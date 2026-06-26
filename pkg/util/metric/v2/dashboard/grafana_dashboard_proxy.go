@@ -31,6 +31,8 @@ func (c *DashboardCreator) initProxyDashboard() error {
 		"Proxy Metrics",
 		c.withRowOptions(
 			c.initProxyConnectionRow(),
+			c.initProxyHealthRow(),
+			c.initProxyHandshakeRow(),
 			c.initProxyTransferDurationRow(),
 			c.initProxyTransferCounterRow(),
 			c.initProxyOthersRow(),
@@ -94,6 +96,43 @@ func (c *DashboardCreator) initProxyTransferDurationRow() dashboard.Option {
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			12,
 			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initProxyHealthRow() dashboard.Option {
+	return dashboard.Row(
+		"Proxy CN Health",
+		c.withGraph(
+			"CN Health Events",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_proxy_cn_health_total", "")+`[$interval])) by (event, cn_uuid)`,
+			"{{ event }} {{ cn_uuid }}",
+			axis.Min(0)),
+		c.withGraph(
+			"All CN Busy",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_proxy_connect_counter", `type="cn-all-busy"`)+`[$interval])) by (`+c.by+`)`,
+			"{{ "+c.by+" }}",
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initProxyHandshakeRow() dashboard.Option {
+	return dashboard.Row(
+		"Proxy Backend Handshake",
+		c.withGraph(
+			"P95 Handshake Duration",
+			6,
+			`histogram_quantile(0.95, sum(rate(`+c.getMetricWithFilter("mo_proxy_backend_handshake_duration_seconds_bucket", "")+`[$interval])) by (le, cn_uuid, result))`,
+			"{{ cn_uuid }} {{ result }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+		c.withGraph(
+			"In-flight Handshakes",
+			6,
+			`sum(`+c.getMetricWithFilter("mo_proxy_backend_handshake_inflight", "")+`) by (cn_uuid)`,
+			"{{ cn_uuid }}",
 			axis.Min(0)),
 	)
 }

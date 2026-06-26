@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -42,6 +43,28 @@ type testClientSession struct {
 	writeCalled bool
 	asyncCalled bool
 	closeCalled bool
+}
+
+func TestLockserviceRemoteRPCErrorType(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil", nil, ""},
+		{"rpc timeout", moerr.NewRPCTimeoutNoCtx(), "rpc_timeout"},
+		{"backend cannot connect", moerr.NewBackendCannotConnectNoCtx(), "backend_cannot_connect"},
+		{"backend closed", moerr.NewBackendClosedNoCtx(), "backend_closed"},
+		{"unexpected eof", io.ErrUnexpectedEOF, "unexpected_eof"},
+		{"caller context deadline ignored", context.DeadlineExceeded, ""},
+		{"string timeout", moerr.NewInternalErrorNoCtx("read tcp 127.0.0.1:6003: i/o timeout"), "timeout"},
+		{"business error ignored", moerr.NewInternalErrorNoCtx("lock conflict"), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, lockserviceRemoteRPCErrorType(tt.err))
+		})
+	}
 }
 
 func (s *testClientSession) Close() error {

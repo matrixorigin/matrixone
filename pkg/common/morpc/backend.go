@@ -615,6 +615,7 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 			zap.String("request", f.send.Message.DebugString()))...)
 	}
 	if err := rb.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
+		rb.metrics.observeBackendError(rb.remote, "write", err)
 		rb.rateLimitLogger.Error("write-conn",
 			"write request failed",
 			append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
@@ -670,6 +671,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 					// Per specification: io.EOF is a normal connection closure signal,
 					// do not log it to avoid unnecessary noise
 				} else {
+					rb.metrics.observeBackendError(rb.remote, "read", err)
 					rb.rateLimitLogger.Error("read-loop",
 						"read from backend failed",
 						append(rb.logFields(), zap.Error(err))...)
@@ -805,6 +807,7 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed(err error) {
 	}()
 
 	for i, f := range waitings {
+		rb.metrics.observeBackendError(rb.remote, "wait_response", err)
 		f.error(ids[i], err, nil)
 	}
 }
@@ -994,6 +997,7 @@ func (rb *remoteBackend) resetConn() error {
 		}
 
 		rb.metrics.connectFailedCounter.Inc()
+		rb.metrics.observeBackendError(rb.remote, "connect", err)
 
 		// only retry on temp net error
 		canRetry := false
@@ -1012,7 +1016,9 @@ func (rb *remoteBackend) resetConn() error {
 			time.Sleep(sleep)
 			duration += sleep
 			if time.Since(start) > rb.options.connectTimeout {
-				return moerr.NewRPCTimeoutNoCtx()
+				err := moerr.NewRPCTimeoutNoCtx()
+				rb.metrics.observeBackendError(rb.remote, "connect", err)
+				return err
 			}
 			select {
 			case <-rb.ctx.Done():
@@ -1026,7 +1032,8 @@ func (rb *remoteBackend) resetConn() error {
 		wait += wait / 2
 
 		// reconnect failed, notify all future failed
-		rb.notifyAllWaitWritesFailed(moerr.NewBackendCannotConnectNoCtx())
+		backendErr := moerr.NewBackendCannotConnectNoCtx()
+		rb.notifyAllWaitWritesFailed(backendErr)
 	}
 }
 
