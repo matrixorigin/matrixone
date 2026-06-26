@@ -58,7 +58,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		stmt.Rows.With = stmt.With
 	}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false)
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false)
 	if err != nil {
 		return 0, err
 	}
@@ -1283,7 +1283,7 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	return newCols, nil
 }
 
-func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool) (int32, map[string]int32, []bool, error) {
+func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool, colRefAsDefault bool) (int32, map[string]int32, []bool, error) {
 	var (
 		lastNodeID int32
 		err        error
@@ -1336,7 +1336,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		if isAllDefault && astCols != nil {
 			return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		lastNodeID, err = builder.buildValueScan(isAllDefault, bindCtx, tableDef, selectImpl, insertColumns)
+		lastNodeID, err = builder.buildValueScan(isAllDefault, colRefAsDefault, bindCtx, tableDef, selectImpl, insertColumns)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -1617,6 +1617,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 
 func (builder *QueryBuilder) buildValueScan(
 	isAllDefault bool,
+	colRefAsDefault bool,
 	bindCtx *BindContext,
 	tableDef *TableDef,
 	stmt *tree.ValuesClause,
@@ -1666,8 +1667,16 @@ func (builder *QueryBuilder) buildValueScan(
 				}
 			}
 		} else {
-			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-			binder.builder = builder
+			var binder Binder
+			if colRefAsDefault {
+				// REPLACE ... SET col = expr: an RHS reference to a target-table
+				// column is evaluated as DEFAULT(col), matching MySQL.
+				binder = NewReplaceValueBinder(builder.GetContext(), builder, nil, tableDef)
+			} else {
+				defaultBinder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+				defaultBinder.builder = builder
+				binder = defaultBinder
+			}
 			for _, r := range stmt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
