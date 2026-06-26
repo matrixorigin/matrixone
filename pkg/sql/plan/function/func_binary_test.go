@@ -2835,6 +2835,125 @@ func TestConvertTz(t *testing.T) {
 	}
 }
 
+func TestConvSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	cases := []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "uppercase output",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"255"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FF"}, []bool{false}),
+		},
+		{
+			name: "null base returns null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"10"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		},
+		{
+			name: "invalid base returns null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"10"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		},
+		{
+			name: "negative from_base signed parse",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"-17"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFEF"}, []bool{false}),
+		},
+		{
+			name: "negative to_base signed output",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-17}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-18}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-H"}, []bool{false}),
+		},
+		{
+			name: "unsigned parse with negative to_base",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ffffffffffffffff"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-10}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-1"}, []bool{false}),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Conv)
+			s, info := fcTC.Run()
+			require.True(t, s, info)
+		})
+	}
+}
+
+func TestConvInvalidInputReturnsError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	cases := []struct {
+		name  string
+		value string
+		base  int64
+	}{
+		{name: "invalid character", value: "g", base: 16},
+		{name: "prefix truncation", value: "10xyz", base: 10},
+		{name: "invalid digit for base", value: "2", base: 2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, []bool{false}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{tc.base}, []bool{false}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
+				Conv,
+			)
+			s, info := fcTC.Run()
+			require.True(t, s, info)
+		})
+	}
+}
+
+func TestConvTypeCheckAcceptsNullBase(t *testing.T) {
+	_, err := GetFunctionByName(context.Background(), "conv", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_any.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(context.Background(), "conv", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+		types.T_any.ToType(),
+	})
+	require.NoError(t, err)
+}
+
 func initFormatTestCase() []tcTemp {
 	format := `%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%`
 

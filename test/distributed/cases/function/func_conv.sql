@@ -203,7 +203,6 @@ drop table if exists test_conv;
 -- MO vs MySQL differing cases (issue #23845)
 -- All failures are case sensitivity: MySQL returns uppercase, MO returns lowercase
 -- ============================================
--- @bvt:issue#23845
 -- test 2: decimal to hex
 select conv('255', 10, 16) as result2;
 -- expected: ff
@@ -260,43 +259,61 @@ select concat('0x', conv('255', 10, 16)) as hex_with_prefix;
 -- expected: 0xff
 
 select conv('g', 16, 10) as result8;
--- expected: MySQL returns 0, MO returns null
+-- expected: MO returns error on invalid character
 
 select conv('10', 1, 10) as result9;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('abc', 16, 10) as result10;
--- expected: 2748 (MO result parsing issue)
+-- expected: 2748
 
 select conv('10', null, 16) as null_from_base;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('10', 10, null) as null_to_base;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('g', 16, 10) as invalid_hex_char;
--- expected: MySQL returns 0, MO returns null
+-- expected: MO returns error on invalid character
 
 select conv('2', 2, 10) as invalid_binary_char;
--- expected: MySQL returns 0, MO returns null
+-- expected: MO returns error on invalid character
 
 select conv('8', 8, 10) as invalid_octal_char;
--- expected: MySQL returns 0, MO returns null
+-- expected: MO returns error on invalid character
 
 select conv('10', 1, 10) as invalid_from_base;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('10', 10, 1) as invalid_to_base;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('10', 37, 10) as invalid_from_base_high;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('10', 10, 37) as invalid_to_base_high;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv(10, 10, 16) as numeric_input;
--- expected: a (MO result parsing issue)
--- @bvt:issue
+-- expected: A
+
+-- negative base semantics
+select conv(-17, 10, -18) as negative_to_negative_base;
+-- expected: -H
+
+select conv(17, 10, -18) as positive_to_negative_base;
+-- expected: H
+
+select conv('-17', -10, 16) as negative_from_negative_base;
+-- expected: FFFFFFFFFFFFFFEF
+
+select conv('17', -10, 16) as positive_from_negative_base;
+-- expected: 11
+
+select conv('ffffffffffffffff', 16, -10) as unsigned_to_negative_base;
+-- expected: -1
+
+select conv('10xyz', 10, 16) as invalid_suffix;
+-- expected: MO returns error on prefix truncation / invalid suffix
 
 drop database conv_func;
