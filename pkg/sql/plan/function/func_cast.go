@@ -5562,7 +5562,9 @@ func strToStr(
 				continue
 			}
 			s := convertByteSliceToString(v)
-			if utf8.RuneCountInString(s) > destLen {
+			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && utf8.RuneCountInString(s) > destLen {
+				v = []byte(truncateStringByRunes(s, destLen))
+			} else if utf8.RuneCountInString(s) > destLen {
 				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
@@ -6394,6 +6396,20 @@ func appendNulls[T types.FixedSizeT](result vector.FunctionResultWrapper, length
 func convertByteSliceToString(v []byte) string {
 	return util.UnsafeBytesToString(v)
 	// return string(v)
+}
+
+func truncateStringByRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	count := 0
+	for idx := range s {
+		if count == maxRunes {
+			return s[:idx]
+		}
+		count++
+	}
+	return s
 }
 
 // shorten the string to the one with no more than 101 characters.

@@ -17,6 +17,8 @@ package colexec
 import (
 	"context"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -115,6 +117,62 @@ func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan
 		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility && nulls.Any(nsp) {
 			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", attrs[j]))
 		}
+	}
+	return nil
+}
+
+func BatchDataStringWidthCheck(vecs []*vector.Vector, attrs []string, tableDef *plan.TableDef, ctx context.Context) error {
+	if tableDef == nil {
+		return nil
+	}
+	for j, vec := range vecs {
+		if vec == nil {
+			continue
+		}
+		attr := ""
+		if j < len(attrs) {
+			attr = attrs[j]
+		}
+		col := findColumnDefForWriteCheck(tableDef, j, attr)
+		if col == nil {
+			continue
+		}
+		typ := col.Typ
+		oid := types.T(typ.Id)
+		if (oid != types.T_char && oid != types.T_varchar) || typ.Width <= 0 {
+			continue
+		}
+
+		if attr == "" {
+			attr = col.Name
+		}
+		values := vector.GenerateFunctionStrParameter(vec)
+		for row := uint64(0); row < uint64(vec.Length()); row++ {
+			value, isNull := values.GetStrValue(row)
+			if isNull {
+				continue
+			}
+			if utf8.RuneCount(value) > int(typ.Width) {
+				return moerr.NewInternalErrorf(ctx, "Data too long for column '%s' at row %d", attr, row+1)
+			}
+		}
+	}
+	return nil
+}
+
+func findColumnDefForWriteCheck(tableDef *plan.TableDef, pos int, attr string) *plan.ColDef {
+	if attr != "" {
+		if colIdx, ok := tableDef.Name2ColIndex[attr]; ok && int(colIdx) < len(tableDef.Cols) {
+			return tableDef.Cols[colIdx]
+		}
+		for _, col := range tableDef.Cols {
+			if col.Name == attr || col.GetOriginCaseName() == attr || strings.EqualFold(col.Name, attr) {
+				return col
+			}
+		}
+	}
+	if pos < len(tableDef.Cols) {
+		return tableDef.Cols[pos]
 	}
 	return nil
 }

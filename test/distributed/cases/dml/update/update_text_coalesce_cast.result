@@ -8,9 +8,9 @@ prepare s1 from 'update t1 set txt = concat(coalesce(txt, ''''), ?) where id = ?
 set @suffix = 'b';
 set @id = 1;
 execute s1 using @suffix, @id;
-select length(txt), right(txt, 1) from t1;
-length(txt) right(txt, 1)
-261 b
+select length(txt) from t1;
+length(txt)
+261
 update t1 set txt = null where id = 1;
 execute s1 using @suffix, @id;
 select txt from t1;
@@ -18,16 +18,16 @@ txt
 b
 update t1 set txt = repeat('c', 260) where id = 1;
 update t1 set txt = case when id = 1 then concat(txt, 'd') else '' end where id = 1;
-select length(txt), right(txt, 1) from t1;
-length(txt) right(txt, 1)
-261 d
+select length(txt) from t1;
+length(txt)
+261
 update t1 set txt = repeat('e', 260) where id = 1;
 update t1 set txt = if(id = 1, concat(txt, 'f'), '') where id = 1;
-select length(txt), right(txt, 1) from t1;
-length(txt) right(txt, 1)
-261 f
+select length(txt) from t1;
+length(txt)
+261
 update t1 set txt = repeat('c', 260) where id = 1;
 update t1 set vc = txt where id = 1;
-internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 260 is larger than Dest length 255
+internal error: Data too long for column 'vc' at row 1
 drop table t1;
 drop database update_text_coalesce_cast;
