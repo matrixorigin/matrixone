@@ -144,10 +144,19 @@ func handleDelsOnLCA(
 			}
 		}
 
+		selectCols := make([]string, len(tblStuff.def.colNames)+1)
+		selectCols[0] = "pks.__idx_"
+		for i, colName := range tblStuff.def.colNames {
+			selectCols[i+1] = fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
+		}
+
 		sqlBuf.Reset()
 		sqlBuf.WriteString(fmt.Sprintf(
-			"select pks.__idx_, lca.* from %s.%s%s as lca ",
-			lcaTblDef.DbName, lcaTblDef.Name, mots),
+			"select %s from %s.%s%s as lca ",
+			strings.Join(selectCols, ", "),
+			quoteIdentifierForSQL(lcaTblDef.DbName),
+			quoteIdentifierForSQL(lcaTblDef.Name),
+			mots),
 		)
 		sqlBuf.WriteString(fmt.Sprintf(
 			"right join (values %s) as pks(__idx_,%s) on ",
@@ -252,8 +261,6 @@ func handleDelsOnLCA(
 
 	dBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 
-	endIdx := dBat.VectorCount() - 1
-
 	sels := make([]int64, 0, 100)
 	joinedRows := 0
 	lcaHitRows := 0
@@ -275,17 +282,6 @@ func handleDelsOnLCA(
 				}
 			}
 
-			// For composite/fake PK tables, the hidden PK column (__cpkey__
-			// or __mo_fake_pk_col) may not be returned by SQL "select *".
-			// Fill it from the tombstone batch when the loop above didn't
-			// cover endIdx.  The reader fallback returns ALL columns so the
-			// loop already fills endIdx — skip the extra append to avoid
-			// doubling Vecs[endIdx].Length() vs RowCount().
-			if tblStuff.def.pkKind != normalKind && len(cols)-2 < endIdx {
-				if err = dBat.Vecs[endIdx].UnionOne(tBat.Vecs[0], int64(i), ses.proc.Mp()); err != nil {
-					return false
-				}
-			}
 		}
 
 		dBat.SetRowCount(dBat.Vecs[0].Length())
