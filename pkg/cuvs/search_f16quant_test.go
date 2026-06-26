@@ -20,72 +20,102 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"golang.org/x/exp/rand"
 )
 
 // f16 converts a float32 to the cuVS half (Float16) bit pattern. types.Float16
 // and cuvs.Float16 are both uint16 IEEE-754 halfs, so the bits transfer directly.
 func f16(f float32) Float16 { return Float16(types.Float16FromFloat32(f)) }
 
-// makeF16Dataset builds a deterministic, distinct-per-row Float16 dataset.
+// makeF16Dataset builds a deterministic random half dataset in [0,1).
 func makeF16Dataset(n uint64, dim uint32) []Float16 {
+	r := rand.New(rand.NewSource(1))
 	ds := make([]Float16, n*uint64(dim))
-	for i := uint64(0); i < n; i++ {
-		for j := uint32(0); j < dim; j++ {
-			v := float32((i*7+uint64(j)*13)%97) / 97.0
-			ds[i*uint64(dim)+uint64(j)] = f16(v)
-		}
+	for i := range ds {
+		ds[i] = f16(r.Float32())
 	}
 	return ds
 }
 
 // TestGpuF16QuantizeAll covers the vecf16-base -> int8/uint8 quantization path
-// (the native half-source quantizer) for IVF-PQ and CAGRA: build via
-// AddChunkQuantize from native Float16 input, then SearchQuantize with a Float16
-// query. This is the f16->int8 / f16->uint8 combination that the float32-base
-// info_test matrix and search_float_test do not exercise.
+// (the native half-source quantizer) for IVF-PQ and CAGRA: build from native
+// Float16 input via AddChunkQuantize, then SearchQuantize with a Float16 query.
+// This is the f16->int8 / f16->uint8 combination the float32-base info_test and
+// search_float_test do not exercise.
+//
+// Correctness is graded as self-match RECALL: each probe query is an exact copy
+// of a stored row, so a working quantized search must return that row's id in the
+// top-k for the large majority of probes. (Exact top-1 is not asserted — int8/
+// uint8 + product quantization are lossy by design; recall is the right metric,
+// matching the C++ Int8VsUint8SignedDataHalf test.) A broken search would score
+// ~0, so the 0.8 floor is a real correctness check, not a shape check.
 func TestGpuF16QuantizeAll(t *testing.T) {
 	const (
 		dimension = uint32(16)
 		nVectors  = uint64(2000)
-		k         = uint32(5)
+		k         = uint32(10)
+		minRecall = 0.8
 	)
 	deviceID := 0
 	ds := makeF16Dataset(nVectors, dimension)
-	// Self-query: the first base vector. This test verifies the f16->int8/uint8
-	// build+search PATH returns valid results; exact-match recall under
-	// quantization is covered separately by the C++ Int8VsUint8SignedDataHalf test.
-	query := append([]Float16(nil), ds[:dimension]...)
+	probes := []int64{0, 1, 7, 100, 500, 999, 1500, 1999} // rows to self-query
 
-	checkResult := func(t *testing.T, neighbors []int64) {
-		if uint32(len(neighbors)) != k {
-			t.Fatalf("expected %d neighbors, got %d", k, len(neighbors))
-		}
-		for _, n := range neighbors {
-			if n < 0 || n >= int64(nVectors) {
-				t.Fatalf("neighbor id %d out of range [0,%d)", n, nVectors)
-			}
-		}
-	}
-
-	// ---- IVF-PQ: f16 -> {int8, uint8} ----
 	t.Run("IVF-PQ/f16-int8", func(t *testing.T) {
-		runIvfPqF16Quant[int8](t, ds, query, nVectors, dimension, k, deviceID, checkResult)
+		runIvfPqF16Quant[int8](t, ds, probes, nVectors, dimension, k, deviceID, minRecall)
 	})
 	t.Run("IVF-PQ/f16-uint8", func(t *testing.T) {
-		runIvfPqF16Quant[uint8](t, ds, query, nVectors, dimension, k, deviceID, checkResult)
+		runIvfPqF16Quant[uint8](t, ds, probes, nVectors, dimension, k, deviceID, minRecall)
 	})
-
-	// ---- CAGRA: f16 -> {int8, uint8} ----
 	t.Run("CAGRA/f16-int8", func(t *testing.T) {
-		runCagraF16Quant[int8](t, ds, query, nVectors, dimension, k, deviceID, checkResult)
+		runCagraF16Quant[int8](t, ds, probes, nVectors, dimension, k, deviceID, minRecall)
 	})
 	t.Run("CAGRA/f16-uint8", func(t *testing.T) {
-		runCagraF16Quant[uint8](t, ds, query, nVectors, dimension, k, deviceID, checkResult)
+		runCagraF16Quant[uint8](t, ds, probes, nVectors, dimension, k, deviceID, minRecall)
 	})
 }
 
-func runIvfPqF16Quant[Q VectorType](t *testing.T, ds, query []Float16, n uint64, dim, k uint32, dev int, check func(*testing.T, []int64)) {
-	bp := IvfPqBuildParams{NLists: 50, M: 4, BitsPerCode: 8, AddDataOnBuild: true}
+// rowVec returns a copy of row id from ds (an exact self-query).
+func rowVec(ds []Float16, id int64, dim uint32) []Float16 {
+	off := uint64(id) * uint64(dim)
+	return append([]Float16(nil), ds[off:off+uint64(dim)]...)
+}
+
+func contains(xs []int64, want int64) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
+
+// gradeSelfMatch runs each probe as a self-query and returns the fraction whose
+// own id appears in the top-k.
+func gradeSelfMatch(t *testing.T, probes []int64, k uint32, search func(int64) ([]int64, error)) float64 {
+	t.Helper()
+	hits := 0
+	for _, id := range probes {
+		neighbors, err := search(id)
+		if err != nil {
+			t.Fatalf("SearchQuantize(row %d): %v", id, err)
+		}
+		if uint32(len(neighbors)) != k {
+			t.Fatalf("row %d: expected %d neighbors, got %d", id, k, len(neighbors))
+		}
+		if contains(neighbors, id) {
+			hits++
+		}
+	}
+	return float64(hits) / float64(len(probes))
+}
+
+func runIvfPqF16Quant[Q VectorType](t *testing.T, ds []Float16, probes []int64, n uint64, dim, k uint32, dev int, minRecall float64) {
+	// Start from the defaults (which set KmeansTrainsetFraction etc.) and override
+	// only NLists — the default 1024 lists would be near-empty for 2000 vectors.
+	// A struct literal would zero-default the omitted fields, e.g.
+	// KmeansTrainsetFraction=0 => no kmeans training => near-zero recall.
+	bp := DefaultIvfPqBuildParams()
+	bp.NLists = 50
 	index, err := NewGpuIvfPqEmpty[Float16, Q](n, dim, L2Expanded, bp, []int{dev}, 1, SingleGpu)
 	if err != nil {
 		t.Fatalf("NewGpuIvfPqEmpty[Float16,Q]: %v", err)
@@ -101,15 +131,19 @@ func runIvfPqF16Quant[Q VectorType](t *testing.T, ds, query []Float16, n uint64,
 	if err = index.Build(); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	res, err := index.SearchQuantize(query, 1, dim, k, IvfPqSearchParams{NProbes: 50})
-	if err != nil {
-		t.Fatalf("SearchQuantize: %v", err)
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = bp.NLists // probe every list for a deterministic exhaustive search
+	recall := gradeSelfMatch(t, probes, k, func(id int64) ([]int64, error) {
+		res, err := index.SearchQuantize(rowVec(ds, id, dim), 1, dim, k, sp)
+		return res.Neighbors, err
+	})
+	if recall < minRecall {
+		t.Errorf("IVF-PQ f16-quant self-match recall %.2f < %.2f", recall, minRecall)
 	}
-	check(t, res.Neighbors)
 }
 
-func runCagraF16Quant[Q VectorType](t *testing.T, ds, query []Float16, n uint64, dim, k uint32, dev int, check func(*testing.T, []int64)) {
-	bp := CagraBuildParams{IntermediateGraphDegree: 128, GraphDegree: 64, AttachDatasetOnBuild: true}
+func runCagraF16Quant[Q VectorType](t *testing.T, ds []Float16, probes []int64, n uint64, dim, k uint32, dev int, minRecall float64) {
+	bp := DefaultCagraBuildParams()
 	index, err := NewGpuCagraEmpty[Float16, Q](n, dim, L2Expanded, bp, []int{dev}, 1, SingleGpu)
 	if err != nil {
 		t.Fatalf("NewGpuCagraEmpty[Float16,Q]: %v", err)
@@ -125,9 +159,12 @@ func runCagraF16Quant[Q VectorType](t *testing.T, ds, query []Float16, n uint64,
 	if err = index.Build(); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	res, err := index.SearchQuantize(query, 1, dim, k, CagraSearchParams{ItopkSize: 64})
-	if err != nil {
-		t.Fatalf("SearchQuantize: %v", err)
+	sp := DefaultCagraSearchParams()
+	recall := gradeSelfMatch(t, probes, k, func(id int64) ([]int64, error) {
+		res, err := index.SearchQuantize(rowVec(ds, id, dim), 1, dim, k, sp)
+		return res.Neighbors, err
+	})
+	if recall < minRecall {
+		t.Errorf("CAGRA f16-quant self-match recall %.2f < %.2f", recall, minRecall)
 	}
-	check(t, res.Neighbors)
 }
