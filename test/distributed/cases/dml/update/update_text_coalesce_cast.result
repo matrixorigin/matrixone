@@ -17,6 +17,16 @@ select txt from t1;
 txt
 b
 update t1 set txt = repeat('c', 260) where id = 1;
+update t1 set txt = case when id = 1 then concat(txt, 'd') else '' end where id = 1;
+select length(txt), right(txt, 1) from t1;
+length(txt) right(txt, 1)
+261 d
+update t1 set txt = repeat('e', 260) where id = 1;
+update t1 set txt = if(id = 1, concat(txt, 'f'), '') where id = 1;
+select length(txt), right(txt, 1) from t1;
+length(txt) right(txt, 1)
+261 f
+update t1 set txt = repeat('c', 260) where id = 1;
 update t1 set vc = txt where id = 1;
 internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 260 is larger than Dest length 255
 drop table t1;

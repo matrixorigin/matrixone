@@ -264,6 +264,24 @@ func TestPrepareUpdateTextConcatCoalesceKeepsTextAssignmentCast(t *testing.T) {
 	assert.False(t, planHasTextToCharOrVarcharCast(logicPlan))
 }
 
+func TestUpdateTextCaseKeepsTextAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "update text_cast_t set txt = case when id = 1 then txt else '' end where id = 1")
+	assert.NoError(t, err)
+	assert.False(t, planHasTextToCharOrVarcharCast(logicPlan))
+}
+
+func TestUpdateTextIfKeepsTextAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "update text_cast_t set txt = if(id = 1, txt, '') where id = 1")
+	assert.NoError(t, err)
+	assert.False(t, planHasTextToCharOrVarcharCast(logicPlan))
+}
+
 func TestUpdateVarcharFromTextKeepsVarcharWidthCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)

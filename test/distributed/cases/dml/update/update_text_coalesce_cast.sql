@@ -17,6 +17,14 @@ execute s1 using @suffix, @id;
 select txt from t1;
 
 update t1 set txt = repeat('c', 260) where id = 1;
+update t1 set txt = case when id = 1 then concat(txt, 'd') else '' end where id = 1;
+select length(txt), right(txt, 1) from t1;
+
+update t1 set txt = repeat('e', 260) where id = 1;
+update t1 set txt = if(id = 1, concat(txt, 'f'), '') where id = 1;
+select length(txt), right(txt, 1) from t1;
+
+update t1 set txt = repeat('c', 260) where id = 1;
 update t1 set vc = txt where id = 1;
 
 drop table t1;

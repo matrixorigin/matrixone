@@ -922,25 +922,12 @@ func coalesceDecimalResult(overloads []overload, minOid types.T, inputs []types.
 }
 
 func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
-	hasText := false
-	aligned := true
-	for _, input := range inputs {
-		switch input.Oid {
-		case types.T_text:
-			hasText = true
-		case types.T_any:
-			aligned = false
-		case types.T_char, types.T_varchar:
-			aligned = false
-		default:
-			return checkResult{}, false
-		}
-	}
-	if !hasText {
+	target, aligned, ok := textStringCommonType(inputs)
+	if !ok {
 		return checkResult{}, false
 	}
 	for i, over := range overloads {
-		if len(over.args) != 1 || over.args[0] != types.T_text {
+		if len(over.args) != 1 || over.args[0] != target.Oid {
 			continue
 		}
 		if aligned {
@@ -948,7 +935,7 @@ func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkR
 		}
 		castType := make([]types.Type, len(inputs))
 		for j := range castType {
-			castType[j] = types.T_text.ToType()
+			castType[j] = target
 		}
 		return newCheckResultWithCast(i, castType), true
 	}
