@@ -64,6 +64,20 @@ class Quantization(IntEnum):
     INT8 = 2
     UINT8 = 3
 
+# numpy dtype for a base/storage element type. Base-typed buffers (dataset,
+# query, quantizer training data) must carry these exact bytes so the C side
+# reads them per btype — e.g. a vecf16 base must be passed as float16, NOT
+# coerced to float32 (which would double the width and misread the halfs).
+_NP_DTYPE = {
+    Quantization.F32: np.float32,
+    Quantization.F16: np.float16,
+    Quantization.INT8: np.int8,
+    Quantization.UINT8: np.uint8,
+}
+
+def _np_dtype_for(quant):
+    return _NP_DTYPE[Quantization(int(quant))]
+
 class DistributionMode(IntEnum):
     SINGLE_GPU = 0
     SHARDED = 1
@@ -389,13 +403,13 @@ class CagraIndex:
     @classmethod
     def create(cls, dataset, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32, ids=None):
         if build_params is None: build_params = CagraBuildParams.default()
-        dataset = np.ascontiguousarray(dataset, dtype=np.float32)
+        dataset = np.ascontiguousarray(dataset, dtype=_np_dtype_for(btype))
         count, dim = dataset.shape
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
         h = _lib.gpu_cagra_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), id_ptr, ctypes.byref(errmsg))
-        _check_error(errmsg); return cls(h, dim)
+        _check_error(errmsg); idx = cls(h, dim); idx.btype = int(btype); return idx
 
     @classmethod
     def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32, ids=None):
@@ -443,7 +457,7 @@ class CagraIndex:
         id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p(); _lib.gpu_cagra_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), id_ptr, ctypes.byref(errmsg)); _check_error(errmsg)
     def train_quantizer(self, train_data):
-        train_data = np.ascontiguousarray(train_data, dtype=np.float32)
+        train_data = np.ascontiguousarray(train_data, dtype=_np_dtype_for(getattr(self, 'btype', Quantization.F32)))
         errmsg = ctypes.c_char_p(); _lib.gpu_cagra_train_quantizer(self.handle, train_data.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(train_data), ctypes.byref(errmsg)); _check_error(errmsg)
     
     def set_batch_window(self, window_us):
@@ -475,7 +489,7 @@ class CagraIndex:
 
     def search(self, queries, k, search_params=None):
         if search_params is None: search_params = CagraSearchParams.default()
-        queries = np.ascontiguousarray(queries, dtype=np.float32)
+        queries = np.ascontiguousarray(queries, dtype=_np_dtype_for(getattr(self, 'btype', Quantization.F32)))
         num_q, dim = queries.shape
         errmsg = ctypes.c_char_p()
         res = _lib.gpu_cagra_search_quantize(self.handle, queries.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), num_q, dim, k, search_params, ctypes.byref(errmsg))
@@ -719,13 +733,13 @@ class IvfPqIndex:
     @classmethod
     def create(cls, dataset, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32, ids=None):
         if build_params is None: build_params = IvfPqBuildParams.default()
-        dataset = np.ascontiguousarray(dataset, dtype=np.float32)
+        dataset = np.ascontiguousarray(dataset, dtype=_np_dtype_for(btype))
         count, dim = dataset.shape
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
         h = _lib.gpu_ivf_pq_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), id_ptr, ctypes.byref(errmsg))
-        _check_error(errmsg); return cls(h, dim)
+        _check_error(errmsg); idx = cls(h, dim); idx.btype = int(btype); return idx
 
     @classmethod
     def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32, ids=None):
@@ -779,7 +793,7 @@ class IvfPqIndex:
         errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), id_ptr, ctypes.byref(errmsg)); _check_error(errmsg)
     
     def train_quantizer(self, train_data):
-        train_data = np.ascontiguousarray(train_data, dtype=np.float32)
+        train_data = np.ascontiguousarray(train_data, dtype=_np_dtype_for(getattr(self, 'btype', Quantization.F32)))
         errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_train_quantizer(self.handle, train_data.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(train_data), ctypes.byref(errmsg)); _check_error(errmsg)
     
     def set_batch_window(self, window_us):
@@ -811,7 +825,7 @@ class IvfPqIndex:
 
     def search(self, queries, k, search_params=None):
         if search_params is None: search_params = IvfPqSearchParams.default()
-        queries = np.ascontiguousarray(queries, dtype=np.float32)
+        queries = np.ascontiguousarray(queries, dtype=_np_dtype_for(getattr(self, 'btype', Quantization.F32)))
         num_q, dim = queries.shape
         errmsg = ctypes.c_char_p()
         res = _lib.gpu_ivf_pq_search_quantize(self.handle, queries.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), num_q, dim, k, search_params, ctypes.byref(errmsg))
