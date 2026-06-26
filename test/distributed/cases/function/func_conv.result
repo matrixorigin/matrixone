@@ -235,4 +235,13 @@ FFFFFFFFFFFFFFFF
 select conv('10000000000000000', 16, 10) as overflow_hex_to_decimal;
 ➤ overflow_hex_to_decimal[12,-1,0]  𝄀
 18446744073709551615
+select conv('+9223372036854775808', 10, 16) as plus_prefixed_above_max_int64;
+➤ plus_prefixed_above_max_int64[12,-1,0]  𝄀
+8000000000000000
+select conv('+18446744073709551614', 10, 16) as plus_prefixed_near_uint64_max;
+➤ plus_prefixed_near_uint64_max[12,-1,0]  𝄀
+FFFFFFFFFFFFFFFE
+select conv('+FFFFFFFFFFFFFFFF', 16, 10) as plus_prefixed_hex_uint64_max;
+➤ plus_prefixed_hex_uint64_max[12,-1,0]  𝄀
+18446744073709551615
 drop database conv_func;

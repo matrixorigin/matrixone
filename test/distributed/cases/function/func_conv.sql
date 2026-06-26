@@ -326,4 +326,14 @@ select conv('-18446744073709551616', 10, 16) as overflow_negative_decimal_to_hex
 select conv('10000000000000000', 16, 10) as overflow_hex_to_decimal;
 -- expected: 18446744073709551615
 
+-- plus-prefixed unsigned values above int64 must still use unsigned parsing
+select conv('+9223372036854775808', 10, 16) as plus_prefixed_above_max_int64;
+-- expected: 8000000000000000
+
+select conv('+18446744073709551614', 10, 16) as plus_prefixed_near_uint64_max;
+-- expected: FFFFFFFFFFFFFFFE
+
+select conv('+FFFFFFFFFFFFFFFF', 16, 10) as plus_prefixed_hex_uint64_max;
+-- expected: 18446744073709551615
+
 drop database conv_func;

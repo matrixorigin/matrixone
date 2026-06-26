@@ -2924,6 +2924,33 @@ func TestConvSemantics(t *testing.T) {
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"18446744073709551615"}, []bool{false}),
 		},
+		{
+			name: "plus prefixed unsigned above max int64",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"+9223372036854775808"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"8000000000000000"}, []bool{false}),
+		},
+		{
+			name: "plus prefixed unsigned near uint64 max",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"+18446744073709551614"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFFE"}, []bool{false}),
+		},
+		{
+			name: "plus prefixed unsigned hex max",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"+FFFFFFFFFFFFFFFF"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"18446744073709551615"}, []bool{false}),
+		},
 	}
 
 	for _, tc := range cases {

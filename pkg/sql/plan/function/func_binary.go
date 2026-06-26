@@ -2712,7 +2712,7 @@ func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error
 		return val, 0, true, nil
 	}
 
-	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
+	if strings.HasPrefix(s, "-") {
 		val, err := strconv.ParseInt(s, base, 64)
 		if err != nil {
 			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
@@ -2722,6 +2722,8 @@ func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error
 		}
 		return val, 0, true, nil
 	}
+
+	s = strings.TrimPrefix(s, "+")
 
 	uval, err := strconv.ParseUint(s, base, 64)
 	if err != nil {
