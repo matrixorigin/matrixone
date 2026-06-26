@@ -31,6 +31,12 @@ select length(txt) from t1;
 update t1 set txt = repeat('i', 260) where id = 1;
 select length(cast(txt as varchar(255))) from t1;
 
+update t1 set txt = repeat('j', 260), vc = null where id = 1;
+insert into t1(id, vc) select 2, txt from t1 where id = 1;
+
+update t1 set txt = repeat('k', 260), vc = null where id = 1;
+insert into t1 values(1, 'x', '') on duplicate key update vc = txt;
+
 update t1 set txt = repeat('c', 260) where id = 1;
 update t1 set vc = txt where id = 1;
 

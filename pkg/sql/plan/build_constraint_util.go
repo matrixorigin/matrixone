@@ -542,7 +542,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		case isGeometryPlanType(&colTyp):
 			projExpr, err = funcCastForGeometryType(builder.GetContext(), projExpr, colTyp)
 		default:
-			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, colTyp)
+			projExpr, err = forceAssignmentCastExpr(builder.GetContext(), projExpr, colTyp)
 		}
 		if err != nil {
 			return false, nil, nil, err
@@ -734,7 +734,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							return false, nil, nil, err
 						}
 					} else {
-						defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+						defExpr, err = forceAssignmentCastExpr(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
 							return false, nil, nil, err
 						}
@@ -940,6 +940,8 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 }
 
 var ForceCastExpr = forceCastExpr
+
+var ForceAssignmentCastExpr = forceAssignmentCastExpr
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
 	if targetType.Typ.Id == 0 {

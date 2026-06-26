@@ -176,6 +176,13 @@ func nodeHasTextToCharOrVarcharCast(node *plan.Node) bool {
 			}
 		}
 	}
+	if node.DedupJoinCtx != nil {
+		for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+			if exprHasTextToCharOrVarcharCast(expr) {
+				return true
+			}
+		}
+	}
 	return false
 }
 
@@ -206,6 +213,14 @@ func exprHasTextToCharOrVarcharCast(expr *plan.Expr) bool {
 }
 
 func planHasTextToVarcharCastWithWidth(p *Plan, width int32) bool {
+	return planHasTextToVarcharCastWithNameAndWidth(p, "", width)
+}
+
+func planHasTextToVarcharStrictCastWithWidth(p *Plan, width int32) bool {
+	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_strict", width)
+}
+
+func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width int32) bool {
 	if p == nil || p.GetQuery() == nil {
 		return false
 	}
@@ -215,7 +230,11 @@ func planHasTextToVarcharCastWithWidth(p *Plan, width int32) bool {
 			return false
 		}
 		if f := expr.GetF(); f != nil {
-			if (f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict") && len(f.Args) > 0 &&
+			nameMatches := f.Func.GetObjName() == funcName
+			if funcName == "" {
+				nameMatches = f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict"
+			}
+			if nameMatches && len(f.Args) > 0 &&
 				f.Args[0].Typ.Id == int32(types.T_text) &&
 				expr.Typ.Id == int32(types.T_varchar) &&
 				expr.Typ.Width == width {
@@ -240,6 +259,20 @@ func planHasTextToVarcharCastWithWidth(p *Plan, width int32) bool {
 		for _, expr := range node.ProjectList {
 			if visit(expr) {
 				return true
+			}
+		}
+		if node.OnDuplicateKey != nil {
+			for _, expr := range node.OnDuplicateKey.OnDuplicateExpr {
+				if visit(expr) {
+					return true
+				}
+			}
+		}
+		if node.DedupJoinCtx != nil {
+			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+				if visit(expr) {
+					return true
+				}
 			}
 		}
 	}
@@ -289,6 +322,24 @@ func TestUpdateVarcharFromTextKeepsVarcharWidthCast(t *testing.T) {
 	logicPlan, err := runOneStmt(mock, t, "update text_cast_t set vc = txt where id = 1")
 	assert.NoError(t, err)
 	assert.True(t, planHasTextToVarcharCastWithWidth(logicPlan, 255))
+}
+
+func TestInsertSelectVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, vc) select id, txt from text_cast_t")
+	assert.NoError(t, err)
+	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
+}
+
+func TestOnDuplicateUpdateVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
+	assert.NoError(t, err)
+	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
 }
 
 //Test Query Node Tree

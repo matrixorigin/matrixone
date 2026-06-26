@@ -34,6 +34,12 @@ update t1 set txt = repeat('i', 260) where id = 1;
 select length(cast(txt as varchar(255))) from t1;
 length(cast(txt as varchar(255)))
 255
+update t1 set txt = repeat('j', 260), vc = null where id = 1;
+insert into t1(id, vc) select 2, txt from t1 where id = 1;
+internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 260 is larger than Dest length 255
+update t1 set txt = repeat('k', 260), vc = null where id = 1;
+insert into t1 values(1, 'x', '') on duplicate key update vc = txt;
+internal error: Can't cast 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk...' from TEXT type to VARCHAR type. Src length 260 is larger than Dest length 255
 update t1 set txt = repeat('c', 260) where id = 1;
 update t1 set vc = txt where id = 1;
 internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 260 is larger than Dest length 255
