@@ -15,6 +15,7 @@
 package lockop
 
 import (
+	"bytes"
 	"context"
 	"math"
 	"testing"
@@ -117,10 +118,23 @@ func TestLockOpHelpers(t *testing.T) {
 	defer op.Release()
 
 	require.Equal(t, opName, op.TypeName())
-	require.Equal(t, opName+": lock-op()", op.String())
 
-	op = op.WithLockSharding(lock.Sharding_KeepBind).WithLockGroup(7).WithLockMode(lock.LockMode_Shared).WithLockTable(true, true)
-	require.Equal(t, lock.Sharding_KeepBind, op.targets[0].lockRows) // placeholder to keep compiler from optimizing? no
+	var buf bytes.Buffer
+	op.String(&buf)
+	require.Equal(t, opName+": lock-op()", buf.String())
+
+	parker := types.NewPacker()
+	defer parker.Close()
+	opts := DefaultLockOptions(parker).
+		WithLockSharding(lock.Sharding_ByRow).
+		WithLockGroup(7).
+		WithLockMode(lock.LockMode_Shared).
+		WithLockTable(true, true)
+	require.Equal(t, lock.Sharding_ByRow, opts.sharding)
+	require.Equal(t, uint32(7), opts.group)
+	require.Equal(t, lock.LockMode_Shared, opts.mode)
+	require.True(t, opts.lockTable)
+	require.True(t, opts.changeDef)
 }
 
 func TestRefreshLockWaitOptionsUsesRemainingDeadline(t *testing.T) {
@@ -238,7 +252,7 @@ func TestHasNewVersionInRange(t *testing.T) {
 		nil,
 		txnOp,
 		nil,
-		eng,
+		nil,
 		nil,
 		nil,
 		nil,
@@ -246,7 +260,7 @@ func TestHasNewVersionInRange(t *testing.T) {
 		nil,
 	)
 	analyzer := process.NewTempAnalyzer()
-	bat := batch.New(true)
+	bat := batch.New(nil)
 
 	changed, err := hasNewVersionInRange(proc, rel, analyzer, 1, eng, nil, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
 	require.NoError(t, err)
@@ -924,6 +938,8 @@ func TestLockWithRetryFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 }
 
 func TestLockWithRetryRetriesInsideLoopAndReturnsSecondResult(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
