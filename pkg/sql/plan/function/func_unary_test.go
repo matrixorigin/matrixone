@@ -6993,6 +6993,21 @@ func TestPi(t *testing.T) {
 	}
 }
 
+func TestRowCount(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// ROW_COUNT() reads the affected rows recorded on the process, including
+	// the -1 sentinel used after result-set statements.
+	for _, want := range []int64{0, 1, 2, 100, -1} {
+		proc.SetAffectedRows(want)
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_int8.ToType(), []int8{0}, []bool{false})},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{want}, []bool{false}),
+			RowCount)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("row_count want %d, err info is '%s'", want, info))
+	}
+}
+
 func initUTCTimestampTestCase() []tcTemp {
 	return []tcTemp{
 		{
