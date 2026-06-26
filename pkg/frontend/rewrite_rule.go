@@ -254,7 +254,13 @@ func extractInlineRewrites(ctx context.Context, sql string) (rewrites map[string
 	if content == "" || content[0] != '{' {
 		return nil, nil, nil
 	}
-	return parseSessionRewrites(ctx, content)
+	rewrites, remapDb, perr := parseSessionRewrites(ctx, content)
+	if perr != nil {
+		// Report this as an inline-hint problem rather than reusing the
+		// remap_rewrites session-variable wording from parseSessionRewrites.
+		return nil, nil, moerr.NewInvalidInputf(ctx, "invalid inline rewrite hint %q", content)
+	}
+	return rewrites, remapDb, nil
 }
 
 // leadingHintContent extracts the inner content of the first leading

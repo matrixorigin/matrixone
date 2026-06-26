@@ -771,6 +771,9 @@ func TestExtractInlineRewrites(t *testing.T) {
 	t.Run("malformed json hint", func(t *testing.T) {
 		_, _, err := extractInlineRewrites(ctx, `/*+ {not json} */ select 1`)
 		require.Error(t, err)
+		// The error should point at the inline hint, not the remap_rewrites var.
+		require.Contains(t, err.Error(), "invalid inline rewrite hint")
+		require.NotContains(t, err.Error(), "remap_rewrites")
 	})
 }
 
