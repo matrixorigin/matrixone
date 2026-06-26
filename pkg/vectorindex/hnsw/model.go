@@ -50,6 +50,13 @@ type HnswModel[T types.RealNumbers] struct {
 	MaxCapacity uint
 	NThread     uint
 
+	// inflight counts adds that have been ASSIGNED to this index (a slot reserved
+	// under HnswBuild.mutex) but not yet completed. A concurrent capacity rollover
+	// must wait for this to drain before SaveToFile() saves+destroys the index, so an
+	// in-flight worker never adds to a destroyed usearch index or persists a partial
+	// one. Build-only; unused for Search/Sync.
+	inflight sync.WaitGroup
+
 	// from metadata.  info required for search
 	Timestamp int64
 	Checksum  string
