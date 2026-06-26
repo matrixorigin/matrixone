@@ -2456,6 +2456,18 @@ func validateIncludeColumns(ctx CompilerContext,
 	return nil
 }
 
+func getVectorIndexIncludeColumnNames(indexInfo *tree.Index) []string {
+	if indexInfo == nil || indexInfo.IndexOption == nil || len(indexInfo.IndexOption.IncludeColumns) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(indexInfo.IndexOption.IncludeColumns))
+	for _, col := range indexInfo.IndexOption.IncludeColumns {
+		names = append(names, col.ColName())
+	}
+	return names
+}
+
 func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 	indexTableName, indexAlgoTableType string,
 	indexParts []string, isUnique bool) (*plan.IndexDef, error) {
@@ -2466,6 +2478,7 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 
 	indexDef.IndexTableName = indexTableName
 	indexDef.Parts = indexParts
+	indexDef.IncludedColumns = getVectorIndexIncludeColumnNames(indexInfo)
 
 	indexDef.Unique = isUnique
 	indexDef.TableExist = true

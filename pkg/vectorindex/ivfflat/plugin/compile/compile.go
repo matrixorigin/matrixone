@@ -29,7 +29,9 @@ package compile
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -327,7 +329,7 @@ func ivfIndexCentroidsTable(
 		}
 
 		sql = fmt.Sprintf("SELECT * FROM ivf_create('%s', '%s') AS f;",
-			indexDef.IndexAlgoParams, string(cfgbytes))
+			escapeSQLStringLiteral(indexDef.IndexAlgoParams), escapeSQLStringLiteral(string(cfgbytes)))
 	}
 
 	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
@@ -386,36 +388,64 @@ func ivfIndexEntriesTable(
 	qryDatabase string, originalTableDef *plan.TableDef,
 	metadataTableName, centroidsTableName string,
 ) error {
-	val, err := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
-	optype, err := val.StrictString()
-	if err != nil {
-		return err
+	optype, ok := params[catalog.IndexAlgoParamOpType]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("vector optype not found")
+	}
+
+	includeCols := slices.Clone(indexDef.IncludedColumns)
+	if len(includeCols) == 0 {
+		includeColumns, ok := params[catalog.IncludedColumns]
+		if ok && includeColumns != "" {
+			includeCols, err = catalog.ParseIncludeColumnsValue(includeColumns)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	var originalTblPkColsCommaSeparated, originalTblPkColMaySerial string
+	srcAlias := "src"
+	centroidsAlias := "centroids_cur"
+	srcTableRef := fmt.Sprintf("`%s`.`%s`", qryDatabase, originalTableDef.Name)
 	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		for i, part := range originalTableDef.Pkey.Names {
 			if i > 0 {
 				originalTblPkColsCommaSeparated += ","
 			}
-			originalTblPkColsCommaSeparated += fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, part)
+			originalTblPkColsCommaSeparated += fmt.Sprintf("`%s`.`%s`", srcAlias, part)
 		}
 		originalTblPkColMaySerial = fmt.Sprintf("serial(%s)", originalTblPkColsCommaSeparated)
 	} else {
-		originalTblPkColsCommaSeparated = fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, originalTableDef.Pkey.PkeyColName)
+		originalTblPkColsCommaSeparated = fmt.Sprintf("`%s`.`%s`", srcAlias, originalTableDef.Pkey.PkeyColName)
 		originalTblPkColMaySerial = originalTblPkColsCommaSeparated
 	}
 
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
-		qryDatabase,
-		indexDef.IndexTableName,
+	insertCols := []string{
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+	}
+	selectCols := []string{
+		fmt.Sprintf("`%s`.`%s`", centroidsAlias, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version),
+		fmt.Sprintf("`%s`.`%s`", centroidsAlias, catalog.SystemSI_IVFFLAT_TblCol_Centroids_id),
+		originalTblPkColMaySerial,
+		fmt.Sprintf("`%s`.`%s`", srcAlias, indexDef.Parts[0]),
+	}
+	for _, includeCol := range includeCols {
+		insertCols = append(insertCols, catalog.SystemSI_IVFFLAT_IncludeColPrefix+includeCol)
+		selectCols = append(selectCols, fmt.Sprintf("`%s`.`%s`", srcAlias, includeCol))
+	}
+
+	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) ",
+		qryDatabase,
+		indexDef.IndexTableName,
+		joinQuotedIdentifiers(insertCols),
 	)
 
 	centroidsTableForCurrentVersionSql := fmt.Sprintf("(select * from "+
@@ -428,21 +458,18 @@ func ivfIndexEntriesTable(
 		qryDatabase,
 		metadataTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		centroidsTableName,
+		centroidsAlias,
 	)
 
 	indexColumnName := indexDef.Parts[0]
 	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
-		"SELECT `%s`, `%s`,  %s, `%s`"+
-		" FROM `%s`.`%s` CENTROIDX ('%s') join %s "+
+		"SELECT %s"+
+		" FROM %s AS `%s` CENTROIDX ('%s') join %s "+
 		" using (`%s`, `%s`) ",
 		insertSQL,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-		originalTblPkColMaySerial,
-		indexColumnName,
-		qryDatabase,
-		originalTableDef.Name,
+		strings.Join(selectCols, ", "),
+		srcTableRef,
+		srcAlias,
 		optype,
 		centroidsTableForCurrentVersionSql,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
@@ -456,6 +483,19 @@ func ivfIndexEntriesTable(
 		return err
 	}
 	return logTimestamp(ctx, qryDatabase, metadataTableName, "mapping_end")
+}
+
+func escapeSQLStringLiteral(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `'`, `''`)
+}
+
+func joinQuotedIdentifiers(cols []string) string {
+	quoted := make([]string, len(cols))
+	for i, col := range cols {
+		quoted[i] = fmt.Sprintf("`%s`", col)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // registerIdxcronUpdate is lifted from Scope.handleIvfIndexRegisterUpdate

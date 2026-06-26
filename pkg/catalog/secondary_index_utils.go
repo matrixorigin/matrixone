@@ -113,7 +113,11 @@ const (
 	IntermediateGraphDegree = "intermediate_graph_degree"
 	GraphDegree             = "graph_degree"
 	ITopkSize               = "itopk_size"
-	IncludedColumns         = "included_columns"
+	// IncludedColumns is catalog/build metadata. SHOW CREATE renders INCLUDE
+	// from plan.IndexDef.IncludedColumns, not from flat algo_params, to avoid
+	// duplicate INCLUDE clauses when both locations are populated for
+	// compatibility.
+	IncludedColumns = "included_columns"
 
 	// Index-defining build params, settable as CREATE INDEX options (parsed by
 	// each plugin's ParamsFromTree). Written into flat algo_params only when
@@ -125,6 +129,45 @@ const (
 
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
 )
+
+func MarshalIncludeColumnsValue(cols []string) (string, error) {
+	if len(cols) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(cols)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func ParseIncludeColumnsValue(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	if strings.HasPrefix(raw, "[") {
+		var cols []string
+		if err := json.Unmarshal([]byte(raw), &cols); err == nil {
+			return cols, nil
+		}
+	}
+
+	parts := strings.Split(raw, ",")
+	cols := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		cols = append(cols, part)
+	}
+	if len(cols) == 0 {
+		return nil, nil
+	}
+	return cols, nil
+}
 
 /* 1. ToString Functions */
 
@@ -219,18 +262,6 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxIndexCapacity, val)
 	}
 
-	if val, ok := result[IncludedColumns]; ok && len(val) > 0 {
-		raw := strings.Split(val, ",")
-		parts := make([]string, 0, len(raw))
-		for _, p := range raw {
-			if p = strings.TrimSpace(p); p != "" {
-				parts = append(parts, p)
-			}
-		}
-		if len(parts) > 0 {
-			res += " INCLUDE (" + strings.Join(parts, ", ") + ") "
-		}
-	}
 	return res, nil
 }
 
@@ -420,7 +451,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_RTREE:
 			// do nothing
 		case tree.INDEX_TYPE_MASTER:
-			// do nothing
+		// do nothing
 		default:
 			// Vector algorithms (IVFFLAT / HNSW / CAGRA / IVFPQ) build their
 			// algo_params via the per-plugin plan hook BuildIndexParams; they
