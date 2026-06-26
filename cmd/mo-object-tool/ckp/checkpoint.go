@@ -1848,7 +1848,9 @@ func dumpTablesConcurrently(
 			return
 		}
 		errMu.Lock()
-		dumpErr = preferRealError(dumpErr, err)
+		if !isContextCanceledOnly(err) {
+			dumpErr = preferRealError(dumpErr, err)
+		}
 		errMu.Unlock()
 		cancel()
 	}
@@ -2027,6 +2029,9 @@ func dumpOneTable(
 }
 
 func dumpTableError(dumpErr, closeErr error) error {
+	if dumpErr != nil && closeErr != nil && dumpErr.Error() == closeErr.Error() {
+		return dumpErr
+	}
 	return preferRealError(dumpErr, closeErr)
 }
 
@@ -2043,6 +2048,34 @@ func preferRealError(current, next error) error {
 	default:
 		return errors.Join(current, next)
 	}
+}
+
+func isContextCanceledOnly(err error) bool {
+	if err == nil || !errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	type multiUnwrapper interface {
+		Unwrap() []error
+	}
+	if unwrapped, ok := err.(multiUnwrapper); ok {
+		errs := unwrapped.Unwrap()
+		if len(errs) == 0 {
+			return false
+		}
+		for _, inner := range errs {
+			if !isContextCanceledOnly(inner) {
+				return false
+			}
+		}
+		return true
+	}
+	type unwrapper interface {
+		Unwrap() error
+	}
+	if unwrapped, ok := err.(unwrapper); ok {
+		return isContextCanceledOnly(unwrapped.Unwrap())
+	}
+	return true
 }
 
 func safePathPart(s string) string {

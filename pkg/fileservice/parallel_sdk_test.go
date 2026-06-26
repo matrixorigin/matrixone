@@ -720,6 +720,67 @@ func TestCOSMultipartUploadPartError(t *testing.T) {
 	}
 }
 
+func TestCOSMultipartUploadPartRetriesServerClosedIdleConnection(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "cos-uid-retry-idle-conn"
+
+	baseClient := server.Client()
+	baseTransport := baseClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	transport := &cosUploadPartIdleConnTransport{
+		base: baseTransport,
+		part: "1",
+	}
+	baseClient.Transport = transport
+
+	baseURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	client := costypes.NewClient(
+		&costypes.BaseURL{BucketURL: baseURL},
+		baseClient,
+	)
+	client.Conf.EnableCRC = false
+	sdk := &QCloudSDK{
+		name:   "cos-retry-idle-conn-test",
+		client: client,
+	}
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	size := int64(len(data))
+	if err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
+		PartSize:    minMultipartPartSize,
+		Concurrency: 1,
+	}); err != nil {
+		t.Fatalf("write failed after transient upload-part error: %v", err)
+	}
+	if transport.uploadPartCalls.Load() < 2 {
+		t.Fatalf("expected upload part retry, got %d calls", transport.uploadPartCalls.Load())
+	}
+	if !state.completed.Load() {
+		t.Fatalf("expected multipart upload complete")
+	}
+}
+
+type cosUploadPartIdleConnTransport struct {
+	base            http.RoundTripper
+	part            string
+	uploadPartCalls atomic.Int32
+}
+
+func (t *cosUploadPartIdleConnTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method == http.MethodPut && req.URL.Query().Get("partNumber") == t.part {
+		if t.uploadPartCalls.Add(1) == 1 {
+			return nil, fmt.Errorf("http: server closed idle connection")
+		}
+	}
+	return t.base.RoundTrip(req)
+}
+
 func TestCOSParallelMultipartUnknownSize(t *testing.T) {
 	server, state := newMockCOSServer(t, 0)
 	defer server.Close()

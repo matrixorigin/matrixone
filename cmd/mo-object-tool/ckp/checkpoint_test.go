@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,23 @@ func TestPreferRealErrorKeepsNonCanceledRootCause(t *testing.T) {
 	assert.ErrorIs(t, preferRealError(root, context.Canceled), root)
 	assert.ErrorIs(t, preferRealError(context.Canceled, context.Canceled), context.Canceled)
 	assert.NoError(t, preferRealError(nil, nil))
+}
+
+func TestDumpTableErrorDedupesPipeWriteAndCloseError(t *testing.T) {
+	err := errors.New("s3 write failed")
+
+	assert.Equal(t, err, dumpTableError(err, errors.New("s3 write failed")))
+}
+
+func TestIsContextCanceledOnly(t *testing.T) {
+	root := errors.New("s3 write failed")
+
+	assert.True(t, isContextCanceledOnly(context.Canceled))
+	assert.True(t, isContextCanceledOnly(fmt.Errorf("dump table 1: %w", context.Canceled)))
+	assert.True(t, isContextCanceledOnly(errors.Join(context.Canceled, fmt.Errorf("worker: %w", context.Canceled))))
+	assert.False(t, isContextCanceledOnly(root))
+	assert.False(t, isContextCanceledOnly(context.DeadlineExceeded))
+	assert.False(t, isContextCanceledOnly(errors.Join(context.Canceled, root)))
 }
 
 func TestNormalizeCreateTableDDLName(t *testing.T) {
