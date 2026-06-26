@@ -5867,10 +5867,10 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 }
 
 // hasJoinDescendant returns true if any node in the subtree rooted at nodeID
-// is a JOIN node.  Uses plan.Node_JOIN (14) constant.
+// is a JOIN node.
 func (c *Compile) hasJoinDescendant(nodeID int32) bool {
 	node := c.anal.qry.Nodes[nodeID]
-	if node.NodeType == 14 { // plan.Node_JOIN
+	if node.NodeType == plan.Node_JOIN {
 		return true
 	}
 	for _, childID := range node.Children {
