@@ -967,6 +967,18 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 }
 
 func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	return forceCastExprWithName(ctx, expr, targetType, "cast")
+}
+
+func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	funcName := "cast"
+	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
+		funcName = "cast_strict"
+	}
+	return forceCastExprWithName(ctx, expr, targetType, funcName)
+}
+
+func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
 	}
@@ -976,7 +988,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, err
 	}
 
 	targetType.NotNullable = expr.Typ.NotNullable
-	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}
@@ -989,7 +1001,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, err
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: funcName},
 				Args: []*Expr{expr, t},
 			},
 		},

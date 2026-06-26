@@ -1,4 +1,4 @@
--- @bvt:issue#23176
+-- @label:bvt
 drop database if exists update_text_coalesce_cast;
 create database update_text_coalesce_cast;
 use update_text_coalesce_cast;

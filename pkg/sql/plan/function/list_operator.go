@@ -2575,6 +2575,33 @@ var supportedOperators = []FuncNew{
 		},
 	},
 
+	// operator `cast_strict`
+	{
+		functionId: CAST_STRICT,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 2 {
+				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewStrictCast
+				},
+			},
+		},
+	},
+
 	// operator `bit_cast`
 	{
 		functionId: BIT_CAST,

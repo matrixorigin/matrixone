@@ -2063,7 +2063,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, from, to, len(tt.inputs), tt.toType)
+			err = strToStr(ctx, from, to, len(tt.inputs), tt.toType, false)
 			require.NoError(t, err)
 
 			resultVec := to.GetResultVector()
@@ -3397,7 +3397,7 @@ func Test_strToStr_TextLengthCheck(t *testing.T) {
 	defer to.Free()
 	require.NoError(t, to.PreExtendAndReset(1))
 
-	err := strToStr(ctx, from, to, 1, toType)
+	err := strToStr(ctx, from, to, 1, toType, false)
 	require.NoError(t, err)
 
 	// TEXT -> VARCHAR(3): value too long, should truncate
@@ -3412,7 +3412,7 @@ func Test_strToStr_TextLengthCheck(t *testing.T) {
 	defer to2.Free()
 	require.NoError(t, to2.PreExtendAndReset(1))
 
-	err = strToStr(ctx, from2, to2, 1, toType2)
+	err = strToStr(ctx, from2, to2, 1, toType2, false)
 	require.NoError(t, err)
 	get, null := vector.GenerateFunctionStrParameter(resultVec2.GetResultVector()).GetStrValue(0)
 	require.False(t, null)

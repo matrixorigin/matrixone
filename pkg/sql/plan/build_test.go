@@ -184,7 +184,7 @@ func exprHasTextToCharOrVarcharCast(expr *plan.Expr) bool {
 		return false
 	}
 	if f := expr.GetF(); f != nil {
-		if f.Func.GetObjName() == "cast" && len(f.Args) > 0 &&
+		if (f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict") && len(f.Args) > 0 &&
 			f.Args[0].Typ.Id == int32(types.T_text) &&
 			(expr.Typ.Id == int32(types.T_char) || expr.Typ.Id == int32(types.T_varchar)) {
 			return true
@@ -215,7 +215,7 @@ func planHasTextToVarcharCastWithWidth(p *Plan, width int32) bool {
 			return false
 		}
 		if f := expr.GetF(); f != nil {
-			if f.Func.GetObjName() == "cast" && len(f.Args) > 0 &&
+			if (f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict") && len(f.Args) > 0 &&
 				f.Args[0].Typ.Id == int32(types.T_text) &&
 				expr.Typ.Id == int32(types.T_varchar) &&
 				expr.Typ.Width == width {
