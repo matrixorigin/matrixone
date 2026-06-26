@@ -24,17 +24,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// applyRemapDbToSQL parses sql, attaches remap as the statement's RemapDb, runs
-// applyRemapDb, and returns the re-stringified statement.
+// applyRemapDbToSQL parses sql, runs applyRemapDb with the given remap, and
+// returns the re-stringified statement.
 func applyRemapDbToSQL(t *testing.T, sql string, remap map[string]string) string {
 	ctx := context.Background()
 	stmts, err := parsers.Parse(ctx, dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
-	if sel, ok := asRemapSelect(stmts[0]); ok {
-		sel.RewriteOption = &tree.RewriteOption{RemapDb: remap}
-	}
-	applyRemapDb(stmts)
+	applyRemapDb(stmts, remap)
 	return tree.String(stmts[0], dialect.MYSQL)
 }
 
@@ -83,5 +80,30 @@ func TestApplyRemapDb(t *testing.T) {
 	t.Run("non-mapped db untouched", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "select * from other.t", remap)
 		require.Contains(t, out, "other.t")
+	})
+
+	t.Run("insert target and select source", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "insert into dbxxx.t select * from dbxxx.u", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.Contains(t, out, "dbyyy.u")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("insert values", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "insert into dbxxx.t values (1)", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("update", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "update dbxxx.t set v = 1 where id = 2", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "delete from dbxxx.t where id = 2", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.NotContains(t, out, "dbxxx")
 	})
 }

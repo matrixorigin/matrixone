@@ -39,6 +39,32 @@ set remap_rewrites = '{"remapdb": {"rdb_src": "nosuchdb"}}';
 /*+ {"remapdb": {"rdb_src": "rdb_dst"}} */ select * from rdb_src.t order by id;
 set remap_rewrites = '';
 
+-- a single inline hint carrying BOTH remapdb and a table rewrite: remapdb is
+-- applied first (rdb_src.t -> rdb_dst.t), then the rewrite keyed on rdb_dst.t
+/*+ {"remapdb": {"rdb_src": "rdb_dst"}, "rewrites": {"rdb_dst.t": "select * from rdb_dst.t where id = 2"}} */ select * from rdb_src.t order by id;
+
+-- session remapdb combined with an inline rewrite in the same query
+set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst"}}';
+/*+ {"rewrites": {"rdb_dst.t": "select * from rdb_dst.t where id >= 2"}} */ select * from rdb_src.t order by id;
+set remap_rewrites = '';
+
+-- remapdb works with INSERT / UPDATE / DELETE (the modified table is remapped
+-- like any other reference)
+drop database if exists rdb_dml;
+create database rdb_dml;
+create table rdb_dml.t(id int, v int);
+insert into rdb_dml.t values (1,10),(2,20),(3,30);
+create table rdb_dml.u(id int, v int);
+set remap_rewrites = '{"remapdb": {"rdb_src_dml": "rdb_dml"}}';
+insert into rdb_src_dml.u select * from rdb_src_dml.t where id <= 2;
+select * from rdb_dml.u order by id;
+update rdb_src_dml.t set v = 999 where id = 3;
+select * from rdb_dml.t order by id;
+delete from rdb_src_dml.t where id = 1;
+select * from rdb_dml.t order by id;
+set remap_rewrites = '';
+drop database if exists rdb_dml;
+
 -- USE <src> switches the session to the target database; unqualified names then
 -- resolve there
 use rdb_src;

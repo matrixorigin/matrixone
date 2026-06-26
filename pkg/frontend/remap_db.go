@@ -19,49 +19,68 @@ import (
 )
 
 // applyRemapDb substitutes the database of qualified table references in the
-// parsed statements (db.table -> remapdb[db].table), using the remapdb config
-// carried on each statement's RewriteOption. It runs after parsing and before
-// privilege checks / planning, which otherwise resolve the original database and
-// would reject a remapped-away database before the planner sees it.
+// parsed statements (db.table -> remap[db].table). It runs after parsing and
+// before privilege checks / planning, which otherwise resolve the original
+// database and would reject a remapped-away database before the planner sees it.
+// It covers SELECT and INSERT/UPDATE/DELETE (including their target tables,
+// read sources, INSERT ... SELECT bodies and CTE bodies).
 //
 // Only QUALIFIED references are rewritten. An unqualified name may be a CTE or
 // derived-table alias rather than a base table, so attaching a database to it
 // could change its meaning; the current-database case is instead handled by
 // remapping USE (the session lands on the target database and unqualified names
-// resolve there naturally).
-func applyRemapDb(stmts []tree.Statement) {
+// resolve there naturally). Sub-selects in expressions (e.g. WHERE IN (...)) are
+// not walked.
+func applyRemapDb(stmts []tree.Statement, remap map[string]string) {
+	if len(remap) == 0 {
+		return
+	}
 	for _, stmt := range stmts {
-		sel, ok := asRemapSelect(stmt)
-		if !ok || sel.RewriteOption == nil || len(sel.RewriteOption.RemapDb) == 0 {
-			continue
-		}
-		remapDbInSelect(sel, sel.RewriteOption.RemapDb)
+		remapDbInStmt(stmt, remap)
 	}
 }
 
-func asRemapSelect(stmt tree.Statement) (*tree.Select, bool) {
+func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
 	switch s := stmt.(type) {
 	case *tree.Select:
-		return s, true
+		remapDbInSelect(s, remap)
 	case *tree.ParenSelect:
-		return s.Select, s.Select != nil
+		remapDbInSelect(s.Select, remap)
+	case *tree.Insert:
+		remapDbInWith(s.With, remap)
+		remapDbInTableExpr(s.Table, remap)
+		if s.Rows != nil {
+			remapDbInSelect(s.Rows, remap)
+		}
+	case *tree.Update:
+		remapDbInWith(s.With, remap)
+		remapDbInTableExprs(s.Tables, remap)
+		if s.From != nil {
+			remapDbInTableExprs(s.From.Tables, remap)
+		}
+	case *tree.Delete:
+		remapDbInWith(s.With, remap)
+		remapDbInTableExprs(s.Tables, remap)
+		remapDbInTableExprs(s.TableRefs, remap)
 	}
-	return nil, false
+}
+
+func remapDbInWith(w *tree.With, remap map[string]string) {
+	if w == nil {
+		return
+	}
+	for _, cte := range w.CTEs {
+		if cte != nil {
+			remapDbInStmt(cte.Stmt, remap)
+		}
+	}
 }
 
 func remapDbInSelect(sel *tree.Select, remap map[string]string) {
 	if sel == nil {
 		return
 	}
-	if sel.With != nil {
-		for _, cte := range sel.With.CTEs {
-			if cte != nil {
-				if s, ok := asRemapSelect(cte.Stmt); ok {
-					remapDbInSelect(s, remap)
-				}
-			}
-		}
-	}
+	remapDbInWith(sel.With, remap)
 	remapDbInSelectStatement(sel.Select, remap)
 }
 
@@ -69,9 +88,7 @@ func remapDbInSelectStatement(s tree.SelectStatement, remap map[string]string) {
 	switch c := s.(type) {
 	case *tree.SelectClause:
 		if c.From != nil {
-			for _, te := range c.From.Tables {
-				remapDbInTableExpr(te, remap)
-			}
+			remapDbInTableExprs(c.From.Tables, remap)
 		}
 	case *tree.UnionClause:
 		remapDbInSelectStatement(c.Left, remap)
@@ -80,6 +97,12 @@ func remapDbInSelectStatement(s tree.SelectStatement, remap map[string]string) {
 		remapDbInSelect(c.Select, remap)
 	case *tree.Select:
 		remapDbInSelect(c, remap)
+	}
+}
+
+func remapDbInTableExprs(tes tree.TableExprs, remap map[string]string) {
+	for _, te := range tes {
+		remapDbInTableExpr(te, remap)
 	}
 }
 

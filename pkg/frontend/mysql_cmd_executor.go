@@ -2485,8 +2485,13 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 				}
 				// Apply remapdb (database-name substitution) on the parsed AST
 				// before privilege checks and planning resolve the original
-				// database.
-				applyRemapDb(stmts)
+				// database. The effective remapdb (role rules carry none, the
+				// session variable and any inline hint are merged by rewriteSQL
+				// into the leading hint) is read back from the statement text and
+				// applied to SELECT and INSERT/UPDATE/DELETE alike.
+				if _, remapDb, rerr := extractInlineRewrites(execCtx.reqCtx, execCtx.input.getSql()); rerr == nil {
+					applyRemapDb(stmts, remapDb)
+				}
 			}
 		}
 	}
