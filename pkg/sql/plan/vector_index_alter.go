@@ -36,6 +36,22 @@ func indexDependsOnColumn(indexDef *planpb.IndexDef, colName string) (bool, erro
 	return planplugin.IncludedColumnAffected(indexDef, colName), nil
 }
 
+func renameColumnRequiresPluginIndexRebuild(tableDef *planpb.TableDef, oldColName string) bool {
+	if tableDef == nil {
+		return false
+	}
+	for _, indexDef := range tableDef.Indexes {
+		if indexDef == nil {
+			continue
+		}
+		if catalog.ToLower(indexDef.IndexAlgo) == catalog.MoIndexIvfFlatAlgo.ToString() &&
+			planplugin.IncludedColumnAffected(indexDef, oldColName) {
+			return true
+		}
+	}
+	return false
+}
+
 func collectAffectedIndexNamesForAlter(indexDefs []*planpb.IndexDef, affectedCols []string) ([]string, error) {
 	if len(indexDefs) == 0 || len(affectedCols) == 0 {
 		return nil, nil
