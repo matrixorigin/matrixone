@@ -375,7 +375,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Type
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
-%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE
+%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE PRECISION
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
@@ -13126,6 +13126,34 @@ decimal_type:
        			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
                 Scale: $2.Scale,
+        	},
+        }
+    }
+|   DOUBLE PRECISION float_length_opt
+    {
+        // DOUBLE PRECISION is the SQL-standard synonym for DOUBLE (float64).
+        locale := ""
+        if $3.DisplayWith > 255 {
+            yylex.Error("Display width for double out of range (max = 255)")
+            goto ret1
+        }
+        if $3.Scale > 30 {
+            yylex.Error("Display scale for double out of range (max = 30)")
+            goto ret1
+        }
+        if $3.Scale != tree.NotDefineDec && $3.Scale > $3.DisplayWith {
+            yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+                goto ret1
+        }
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+        		Family: tree.FloatFamily,
+                FamilyString: $1,
+        		Width:  64,
+        		Locale: &locale,
+       			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
+                DisplayWith: $3.DisplayWith,
+                Scale: $3.Scale,
         	},
         }
     }

@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -30,10 +31,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDataBranchUserVisibleColumn(t *testing.T) {
+	require.True(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "tenant"}))
+	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.FakePrimaryKeyColName, Hidden: true}))
+	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.CPrimaryKeyColName, Hidden: true}))
+	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "__mo_cbkey_006tenant003seq", Hidden: true}))
+	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.Row_ID, Hidden: true}))
+}
+
+func TestDataBranchFakePKColIdxesUseOnlyVisibleColumns(t *testing.T) {
+	tblDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "tenant"},
+			{Name: "__mo_cbkey_006tenant003seq", Hidden: true},
+			{Name: "payload"},
+			{Name: catalog.FakePrimaryKeyColName, Hidden: true},
+			{Name: catalog.Row_ID, Hidden: true},
+		},
+	}
+	require.Equal(t, []int{0, 2}, dataBranchFakePKColIdxes(tblDef))
+}
 
 func TestFormatValIntoString_StringEscaping(t *testing.T) {
 	var buf bytes.Buffer
