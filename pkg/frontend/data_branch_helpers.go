@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -671,149 +672,202 @@ func compareSingleValInVector(
 		return 1, nil
 	}
 
-	// Use raw values to avoid format conversions in extractRowFromVector.
-	switch vec1.GetType().Oid {
-	case types.T_json:
-		return bytejson.CompareByteJson(
-			types.DecodeJson(vec1.GetBytesAt(rowIdx1)),
-			types.DecodeJson(vec2.GetBytesAt(rowIdx2)),
-		), nil
-	case types.T_bool:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[bool](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[bool](vec2, rowIdx2),
-		), nil
-	case types.T_bit:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2),
-		), nil
-	case types.T_int8:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[int8](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[int8](vec2, rowIdx2),
-		), nil
-	case types.T_uint8:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[uint8](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[uint8](vec2, rowIdx2),
-		), nil
-	case types.T_int16:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[int16](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[int16](vec2, rowIdx2),
-		), nil
-	case types.T_uint16:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[uint16](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[uint16](vec2, rowIdx2),
-		), nil
-	case types.T_int32:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[int32](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[int32](vec2, rowIdx2),
-		), nil
-	case types.T_uint32:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[uint32](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[uint32](vec2, rowIdx2),
-		), nil
-	case types.T_int64:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[int64](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[int64](vec2, rowIdx2),
-		), nil
-	case types.T_uint64:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2),
-		), nil
-	case types.T_float32:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[float32](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[float32](vec2, rowIdx2),
-		), nil
-	case types.T_float64:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[float64](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[float64](vec2, rowIdx2),
-		), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
-		return bytes.Compare(
-			vec1.GetBytesAt(rowIdx1),
-			vec2.GetBytesAt(rowIdx2),
-		), nil
-	case types.T_array_float32:
-		return types.CompareValue(
-			vector.GetArrayAt[float32](vec1, rowIdx1),
-			vector.GetArrayAt[float32](vec2, rowIdx2),
-		), nil
-	case types.T_array_float64:
-		return types.CompareValue(
-			vector.GetArrayAt[float64](vec1, rowIdx1),
-			vector.GetArrayAt[float64](vec2, rowIdx2),
-		), nil
-	case types.T_date:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.Date](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.Date](vec2, rowIdx2),
-		), nil
-	case types.T_datetime:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.Datetime](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.Datetime](vec2, rowIdx2),
-		), nil
-	case types.T_time:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.Time](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.Time](vec2, rowIdx2),
-		), nil
-	case types.T_timestamp:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec2, rowIdx2),
-		), nil
-	case types.T_year:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.MoYear](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.MoYear](vec2, rowIdx2),
-		), nil
-	case types.T_decimal64:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.Decimal64](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.Decimal64](vec2, rowIdx2),
-		), nil
-	case types.T_decimal128:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec2, rowIdx2),
-		), nil
-	case types.T_uuid:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.Uuid](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.Uuid](vec2, rowIdx2),
-		), nil
-	case types.T_Rowid:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.Rowid](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.Rowid](vec2, rowIdx2),
-		), nil
-	case types.T_Blockid:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.Blockid](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.Blockid](vec2, rowIdx2),
-		), nil
-	case types.T_TS:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.TS](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.TS](vec2, rowIdx2),
-		), nil
-	case types.T_enum:
-		return types.CompareValue(
-			vector.GetFixedAtNoTypeCheck[types.Enum](vec1, rowIdx1),
-			vector.GetFixedAtNoTypeCheck[types.Enum](vec2, rowIdx2),
-		), nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtxf("compareSingleValInVector : unsupported type %d", vec1.GetType().Oid)
+	left, err := compareValueFromVector(vec1, rowIdx1)
+	if err != nil {
+		return 0, err
 	}
+	right, err := compareValueFromVector(vec2, rowIdx2)
+	if err != nil {
+		return 0, err
+	}
+	return compareSingleValueByType(vec1.GetType().Oid, left, right)
+}
+
+func compareTupleValueWithVector(val any, vec *vector.Vector, rowIdx int) (int, error) {
+	if vec.IsConst() {
+		rowIdx = 0
+	}
+	if val == nil || vec.IsNull(uint64(rowIdx)) {
+		if val == nil && vec.IsNull(uint64(rowIdx)) {
+			return 0, nil
+		}
+		return 1, nil
+	}
+	left, err := normalizeCompareValue(*vec.GetType(), val)
+	if err != nil {
+		return 0, err
+	}
+	right, err := compareValueFromVector(vec, rowIdx)
+	if err != nil {
+		return 0, err
+	}
+	return compareSingleValueByType(vec.GetType().Oid, left, right)
+}
+
+func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
+	switch vec.GetType().Oid {
+	case types.T_json:
+		return types.DecodeJson(vec.GetBytesAt(rowIdx)), nil
+	case types.T_bool:
+		return vector.GetFixedAtNoTypeCheck[bool](vec, rowIdx), nil
+	case types.T_bit:
+		return vector.GetFixedAtNoTypeCheck[uint64](vec, rowIdx), nil
+	case types.T_int8:
+		return vector.GetFixedAtNoTypeCheck[int8](vec, rowIdx), nil
+	case types.T_uint8:
+		return vector.GetFixedAtNoTypeCheck[uint8](vec, rowIdx), nil
+	case types.T_int16:
+		return vector.GetFixedAtNoTypeCheck[int16](vec, rowIdx), nil
+	case types.T_uint16:
+		return vector.GetFixedAtNoTypeCheck[uint16](vec, rowIdx), nil
+	case types.T_int32:
+		return vector.GetFixedAtNoTypeCheck[int32](vec, rowIdx), nil
+	case types.T_uint32:
+		return vector.GetFixedAtNoTypeCheck[uint32](vec, rowIdx), nil
+	case types.T_int64:
+		return vector.GetFixedAtNoTypeCheck[int64](vec, rowIdx), nil
+	case types.T_uint64:
+		return vector.GetFixedAtNoTypeCheck[uint64](vec, rowIdx), nil
+	case types.T_float32:
+		return vector.GetFixedAtNoTypeCheck[float32](vec, rowIdx), nil
+	case types.T_float64:
+		return vector.GetFixedAtNoTypeCheck[float64](vec, rowIdx), nil
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+		return vec.GetBytesAt(rowIdx), nil
+	case types.T_array_float32:
+		return vector.GetArrayAt[float32](vec, rowIdx), nil
+	case types.T_array_float64:
+		return vector.GetArrayAt[float64](vec, rowIdx), nil
+	case types.T_date:
+		return vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx), nil
+	case types.T_datetime:
+		return vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIdx), nil
+	case types.T_time:
+		return vector.GetFixedAtNoTypeCheck[types.Time](vec, rowIdx), nil
+	case types.T_timestamp:
+		return vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, rowIdx), nil
+	case types.T_year:
+		return vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIdx), nil
+	case types.T_decimal64:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIdx), nil
+	case types.T_decimal128:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIdx), nil
+	case types.T_uuid:
+		return vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIdx), nil
+	case types.T_Rowid:
+		return vector.GetFixedAtNoTypeCheck[types.Rowid](vec, rowIdx), nil
+	case types.T_Blockid:
+		return vector.GetFixedAtNoTypeCheck[types.Blockid](vec, rowIdx), nil
+	case types.T_TS:
+		return vector.GetFixedAtNoTypeCheck[types.TS](vec, rowIdx), nil
+	case types.T_enum:
+		return vector.GetFixedAtNoTypeCheck[types.Enum](vec, rowIdx), nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("compareSingleValInVector : unsupported type %d", vec.GetType().Oid)
+	}
+}
+
+func normalizeCompareValue(typ types.Type, val any) (any, error) {
+	switch typ.Oid {
+	case types.T_json:
+		switch v := val.(type) {
+		case bytejson.ByteJson:
+			return v, nil
+		case []byte:
+			return types.DecodeJson(v), nil
+		}
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+		switch v := val.(type) {
+		case []byte:
+			return v, nil
+		case string:
+			return []byte(v), nil
+		}
+	case types.T_array_float32:
+		switch v := val.(type) {
+		case []float32:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[float32](v), nil
+		}
+	case types.T_array_float64:
+		switch v := val.(type) {
+		case []float64:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[float64](v), nil
+		}
+	case types.T_Rowid:
+		return normalizeFixedCompareValue[types.Rowid](typ, val)
+	case types.T_Blockid:
+		return normalizeFixedCompareValue[types.Blockid](typ, val)
+	case types.T_TS:
+		return normalizeFixedCompareValue[types.TS](typ, val)
+	case types.T_year:
+		return normalizeFixedCompareValue[types.MoYear](typ, val)
+	case types.T_enum:
+		switch v := val.(type) {
+		case types.Enum:
+			return v, nil
+		case uint16:
+			return types.Enum(v), nil
+		}
+	default:
+		return val, nil
+	}
+	return nil, moerr.NewInternalErrorNoCtxf(
+		"unexpected compare value type %T for column type %s",
+		val, typ.String(),
+	)
+}
+
+func normalizeFixedCompareValue[T types.FixedSizeT](typ types.Type, val any) (any, error) {
+	if typed, ok := val.(T); ok {
+		return typed, nil
+	}
+	if v, ok := val.([]byte); ok {
+		if len(v) == 0 {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"empty raw compare value for column type %s",
+				typ.String(),
+			)
+		}
+		return types.DecodeFixed[T](v), nil
+	}
+	return nil, moerr.NewInternalErrorNoCtxf(
+		"unexpected compare value type %T for column type %s",
+		val, typ.String(),
+	)
+}
+
+func compareSingleValueByType(typ types.T, left any, right any) (int, error) {
+	if left == nil || right == nil {
+		return types.CompareValue(left, right), nil
+	}
+	if reflect.TypeOf(left) != reflect.TypeOf(right) {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"compareSingleValInVector : unsupported or mismatched type %d (%T <-> %T)",
+			typ, left, right,
+		)
+	}
+
+	switch left.(type) {
+	case bool,
+		uint64,
+		int8, int16, int32, int64,
+		uint8, uint16, uint32,
+		float32, float64,
+		types.Decimal64, types.Decimal128,
+		types.Date, types.Time, types.Timestamp, types.Datetime, types.MoYear,
+		types.Uuid, types.TS, types.Blockid, types.Rowid,
+		[]byte, bytejson.ByteJson,
+		[]float32, []float64,
+		types.Enum, string:
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"compareSingleValInVector : unsupported or mismatched type %d (%T <-> %T)",
+			typ, left, right,
+		)
+	}
+	return types.CompareValue(left, right), nil
 }
