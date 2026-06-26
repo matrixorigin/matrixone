@@ -1599,6 +1599,28 @@ func TestReplaceFakePKCompositeNullableUKSkipsNullKeyIndex(t *testing.T) {
 		"REPLACE with a fully non-NULL composite unique key must maintain the unique index table")
 }
 
+func TestReplaceChildParentFKUsesInPlanCheck(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// emp has a child->parent foreign key (deptno references dept(deptno)). REPLACE
+	// must enforce parent existence in-plan with the per-FK MARK-join assert the modern
+	// INSERT path uses, not silently allow an orphan child row. emp has no
+	// self-referencing FK, so DetectSqls must be empty.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO emp VALUES (1, 'Alice', 'DEV', 0, '2020-01-01', 5000.00, 500.00, 1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	hasMark := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			hasMark = true
+		}
+	}
+	assert.True(t, hasMark, "REPLACE on a child FK table must enforce parent existence via an in-plan MARK join")
+	assert.Empty(t, query.DetectSqls, "child->parent FK on REPLACE should be enforced in-plan, not via DetectSqls")
+}
+
 func TestReplaceFKTable(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// REPLACE on table with foreign key should pass (modern path)
@@ -1760,7 +1782,7 @@ func TestInsertOnDupChildParentFKUsesInPlanCheck(t *testing.T) {
 	assert.Empty(t, query.DetectSqls,
 		"ODKU with only a child→parent FK should enforce it in-plan, not via DetectSqls")
 
-	hasFilter, hasMultiUpdate := false, false
+	hasFilter, hasMultiUpdate, hasMark := false, false, false
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
 			hasFilter = true
@@ -1768,9 +1790,13 @@ func TestInsertOnDupChildParentFKUsesInPlanCheck(t *testing.T) {
 		if node.NodeType == plan.Node_MULTI_UPDATE {
 			hasMultiUpdate = true
 		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			hasMark = true
+		}
 	}
 	assert.True(t, hasFilter, "child→parent FK ODKU should contain an in-plan assert FILTER node")
 	assert.True(t, hasMultiUpdate, "child→parent FK ODKU should stay on the modern MULTI_UPDATE path")
+	assert.True(t, hasMark, "child→parent FK ODKU must use a per-FK MARK join (null-aware MATCH SIMPLE), not a global isnotnull pre-filter")
 }
 
 func TestInsertIgnoreChildParentFKDropsRows(t *testing.T) {

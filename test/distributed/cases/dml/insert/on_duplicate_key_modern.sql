@@ -271,3 +271,25 @@ insert ignore into t_ign_fk_child values (10, 1), (11, 2), (12, 4), (13, 1), (14
 select cid, pid from t_ign_fk_child order by cid;
 drop table if exists t_ign_fk_child;
 drop table if exists t_ign_fk_parent;
+
+-- Multi-FK ON DUPLICATE KEY UPDATE: per-FK MATCH SIMPLE. Setting one FK column to NULL
+-- skips only its own FK; another non-NULL FK pointing at a missing parent must still
+-- fail. (The old global isnotnull pre-filter dropped the row from the entire check as
+-- soon as ANY FK column was NULL, so it skipped every FK's validation.)
+drop table if exists t_odku_mfk_child;
+drop table if exists t_odku_mfk_p1;
+drop table if exists t_odku_mfk_p2;
+create table t_odku_mfk_p1(id int primary key);
+create table t_odku_mfk_p2(id int primary key);
+create table t_odku_mfk_child(cid int primary key, a int, b int, foreign key(a) references t_odku_mfk_p1(id), foreign key(b) references t_odku_mfk_p2(id));
+insert into t_odku_mfk_p1 values (1);
+insert into t_odku_mfk_p2 values (1);
+insert into t_odku_mfk_child values (1, 1, 1);
+-- a set NULL (its FK skipped), b set to a non-existent parent -> must still fail on b.
+insert into t_odku_mfk_child values (1, 1, 1) on duplicate key update a = NULL, b = 999;
+-- a set NULL (skipped), b valid -> must pass.
+insert into t_odku_mfk_child values (1, 1, 1) on duplicate key update a = NULL, b = 1;
+select cid, a, b from t_odku_mfk_child order by cid;
+drop table if exists t_odku_mfk_child;
+drop table if exists t_odku_mfk_p1;
+drop table if exists t_odku_mfk_p2;

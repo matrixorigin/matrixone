@@ -73,6 +73,24 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectTag := selectNode.BindingTags[0]
 
+	// Enforce child->parent foreign keys on the inserted image with the same
+	// row-scoped per-FK MARK-join assert the modern INSERT path uses. REPLACE always
+	// inserts the new row (after deleting any conflicting row), so asserting the new
+	// row's FKs covers both the insert-only and the conflict-replace cases: a missing
+	// parent fails the statement, a NULL FK column satisfies MATCH SIMPLE, and a
+	// self-referencing FK is left to the post-execution DetectSql in
+	// bindAndOptimizeReplaceQuery.
+	if fkEnabled, fkErr := builder.modernInsertFkCheckEnabled(tableDef); fkErr != nil {
+		return 0, fkErr
+	} else if fkEnabled {
+		var assertErr error
+		if lastNodeID, selectTag, assertErr = builder.buildModernChildFkAssert(bindCtx, tableDef, lastNodeID, selectTag,
+			func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }); assertErr != nil {
+			return 0, assertErr
+		}
+		selectNode = builder.qry.Nodes[lastNodeID]
+	}
+
 	fullProjTag := builder.genNewBindTag()
 	fullProjList := make([]*plan.Expr, 0, len(selectNode.ProjectList)+len(tableDef.Cols))
 	for i, expr := range selectNode.ProjectList {

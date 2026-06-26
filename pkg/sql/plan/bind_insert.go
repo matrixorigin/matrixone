@@ -842,19 +842,11 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 // path uses (reduceSinkSinkScanNodes + tempOptimizeForDML). It is a no-op when the
 // table has no irregular indexes. Shared by the modern INSERT and LOAD paths.
 func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, bindCtx *BindContext) error {
-	if len(builder.irregularMaintIndexes) == 0 && !builder.modernFkCheck {
+	if len(builder.irregularMaintIndexes) == 0 {
 		return nil
 	}
 	if len(builder.irregularMaintIndexes) > 0 {
 		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
-			return err
-		}
-	}
-	if builder.modernFkCheck {
-		// Row-scoped child→parent FK parent-existence check over the materialized
-		// new-row image (irregularMaintTableDef keeps the table's Fkeys/Cols).
-		if err := appendForeignConstrantPlan(builder, bindCtx, builder.irregularMaintTableDef,
-			builder.irregularMaintObjRef, builder.irregularMaintSourceStep, false); err != nil {
 			return err
 		}
 	}
@@ -2238,7 +2230,38 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if err != nil {
 			return 0, err
 		}
-		if len(irregularIndexes) > 0 || odkuNeedFkCheck {
+		// ON DUPLICATE KEY UPDATE enforces child->parent FKs in the data flow with the
+		// same per-FK MARK-join check as INSERT, over this final merged image. Each FK is
+		// asserted independently (its parent exists OR one of that FK's own columns is
+		// NULL), correct MATCH SIMPLE -- unlike the old appendForeignConstrantPlan, which
+		// first applied one global isnotnull pre-filter across ALL FK columns and so
+		// skipped every FK's validation as soon as ANY FK column on the row was NULL.
+		// Unlike plain INSERT this does NOT re-project to a fresh tag: ODKU's downstream
+		// MULTI_UPDATE reads both the merged image (finalProjTag) and the delete columns
+		// (delColName2Idx) from this subtree, which a re-project would hide.
+		if onDupAction == plan.Node_UPDATE && odkuNeedFkCheck {
+			var oks []*plan.Expr
+			if lastNodeID, oks, err = builder.appendModernChildFkMarkOks(bindCtx, tableDef, lastNodeID, finalProjTag,
+				func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }); err != nil {
+				return 0, err
+			}
+			if len(oks) > 0 {
+				fkErrExpr := makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails")
+				assertConds := make([]*plan.Expr, len(oks))
+				for i, ok := range oks {
+					if assertConds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr)}); err != nil {
+						return 0, err
+					}
+				}
+				lastNodeID = builder.appendNode(&plan.Node{
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{lastNodeID},
+					FilterList: assertConds,
+				}, bindCtx)
+				selectNode = builder.qry.Nodes[lastNodeID]
+			}
+		}
+		if len(irregularIndexes) > 0 {
 			// ODKU cannot change the PK, so the stale entries are keyed by the same
 			// PK the final image carries at its natural position.
 			odkuPkPos, odkuPkTyp := getPkPos(tableDef, false)
@@ -2246,14 +2269,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				bindCtx, lastNodeID, finalProjTag, int32(odkuPkPos), odkuPkTyp,
 				irregularIndexes, tableDef, dmlCtx.objRefs[0])
 			selectNode = builder.qry.Nodes[lastNodeID]
-			// Only ON DUPLICATE KEY UPDATE defers its child→parent FK check to the
-			// post-createQuery assert over this merged image. Plain INSERT and INSERT
-			// IGNORE already enforced it in the data flow (buildModernChildFkAssert /
-			// buildInsertIgnoreFkFilter), so they must NOT also run the legacy assert —
-			// it mis-types on a unique-key child's appended index-helper columns.
-			if onDupAction == plan.Node_UPDATE {
-				builder.modernFkCheck = odkuNeedFkCheck
-			}
 		}
 	}
 

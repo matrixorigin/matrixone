@@ -238,11 +238,6 @@ type QueryBuilder struct {
 	irregularMaintIndexes     []*plan.IndexDef
 	irregularMaintTableDef    *plan.TableDef
 	irregularMaintObjRef      *plan.ObjectRef
-	// modernFkCheck requests a row-scoped child→parent foreign-key parent-existence
-	// check (the legacy in-plan assert) over the materialized new-row image, run in
-	// finishIrregularIndexMaintenance after createQuery. Used by the modern plain
-	// INSERT path instead of a whole-table DetectSql so it validates only new rows.
-	modernFkCheck bool
 	// sinkColRef records, per materialized step, the post-pruning column remap
 	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
 	// -> newColPos. The irregular-index maintenance sub-plans are appended after
