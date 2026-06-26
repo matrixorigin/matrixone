@@ -11992,6 +11992,98 @@ func TestDoTimestampAddWithAddIntervalFailure(t *testing.T) {
 	}
 }
 
+func TestDateTruncTimestampPreservesDSTFold(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	firstFold := types.UnixMicroToTimestamp(time.Date(2024, 11, 3, 5, 30, 45, 123456000, time.UTC).UnixMicro())
+	secondFold := types.UnixMicroToTimestamp(time.Date(2024, 11, 3, 6, 30, 45, 123456000, time.UTC).UnixMicro())
+
+	firstTruncated, err := dateTruncTimestamp("hour", firstFold, loc)
+	require.NoError(t, err)
+	secondTruncated, err := dateTruncTimestamp("hour", secondFold, loc)
+	require.NoError(t, err)
+
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2024, 11, 3, 5, 0, 0, 0, time.UTC).UnixMicro()), firstTruncated)
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2024, 11, 3, 6, 0, 0, 0, time.UTC).UnixMicro()), secondTruncated)
+	require.NotEqual(t, firstTruncated, secondTruncated)
+	require.Equal(t, "2024-11-03 01:00:00", firstTruncated.String2(loc, 0))
+	require.Equal(t, "2024-11-03 01:00:00", secondTruncated.String2(loc, 0))
+}
+
+func TestDateTruncTimestampVectorPreservesDSTFold(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = loc
+
+	unitVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("hour"), 2, proc.Mp())
+	require.NoError(t, err)
+	tsVec := vector.NewVec(types.T_timestamp.ToType())
+	values := []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2024, 11, 3, 5, 30, 45, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2024, 11, 3, 6, 30, 45, 0, time.UTC).UnixMicro()),
+	}
+	err = vector.AppendFixedList(tsVec, values, nil, proc.Mp())
+	require.NoError(t, err)
+	tsVec.SetLength(len(values))
+
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+	err = result.PreExtendAndReset(len(values))
+	require.NoError(t, err)
+
+	err = DateTruncTimestamp([]*vector.Vector{unitVec, tsVec}, result, proc, len(values), nil)
+	require.NoError(t, err)
+
+	got := vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2024, 11, 3, 5, 0, 0, 0, time.UTC).UnixMicro()), got[0])
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2024, 11, 3, 6, 0, 0, 0, time.UTC).UnixMicro()), got[1])
+	require.NotEqual(t, got[0], got[1])
+}
+
+func TestDateTruncCheckRejectsInvalidArguments(t *testing.T) {
+	overloads := allSupportedFunctions[DATE_TRUNC].Overloads
+
+	get := dateTruncCheck(overloads, []types.Type{types.T_char.ToType(), types.T_datetime.ToType()})
+	require.Equal(t, succeedWithCast, get.status)
+	require.Equal(t, 0, get.idx)
+
+	get = dateTruncCheck(overloads, []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()})
+	require.Equal(t, failedFunctionParametersWrong, get.status)
+
+	get = dateTruncCheck(overloads, []types.Type{types.T_varchar.ToType(), types.T_timestamp.ToType()})
+	require.Equal(t, succeedMatched, get.status)
+	require.Equal(t, 2, get.idx)
+
+	get = dateTruncCheck(overloads, []types.Type{types.T_varchar.ToType()})
+	require.Equal(t, failedFunctionParametersWrong, get.status)
+
+	get = dateTruncCheck(overloads, []types.Type{types.T_varchar.ToType(), types.T_datetime.ToType(), types.T_datetime.ToType()})
+	require.Equal(t, failedFunctionParametersWrong, get.status)
+
+	get = dateTruncCheck(overloads, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()})
+	require.Equal(t, failedFunctionParametersWrong, get.status)
+}
+
+func TestDateTruncInvalidUnitErrorsAreInvalidInput(t *testing.T) {
+	_, err := dateTruncCore("epoch", types.Datetime(0))
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+	proc := testutil.NewProcess(t)
+	unitVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("hour"), 1, proc.Mp())
+	require.NoError(t, err)
+	dateVec, err := vector.NewConstFixed(types.T_date.ToType(), types.Date(0), 1, proc.Mp())
+	require.NoError(t, err)
+	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	err = DateTruncDate([]*vector.Vector{unitVec, dateVec}, result, proc, 1, nil)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+}
+
 // TestTimestampAddDatetimeWithNonOverflowError tests TimestampAddDatetime with non-overflow error from doDatetimeAdd
 func TestTimestampAddDatetimeWithNonOverflowError(t *testing.T) {
 	proc := testutil.NewProcess(t)
