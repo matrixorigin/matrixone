@@ -5880,7 +5880,7 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 // is a JOIN node.
 func (c *Compile) hasJoinDescendant(nodeID int32) bool {
 	node := c.anal.qry.Nodes[nodeID]
-	if node.NodeType == 14 { // plan.Node_JOIN
+	if node.NodeType == plan.Node_JOIN {
 		return true
 	}
 	for _, childID := range node.Children {
