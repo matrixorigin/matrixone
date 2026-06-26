@@ -24,6 +24,13 @@ update t1 set txt = repeat('e', 260) where id = 1;
 update t1 set txt = if(id = 1, concat(txt, 'f'), '') where id = 1;
 select length(txt) from t1;
 
+update t1 set txt = repeat('g', 260), vc = null where id = 1;
+update t1 set txt = concat(coalesce(vc, txt, ''), 'h') where id = 1;
+select length(txt) from t1;
+
+update t1 set txt = repeat('i', 260) where id = 1;
+select length(cast(txt as varchar(255))) from t1;
+
 update t1 set txt = repeat('c', 260) where id = 1;
 update t1 set vc = txt where id = 1;
 
