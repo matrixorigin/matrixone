@@ -86,6 +86,83 @@ func TestDedupLoadCleansUpAfterPanic(t *testing.T) {
 	assert.Equal(t, []byte("ok"), v)
 }
 
+func TestDedupLoadWaiterGetsSuccessfulOwnerValue(t *testing.T) {
+	oldMetaCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(1024))
+	defer func() {
+		metaCache = oldMetaCache
+	}()
+
+	var key mataCacheKey
+	key[0] = 8
+	started := make(chan struct{})
+	release := make(chan struct{})
+	waiterDone := make(chan struct {
+		val []byte
+		err error
+	}, 1)
+
+	go func() {
+		_, _ = dedupLoad(context.Background(), key, func() ([]byte, error) {
+			close(started)
+			<-release
+			return []byte("ok"), nil
+		})
+	}()
+	<-started
+
+	go func() {
+		v, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+			return nil, errors.New("unexpected waiter load")
+		})
+		waiterDone <- struct {
+			val []byte
+			err error
+		}{v, err}
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	result := <-waiterDone
+	assert.NoError(t, result.err)
+	assert.Equal(t, []byte("ok"), result.val)
+}
+
+func TestDedupLoadWaiterTimeoutWhileOwnerStillLoading(t *testing.T) {
+	oldMetaCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(1024))
+	defer func() {
+		metaCache = oldMetaCache
+	}()
+
+	var key mataCacheKey
+	key[0] = 7
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ownerDone := make(chan error, 1)
+
+	go func() {
+		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+			close(started)
+			<-release
+			return []byte("ok"), nil
+		})
+		ownerDone <- err
+	}()
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := dedupLoad(ctx, key, func() ([]byte, error) {
+		return nil, errors.New("unexpected waiter load")
+	})
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.NotContains(t, err.Error(), "dedup load did not complete")
+
+	close(release)
+	assert.NoError(t, <-ownerDone)
+}
+
 func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
 	oldMetaCache := metaCache
 	metaCache = newMetaCache(fscache.ConstCapacity(1024))
