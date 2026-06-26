@@ -953,14 +953,21 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	// Assigning a value to a real CHAR/VARCHAR(N) column must keep the strict
+	// width check: an over-length value errors instead of being silently
+	// truncated. Generic casts stay lenient (MySQL-compatible truncation).
+	funcName := "cast"
+	if t2.Oid == types.T_char || t2.Oid == types.T_varchar {
+		funcName = "cast_strict"
+	}
+	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: funcName},
 				Args: []*Expr{expr, targetType},
 			},
 		},

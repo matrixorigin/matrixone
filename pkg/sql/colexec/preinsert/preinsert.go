@@ -278,10 +278,6 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	err = colexec.BatchDataStringWidthCheck(tempVecs, preInsert.Attrs, preInsert.TableDef, proc.Ctx)
-	if err != nil {
-		return result, err
-	}
 
 	if err = preInsert.constructHiddenColBuf(proc, bat, first); err != nil {
 		return result, err

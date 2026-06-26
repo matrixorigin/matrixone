@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -72,9 +71,6 @@ func (update *MultiUpdate) insert_main_table(
 			}
 		}
 	}
-	if err = checkMainTableStringWidth(proc, updateCtx, inputBatch); err != nil {
-		return err
-	}
 
 	// insert
 	err = update.insert_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
@@ -115,9 +111,6 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 	if err = checkMainTableNotNull(proc, updateCtx, insertBatch); err != nil {
 		return err
 	}
-	if err = colexec.BatchDataStringWidthCheck(insertBatch.Vecs, insertBatch.Attrs, updateCtx.TableDef, proc.Ctx); err != nil {
-		return err
-	}
 	tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 	update.addInsertAffectRows(tableType, uint64(newRowCount))
 	source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
@@ -139,19 +132,6 @@ func mainTableInsertPkInputIdx(updateCtx *MultiUpdateCtx) (int, bool) {
 		return 0, false
 	}
 	return updateCtx.InsertCols[updateCtx.InsertPkColIdx], true
-}
-
-func checkMainTableStringWidth(proc *process.Process, updateCtx *MultiUpdateCtx, inputBatch *batch.Batch) error {
-	vecs := make([]*vector.Vector, len(updateCtx.InsertCols))
-	attrs := make([]string, len(updateCtx.InsertCols))
-	for insertIdx, inputIdx := range updateCtx.InsertCols {
-		if insertIdx >= len(updateCtx.TableDef.Cols) || inputIdx >= len(inputBatch.Vecs) {
-			continue
-		}
-		vecs[insertIdx] = inputBatch.Vecs[inputIdx]
-		attrs[insertIdx] = updateCtx.TableDef.Cols[insertIdx].Name
-	}
-	return colexec.BatchDataStringWidthCheck(vecs, attrs, updateCtx.TableDef, proc.Ctx)
 }
 
 func (update *MultiUpdate) insert_unique_index_table(

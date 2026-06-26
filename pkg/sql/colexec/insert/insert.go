@@ -132,10 +132,6 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 
 			// write to s3.
 			input.Batch.Attrs = append(input.Batch.Attrs[:0], insert.InsertCtx.Attrs...)
-			if err = colexec.BatchDataStringWidthCheck(input.Batch.Vecs, input.Batch.Attrs, insert.InsertCtx.TableDef, proc.Ctx); err != nil {
-				insert.ctr.state = vm.End
-				return vm.CancelResult, err
-			}
 			err = insert.ctr.s3Writer.Write(proc.Ctx, input.Batch)
 			if err != nil {
 				insert.ctr.state = vm.End
@@ -194,9 +190,6 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 		}
 	}
 	insert.ctr.buf.SetRowCount(input.Batch.RowCount())
-	if err := colexec.BatchDataStringWidthCheck(insert.ctr.buf.Vecs, insert.ctr.buf.Attrs, insert.InsertCtx.TableDef, proc.Ctx); err != nil {
-		return input, err
-	}
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
