@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -429,6 +430,15 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 					opts = append(opts, txnclient.WithDisableTrace(true))
 				}
 			}
+		}
+	}
+
+	// Attach session-level lock_wait_timeout to the txn so the lock service
+	// uses it instead of the global config.
+	if varVal, err := execCtx.ses.GetSessionSysVar("lock_wait_timeout"); err == nil {
+		if seconds, ok := varVal.(int64); ok && seconds > 0 {
+			opts = append(opts,
+				txnclient.WithTxnLockWaitTimeout(time.Duration(seconds)*time.Second))
 		}
 	}
 

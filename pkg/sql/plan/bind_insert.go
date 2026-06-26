@@ -1615,6 +1615,28 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	return lastNodeID, colName2Idx, skipUniqueIdx, nil
 }
 
+// valuesExprIsFuncCall reports whether a VALUES item is, or transparently wraps
+// (through parentheses or a cast), a function call. Such expressions must be
+// bound without the destination column type so the function's literal arguments
+// bind by their own types — e.g. st_point(116.3975, 39.9087),
+// (st_point(116.3975, 39.9087)) or cast(st_point(...) as point) into a geometry
+// column. A bare literal (or a literal wrapped in a unary minus / cast) is not a
+// function call and still binds against the column type.
+func valuesExprIsFuncCall(e tree.Expr) bool {
+	for {
+		switch v := e.(type) {
+		case *tree.ParenExpr:
+			e = v.Expr
+		case *tree.CastExpr:
+			e = v.Expr
+		case *tree.FuncExpr:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
 func (builder *QueryBuilder) buildValueScan(
 	isAllDefault bool,
 	bindCtx *BindContext,
@@ -1668,6 +1690,17 @@ func (builder *QueryBuilder) buildValueScan(
 		} else {
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
+			// A function-call value expression must be bound without the
+			// destination column type. The DefaultBinder pushes its type down to
+			// nested literals, so binding st_point(116.3975, 39.9087) against a
+			// GEOMETRY column would type the float arguments as GEOMETRY and break
+			// the function's overload resolution. A function's arguments bind by
+			// their own types, and the result is cast to the column type below
+			// (funcCastFor*Type / forceCastExpr2). Other value expressions (a
+			// negative literal like -1.5, a cast, etc.) still bind against the
+			// column type, which a literal value legitimately adopts.
+			funcBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
+			funcBinder.builder = builder
 			for _, r := range stmt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
@@ -1688,7 +1721,14 @@ func (builder *QueryBuilder) buildValueScan(
 						return 0, err
 					}
 				} else {
-					defExpr, err = binder.BindExpr(r[i], 0, true)
+					valueBinder := binder
+					if valuesExprIsFuncCall(r[i]) {
+						// function call (possibly wrapped in parens / a cast):
+						// bind its arguments by their own types, not the
+						// destination column type
+						valueBinder = funcBinder
+					}
+					defExpr, err = valueBinder.BindExpr(r[i], 0, true)
 					if err != nil {
 						return 0, err
 					}
