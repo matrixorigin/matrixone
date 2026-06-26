@@ -1688,6 +1688,12 @@ func diffDataHelper(
 
 	// if no pk, we cannot use the fake pk to probe.
 	// must probe with full columns
+	var migratedHashmaps []databranchutils.BranchHashmap
+	defer func() {
+		for _, hashmap := range migratedHashmaps {
+			err = errors.Join(err, hashmap.Close())
+		}
+	}()
 
 	if tblStuff.def.pkKind == fakeKind {
 		var (
@@ -1695,21 +1701,17 @@ func diffDataHelper(
 			newHashmap databranchutils.BranchHashmap
 		)
 
-		if newHashmap, err = baseDataHashmap.Migrate(keyIdxes, -1); err != nil {
-			return err
-		}
-		if err = baseDataHashmap.Close(); err != nil {
+		if newHashmap, err = migrateAndCloseSourceHashmap(baseDataHashmap, keyIdxes, -1); err != nil {
 			return err
 		}
 		baseDataHashmap = newHashmap
+		migratedHashmaps = append(migratedHashmaps, baseDataHashmap)
 
-		if newHashmap, err = tarDataHashmap.Migrate(keyIdxes, -1); err != nil {
-			return err
-		}
-		if err = tarDataHashmap.Close(); err != nil {
+		if newHashmap, err = migrateAndCloseSourceHashmap(tarDataHashmap, keyIdxes, -1); err != nil {
 			return err
 		}
 		tarDataHashmap = newHashmap
+		migratedHashmaps = append(migratedHashmaps, tarDataHashmap)
 	}
 
 	if err = tarDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
@@ -1922,6 +1924,23 @@ func diffDataHelper(
 
 	return nil
 }
+
+func migrateAndCloseSourceHashmap(
+	source databranchutils.BranchHashmap,
+	keyIdxes []int,
+	parallelism int,
+) (databranchutils.BranchHashmap, error) {
+	newHashmap, err := source.Migrate(keyIdxes, parallelism)
+	if err != nil {
+		return nil, err
+	}
+	if err = source.Close(); err != nil {
+		_ = newHashmap.Close()
+		return nil, err
+	}
+	return newHashmap, nil
+}
+
 func buildHashmapForTable(
 	ctx context.Context,
 	mp *mpool.MPool,
