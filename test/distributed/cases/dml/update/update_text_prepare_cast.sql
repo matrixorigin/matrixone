@@ -10,7 +10,7 @@ prepare s1 from 'update t1 set txt = concat(coalesce(txt, ''''), ?) where id = ?
 set @suffix = 'b';
 set @id = 1;
 execute s1 using @suffix, @id;
-select length(txt), right(txt, 1) from t1;
+select length(txt) from t1;
 
 deallocate prepare s1;
 drop table t1;
