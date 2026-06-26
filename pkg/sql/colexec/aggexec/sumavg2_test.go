@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -221,6 +222,63 @@ func TestAvg(t *testing.T) {
 
 func TestAvgDistinct(t *testing.T) {
 	testSumAvg(t, makeAvgDistinctExec, newExpectedSumAvg(6, 6, 6, 126000))
+}
+
+func TestSumAvgBulkFillIntermediateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typs, vecs, nvecs := buildNumericTestDataVecs(t, mp)
+
+	testCases := []struct {
+		name     string
+		makeExec func(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec
+		expected *expectedSumAvg
+	}{
+		{"sum", makeSumExec, newExpectedSumAvg(111, 53, 58, 222000)},
+		{"avg", makeAvgExec, newExpectedSumAvg(6.1666666666, 5.88888888, 6.4444444444, 126000)},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			for i, typ := range typs {
+				curNB := mp.CurrNB()
+
+				left := tc.makeExec(t, mp, typ)
+				right := tc.makeExec(t, mp, typ)
+				left.GetOptResult().modifyChunkSize(1)
+				right.GetOptResult().modifyChunkSize(1)
+				require.NoError(t, left.GroupGrow(1))
+				require.NoError(t, right.GroupGrow(1))
+				require.NoError(t, left.BulkFill(0, vecs[i:i+1]))
+				require.NoError(t, right.BulkFill(0, nvecs[i:i+1]))
+
+				var leftBuf, rightBuf bytes.Buffer
+				require.NoError(t, left.SaveIntermediateResult(1, [][]uint8{{1}}, &leftBuf))
+				require.NoError(t, right.SaveIntermediateResult(1, [][]uint8{{1}}, &rightBuf))
+
+				restoredLeft := tc.makeExec(t, mp, typ)
+				restoredRight := tc.makeExec(t, mp, typ)
+				restoredLeft.GetOptResult().modifyChunkSize(1)
+				restoredRight.GetOptResult().modifyChunkSize(1)
+				require.NoError(t, restoredLeft.UnmarshalFromReader(bytes.NewReader(leftBuf.Bytes()), mp))
+				require.NoError(t, restoredRight.UnmarshalFromReader(bytes.NewReader(rightBuf.Bytes()), mp))
+				require.NoError(t, restoredLeft.Merge(restoredRight, 0, 0))
+
+				results, err := restoredLeft.Flush()
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				require.NoError(t, tc.expected.expected.checkVecAt(results[0], 0))
+
+				for _, result := range results {
+					result.Free(mp)
+				}
+				left.Free()
+				right.Free()
+				restoredLeft.Free()
+				restoredRight.Free()
+				require.Equal(t, curNB, mp.CurrNB())
+			}
+		})
+	}
 }
 
 func testSumAvg(t *testing.T,
