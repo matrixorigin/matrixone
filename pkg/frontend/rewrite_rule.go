@@ -56,6 +56,34 @@ func formatRewriteHint(ctx context.Context, rules map[string]string) (string, er
 	return hintPrefix + strings.TrimSpace(buf.String()) + hintSuffix, nil
 }
 
+// formatRewriteHintChains serializes per-table rewrite chains into the
+// /*+ {"rewrites": {...}} */ hint format. A chain with a single layer is
+// emitted as a plain string (keeping the common case identical to
+// formatRewriteHint); a chain with multiple layers is emitted as an ordered
+// JSON array (innermost first, outermost last). Empty chains are skipped.
+func formatRewriteHintChains(ctx context.Context, chains map[string][]string) (string, error) {
+	rewrites := make(map[string]interface{}, len(chains))
+	for k, chain := range chains {
+		switch len(chain) {
+		case 0:
+			continue
+		case 1:
+			rewrites[k] = chain[0]
+		default:
+			rewrites[k] = chain
+		}
+	}
+	payload := map[string]interface{}{"rewrites": rewrites}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(payload); err != nil {
+		return "", moerr.NewInternalErrorf(ctx, "failed to serialize rewrite rules: %v", err)
+	}
+	// Encode appends a trailing newline, trim it
+	return hintPrefix + strings.TrimSpace(buf.String()) + hintSuffix, nil
+}
+
 // parseRewriteHint parses a hint string back into a rules map.
 func parseRewriteHint(ctx context.Context, hint string) (map[string]string, error) {
 	if !strings.HasPrefix(hint, hintPrefix) || !strings.HasSuffix(hint, hintSuffix) {
@@ -121,29 +149,32 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 		return sql, nil
 	}
 
-	// Precedence: role rules < session variable < inline hint. The inline hint
-	// is part of this single statement's text, so its overrides are naturally
-	// effective for this one query only. We merge the inline rules into the
-	// single hint we emit because the parser only honors the first leading
-	// hint; emitting a second hint of our own would otherwise mask the inline
-	// one.
+	// Layering: a table's rewrites are applied as stacked views in the order
+	// role rule -> session variable -> inline hint. Each layer is a view over
+	// the previous one (a reference to the table inside a session/inline rule
+	// resolves to the role-rewritten relation, etc.), so later layers narrow or
+	// transform the earlier ones rather than replacing them. The inline hint is
+	// part of this single statement's text, so its layer is effective for this
+	// one query only. All layers are emitted as a single hint because the
+	// parser only honors the first leading hint; a second hint of our own would
+	// otherwise mask the inline one.
 	inlineRules, err := extractInlineRewrites(ctx, sql)
 	if err != nil {
 		return sql, err
 	}
 
-	combined := make(map[string]string, len(cache)+len(sessionRules)+len(inlineRules))
+	chains := make(map[string][]string, len(cache)+len(sessionRules)+len(inlineRules))
 	for k, v := range cache {
-		combined[k] = v
+		chains[k] = append(chains[k], v)
 	}
 	for k, v := range sessionRules {
-		combined[k] = v
+		chains[k] = append(chains[k], v)
 	}
 	for k, v := range inlineRules {
-		combined[k] = v
+		chains[k] = append(chains[k], v)
 	}
 
-	hint, err := formatRewriteHint(ctx, combined)
+	hint, err := formatRewriteHintChains(ctx, chains)
 	if err != nil {
 		return sql, err
 	}

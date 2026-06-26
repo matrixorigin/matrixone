@@ -47,9 +47,9 @@ select * from t1 order by id;
 ➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
 2  ¦  Bob  ¦  30  𝄀
 3  ¦  Charlie  ¦  40
-/*+ {"rewrites": {"remap_sess.t1": "select * from t1 where id = 1"}} */ select * from t1 order by id;
+/*+ {"rewrites": {"remap_sess.t1": "select * from t1 where id <= 2"}} */ select * from t1 order by id;
 ➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
-1  ¦  Alice  ¦  20
+2  ¦  Bob  ¦  30
 select * from t1 order by id;
 ➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
 2  ¦  Bob  ¦  30  𝄀

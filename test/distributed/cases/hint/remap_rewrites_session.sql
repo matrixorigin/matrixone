@@ -37,14 +37,17 @@ select t1.name, t2.city from t1 join t2 on t1.id = t2.id order by t1.name;
 set remap_rewrites = '';
 select * from t1 order by id;
 
--- an inline /*+ ... */ hint overrides the session variable, but only for the
--- single query that carries it
+-- an inline /*+ ... */ hint is LAYERED on top of the session variable (a view
+-- over the session-rewritten table), and only for the single query that carries
+-- it. session keeps age > 25 (Bob 30, Charlie 40); inline then keeps id <= 2 on
+-- top of that -> only Bob. The next query is back to the session layer.
 set remap_rewrites = '{"remap_sess.t1": "select * from t1 where age > 25"}';
 select * from t1 order by id;
-/*+ {"rewrites": {"remap_sess.t1": "select * from t1 where id = 1"}} */ select * from t1 order by id;
+/*+ {"rewrites": {"remap_sess.t1": "select * from t1 where id <= 2"}} */ select * from t1 order by id;
 select * from t1 order by id;
 
--- an inline hint for a different table merges with the session rewrite of t1
+-- an inline hint for a different table layers on t2 while t1 keeps its session
+-- rewrite: t1 age>25 (Bob,Charlie) joined with t2 id=3 (Guangzhou) -> Charlie
 /*+ {"rewrites": {"remap_sess.t2": "select * from t2 where id = 3"}} */ select t1.id, t2.city from t1 join t2 on t1.id = t2.id order by t1.id;
 set remap_rewrites = '';
 

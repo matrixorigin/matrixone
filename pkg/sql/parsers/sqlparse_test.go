@@ -359,7 +359,9 @@ func TestAddRewriteHints_ValidSimple(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, sel.RewriteOption)
 	require.Contains(t, sel.RewriteOption.Rewrites, "db1.t1")
-	r := sel.RewriteOption.Rewrites["db1.t1"]
+	chain := sel.RewriteOption.Rewrites["db1.t1"]
+	require.Len(t, chain, 1)
+	r := chain[0]
 	require.Equal(t, "t1", r.TableName)
 	require.Equal(t, "db1", r.DbName)
 	switch r.Stmt.(type) {
@@ -380,13 +382,37 @@ func TestAddRewriteHints_ValidWithBangPlusComment(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, sel.RewriteOption)
 	require.Contains(t, sel.RewriteOption.Rewrites, "db2.t2")
-	r := sel.RewriteOption.Rewrites["db2.t2"]
+	chain := sel.RewriteOption.Rewrites["db2.t2"]
+	require.Len(t, chain, 1)
+	r := chain[0]
 	require.Equal(t, "t2", r.TableName)
 	require.Equal(t, "db2", r.DbName)
 	switch r.Stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
 	default:
 		t.Fatalf("unexpected rewrite stmt type: %T", r.Stmt)
+	}
+}
+
+func TestAddRewriteHints_ChainArray(t *testing.T) {
+	sql := `/*+ {"rewrites": {"db1.t1": ["select * from db1.t1 where a < 4", "select * from db1.t1 where a > 1"]}} */ select * from db1.t1`
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+
+	sel, ok := stmts[0].(*tree.Select)
+	require.True(t, ok)
+	require.NotNil(t, sel.RewriteOption)
+	chain := sel.RewriteOption.Rewrites["db1.t1"]
+	require.Len(t, chain, 2)
+	for _, r := range chain {
+		require.Equal(t, "t1", r.TableName)
+		require.Equal(t, "db1", r.DbName)
+		switch r.Stmt.(type) {
+		case *tree.Select, *tree.ParenSelect:
+		default:
+			t.Fatalf("unexpected rewrite stmt type: %T", r.Stmt)
+		}
 	}
 }
 

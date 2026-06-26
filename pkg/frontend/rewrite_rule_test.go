@@ -729,6 +729,38 @@ func TestExtractInlineRewrites(t *testing.T) {
 	})
 }
 
+// TestFormatRewriteHintChains verifies that a single-layer chain is emitted as
+// a plain string (backward compatible) and a multi-layer chain is emitted as an
+// ordered JSON array (innermost first, outermost last).
+func TestFormatRewriteHintChains(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("single layer is a string", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"select * from db.t1 where a > 1"},
+		})
+		require.NoError(t, err)
+		require.Contains(t, hint, `"db.t1":"select * from db.t1 where a > 1"`)
+		require.NotContains(t, hint, "[")
+	})
+
+	t.Run("multi layer is an ordered array", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"role_sql", "session_sql", "inline_sql"},
+		})
+		require.NoError(t, err)
+		require.Contains(t, hint, `"db.t1":["role_sql","session_sql","inline_sql"]`)
+	})
+
+	t.Run("empty chain skipped", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {},
+		})
+		require.NoError(t, err)
+		require.Contains(t, hint, `"rewrites":{}`)
+	})
+}
+
 func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

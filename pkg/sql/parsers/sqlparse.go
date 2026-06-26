@@ -275,8 +275,28 @@ func extractLeadingHints(sql string) []string {
 }
 
 type RewriteMap struct {
-	// RawRewrites carries the raw SQL strings from JSON input.
-	RawRewrites map[string]string `json:"rewrites"`
+	// RawRewrites carries the raw JSON value for each table key. Each value is
+	// either a single SQL string or an ordered array of SQL strings (a stacked
+	// rewrite chain: innermost first, outermost last).
+	RawRewrites map[string]json.RawMessage `json:"rewrites"`
+}
+
+// decodeRewriteChain decodes a rewrite value that is either a JSON string or a
+// JSON array of strings into an ordered list of SQL strings.
+func decodeRewriteChain(ctx context.Context, raw json.RawMessage) ([]string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var arr []string
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return nil, moerr.NewParseError(ctx, err.Error())
+		}
+		return arr, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, moerr.NewParseError(ctx, err.Error())
+	}
+	return []string{s}, nil
 }
 
 // AddRewriteHints The position of the hint at the beginning is different from that in MySQL.
@@ -306,8 +326,8 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 		if len(rewriteMap.RawRewrites) == 0 {
 			continue
 		}
-		rewriteOption := &tree.RewriteOption{Rewrites: make(map[string]*tree.Rewrite)}
-		for k, v := range rewriteMap.RawRewrites {
+		rewriteOption := &tree.RewriteOption{Rewrites: make(map[string][]*tree.Rewrite)}
+		for k, raw := range rewriteMap.RawRewrites {
 			key := strings.TrimSpace(k)
 			if key == "" {
 				return moerr.NewParseError(ctx, "empty table and database")
@@ -324,24 +344,35 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 			if table == "" || db == "" {
 				return moerr.NewParseError(ctx, "empty table or database")
 			}
-			if v == "" {
+			sqls, err := decodeRewriteChain(ctx, raw)
+			if err != nil {
+				return err
+			}
+			if len(sqls) == 0 {
 				return moerr.NewParseError(ctx, "statement")
 			}
-			st, err := ParseOne(ctx, dialect.MYSQL, v, 1)
-			if err != nil {
-				return moerr.NewParseError(ctx, err.Error())
-			}
+			chain := make([]*tree.Rewrite, 0, len(sqls))
+			for _, v := range sqls {
+				if v == "" {
+					return moerr.NewParseError(ctx, "statement")
+				}
+				st, err := ParseOne(ctx, dialect.MYSQL, v, 1)
+				if err != nil {
+					return moerr.NewParseError(ctx, err.Error())
+				}
 
-			switch st.(type) {
-			case *tree.Select, *tree.ParenSelect:
-				// ok
-			default:
-				return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
+				switch st.(type) {
+				case *tree.Select, *tree.ParenSelect:
+					// ok
+				default:
+					return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
+				}
+				chain = append(chain, &tree.Rewrite{TableName: table, DbName: db, Stmt: st})
 			}
 			if _, ok := rewriteOption.Rewrites[key]; ok {
 				return moerr.NewParseError(ctx, "duplicate mapping names")
 			}
-			rewriteOption.Rewrites[key] = &tree.Rewrite{TableName: table, DbName: db, Stmt: st}
+			rewriteOption.Rewrites[key] = chain
 		}
 		if len(rewriteOption.Rewrites) > 0 {
 			switch s := stmt.(type) {
