@@ -193,14 +193,32 @@ func (s *service) handleRemoteLock(
 		return
 	}
 
-	s.bindChangeMu.RLock()
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale
 		// lock table binding.
-		s.bindChangeMu.RUnlock()
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+
+	if s.option.beforeRemoteLockBindCheck != nil {
+		s.option.beforeRemoteLockBindCheck()
+	}
+
+	s.bindChangeMu.RLock()
+	bind := l.getBind()
+	current := s.tableGroups.get(bind.Group, bind.Table)
+	if current == nil {
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTableNotFound, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	if current.getBind().Changed(bind) {
+		newBind := current.getBind()
+		resp.NewBind = &newBind
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, nil, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
 	s.activeTxnHolder.keepRemoteActiveTxn(req.Lock.ServiceID)
@@ -229,7 +247,6 @@ func (s *service) handleRemoteLock(
 
 	var lockErr error
 	// it needs to inc table bind ref when set restart cn
-	bind := l.getBind()
 	h := txn.getHoldLocksLocked(bind.Group)
 	_, hasBind := h.tableBinds[bind.Table]
 	txn.lockTableBindTouched(bind)
@@ -706,13 +723,18 @@ func (s *service) isValidLocalTxn(t []byte) bool {
 	return len(committing) != 0
 }
 
+type allocatorState struct {
+	id      string
+	version uint64
+}
+
 func getLockTableBind(
 	c Client,
 	group uint32,
 	tableID uint64,
 	originTableID uint64,
 	serviceID string,
-	sharding pb.Sharding) (pb.LockTable, error) {
+	sharding pb.Sharding) (pb.LockTable, allocatorState, error) {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseGetLockTableBind)
 	defer cancel()
 
@@ -728,11 +750,14 @@ func getLockTableBind(
 
 	resp, err := c.Send(ctx, req)
 	if err != nil {
-		return pb.LockTable{}, moerr.AttachCause(ctx, err)
+		return pb.LockTable{}, allocatorState{}, moerr.AttachCause(ctx, err)
 	}
 	defer releaseResponse(resp)
 	v := resp.GetBind.LockTable
-	return v, nil
+	return v, allocatorState{
+		id:      resp.GetBind.AllocatorID,
+		version: resp.GetBind.AllocatorVersion,
+	}, nil
 }
 
 type who struct {

@@ -60,13 +60,22 @@ func (s *service) GetLockHolder(
 		if err := ctx.Err(); err != nil {
 			return pb.WaitTxn{}, false, err
 		}
-		s.bindChangeMu.RLock()
 		l, err := s.getLockTableWithCreate(options.Group, tableID, [][]byte{row}, options.Sharding)
 		if err != nil {
-			s.bindChangeMu.RUnlock()
+			if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+				continue
+			}
 			return pb.WaitTxn{}, false, err
 		}
-		holder, ok, err := l.getLockHolder(ctx, row)
+
+		bind := l.getBind()
+		s.bindChangeMu.RLock()
+		current := s.tableGroups.get(bind.Group, bind.Table)
+		if current == nil || current.getBind().Changed(bind) {
+			s.bindChangeMu.RUnlock()
+			continue
+		}
+		holder, ok, err := current.getLockHolder(ctx, row)
 		s.bindChangeMu.RUnlock()
 		if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
 			return holder, ok, err
@@ -107,13 +116,26 @@ func (s *service) GetLockTableBind(
 }
 
 func (s *service) GetLatestLockTableBind(bind pb.LockTable) (pb.LockTable, error) {
-	return getLockTableBind(
+	requestAllocator := s.allocatorStateSnapshot()
+	newBind, allocator, err := getLockTableBind(
 		s.remote.client,
 		bind.Group,
 		bind.Table,
 		bind.OriginTable,
 		s.serviceID,
 		bind.Sharding)
+	if err != nil {
+		return pb.LockTable{}, err
+	}
+	if _, accepted := s.observeAllocatorStateWithHoldersFromSnapshot(
+		"latest-bind",
+		allocator,
+		requestAllocator,
+		true,
+		s.tableGroups); !accepted {
+		return pb.LockTable{}, ErrLockTableBindChanged
+	}
+	return newBind, nil
 }
 
 func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bool) {
