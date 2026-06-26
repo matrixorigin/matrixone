@@ -3639,13 +3639,34 @@ func builtInLog10(parameters []*vector.Vector, result vector.FunctionResultWrapp
 }
 
 type opBuiltInRand struct {
-	seed *rand.Rand
+	seed *mysqlRandState
 }
 
 var _ = newOpBuiltInRand().builtInRand
 
 func newOpBuiltInRand() *opBuiltInRand {
 	return new(opBuiltInRand)
+}
+
+const mysqlRandMaxValue uint64 = 0x3FFFFFFF
+
+type mysqlRandState struct {
+	seed1 uint64
+	seed2 uint64
+}
+
+func newMySQLRandState(seed int64) *mysqlRandState {
+	tmp := uint64(uint32(seed))
+	return &mysqlRandState{
+		seed1: (tmp*0x10001 + 55555555) % mysqlRandMaxValue,
+		seed2: (tmp * 0x10000001) % mysqlRandMaxValue,
+	}
+}
+
+func (s *mysqlRandState) Float64() float64 {
+	s.seed1 = (s.seed1*3 + s.seed2) % mysqlRandMaxValue
+	s.seed2 = (s.seed1 + s.seed2 + 33) % mysqlRandMaxValue
+	return float64(s.seed1) / float64(mysqlRandMaxValue)
 }
 
 func builtInRand(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -3660,27 +3681,40 @@ func builtInRand(parameters []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if !parameters[0].IsConst() {
-		return moerr.NewInvalidArg(proc.Ctx, "parameter of rand", "column")
-	}
-	if parameters[0].IsConstNull() {
-		return moerr.NewInvalidArg(proc.Ctx, "parameter of rand", "null")
-	}
-
 	p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 
-	if op.seed == nil {
-		seedNumber, _ := p1.GetValue(0)
-		op.seed = rand.New(rand.NewSource(seedNumber))
+	if parameters[0].IsConst() {
+		if op.seed == nil {
+			seedNumber, _ := p1.GetValue(0)
+			op.seed = newMySQLRandState(seedNumber)
+		}
+		for i := uint64(0); i < uint64(length); i++ {
+			v := op.seed.Float64()
+			if err := rs.Append(v, false); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		v := op.seed.Float64()
+		seedNumber, _ := p1.GetValue(i)
+		v := newMySQLRandState(seedNumber).Float64()
 		if err := rs.Append(v, false); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+func (op *opBuiltInRand) Reset() error {
+	op.seed = nil
+	return nil
+}
+
+func (op *opBuiltInRand) Close() error {
+	op.seed = nil
 	return nil
 }
 
