@@ -244,4 +244,6 @@ FFFFFFFFFFFFFFFE
 select conv('+FFFFFFFFFFFFFFFF', 16, 10) as plus_prefixed_hex_uint64_max;
 ➤ plus_prefixed_hex_uint64_max[12,-1,0]  𝄀
 18446744073709551615
+select conv('+', 10, 16) as sign_only_invalid;
+invalid input: invalid conv input "+" for base 10
 drop database conv_func;

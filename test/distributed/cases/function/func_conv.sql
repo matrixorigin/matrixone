@@ -336,4 +336,7 @@ select conv('+18446744073709551614', 10, 16) as plus_prefixed_near_uint64_max;
 select conv('+FFFFFFFFFFFFFFFF', 16, 10) as plus_prefixed_hex_uint64_max;
 -- expected: 18446744073709551615
 
+select conv('+', 10, 16) as sign_only_invalid;
+-- expected: MO returns error on sign-only invalid input
+
 drop database conv_func;

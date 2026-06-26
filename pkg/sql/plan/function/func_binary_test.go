@@ -3008,6 +3008,37 @@ func TestConvTypeCheckAcceptsNullBase(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestParseConvStrictStringEdgeCases(t *testing.T) {
+	t.Run("empty string returns zero values without error", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseConvStrictString("", 10)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+		require.False(t, signed)
+	})
+
+	t.Run("sign only is invalid", func(t *testing.T) {
+		_, _, _, err := parseConvStrictString("+", 10)
+		require.Error(t, err)
+	})
+
+	t.Run("negative base positive overflow saturates to max int64", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseConvStrictString("9223372036854775808", -10)
+		require.NoError(t, err)
+		require.True(t, signed)
+		require.Equal(t, int64(math.MaxInt64), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+	})
+
+	t.Run("negative base negative overflow saturates to min int64", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseConvStrictString("-9223372036854775809", -10)
+		require.NoError(t, err)
+		require.True(t, signed)
+		require.Equal(t, int64(math.MinInt64), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+	})
+}
+
 func initFormatTestCase() []tcTemp {
 	format := `%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%`
 
