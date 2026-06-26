@@ -4333,6 +4333,24 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		ss[0].setRootOperator(multiUpdateArg)
 	}
 	c.anal.isFirst = false
+
+	// If any descendant is a JOIN, the DELETE path may produce duplicate
+	// target rows — mark for rowid dedup in delete_table.
+	needDedup := false
+	for _, childID := range node.Children {
+		if c.hasJoinDescendant(childID) {
+			needDedup = true
+			break
+		}
+	}
+	if needDedup {
+		for _, s := range ss {
+			if mu, ok := s.RootOp.(*multi_update.MultiUpdate); ok {
+				mu.NeedDedupDelete = true
+			}
+		}
+	}
+
 	return ss, nil
 }
 
@@ -5853,6 +5871,21 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 			if ws.GetCCPRTaskID() != "" {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// hasJoinDescendant returns true if any node in the subtree rooted at nodeID
+// is a JOIN node.
+func (c *Compile) hasJoinDescendant(nodeID int32) bool {
+	node := c.anal.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_JOIN {
+		return true
+	}
+	for _, childID := range node.Children {
+		if c.hasJoinDescendant(childID) {
+			return true
 		}
 	}
 	return false
