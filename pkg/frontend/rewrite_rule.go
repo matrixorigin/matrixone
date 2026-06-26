@@ -46,6 +46,29 @@ type rewriteHintPayload struct {
 	RemapDb map[string]string `json:"remapdb"`
 }
 
+// validateRemapDb checks a remapdb map: every source/target is a valid database
+// identifier, and the set of source databases is disjoint from the set of
+// target databases. The disjointness rule forbids chaining/ambiguity such as
+// {"x":"y","y":"z"} (y is both a target and a source) and self-maps {"x":"x"}.
+func validateRemapDb(ctx context.Context, remapDb map[string]string) error {
+	if len(remapDb) == 0 {
+		return nil
+	}
+	sources := make(map[string]struct{}, len(remapDb))
+	for src, dst := range remapDb {
+		if !isValidDbIdentifier(src) || !isValidDbIdentifier(dst) {
+			return moerr.NewInvalidInputf(ctx, "remapdb names must be valid identifiers, got %q -> %q", src, dst)
+		}
+		sources[src] = struct{}{}
+	}
+	for _, dst := range remapDb {
+		if _, ok := sources[dst]; ok {
+			return moerr.NewInvalidInputf(ctx, "remapdb: database %q must not be both a source and a destination (chaining is not allowed)", dst)
+		}
+	}
+	return nil
+}
+
 // isValidDbIdentifier reports whether s is a usable (unquoted) database name:
 // non-empty and composed only of letters, digits, underscore or '$'. remapdb
 // only substitutes a name, so both sides must be plain identifiers.
@@ -301,10 +324,8 @@ func validateRemapRewrites(ctx context.Context, val interface{}) error {
 			return err
 		}
 	}
-	for src, dst := range remapDb {
-		if !isValidDbIdentifier(src) || !isValidDbIdentifier(dst) {
-			return moerr.NewInvalidInputf(ctx, "remap_rewrites: remapdb names must be valid identifiers, got %q -> %q", src, dst)
-		}
+	if err := validateRemapDb(ctx, remapDb); err != nil {
+		return err
 	}
 	return nil
 }

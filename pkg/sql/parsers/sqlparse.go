@@ -358,6 +358,13 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 				}
 				rewriteOption.RemapDb[s] = d
 			}
+			// Source and destination databases must be disjoint: forbid
+			// chaining/ambiguity such as {"x":"y","y":"z"} and self-maps.
+			for _, dst := range rewriteOption.RemapDb {
+				if _, ok := rewriteOption.RemapDb[dst]; ok {
+					return moerr.NewParseErrorf(ctx, "remapdb: database %q must not be both a source and a destination (chaining is not allowed)", dst)
+				}
+			}
 		}
 		for k, raw := range rewriteMap.RawRewrites {
 			key := strings.TrimSpace(k)

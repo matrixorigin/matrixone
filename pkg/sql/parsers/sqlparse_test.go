@@ -394,6 +394,29 @@ func TestAddRewriteHints_ValidWithBangPlusComment(t *testing.T) {
 	}
 }
 
+func TestAddRewriteHints_RemapDb(t *testing.T) {
+	t.Run("valid multi", func(t *testing.T) {
+		stmts, err := parseAndApply(t, `/*+ {"remapdb": {"a": "b", "x": "y"}} */ select * from a.t`)
+		require.NoError(t, err)
+		sel, ok := stmts[0].(*tree.Select)
+		require.True(t, ok)
+		require.NotNil(t, sel.RewriteOption)
+		require.Equal(t, map[string]string{"a": "b", "x": "y"}, sel.RewriteOption.RemapDb)
+	})
+	t.Run("invalid identifier", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"a.b": "c"}} */ select 1`)
+		require.ErrorContains(t, err, "valid identifiers")
+	})
+	t.Run("chaining rejected", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"x": "y", "y": "z"}} */ select 1`)
+		require.ErrorContains(t, err, "must not be both a source and a destination")
+	})
+	t.Run("self map rejected", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"x": "x"}} */ select 1`)
+		require.ErrorContains(t, err, "must not be both a source and a destination")
+	})
+}
+
 func TestAddRewriteHints_ChainArray(t *testing.T) {
 	sql := `/*+ {"rewrites": {"db1.t1": ["select * from db1.t1 where a < 4", "select * from db1.t1 where a > 1"]}} */ select * from db1.t1`
 	stmts, err := parseAndApply(t, sql)

@@ -63,6 +63,16 @@ drop database if exists rdb_dst2;
 -- remapdb names must be valid identifiers (rejected at SET time)
 set remap_rewrites = '{"remapdb": {"a.b": "c"}}';
 
+-- source and destination databases must be disjoint: chaining is rejected
+-- (y is both a destination of x and a source), at SET time and in an inline hint
+set remap_rewrites = '{"remapdb": {"x": "y", "y": "z"}}';
+/*+ {"remapdb": {"x": "y", "y": "z"}} */ select 1;
+-- a self-map is also rejected
+set remap_rewrites = '{"remapdb": {"x": "x"}}';
+-- multiple sources mapping to the same destination is allowed
+set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst", "rdb_src3": "rdb_dst"}}';
+select * from rdb_src.t order by id;
+
 set remap_rewrites = '';
 set enable_remap_hint = 0;
 drop database if exists rdb_src;

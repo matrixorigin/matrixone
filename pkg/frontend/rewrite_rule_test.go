@@ -692,6 +692,27 @@ func TestValidateRemapRewrites(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "table key must not be empty")
 	})
+	t.Run("valid remapdb multi", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"remapdb": {"a": "b", "x": "y"}}`))
+	})
+	t.Run("remapdb invalid identifier rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"a.b": "c"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "valid identifiers")
+	})
+	t.Run("remapdb chaining rejected (x->y, y->z)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "y", "y": "z"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not be both a source and a destination")
+	})
+	t.Run("remapdb self-map rejected (x->x)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "x"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not be both a source and a destination")
+	})
+	t.Run("remapdb multiple sources to one dest allowed", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"remapdb": {"a": "z", "b": "z"}}`))
+	})
 }
 
 // TestLeadingHintContent covers extraction of the inner content of a leading
