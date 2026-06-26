@@ -151,6 +151,20 @@ func (mr *MockAutoIncrementServiceMockRecorder) Reset(ctx, oldTableID, newTableI
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reset", reflect.TypeOf((*MockAutoIncrementService)(nil).Reset), ctx, oldTableID, newTableID, keep, txn)
 }
 
+// SetOffset mocks base method.
+func (m *MockAutoIncrementService) SetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txn client.TxnOperator) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetOffset", ctx, tableID, colName, offset, txn)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetOffset indicates an expected call of SetOffset.
+func (mr *MockAutoIncrementServiceMockRecorder) SetOffset(ctx, tableID, colName, offset, txn interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetOffset", reflect.TypeOf((*MockAutoIncrementService)(nil).SetOffset), ctx, tableID, colName, offset, txn)
+}
+
 // UUID mocks base method.
 func (m *MockAutoIncrementService) UUID() string {
 	m.ctrl.T.Helper()
@@ -488,4 +502,32 @@ func (m *MockIncrValueStore) UpdateMinValue(ctx context.Context, tableID uint64,
 func (mr *MockIncrValueStoreMockRecorder) UpdateMinValue(ctx, tableID, col, minValue, txnOp interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateMinValue", reflect.TypeOf((*MockIncrValueStore)(nil).UpdateMinValue), ctx, tableID, col, minValue, txnOp)
+}
+
+// SetOffset mocks base method.
+func (m *MockIncrValueStore) SetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txnOp client.TxnOperator) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetOffset", ctx, tableID, colName, offset, txnOp)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetOffset indicates an expected call of SetOffset.
+func (mr *MockIncrValueStoreMockRecorder) SetOffset(ctx, tableID, colName, offset, txnOp interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetOffset", reflect.TypeOf((*MockIncrValueStore)(nil).SetOffset), ctx, tableID, colName, offset, txnOp)
+}
+
+// ForceSetOffset mocks base method.
+func (m *MockIncrValueStore) ForceSetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txnOp client.TxnOperator) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ForceSetOffset", ctx, tableID, colName, offset, txnOp)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ForceSetOffset indicates an expected call of ForceSetOffset.
+func (mr *MockIncrValueStoreMockRecorder) ForceSetOffset(ctx, tableID, colName, offset, txnOp interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ForceSetOffset", reflect.TypeOf((*MockIncrValueStore)(nil).ForceSetOffset), ctx, tableID, colName, offset, txnOp)
 }

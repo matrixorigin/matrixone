@@ -725,6 +725,14 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				AlterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: AddFk,
 				}
+			case *plan.AlterTable_Action_AlterAutoIncrement:
+				AlterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AlterAutoIncrement{
+						AlterAutoIncrement: &plan.AlterTableAutoIncrement{
+							NewOffset: act.AlterAutoIncrement.NewOffset,
+						},
+					},
+				}
 			}
 		}
 

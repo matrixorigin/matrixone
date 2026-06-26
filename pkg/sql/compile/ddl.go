@@ -1111,6 +1111,21 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				did, tid,
 				act.AlterComment.NewComment,
 			))
+		case *plan.AlterTable_Action_AlterAutoIncrement:
+			autoCols := incrservice.GetAutoColumnFromDef(qry.GetTableDef())
+			sid := c.proc.GetService()
+			svc := incrservice.GetAutoIncrementService(sid)
+			for _, col := range autoCols {
+				if err = svc.SetOffset(
+					c.proc.Ctx,
+					tid,
+					col.ColName,
+					act.AlterAutoIncrement.NewOffset,
+					c.proc.GetTxnOperator(),
+				); err != nil {
+					return err
+				}
+			}
 		case *plan.AlterTable_Action_AlterName:
 			reqs = append(reqs, api.NewRenameTableReq(
 				did, tid,

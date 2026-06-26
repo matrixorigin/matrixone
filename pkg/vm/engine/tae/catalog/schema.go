@@ -284,6 +284,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 		logutil.Infof("[Alter] rename table %s -> %s", s.Name, rename.NewName)
 		s.Name = rename.NewName
+
 	default:
 		return moerr.NewNYINoCtxf("unsupported alter kind: %v", req.Kind)
 	}

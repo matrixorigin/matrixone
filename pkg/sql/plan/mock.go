@@ -155,15 +155,16 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 }
 
 type Schema struct {
-	cols      []col
-	pks       []int
-	idxs      []index
-	fks       []*ForeignKeyDef
-	clusterby *ClusterByDef
-	outcnt    float64
-	tblId     int64
-	isView    bool
-	viewCfg   ViewCfg
+	cols            []col
+	pks             []int
+	idxs            []index
+	fks             []*ForeignKeyDef
+	clusterby       *ClusterByDef
+	outcnt          float64
+	tblId           int64
+	isView          bool
+	autoIncrColName string
+	viewCfg         ViewCfg
 }
 
 type ViewCfg struct {
@@ -1204,7 +1205,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 						NotNullable: !col.Nullable,
 						Width:       col.Width,
 						Scale:       col.Scale,
-						AutoIncr:    isFakePK,
+						AutoIncr:    isFakePK || (table.autoIncrColName != "" && col.Name == table.autoIncrColName),
 					},
 					Name:       strings.ToLower(col.Name),
 					OriginName: col.Name,

@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
@@ -194,6 +195,26 @@ func (m *MockAutoIncrementService) CurrentValue(
 // Reload reloads auto-increment cache
 func (m *MockAutoIncrementService) Reload(ctx context.Context, tableID uint64) error {
 	// No-op for mock
+	return nil
+}
+
+// SetOffset sets the offset of an auto-increment column
+func (m *MockAutoIncrementService) SetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txn client.TxnOperator,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	counters, ok := m.counters[tableID]
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "table %d not found in mock auto-increment counters", tableID)
+	}
+	if current, ok := counters[colName]; !ok || current < offset {
+		counters[colName] = offset
+	}
 	return nil
 }
 
