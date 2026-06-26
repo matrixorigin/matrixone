@@ -5552,6 +5552,9 @@ func strToStr(
 		}
 		return nil
 	}
+	fromType := from.GetSourceVector().GetType()
+	isSourceText := fromType.Oid == types.T_text
+
 	if totype.Oid != types.T_text && destLen != 0 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
@@ -5562,7 +5565,12 @@ func strToStr(
 				continue
 			}
 			s := convertByteSliceToString(v)
-			if utf8.RuneCountInString(s) > destLen {
+			// Preserve TEXT update compatibility when TEXT columns are routed through
+			// a CHAR/VARCHAR cast width used by the planner.
+			shouldSkipLengthCheck := isSourceText &&
+				(toType.Oid == types.T_char || toType.Oid == types.T_varchar) &&
+				destLen >= 255
+			if !shouldSkipLengthCheck && utf8.RuneCountInString(s) > destLen {
 				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
