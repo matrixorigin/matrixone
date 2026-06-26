@@ -2483,6 +2483,10 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 				if err != nil {
 					return nil, err
 				}
+				// Apply remapdb (database-name substitution) on the parsed AST
+				// before privilege checks and planning resolve the original
+				// database.
+				applyRemapDb(stmts)
 			}
 		}
 	}

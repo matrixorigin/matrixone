@@ -1,0 +1,62 @@
+drop database if exists rdb_src;
+drop database if exists rdb_dst;
+create database rdb_dst;
+create table rdb_dst.t(id int, v int);
+insert into rdb_dst.t values (1,10),(2,20),(3,30);
+create table rdb_dst.u(id int, w int);
+insert into rdb_dst.u values (1,100),(2,200),(3,300);
+set enable_remap_hint = 1;
+set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst"}}';
+select * from rdb_src.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select t.id, u.w from rdb_src.t t join rdb_src.u u on t.id = u.id order by t.id;
+➤ id[4,32,0]  ¦  w[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  200  𝄀
+3  ¦  300
+select x.id from (select * from rdb_src.t where id >= 2) x order by x.id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+with c as (select * from rdb_src.t where id <= 2) select * from c order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select * from rdb_dst.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst"}, "rewrites": {"rdb_dst.t": "select * from rdb_dst.t where id >= 2"}}';
+select * from rdb_src.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+set remap_rewrites = '{"remapdb": {"rdb_src": "nosuchdb"}}';
+/*+ {"remapdb": {"rdb_src": "rdb_dst"}} */ select * from rdb_src.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+set remap_rewrites = '';
+use rdb_src;
+Unknown database rdb_src
+set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst"}}';
+use rdb_src;
+select database() as curdb;
+➤ curdb[12,-1,0]  𝄀
+rdb_dst
+select * from t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+set remap_rewrites = '{"remapdb": {"a.b": "c"}}';
+invalid input: remap_rewrites: remapdb names must be valid identifiers, got "a.b" -> "c"
+set remap_rewrites = '';
+set enable_remap_hint = 0;
+drop database if exists rdb_src;
+drop database if exists rdb_dst;

@@ -610,32 +610,49 @@ func TestParseSessionRewrites(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("empty", func(t *testing.T) {
-		rules, err := parseSessionRewrites(ctx, "")
+		rules, remap, err := parseSessionRewrites(ctx, "")
 		require.NoError(t, err)
 		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
 	})
 	t.Run("blank", func(t *testing.T) {
-		rules, err := parseSessionRewrites(ctx, "   ")
+		rules, remap, err := parseSessionRewrites(ctx, "   ")
 		require.NoError(t, err)
 		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
 	})
 	t.Run("bare map", func(t *testing.T) {
-		rules, err := parseSessionRewrites(ctx, `{"db1.t1": "select a, b from db2.t1"}`)
+		rules, remap, err := parseSessionRewrites(ctx, `{"db1.t1": "select a, b from db2.t1"}`)
 		require.NoError(t, err)
 		require.Equal(t, map[string]string{"db1.t1": "select a, b from db2.t1"}, rules)
+		require.Len(t, remap, 0)
 	})
 	t.Run("wrapped rewrites form", func(t *testing.T) {
-		rules, err := parseSessionRewrites(ctx, `{"rewrites": {"db1.t1": "select a from db2.t1"}}`)
+		rules, remap, err := parseSessionRewrites(ctx, `{"rewrites": {"db1.t1": "select a from db2.t1"}}`)
 		require.NoError(t, err)
 		require.Equal(t, map[string]string{"db1.t1": "select a from db2.t1"}, rules)
+		require.Len(t, remap, 0)
+	})
+	t.Run("remapdb only", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, `{"remapdb": {"dbxxx": "dbyyy"}}`)
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
+	})
+	t.Run("rewrites and remapdb", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx,
+			`{"rewrites": {"db.t1": "select * from db.t1"}, "remapdb": {"dbxxx": "dbyyy"}}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db.t1": "select * from db.t1"}, rules)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
 	})
 	t.Run("two keys", func(t *testing.T) {
-		rules, err := parseSessionRewrites(ctx, `{"db.t1": "select * from t1", "db.t2": "select * from t2"}`)
+		rules, _, err := parseSessionRewrites(ctx, `{"db.t1": "select * from t1", "db.t2": "select * from t2"}`)
 		require.NoError(t, err)
 		require.Len(t, rules, 2)
 	})
 	t.Run("malformed json", func(t *testing.T) {
-		_, err := parseSessionRewrites(ctx, `{not json}`)
+		_, _, err := parseSessionRewrites(ctx, `{not json}`)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid remap_rewrites value")
 	})
@@ -709,22 +726,29 @@ func TestExtractInlineRewrites(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("no hint", func(t *testing.T) {
-		rules, err := extractInlineRewrites(ctx, "select * from t")
+		rules, remap, err := extractInlineRewrites(ctx, "select * from t")
 		require.NoError(t, err)
 		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
 	})
 	t.Run("non-json hint ignored", func(t *testing.T) {
-		rules, err := extractInlineRewrites(ctx, "/*+ NO_INDEX(t) */ select * from t")
+		rules, remap, err := extractInlineRewrites(ctx, "/*+ NO_INDEX(t) */ select * from t")
 		require.NoError(t, err)
 		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
 	})
 	t.Run("rewrites hint", func(t *testing.T) {
-		rules, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": "select a from db.t1"}} */ select * from db.t1`)
+		rules, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": "select a from db.t1"}} */ select * from db.t1`)
 		require.NoError(t, err)
 		require.Equal(t, map[string]string{"db.t1": "select a from db.t1"}, rules)
 	})
+	t.Run("remapdb hint", func(t *testing.T) {
+		_, remap, err := extractInlineRewrites(ctx, `/*+ {"remapdb": {"dbxxx": "dbyyy"}} */ select * from dbxxx.t`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
+	})
 	t.Run("malformed json hint", func(t *testing.T) {
-		_, err := extractInlineRewrites(ctx, `/*+ {not json} */ select 1`)
+		_, _, err := extractInlineRewrites(ctx, `/*+ {not json} */ select 1`)
 		require.Error(t, err)
 	})
 }
@@ -738,7 +762,7 @@ func TestFormatRewriteHintChains(t *testing.T) {
 	t.Run("single layer is a string", func(t *testing.T) {
 		hint, err := formatRewriteHintChains(ctx, map[string][]string{
 			"db.t1": {"select * from db.t1 where a > 1"},
-		})
+		}, nil)
 		require.NoError(t, err)
 		require.Contains(t, hint, `"db.t1":"select * from db.t1 where a > 1"`)
 		require.NotContains(t, hint, "[")
@@ -747,15 +771,23 @@ func TestFormatRewriteHintChains(t *testing.T) {
 	t.Run("multi layer is an ordered array", func(t *testing.T) {
 		hint, err := formatRewriteHintChains(ctx, map[string][]string{
 			"db.t1": {"role_sql", "session_sql", "inline_sql"},
-		})
+		}, nil)
 		require.NoError(t, err)
 		require.Contains(t, hint, `"db.t1":["role_sql","session_sql","inline_sql"]`)
+	})
+
+	t.Run("remapdb included", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"select * from db.t1"},
+		}, map[string]string{"dbxxx": "dbyyy"})
+		require.NoError(t, err)
+		require.Contains(t, hint, `"remapdb":{"dbxxx":"dbyyy"}`)
 	})
 
 	t.Run("empty chain skipped", func(t *testing.T) {
 		hint, err := formatRewriteHintChains(ctx, map[string][]string{
 			"db.t1": {},
-		})
+		}, nil)
 		require.NoError(t, err)
 		require.Contains(t, hint, `"rewrites":{}`)
 	})

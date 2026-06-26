@@ -279,6 +279,27 @@ type RewriteMap struct {
 	// either a single SQL string or an ordered array of SQL strings (a stacked
 	// rewrite chain: innermost first, outermost last).
 	RawRewrites map[string]json.RawMessage `json:"rewrites"`
+	// RemapDb maps a source database name to a target database name, applied
+	// before the table rewrites.
+	RemapDb map[string]string `json:"remapdb"`
+}
+
+// isValidDbIdentifier reports whether s is a usable (unquoted) database name:
+// non-empty and composed only of letters, digits, underscore or '$'.
+func isValidDbIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r == '_' || r == '$' ||
+			(r >= '0' && r <= '9') ||
+			(r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // decodeRewriteChain decodes a rewrite value that is either a JSON string or a
@@ -323,10 +344,21 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 		if err := json.Unmarshal([]byte(hint), &rewriteMap); err != nil {
 			return moerr.NewParseError(ctx, err.Error())
 		}
-		if len(rewriteMap.RawRewrites) == 0 {
+		if len(rewriteMap.RawRewrites) == 0 && len(rewriteMap.RemapDb) == 0 {
 			continue
 		}
 		rewriteOption := &tree.RewriteOption{Rewrites: make(map[string][]*tree.Rewrite)}
+		if len(rewriteMap.RemapDb) > 0 {
+			rewriteOption.RemapDb = make(map[string]string, len(rewriteMap.RemapDb))
+			for src, dst := range rewriteMap.RemapDb {
+				s := strings.TrimSpace(src)
+				d := strings.TrimSpace(dst)
+				if !isValidDbIdentifier(s) || !isValidDbIdentifier(d) {
+					return moerr.NewParseErrorf(ctx, "remapdb names must be valid identifiers, got %q -> %q", src, dst)
+				}
+				rewriteOption.RemapDb[s] = d
+			}
+		}
 		for k, raw := range rewriteMap.RawRewrites {
 			key := strings.TrimSpace(k)
 			if key == "" {
@@ -374,7 +406,7 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 			}
 			rewriteOption.Rewrites[key] = chain
 		}
-		if len(rewriteOption.Rewrites) > 0 {
+		if len(rewriteOption.Rewrites) > 0 || len(rewriteOption.RemapDb) > 0 {
 			switch s := stmt.(type) {
 			case *tree.Select:
 				s.RewriteOption = rewriteOption

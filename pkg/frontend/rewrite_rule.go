@@ -41,6 +41,28 @@ const (
 // rewriteHintPayload is the JSON structure embedded in the hint comment.
 type rewriteHintPayload struct {
 	Rewrites map[string]string `json:"rewrites"`
+	// RemapDb maps a source database name to a target database name. It is
+	// applied before the table Rewrites.
+	RemapDb map[string]string `json:"remapdb"`
+}
+
+// isValidDbIdentifier reports whether s is a usable (unquoted) database name:
+// non-empty and composed only of letters, digits, underscore or '$'. remapdb
+// only substitutes a name, so both sides must be plain identifiers.
+func isValidDbIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r == '_' || r == '$' ||
+			(r >= '0' && r <= '9') ||
+			(r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // formatRewriteHint serializes a rules map into the /*+ {"rewrites": {...}} */ hint format.
@@ -61,7 +83,7 @@ func formatRewriteHint(ctx context.Context, rules map[string]string) (string, er
 // emitted as a plain string (keeping the common case identical to
 // formatRewriteHint); a chain with multiple layers is emitted as an ordered
 // JSON array (innermost first, outermost last). Empty chains are skipped.
-func formatRewriteHintChains(ctx context.Context, chains map[string][]string) (string, error) {
+func formatRewriteHintChains(ctx context.Context, chains map[string][]string, remapDb map[string]string) (string, error) {
 	rewrites := make(map[string]interface{}, len(chains))
 	for k, chain := range chains {
 		switch len(chain) {
@@ -74,6 +96,9 @@ func formatRewriteHintChains(ctx context.Context, chains map[string][]string) (s
 		}
 	}
 	payload := map[string]interface{}{"rewrites": rewrites}
+	if len(remapDb) > 0 {
+		payload["remapdb"] = remapDb
+	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -137,14 +162,11 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 		ses.ruleCacheMu.Unlock()
 	}
 
-	// Merge session-variable rewrites on top of the role rules.
-	sessionRules, err := getSessionRewriteRules(ctx, ses)
-	if err != nil {
-		return sql, err
-	}
+	// Session-variable rewrites and database remaps.
+	sessionRules, sessionRemapDb := getSessionRewriteRules(ctx, ses)
 
-	if len(cache) == 0 && len(sessionRules) == 0 {
-		// No persistent or session rules. Leave any inline /*+ ... */ hint to be
+	if len(cache) == 0 && len(sessionRules) == 0 && len(sessionRemapDb) == 0 {
+		// No persistent or session config. Leave any inline /*+ ... */ hint to be
 		// handled natively by the parser.
 		return sql, nil
 	}
@@ -158,7 +180,11 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	// one query only. All layers are emitted as a single hint because the
 	// parser only honors the first leading hint; a second hint of our own would
 	// otherwise mask the inline one.
-	inlineRules, err := extractInlineRewrites(ctx, sql)
+	//
+	// remapdb (database-name substitution) is applied before the table rewrites
+	// and does not stack: a database maps to one target, so the inline hint
+	// overrides the session variable for the same source database.
+	inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, sql)
 	if err != nil {
 		return sql, err
 	}
@@ -174,7 +200,15 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 		chains[k] = append(chains[k], v)
 	}
 
-	hint, err := formatRewriteHintChains(ctx, chains)
+	remapDb := make(map[string]string, len(sessionRemapDb)+len(inlineRemapDb))
+	for k, v := range sessionRemapDb {
+		remapDb[k] = v
+	}
+	for k, v := range inlineRemapDb {
+		remapDb[k] = v
+	}
+
+	hint, err := formatRewriteHintChains(ctx, chains, remapDb)
 	if err != nil {
 		return sql, err
 	}
@@ -182,19 +216,20 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	return hint + " " + sql, nil
 }
 
-// extractInlineRewrites returns the table-rewrite rules from a leading
-// /*+ {...} */ (or /*!+ {...} */) hint on sql, if present. It only treats a
-// hint whose content is a JSON object (starting with '{') as a rewrite hint;
-// other leading hints yield no rules. The original sql is left untouched — the
-// rules are merged into the single hint rewriteSQL prepends.
-func extractInlineRewrites(ctx context.Context, sql string) (map[string]string, error) {
+// extractInlineRewrites returns the table-rewrite rules and database-remap
+// entries from a leading /*+ {...} */ (or /*!+ {...} */) hint on sql, if
+// present. It only treats a hint whose content is a JSON object (starting with
+// '{') as a rewrite hint; other leading hints yield nothing. The original sql is
+// left untouched — the rules are merged into the single hint rewriteSQL
+// prepends.
+func extractInlineRewrites(ctx context.Context, sql string) (rewrites map[string]string, remapDb map[string]string, err error) {
 	content, ok := leadingHintContent(sql)
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	content = strings.TrimSpace(content)
 	if content == "" || content[0] != '{' {
-		return nil, nil
+		return nil, nil, nil
 	}
 	return parseSessionRewrites(ctx, content)
 }
@@ -219,15 +254,15 @@ func leadingHintContent(sql string) (string, bool) {
 }
 
 // getSessionRewriteRules reads the remap_rewrites session variable and returns
-// its table-rewrite rules. An empty/unset variable yields no rules. The value
-// is validated at SET time (validateRemapRewrites), so a parse error here is
-// unexpected and is treated as "no session rules" rather than failing every
-// query.
-func getSessionRewriteRules(ctx context.Context, ses *Session) (map[string]string, error) {
+// its table-rewrite rules and database-remap entries. An empty/unset variable
+// yields nothing. The value is validated at SET time (validateRemapRewrites), so
+// a parse error here is unexpected and is treated as "no session config" rather
+// than failing every query.
+func getSessionRewriteRules(ctx context.Context, ses *Session) (rewrites map[string]string, remapDb map[string]string) {
 	v, err := ses.GetSessionSysVar("remap_rewrites")
 	if err != nil {
 		// remap_rewrites is always registered; a lookup error should not block
-		// the query, so fall back to "no session rules".
+		// the query, so fall back to "no session config".
 		return nil, nil
 	}
 	raw, ok := v.(string)
@@ -235,13 +270,13 @@ func getSessionRewriteRules(ctx context.Context, ses *Session) (map[string]strin
 		return nil, nil
 	}
 
-	rules, err := parseSessionRewrites(ctx, raw)
+	rewrites, remapDb, err = parseSessionRewrites(ctx, raw)
 	if err != nil {
 		ses.Error(ctx, "failed to parse remap_rewrites; ignoring session rewrites",
 			logutil.ErrorField(err))
 		return nil, nil
 	}
-	return rules, nil
+	return rewrites, remapDb
 }
 
 // validateRemapRewrites validates a remap_rewrites session-variable value: it
@@ -254,7 +289,7 @@ func validateRemapRewrites(ctx context.Context, val interface{}) error {
 	if !ok {
 		return moerr.NewInvalidInputf(ctx, "remap_rewrites must be a string, got %T", val)
 	}
-	rules, err := parseSessionRewrites(ctx, raw)
+	rules, remapDb, err := parseSessionRewrites(ctx, raw)
 	if err != nil {
 		return err
 	}
@@ -266,28 +301,46 @@ func validateRemapRewrites(ctx context.Context, val interface{}) error {
 			return err
 		}
 	}
+	for src, dst := range remapDb {
+		if !isValidDbIdentifier(src) || !isValidDbIdentifier(dst) {
+			return moerr.NewInvalidInputf(ctx, "remap_rewrites: remapdb names must be valid identifiers, got %q -> %q", src, dst)
+		}
+	}
 	return nil
 }
 
-// parseSessionRewrites parses the remap_rewrites value. It accepts both the
-// wrapped form {"rewrites": {"db.t": "select ..."}} (same payload as the inline
-// hint) and the bare form {"db.t": "select ..."}.
-func parseSessionRewrites(ctx context.Context, value string) (map[string]string, error) {
+// sessionRemapDb returns the database-remap entries from the remap_rewrites
+// session variable, but only when the rewrite feature is enabled. It is used by
+// statements that are not rewritten through a hint (e.g. USE).
+func sessionRemapDb(ctx context.Context, ses *Session) map[string]string {
+	if !ses.rewriteEnabled.Load() {
+		return nil
+	}
+	_, remapDb := getSessionRewriteRules(ctx, ses)
+	return remapDb
+}
+
+// parseSessionRewrites parses a remap_rewrites value or an inline hint payload
+// into its table-rewrite rules and database-remap entries. It accepts both the
+// wrapped form {"rewrites": {...}, "remapdb": {...}} and the bare form
+// {"db.t": "select ..."} (rewrites only, no remapdb).
+func parseSessionRewrites(ctx context.Context, value string) (rewrites map[string]string, remapDb map[string]string, err error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	var payload rewriteHintPayload
-	if err := json.Unmarshal([]byte(value), &payload); err == nil && payload.Rewrites != nil {
-		return payload.Rewrites, nil
+	if err := json.Unmarshal([]byte(value), &payload); err == nil &&
+		(payload.Rewrites != nil || payload.RemapDb != nil) {
+		return payload.Rewrites, payload.RemapDb, nil
 	}
 
 	var rules map[string]string
 	if err := json.Unmarshal([]byte(value), &rules); err != nil {
-		return nil, moerr.NewInvalidInputf(ctx, "invalid remap_rewrites value %q: %v", value, err)
+		return nil, nil, moerr.NewInvalidInputf(ctx, "invalid remap_rewrites value %q: %v", value, err)
 	}
-	return rules, nil
+	return rules, nil, nil
 }
 
 // loadRuleCache queries the mo_catalog.mo_role_rule table for all rewrite rules
