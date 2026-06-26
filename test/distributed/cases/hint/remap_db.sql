@@ -47,6 +47,19 @@ use rdb_src;
 select database() as curdb;
 select * from t order by id;
 
+-- remapdb can remap several databases at once; each reference is resolved
+-- independently, even multiple within one query
+drop database if exists rdb_dst2;
+create database rdb_dst2;
+create table rdb_dst2.t(id int, v int);
+insert into rdb_dst2.t values (7,70),(8,80);
+set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst", "rdb_src2": "rdb_dst2"}}';
+select * from rdb_src.t order by id;
+select * from rdb_src2.t order by id;
+select a.id as a_id, b.id as b_id from rdb_src.t a join rdb_src2.t b on a.id + 6 = b.id order by a.id;
+set remap_rewrites = '';
+drop database if exists rdb_dst2;
+
 -- remapdb names must be valid identifiers (rejected at SET time)
 set remap_rewrites = '{"remapdb": {"a.b": "c"}}';
 

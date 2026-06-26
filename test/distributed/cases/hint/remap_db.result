@@ -54,6 +54,26 @@ select * from t order by id;
 1  ¦  10  𝄀
 2  ¦  20  𝄀
 3  ¦  30
+drop database if exists rdb_dst2;
+create database rdb_dst2;
+create table rdb_dst2.t(id int, v int);
+insert into rdb_dst2.t values (7,70),(8,80);
+set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst", "rdb_src2": "rdb_dst2"}}';
+select * from rdb_src.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+select * from rdb_src2.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+7  ¦  70  𝄀
+8  ¦  80
+select a.id as a_id, b.id as b_id from rdb_src.t a join rdb_src2.t b on a.id + 6 = b.id order by a.id;
+➤ a_id[4,32,0]  ¦  b_id[4,32,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  8
+set remap_rewrites = '';
+drop database if exists rdb_dst2;
 set remap_rewrites = '{"remapdb": {"a.b": "c"}}';
 invalid input: remap_rewrites: remapdb names must be valid identifiers, got "a.b" -> "c"
 set remap_rewrites = '';
