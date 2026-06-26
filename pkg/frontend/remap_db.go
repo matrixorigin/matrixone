@@ -29,8 +29,9 @@ import (
 // derived-table alias rather than a base table, so attaching a database to it
 // could change its meaning; the current-database case is instead handled by
 // remapping USE (the session lands on the target database and unqualified names
-// resolve there naturally). Sub-selects in expressions (e.g. WHERE IN (...)) are
-// not walked.
+// resolve there naturally). Sub-selects nested in expressions (e.g. WHERE id IN
+// (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections, GROUP/HAVING) are
+// also walked so their qualified references are remapped.
 func applyRemapDb(stmts []tree.Statement, remap map[string]string) {
 	if len(remap) == 0 {
 		return
@@ -58,10 +59,17 @@ func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
 		if s.From != nil {
 			remapDbInTableExprs(s.From.Tables, remap)
 		}
+		for _, ue := range s.Exprs {
+			if ue != nil {
+				remapDbInExpr(ue.Expr, remap)
+			}
+		}
+		remapDbInWhere(s.Where, remap)
 	case *tree.Delete:
 		remapDbInWith(s.With, remap)
 		remapDbInTableExprs(s.Tables, remap)
 		remapDbInTableExprs(s.TableRefs, remap)
+		remapDbInWhere(s.Where, remap)
 	}
 }
 
@@ -90,6 +98,17 @@ func remapDbInSelectStatement(s tree.SelectStatement, remap map[string]string) {
 		if c.From != nil {
 			remapDbInTableExprs(c.From.Tables, remap)
 		}
+		for _, se := range c.Exprs {
+			remapDbInExpr(se.Expr, remap)
+		}
+		remapDbInWhere(c.Where, remap)
+		remapDbInWhere(c.Having, remap)
+		if c.GroupBy != nil {
+			for _, exprs := range c.GroupBy.GroupByExprsList {
+				remapDbInExprs(exprs, remap)
+			}
+			remapDbInExprs(c.GroupBy.GroupingSet, remap)
+		}
 	case *tree.UnionClause:
 		remapDbInSelectStatement(c.Left, remap)
 		remapDbInSelectStatement(c.Right, remap)
@@ -97,6 +116,12 @@ func remapDbInSelectStatement(s tree.SelectStatement, remap map[string]string) {
 		remapDbInSelect(c.Select, remap)
 	case *tree.Select:
 		remapDbInSelect(c, remap)
+	}
+}
+
+func remapDbInWhere(w *tree.Where, remap map[string]string) {
+	if w != nil {
+		remapDbInExpr(w.Expr, remap)
 	}
 }
 
@@ -115,12 +140,67 @@ func remapDbInTableExpr(te tree.TableExpr, remap map[string]string) {
 	case *tree.JoinTableExpr:
 		remapDbInTableExpr(t.Left, remap)
 		remapDbInTableExpr(t.Right, remap)
+		if on, ok := t.Cond.(*tree.OnJoinCond); ok {
+			remapDbInExpr(on.Expr, remap)
+		}
 	case *tree.ParenTableExpr:
 		remapDbInTableExpr(t.Expr, remap)
 	case *tree.Select:
 		remapDbInSelect(t, remap)
 	case *tree.ParenSelect:
 		remapDbInSelect(t.Select, remap)
+	}
+}
+
+func remapDbInExprs(exprs tree.Exprs, remap map[string]string) {
+	for _, e := range exprs {
+		remapDbInExpr(e, remap)
+	}
+}
+
+// remapDbInExpr walks an expression looking for nested sub-selects (a
+// *tree.Subquery, e.g. WHERE id IN (SELECT ... FROM dbx.t) or EXISTS (...)) and
+// remaps the qualified table references inside them. It recurses through the
+// common boolean/comparison/function expression containers; expression kinds
+// that cannot contain a sub-select are no-ops.
+func remapDbInExpr(expr tree.Expr, remap map[string]string) {
+	switch e := expr.(type) {
+	case nil:
+		return
+	case *tree.Subquery:
+		remapDbInSelectStatement(e.Select, remap)
+	case *tree.ParenExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.NotExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.AndExpr:
+		remapDbInExpr(e.Left, remap)
+		remapDbInExpr(e.Right, remap)
+	case *tree.OrExpr:
+		remapDbInExpr(e.Left, remap)
+		remapDbInExpr(e.Right, remap)
+	case *tree.XorExpr:
+		remapDbInExpr(e.Left, remap)
+		remapDbInExpr(e.Right, remap)
+	case *tree.ComparisonExpr:
+		remapDbInExpr(e.Left, remap)
+		remapDbInExpr(e.Right, remap)
+		remapDbInExpr(e.Escape, remap)
+	case *tree.RangeCond:
+		remapDbInExpr(e.Left, remap)
+		remapDbInExpr(e.From, remap)
+		remapDbInExpr(e.To, remap)
+	case *tree.UnaryExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.BinaryExpr:
+		remapDbInExpr(e.Left, remap)
+		remapDbInExpr(e.Right, remap)
+	case *tree.CastExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.FuncExpr:
+		remapDbInExprs(e.Exprs, remap)
+	case *tree.Tuple:
+		remapDbInExprs(e.Exprs, remap)
 	}
 }
 

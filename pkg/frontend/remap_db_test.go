@@ -106,4 +106,47 @@ func TestApplyRemapDb(t *testing.T) {
 		require.Contains(t, out, "dbyyy.t")
 		require.NotContains(t, out, "dbxxx")
 	})
+
+	t.Run("where IN subquery", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "select * from dbxxx.a where id in (select id from dbxxx.b)", remap)
+		require.Contains(t, out, "dbyyy.a")
+		require.Contains(t, out, "dbyyy.b")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("where EXISTS subquery", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "select * from dbxxx.a where exists (select 1 from dbxxx.b where b.id = a.id)", remap)
+		require.Contains(t, out, "dbyyy.a")
+		require.Contains(t, out, "dbyyy.b")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("having subquery", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "select id from dbxxx.a group by id having count(*) > (select count(*) from dbxxx.b)", remap)
+		require.Contains(t, out, "dbyyy.a")
+		require.Contains(t, out, "dbyyy.b")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("projection scalar subquery", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "select (select max(id) from dbxxx.b) from dbxxx.a", remap)
+		require.Contains(t, out, "dbyyy.a")
+		require.Contains(t, out, "dbyyy.b")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("join ON subquery", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "select * from dbxxx.a join dbxxx.c on a.id in (select id from dbxxx.b)", remap)
+		require.Contains(t, out, "dbyyy.a")
+		require.Contains(t, out, "dbyyy.b")
+		require.Contains(t, out, "dbyyy.c")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("delete with IN subquery source", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "delete from dbxxx.t where id in (select id from dbxxx.s)", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.Contains(t, out, "dbyyy.s")
+		require.NotContains(t, out, "dbxxx")
+	})
 }

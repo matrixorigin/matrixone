@@ -3591,8 +3591,11 @@ var gSysVarsDefs = map[string]SystemVariable{
 	// The bare map form above and the wrapped {"rewrites": {...}} form are both
 	// accepted. Setting it to '' clears the session rules.
 	"remap_rewrites": {
-		Name:              "remap_rewrites",
-		Scope:             ScopeBoth,
+		Name: "remap_rewrites",
+		// Session-only: the value is validated at SET time by validateRemapRewrites
+		// via SetSessionSysVar. ScopeGlobal/ScopeBoth would allow SET GLOBAL to
+		// store an unvalidated value that later breaks per-query rewriting.
+		Scope:             ScopeSession,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("remap_rewrites"),

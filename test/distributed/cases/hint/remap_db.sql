@@ -98,6 +98,21 @@ set remap_rewrites = '{"remapdb": {"x": "x"}}';
 -- multiple sources mapping to the same destination is allowed
 set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst", "rdb_src3": "rdb_dst"}}';
 select * from rdb_src.t order by id;
+set remap_rewrites = '';
+
+-- remapdb reaches qualified references nested inside expression sub-selects:
+-- WHERE IN (...), EXISTS (...), a scalar subquery in the projection, and the
+-- read source of a DELETE/UPDATE subquery
+create table rdb_dst.s(id int);
+insert into rdb_dst.s values (2),(3);
+set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst"}}';
+select * from rdb_src.t where id in (select id from rdb_src.s) order by id;
+select * from rdb_src.t a where exists (select 1 from rdb_src.s b where b.id = a.id) order by id;
+select id, (select count(*) from rdb_src.s) as scnt from rdb_src.t order by id;
+delete from rdb_src.t where id in (select id from rdb_src.s);
+select * from rdb_dst.t order by id;
+set remap_rewrites = '';
+insert into rdb_dst.t values (2,20),(3,30);
 
 set remap_rewrites = '';
 set enable_remap_hint = 0;

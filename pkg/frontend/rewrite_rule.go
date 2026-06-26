@@ -149,8 +149,10 @@ func parseRewriteHint(ctx context.Context, hint string) (map[string]string, erro
 // remap_rewrites session variable and, if rules exist, prepends a hint comment
 // to the SQL string.
 // If ruleCache is nil (not yet loaded), it lazily loads rules via loadRuleCache.
-// Session-variable rules are merged on top of the role rules (a session rule
-// overrides a role rule for the same table key).
+// Rules for the same table key are layered, not overridden: role -> session ->
+// inline are emitted as an ordered chain (stacked views), so a session/inline
+// rule narrows the role-rewritten relation rather than replacing it. See the
+// chain-building comment below for details.
 // If the combined rule set is empty, the original SQL is returned unchanged.
 // This function only injects hints when enable_remap_hint is true.
 // Rule cache load failures are returned to the caller so access-control rewrites
@@ -263,6 +265,29 @@ func extractInlineRewrites(ctx context.Context, sql string) (rewrites map[string
 	return rewrites, remapDb, nil
 }
 
+// extractInlineRemapDb returns only the remapdb entries from a leading
+// /*+ {...} */ hint, decoding the remapdb field alone and ignoring rewrites.
+// This is what the executor needs to apply database remapping, and it stays
+// correct even when the merged hint carries layered (array-form) rewrites that
+// parseSessionRewrites would reject.
+func extractInlineRemapDb(sql string) map[string]string {
+	content, ok := leadingHintContent(sql)
+	if !ok {
+		return nil
+	}
+	content = strings.TrimSpace(content)
+	if content == "" || content[0] != '{' {
+		return nil
+	}
+	var payload struct {
+		RemapDb map[string]string `json:"remapdb"`
+	}
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return nil
+	}
+	return payload.RemapDb
+}
+
 // leadingHintContent extracts the inner content of the first leading
 // /*+ ... */ or /*!+ ... */ comment in sql. It returns ("", false) when sql
 // does not start with such a hint.
@@ -357,17 +382,49 @@ func parseSessionRewrites(ctx context.Context, value string) (rewrites map[strin
 		return nil, nil, nil
 	}
 
-	var payload rewriteHintPayload
-	if err := json.Unmarshal([]byte(value), &payload); err == nil &&
-		(payload.Rewrites != nil || payload.RemapDb != nil) {
-		return payload.Rewrites, payload.RemapDb, nil
+	// A rewrite value must be a single SQL string: a table name maps to exactly
+	// one query. The chained-array form is internal to rewriteSQL/the parser and
+	// is never accepted here.
+	var wrapped struct {
+		Rewrites map[string]json.RawMessage `json:"rewrites"`
+		RemapDb  map[string]string          `json:"remapdb"`
+	}
+	if err := json.Unmarshal([]byte(value), &wrapped); err == nil &&
+		(wrapped.Rewrites != nil || wrapped.RemapDb != nil) {
+		rules, derr := stringRewrites(ctx, value, wrapped.Rewrites)
+		if derr != nil {
+			return nil, nil, derr
+		}
+		return rules, wrapped.RemapDb, nil
 	}
 
-	var rules map[string]string
-	if err := json.Unmarshal([]byte(value), &rules); err != nil {
+	var bare map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(value), &bare); err != nil {
 		return nil, nil, moerr.NewInvalidInputf(ctx, "invalid remap_rewrites value %q: %v", value, err)
 	}
+	rules, derr := stringRewrites(ctx, value, bare)
+	if derr != nil {
+		return nil, nil, derr
+	}
 	return rules, nil, nil
+}
+
+// stringRewrites requires every rewrite value to be a single SQL string. An
+// array (a layered chain) or any other JSON type is rejected: a table maps to
+// one query, not a list.
+func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMessage) (map[string]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(raw))
+	for k, rv := range raw {
+		var s string
+		if err := json.Unmarshal(rv, &s); err != nil {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid remap_rewrites value %q: rewrite for %q must be a single SQL string, not an array or object", value, k)
+		}
+		out[k] = s
+	}
+	return out, nil
 }
 
 // loadRuleCache queries the mo_catalog.mo_role_rule table for all rewrite rules

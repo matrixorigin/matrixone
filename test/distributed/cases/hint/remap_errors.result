@@ -6,12 +6,14 @@ insert into t values (1,10),(2,20),(3,30);
 create table u(id int, v int);
 insert into u values (1,100),(2,200),(3,300);
 set enable_remap_hint = 1;
+set global remap_rewrites = '{}';
+internal error: the system variable is session
 set remap_rewrites = '{not json}';
 invalid input: invalid remap_rewrites value "{not json}": invalid character 'n' looking for beginning of object key string
 set remap_rewrites = '[1,2,3]';
-invalid input: invalid remap_rewrites value "[1,2,3]": json: cannot unmarshal array into Go value of type map[string]string
+invalid input: invalid remap_rewrites value "[1,2,3]": json: cannot unmarshal array into Go value of type map[string]json.RawMessage
 set remap_rewrites = '123';
-invalid input: invalid remap_rewrites value "123": json: cannot unmarshal number into Go value of type map[string]string
+invalid input: invalid remap_rewrites value "123": json: cannot unmarshal number into Go value of type map[string]json.RawMessage
 set remap_rewrites = '{"rerr.t": "delete from t"}';
 invalid input: invalid rewrite rule SQL "delete from t": only accept SELECT-like statements as rewrites
 set remap_rewrites = '{"rerr.t": "update t set v = 0"}';
@@ -20,6 +22,10 @@ set remap_rewrites = '{"rerr.t": "select from"}';
 invalid input: invalid rewrite rule SQL "select from": You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " from";
 set remap_rewrites = '{"   ": "select 1"}';
 invalid input: remap_rewrites: table key must not be empty
+set remap_rewrites = '{"rewrites": {"rerr.t": ["select * from t", "select * from t where id <= 1"]}}';
+invalid input: invalid remap_rewrites value "{\"rewrites\": {\"rerr.t\": [\"select * from t\", \"select * from t where id <= 1\"]}}": rewrite for "rerr.t" must be a single SQL string, not an array or object
+set remap_rewrites = '{"rewrites": {"rerr.t": {"x": "y"}}}';
+invalid input: invalid remap_rewrites value "{\"rewrites\": {\"rerr.t\": {\"x\": \"y\"}}}": rewrite for "rerr.t" must be a single SQL string, not an array or object
 set remap_rewrites = '{"remapdb": {"a.b": "c"}}';
 invalid input: remapdb names must be valid identifiers, got "a.b" -> "c"
 set remap_rewrites = '{"remapdb": {"x": "y z"}}';

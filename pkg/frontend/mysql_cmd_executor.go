@@ -2488,10 +2488,10 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 				// database. The effective remapdb (role rules carry none, the
 				// session variable and any inline hint are merged by rewriteSQL
 				// into the leading hint) is read back from the statement text and
-				// applied to SELECT and INSERT/UPDATE/DELETE alike.
-				if _, remapDb, rerr := extractInlineRewrites(execCtx.reqCtx, execCtx.input.getSql()); rerr == nil {
-					applyRemapDb(stmts, remapDb)
-				}
+				// applied to SELECT and INSERT/UPDATE/DELETE alike. Only the
+				// remapdb field is decoded here, so layered (array-form) rewrites
+				// in the merged hint do not interfere.
+				applyRemapDb(stmts, extractInlineRemapDb(execCtx.input.getSql()))
 			}
 		}
 	}

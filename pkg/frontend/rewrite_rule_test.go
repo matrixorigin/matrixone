@@ -656,6 +656,33 @@ func TestParseSessionRewrites(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid remap_rewrites value")
 	})
+	t.Run("array (chain) rewrite value is rejected", func(t *testing.T) {
+		// A table must map to a single SQL string, not a list.
+		_, _, err := parseSessionRewrites(ctx,
+			`{"rewrites": {"db.t": ["select * from db.t", "select * from db.t where x > 0"]}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a single SQL string")
+	})
+	t.Run("rewrite value of wrong type is rejected", func(t *testing.T) {
+		_, _, err := parseSessionRewrites(ctx, `{"rewrites": {"db.t": 123}}`)
+		require.Error(t, err)
+	})
+}
+
+// TestExtractInlineRemapDb covers reading back remapdb from the merged hint,
+// which must stay correct even when rewrites are present in array (chain) form.
+func TestExtractInlineRemapDb(t *testing.T) {
+	t.Run("remapdb alongside chained rewrites", func(t *testing.T) {
+		remap := extractInlineRemapDb(
+			`/*+ {"rewrites": {"db.t": ["s1", "s2"]}, "remapdb": {"dbx": "dby"}} */ select * from dbx.t`)
+		require.Equal(t, "dby", remap["dbx"])
+	})
+	t.Run("no remapdb", func(t *testing.T) {
+		require.Nil(t, extractInlineRemapDb(`/*+ {"rewrites": {"db.t": "s1"}} */ select 1`))
+	})
+	t.Run("no hint", func(t *testing.T) {
+		require.Nil(t, extractInlineRemapDb(`select 1`))
+	})
 }
 
 // TestValidateRemapRewrites covers the SET-time validation of the

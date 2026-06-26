@@ -13,6 +13,10 @@ insert into u values (1,100),(2,200),(3,300);
 
 set enable_remap_hint = 1;
 
+-- remap_rewrites is session-only: SET GLOBAL is rejected (a global value would
+-- otherwise bypass the SET-time validation below)
+set global remap_rewrites = '{}';
+
 -- =========================================================================
 -- SET-time validation of the remap_rewrites session variable
 -- =========================================================================
@@ -28,6 +32,10 @@ set remap_rewrites = '{"rerr.t": "update t set v = 0"}';
 set remap_rewrites = '{"rerr.t": "select from"}';
 -- an empty table key is rejected
 set remap_rewrites = '{"   ": "select 1"}';
+-- a rewrite value must be a single SQL string: an array (chain) is rejected
+set remap_rewrites = '{"rewrites": {"rerr.t": ["select * from t", "select * from t where id <= 1"]}}';
+-- an object rewrite value is rejected too
+set remap_rewrites = '{"rewrites": {"rerr.t": {"x": "y"}}}';
 -- remapdb names must be valid identifiers
 set remap_rewrites = '{"remapdb": {"a.b": "c"}}';
 set remap_rewrites = '{"remapdb": {"x": "y z"}}';
