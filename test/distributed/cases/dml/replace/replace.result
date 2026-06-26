@@ -287,3 +287,50 @@ name    email    value
 a    y@a.com    111
 b    z@a.com    222
 drop table t_replace_multi_uk_batch;
+drop table if exists t_replace_check;
+create table t_replace_check(id int primary key, v int check (v > 0));
+insert into t_replace_check values (1, 10);
+replace into t_replace_check values (1, -1);
+constraint violation: Check constraint '__mo_chk_1' is violated
+select * from t_replace_check order by id;
+id    v
+1    10
+replace into t_replace_check values (2, null);
+select * from t_replace_check order by id;
+id    v
+1    10
+2    null
+insert into t_replace_check values (3, -3);
+constraint violation: Check constraint '__mo_chk_1' is violated
+select * from t_replace_check order by id;
+id    v
+1    10
+2    null
+insert into t_replace_check values (3, 30), (4, -4);
+constraint violation: Check constraint '__mo_chk_1' is violated
+select * from t_replace_check order by id;
+id    v
+1    10
+2    null
+insert into t_replace_check values (1, -5) on duplicate key update v = values(v);
+constraint violation: Check constraint '__mo_chk_1' is violated
+select * from t_replace_check order by id;
+id    v
+1    10
+2    null
+update t_replace_check set v = -3 where id = 1;
+constraint violation: Check constraint '__mo_chk_1' is violated
+select * from t_replace_check order by id;
+id    v
+1    10
+2    null
+drop table t_replace_check;
+drop table if exists t_replace_table_check;
+create table t_replace_table_check(id int primary key, a int, b int, check (a < b));
+insert into t_replace_table_check values (1, 1, 2);
+insert into t_replace_table_check values (2, 3, 2);
+constraint violation: Check constraint '__mo_chk_1' is violated
+select * from t_replace_table_check order by id;
+id    a    b
+1    1    2
+drop table t_replace_table_check;

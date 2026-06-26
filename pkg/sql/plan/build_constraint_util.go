@@ -93,6 +93,143 @@ func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, alia
 	}
 }
 
+func appendCheckConstraintPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, inputTag int32, colName2Idx map[string]int32) (int32, error) {
+	if len(tableDef.Checks) == 0 {
+		return lastNodeID, nil
+	}
+
+	tableColProjList := make([]*plan.Expr, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		colPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot find column %s.%s for check constraint", tableDef.Name, col.Name)
+		}
+		tableColProjList[i] = &plan.Expr{
+			Typ: col.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: inputTag,
+					ColPos: colPos,
+					Name:   col.Name,
+				},
+			},
+		}
+	}
+
+	filterList := make([]*plan.Expr, 0, len(tableDef.Checks))
+	for _, check := range tableDef.Checks {
+		if colName, ok := checkConstraintReferencesSyntheticCol(check.Check, tableDef); ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"check constraint %q references synthetic column %s", check.Name, colName)
+		}
+		checkExpr := substituteColRefsInExpr(check.Check, tableColProjList, 0)
+		isNullExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(checkExpr)})
+		if err != nil {
+			return 0, err
+		}
+		passExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{checkExpr, isNullExpr})
+		if err != nil {
+			return 0, err
+		}
+
+		checkName := check.Name
+		if checkName == "" {
+			checkName = "CHECK"
+		}
+		errMsg := makePlan2StringConstExprWithType(fmt.Sprintf("Check constraint '%s' is violated", checkName))
+		assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "check_constraint_assert", []*plan.Expr{passExpr, errMsg})
+		if err != nil {
+			return 0, err
+		}
+		filterList = append(filterList, assertExpr)
+	}
+
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_FILTER,
+		Children:    []int32{lastNodeID},
+		FilterList:  filterList,
+		ProjectList: getProjectionByLastNodeIfAvailable(builder, lastNodeID),
+	}, bindCtx), nil
+}
+
+func checkConstraintReferencesSyntheticCol(expr *plan.Expr, tableDef *TableDef) (string, bool) {
+	if expr == nil {
+		return "", false
+	}
+
+	syntheticCols := make(map[int32]string, 2)
+	addSyntheticCol := func(name string) {
+		if name == "" {
+			return
+		}
+		if colPos, ok := tableDef.Name2ColIndex[name]; ok {
+			syntheticCols[colPos] = name
+		}
+	}
+	addSyntheticCol(catalog.CPrimaryKeyColName)
+	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		addSyntheticCol(tableDef.ClusterBy.Name)
+	}
+
+	var walk func(*plan.Expr) (string, bool)
+	walk = func(expr *plan.Expr) (string, bool) {
+		if expr == nil {
+			return "", false
+		}
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			if e.Col.RelPos == 0 {
+				if colName, ok := syntheticCols[e.Col.ColPos]; ok {
+					return colName, true
+				}
+			}
+		case *plan.Expr_F:
+			for _, arg := range e.F.Args {
+				if colName, ok := walk(arg); ok {
+					return colName, true
+				}
+			}
+		case *plan.Expr_List:
+			for _, item := range e.List.List {
+				if colName, ok := walk(item); ok {
+					return colName, true
+				}
+			}
+		case *plan.Expr_Sub:
+			if e.Sub != nil {
+				if colName, ok := walk(e.Sub.Child); ok {
+					return colName, true
+				}
+			}
+		}
+		return "", false
+	}
+	return walk(expr)
+}
+
+func getProjectionByLastNodeIfAvailable(builder *QueryBuilder, lastNodeID int32) []*Expr {
+	return getProjectionByLastNodeIfAvailableWithVisited(builder, lastNodeID, make(map[int32]struct{}))
+}
+
+func getProjectionByLastNodeIfAvailableWithVisited(builder *QueryBuilder, lastNodeID int32, visited map[int32]struct{}) []*Expr {
+	if _, ok := visited[lastNodeID]; ok {
+		return nil
+	}
+	visited[lastNodeID] = struct{}{}
+
+	lastNode := builder.qry.Nodes[lastNodeID]
+	if len(lastNode.ProjectList) > 0 {
+		return getProjectionByLastNode(builder, lastNodeID)
+	}
+	if len(lastNode.Children) == 0 {
+		return nil
+	}
+	return getProjectionByLastNodeIfAvailableWithVisited(builder, lastNode.Children[0], visited)
+}
+
 func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, error) {
 	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, nil, "update")
 	if err != nil {

@@ -1615,6 +1615,217 @@ func TestReplacePlanStructure(t *testing.T) {
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
 }
 
+func TestReplacePlanChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO single_idx_t VALUES (1, -1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "REPLACE")
+}
+
+func TestInsertPlanChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO single_idx_t VALUES (1, -1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "INSERT")
+}
+
+func TestUpdatePlanChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "UPDATE single_idx_t SET val = -1 WHERE id = 1")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "UPDATE")
+}
+
+func TestSubstituteColRefsInExprSkipsNilProjection(t *testing.T) {
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_Rowid)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 1,
+				Name:   catalog.Row_ID,
+			},
+		},
+	}
+
+	got := substituteColRefsInExpr(expr, []*plan.Expr{MakePlan2Int32ConstExprWithType(1), nil}, 0)
+	assert.Same(t, expr, got)
+}
+
+func TestGetProjectionByLastNodeIfAvailableFollowsPrimaryChild(t *testing.T) {
+	builder := &QueryBuilder{
+		qry: &plan.Query{
+			Nodes: []*plan.Node{
+				{
+					NodeType: plan.Node_JOIN,
+					Children: []int32{1, 2},
+				},
+				{
+					NodeType: plan.Node_TABLE_SCAN,
+				},
+				{
+					NodeType: plan.Node_PROJECT,
+					ProjectList: []*plan.Expr{
+						MakePlan2Int32ConstExprWithType(1),
+					},
+				},
+			},
+		},
+	}
+
+	require.Nil(t, getProjectionByLastNodeIfAvailable(builder, 0))
+}
+
+func TestCheckConstraintRejectsSyntheticColumns(t *testing.T) {
+	tableDef := &TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a"},
+			{Name: "b"},
+			{Name: catalog.CPrimaryKeyColName},
+			{Name: "__mo_cbkey_001a001b"},
+		},
+		Name2ColIndex: map[string]int32{
+			"a":                        0,
+			"b":                        1,
+			catalog.CPrimaryKeyColName: 2,
+			"__mo_cbkey_001a001b":      3,
+		},
+		ClusterBy: &plan.ClusterByDef{Name: "__mo_cbkey_001a001b"},
+	}
+
+	for _, tc := range []struct {
+		name   string
+		colPos int32
+		want   string
+	}{
+		{name: "composite primary key", colPos: 2, want: catalog.CPrimaryKeyColName},
+		{name: "composite cluster by", colPos: 3, want: "__mo_cbkey_001a001b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: tc.colPos,
+					},
+				},
+			}
+			got, ok := checkConstraintReferencesSyntheticCol(expr, tableDef)
+			require.True(t, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	syntheticColExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 2,
+			},
+		},
+	}
+	litExpr := MakePlan2Int32ConstExprWithType(1)
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+	}{
+		{
+			name: "under function args",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_F{
+					F: &plan.Function{Args: []*plan.Expr{litExpr, syntheticColExpr}},
+				},
+			},
+		},
+		{
+			name: "under expression list",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_tuple)},
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{List: []*plan.Expr{litExpr, syntheticColExpr}},
+				},
+			},
+		},
+		{
+			name: "under subquery child",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Sub{
+					Sub: &plan.SubqueryRef{Child: syntheticColExpr},
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := checkConstraintReferencesSyntheticCol(tc.expr, tableDef)
+			require.True(t, ok)
+			require.Equal(t, catalog.CPrimaryKeyColName, got)
+		})
+	}
+}
+
+func addSingleIdxTPositiveCheck(t *testing.T, mock *MockOptimizer) {
+	t.Helper()
+	tableDef := mock.ctxt.tables["single_idx_t"]
+	valCol := tableDef.Name2ColIndex["val"]
+	checkExpr, err := BindFuncExprImplByPlanExpr(context.TODO(), ">", []*plan.Expr{
+		{
+			Typ: tableDef.Cols[valCol].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					Name:   "val",
+					ColPos: valCol,
+				},
+			},
+		},
+		MakePlan2Int32ConstExprWithType(0),
+	})
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	tableDef.Checks = []*plan.CheckDef{
+		{
+			Name:  "chk_val_positive",
+			Check: checkExpr,
+		},
+	}
+}
+
+func assertPlanHasCheckConstraintAssert(t *testing.T, query *Query, stmt string) {
+	t.Helper()
+	hasCheckAssert := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, expr := range node.FilterList {
+			if exprContainsFuncName(expr, "check_constraint_assert") {
+				hasCheckAssert = true
+				break
+			}
+		}
+	}
+	assert.True(t, hasCheckAssert, "%s plan should assert table CHECK constraints before writing", stmt)
+}
+
 func TestReplaceNonUniqueSingleIndexDeleteUsesIndexRowID(t *testing.T) {
 	mock := NewMockOptimizer(true)
 

@@ -237,3 +237,28 @@ insert into t_replace_multi_uk_batch (name, email, value) values ('a', 'x@a.com'
 replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com', 111), ('b', 'z@a.com', 222);
 select name, email, value from t_replace_multi_uk_batch order by name;
 drop table t_replace_multi_uk_batch;
+
+-- test REPLACE validates CHECK constraints before deleting the old row
+drop table if exists t_replace_check;
+create table t_replace_check(id int primary key, v int check (v > 0));
+insert into t_replace_check values (1, 10);
+replace into t_replace_check values (1, -1);
+select * from t_replace_check order by id;
+replace into t_replace_check values (2, null);
+select * from t_replace_check order by id;
+insert into t_replace_check values (3, -3);
+select * from t_replace_check order by id;
+insert into t_replace_check values (3, 30), (4, -4);
+select * from t_replace_check order by id;
+insert into t_replace_check values (1, -5) on duplicate key update v = values(v);
+select * from t_replace_check order by id;
+update t_replace_check set v = -3 where id = 1;
+select * from t_replace_check order by id;
+drop table t_replace_check;
+
+drop table if exists t_replace_table_check;
+create table t_replace_table_check(id int primary key, a int, b int, check (a < b));
+insert into t_replace_table_check values (1, 1, 2);
+insert into t_replace_table_check values (2, 3, 2);
+select * from t_replace_table_check order by id;
+drop table t_replace_table_check;

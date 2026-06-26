@@ -1104,6 +1104,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
+	type pendingCheckDef struct {
+		name           string
+		expr           tree.Expr
+		enforced       bool
+		enforcementSet bool
+		column         *ColDef
+	}
+	pendingChecks := make([]pendingCheckDef, 0)
 
 	if stmt.Param != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
@@ -1295,6 +1303,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			} else {
 				colMap[colName] = col
 				createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
+				for _, attr := range def.Attributes {
+					checkAttr, ok := attr.(*tree.AttributeCheckConstraint)
+					if !ok {
+						continue
+					}
+					pendingChecks = append(pendingChecks, pendingCheckDef{
+						name:           checkAttr.Name,
+						expr:           checkAttr.Expr,
+						enforced:       checkAttr.Enforced,
+						enforcementSet: checkAttr.EnforcementSet,
+						column:         col,
+					})
+				}
 
 				// get default val from ast node
 				attrIdx := slices.IndexFunc(def.Attributes, func(a tree.ColumnAttribute) bool {
@@ -1426,8 +1447,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				fkDatasOfFKSelfRefer = append(fkDatasOfFKSelfRefer, fkData)
 			}
 		case *tree.CheckIndex:
-			// unsupport in plan. will support in next version.
-			// return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
+			pendingChecks = append(pendingChecks, pendingCheckDef{
+				name:           def.ConstraintSymbol,
+				expr:           def.Expr,
+				enforced:       def.Enforced,
+				enforcementSet: def.EnforcementSet,
+			})
 		default:
 			return moerr.NewNYIf(ctx.GetContext(), "table def: '%v'", def)
 		}
@@ -1468,6 +1493,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
+	}
+
+	for _, check := range pendingChecks {
+		if check.enforcementSet && !check.enforced {
+			return moerr.NewNotSupported(ctx.GetContext(), "CHECK constraint NOT ENFORCED")
+		}
+		checkCols := createTable.TableDef.Cols
+		if check.column != nil {
+			checkCols = []*ColDef{check.column}
+		}
+		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, checkCols); err != nil {
+			return err
+		}
 	}
 
 	// table must have one visible column
@@ -1713,6 +1751,32 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	return nil
+}
+
+func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExpr tree.Expr, cols []*ColDef) error {
+	colNames := make([]string, 0, len(cols))
+	colTypes := make([]plan.Type, 0, len(cols))
+	for _, col := range cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		colNames = append(colNames, col.Name)
+		colTypes = append(colTypes, col.Typ)
+	}
+
+	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
+	checkExpr, err := binder.BindExpr(astExpr, 0, true)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		name = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
+	tableDef.Checks = append(tableDef.Checks, &plan.CheckDef{
+		Name:  name,
+		Check: checkExpr,
+	})
 	return nil
 }
 

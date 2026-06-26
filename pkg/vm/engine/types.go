@@ -17,6 +17,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"regexp"
 	"strconv"
@@ -52,7 +53,9 @@ type Node struct {
 	CNIDX int32 // cn index , starts from 0
 }
 
-func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
+const CheckConstraintsConfigKey = "__mo_check_constraints"
+
+func PlanDefToCstrDef(tableDef *plan.TableDef) (*ConstraintDef, error) {
 	planDefs := tableDef.GetDefs()
 	c := new(ConstraintDef)
 	for _, def := range planDefs {
@@ -88,7 +91,66 @@ func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 		})
 	}
 
-	return c
+	if len(tableDef.Checks) > 0 {
+		value, err := MarshalCheckConstraints(tableDef.Checks)
+		if err != nil {
+			return nil, err
+		}
+		c.Cts = append(c.Cts, &StreamConfigsDef{
+			Configs: []*plan.Property{
+				{
+					Key:   CheckConstraintsConfigKey,
+					Value: value,
+				},
+			},
+		})
+	}
+
+	return c, nil
+}
+
+func MarshalCheckConstraints(checks []*plan.CheckDef) (string, error) {
+	data, err := (&plan.TableDef{Checks: checks}).Marshal()
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(data), nil
+}
+
+func UnmarshalCheckConstraints(value string) ([]*plan.CheckDef, error) {
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, err
+	}
+	tableDef := &plan.TableDef{}
+	if err := tableDef.Unmarshal(data); err != nil {
+		return nil, err
+	}
+	return tableDef.Checks, nil
+}
+
+func SplitCheckConstraintsFromConfigs(configs []*plan.Property) ([]*plan.Property, []*plan.CheckDef, error) {
+	visibleConfigs := make([]*plan.Property, 0, len(configs))
+	var checks []*plan.CheckDef
+	var firstErr error
+	for _, config := range configs {
+		if config.Key != CheckConstraintsConfigKey {
+			visibleConfigs = append(visibleConfigs, config)
+			continue
+		}
+		decodedChecks, err := UnmarshalCheckConstraints(config.Value)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		checks = append(checks, decodedChecks...)
+	}
+	if firstErr != nil {
+		return visibleConfigs, nil, firstErr
+	}
+	return visibleConfigs, checks, nil
 }
 
 var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaExtra, error) {
@@ -144,7 +206,10 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		})
 	}
 
-	c := PlanDefToCstrDef(tableDef)
+	c, err := PlanDefToCstrDef(tableDef)
+	if err != nil {
+		return nil, nil, err
+	}
 	if len(c.Cts) > 0 {
 		exeDefs = append(exeDefs, c)
 	}

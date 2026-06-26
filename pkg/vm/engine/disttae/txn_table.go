@@ -1444,6 +1444,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		var primarykey *plan.PrimaryKeyDef
 		var indexes []*plan.IndexDef
 		var refChildTbls []uint64
+		var checks []*plan.CheckDef
 		var hasRowId bool
 		var partition *plan.Partition
 
@@ -1527,7 +1528,14 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
 				case *engine.StreamConfigsDef:
-					properties = append(properties, k.Configs...)
+					visibleConfigs, checkDefs, err := engine.SplitCheckConstraintsFromConfigs(k.Configs)
+					if err != nil {
+						logutil.Errorf("txn-table error: unmarshal table check constraint information: %s-%s, err: %v",
+							tbl.db.databaseName, tbl.tableName, err)
+						return nil
+					}
+					properties = append(properties, visibleConfigs...)
+					checks = append(checks, checkDefs...)
 				}
 			}
 		}
@@ -1583,6 +1591,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			RefChildTbls:  refChildTbls,
 			ClusterBy:     clusterByDef,
 			Indexes:       indexes,
+			Checks:        checks,
 			Version:       tbl.version,
 			DbId:          tbl.GetDBID(ctx),
 			Partition:     partition,

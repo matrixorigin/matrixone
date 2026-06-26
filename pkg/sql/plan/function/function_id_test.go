@@ -577,9 +577,10 @@ var predefinedFunids = map[int]int{
 	IS_FREE_LOCK:                  521,
 	IS_USED_LOCK:                  522,
 	RELEASE_ALL_LOCKS:             523,
+	CHECK_CONSTRAINT_ASSERT:       524,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 524,
+	FUNCTION_END_NUMBER: 525,
 }
 
 func Test_funids(t *testing.T) {

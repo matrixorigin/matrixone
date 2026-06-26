@@ -726,16 +726,17 @@ const (
 	UUID_TO_BIN = 516
 	BIN_TO_UUID = 517
 
-	NAME_CONST        = 518
-	GET_LOCK          = 519
-	RELEASE_LOCK      = 520
-	IS_FREE_LOCK      = 521
-	IS_USED_LOCK      = 522
-	RELEASE_ALL_LOCKS = 523
+	NAME_CONST              = 518
+	GET_LOCK                = 519
+	RELEASE_LOCK            = 520
+	IS_FREE_LOCK            = 521
+	IS_USED_LOCK            = 522
+	RELEASE_ALL_LOCKS       = 523
+	CHECK_CONSTRAINT_ASSERT = 524
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 524
+	FUNCTION_END_NUMBER = 525
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1118,6 +1119,7 @@ var functionIdRegister = map[string]int32{
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
 	"name_const":                     NAME_CONST,
+	"check_constraint_assert":        CHECK_CONSTRAINT_ASSERT,
 	"values":                         VALUES,
 	"binary":                         BINARY,
 	"internal_char_length":           INTERNAL_CHAR_LENGTH,

@@ -13182,6 +13182,52 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `check_constraint_assert`
+	{
+		functionId: CHECK_CONSTRAINT_ASSERT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 2 || inputs[0].Oid != types.T_bool || !inputs[1].Oid.IsMySQLString() {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+						errMsgs := vector.GenerateFunctionStrParameter(parameters[1])
+						value, null := errMsgs.GetStrValue(0)
+						if null {
+							return moerr.NewInternalError(proc.Ctx, "the second parameter of check_constraint_assert() should not be null")
+						}
+						errMsg := functionUtil.QuickBytesToStr(value)
+
+						for i := uint64(0); i < uint64(length); i++ {
+							flag, isNull := checkFlags.GetValue(i)
+							if isNull || !flag {
+								return moerr.NewConstraintViolation(proc.Ctx, errMsg)
+							}
+						}
+
+						res := vector.MustFunctionResult[bool](result)
+						for i := 0; i < length; i++ {
+							res.AppendMustValue(true)
+						}
+						return nil
+					}
+				},
+			},
+		},
+	},
+
 	// function `isempty`
 	{
 		functionId: ISEMPTY,
