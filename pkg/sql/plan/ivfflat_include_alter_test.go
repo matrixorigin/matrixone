@@ -34,6 +34,13 @@ func makeIvfIncludeAlterIndexDef(indexName string, includedColumns []string) *pl
 	}
 }
 
+func makeIvfIncludeAlterIndexDefForTable(indexName, tableType, tableName string, includedColumns []string) *planpb.IndexDef {
+	indexDef := makeIvfIncludeAlterIndexDef(indexName, includedColumns)
+	indexDef.IndexAlgoTableType = tableType
+	indexDef.IndexTableName = tableName
+	return indexDef
+}
+
 func TestHandleDropColumnWithIndexRemovesIvfIndexForIncludeColumn(t *testing.T) {
 	def := TableDef{
 		Indexes: []*IndexDef{
@@ -51,7 +58,8 @@ func TestHandleDropColumnWithIndexRemovesIvfIndexForIncludeColumn(t *testing.T) 
 func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef := &planpb.TableDef{
-		TblId: 42,
+		TblId:  42,
+		DbName: "db1",
 		Cols: []*ColDef{
 			{Name: "id", OriginName: "id"},
 			{Name: "title", OriginName: "title"},
@@ -62,9 +70,9 @@ func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
 			PkeyColName: "id",
 		},
 		Indexes: []*planpb.IndexDef{
-			makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
-			makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
-			makeIvfIncludeAlterIndexDef("idx_ivf", []string{"title", "category"}),
+			makeIvfIncludeAlterIndexDefForTable("idx_ivf", catalog.SystemSI_IVFFLAT_TblType_Metadata, "meta_tbl", []string{"title", "category"}),
+			makeIvfIncludeAlterIndexDefForTable("idx_ivf", catalog.SystemSI_IVFFLAT_TblType_Centroids, "centroids_tbl", []string{"title", "category"}),
+			makeIvfIncludeAlterIndexDefForTable("idx_ivf", catalog.SystemSI_IVFFLAT_TblType_Entries, "entries_tbl", []string{"title", "category"}),
 		},
 	}
 
@@ -78,9 +86,10 @@ func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	require.Len(t, sqls, 1)
+	require.Len(t, sqls, 2)
 	require.Contains(t, sqls[0], `set included_columns = '["headline","category"]'`)
 	require.Contains(t, sqls[0], "name = 'idx_ivf'")
+	require.Contains(t, sqls[1], "alter table `db1`.`entries_tbl` rename column `__mo_index_include_title` to `__mo_index_include_headline`")
 
 	for _, indexDef := range tableDef.Indexes {
 		require.Equal(t, []string{"headline", "category"}, indexDef.IncludedColumns)

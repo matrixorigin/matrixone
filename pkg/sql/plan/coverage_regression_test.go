@@ -215,6 +215,38 @@ func TestUpdateRenameColumnInTableDefRenamesPrimaryKeyAlias(t *testing.T) {
 	require.Contains(t, sqls[0], catalog.CreateAlias("row_id"))
 }
 
+func TestUpdateRenameColumnInTableDefEscapesMoIndexesColumnNameUpdate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := &planpb.TableDef{
+		TblId: 7,
+		Cols: []*ColDef{
+			{Name: "title", OriginName: "ti'tle"},
+		},
+		Pkey: &PrimaryKeyDef{},
+		Indexes: []*planpb.IndexDef{
+			{
+				IndexName: "idx_title",
+				IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+				Parts:     []string{"title"},
+			},
+		},
+	}
+
+	sqls, err := updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[0],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("head'line"),
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, sqls, 1)
+	require.Contains(t, sqls[0], "set column_name = 'head''line'")
+	require.Contains(t, sqls[0], "column_name = 'ti''tle'")
+}
+
 func TestUpdateRenameColumnInTableDefRejectsDuplicateTargetName(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef := makeAlterCoverageTableDef()

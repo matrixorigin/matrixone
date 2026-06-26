@@ -39,6 +39,15 @@ from vector_ivfflat_include_phase7_include
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=force';
 
+insert into vector_ivfflat_include_phase7_include values
+    (5, "[100,100,100]", "epsilon", 50, "n5");
+
+select id, headline, category
+from vector_ivfflat_include_phase7_include
+where headline = "epsilon"
+order by l2_distance(embedding, "[1,2,3]")
+limit 1 by rank with option 'mode=include';
+
 alter table vector_ivfflat_include_phase7_include drop column category;
 
 show create table vector_ivfflat_include_phase7_include;
