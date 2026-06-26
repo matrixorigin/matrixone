@@ -5719,6 +5719,520 @@ func Test_determineDML(t *testing.T) {
 	})
 }
 
+func TestReplacePrivilegeRequiresDeleteForConflictingTargets(t *testing.T) {
+	const (
+		dbName    = "replace_priv_edge"
+		tableName = "t_priv"
+	)
+
+	convey.Convey("replace with real primary key requires delete privilege", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.Replace{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
+		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
+			PrivilegeTypeSelect: true,
+			PrivilegeTypeInsert: true,
+			PrivilegeTypeDelete: false,
+		})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(0)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+			ses.GetTxnHandler().GetTxnCtx(),
+			ses,
+			stmt,
+			makeReplacePrivilegePlan(dbName, tableName, false, false),
+		)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("replace on fake pk table without unique indexes remains insert only", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.Replace{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
+		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
+			PrivilegeTypeSelect: true,
+			PrivilegeTypeInsert: true,
+			PrivilegeTypeDelete: false,
+		})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(0)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+			ses.GetTxnHandler().GetTxnCtx(),
+			ses,
+			stmt,
+			makeReplacePrivilegePlan(dbName, tableName, true, false),
+		)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("replace on fake pk table with unique index requires delete privilege", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.Replace{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
+		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
+			PrivilegeTypeSelect: true,
+			PrivilegeTypeInsert: true,
+			PrivilegeTypeDelete: false,
+		})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(0)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+			ses.GetTxnHandler().GetTxnCtx(),
+			ses,
+			stmt,
+			makeReplacePrivilegePlan(dbName, tableName, true, true),
+		)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("replace on fake pk nullable unique null remains insert only", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.Replace{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		sql2result := makeSql2ExecResult2(0, [][]interface{}{{0, false}}, nil, nil, nil, nil, nil, nil, nil)
+		addTablePrivilegeResultsForRole(t, sql2result, 0, dbName, tableName, map[PrivilegeType]bool{
+			PrivilegeTypeSelect: true,
+			PrivilegeTypeInsert: true,
+			PrivilegeTypeDelete: false,
+		})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(0)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+			ses.GetTxnHandler().GetTxnCtx(),
+			ses,
+			stmt,
+			makeReplacePrivilegeNullableUniqueNullPlan(dbName, tableName),
+		)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+}
+
+func TestExtractPrivilegeTipsFromPlanSkipsInvalidMultiUpdateCtx(t *testing.T) {
+	const (
+		dbName    = "multi_update_priv"
+		tableName = "t"
+	)
+
+	tableDef := &plan.TableDef{
+		Name:   tableName,
+		DbName: dbName,
+	}
+	objRef := &plan.ObjectRef{SchemaName: dbName, ObjName: tableName}
+	p := &plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan.Query{
+				StmtType: plan.Query_UPDATE,
+				Nodes: []*plan.Node{
+					{
+						NodeType: plan.Node_MULTI_UPDATE,
+						UpdateCtxList: []*plan.UpdateCtx{
+							nil,
+							{},
+							{ObjRef: objRef},
+							{TableDef: tableDef},
+							{ObjRef: objRef, TableDef: tableDef},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NotPanics(t, func() {
+		arr := extractPrivilegeTipsFromPlan(p)
+		require.Len(t, arr, 1)
+		require.Equal(t, PrivilegeTypeUpdate, arr[0].typ)
+		require.Equal(t, dbName, arr[0].databaseName)
+		require.Equal(t, tableName, arr[0].tableName)
+	})
+}
+
+func makeReplacePrivilegePlan(dbName, tableName string, fakePK bool, uniqueIndex bool) *plan2.Plan {
+	pkName := "id"
+	if fakePK {
+		pkName = catalog.FakePrimaryKeyColName
+	}
+	tableDef := &plan.TableDef{
+		Name:   tableName,
+		DbName: dbName,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: pkName,
+			Names:       []string{pkName},
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID},
+			{Name: pkName},
+			{Name: "v"},
+		},
+	}
+	if uniqueIndex {
+		tableDef.Indexes = []*plan.IndexDef{
+			{
+				IndexName:      "u_v",
+				Parts:          []string{"v"},
+				Unique:         true,
+				IndexTableName: "__mo_index_u_v",
+			},
+		}
+	}
+	objRef := &plan.ObjectRef{SchemaName: dbName, ObjName: tableName}
+	return &plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan.Query{
+				StmtType: plan.Query_INSERT,
+				Nodes: []*plan.Node{
+					{
+						NodeType: plan.Node_TABLE_SCAN,
+						ObjRef:   objRef,
+						TableDef: tableDef,
+					},
+					{
+						NodeType: plan.Node_PRE_INSERT,
+						PreInsertCtx: &plan.PreInsertCtx{
+							Ref:      objRef,
+							TableDef: tableDef,
+						},
+					},
+					{
+						NodeType: plan.Node_MULTI_UPDATE,
+						UpdateCtxList: []*plan.UpdateCtx{
+							{
+								ObjRef:   objRef,
+								TableDef: tableDef,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeReplacePrivilegeNullableUniqueNullPlan(dbName, tableName string) *plan2.Plan {
+	const (
+		valueTag   int32 = 10
+		projectTag int32 = 20
+	)
+	tableDef := &plan.TableDef{
+		Name:   tableName,
+		DbName: dbName,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: catalog.FakePrimaryKeyColName,
+			Names:       []string{catalog.FakePrimaryKeyColName},
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID},
+			{Name: catalog.FakePrimaryKeyColName},
+			{Name: "v"},
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:      "u_v",
+				Parts:          []string{"v"},
+				Unique:         true,
+				IndexTableName: "__mo_index_u_v",
+			},
+		},
+	}
+	objRef := &plan.ObjectRef{SchemaName: dbName, ObjName: tableName}
+	fakePKRef := plan.ColRef{RelPos: 0, ColPos: 0, Name: catalog.FakePrimaryKeyColName}
+	uniqueRef := plan.ColRef{RelPos: 0, ColPos: 1, Name: "v"}
+	oldRowIDRef := plan.ColRef{RelPos: 0, ColPos: 2, Name: catalog.Row_ID}
+	oldPKRef := plan.ColRef{RelPos: 0, ColPos: 3, Name: catalog.FakePrimaryKeyColName}
+
+	return &plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan.Query{
+				StmtType: plan.Query_INSERT,
+				Nodes: []*plan.Node{
+					{
+						NodeType:    plan.Node_VALUE_SCAN,
+						BindingTags: []int32{valueTag},
+						RowsetData: &plan.RowsetData{
+							RowCount: 1,
+							Cols: []*plan.ColData{
+								{
+									Data: []*plan.RowsetExpr{{
+										RowPos: 0,
+										Expr: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+											Value: &plan.Literal_I32Val{I32Val: 1},
+										}}},
+									}},
+								},
+								{
+									Data: []*plan.RowsetExpr{{
+										RowPos: 0,
+										Expr: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+											Isnull: true,
+										}}},
+									}},
+								},
+							},
+						},
+					},
+					{
+						NodeType:    plan.Node_PROJECT,
+						BindingTags: []int32{projectTag},
+						ProjectList: []*plan.Expr{
+							{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: valueTag, ColPos: 0}}},
+							{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: valueTag, ColPos: 1}}},
+							{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+							{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+						},
+					},
+					{
+						NodeType: plan.Node_MULTI_UPDATE,
+						Children: []int32{1},
+						UpdateCtxList: []*plan.UpdateCtx{
+							{
+								ObjRef:     objRef,
+								TableDef:   tableDef,
+								InsertCols: []plan.ColRef{fakePKRef, uniqueRef},
+								DeleteCols: []plan.ColRef{oldRowIDRef, oldPKRef},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestReplaceStaticNullHelpers(t *testing.T) {
+	const (
+		valueTag       int32 = 10
+		projectTag     int32 = 20
+		lockTag        int32 = 30
+		badValueTag    int32 = 40
+		emptyValueTag  int32 = 50
+		noDataValueTag int32 = 60
+	)
+
+	nullLit := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	nonNullLit := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_I32Val{I32Val: 1},
+	}}}
+	colExpr := func(tag, pos int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: pos}}}
+	}
+	colData := func(exprs ...*plan.Expr) *plan.ColData {
+		data := make([]*plan.RowsetExpr, 0, len(exprs))
+		for i, expr := range exprs {
+			if expr == nil {
+				data = append(data, nil)
+				continue
+			}
+			data = append(data, &plan.RowsetExpr{RowPos: int32(i), Expr: expr})
+		}
+		return &plan.ColData{Data: data}
+	}
+
+	query := &plan.Query{
+		Nodes: []*plan.Node{
+			{
+				NodeType:    plan.Node_VALUE_SCAN,
+				BindingTags: []int32{valueTag},
+				RowsetData: &plan.RowsetData{
+					Cols: []*plan.ColData{
+						colData(nullLit, nullLit),
+						colData(nullLit, nonNullLit),
+						nil,
+					},
+				},
+			},
+			{
+				NodeType:    plan.Node_PROJECT,
+				BindingTags: []int32{projectTag},
+				Children:    []int32{0},
+				ProjectList: []*plan.Expr{
+					colExpr(valueTag, 0),
+					colExpr(valueTag, 1),
+					nullLit,
+					nonNullLit,
+				},
+			},
+			{
+				NodeType:    plan.Node_LOCK_OP,
+				BindingTags: []int32{lockTag},
+				Children:    []int32{1},
+			},
+			{
+				NodeType:    plan.Node_VALUE_SCAN,
+				BindingTags: []int32{badValueTag},
+			},
+			{
+				NodeType:    plan.Node_VALUE_SCAN,
+				BindingTags: []int32{emptyValueTag},
+				RowsetData: &plan.RowsetData{
+					Cols: []*plan.ColData{colData()},
+				},
+			},
+			{
+				NodeType:    plan.Node_VALUE_SCAN,
+				BindingTags: []int32{noDataValueTag},
+				RowsetData: &plan.RowsetData{
+					Cols: []*plan.ColData{colData(nil)},
+				},
+			},
+		},
+	}
+	nodesByTag := replaceNodesByTag(query)
+
+	require.True(t, replaceExprAlwaysStaticNull(nullLit, nil, query, nodesByTag, 0))
+	require.False(t, replaceExprAlwaysStaticNull(nonNullLit, nil, query, nodesByTag, 0))
+	require.False(t, replaceExprAlwaysStaticNull(nil, nil, query, nodesByTag, 0))
+	require.False(t, replaceExprAlwaysStaticNull(nullLit, nil, query, nodesByTag, 33))
+
+	require.True(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: projectTag, ColPos: 0}, nil, query, nodesByTag))
+	require.False(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: projectTag, ColPos: 1}, nil, query, nodesByTag))
+	require.False(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: projectTag, ColPos: 99}, nil, query, nodesByTag))
+	require.False(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: 999, ColPos: 0}, nil, query, nodesByTag))
+
+	require.True(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: valueTag, ColPos: 0}, nil, query, nodesByTag))
+	require.False(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: valueTag, ColPos: 1}, nil, query, nodesByTag))
+	require.False(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: valueTag, ColPos: 2}, nil, query, nodesByTag))
+	require.False(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: valueTag, ColPos: 3}, nil, query, nodesByTag))
+	require.False(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: badValueTag, ColPos: 0}, nil, query, nodesByTag))
+	require.False(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: emptyValueTag, ColPos: 0}, nil, query, nodesByTag))
+	require.False(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: noDataValueTag, ColPos: 0}, nil, query, nodesByTag))
+
+	require.True(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: lockTag, ColPos: 0}, nil, query, nodesByTag))
+	require.False(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: lockTag, ColPos: 1}, nil, query, nodesByTag))
+	require.True(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: 0, ColPos: 0}, query.Nodes[2], query, nodesByTag))
+	require.False(t, replaceColRefAlwaysStaticNull(plan.ColRef{RelPos: 0, ColPos: 1}, query.Nodes[2], query, nodesByTag))
+
+	require.True(t, replaceNodeOutputAlwaysStaticNull(query.Nodes[1], 0, query, nodesByTag, 0))
+	require.False(t, replaceNodeOutputAlwaysStaticNull(query.Nodes[1], 99, query, nodesByTag, 0))
+	require.True(t, replaceNodeOutputAlwaysStaticNull(query.Nodes[2], 0, query, nodesByTag, 0))
+	require.False(t, replaceNodeOutputAlwaysStaticNull(nil, 0, query, nodesByTag, 0))
+	require.False(t, replaceNodeOutputAlwaysStaticNull(query.Nodes[1], 0, query, nodesByTag, 33))
+	require.False(t, replaceNodeOutputAlwaysStaticNull(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, 0, query, nodesByTag, 0))
+	require.False(t, replaceNodeOutputAlwaysStaticNull(&plan.Node{NodeType: plan.Node_LOCK_OP}, 0, query, nodesByTag, 0))
+
+	require.Same(t, query.Nodes[1], replaceInputNodeByOrdinal(query.Nodes[2], query, 0))
+	require.Nil(t, replaceInputNodeByOrdinal(nil, query, 0))
+	require.Nil(t, replaceInputNodeByOrdinal(query.Nodes[2], nil, 0))
+	require.Nil(t, replaceInputNodeByOrdinal(query.Nodes[2], query, -1))
+	require.Nil(t, replaceInputNodeByOrdinal(query.Nodes[2], query, 1))
+	require.Nil(t, replaceInputNodeByOrdinal(&plan.Node{Children: []int32{-1}}, query, 0))
+	require.Nil(t, replaceInputNodeByOrdinal(&plan.Node{Children: []int32{99}}, query, 0))
+
+	castNull := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "cast"},
+		Args: []*plan.Expr{nullLit},
+	}}}
+	nonCastNull := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "coalesce"},
+		Args: []*plan.Expr{nullLit},
+	}}}
+	emptyFunc := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "cast"},
+	}}}
+	require.True(t, replaceExprAlwaysStaticNull(castNull, nil, query, nodesByTag, 0))
+	require.False(t, replaceExprAlwaysStaticNull(nonCastNull, nil, query, nodesByTag, 0))
+	require.False(t, replaceExprAlwaysStaticNull(emptyFunc, nil, query, nodesByTag, 0))
+	require.True(t, replaceFunctionPreservesNull(castNull.GetF()))
+	require.False(t, replaceFunctionPreservesNull(nil))
+	require.False(t, replaceFunctionPreservesNull(&plan.Function{}))
+	require.False(t, replaceFunctionPreservesNull(nonCastNull.GetF()))
+}
+
+func TestReplaceTargetIsInsertOnlyGuards(t *testing.T) {
+	fakePKTable := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+	}
+	realPKTable := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+	}
+	uniqueFakePKTable := &plan.TableDef{
+		Pkey:    &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+		Indexes: []*plan.IndexDef{{Unique: true}},
+	}
+
+	require.False(t, replaceTargetIsInsertOnly(nil, nil, nil))
+	require.False(t, replaceTargetIsInsertOnly(&plan.UpdateCtx{}, nil, nil))
+	require.False(t, replaceTargetIsInsertOnly(&plan.UpdateCtx{TableDef: &plan.TableDef{}}, nil, nil))
+	require.False(t, replaceTargetIsInsertOnly(&plan.UpdateCtx{TableDef: realPKTable}, nil, nil))
+	require.True(t, replaceTargetIsInsertOnly(&plan.UpdateCtx{TableDef: fakePKTable}, nil, nil))
+	require.False(t, replaceTargetIsInsertOnly(&plan.UpdateCtx{TableDef: uniqueFakePKTable}, nil, nil))
+	require.False(t, replaceDeleteColsAlwaysStaticNull(nil, nil, nil))
+	require.False(t, replaceDeleteColsAlwaysStaticNull(&plan.UpdateCtx{}, nil, nil))
+}
+
+func addTablePrivilegeResultsForRole(
+	t *testing.T,
+	sql2result map[string]ExecResult,
+	roleID int64,
+	dbName string,
+	tableName string,
+	allowed map[PrivilegeType]bool,
+) {
+	t.Helper()
+	privTypes := []PrivilegeType{
+		PrivilegeTypeSelect,
+		PrivilegeTypeInsert,
+		PrivilegeTypeDelete,
+		PrivilegeTypeTableAll,
+		PrivilegeTypeTableOwnership,
+	}
+	for _, privType := range privTypes {
+		entry := privilegeEntriesMap[privType]
+		entry.objType = objectTypeTable
+		entry.databaseName = dbName
+		entry.tableName = tableName
+		levels, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+		require.NoError(t, err)
+		for _, level := range levels {
+			sql, err := getSqlForPrivilege(context.TODO(), roleID, entry, level)
+			require.NoError(t, err)
+			rows := [][]interface{}{}
+			if allowed[privType] {
+				rows = [][]interface{}{{entry.privilegeId, true}}
+			}
+			sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+		}
+	}
+}
+
 func Test_doGrantRole(t *testing.T) {
 	convey.Convey("grant role to role succ", t, func() {
 		ctrl := gomock.NewController(t)
