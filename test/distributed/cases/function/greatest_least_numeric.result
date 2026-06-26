@@ -1,0 +1,75 @@
+select greatest(1, 2.0);
+➤ greatest(1, 2.0)[3,20,1]  𝄀
+2.0
+select least(1, 2.0);
+➤ least(1, 2.0)[3,20,1]  𝄀
+1.0
+select greatest(cast(1 as bigint), cast(2.0 as double));
+➤ greatest(cast(1 as bigint), cast(2.0 as double))[8,54,0]  𝄀
+2.0
+select least(cast(1 as bigint), cast(2.0 as double));
+➤ least(cast(1 as bigint), cast(2.0 as double))[8,54,0]  𝄀
+1.0
+select greatest(cast(1 as bigint), cast(2.0 as double)) as g, least(cast(1 as bigint), cast(2.0 as double)) as l;
+➤ g[8,54,0]  ¦  l[8,54,0]  𝄀
+2.0  ¦  1.0
+select greatest(cast(5 as bigint), cast(2.5 as decimal(10,2)));
+➤ greatest(cast(5 as bigint), cast(2.5 as decimal(10, 2)))[3,21,2]  𝄀
+5.00
+select least(cast(5 as bigint), cast(2.5 as decimal(10,2)));
+➤ least(cast(5 as bigint), cast(2.5 as decimal(10, 2)))[3,21,2]  𝄀
+2.50
+select greatest(cast(1 as bigint), cast(2 as bigint));
+➤ greatest(cast(1 as bigint), cast(2 as bigint))[-5,64,0]  𝄀
+2
+select greatest(cast(1.0 as double), cast(2.0 as double));
+➤ greatest(cast(1.0 as double), cast(2.0 as double))[8,54,0]  𝄀
+2.0
+select greatest(cast(1 as tinyint), cast(2000 as int));
+➤ greatest(cast(1 as tinyint), cast(2000 as int))[4,32,0]  𝄀
+2000
+select least(cast(1 as tinyint), cast(2000 as int));
+➤ least(cast(1 as tinyint), cast(2000 as int))[4,32,0]  𝄀
+1
+select greatest(1, null, 2.0);
+➤ greatest(1, null, 2.0)[3,20,1]  𝄀
+null
+select least(1, null, 2.0);
+➤ least(1, null, 2.0)[3,20,1]  𝄀
+null
+drop table if exists toll_transactions;
+create table toll_transactions(id int, gate_processing_sec double, lanes int);
+insert into toll_transactions values
+(1, 3.5, 2), (2, 7.0, 2), (3, 1.0, 4), (4, 12.5, 3);
+select greatest(count(*), avg(gate_processing_sec)) from toll_transactions;
+➤ greatest(count(*), avg(gate_processing_sec))[8,54,0]  𝄀
+6.0
+select least(count(*), avg(gate_processing_sec)) from toll_transactions;
+➤ least(count(*), avg(gate_processing_sec))[8,54,0]  𝄀
+4.0
+select greatest(0, count(*) - lanes * (3600.0 / avg(gate_processing_sec))) as est
+from toll_transactions group by lanes order by lanes;
+➤ est[8,54,0]  𝄀
+0.0  𝄀
+0.0  𝄀
+0.0
+drop table if exists mixed_num;
+create table mixed_num(a bigint, b double, c decimal(20,4));
+insert into mixed_num values (10, 2.5, 7.25), (3, 9.0, 4.5), (-5, -1.0, 100.0);
+select a, b, c, greatest(a, b) as gab, least(a, b) as lab from mixed_num order by a;
+➤ a[-5,64,0]  ¦  b[8,54,0]  ¦  c[3,20,4]  ¦  gab[8,54,0]  ¦  lab[8,54,0]  𝄀
+-5  ¦  -1.0  ¦  100.0000  ¦  -1.0  ¦  -5.0  𝄀
+3  ¦  9.0  ¦  4.5000  ¦  9.0  ¦  3.0  𝄀
+10  ¦  2.5  ¦  7.2500  ¦  10.0  ¦  2.5
+select a, c, greatest(a, c) as gac, least(a, c) as lac from mixed_num order by a;
+➤ a[-5,64,0]  ¦  c[3,20,4]  ¦  gac[3,23,4]  ¦  lac[3,23,4]  𝄀
+-5  ¦  100.0000  ¦  100.0000  ¦  -5.0000  𝄀
+3  ¦  4.5000  ¦  4.5000  ¦  3.0000  𝄀
+10  ¦  7.2500  ¦  10.0000  ¦  7.2500
+select greatest(a, b, c) as g3, least(a, b, c) as l3 from mixed_num order by a;
+➤ g3[8,54,0]  ¦  l3[8,54,0]  𝄀
+100.0  ¦  -5.0  𝄀
+9.0  ¦  3.0  𝄀
+10.0  ¦  2.5
+drop table if exists toll_transactions;
+drop table if exists mixed_num;

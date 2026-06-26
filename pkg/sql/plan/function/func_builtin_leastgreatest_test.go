@@ -416,3 +416,117 @@ func TestGreatest(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+// TestLeastGreatestCheck verifies the type-promotion behavior of the
+// LEAST/GREATEST type checker (issue #25145): mixed numeric arguments are
+// promoted to a common type via an implicit cast, identical types succeed
+// directly, and non-promotable mixes are rejected.
+func TestLeastGreatestCheck(t *testing.T) {
+	dec := func(oid types.T, width, scale int32) types.Type {
+		typ := oid.ToType()
+		typ.Width = width
+		typ.Scale = scale
+		return typ
+	}
+
+	type tc struct {
+		name     string
+		inputs   []types.Type
+		wantOk   bool    // expect a successful check (no failure)
+		wantCast bool    // expect an implicit cast to be requested
+		target   types.T // expected common Oid when wantCast is true
+	}
+
+	cases := []tc{
+		{
+			name:   "no input",
+			inputs: []types.Type{},
+			wantOk: false,
+		},
+		{
+			name:   "all same int64",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+			wantOk: true,
+		},
+		{
+			name:   "all NULL literals",
+			inputs: []types.Type{types.T_any.ToType(), types.T_any.ToType()},
+			wantOk: true,
+		},
+		{
+			name:     "bigint + double -> double",
+			inputs:   []types.Type{types.T_int64.ToType(), types.T_float64.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_float64,
+		},
+		{
+			name:     "bigint + decimal -> decimal",
+			inputs:   []types.Type{types.T_int64.ToType(), dec(types.T_decimal64, 10, 2)},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_decimal128,
+		},
+		{
+			name:     "int + float32 -> double",
+			inputs:   []types.Type{types.T_int32.ToType(), types.T_float32.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_float64,
+		},
+		{
+			name:     "int8 + int32 -> int32",
+			inputs:   []types.Type{types.T_int8.ToType(), types.T_int32.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_int32,
+		},
+		{
+			name:     "int64 + uint64 -> decimal128",
+			inputs:   []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_decimal128,
+		},
+		{
+			name:     "int32 + uint16 -> int64",
+			inputs:   []types.Type{types.T_int32.ToType(), types.T_uint16.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_int64,
+		},
+		{
+			name:     "double + NULL literal -> double",
+			inputs:   []types.Type{types.T_float64.ToType(), types.T_any.ToType(), types.T_int64.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_float64,
+		},
+		{
+			name:   "numeric + varchar rejected",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+			wantOk: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := leastGreatestCheck(nil, c.inputs)
+			if !c.wantOk {
+				require.Equal(t, failedFunctionParametersWrong, res.status,
+					"case %q should fail the type check", c.name)
+				return
+			}
+			if c.wantCast {
+				require.Equal(t, succeedWithCast, res.status, "case %q should request a cast", c.name)
+				require.Len(t, res.finalType, len(c.inputs))
+				for i := range res.finalType {
+					require.Equal(t, c.target, res.finalType[i].Oid,
+						"case %q arg %d cast target", c.name, i)
+				}
+			} else {
+				require.Equal(t, succeedMatched, res.status, "case %q should match directly", c.name)
+			}
+		})
+	}
+}
