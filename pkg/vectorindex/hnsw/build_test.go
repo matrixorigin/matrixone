@@ -390,3 +390,100 @@ func TestBuildMultiWorker(t *testing.T) {
 	require.Nil(t, err)
 	require.True(t, len(sqls) > 0)
 }
+
+// TestBuildMultiWorkerLastItemError is a regression for the worker-error-loss bug
+// that multi-threaded build re-enables. Add() only polls for an earlier worker error
+// before enqueueing, so when a worker fails on the LAST queued vector that Add() has
+// already returned nil. Finalization (CloseAndWait/ToInsertSql) must drain and return
+// that error instead of finalizing the build as if it had succeeded.
+func TestBuildMultiWorkerLastItemError(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	ndim := 8
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.IndexCapacity = MaxIndexCapacity
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
+		ThreadsSearch: 4, ThreadsBuild: 4}
+
+	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
+	// nworker = 1 with ThreadsBuild = 4 selects the multi-threaded build path.
+	build, err := NewHnswBuild[float32](sqlproc, uid, 1, idxcfg, tblcfg)
+	require.Nil(t, err)
+	require.Greater(t, build.nthread, 1, "test needs the multi-threaded build path")
+	defer build.Destroy()
+
+	r := rand.New(rand.NewSource(7))
+	for i := 0; i < 64; i++ {
+		vec := make([]float32, ndim)
+		for j := range vec {
+			vec[j] = r.Float32()
+		}
+		require.Nil(t, build.Add(int64(i), vec))
+	}
+
+	// The last vector has the wrong dimension; the worker fails on it. Add() may well
+	// return nil here (the item is enqueued before any worker touches it) — that is
+	// exactly the scenario where the error would otherwise be lost.
+	bad := make([]float32, ndim+1)
+	_ = build.Add(int64(64), bad)
+
+	_, err = build.ToInsertSql(time.Now().UnixMicro())
+	require.NotNil(t, err, "worker error on the last queued vector must surface at finalization")
+	require.Contains(t, err.Error(), "dimension not match")
+}
+
+// TestBuildMultiWorkerRollover is a regression for the capacity-rollover race that
+// multi-threaded build re-enables. getIndexForAddSync() reserves a slot under the lock
+// but idx.Add() runs after the lock is released; when a peer worker crosses
+// IndexCapacity it receives the previous index as save_idx and SaveToFile() saves then
+// destroys it. Without an in-flight barrier that save+destroy can race a peer worker's
+// idx.Add() on the same index (use-after-destroy / partial save). With the barrier all
+// keys survive and finalization succeeds. Run with -race to exercise the race directly.
+func TestBuildMultiWorkerRollover(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	ndim := 8
+	nitem := 1000
+	capacity := int64(20) // small -> force many concurrent rollovers
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(uint(ndim))}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.IndexCapacity = capacity
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
+		ThreadsSearch: 8, ThreadsBuild: 8}
+
+	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
+	build, err := NewHnswBuild[float32](sqlproc, uid, 1, idxcfg, tblcfg)
+	require.Nil(t, err)
+	require.Greater(t, build.nthread, 1, "test needs the multi-threaded build path")
+	defer build.Destroy()
+
+	r := rand.New(rand.NewSource(11))
+	for i := 0; i < nitem; i++ {
+		vec := make([]float32, ndim)
+		for j := range vec {
+			vec[j] = r.Float32()
+		}
+		require.Nil(t, build.Add(int64(i), vec))
+	}
+
+	sqls, err := build.ToInsertSql(time.Now().UnixMicro())
+	require.Nil(t, err)
+	require.True(t, len(sqls) > 0)
+
+	// All adds survived: the per-index add counters sum to nitem, and rollover created
+	// exactly ceil(nitem/capacity) indexes (none was destroyed mid-flight).
+	var total int64
+	for _, idx := range build.indexes {
+		total += idx.Len.Load()
+	}
+	require.Equal(t, int64(nitem), total)
+	require.Equal(t, (nitem+int(capacity)-1)/int(capacity), len(build.indexes))
+}

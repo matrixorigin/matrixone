@@ -36,11 +36,37 @@ type HnswBuild[T types.RealNumbers] struct {
 	indexes  []*HnswModel[T]
 	nthread  int
 	add_chan chan AddItem[T]
-	err_chan chan error
 	wg       sync.WaitGroup
 	once     sync.Once
 	mutex    sync.Mutex
 	count    atomic.Int64
+
+	// Worker-error propagation for the multi-threaded build. `stopped` is closed
+	// once the first worker fails (or the context is cancelled); producers select on
+	// it so an enqueue never blocks forever after the workers are gone, and finalizers
+	// surface the recorded error instead of finishing a build as if it succeeded.
+	stopOnce  sync.Once
+	stopped   chan struct{}
+	errMu     sync.Mutex
+	workerErr error
+}
+
+// recordWorkerErr stores the first worker error and wakes any blocked producer /
+// finalizer. First-error-wins: the root failure is the most useful to report.
+func (h *HnswBuild[T]) recordWorkerErr(err error) {
+	h.stopOnce.Do(func() {
+		h.errMu.Lock()
+		h.workerErr = err
+		h.errMu.Unlock()
+		close(h.stopped)
+	})
+}
+
+// WorkerErr returns the recorded worker error (nil if none). Safe to call any time.
+func (h *HnswBuild[T]) WorkerErr() error {
+	h.errMu.Lock()
+	defer h.errMu.Unlock()
+	return h.workerErr
 }
 
 type AddItem[T types.RealNumbers] struct {
@@ -82,7 +108,7 @@ func NewHnswBuild[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, uid string, 
 
 	if nthread > 1 {
 		info.add_chan = make(chan AddItem[T], nthread*4)
-		info.err_chan = make(chan error, nthread)
+		info.stopped = make(chan struct{})
 
 		// create multi-threads worker for add
 		for i := 0; i < info.nthread; i++ {
@@ -90,12 +116,13 @@ func NewHnswBuild[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, uid string, 
 			info.wg.Add(1)
 			go func() {
 				defer info.wg.Done()
-				var err0 error
-				closed := false
-				for !closed {
-					closed, err0 = info.addFromChannel(sqlproc)
+				for {
+					closed, err0 := info.addFromChannel(sqlproc)
 					if err0 != nil {
-						info.err_chan <- err0
+						info.recordWorkerErr(err0)
+						return
+					}
+					if closed {
 						return
 					}
 				}
@@ -129,13 +156,17 @@ func (h *HnswBuild[T]) addFromChannel(sqlproc *sqlexec.SqlProcess) (stream_close
 	return false, nil
 }
 
-func (h *HnswBuild[T]) CloseAndWait() {
+// CloseAndWait closes the work queue, waits for all workers to drain it, and
+// returns the first worker error (nil on success). It is idempotent; later calls
+// return the same recorded error.
+func (h *HnswBuild[T]) CloseAndWait() error {
 	if h.nthread > 1 {
 		h.once.Do(func() {
 			close(h.add_chan)
 			h.wg.Wait()
 		})
 	}
+	return h.WorkerErr()
 }
 
 // destroy
@@ -143,7 +174,9 @@ func (h *HnswBuild[T]) Destroy() error {
 
 	var errs error
 
-	h.CloseAndWait()
+	if err := h.CloseAndWait(); err != nil {
+		errs = errors.Join(errs, err)
+	}
 
 	for _, idx := range h.indexes {
 		err := idx.Destroy()
@@ -157,18 +190,20 @@ func (h *HnswBuild[T]) Destroy() error {
 
 func (h *HnswBuild[T]) Add(key int64, vec []T) error {
 	if h.nthread > 1 {
-
+		// copy the []T slice.
+		item := AddItem[T]{key, append(make([]T, 0, len(vec)), vec...)}
 		select {
-		case err := <-h.err_chan:
-			return err
-		default:
+		case h.add_chan <- item:
+			return nil
+		case <-h.stopped:
+			// A worker failed or the context was cancelled. Stop feeding the queue
+			// (the send would otherwise block forever once workers are gone) and
+			// surface the recorded error. recordWorkerErr stores the error before
+			// closing `stopped`, so WorkerErr() is non-nil here.
+			return h.WorkerErr()
 		}
-		// copy the []float32 slice.
-		h.add_chan <- AddItem[T]{key, append(make([]T, 0, len(vec)), vec...)}
-		return nil
-	} else {
-		return h.addVector(key, vec)
 	}
+	return h.addVector(key, vec)
 }
 
 func (h *HnswBuild[T]) createIndexUniqueKey(id int64) string {
@@ -212,6 +247,11 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 	}
 	h.count.Add(1)
 
+	// Reserve an in-flight slot on the index this add will go to, under the same lock
+	// that decides rollover. A later rollover that hands this index back as save_idx
+	// will wait for these to drain before SaveToFile() saves+destroys it.
+	idx.inflight.Add(1)
+
 	return idx, save_idx, nil
 }
 
@@ -219,19 +259,20 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 // it will check the current index is full and add the vector to available index
 // sync version for multi-thread
 func (h *HnswBuild[T]) addVectorSync(key int64, vec []T) error {
-	var err error
-	var idx *HnswModel[T]
-	var save_idx *HnswModel[T]
-
-	idx, save_idx, err = h.getIndexForAddSync()
+	idx, save_idx, err := h.getIndexForAddSync()
 	if err != nil {
 		return err
 	}
+	defer idx.inflight.Done()
 
 	if save_idx != nil {
-		// save the current index to file
-		err = save_idx.SaveToFile()
-		if err != nil {
+		// Wait for every add already assigned to the rolled-over index to finish before
+		// saving+destroying it. Otherwise SaveToFile() could persist a partial index or
+		// free the usearch index while a peer worker is still calling idx.Add() on it.
+		// This index receives no new adds (rollover already swapped in the next index
+		// under the lock), so the wait converges.
+		save_idx.inflight.Wait()
+		if err = save_idx.SaveToFile(); err != nil {
 			return err
 		}
 	}
@@ -243,21 +284,19 @@ func (h *HnswBuild[T]) addVectorSync(key int64, vec []T) error {
 // it will check the current index is full and add the vector to available index
 // single-threaded version.
 func (h *HnswBuild[T]) addVector(key int64, vec []T) error {
-	var err error
-	var idx *HnswModel[T]
-	var save_idx *HnswModel[T]
-
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
-	idx, save_idx, err = h.getIndexForAdd()
+	idx, save_idx, err := h.getIndexForAdd()
 	if err != nil {
 		return err
 	}
+	defer idx.inflight.Done()
 
 	if save_idx != nil {
-		// save the current index to file
-		err = save_idx.SaveToFile()
-		if err != nil {
+		// Single-threaded: the rolled-over index has no in-flight adds (each add
+		// completes before the next), so this is a no-op barrier kept for symmetry.
+		save_idx.inflight.Wait()
+		if err = save_idx.SaveToFile(); err != nil {
 			return err
 		}
 	}
@@ -270,7 +309,12 @@ func (h *HnswBuild[T]) addVector(key int64, vec []T) error {
 // 2. sync the index file to index table
 func (h *HnswBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 
-	h.CloseAndWait()
+	// Surface any worker error from the multi-threaded build. Without this a worker
+	// that failed on the last queued vector (after Add already returned nil) would be
+	// silently dropped and the build finalized as if it succeeded.
+	if err := h.CloseAndWait(); err != nil {
+		return nil, err
+	}
 
 	if len(h.indexes) == 0 {
 		return []string{}, nil
