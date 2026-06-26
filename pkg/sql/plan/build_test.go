@@ -1564,8 +1564,12 @@ func TestReplaceSetColRefAsDefault(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// An RHS reference to a non-existent column must still error.
+	// A qualified RHS reference must NOT be silently resolved to DEFAULT(col) of
+	// the destination column; it must error rather than dropping the qualifier.
 	sqls = []string{
 		"REPLACE INTO dept SET deptno = 1, dname = nosuchcol",
+		"REPLACE INTO dept SET deptno = 1, dname = other.dname",
+		"REPLACE INTO dept SET deptno = 1, dname = dept.dname",
 	}
 	runTestShouldError(mock, t, sqls)
 }

@@ -76,6 +76,20 @@ func TestReplaceValueBinder_BindColRef(t *testing.T) {
 	// A reference to a non-existent column errors.
 	_, err = b.BindColRef(tree.NewUnresolvedColName("nope"), 0, true)
 	require.Error(t, err)
+
+	// A qualified reference must NOT be silently resolved to DEFAULT(v) of the
+	// destination column just because the target table has a column named "v".
+	// `other.v` (a column on some other table) is rejected.
+	qualified := tree.NewUnresolvedName(tree.NewCStr("other", 1), tree.NewCStr("v", 1))
+	require.Equal(t, 2, qualified.NumParts)
+	_, err = b.BindColRef(qualified, 0, true)
+	require.Error(t, err)
+
+	// A db.table.col reference is likewise rejected.
+	qualified3 := tree.NewUnresolvedName(tree.NewCStr("db", 1), tree.NewCStr("t", 1), tree.NewCStr("v", 1))
+	require.Equal(t, 3, qualified3.NumParts)
+	_, err = b.BindColRef(qualified3, 0, true)
+	require.Error(t, err)
 }
 
 func TestReplaceValueBinder_BindExpr(t *testing.T) {

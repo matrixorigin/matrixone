@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -41,6 +42,13 @@ func (b *ReplaceValueBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot boo
 // matching MySQL's `REPLACE ... SET col = col + 1` semantics where the RHS
 // `col` is treated as DEFAULT(col).
 func (b *ReplaceValueBinder) BindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool) (*plan.Expr, error) {
+	// A qualified reference such as `other.v` or `db.t.v` must not be silently
+	// reinterpreted as DEFAULT(v) of the destination column. MySQL only documents
+	// the bare column-name case for `REPLACE ... SET col = col + 1`, so reject any
+	// qualifier rather than dropping it.
+	if astExpr.NumParts > 1 {
+		return nil, moerr.NewInvalidInputf(b.GetContext(), "qualified column reference '%s' is not allowed in replace set value", tree.String(astExpr, dialect.MYSQL))
+	}
 	colName := strings.ToLower(astExpr.ColName())
 	colIdx, ok := b.tableDef.Name2ColIndex[colName]
 	if !ok {
