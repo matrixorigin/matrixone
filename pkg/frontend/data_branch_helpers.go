@@ -47,58 +47,80 @@ func containsDataBranchTempTableName(sqlLower string) bool {
 }
 
 func dataBranchTempSQLNeedsBackExec(sqlLower string) bool {
-	if !containsDataBranchTempTableName(sqlLower) {
-		return false
-	}
-
-	switch {
-	case strings.HasPrefix(sqlLower, "drop table"):
-		return true
-	case strings.HasPrefix(sqlLower, "create table"):
-		return true
-	case strings.HasPrefix(sqlLower, "truncate table"):
-		return true
-	case strings.HasPrefix(sqlLower, "insert into "):
-		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("insert into "):]))
-	case strings.HasPrefix(sqlLower, "replace into "):
-		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("replace into "):]))
-	case strings.HasPrefix(sqlLower, "delete from "):
-		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("delete from "):]))
-	case strings.HasPrefix(sqlLower, "update "):
-		return containsDataBranchTempTableName(firstSQLTableToken(sqlLower[len("update "):]))
-	default:
-		return true
-	}
-}
-
-func firstSQLTableToken(sqlLower string) string {
-	sqlLower = strings.TrimSpace(sqlLower)
-	for i := 0; i < len(sqlLower); i++ {
-		switch sqlLower[i] {
-		case ' ', '\t', '\n', '\r', '(':
-			return sqlLower[:i]
-		}
-	}
-	return sqlLower
+	return containsDataBranchTempTableName(sqlLower)
 }
 
 func containsTempTableMarker(sqlLower, marker string) bool {
-	searchFrom := 0
-	for {
-		offset := strings.Index(sqlLower[searchFrom:], marker)
-		if offset < 0 {
-			return false
+	for idx := 0; idx < len(sqlLower); idx++ {
+		switch sqlLower[idx] {
+		case '\'', '"':
+			idx = skipSQLQuotedLiteral(sqlLower, idx, sqlLower[idx]) - 1
+			continue
+		case '-':
+			if idx+1 < len(sqlLower) && sqlLower[idx+1] == '-' {
+				idx = skipSQLLineComment(sqlLower, idx+2) - 1
+				continue
+			}
+		case '#':
+			idx = skipSQLLineComment(sqlLower, idx+1) - 1
+			continue
+		case '/':
+			if idx+1 < len(sqlLower) && sqlLower[idx+1] == '*' {
+				idx = skipSQLBlockComment(sqlLower, idx+2) - 1
+				continue
+			}
 		}
-		idx := searchFrom + offset
-		if idx == 0 {
+		if strings.HasPrefix(sqlLower[idx:], marker) && isSQLIdentifierBoundary(sqlLower, idx) {
 			return true
 		}
-		switch sqlLower[idx-1] {
-		case ' ', '\t', '\n', '\r', '.', '(', ',':
-			return true
-		}
-		searchFrom = idx + len(marker)
 	}
+	return false
+}
+
+func skipSQLQuotedLiteral(sql string, start int, quote byte) int {
+	for idx := start + 1; idx < len(sql); idx++ {
+		if sql[idx] == '\\' {
+			idx++
+			continue
+		}
+		if sql[idx] == quote {
+			if idx+1 < len(sql) && sql[idx+1] == quote {
+				idx++
+				continue
+			}
+			return idx + 1
+		}
+	}
+	return len(sql)
+}
+
+func skipSQLLineComment(sql string, start int) int {
+	for idx := start; idx < len(sql); idx++ {
+		if sql[idx] == '\n' || sql[idx] == '\r' {
+			return idx + 1
+		}
+	}
+	return len(sql)
+}
+
+func skipSQLBlockComment(sql string, start int) int {
+	for idx := start; idx+1 < len(sql); idx++ {
+		if sql[idx] == '*' && sql[idx+1] == '/' {
+			return idx + 2
+		}
+	}
+	return len(sql)
+}
+
+func isSQLIdentifierBoundary(sql string, idx int) bool {
+	return idx == 0 || !isSQLIdentifierChar(sql[idx-1])
+}
+
+func isSQLIdentifierChar(ch byte) bool {
+	return ch == '_' ||
+		ch >= '0' && ch <= '9' ||
+		ch >= 'a' && ch <= 'z' ||
+		ch >= 'A' && ch <= 'Z'
 }
 
 func acquireBuffer(pool *sync.Pool) *bytes.Buffer {
@@ -533,6 +555,29 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	}
 
 	return nil
+}
+
+func extractDataBranchSQLRowValue(
+	ctx context.Context,
+	ses *Session,
+	vec *vector.Vector,
+	colIdx int,
+	row []any,
+	rowIdx int,
+) error {
+	if vec.GetNulls().Contains(uint64(rowIdx)) {
+		row[colIdx] = nil
+		return nil
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_datetime, types.T_timestamp, types.T_decimal64,
+		types.T_decimal128, types.T_decimal256, types.T_time:
+		row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
+		return nil
+	default:
+		return extractRowFromVector(ctx, ses, vec, colIdx, row, rowIdx, false)
+	}
 }
 
 // writeEscapedSQLString escapes special and control characters for SQL literal output.

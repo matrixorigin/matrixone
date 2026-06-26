@@ -910,13 +910,19 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					alterIndex = indexdef
 					alterIndex.Visible = tableAlterIndex.Visible
 					oTableDef.Indexes[i].Visible = tableAlterIndex.Visible
-					// update the index visibility in mo_catalog.mo_indexes
+					// update the index visibility in mo_catalog.mo_indexes.
+					// Escape the index name the same as the AUTO_UPDATE / REINDEX
+					// branches: it is user-supplied and a backticked identifier may
+					// contain single quotes or backslashes (the scanner still treats
+					// backslash as an escape inside '...'), which could corrupt or
+					// break out of name = '...'.
 					var updateSql string
+					visible := 0
 					if alterIndex.Visible {
-						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 1, oTableDef.TblId, indexdef.IndexName)
-					} else {
-						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 0, oTableDef.TblId, indexdef.IndexName)
+						visible = 1
 					}
+					updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, visible, oTableDef.TblId,
+						sqlquote.EscapeString(indexdef.IndexName))
 					if err = c.runSqlWithOptions(
 						updateSql, executor.StatementOption{}.WithDisableLog(),
 					); err != nil {
@@ -968,7 +974,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 2. Update IndexDef and mo_catalog.mo_indexes.
 					alterIndex.IndexAlgoParams = newAlgoParams
 					oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
-					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+					// Escape the SQL string literals, same as the REINDEX branch
+					// below: algo_params is a JSON blob (JSON does not escape SQL
+					// quotes/backslashes) and the index name is user-supplied, so
+					// an unescaped quote or backslash could corrupt or break out of
+					// algo_params = '...' / name = '...'.
+					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams,
+						sqlquote.EscapeString(newAlgoParams), oTableDef.TblId,
+						sqlquote.EscapeString(alterIndex.IndexName))
 					if err = c.runSqlWithOptions(
 						updateSql, executor.StatementOption{}.WithDisableLog(),
 					); err != nil {
@@ -4878,6 +4891,7 @@ func (s *Scope) DropCDC(c *Compile) error {
 		targetTaskStatus,
 		uint64(accountId),
 		taskName,
+		planCDC.IfExists,
 		conds...,
 	)
 }
@@ -4887,6 +4901,7 @@ func doUpdateCDCTask(
 	targetTaskStatus task.TaskStatus,
 	accountId uint64,
 	taskName string,
+	ifExists bool,
 	conds ...taskservice.Condition,
 ) (err error) {
 	ts := proc.GetTaskService()
@@ -4908,6 +4923,7 @@ func doUpdateCDCTask(
 				tx,
 				accountId,
 				taskName,
+				ifExists,
 			)
 		},
 		conds...,
@@ -4922,11 +4938,12 @@ func onPreUpdateCDCTasks(
 	tx taskservice.SqlExecutor,
 	accountId uint64,
 	taskName string,
+	ifExists bool,
 ) (affectedCdcRow int, err error) {
 	var cnt int64
 
 	// Get task keys count
-	if cnt, err = getTaskKeysCount(ctx, tx, accountId, taskName, keys); err != nil {
+	if cnt, err = getTaskKeysCount(ctx, tx, accountId, taskName, keys, ifExists); err != nil {
 		return
 	}
 	affectedCdcRow = int(cnt)
@@ -4978,6 +4995,7 @@ func getTaskKeysCount(
 	accountId uint64,
 	taskName string,
 	keys map[taskservice.CDCTaskKey]struct{},
+	ifExists bool,
 ) (cnt int64, err error) {
 	var (
 		rows *sql.Rows
@@ -5006,7 +5024,7 @@ func getTaskKeysCount(
 		cnt++
 	}
 
-	if cnt == 0 && taskName != "" {
+	if cnt == 0 && taskName != "" && !ifExists {
 		err = moerr.NewInternalErrorf(
 			ctx,
 			"no cdc task found, accountId: %d, taskName: %s",

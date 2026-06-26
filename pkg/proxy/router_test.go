@@ -689,3 +689,224 @@ func Test_router(t *testing.T) {
 	_, err := rt.SelectByConnID(123)
 	require.Error(t, err)
 }
+
+func TestRouter_CNHealthProbeWindowOption(t *testing.T) {
+	ru := newRouter(nil, nil, newMockSQLWorker(), true,
+		withCNHealthCheckProbeWindow(time.Second*42),
+	).(*router)
+	require.NotNil(t, ru.health)
+	require.Equal(t, time.Second*42, ru.health.probeWindow)
+}
+
+// TestRouteWithCNHealthChecker verifies that the router skips CN servers whose
+// health breaker is tripped, and fast-fails with allCNServersBusyErr (rather
+// than noCNServerErr) when every candidate CN is temporarily unhealthy.
+func TestRouteWithCNHealthChecker(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{}
+	for _, uuid := range []string{"cn1", "cn2", "cn3"} {
+		hc.updateCN(uuid, uuid+"-addr", map[string]metadata.LabelList{
+			tenantLabelKey: {Labels: []string{"t1"}},
+		})
+	}
+
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	mc.ForceRefresh(true)
+	re := testRebalancer(t, st, logger, mc)
+
+	ru := newRouter(mc, re, newMockSQLWorker(), true).(*router)
+	// Inject a controllable clock into the breaker. failThreshold=1 keeps the
+	// test focused (a single reported failure trips the CN).
+	clock := newFakeClock()
+	ru.health = newCNHealthChecker(
+		withCNHealthClock(clock.Now),
+		withCNHealthFailThreshold(1),
+		withCNHealthCooldown(time.Second*5, time.Second*30),
+	)
+
+	ci := clientInfo{labelInfo: labelInfo{Tenant: "t1"}}
+
+	// With all CNs healthy, routing succeeds.
+	cn, err := ru.Route(context.TODO(), "", ci, nil)
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+
+	// Trip cn1 and cn2; cn3 must always be the one returned.
+	ru.health.reportFailure("cn1", "cn1-addr")
+	ru.health.reportFailure("cn2", "cn2-addr")
+	for i := 0; i < 10; i++ {
+		cn, err = ru.Route(context.TODO(), "", ci, nil)
+		require.NoError(t, err)
+		require.NotNil(t, cn)
+		require.Equal(t, "cn3", cn.uuid, "unhealthy CNs must be skipped")
+	}
+
+	// Trip cn3 as well: every candidate is now in active cooldown, so the
+	// router fast-fails with the busy error instead of "no available CN".
+	ru.health.reportFailure("cn3", "cn3-addr")
+	cn, err = ru.Route(context.TODO(), "", ci, nil)
+	require.Nil(t, cn)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrAllCNServersBusy),
+		"expected ErrAllCNServersBusy, got: %v", err)
+
+	// After the cooldown expires, a half-open probe is allowed through so the
+	// cluster can recover automatically.
+	clock.advance(time.Second * 5)
+	cn, err = ru.Route(context.TODO(), "", ci, nil)
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+
+	// A successful connect on that probe restores the CN to healthy.
+	ru.health.reportSuccess(cn.uuid, cn.addr)
+	require.Equal(t, 2, ru.health.unhealthyCount())
+}
+
+// TestRouteConnectTripsBreakerEndToEnd verifies the full chain: a real
+// router.Connect() failure must feed back into the breaker (reportFailure),
+// trip the CN, and cause the next Route() to skip it. This guards against the
+// breaker being correct in isolation while the Connect->reportFailure wiring is
+// missing or misplaced.
+func TestRouteConnectTripsBreakerEndToEnd(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{}
+
+	temp := os.TempDir()
+	// cnBad accepts the TCP connect but hangs in handshake long enough to
+	// trigger the auth timeout, which is exactly the busy/overload path the
+	// breaker is meant to remember globally.
+	badAddr := fmt.Sprintf("%s/%d-bad.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(badAddr))
+	hc.updateCN("cnBad", badAddr, map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	stopBad := startTestCNServer(t, ctx, badAddr, nil, withBeforeHandle(func() {
+		time.Sleep(time.Second * 2)
+	}))
+	defer func() { require.NoError(t, stopBad()) }()
+	// cnGood is started so it is a healthy alternative.
+	goodAddr := fmt.Sprintf("%s/%d-good.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(goodAddr))
+	hc.updateCN("cnGood", goodAddr, map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	stopGood := startTestCNServer(t, ctx, goodAddr, nil)
+	defer func() { require.NoError(t, stopGood()) }()
+
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	mc.ForceRefresh(true)
+	re := testRebalancer(t, st, logger, mc)
+
+	// Real router (test=false) so Connect actually dials the backend. Trip on
+	// the first failure to keep the test deterministic.
+	ru := newRouter(mc, re, newMockSQLWorker(), false,
+		withCNHealthCheckFailThreshold(1),
+		withAuthTimeout(time.Second),
+	).(*router)
+
+	li := labelInfo{Tenant: "t1"}
+
+	// Force selection of cnBad and connect to it; the real Route-selected
+	// connect must fail and trip the breaker.
+	cn, err := ru.Route(ctx, "", clientInfo{labelInfo: li}, func(s string) bool {
+		return s == goodAddr // exclude cnGood
+	})
+	require.NoError(t, err)
+	require.Equal(t, "cnBad", cn.uuid)
+	cn.addr = "unix://" + cn.addr
+	cn.salt = testSlat
+	tu := newTunnel(context.TODO(), logger, nil)
+	rr, ok := any(ru).(routeSelectedConnector)
+	require.True(t, ok)
+	_, _, err = rr.ConnectRouteSelected(cn, testPacket, tu)
+	require.Error(t, err)
+	require.True(t, isRetryableErr(err))
+	require.True(t, isTimeoutErr(err))
+
+	// The end-to-end feedback must have tripped cnBad's breaker.
+	require.Equal(t, 1, ru.health.unhealthyCount(),
+		"a real Connect failure must trip the breaker")
+
+	// The next Route (no filter) must skip the tripped cnBad and pick cnGood.
+	for i := 0; i < 5; i++ {
+		cn, err = ru.Route(ctx, "", clientInfo{labelInfo: li}, nil)
+		require.NoError(t, err)
+		require.Equal(t, "cnGood", cn.uuid, "tripped CN must be skipped after a real failure")
+	}
+}
+
+// TestRouteConnectHardFailureDoesNotTripBreaker verifies that hard
+// unavailability signals (e.g. ECONNREFUSED / connectErr without timeout) do
+// not globally trip the CN health breaker or get reclassified as "busy".
+func TestRouteConnectHardFailureDoesNotTripBreaker(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{}
+
+	temp := os.TempDir()
+	badAddr := fmt.Sprintf("%s/%d-hardbad.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(badAddr))
+	hc.updateCN("cnBad", badAddr, map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	goodAddr := fmt.Sprintf("%s/%d-hardgood.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(goodAddr))
+	hc.updateCN("cnGood", goodAddr, map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	stopGood := startTestCNServer(t, ctx, goodAddr, nil)
+	defer func() { require.NoError(t, stopGood()) }()
+
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	mc.ForceRefresh(true)
+	re := testRebalancer(t, st, logger, mc)
+
+	ru := newRouter(mc, re, newMockSQLWorker(), false,
+		withCNHealthCheckFailThreshold(1),
+	).(*router)
+
+	li := labelInfo{Tenant: "t1"}
+	cn, err := ru.Route(ctx, "", clientInfo{labelInfo: li}, func(s string) bool {
+		return s == goodAddr // exclude cnGood
+	})
+	require.NoError(t, err)
+	require.Equal(t, "cnBad", cn.uuid)
+	cn.addr = "unix://" + cn.addr
+	cn.salt = testSlat
+	tu := newTunnel(context.TODO(), logger, nil)
+	rr, ok := any(ru).(routeSelectedConnector)
+	require.True(t, ok)
+	_, _, err = rr.ConnectRouteSelected(cn, testPacket, tu)
+	require.Error(t, err)
+	require.True(t, isRetryableErr(err))
+	require.False(t, isTimeoutErr(err))
+
+	// Hard failures must not trip the global breaker.
+	require.Equal(t, 0, ru.health.unhealthyCount())
+}
