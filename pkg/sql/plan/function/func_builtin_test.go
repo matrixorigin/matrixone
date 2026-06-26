@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -29,6 +30,125 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestBuiltInRandWithSeed(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("type check accepts one int64 arg", func(t *testing.T) {
+		_, err := GetFunctionByName(context.Background(), "rand", []types.Type{types.T_int64.ToType()})
+		require.NoError(t, err)
+	})
+
+	t.Run("constant seed produces deterministic sequence", func(t *testing.T) {
+		op := newOpBuiltInRand()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3, 3, 3}, []bool{false, false, false}),
+			},
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{}, nil),
+			op.builtInRand,
+		)
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		vec, err := tc.DebugRun()
+		require.NoError(t, err)
+		param := vector.GenerateFunctionFixedTypeParameter[float64](vec)
+		expected := []float64{
+			0.9057697559760601,
+			0.37307905813034953,
+			0.14808605345719134,
+		}
+		for i, want := range expected {
+			got, null := param.GetValue(uint64(i))
+			require.False(t, null)
+			require.InDelta(t, want, got, 1e-12)
+		}
+		require.NoError(t, op.Reset())
+
+		tc2 := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3, 3, 3}, []bool{false, false, false}),
+			},
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{}, nil),
+			op.builtInRand,
+		)
+		require.NoError(t, tc2.result.PreExtendAndReset(tc2.fnLength))
+		vec2, err := tc2.DebugRun()
+		require.NoError(t, err)
+		param2 := vector.GenerateFunctionFixedTypeParameter[float64](vec2)
+		for i, want := range expected {
+			got, null := param2.GetValue(uint64(i))
+			require.False(t, null)
+			require.InDelta(t, want, got, 1e-12)
+		}
+	})
+
+	t.Run("same constant seed on two expression instances gives same first value", func(t *testing.T) {
+		op1 := newOpBuiltInRand()
+		op2 := newOpBuiltInRand()
+		tc1 := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{}, nil),
+			op1.builtInRand,
+		)
+		tc2 := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{}, nil),
+			op2.builtInRand,
+		)
+		require.NoError(t, tc1.result.PreExtendAndReset(tc1.fnLength))
+		require.NoError(t, tc2.result.PreExtendAndReset(tc2.fnLength))
+		v1, err := tc1.DebugRun()
+		require.NoError(t, err)
+		v2, err := tc2.DebugRun()
+		require.NoError(t, err)
+		f1, _ := vector.GenerateFunctionFixedTypeParameter[float64](v1).GetValue(0)
+		f2, _ := vector.GenerateFunctionFixedTypeParameter[float64](v2).GetValue(0)
+		require.InDelta(t, f1, f2, 1e-15)
+	})
+
+	t.Run("non constant seed reinitializes per row", func(t *testing.T) {
+		op := newOpBuiltInRand()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 2}, []bool{false, false, false}),
+			},
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{}, nil),
+			op.builtInRand,
+		)
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		vec, err := tc.DebugRun()
+		require.NoError(t, err)
+		param := vector.GenerateFunctionFixedTypeParameter[float64](vec)
+		want1 := newMySQLRandState(1).Float64()
+		want2 := newMySQLRandState(2).Float64()
+		got0, _ := param.GetValue(0)
+		got1, _ := param.GetValue(1)
+		got2, _ := param.GetValue(2)
+		require.InDelta(t, want1, got0, 1e-12)
+		require.InDelta(t, want1, got1, 1e-12)
+		require.InDelta(t, want2, got2, 1e-12)
+	})
+
+	t.Run("null seed behaves like zero seed", func(t *testing.T) {
+		op := newOpBuiltInRand()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{}, nil),
+			op.builtInRand,
+		)
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		vec, err := tc.DebugRun()
+		require.NoError(t, err)
+		got, _ := vector.GenerateFunctionFixedTypeParameter[float64](vec).GetValue(0)
+		require.InDelta(t, newMySQLRandState(0).Float64(), got, 1e-12)
+	})
+}
 
 func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 	proc := testutil.NewProcess(t)

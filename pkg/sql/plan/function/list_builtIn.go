@@ -7822,21 +7822,22 @@ var supportedMathBuiltIns = []FuncNew{
 		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
-			//{
-			//	overloadId:     0,
-			//	args:           []types.T{types.T_int64},
-			//	cannotParallel: true,
-			//	volatile:       true,
-			//	retType: func(parameters []types.Type) types.Type {
-			//		return types.T_float64.ToType()
-			//	},
-			//	newOp: func() executeLogicOfOverload {
-			//		return newOpBuiltInRand().builtInRand
-			//	},
-			//},
+			{
+				overloadId:     0,
+				args:           []types.T{types.T_int64},
+				cannotParallel: true,
+				volatile:       true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+					opRand := newOpBuiltInRand()
+					return opRand.builtInRand, opRand.Reset, opRand.Close
+				},
+			},
 
 			{
-				overloadId: 0,
+				overloadId: 1,
 				args:       nil,
 				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
