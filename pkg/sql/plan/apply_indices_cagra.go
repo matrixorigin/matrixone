@@ -34,6 +34,7 @@ type cagraIndexContext struct {
 	vecLitArg    *plan.Expr
 	origFuncName string
 	partPos      int32
+	partType     plan.Type
 	pkPos        int32
 	pkType       plan.Type
 	params       string
@@ -84,6 +85,7 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
+	partType := vecCtx.scanNode.TableDef.Cols[partPos].Typ
 	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
 	if !found {
 		return nil, nil
@@ -114,6 +116,7 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 		vecLitArg:    vecLitArg,
 		origFuncName: origFuncName,
 		partPos:      partPos,
+		partType:     partType,
 		pkPos:        pkPos,
 		pkType:       pkType,
 		params:       idxDef.IndexAlgoParams,
@@ -142,7 +145,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "gpu_multi_simulation": %d}`,
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "gpu_multi_simulation": %d, "parttype": %d}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		cagraCtx.metaDef.IndexTableName,
@@ -150,7 +153,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		cagraCtx.nThread,
 		cagraCtx.origFuncName,
 		cagraCtx.batchWindow,
-		cagraCtx.gpuMultiSim)
+		cagraCtx.gpuMultiSim,
+		cagraCtx.partType.Id)
 
 	// Predicate pushdown on INCLUDE columns and the primary key: peel
 	// filters that reference only INCLUDE columns (or the PK, routed to

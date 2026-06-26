@@ -441,6 +441,17 @@ func TestFormatColTypeArrayMetadata(t *testing.T) {
 	}))
 }
 
+func TestFormatColTypeVector(t *testing.T) {
+	// Every vector type must round-trip its dimension in SHOW CREATE, not just
+	// f32/f64 (the narrow types were previously missing the (N) suffix).
+	require.Equal(t, "VECF32(3)", FormatColType(plan.Type{Id: int32(types.T_array_float32), Width: 3}))
+	require.Equal(t, "VECF64(3)", FormatColType(plan.Type{Id: int32(types.T_array_float64), Width: 3}))
+	require.Equal(t, "VECBF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_bf16), Width: 3}))
+	require.Equal(t, "VECF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_float16), Width: 3}))
+	require.Equal(t, "VECINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_int8), Width: 3}))
+	require.Equal(t, "VECUINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_uint8), Width: 3}))
+}
+
 // TestShowCreateExternalWriteFilePattern ensures SHOW CREATE TABLE formatting
 // keeps WRITE_FILE_PATTERN for writable external tables, in both the INFILE
 // and the URL s3option forms; without it the recreated table silently degrades

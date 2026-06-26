@@ -11543,6 +11543,73 @@ func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vec
 	}, selectList)
 }
 
+// arrayDistanceNarrow computes a binary vector distance for the narrow element
+// types (bf16/f16/int8/uint8) using the NATIVE metric kernel for T — int8/uint8
+// run the INTEGER kernels (int32/int64 accumulate, no float upcast), bf16/f16 run
+// the fused decode-to-float32 kernels (no intermediate []float32 materialized).
+// This is the same kernel ivfflat's brute-force centroid scan uses, so the SQL
+// re-rank (l2_distance over a narrow entries column — the hot path) no longer
+// detours through the float32 bridge. It deliberately bypasses
+// batchArrayDistanceSync (the GPU/usearch path), which only supports native float
+// element types.
+//
+// m selects the kernel; sqrtResult sqrts the result for TRUE L2 (the kernel
+// returns squared L2 for Metric_L2Distance, matching ResolveDistanceFn). The int8
+// squared sum is exact in int64, so sqrt-in-float64 is at least as accurate as the
+// old float32 bridge and preserves ranking order.
+func arrayDistanceNarrow[T types.ArrayElement](
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList,
+	m metric.MetricType, sqrtResult bool) error {
+	kernel, err := metric.ResolveDistanceFn[T, float64](m)
+	if err != nil {
+		return err
+	}
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+		d, e := kernel(types.BytesToArray[T](v1), types.BytesToArray[T](v2))
+		if e != nil {
+			return 0, e
+		}
+		if sqrtResult {
+			d = math.Sqrt(d)
+		}
+		return d, nil
+	}, selectList)
+}
+
+// arrayDistanceViaF32 is retained only for cosine_similarity, whose float32
+// downcast corner-case handling (see moarray.CosineSimilarity) has no integer-
+// kernel equivalent. Operands are upcast to []float32 and run through the f32
+// kernel.
+func arrayDistanceViaF32[T types.ArrayElement](
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList,
+	kernel func(v1, v2 []float32) (float64, error)) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+		f1 := types.ToFloat32Array[T](types.BytesToArray[T](v1))
+		f2 := types.ToFloat32Array[T](types.BytesToArray[T](v2))
+		return kernel(f1, f2)
+	}, selectList)
+}
+
+func L2DistanceArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_L2Distance, true)
+}
+
+func L2DistanceSqArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_L2sqDistance, false)
+}
+
+func InnerProductArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_InnerProduct, false)
+}
+
+func CosineDistanceArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_CosineDistance, false)
+}
+
+func CosineSimilarityArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceViaF32[T](ivecs, result, proc, length, selectList, moarray.CosineSimilarity[float32])
+}
+
 func castBinaryArrayToInt(array []uint8) int64 {
 	var result int64
 	for i, value := range array {

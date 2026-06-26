@@ -4507,6 +4507,55 @@ func TestVecFromBase64(t *testing.T) {
 	require.True(t, s, fmt.Sprintf("vecf64 case failed: %s", info))
 }
 
+// TestVecFromBase64Narrow exercises VecFromBase64's narrow elemSize branches
+// (int8=1, bf16/f16=2) and its error paths via the function-UT harness.
+func TestVecFromBase64Narrow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	mkInput := func(b64 string) []FunctionTestInput {
+		return []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{b64}, []bool{})}
+	}
+	runCase := func(in []FunctionTestInput, res FunctionTestResult, fn fEvalFn) (bool, string) {
+		fcTC := NewFunctionTestCase(proc, in, res, fn)
+		return fcTC.Run()
+	}
+
+	// int8 roundtrip (elemSize 1).
+	i8 := []int8{1, -2, 127, -128}
+	ok, info := runCase(mkInput(types.ArrayToBase64(i8)),
+		NewFunctionTestResult(types.T_array_int8.ToType(), false, [][]int8{i8}, []bool{}), VecFromBase64[int8])
+	require.Truef(t, ok, "vecint8 roundtrip: %s", info)
+
+	// uint8 roundtrip (elemSize 1). Regression: with the uint8 case missing from
+	// the decoder, elemSize was 0 and `n % elemSize` panicked (divide by zero).
+	u8 := []uint8{0, 255, 128, 1}
+	ok, info = runCase(mkInput(types.ArrayToBase64(u8)),
+		NewFunctionTestResult(types.T_array_uint8.ToType(), false, [][]uint8{u8}, []bool{}), VecFromBase64[uint8])
+	require.Truef(t, ok, "vecuint8 roundtrip: %s", info)
+
+	// bf16 roundtrip (elemSize 2).
+	bf := types.Float32ToBF16Slice([]float32{1.5, -2.25, 0, 8})
+	ok, info = runCase(mkInput(types.ArrayToBase64(bf)),
+		NewFunctionTestResult(types.T_array_bf16.ToType(), false, [][]types.BF16{bf}, []bool{}), VecFromBase64[types.BF16])
+	require.Truef(t, ok, "vecbf16 roundtrip: %s", info)
+
+	// f16 roundtrip.
+	f16 := types.Float32ToFloat16Slice([]float32{1.5, -2.25, 0, 8})
+	ok, info = runCase(mkInput(types.ArrayToBase64(f16)),
+		NewFunctionTestResult(types.T_array_float16.ToType(), false, [][]types.Float16{f16}, []bool{}), VecFromBase64[types.Float16])
+	require.Truef(t, ok, "vecf16 roundtrip: %s", info)
+
+	// invalid base64 -> error.
+	ok, info = runCase(mkInput("!!!not-base64!!!"),
+		NewFunctionTestResult(types.T_array_int8.ToType(), true, [][]int8{nil}, []bool{}), VecFromBase64[int8])
+	require.Truef(t, ok, "invalid base64 should error: %s", info)
+
+	// "AQID" decodes to 3 bytes, not a multiple of 2 (bf16 elemSize) -> error.
+	ok, info = runCase(mkInput("AQID"),
+		NewFunctionTestResult(types.T_array_bf16.ToType(), true, [][]types.BF16{nil}, []bool{}), VecFromBase64[types.BF16])
+	require.Truef(t, ok, "odd length should error: %s", info)
+}
+
 func initValidatePasswordStrengthTestCase() []tcTemp {
 	return []tcTemp{
 		{

@@ -437,7 +437,8 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		decimalValue.A = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B0_63)
 		decimalValue.B = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B64_127)
 		return &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: decimalValue}}
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		data := vec.GetStringAt(int(row))
 		return &plan.Literal{
 			Value: &plan.Literal_VecVal{
@@ -574,7 +575,8 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 				err = vector.AppendBytes(vec, nil, false, proc.Mp())
 				return false, err
 			}
-		case types.T_array_float32, types.T_array_float64:
+		case types.T_array_float32, types.T_array_float64,
+			types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_VecVal); ok {
 				val := val.VecVal
 				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())

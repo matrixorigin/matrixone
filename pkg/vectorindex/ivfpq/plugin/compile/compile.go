@@ -279,14 +279,30 @@ func registerIdxcronUpdate(
 // IVF-PQ supports updating `lists` at REINDEX time — mirrors IVF-FLAT
 // since both algorithms key on the inverted-list count for their build.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	return compileplugin.MergeReindexParams(old, alter, "ivfpq",
+	// Merge first, then validate the EFFECTIVE quantization via the per-algo
+	// catalog hook (the single home shared with CREATE). The merged map is the
+	// index's actual post-reindex config: the value the reindex set, or — when
+	// the reindex omitted QUANTIZATION (e.g. the idxcron-issued rebuild) — the
+	// value already stored on the index. Validating the merge (not the raw alter
+	// delta) means the check is never skipped just because the statement omitted
+	// quantization, and quantization and op_type come from one consistent source.
+	merged, err := compileplugin.MergeReindexParams(old, alter, "ivfpq",
 		catalog.IndexAlgoParamLists,
 		catalog.IndexAlgoParamKmeansTrainPercent,
 		catalog.IndexAlgoParamKmeansMaxIteration,
 		catalog.IndexAlgoParamMaxIndexCapacity,
 		catalog.HnswM,
 		catalog.BitsPerCode,
+		catalog.Quantization,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if err := (ivfpqruntime.CatalogHooks{}).ValidQuantization(
+		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
+		return nil, err
+	}
+	return merged, nil
 }
 
 // HandleDropIndex runs algorithm-specific cleanup beyond the generic
@@ -299,6 +315,12 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 // so this is a no-op. Compare HNSW, which does maintain CDC tasks.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] ivfpq HandleDropIndex: defs=%d", len(defs))
+	// Evict the cached search index so its GPU resources are freed NOW, rather
+	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
+	// Mirrors the create-side cache.Cache.Remove(storageDef.IndexTableName).
+	if storageDef, ok := defs[catalog.Ivfpq_TblType_Storage]; ok {
+		cache.Cache.Remove(storageDef.IndexTableName)
+	}
 	return nil
 }
 

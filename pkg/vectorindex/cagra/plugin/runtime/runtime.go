@@ -99,11 +99,42 @@ const CagraIndexFlag = "experimental_cagra_index"
 // ExperimentalFlag: CAGRA DDL is gated by CagraIndexFlag.
 func (CatalogHooks) ExperimentalFlag() string { return CagraIndexFlag }
 
-// SupportedVectorTypes: CAGRA (cuvs) indexes f32 vectors only.
-func (CatalogHooks) SupportedVectorTypes() []types.T { return []types.T{types.T_array_float32} }
+// SupportedVectorTypes: CAGRA (cuvs) accepts f32 and f16 base columns. f16 is
+// stored natively as half, or downcast-quantized to int8/uint8 via QUANTIZATION.
+// int8/uint8 base columns are unsupported (the CDC overflow brute force is f32/f16-only).
+func (CatalogHooks) SupportedVectorTypes() []types.T {
+	return []types.T{types.T_array_float32, types.T_array_float16}
+}
 
 // SupportedPrimaryKeyTypes: requires an int64 primary key.
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return []types.T{types.T_int64} }
+
+// ValidQuantization gates the (quantization, op_type) pair for CAGRA (cuvs):
+// the value must be a cuvs storage type (float32/float16/int8/uint8 — bf16 and
+// float64 are absent from CuvsQuantizationNameToType), and the 1-byte int8/uint8
+// scalar quantizer is L2-only (its affine map q(x)=scalar*x+offset preserves L2
+// ordering — the offset cancels in a difference — but biases inner-product and
+// rotates cosine angles). One home for CREATE (plan/schema) and REINDEX
+// (compile/ValidateReindexParams). quant=="" => no quantization (valid); op==""
+// => value rule only.
+func (CatalogHooks) ValidQuantization(quant, op string) error {
+	if quant == "" {
+		return nil
+	}
+	quant = strings.ToLower(quant)
+	if !metric.ValidQuantization(quant) {
+		return moerr.NewNotSupportedNoCtxf(
+			"cagra quantization %q (supported: float32, float16, int8, uint8)", quant)
+	}
+	if quant == metric.Quantization_INT8_Str || quant == metric.Quantization_UINT8_Str {
+		switch strings.ToLower(op) {
+		case metric.OpType_InnerProduct, metric.OpType_CosineDistance:
+			return moerr.NewNotSupportedNoCtxf(
+				"cagra quantization %q is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry", quant)
+		}
+	}
+	return nil
+}
 
 // SupportedIncludeColumnTypes: cuvs INCLUDE (pre-filter) columns accept
 // int32/int64/float32/float64 scalars.

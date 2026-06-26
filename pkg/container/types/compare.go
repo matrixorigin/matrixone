@@ -107,6 +107,14 @@ func GenericDescCompare[T OrderedT](x, y T) int {
 // Compare returns an integer comparing two arrays/vectors lexicographically.
 // TODO: this function might not be correct. we need to compare using tolerance for float values.
 // TODO: need to check if we need len(v1)==len(v2) check.
+// ArrayElementCompare orders two narrow-typed vectors by upcasting to float32.
+// Direct uint16/int8 comparison would be wrong for bf16/f16 (the sign bit makes
+// bit order disagree with value order), so all element types route through the
+// float32 bridge. Exact for int8/float32; lossless for the stored bf16/f16 values.
+func ArrayElementCompare[T ArrayElement](v1, v2 []T) int {
+	return ArrayCompare[float32](ToFloat32Array(v1), ToFloat32Array(v2))
+}
+
 func ArrayCompare[T RealNumbers](v1, v2 []T) int {
 	minLen := len(v1)
 	if len(v2) < minLen {
@@ -137,4 +145,16 @@ func CompareArrayFromBytes[T RealNumbers](_x, _y []byte, desc bool) int {
 		return ArrayCompare[T](y, x)
 	}
 	return ArrayCompare[T](x, y)
+}
+
+// CompareArrayElementFromBytes is the narrow-type (bf16/f16/int8) counterpart of
+// CompareArrayFromBytes; it orders through the float32 bridge.
+func CompareArrayElementFromBytes[T ArrayElement](_x, _y []byte, desc bool) int {
+	x := BytesToArray[T](_x)
+	y := BytesToArray[T](_y)
+
+	if desc {
+		return ArrayElementCompare[T](y, x)
+	}
+	return ArrayElementCompare[T](x, y)
 }

@@ -365,6 +365,62 @@ func makePlan2Vecf64ConstExprWithType(v string, l int32) *plan.Expr {
 	}
 }
 
+var MakePlan2VecBf16ConstExprWithType = makePlan2VecBf16ConstExprWithType
+
+// makePlan2VecBf16ConstExprWithType makes a vecbf16 const expr.
+func makePlan2VecBf16ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_bf16),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+var MakePlan2VecF16ConstExprWithType = makePlan2VecF16ConstExprWithType
+
+// makePlan2VecF16ConstExprWithType makes a vecf16 const expr.
+func makePlan2VecF16ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_float16),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+var MakePlan2VecInt8ConstExprWithType = makePlan2VecInt8ConstExprWithType
+
+// makePlan2VecInt8ConstExprWithType makes a vecint8 const expr.
+func makePlan2VecInt8ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_int8),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+var MakePlan2VecUint8ConstExprWithType = makePlan2VecUint8ConstExprWithType
+
+// makePlan2VecUint8ConstExprWithType makes a vecuint8 const expr.
+func makePlan2VecUint8ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_uint8),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
 var MakePlan2StringVecExprWithType = makePlan2StringVecExprWithType
 
 func makePlan2StringVecExprWithType(mp *mpool.MPool, vals ...string) *plan.Expr {

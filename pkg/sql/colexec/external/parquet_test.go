@@ -506,6 +506,149 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "parquet list NULL elements are not supported")
 	})
+
+	// Narrow vector targets: bf16/f16 decode from FLOAT leaves, int8/uint8 from
+	// INT32 leaves. Values are chosen exactly representable so the round-trip is
+	// loss-free and can be asserted by exact equality.
+	t.Run("float list to vecbf16", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+			{
+				parquet.FloatValue(1).Level(0, 1, 0),
+				parquet.FloatValue(2).Level(1, 1, 0),
+				parquet.FloatValue(-0.5).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_bf16), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_bf16, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, []types.BF16{
+			types.BF16FromFloat32(1), types.BF16FromFloat32(2), types.BF16FromFloat32(-0.5),
+		}, vector.GetArrayAt[types.BF16](vec, 0))
+	})
+
+	t.Run("float list to vecf16", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+			{
+				parquet.FloatValue(0.5).Level(0, 1, 0),
+				parquet.FloatValue(0.25).Level(1, 1, 0),
+				parquet.FloatValue(4).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float16), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_float16, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, []types.Float16{
+			types.Float16FromFloat32(0.5), types.Float16FromFloat32(0.25), types.Float16FromFloat32(4),
+		}, vector.GetArrayAt[types.Float16](vec, 0))
+	})
+
+	t.Run("int32 list to vecint8", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+			{
+				parquet.Int32Value(-128).Level(0, 1, 0),
+				parquet.Int32Value(0).Level(1, 1, 0),
+				parquet.Int32Value(127).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_int8), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_int8, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, []int8{-128, 0, 127}, vector.GetArrayAt[int8](vec, 0))
+	})
+
+	t.Run("int32 list to vecuint8", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+			{
+				parquet.Int32Value(0).Level(0, 1, 0),
+				parquet.Int32Value(128).Level(1, 1, 0),
+				parquet.Int32Value(255).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_uint8), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_uint8, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, []uint8{0, 128, 255}, vector.GetArrayAt[uint8](vec, 0))
+	})
+
+	t.Run("vecint8 out of range rejected", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+			{
+				parquet.Int32Value(200).Level(0, 1, 0),
+				parquet.Int32Value(0).Level(1, 1, 0),
+				parquet.Int32Value(0).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_int8), Width: 3})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_int8, 3, 0))
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "out of range")
+	})
+
+	t.Run("vecuint8 out of range rejected", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+			{
+				parquet.Int32Value(-1).Level(0, 1, 0),
+				parquet.Int32Value(0).Level(1, 1, 0),
+				parquet.Int32Value(0).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_uint8), Width: 3})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_uint8, 3, 0))
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "out of range")
+	})
+
+	t.Run("vecbf16 rejects int32 leaf", func(t *testing.T) {
+		f, _ := writeListAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+			{parquet.Int32Value(1).Level(0, 1, 0)},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_bf16), Width: 1})
+		require.Nil(t, leaf)
+		require.Nil(t, mp)
+	})
+
+	t.Run("vecint8 rejects float leaf", func(t *testing.T) {
+		f, _ := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+			{parquet.FloatValue(1).Level(0, 1, 0)},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_int8), Width: 1})
+		require.Nil(t, leaf)
+		require.Nil(t, mp)
+	})
 }
 
 func TestParquetCrossTypeMappings(t *testing.T) {

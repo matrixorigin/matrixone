@@ -234,17 +234,38 @@ func registerIdxcronUpdate(
 }
 
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	return compileplugin.MergeReindexParams(old, alter, "cagra",
+	// Merge first, then validate the EFFECTIVE quantization via the per-algo
+	// catalog hook (the single home shared with CREATE). The merged map is the
+	// index's actual post-reindex config: the value the reindex set, or — when
+	// the reindex omitted QUANTIZATION (e.g. the idxcron-issued rebuild) — the
+	// value already stored on the index. Validating the merge (not the raw alter
+	// delta) means the check is never skipped just because the statement omitted
+	// quantization, and quantization and op_type come from one consistent source.
+	merged, err := compileplugin.MergeReindexParams(old, alter, "cagra",
 		catalog.IndexAlgoParamMaxIndexCapacity,
 		catalog.IntermediateGraphDegree,
 		catalog.GraphDegree,
 		catalog.ITopkSize,
+		catalog.Quantization,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if err := (cagraruntime.CatalogHooks{}).ValidQuantization(
+		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
+		return nil, err
+	}
+	return merged, nil
 }
 
-// HandleDropIndex is a no-op: generic hidden-table cleanup is sufficient.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] cagra HandleDropIndex: defs=%d", len(defs))
+	// Evict the cached search index so its GPU resources are freed NOW, rather
+	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
+	// Mirrors the create-side cache.Cache.Remove(storageDef.IndexTableName).
+	if storageDef, ok := defs[catalog.Cagra_TblType_Storage]; ok {
+		cache.Cache.Remove(storageDef.IndexTableName)
+	}
 	return nil
 }
 

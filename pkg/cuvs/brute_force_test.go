@@ -30,7 +30,7 @@ func TestGpuBruteForce(t *testing.T) {
 		dataset[i*uint64(dimension)+1] = float32(i)
 	}
 
-	index, err := NewGpuBruteForce[float32](dataset, n_vectors, dimension, L2Expanded, 1, 0)
+	index, err := NewGpuBruteForce[float32, float32](dataset, n_vectors, dimension, L2Expanded, 1, 0)
 	if err != nil {
 		t.Fatalf("Failed to create GpuBruteForce: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestGpuBruteForceChunked(t *testing.T) {
 	totalCount := uint64(100)
 
 	// Create empty index (target type half)
-	index, err := NewGpuBruteForceEmpty[Float16](totalCount, dimension, L2Expanded, 1, 0)
+	index, err := NewGpuBruteForceEmpty[float32, Float16](totalCount, dimension, L2Expanded, 1, 0)
 	if err != nil {
 		t.Fatalf("Failed to create GpuBruteForceEmpty: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestGpuBruteForceChunked(t *testing.T) {
 		for j := range chunk {
 			chunk[j] = val
 		}
-		err = index.AddChunkFloat(chunk, chunkSize, nil)
+		err = index.AddChunkQuantize(chunk, chunkSize, nil)
 		if err != nil {
 			t.Fatalf("AddChunkFloat failed at offset %d: %v", i, err)
 		}
@@ -132,7 +132,7 @@ func TestGpuBruteForceFloat16(t *testing.T) {
 		t.Fatalf("Failed to convert dataset to F16: %v", err)
 	}
 
-	index, err := NewGpuBruteForce(hDataset, count, dimension, L2Expanded, 1, 0)
+	index, err := NewGpuBruteForce[Float16, Float16](hDataset, count, dimension, L2Expanded, 1, 0)
 	if err != nil {
 		t.Fatalf("Failed to create F16 GpuBruteForce: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestGpuBruteForceFilter(t *testing.T) {
 		pkids[i] = int64(1000 + i)
 	}
 
-	idx, err := NewGpuBruteForceEmpty[float32](nVectors, dimension, L2Expanded, 1, 0)
+	idx, err := NewGpuBruteForceEmpty[float32, float32](nVectors, dimension, L2Expanded, 1, 0)
 	if err != nil {
 		t.Fatalf("NewGpuBruteForceEmpty: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestGpuBruteForceFilter(t *testing.T) {
 	if err = idx.SetFilterColumns(colMetaJSON, nVectors); err != nil {
 		t.Fatalf("SetFilterColumns: %v", err)
 	}
-	if err = idx.AddChunkFloat(dataset, nVectors, pkids); err != nil {
+	if err = idx.AddChunkQuantize(dataset, nVectors, pkids); err != nil {
 		t.Fatalf("AddChunkFloat: %v", err)
 	}
 	// One column of int64; row i value = i. No nulls.
@@ -214,7 +214,7 @@ func TestGpuBruteForceFilter(t *testing.T) {
 	// Query closest to row 0; without filter NN would be pkid 1000 (row 0).
 	queries := []float32{0.0, 0.0}
 	predsJSON := `[{"col":0,"op":">","val":50}]`
-	jobID, err := idx.SearchFloatWithFilterAsync(queries, 1, dimension, 1, predsJSON)
+	jobID, err := idx.SearchQuantizeWithFilterAsync(queries, 1, dimension, 1, predsJSON)
 	if err != nil {
 		t.Fatalf("SearchFloatWithFilterAsync: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestGpuBruteForceFilter(t *testing.T) {
 	}
 
 	// Sanity: empty preds JSON falls through to unfiltered NN (pkid 1000).
-	jobID2, err := idx.SearchFloatWithFilterAsync(queries, 1, dimension, 1, "")
+	jobID2, err := idx.SearchQuantizeWithFilterAsync(queries, 1, dimension, 1, "")
 	if err != nil {
 		t.Fatalf("SearchFloatWithFilterAsync (no preds): %v", err)
 	}
@@ -254,8 +254,8 @@ func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 		dataset[i] = rand.Float32()
 	}
 
-	// Use Float16 as internal type
-	index, err := NewGpuBruteForceEmpty[Float16](uint64(totalCount), dimension, L2Expanded, 8, 0)
+	// Use Float16 storage with float32 base/query (quantize f32 -> half).
+	index, err := NewGpuBruteForceEmpty[float32, Float16](uint64(totalCount), dimension, L2Expanded, 8, 0)
 	if err != nil {
 		b.Fatalf("Failed to create index: %v", err)
 	}
@@ -268,7 +268,7 @@ func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 	// Add data in chunks using AddChunkFloat
 	for i := 0; i < totalCount; i += chunkSize {
 		chunk := dataset[i*dimension : (i+chunkSize)*dimension]
-		if err := index.AddChunkFloat(chunk, uint64(chunkSize), nil); err != nil {
+		if err := index.AddChunkQuantize(chunk, uint64(chunkSize), nil); err != nil {
 			b.Fatalf("AddChunkFloat failed at %d: %v", i, err)
 		}
 	}
@@ -286,7 +286,7 @@ func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 			queries[i] = rand.Float32()
 		}
 		for pb.Next() {
-			_, _, err := index.SearchFloat(queries, 1, dimension, 10)
+			_, _, err := index.SearchQuantize(queries, 1, dimension, 10)
 			if err != nil {
 				b.Fatalf("Search failed: %v", err)
 			}
@@ -294,7 +294,7 @@ func BenchmarkGpuAddChunkAndSearchBruteForceF16(b *testing.B) {
 	})
 	b.StopTimer()
 	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-		neighbors, _, err := index.SearchFloat(queries, numQueries, dimension, limit)
+		neighbors, _, err := index.SearchQuantize(queries, numQueries, dimension, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +311,7 @@ func BenchmarkGpuBruteForceF32(b *testing.B) {
 		dataset[i] = rand.Float32()
 	}
 
-	index, err := NewGpuBruteForce[float32](dataset, uint64(totalCount), dimension, L2Expanded, 8, 0)
+	index, err := NewGpuBruteForce[float32, float32](dataset, uint64(totalCount), dimension, L2Expanded, 8, 0)
 	if err != nil {
 		b.Fatalf("Failed to create index: %v", err)
 	}
@@ -331,7 +331,7 @@ func BenchmarkGpuBruteForceF32(b *testing.B) {
 			queries[i] = rand.Float32()
 		}
 		for pb.Next() {
-			_, _, err := index.SearchFloat(queries, 1, dimension, 10)
+			_, _, err := index.SearchQuantize(queries, 1, dimension, 10)
 			if err != nil {
 				b.Fatalf("Search failed: %v", err)
 			}
@@ -339,7 +339,7 @@ func BenchmarkGpuBruteForceF32(b *testing.B) {
 	})
 	b.StopTimer()
 	ReportRecall(b, dataset, uint64(totalCount), uint32(dimension), 10, func(queries []float32, numQueries uint64, limit uint32) ([]int64, error) {
-		neighbors, _, err := index.SearchFloat(queries, numQueries, dimension, limit)
+		neighbors, _, err := index.SearchQuantize(queries, numQueries, dimension, limit)
 		if err != nil {
 			return nil, err
 		}

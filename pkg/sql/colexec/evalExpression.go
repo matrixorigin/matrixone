@@ -850,10 +850,19 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 		case *plan.Literal_EnumVal:
 			vec, err = vector.NewConstFixed(constEnumType, types.Enum(val.EnumVal), 1, proc.Mp())
 		case *plan.Literal_VecVal:
-			if typ.Oid == types.T_array_float32 {
+			switch typ.Oid {
+			case types.T_array_float32:
 				vec, err = vector.NewConstArray(typ, types.BytesToArray[float32]([]byte(val.VecVal)), 1, proc.Mp())
-			} else if typ.Oid == types.T_array_float64 {
+			case types.T_array_float64:
 				vec, err = vector.NewConstArray(typ, types.BytesToArray[float64]([]byte(val.VecVal)), 1, proc.Mp())
+			case types.T_array_bf16:
+				vec, err = vector.NewConstArray(typ, types.BytesToArray[types.BF16]([]byte(val.VecVal)), 1, proc.Mp())
+			case types.T_array_float16:
+				vec, err = vector.NewConstArray(typ, types.BytesToArray[types.Float16]([]byte(val.VecVal)), 1, proc.Mp())
+			case types.T_array_int8:
+				vec, err = vector.NewConstArray(typ, types.BytesToArray[int8]([]byte(val.VecVal)), 1, proc.Mp())
+			case types.T_array_uint8:
+				vec, err = vector.NewConstArray(typ, types.BytesToArray[uint8]([]byte(val.VecVal)), 1, proc.Mp())
 			}
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))

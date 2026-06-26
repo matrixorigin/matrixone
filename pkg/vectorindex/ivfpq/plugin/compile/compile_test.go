@@ -254,6 +254,36 @@ func TestIvfpqValidateReindexParams_Unsupported(t *testing.T) {
 	require.Contains(t, err.Error(), catalog.HnswEfConstruction)
 }
 
+// TestIvfpqValidateReindexParams_Quantization: IVF-PQ (cuvs) accepts the
+// cuvs-supported quantization names and rejects others (e.g. bf16).
+func TestIvfpqValidateReindexParams_Quantization(t *testing.T) {
+	got, err := Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "int8"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "int8", got[catalog.Quantization])
+
+	_, err = Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "bf16"},
+	})
+	require.Error(t, err)
+
+	// int8/uint8 on a non-L2 (inner-product) index IS rejected at REINDEX via the
+	// ValidQuantization hook: the merged op_type is inner-product and the
+	// int8/uint8 affine quantizer only preserves L2 geometry.
+	_, err = Hooks{}.ValidateReindexParams(
+		map[string]string{catalog.IndexAlgoParamOpType: "vector_ip_ops"},
+		compileplugin.ReindexParamUpdate{Params: map[string]string{catalog.Quantization: "uint8"}})
+	require.Error(t, err)
+
+	// ...but uint8 with L2 (the merged op_type) is accepted.
+	got, err = Hooks{}.ValidateReindexParams(
+		map[string]string{catalog.IndexAlgoParamOpType: "vector_l2_ops"},
+		compileplugin.ReindexParamUpdate{Params: map[string]string{catalog.Quantization: "uint8"}})
+	require.NoError(t, err)
+	require.Equal(t, "uint8", got[catalog.Quantization])
+}
+
 func TestIvfpqHandleDropIndex(t *testing.T) {
 	require.NoError(t, Hooks{}.HandleDropIndex(nil, nil))
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // ivfflatCatalogHooks is the shared (stateless) catalog-hooks instance used for
@@ -146,14 +147,31 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Typ:     plan.Type{Id: int32(types.T_int64)},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
+		// Centroid type is decoupled from the entry type. Centroids are f32 whenever
+		// the entries are NOT a plain f32/f64 column: i.e. for a narrow base
+		// (bf16/f16/int8) or for ANY base under QUANTIZATION (incl. f64). f32 gives
+		// accurate assignment, fast f32 search, and tiny RAM for the few centroids;
+		// the entries carry the memory win. A plain f32/f64 column keeps its type.
+		centroidTyp := plan.Type{
+			Id:    colMap[colName].Typ.Id,
+			Width: colMap[colName].Typ.Width,
+			Scale: colMap[colName].Typ.Scale,
+		}
+		quantized := indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != ""
+		switch types.T(centroidTyp.Id) {
+		case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+			centroidTyp.Id = int32(types.T_array_float32)
+			centroidTyp.Scale = 0
+		default:
+			if quantized {
+				centroidTyp.Id = int32(types.T_array_float32)
+				centroidTyp.Scale = 0
+			}
+		}
 		tableDefs[1].Cols[2] = &plan.ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    colMap[colName].Typ.Id,
-				Width: colMap[colName].Typ.Width,
-				Scale: colMap[colName].Typ.Scale,
-			},
+			Name:    catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+			Alg:     plan.CompressType_Lz4,
+			Typ:     centroidTyp,
 			Default: &plan.Default{NullAbility: true, Expr: nil, OriginString: ""},
 		}
 		tableDefs[1].Cols[3] = planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
@@ -218,14 +236,38 @@ func (Hooks) BuildSecondaryIndexDefs(
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
+		// Entry type follows the QUANTIZATION option: CREATE INDEX ... USING
+		// ivfflat ... QUANTIZATION='int8' stores entries as vecint8 (quantized from
+		// the base vectors), while the base column and the f32 centroids are
+		// unchanged. Without QUANTIZATION the entries keep the base column type.
+		entryTyp := plan.Type{
+			Id:    colMap[colName].Typ.Id,
+			Width: colMap[colName].Typ.Width,
+			Scale: colMap[colName].Typ.Scale,
+		}
+		if indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != "" {
+			if qt, ok := quantizer.ToVectorType(indexInfo.IndexOption.Quantization); ok {
+				// QUANTIZATION is downcast-only: the quantized entry element must be the
+				// same width or narrower than the base column. Upcasting (e.g. a bf16 or
+				// int8 base with QUANTIZATION='float32') is unsupported — it costs 2-4x the
+				// entry storage for no precision gain and forces the f32 distance kernel
+				// over narrow entries. Omit QUANTIZATION to keep the base-width entries.
+				baseSize := types.Type{Oid: types.T(colMap[colName].Typ.Id)}.GetArrayElementSize()
+				quantSize := types.Type{Oid: qt}.GetArrayElementSize()
+				if quantSize > baseSize {
+					return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
+						"ivfflat QUANTIZATION '%s' (%d bytes/element) cannot upcast base column %s (%d bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type",
+						indexInfo.IndexOption.Quantization, quantSize,
+						types.T(colMap[colName].Typ.Id).String(), baseSize)
+				}
+				entryTyp.Id = int32(qt)
+				entryTyp.Scale = 0
+			}
+		}
 		tableDefs[2].Cols[3] = &plan.ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    colMap[colName].Typ.Id,
-				Width: colMap[colName].Typ.Width,
-				Scale: colMap[colName].Typ.Scale,
-			},
+			Name:    catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			Alg:     plan.CompressType_Lz4,
+			Typ:     entryTyp,
 			Default: &plan.Default{NullAbility: true, Expr: nil, OriginString: ""},
 		}
 		tableDefs[2].Cols[4] = planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)

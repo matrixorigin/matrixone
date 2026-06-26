@@ -53,7 +53,18 @@ var (
 	}
 )
 
-func PairWiseDistance[T types.RealNumbers](
+// gpuPairwiseSupported reports whether T is a cuVS-supported pairwise element
+// type (float32 or types.Float16). bf16/int8/uint8/float64 run on CPU.
+func gpuPairwiseSupported[T types.ArrayElement]() bool {
+	switch any(*new(T)).(type) {
+	case float32, types.Float16:
+		return true
+	default:
+		return false
+	}
+}
+
+func PairWiseDistance[T types.ArrayElement](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
@@ -78,8 +89,7 @@ func PairWiseDistance[T types.RealNumbers](
 		return GoPairWiseDistance(x, y, metric)
 	}
 
-	var zero T
-	if _, isF32 := any(zero).(float32); isF32 {
+	if gpuPairwiseSupported[T]() {
 		res := make([]float32, nX*nY)
 		handle, err := PairwiseDistanceLaunch(x, y, metric, res, GPUThresholdSync, gpuMode)
 		if err != nil {
@@ -145,7 +155,7 @@ func (m *gpuJobManager) pop(jobID uint64) *gpuJob {
 // It flattens the input vectors on the CPU and then launches a CUDA kernel.
 // This allows for overlapping the CPU-bound flattening work with GPU execution
 // when pipelined at the reader level.
-func PairwiseDistanceLaunch[T types.RealNumbers](
+func PairwiseDistanceLaunch[T types.ArrayElement](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
@@ -168,63 +178,87 @@ func PairwiseDistanceLaunch[T types.RealNumbers](
 	dim := len(x[0])
 
 	cuvsMetric, ok := MetricTypeToCuvsMetric[metric]
-	var zero T
-	_, isF32 := any(zero).(float32)
-
-	if ok && isF32 && uint64(nX)*uint64(nY)*uint64(dim) >= minWorkSize {
-		allocator := malloc.NewCAllocator()
-
-		// 1. Flatten Y
-		yf32Slice, yDeallocator, err := allocator.Allocate(uint64(nY*dim*4), malloc.NoClear)
-		if err != nil {
-			return 0, err
+	if ok && uint64(nX)*uint64(nY)*uint64(dim) >= minWorkSize {
+		// cuVS pairwise supports float32 and Float16 only.
+		switch xs := any(x).(type) {
+		case [][]float32:
+			return gpuPairwiseLaunch[float32](xs, any(y).([][]float32), dim, cuvsMetric, dist, 4)
+		case [][]types.Float16:
+			ys := any(y).([][]types.Float16)
+			// types.Float16 and cuvs.Float16 are both IEEE binary16 uint16 — a
+			// per-row reinterpret (no element copy) hands them to the cuVS kernel.
+			xc := make([][]cuvs.Float16, len(xs))
+			for i, v := range xs {
+				xc[i] = util.UnsafeSliceCast[cuvs.Float16](v)
+			}
+			yc := make([][]cuvs.Float16, len(ys))
+			for i, v := range ys {
+				yc[i] = util.UnsafeSliceCast[cuvs.Float16](v)
+			}
+			return gpuPairwiseLaunch[cuvs.Float16](xc, yc, dim, cuvsMetric, dist, 2)
 		}
-		yf32 := util.UnsafeSliceCast[float32](yf32Slice)
-		y32 := any(y).([][]float32)
-		for i, v := range y32 {
-			copy(yf32[i*dim:(i+1)*dim], v)
-		}
-
-		// 2. Flatten X
-		xf32Slice, xDeallocator, err := allocator.Allocate(uint64(nX*dim*4), malloc.NoClear)
-		if err != nil {
-			yDeallocator.Deallocate()
-			return 0, err
-		}
-		xf32 := util.UnsafeSliceCast[float32](xf32Slice)
-		x32 := any(x).([][]float32)
-		for i, v := range x32 {
-			copy(xf32[i*dim:(i+1)*dim], v)
-		}
-
-		// Register job before launch so the slot exists if Wait is called
-		// concurrently. On launch failure, pop removes it before returning;
-		// no caller can see the job because cuvsJobID is only set by update()
-		// below, which is never reached on this error path.
-		gpuID := globalGpuJobManager.add(dist)
-
-		cuvsID, err := cuvs.PairwiseDistanceLaunch(
-			xf32,
-			uint64(nX),
-			yf32,
-			uint64(nY),
-			uint32(dim),
-			cuvsMetric,
-			dist,
-		)
-		if err != nil {
-			xDeallocator.Deallocate()
-			yDeallocator.Deallocate()
-			globalGpuJobManager.pop(gpuID)
-			return 0, err
-		}
-
-		globalGpuJobManager.update(gpuID, cuvsID, xDeallocator, yDeallocator)
-
-		return PairwiseJobHandle(gpuID), nil
 	}
 
 	return PairwiseDistanceLaunchCPU(x, y, metric, dist)
+}
+
+// gpuPairwiseLaunch flattens [][]C into a C-allocator buffer (elemSize bytes per
+// element) and launches the async cuVS pairwise distance. C is float32 (4B) or
+// cuvs.Float16 (2B). Mirrors the old f32-only path, generalized over the element.
+func gpuPairwiseLaunch[C cuvs.VectorType](
+	x, y [][]C,
+	dim int,
+	cuvsMetric cuvs.DistanceType,
+	dist []float32,
+	elemSize int,
+) (PairwiseJobHandle, error) {
+	nX, nY := len(x), len(y)
+	allocator := malloc.NewCAllocator()
+
+	// 1. Flatten Y
+	yBuf, yDeallocator, err := allocator.Allocate(uint64(nY*dim*elemSize), malloc.NoClear)
+	if err != nil {
+		return 0, err
+	}
+	yf := util.UnsafeSliceCast[C](yBuf)
+	for i, v := range y {
+		copy(yf[i*dim:(i+1)*dim], v)
+	}
+
+	// 2. Flatten X
+	xBuf, xDeallocator, err := allocator.Allocate(uint64(nX*dim*elemSize), malloc.NoClear)
+	if err != nil {
+		yDeallocator.Deallocate()
+		return 0, err
+	}
+	xf := util.UnsafeSliceCast[C](xBuf)
+	for i, v := range x {
+		copy(xf[i*dim:(i+1)*dim], v)
+	}
+
+	// Register job before launch so the slot exists if Wait is called
+	// concurrently. On launch failure, pop removes it before returning.
+	gpuID := globalGpuJobManager.add(dist)
+
+	cuvsID, err := cuvs.PairwiseDistanceLaunch(
+		xf,
+		uint64(nX),
+		yf,
+		uint64(nY),
+		uint32(dim),
+		cuvsMetric,
+		dist,
+	)
+	if err != nil {
+		xDeallocator.Deallocate()
+		yDeallocator.Deallocate()
+		globalGpuJobManager.pop(gpuID)
+		return 0, err
+	}
+
+	globalGpuJobManager.update(gpuID, cuvsID, xDeallocator, yDeallocator)
+
+	return PairwiseJobHandle(gpuID), nil
 }
 
 // PairwiseDistanceWait waits for the completion of the asynchronous GPU distance

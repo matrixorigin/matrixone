@@ -517,9 +517,13 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	addInt(catalog.IndexAlgoParamKmeansTrainPercent, opt.KmeansTrainPercent)
 	addInt(catalog.IndexAlgoParamKmeansMaxIteration, opt.KmeansMaxIteration)
 	addInt(catalog.IndexAlgoParamMaxIndexCapacity, opt.MaxIndexCapacity)
-	// NOTE: quantization is intentionally NOT handled by reindex. The vecf16
-	// branch owns the quantization work (per-backend validity, BF16, ...), so
-	// reindex neither merges nor rejects it here — revisit once that lands.
+	// quantization is normalized to lowercase here (matching the CREATE INDEX
+	// path) so case-sensitive consumers (GPU build switch / quantizer) behave
+	// identically; the per-backend VALUE check (which names a given algorithm
+	// accepts) is done in each plugin's ValidateReindexParams.
+	if opt.Quantization != "" {
+		m[catalog.Quantization] = catalog.ToLower(opt.Quantization)
+	}
 	return m
 }
 
@@ -2556,6 +2560,38 @@ func (s *Scope) DropIndex(c *Compile) error {
 	)
 	if err != nil {
 		return err
+	}
+
+	//6. Plugin-mediated drop hook — mirrors the HandleCreateIndex dispatch in
+	// CreateIndex. Vector-index plugins use it to evict their in-process search
+	// cache for the dropped index, so GPU/host resources are freed NOW instead of
+	// lingering until the 5-min VectorIndexCacheTTL housekeeping. Without this the
+	// hook (pkg/vectorindex/*/plugin/compile HandleDropIndex) was never invoked.
+	dropPluginIndexes := make(map[string]*MultiTableIndex)
+	for _, idef := range oldTableDef.Indexes {
+		if idef.IndexName != qry.IndexName || idef.Unique || !indexplugin.IsPluginAlgo(idef.IndexAlgo) {
+			continue
+		}
+		algo := catalog.ToLower(idef.IndexAlgo)
+		mti, ok := dropPluginIndexes[algo]
+		if !ok {
+			mti = &MultiTableIndex{IndexAlgo: algo, IndexDefs: make(map[string]*plan.IndexDef)}
+			dropPluginIndexes[algo] = mti
+		}
+		mti.IndexDefs[catalog.ToLower(idef.IndexAlgoTableType)] = idef
+	}
+	if len(dropPluginIndexes) > 0 {
+		dctx := newPluginCompileCtx(s, c, oldTableDef.TblId, nil, d, qry.Database, oldTableDef, nil)
+		for _, mti := range dropPluginIndexes {
+			if p, ok := indexplugin.Get(mti.IndexAlgo); ok {
+				// Best-effort cleanup: the 5-min TTL is the backstop, so don't
+				// fail the DROP if cache eviction errors — just log.
+				if e := p.Compile().HandleDropIndex(dctx, mti.IndexDefs); e != nil {
+					logutil.Warnf("[plugin] %s HandleDropIndex %s.%s/%s: %v",
+						mti.IndexAlgo, qry.Database, qry.Table, qry.IndexName, e)
+				}
+			}
+		}
 	}
 
 	return nil

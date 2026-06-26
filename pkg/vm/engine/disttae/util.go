@@ -191,6 +191,26 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
 			mp[v] = true
 		}
+	case types.T_array_bf16:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[types.BF16](vector.GetArrayAt[types.BF16](pk, i))
+			mp[v] = true
+		}
+	case types.T_array_float16:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[types.Float16](vector.GetArrayAt[types.Float16](pk, i))
+			mp[v] = true
+		}
+	case types.T_array_int8:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[int8](vector.GetArrayAt[int8](pk, i))
+			mp[v] = true
+		}
+	case types.T_array_uint8:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[uint8](vector.GetArrayAt[uint8](pk, i))
+			mp[v] = true
+		}
 	default:
 		panic(moerr.NewInternalErrorNoCtxf("%s not supported", pk.GetType().String()))
 	}
@@ -395,6 +415,34 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		case types.T_array_float64:
 			for i := 0; i < vec.Length(); i++ {
 				v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
+				if mp[v] {
+					sels = append(sels, int64(i))
+				}
+			}
+		case types.T_array_bf16:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[types.BF16](vector.GetArrayAt[types.BF16](vec, i))
+				if mp[v] {
+					sels = append(sels, int64(i))
+				}
+			}
+		case types.T_array_float16:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[types.Float16](vector.GetArrayAt[types.Float16](vec, i))
+				if mp[v] {
+					sels = append(sels, int64(i))
+				}
+			}
+		case types.T_array_int8:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[int8](vector.GetArrayAt[int8](vec, i))
+				if mp[v] {
+					sels = append(sels, int64(i))
+				}
+			}
+		case types.T_array_uint8:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[uint8](vector.GetArrayAt[uint8](vec, i))
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}

@@ -37,7 +37,7 @@ TEST(GpuIvfFlatTest, BasicLoadSearchAndCenters) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 2;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
     index.build();
 
@@ -71,7 +71,7 @@ TEST(GpuIvfFlatTest, BasicLoadAndSearchWithIds) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 100;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
     index.start();
     index.build();
 
@@ -106,7 +106,7 @@ TEST(GpuIvfFlatTest, ParallelAddChunkWithOffset) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 100;
-    gpu_ivf_flat_t<float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    gpu_ivf_flat_t<float, float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
 
     std::thread t1([&]() { index.add_chunk(chunk1.data(), count_per_chunk, 0, ids1.data()); });
@@ -136,7 +136,7 @@ TEST(GpuIvfFlatTest, SaveAndLoadFromFile) {
     {
         ivf_flat_build_params_t bp = ivf_flat_build_params_default();
         bp.n_lists = 2;
-        gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+        gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
         index.build();
         index.save(filename);
@@ -148,7 +148,7 @@ TEST(GpuIvfFlatTest, SaveAndLoadFromFile) {
         ivf_flat_build_params_t bp = ivf_flat_build_params_default();
         bp.n_lists = 2;
         // Construct without loading immediately
-        gpu_ivf_flat_t<float> index(filename, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+        gpu_ivf_flat_t<float, float> index(filename, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start(); // Start worker first
         index.load(filename); // Then load explicitly
 
@@ -180,7 +180,7 @@ TEST(GpuIvfFlatTest, ReplicatedModeSimulation) {
 
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 10;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
     index.start();
     index.build();
     
@@ -207,7 +207,7 @@ TEST(GpuIvfFlatTest, ReplicatedLoadSearch) {
     {
         ivf_flat_build_params_t bp = ivf_flat_build_params_default();
         bp.n_lists = 10;
-        gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, single_device, 1, DistributionMode_SINGLE_GPU);
+        gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, single_device, 1, DistributionMode_SINGLE_GPU);
         index.start();
         index.build();
         index.save(filename);
@@ -224,7 +224,7 @@ TEST(GpuIvfFlatTest, ReplicatedLoadSearch) {
         ivf_flat_build_params_t bp = ivf_flat_build_params_default();
         bp.n_lists = 10;
         
-        gpu_ivf_flat_t<float> index(filename, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
+        gpu_ivf_flat_t<float, float> index(filename, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
         index.start();
         index.load(filename);
 
@@ -251,7 +251,7 @@ TEST(GpuIvfFlatTest, SetGetQuantizer) {
     bp.n_lists = 5;
     std::vector<int> devices = {0};
     
-    gpu_ivf_flat_t<int8_t> index(count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    gpu_ivf_flat_t<float, int8_t> index(count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     
     float min = -1.5f;
     float max = 2.5f;
@@ -283,7 +283,7 @@ TEST(GpuIvfFlatTest, ManualShardedSearch) {
 
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 50;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.start();
     index.build();
     
@@ -316,7 +316,7 @@ TEST(GpuIvfFlatTest, ManualShardedSearchWithIds) {
 
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 50;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED, ids.data());
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED, ids.data());
     index.start();
     index.build();
     
@@ -349,7 +349,7 @@ TEST(GpuIvfFlatTest, SimulatedReplicatedBuildSearch) {
 
     std::vector<int> sim2 = {0, 0};                 // 2 logical GPUs on physical device 0
     ivf_flat_build_params_t bp = ivf_flat_build_params_default(); bp.n_lists = 4;
-    gpu_ivf_flat_t<float> index(ds.data(), count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_REPLICATED, ids.data());
+    gpu_ivf_flat_t<float, float> index(ds.data(), count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_REPLICATED, ids.data());
     index.start(); index.build();
 
     ASSERT_TRUE(index.info().find("\"ranks\": 2") != std::string::npos);  // 2 replicas coexist
@@ -373,7 +373,7 @@ TEST(GpuIvfFlatTest, SimulatedShardedBuildSearch) {
 
     std::vector<int> sim2 = {0, 0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default(); bp.n_lists = 4;
-    gpu_ivf_flat_t<float> index(ds.data(), count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_SHARDED, ids.data());
+    gpu_ivf_flat_t<float, float> index(ds.data(), count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_SHARDED, ids.data());
     index.start(); index.build();
 
     ASSERT_TRUE(index.info().find("\"ranks\": 2") != std::string::npos); // 2 shards coexist
@@ -405,7 +405,7 @@ TEST(GpuIvfFlatTest, SimulatedShardedDeleteSearch) {
 
     std::vector<int> sim2 = {0, 0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default(); bp.n_lists = 4;
-    gpu_ivf_flat_t<float> index(ds.data(), count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_SHARDED, ids.data());
+    gpu_ivf_flat_t<float, float> index(ds.data(), count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_SHARDED, ids.data());
     index.start(); index.build();
     ASSERT_TRUE(index.info().find("\"ranks\": 2") != std::string::npos);
 
@@ -453,7 +453,7 @@ TEST(GpuIvfFlatTest, SimulatedReplicatedExtend) {
 
     std::vector<int> sim2 = {0, 0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default(); bp.n_lists = 4;
-    gpu_ivf_flat_t<float> index(ds.data(), base, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_REPLICATED, ids.data());
+    gpu_ivf_flat_t<float, float> index(ds.data(), base, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_REPLICATED, ids.data());
     index.start(); index.build();
     ASSERT_TRUE(index.info().find("\"ranks\": 2") != std::string::npos);
 
@@ -484,7 +484,7 @@ TEST(GpuIvfFlatTest, SimulatedSaveLoadAcrossModes) {
     ivf_flat_build_params_t bp = ivf_flat_build_params_default(); bp.n_lists = 4;
     ivf_flat_search_params_t sp = ivf_flat_search_params_default(); sp.n_probes = 4;
 
-    auto probe = [&](gpu_ivf_flat_t<float>& idx, const std::vector<float>& data, const std::vector<int> rows) {
+    auto probe = [&](gpu_ivf_flat_t<float, float>& idx, const std::vector<float>& data, const std::vector<int> rows) {
         for (int r : rows) {
             std::vector<float> q(data.begin()+r*dim, data.begin()+(r+1)*dim);
             auto res = idx.search(q.data(), 1, dim, 1, sp);
@@ -497,19 +497,19 @@ TEST(GpuIvfFlatTest, SimulatedSaveLoadAcrossModes) {
     std::string dirR = "/tmp/mo_sim_ivf_flat_rep";
     system(("rm -rf " + dirR).c_str());
     {
-        gpu_ivf_flat_t<float> idx(ds.data(), count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_REPLICATED, ids.data());
+        gpu_ivf_flat_t<float, float> idx(ds.data(), count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_REPLICATED, ids.data());
         idx.start(); idx.build();
         ASSERT_TRUE(idx.info().find("\"ranks\": 2") != std::string::npos);
         idx.save_dir(dirR); idx.destroy();
     }
     {
-        gpu_ivf_flat_t<float> idx(count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_REPLICATED);
+        gpu_ivf_flat_t<float, float> idx(count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_REPLICATED);
         idx.start(); idx.load_dir(dirR, DistributionMode_REPLICATED);
         ASSERT_TRUE(idx.info().find("\"ranks\": 2") != std::string::npos);
         probe(idx, ds, {0, 9, 15}); idx.destroy();
     }
     {
-        gpu_ivf_flat_t<float> idx(count, dim, DistanceType_L2Expanded, bp, one, 1, DistributionMode_SINGLE_GPU);
+        gpu_ivf_flat_t<float, float> idx(count, dim, DistanceType_L2Expanded, bp, one, 1, DistributionMode_SINGLE_GPU);
         idx.start(); idx.load_dir(dirR, DistributionMode_SINGLE_GPU);
         probe(idx, ds, {0, 9, 15}); idx.destroy();
     }
@@ -518,11 +518,11 @@ TEST(GpuIvfFlatTest, SimulatedSaveLoadAcrossModes) {
     std::string dirS = "/tmp/mo_sim_ivf_flat_single";
     system(("rm -rf " + dirS).c_str());
     {
-        gpu_ivf_flat_t<float> idx(ds.data(), count, dim, DistanceType_L2Expanded, bp, one, 1, DistributionMode_SINGLE_GPU, ids.data());
+        gpu_ivf_flat_t<float, float> idx(ds.data(), count, dim, DistanceType_L2Expanded, bp, one, 1, DistributionMode_SINGLE_GPU, ids.data());
         idx.start(); idx.build(); idx.save_dir(dirS); idx.destroy();
     }
     {
-        gpu_ivf_flat_t<float> idx(count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_REPLICATED);
+        gpu_ivf_flat_t<float, float> idx(count, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_REPLICATED);
         idx.start(); idx.load_dir(dirS, DistributionMode_REPLICATED);
         ASSERT_TRUE(idx.info().find("\"ranks\": 2") != std::string::npos);
         probe(idx, ds, {0, 9, 15}); idx.destroy();
@@ -535,13 +535,13 @@ TEST(GpuIvfFlatTest, SimulatedSaveLoadAcrossModes) {
     std::string dirSh = "/tmp/mo_sim_ivf_flat_shard";
     system(("rm -rf " + dirSh).c_str());
     {
-        gpu_ivf_flat_t<float> idx(sds.data(), scount, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_SHARDED, sids.data());
+        gpu_ivf_flat_t<float, float> idx(sds.data(), scount, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_SHARDED, sids.data());
         idx.start(); idx.build();
         ASSERT_TRUE(idx.info().find("\"ranks\": 2") != std::string::npos);
         idx.save_dir(dirSh); idx.destroy();
     }
     {
-        gpu_ivf_flat_t<float> idx(scount, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_SHARDED);
+        gpu_ivf_flat_t<float, float> idx(scount, dim, DistanceType_L2Expanded, bp, sim2, 2, DistributionMode_SHARDED);
         idx.start(); idx.load_dir(dirSh, DistributionMode_SHARDED);
         ASSERT_TRUE(idx.info().find("\"ranks\": 2") != std::string::npos);
         probe(idx, sds, {3, 40, 63}); idx.destroy();
@@ -563,7 +563,7 @@ TEST(GpuIvfFlatTest, ExtendWithoutHostIds) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 10;
-    gpu_ivf_flat_t<float> index(dataset.data(), n_base, dimension,
+    gpu_ivf_flat_t<float, float> index(dataset.data(), n_base, dimension,
                                 DistanceType_L2Expanded, bp, devices, 1,
                                 DistributionMode_SINGLE_GPU);
     index.start();
@@ -611,7 +611,7 @@ TEST(GpuIvfFlatTest, ExtendWithHostIds) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 10;
-    gpu_ivf_flat_t<float> index(dataset.data(), n_base, dimension,
+    gpu_ivf_flat_t<float, float> index(dataset.data(), n_base, dimension,
                                 DistanceType_L2Expanded, bp, devices, 1,
                                 DistributionMode_SINGLE_GPU, base_ids.data());
     index.start();
@@ -664,7 +664,7 @@ TEST(GpuIvfFlatTest, ExtendReplicatedWithHostIds) {
 
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 10;
-    gpu_ivf_flat_t<float> index(dataset.data(), n_base, dimension,
+    gpu_ivf_flat_t<float, float> index(dataset.data(), n_base, dimension,
                                 DistanceType_L2Expanded, bp, devices, 1,
                                 DistributionMode_REPLICATED, base_ids.data());
     index.start();
@@ -712,7 +712,7 @@ TEST(GpuIvfFlatTest, ExtendShardedWithHostIds) {
 
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 10;
-    gpu_ivf_flat_t<float> index(dataset.data(), n_base, dimension,
+    gpu_ivf_flat_t<float, float> index(dataset.data(), n_base, dimension,
                                 DistanceType_L2Expanded, bp, devices, 1,
                                 DistributionMode_SHARDED, base_ids.data());
     index.start();
@@ -759,7 +759,7 @@ TEST(GpuIvfFlatTest, ExtendShardedWithoutHostIds) {
 
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 10;
-    gpu_ivf_flat_t<float> index(dataset.data(), n_base, dimension,
+    gpu_ivf_flat_t<float, float> index(dataset.data(), n_base, dimension,
                                 DistanceType_L2Expanded, bp, devices, 1,
                                 DistributionMode_SHARDED, nullptr);
     index.start();
@@ -802,7 +802,7 @@ TEST(GpuIvfFlatTest, ManualShardedGetCenters) {
 
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 50;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.start();
     index.build();
 
@@ -833,7 +833,7 @@ TEST(GpuIvfFlatTest, FilteredSearchIncludesOnlyAllowedCategories) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 4;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension,
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension,
                                 DistanceType_L2Expanded, bp, devices, 1,
                                 DistributionMode_SINGLE_GPU);
     index.start();
@@ -880,7 +880,7 @@ TEST(GpuIvfFlatTest, FilteredSearchCombinesWithDeleteBitset) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 4;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension,
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension,
                                 DistanceType_L2Expanded, bp, devices, 1,
                                 DistributionMode_SINGLE_GPU);
     index.start();
@@ -920,7 +920,7 @@ TEST(GpuIvfFlatTest, FilteredSearchEmptyPredsMatchesUnfiltered) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 4;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension,
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension,
                                 DistanceType_L2Expanded, bp, devices, 1,
                                 DistributionMode_SINGLE_GPU);
     index.start();
@@ -956,7 +956,7 @@ TEST(GpuIvfFlatTest, KExceedsIndexSizeClampsAndPads) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 2;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
                                 bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
     index.build();
@@ -1004,7 +1004,7 @@ TEST(GpuIvfFlatTest, MultiQueryKExceedsIndexSize) {
     std::vector<int> devices = {0};
     ivf_flat_build_params_t bp = ivf_flat_build_params_default();
     bp.n_lists = 2;
-    gpu_ivf_flat_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
+    gpu_ivf_flat_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
                                 bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
     index.build();

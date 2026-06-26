@@ -27,19 +27,19 @@ import (
 )
 
 // IvfpqSearch implements cache.VectorIndexSearchIf for GPU IVF-PQ indexes.
-type IvfpqSearch[T cuvs.VectorType] struct {
+type IvfpqSearch[B, Q cuvs.VectorType] struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
-	Indexes       []*IvfpqModel[T]
-	MultiIndex    *cuvs.MultiGpuIvfPq[T]
-	Overflow      *cuvs.GpuBruteForce[T] // CDC insert overflow; nil when no overflow records exist
+	Indexes       []*IvfpqModel[B, Q]
+	MultiIndex    *cuvs.MultiGpuIvfPq[B, Q]
+	Overflow      cuvs.BruteForceOverflow[B] // CDC insert overflow; nil when no overflow records exist
 	Devices       []int
 	ThreadsSearch int64
 }
 
-func NewIvfpqSearch[T cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, devices []int) *IvfpqSearch[T] {
+func NewIvfpqSearch[B, Q cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, devices []int) *IvfpqSearch[B, Q] {
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
-	return &IvfpqSearch[T]{
+	return &IvfpqSearch[B, Q]{
 		Idxcfg:        idxcfg,
 		Tblcfg:        tblcfg,
 		Devices:       devices,
@@ -48,12 +48,7 @@ func NewIvfpqSearch[T cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg ve
 }
 
 // Search implements cache.VectorIndexSearchIf.
-func (s *IvfpqSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	query, ok := anyquery.([]float32)
-	if !ok {
-		return nil, nil, moerr.NewInternalErrorNoCtx("IvfpqSearch: query type mismatch")
-	}
-
+func (s *IvfpqSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	limit := rt.Limit
 
 	if s.MultiIndex == nil {
@@ -77,10 +72,18 @@ func (s *IvfpqSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 		neighbors64 []int64
 		dists32     []float32
 	)
+	// Any base (f32 or vecf16) routes its native base-typed (B) query through the
+	// const-B* search_quantize path — cuVS converts B to storage Q on device (B==Q
+	// copy for a direct index, learned/cast quantizer for a compressed one). The
+	// query asserts to []B for both float32 (B==float) and Float16 (B==half) base.
+	qB, ok := anyquery.([]B)
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("IvfpqSearch: query type mismatch")
+	}
 	if rt.FilterJSON != "" {
-		neighbors64, dists32, err = s.MultiIndex.SearchFloat32WithFilter(query, 1, dim, uint32(limit), sp, rt.FilterJSON)
+		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithFilter(qB, 1, dim, uint32(limit), sp, rt.FilterJSON)
 	} else {
-		neighbors64, dists32, err = s.MultiIndex.SearchFloat32(query, 1, dim, uint32(limit), sp)
+		neighbors64, dists32, err = s.MultiIndex.SearchQuantize(qB, 1, dim, uint32(limit), sp)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -104,7 +107,7 @@ func (s *IvfpqSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 }
 
 // SearchFloat32 implements cache.VectorIndexSearchIf.
-func (s *IvfpqSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+func (s *IvfpqSearch[B, Q]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	keys, dists, err := s.Search(proc, query, rt)
 	if err != nil {
 		return err
@@ -124,8 +127,8 @@ func (s *IvfpqSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt v
 }
 
 // Load implements cache.VectorIndexSearchIf.
-func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
-	indexes, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
+	indexes, err := LoadMetadata[B, Q](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
@@ -158,7 +161,7 @@ func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 // loadCdcTail mirrors cagra.CagraSearch.loadCdcTail — see that for the
 // architectural commentary. Differs only in the IndexConfig type slot and
 // the GpuIvfPq element type.
-func (s *IvfpqSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
+func (s *IvfpqSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	var (
 		includeBytesPerRow int
 		colMetaJSON        string
@@ -175,7 +178,7 @@ func (s *IvfpqSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 
-	stub := &IvfpqModel[T]{Id: vectorindex.CdcTailId}
+	stub := &IvfpqModel[B, Q]{Id: vectorindex.CdcTailId}
 	chunks, err := stub.loadCdcEventsFromDB(sqlproc, s.Tblcfg)
 	if err != nil {
 		return err
@@ -199,7 +202,7 @@ func (s *IvfpqSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	}
 
 	dim := int(s.Idxcfg.CuvsIvfpq.Dimensions)
-	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(chunks, dim, includeBytesPerRow)
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks[B](chunks, dim, includeBytesPerRow)
 	if err != nil {
 		return err
 	}
@@ -215,7 +218,7 @@ func (s *IvfpqSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 
-	s.Indexes = append(s.Indexes, &IvfpqModel[T]{
+	s.Indexes = append(s.Indexes, &IvfpqModel[B, Q]{
 		Id:                   vectorindex.CdcTailId,
 		DeletedPkids:         delPkids,
 		OverflowPkids:        ovPkids,
@@ -228,8 +231,8 @@ func (s *IvfpqSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 }
 
 // addOverflowFilterChunks — see cagra/search_gpu.go for docs.
-func addOverflowFilterChunks[T cuvs.VectorType](
-	bf *cuvs.GpuBruteForce[T],
+func addOverflowFilterChunks[B, OB cuvs.VectorType](
+	bf *cuvs.GpuBruteForce[B, OB],
 	colMetaJSON string,
 	includeBytes []byte,
 	nrows uint64,
@@ -251,7 +254,7 @@ func addOverflowFilterChunks[T cuvs.VectorType](
 // loaded model's CDC insert overflow. When the underlying index has INCLUDE
 // columns, the brute-force is set up with the matching FilterStore so a
 // filtered query can prefilter overflow rows.
-func (s *IvfpqSearch[T]) buildOverflow() error {
+func (s *IvfpqSearch[B, Q]) buildOverflow() error {
 	total := uint64(0)
 	for _, m := range s.Indexes {
 		total += uint64(len(m.OverflowPkids))
@@ -272,25 +275,46 @@ func (s *IvfpqSearch[T]) buildOverflow() error {
 		device = s.Devices[0]
 	}
 
-	bf, err := cuvs.NewGpuBruteForceEmpty[T](
-		total, dim, cuvsMetric, uint32(s.ThreadsSearch), device)
+	// cuVS brute force can only store float/half. Pick the overflow storage type
+	// OB from the index storage Q: keep Q when float/half, else fall back to base
+	// B (which is always float/half). The type-erased BruteForceOverflow[B] holds
+	// either concrete *GpuBruteForce[B, OB].
+	var (
+		ov  cuvs.BruteForceOverflow[B]
+		err error
+	)
+	switch cuvs.GetQuantization[Q]() {
+	case cuvs.F32, cuvs.F16:
+		ov, err = buildOverflowBF[B, Q](s.Indexes, total, dim, cuvsMetric, device, uint32(s.ThreadsSearch))
+	default: // INT8/UINT8: brute force can't store these → store base B.
+		ov, err = buildOverflowBF[B, B](s.Indexes, total, dim, cuvsMetric, device, uint32(s.ThreadsSearch))
+	}
 	if err != nil {
 		return err
 	}
+	s.Overflow = ov
+	return nil
+}
+
+// buildOverflowBF — see cagra/search_gpu.go.
+func buildOverflowBF[B, OB cuvs.VectorType, Q cuvs.VectorType](
+	indexes []*IvfpqModel[B, Q],
+	total uint64, dim uint32, cuvsMetric cuvs.DistanceType, device int, threads uint32,
+) (cuvs.BruteForceOverflow[B], error) {
+	bf, err := cuvs.NewGpuBruteForceEmpty[B, OB](total, dim, cuvsMetric, threads, device)
+	if err != nil {
+		return nil, err
+	}
 	if err = bf.Start(); err != nil {
 		bf.Destroy()
-		return err
+		return nil, err
 	}
 
-	// INCLUDE-column wiring — pull the col-meta JSON from the first loaded
-	// model (every shard agrees by construction). For small-data-only
-	// indexes (no tag=0 sub-index ever built) the synthetic CDC-tail model
-	// carries the colMetaJSON recovered from the CdcOpHeader record.
 	var (
 		colMetaJSON        string
 		includeBytesPerRow int
 	)
-	for _, m := range s.Indexes {
+	for _, m := range indexes {
 		if m.Index != nil {
 			colMetaJSON = m.Index.GetFilterColMetaJSON()
 			includeBytesPerRow = m.IncludeBytesPerRow
@@ -298,7 +322,7 @@ func (s *IvfpqSearch[T]) buildOverflow() error {
 		}
 	}
 	if colMetaJSON == "" {
-		for _, m := range s.Indexes {
+		for _, m := range indexes {
 			if m.OverflowColMetaJSON != "" {
 				colMetaJSON = m.OverflowColMetaJSON
 				includeBytesPerRow = m.IncludeBytesPerRow
@@ -309,32 +333,33 @@ func (s *IvfpqSearch[T]) buildOverflow() error {
 	if colMetaJSON != "" && includeBytesPerRow > 0 {
 		if err = bf.SetFilterColumns(colMetaJSON, total); err != nil {
 			bf.Destroy()
-			return err
+			return nil, err
 		}
 	}
 
-	for _, m := range s.Indexes {
+	for _, m := range indexes {
 		if len(m.OverflowPkids) == 0 {
 			continue
 		}
 		count := uint64(len(m.OverflowPkids))
-		if err = bf.AddChunkFloat(m.OverflowVecs, count, m.OverflowPkids); err != nil {
+		// Base-typed (B) overflow vectors; AddChunkQuantize converts B -> Q storage
+		// on the C++ side (native store when B==Q, f32->f16 cast otherwise).
+		if err = bf.AddChunkQuantize(m.OverflowVecs, count, m.OverflowPkids); err != nil {
 			bf.Destroy()
-			return err
+			return nil, err
 		}
 		if colMetaJSON != "" && includeBytesPerRow > 0 {
 			if err = addOverflowFilterChunks(bf, colMetaJSON, m.OverflowIncludeBytes, count, includeBytesPerRow); err != nil {
 				bf.Destroy()
-				return err
+				return nil, err
 			}
 		}
 	}
 	if err = bf.Build(); err != nil {
 		bf.Destroy()
-		return err
+		return nil, err
 	}
-	s.Overflow = bf
-	return nil
+	return bf, nil
 }
 
 // buildMultiIndex assembles a MultiGpuIvfPq from the loaded indexes.
@@ -344,14 +369,14 @@ func (s *IvfpqSearch[T]) buildOverflow() error {
 // s.MultiIndex == nil — that's the load-bearing path for "no main
 // index + no brute-force → empty result". Any future regression here
 // will fail TestIvfpqSearchEmpty.
-func (s *IvfpqSearch[T]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[T], error) {
+func (s *IvfpqSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[B, Q], error) {
 	cuvsMetric, ok := metric.MetricTypeToCuvsMetric[metric.MetricType(s.Idxcfg.CuvsIvfpq.Metric)]
 	if !ok {
 		// Unsupported metric is a real error — surface it rather than returning a
 		// nil index, which Search would treat as an (empty) success.
 		return nil, moerr.NewInternalErrorNoCtxf("IvfpqSearch: unsupported metric type %v", s.Idxcfg.CuvsIvfpq.Metric)
 	}
-	gpuIndices := make([]*cuvs.GpuIvfPq[T], 0, len(s.Indexes))
+	gpuIndices := make([]*cuvs.GpuIvfPq[B, Q], 0, len(s.Indexes))
 	for _, model := range s.Indexes {
 		if model.Index != nil {
 			gpuIndices = append(gpuIndices, model.Index)
@@ -367,7 +392,7 @@ func (s *IvfpqSearch[T]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[T], error) {
 }
 
 // loadIndexes loads each model's index data from the database.
-func (s *IvfpqSearch[T]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[T]) ([]*IvfpqModel[T], error) {
+func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[B, Q]) ([]*IvfpqModel[B, Q], error) {
 	for _, idx := range indexes {
 		idx.Devices = s.Devices
 		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
@@ -381,7 +406,7 @@ func (s *IvfpqSearch[T]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*Ivf
 }
 
 // Destroy implements cache.VectorIndexSearchIf.
-func (s *IvfpqSearch[T]) Destroy() {
+func (s *IvfpqSearch[B, Q]) Destroy() {
 	s.MultiIndex = nil
 	if s.Overflow != nil {
 		s.Overflow.Destroy()
@@ -394,6 +419,6 @@ func (s *IvfpqSearch[T]) Destroy() {
 }
 
 // UpdateConfig implements cache.VectorIndexSearchIf.
-func (s *IvfpqSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
+func (s *IvfpqSearch[B, Q]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }

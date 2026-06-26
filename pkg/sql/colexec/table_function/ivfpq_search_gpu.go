@@ -61,15 +61,28 @@ func newIvfpqAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTabl
 	// test-only: mirror the build-side device simulation so search loads the same
 	// SHARDED / REPLICATED topology. No-op when gpu_multi_simulation < 2.
 	devices = vectorindex.SimulateDevices(devices, tblcfg.GpuMultiSimulation)
-	switch metric.QuantizationType(idxcfg.CuvsIvfpq.Quantization) {
+	// Dispatch on (base type B, storage type Q): the main indices store Q (the
+	// quantization), the CDC/overflow brute force is the base type B (f32/f16).
+	q := metric.QuantizationType(idxcfg.CuvsIvfpq.Quantization)
+	if types.T(tblcfg.KeyPartType) == types.T_array_float16 {
+		switch q {
+		case metric.Quantization_INT8:
+			return ivfpqPkg.NewIvfpqSearch[cuvs.Float16, int8](idxcfg, tblcfg, devices)
+		case metric.Quantization_UINT8:
+			return ivfpqPkg.NewIvfpqSearch[cuvs.Float16, uint8](idxcfg, tblcfg, devices)
+		default: // F16 (direct)
+			return ivfpqPkg.NewIvfpqSearch[cuvs.Float16, cuvs.Float16](idxcfg, tblcfg, devices)
+		}
+	}
+	switch q {
 	case metric.Quantization_F16:
-		return ivfpqPkg.NewIvfpqSearch[cuvs.Float16](idxcfg, tblcfg, devices)
+		return ivfpqPkg.NewIvfpqSearch[float32, cuvs.Float16](idxcfg, tblcfg, devices)
 	case metric.Quantization_INT8:
-		return ivfpqPkg.NewIvfpqSearch[int8](idxcfg, tblcfg, devices)
+		return ivfpqPkg.NewIvfpqSearch[float32, int8](idxcfg, tblcfg, devices)
 	case metric.Quantization_UINT8:
-		return ivfpqPkg.NewIvfpqSearch[uint8](idxcfg, tblcfg, devices)
+		return ivfpqPkg.NewIvfpqSearch[float32, uint8](idxcfg, tblcfg, devices)
 	default:
-		return ivfpqPkg.NewIvfpqSearch[float32](idxcfg, tblcfg, devices)
+		return ivfpqPkg.NewIvfpqSearch[float32, float32](idxcfg, tblcfg, devices)
 	}
 }
 
@@ -219,6 +232,24 @@ func (u *ivfpqSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 		u.idxcfg.CuvsIvfpq.Dimensions = uint(faVec.GetType().Width)
 		u.idxcfg.Type = vectorindex.IVFPQ
 
+		// The query vector type must equal the index's base column type. The
+		// planner pushdown normally forces this, but the table function has no
+		// other guard: without it a mismatched query (e.g. a vecf16 query against
+		// an f32-base/f32-storage index) would drive the f32->f16 storage override
+		// below off the QUERY type and deserialize the on-disk index with the wrong
+		// storage type. Mirrors the CPU ivf_search guard.
+		if int32(faVec.GetType().Oid) != u.tblcfg.KeyPartType {
+			return moerr.NewInvalidInput(proc.Ctx, "query vector type does not match the index base column type")
+		}
+
+		// A vecf16 base with no QUANTIZATION stores natively as half: derive the
+		// storage qtype from the (f16) base type so newIvfpqAlgo dispatches
+		// NewIvfpqSearch[cuvs.Float16]. (vecf16 + QUANTIZATION keeps int8/uint8.)
+		if types.T(u.tblcfg.KeyPartType) == types.T_array_float16 &&
+			metric.QuantizationType(u.idxcfg.CuvsIvfpq.Quantization) == metric.Quantization_F32 {
+			u.idxcfg.CuvsIvfpq.Quantization = uint16(metric.Quantization_F16)
+		}
+
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -247,6 +278,13 @@ func (u *ivfpqSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 
 	veccache.Cache.Once()
 
+	// A vecf16 query is decoded natively to half. IvfpqSearch.Search dispatches:
+	// f16-direct (T==Float16) searches the half index natively; a quantized
+	// f16->int8/uint8 index quantizes the half query to T via the half quantizer.
+	if faVec.GetType().Oid == types.T_array_float16 {
+		return runIvfpqSearchHalf(proc, u, faVec, nthRow)
+	}
+
 	return runIvfpqSearch[float32](proc, u, faVec, nthRow)
 }
 
@@ -255,7 +293,21 @@ func runIvfpqSearch[T types.RealNumbers](proc *process.Process, u *ivfpqSearchSt
 	if uint(len(fa)) != u.idxcfg.CuvsIvfpq.Dimensions {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.CuvsIvfpq.Dimensions, len(fa)))
 	}
+	return ivfpqRunSearchQuery(proc, u, fa)
+}
 
+// runIvfpqSearchHalf decodes a vecf16 query natively to []cuvs.Float16 (no f32
+// detour) for a half-storage index. IvfpqSearch.Search dispatches the native
+// half path; a filtered query is half-cast to f32 there (exact).
+func runIvfpqSearchHalf(proc *process.Process, u *ivfpqSearchState, faVec *vector.Vector, nthRow int) (err error) {
+	h := types.BytesToArray[types.Float16](faVec.GetBytesAt(nthRow))
+	if uint(len(h)) != u.idxcfg.CuvsIvfpq.Dimensions {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.CuvsIvfpq.Dimensions, len(h)))
+	}
+	return ivfpqRunSearchQuery(proc, u, f16ToCuvs(h))
+}
+
+func ivfpqRunSearchQuery(proc *process.Process, u *ivfpqSearchState, fa any) (err error) {
 	algo := newIvfpqAlgo(u.idxcfg, u.tblcfg)
 
 	rt := vectorindex.RuntimeConfig{
