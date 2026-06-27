@@ -1,0 +1,21 @@
+drop database if exists load_string_width;
+create database load_string_width;
+use load_string_width;
+drop table if exists t_width;
+create table t_width(c1 varchar(3), c2 char(3));
+load data infile '$resources/load_data/test_string_width_over.csv' into table t_width fields terminated by ',';
+internal error: Data too long for column 'c1' at row 1
+select count(*) from t_width;
+count(*)
+0
+load data infile '$resources/load_data/test_string_width_over.csv' into table t_width fields terminated by ',' parallel 'true';
+internal error: Data too long for column 'c1' at row 1
+select count(*) from t_width;
+count(*)
+0
+load data infile '$resources/load_data/test_string_width_fit.csv' into table t_width fields terminated by ',';
+select * from t_width;
+c1	c2
+abc	abc
+drop table t_width;
+drop database load_string_width;

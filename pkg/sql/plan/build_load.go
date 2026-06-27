@@ -553,7 +553,9 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 			Expr: expr,
 		}
 
-		planExpr, _ = makePlan2CastExpr(stmt.Param.Ctx, planExpr, typ)
+		// Loading into a real CHAR/VARCHAR column is an assignment: use the
+		// strict cast so an over-width value is rejected, not truncated.
+		planExpr, _ = makePlan2AssignmentCastExpr(stmt.Param.Ctx, planExpr, typ)
 		ret = append(ret, planExpr)
 	}
 
