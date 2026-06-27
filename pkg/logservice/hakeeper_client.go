@@ -813,6 +813,60 @@ func (c *managedHAKeeperClient) UpdateNonVotingLocality(
 	}
 }
 
+func (c *managedHAKeeperClient) RepairLogShard(
+	ctx context.Context, repair pb.RepairLogShard,
+) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			if c.isRetryableError(err) {
+				if err := c.waitRetry(ctx); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		err := c.getClient().repairLogShard(ctx, repair)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			if err := c.waitRetry(ctx); err != nil {
+				return err
+			}
+			continue
+		}
+		return err
+	}
+}
+
+func (c *managedHAKeeperClient) UnblockLogShardStores(
+	ctx context.Context, unblock pb.UnblockLogShardStores,
+) error {
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			if c.isRetryableError(err) {
+				if err := c.waitRetry(ctx); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		err := c.getClient().unblockLogShardStores(ctx, unblock)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			if err := c.waitRetry(ctx); err != nil {
+				return err
+			}
+			continue
+		}
+		return err
+	}
+}
+
 func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 	return errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
@@ -1215,6 +1269,34 @@ func (c *hakeeperClient) updateNonVotingLocality(
 	req := pb.Request{
 		Method:            pb.UPDATE_NON_VOTING_LOCALITY,
 		NonVotingLocality: &locality,
+	}
+	_, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *hakeeperClient) repairLogShard(
+	ctx context.Context, repair pb.RepairLogShard,
+) error {
+	req := pb.Request{
+		Method:         pb.REPAIR_LOG_SHARD,
+		RepairLogShard: &repair,
+	}
+	_, err := c.request(ctx, req)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *hakeeperClient) unblockLogShardStores(
+	ctx context.Context, unblock pb.UnblockLogShardStores,
+) error {
+	req := pb.Request{
+		Method:                pb.UNBLOCK_LOG_SHARD_STORES,
+		UnblockLogShardStores: &unblock,
 	}
 	_, err := c.request(ctx, req)
 	if err != nil {

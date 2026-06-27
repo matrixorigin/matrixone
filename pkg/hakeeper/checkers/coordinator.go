@@ -77,13 +77,18 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 
 	c.OperatorController.RemoveFinishedOperator(logState, tnState, cnState, proxyState)
 
+	if c.teardown && len(state.LogShardRepairs) > 0 {
+		c.teardown = false
+		c.teardownOps = nil
+	}
+
 	// if we've discovered unhealthy already, no need to keep alive anymore.
 	if c.teardown {
 		return c.OperatorController.Dispatch(c.teardownOps, logState, tnState, cnState, proxyState)
 	}
 
 	// check whether system health or not.
-	if operators, health := syshealth.Check(c.cfg, cluster, tnState, logState, currentTick); !health {
+	if operators, health := syshealth.Check(c.cfg, cluster, tnState, logState, currentTick, state.LogShardRepairs); !health {
 		c.teardown = true
 		c.teardownOps = operators
 		return c.OperatorController.Dispatch(c.teardownOps, logState, tnState, cnState, proxyState)
@@ -111,6 +116,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 			executingNonVoting,
 			state.NonVotingReplicaNum,
 			state.NonVotingLocality,
+			state.LogShardRepairs,
 			standbyEnabled,
 		),
 		tnservice.NewTNServiceChecker(commonFields, tnState),
@@ -120,5 +126,56 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 	for _, checker := range checkers {
 		operators = append(operators, checker.Check()...)
 	}
-	return c.OperatorController.Dispatch(operators, logState, tnState, cnState, proxyState)
+	commands := c.OperatorController.Dispatch(operators, logState, tnState, cnState, proxyState)
+	return filterBlockedLogShardCommands(commands, state.LogShardRepairs)
+}
+
+func filterBlockedLogShardCommands(
+	commands []pb.ScheduleCommand,
+	repairs map[uint64]pb.LogShardRepairState,
+) []pb.ScheduleCommand {
+	if len(repairs) == 0 {
+		return commands
+	}
+	filtered := commands[:0]
+	for _, command := range commands {
+		if isBlockedLogShardCommand(command, repairs) {
+			continue
+		}
+		filtered = append(filtered, command)
+	}
+	return filtered
+}
+
+func isBlockedLogShardCommand(
+	command pb.ScheduleCommand,
+	repairs map[uint64]pb.LogShardRepairState,
+) bool {
+	if command.ServiceType != pb.LogService {
+		return false
+	}
+	if command.ConfigChange != nil {
+		replica := command.ConfigChange.Replica
+		return isBlockedLogShardStore(repairs, replica.UUID, replica.ShardID) ||
+			isBlockedLogShardStore(repairs, command.UUID, replica.ShardID)
+	}
+	if command.BootstrapShard != nil {
+		return isBlockedLogShardStore(repairs, command.UUID, command.BootstrapShard.ShardID)
+	}
+	return false
+}
+
+func isBlockedLogShardStore(
+	repairs map[uint64]pb.LogShardRepairState,
+	uuid string,
+	shardID uint64,
+) bool {
+	if len(repairs) == 0 {
+		return false
+	}
+	repair, ok := repairs[shardID]
+	if !ok {
+		return false
+	}
+	return repair.BlockedStores[uuid]
 }

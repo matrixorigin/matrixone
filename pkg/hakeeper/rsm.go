@@ -238,6 +238,30 @@ func parseLogShardUpdateCmd(cmd []byte) pb.AddLogShard {
 	return addLogShard
 }
 
+func parseRepairLogShardCmd(cmd []byte) pb.RepairLogShard {
+	if parseCmdTag(cmd) != pb.RepairLogShardUpdate {
+		panic("not a RepairLogShardUpdate cmd")
+	}
+	payload := cmd[headerSize:]
+	var repair pb.RepairLogShard
+	if err := repair.Unmarshal(payload); err != nil {
+		panic(err)
+	}
+	return repair
+}
+
+func parseUnblockLogShardStoresCmd(cmd []byte) pb.UnblockLogShardStores {
+	if parseCmdTag(cmd) != pb.UnblockLogShardStoresUpdate {
+		panic("not a UnblockLogShardStoresUpdate cmd")
+	}
+	payload := cmd[headerSize:]
+	var unblock pb.UnblockLogShardStores
+	if err := unblock.Unmarshal(payload); err != nil {
+		panic(err)
+	}
+	return unblock
+}
+
 func GetSetStateCmd(state pb.HAKeeperState) []byte {
 	cmd := make([]byte, headerSize+4)
 	binaryEnc.PutUint32(cmd, uint32(pb.SetStateUpdate))
@@ -360,6 +384,24 @@ func GetAddLogShardCmd(addLogShard pb.AddLogShard) []byte {
 	return cmd
 }
 
+func GetRepairLogShardCmd(repair pb.RepairLogShard) []byte {
+	cmd := make([]byte, headerSize+repair.ProtoSize())
+	binaryEnc.PutUint32(cmd, uint32(pb.RepairLogShardUpdate))
+	if _, err := repair.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GetUnblockLogShardStoresCmd(unblock pb.UnblockLogShardStores) []byte {
+	cmd := make([]byte, headerSize+unblock.ProtoSize())
+	binaryEnc.PutUint32(cmd, uint32(pb.UnblockLogShardStoresUpdate))
+	if _, err := unblock.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
 func NewStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 	if shardID != DefaultHAKeeperShardID {
 		panic(moerr.NewInvalidInputNoCtxf("HAKeeper shard ID %d does not match DefaultHAKeeperShardID %d", shardID, DefaultHAKeeperShardID))
@@ -473,8 +515,32 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	hb = s.filterBlockedLogHeartbeat(hb)
 	s.state.LogState.Update(hb, s.state.Tick)
 	return s.getCommandBatch(hb.UUID)
+}
+
+func (s *stateMachine) filterBlockedLogHeartbeat(hb pb.LogStoreHeartbeat) pb.LogStoreHeartbeat {
+	if len(s.state.LogShardRepairs) == 0 || len(hb.Replicas) == 0 {
+		return hb
+	}
+	filtered := hb
+	filtered.Replicas = filtered.Replicas[:0]
+	for _, replica := range hb.Replicas {
+		if s.isBlockedLogReplica(hb.UUID, replica.ShardID) {
+			continue
+		}
+		filtered.Replicas = append(filtered.Replicas, replica)
+	}
+	return filtered
+}
+
+func (s *stateMachine) isBlockedLogReplica(uuid string, shardID uint64) bool {
+	repair, ok := s.state.LogShardRepairs[shardID]
+	if !ok {
+		return false
+	}
+	return repair.BlockedStores[uuid]
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
@@ -670,6 +736,182 @@ func (s *stateMachine) handleLogShardUpdate(cmd []byte) sm.Result {
 	return sm.Result{}
 }
 
+func repairErrorResult(format string, args ...any) sm.Result {
+	return sm.Result{
+		Value: 1,
+		Data:  []byte(fmt.Sprintf(format, args...)),
+	}
+}
+
+func (s *stateMachine) expectedLogShardReplicas(shardID uint64) (uint64, bool) {
+	for _, rec := range s.state.ClusterInfo.LogShards {
+		if rec.ShardID == shardID {
+			return rec.NumberOfReplicas, true
+		}
+	}
+	return 0, false
+}
+
+func (s *stateMachine) handleRepairLogShardUpdate(cmd []byte) sm.Result {
+	repair := parseRepairLogShardCmd(cmd)
+	shardID := repair.Shard.ShardID
+	recorded, ok := s.state.LogState.Shards[shardID]
+	if !ok {
+		return repairErrorResult("log shard %d does not exist", shardID)
+	}
+	if repair.Shard.Epoch < recorded.Epoch && !repair.Force {
+		return repairErrorResult(
+			"repair shard %d epoch %d is smaller than current epoch %d",
+			shardID,
+			repair.Shard.Epoch,
+			recorded.Epoch,
+		)
+	}
+	if numOfReplicas, ok := s.expectedLogShardReplicas(shardID); ok &&
+		uint64(len(repair.Shard.Replicas)) > numOfReplicas {
+		return repairErrorResult(
+			"repair shard %d replica count %d exceeds expected count %d",
+			shardID,
+			len(repair.Shard.Replicas),
+			numOfReplicas,
+		)
+	}
+	for _, uuid := range repair.BlockedStores {
+		if _, ok := s.state.LogState.Stores[uuid]; !ok && !repair.Force {
+			return repairErrorResult("blocked log store %s is unknown", uuid)
+		}
+	}
+	if repair.Shard.Replicas == nil {
+		repair.Shard.Replicas = make(map[uint64]string)
+	}
+	if repair.Shard.NonVotingReplicas == nil {
+		repair.Shard.NonVotingReplicas = make(map[uint64]string)
+	}
+	if repair.Shard.LeaderID == 0 {
+		repair.Shard.LeaderID = recorded.LeaderID
+	}
+	if repair.Shard.Term == 0 {
+		repair.Shard.Term = recorded.Term
+	}
+	s.state.LogState.Shards[shardID] = repair.Shard
+	if s.state.LogShardRepairs == nil {
+		s.state.LogShardRepairs = make(map[uint64]pb.LogShardRepairState)
+	}
+	blockedStores := make(map[string]bool)
+	if existing, ok := s.state.LogShardRepairs[shardID]; ok {
+		for uuid, blocked := range existing.BlockedStores {
+			blockedStores[uuid] = blocked
+		}
+	}
+	for _, uuid := range repair.BlockedStores {
+		blockedStores[uuid] = true
+	}
+	state := s.state.LogShardRepairs[shardID]
+	if state.CreatedTick == 0 {
+		state.CreatedTick = s.state.Tick
+	}
+	state.UpdatedTick = s.state.Tick
+	state.Shard = repair.Shard
+	state.BlockedStores = blockedStores
+	state.Reason = repair.Reason
+	s.state.LogShardRepairs[shardID] = state
+	s.clearLogShardRepairCommands(repair.Shard.ShardID, repair.Shard, blockedStores)
+	return sm.Result{}
+}
+
+func (s *stateMachine) clearLogShardRepairCommands(
+	shardID uint64,
+	shard pb.LogShardInfo,
+	blockedStores map[string]bool,
+) {
+	logStores := make(map[string]struct{})
+	for _, uuid := range shard.Replicas {
+		logStores[uuid] = struct{}{}
+	}
+	for _, uuid := range shard.NonVotingReplicas {
+		logStores[uuid] = struct{}{}
+	}
+	for uuid := range blockedStores {
+		logStores[uuid] = struct{}{}
+	}
+	for uuid, batch := range s.state.ScheduleCommands {
+		commands := batch.Commands[:0]
+		for _, command := range batch.Commands {
+			if shouldClearLogShardRepairCommand(uuid, command, shardID, logStores) {
+				continue
+			}
+			commands = append(commands, command)
+		}
+		if len(commands) == 0 {
+			delete(s.state.ScheduleCommands, uuid)
+			continue
+		}
+		batch.Commands = commands
+		s.state.ScheduleCommands[uuid] = batch
+	}
+}
+
+func shouldClearLogShardRepairCommand(
+	batchUUID string,
+	command pb.ScheduleCommand,
+	shardID uint64,
+	logStores map[string]struct{},
+) bool {
+	if command.ServiceType != pb.LogService {
+		return false
+	}
+	if command.ConfigChange != nil {
+		replica := command.ConfigChange.Replica
+		if replica.ShardID != shardID {
+			return false
+		}
+		return containsRepairLogStore(logStores, batchUUID) ||
+			containsRepairLogStore(logStores, replica.UUID) ||
+			containsRepairLogStore(logStores, command.UUID)
+	}
+	if command.BootstrapShard != nil {
+		return command.BootstrapShard.ShardID == shardID &&
+			(containsRepairLogStore(logStores, batchUUID) ||
+				containsRepairLogStore(logStores, command.UUID))
+	}
+	if command.ShutdownStore != nil {
+		return containsRepairLogStore(logStores, batchUUID) ||
+			containsRepairLogStore(logStores, command.UUID) ||
+			containsRepairLogStore(logStores, command.ShutdownStore.StoreID)
+	}
+	return false
+}
+
+func containsRepairLogStore(logStores map[string]struct{}, uuid string) bool {
+	_, ok := logStores[uuid]
+	return ok
+}
+
+func (s *stateMachine) handleUnblockLogShardStoresUpdate(cmd []byte) sm.Result {
+	unblock := parseUnblockLogShardStoresCmd(cmd)
+	repair, ok := s.state.LogShardRepairs[unblock.ShardID]
+	if !ok {
+		return sm.Result{}
+	}
+	if len(unblock.Stores) == 0 {
+		delete(s.state.LogShardRepairs, unblock.ShardID)
+		return sm.Result{}
+	}
+	for _, uuid := range unblock.Stores {
+		delete(repair.BlockedStores, uuid)
+	}
+	if len(repair.BlockedStores) == 0 {
+		delete(s.state.LogShardRepairs, unblock.ShardID)
+		return sm.Result{}
+	}
+	repair.UpdatedTick = s.state.Tick
+	if unblock.Reason != "" {
+		repair.Reason = unblock.Reason
+	}
+	s.state.LogShardRepairs[unblock.ShardID] = repair
+	return sm.Result{}
+}
+
 // FIXME: NextID should be set to K8SIDRangeEnd once HAKeeper state is
 // set to HAKeeperBootstrapping.
 func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
@@ -795,6 +1037,10 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleUpdateNonVotingLocality(cmd), nil
 	case pb.LogShardUpdate:
 		return s.handleLogShardUpdate(cmd), nil
+	case pb.RepairLogShardUpdate:
+		return s.handleRepairLogShardUpdate(cmd), nil
+	case pb.UnblockLogShardStoresUpdate:
+		return s.handleUnblockLogShardStoresUpdate(cmd), nil
 	default:
 		panic(moerr.NewInvalidInputNoCtxf("unknown haKeeper cmd '%v'", cmd))
 	}
@@ -815,6 +1061,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		NextIDByKey:         s.state.NextIDByKey,
 		NonVotingReplicaNum: s.state.NonVotingReplicaNum,
 		NonVotingLocality:   s.state.NonVotingLocality,
+		LogShardRepairs:     s.state.LogShardRepairs,
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)

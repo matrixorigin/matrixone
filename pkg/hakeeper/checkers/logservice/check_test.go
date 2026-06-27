@@ -1235,6 +1235,7 @@ func TestCheck(t *testing.T) {
 			executing,
 			c.nonVotingReplicaNum,
 			pb.Locality{},
+			nil,
 			c.standbyEnabled,
 		)
 		operators := lc.Check()

@@ -1,0 +1,170 @@
+// Copyright 2021 - 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package logservice
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/lni/dragonboat/v4"
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+)
+
+const logShardRepairReasonPrefix = "__mo_log_shard_repair__:"
+
+// Repair cleanup runs before local replicas are started. Give HAKeeper enough
+// time to answer while other LogService pods are being restarted by the runbook.
+const repairStartupCleanupTimeout = 30 * time.Second
+
+type logShardRepairReason struct {
+	Reason                 string              `json:"reason,omitempty"`
+	CleanupReplicasByStore map[string][]uint64 `json:"cleanupReplicasByStore,omitempty"`
+}
+
+func decodeLogShardRepairReason(reason string) logShardRepairReason {
+	if !strings.HasPrefix(reason, logShardRepairReasonPrefix) {
+		return logShardRepairReason{Reason: reason}
+	}
+	var ret logShardRepairReason
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(reason, logShardRepairReasonPrefix)), &ret); err != nil {
+		return logShardRepairReason{Reason: reason}
+	}
+	return ret
+}
+
+func (l *store) cleanRequestedReplicasFromRepairState(ctx context.Context, shards []metadata.LogShard) error {
+	if len(shards) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, repairStartupCleanupTimeout)
+	defer cancel()
+
+	client, err := NewLogHAKeeperClient(ctx, l.cfg.UUID, l.cfg.GetHAKeeperClientConfig())
+	if err != nil {
+		l.runtime.Logger().Warn("skip repair cleanup: failed to create HAKeeper client",
+			zap.Error(err))
+		return nil
+	}
+	defer func() {
+		if err := client.Close(); err != nil {
+			l.runtime.Logger().Warn("failed to close HAKeeper client for repair cleanup",
+				zap.Error(err))
+		}
+	}()
+
+	state, err := client.GetClusterState(ctx)
+	if err != nil {
+		l.runtime.Logger().Warn("skip repair cleanup: failed to read HAKeeper state",
+			zap.Error(err))
+		return nil
+	}
+	for shardID, repair := range state.LogShardRepairs {
+		reason := decodeLogShardRepairReason(repair.Reason)
+		replicas := reason.CleanupReplicasByStore[l.cfg.UUID]
+		if len(replicas) == 0 {
+			continue
+		}
+		if !repair.BlockedStores[l.cfg.UUID] {
+			l.runtime.Logger().Warn("skip repair cleanup for unblocked store",
+				zap.Uint64("shardID", shardID),
+				zap.String("uuid", l.cfg.UUID))
+			continue
+		}
+		for _, replicaID := range replicas {
+			if err := validateRequestedRepairCleanup(repair, l.cfg.UUID, shardID, replicaID); err != nil {
+				return err
+			}
+			l.runtime.Logger().Warn("clean local log replica requested by HAKeeper repair state",
+				zap.Uint64("shardID", shardID),
+				zap.Uint64("replicaID", replicaID),
+				zap.String("uuid", l.cfg.UUID))
+			if err := l.snapshotMgr.RemoveReplica(shardID, replicaID); err != nil {
+				return err
+			}
+			if err := l.nh.RemoveData(shardID, replicaID); err != nil &&
+				!errors.Is(err, dragonboat.ErrShardNotFound) {
+				return err
+			}
+			if err := l.removeRepairReplicaResiduals(shardID, replicaID); err != nil {
+				return err
+			}
+			l.removeMetadata(shardID, replicaID)
+			if l.onReplicaChanged != nil {
+				l.onReplicaChanged(shardID, replicaID, DelReplica)
+			}
+		}
+	}
+	return nil
+}
+
+func (l *store) removeRepairReplicaResiduals(shardID uint64, replicaID uint64) error {
+	deploymentDir := fmt.Sprintf("%020d", l.cfg.DeploymentID)
+	matches, err := filepath.Glob(filepath.Join(l.cfg.DataDir, "*", deploymentDir))
+	if err != nil {
+		return err
+	}
+	for _, dir := range matches {
+		paths := []string{
+			filepath.Join(dir, "tandb", fmt.Sprintf("node-%d-%d", shardID, replicaID)),
+			filepath.Join(dir, fmt.Sprintf("snapshot-part-%d", shardID), fmt.Sprintf("snapshot-%d-%d", shardID, replicaID)),
+			filepath.Join(dir, "exported-snapshot", fmt.Sprintf("shard-%d", shardID), fmt.Sprintf("replica-%d", replicaID)),
+		}
+		for _, path := range paths {
+			if err := os.RemoveAll(path); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateRequestedRepairCleanup(
+	repair logpb.LogShardRepairState,
+	uuid string,
+	shardID uint64,
+	replicaID uint64,
+) error {
+	if !repair.BlockedStores[uuid] {
+		return moerr.NewInvalidInputNoCtxf(
+			"repair cleanup requires store %s to be blocked for shard %d",
+			uuid,
+			shardID,
+		)
+	}
+	if shardID != hakeeper.DefaultHAKeeperShardID {
+		return nil
+	}
+	if repair.Shard.Replicas[replicaID] == uuid ||
+		repair.Shard.NonVotingReplicas[replicaID] == uuid {
+		return moerr.NewInvalidInputNoCtxf(
+			"repair cleanup must not clean target HAKeeper shard %d replica %d on store %s",
+			shardID,
+			replicaID,
+			uuid,
+		)
+	}
+	return nil
+}

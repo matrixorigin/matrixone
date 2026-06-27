@@ -225,7 +225,7 @@ func TestLogShardMap(t *testing.T) {
 		},
 	}
 
-	shards := listExpiredShards(expiredStores, workingStores, logState, pb.ClusterInfo{})
+	shards := listExpiredShards(expiredStores, workingStores, logState, pb.ClusterInfo{}, nil)
 	require.Equal(t, 4, len(shards))
 
 	require.Equal(t, 2, len(shards[10].expiredReplicas))
@@ -294,7 +294,7 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		ops, healthy := Check(cfg, pb.ClusterInfo{}, tnState, logState, currTick)
+		ops, healthy := Check(cfg, pb.ClusterInfo{}, tnState, logState, currTick, nil)
 		require.True(t, healthy)
 		require.Equal(t, 0, len(ops))
 	}
@@ -345,9 +345,38 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		ops, healthy := Check(cfg, pb.ClusterInfo{}, tnState, logState, currTick)
+		ops, healthy := Check(cfg, pb.ClusterInfo{}, tnState, logState, currTick, nil)
 		require.False(t, healthy)
 		require.Equal(t, 6, len(ops))
+	}
+
+	// repair-blocked expired log replica should not trigger teardown for that shard.
+	{
+		logState := pb.LogState{
+			Stores: map[string]pb.LogStoreInfo{
+				"expired1": mockLogStoreInfo(
+					expiredTick,
+					mockLogReplicaInfo(10, 100),
+				),
+				"working1": mockLogStoreInfo(
+					currTick,
+					mockLogReplicaInfo(10, 101),
+				),
+			},
+		}
+
+		tnState := pb.TNState{Stores: map[string]pb.TNStoreInfo{}}
+		repairs := map[uint64]pb.LogShardRepairState{
+			10: {
+				BlockedStores: map[string]bool{
+					"expired1": true,
+				},
+			},
+		}
+
+		ops, healthy := Check(cfg, pb.ClusterInfo{}, tnState, logState, currTick, repairs)
+		require.True(t, healthy)
+		require.Empty(t, ops)
 	}
 }
 

@@ -135,6 +135,214 @@ func TestHandleLogHeartbeat(t *testing.T) {
 	assert.Equal(t, hb.Replicas, lsinfo.Replicas)
 }
 
+func TestHandleRepairLogShardUpdateBlocksHeartbeat(t *testing.T) {
+	tsm := NewStateMachine(0, 1).(*stateMachine)
+	tsm.state.Tick = 10
+	tsm.state.ClusterInfo.LogShards = []metadata.LogShardRecord{
+		{ShardID: 1, NumberOfReplicas: 3},
+		{ShardID: 2, NumberOfReplicas: 1},
+	}
+	tsm.state.LogState.Shards[1] = pb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{10: "log1", 20: "log2"},
+		Epoch:    5,
+	}
+	for _, uuid := range []string{"log1", "log2", "log3"} {
+		tsm.state.LogState.Stores[uuid] = pb.LogStoreInfo{}
+	}
+	repaired := pb.LogShardInfo{
+		ShardID:           1,
+		Replicas:          map[uint64]string{10: "log1", 20: "log2", 30: "log3"},
+		NonVotingReplicas: map[uint64]string{},
+		Epoch:             5,
+	}
+	result, err := tsm.Update(sm.Entry{Cmd: GetRepairLogShardCmd(pb.RepairLogShard{
+		Shard:         repaired,
+		BlockedStores: []string{"log3"},
+		Reason:        "test repair",
+	})})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), result.Value)
+	assert.Equal(t, repaired, tsm.state.LogState.Shards[1])
+	require.True(t, tsm.state.LogShardRepairs[1].BlockedStores["log3"])
+
+	hb := pb.LogStoreHeartbeat{
+		UUID: "log3",
+		Replicas: []pb.LogReplicaInfo{
+			{
+				LogShardInfo: pb.LogShardInfo{
+					ShardID:  1,
+					Replicas: map[uint64]string{10: "log1", 20: "log2"},
+					Epoch:    999,
+				},
+				ReplicaID: 30,
+			},
+			{
+				LogShardInfo: pb.LogShardInfo{
+					ShardID:  2,
+					Replicas: map[uint64]string{40: "log3"},
+					Epoch:    9,
+				},
+				ReplicaID: 40,
+			},
+		},
+	}
+	data, err := hb.Marshal()
+	require.NoError(t, err)
+	_, err = tsm.Update(sm.Entry{Cmd: GetLogStoreHeartbeatCmd(data)})
+	require.NoError(t, err)
+
+	assert.Equal(t, repaired, tsm.state.LogState.Shards[1])
+	assert.Equal(t, uint64(9), tsm.state.LogState.Shards[2].Epoch)
+	require.Len(t, tsm.state.LogState.Stores["log3"].Replicas, 1)
+	assert.Equal(t, uint64(2), tsm.state.LogState.Stores["log3"].Replicas[0].ShardID)
+}
+
+func TestHandleRepairLogShardUpdatePreservesLeaderAndTerm(t *testing.T) {
+	tsm := NewStateMachine(0, 1).(*stateMachine)
+	tsm.state.ClusterInfo.LogShards = []metadata.LogShardRecord{
+		{ShardID: 1, NumberOfReplicas: 3},
+	}
+	tsm.state.LogState.Shards[1] = pb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{10: "log1", 20: "log2"},
+		Epoch:    5,
+		LeaderID: 10,
+		Term:     4,
+	}
+	for _, uuid := range []string{"log1", "log2", "log3"} {
+		tsm.state.LogState.Stores[uuid] = pb.LogStoreInfo{}
+	}
+	result, err := tsm.Update(sm.Entry{Cmd: GetRepairLogShardCmd(pb.RepairLogShard{
+		Shard: pb.LogShardInfo{
+			ShardID:           1,
+			Replicas:          map[uint64]string{10: "log1", 20: "log2", 30: "log3"},
+			NonVotingReplicas: map[uint64]string{},
+			Epoch:             5,
+		},
+		BlockedStores: []string{"log3"},
+	})})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), result.Value)
+
+	repaired := tsm.state.LogState.Shards[1]
+	assert.Equal(t, uint64(10), repaired.LeaderID)
+	assert.Equal(t, uint64(4), repaired.Term)
+	assert.Equal(t, repaired, tsm.state.LogShardRepairs[1].Shard)
+}
+
+func TestHandleRepairLogShardUpdateOnlyClearsRelatedLogCommands(t *testing.T) {
+	tsm := NewStateMachine(0, 1).(*stateMachine)
+	tsm.state.ClusterInfo.LogShards = []metadata.LogShardRecord{
+		{ShardID: 1, NumberOfReplicas: 3},
+	}
+	tsm.state.LogState.Shards[1] = pb.LogShardInfo{
+		ShardID:  1,
+		Replicas: map[uint64]string{10: "log1", 20: "log2"},
+		Epoch:    5,
+	}
+	for _, uuid := range []string{"log1", "log2", "log3"} {
+		tsm.state.LogState.Stores[uuid] = pb.LogStoreInfo{}
+	}
+	tsm.state.ScheduleCommands = map[string]pb.CommandBatch{
+		"log3": {
+			Commands: []pb.ScheduleCommand{
+				{
+					UUID:        "log3",
+					ServiceType: pb.LogService,
+					ShutdownStore: &pb.ShutdownStore{
+						StoreID: "log3",
+					},
+				},
+			},
+		},
+		"log-other": {
+			Commands: []pb.ScheduleCommand{
+				{
+					UUID:        "log-other",
+					ServiceType: pb.LogService,
+					ShutdownStore: &pb.ShutdownStore{
+						StoreID: "log-other",
+					},
+				},
+			},
+		},
+		"log2": {
+			Commands: []pb.ScheduleCommand{
+				{
+					UUID:        "log2",
+					ServiceType: pb.LogService,
+					ConfigChange: &pb.ConfigChange{
+						Replica:    pb.Replica{UUID: "log2", ShardID: 2, ReplicaID: 99},
+						ChangeType: pb.StartReplica,
+					},
+				},
+			},
+		},
+		"tn1": {
+			Commands: []pb.ScheduleCommand{
+				{
+					UUID:        "tn1",
+					ServiceType: pb.TNService,
+					ShutdownStore: &pb.ShutdownStore{
+						StoreID: "tn1",
+					},
+				},
+			},
+		},
+	}
+
+	result, err := tsm.Update(sm.Entry{Cmd: GetRepairLogShardCmd(pb.RepairLogShard{
+		Shard: pb.LogShardInfo{
+			ShardID:           1,
+			Replicas:          map[uint64]string{10: "log1", 20: "log2", 30: "log3"},
+			NonVotingReplicas: map[uint64]string{},
+			Epoch:             5,
+		},
+		BlockedStores: []string{"log3"},
+	})})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), result.Value)
+	assert.NotContains(t, tsm.state.ScheduleCommands, "log3")
+	assert.Contains(t, tsm.state.ScheduleCommands, "log-other")
+	assert.Contains(t, tsm.state.ScheduleCommands, "log2")
+	assert.Contains(t, tsm.state.ScheduleCommands, "tn1")
+}
+
+func TestHandleUnblockLogShardStoresUpdate(t *testing.T) {
+	tsm := NewStateMachine(0, 1).(*stateMachine)
+	tsm.state.LogShardRepairs[1] = pb.LogShardRepairState{
+		Shard: pb.LogShardInfo{
+			ShardID:  1,
+			Replicas: map[uint64]string{1: "log1"},
+			Epoch:    1,
+		},
+		BlockedStores: map[string]bool{"log1": true, "log2": true},
+		Reason:        "repair",
+		CreatedTick:   1,
+		UpdatedTick:   1,
+	}
+	tsm.state.Tick = 2
+	_, err := tsm.Update(sm.Entry{Cmd: GetUnblockLogShardStoresCmd(pb.UnblockLogShardStores{
+		ShardID: 1,
+		Stores:  []string{"log2"},
+		Reason:  "log2 fixed",
+	})})
+	require.NoError(t, err)
+	repair := tsm.state.LogShardRepairs[1]
+	assert.True(t, repair.BlockedStores["log1"])
+	assert.False(t, repair.BlockedStores["log2"])
+	assert.Equal(t, "log2 fixed", repair.Reason)
+	assert.Equal(t, uint64(2), repair.UpdatedTick)
+
+	_, err = tsm.Update(sm.Entry{Cmd: GetUnblockLogShardStoresCmd(pb.UnblockLogShardStores{
+		ShardID: 1,
+	})})
+	require.NoError(t, err)
+	_, ok := tsm.state.LogShardRepairs[1]
+	assert.False(t, ok)
+}
+
 func TestHandleTNHeartbeat(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	cmd := GetTickCmd()

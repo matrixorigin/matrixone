@@ -944,3 +944,51 @@ func TestOpExpiredAndThenCompleted(t *testing.T) {
 		false,
 	))
 }
+
+func TestFilterBlockedLogShardCommands(t *testing.T) {
+	repairs := map[uint64]pb.LogShardRepairState{
+		1: {BlockedStores: map[string]bool{"a": true, "b": true}},
+	}
+	commands := []pb.ScheduleCommand{
+		{
+			UUID:        "a",
+			ServiceType: pb.LogService,
+			ConfigChange: &pb.ConfigChange{
+				Replica:    pb.Replica{UUID: "a", ShardID: 1, ReplicaID: 1},
+				ChangeType: pb.StartReplica,
+			},
+		},
+		{
+			UUID:        "c",
+			ServiceType: pb.LogService,
+			ConfigChange: &pb.ConfigChange{
+				Replica:    pb.Replica{UUID: "a", ShardID: 1, ReplicaID: 1},
+				ChangeType: pb.AddReplica,
+			},
+		},
+		{
+			UUID:           "b",
+			ServiceType:    pb.LogService,
+			BootstrapShard: &pb.BootstrapShard{ShardID: 1, ReplicaID: 2},
+		},
+		{
+			UUID:        "a",
+			ServiceType: pb.LogService,
+			ConfigChange: &pb.ConfigChange{
+				Replica:    pb.Replica{UUID: "a", ShardID: 2, ReplicaID: 1},
+				ChangeType: pb.StartReplica,
+			},
+		},
+		{
+			UUID:        "a",
+			ServiceType: pb.TNService,
+			ConfigChange: &pb.ConfigChange{
+				Replica:    pb.Replica{UUID: "a", ShardID: 1, ReplicaID: 1},
+				ChangeType: pb.StartReplica,
+			},
+		},
+	}
+
+	filtered := filterBlockedLogShardCommands(commands, repairs)
+	assert.Equal(t, []pb.ScheduleCommand{commands[3], commands[4]}, filtered)
+}
