@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -50,17 +49,6 @@ func TestScopeContainsVarExprInSource(t *testing.T) {
 	scope.DataSource = &Source{
 		FilterList: []*plan.Expr{makeTestVarExpr("sql_mode")},
 	}
-
-	require.True(t, scopeContainsVarExpr(scope))
-}
-
-func TestScopeContainsVarExprInOperatorMap(t *testing.T) {
-	scope := newScope(Normal)
-	op := onduplicatekey.NewArgument()
-	op.OnDuplicateExpr = map[string]*plan.Expr{
-		"col": makeTestVarExpr("sql_mode"),
-	}
-	scope.setRootOperator(op)
 
 	require.True(t, scopeContainsVarExpr(scope))
 }
