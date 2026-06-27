@@ -32,6 +32,11 @@ set remap_rewrites = '{"rerr.t": "update t set v = 0"}';
 set remap_rewrites = '{"rerr.t": "select from"}';
 -- an empty table key is rejected
 set remap_rewrites = '{"   ": "select 1"}';
+-- a rewrite key must be qualified as database.table (issue #25188): an
+-- unqualified or over-qualified key is rejected rather than silently ignored
+set remap_rewrites = '{"t": "select * from t where i < 10"}';
+set remap_rewrites = '{"a.b.c": "select 1"}';
+set remap_rewrites = '{".t": "select 1"}';
 -- a rewrite value must be a single SQL string: an array (chain) is rejected
 set remap_rewrites = '{"rewrites": {"rerr.t": ["select * from t", "select * from t where id <= 1"]}}';
 -- an object rewrite value is rejected too

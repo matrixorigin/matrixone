@@ -719,6 +719,21 @@ func TestValidateRemapRewrites(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "table key must not be empty")
 	})
+	t.Run("unqualified key rejected (issue #25188)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"t": "select * from t where i < 10"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
+	t.Run("over-qualified key rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"a.b.c": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
+	t.Run("empty db part rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{".t": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
 	t.Run("valid remapdb multi", func(t *testing.T) {
 		require.NoError(t, validateRemapRewrites(ctx, `{"remapdb": {"a": "b", "x": "y"}}`))
 	})

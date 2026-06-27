@@ -333,6 +333,22 @@ func getSessionRewriteRules(ctx context.Context, ses *Session) (rewrites map[str
 	return rewrites, remapDb
 }
 
+// validateRewriteTableKey ensures a rewrite rule's table key is qualified as
+// database.table (both parts present). An unqualified key such as "t" is
+// rejected: it can never match a table reference, so the rule would silently do
+// nothing (issue #25188). This mirrors the parser's check on inline-hint keys.
+func validateRewriteTableKey(ctx context.Context, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return moerr.NewInvalidInput(ctx, "remap_rewrites: table key must not be empty")
+	}
+	parts := strings.Split(key, ".")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return moerr.NewInvalidInputf(ctx, "remap_rewrites: rewrite table %q must be qualified as database.table", key)
+	}
+	return nil
+}
+
 // validateRemapRewrites validates a remap_rewrites session-variable value: it
 // must be a string holding a valid rewrites payload (parseable JSON) where every
 // table key is non-empty and every rule value is a SELECT-like statement (the
@@ -348,8 +364,8 @@ func validateRemapRewrites(ctx context.Context, val interface{}) error {
 		return err
 	}
 	for key, rule := range rules {
-		if strings.TrimSpace(key) == "" {
-			return moerr.NewInvalidInput(ctx, "remap_rewrites: table key must not be empty")
+		if err := validateRewriteTableKey(ctx, key); err != nil {
+			return err
 		}
 		if err := validateRewriteRuleSQL(ctx, rule); err != nil {
 			return err

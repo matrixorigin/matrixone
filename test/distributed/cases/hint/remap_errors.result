@@ -22,6 +22,12 @@ set remap_rewrites = '{"rerr.t": "select from"}';
 invalid input: invalid rewrite rule SQL "select from": You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " from";
 set remap_rewrites = '{"   ": "select 1"}';
 invalid input: remap_rewrites: table key must not be empty
+set remap_rewrites = '{"t": "select * from t where i < 10"}';
+invalid input: remap_rewrites: rewrite table "t" must be qualified as database.table
+set remap_rewrites = '{"a.b.c": "select 1"}';
+invalid input: remap_rewrites: rewrite table "a.b.c" must be qualified as database.table
+set remap_rewrites = '{".t": "select 1"}';
+invalid input: remap_rewrites: rewrite table ".t" must be qualified as database.table
 set remap_rewrites = '{"rewrites": {"rerr.t": ["select * from t", "select * from t where id <= 1"]}}';
 invalid input: invalid remap_rewrites value "{\"rewrites\": {\"rerr.t\": [\"select * from t\", \"select * from t where id <= 1\"]}}": rewrite for "rerr.t" must be a single SQL string, not an array or object
 set remap_rewrites = '{"rewrites": {"rerr.t": {"x": "y"}}}';
