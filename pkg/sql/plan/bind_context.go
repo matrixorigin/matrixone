@@ -563,7 +563,7 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 					exprImpl.CStrParts[1] = tree.NewCStr(binding.table, bc.lower)
 					return astExpr, nil
 				} else {
-					return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "ambiguouse column reference to '%s'", exprImpl.ColNameOrigin())
+					return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "ambiguous column reference to '%s'", exprImpl.ColNameOrigin())
 				}
 			}
 
