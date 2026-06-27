@@ -56,6 +56,27 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 	return r, nil
 }
 
+func (c *clientConn) setMigrateConnFromLockRelease(sqlAddr string, enabled bool) error {
+	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
+	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
+		ConnID:                     c.connID,
+		SkipUserLevelLockRelease:   !enabled,
+		EnableUserLevelLockRelease: enabled,
+	}
+	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseMigrateConnFrom)
+	defer cancel()
+	addr := getQueryAddress(c.moCluster, sqlAddr)
+	if addr == "" {
+		return moerr.NewInternalError(c.ctx, "cannot get query service address")
+	}
+	resp, err := c.queryClient.SendMessage(ctx, addr, req)
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	c.queryClient.Release(resp)
+	return nil
+}
+
 func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromResponse) error {
 	// Before migrate session info with RPC, we need to execute some
 	// SQLs to initialize the session and account in handler.
@@ -92,9 +113,10 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 	)
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
 	req.MigrateConnToRequest = &query.MigrateConnToRequest{
-		ConnID:       c.connID,
-		DB:           info.DB,
-		PrepareStmts: info.PrepareStmts,
+		ConnID:         c.connID,
+		DB:             info.DB,
+		PrepareStmts:   info.PrepareStmts,
+		UserLevelLocks: info.UserLevelLocks,
 	}
 	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseMigrateConnTo)
 	defer cancel()
@@ -114,5 +136,12 @@ func (c *clientConn) migrateConn(prevAddr string, sc ServerConn) error {
 	if resp == nil {
 		return moerr.NewInternalError(c.ctx, "bad response")
 	}
-	return c.migrateConnTo(sc, resp)
+	if err := c.setMigrateConnFromLockRelease(prevAddr, false); err != nil {
+		return err
+	}
+	if err := c.migrateConnTo(sc, resp); err != nil {
+		_ = c.setMigrateConnFromLockRelease(prevAddr, true)
+		return err
+	}
+	return nil
 }

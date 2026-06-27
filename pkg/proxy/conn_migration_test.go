@@ -72,8 +72,15 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(cc *cl
 				if req.MigrateConnFromRequest == nil {
 					return moerr.NewInternalError(ctx, "bad request")
 				}
+				if req.MigrateConnFromRequest.SkipUserLevelLockRelease {
+					resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{}
+					return nil
+				}
 				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
 					DB: "d1",
+					UserLevelLocks: []*pb.UserLevelLock{
+						{Name: "migration_lock", Count: 2},
+					},
 				}
 				return nil
 			}, false)
@@ -81,6 +88,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(cc *cl
 				if req.MigrateConnToRequest == nil {
 					return moerr.NewInternalError(ctx, "bad request")
 				}
+				assert.Equal(t, []*pb.UserLevelLock{{Name: "migration_lock", Count: 2}}, req.MigrateConnToRequest.UserLevelLocks)
 				resp.MigrateConnToResponse = &pb.MigrateConnToResponse{
 					Success: true,
 				}
@@ -122,6 +130,7 @@ func TestQueryServiceMigrateFrom(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 		assert.Equal(t, "d1", resp.DB)
+		assert.Equal(t, []*pb.UserLevelLock{{Name: "migration_lock", Count: 2}}, resp.UserLevelLocks)
 	})
 }
 
@@ -137,6 +146,16 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 		sc := newMockServerConn(c1)
 		cc.migration.setVarStmts = append(cc.migration.setVarStmts, "set a=1")
 		err = cc.migrateConnTo(sc, resp)
+		assert.NoError(t, err)
+	})
+}
+
+func TestQueryServiceSetMigrateFromLockRelease(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "127.0.0.1:9000"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, addr string) {
+		err := cc.setMigrateConnFromLockRelease(addr, false)
+		assert.NoError(t, err)
+		err = cc.setMigrateConnFromLockRelease(addr, true)
 		assert.NoError(t, err)
 	})
 }

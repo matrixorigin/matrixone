@@ -46,7 +46,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	hll "github.com/axiomhq/hyperloglog"
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -6983,6 +6982,11 @@ type userLevelLockKey struct {
 	name  string
 }
 
+type UserLevelLockState struct {
+	Name  string
+	Count uint64
+}
+
 var userLevelLocks = struct {
 	sync.Mutex
 	// userLevelLocks is process-local state for the current CN. It tracks only
@@ -7001,13 +7005,13 @@ func userLevelLockOwner(proc *process.Process) string {
 		return ""
 	}
 	si := proc.GetSessionInfo()
-	if si.SessionId != uuid.Nil {
-		return si.SessionId.String()
+	if si.GetConnectionID() != 0 {
+		return fmt.Sprintf("%s:%d", si.Account, si.GetConnectionID())
 	}
 	if proc.GetLockService() != nil {
-		return fmt.Sprintf("%s:%d", proc.GetLockService().GetServiceID(), si.GetConnectionID())
+		return fmt.Sprintf("%s:%s:%s", si.Account, proc.GetLockService().GetServiceID(), si.SessionId.String())
 	}
-	return fmt.Sprintf("%d", si.GetConnectionID())
+	return fmt.Sprintf("%s:%s", si.Account, si.SessionId.String())
 }
 
 func userLevelLockConnectionID(proc *process.Process) uint64 {
@@ -7196,6 +7200,60 @@ func userLevelLocksForOwner(owner string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func UserLevelLocksForMigration(proc *process.Process) []UserLevelLockState {
+	owner := userLevelLockOwner(proc)
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	names := userLevelLocks.byOwner[owner]
+	if len(names) == 0 {
+		return nil
+	}
+	result := make([]UserLevelLockState, 0, len(names))
+	for name := range names {
+		count := userLevelLocks.counts[userLevelLockKey{owner: owner, name: name}]
+		if count > 0 {
+			result = append(result, UserLevelLockState{Name: name, Count: count})
+		}
+	}
+	return result
+}
+
+func RestoreUserLevelLocksFromMigration(proc *process.Process, states []UserLevelLockState) {
+	owner := userLevelLockOwner(proc)
+	if owner == "" || len(states) == 0 {
+		return
+	}
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	for _, state := range states {
+		if state.Name == "" || state.Count == 0 {
+			continue
+		}
+		key := userLevelLockKey{owner: owner, name: state.Name}
+		userLevelLocks.counts[key] = state.Count
+		if userLevelLocks.byOwner[owner] == nil {
+			userLevelLocks.byOwner[owner] = make(map[string]struct{})
+		}
+		userLevelLocks.byOwner[owner][state.Name] = struct{}{}
+	}
+}
+
+func DiscardMigratedUserLevelLocks(proc *process.Process) {
+	owner := userLevelLockOwner(proc)
+	if owner == "" {
+		return
+	}
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	for name := range userLevelLocks.byOwner[owner] {
+		delete(userLevelLocks.counts, userLevelLockKey{owner: owner, name: name})
+	}
+	delete(userLevelLocks.byOwner, owner)
 }
 
 func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
