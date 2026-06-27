@@ -1740,8 +1740,8 @@ func RolesGraphml(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 }
 
 func RowCount(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
-		return 0
+	return opNoneParamToFixed[int64](result, proc, length, func() int64 {
+		return proc.GetAffectedRows()
 	})
 }
 

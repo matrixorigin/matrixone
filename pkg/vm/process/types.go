@@ -279,7 +279,12 @@ type BaseProcess struct {
 	PartitionService partitionservice.PartitionService
 	IncrService      incrservice.AutoIncrementService
 
-	LastInsertID        *uint64
+	LastInsertID *uint64
+	// AffectedRows carries the number of rows affected by the previous
+	// statement in the same session, used by the ROW_COUNT() builtin.
+	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
+	// 0 after DDL, and the affected row count after DML.
+	AffectedRows        *int64
 	LoadLocalReader     *io.PipeReader
 	Aicm                *defines.AutoIncrCacheManager
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
@@ -406,6 +411,19 @@ func (proc *Process) GetLastInsertID() uint64 {
 	if proc.Base.LastInsertID != nil {
 		num := atomic.LoadUint64(proc.Base.LastInsertID)
 		return num
+	}
+	return 0
+}
+
+func (proc *Process) SetAffectedRows(num int64) {
+	if proc.Base.AffectedRows != nil {
+		atomic.StoreInt64(proc.Base.AffectedRows, num)
+	}
+}
+
+func (proc *Process) GetAffectedRows() int64 {
+	if proc.Base.AffectedRows != nil {
+		return atomic.LoadInt64(proc.Base.AffectedRows)
 	}
 	return 0
 }

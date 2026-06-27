@@ -22,10 +22,73 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 	return ses.SetNewResponse(OkResponse, rspLen, int(COM_QUERY), "", isLastStmt)
+}
+
+// recordLastAffectedRows records the value the ROW_COUNT() builtin should return
+// for the statement that just finished. It is called once per statement, right
+// after execution, so it covers both single- and multi-statement COM_QUERY and
+// the binary-protocol execute path.
+//
+// MySQL semantics, keyed off how the statement reports its result rather than a
+// fixed AST whitelist:
+//   - result-set statement (SELECT/SHOW/...): -1
+//   - status statement: the rows it actually affected. This covers DML, LOAD and
+//     status-returning selects such as `SELECT ... INTO ...`; DDL and other
+//     no-op status statements naturally carry AffectRows == 0.
+//   - anything else (undefined output): 0
+//
+// The value is written to both the process and the session: the process so that
+// a later statement reusing the same proc (multi-statement COM_QUERY) reads the
+// fresh value, and the session so that the next COM_QUERY (which builds a new
+// proc seeded from the session) reads it too.
+func recordLastAffectedRows(ses *Session, execCtx *ExecCtx) {
+	// Internal protocol-only helper commands are not user SQL statements and must
+	// not clobber the ROW_COUNT() state of the preceding statement. COM_FIELD_LIST
+	// is routed through doComQuery as InternalCmdFieldList (an OUTPUT_STATUS stmt
+	// with no runResult), which would otherwise record 0.
+	if _, ok := execCtx.stmt.(*InternalCmdFieldList); ok {
+		return
+	}
+	var n int64
+	switch execCtx.stmt.StmtKind().OutputType() {
+	case tree.OUTPUT_RESULT_ROW:
+		n = -1
+	case tree.OUTPUT_STATUS:
+		if execCtx.runResult != nil {
+			n = int64(execCtx.runResult.AffectRows)
+		}
+	}
+	if execCtx.proc != nil {
+		execCtx.proc.SetAffectedRows(n)
+	}
+	ses.SetLastAffectedRows(n)
+}
+
+// markRowCountFailed sets the ROW_COUNT() state to -1, the value MySQL reports
+// for the statement following a failed one. It updates both the session (which
+// drives the next COM_QUERY, since the proc is reseeded from the session) and
+// the given proc (for completeness within the current request). proc may be nil.
+func markRowCountFailed(ses *Session, proc *process.Process) {
+	ses.SetLastAffectedRows(-1)
+	if proc != nil {
+		proc.SetAffectedRows(-1)
+	}
+}
+
+// restoreRowCount writes v back to both the session and proc. It is used to keep
+// a protocol-only command that is internally rewritten into a real SQL statement
+// (COM_STMT_CLOSE/COM_STMT_RESET -> DEALLOCATE/RESET PREPARE) from clobbering the
+// preceding statement's ROW_COUNT() when it succeeds. proc may be nil.
+func restoreRowCount(ses *Session, proc *process.Process, v int64) {
+	ses.SetLastAffectedRows(v)
+	if proc != nil {
+		proc.SetAffectedRows(v)
+	}
 }
 
 // response the client
