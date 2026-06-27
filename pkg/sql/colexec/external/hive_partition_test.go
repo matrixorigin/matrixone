@@ -2763,10 +2763,11 @@ func TestHivePartitionListCache_Singleflight(t *testing.T) {
 	ResetHivePartitionListCacheForTest()
 	var calls atomic.Int32
 	started := make(chan struct{})
+	var startedOnce sync.Once
 	release := make(chan struct{})
 	listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
 		calls.Add(1)
-		close(started)
+		startedOnce.Do(func() { close(started) })
 		<-release
 		return func(yield func(*fileservice.DirEntry, error) bool) {
 			yield(&fileservice.DirEntry{Name: "year=2024", IsDir: true}, nil)
