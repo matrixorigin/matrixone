@@ -113,16 +113,32 @@ func (ps *PipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
 	return ps.shardPool[next].dataContent, ps.shardPool[next].errContent
 }
 
-// Close the sender and receivers, and do memory clean.
-func (ps *PipelineSpool) Close() {
+// Close waits for all receivers to finish their work, then frees cached memory.
+//
+// If ctx is cancelled before all receivers have drained the End-message,
+// Close stops waiting to avoid blocking the teardown path forever (issue #25025).
+// In this case cache.free() is NOT called, because the merge-side WaitingEnd()
+// (which uses context.TODO(), not this ctx) may still be draining and calling
+// ReleaseCurrent → CacheBatch on the cached memory. Skipping cache.free() in the
+// error path is a bounded memory trade-off: the cached slices are freed when the
+// MPool is eventually destroyed.
+func (ps *PipelineSpool) Close(ctx context.Context) {
 	// wait for all receivers done its work first.
 	requireEndingReceiver := len(ps.rs)
 	for requireEndingReceiver > 0 {
 		requireEndingReceiver--
 
-		<-ps.csDoneSignal
+		select {
+		case <-ps.csDoneSignal:
+		case <-ctx.Done():
+			// Some receivers have exited without draining the End-message.
+			// Don't free the cache — WaitingEnd() may still be running with
+			// context.TODO() and accessing cached memory via ReleaseCurrent.
+			return
+		}
 	}
 
+	// All receivers drained normally — safe to free the cache.
 	ps.cache.free()
 }
 

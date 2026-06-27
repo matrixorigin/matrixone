@@ -154,7 +154,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 			reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(dispatch.ctr.sp, i)
 		}
 
-		dispatch.ctr.sp.Close()
+		dispatch.ctr.sp.Close(proc.Ctx)
 		dispatch.ctr.sp = nil
 	} else {
 		for _, reg := range dispatch.LocalRegs {
