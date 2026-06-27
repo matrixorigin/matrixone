@@ -164,7 +164,9 @@ func (proc *Process) GetTopContext() context.Context {
 
 // ReplaceTopCtx sets the new top context.
 func (proc *Process) ReplaceTopCtx(topCtx context.Context) {
-	proc.Base.sqlContext.outerContext = topCtx
+	if proc.Base != nil {
+		proc.Base.sqlContext.outerContext = topCtx
+	}
 }
 
 // SaveToTopContext for easy access to change the top context.
