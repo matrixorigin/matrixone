@@ -128,7 +128,24 @@ func addTextCastTableForTest(mock *MockOptimizer) {
 	mock.ctxt.pks[tableName] = []int{0}
 }
 
+// resolveQueryPlan unwraps a PREPARE plan to the inner prepared query plan so
+// prepare-specific assertions inspect the real query instead of the outer DCL
+// node (whose GetQuery() is nil).
+func resolveQueryPlan(p *Plan) *Plan {
+	if p == nil {
+		return nil
+	}
+	if p.GetQuery() != nil {
+		return p
+	}
+	if prep := p.GetDcl().GetPrepare(); prep != nil {
+		return prep.GetPlan()
+	}
+	return p
+}
+
 func planHasTextToCharOrVarcharCast(p *Plan) bool {
+	p = resolveQueryPlan(p)
 	if p == nil || p.GetQuery() == nil {
 		return false
 	}
@@ -183,6 +200,20 @@ func nodeHasTextToCharOrVarcharCast(node *plan.Node) bool {
 			}
 		}
 	}
+	for _, expr := range node.OnUpdateExprs {
+		if exprHasTextToCharOrVarcharCast(expr) {
+			return true
+		}
+	}
+	if node.RowsetData != nil {
+		for _, col := range node.RowsetData.Cols {
+			for _, data := range col.Data {
+				if exprHasTextToCharOrVarcharCast(data.Expr) {
+					return true
+				}
+			}
+		}
+	}
 	return false
 }
 
@@ -221,6 +252,7 @@ func planHasTextToVarcharStrictCastWithWidth(p *Plan, width int32) bool {
 }
 
 func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width int32) bool {
+	p = resolveQueryPlan(p)
 	if p == nil || p.GetQuery() == nil {
 		return false
 	}
@@ -272,6 +304,20 @@ func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width in
 			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
 				if visit(expr) {
 					return true
+				}
+			}
+		}
+		for _, expr := range node.OnUpdateExprs {
+			if visit(expr) {
+				return true
+			}
+		}
+		if node.RowsetData != nil {
+			for _, col := range node.RowsetData.Cols {
+				for _, data := range col.Data {
+					if visit(data.Expr) {
+						return true
+					}
 				}
 			}
 		}
