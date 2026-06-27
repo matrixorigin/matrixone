@@ -1,0 +1,18 @@
+drop table if exists load_data_year_t;
+create table load_data_year_t (
+id int primary key,
+y year
+);
+load data infile '$resources/load_data/year.csv'
+into table load_data_year_t
+fields terminated by ','
+lines terminated by '\n'
+ignore 1 lines;
+select count(*) from load_data_year_t;
+➤ count(*)[-5,64,0]  𝄀
+2
+select id, cast(y as char) as y from load_data_year_t order by id;
+➤ id[4,32,0]  ¦  y[12,-1,0]  𝄀
+1  ¦  2024  𝄀
+2  ¦  2000
+drop table load_data_year_t;
