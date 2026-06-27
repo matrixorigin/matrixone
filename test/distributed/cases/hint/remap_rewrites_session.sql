@@ -67,11 +67,15 @@ set remap_rewrites = '{not json}';
 -- session is never bricked: subsequent queries still work
 select * from t1 order by id;
 
--- an inline array-form (chain) rewrite still composes on top of a session rule:
--- session layer (age > 25) -> inline layer 1 (age < 40) -> inline layer 2 (id >= 1).
--- The array syntax (which the parser accepts) must not be rejected when merged.
-set remap_rewrites = '{"remap_sess.t1": "select * from t1 where age > 25"}';
+-- a user-written rewrite value must be a single SQL string: the array (chain)
+-- form is reserved for the server's internal merged hint and is rejected as
+-- input, both for the session variable and for an inline hint
+set remap_rewrites = '{"remap_sess.t1": ["select * from t1 where age < 40", "select * from t1 where id >= 1"]}';
 /*+ {"rewrites": {"remap_sess.t1": ["select * from t1 where age < 40", "select * from t1 where id >= 1"]}} */ select * from t1 order by id;
+-- but a single inline string still composes on top of the session rule:
+-- session layer (age > 25) -> inline layer (age < 40) -> 30 only (Bob)
+set remap_rewrites = '{"remap_sess.t1": "select * from t1 where age > 25"}';
+/*+ {"rewrites": {"remap_sess.t1": "select * from t1 where age < 40"}} */ select * from t1 order by id;
 set remap_rewrites = '';
 
 set remap_rewrites = '';

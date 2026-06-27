@@ -67,7 +67,10 @@ select * from t order by id;
 3  ¦  30
 set remap_rewrites = '{"remapdb": {"q": "r"}}';
 /*+ {not json} */ select * from t order by id;
-SQL parser error: invalid character 'n' looking for beginning of object key string
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
 set remap_rewrites = '';
 set remap_rewrites = '{"remapdb": {"rdb_a": "rdb_b"}}';
 /*+ {"remapdb": {"rdb_b": "rdb_c"}} */ select 1;

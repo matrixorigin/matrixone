@@ -74,8 +74,12 @@ select * from t1 order by id;
 ➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
 2  ¦  Bob  ¦  30  𝄀
 3  ¦  Charlie  ¦  40
-set remap_rewrites = '{"remap_sess.t1": "select * from t1 where age > 25"}';
+set remap_rewrites = '{"remap_sess.t1": ["select * from t1 where age < 40", "select * from t1 where id >= 1"]}';
+invalid input: invalid remap_rewrites value "{\"remap_sess.t1\": [\"select * from t1 where age < 40\", \"select * from t1 where id >= 1\"]}": rewrite for "remap_sess.t1" must be a single SQL string, not an array or object
 /*+ {"rewrites": {"remap_sess.t1": ["select * from t1 where age < 40", "select * from t1 where id >= 1"]}} */ select * from t1 order by id;
+invalid input: invalid remap_rewrites value "{\"rewrites\": {\"remap_sess.t1\": [\"select * from t1 where age < 40\", \"select * from t1 where id >= 1\"]}}": rewrite for "remap_sess.t1" must be a single SQL string, not an array or object
+set remap_rewrites = '{"remap_sess.t1": "select * from t1 where age > 25"}';
+/*+ {"rewrites": {"remap_sess.t1": "select * from t1 where age < 40"}} */ select * from t1 order by id;
 ➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
 2  ¦  Bob  ¦  30
 set remap_rewrites = '';

@@ -36,6 +36,11 @@ import (
 const (
 	hintPrefix = "/*+ "
 	hintSuffix = " */"
+	// nonStringRewriteMsg is the stable substring of the error raised when a
+	// rewrite value is not a single SQL string (an array or object). It lets
+	// extractInlineRewrites distinguish that user-input rejection from other
+	// parse errors it should defer to the parser.
+	nonStringRewriteMsg = "must be a single SQL string"
 )
 
 // rewriteHintPayload is the JSON structure embedded in the hint comment.
@@ -190,9 +195,19 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	// Session-variable rewrites and database remaps.
 	sessionRules, sessionRemapDb := getSessionRewriteRules(ctx, ses)
 
-	if len(cache) == 0 && len(sessionRules) == 0 && len(sessionRemapDb) == 0 {
-		// No persistent or session config. Leave any inline /*+ ... */ hint to be
-		// handled natively by the parser.
+	// Inline /*+ {...} */ rewrites and database remaps. A user-provided rewrite
+	// value must be a single SQL string; arrays/objects are rejected here. The
+	// array form exists only internally, to carry the role->session->inline
+	// stacked-view chain to the planner. Validate the inline hint up front so an
+	// invalid value is caught even when there is no role/session config to merge.
+	inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, sql)
+	if err != nil {
+		return sql, err
+	}
+
+	if len(cache) == 0 && len(sessionRules) == 0 && len(sessionRemapDb) == 0 &&
+		len(inlineRules) == 0 && len(inlineRemapDb) == 0 {
+		// Nothing to apply. Leave any non-rewrite inline hint for the parser.
 		return sql, nil
 	}
 
@@ -204,16 +219,12 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	// part of this single statement's text, so its layer is effective for this
 	// one query only. All layers are emitted as a single hint because the
 	// parser only honors the first leading hint; a second hint of our own would
-	// otherwise mask the inline one.
+	// otherwise mask the inline one. Each source contributes one string layer;
+	// the multi-element array only appears in the merged hint we emit below.
 	//
 	// remapdb (database-name substitution) is applied before the table rewrites
 	// and does not stack: a database maps to one target, so the inline hint
 	// overrides the session variable for the same source database.
-	inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, sql)
-	if err != nil {
-		return sql, err
-	}
-
 	chains := make(map[string][]string, len(cache)+len(sessionRules)+len(inlineRules))
 	for k, v := range cache {
 		chains[k] = append(chains[k], v)
@@ -221,10 +232,8 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	for k, v := range sessionRules {
 		chains[k] = append(chains[k], v)
 	}
-	// inlineRules is already a per-table chain (it may carry the array-form
-	// syntax), so its layers extend the stack as a whole.
 	for k, v := range inlineRules {
-		chains[k] = append(chains[k], v...)
+		chains[k] = append(chains[k], v)
 	}
 
 	remapDb := make(map[string]string, len(sessionRemapDb)+len(inlineRemapDb))
@@ -243,19 +252,34 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	return hint + " " + sql, nil
 }
 
-// extractInlineRewrites returns the per-table rewrite chains and database-remap
+// extractInlineRewrites returns the per-table rewrite rules and database-remap
 // entries from a leading /*+ {...} */ (or /*!+ {...} */) hint on sql, if present.
-// It decodes the hint with the same parser logic AddRewriteHints uses, so the
-// inline array-form (chain) syntax stays usable when rewriteSQL merges hints
-// (issue: inline chains were rejected by the session-variable parser). The
-// original sql is left untouched — the rules are merged into the single hint
+// Each rewrite value must be a single SQL string: a user-written inline hint may
+// not use the array (chain) form — that form is reserved for the merged hint
+// rewriteSQL emits internally. An array/object value is rejected with an error.
+// The original sql is left untouched; the rules are merged into the single hint
 // rewriteSQL prepends.
-func extractInlineRewrites(ctx context.Context, sql string) (rewrites map[string][]string, remapDb map[string]string, err error) {
+func extractInlineRewrites(ctx context.Context, sql string) (rewrites map[string]string, remapDb map[string]string, err error) {
 	content, ok := leadingHintContent(sql)
 	if !ok {
 		return nil, nil, nil
 	}
-	return parsers.DecodeRewriteHint(ctx, content)
+	content = strings.TrimSpace(content)
+	if content == "" || content[0] != '{' {
+		return nil, nil, nil
+	}
+	// parseSessionRewrites is string-only (stringRewrites rejects arrays/objects).
+	rewrites, remapDb, err = parseSessionRewrites(ctx, content)
+	if err != nil {
+		// Surface the array/object rejection (the user-input rule we enforce here);
+		// leave every other parse problem (e.g. malformed JSON) for the parser's
+		// AddRewriteHints, so the error matches the no-config path.
+		if strings.Contains(err.Error(), nonStringRewriteMsg) {
+			return nil, nil, err
+		}
+		return nil, nil, nil
+	}
+	return rewrites, remapDb, nil
 }
 
 // extractInlineRemapDb returns only the remapdb entries from a leading
@@ -452,7 +476,7 @@ func stringRewrites(ctx context.Context, value string, raw map[string]json.RawMe
 	for k, rv := range raw {
 		var s string
 		if err := json.Unmarshal(rv, &s); err != nil {
-			return nil, moerr.NewInvalidInputf(ctx, "invalid remap_rewrites value %q: rewrite for %q must be a single SQL string, not an array or object", value, k)
+			return nil, moerr.NewInvalidInputf(ctx, "invalid remap_rewrites value %q: rewrite for %q %s, not an array or object", value, k, nonStringRewriteMsg)
 		}
 		out[k] = s
 	}
