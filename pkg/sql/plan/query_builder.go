@@ -124,6 +124,9 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		deleteNode:           make(map[uint64]int32),
 		skipStats:            skipStats,
 		optimizationHistory:  make([]string, 0),
+		// -1 means "no old-row delete maintenance" (set only on ODKU into an
+		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
+		irregularMaintDeleteStep: -1,
 	}
 }
 
@@ -2207,6 +2210,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
 	}
+
+	// Expose the SINK column remap so irregular-index maintenance sub-plans built
+	// after createQuery can translate pre-prune positions into the materialized
+	// sink's post-prune layout.
+	builder.sinkColRef = sinkColRef
 
 	err = builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
 	if err != nil {
