@@ -894,6 +894,12 @@ type ExecCtx struct {
 	results           []ExecResult
 	prepareColDef     [][]byte
 	isIssue3482       bool
+	// remapDb is the effective database remap (role/session/inline merged) for
+	// this statement. It is applied at the AST level to qualified references by
+	// applyRemapDb, and to the current database (for unqualified references) by
+	// TxnCompilerContext.DefaultDatabase. nil when the rewrite feature is off or
+	// no remapdb is configured.
+	remapDb map[string]string
 }
 
 func (execCtx *ExecCtx) Close() {
@@ -1442,6 +1448,16 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 
 	if name == "wait_timeout" || name == "interactive_timeout" {
 		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
+			return err
+		}
+	}
+
+	// Validate remap_rewrites at SET time so an invalid value is rejected up
+	// front and can never be stored. Without this the value would only fail
+	// later in rewriteSQL, which runs on every statement and would make the
+	// session unable to even clear the bad value.
+	if name == "remap_rewrites" {
+		if err = validateRemapRewrites(ctx, val); err != nil {
 			return err
 		}
 	}
