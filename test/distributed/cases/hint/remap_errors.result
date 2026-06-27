@@ -40,6 +40,18 @@ set remap_rewrites = '{"remapdb": {"x": "y", "y": "z"}}';
 invalid input: remapdb: database "y" must not be both a source and a destination (chaining is not allowed)
 set remap_rewrites = '{"remapdb": {"x": "x"}}';
 invalid input: remapdb: database "x" must not be both a source and a destination (chaining is not allowed)
+set remap_rewrites = '{"remapdb": {"mysql": "x"}}';
+invalid input: remapdb must not remap a system database, got "mysql" -> "x"
+set remap_rewrites = '{"remapdb": {"information_schema": "x"}}';
+invalid input: remapdb must not remap a system database, got "information_schema" -> "x"
+set remap_rewrites = '{"remapdb": {"system_metrics": "x"}}';
+invalid input: remapdb must not remap a system database, got "system_metrics" -> "x"
+set remap_rewrites = '{"remapdb": {"mo_catalog": "x"}}';
+invalid input: remapdb must not remap a system database, got "mo_catalog" -> "x"
+set remap_rewrites = '{"remapdb": {"x": "mo_secret"}}';
+invalid input: remapdb must not remap a system database, got "x" -> "mo_secret"
+set remap_rewrites = '{"remapdb": {"x": "mysql"}}';
+invalid input: remapdb must not remap a system database, got "x" -> "mysql"
 select @@remap_rewrites as cur;
 ➤ cur[12,0,0]  𝄀
 
@@ -60,6 +72,8 @@ SQL parser error: empty table or database
 SQL parser error: remapdb names must be valid identifiers, got "a.b" -> "c"
 /*+ {"remapdb": {"x": "y", "y": "z"}} */ select * from t order by id;
 SQL parser error: remapdb: database "y" must not be both a source and a destination (chaining is not allowed)
+/*+ {"remapdb": {"mo_catalog": "x"}} */ select * from t order by id;
+SQL parser error: remapdb must not remap a system database, got "mo_catalog" -> "x"
 select * from t order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  10  𝄀

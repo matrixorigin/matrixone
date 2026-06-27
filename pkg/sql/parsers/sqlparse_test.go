@@ -415,6 +415,25 @@ func TestAddRewriteHints_RemapDb(t *testing.T) {
 		_, err := parseAndApply(t, `/*+ {"remapdb": {"x": "x"}} */ select 1`)
 		require.ErrorContains(t, err, "must not be both a source and a destination")
 	})
+	t.Run("system database source rejected", func(t *testing.T) {
+		for _, src := range []string{"mysql", "information_schema", "system", "system_metrics", "mo_catalog", "mo_anything"} {
+			_, err := parseAndApply(t, `/*+ {"remapdb": {"`+src+`": "y"}} */ select 1`)
+			require.ErrorContains(t, err, "must not remap a system database", "src=%s", src)
+		}
+	})
+	t.Run("system database destination rejected", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"x": "mo_catalog"}} */ select 1`)
+		require.ErrorContains(t, err, "must not remap a system database")
+	})
+}
+
+func TestIsSystemDatabase(t *testing.T) {
+	for _, n := range []string{"mysql", "MySQL", "information_schema", "system", "system_metrics", "mo_catalog", "mo_task", "mo_foo", "MO_BAR"} {
+		require.True(t, IsSystemDatabase(n), n)
+	}
+	for _, n := range []string{"db1", "users", "moose", "system2", "mo", "mox"} {
+		require.False(t, IsSystemDatabase(n), n)
+	}
 }
 
 func TestAddRewriteHints_ChainArray(t *testing.T) {

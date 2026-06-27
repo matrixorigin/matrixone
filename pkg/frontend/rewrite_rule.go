@@ -64,6 +64,9 @@ func validateRemapDb(ctx context.Context, remapDb map[string]string) error {
 		if !isValidDbIdentifier(src) || !isValidDbIdentifier(dst) {
 			return moerr.NewInvalidInputf(ctx, "remapdb names must be valid identifiers, got %q -> %q", src, dst)
 		}
+		if parsers.IsSystemDatabase(src) || parsers.IsSystemDatabase(dst) {
+			return moerr.NewInvalidInputf(ctx, "remapdb must not remap a system database, got %q -> %q", src, dst)
+		}
 		sources[src] = struct{}{}
 	}
 	for _, dst := range remapDb {

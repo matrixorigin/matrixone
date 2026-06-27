@@ -752,6 +752,16 @@ func TestValidateRemapRewrites(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "must not be both a source and a destination")
 	})
+	t.Run("remapdb system database source rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"mysql": "y"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not remap a system database")
+	})
+	t.Run("remapdb mo_ prefix destination rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "mo_secret"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not remap a system database")
+	})
 	t.Run("remapdb multiple sources to one dest allowed", func(t *testing.T) {
 		require.NoError(t, validateRemapRewrites(ctx, `{"remapdb": {"a": "z", "b": "z"}}`))
 	})

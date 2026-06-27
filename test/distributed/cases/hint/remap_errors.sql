@@ -47,6 +47,14 @@ set remap_rewrites = '{"remapdb": {"x": "y z"}}';
 -- remapdb source/destination sets must be disjoint
 set remap_rewrites = '{"remapdb": {"x": "y", "y": "z"}}';
 set remap_rewrites = '{"remapdb": {"x": "x"}}';
+-- remapdb may not remap from or to a system database (information_schema,
+-- mysql, system, system_metrics, or any mo_* database), source or destination
+set remap_rewrites = '{"remapdb": {"mysql": "x"}}';
+set remap_rewrites = '{"remapdb": {"information_schema": "x"}}';
+set remap_rewrites = '{"remapdb": {"system_metrics": "x"}}';
+set remap_rewrites = '{"remapdb": {"mo_catalog": "x"}}';
+set remap_rewrites = '{"remapdb": {"x": "mo_secret"}}';
+set remap_rewrites = '{"remapdb": {"x": "mysql"}}';
 
 -- after all the rejected SETs, the variable is still empty and queries work
 select @@remap_rewrites as cur;
@@ -67,6 +75,8 @@ select * from t order by id;
 /*+ {"remapdb": {"a.b": "c"}} */ select * from t order by id;
 -- remapdb chaining in an inline hint
 /*+ {"remapdb": {"x": "y", "y": "z"}} */ select * from t order by id;
+-- a system database in an inline remapdb hint is rejected too
+/*+ {"remapdb": {"mo_catalog": "x"}} */ select * from t order by id;
 
 -- an invalid inline hint only fails its own query; the next query is fine
 select * from t order by id;

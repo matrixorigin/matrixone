@@ -345,6 +345,22 @@ func SplitRewriteKey(key string) (db, table string, ok bool) {
 // be disjoint (forbidding chaining such as {"x":"y","y":"z"} and self-maps). It
 // is shared by the parser and the frontend so all remapdb entries — for SELECT,
 // DML and USE, from a session variable or an inline hint — get the same checks.
+// IsSystemDatabase reports whether name is a reserved system database that
+// remapdb may not use as a source or destination: information_schema, mysql,
+// system, system_metrics, or any database whose name starts with "mo_". The
+// comparison is case-insensitive.
+func IsSystemDatabase(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if strings.HasPrefix(name, "mo_") {
+		return true
+	}
+	switch name {
+	case "information_schema", "mysql", "system", "system_metrics":
+		return true
+	}
+	return false
+}
+
 func ValidateRemapDb(ctx context.Context, remapDb map[string]string) error {
 	if len(remapDb) == 0 {
 		return nil
@@ -352,6 +368,9 @@ func ValidateRemapDb(ctx context.Context, remapDb map[string]string) error {
 	for src, dst := range remapDb {
 		if !isValidDbIdentifier(strings.TrimSpace(src)) || !isValidDbIdentifier(strings.TrimSpace(dst)) {
 			return moerr.NewParseErrorf(ctx, "remapdb names must be valid identifiers, got %q -> %q", src, dst)
+		}
+		if IsSystemDatabase(src) || IsSystemDatabase(dst) {
+			return moerr.NewParseErrorf(ctx, "remapdb must not remap a system database, got %q -> %q", src, dst)
 		}
 	}
 	for _, dst := range remapDb {
