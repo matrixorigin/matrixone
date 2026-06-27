@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/bytedance/sonic"
@@ -246,6 +247,13 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 		Probe:             uint(u.tblcfg.Nprobe),
 		OrigFuncName:      u.tblcfg.OrigFuncName,
 		BackgroundQueries: make([]*plan.Query, 1),
+	}
+	// Reader-driven IVF widening (UNVERIFIED prototype, branch ivfflat_widening).
+	// Gated by env var so it can be toggled per cluster node for testing without
+	// a new system variable. BucketRadius left 0 (standard approximate IVF
+	// early-stop); set it to the per-bucket radius for exact widening.
+	if os.Getenv("MO_IVF_WIDENING") == "1" {
+		rt.Widening = true
 	}
 	sqlProc := sqlexec.NewSqlProcess(proc)
 	sqlProc.IndexReaderParam = u.indexReaderParam

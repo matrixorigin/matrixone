@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
@@ -157,6 +158,30 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 	return keys.([]int64), nil
 }
 
+// rankAllCentroids returns ALL centroid ids ordered nearest->farthest from the
+// query. Used by the reader-driven widening path; the entries reader visits
+// buckets (blocks) in this rank order. UNVERIFIED prototype (branch ivfflat_widening).
+func (idx *IvfflatSearchIndex[T]) rankAllCentroids(sqlproc *sqlexec.SqlProcess, query []T, idxcfg vectorindex.IndexConfig) ([]int64, error) {
+	if idx.Centroids == nil {
+		return []int64{1}, nil
+	}
+	limit := idxcfg.Ivfflat.Lists
+	if limit == 0 {
+		limit = 1
+	}
+	queries := [][]T{query}
+	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 1}
+	keys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
+	if err != nil {
+		return nil, err
+	}
+	ids, ok := keys.([]int64)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("rankAllCentroids: centroid keys are not []int64")
+	}
+	return ids, nil
+}
+
 /*
 prepare the runtime doc_id pushdown filter for pre-filtering.
 
@@ -252,6 +277,34 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	centroids_ids, err := idx.findCentroids(sqlproc, query, distfn, idxcfg, rt.Probe, nthread)
 	if err != nil {
 		return
+	}
+
+	// Reader-driven IVF widening (UNVERIFIED prototype, branch ivfflat_widening;
+	// gated by rt.Widening). Rank ALL centroids and attach the widening
+	// side-channel; the entries-table scan then walks buckets in centroid-rank
+	// order and early-stops via objectio.IndexReaderTopOp.ShouldStopWidening.
+	// The IN-list below uses the full ranked set so the reader sees every bucket
+	// (the early-stop bounds the actual work).
+	if rt.Widening {
+		rankedIDs, rerr := idx.rankAllCentroids(sqlproc, query, idxcfg)
+		if rerr != nil {
+			err = rerr
+			return
+		}
+		centroids_ids = rankedIDs
+		if sqlproc != nil {
+			nprobe := int(rt.Probe)
+			if nprobe <= 0 {
+				nprobe = 1
+			}
+			sqlproc.IvfWidening = &objectio.IvfWideningParam{
+				RankedCentroids: rankedIDs,
+				Nprobe:          nprobe,
+				CentroidColName: catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+			}
+			logutil.Infof("[IVF-WIDEN] activate: ranked=%d nprobe=%d limit=%d col=%s",
+				len(rankedIDs), nprobe, rt.Limit, catalog.SystemSI_IVFFLAT_TblCol_Entries_id)
+		}
 	}
 
 	var instr string

@@ -247,6 +247,13 @@ type RuntimeConfig struct {
 	BackgroundQueries []*plan.Query
 	NThreads          uint // Brute Force Index
 
+	// Widening enables reader-driven rank-ordered IVF widening search: rank ALL
+	// centroids, issue ONE SQL, and let the entries-table reader walk buckets in
+	// centroid-rank order and early-stop once the top-K heap can no longer
+	// improve. Gated (off by default); set by the planner from a session
+	// variable. UNVERIFIED prototype path (branch ivfflat_widening).
+	Widening bool
+
 	// FilterJSON is a JSON predicate array forwarded verbatim to CGo
 	// (gpu_<idx>_search_with_filter). Empty → unfiltered search path.
 	// Go never parses this payload; it's produced by the SQL layer and

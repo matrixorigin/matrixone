@@ -21,6 +21,7 @@ import (
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -86,6 +87,10 @@ type SqlProcess struct {
 	// Optional IndexReaderParam attached by vector index runtime.
 	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
 	IndexReaderParam *plan.IndexReaderParam
+	// Optional reader-driven IVF widening params (ranked centroids, radius, nprobe).
+	// When set, the ivf entries scan walks buckets in centroid-rank order and
+	// early-stops once the top-K heap can no longer be improved.
+	IvfWidening *objectio.IvfWideningParam
 }
 
 func NewSqlProcess(proc *process.Process) *SqlProcess {
@@ -141,6 +146,10 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 		// Attach optional DistRange to context for internal executor.
 		if sqlproc.IndexReaderParam != nil {
 			topContext = context.WithValue(topContext, defines.IvfReaderParam{}, sqlproc.IndexReaderParam)
+		}
+		// Attach optional IVF widening params (ranked centroids/radius/nprobe).
+		if sqlproc.IvfWidening != nil {
+			topContext = context.WithValue(topContext, defines.IvfWidening{}, sqlproc.IvfWidening)
 		}
 		accountId, err := defines.GetAccountId(proc.Ctx)
 		if err != nil {
