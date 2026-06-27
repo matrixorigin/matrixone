@@ -48,12 +48,15 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		ses.EnterFPrint(FPUse)
 		defer ses.ExitFPrint(FPUse)
 		dbName := st.Name.Compare()
-		// Apply the remap_rewrites database remap so that `use <src>` switches to
-		// the mapped target database (USE is not rewritten through a hint).
-		if remap := sessionRemapDb(execCtx.reqCtx, ses); len(remap) > 0 {
-			if mapped, ok := remap[dbName]; ok {
-				dbName = mapped
-			}
+		// Apply the database remap (session variable + any surviving inline hint)
+		// so that `use <src>` switches to the mapped target database.
+		remap, remapErr := useStatementRemapDb(execCtx.reqCtx, ses, execCtx.input.getSql())
+		if remapErr != nil {
+			err = remapErr
+			return
+		}
+		if mapped, ok := remap[dbName]; ok {
+			dbName = mapped
 		}
 		//use database
 		err = handleChangeDB(ses, execCtx, dbName)

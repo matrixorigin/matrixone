@@ -800,21 +800,34 @@ func TestExtractInlineRewrites(t *testing.T) {
 		require.Len(t, rules, 0)
 		require.Len(t, remap, 0)
 	})
-	t.Run("rewrites hint", func(t *testing.T) {
+	t.Run("rewrites hint (single layer -> 1-element chain)", func(t *testing.T) {
 		rules, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": "select a from db.t1"}} */ select * from db.t1`)
 		require.NoError(t, err)
-		require.Equal(t, map[string]string{"db.t1": "select a from db.t1"}, rules)
+		require.Equal(t, map[string][]string{"db.t1": {"select a from db.t1"}}, rules)
+	})
+	t.Run("rewrites hint array (chain) is accepted", func(t *testing.T) {
+		rules, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": ["select a from db.t1", "select a from db.t1 where a > 0"]}} */ select * from db.t1`)
+		require.NoError(t, err)
+		require.Equal(t, map[string][]string{"db.t1": {"select a from db.t1", "select a from db.t1 where a > 0"}}, rules)
 	})
 	t.Run("remapdb hint", func(t *testing.T) {
 		_, remap, err := extractInlineRewrites(ctx, `/*+ {"remapdb": {"dbxxx": "dbyyy"}} */ select * from dbxxx.t`)
 		require.NoError(t, err)
 		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
 	})
+	t.Run("unqualified rewrite key rejected", func(t *testing.T) {
+		_, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"t1": "select a from t1"}} */ select * from t1`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "the mapping name needs to include database name")
+	})
+	t.Run("remapdb chaining rejected", func(t *testing.T) {
+		_, _, err := extractInlineRewrites(ctx, `/*+ {"remapdb": {"x": "y", "y": "z"}} */ select 1`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not be both a source and a destination")
+	})
 	t.Run("malformed json hint", func(t *testing.T) {
 		_, _, err := extractInlineRewrites(ctx, `/*+ {not json} */ select 1`)
 		require.Error(t, err)
-		// The error should point at the inline hint, not the remap_rewrites var.
-		require.Contains(t, err.Error(), "invalid inline rewrite hint")
 		require.NotContains(t, err.Error(), "remap_rewrites")
 	})
 }

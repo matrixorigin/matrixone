@@ -221,8 +221,10 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	for k, v := range sessionRules {
 		chains[k] = append(chains[k], v)
 	}
+	// inlineRules is already a per-table chain (it may carry the array-form
+	// syntax), so its layers extend the stack as a whole.
 	for k, v := range inlineRules {
-		chains[k] = append(chains[k], v)
+		chains[k] = append(chains[k], v...)
 	}
 
 	remapDb := make(map[string]string, len(sessionRemapDb)+len(inlineRemapDb))
@@ -241,28 +243,19 @@ func rewriteSQL(ctx context.Context, ses *Session, sql string) (string, error) {
 	return hint + " " + sql, nil
 }
 
-// extractInlineRewrites returns the table-rewrite rules and database-remap
-// entries from a leading /*+ {...} */ (or /*!+ {...} */) hint on sql, if
-// present. It only treats a hint whose content is a JSON object (starting with
-// '{') as a rewrite hint; other leading hints yield nothing. The original sql is
-// left untouched — the rules are merged into the single hint rewriteSQL
-// prepends.
-func extractInlineRewrites(ctx context.Context, sql string) (rewrites map[string]string, remapDb map[string]string, err error) {
+// extractInlineRewrites returns the per-table rewrite chains and database-remap
+// entries from a leading /*+ {...} */ (or /*!+ {...} */) hint on sql, if present.
+// It decodes the hint with the same parser logic AddRewriteHints uses, so the
+// inline array-form (chain) syntax stays usable when rewriteSQL merges hints
+// (issue: inline chains were rejected by the session-variable parser). The
+// original sql is left untouched — the rules are merged into the single hint
+// rewriteSQL prepends.
+func extractInlineRewrites(ctx context.Context, sql string) (rewrites map[string][]string, remapDb map[string]string, err error) {
 	content, ok := leadingHintContent(sql)
 	if !ok {
 		return nil, nil, nil
 	}
-	content = strings.TrimSpace(content)
-	if content == "" || content[0] != '{' {
-		return nil, nil, nil
-	}
-	rewrites, remapDb, perr := parseSessionRewrites(ctx, content)
-	if perr != nil {
-		// Report this as an inline-hint problem rather than reusing the
-		// remap_rewrites session-variable wording from parseSessionRewrites.
-		return nil, nil, moerr.NewInvalidInputf(ctx, "invalid inline rewrite hint %q", content)
-	}
-	return rewrites, remapDb, nil
+	return parsers.DecodeRewriteHint(ctx, content)
 }
 
 // extractInlineRemapDb returns only the remapdb entries from a leading
@@ -338,12 +331,12 @@ func getSessionRewriteRules(ctx context.Context, ses *Session) (rewrites map[str
 // rejected: it can never match a table reference, so the rule would silently do
 // nothing (issue #25188). This mirrors the parser's check on inline-hint keys.
 func validateRewriteTableKey(ctx context.Context, key string) error {
-	key = strings.TrimSpace(key)
-	if key == "" {
+	if strings.TrimSpace(key) == "" {
 		return moerr.NewInvalidInput(ctx, "remap_rewrites: table key must not be empty")
 	}
-	parts := strings.Split(key, ".")
-	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+	// Same qualification rule the parser enforces on inline-hint keys, so a value
+	// accepted at SET time never fails later when the hint is re-parsed.
+	if _, _, ok := parsers.SplitRewriteKey(key); !ok {
 		return moerr.NewInvalidInputf(ctx, "remap_rewrites: rewrite table %q must be qualified as database.table", key)
 	}
 	return nil
@@ -377,15 +370,38 @@ func validateRemapRewrites(ctx context.Context, val interface{}) error {
 	return nil
 }
 
-// sessionRemapDb returns the database-remap entries from the remap_rewrites
-// session variable, but only when the rewrite feature is enabled. It is used by
-// statements that are not rewritten through a hint (e.g. USE).
-func sessionRemapDb(ctx context.Context, ses *Session) map[string]string {
+// useStatementRemapDb returns the effective database-remap entries for a USE
+// statement. The session-variable remapdb is read from the variable (not the
+// statement text): a USE is re-stringified per statement during execution, which
+// drops the leading hint rewriteSQL adds, so the text is unreliable here. Any
+// inline hint that did survive on the statement text is merged on top, with the
+// same validation (valid identifiers, no chaining) applied to the result.
+func useStatementRemapDb(ctx context.Context, ses *Session, sql string) (map[string]string, error) {
 	if !ses.rewriteEnabled.Load() {
-		return nil
+		return nil, nil
 	}
-	_, remapDb := getSessionRewriteRules(ctx, ses)
-	return remapDb
+	_, sessionRemap := getSessionRewriteRules(ctx, ses)
+	var inlineRemap map[string]string
+	if content, ok := leadingHintContent(sql); ok {
+		var err error
+		if _, inlineRemap, err = parsers.DecodeRewriteHint(ctx, content); err != nil {
+			return nil, err
+		}
+	}
+	if len(sessionRemap) == 0 && len(inlineRemap) == 0 {
+		return nil, nil
+	}
+	merged := make(map[string]string, len(sessionRemap)+len(inlineRemap))
+	for k, v := range sessionRemap {
+		merged[k] = v
+	}
+	for k, v := range inlineRemap {
+		merged[k] = v
+	}
+	if err := parsers.ValidateRemapDb(ctx, merged); err != nil {
+		return nil, err
+	}
+	return merged, nil
 }
 
 // parseSessionRewrites parses a remap_rewrites value or an inline hint payload
