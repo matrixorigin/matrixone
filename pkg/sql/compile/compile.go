@@ -603,12 +603,15 @@ func (c *Compile) runOnce() (err error) {
 	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		// Filter out pre-check SQLs (already executed before the main operation)
+		// Filter out pre-check SQLs (already executed before the main operation).
+		// The modern INSERT path enforces child→parent existence in-plan now, so the
+		// remaining DetectSqls are self-referencing FK checks (plain 1452 message).
 		var postCheckSqls []string
 		for _, sql := range query.DetectSqls {
-			if !strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
-				postCheckSqls = append(postCheckSqls, sql)
+			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+				continue
 			}
+			postCheckSqls = append(postCheckSqls, sql)
 		}
 		err = detectFkSelfRefer(c, postCheckSqls)
 	}
@@ -1280,18 +1283,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		node.NotCacheable = true
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileDelete(node, ss)
-	case plan.Node_ON_DUPLICATE_KEY:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
-		if err != nil {
-			return nil, err
-		}
-
-		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss, err = c.compileOnduplicateKey(node, ss)
-		if err != nil {
-			return nil, err
-		}
-		return ss, nil
 	case plan.Node_FUZZY_FILTER:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -4550,18 +4541,6 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 	dispatchLocal := constructDispatchLocal(true, true, node.RecursiveSink, node.RecursiveCte, receivers)
 	dispatchLocal.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(dispatchLocal)
-	c.anal.isFirst = false
-
-	ss = []*Scope{rs}
-	return ss, nil
-}
-func (c *Compile) compileOnduplicateKey(node *plan.Node, ss []*Scope) ([]*Scope, error) {
-	rs := c.newMergeScope(ss)
-
-	currentFirstFlag := c.anal.isFirst
-	arg := constructOnduplicateKey(node, c.e)
-	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.setRootOperator(arg)
 	c.anal.isFirst = false
 
 	ss = []*Scope{rs}

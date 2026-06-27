@@ -1845,7 +1845,7 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false
-		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
+		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt {
 			node.IsRightJoin = true
 		}
 

@@ -2,10 +2,12 @@
 -- INSERT ... ON DUPLICATE KEY UPDATE 测试套件
 -- 测试目标：验证 INSERT ON DUPLICATE KEY UPDATE 语句的各种场景
 -- 
--- 重要限制：MatrixOne 不支持更新主键列和唯一键列
+-- 重要限制：MatrixOne 不支持在 SET 子句中更新主键列和唯一键列
 -- - 如果尝试更新主键列或唯一键列，会返回错误
 -- - 对于复合键，只要涉及其中任何一列都不支持更新
--- - 如果主键不冲突但唯一键冲突，MO 不支持 ON DUPLICATE KEY UPDATE, 报错
+-- - 任意唯一键（主键或唯一索引）冲突都会触发更新，对齐 MySQL：
+--   按主键 > 唯一键定义序，更新首个命中的已存在行
+-- - 例外：同一 INSERT 批内多个新行命中相同的新唯一键值，仍保留确定性报错
 -- =====================================================
 
 -- =====================================================
@@ -107,10 +109,10 @@ ON DUPLICATE KEY UPDATE `uv`=VALUES(`uv`), `update_time`=VALUES(`update_time`);
 SELECT * FROM indup_01;
 EXECUTE check_idx;
 
--- 测试 2.2: 唯一索引冲突但主键不冲突（预期报错：MO 不支持此场景）
--- @regex("Duplicate entry '\(beijing,001\)'", true)
-INSERT INTO indup_01 VALUES (100,'beijing','001',888,'2023-02-01') 
+-- 测试 2.2: 唯一索引冲突但主键不冲突，更新被撞行（对齐 MySQL，保留旧主键 id=1）
+INSERT INTO indup_01 VALUES (100,'beijing','001',888,'2023-02-01')
 ON DUPLICATE KEY UPDATE `uv`=VALUES(`uv`), `update_time`=VALUES(`update_time`);
+SELECT * FROM indup_01;
 EXECUTE check_idx;
 
 -- 测试 2.3: 批量插入，混合冲突和非冲突
@@ -178,8 +180,8 @@ CREATE TABLE indup_04_multi_uk(
 );
 
 -- @ignore:0
--- @regex("On Duplicate Key", true)
--- @regex("Join Type: LEFT", true)
+-- @regex("Multi Update", true)
+-- @regex("Join Type: DEDUP", true)
 -- @regex("any_value", false)
 EXPLAIN INSERT INTO indup_04_multi_uk VALUES (99,10,20,999)
 ON DUPLICATE KEY UPDATE value = VALUES(value);
@@ -193,8 +195,7 @@ INSERT INTO indup_04_multi_uk VALUES (99,10,20,999)
 ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_uk ORDER BY a;
 
--- 测试 3.5: 多个唯一键命中不同旧行，应报错而不是任意挑一行更新
--- @regex("Duplicate entry .* key .*", true)
+-- 测试 3.5: 多个唯一键命中不同旧行，对齐 MySQL 语义更新首个命中行（不报错）
 INSERT INTO indup_04_multi_uk VALUES (100,10,21,555)
 ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_uk ORDER BY a;
@@ -223,8 +224,7 @@ INSERT INTO indup_04_multi_comp_uk VALUES (99,10,20,30,40,999)
 ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_comp_uk ORDER BY a;
 
--- 测试 3.7: 复合多个唯一键命中不同旧行，应报错而不是任意挑一行更新
--- @regex("Duplicate entry .* key .*", true)
+-- 测试 3.7: 复合多个唯一键命中不同旧行，对齐 MySQL 语义更新首个命中行（不报错）
 INSERT INTO indup_04_multi_comp_uk VALUES (100,10,20,31,41,555)
 ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_comp_uk ORDER BY a;
@@ -252,6 +252,7 @@ ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_uk_null ORDER BY a;
 
 -- 测试 3.9: 部分唯一键为 NULL 时，非 NULL 唯一键仍应命中对应旧行
+-- @regex("Duplicate entry '10' for key",true)
 INSERT INTO indup_04_multi_uk_null VALUES (4,NULL,10,400)
 ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_uk_null ORDER BY a;
@@ -533,15 +534,15 @@ INSERT INTO indup_09 (biz_type, namespace, sn) VALUES
 SELECT * FROM indup_09;
 EXECUTE check_idx;
 
--- 测试 5.1: 唯一索引冲突但主键不冲突（预期报错：MO 不支持此场景）
--- @regex("Duplicate entry '\(1,ns1\)'", true)
-INSERT INTO indup_09 (biz_type, namespace, sn) VALUES (1, 'ns1', 999) 
+-- 测试 5.1: 唯一索引冲突但主键不冲突，更新被撞行（对齐 MySQL，sn=sn+1）
+INSERT INTO indup_09 (biz_type, namespace, sn) VALUES (1, 'ns1', 999)
 ON DUPLICATE KEY UPDATE sn = sn + 1;
+SELECT * FROM indup_09 WHERE biz_type = 1 AND namespace = 'ns1';
 
--- 测试 5.2: 多次尝试唯一键冲突更新（预期报错）
--- @regex("Duplicate entry '\(1,ns1\)'", true)
-INSERT INTO indup_09 (biz_type, namespace, sn) VALUES (1, 'ns1', 999) 
+-- 测试 5.2: 再次唯一键冲突更新，sn 在上一步基础上继续 +1
+INSERT INTO indup_09 (biz_type, namespace, sn) VALUES (1, 'ns1', 999)
 ON DUPLICATE KEY UPDATE sn = sn + 1;
+SELECT * FROM indup_09 WHERE biz_type = 1 AND namespace = 'ns1';
 
 -- 测试 5.3: 使用主键冲突的方式更新（应该成功）
 INSERT INTO indup_09 (id, biz_type, namespace, sn) VALUES (1, 999, 'ns999', 999) 
@@ -1437,8 +1438,8 @@ DROP TABLE indup_overflow;
 -- =====================================================
 
 -- =====================================================
--- 测试场景 25: 错误场景 - 唯一键冲突但主键不冲突
--- 测试点：验证 MO 只支持主键冲突场景，不支持纯唯一键冲突
+-- 测试场景 25: 唯一键冲突但主键不冲突 - 更新被撞行（对齐 MySQL）
+-- 测试点：纯唯一键冲突触发更新，保留被撞行的主键
 -- =====================================================
 DROP TABLE IF EXISTS indup_err_uk_01;
 CREATE TABLE indup_err_uk_01(
@@ -1455,13 +1456,13 @@ PREPARE check_idx FROM @idxsql;
 INSERT INTO indup_err_uk_01 VALUES (1, 'user@example.com', 'user1');
 EXECUTE check_idx;
 
--- 测试 25.1: 唯一键冲突但主键不冲突（预期报错）
--- @regex("Duplicate entry 'user@example.com'", true)
-INSERT INTO indup_err_uk_01 VALUES (2, 'user@example.com', 'user2') 
+-- 测试 25.1: 唯一键(email)冲突但主键不冲突，更新被撞行的 name（保留 id=1）
+INSERT INTO indup_err_uk_01 VALUES (2, 'user@example.com', 'user2')
 ON DUPLICATE KEY UPDATE name = VALUES(name);
+SELECT * FROM indup_err_uk_01;
 EXECUTE check_idx;
 
--- 测试 25.2: 复合唯一键冲突但主键不冲突
+-- 测试 25.2: 复合唯一键冲突但主键不冲突，更新被撞行
 DROP TABLE IF EXISTS indup_err_uk_02;
 CREATE TABLE indup_err_uk_02(
     id INT PRIMARY KEY,
@@ -1478,10 +1479,10 @@ PREPARE check_idx FROM @idxsql;
 INSERT INTO indup_err_uk_02 VALUES (1, 'a', 'b', 100);
 EXECUTE check_idx;
 
--- 预期报错
--- @regex("Duplicate entry '\(a,b\)'", true)
-INSERT INTO indup_err_uk_02 VALUES (2, 'a', 'b', 200) 
+-- 复合唯一键(col1,col2)冲突，更新被撞行的 value（保留 id=1）
+INSERT INTO indup_err_uk_02 VALUES (2, 'a', 'b', 200)
 ON DUPLICATE KEY UPDATE value = VALUES(value);
+SELECT * FROM indup_err_uk_02;
 EXECUTE check_idx;
 
 
