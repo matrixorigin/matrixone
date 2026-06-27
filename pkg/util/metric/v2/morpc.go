@@ -130,6 +130,22 @@ var (
 			Name:      "circuit_breaker_trips_total",
 			Help:      "Total number of circuit breaker trips (closed -> open).",
 		}, []string{"name", "backend"})
+
+	rpcBackendErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "backend_error_total",
+			Help:      "Total number of classified morpc backend errors.",
+		}, []string{"name", "backend", "phase", "error_type"})
+
+	lockserviceRemoteRPCErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "remote_rpc_error_total",
+			Help:      "Total number of classified lockservice remote RPC errors.",
+		}, []string{"method", "error_type"})
 )
 
 var (
@@ -358,6 +374,14 @@ func NewRPCCircuitBreakerStateGauge(name, backend string) prometheus.Gauge {
 
 func NewRPCCircuitBreakerTripsCounter(name, backend string) prometheus.Counter {
 	return rpcCircuitBreakerTripsCounter.WithLabelValues(name, backend)
+}
+
+func NewRPCBackendErrorCounter(name, backend, phase, errorType string) prometheus.Counter {
+	return rpcBackendErrorCounter.WithLabelValues(name, backend, phase, errorType)
+}
+
+func NewLockserviceRemoteRPCErrorCounter(method, errorType string) prometheus.Counter {
+	return lockserviceRemoteRPCErrorCounter.WithLabelValues(method, errorType)
 }
 
 func GetRPCGCCreateProcessedCounter() prometheus.Counter {
