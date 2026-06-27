@@ -70,6 +70,41 @@ func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
 		remapDbInTableExprs(s.Tables, remap)
 		remapDbInTableExprs(s.TableRefs, remap)
 		remapDbInWhere(s.Where, remap)
+
+	// Table-level DDL: the target table/view/index is a table-level object, so a
+	// qualified <src>.t is remapped. CREATE/ALTER ... AS SELECT bodies are walked
+	// too. Database-level DDL (CREATE/DROP/ALTER DATABASE, USE) is intentionally
+	// absent here and never remapped.
+	case *tree.CreateTable:
+		remapTableName(&s.Table, remap)
+		remapTableName(&s.LikeTableName, remap)
+		if s.AsSource != nil {
+			remapDbInSelect(s.AsSource, remap)
+		}
+	case *tree.CreateView:
+		remapTableName(s.Name, remap)
+		if s.AsSource != nil {
+			remapDbInSelect(s.AsSource, remap)
+		}
+	case *tree.CreateIndex:
+		remapTableName(s.Table, remap)
+	case *tree.AlterTable:
+		remapTableName(s.Table, remap)
+	case *tree.AlterView:
+		remapTableName(s.Name, remap)
+		if s.AsSource != nil {
+			remapDbInSelect(s.AsSource, remap)
+		}
+	case *tree.DropTable:
+		for _, n := range s.Names {
+			remapTableName(n, remap)
+		}
+	case *tree.DropView:
+		for _, n := range s.Names {
+			remapTableName(n, remap)
+		}
+	case *tree.DropIndex:
+		remapTableName(s.TableName, remap)
 	}
 }
 

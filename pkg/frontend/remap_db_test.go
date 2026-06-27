@@ -149,4 +149,61 @@ func TestApplyRemapDb(t *testing.T) {
 		require.Contains(t, out, "dbyyy.s")
 		require.NotContains(t, out, "dbxxx")
 	})
+
+	// table-level DDL: the qualified target is remapped
+	t.Run("create table", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "create table dbxxx.t(id int)", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.NotContains(t, out, "dbxxx")
+	})
+	t.Run("create table as select", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "create table dbxxx.t as select * from dbxxx.s", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.Contains(t, out, "dbyyy.s")
+		require.NotContains(t, out, "dbxxx")
+	})
+	t.Run("create view", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "create view dbxxx.v as select * from dbxxx.t", remap)
+		require.Contains(t, out, "dbyyy.v")
+		require.Contains(t, out, "dbyyy.t")
+		require.NotContains(t, out, "dbxxx")
+	})
+	t.Run("create index", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "create index ix on dbxxx.t(id)", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.NotContains(t, out, "dbxxx")
+	})
+	t.Run("alter table", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "alter table dbxxx.t add column c int", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.NotContains(t, out, "dbxxx")
+	})
+	t.Run("drop table multi", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "drop table dbxxx.t, dbxxx.s", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.Contains(t, out, "dbyyy.s")
+		require.NotContains(t, out, "dbxxx")
+	})
+	t.Run("drop view", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "drop view dbxxx.v", remap)
+		require.Contains(t, out, "dbyyy.v")
+		require.NotContains(t, out, "dbxxx")
+	})
+	t.Run("drop index", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "drop index ix on dbxxx.t", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	// database-level DDL is NOT remapped
+	t.Run("create database is not remapped", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "create database dbxxx", map[string]string{"dbxxx": "dbyyy"})
+		require.Contains(t, out, "dbxxx")
+		require.NotContains(t, out, "dbyyy")
+	})
+	t.Run("drop database is not remapped", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "drop database dbxxx", map[string]string{"dbxxx": "dbyyy"})
+		require.Contains(t, out, "dbxxx")
+		require.NotContains(t, out, "dbyyy")
+	})
 }
