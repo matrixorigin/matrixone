@@ -238,6 +238,26 @@ replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com
 select name, email, value from t_replace_multi_uk_batch order by name;
 drop table t_replace_multi_uk_batch;
 
+-- MySQL-compatible REPLACE syntax variants: TABLE source (with/without column list), LOW_PRIORITY, DELAYED
+drop table if exists t_replace_src;
+drop table if exists t_replace_dst;
+create table t_replace_src (id int primary key, v int);
+create table t_replace_dst (id int primary key, v int);
+insert into t_replace_src values (1, 10), (2, 20), (3, 30);
+insert into t_replace_dst values (1, 999);
+replace into t_replace_dst table t_replace_src;
+select * from t_replace_dst order by id;
+replace into t_replace_dst (id, v) table t_replace_src;
+select * from t_replace_dst order by id;
+drop table t_replace_src;
+drop table t_replace_dst;
+drop table if exists t_replace_prio;
+create table t_replace_prio (id int primary key, v int);
+replace low_priority into t_replace_prio values (1, 20);
+replace delayed into t_replace_prio values (1, 30);
+select * from t_replace_prio order by id;
+drop table t_replace_prio;
+
 -- fake-PK table with a composite nullable unique key: a REPLACE whose composite
 -- unique-key part is statically NULL (column a omitted -> NULL) serializes to a NULL
 -- key, can never conflict, and behaves like a plain INSERT (no existing row deleted;
