@@ -57,8 +57,15 @@ type service struct {
 	clock                clock.Clock
 	stopper              *stopper.Stopper
 	stopOnce             sync.Once
+	bindChangeMu         sync.RWMutex
 	fetchWhoWaitingListC chan who
 	logger               *log.MOLogger
+
+	allocatorVersionMu         sync.Mutex
+	lastAllocatorVersion       uint64
+	lastAllocatorID            string
+	supersededAllocatorIDs     map[string]struct{}
+	supersededAllocatorIDOrder []string
 
 	remote struct {
 		client Client
@@ -76,10 +83,13 @@ type service struct {
 	}
 
 	option struct {
-		wait       func()
-		serverOpts []ServerOption
+		wait                      func()
+		beforeRemoteLockBindCheck func()
+		serverOpts                []ServerOption
 	}
 }
+
+const maxSupersededAllocatorIDs = 64
 
 // NewLockService create a lock service instance
 func NewLockService(
@@ -160,28 +170,43 @@ func (s *service) Lock(
 		return pb.Result{}, err
 	}
 
+	s.bindChangeMu.RLock()
 	// All txn lock op must be serial. And avoid dead lock between doAcquireLock
 	// and getLock. The doAcquireLock and getLock operations of the same transaction
 	// will be concurrent (deadlock detection), which may lead to a deadlock in mutex.
 	txn.Lock()
 	defer txn.Unlock()
 	if !bytes.Equal(txn.txnID, txnID) {
+		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrTxnNotFound
 	}
 	if txn.deadlockFound {
+		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrDeadLockDetected
+	}
+	if txn.bindChanged {
+		s.bindChangeMu.RUnlock()
+		return pb.Result{}, ErrLockTableBindChanged
 	}
 
 	// it needs to inc table bind ref when set restart cn
-	h := txn.getHoldLocksLocked(l.getBind().Group)
-	_, hasBind := h.tableBinds[l.getBind().Table]
+	bind := l.getBind()
+	current := s.tableGroups.get(bind.Group, bind.Table)
+	if current == nil || current.getBind().Changed(bind) {
+		s.bindChangeMu.RUnlock()
+		return pb.Result{}, ErrLockTableBindChanged
+	}
+	h := txn.getHoldLocksLocked(bind.Group)
+	_, hasBind := h.tableBinds[bind.Table]
+	txn.lockTableBindTouched(bind)
+	s.bindChangeMu.RUnlock()
 	defer func() {
 		if s.isStatus(pb.Status_ServiceLockEnable) ||
 			err != nil ||
 			hasBind {
 			return
 		}
-		s.incRef(l.getBind().Group, l.getBind().Table)
+		s.incRef(bind.Group, bind.Table)
 	}()
 
 	var result pb.Result
@@ -194,7 +219,38 @@ func (s *service) Lock(
 			result = r
 			err = e
 		})
+	if err == nil {
+		if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
+			result = pb.Result{}
+			err = e
+		}
+	}
 	return result, err
+}
+
+func (s *service) checkBindChangedBeforeLockSuccess(
+	txn *activeTxn,
+	txnID []byte,
+	bind pb.LockTable,
+) error {
+	// Let any pending bind-change fence complete before reporting lock success.
+	// Keep the lock order consistent with Lock: bindChangeMu before txn.Lock.
+	txn.Unlock()
+	s.bindChangeMu.RLock()
+	txn.Lock()
+	defer s.bindChangeMu.RUnlock()
+
+	if !bytes.Equal(txn.txnID, txnID) {
+		return ErrTxnNotFound
+	}
+	if txn.bindChanged {
+		return ErrLockTableBindChanged
+	}
+	l := s.tableGroups.get(bind.Group, bind.Table)
+	if l == nil || l.getBind().Changed(bind) {
+		return ErrLockTableBindChanged
+	}
+	return nil
 }
 
 func (s *service) Unlock(
@@ -391,7 +447,7 @@ func (s *service) Close() error {
 	var err error
 	s.stopOnce.Do(func() {
 		s.stopper.Stop()
-		s.tableGroups.removeWithFilter(func(_ uint64, _ lockTable) bool { return true })
+		s.tableGroups.removeWithFilter(func(_ uint64, _ lockTable) bool { return true }, closeReasonServiceClose)
 		if err = s.remote.client.Close(); err != nil {
 			return
 		}
@@ -585,7 +641,8 @@ func (s *service) getLockTableWithCreate(
 		close(c)
 	}()
 
-	bind, err := getLockTableBind(
+	requestAllocator := s.allocatorStateSnapshot()
+	bind, allocator, err := getLockTableBind(
 		s.remote.client,
 		group,
 		tableID,
@@ -596,13 +653,337 @@ func (s *service) getLockTableWithCreate(
 		return nil, err
 	}
 
-	v := s.tableGroups.set(group, tableID, s.createLockTableByBind(bind))
-	return v, nil
+	return s.publishLockTableBindFromAllocator(
+		"get-bind",
+		group,
+		tableID,
+		bind,
+		allocator,
+		requestAllocator)
+}
+
+func (s *service) publishLockTableBindFromAllocator(
+	source string,
+	group uint32,
+	tableID uint64,
+	bind pb.LockTable,
+	allocator allocatorState,
+	requestAllocator allocatorState,
+) (lockTable, error) {
+	s.allocatorVersionMu.Lock()
+	defer s.allocatorVersionMu.Unlock()
+
+	if _, accepted := s.observeAllocatorStateLocked(
+		source,
+		allocator,
+		requestAllocator,
+		true,
+		s.tableGroups); !accepted {
+		return nil, ErrLockTableBindChanged
+	}
+
+	s.bindChangeMu.Lock()
+	defer s.bindChangeMu.Unlock()
+
+	current := s.tableGroups.get(group, tableID)
+	if current != nil {
+		if current.getBind().Changed(bind) {
+			return nil, ErrLockTableBindChanged
+		}
+		return current, nil
+	}
+	return s.tableGroups.set(group, tableID, s.createLockTableByBind(bind)), nil
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
+	s.bindChangeMu.Lock()
+	defer s.bindChangeMu.Unlock()
+
 	new := s.createLockTableByBind(newBind)
 	s.tableGroups.set(newBind.Group, newBind.Table, new)
+	s.fenceByBindChanged(newBind)
+}
+
+func (s *service) handleBindChangedFromAllocator(
+	source string,
+	oldBind pb.LockTable,
+	newBind pb.LockTable,
+	allocator allocatorState,
+	requestAllocator allocatorState,
+) error {
+	s.allocatorVersionMu.Lock()
+	defer s.allocatorVersionMu.Unlock()
+
+	if _, accepted := s.observeAllocatorStateLocked(
+		source,
+		allocator,
+		requestAllocator,
+		true,
+		s.tableGroups); !accepted {
+		return ErrLockTableBindChanged
+	}
+
+	s.bindChangeMu.Lock()
+	defer s.bindChangeMu.Unlock()
+
+	current := s.tableGroups.get(newBind.Group, newBind.Table)
+	if current != nil {
+		currentBind := current.getBind()
+		if !currentBind.Changed(newBind) {
+			return nil
+		}
+		if currentBind.Changed(oldBind) {
+			return ErrLockTableBindChanged
+		}
+	}
+
+	new := s.createLockTableByBind(newBind)
+	s.tableGroups.set(newBind.Group, newBind.Table, new)
+	s.fenceByBindChanged(newBind)
+	return nil
+}
+
+func (s *service) fenceByBindChanged(bind pb.LockTable) {
+	if s.activeTxnHolder == nil {
+		return
+	}
+	s.activeTxnHolder.fenceByBindChanged(bind)
+}
+
+func (s *service) observeAllocatorVersion(source string, observedVersion uint64) int {
+	return s.observeAllocatorStateWithHolders(source, allocatorState{version: observedVersion}, s.tableGroups)
+}
+
+func (s *service) observeAllocatorStateWithHolders(
+	source string,
+	observed allocatorState,
+	holders *lockTableHolders,
+) int {
+	removed, _ := s.observeAllocatorStateWithHoldersFromSnapshot(source, observed, allocatorState{}, false, holders)
+	return removed
+}
+
+func (s *service) observeAllocatorStateWithHoldersFromSnapshot(
+	source string,
+	observed allocatorState,
+	requestAllocator allocatorState,
+	hasRequestAllocator bool,
+	holders *lockTableHolders,
+) (int, bool) {
+	s.allocatorVersionMu.Lock()
+	defer s.allocatorVersionMu.Unlock()
+	return s.observeAllocatorStateLocked(source, observed, requestAllocator, hasRequestAllocator, holders)
+}
+
+func (s *service) observeAllocatorStateLocked(
+	source string,
+	observed allocatorState,
+	requestAllocator allocatorState,
+	hasRequestAllocator bool,
+	holders *lockTableHolders,
+) (int, bool) {
+	if observed.version == 0 && observed.id == "" {
+		return 0, true
+	}
+
+	oldVersion := s.lastAllocatorVersion
+	oldID := s.lastAllocatorID
+	allocatorChanged := observed.id != "" &&
+		observed.id != oldID &&
+		(oldID != "" || oldVersion != 0)
+	if s.isAllocatorStateRejectedLocked(source, observed, requestAllocator, hasRequestAllocator, allocatorChanged, oldID, oldVersion) {
+		return 0, false
+	}
+	if !allocatorChanged && oldVersion != 0 && observed.version < oldVersion {
+		v2.GetLockServiceAllocatorEpochRegressionCounter(source).Inc()
+		logAllocatorEpochRegression(s.logger, source, oldVersion, observed.version)
+		return 0, false
+	}
+	if !allocatorChanged && observed.version == oldVersion {
+		return 0, true
+	}
+
+	// Defensive path for minimal service instances used by keeper tests.
+	// Normal lock services always pass a holder and can purge stale binds.
+	if holders == nil {
+		s.updateAllocatorStateLocked(observed)
+		v2.LockServiceAllocatorEpochObservedGauge.Set(float64(observed.version))
+		v2.GetLockServiceAllocatorEpochChangedCounter(source).Inc()
+		logAllocatorEpochChanged(s.logger, source, oldVersion, observed.version, 0)
+		return 0, true
+	}
+
+	s.bindChangeMu.Lock()
+	removed := s.removeLockTablesWithFence(holders, func(bind pb.LockTable) bool {
+		if allocatorChanged {
+			if observed.id != "" && bind.AllocatorID != "" {
+				return bind.AllocatorID != observed.id
+			}
+			return true
+		}
+		return bind.Version < observed.version
+	}, observed)
+	s.bindChangeMu.Unlock()
+
+	s.updateAllocatorStateLocked(observed)
+	v2.LockServiceAllocatorEpochObservedGauge.Set(float64(observed.version))
+	v2.GetLockServiceAllocatorEpochChangedCounter(source).Inc()
+	if removed > 0 {
+		v2.GetLockServiceStaleBindPurgedCounter(source).Add(float64(removed))
+	}
+	logAllocatorEpochChanged(s.logger, source, oldVersion, observed.version, removed)
+	return removed, true
+}
+
+func (s *service) updateAllocatorStateLocked(observed allocatorState) {
+	if observed.id != "" {
+		if s.lastAllocatorID != "" && s.lastAllocatorID != observed.id {
+			s.addSupersededAllocatorIDLocked(s.lastAllocatorID)
+		}
+		s.lastAllocatorID = observed.id
+	}
+	if observed.version != 0 {
+		s.lastAllocatorVersion = observed.version
+	}
+}
+
+func (s *service) addSupersededAllocatorIDLocked(id string) {
+	if id == "" {
+		return
+	}
+	if s.supersededAllocatorIDs == nil {
+		s.supersededAllocatorIDs = make(map[string]struct{})
+	}
+	if _, ok := s.supersededAllocatorIDs[id]; ok {
+		return
+	}
+	s.supersededAllocatorIDs[id] = struct{}{}
+	s.supersededAllocatorIDOrder = append(s.supersededAllocatorIDOrder, id)
+	if len(s.supersededAllocatorIDOrder) <= maxSupersededAllocatorIDs {
+		return
+	}
+	evicted := s.supersededAllocatorIDOrder[0]
+	copy(s.supersededAllocatorIDOrder, s.supersededAllocatorIDOrder[1:])
+	s.supersededAllocatorIDOrder[len(s.supersededAllocatorIDOrder)-1] = ""
+	s.supersededAllocatorIDOrder = s.supersededAllocatorIDOrder[:len(s.supersededAllocatorIDOrder)-1]
+	delete(s.supersededAllocatorIDs, evicted)
+}
+
+func (s *service) allocatorStateSnapshot() allocatorState {
+	s.allocatorVersionMu.Lock()
+	defer s.allocatorVersionMu.Unlock()
+	return allocatorState{
+		id:      s.lastAllocatorID,
+		version: s.lastAllocatorVersion,
+	}
+}
+
+func (s *service) isAllocatorStateRejectedLocked(
+	source string,
+	observed allocatorState,
+	requestAllocator allocatorState,
+	hasRequestAllocator bool,
+	allocatorChanged bool,
+	oldID string,
+	oldVersion uint64,
+) bool {
+	if observed.id != "" {
+		if _, ok := s.supersededAllocatorIDs[observed.id]; ok {
+			v2.GetLockServiceAllocatorEpochRegressionCounter(source).Inc()
+			logAllocatorEpochRegression(s.logger, source, oldVersion, observed.version)
+			return true
+		}
+		if hasRequestAllocator &&
+			(requestAllocator.id != oldID || requestAllocator.version != oldVersion) &&
+			oldID != "" &&
+			observed.id != oldID {
+			v2.GetLockServiceAllocatorEpochRegressionCounter(source).Inc()
+			logAllocatorEpochRegression(s.logger, source, oldVersion, observed.version)
+			return true
+		}
+	}
+	if !allocatorChanged && oldVersion != 0 && observed.version < oldVersion {
+		v2.GetLockServiceAllocatorEpochRegressionCounter(source).Inc()
+		logAllocatorEpochRegression(s.logger, source, oldVersion, observed.version)
+		return true
+	}
+	return false
+}
+
+func (s *service) removeLockTablesWithFence(
+	holders *lockTableHolders,
+	filter func(pb.LockTable) bool,
+	observed allocatorState,
+) int {
+	var removedBinds []pb.LockTable
+	removed := holders.removeWithFilter(func(_ uint64, lt lockTable) bool {
+		bind := lt.getBind()
+		if !filter(bind) {
+			return false
+		}
+		removedBinds = append(removedBinds, fenceBindForAllocatorState(bind, observed))
+		return true
+	}, closeReasonBindChanged)
+	for _, bind := range removedBinds {
+		s.fenceByBindChanged(bind)
+	}
+	return removed
+}
+
+func fenceBindForAllocatorState(
+	bind pb.LockTable,
+	observed allocatorState,
+) pb.LockTable {
+	bind.AllocatorID = observed.id
+	if observed.version > bind.Version {
+		bind.Version = observed.version
+	} else {
+		bind.Version++
+	}
+	return bind
+}
+
+func (s *service) handleKeepBindFailed(
+	serviceID string,
+	holders *lockTableHolders,
+	oldTableVersion uint64,
+	allocator allocatorState,
+	requestAllocator allocatorState,
+) int {
+	s.allocatorVersionMu.Lock()
+	defer s.allocatorVersionMu.Unlock()
+
+	if s.isAllocatorStateRejectedLocked(
+		"keepalive-ok-false-epoch",
+		allocator,
+		requestAllocator,
+		true,
+		allocator.id != "" && allocator.id != s.lastAllocatorID && (s.lastAllocatorID != "" || s.lastAllocatorVersion != 0),
+		s.lastAllocatorID,
+		s.lastAllocatorVersion) {
+		return 0
+	}
+
+	if holders == nil {
+		s.observeAllocatorStateLocked("keepalive-ok-false-epoch", allocator, requestAllocator, true, nil)
+		return 0
+	}
+
+	// Keep the original OK=false snapshot guard: if another local purge already
+	// changed holders.version, this service-level purge should skip this round.
+	s.bindChangeMu.Lock()
+	removed := s.removeLockTablesWithFence(holders, func(bind pb.LockTable) bool {
+		if oldTableVersion != holders.getVersion() {
+			return false
+		}
+		return bind.ServiceID == serviceID
+	}, allocator)
+	s.bindChangeMu.Unlock()
+	if removed > 0 {
+		v2.GetLockServiceStaleBindPurgedCounter("keepalive-ok-false-service").Add(float64(removed))
+	}
+	s.observeAllocatorStateLocked("keepalive-ok-false-epoch", allocator, requestAllocator, true, holders)
+	return removed
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
@@ -631,6 +1012,8 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 			s.handleBindChanged,
 			s.logger,
 		)
+		remote.allocatorStateProvider = s.allocatorStateSnapshot
+		remote.allocatorBindChangedHandler = s.handleBindChangedFromAllocator
 		if !s.cfg.EnableRemoteLocalProxy {
 			return remote
 		}
@@ -653,6 +1036,7 @@ type activeTxnHolder interface {
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
 	hasActiveTxn(txnID []byte) bool
 	deleteActiveTxn(txnID []byte) *activeTxn
+	fenceByBindChanged(bind pb.LockTable) int
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
 	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
@@ -792,6 +1176,19 @@ func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
 		delete(h.mu.activeTxnServices, txnKey)
 	}
 	return v
+}
+
+func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	n := 0
+	for _, txn := range h.mu.activeTxns {
+		if txn.fenceByBindChanged(bind, h.logger) {
+			n++
+		}
+	}
+	return n
 }
 
 func (h *mapBasedTxnHolder) keepRemoteActiveTxn(remoteService string) {
@@ -1016,6 +1413,8 @@ func getRemoteLockBindKey(remoteService string, bind pb.LockTable) string {
 	b.WriteString(bind.ServiceID)
 	b.WriteByte('/')
 	b.WriteString(strconv.FormatUint(bind.Version, 10))
+	b.WriteByte('/')
+	b.WriteString(bind.AllocatorID)
 	return b.String()
 }
 
@@ -1071,19 +1470,22 @@ func (m *lockTableHolders) iter(fn func(uint64, lockTable) bool) {
 	}
 }
 
-func (m *lockTableHolders) removeWithFilter(filter func(uint64, lockTable) bool) {
+func (m *lockTableHolders) removeWithFilter(
+	filter func(uint64, lockTable) bool,
+	reasons ...closeReason,
+) int {
 	m.RLock()
 	defer m.RUnlock()
 
-	removed := false
+	reason := closeReasonOrDefault(reasons)
+	removed := 0
 	for _, h := range m.holders {
-		if h.removeWithFilter(filter) {
-			removed = true
-		}
+		removed += h.removeWithFilter(filter, reason)
 	}
-	if removed {
+	if removed > 0 {
 		m.version.Add(1)
 	}
+	return removed
 }
 
 // getVersion returns the current version of the lockTableHolders
@@ -1121,12 +1523,12 @@ func (m *lockTableHolder) set(
 	oldBind := old.getBind()
 	newBind := new.getBind()
 	if oldBind.Changed(newBind) {
-		old.close()
+		old.close(closeReasonBindChanged)
 		m.tables[id] = new
 		logRemoteBindChanged(logger, m.service, oldBind, newBind)
 		return new
 	}
-	new.close()
+	new.close(closeReasonBindChanged)
 	return old
 }
 
@@ -1141,15 +1543,19 @@ func (m *lockTableHolder) iter(fn func(uint64, lockTable) bool) bool {
 	return true
 }
 
-func (m *lockTableHolder) removeWithFilter(filter func(uint64, lockTable) bool) bool {
+func (m *lockTableHolder) removeWithFilter(
+	filter func(uint64, lockTable) bool,
+	reasons ...closeReason,
+) int {
 	m.Lock()
 	defer m.Unlock()
-	removed := false
+	reason := closeReasonOrDefault(reasons)
+	removed := 0
 	for id, v := range m.tables {
 		if filter(id, v) {
-			v.close()
+			v.close(reason)
 			delete(m.tables, id)
-			removed = true
+			removed++
 		}
 	}
 	return removed

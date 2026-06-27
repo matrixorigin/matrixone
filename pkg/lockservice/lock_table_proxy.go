@@ -206,8 +206,8 @@ func (lp *localLockTableProxy) getBind() pb.LockTable {
 	return lp.remote.getBind()
 }
 
-func (lp *localLockTableProxy) close() {
-	lp.remote.close()
+func (lp *localLockTableProxy) close(reasons ...closeReason) {
+	lp.remote.close(reasons...)
 }
 
 type sharedOps struct {
