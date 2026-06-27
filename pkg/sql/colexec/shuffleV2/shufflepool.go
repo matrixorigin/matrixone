@@ -70,6 +70,12 @@ type ShufflePoolV2 struct {
 	batchPoolLock sync.Mutex
 }
 
+func (sp *ShufflePoolV2) SetMaxHolders(n int32) {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	sp.maxHolders = n
+}
+
 func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePoolV2 {
 	sp := &ShufflePoolV2{bucketNum: bucketNum, maxHolders: maxHolders}
 	sp.holders = 0
@@ -121,7 +127,7 @@ func (sp *ShufflePoolV2) stopWriting() {
 func (sp *ShufflePoolV2) allStop() bool {
 	sp.holderLock.Lock()
 	defer sp.holderLock.Unlock()
-	return sp.stoppers == sp.maxHolders
+	return sp.stoppers >= sp.holders
 }
 
 func (sp *ShufflePoolV2) Reset(m *mpool.MPool) {
@@ -237,6 +243,28 @@ func (sp *ShufflePoolV2) getLastBatch(shuffleIDX int32) *batch.Batch {
 		bat.ShuffleIDX = shuffleIDX
 	}
 	return bat
+}
+
+// getAnyFullBatch scans all buckets and returns the first full batch found.
+// Used when maxHolders == 1 (single worker serving all buckets for multi-CN dispatch).
+func (sp *ShufflePoolV2) getAnyFullBatch() *batch.Batch {
+	for i := int32(0); i < sp.bucketNum; i++ {
+		if bat := sp.getFullBatch(i); bat != nil {
+			return bat
+		}
+	}
+	return nil
+}
+
+// getAnyLastBatch drains remaining batches from all buckets when all writers have stopped.
+// Used when maxHolders == 1 (single worker serving all buckets for multi-CN dispatch).
+func (sp *ShufflePoolV2) getAnyLastBatch() *batch.Batch {
+	for i := int32(0); i < sp.bucketNum; i++ {
+		if bat := sp.getLastBatch(i); bat != nil {
+			return bat
+		}
+	}
+	return nil
 }
 
 func (sp *ShufflePoolV2) putAllBatchIntoPoolByShuffleIdx(srcBatch *batch.Batch, proc *process.Process, shuffleIDX int32) error {

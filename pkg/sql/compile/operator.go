@@ -401,6 +401,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		if sourceArg.GetShufflePool() == nil {
 			sourceArg.SetShufflePool(shuffleV2.NewShufflePool(sourceArg.BucketNum, int32(maxParallel)))
 		}
+		sourceArg.GetShufflePool().SetMaxHolders(int32(maxParallel))
 		op := shuffleV2.NewArgument()
 		op.SetShufflePool(sourceArg.GetShufflePool())
 		op.ShuffleType = sourceArg.ShuffleType
@@ -1541,41 +1542,8 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 	return hasRemote, arg
 }
 
-func constructShuffleOperatorForJoinV2(bucketNum int32, node *plan.Node, left bool) *shuffleV2.ShuffleV2 {
+func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool) *shuffleV2.ShuffleV2 {
 	arg := shuffleV2.NewArgument()
-	var expr *plan.Expr
-	cond := node.OnList[node.Stats.HashmapStats.ShuffleColIdx]
-	switch condImpl := cond.Expr.(type) {
-	case *plan.Expr_F:
-		if left {
-			expr = condImpl.F.Args[0]
-		} else {
-			expr = condImpl.F.Args[1]
-		}
-	}
-
-	hashCol, typ := plan2.GetHashColumn(expr)
-	if hashCol != nil {
-		arg.ShuffleColIdx = hashCol.ColPos
-	} else {
-		// expression-based shuffle (e.g., serial_full)
-		arg.ShuffleExpr = plan2.DeepCopyExpr(expr)
-	}
-	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
-	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
-	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
-	arg.BucketNum = bucketNum
-	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	}
-	return arg
-}
-
-func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool) *shuffle.Shuffle {
-	arg := shuffle.NewArgument()
 	var expr *plan.Expr
 	cond := node.OnList[node.Stats.HashmapStats.ShuffleColIdx]
 	switch condImpl := cond.Expr.(type) {
@@ -1610,7 +1578,7 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	return arg
 }
 
-func constructShuffleArgForGroupV2(node *plan.Node, dop int32) *shuffleV2.ShuffleV2 {
+func constructShuffleArgForGroup(node *plan.Node, dop int32) *shuffleV2.ShuffleV2 {
 	arg := shuffleV2.NewArgument()
 	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
 	arg.ShuffleColIdx = hashCol.ColPos
@@ -1627,24 +1595,6 @@ func constructShuffleArgForGroupV2(node *plan.Node, dop int32) *shuffleV2.Shuffl
 	return arg
 }
 
-func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle {
-	arg := shuffle.NewArgument()
-	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
-	arg.ShuffleColIdx = hashCol.ColPos
-	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
-	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
-	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
-	arg.BucketNum = int32(len(ss))
-	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	}
-	return arg
-}
-
-// cross-cn dispath  will send same batch to all register
 func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node, left bool) *dispatch.Dispatch {
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, target, source)
 	if node.Stats.HashmapStats.Shuffle {
