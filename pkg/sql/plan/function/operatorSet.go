@@ -69,6 +69,27 @@ func requireDecimalReturn(source []types.Type) bool {
 	return hasDecimal
 }
 
+func textStringCommonType(source []types.Type) (types.Type, bool, bool) {
+	hasText := false
+	aligned := true
+	for _, input := range source {
+		switch input.Oid {
+		case types.T_text:
+			hasText = true
+		case types.T_any:
+			aligned = false
+		case types.T_char, types.T_varchar:
+			aligned = false
+		default:
+			return types.Type{}, false, false
+		}
+	}
+	if !hasText {
+		return types.Type{}, false, false
+	}
+	return types.T_text.ToType(), aligned, true
+}
+
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 func caseCheck(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
@@ -126,6 +147,25 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 		if l%2 == 1 {
 			source = append(source, inputs[l-1])
+		}
+
+		if retType, resultAligned, ok := textStringCommonType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast || !resultAligned
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = retType
+				}
+				if finalTypes[i].Oid != inputs[i].Oid {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
 		}
 
 		target := make([]types.T, len(source))
@@ -388,6 +428,19 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			retType := types.T_varchar.ToType()
 			setMaxWidthFromSource(&retType, source)
 			return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), retType, retType})
+		}
+		if retType, resultAligned, ok := textStringCommonType(source); ok {
+			finalTypes := []types.Type{types.T_bool.ToType(), retType, retType}
+			shouldCast := needCast || !resultAligned
+			for i := range inputs {
+				if inputs[i].Oid != finalTypes[i].Oid {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
 		}
 
 		minCost := math.MaxInt32

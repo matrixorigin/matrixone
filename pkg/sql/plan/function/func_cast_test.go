@@ -2394,19 +2394,19 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 		errMsg    string
 	}{
 		{
-			name:     "TEXT to CHAR(255) with length 260 - should succeed",
+			name:     "TEXT to CHAR(255) with length 260 - should truncate",
 			inputs:   []string{longString260},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_char, 255, 0),
-			want:     []string{longString260}, // Should keep original length
+			want:     []string{strings.Repeat("a", 255)},
 			wantErr:  false,
 		},
 		{
-			name:     "TEXT to VARCHAR(255) with length 260 - should succeed",
+			name:     "TEXT to VARCHAR(255) with length 260 - should truncate",
 			inputs:   []string{longString260},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_varchar, 255, 0),
-			want:     []string{longString260}, // Should keep original length
+			want:     []string{strings.Repeat("a", 255)},
 			wantErr:  false,
 		},
 		{
@@ -2420,36 +2420,32 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			wantErr:   false,
 		},
 		{
-			name:     "VARCHAR to CHAR(10) with length 100 - should fail (normal behavior)",
+			name:     "VARCHAR to CHAR(10) with length 100 - should truncate",
 			inputs:   []string{longString100},
 			fromType: types.New(types.T_varchar, 100, 0),
 			toType:   types.New(types.T_char, 10, 0),
-			wantErr:  true,
-			errMsg:   "larger than Dest length",
+			want:     []string{strings.Repeat("b", 10)},
 		},
 		{
-			name:     "TEXT to CHAR(1) with length > 1 - should fail (explicit CAST)",
+			name:     "TEXT to CHAR(1) with length > 1 - should truncate",
 			inputs:   []string{"ab"},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_char, 1, 0),
-			wantErr:  true,
-			errMsg:   "larger than Dest length",
+			want:     []string{"a"},
 		},
 		{
-			name:     "TEXT to CHAR(10) with length 100 - should fail (explicit CAST to small width)",
+			name:     "TEXT to CHAR(10) with length 100 - should truncate",
 			inputs:   []string{longString100},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_char, 10, 0),
-			wantErr:  true,
-			errMsg:   "larger than Dest length",
+			want:     []string{strings.Repeat("b", 10)},
 		},
 		{
-			name:     "TEXT to VARCHAR(10) with length 100 - should fail (explicit CAST to small width)",
+			name:     "TEXT to VARCHAR(10) with length 100 - should truncate",
 			inputs:   []string{longString100},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_varchar, 10, 0),
-			wantErr:  true,
-			errMsg:   "larger than Dest length",
+			want:     []string{strings.Repeat("b", 10)},
 		},
 		{
 			name:     "TEXT to TEXT - should succeed",
@@ -2460,12 +2456,19 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name:     "TEXT to CHAR(255) with multiple values",
+			name:     "TEXT to CHAR(255) with multiple values - over-width truncates",
 			inputs:   []string{"short", longString260, "medium length string"},
 			fromType: types.T_text.ToType(),
 			toType:   types.New(types.T_char, 255, 0),
-			want:     []string{"short", longString260, "medium length string"},
+			want:     []string{"short", strings.Repeat("a", 255), "medium length string"},
 			wantErr:  false,
+		},
+		{
+			name:     "TEXT to VARCHAR(3) with multibyte value - should truncate by rune",
+			inputs:   []string{"你好世界"},
+			fromType: types.T_text.ToType(),
+			toType:   types.New(types.T_varchar, 3, 0),
+			want:     []string{"你好世"},
 		},
 		{
 			name:     "VARCHAR to GEOMETRY with valid point",
@@ -2522,7 +2525,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2585,7 +2588,7 @@ func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	err := to.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType())
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }
