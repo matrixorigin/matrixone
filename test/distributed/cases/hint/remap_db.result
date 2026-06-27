@@ -75,18 +75,31 @@ select * from rdb_dml.t order by id;
 3  ¦  999
 set remap_rewrites = '';
 drop database if exists rdb_dml;
-use rdb_src;
-Unknown database rdb_src
+create database rdb_src;
+create table rdb_src.t(id int, v int);
+insert into rdb_src.t values (100,1000),(200,2000);
 set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst"}}';
 use rdb_src;
 select database() as curdb;
 ➤ curdb[12,-1,0]  𝄀
-rdb_dst
+rdb_src
 select * from t order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  10  𝄀
 2  ¦  20  𝄀
 3  ¦  30
+select * from rdb_src.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+set remap_rewrites = '';
+select * from t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+100  ¦  1000  𝄀
+200  ¦  2000
+use mysql;
+drop database if exists rdb_src;
 drop database if exists rdb_dst2;
 create database rdb_dst2;
 create table rdb_dst2.t(id int, v int);

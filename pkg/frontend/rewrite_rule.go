@@ -394,40 +394,6 @@ func validateRemapRewrites(ctx context.Context, val interface{}) error {
 	return nil
 }
 
-// useStatementRemapDb returns the effective database-remap entries for a USE
-// statement. The session-variable remapdb is read from the variable (not the
-// statement text): a USE is re-stringified per statement during execution, which
-// drops the leading hint rewriteSQL adds, so the text is unreliable here. Any
-// inline hint that did survive on the statement text is merged on top, with the
-// same validation (valid identifiers, no chaining) applied to the result.
-func useStatementRemapDb(ctx context.Context, ses *Session, sql string) (map[string]string, error) {
-	if !ses.rewriteEnabled.Load() {
-		return nil, nil
-	}
-	_, sessionRemap := getSessionRewriteRules(ctx, ses)
-	var inlineRemap map[string]string
-	if content, ok := leadingHintContent(sql); ok {
-		var err error
-		if _, inlineRemap, err = parsers.DecodeRewriteHint(ctx, content); err != nil {
-			return nil, err
-		}
-	}
-	if len(sessionRemap) == 0 && len(inlineRemap) == 0 {
-		return nil, nil
-	}
-	merged := make(map[string]string, len(sessionRemap)+len(inlineRemap))
-	for k, v := range sessionRemap {
-		merged[k] = v
-	}
-	for k, v := range inlineRemap {
-		merged[k] = v
-	}
-	if err := parsers.ValidateRemapDb(ctx, merged); err != nil {
-		return nil, err
-	}
-	return merged, nil
-}
-
 // parseSessionRewrites parses a remap_rewrites value or an inline hint payload
 // into its table-rewrite rules and database-remap entries. It accepts both the
 // wrapped form {"rewrites": {...}, "remapdb": {...}} and the bare form

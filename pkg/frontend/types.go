@@ -894,6 +894,12 @@ type ExecCtx struct {
 	results           []ExecResult
 	prepareColDef     [][]byte
 	isIssue3482       bool
+	// remapDb is the effective database remap (role/session/inline merged) for
+	// this statement. It is applied at the AST level to qualified references by
+	// applyRemapDb, and to the current database (for unqualified references) by
+	// TxnCompilerContext.DefaultDatabase. nil when the rewrite feature is off or
+	// no remapdb is configured.
+	remapDb map[string]string
 }
 
 func (execCtx *ExecCtx) Close() {

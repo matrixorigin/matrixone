@@ -1,6 +1,8 @@
 -- remapdb: the remap_rewrites session variable (and inline hint) can remap one
--- database name to another. A reference to <src>.t resolves to <dst>.t, USE
--- <src> switches to <dst>, and remapdb is applied before the table rewrites.
+-- database name to another. A qualified reference <src>.t resolves to <dst>.t,
+-- and when the current database is <src>, UNQUALIFIED names resolve against
+-- <dst> too. USE is NOT affected by remapdb (it switches to the named database
+-- as written). remapdb is applied before the table rewrites.
 
 drop database if exists rdb_src;
 drop database if exists rdb_dst;
@@ -65,13 +67,25 @@ select * from rdb_dml.t order by id;
 set remap_rewrites = '';
 drop database if exists rdb_dml;
 
--- USE <src> switches the session to the target database; unqualified names then
--- resolve there
-use rdb_src;
+-- USE is NOT remapped: `use rdb_src` lands in the real rdb_src. But while the
+-- current database is rdb_src (a remap source), unqualified names resolve in
+-- rdb_dst. Create a real rdb_src with DISTINCT data to show the difference.
+create database rdb_src;
+create table rdb_src.t(id int, v int);
+insert into rdb_src.t values (100,1000),(200,2000);
 set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst"}}';
 use rdb_src;
+-- USE not remapped: current database is the real rdb_src
 select database() as curdb;
+-- unqualified t resolves in rdb_dst (1,2,3), NOT the real rdb_src data (100,200)
 select * from t order by id;
+-- qualified rdb_src.t is remapped to rdb_dst too
+select * from rdb_src.t order by id;
+-- turn remapdb off: now the real rdb_src is visible (100,200)
+set remap_rewrites = '';
+select * from t order by id;
+use mysql;
+drop database if exists rdb_src;
 
 -- remapdb can remap several databases at once; each reference is resolved
 -- independently, even multiple within one query
