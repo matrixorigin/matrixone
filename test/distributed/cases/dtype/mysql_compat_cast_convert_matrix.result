@@ -1,0 +1,37 @@
+drop database if exists mysql_compat_cast_convert_matrix;
+create database mysql_compat_cast_convert_matrix;
+use mysql_compat_cast_convert_matrix;
+set time_zone = '+00:00';
+select cast('  -12' as signed) as signed_ws,
+cast('0012' as unsigned) as unsigned_leading_zero,
+cast('12.75' as decimal(6,2)) as decimal_scale,
+cast('12.75' as double) as double_value,
+cast('-12.75' as float) as float_value;
+signed_ws    unsigned_leading_zero    decimal_scale    double_value    float_value
+-12    12    12.75    12.75    -12.75
+select convert('42', signed) as convert_signed,
+convert('42', unsigned) as convert_unsigned,
+convert('42.50', decimal(6,2)) as convert_decimal;
+convert_signed    convert_unsigned    convert_decimal
+42    42    42.50
+select cast(12345 as char) as int_to_char,
+cast(-12.50 as char) as decimal_to_char,
+hex(cast('AZ' as binary)) as binary_hex,
+length(cast('AZ' as binary)) as binary_len;
+int_to_char    decimal_to_char    binary_hex    binary_len
+12345    -12.50    415A    2
+select cast('2024-01-02' as date) as cast_date,
+cast('2024-01-02 03:04:05.123456' as datetime(6)) as cast_datetime6,
+cast('03:04:05.123456' as time(6)) as cast_time6;
+cast_date    cast_datetime6    cast_time6
+2024-01-02    2024-01-02 03:04:05.123456000    03:04:05.123456000
+select cast(cast('2024-01-02' as date) as char) as date_to_char,
+cast(cast('2024-01-02 03:04:05.123456' as datetime(6)) as char) as datetime_to_char,
+cast(cast('03:04:05.123456' as time(6)) as char) as time_to_char;
+date_to_char    datetime_to_char    time_to_char
+2024-01-02    2024-01-02 03:04:05.123456    03:04:05.123456
+select json_extract(cast('{"a": 1, "b": "2"}' as json), '$.a') as json_a,
+json_unquote(json_extract(cast('{"a": 1, "b": "2"}' as json), '$.b')) as json_b;
+json_a    json_b
+1    2
+drop database mysql_compat_cast_convert_matrix;

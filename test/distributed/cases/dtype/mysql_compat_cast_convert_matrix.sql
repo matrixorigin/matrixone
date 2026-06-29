@@ -1,0 +1,38 @@
+-- @suite
+
+-- @case
+-- @desc: MySQL compatibility cases for CAST/CONVERT target type matrix
+-- @label:bvt
+
+drop database if exists mysql_compat_cast_convert_matrix;
+create database mysql_compat_cast_convert_matrix;
+use mysql_compat_cast_convert_matrix;
+set time_zone = '+00:00';
+
+select cast('  -12' as signed) as signed_ws,
+       cast('0012' as unsigned) as unsigned_leading_zero,
+       cast('12.75' as decimal(6,2)) as decimal_scale,
+       cast('12.75' as double) as double_value,
+       cast('-12.75' as float) as float_value;
+
+select convert('42', signed) as convert_signed,
+       convert('42', unsigned) as convert_unsigned,
+       convert('42.50', decimal(6,2)) as convert_decimal;
+
+select cast(12345 as char) as int_to_char,
+       cast(-12.50 as char) as decimal_to_char,
+       hex(cast('AZ' as binary)) as binary_hex,
+       length(cast('AZ' as binary)) as binary_len;
+
+select cast('2024-01-02' as date) as cast_date,
+       cast('2024-01-02 03:04:05.123456' as datetime(6)) as cast_datetime6,
+       cast('03:04:05.123456' as time(6)) as cast_time6;
+
+select cast(cast('2024-01-02' as date) as char) as date_to_char,
+       cast(cast('2024-01-02 03:04:05.123456' as datetime(6)) as char) as datetime_to_char,
+       cast(cast('03:04:05.123456' as time(6)) as char) as time_to_char;
+
+select json_extract(cast('{"a": 1, "b": "2"}' as json), '$.a') as json_a,
+       json_unquote(json_extract(cast('{"a": 1, "b": "2"}' as json), '$.b')) as json_b;
+
+drop database mysql_compat_cast_convert_matrix;
