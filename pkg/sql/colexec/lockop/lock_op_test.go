@@ -891,6 +891,26 @@ func TestLockRetryStopsUnderCriticalMemoryPressure(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestLockRetryBudgetUsesLockWaitDeadline(t *testing.T) {
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	oldPressure := getLockRetryMemoryPressureLevel
+	defer func() {
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+		getLockRetryMemoryPressureLevel = oldPressure
+	}()
+	defaultMaxWaitTimeOnRetryBackendLock = 10 * time.Second
+	getLockRetryMemoryPressureLevel = defaultLockRetryMemoryPressureLevel
+
+	state := lockRetryState{
+		lockWaitDeadline: time.Now().Add(15 * time.Second),
+	}
+	wait, ok := getRetryWaitDuration(moerr.NewLockTableBindChangedNoCtx(), &state)
+	require.WithinDuration(t, state.lockWaitDeadline, state.backendRetryDeadline, 100*time.Millisecond)
+	if ok {
+		require.Equal(t, defaultWaitTimeOnRetryLock, wait)
+	}
+}
+
 func TestLockWithRetryFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

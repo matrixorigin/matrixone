@@ -794,6 +794,7 @@ func doLock(
 
 type lockRetryState struct {
 	backendRetryDeadline time.Time
+	lockWaitDeadline     time.Time
 	useMemoryRetrySlot   bool
 }
 
@@ -835,6 +836,13 @@ func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) 
 	return options, nil
 }
 
+func getLockWaitDeadline(options lock.LockOptions) time.Time {
+	if options.LockWaitDeadline <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, options.LockWaitDeadline)
+}
+
 func lockWithRetry(
 	ctx context.Context,
 	lockService lockservice.LockService,
@@ -850,7 +858,9 @@ func lockWithRetry(
 ) (lock.Result, error) {
 	var result lock.Result
 	var err error
-	retryState := lockRetryState{}
+	retryState := lockRetryState{
+		lockWaitDeadline: getLockWaitDeadline(options),
+	}
 
 	options, err = refreshLockWaitOptions(options)
 	if err != nil {
@@ -998,7 +1008,11 @@ func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration,
 
 	now := time.Now()
 	if isBoundedRetryLockError(err) && retryState.backendRetryDeadline.IsZero() {
-		retryState.backendRetryDeadline = now.Add(defaultMaxWaitTimeOnRetryBackendLock)
+		if !retryState.lockWaitDeadline.IsZero() {
+			retryState.backendRetryDeadline = retryState.lockWaitDeadline
+		} else {
+			retryState.backendRetryDeadline = now.Add(defaultMaxWaitTimeOnRetryBackendLock)
+		}
 	}
 	if retryState.backendRetryDeadline.IsZero() {
 		return defaultWaitTimeOnRetryLock, true
