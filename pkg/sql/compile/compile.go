@@ -4263,6 +4263,16 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
+	// If any descendant is a JOIN, the DELETE path may produce duplicate
+	// target rows — mark for rowid dedup in delete_table.
+	needDedup := false
+	for _, childID := range node.Children {
+		if c.hasJoinDescendant(childID) {
+			needDedup = true
+			break
+		}
+	}
+
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {
 		if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
@@ -4289,7 +4299,7 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		}
 
 		for i := range ss {
-			multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateWriteS3, ss[i].IsRemote)
+			multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateWriteS3, ss[i].IsRemote, false) // S3 writer never calls delete_table
 			if err != nil {
 				return nil, err
 			}
@@ -4308,7 +4318,7 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 			rs = c.newMergeScope(ss)
 		}
 
-		multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateFlushS3Info, rs.IsRemote)
+		multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateFlushS3Info, rs.IsRemote, false) // flush calls source.Delete directly
 		if err != nil {
 			return nil, err
 		}
@@ -4322,7 +4332,7 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
-		multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateWriteTable, ss[0].IsRemote)
+		multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateWriteTable, ss[0].IsRemote, needDedup)
 		if err != nil {
 			return nil, err
 		}
@@ -4330,25 +4340,6 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		ss[0].setRootOperator(multiUpdateArg)
 	}
 	c.anal.isFirst = false
-
-	// If any descendant is a JOIN, the DELETE path may produce duplicate
-	// target rows — mark for rowid dedup in delete_table.
-	needDedup := false
-	for _, childID := range node.Children {
-		if c.hasJoinDescendant(childID) {
-			needDedup = true
-			break
-		}
-	}
-	if needDedup {
-		for _, s := range ss {
-			if mu, ok := s.RootOp.(*multi_update.MultiUpdate); ok {
-				mu.NeedDedupDelete = true
-			} else if pmu, ok := s.RootOp.(*multi_update.PartitionMultiUpdate); ok {
-				pmu.GetMultiUpdate().NeedDedupDelete = true
-			}
-		}
-	}
 
 	return ss, nil
 }

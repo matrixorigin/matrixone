@@ -802,10 +802,12 @@ func constructMultiUpdate(
 	proc *process.Process,
 	action multi_update.UpdateAction,
 	isRemote bool,
+	needDedup bool,
 ) (vm.Operator, error) {
 	arg := multi_update.NewArgument()
 	arg.Engine = eng
 	arg.IsRemote = isRemote
+	arg.NeedDedupDelete = needDedup
 
 	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(node.UpdateCtxList))
 	for i, updateCtx := range node.UpdateCtxList {
