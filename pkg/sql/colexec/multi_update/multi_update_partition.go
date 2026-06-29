@@ -354,10 +354,6 @@ func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {
 	return &op.OperatorBase
 }
 
-func (op *PartitionMultiUpdate) GetMultiUpdate() *MultiUpdate {
-	return op.raw
-}
-
 func (op *PartitionMultiUpdate) getPartitionIndex(
 	proc *process.Process,
 	tableID uint64,
