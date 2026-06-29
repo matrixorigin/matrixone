@@ -78,7 +78,7 @@ func newWaiter() *waiter {
 	return w
 }
 
-func (w waiter) TypeName() string {
+func (w *waiter) TypeName() string {
 	return "lockservice.wait"
 }
 
@@ -96,6 +96,14 @@ type waiter struct {
 	event         event
 	waitAt        atomic.Value
 	enableChecker bool
+
+	// lockWaitTimeout is the session-level SET lock_wait_timeout value.
+	// A zero value means no session-level timeout is enforced here; in that
+	// case waiting relies on the context or other external cancellation.
+	// Set in waiterEvents.add() from the lockContext and checked in
+	// waiterEvents.check() to enforce timeouts on the async (remote) lock path.
+	lockWaitTimeout time.Duration
+	lockWaitTimer   atomic.Pointer[time.Timer]
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -130,6 +138,7 @@ func (w *waiter) close(
 	info string,
 	logger *log.MOLogger,
 ) {
+	w.stopLockWaitTimer()
 	if w.enableChecker {
 		logCloseWaiter(logger, info, w.txn.TxnID, w)
 	}
@@ -272,6 +281,7 @@ func (w *waiter) notify(
 		// if status changed, notify and timeout are concurrently issued, need
 		// retry.
 		if w.casStatus(status, notified, logger) {
+			w.stopLockWaitTimer()
 			w.mustSendNotification(value, logger)
 			return true
 		}
@@ -281,6 +291,12 @@ func (w *waiter) notify(
 
 func (w *waiter) startWait() {
 	w.waitAt.Store(time.Now())
+}
+
+func (w *waiter) stopLockWaitTimer() {
+	if timer := w.lockWaitTimer.Swap(nil); timer != nil {
+		timer.Stop()
+	}
 }
 
 func (w *waiter) reset() {
@@ -297,6 +313,8 @@ func (w *waiter) reset() {
 	w.conflictKey.Store(nil)
 	w.lt.Store(nil)
 	w.setStatus(ready)
+	w.lockWaitTimeout = 0
+	w.stopLockWaitTimer()
 }
 
 type notifyValue struct {
