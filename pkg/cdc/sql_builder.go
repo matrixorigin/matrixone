@@ -523,10 +523,10 @@ func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgSQL(
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCUpdateTaskStateAndErrMsgSQL_Idx].SQL,
-		state,
-		errMsg,
+		escapeSQLString(state),
+		escapeSQLString(errMsg),
 		accountId,
-		taskId,
+		escapeSQLString(taskId),
 	)
 }
 

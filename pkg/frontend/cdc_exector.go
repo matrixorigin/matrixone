@@ -1001,7 +1001,8 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 			continue
 		}
 		if hasError {
-			continue
+			err = exec.failTaskForPermanentTableError(ctx, newTableInfo)
+			return err
 		}
 
 		logutil.Info(
@@ -1069,6 +1070,72 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 	}
 
 	return nil
+}
+
+func (exec *CDCTaskExecutor) failTaskForPermanentTableError(ctx context.Context, tbl *cdc.DbTableInfo) error {
+	taskErr := moerr.NewInternalErrorf(
+		ctx,
+		"CDC task %s has permanent table error on %s.%s; check mo_catalog.mo_cdc_watermark.err_msg for details",
+		exec.spec.TaskName,
+		tbl.SourceDbName,
+		tbl.SourceTblName,
+	)
+
+	if err := exec.updateErrMsg(ctx, taskErr.Error()); err != nil {
+		logutil.Warn(
+			"cdc.frontend.task.update_task_error_failed",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+			zap.String("db", tbl.SourceDbName),
+			zap.String("table", tbl.SourceTblName),
+			zap.Error(err),
+		)
+	}
+
+	wasRunning := false
+	if exec.stateMachine != nil {
+		wasRunning = exec.stateMachine.IsRunning()
+		if err := exec.stateMachine.SetFailed(taskErr.Error()); err != nil {
+			logutil.Warn(
+				"cdc.frontend.task.set_state_failed",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.String("task-name", exec.spec.TaskName),
+				zap.String("db", tbl.SourceDbName),
+				zap.String("table", tbl.SourceTblName),
+				zap.Error(err),
+			)
+		}
+	}
+
+	cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+	if exec.activeRoutine != nil {
+		exec.activeRoutine.CloseCancel()
+	}
+	exec.stopAllReaders()
+	if exec.holdCh != nil {
+		select {
+		case exec.holdCh <- 1:
+		default:
+		}
+	}
+
+	if wasRunning {
+		v2.CdcTaskTotalGauge.WithLabelValues("running").Dec()
+		v2.CdcTaskStateChangeCounter.WithLabelValues("running", "failed").Inc()
+	}
+	v2.CdcTaskTotalGauge.WithLabelValues("failed").Inc()
+	v2.CdcTaskErrorCounter.WithLabelValues("permanent_table_error", "false").Inc()
+
+	logutil.Error(
+		"cdc.frontend.task.failed_by_permanent_table_error",
+		zap.String("task-id", exec.spec.TaskId),
+		zap.String("task-name", exec.spec.TaskName),
+		zap.String("db", tbl.SourceDbName),
+		zap.String("table", tbl.SourceTblName),
+		zap.Error(taskErr),
+	)
+
+	return taskErr
 }
 
 var GetTableErrMsg = func(
