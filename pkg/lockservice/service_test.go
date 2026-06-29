@@ -3396,6 +3396,46 @@ func TestAllocatorObserverDoesNotPurgeSameEpochBindVersions(t *testing.T) {
 	)
 }
 
+func TestKeepBindFailedSkipsBindPublishedAfterSnapshot(t *testing.T) {
+	logger := getLogger("")
+	s := &service{
+		serviceID: "s1",
+		logger:    logger,
+	}
+	s.tableGroups = &lockTableHolders{
+		service: s.serviceID,
+		logger:  logger,
+		holders: map[uint32]*lockTableHolder{},
+	}
+	oldVersion := s.tableGroups.getVersion()
+	bind := pb.LockTable{
+		Group:       0,
+		Table:       1,
+		OriginTable: 1,
+		ServiceID:   s.serviceID,
+		Version:     1,
+		Valid:       true,
+	}
+	s.tableGroups.set(bind.Group, bind.Table, newRemoteLockTable(
+		s.serviceID,
+		time.Second,
+		bind,
+		nil,
+		s.handleBindChanged,
+		logger,
+	))
+	require.NotEqual(t, oldVersion, s.tableGroups.getVersion())
+
+	removed := s.handleKeepBindFailed(
+		s.serviceID,
+		s.tableGroups,
+		oldVersion,
+		allocatorState{},
+		allocatorState{})
+	require.Zero(t, removed)
+	require.NotNil(t, s.tableGroups.get(bind.Group, bind.Table))
+}
+
 func TestGetBindPurgesStaleBindWhenAllocatorIDChangesWithRegressedVersion(t *testing.T) {
 	runLockServiceTests(
 		t,

@@ -292,7 +292,6 @@ func (s *service) handleForwardLock(
 		return
 	}
 
-	s.bindChangeMu.RLock()
 	l, err := s.getLockTable(
 		req.LockTable.Group,
 		req.LockTable.Table)
@@ -300,11 +299,25 @@ func (s *service) handleForwardLock(
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale
 		// lock table binding.
-		s.bindChangeMu.RUnlock()
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
 
+	s.bindChangeMu.RLock()
+	bind := l.getBind()
+	current := s.tableGroups.get(bind.Group, bind.Table)
+	if current == nil {
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTableNotFound, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	if current.getBind().Changed(bind) {
+		newBind := current.getBind()
+		resp.NewBind = &newBind
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, nil, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	s.activeTxnHolder.keepRemoteActiveTxn(req.Lock.ServiceID)
 	s.activeTxnHolder.keepRemoteLockBindActive(req.Lock.ServiceID, req.LockTable)
 	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
@@ -330,7 +343,6 @@ func (s *service) handleForwardLock(
 
 	var lockErr error
 	// it needs to inc table bind ref when set restart cn
-	bind := l.getBind()
 	h := txn.getHoldLocksLocked(bind.Group)
 	_, hasBind := h.tableBinds[bind.Table]
 	txn.lockTableBindTouched(bind)
