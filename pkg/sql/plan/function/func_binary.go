@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -2713,14 +2714,13 @@ func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error
 	}
 
 	if strings.HasPrefix(s, "-") {
-		val, err := strconv.ParseInt(s, base, 64)
-		if err != nil {
-			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
-				return 0, math.MaxUint64, false, nil
-			}
+		magnitudeStr := s[1:]
+		magnitude, ok := new(big.Int).SetString(magnitudeStr, base)
+		if !ok {
 			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
 		}
-		return val, 0, true, nil
+		reduced := new(big.Int).Mod(magnitude, new(big.Int).Lsh(big.NewInt(1), 64))
+		return 0, uint64(0) - reduced.Uint64(), false, nil
 	}
 
 	s = strings.TrimPrefix(s, "+")

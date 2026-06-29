@@ -313,6 +313,18 @@ select conv('17', -10, 16) as positive_from_negative_base;
 select conv('ffffffffffffffff', 16, -10) as unsigned_to_negative_base;
 -- expected: -1
 
+select conv('-9223372036854775808', 10, 16) as negative_int64_min;
+-- expected: 8000000000000000
+
+select conv('-9223372036854775809', 10, 16) as negative_below_int64_min;
+-- expected: 7FFFFFFFFFFFFFFF
+
+select conv('-18446744073709551615', 10, 16) as negative_uint64_max_minus_one;
+-- expected: 1
+
+select conv('-18446744073709551616', 10, 16) as negative_uint64_overflow;
+-- expected: 0
+
 select conv('10xyz', 10, 16) as invalid_suffix;
 -- expected: MO returns error on prefix truncation / invalid suffix
 
@@ -321,7 +333,7 @@ select conv('18446744073709551616', 10, 16) as overflow_decimal_to_hex;
 -- expected: FFFFFFFFFFFFFFFF
 
 select conv('-18446744073709551616', 10, 16) as overflow_negative_decimal_to_hex;
--- expected: FFFFFFFFFFFFFFFF
+-- expected: 0
 
 select conv('10000000000000000', 16, 10) as overflow_hex_to_decimal;
 -- expected: 18446744073709551615
