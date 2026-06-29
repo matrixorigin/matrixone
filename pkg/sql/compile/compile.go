@@ -4347,6 +4347,8 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		for _, s := range ss {
 			if mu, ok := s.RootOp.(*multi_update.MultiUpdate); ok {
 				mu.NeedDedupDelete = true
+			} else if pmu, ok := s.RootOp.(*multi_update.PartitionMultiUpdate); ok {
+				pmu.GetMultiUpdate().NeedDedupDelete = true
 			}
 		}
 	}

@@ -62,6 +62,7 @@ func NewPartitionMultiUpdateFrom(
 	op.MultiUpdateCtx = from.raw.MultiUpdateCtx
 	op.Action = from.raw.Action
 	op.IsOnduplicateKeyUpdate = from.raw.IsOnduplicateKeyUpdate
+	op.NeedDedupDelete = from.raw.NeedDedupDelete
 	op.Engine = from.raw.Engine
 	return NewPartitionMultiUpdate(op, from.tableID)
 }
@@ -351,6 +352,10 @@ func (op *PartitionMultiUpdate) Reset(
 
 func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {
 	return &op.OperatorBase
+}
+
+func (op *PartitionMultiUpdate) GetMultiUpdate() *MultiUpdate {
+	return op.raw
 }
 
 func (op *PartitionMultiUpdate) getPartitionIndex(

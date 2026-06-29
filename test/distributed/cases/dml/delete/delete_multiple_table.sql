@@ -189,3 +189,25 @@ SELECT * FROM t1;
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS temp;
 
+-- Test: partitioned DELETE with JOIN -- duplicate matches on right side
+-- Each target row should be deleted exactly once (not over-counted)
+create table tj_part_c (
+	id int,
+	n int,
+	primary key (id, n)
+) partition by hash(n) partitions 3;
+
+create table tj_part_d (id int);
+
+insert into tj_part_c values (1, 10), (2, 20), (3, 30);
+insert into tj_part_d values (1), (1), (1), (2), (2);
+
+-- tj_part_c (id=1) matches 3 rows in tj_part_d
+-- tj_part_c (id=2) matches 2 rows in tj_part_d
+-- Expect: each target row deleted once; count = 1 remaining
+delete c from tj_part_c c join tj_part_d d on c.id = d.id;
+select count(*) from tj_part_c;
+
+drop table tj_part_c;
+drop table tj_part_d;
+
