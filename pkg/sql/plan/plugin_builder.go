@@ -32,6 +32,8 @@ func init() {
 	planplugin.MakeHiddenColDefByName = MakeHiddenColDefByName
 	planplugin.ValidateIncludeColumns = validateIncludeColumnsForPlugin
 	planplugin.DeepCopyColDefList = DeepCopyColDefList
+	planplugin.IncludedColumnAffected = includedColumnAffected
+	planplugin.RenameIncludedColumnsForAlgo = renameIncludedColumnsForAlgo
 }
 
 // validateIncludeColumnsForPlugin adapts validateIncludeColumns to the

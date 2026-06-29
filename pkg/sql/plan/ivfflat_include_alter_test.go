@@ -98,6 +98,40 @@ func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
 	require.Equal(t, "headline", tableDef.Cols[1].OriginName)
 }
 
+func TestRenameIncludedColumnsForAlgoSyncsAlgoParams(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		TblId: 42,
+		Indexes: []*planpb.IndexDef{
+			{
+				IndexName:       "idx_gpu",
+				IndexAlgo:       catalog.MoIndexCagraAlgo.ToString(),
+				IndexAlgoParams: `{"op_type":"vector_l2_ops","include_columns":"title,category"}`,
+				IncludedColumns: []string{"title", "category"},
+			},
+			{
+				IndexName:       "idx_gpu",
+				IndexAlgo:       catalog.MoIndexCagraAlgo.ToString(),
+				IndexAlgoParams: `{"op_type":"vector_l2_ops","include_columns":"title,category"}`,
+				IncludedColumns: []string{"title", "category"},
+			},
+		},
+	}
+
+	sqls, err := renameIncludedColumnsForAlgo(tableDef, catalog.MoIndexCagraAlgo.ToString(), "title", "headline", true)
+	require.NoError(t, err)
+	require.Len(t, sqls, 1)
+	require.Contains(t, sqls[0], `included_columns = '["headline","category"]'`)
+	require.Contains(t, sqls[0], `algo_params = '{"included_columns":"headline,category","op_type":"vector_l2_ops"}'`)
+
+	for _, indexDef := range tableDef.Indexes {
+		require.Equal(t, []string{"headline", "category"}, indexDef.IncludedColumns)
+		params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+		require.NoError(t, err)
+		require.Equal(t, "headline,category", params[catalog.IncludedColumns])
+		require.NotContains(t, params, "include_columns")
+	}
+}
+
 func TestResolveAlterTableAlgorithmCopiesIvfIncludeRename(t *testing.T) {
 	tableDef := &planpb.TableDef{
 		Indexes: []*planpb.IndexDef{

@@ -36,6 +36,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -329,7 +330,7 @@ func ivfIndexCentroidsTable(
 		}
 
 		sql = fmt.Sprintf("SELECT * FROM ivf_create('%s', '%s') AS f;",
-			escapeSQLStringLiteral(indexDef.IndexAlgoParams), escapeSQLStringLiteral(string(cfgbytes)))
+			sqlquote.EscapeString(indexDef.IndexAlgoParams), sqlquote.EscapeString(string(cfgbytes)))
 	}
 
 	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
@@ -483,11 +484,6 @@ func ivfIndexEntriesTable(
 		return err
 	}
 	return logTimestamp(ctx, qryDatabase, metadataTableName, "mapping_end")
-}
-
-func escapeSQLStringLiteral(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	return strings.ReplaceAll(s, `'`, `''`)
 }
 
 func joinQuotedIdentifiers(cols []string) string {

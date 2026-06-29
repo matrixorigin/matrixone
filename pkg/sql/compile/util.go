@@ -25,17 +25,13 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-func escapeSQLStringLiteral(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	return strings.ReplaceAll(s, `'`, `''`)
-}
 
 const moIndexesColumnList = "(id, table_id, database_id, name, type, algo, algo_table_type, algo_params, is_visible, hidden, comment, column_name, ordinal_position, options, index_table_name)"
 
@@ -415,7 +411,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 							return "", err
 						}
 						if includedColumns != "" {
-							fmt.Fprintf(buffer, ", '%s')", escapeSQLStringLiteral(includedColumns))
+							fmt.Fprintf(buffer, ", '%s')", sqlquote.EscapeString(includedColumns))
 						} else {
 							fmt.Fprintf(buffer, ", %s)", NULL_VALUE)
 						}
