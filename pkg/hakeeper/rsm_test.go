@@ -663,6 +663,47 @@ func TestHandleInitialClusterRequestCmd(t *testing.T) {
 	assert.Equal(t, nextIDByKey, rsm.state.NextIDByKey)
 }
 
+func TestHandleInitialClusterRequestCmdPatchesIDsWhenAlreadyInitialized(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.State = pb.HAKeeperRunning
+	rsm.state.NextID = 1000
+	rsm.state.NextIDByKey = map[string]uint64{
+		"index_key":          100,
+		"____server_conn_id": 900,
+	}
+	rsm.state.ClusterInfo = pb.ClusterInfo{
+		LogShards: []metadata.LogShardRecord{
+			{
+				ShardID:          10,
+				NumberOfReplicas: 3,
+			},
+		},
+	}
+
+	cmd := GetInitialClusterRequestCmd(
+		1,
+		1,
+		3,
+		5000,
+		map[string]uint64{
+			"index_key":          200,
+			"____server_conn_id": 800,
+			"_mo_bootstrap":      1,
+		},
+		nil,
+	)
+	result, err := rsm.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+
+	assert.Equal(t, sm.Result{Value: uint64(pb.HAKeeperRunning)}, result)
+	assert.Equal(t, pb.HAKeeperRunning, rsm.state.State)
+	assert.Equal(t, uint64(5000), rsm.state.NextID)
+	assert.Equal(t, uint64(200), rsm.state.NextIDByKey["index_key"])
+	assert.Equal(t, uint64(900), rsm.state.NextIDByKey["____server_conn_id"])
+	assert.Equal(t, uint64(1), rsm.state.NextIDByKey["_mo_bootstrap"])
+	assert.Equal(t, uint64(10), rsm.state.ClusterInfo.LogShards[0].ShardID)
+}
+
 func TestGetCommandBatch(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	cb := pb.CommandBatch{

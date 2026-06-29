@@ -674,10 +674,11 @@ func (s *stateMachine) handleLogShardUpdate(cmd []byte) sm.Result {
 // set to HAKeeperBootstrapping.
 func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	result := sm.Result{Value: uint64(s.state.State)}
+	req := parseInitialClusterRequestCmd(cmd)
 	if s.state.State != pb.HAKeeperCreated {
+		s.patchInitialClusterIDs(req)
 		return result
 	}
-	req := parseInitialClusterRequestCmd(cmd)
 
 	// The number of TN shard should only be 1.
 	// There is one corresponding Log shard with that TN shard.
@@ -742,6 +743,29 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	plog.Infof("initial cluster set, HAKeeper is in BOOTSTRAPPING state")
 	s.state.State = pb.HAKeeperBootstrapping
 	return result
+}
+
+func (s *stateMachine) patchInitialClusterIDs(req pb.InitialClusterRequest) {
+	updated := false
+	if req.NextID > s.state.NextID {
+		s.state.NextID = req.NextID
+		updated = true
+	}
+	if len(req.NextIDByKey) > 0 {
+		if s.state.NextIDByKey == nil {
+			s.state.NextIDByKey = make(map[string]uint64)
+		}
+		for key, nextID := range req.NextIDByKey {
+			if nextID > s.state.NextIDByKey[key] {
+				s.state.NextIDByKey[key] = nextID
+				updated = true
+			}
+		}
+	}
+	if updated {
+		plog.Infof("patched initial cluster IDs from restore data, next-id %d, next-id-by-key %v",
+			s.state.NextID, s.state.NextIDByKey)
+	}
 }
 
 func (s *stateMachine) assertState() {
