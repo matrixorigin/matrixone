@@ -248,6 +248,78 @@ func TestHandleForwardLockRejectsWhenServiceCannotLock(t *testing.T) {
 	)
 }
 
+func TestHandleForwardLockDoesNotHoldBindChangeLockWhileWaitingForBind(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, services []*service) {
+			s := services[0]
+			group := uint32(0)
+			table := uint64(24905)
+			bind := pb.LockTable{
+				Group:       group,
+				Table:       table,
+				OriginTable: table,
+				ServiceID:   s.serviceID,
+				Valid:       true,
+				Version:     alloc.version,
+				AllocatorID: alloc.allocatorID,
+			}
+			waitC := make(chan struct{})
+			s.mu.Lock()
+			s.mu.allocating[group] = map[uint64]chan struct{}{table: waitC}
+			s.mu.Unlock()
+
+			req := &pb.Request{
+				RequestID: 1,
+				Method:    pb.Method_ForwardLock,
+				LockTable: bind,
+				Lock: pb.LockRequest{
+					TxnID:     []byte("forward-waiting-bind"),
+					ServiceID: "remote-service",
+					Rows:      [][]byte{{1}},
+					Options:   newTestRowExclusiveOptions(),
+				},
+			}
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				s.handleForwardLock(context.Background(), nil, req, resp, cs)
+			}()
+			time.Sleep(20 * time.Millisecond)
+
+			published := make(chan struct{})
+			go func() {
+				defer close(published)
+				s.bindChangeMu.Lock()
+				s.tableGroups.set(group, table, s.createLockTableByBind(bind))
+				s.bindChangeMu.Unlock()
+				s.mu.Lock()
+				delete(s.mu.allocating[group], table)
+				s.mu.Unlock()
+				close(waitC)
+			}()
+
+			select {
+			case <-published:
+			case <-time.After(time.Second):
+				require.Fail(t, "bind publish blocked while forwarded lock waited for allocation")
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				require.Fail(t, "forwarded lock did not finish after bind publish")
+			}
+			require.True(t, cs.writeCalled)
+			require.NoError(t, resp.UnwrapError())
+		},
+	)
+}
+
 func TestGetActiveTxnWithRemote(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
