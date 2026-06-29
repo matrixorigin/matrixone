@@ -91,9 +91,10 @@ var metaLoadMu sync.Mutex
 var metaLoadCalls = make(map[mataCacheKey]*loadCall)
 
 type loadCall struct {
-	done chan struct{}
-	val  []byte
-	err  error
+	done      chan struct{}
+	val       []byte
+	err       error
+	completed bool
 }
 
 func metaCacheSize() int64 {
@@ -345,13 +346,15 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 			if call.err != nil {
 				return nil, call.err
 			}
+			if !call.completed {
+				return nil, moerr.NewInternalErrorNoCtx("dedup load did not complete")
+			}
 			return call.val, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
 	call := &loadCall{done: make(chan struct{})}
-	call.err = moerr.NewInternalErrorNoCtx("dedup load did not complete")
 	metaLoadCalls[key] = call
 	metaLoadMu.Unlock()
 
@@ -363,6 +366,7 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 	}()
 
 	call.val, call.err = load()
+	call.completed = true
 	if call.err == nil {
 		if target, ok := metaCachePressureTarget(metaCache.Capacity()); ok &&
 			metaCache.Used()+int64(len(call.val)) > target {
