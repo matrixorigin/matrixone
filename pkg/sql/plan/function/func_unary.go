@@ -7025,24 +7025,22 @@ func userLevelLockConnectionID(proc *process.Process) uint64 {
 // user-level lock names (GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK).
 const maxUserLevelLockNameLength = 64
 
-// normalizeUserLevelLockName validates and normalizes a MySQL user-level lock name.
-// It returns the normalized (lowercased) name, or an error if the name is empty or
-// exceeds maxUserLevelLockNameLength characters (MySQL enforces 64 characters, not bytes).
-func normalizeUserLevelLockName(name string) (string, error) {
+// validateUserLevelLockName validates a MySQL user-level lock name.
+// It preserves the original lock-name bytes/casing for lock identity.
+func validateUserLevelLockName(name string) (string, error) {
 	if len(name) == 0 {
 		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not be empty")
 	}
 	if strings.IndexByte(name, 0) >= 0 {
 		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not contain NUL bytes")
 	}
-	normalized := strings.ToLower(name)
-	if utf8.RuneCountInString(normalized) > maxUserLevelLockNameLength {
+	if utf8.RuneCountInString(name) > maxUserLevelLockNameLength {
 		return "", moerr.NewInternalErrorNoCtxf(
 			"user-level lock name exceeds maximum length of %d characters",
 			maxUserLevelLockNameLength,
 		)
 	}
-	return normalized, nil
+	return name, nil
 }
 
 func userLevelLockTxnID(owner string, connID uint64, name string) []byte {
@@ -7257,7 +7255,7 @@ func DiscardMigratedUserLevelLocks(proc *process.Process) {
 }
 
 func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, err
 	}
@@ -7303,7 +7301,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 //   - (0, false, nil): lock exists but is held by another session.
 //   - (0, true, nil):  lock does not exist (MySQL returns NULL).
 func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, false, err
 	}
@@ -7349,7 +7347,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 }
 
 func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, err
 	}
@@ -7378,7 +7376,7 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 }
 
 func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, false, err
 	}

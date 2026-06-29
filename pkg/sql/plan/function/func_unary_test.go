@@ -8061,7 +8061,7 @@ func TestUserLevelLockNameContainsNUL(t *testing.T) {
 	})
 }
 
-func TestUserLevelLockCaseInsensitive(t *testing.T) {
+func TestUserLevelLockCaseSensitive(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
 		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
@@ -8071,35 +8071,45 @@ func TestUserLevelLockCaseInsensitive(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 
-		// Session B attempts to acquire the same lock with different case —
-		// MySQL treats these as the same lock, so B should fail to acquire.
+		// Different casing is a different lock identity.
 		v, err = getUserLevelLock("CASE_LOCK", 0, proc2)
 		require.NoError(t, err)
-		require.Equal(t, int64(0), v, "case-insensitive: session B should not acquire lock held by A")
+		require.Equal(t, int64(1), v, "case-sensitive: session B should acquire differently cased lock")
 
-		// Session B should also fail with lowercase variant.
+		// Lowercase is also a separate lock identity.
 		v, err = getUserLevelLock("case_lock", 0, proc2)
 		require.NoError(t, err)
-		require.Equal(t, int64(0), v, "case-insensitive: session B should not acquire lock held by A")
+		require.Equal(t, int64(1), v, "case-sensitive: session B should acquire lowercase lock")
 
-		// IS_FREE_LOCK should also be case-insensitive: lock is held, so it's not free.
-		v, err = isUserLevelLockFree("case_lock", proc2)
+		// A different case from the held lock should still be free.
+		v, err = isUserLevelLockFree("case_LOCK", proc2)
 		require.NoError(t, err)
-		require.Equal(t, int64(0), v, "case-insensitive IS_FREE_LOCK should see lock as held")
+		require.Equal(t, int64(1), v, "case-sensitive IS_FREE_LOCK should treat different case as free")
 
-		// Session A releases the lock.
+		// Releasing a different case from the held lock should return NULL.
 		v, isNull, err := releaseUserLevelLock("case_LOCK", proc1)
 		require.NoError(t, err)
-		require.False(t, isNull)
-		require.Equal(t, int64(1), v, "case-insensitive release should succeed for lock owner")
+		require.True(t, isNull)
+		require.Equal(t, int64(0), v, "case-sensitive release should not release differently cased lock")
 
-		// Now session B can acquire the lock.
-		v, err = getUserLevelLock("case_lock", 0, proc2)
+		// The original mixed-case lock is still held by session A.
+		v, err = getUserLevelLock("Case_Lock", 0, proc2)
 		require.NoError(t, err)
-		require.Equal(t, int64(1), v, "after release, session B should acquire the lock")
+		require.Equal(t, int64(0), v)
 
 		// Cleanup.
-		releaseUserLevelLock("CASE_LOCK", proc2)
+		v, isNull, err = releaseUserLevelLock("Case_Lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		v, isNull, err = releaseUserLevelLock("CASE_LOCK", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		v, isNull, err = releaseUserLevelLock("case_lock", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
 	})
 }
 
