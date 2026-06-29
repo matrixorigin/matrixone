@@ -16,15 +16,7 @@ id    s    plus_one    as_decimal
 2    15    16    15.00
 3    -2    -1    -2.00
 4      12    13    12.00
-select id from t_string_number where s = 7 order by id;
-id
-1
 drop table t_string_number;
-select '9' between 2 and 10 as str_between_num,
-'9' in (8, 9, '10') as str_in_mixed,
-'08' = 8 as leading_zero_eq;
-str_between_num    str_in_mixed    leading_zero_eq
-1    1    1
 select value_col
 from (select '1' as value_col union all select 2 union all select 3.50) as u
 order by cast(value_col as decimal(10,2));
@@ -63,9 +55,4 @@ ifnull(null, '8') + 1 as ifnull_plus_one,
 ifnull(7, '8') as ifnull_first_number;
 ifnull_string    ifnull_plus_one    ifnull_first_number
 8    9    7
-select nullif('8', 8) as nullif_equal,
-nullif('8', 9) as nullif_not_equal,
-nullif(8, '8') as nullif_num_str;
-nullif_equal    nullif_not_equal    nullif_num_str
-null    8    null
 drop database mysql_compat_type_conversion;

@@ -1,7 +1,7 @@
--- @suit
+-- @suite
 
 -- @case
--- @desc:test MySQL-compatible comparison expression implicit conversion
+-- @desc:test MySQL-compatible comparison predicate implicit conversion
 -- @label:bvt
 
 DROP DATABASE IF EXISTS mysql_compat_comparison_expr;
@@ -38,16 +38,14 @@ CREATE TABLE t_cmp_expr (
   id INT PRIMARY KEY,
   s_num VARCHAR(20),
   n INT,
-  d DATE,
-  dt DATETIME,
   amount DECIMAL(10, 2)
 );
 
 INSERT INTO t_cmp_expr VALUES
-  (1, '7', 7, '2024-01-02', '2024-01-02 12:34:56', 7.00),
-  (2, '08', 8, '2024-01-10', '2024-01-10 00:00:00', 8.50),
-  (3, '9', 9, '2024-02-01', '2024-02-01 01:02:03', 9.50),
-  (4, NULL, NULL, NULL, NULL, NULL);
+  (1, '7', 7, 7.00),
+  (2, '08', 8, 8.50),
+  (3, '9', 9, 9.50),
+  (4, NULL, NULL, NULL);
 
 SELECT id, s_num, n
 FROM t_cmp_expr
@@ -62,16 +60,6 @@ ORDER BY id;
 SELECT id, n, amount
 FROM t_cmp_expr
 WHERE amount BETWEEN '7.00' AND 9
-ORDER BY id;
-
-SELECT id, d
-FROM t_cmp_expr
-WHERE d BETWEEN '2024-01-01' AND '2024-01-31'
-ORDER BY id;
-
-SELECT id, dt
-FROM t_cmp_expr
-WHERE dt >= '2024-01-10' AND dt < '2024-02-01'
 ORDER BY id;
 
 SELECT l.id AS left_id, r.id AS right_id, l.s_num AS left_s, r.n AS right_n

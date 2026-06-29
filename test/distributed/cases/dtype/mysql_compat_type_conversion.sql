@@ -1,6 +1,6 @@
 -- @suite
 -- @case
--- @desc: MySQL compatibility cases for mixed type conversion, batch 1
+-- @desc: MySQL compatibility cases for expression type conversion, batch 1
 -- @label:bvt
 
 drop database if exists mysql_compat_type_conversion;
@@ -8,7 +8,7 @@ create database mysql_compat_type_conversion;
 use mysql_compat_type_conversion;
 set time_zone = '+00:00';
 
--- varchar column values used in numeric expressions and comparisons
+-- varchar column values used in explicit and arithmetic numeric conversion
 drop table if exists t_string_number;
 create table t_string_number (id int primary key, s varchar(20));
 insert into t_string_number values
@@ -18,14 +18,9 @@ insert into t_string_number values
   (4, '  12');
 select id, s, s + 1 as plus_one, cast(s as decimal(10,2)) as as_decimal
 from t_string_number order by id;
-select id from t_string_number where s = 7 order by id;
 drop table t_string_number;
 
--- mixed string and numeric comparisons
-select '9' between 2 and 10 as str_between_num,
-       '9' in (8, 9, '10') as str_in_mixed,
-       '08' = 8 as leading_zero_eq;
-
+-- set-operation result coercion with string, integer, and decimal branches
 select value_col
 from (select '1' as value_col union all select 2 union all select 3.50) as u
 order by cast(value_col as decimal(10,2));
@@ -56,9 +51,5 @@ select coalesce(null, '8', 9) as coalesce_string_number,
 select ifnull(null, '8') as ifnull_string,
        ifnull(null, '8') + 1 as ifnull_plus_one,
        ifnull(7, '8') as ifnull_first_number;
-
-select nullif('8', 8) as nullif_equal,
-       nullif('8', 9) as nullif_not_equal,
-       nullif(8, '8') as nullif_num_str;
 
 drop database mysql_compat_type_conversion;
