@@ -1504,11 +1504,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if check.enforcementSet && !check.enforced {
 			return moerr.NewNotSupported(ctx.GetContext(), "CHECK constraint NOT ENFORCED")
 		}
-		checkCols := createTable.TableDef.Cols
-		if check.column != nil {
-			checkCols = []*ColDef{check.column}
-		}
-		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, checkCols); err != nil {
+		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, check.column); err != nil {
 			return err
 		}
 	}
@@ -1759,19 +1755,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	return nil
 }
 
-func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExpr tree.Expr, cols []*ColDef) error {
-	colNames := make([]string, 0, len(cols))
-	colTypes := make([]plan.Type, 0, len(cols))
-	for _, col := range cols {
-		if col.Name == catalog.Row_ID {
-			continue
+func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExpr tree.Expr, column *ColDef) error {
+	if column != nil {
+		// Bind against the defining column first to enforce column-level CHECK scope.
+		if _, err := bindCheckExpr(ctx, astExpr, []*ColDef{column}); err != nil {
+			return err
 		}
-		colNames = append(colNames, col.Name)
-		colTypes = append(colTypes, col.Typ)
 	}
 
-	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
-	checkExpr, err := binder.BindExpr(astExpr, 0, true)
+	checkExpr, err := bindCheckExpr(ctx, astExpr, tableDef.Cols)
 	if err != nil {
 		return err
 	}
@@ -1783,6 +1775,21 @@ func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExp
 		Check: checkExpr,
 	})
 	return nil
+}
+
+func bindCheckExpr(ctx CompilerContext, astExpr tree.Expr, cols []*ColDef) (*plan.Expr, error) {
+	colNames := make([]string, 0, len(cols))
+	colTypes := make([]plan.Type, 0, len(cols))
+	for _, col := range cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		colNames = append(colNames, col.Name)
+		colTypes = append(colTypes, col.Typ)
+	}
+
+	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
+	return binder.BindExpr(astExpr, 0, true)
 }
 
 func restoreIntervalSyntaxForCTAS(sql string) string {

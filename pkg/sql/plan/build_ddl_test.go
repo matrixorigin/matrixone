@@ -586,6 +586,18 @@ func TestBuildCreateTableStoresCheckConstraints(t *testing.T) {
 	}
 }
 
+func TestBuildCreateTableColumnCheckUsesTableColumnPosition(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, "CREATE TABLE t_column_check_position (id INT PRIMARY KEY, v INT CHECK (v > 0));")
+	require.NoError(t, err)
+
+	checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+	require.Len(t, checks, 1)
+	checkArgs := checks[0].GetCheck().GetF().GetArgs()
+	require.NotEmpty(t, checkArgs)
+	require.Equal(t, int32(1), checkArgs[0].GetCol().GetColPos())
+}
+
 func TestBuildCreateTableCheckConstraintEnforcement(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	for _, tt := range []struct {
