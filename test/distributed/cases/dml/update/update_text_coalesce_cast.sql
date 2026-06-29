@@ -40,5 +40,14 @@ insert into t1 values(1, 'x', '') on duplicate key update vc = txt;
 update t1 set txt = repeat('c', 260) where id = 1;
 update t1 set vc = txt where id = 1;
 
+-- multi-row mixed length in one UPDATE: an over-width TEXT row and a short row;
+-- the COALESCE/CONCAT result must stay TEXT for every row (no narrowing).
+drop table if exists t_multi;
+create table t_multi(id int primary key, txt text);
+insert into t_multi values(1, repeat('a', 260)), (2, 'short');
+update t_multi set txt = concat(coalesce(txt, ''), 'x');
+select length(txt) from t_multi order by id;
+drop table t_multi;
+
 drop table t1;
 drop database update_text_coalesce_cast;

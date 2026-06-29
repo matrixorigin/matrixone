@@ -43,5 +43,14 @@ internal error: Can't cast 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
 update t1 set txt = repeat('c', 260) where id = 1;
 update t1 set vc = txt where id = 1;
 internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 260 is larger than Dest length 255
+drop table if exists t_multi;
+create table t_multi(id int primary key, txt text);
+insert into t_multi values(1, repeat('a', 260)), (2, 'short');
+update t_multi set txt = concat(coalesce(txt, ''), 'x');
+select length(txt) from t_multi order by id;
+length(txt)
+261
+6
+drop table t_multi;
 drop table t1;
 drop database update_text_coalesce_cast;
