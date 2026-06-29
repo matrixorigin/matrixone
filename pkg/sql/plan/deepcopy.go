@@ -88,24 +88,6 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 	return result
 }
 
-func DeepCopyOnDuplicateKeyCtx(ctx *plan.OnDuplicateKeyCtx) *plan.OnDuplicateKeyCtx {
-	if ctx == nil {
-		return nil
-	}
-	newCtx := &plan.OnDuplicateKeyCtx{
-		OnDuplicateIdx: slices.Clone(ctx.OnDuplicateIdx),
-	}
-
-	if ctx.OnDuplicateExpr != nil {
-		newCtx.OnDuplicateExpr = make(map[string]*Expr)
-		for k, v := range ctx.OnDuplicateExpr {
-			newCtx.OnDuplicateExpr[k] = DeepCopyExpr(v)
-		}
-	}
-
-	return newCtx
-}
-
 func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 	if ctx == nil {
 		return nil
@@ -238,7 +220,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		SourceStep:       node.SourceStep,
 		PreInsertCtx:     DeepCopyPreInsertCtx(node.PreInsertCtx),
 		PreInsertUkCtx:   DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
-		OnDuplicateKey:   DeepCopyOnDuplicateKeyCtx(node.OnDuplicateKey),
 		LockTargets:      make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:      DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:            node.IsEnd,

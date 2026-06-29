@@ -27186,6 +27186,7 @@ yydefault:
 		yyDollar = yyS[yypt-0 : yypt+1]
 //line mysql_sql.y:11576
 		{
+			yyVAL.str = ""
 		}
 	case 1736:
 		yyDollar = yyS[yypt-2 : yypt+1]

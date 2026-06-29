@@ -136,6 +136,13 @@ func (m LockOptions) WithWaitPolicy(policy WaitPolicy) LockOptions {
 	return m
 }
 
+// WithLockWaitTimeout sets the lock wait timeout in seconds. 0 disables
+// lock-wait-timeout enforcement and relies on the caller context instead.
+func (m LockOptions) WithLockWaitTimeout(seconds int64) LockOptions {
+	m.LockWaitTimeout = seconds
+	return m
+}
+
 // WrapError wrapper error to TxnError
 func (m *Response) WrapError(err error) {
 	me := moerr.ConvertGoError(context.TODO(), err).(*moerr.Error)
