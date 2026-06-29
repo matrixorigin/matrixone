@@ -2568,6 +2568,58 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 	}
 }
 
+// Test_strToStr_StrictStringWidth covers the strict assignment path
+// (strictStringWidth=true, used by cast_strict): an over-width CHAR/VARCHAR
+// value is rejected with "larger than Dest length" instead of being truncated,
+// while a value that fits is stored unchanged. The lenient path
+// (strictStringWidth=false) truncates the same over-width value. Width is
+// measured in runes, so multibyte boundaries are honored.
+func Test_strToStr_StrictStringWidth(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	tests := []struct {
+		name    string
+		input   string
+		toType  types.Type
+		strict  bool
+		want    string
+		wantErr bool
+	}{
+		{name: "strict varchar over-width rejected", input: "abcd", toType: types.New(types.T_varchar, 3, 0), strict: true, wantErr: true},
+		{name: "strict char over-width rejected", input: "abcd", toType: types.New(types.T_char, 3, 0), strict: true, wantErr: true},
+		{name: "strict varchar fits", input: "abc", toType: types.New(types.T_varchar, 3, 0), strict: true, want: "abc"},
+		{name: "strict char fits", input: "abc", toType: types.New(types.T_char, 3, 0), strict: true, want: "abc"},
+		{name: "non-strict varchar over-width truncates", input: "abcd", toType: types.New(types.T_varchar, 3, 0), strict: false, want: "abc"},
+		{name: "strict multibyte over-width rejected", input: "你好世", toType: types.New(types.T_varchar, 2, 0), strict: true, wantErr: true},
+		{name: "strict multibyte fits", input: "你好", toType: types.New(types.T_varchar, 2, 0), strict: true, want: "你好"},
+		{name: "non-strict multibyte over-width truncates by rune", input: "你好世", toType: types.New(types.T_varchar, 2, 0), strict: false, want: "你好"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputVec := testutil.MakeTextVector([]string{tt.input}, nil, mp)
+			defer inputVec.Free(mp)
+			from := vector.GenerateFunctionStrParameter(inputVec)
+
+			to := vector.NewFunctionResultWrapper(tt.toType, mp).(*vector.FunctionResult[types.Varlena])
+			defer to.Free()
+			require.NoError(t, to.PreExtendAndReset(1))
+
+			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict)
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "larger than Dest length")
+				return
+			}
+			require.NoError(t, err)
+			get, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
+			require.False(t, null)
+			require.Equal(t, tt.want, string(get))
+		})
+	}
+}
+
 func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcess(t)

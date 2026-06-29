@@ -882,13 +882,13 @@ invalid input: the data of row 1 contained is not equal to input columns
 drop table load_data_t8;
 drop database test_load_db;
 drop account test_load;
+set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY";
 drop table if exists load_data_t9;
 create table load_data_t9(col1 int, col2 varchar(100), col3 varchar(100));
 load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true';
-internal error: Data too long for column 'col3' at row 1
 select count(*) from load_data_t9;
 count(*)
-0
+10000
 delete from load_data_t9;
 load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' ignore 99999 lines parallel 'true';
 select count(*) from load_data_t9;
@@ -896,34 +896,29 @@ count(*)
 0
 delete from load_data_t9;
 load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' ignore 9999 lines parallel 'true';
-internal error: Data too long for column 'col3' at row 1
 select count(*) from load_data_t9;
 count(*)
-0
+1
 delete from load_data_t9;
 load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' enclosed by '"' LINES TERMINATED BY '\n' parallel 'true';
-internal error: Data too long for column 'col3' at row 1
 select count(*) from load_data_t9;
 count(*)
-0
+10000
 delete from load_data_t9;
 load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true' strict 'true';
-internal error: Data too long for column 'col3' at row 1
 select count(*) from load_data_t9;
 count(*)
-0
+10000
 delete from load_data_t9;
 load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true' strict 'false';
-internal error: Data too long for column 'col3' at row 1
 select count(*) from load_data_t9;
 count(*)
-0
+10000
 delete from load_data_t9;
 load data infile {'filepath'='$resources/load_data/test_parallel_gz.csv.gz'} into table load_data_t9 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
-internal error: Data too long for column 'col3' at row 1
 select count(*) from load_data_t9;
 count(*)
-0
+400000
 drop table load_data_t9;
 drop table if exists load_data_type;
 create table load_data_type(col1 int);
@@ -1042,23 +1037,21 @@ zbkbl VARCHAR(10) COMMENT '折扣比例备份',
 PRIMARY KEY (mandt, vbeln)
 );
 LOAD DATA INFILE '$resources/load_data/test_parse_newline.csv' INTO TABLE load_data_0303 FIELDS TERMINATED BY ','  lines terminated by '\r\n';
-internal error: Data too long for column 'htqrs' at row 1
 select count(*) from load_data_0303;
 count(*)
-0
+100
 delete from load_data_0303;
 LOAD DATA INFILE '$resources/load_data/test_parse_newline.csv' INTO TABLE load_data_0303 FIELDS TERMINATED BY ','  lines terminated by '\n';
-internal error: Data too long for column 'htqrs' at row 1
 select count(*) from load_data_0303;
 count(*)
-0
+100
 delete from load_data_0303;
 LOAD DATA INFILE '$resources/load_data/test_parse_newline.csv' INTO TABLE load_data_0303 FIELDS TERMINATED BY ',';
-internal error: Data too long for column 'htqrs' at row 1
 select count(*) from load_data_0303;
 count(*)
-0
+100
 drop table load_data_0303;
+set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 drop database if exists test;
 create database test;
 use test;
