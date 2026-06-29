@@ -73,7 +73,9 @@ func (l *localLockTable) newLockContext(
 	c.cb = cb
 	c.result = pb.Result{LockedOn: bind}
 	c.createAt = time.Now()
-	if opts.async && opts.LockWaitTimeout > 0 {
+	if opts.LockWaitDeadline > 0 {
+		c.lockWaitDeadline = time.Unix(0, opts.LockWaitDeadline)
+	} else if opts.LockWaitTimeout > 0 {
 		c.lockWaitDeadline = c.createAt.Add(time.Duration(opts.LockWaitTimeout) * time.Second)
 	}
 	return c
@@ -104,6 +106,10 @@ func (c *lockContext) getLockWaitTimeout() time.Duration {
 		return time.Duration(c.opts.LockWaitTimeout) * time.Second
 	}
 	return time.Until(c.lockWaitDeadline)
+}
+
+func (c *lockContext) lockWaitTimeoutEnabled() bool {
+	return !c.lockWaitDeadline.IsZero() || c.opts.LockWaitTimeout > 0
 }
 
 type event struct {

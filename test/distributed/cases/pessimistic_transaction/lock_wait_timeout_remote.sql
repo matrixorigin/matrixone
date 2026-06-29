@@ -22,7 +22,7 @@ begin;
 select a, b from t where b = @@sql_mode for update;
 -- @session}
 
--- @regex("(?s)(invalid state lock timeout|lock timeout|context deadline exceeded)",true)
+-- @regex("(?s)(invalid state lock timeout|lock timeout)",true)
 select a, b from t where b = @@sql_mode for update;
 rollback;
 

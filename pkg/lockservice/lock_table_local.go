@@ -103,9 +103,6 @@ func (l *localLockTable) doLock(
 	var oldOffset int
 	var err error
 	table := l.bind.Table
-	// Session-level SET lock_wait_timeout takes highest priority (passed via
-	// pb.LockOptions). The budget only counts time actually spent waiting.
-	leftTimeout := time.Duration(c.opts.LockWaitTimeout) * time.Second
 	for {
 		// blocked used for async callback, waiter is created, and added to wait list.
 		// So only need wait notify.
@@ -169,12 +166,16 @@ func (l *localLockTable) doLock(
 
 		waitCtx := c.ctx
 		var cancel context.CancelFunc
-		if leftTimeout > 0 {
+		leftTimeout := time.Duration(0)
+		if c.lockWaitTimeoutEnabled() {
+			leftTimeout = c.getLockWaitTimeout()
+			if leftTimeout <= 0 {
+				leftTimeout = time.Nanosecond
+			}
 			waitCtx, cancel = context.WithTimeoutCause(c.ctx, leftTimeout, ErrLockTimeout)
 		}
-		waitStart := time.Now()
 		v := c.w.wait(waitCtx, l.logger)
-		lockWaitTimeoutHit := leftTimeout > 0 &&
+		lockWaitTimeoutHit := c.lockWaitTimeoutEnabled() &&
 			errors.Is(v.err, context.DeadlineExceeded) &&
 			context.Cause(waitCtx) == ErrLockTimeout
 		if cancel != nil {
@@ -185,20 +186,11 @@ func (l *localLockTable) doLock(
 			l.options.afterWait(c)()
 		}
 
-		// Update the remaining lock_wait_timeout budget using only wait time.
-		if leftTimeout > 0 {
-			waited := time.Since(waitStart)
-			if waited < leftTimeout {
-				leftTimeout -= waited
-			} else {
-				leftTimeout = 0
-			}
-			if lockWaitTimeoutHit {
-				// lock_wait_timeout expired: return ErrLockTimeout directly
-				// (not errors.Join) so upper layers can recognize it via
-				// moerr.IsMoErrCode(err, moerr.ErrInvalidState).
-				v.err = ErrLockTimeout
-			}
+		if lockWaitTimeoutHit {
+			// lock_wait_timeout expired: return ErrLockTimeout directly
+			// (not errors.Join) so upper layers can recognize it via
+			// moerr.IsMoErrCode(err, moerr.ErrInvalidState).
+			v.err = ErrLockTimeout
 		}
 
 		c.txn.Lock()

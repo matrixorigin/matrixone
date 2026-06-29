@@ -137,7 +137,7 @@ func TestLockOpHelpers(t *testing.T) {
 	require.True(t, opts.changeDef)
 }
 
-func TestRefreshLockWaitOptionsUsesRemainingDeadline(t *testing.T) {
+func TestRefreshLockWaitOptionsPreservesAbsoluteDeadline(t *testing.T) {
 	options := lock.LockOptions{
 		LockWaitDeadline: time.Now().Add(1500 * time.Millisecond).UnixNano(),
 		LockWaitTimeout:  60,
@@ -145,8 +145,7 @@ func TestRefreshLockWaitOptionsUsesRemainingDeadline(t *testing.T) {
 
 	refreshed, err := refreshLockWaitOptions(options)
 	require.NoError(t, err)
-	require.Greater(t, refreshed.LockWaitTimeout, int64(0))
-	require.LessOrEqual(t, refreshed.LockWaitTimeout, int64(2))
+	require.Equal(t, options.LockWaitTimeout, refreshed.LockWaitTimeout)
 	require.Equal(t, options.LockWaitDeadline, refreshed.LockWaitDeadline)
 }
 

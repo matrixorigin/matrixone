@@ -13,6 +13,7 @@ select a, b from t where b = @@sql_mode for update;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
 1  ¦  ONLY_FULL_GROUP_BY
 select a, b from t where b = @@sql_mode for update;
+-- @regex("(?s)(invalid state lock timeout|lock timeout)", true)
 invalid state lock timeout
 rollback;
 rollback;

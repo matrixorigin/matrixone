@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -832,10 +831,6 @@ func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) 
 	remaining := time.Until(time.Unix(0, options.LockWaitDeadline))
 	if remaining <= 0 {
 		return options, lockservice.ErrLockTimeout
-	}
-	options.LockWaitTimeout = int64(math.Ceil(remaining.Seconds()))
-	if options.LockWaitTimeout <= 0 {
-		options.LockWaitTimeout = 1
 	}
 	return options, nil
 }

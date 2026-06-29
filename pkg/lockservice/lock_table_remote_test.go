@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -630,6 +631,65 @@ func TestRetryRemoteLockError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := retryRemoteLockError(tt.err)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestSkipTrackLockOnError(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want bool
+	}{
+		{
+			name: "wrapped net timeout",
+			ctx:  context.Background(),
+			err: fmt.Errorf(
+				"send failed: %w",
+				&net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}),
+			want: true,
+		},
+		{
+			name: "rpc context deadline exceeded",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+				defer cancel()
+				<-ctx.Done()
+				return ctx
+			}(),
+			err:  context.DeadlineExceeded,
+			want: true,
+		},
+		{
+			name: "lock timeout error",
+			ctx:  context.Background(),
+			err:  ErrLockTimeout,
+			want: true,
+		},
+		{
+			name: "wrapped lock timeout error",
+			ctx:  context.Background(),
+			err:  fmt.Errorf("remote lock failed: %w", ErrLockTimeout),
+			want: true,
+		},
+		{
+			name: "invalid state lock timeout message",
+			ctx:  context.Background(),
+			err:  moerr.NewInvalidStateNoCtx("lock timeout"),
+			want: true,
+		},
+		{
+			name: "ordinary remote error may have been observed",
+			ctx:  context.Background(),
+			err:  errors.New("remote lock failed"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, skipTrackLockOnError(tt.ctx, tt.err))
 		})
 	}
 }

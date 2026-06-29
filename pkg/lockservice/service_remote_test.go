@@ -891,3 +891,40 @@ func TestRemoteLockWaitTimeout_ReturnsLockTimeout(t *testing.T) {
 		},
 	)
 }
+
+func TestRemoteLockWaitDeadlineOverridesLongTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			start := time.Now()
+			_, err := l2.Lock(ctx, tableID, [][]byte{row1}, txn2, pb.LockOptions{
+				Granularity:      pb.Granularity_Row,
+				Mode:             pb.LockMode_Exclusive,
+				Policy:           pb.WaitPolicy_Wait,
+				LockWaitDeadline: time.Now().Add(500 * time.Millisecond).UnixNano(),
+				LockWaitTimeout:  60,
+			})
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+				"expected lock timeout, got %v", err)
+			require.Contains(t, err.Error(), "lock timeout")
+			require.Less(t, elapsed, 2*time.Second,
+				"absolute deadline should override long LockWaitTimeout, elapsed=%v", elapsed)
+		},
+	)
+}
