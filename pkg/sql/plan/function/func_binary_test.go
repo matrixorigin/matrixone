@@ -2907,13 +2907,13 @@ func TestConvSemantics(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFFF"}, []bool{false}),
 		},
 		{
-			name: "negative decimal overflow saturates to uint64 max",
+			name: "negative decimal overflow wraps modulo uint64",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"-18446744073709551616"}, []bool{false}),
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFFF"}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"0"}, []bool{false}),
 		},
 		{
 			name: "hex overflow saturates to uint64 max",
