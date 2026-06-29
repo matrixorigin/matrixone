@@ -2821,6 +2821,21 @@ func Test_initAesKey(t *testing.T) {
 
 var _ ie.InternalExecutor = &mockIe{}
 
+type captureCDCExecutor struct {
+	execSQLs []string
+}
+
+func (e *captureCDCExecutor) Exec(ctx context.Context, s string, options ie.SessionOverrideOptions) error {
+	e.execSQLs = append(e.execSQLs, s)
+	return nil
+}
+
+func (*captureCDCExecutor) Query(ctx context.Context, s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	return &mockIeResult{}
+}
+
+func (*captureCDCExecutor) ApplySessionOverride(options ie.SessionOverrideOptions) {}
+
 type mockIe struct {
 	cnt int
 }
@@ -3064,6 +3079,71 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, false, mp[0]["db1.tb2"].IdChanged)
 	fault.Disable()
+}
+
+func TestCdcTask_handleNewTables_PermanentTableErrorFailsTask(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	stub3 := gostub.Stub(&GetTableErrMsg, func(context.Context, uint32, ie.InternalExecutor, string, *cdc.DbTableInfo) (bool, error) {
+		return true, nil
+	})
+	defer stub3.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	executor := &captureCDCExecutor{}
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		ie:             executor,
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+		stateMachine:   NewExecutorStateMachine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		holdCh:         make(chan int, 1),
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+
+	mp := map[uint32]cdc.TblMap{
+		0: {
+			"db1.tb1": &cdc.DbTableInfo{
+				SourceDbName:  "db1",
+				SourceTblName: "tb1",
+			},
+		},
+	}
+	err := cdcTask.handleNewTables(mp)
+	require.Error(t, err)
+	require.Equal(t, StateFailed, cdcTask.stateMachine.State())
+	require.Len(t, executor.execSQLs, 1)
+	require.Contains(t, executor.execSQLs[0], "SET state = 'failed'")
+	require.Contains(t, executor.execSQLs[0], "task-1")
 }
 
 func TestCdcTask_handleNewTables_GetTxnOpErr(t *testing.T) {
