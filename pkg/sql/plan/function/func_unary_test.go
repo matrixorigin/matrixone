@@ -7158,6 +7158,7 @@ func resetUserLevelLocksForTest(t *testing.T) {
 	userLevelLocks.Lock()
 	userLevelLocks.counts = make(map[userLevelLockKey]uint64)
 	userLevelLocks.byOwner = make(map[string]map[string]struct{})
+	userLevelLocks.ownerSessions = make(map[string]string)
 	userLevelLocks.Unlock()
 }
 
