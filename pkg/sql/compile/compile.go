@@ -603,12 +603,15 @@ func (c *Compile) runOnce() (err error) {
 	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		// Filter out pre-check SQLs (already executed before the main operation)
+		// Filter out pre-check SQLs (already executed before the main operation).
+		// The modern INSERT path enforces child→parent existence in-plan now, so the
+		// remaining DetectSqls are self-referencing FK checks (plain 1452 message).
 		var postCheckSqls []string
 		for _, sql := range query.DetectSqls {
-			if !strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
-				postCheckSqls = append(postCheckSqls, sql)
+			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+				continue
 			}
+			postCheckSqls = append(postCheckSqls, sql)
 		}
 		err = detectFkSelfRefer(c, postCheckSqls)
 	}
@@ -1280,18 +1283,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		node.NotCacheable = true
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileDelete(node, ss)
-	case plan.Node_ON_DUPLICATE_KEY:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
-		if err != nil {
-			return nil, err
-		}
-
-		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss, err = c.compileOnduplicateKey(node, ss)
-		if err != nil {
-			return nil, err
-		}
-		return ss, nil
 	case plan.Node_FUZZY_FILTER:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -1541,7 +1532,7 @@ func calculatePartitions(start, end, n int64) [][2]int64 {
 }
 
 func StrictSqlMode(proc *process.Process) (error, bool) {
-	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	mode, err := resolveVariableOrDefault(proc, "sql_mode", true, false)
 	if err != nil {
 		return err, false
 	}
@@ -4111,6 +4102,29 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		// One timestamp per statement: all scopes must expand WRITE_FILE_PATTERN
 		// time directives against the same instant.
 		stmtAt := externalInsertStmtTime(c.proc, c.startAt)
+		localFileStage, err := externalInsertTargetIsLocalFile(c.proc, node, stmtAt)
+		if err != nil {
+			return nil, err
+		}
+		if localFileStage {
+			// Only merge scopes on remote CNs onto the current CN.
+			// Same-CN parallel writers share the same filesystem and
+			// use unique filename directives (%U / %<n>N), so they are safe
+			// to keep unmerged.
+			var localSS, remoteSS []*Scope
+			for _, s := range ss {
+				if isSameCN(s.NodeInfo.Addr, c.addr) {
+					localSS = append(localSS, s)
+				} else {
+					remoteSS = append(remoteSS, s)
+				}
+			}
+			if len(remoteSS) > 0 {
+				mergedRemote := c.newMergeScope(remoteSS)
+				localSS = append(localSS, mergedRemote)
+			}
+			ss = localSS
+		}
 		for i := range ss {
 			insertArg, err := constructExternalInsert(c.proc, node, c.e, stmtAt)
 			if err != nil {
@@ -4128,6 +4142,17 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
 	if !toWriteS3 {
+		// A non-S3 INSERT can still drive a cross-CN shuffle join: toWriteS3 is decided by the
+		// INSERT *output* row count, while shuffle is decided by the JOIN *input* table size and
+		// CN count -- independent decisions. A large shuffle join with a highly selective filter
+		// can produce few output rows (non-S3) yet still shuffle across CNs. So group the same-CN
+		// shuffle buckets (with their nested cross-CN dispatch) into one per-CN send unit *before*
+		// attaching Insert. This (a) keeps the dispatch in the same tree as all its local buckets
+		// so it is sent to its own CN instead of being converted to local on the coordinator and
+		// hanging (issue #24919), and (b) puts Insert on the per-CN container's RootOp chain
+		// (Insert -> Merge), so affectedRows() -- which walks the RootOp chain -- still counts it.
+		// Noop when ss carries no cross-CN shuffle dispatch.
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		currentFirstFlag := c.anal.isFirst
 		// Not write S3
 		for i := range ss {
@@ -4148,6 +4173,10 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		// todo : pipelines with sink scan ,must refactor this in the future
 		currentFirstFlag := c.anal.isFirst
 		c.anal.isFirst = false
+		// dataScope merges the buckets, but dataScope.MergeRun still sends each bucket as an
+		// individual RemoteRun unit, so a cross-CN shuffle dispatch here would hit the same
+		// convert-to-local hang. Group same-CN buckets into one per-CN send unit first (issue #24919).
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		dataScope := c.newMergeScope(ss)
 		if c.anal.qry.LoadTag {
 			// reset the channel buffer of sink for load
@@ -4215,6 +4244,11 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		ss[i].setRootOperator(insertArg)
 	}
 	currentFirstFlag = false
+	// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
+	// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
+	// to and executed at its own CN instead of being converted to local on the coordinator
+	// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+	ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 	rs := c.newMergeScope(ss)
 	rs.Magic = MergeInsert
 	mergeInsertArg := constructMergeblock(c.e, node)
@@ -4264,6 +4298,11 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 			ss[i].setRootOperator(multiUpdateArg)
 		}
 
+		// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
+		// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
+		// to and executed at its own CN instead of being converted to local on the coordinator
+		// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		rs := ss[0]
 		if len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1 {
 			rs = c.newMergeScope(ss)
@@ -4278,6 +4317,8 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		ss = []*Scope{rs}
 	} else {
 		if !c.IsTpQuery() {
+			// keep a cross-CN shuffle dispatch in the same send unit as all its local buckets (issue #24919).
+			ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
@@ -4505,18 +4546,6 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 	ss = []*Scope{rs}
 	return ss, nil
 }
-func (c *Compile) compileOnduplicateKey(node *plan.Node, ss []*Scope) ([]*Scope, error) {
-	rs := c.newMergeScope(ss)
-
-	currentFirstFlag := c.anal.isFirst
-	arg := constructOnduplicateKey(node, c.e)
-	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.setRootOperator(arg)
-	c.anal.isFirst = false
-
-	ss = []*Scope{rs}
-	return ss, nil
-}
 
 // DeleteMergeScope need to assure this:
 // one block can be only deleted by one and the same
@@ -4699,6 +4728,70 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 		}
 	}
 	return rs
+}
+
+// scopeTreeHasCrossCNDispatch reports whether the scope tree rooted at s contains a
+// dispatch operator that sends to remote (cross-CN) receivers. A non-empty RemoteRegs is
+// the signature of a cross-CN shuffle dispatch (see constructDispatchLocalAndRemote).
+//
+// Precondition: it only inspects each scope's RootOp, assuming a shuffle dispatch is always
+// the root operator of its scope (constructDispatch results are attached via setRootOperator
+// with IsEnd=true, so nothing is appended on top of them). A dispatch nested as a child of
+// another operator would be missed -- which does not happen for shuffle dispatches today.
+//
+// Scope of the check (intentionally narrower than checkPipelineStandaloneExecutableAtRemote,
+// which rejects out-of-tree dispatch *and* out-of-tree connector targets): this gate only
+// looks for a cross-CN dispatch, because per-CN grouping only reorganizes the same-CN shuffle
+// dispatch together with its dop buckets. A scope tree that crosses CNs solely via a connector
+// is not the shuffle-bucket pattern grouping addresses and is intentionally left untouched.
+func scopeTreeHasCrossCNDispatch(s *Scope) bool {
+	if d, ok := s.RootOp.(*dispatch.Dispatch); ok && len(d.RemoteRegs) > 0 {
+		return true
+	}
+	for _, pre := range s.PreScopes {
+		if scopeTreeHasCrossCNDispatch(pre) {
+			return true
+		}
+	}
+	return false
+}
+
+// groupShuffleBucketsByCNIfNeeded groups the same-CN shuffle buckets (together with the
+// shuffle dispatch nested under them) into one per-CN send unit, so a cross-CN shuffle
+// dispatch always travels in the same pipeline tree as all of its dop local buckets.
+//
+// Background (issue #24919): newShuffleJoinScopeList leaves a CN's dop join buckets in
+// separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
+// When the consumer (here compileInsert) sends each bucket individually, RemoteRun ->
+// checkPipelineStandaloneExecutableAtRemote sees the dispatch.LocalRegs pointing to the
+// sibling out-of-tree buckets, converts the pipeline to local on the coordinator, and the
+// dispatch then runs on the coordinator instead of its compile-time CN -- mispaired with
+// the cross-CN receiver's FromAddr -> the remote receiver's GetProcByUuid spins / merge
+// WaitingEnd waits forever -> hang. Regrouping by CN keeps all of a CN's buckets in one
+// tree, so the whole group is really executed at the remote CN and the pairing is correct.
+//
+// It is a no-op unless we are multi-CN and ss actually carries a cross-CN shuffle dispatch,
+// so single-CN and non-shuffle inserts are completely unaffected.
+//
+// Operator-chain note: callers attach their own root operator to each bucket first (e.g.
+// the insert / multiUpdate operator). mergeScopesByCN (via newMergeScopeByCN ->
+// doSetRootOperator) appends a connector *on top of* that existing root using AppendChild
+// semantics, so the caller's operator is preserved as the connector's child, not replaced.
+func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
+	if len(c.cnList) <= 1 || len(ss) <= len(c.cnList) {
+		return ss
+	}
+	hasCrossCNDispatch := false
+	for _, s := range ss {
+		if scopeTreeHasCrossCNDispatch(s) {
+			hasCrossCNDispatch = true
+			break
+		}
+	}
+	if !hasCrossCNDispatch {
+		return ss
+	}
+	return c.mergeScopesByCN(ss)
 }
 
 func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
@@ -5487,12 +5580,12 @@ func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {
-		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'; treating as same-CN", addr)
 		return true
 	}
 	parts2 := strings.Split(currentCNAddr, ":")
 	if len(parts2) != 2 {
-		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
+		logutil.Warnf("compileScope received a malformed current-cn address '%s', expected 'ip:port'; treating as same-CN", currentCNAddr)
 		return true
 	}
 	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
@@ -5572,6 +5665,16 @@ func (c *Compile) runSqlWithResultAndOptions(
 	}
 
 	exec := v.(executor.SQLExecutor)
+	// Propagate the IsFrontend signal from the outer Compile's proc
+	// to the sub-execution. Without this, sub-Compiles spawned for
+	// internal sub-SQL (e.g. ALTER TABLE COPY's CreateTmpTableSql)
+	// default to IsFrontend=false even when the outer caller is
+	// user-driven, and any downstream code that gates on
+	// ctx.IsFrontend() / proc.Base.IsFrontend silently misfires —
+	// most notably CreateAllIndexUpdateTasks, which would otherwise
+	// see metadata=nil from BuildIdxcronMetadata and write '' into
+	// mo_index_update's JSON column. Mirrors the propagation already
+	// in pkg/vectorindex/sqlexec/sqlexec.go.
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -5581,7 +5684,8 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower).
 		WithStatementOption(options).
-		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
+		WithResolveVariableFunc(c.proc.GetResolveVariableFunc()).
+		WithFrontend(c.proc.Base.IsFrontend)
 
 	ctx := c.proc.Ctx
 	if ctx == nil {

@@ -1546,11 +1546,19 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	}
 
 	if len(txn.tablesInVain) > 0 {
+		ignoreTablesInVain := func(entry Entry) bool {
+			_, ok := txn.tablesInVain[entry.tableId]
+			return ok
+		}
 		for i, e := range txn.writes {
 			if _, ok := txn.tablesInVain[e.tableId]; e.bat != nil && ok {
 				// if the entry contains objects, need to clean it from the disk.
 				// Skip GC for CCPR transactions - CCPRTxnCache handles GC to avoid deleting shared objects
 				if len(e.fileName) != 0 && !txn.isCCPRTxn {
+					txn.unprotectUnreferencedTxnLocalSharedFilesLocked(
+						collectObjectStatsFromEntry(e),
+						ignoreTablesInVain,
+					)
 					_ = txn.GCObjsByIdxRange(i, i)
 				}
 				e.bat.Clean(txn.proc.GetMPool())
@@ -1878,9 +1886,77 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	}
 
 	waiter.Wait()
+	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(dirtyObject, nil)
 	_ = txn.GCObjsByStats(dirtyObject...)
 
 	return nil
+}
+
+func (txn *Transaction) unprotectUnreferencedTxnLocalSharedFilesLocked(
+	statsList []objectio.ObjectStats,
+	ignoreEntry func(Entry) bool,
+) {
+	if !txn.isCloneTxn ||
+		txn.op == nil ||
+		txn.engine == nil ||
+		txn.engine.cloneTxnCache == nil {
+		return
+	}
+
+	txnID := txn.op.Txn().ID
+	for i := range statsList {
+		name := statsList[i].ObjectName().String()
+		if txn.hasLiveObjectStatsRefLocked(name, ignoreEntry) {
+			continue
+		}
+		txn.engine.cloneTxnCache.RemoveTxnLocalSharedFile(txnID, name)
+	}
+}
+
+func (txn *Transaction) hasLiveObjectStatsRefLocked(
+	name string,
+	ignoreEntry func(Entry) bool,
+) bool {
+	for _, entry := range txn.writes {
+		if ignoreEntry != nil && ignoreEntry(entry) {
+			continue
+		}
+		if entry.bat == nil || entry.bat.IsEmpty() {
+			continue
+		}
+
+		for _, stats := range collectObjectStatsFromEntry(entry) {
+			if stats.ObjectName().String() == name {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func collectObjectStatsFromEntry(entry Entry) []objectio.ObjectStats {
+	if entry.bat == nil || entry.bat.IsEmpty() {
+		return nil
+	}
+
+	statsIdx := -1
+	for i, attr := range entry.bat.Attrs {
+		if attr == catalog.ObjectMeta_ObjectStats {
+			statsIdx = i
+			break
+		}
+	}
+	if statsIdx == -1 {
+		return nil
+	}
+
+	vec := entry.bat.Vecs[statsIdx]
+	statsList := make([]objectio.ObjectStats, 0, vec.Length())
+	for i := range vec.Length() {
+		statsList = append(statsList, objectio.ObjectStats(vec.GetBytesAt(i)))
+	}
+	return statsList
 }
 
 // TODO::remove it after workspace refactor.
@@ -1991,15 +2067,13 @@ func (txn *Transaction) getCachedTable(
 	return tbl
 }
 
-func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
+func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err error) {
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.Commit",
 			zap.String("txn", txn.op.Txn().DebugString()),
 		)
 	})
-
-	defer txn.delTransaction()
 
 	if txn.readOnly.Load() {
 		return nil, nil
@@ -2018,6 +2092,12 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	}
 	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
 		return nil, err
+	}
+	if msg, injected := objectio.CNCommitAfterWorkspaceDumpFailedInjected(); injected {
+		if msg == "" {
+			msg = "injected commit failure after workspace dump"
+		}
+		return nil, moerr.NewInternalError(ctx, msg)
 	}
 
 	txn.traceWorkspaceLocked(true)
@@ -2052,18 +2132,28 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 			return nil, err
 		}
 	}
-	reqs, err := genWriteReqs(ctx, txn)
+	reqs, err = genWriteReqs(ctx, txn)
 	if err != nil {
 		return nil, err
 	}
 
-	// For CCPR transactions, call OnTxnCommit to clean up the cache
-	// This must happen after all commit operations succeed
+	return reqs, nil
+}
+
+func (txn *Transaction) FinalizeCommit(context.Context) {
 	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
 		txn.engine.ccprTxnCache.OnTxnCommit(txn.op.Txn().ID)
 	}
+	txn.delTransaction()
+}
 
-	return reqs, nil
+func (txn *Transaction) FinalizeCommitWithUnknownResult(context.Context) {
+	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
+		txn.engine.ccprTxnCache.OnTxnUnknownResult(txn.op.Txn().ID)
+	}
+	// Keep workspace/object-stat metadata intact. If the outer commit result is
+	// later known to be aborted, Rollback still needs the metadata to GC
+	// txn-local CN objects. If it actually committed, rollback GC must not run.
 }
 
 func (txn *Transaction) transferTombstonesByStatement(
@@ -2159,7 +2249,7 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 		txn.engine.ccprTxnCache.OnTxnRollback(txn.op.Txn().ID)
 	} else {
 		//to gc the s3 objs
-		if err := txn.GCObjsByIdxRange(0, len(txn.writes)-1); err != nil {
+		if err := txn.gcObjsByIdxRange(0, len(txn.writes)-1, cloneGCTxnRollback); err != nil {
 			panic("Rollback txn failed: to gc objects generated by CN failed")
 		}
 	}

@@ -28,15 +28,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
+	cagrart "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// cagraCatalogHooks is the shared (stateless) catalog-hooks instance used for
+// plugin-declared type validation (see pkg/indexplugin/catalog).
+var cagraCatalogHooks = cagrart.CatalogHooks{}
 
 var cagra_runSql = sqlexec.RunSql
 
@@ -56,11 +64,31 @@ type cagraCreateState struct {
 	// index has no INCLUDE columns.
 	filterCols []cuvsfilter.ColumnMeta
 
+	// Small-tail CDC fallback. cuvs CAGRA build needs at least
+	// intermediate_graph_degree rows per sub-index. When the source
+	// has a partial trailing chunk smaller than that — or the whole
+	// dataset is too small — those rows can't go through cuvs.
+	// rowsSeen >= cdcCutoff routes them into cdcTail, which end() emits
+	// as tag=1 CDC records under vectorindex.CdcTailId. Search-side
+	// brute-force replay serves them until a future rebuild grows the
+	// tail back above threshold.
+	cdcCutoff int64
+	rowsSeen  int64
+	cdcTail   []cuvscdc.PendingRecord
+
+	// srcEmpty short-circuits the per-row code when SELECT COUNT(*)
+	// at init time returned zero — nothing to build, nothing to CDC.
+	srcEmpty bool
+
 	// holding one call batch, cagraCreateState owns it.
 	batch *batch.Batch
 }
 
 func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
+	if u.srcEmpty {
+		return nil
+	}
+
 	var (
 		sqls []string
 		err  error
@@ -77,10 +105,31 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	case u.buildui8 != nil:
 		sqls, err = u.buildui8.ToInsertSql(ts)
 	default:
-		return nil
+		// No builder selected → init didn't set one. Nothing to do for
+		// the cuvs side; the CDC tail (if any) below still emits.
 	}
 	if err != nil {
 		return err
+	}
+
+	// Emit any buffered CDC tail records as tag=1 INSERTs under
+	// vectorindex.CdcTailId. Search-side brute-force replay picks
+	// them up alongside (or in place of) the cuvs sub-indexes.
+	if len(u.cdcTail) > 0 {
+		ibpr := includeBytesPerRowFromCols(u.filterCols)
+		// colMetaJSON rides as a CdcOpHeader record at chunk_id=0,
+		// record 0. Search-side can recover the INCLUDE-column layout
+		// for tag=1 replay even when no tag=0 sub-index exists.
+		colMetaJSON := colMetaJSONFromCols(u.filterCols)
+		tailSqls, err := cuvscdc.SaveSmallTailAsCdc(
+			u.tblcfg, u.cdcTail,
+			int(u.idxcfg.CuvsCagra.Dimensions), ibpr, colMetaJSON)
+		if err != nil {
+			return err
+		}
+		sqls = append(sqls, tailSqls...)
+		logutil.Infof("CAGRA create: emitted %d CDC tail records for `%s`.`%s` index `%s`",
+			len(u.cdcTail), u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.IndexTable)
 	}
 
 	for _, s := range sqls {
@@ -211,27 +260,86 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
 			return err
 		}
-		if u.tblcfg.IndexCapacity <= 0 {
-			cnt, err := fetchSrcTableRowCount(proc, cagra_runSql, u.tblcfg.DbName, u.tblcfg.SrcTable)
+
+		// max_index_capacity: flat algo_params key (set in CREATE INDEX) wins;
+		// otherwise the session variable controls it, then the hardcoded
+		// default. (Still 0 → auto-detect from srcRowCount below.)
+		if u.idxcfg.IndexCapacity <= 0 {
+			u.idxcfg.IndexCapacity, err = indexplugin.AlgoParamInt(u.param.MaxIndexCapacity,
+				proc.GetResolveVariableFunc(), "cagra_max_index_capacity", cagrart.DefaultMaxIndexCapacity)
 			if err != nil {
 				return err
 			}
-			if cnt <= 0 {
-				return moerr.NewInvalidInput(proc.Ctx, "source table is empty; cannot determine index capacity")
-			}
-			u.tblcfg.IndexCapacity = cnt
+		}
+
+		// Pre-count source rows; needed both for IndexCapacity auto-
+		// detection (when 0) and for the small-tail CDC cutoff
+		// computation below. One round trip per build.
+		//
+		// Snapshot safety: this COUNT runs via NewSqlProcess(proc), i.e. on
+		// the SAME proc/transaction as the table function's source scan that
+		// streams the build rows. Under MO's per-txn snapshot isolation both
+		// observe the same read timestamp. It counts only indexable (vec IS NOT
+		// NULL) rows, matching the build cursor (which advances only on non-NULL
+		// rows), so srcRowCount equals the indexable rows actually streamed — the
+		// `rowsSeen >= cdcCutoff` split cannot drift even under concurrent writes.
+		srcRowCount, err := fetchSrcTableRowCount(proc, cagra_runSql, u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.KeyPart)
+		if err != nil {
+			return err
+		}
+		if srcRowCount == 0 {
+			// Empty source: nothing to build, nothing to CDC. Mark
+			// inited so subsequent (unexpected) per-row calls
+			// short-circuit cleanly via srcEmpty.
+			u.inited = true
+			u.srcEmpty = true
+			logutil.Infof("CAGRA create: source `%s`.`%s` is empty; nothing to build",
+				u.tblcfg.DbName, u.tblcfg.SrcTable)
+			return nil
+		}
+		if u.idxcfg.IndexCapacity <= 0 {
+			u.idxcfg.IndexCapacity = srcRowCount
 			logutil.Infof("CAGRA create: auto-detected index capacity = %d from `%s`.`%s`",
-				u.tblcfg.IndexCapacity, u.tblcfg.DbName, u.tblcfg.SrcTable)
+				u.idxcfg.IndexCapacity, u.tblcfg.DbName, u.tblcfg.SrcTable)
+		}
+
+		// Compute the small-tail cutoff. The trailing partial chunk is
+		// total % IndexCapacity. When IndexCapacity is auto-detected
+		// (== srcRowCount) the modulo is zero and no fallback fires.
+		// When the user explicitly set IndexCapacity and the trailing
+		// partial is smaller than the cuvs minimum (or every chunk
+		// would be too small because IndexCapacity itself is below the
+		// threshold) the tail rows route to CDC instead of cuvs.
+		// Threshold = the cuvs CAGRA minimum graph size for a build to
+		// succeed. Mirrors cuvs.DefaultCagraBuildParams().IntermediateGraphDegree
+		// (128) when the user didn't set it explicitly — same fallback
+		// chain the build itself uses.
+		threshold := int64(u.idxcfg.CuvsCagra.IntermediateGraphDegree)
+		if threshold <= 0 {
+			threshold = 128
+		}
+		u.cdcCutoff = srcRowCount
+		if u.idxcfg.IndexCapacity < threshold {
+			u.cdcCutoff = 0
+			logutil.Infof("CAGRA create: IndexCapacity %d < threshold %d; all %d rows route to CDC tail",
+				u.idxcfg.IndexCapacity, threshold, srcRowCount)
+		} else {
+			lastChunkSize := srcRowCount % u.idxcfg.IndexCapacity
+			if lastChunkSize > 0 && lastChunkSize < threshold {
+				u.cdcCutoff = srcRowCount - lastChunkSize
+				logutil.Infof("CAGRA create: trailing %d rows < threshold %d; routing them to CDC tail (cutoff=%d, total=%d)",
+					lastChunkSize, threshold, u.cdcCutoff, srcRowCount)
+			}
 		}
 
 		// ---- validate argument types ----
 		idVec := tf.ctr.argVecs[1]
-		if idVec.GetType().Oid != types.T_int64 {
+		if !catalogplugin.SupportsPrimaryKeyType(cagraCatalogHooks, idVec.GetType().Oid) {
 			return moerr.NewInvalidInput(proc.Ctx, "second argument (pkid) must be an int64")
 		}
 
 		faVec := tf.ctr.argVecs[2]
-		if faVec.GetType().Oid != types.T_array_float32 {
+		if !catalogplugin.SupportsVectorType(cagraCatalogHooks, faVec.GetType().Oid) {
 			return moerr.NewInvalidInput(proc.Ctx, "third argument (vector) must be a float32 array")
 		}
 
@@ -241,6 +349,9 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 
 		// ---- GPU devices ----
 		devices, _ := cuvs.GetGpuDeviceList()
+		// test-only: present N logical GPUs (all on device 0) so SHARDED / REPLICATED
+		// modes can be built on a single-GPU host. No-op when gpu_multi_simulation < 2.
+		devices = vectorindex.SimulateDevices(devices, u.tblcfg.GpuMultiSimulation)
 
 		nthread := uint32(vectorindex.GetConcurrency(u.tblcfg.ThreadsBuild))
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
@@ -279,20 +390,52 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		u.inited = true
 	}
 
+	// Empty source: nothing to do.
+	if u.srcEmpty {
+		return nil
+	}
+
 	// ---- per-row: append one vector ----
 	u.offset = 0
 	u.batch.CleanOnlyData()
 
 	faVec := tf.ctr.argVecs[2]
 	if faVec.IsNull(uint64(nthRow)) {
+		// NULL vector: not indexed and does NOT advance the build cursor, so the
+		// cuVS chunk / small-tail cutoff is computed over non-NULL rows only
+		// (matching the COUNT(... WHERE vec IS NOT NULL) basis of cdcCutoff).
 		return nil
 	}
+
+	// Build-stream position over indexable (non-NULL) rows only — matches the
+	// COUNT(... WHERE vec IS NOT NULL) basis that cdcCutoff was derived from.
+	srcPos := u.rowsSeen
+	u.rowsSeen++
 
 	id := vector.GetFixedAtNoTypeCheck[int64](tf.ctr.argVecs[1], nthRow)
 	fa := types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
 
 	if uint(len(fa)) != u.idxcfg.CuvsCagra.Dimensions {
 		return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+	}
+
+	// Trailing rows below the cuvs threshold route to the CDC tail
+	// (search-side brute-force replay) instead of the cuvs builder.
+	if srcPos >= u.cdcCutoff {
+		vecCopy := append([]float32(nil), fa...)
+		var incBytes []byte
+		if len(u.filterCols) > 0 {
+			incBytes, err = encodeIncludeRowFromArgVecs(u.filterCols, tf.ctr.argVecs, 3, nthRow)
+			if err != nil {
+				return err
+			}
+		}
+		u.cdcTail = append(u.cdcTail, cuvscdc.PendingRecord{
+			Pkid:    id,
+			Vec:     vecCopy,
+			Include: incBytes,
+		})
+		return nil
 	}
 
 	switch {

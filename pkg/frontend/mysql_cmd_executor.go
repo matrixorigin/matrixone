@@ -2376,16 +2376,6 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 					return true, err
 				}
 			}
-			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef, &plan.TableDef{
-					Name:    ctx.TableName,
-					TblId:   ctx.TableId,
-					Version: ctx.TableVersion,
-				})
-				if err != nil || flag {
-					return true, err
-				}
-			}
 		}
 	default:
 	}
@@ -2567,6 +2557,15 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		if !havePrivilege {
 			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
 			return stats, err
+		}
+
+		//!!!note: clone table executed in the frontend.
+		//handle privilege check here for it
+		priv := ses.GetPrivilege()
+		if priv.objectType() == objectTypeTable {
+			if !checkProtectedDatabaseWriteByPrivilege(reqCtx, ses, priv) {
+				return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+			}
 		}
 	}
 	return stats, nil
@@ -3294,6 +3293,7 @@ func executeStmt(ses *Session,
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
+	defer ses.ClearDDLOwnerRoleID()
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	// set the batch buf for stream scan
 	var inMemStreamScan []*kafka.Message
@@ -3304,6 +3304,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
+	execCtx.reqCtx = defines.AttachDDLOwnerRoleIDProvider(execCtx.reqCtx, ses)
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	resper := ses.GetResponser()
@@ -3362,6 +3363,13 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
+	// Frontend client SQL — session-bound resolver. Procs constructed
+	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
+	// IsFrontend from opts.IsFrontend() (default false → background);
+	// this proc is built inline here so we set the flag explicitly,
+	// paired with the resolver bind above as the "I have a session"
+	// signal.
+	proc.Base.IsFrontend = true
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.
@@ -3468,6 +3476,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
+			ses.ClearDDLOwnerRoleID()
 			authStats, err := authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
 			if err != nil {
 				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
@@ -3516,6 +3525,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.input = input
 
 		err = executeStmtWithResponse(ses, execCtx)
+		ses.ClearDDLOwnerRoleID()
 		if err != nil {
 			return err
 		}

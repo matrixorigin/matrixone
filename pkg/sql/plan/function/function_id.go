@@ -725,11 +725,44 @@ const (
 	IS_UUID     = 515
 	UUID_TO_BIN = 516
 	BIN_TO_UUID = 517
-	NAME_CONST  = 518
+
+	NAME_CONST        = 518
+	GET_LOCK          = 519
+	RELEASE_LOCK      = 520
+	IS_FREE_LOCK      = 521
+	IS_USED_LOCK      = 522
+	RELEASE_ALL_LOCKS = 523
+
+	// S2 geometry (github.com/golang/geo/s2) cell functions. A CellId is a
+	// BIGINT UNSIGNED (uint64). See docs/design/s2h3_funcs.md.
+	S2_CELLID               = 524
+	S2_CELLID_LEVEL         = 525
+	S2_CELLID_CENTER        = 526
+	S2_CELLID_AREA          = 527
+	S2_CELLID_PARENT        = 528
+	S2_CELLID_EDGENEIGHBORS = 529
+	S2_CELLID_ALLNEIGHBORS  = 530
+	S2_CELLID_ARENEIGHBORS  = 531
+
+	// H3 hierarchical hexagonal index (github.com/uber/h3-go) functions. An
+	// H3Index is a BIGINT UNSIGNED (uint64). See docs/design/s2h3_funcs.md.
+	H3_H3INDEX              = 532
+	H3_H3INDEX_RESOLUTION   = 533
+	H3_H3INDEX_CENTER       = 534
+	H3_H3INDEX_BOUNDARY     = 535
+	H3_H3INDEX_PARENT       = 536
+	H3_H3INDEX_NEIGHBORS    = 537
+	H3_H3INDEX_ARENEIGHBORS = 538
+
+	// GIS numeric point constructors: ST_Point(x, y) -> GEOMETRY (POINT),
+	// ST_Point32(x, y) -> GEOMETRY32 (POINT), where x is longitude/X and y is
+	// latitude/Y.
+	ST_POINT   = 539
+	ST_POINT32 = 540
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 519
+	FUNCTION_END_NUMBER = 541
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1075,6 +1108,11 @@ var functionIdRegister = map[string]int32{
 	"field":                          FIELD,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
+	"get_lock":                       GET_LOCK,
+	"release_lock":                   RELEASE_LOCK,
+	"is_free_lock":                   IS_FREE_LOCK,
+	"is_used_lock":                   IS_USED_LOCK,
+	"release_all_locks":              RELEASE_ALL_LOCKS,
 	"split_part":                     SPLIT_PART,
 	"insert":                         INSERT,
 	"instr":                          INSTR,
@@ -1136,6 +1174,8 @@ var functionIdRegister = map[string]int32{
 	"st_geometryfromtext":            ST_GEOMFROMTEXT,
 	"st_geomfromwkb":                 ST_GEOMFROMWKB,
 	"st_geomfrombinary":              ST_GEOMFROMWKB,
+	"st_point":                       ST_POINT,
+	"st_point32":                     ST_POINT32,
 	"st_pointfromtext":               ST_POINTFROMTEXT,
 	"st_linefromtext":                ST_LINEFROMTEXT,
 	"st_linestringfromtext":          ST_LINEFROMTEXT,
@@ -1198,6 +1238,26 @@ var functionIdRegister = map[string]int32{
 	"st_difference":                  ST_DIFFERENCE,
 	"st_symdifference":               ST_SYMDIFFERENCE,
 	"st_buffer":                      ST_BUFFER,
+	"s2_cellid":                      S2_CELLID,
+	"s2_cellid_level":                S2_CELLID_LEVEL,
+	"s2_cellid_center":               S2_CELLID_CENTER,
+	"s2_cellid_area":                 S2_CELLID_AREA,
+	"s2_cellid_parent":               S2_CELLID_PARENT,
+	"s2_cellid_edgeneighbours":       S2_CELLID_EDGENEIGHBORS,
+	"s2_cellid_edgeneighbors":        S2_CELLID_EDGENEIGHBORS,
+	"s2_cellid_allneighbours":        S2_CELLID_ALLNEIGHBORS,
+	"s2_cellid_allneighbors":         S2_CELLID_ALLNEIGHBORS,
+	"s2_cellid_areneighbours":        S2_CELLID_ARENEIGHBORS,
+	"s2_cellid_areneighbors":         S2_CELLID_ARENEIGHBORS,
+	"h3_h3index":                     H3_H3INDEX,
+	"h3_h3index_resolution":          H3_H3INDEX_RESOLUTION,
+	"h3_h3index_center":              H3_H3INDEX_CENTER,
+	"h3_h3index_boundary":            H3_H3INDEX_BOUNDARY,
+	"h3_h3index_parent":              H3_H3INDEX_PARENT,
+	"h3_h3index_neighbours":          H3_H3INDEX_NEIGHBORS,
+	"h3_h3index_neighbors":           H3_H3INDEX_NEIGHBORS,
+	"h3_h3index_areneighbours":       H3_H3INDEX_ARENEIGHBORS,
+	"h3_h3index_areneighbors":        H3_H3INDEX_ARENEIGHBORS,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,

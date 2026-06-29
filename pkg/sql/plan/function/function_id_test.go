@@ -572,9 +572,31 @@ var predefinedFunids = map[int]int{
 	UUID_TO_BIN:                   516,
 	BIN_TO_UUID:                   517,
 	NAME_CONST:                    518,
+	GET_LOCK:                      519,
+	RELEASE_LOCK:                  520,
+	IS_FREE_LOCK:                  521,
+	IS_USED_LOCK:                  522,
+	RELEASE_ALL_LOCKS:             523,
+	S2_CELLID:                     524,
+	S2_CELLID_LEVEL:               525,
+	S2_CELLID_CENTER:              526,
+	S2_CELLID_AREA:                527,
+	S2_CELLID_PARENT:              528,
+	S2_CELLID_EDGENEIGHBORS:       529,
+	S2_CELLID_ALLNEIGHBORS:        530,
+	S2_CELLID_ARENEIGHBORS:        531,
+	H3_H3INDEX:                    532,
+	H3_H3INDEX_RESOLUTION:         533,
+	H3_H3INDEX_CENTER:             534,
+	H3_H3INDEX_BOUNDARY:           535,
+	H3_H3INDEX_PARENT:             536,
+	H3_H3INDEX_NEIGHBORS:          537,
+	H3_H3INDEX_ARENEIGHBORS:       538,
+	ST_POINT:                      539,
+	ST_POINT32:                    540,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 519,
+	FUNCTION_END_NUMBER: 541,
 }
 
 func Test_funids(t *testing.T) {

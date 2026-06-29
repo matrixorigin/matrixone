@@ -154,6 +154,12 @@ func (t *testWorkspace) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	panic("implement me")
 }
 
+func (t *testWorkspace) FinalizeCommit(ctx context.Context) {
+}
+
+func (t *testWorkspace) FinalizeCommitWithUnknownResult(ctx context.Context) {
+}
+
 func (t *testWorkspace) Rollback(ctx context.Context) error {
 	//TODO implement me
 	panic("implement me")
@@ -780,6 +786,42 @@ func Test_commit(t *testing.T) {
 	})
 }
 
+func TestCommitTxnUnknownPreservesTxnOperatorForLaterCleanup(t *testing.T) {
+	convey.Convey("commit ErrTxnUnknown keeps txn operator reachable", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		ses.txnHandler.storage = eng
+
+		txnOp := newTestTxnOp()
+		txnOp.meta = txn.TxnMeta{
+			ID:     []byte{1, 2, 3, 4},
+			Status: txn.TxnStatus_Active,
+		}
+		txnOp.commitErr = moerr.NewTxnUnknown(ctx, "test")
+		ses.txnHandler.txnOp = txnOp
+		ses.txnHandler.txnCtx = ctx
+		ses.txnHandler.shareTxn = false
+
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
+		ec.stmt = &tree.Insert{}
+		ec.txnOpt = FeTxnOption{autoCommit: true}
+
+		err := finishTxnFunc(ses, nil, ec)
+		convey.So(moerr.IsMoErrCode(err, moerr.ErrTxnUnknown), convey.ShouldBeTrue)
+		convey.So(txnOp.commitCalls, convey.ShouldEqual, 1)
+		convey.So(txnOp.rollbackCalls, convey.ShouldEqual, 0)
+		convey.So(ses.GetTxnHandler().GetTxn(), convey.ShouldEqual, txnOp)
+	})
+}
+
 var _ TxnOperator = new(testTxnOp)
 
 const (
@@ -790,6 +832,9 @@ type testTxnOp struct {
 	meta                 txn.TxnMeta
 	wp                   *testWorkspace
 	mod                  int
+	commitErr            error
+	commitCalls          int
+	rollbackCalls        int
 	checkLockTableBinds  func(context.Context) error
 	checkLockTableChecks int
 }
@@ -879,11 +924,16 @@ func (txnop *testTxnOp) WriteAndCommit(ctx context.Context, ops []txn.TxnRequest
 }
 
 func (txnop *testTxnOp) Commit(ctx context.Context) error {
+	txnop.commitCalls++
+	if txnop.commitErr != nil {
+		return txnop.commitErr
+	}
 	txnop.meta.Status = txn.TxnStatus_Committed
 	return nil
 }
 
 func (txnop *testTxnOp) Rollback(ctx context.Context) error {
+	txnop.rollbackCalls++
 	if txnop.mod == modRollbackError {
 		return moerr.NewInternalErrorNoCtx("throw error")
 	}

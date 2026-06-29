@@ -219,6 +219,25 @@ func TestConnCache(t *testing.T) {
 		})
 	})
 
+	t.Run("pop - skip unhealthy cn before reuse", func(t *testing.T) {
+		runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
+			ccc := cc.(*connCache)
+			ccc.canReuseCN = func(cn *CNServer) bool {
+				return cn == nil || cn.uuid != "bad-cn"
+			}
+
+			c1, _ := net.Pipe()
+			mockConn1 := newMockServerConn(c1)
+			mockConn1.setCN(&CNServer{uuid: "bad-cn"})
+			assert.True(t, cc.Push("k100", mockConn1))
+			assert.Equal(t, 1, cc.Count())
+
+			sc := cc.Pop("k100", 1, nil, nil)
+			assert.Nil(t, sc)
+			assert.Equal(t, 0, cc.Count())
+		})
+	})
+
 	t.Run("pop - nil auth, return err", func(t *testing.T) {
 		runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
 			c1, _ := net.Pipe()
@@ -259,6 +278,25 @@ func TestConnCache(t *testing.T) {
 			assert.Nil(t, sc)
 			// count is 0 because the connection has been removed.
 			assert.Equal(t, 0, cc.Count())
+		})
+	})
+
+	t.Run("close - disables push and pop", func(t *testing.T) {
+		runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
+			c1, _ := net.Pipe()
+			mockConn1 := newMockServerConn(c1)
+			assert.True(t, cc.Push("k100", mockConn1))
+			assert.Equal(t, 1, cc.Count())
+
+			assert.NoError(t, cc.Close())
+			assert.Equal(t, 0, cc.Count())
+
+			sc := cc.Pop("k100", 1, nil, nil)
+			assert.Nil(t, sc)
+
+			c2, _ := net.Pipe()
+			mockConn2 := newMockServerConn(c2)
+			assert.False(t, cc.Push("k100", mockConn2))
 		})
 	})
 }

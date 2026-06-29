@@ -24,6 +24,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -725,16 +726,233 @@ func TestUpdate(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
-func TestUpdateFromUsesAggDedup(t *testing.T) {
+func TestDropIndexIfExistsMissingIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "drop index if exists nonexist on test_idx")
+	require.NoError(t, err)
+	testDeepCopy(logicPlan)
+	dropIndex := logicPlan.GetDdl().GetDropIndex()
+	require.NotNil(t, dropIndex)
+	require.Equal(t, "", dropIndex.GetIndexName())
+
+	_, err = runOneStmt(mock, t, "drop index nonexist on test_idx")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found index: nonexist")
+}
+
+func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp SET emp.sal = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
 	if err != nil {
-		t.Fatalf("build PostgreSQL-style update from: %v", err)
+		t.Fatalf("build UPDATE FROM plan: %v", err)
 	}
 
-	assertFallbackUpdateAggDedupWithAnyValue(t, logicPlan.GetQuery())
+	query := logicPlan.GetQuery()
+	tableDef := mock.ctxt.tables["nation"]
+	if hasUpdateFromDedupAnyValueAgg(query, len(tableDef.Cols)) {
+		t.Fatalf("UPDATE FROM dedup should not aggregate update columns with any_value")
+	}
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("UPDATE FROM should dedup duplicate source matches with row_number window partitioned by row_id")
+	}
+}
+
+func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME, N_COMMENT = NATION2.N_COMMENT FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM plan: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["nation"].Cols)) {
+		t.Fatalf("UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
+	}
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("UPDATE FROM dedup should use row_number window partitioned by target row_id")
+	}
+}
+
+func TestUpdateFallbackPgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["emp"].Cols)) {
+		t.Fatalf("fallback UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
+	}
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("fallback UPDATE FROM dedup should use row_number window partitioned by target row_id")
+	}
+}
+
+// TestUpdatePgStyleFromDedupPartitionsByRowIDNotGeometry32 guards the new
+// bindUpdate path against the GEOMETRY32 partition-key crash: T_geometry32 has
+// no comparator in pkg/compare, so a row_number window partitioned on a
+// GEOMETRY32 target column would build a nil comparator and crash at runtime.
+// The dedup key must be row_id, never the geometry column.
+func TestUpdatePgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	geoTyp := plan.Type{Id: int32(types.T_geometry32)}
+	setMockColumnType(t, mock, "nation", "n_comment", geoTyp)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM with GEOMETRY32 column: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
+	}
+	if updateFromDedupPartitionsColName(query, "n_comment") {
+		t.Fatalf("UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
+	}
+}
+
+// TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32 guards the
+// fallback (buildTableUpdate) path against the same GEOMETRY32 partition-key
+// crash. emp has a foreign key, so UPDATE ... FROM routes through the fallback
+// planner.
+func TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	geoTyp := plan.Type{Id: int32(types.T_geometry32)}
+	setMockColumnType(t, mock, "emp", "hiredate", geoTyp)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback UPDATE FROM with GEOMETRY32 column: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("fallback UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
+	}
+	if updateFromDedupPartitionsColName(query, "hiredate") {
+		t.Fatalf("fallback UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
+	}
+}
+
+// TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter guards the fallback path
+// against losing the join-target NULL-row safeguard. The fallback path's
+// needAggFilter drives both the any_value dedup AND an isnotnull(row_id) filter
+// that drops NULL rows from left/right-join targets. Replacing the dedup with a
+// row_number() window must still keep that NULL filter, otherwise a joined-target
+// NULL row could leak into the update pipeline.
+func TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if hasAnyValueAgg(query) {
+		t.Fatalf("fallback UPDATE FROM dedup must not use any_value aggregation")
+	}
+	if !hasRowIdIsNotNullFilter(query) {
+		t.Fatalf("fallback UPDATE FROM must keep the isnotnull(row_id) join-target NULL-row filter")
+	}
+}
+
+func TestUpdatePgStyleFromDedupExpandsDefaultBeforeDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockDefaultExpr(t, mock, "nation", "n_name", "name-default")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = DEFAULT FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM with DEFAULT: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if queryContainsDefaultVal(query) {
+		t.Fatalf("UPDATE FROM dedup should run after DEFAULT expansion")
+	}
+	if !queryContainsStringLiteral(query, "name-default") {
+		t.Fatalf("UPDATE FROM dedup should retain the expanded DEFAULT expression")
+	}
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["nation"].Cols)) {
+		t.Fatalf("UPDATE FROM dedup should not wrap DEFAULT with any_value")
+	}
+}
+
+func TestUpdatePgStyleFromDedupAllowsVectorUpdateColumn(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	vecTyp := plan.Type{Id: int32(types.T_array_float32), Width: 4}
+	setMockColumnType(t, mock, "nation", "n_comment", vecTyp)
+	setMockColumnType(t, mock, "nation2", "n_comment", vecTyp)
+
+	_, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_COMMENT = NATION2.N_COMMENT FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("UPDATE FROM should allow vector update columns through row-level dedup: %v", err)
+	}
+}
+
+func TestUpdatePgStyleFromDedupKeepsGeneratedColumnsAfterDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "nation", "n_comment", "n_name")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = NATION2.N_NAME FROM NATION2 WHERE NATION.N_REGIONKEY = NATION2.R_REGIONKEY")
+	if err != nil {
+		t.Fatalf("build UPDATE FROM with generated column: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["nation"].Cols)) {
+		t.Fatalf("dedup should not aggregate generated or update columns with any_value")
+	}
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("UPDATE FROM with generated column should still use row-level dedup")
+	}
+}
+
+func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  plan.Type
+		sql  string
+	}{
+		{
+			name: "decimal256",
+			typ:  plan.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 30},
+			sql:  "UPDATE NATION SET N_COMMENT = REGION.R_COMMENT FROM REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY",
+		},
+		{
+			name: "enum",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "small,medium,large"},
+			sql:  "UPDATE NATION SET N_COMMENT = CASE WHEN 1 > 0 THEN 'small' ELSE 'medium' END FROM REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			setMockColumnType(t, mock, "nation", "n_comment", tt.typ)
+			setMockColumnType(t, mock, "region", "r_comment", tt.typ)
+
+			_, err := runOneStmt(mock, t, tt.sql)
+			if err != nil {
+				t.Fatalf("UPDATE FROM should allow %s update columns through row-level dedup: %v", tt.name, err)
+			}
+		})
+	}
 }
 
 func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
@@ -936,6 +1154,11 @@ func setMockOnUpdateExpr(t *testing.T, mock *MockOptimizer, tableName, colName, 
 	}
 }
 
+func setMockColumnType(t *testing.T, mock *MockOptimizer, tableName, colName string, typ plan.Type) {
+	col := requireMockColumn(t, mock, tableName, colName)
+	col.Typ = typ
+}
+
 func requireMockColumn(t *testing.T, mock *MockOptimizer, tableName, colName string) *ColDef {
 	tableDef := mock.ctxt.tables[tableName]
 	if tableDef == nil {
@@ -985,6 +1208,145 @@ func isFallbackSourceProjectNode(query *Query, node *Node, projectLen int, marke
 	for _, expr := range node.ProjectList {
 		if exprContainsStringLiteral(expr, marker) {
 			return true
+		}
+	}
+	return false
+}
+
+func hasUpdateFromDedupAnyValueAgg(query *Query, groupByLen int) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG || len(node.GroupBy) != groupByLen {
+			continue
+		}
+		for _, aggExpr := range node.AggList {
+			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasAnyValueAgg reports whether the plan contains any AGG node aggregating with
+// any_value, regardless of GROUP BY shape.
+func hasAnyValueAgg(query *Query) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		for _, aggExpr := range node.AggList {
+			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasRowIdIsNotNullFilter reports whether the plan filters out joined-target
+// NULL rows via isnotnull(row_id). This safeguard must survive on the fallback
+// UPDATE ... FROM path even after duplicate matches are deduped by row_number().
+func hasRowIdIsNotNullFilter(query *Query) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, f := range node.FilterList {
+			fn := f.GetF()
+			if fn == nil || fn.Func.ObjName != "isnotnull" || len(fn.Args) != 1 {
+				continue
+			}
+			if exprContainsColName(fn.Args[0], catalog.Row_ID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasUpdateFromDedupWindow reports whether the plan contains a row_number window
+// used for UPDATE ... FROM dedup, partitioned on exactly partitionByLen row_id
+// columns. The dedup key must be the target row's physical identity (row_id),
+// not the whole old target row, so every partition expr must reference row_id.
+func hasUpdateFromDedupWindow(query *Query, partitionByLen int) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_WINDOW {
+			continue
+		}
+		for _, winExpr := range node.WinSpecList {
+			spec := winExpr.GetW()
+			if spec == nil || spec.Name != "row_number" || len(spec.PartitionBy) != partitionByLen {
+				continue
+			}
+			allRowID := true
+			for _, partExpr := range spec.PartitionBy {
+				if !exprContainsColName(partExpr, catalog.Row_ID) {
+					allRowID = false
+					break
+				}
+			}
+			if allRowID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// updateFromDedupPartitionsColName reports whether any row_number dedup window
+// partitions on the given column name. Used to assert that columns without a
+// stable comparator (e.g. GEOMETRY32) never end up in the dedup partition key.
+func updateFromDedupPartitionsColName(query *Query, colName string) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_WINDOW {
+			continue
+		}
+		for _, winExpr := range node.WinSpecList {
+			spec := winExpr.GetW()
+			if spec == nil || spec.Name != "row_number" {
+				continue
+			}
+			for _, partExpr := range spec.PartitionBy {
+				if exprContainsColName(partExpr, colName) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func queryContainsStringLiteral(query *Query, value string) bool {
+	return queryContainsExpr(query, func(expr *plan.Expr) bool {
+		return exprContainsStringLiteral(expr, value)
+	})
+}
+
+func queryContainsDefaultVal(query *Query) bool {
+	return queryContainsExpr(query, exprContainsDefaultVal)
+}
+
+func queryContainsExpr(query *Query, accept func(*plan.Expr) bool) bool {
+	for _, node := range query.Nodes {
+		exprLists := [][]*plan.Expr{
+			node.ProjectList,
+			node.OnList,
+			node.FilterList,
+			node.GroupBy,
+			node.AggList,
+			node.WinSpecList,
+		}
+		for _, exprList := range exprLists {
+			for _, expr := range exprList {
+				if accept(expr) {
+					return true
+				}
+			}
+		}
+		for _, order := range node.OrderBy {
+			if accept(order.Expr) {
+				return true
+			}
 		}
 	}
 	return false
@@ -1072,6 +1434,55 @@ func exprContainsStringLiteral(expr *plan.Expr, value string) bool {
 				return true
 			}
 		}
+	case *plan.Expr_W:
+		if exprContainsStringLiteral(e.W.WindowFunc, value) {
+			return true
+		}
+		for _, partition := range e.W.PartitionBy {
+			if exprContainsStringLiteral(partition, value) {
+				return true
+			}
+		}
+		for _, order := range e.W.OrderBy {
+			if exprContainsStringLiteral(order.Expr, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprContainsDefaultVal(expr *plan.Expr) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		_, ok := e.Lit.Value.(*plan.Literal_Defaultval)
+		return ok
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if exprContainsDefaultVal(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsDefaultVal(item) {
+				return true
+			}
+		}
+	case *plan.Expr_W:
+		if exprContainsDefaultVal(e.W.WindowFunc) {
+			return true
+		}
+		for _, partition := range e.W.PartitionBy {
+			if exprContainsDefaultVal(partition) {
+				return true
+			}
+		}
+		for _, order := range e.W.OrderBy {
+			if exprContainsDefaultVal(order.Expr) {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -1148,6 +1559,68 @@ func TestReplaceFakePKTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestReplaceFakePKCompositeNullableUKSkipsNullKeyIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	idxTbl := catalog.UniqueIndexTableNamePrefix + "fake-pk-comp-uk-ab"
+
+	// touchesIdx reports whether the REPLACE plan reads or maintains the uk_ab index
+	// table (a TABLE_SCAN on it, or a MULTI_UPDATE UpdateCtx targeting it).
+	touchesIdx := func(sql string) bool {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("%s: %+v", sql, err)
+		}
+		query := logicPlan.GetQuery()
+		for _, node := range query.Nodes {
+			if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == idxTbl {
+				return true
+			}
+			if node.NodeType == plan.Node_MULTI_UPDATE {
+				for _, uc := range node.UpdateCtxList {
+					if uc.TableDef != nil && uc.TableDef.Name == idxTbl {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+
+	// fake_pk_comp has a composite UNIQUE(a, b) and no real PK. Omitting column a makes
+	// it default to NULL, so serial(a, b) is NULL: the unique key can never conflict and
+	// is never stored. Like a plain INSERT (which skips index maintenance for a NULL
+	// key), REPLACE must NOT read or maintain the uk_ab index table for this row.
+	assert.False(t, touchesIdx("REPLACE INTO fake_pk_comp (b, c) VALUES (1, 'x')"),
+		"REPLACE with a statically-NULL composite unique-key part must not maintain the unique index table")
+
+	// With both key parts provided (non-NULL) the unique key can conflict, so REPLACE
+	// must maintain the uk_ab index table as usual.
+	assert.True(t, touchesIdx("REPLACE INTO fake_pk_comp (a, b, c) VALUES (1, 2, 'x')"),
+		"REPLACE with a fully non-NULL composite unique key must maintain the unique index table")
+}
+
+func TestReplaceChildParentFKUsesInPlanCheck(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// emp has a child->parent foreign key (deptno references dept(deptno)). REPLACE
+	// must enforce parent existence in-plan with the per-FK MARK-join assert the modern
+	// INSERT path uses, not silently allow an orphan child row. emp has no
+	// self-referencing FK, so DetectSqls must be empty.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO emp VALUES (1, 'Alice', 'DEV', 0, '2020-01-01', 5000.00, 500.00, 1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	hasMark := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			hasMark = true
+		}
+	}
+	assert.True(t, hasMark, "REPLACE on a child FK table must enforce parent existence via an in-plan MARK join")
+	assert.Empty(t, query.DetectSqls, "child->parent FK on REPLACE should be enforced in-plan, not via DetectSqls")
+}
+
 func TestReplaceFKTable(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// REPLACE on table with foreign key should pass (modern path)
@@ -1202,6 +1675,310 @@ func TestReplacePlanStructure(t *testing.T) {
 	}
 	assert.True(t, hasMultiUpdate, "REPLACE plan should contain MULTI_UPDATE node")
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
+}
+
+func TestInsertOnDupFakePKUsesModernPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// fake_pk_t has no real PK, only unique key(a). ON DUPLICATE KEY UPDATE must
+	// be planned on the modern DEDUP JOIN + MULTI_UPDATE path (using the unique
+	// key for conflict detection), not fall back to the legacy
+	// Node_ON_DUPLICATE_KEY operator.
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO fake_pk_t VALUES (1, 'x') ON DUPLICATE KEY UPDATE b = 'y'")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	hasDedupJoin := false
+	for _, node := range query.Nodes {
+		switch {
+		case node.NodeType == plan.Node_MULTI_UPDATE:
+			hasMultiUpdate = true
+		case node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP:
+			hasDedupJoin = true
+		}
+	}
+	assert.True(t, hasMultiUpdate, "fake-PK ODKU plan should contain MULTI_UPDATE node")
+	assert.True(t, hasDedupJoin, "fake-PK ODKU plan should contain DEDUP JOIN node")
+}
+
+func TestInsertOnDupFKUsesModernPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// emp has a foreign key (deptno) references dept(deptno). ON DUPLICATE KEY
+	// UPDATE on an FK table must be planned on the modern MULTI_UPDATE path, not the
+	// legacy Node_ON_DUPLICATE_KEY operator. The child→parent FK is enforced
+	// row-scoped in-plan (see TestInsertOnDupChildParentFKUsesInPlanCheck), so emp —
+	// which has no self-referencing FK — generates no DetectSqls.
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO emp (empno, deptno) VALUES (1, 10) ON DUPLICATE KEY UPDATE comm = 100")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+	}
+	assert.True(t, hasMultiUpdate, "FK-table ODKU plan should contain MULTI_UPDATE node")
+	assert.Empty(t, query.DetectSqls, "child→parent FK ODKU should enforce FK in-plan, not via DetectSqls")
+}
+
+func TestInsertChildParentFKUsesInPlanCheck(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// emp has a child→parent foreign key (deptno references dept(deptno)). A plain
+	// INSERT must enforce it with the row-scoped in-plan assert (a FILTER over the
+	// new-row image joined against the parent), NOT a whole-table DetectSql — the
+	// latter would false-positive on rows inserted earlier under
+	// FOREIGN_KEY_CHECKS=0. Since emp has no self-referencing FK, DetectSqls must be
+	// empty.
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO emp (empno, deptno) VALUES (1, 10)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Empty(t, query.DetectSqls,
+		"plain INSERT with only a child→parent FK should enforce it in-plan, not via DetectSqls")
+
+	hasFilter := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
+			hasFilter = true
+			break
+		}
+	}
+	assert.True(t, hasFilter, "child→parent FK INSERT should contain an in-plan assert FILTER node")
+}
+
+func TestInsertOnDupChildParentFKUsesInPlanCheck(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// ON DUPLICATE KEY UPDATE on emp (deptno references dept) must enforce the
+	// child→parent FK with a row-scoped in-plan assert over the final merged image,
+	// NOT a whole-table DetectSql — the latter scales with table size and
+	// false-positives on rows inserted earlier under FOREIGN_KEY_CHECKS=0. emp has
+	// no self-referencing FK, so DetectSqls must be empty.
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO emp (empno, deptno) VALUES (1, 10) ON DUPLICATE KEY UPDATE deptno = 20")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Empty(t, query.DetectSqls,
+		"ODKU with only a child→parent FK should enforce it in-plan, not via DetectSqls")
+
+	hasFilter, hasMultiUpdate, hasMark := false, false, false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
+			hasFilter = true
+		}
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			hasMark = true
+		}
+	}
+	assert.True(t, hasFilter, "child→parent FK ODKU should contain an in-plan assert FILTER node")
+	assert.True(t, hasMultiUpdate, "child→parent FK ODKU should stay on the modern MULTI_UPDATE path")
+	assert.True(t, hasMark, "child→parent FK ODKU must use a per-FK MARK join (null-aware MATCH SIMPLE), not a global isnotnull pre-filter")
+}
+
+func TestInsertIgnoreChildParentFKDropsRows(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// INSERT IGNORE on emp (deptno references dept) must drop the rows whose parent
+	// does not exist (MySQL row-skip), not assert. On the modern path that is a MARK
+	// join against the parent (the existence check) plus a FILTER that keeps only the
+	// matching rows, feeding the MULTI_UPDATE. emp has no self-referencing FK, so
+	// DetectSqls must be empty.
+	logicPlan, err := runOneStmt(mock, t, "INSERT IGNORE INTO emp (empno, deptno) VALUES (1, 10)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Empty(t, query.DetectSqls,
+		"INSERT IGNORE with only a child→parent FK should enforce it in-plan, not via DetectSqls")
+
+	hasParentJoin, hasFilter, hasMultiUpdate := false, false, false
+	for _, node := range query.Nodes {
+		// The parent-existence check is a MARK join (the optimizer may also rewrite
+		// the underlying join shape), so accept MARK / SEMI / LEFT / RIGHT.
+		if node.NodeType == plan.Node_JOIN &&
+			(node.JoinType == plan.Node_MARK || node.JoinType == plan.Node_SEMI ||
+				node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_RIGHT) {
+			hasParentJoin = true
+		}
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
+			hasFilter = true
+		}
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+	}
+	assert.True(t, hasParentJoin, "INSERT IGNORE FK row-skip should outer-join the parent table")
+	assert.True(t, hasFilter, "INSERT IGNORE FK row-skip should contain the parent-existence FILTER node")
+	assert.True(t, hasMultiUpdate, "INSERT IGNORE FK should stay on the modern MULTI_UPDATE path")
+}
+
+func TestInsertOnDupSelfReferFKUsesModernPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// self_ref has a self-referencing foreign key (parent_id references
+	// self_ref(id)). ON DUPLICATE KEY UPDATE must be planned on the modern
+	// MULTI_UPDATE path, and the self-referencing FK must be enforced via a
+	// generated DetectSql produced by genSqlsForCheckFKSelfRefer, not by falling
+	// back to the legacy Node_ON_DUPLICATE_KEY operator.
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO self_ref (id, parent_id, name) VALUES (1, NULL, 'x') ON DUPLICATE KEY UPDATE name = 'y'")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+	}
+	assert.True(t, hasMultiUpdate, "self-refer FK ODKU plan should contain MULTI_UPDATE node")
+	assert.NotEmpty(t, query.DetectSqls, "self-refer FK insert should generate FK constraint DetectSqls")
+}
+
+func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// dept has a real PK (deptno) and a unique key (dname). To align with MySQL,
+	// a unique-key conflict on a real-PK table must trigger an UPDATE of the
+	// conflicting row instead of raising a duplicate-entry error.
+	//
+	// The modern plan achieves this by resolving a single UPDATE target row up
+	// front: target_pk = coalesce(pk-existence-probe, uk1_pri, uk2_pri, ...),
+	// treating PRIMARY as the 0th index. The main DEDUP-update join then keys on
+	// target_pk so a cross-row UK conflict lands on the existing row's UPDATE.
+	// The per-UK FAIL dedup join is intentionally kept as in-batch protection
+	// (two brand-new rows sharing a new UK value still error, avoiding a
+	// duplicated unique-index entry).
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO dept VALUES (1, 'Sales', 'NY') ON DUPLICATE KEY UPDATE loc = 'LA'")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	hasUpdateDedupJoin := false
+	hasTargetPkResolve := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_UPDATE {
+			hasUpdateDedupJoin = true
+		}
+		for _, expr := range node.ProjectList {
+			if exprContainsFuncName(expr, "coalesce") {
+				hasTargetPkResolve = true
+			}
+		}
+	}
+	assert.True(t, hasMultiUpdate, "real-PK ODKU plan should contain MULTI_UPDATE node")
+	assert.True(t, hasUpdateDedupJoin,
+		"real-PK ODKU plan should contain a DEDUP JOIN with OnDuplicateAction=UPDATE")
+	assert.True(t, hasTargetPkResolve,
+		"real-PK ODKU must resolve a coalesce(pk, uk...) target so unique-key "+
+			"conflicts update the existing row (MySQL-aligned), not just dedup on PK")
+}
+
+func TestInsertOnDupRealPKCompositeUniqueKeyConflict(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// dept_ck has a real PK (deptno) and a composite unique key (dname, loc),
+	// plus a free column note. The target_pk resolution must serialize the
+	// composite unique-key value to probe its index table, so a composite
+	// unique-key conflict also resolves into the UPDATE target (MySQL-aligned).
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO dept_ck VALUES (1, 'Sales', 'NY', 'n') ON DUPLICATE KEY UPDATE note = 'x'")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	hasTargetPkResolve := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+		for _, expr := range node.ProjectList {
+			if exprContainsFuncName(expr, "coalesce") {
+				hasTargetPkResolve = true
+			}
+		}
+	}
+	assert.True(t, hasMultiUpdate, "composite-UK real-PK ODKU should contain MULTI_UPDATE node")
+	assert.True(t, hasTargetPkResolve,
+		"composite-UK real-PK ODKU should resolve a coalesce(pk, composite-uk) target")
+}
+
+// TestInsertOnDupIndexMetaTableUsesModernPath guards the regression where
+// dropping the legacy ODKU operator broke ivfflat/hnsw/cagra/fulltext index
+// creation: index maintenance upserts a version counter into the index metadata
+// table via ON DUPLICATE KEY UPDATE. That table carries an algo-specific
+// TableType ("metadata") and a secondary-index name, so it is neither
+// SystemOrdinaryRel nor SystemIndexRel and canSkipDedup would skip dedup. The
+// modern path must still handle this ODKU (build a MULTI_UPDATE with the
+// dedup-update join) instead of rejecting it with "insert into vector/text
+// index table".
+func TestInsertOnDupIndexMetaTableUsesModernPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Mirrors the internal SQL generated by handleIvfIndexMetaTable.
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO `__mo_index_secondary_meta` (`__mo_index_key`, `__mo_index_val`) "+
+			"VALUES ('version', '0') ON DUPLICATE KEY UPDATE "+
+			"`__mo_index_val` = CAST( (CAST(`__mo_index_val` AS BIGINT) + 1) AS CHAR)")
+	if err != nil {
+		t.Fatalf("ODKU into index metadata table must be supported by the modern path: %+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+			break
+		}
+	}
+	assert.True(t, hasMultiUpdate,
+		"ODKU into index metadata table should build a MULTI_UPDATE node")
 }
 
 func TestReplaceNonUniqueSingleIndexDeleteUsesIndexRowID(t *testing.T) {

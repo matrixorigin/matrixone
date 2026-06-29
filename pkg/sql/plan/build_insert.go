@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -77,7 +76,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// }
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
-	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 	if stmt.IsRestore {
 		builder.isRestore = true
 		if stmt.IsRestoreByTs {
@@ -129,140 +127,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 	objRef := tblInfo.objRef[0]
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
-		// append on duplicate key node
-		tableDef = DeepCopyTableDef(tableDef, true)
-		if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			tableDef.Cols = append(tableDef.Cols, tableDef.Pkey.CompPkeyCol)
-		}
-		if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			tableDef.Cols = append(tableDef.Cols, tableDef.ClusterBy.CompCbkeyCol)
-		}
-
-		dupProjection := getProjectionByLastNode(builder, lastNodeId)
-		// construct the attrs and insertColCount for on_duplicate_key node
-		attrs := make([]string, 0)
-		insertColCount := int32(0)
-		for _, col := range tableDef.Cols {
-			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-				continue
-			}
-			attrs = append(attrs, col.GetOriginCaseName())
-			insertColCount++
-		}
-		for _, col := range tableDef.Cols {
-			attrs = append(attrs, col.GetOriginCaseName())
-		}
-		attrs = append(attrs, catalog.Row_ID)
-		uniqueColWithIdx, _ := GetUniqueColAndIdxFromTableDef(tableDef)
-		uniqueColCheckExpr, err := GenUniqueColCheckExpr(ctx.GetContext(), tableDef, uniqueColWithIdx, int(insertColCount))
-		if err != nil {
-			return nil, err
-		}
-		uniqueCol := make([]string, len(uniqueColWithIdx))
-		for i := range uniqueColWithIdx {
-			keys := make([]string, 0)
-			for k := range uniqueColWithIdx[i] {
-				keys = append(keys, k)
-			}
-			uniqueCol[i] = strings.Join(keys, ",")
-		}
-		onDuplicateKeyNode := &Node{
-			NodeType:    plan.Node_ON_DUPLICATE_KEY,
-			Children:    []int32{lastNodeId},
-			ProjectList: dupProjection,
-			OnDuplicateKey: &plan.OnDuplicateKeyCtx{
-				Attrs:              attrs,
-				InsertColCount:     insertColCount,
-				UniqueColCheckExpr: uniqueColCheckExpr,
-				UniqueCols:         uniqueCol,
-				OnDuplicateIdx:     rewriteInfo.onDuplicateIdx,
-				OnDuplicateExpr:    rewriteInfo.onDuplicateExpr,
-				IsIgnore:           rewriteInfo.onDuplicateIsIgnore,
-				TableName:          tableDef.Name,
-				TableId:            tableDef.TblId,
-				TableVersion:       tableDef.Version,
-			},
-		}
-		lastNodeId = builder.appendNode(onDuplicateKeyNode, bindCtx)
-
-		// append project node to make batch like update logic, not insert
-		updateColLength := 0
-		updateColPosMap := make(map[string]int)
-		updatePkCol := false
-		var insertColPos []int
-		var projectProjection []*Expr
-		tableDef = DeepCopyTableDef(tableDef, true)
-		tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
-		colLength := len(tableDef.Cols)
-		rowIdPos := colLength - 1
-		if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
-			for _, name := range tableDef.Pkey.Names {
-				if _, ok := rewriteInfo.onDuplicateExpr[name]; ok {
-					updatePkCol = true
-				}
-			}
-		}
-		for _, col := range tableDef.Cols {
-			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-				continue
-			}
-			updateColLength++
-		}
-		for i, col := range tableDef.Cols {
-			projectProjection = append(projectProjection, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(i + updateColLength),
-						Name:   col.Name,
-					},
-				},
-			})
-		}
-		for i := 0; i < updateColLength; i++ {
-			col := tableDef.Cols[i]
-			projectProjection = append(projectProjection, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(i),
-						Name:   col.Name,
-					},
-				},
-			})
-			updateColPosMap[col.Name] = colLength + i
-			insertColPos = append(insertColPos, colLength+i)
-		}
-		projectNode := &Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{lastNodeId},
-			ProjectList: projectProjection,
-		}
-		lastNodeId = builder.appendNode(projectNode, bindCtx)
-
-		// append sink node
-		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-		sourceStep = builder.appendStep(lastNodeId)
-
-		// append plans like update
-		err = buildInsertOnDuplicateUpdatePlans(
-			ctx,
-			builder,
-			objRef,
-			tableDef,
-			sourceStep,
-			updateColLength,
-			rowIdPos,
-			insertColPos,
-			updateColPosMap,
-			updatePkCol,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		query.StmtType = plan.Query_UPDATE
-	} else if tableDef.TableType == catalog.SystemExternalRel {
+		// ON DUPLICATE KEY UPDATE is fully handled by the modern insert path
+		// and must never reach the legacy builder.
+		return nil, moerr.NewInternalError(ctx.GetContext(), "ON DUPLICATE KEY UPDATE should be handled by the modern insert path")
+	}
+	if tableDef.TableType == catalog.SystemExternalRel {
 		// Writable external table: minimal plan, no preinsert/lock/pk-dedup/index.
 		if err = appendExternalInsertPlan(builder, bindCtx, objRef, tableDef, rewriteInfo.rootId); err != nil {
 			return nil, err
@@ -327,40 +196,6 @@ func appendExternalInsertPlan(builder *QueryBuilder, bindCtx *BindContext, objRe
 	lastNodeId = builder.appendNode(insertNode, bindCtx)
 	builder.appendStep(lastNodeId)
 	return nil
-}
-
-var buildInsertGetDmlPlanCtx = getDmlPlanCtx
-var buildInsertPutDmlPlanCtx = putDmlPlanCtx
-var buildInsertUpdatePlans = buildUpdatePlans
-
-func buildInsertOnDuplicateUpdatePlans(
-	ctx CompilerContext,
-	builder *QueryBuilder,
-	objRef *ObjectRef,
-	tableDef *TableDef,
-	sourceStep int32,
-	updateColLength int,
-	rowIdPos int,
-	insertColPos []int,
-	updateColPosMap map[string]int,
-	updatePkCol bool,
-) error {
-	updateBindCtx := NewBindContext(builder, nil)
-	upPlanCtx := buildInsertGetDmlPlanCtx()
-	defer buildInsertPutDmlPlanCtx(upPlanCtx)
-
-	upPlanCtx.objRef = objRef
-	upPlanCtx.tableDef = tableDef
-	upPlanCtx.beginIdx = 0
-	upPlanCtx.sourceStep = sourceStep
-	upPlanCtx.isMulti = false
-	upPlanCtx.updateColLength = updateColLength
-	upPlanCtx.rowIdPos = rowIdPos
-	upPlanCtx.insertColPos = insertColPos
-	upPlanCtx.updateColPosMap = updateColPosMap
-	upPlanCtx.updatePkCol = updatePkCol
-
-	return buildInsertUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
 }
 
 // ------------------- pk filter relatived -------------------

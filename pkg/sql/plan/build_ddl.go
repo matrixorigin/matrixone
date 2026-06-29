@@ -32,6 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
@@ -727,6 +730,48 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 	}, nil
 }
 
+// preserveIndexSessionVars re-attaches algo_params.session_vars from the source
+// table def onto a freshly-built CLONE/LIKE plan's matching index defs.
+// ConstructCreateTableSQL rebuilds each index from its flat options only and
+// drops session_vars (it isn't an index option), so without this the clone (the
+// restore mechanism) loses the captured build-time vars — e.g.
+// kmeans_train_percent — that the background restore reindex needs to reproduce
+// the original build instead of falling back to defaults.
+func preserveIndexSessionVars(p *Plan, src *plan.TableDef) error {
+	if p == nil || src == nil {
+		return nil
+	}
+	ct := p.GetDdl().GetCreateTable()
+	if ct == nil || ct.GetTableDef() == nil {
+		return nil
+	}
+	for _, ni := range ct.GetTableDef().Indexes {
+		for _, si := range src.Indexes {
+			if si.IndexName != ni.IndexName || si.IndexAlgoTableType != ni.IndexAlgoTableType {
+				continue
+			}
+			sv, err := catalog.IndexParamsSessionVars(si.IndexAlgoParams)
+			if err != nil {
+				return err
+			}
+			if len(sv) == 0 {
+				break // source carries no session_vars — nothing to preserve
+			}
+			flat, err := catalog.IndexParamsStringToMap(ni.IndexAlgoParams)
+			if err != nil {
+				return err
+			}
+			merged, err := catalog.IndexParamsMapToJsonStringWithSessionVars(flat, sv)
+			if err != nil {
+				return err
+			}
+			ni.IndexAlgoParams = merged
+			break
+		}
+	}
+	return nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -782,7 +827,19 @@ func buildCreateTable(
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
-			return buildCreateTable(ctx, stmtLike, nil)
+			p, err := buildCreateTable(ctx, stmtLike, nil)
+			if err != nil {
+				return nil, err
+			}
+			// ConstructCreateTableSQL above rebuilds each index from its flat
+			// options only (session_vars is not an index option), so re-attach the
+			// source's algo_params.session_vars onto the clone — otherwise the
+			// restore reindex loses the captured build-time vars (e.g.
+			// kmeans_train_percent) and falls back to defaults.
+			if err := preserveIndexSessionVars(p, tableDef); err != nil {
+				return nil, err
+			}
+			return p, nil
 		}
 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "rewrite for create table like failed")
@@ -1040,8 +1097,6 @@ func buildCreateTable(
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	// all below fields' key is lower case
 	var primaryKeys []string
-	var indexs []string
-	var fulltext_indexs []string
 	colMap := make(map[string]*ColDef)
 	defaultMap := make(map[string]string)
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
@@ -1159,9 +1214,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
-					if isEnumPlanType(&colType) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in unique index", colNameOrigin))
-					}
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", colNameOrigin))
 
@@ -1173,7 +1225,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						KeyParts: []*tree.KeyPart{{ColName: def.Name}},
 						Name:     colName,
 					})
-					indexs = append(indexs, colName)
 				}
 			}
 			if len(pks) > 0 {
@@ -1273,24 +1324,20 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 
 				if col, ok := colMap[name]; ok {
-					if isEnumPlanType(&col.Typ) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in primary key", name))
-					}
-					if isSetPlanType(&col.Typ) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", name))
-					}
-					if isGeometryPlanType(&col.Typ) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in primary key", name))
+					if err := checkIndexColumnSupportability(ctx.GetContext(), col, key, "primary"); err != nil {
+						return err
 					}
 				}
 
 				primaryKeys = append(primaryKeys, name)
 				pksMap[name] = true
-				indexs = append(indexs, name)
 			}
 		case *tree.Index:
 			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
 			if err != nil {
+				return err
+			}
+			if err = checkSpatialIndexColumnSupport(ctx, def, colMap); err != nil {
 				return err
 			}
 
@@ -1299,15 +1346,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				name := key.ColName.ColName()
 
 				if col, ok := colMap[name]; ok {
-					if isEnumPlanType(&col.Typ) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in secondary index", name))
-					}
-					if isGeometryPlanType(&col.Typ) && def.KeyType != tree.INDEX_TYPE_RTREE {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", name))
+					if err := checkIndexColumnSupportability(ctx.GetContext(), col, key, indexColumnCheckKind(def.KeyType)); err != nil {
+						return err
 					}
 				}
-
-				indexs = append(indexs, name)
 			}
 		case *tree.UniqueIndex:
 			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
@@ -1320,18 +1362,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				name := key.ColName.ColName()
 
 				if col, ok := colMap[name]; ok {
-					if isEnumPlanType(&col.Typ) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in unique index", name))
-					}
-					if isSetPlanType(&col.Typ) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", name))
-					}
-					if isGeometryPlanType(&col.Typ) {
-						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", name))
+					if err := checkIndexColumnSupportability(ctx.GetContext(), col, key, "unique"); err != nil {
+						return err
 					}
 				}
-
-				indexs = append(indexs, name)
 			}
 		case *tree.FullTextIndex:
 			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
@@ -1342,7 +1376,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			fullTextIndexInfos = append(fullTextIndexInfos, def)
 			for _, key := range def.KeyParts {
 				name := key.ColName.ColName()
-				fulltext_indexs = append(fulltext_indexs, name)
+				if col, ok := colMap[name]; ok {
+					if col.Typ.Id == int32(types.T_blob) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", key.ColName.ColNameOrigin()))
+					}
+				}
 			}
 		case *tree.ForeignKey:
 			if createTable.Temporary {
@@ -1607,38 +1645,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	// check index invalid on the type
-	for _, str := range indexs {
-		if _, ok := colMap[str]; !ok {
-			return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", str)
-		}
-		if colMap[str].Typ.Id == int32(types.T_blob) {
-			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
-		}
-		if colMap[str].Typ.Id == int32(types.T_text) {
-			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
-		}
-		if colMap[str].Typ.Id == int32(types.T_datalink) {
-			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", str))
-		}
-		if colMap[str].Typ.Id == int32(types.T_json) {
-			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
-		}
-		if isGeometryPlanType(&colMap[str].Typ) {
-			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", str))
-		}
-	}
-
-	// check fulltext index invalid on the typ
-	for _, str := range fulltext_indexs {
-		if _, ok := colMap[str]; !ok {
-			return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", str)
-		}
-		if colMap[str].Typ.Id == int32(types.T_blob) {
-			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
-		}
-	}
-
 	// check Constraint Name (include index/ unique)
 	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
 	if err != nil {
@@ -1807,216 +1813,24 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 	}
 }
 
-// buildFullTextIndexTable create a secondary table with schema (doc_id, word, pos) cluster by (word)
-//
-// with the following schema
-// create __mo_secondary_xxx (
-//
-//	doc_id src_pk_type,
-//	word varchar,
-//	pos int,
-//	cluster by (word)
-//
-// )
+// buildFullTextIndexTable routes each fulltext index through the
+// fulltext plugin's plan.BuildFullTextIndexDefs hook (lifted body
+// lives at pkg/fulltext/plugin/plan/schema.go). It keeps the
+// batched, in-place-append signature the legacy callers used.
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
-	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
-		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
+	p, ok := indexplugin.Get(catalog.MOIndexFullTextAlgo.ToString())
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("fulltext plugin not registered")
 	}
-
-	// check duplicate index
-	if len(existedIndexes) > 0 {
-		for _, existedIndex := range existedIndexes {
-			if existedIndex.IndexAlgo == "fulltext" {
-				for _, indexInfo := range indexInfos {
-					if len(indexInfo.KeyParts) != len(existedIndex.Parts) {
-						continue
-					}
-					n := 0
-					for _, keyPart := range indexInfo.KeyParts {
-						for _, ePart := range existedIndex.Parts {
-							if ePart == keyPart.ColName.ColName() {
-								n++
-								break
-							}
-						}
-					}
-
-					if n == len(indexInfo.KeyParts) {
-						return moerr.NewNotSupported(ctx.GetContext(), "Fulltext index are not allowed to use the same column")
-					}
-				}
-			}
-		}
-	}
-
 	for _, indexInfo := range indexInfos {
-		// fulltext only support char, varchar and text
-		for _, keyPart := range indexInfo.KeyParts {
-			nameOrigin := keyPart.ColName.ColNameOrigin()
-			name := keyPart.ColName.ColName()
-			if _, ok := colMap[name]; !ok {
-				return moerr.NewInvalidInput(ctx.GetContext(), fmt.Sprintf("column '%s' does not exist", nameOrigin))
-			}
-			typid := colMap[name].Typ.Id
-			if !(typid == int32(types.T_text) || typid == int32(types.T_char) ||
-				typid == int32(types.T_varchar) || typid == int32(types.T_json) || typid == int32(types.T_datalink)) {
-				return moerr.NewNotSupported(ctx.GetContext(), "fulltext index only support char, varchar, text, datalink and json")
-			}
-		}
-
-		// check parser
-		var parsername string
-		if indexInfo.IndexOption != nil && indexInfo.IndexOption.ParserName != "" {
-			// set parser ngram
-			parsername = strings.ToLower(indexInfo.IndexOption.ParserName)
-			if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" && parsername != "gojieba" {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("Fulltext parser %s not supported", parsername))
-			}
-		}
-	}
-
-	for _, indexInfo := range indexInfos {
-
-		// create index definition
-		indexDef := &plan.IndexDef{}
-
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		idxDefs, tblDefs, err := p.Plan().BuildFullTextIndexDefs(
+			ctx, indexInfo, colMap, existedIndexes, pkeyName,
+		)
 		if err != nil {
 			return err
 		}
-
-		indexParts := make([]string, 0)
-		for _, keyPart := range indexInfo.KeyParts {
-			name := keyPart.ColName.ColName()
-			indexParts = append(indexParts, name)
-		}
-
-		indexDef.Unique = false
-		indexDef.IndexName = indexInfo.Name
-		indexDef.IndexTableName = indexTableName
-		indexDef.IndexAlgo = tree.INDEX_TYPE_FULLTEXT.ToString()
-		indexDef.IndexAlgoTableType = ""
-		indexDef.Parts = indexParts
-		indexDef.TableExist = true
-		if indexInfo.IndexOption != nil {
-			if indexInfo.IndexOption.ParserName != "" {
-				indexDef.Option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(3)}
-			}
-			indexDef.IndexAlgoParams, err = catalog.IndexParamsToJsonString(indexInfo)
-			if err != nil {
-				return err
-			}
-			if indexInfo.IndexOption.Comment != "" {
-				indexDef.Comment = indexInfo.IndexOption.Comment
-			}
-		}
-
-		// create fulltext index hidden table definition
-		// doc_id, pos, word
-		tableDef := &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.FullTextIndex_TblType,
-		}
-
-		// foreign primary key column
-		keyName := catalog.FullTextIndex_TabCol_Id
-		colDef := &ColDef{
-			Name: keyName,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		// position (int32)
-		keyName = catalog.FullTextIndex_TabCol_Position
-		colDef = &ColDef{
-			Name: keyName,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    int32(types.T_int32),
-				Width: 32,
-				Scale: -1,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		// word (varchar)
-		keyName = catalog.FullTextIndex_TabCol_Word
-		colDef = &ColDef{
-			Name: keyName,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		keyName = catalog.FakePrimaryKeyColName
-		colDef = &ColDef{
-			Name:   keyName,
-			Hidden: true,
-			Alg:    plan.CompressType_Lz4,
-			Typ: Type{
-				Id:       int32(types.T_uint64),
-				AutoIncr: true,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-			NotNull: true,
-			Primary: true,
-		}
-
-		tableDef.Cols = append(tableDef.Cols, colDef)
-
-		tableDef.Pkey = &PrimaryKeyDef{
-			Names:       []string{keyName},
-			PkeyColName: keyName,
-		}
-
-		tableDef.ClusterBy = &ClusterByDef{
-			Name: "word",
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.FullTextIndex_TblType,
-			},
-		}
-		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-
-		// append to createTable.IndexTables and createTable.TableDef
-		createTable.IndexTables = append(createTable.IndexTables, tableDef)
-		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
-
+		createTable.IndexTables = append(createTable.IndexTables, tblDefs...)
+		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, idxDefs...)
 	}
 	return nil
 }
@@ -2042,23 +1856,8 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if _, ok := colMap[name]; !ok {
 				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", nameOrigin)
 			}
-			if colMap[name].Typ.Id == int32(types.T_blob) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", nameOrigin))
-			}
-			if colMap[name].Typ.Id == int32(types.T_text) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", nameOrigin))
-			}
-			if colMap[name].Typ.Id == int32(types.T_datalink) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", nameOrigin))
-			}
-			if colMap[name].Typ.Id == int32(types.T_json) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", nameOrigin))
-			}
-			if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", nameOrigin))
-			}
-			if isGeometryPlanType(&colMap[name].Typ) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", nameOrigin))
+			if err := checkIndexColumnSupportability(ctx.GetContext(), colMap[name], keyPart, "unique"); err != nil {
+				return err
 			}
 
 			indexParts = append(indexParts, name)
@@ -2067,15 +1866,12 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		var keyName string
 		if len(indexInfo.KeyParts) == 1 {
 			keyName = catalog.IndexTableIndexColName
-			colName := indexInfo.KeyParts[0].ColName.ColName()
+			keyPart := indexInfo.KeyParts[0]
+			colName := keyPart.ColName.ColName()
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
-				Typ: Type{
-					Id:    colMap[colName].Typ.Id,
-					Width: colMap[colName].Typ.Width,
-					Scale: colMap[colName].Typ.Scale,
-				},
+				Typ:  indexTableKeyTypeForSinglePart(colMap[colName], keyPart),
 				Default: &plan.Default{
 					NullAbility:  false,
 					Expr:         nil,
@@ -2150,10 +1946,32 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		} else {
 			indexDef.Comment = ""
 		}
+		indexDef.IndexAlgoParams, err = catalog.AddIndexPrefixLengthsToParams(indexDef.IndexAlgoParams, indexInfo.KeyParts)
+		if err != nil {
+			return err
+		}
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 	}
 	return nil
+}
+
+// buildIndexAlgoParams converts the parsed CREATE INDEX options into the
+// algo_params JSON. Per-algo parameter rules live in each index plugin's
+// Catalog().ParamsFromTree hook; non-plugin algorithms (btree/rtree/master)
+// fall through to catalog (which produces no algo_params for them).
+func buildIndexAlgoParams(indexInfo *tree.Index) (string, error) {
+	if p, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
+		res, err := p.Catalog().ParamsFromTree(indexInfo)
+		if err != nil {
+			return "", err
+		}
+		if len(res) == 0 {
+			return "", nil
+		}
+		return catalog.IndexParamsMapToJsonString(res)
+	}
+	return catalog.IndexParamsToJsonString(indexInfo)
 }
 
 func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) (err error) {
@@ -2175,18 +1993,17 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		switch indexInfo.KeyType {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_RTREE:
 			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
-		case tree.INDEX_TYPE_IVFFLAT:
-			indexDef, tableDef, err = buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
 		case tree.INDEX_TYPE_MASTER:
 			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
-		case tree.INDEX_TYPE_HNSW:
-			indexDef, tableDef, err = buildHnswSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
-		case tree.INDEX_TYPE_CAGRA:
-			indexDef, tableDef, err = buildCagraSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
-		case tree.INDEX_TYPE_IVFPQ:
-			indexDef, tableDef, err = buildIvfpqSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
 		default:
-			return moerr.NewInvalidInputNoCtxf("unsupported index type: %s", indexInfo.KeyType.ToString())
+			// Vector-index algorithms live in pkg/vectorindex/<algo>/plugin/plan
+			// (BuildSecondaryIndexDefs). Any KeyType registered with the
+			// plugin registry is supported; anything else is rejected.
+			if p, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
+				indexDef, tableDef, err = p.Plan().BuildSecondaryIndexDefs(ctx, indexInfo, colMap, existedIndexes, pkeyName)
+			} else {
+				return moerr.NewInvalidInputNoCtxf("unsupported index type: %s", indexInfo.KeyType.ToString())
+			}
 		}
 
 		if err != nil {
@@ -2332,7 +2149,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	if indexInfo.IndexOption != nil {
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := buildIndexAlgoParams(indexInfo)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2340,6 +2157,10 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	} else {
 		indexDef.Comment = ""
 		indexDef.IndexAlgoParams = ""
+	}
+	indexDef.IndexAlgoParams, err = catalog.AddIndexPrefixLengthsToParams(indexDef.IndexAlgoParams, indexInfo.KeyParts)
+	if err != nil {
+		return nil, nil, err
 	}
 	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
 }
@@ -2387,27 +2208,15 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	isPkAlreadyPresentInIndexParts := false
 	for _, keyPart := range indexInfo.KeyParts {
 		name := keyPart.ColName.ColName()
-		nameOrigin := keyPart.ColName.ColNameOrigin()
 		if _, ok := colMap[name]; !ok {
-			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", nameOrigin)
+			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", keyPart.ColName.ColNameOrigin())
 		}
-		if colMap[name].Typ.Id == int32(types.T_blob) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", nameOrigin))
+		indexKind := "secondary"
+		if indexInfo.KeyType == tree.INDEX_TYPE_RTREE {
+			indexKind = "rtree"
 		}
-		if colMap[name].Typ.Id == int32(types.T_text) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", nameOrigin))
-		}
-		if colMap[name].Typ.Id == int32(types.T_datalink) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("DATALINK column '%s' cannot be in index", nameOrigin))
-		}
-		if colMap[name].Typ.Id == int32(types.T_json) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", nameOrigin))
-		}
-		if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", nameOrigin))
-		}
-		if isGeometryPlanType(&colMap[name].Typ) && indexInfo.KeyType != tree.INDEX_TYPE_RTREE {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in index", nameOrigin))
+		if err := checkIndexColumnSupportability(ctx.GetContext(), colMap[name], keyPart, indexKind); err != nil {
+			return nil, nil, err
 		}
 
 		if strings.Compare(name, pkeyName) == 0 || catalog.IsAlias(name) {
@@ -2529,7 +2338,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	if indexInfo.IndexOption != nil {
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := buildIndexAlgoParams(indexInfo)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2537,6 +2346,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	} else {
 		indexDef.Comment = ""
 		indexDef.IndexAlgoParams = ""
+	}
+	indexDef.IndexAlgoParams, err = catalog.AddIndexPrefixLengthsToParams(indexDef.IndexAlgoParams, indexInfo.KeyParts)
+	if err != nil {
+		return nil, nil, err
 	}
 	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
 }
@@ -2565,577 +2378,6 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 //	primary key (__mo_index_centriod_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col)
 // )
 
-func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
-
-	indexParts := make([]string, 1)
-
-	// 0. Validate: We only support 1 column of either VECF32 or VECF64 type
-	{
-		if len(indexInfo.KeyParts) != 1 {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column  IVF vector index")
-		}
-
-		name := indexInfo.KeyParts[0].ColName.ColName()
-		indexParts[0] = name
-
-		if _, ok := colMap[name]; !ok {
-			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
-		}
-		if colMap[name].Typ.Id != int32(types.T_array_float32) && colMap[name].Typ.Id != int32(types.T_array_float64) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IVFFLAT only supports VECFXX column types")
-		}
-
-		if len(existedIndexes) > 0 {
-			for _, existedIndex := range existedIndexes {
-				if existedIndex.IndexAlgo == "ivfflat" && existedIndex.Parts[0] == name {
-					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple IVFFLAT indexes are not allowed to use the same column")
-				}
-			}
-		}
-
-	}
-
-	indexDefs := make([]*plan.IndexDef, 3)
-	tableDefs := make([]*TableDef, 3)
-
-	// 1. create ivf-flat `metadata` table
-	{
-		// 1.a tableDef1 init
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
-		if err != nil {
-			return nil, nil, err
-		}
-		tableDefs[0] = &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
-			Cols:      make([]*ColDef, 2),
-		}
-
-		// 1.b indexDef1 init
-		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Metadata, indexParts, false)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// 1.c columns: key (PK), val
-		tableDefs[0].Cols[0] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
-			},
-			Primary: true,
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[1] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-
-		// 1.d PK def
-		tableDefs[0].Pkey = &PrimaryKeyDef{
-			Names:       []string{catalog.SystemSI_IVFFLAT_TblCol_Metadata_key},
-			PkeyColName: catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.SystemSI_IVFFLAT_TblType_Metadata,
-			},
-		}
-		tableDefs[0].Defs = append(tableDefs[0].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-	}
-
-	// 2. create ivf-flat `centroids` table
-	colName := indexInfo.KeyParts[0].ColName.ColName()
-	{
-		// 2.a tableDefs[1] init
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
-		if err != nil {
-			return nil, nil, err
-		}
-		tableDefs[1] = &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
-			Cols:      make([]*ColDef, 4),
-		}
-
-		// 2.b indexDefs[1] init
-		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Centroids, indexParts, false)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// 2.c columns: version, id, centroid, PRIMARY KEY (version,id)
-		tableDefs[1].Cols[0] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[1] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[2] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    colMap[colName].Typ.Id,
-				Width: colMap[colName].Typ.Width,
-				Scale: colMap[colName].Typ.Scale,
-			},
-			Default: &plan.Default{
-				NullAbility:  true,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[3] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
-		tableDefs[1].Cols[3].Alg = plan.CompressType_Lz4
-		tableDefs[1].Cols[3].Primary = true
-
-		// 2.d PK def
-		tableDefs[1].Pkey = &PrimaryKeyDef{
-			Names: []string{
-				catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-				catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-			},
-			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: tableDefs[1].Cols[3],
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.SystemSI_IVFFLAT_TblType_Centroids,
-			},
-		}
-		tableDefs[1].Defs = append(tableDefs[1].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-	}
-
-	// 3. create ivf-flat `entries` table
-	{
-		// 3.a tableDefs[2] init
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
-		if err != nil {
-			return nil, nil, err
-		}
-		tableDefs[2] = &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-			Cols:      make([]*ColDef, 5),
-		}
-
-		// 3.b indexDefs[2] init
-		indexDefs[2], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Entries, indexParts, false)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// 3.c columns: version, id, origin_pk, PRIMARY KEY (version,origin_pk)
-		tableDefs[2].Cols[0] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[2].Cols[1] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-
-		tableDefs[2].Cols[2] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				// NOTE: don't directly copy the Type from Original Table's PK column.
-				// If you do that, we can get the AutoIncrement property from the original table's PK column.
-				// This results in a bug when you try to insert data into entries table.
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[2].Cols[3] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    colMap[colName].Typ.Id,
-				Width: colMap[colName].Typ.Width,
-				Scale: colMap[colName].Typ.Scale,
-			},
-			Default: &plan.Default{
-				NullAbility:  true,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-
-		tableDefs[2].Cols[4] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
-		tableDefs[2].Cols[4].Alg = plan.CompressType_Lz4
-		tableDefs[2].Cols[4].Primary = true
-
-		// 3.d PK def
-		tableDefs[2].Pkey = &PrimaryKeyDef{
-			Names: []string{
-				catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-				catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, // added to make this unique
-			},
-			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: tableDefs[2].Cols[4],
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.SystemSI_IVFFLAT_TblType_Entries,
-			},
-		}
-		tableDefs[2].Defs = append(tableDefs[2].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-	}
-
-	return indexDefs, tableDefs, nil
-}
-
-// buildHnswSecondaryIndexDef will create two internal tables
-//
-// with the following schemas:
-//
-// create __mo_secondary_metadata (
-//
-//	index_id varchar,
-//	checksum varchar,
-//	timestamp int64,
-//	filesize int64,
-//	primary key index_id
-//
-// )
-//
-// create __mo_secondary_index (
-//
-//	index_id varchar,
-//	chunk_id int64,
-// 	data blob,
-//	tag int64,
-//	primary key (index_id, chunk_id)
-// )
-
-func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
-
-	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
-		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for hnsw index")
-	}
-
-	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
-		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be bigint")
-	}
-
-	indexParts := make([]string, 1)
-
-	// 0. Validate: We only support 1 column of VECF32
-	{
-		if len(indexInfo.KeyParts) != 1 {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column  HNSW vector index")
-		}
-
-		name := indexInfo.KeyParts[0].ColName.ColName()
-		indexParts[0] = name
-
-		if _, ok := colMap[name]; !ok {
-			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
-		}
-		if colMap[name].Typ.Id != int32(types.T_array_float32) && colMap[name].Typ.Id != int32(types.T_array_float64) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW only supports VECF32 and VECF64 column types")
-		}
-
-		if len(existedIndexes) > 0 {
-			for _, existedIndex := range existedIndexes {
-				if existedIndex.IndexAlgo == "hnsw" && existedIndex.Parts[0] == name {
-					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple HNSW indexes are not allowed to use the same column")
-				}
-			}
-		}
-
-	}
-
-	indexDefs := make([]*plan.IndexDef, 2)
-	tableDefs := make([]*TableDef, 2)
-
-	// 1. create hnsw `metadata` table
-	{
-		// 1.a tableDef1 init
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
-		if err != nil {
-			return nil, nil, err
-		}
-		tableDefs[0] = &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.Hnsw_TblType_Metadata,
-			Cols:      make([]*ColDef, 4),
-		}
-
-		// 1.b indexDef1 init
-		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.Hnsw_TblType_Metadata, indexParts, false)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// 1.c columns: key (PK), val
-		tableDefs[0].Cols[0] = &ColDef{
-			Name: catalog.Hnsw_TblCol_Metadata_Index_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
-			},
-			Primary: true,
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[1] = &ColDef{
-			Name: catalog.Hnsw_TblCol_Metadata_Checksum,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[2] = &ColDef{
-			Name: catalog.Hnsw_TblCol_Metadata_Timestamp,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[3] = &ColDef{
-			Name: catalog.Hnsw_TblCol_Metadata_Filesize,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-
-		// 1.d PK def
-		tableDefs[0].Pkey = &PrimaryKeyDef{
-			Names:       []string{catalog.Hnsw_TblCol_Metadata_Index_Id},
-			PkeyColName: catalog.Hnsw_TblCol_Metadata_Index_Id,
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.Hnsw_TblType_Metadata,
-			},
-		}
-		tableDefs[0].Defs = append(tableDefs[0].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-	}
-
-	// 2. create hnsw storage table
-	// colName := indexInfo.KeyParts[0].ColName.ColName()
-	{
-		// 1.a tableDef1 init
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
-		if err != nil {
-			return nil, nil, err
-		}
-		tableDefs[1] = &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.Hnsw_TblType_Storage,
-			Cols:      make([]*ColDef, 5),
-		}
-
-		// 1.b indexDef1 init
-		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.Hnsw_TblType_Storage, indexParts, false)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// 1.c columns: key (PK), val
-		tableDefs[1].Cols[0] = &ColDef{
-			Name: catalog.Hnsw_TblCol_Storage_Index_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[1] = &ColDef{
-			Name: catalog.Hnsw_TblCol_Storage_Chunk_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[2] = &ColDef{
-			Name: catalog.Hnsw_TblCol_Storage_Data,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_blob),
-				Width: 65536,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[3] = &ColDef{
-			Name: catalog.Hnsw_TblCol_Storage_Tag,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-
-		tableDefs[1].Cols[4] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
-		tableDefs[1].Cols[4].Alg = plan.CompressType_Lz4
-		tableDefs[1].Cols[4].Primary = true
-
-		tableDefs[1].Pkey = &PrimaryKeyDef{
-			Names: []string{catalog.Hnsw_TblCol_Storage_Index_Id,
-				catalog.Hnsw_TblCol_Storage_Chunk_Id},
-			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: tableDefs[1].Cols[3],
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.Hnsw_TblType_Storage,
-			},
-		}
-		tableDefs[1].Defs = append(tableDefs[1].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-	}
-	return indexDefs, tableDefs, nil
-}
-
 // validateIncludeColumns enforces DDL-time rules for INCLUDE columns on GPU
 // vector (CAGRA / IVF-PQ) indexes. The execute-time path in
 // filter_helper_gpu.go validates types lazily, so without this check a bogus
@@ -3160,7 +2402,8 @@ func validateIncludeColumns(ctx CompilerContext,
 	includeCols []*tree.UnresolvedName,
 	colMap map[string]*ColDef,
 	vecColName string,
-	pkeyName string) error {
+	pkeyName string,
+	supportedTypes []types.T) error {
 	if len(includeCols) == 0 {
 		return nil
 	}
@@ -3193,533 +2436,27 @@ func validateIncludeColumns(ctx CompilerContext,
 			return moerr.NewInvalidInputf(ctx.GetContext(),
 				"INCLUDE column '%s' is not exist", origin)
 		}
-		switch types.T(col.Typ.Id) {
-		case types.T_int32, types.T_int64, types.T_float32, types.T_float64:
-			// supported
-		default:
+		// Supported INCLUDE column types are declared by the index plugin
+		// (catalog.Hooks.SupportedIncludeColumnTypes()) and threaded in via
+		// supportedTypes — the single source of truth, not hardcoded here.
+		colType := types.T(col.Typ.Id)
+		supported := false
+		for _, st := range supportedTypes {
+			if colType == st {
+				supported = true
+				break
+			}
+		}
+		if !supported {
 			return moerr.NewNotSupportedf(ctx.GetContext(),
 				"INCLUDE column '%s' has unsupported type %s (supported: int32, int64, float32, float64)",
-				origin, types.T(col.Typ.Id).String())
+				origin, colType.String())
 		}
 	}
 	return nil
 }
 
-func buildIvfpqSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
-
-	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
-		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for ivfpq index")
-	}
-
-	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
-		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be int64")
-	}
-
-	indexParts := make([]string, 1)
-
-	// Validate: only 1 column of VECF32
-	{
-		if len(indexInfo.KeyParts) != 1 {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column IVFPQ vector index")
-		}
-
-		name := indexInfo.KeyParts[0].ColName.ColName()
-		indexParts[0] = name
-
-		if _, ok := colMap[name]; !ok {
-			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
-		}
-		if colMap[name].Typ.Id != int32(types.T_array_float32) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IvfPQ only supports VECF32 column types")
-		}
-
-		if len(existedIndexes) > 0 {
-			for _, existedIndex := range existedIndexes {
-				if existedIndex.IndexAlgo == "ivfpq" && existedIndex.Parts[0] == name {
-					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple IVFPQ indexes are not allowed to use the same column")
-				}
-			}
-		}
-	}
-
-	if indexInfo.IndexOption != nil {
-		if err := validateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	indexDefs := make([]*plan.IndexDef, 2)
-	tableDefs := make([]*TableDef, 2)
-
-	// 1. create ivfpq metadata table
-	{
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
-		if err != nil {
-			return nil, nil, err
-		}
-		tableDefs[0] = &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.Ivfpq_TblType_Metadata,
-			Cols:      make([]*ColDef, 4),
-		}
-
-		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.Ivfpq_TblType_Metadata, indexParts, false)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		tableDefs[0].Cols[0] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Metadata_Index_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
-			},
-			Primary: true,
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[1] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Metadata_Checksum,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[2] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Metadata_Timestamp,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[3] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Metadata_Filesize,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-
-		tableDefs[0].Pkey = &PrimaryKeyDef{
-			Names:       []string{catalog.Ivfpq_TblCol_Metadata_Index_Id},
-			PkeyColName: catalog.Ivfpq_TblCol_Metadata_Index_Id,
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.Ivfpq_TblType_Metadata,
-			},
-		}
-		tableDefs[0].Defs = append(tableDefs[0].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-	}
-
-	// 2. create ivfpq storage table
-	{
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
-		if err != nil {
-			return nil, nil, err
-		}
-		tableDefs[1] = &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.Ivfpq_TblType_Storage,
-			Cols:      make([]*ColDef, 5),
-		}
-
-		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.Ivfpq_TblType_Storage, indexParts, false)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		tableDefs[1].Cols[0] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Storage_Index_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[1] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Storage_Chunk_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[2] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Storage_Data,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_blob),
-				Width: 65536,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[3] = &ColDef{
-			Name: catalog.Ivfpq_TblCol_Storage_Tag,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-
-		tableDefs[1].Cols[4] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
-		tableDefs[1].Cols[4].Alg = plan.CompressType_Lz4
-		tableDefs[1].Cols[4].Primary = true
-
-		tableDefs[1].Pkey = &PrimaryKeyDef{
-			Names: []string{catalog.Ivfpq_TblCol_Storage_Index_Id,
-				catalog.Ivfpq_TblCol_Storage_Chunk_Id,
-				catalog.Ivfpq_TblCol_Storage_Tag},
-			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: tableDefs[1].Cols[4],
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.Ivfpq_TblType_Storage,
-			},
-		}
-		tableDefs[1].Defs = append(tableDefs[1].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-	}
-	return indexDefs, tableDefs, nil
-}
-
-// buildCagraSecondaryIndexDef will create two internal tables
-//
-// with the following schemas:
-//
-// create __mo_secondary_metadata (
-//
-//	index_id varchar,
-//	checksum varchar,
-//	timestamp int64,
-//	filesize int64,
-//	primary key index_id
-//
-// )
-//
-// create __mo_secondary_index (
-//
-//	index_id varchar,
-//	chunk_id int64,
-// 	data blob,
-//	tag int64,
-//	primary key (index_id, chunk_id)
-// )
-
-func buildCagraSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
-
-	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
-		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for hnsw index")
-	}
-
-	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
-		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be int64")
-	}
-
-	indexParts := make([]string, 1)
-
-	// 0. Validate: We only support 1 column of VECF32
-	{
-		if len(indexInfo.KeyParts) != 1 {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column  CAGRA vector index")
-		}
-
-		name := indexInfo.KeyParts[0].ColName.ColName()
-		indexParts[0] = name
-
-		if _, ok := colMap[name]; !ok {
-			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
-		}
-		if colMap[name].Typ.Id != int32(types.T_array_float32) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Cagra only supports VECF32 column types")
-		}
-
-		if len(existedIndexes) > 0 {
-			for _, existedIndex := range existedIndexes {
-				if existedIndex.IndexAlgo == "cagra" && existedIndex.Parts[0] == name {
-					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple CAGRA indexes are not allowed to use the same column")
-				}
-			}
-		}
-
-	}
-
-	if indexInfo.IndexOption != nil {
-		if err := validateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, indexParts[0], pkeyName); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	indexDefs := make([]*plan.IndexDef, 2)
-	tableDefs := make([]*TableDef, 2)
-
-	// 1. create hnsw `metadata` table
-	{
-		// 1.a tableDef1 init
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
-		if err != nil {
-			return nil, nil, err
-		}
-		tableDefs[0] = &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.Cagra_TblType_Metadata,
-			Cols:      make([]*ColDef, 4),
-		}
-
-		// 1.b indexDef1 init
-		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.Cagra_TblType_Metadata, indexParts, false)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// 1.c columns: key (PK), val
-		tableDefs[0].Cols[0] = &ColDef{
-			Name: catalog.Cagra_TblCol_Metadata_Index_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
-			},
-			Primary: true,
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[1] = &ColDef{
-			Name: catalog.Cagra_TblCol_Metadata_Checksum,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[2] = &ColDef{
-			Name: catalog.Cagra_TblCol_Metadata_Timestamp,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[0].Cols[3] = &ColDef{
-			Name: catalog.Cagra_TblCol_Metadata_Filesize,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-
-		// 1.d PK def
-		tableDefs[0].Pkey = &PrimaryKeyDef{
-			Names:       []string{catalog.Cagra_TblCol_Metadata_Index_Id},
-			PkeyColName: catalog.Cagra_TblCol_Metadata_Index_Id,
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.Cagra_TblType_Metadata,
-			},
-		}
-		tableDefs[0].Defs = append(tableDefs[0].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-	}
-
-	// 2. create cagra storage table
-	// colName := indexInfo.KeyParts[0].ColName.ColName()
-	{
-		// 1.a tableDef1 init
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
-		if err != nil {
-			return nil, nil, err
-		}
-		tableDefs[1] = &TableDef{
-			Name:      indexTableName,
-			TableType: catalog.Cagra_TblType_Storage,
-			Cols:      make([]*ColDef, 5),
-		}
-
-		// 1.b indexDef1 init
-		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.Cagra_TblType_Storage, indexParts, false)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// 1.c columns: key (PK), val
-		tableDefs[1].Cols[0] = &ColDef{
-			Name: catalog.Cagra_TblCol_Storage_Index_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[1] = &ColDef{
-			Name: catalog.Cagra_TblCol_Storage_Chunk_Id,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[2] = &ColDef{
-			Name: catalog.Cagra_TblCol_Storage_Data,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_blob),
-				Width: 65536,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-		tableDefs[1].Cols[3] = &ColDef{
-			Name: catalog.Cagra_TblCol_Storage_Tag,
-			Alg:  plan.CompressType_Lz4,
-			Typ: Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
-			},
-			Default: &plan.Default{
-				NullAbility:  false,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-
-		tableDefs[1].Cols[4] = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
-		tableDefs[1].Cols[4].Alg = plan.CompressType_Lz4
-		tableDefs[1].Cols[4].Primary = true
-
-		tableDefs[1].Pkey = &PrimaryKeyDef{
-			Names: []string{catalog.Cagra_TblCol_Storage_Index_Id,
-				catalog.Cagra_TblCol_Storage_Chunk_Id,
-				catalog.Cagra_TblCol_Storage_Tag},
-			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: tableDefs[1].Cols[4],
-		}
-
-		properties := []*plan.Property{
-			{
-				Key:   catalog.SystemRelAttr_Kind,
-				Value: catalog.Cagra_TblType_Storage,
-			},
-		}
-		tableDefs[1].Defs = append(tableDefs[1].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			}})
-	}
-	return indexDefs, tableDefs, nil
-}
-
-func CreateIndexDef(indexInfo *tree.Index,
+func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 	indexTableName, indexAlgoTableType string,
 	indexParts []string, isUnique bool) (*plan.IndexDef, error) {
 
@@ -3741,37 +2478,56 @@ func CreateIndexDef(indexInfo *tree.Index,
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
 		// Create params JSON string and set it
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := buildIndexAlgoParams(indexInfo)
 		if err != nil {
 			return nil, err
 		}
 		indexDef.IndexAlgoParams = params
 	} else {
 		// default indexInfo.IndexOption values
-		switch indexInfo.KeyType {
-		case catalog.MoIndexDefaultAlgo, catalog.MoIndexBTreeAlgo:
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
-		case catalog.MOIndexMasterAlgo:
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
-		case catalog.MoIndexIvfFlatAlgo:
-			var err error
-			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultIvfIndexAlgoOptions())
-			if err != nil {
-				return nil, err
+		indexDef.Comment = ""
+		indexDef.IndexAlgoParams = ""
+		if p, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
+			// Vector-index algorithms supply their default params via the
+			// plugin (DefaultOptions). Non-vector algos miss the registry
+			// and leave the empty defaults set above.
+			if defaults := p.Catalog().DefaultOptions(); len(defaults) > 0 {
+				params, err := catalog.IndexParamsMapToJsonString(defaults)
+				if err != nil {
+					return nil, err
+				}
+				indexDef.IndexAlgoParams = params
 			}
-		case catalog.MoIndexHnswAlgo:
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
-		case catalog.MoIndexCagraAlgo:
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
-		case catalog.MoIndexIvfpqAlgo:
-			indexDef.Comment = ""
-			indexDef.IndexAlgoParams = ""
 		}
 
+	}
+
+	// Capture the plugin's build-time session vars (BuildSessionVars) into the
+	// typed algo_params.session_vars blob so background builds (restore reindex,
+	// idxcron, async create) reproduce the create-time config. Index-defining
+	// knobs (kmeans_*, max_index_capacity) are NOT auto-captured here: they ride
+	// flat algo_params keys written by ParamsFromTree only when explicitly set
+	// in CREATE INDEX (so an unset option never pollutes algo_params).
+	if ctx != nil {
+		if p, ok := indexplugin.Get(catalog.ToLower(indexDef.IndexAlgo)); ok {
+			if names := p.Catalog().BuildSessionVars(); len(names) > 0 {
+				sv, err := compileplugin.CaptureVars(ctx.ResolveVariable, names)
+				if err != nil {
+					return nil, err
+				}
+				if len(sv) > 0 {
+					flat := map[string]string{}
+					if indexDef.IndexAlgoParams != "" {
+						if flat, err = catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams); err != nil {
+							return nil, err
+						}
+					}
+					if indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonStringWithSessionVars(flat, sv); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
 	}
 
 	nameCount := make(map[string]int)
@@ -3859,26 +2615,21 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.IndexTableNames = make([]string, 0)
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
-				// We only handle truncate on regular index. For other indexes such as IVF, we don't handle truncate now.
-				if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
+				if !indexdef.TableExist {
+					continue
+				}
+				if catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) ||
+					catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) ||
+					catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if indexdef.TableExist && catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
-					if indexdef.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-						// TODO: check with @feng on how to handle truncate on IVF index
-						// Right now, we are only clearing the entries. Should we empty the centroids and metadata as well?
-						// Ideally, after truncate the user is expected to run re-index.
+				} else if p, ok := indexplugin.Get(indexdef.IndexAlgo); ok {
+					// Vector indexes delegate to the plugin's catalog
+					// hook. HNSW/CAGRA/IVF-PQ truncate all hidden
+					// tables; IVF-FLAT preserves metadata + centroids
+					// (k-means model) and only drops entries.
+					if p.Catalog().ShouldTruncateHiddenTable(indexdef.IndexAlgoTableType) {
 						truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 					}
-				} else if indexdef.TableExist && catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if indexdef.TableExist && catalog.IsHnswIndexAlgo(indexdef.IndexAlgo) {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if indexdef.TableExist && catalog.IsCagraIndexAlgo(indexdef.IndexAlgo) {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				} else if indexdef.TableExist && catalog.IsIvfpqIndexAlgo(indexdef.IndexAlgo) {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
 		}
@@ -4369,7 +3120,12 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	}
 
 	if !found {
-		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
+		if stmt.IfExists {
+			// An empty index name represents the no-op path for DROP INDEX IF EXISTS.
+			dropIndex.IndexName = ""
+		} else {
+			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
+		}
 	}
 
 	return &Plan{
@@ -4975,26 +3731,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			alterTableReIndex := new(plan.AlterTableAlterReIndex)
 			constraintName := string(opt.Name)
 			alterTableReIndex.IndexName = constraintName
-
-			switch opt.KeyType {
-			case tree.INDEX_TYPE_IVFFLAT:
-				if opt.AlgoParamList < 0 {
-					return nil, moerr.NewInternalErrorf(
-						ctx.GetContext(),
-						"lists should be >= 0. lists = 0 will keep the original configuration.",
-					)
-				}
-				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
-				alterTableReIndex.ForceSync = opt.ForceSync
-			case tree.INDEX_TYPE_HNSW:
-				// PASS: keep options on change for incremental update
-			default:
-				return nil, moerr.NewInternalErrorf(
-					ctx.GetContext(),
-					unsupportedErrFmt,
-					opt.KeyType.ToString(),
-				)
-			}
+			// ForceSync (sync vs async rebuild) is the only build-time flag the
+			// plan node carries. The shared index_option_list grammar already
+			// restricts the algo (REINDEX rules cover only ivfflat/hnsw/ivfpq/
+			// cagra) and validates option values (> 0); the per-index option
+			// merge + reject happens at compile in Compile.ValidateReindexParams,
+			// reading the options straight off the parse tree.
+			alterTableReIndex.ForceSync = opt.ForceSync
 
 			name_not_found := true
 			// check index
@@ -5859,6 +4602,7 @@ func buildDropCDC(stmt *tree.DropCDC, ctx CompilerContext) (*Plan, error) {
 				DdlType: plan.DataDefinition_DROP_CDC,
 				Definition: &plan.DataDefinition_DropCdc{
 					DropCdc: &plan.DropCDC{
+						IfExists:  stmt.IfExists,
 						AccountId: accountId,
 						All:       stmt.Option.All,
 						TaskName:  string(stmt.Option.TaskName),

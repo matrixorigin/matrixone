@@ -16,11 +16,22 @@ package process
 
 import (
 	"context"
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"reflect"
 	"time"
+)
+
+var (
+	// PipelineCleanupWaitTimeout bounds cleanup-only waits for terminal
+	// pipeline signals. Normal query execution does not use this timeout.
+	PipelineCleanupWaitTimeout = 30 * time.Second
+
+	// PipelineSignalSendTimeout bounds cleanup-only terminal signal sends.
+	PipelineSignalSendTimeout = 30 * time.Second
 )
 
 type PipelineActionType uint8
@@ -66,6 +77,55 @@ func NewPipelineSignalToDirectly(data *batch.Batch, err error, mp *mpool.MPool) 
 	}
 }
 
+func SendPipelineSignalWithTimeout(reg *WaitRegister, signal PipelineSignal, timeout time.Duration) bool {
+	if reg == nil || reg.Ch2 == nil {
+		return false
+	}
+	if timeout <= 0 {
+		reg.Ch2 <- signal
+		return true
+	}
+
+	ctx, cancel := context.WithTimeout(context.TODO(), timeout)
+	defer cancel()
+
+	return SendPipelineSignalWithContext(ctx, reg, signal)
+}
+
+func SendPipelineSignalWithContext(ctx context.Context, reg *WaitRegister, signal PipelineSignal) bool {
+	if reg == nil || reg.Ch2 == nil {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.TODO()
+	}
+	select {
+	case reg.Ch2 <- signal:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func TrySendPipelineSignal(reg *WaitRegister, signal PipelineSignal) bool {
+	if reg == nil || reg.Ch2 == nil {
+		return false
+	}
+	select {
+	case reg.Ch2 <- signal:
+		return true
+	default:
+		return false
+	}
+}
+
+func WaitRegisterChannelState(reg *WaitRegister) (int, int) {
+	if reg == nil || reg.Ch2 == nil {
+		return 0, 0
+	}
+	return len(reg.Ch2), cap(reg.Ch2)
+}
+
 // Action will get the input batch from one place according to which type this signal is.
 //
 // the result batch of this function is an READ-ONLY one.
@@ -91,6 +151,13 @@ type PipelineSignalReceiver struct {
 
 	// currentSignal is the current signal this receiver was using.
 	currentSignal *PipelineSignal
+}
+
+type PipelineSignalReceiverState struct {
+	Alive      int
+	NilBatches []int
+	ChannelLen []int
+	ChannelCap []int
 }
 
 func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister) *PipelineSignalReceiver {
@@ -209,6 +276,27 @@ func (receiver *PipelineSignalReceiver) removeIdxReceiver(chosen int) {
 	}
 }
 
+func (receiver *PipelineSignalReceiver) State() PipelineSignalReceiverState {
+	if receiver == nil {
+		return PipelineSignalReceiverState{}
+	}
+
+	state := PipelineSignalReceiverState{
+		Alive:      receiver.alive,
+		NilBatches: slices.Clone(receiver.nbs),
+		ChannelLen: make([]int, len(receiver.srcReg)),
+		ChannelCap: make([]int, len(receiver.srcReg)),
+	}
+	for i, reg := range receiver.srcReg {
+		if reg == nil || reg.Ch2 == nil {
+			continue
+		}
+		state.ChannelLen[i] = len(reg.Ch2)
+		state.ChannelCap[i] = cap(reg.Ch2)
+	}
+	return state
+}
+
 func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
 	// hard codes for less interface convert and less reflect.
 	switch len(receiver.srcReg) {
@@ -242,16 +330,35 @@ func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
 }
 
 func (receiver *PipelineSignalReceiver) WaitingEnd() {
+	receiver.WaitingEndWithTimeout(PipelineCleanupWaitTimeout)
+}
+
+// WaitingEndWithTimeout is cleanup-only. It intentionally uses a detached
+// cleanup context because Pipeline.Cleanup cancels the process context before
+// operator Reset runs, but cleanup still needs a bounded chance to drain
+// terminal pipeline signals and release spool references.
+func (receiver *PipelineSignalReceiver) WaitingEndWithTimeout(timeout time.Duration) bool {
+	cleanupCtx := context.TODO()
+	cancel := func() {}
+	if timeout > 0 {
+		cleanupCtx, cancel = context.WithTimeout(context.TODO(), timeout)
+	}
+	defer cancel()
+
 	if len(receiver.regs) > 0 {
-		receiver.regs[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(context.TODO().Done())}
+		receiver.regs[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(cleanupCtx.Done())}
 	}
 
-	receiver.usrCtx = context.TODO()
+	receiver.usrCtx = cleanupCtx
 	for {
 		if receiver.alive == 0 {
-			return
+			return true
 		}
 		_, _ = receiver.GetNextBatch(nil)
+		if cleanupCtx.Err() != nil {
+			receiver.releaseCurrent()
+			return false
+		}
 	}
 }
 

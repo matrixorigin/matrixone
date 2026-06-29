@@ -1,0 +1,37 @@
+SET experimental_cagra_index = 1;
+SET cagra_threads_build = 7;
+SET cagra_max_index_capacity = 99999;
+drop database if exists gpu_edge;
+create database gpu_edge;
+use gpu_edge;
+create table t (id bigint primary key, v vecf32(8));
+insert into t values
+( 1, '[1,1,1,1,1,1,1,1]'),     ( 2, '[2,2,2,2,2,2,2,2]'),
+( 3, '[3,3,3,3,3,3,3,3]'),     ( 4, '[4,4,4,4,4,4,4,4]'),
+( 5, NULL),                    ( 6, '[6,6,6,6,6,6,6,6]'),
+( 7, '[7,7,7,7,7,7,7,7]'),     ( 8, '[8,8,8,8,8,8,8,8]'),
+( 9, '[9,9,9,9,9,9,9,9]'),     (10, '[10,10,10,10,10,10,10,10]'),
+(11, NULL),                    (12, '[12,12,12,12,12,12,12,12]'),
+(13, '[13,13,13,13,13,13,13,13]'), (14, '[14,14,14,14,14,14,14,14]'),
+(15, '[15,15,15,15,15,15,15,15]'), (16, '[16,16,16,16,16,16,16,16]'),
+(17, NULL),                    (18, '[18,18,18,18,18,18,18,18]'),
+(19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]'),
+(21, '[12,12,12,12,12,12,12,12]');
+create index ix using cagra on t (v)
+op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+select count(*) from t;
+➤ count(*)[-5,64,0]  𝄀
+21
+select count(*) from t where v is null;
+➤ count(*)[-5,64,0]  𝄀
+3
+select id from t order by l2_distance(v, '[7,7,7,7,7,7,7,7]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+7
+select id from t order by l2_distance(v, '[16,16,16,16,16,16,16,16]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+16
+select id from t order by l2_distance(v, '[13,13,13,13,13,13,13,13]') asc limit 1;
+➤ id[-5,64,0]  𝄀
+13
+drop database gpu_edge;
