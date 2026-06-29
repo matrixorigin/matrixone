@@ -97,7 +97,6 @@ func (l *remoteLockTable) lock(
 	req.Lock.Rows = rows
 
 	if err := ctx.Err(); err != nil {
-		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
 		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 		cb(pb.Result{}, err)
 		return
@@ -468,6 +467,22 @@ func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
 		return nil
 	}
 	newBind := resp.NewBind
+	if l.allocatorBindChangedHandler != nil &&
+		l.allocatorStateProvider != nil &&
+		l.bind.AllocatorID != "" &&
+		newBind.AllocatorID != "" &&
+		l.bind.AllocatorID != newBind.AllocatorID {
+		requestAllocator := l.allocatorStateProvider()
+		if err := l.allocatorBindChangedHandler(
+			"remote-new-bind",
+			l.bind,
+			*newBind,
+			allocatorState{id: newBind.AllocatorID, version: newBind.Version},
+			requestAllocator); err != nil {
+			return err
+		}
+		return ErrLockTableBindChanged
+	}
 	l.bindChangedHandler(*newBind)
 	return ErrLockTableBindChanged
 }
