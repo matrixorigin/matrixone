@@ -167,7 +167,7 @@ func TestLockRemoteWithContextTimeoutTracksLockForUnlock(t *testing.T) {
 	)
 }
 
-func TestLockRemoteWithCanceledContextBeforeSendUnlocksHarmlessly(t *testing.T) {
+func TestLockRemoteWithCanceledContextBeforeSendSkipsRemoteTracking(t *testing.T) {
 	bind := pb.LockTable{ServiceID: "s1", Valid: true}
 	lockCalled := make(chan struct{}, 1)
 	unlockCalled := make(chan struct{}, 1)
@@ -231,8 +231,8 @@ func TestLockRemoteWithCanceledContextBeforeSendUnlocksHarmlessly(t *testing.T) 
 				require.Error(t, err)
 			})
 			holder := txn.getHoldLocksLocked(l.bind.Group)
-			require.Contains(t, holder.tableKeys, l.bind.Table)
-			require.Contains(t, holder.tableBinds, l.bind.Table)
+			require.NotContains(t, holder.tableKeys, l.bind.Table)
+			require.NotContains(t, holder.tableBinds, l.bind.Table)
 
 			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
 				return l, nil
@@ -240,8 +240,8 @@ func TestLockRemoteWithCanceledContextBeforeSendUnlocksHarmlessly(t *testing.T) 
 			closed = true
 			select {
 			case <-unlockCalled:
-			case <-time.After(time.Second):
-				require.Fail(t, "expected harmless remote unlock for locally tracked canceled lock")
+				require.Fail(t, "remote unlock should not be sent when the lock request was never attempted")
+			default:
 			}
 			select {
 			case <-lockCalled:
@@ -251,6 +251,71 @@ func TestLockRemoteWithCanceledContextBeforeSendUnlocksHarmlessly(t *testing.T) 
 		},
 		func(lt pb.LockTable) {},
 	)
+}
+
+func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
+	logger := getLogger("")
+	oldAllocator := allocatorState{id: "old-allocator", version: 100}
+	newAllocator := allocatorState{id: "new-allocator", version: 90}
+	staleA := pb.LockTable{
+		Group:       0,
+		Table:       1,
+		OriginTable: 1,
+		ServiceID:   "old-service",
+		Version:     oldAllocator.version,
+		Valid:       true,
+		AllocatorID: oldAllocator.id,
+	}
+	oldB := pb.LockTable{
+		Group:       0,
+		Table:       2,
+		OriginTable: 2,
+		ServiceID:   "old-service",
+		Version:     oldAllocator.version,
+		Valid:       true,
+		AllocatorID: oldAllocator.id,
+	}
+	newB := oldB
+	newB.ServiceID = "new-service"
+	newB.Version = newAllocator.version
+	newB.AllocatorID = newAllocator.id
+
+	svc := &service{
+		serviceID: "s1",
+		logger:    logger,
+	}
+	svc.tableGroups = &lockTableHolders{
+		service: svc.serviceID,
+		logger:  logger,
+		holders: map[uint32]*lockTableHolder{},
+	}
+	svc.lastAllocatorID = oldAllocator.id
+	svc.lastAllocatorVersion = oldAllocator.version
+	svc.tableGroups.set(staleA.Group, staleA.Table, newRemoteLockTable(
+		svc.serviceID,
+		time.Second,
+		staleA,
+		nil,
+		svc.handleBindChanged,
+		logger,
+	))
+	remote := newRemoteLockTable(
+		svc.serviceID,
+		time.Second,
+		oldB,
+		nil,
+		svc.handleBindChanged,
+		logger,
+	)
+	remote.allocatorStateProvider = svc.allocatorStateSnapshot
+	remote.allocatorBindChangedHandler = svc.handleBindChangedFromAllocator
+
+	err := remote.maybeHandleBindChanged(&pb.Response{NewBind: &newB})
+	require.ErrorIs(t, err, ErrLockTableBindChanged)
+	require.Nil(t, svc.tableGroups.get(staleA.Group, staleA.Table))
+	require.NotNil(t, svc.tableGroups.get(newB.Group, newB.Table))
+	require.Equal(t, newAllocator.id, svc.lastAllocatorID)
+	require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
 }
 
 func TestLockRemoteWithNeedUpgrade(t *testing.T) {

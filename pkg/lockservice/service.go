@@ -1435,7 +1435,11 @@ func (m *lockTableHolders) get(group uint32, id uint64) lockTable {
 }
 
 func (m *lockTableHolders) set(group uint32, id uint64, new lockTable) lockTable {
-	return m.mustGetHolder(group).set(id, new, m.logger)
+	v, changed := m.mustGetHolder(group).set(id, new, m.logger)
+	if changed {
+		m.version.Add(1)
+	}
+	return v
 }
 
 func (m *lockTableHolders) mustGetHolder(group uint32) *lockTableHolder {
@@ -1509,7 +1513,7 @@ func (m *lockTableHolder) set(
 	id uint64,
 	new lockTable,
 	logger *log.MOLogger,
-) lockTable {
+) (lockTable, bool) {
 	m.Lock()
 	defer m.Unlock()
 
@@ -1517,7 +1521,7 @@ func (m *lockTableHolder) set(
 
 	if !ok {
 		m.tables[id] = new
-		return new
+		return new, true
 	}
 
 	oldBind := old.getBind()
@@ -1526,10 +1530,10 @@ func (m *lockTableHolder) set(
 		old.close(closeReasonBindChanged)
 		m.tables[id] = new
 		logRemoteBindChanged(logger, m.service, oldBind, newBind)
-		return new
+		return new, true
 	}
 	new.close(closeReasonBindChanged)
-	return old
+	return old, false
 }
 
 func (m *lockTableHolder) iter(fn func(uint64, lockTable) bool) bool {
