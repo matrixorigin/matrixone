@@ -132,7 +132,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 	require.True(t, forced)
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.NoError(t, err)
 }
@@ -164,7 +164,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *t
 	delete(colName2Idx, tableDef.Name+".dname")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = dname")
@@ -205,7 +205,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
@@ -244,7 +244,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
@@ -277,7 +277,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 	delete(colName2Idx, tableDef.Name+".loc")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = loc")
@@ -449,7 +449,7 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindReplace(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
 	)
 	require.NoError(t, err)
 	require.NotZero(t, rootID)
@@ -503,7 +503,7 @@ func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindReplace(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil,
 	)
 	require.NoError(t, err)
 	require.NotZero(t, rootID)
@@ -534,4 +534,112 @@ func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
 	}
 	require.True(t, leftJoinFound, "REPLACE on table with composite unique index should use LEFT JOIN path")
 	require.True(t, orHasAndChild, "OR clause should contain an AND child for composite UK parts")
+}
+
+func TestBindReplaceSkipsUniqueIndexForStaticNull(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	sql := "replace into constraint_test.fake_pk_t(a, b) values (null, 'nullable')"
+
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	stmt, ok := stmts[0].(*tree.Replace)
+	require.True(t, ok)
+
+	builder := NewQueryBuilder(planpb.Query_INSERT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	dmlCtx := NewDMLContext()
+	objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "fake_pk_t", nil)
+	require.NoError(t, err)
+	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
+	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+	require.Len(t, tableDef.Indexes, 1)
+	require.True(t, tableDef.Indexes[0].Unique)
+
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
+	)
+	require.NoError(t, err)
+	require.Len(t, skipUniqueIdx, 1)
+	require.True(t, skipUniqueIdx[0], "unique index should be skipped when a UK part is static NULL")
+
+	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindReplace(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, getIrregularIndexes(tableDef),
+	)
+	require.NoError(t, err)
+	require.NotZero(t, rootID)
+
+	for _, n := range builder.qry.Nodes {
+		require.False(t,
+			n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_LEFT,
+			"static-NULL UK should not require old-row LEFT JOIN")
+	}
+}
+
+func TestBindReplaceSkipsCompositeUniqueIndexForAnyStaticNull(t *testing.T) {
+	tests := []struct {
+		name         string
+		sql          string
+		wantSkip     bool
+		wantLeftJoin bool
+	}{
+		{
+			name:         "one_part_static_null",
+			sql:          "replace into constraint_test.fake_pk_composite_t(a, b, c) values (null, 1, 'nullable')",
+			wantSkip:     true,
+			wantLeftJoin: false,
+		},
+		{
+			name:         "all_parts_non_null",
+			sql:          "replace into constraint_test.fake_pk_composite_t(a, b, c) values (1, 1, 'conflict')",
+			wantSkip:     false,
+			wantLeftJoin: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+
+			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), tt.sql, 1)
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+			stmt, ok := stmts[0].(*tree.Replace)
+			require.True(t, ok)
+
+			builder := NewQueryBuilder(planpb.Query_INSERT, mock.CurrentContext(), false, true)
+			bindCtx := NewBindContext(builder, nil)
+
+			dmlCtx := NewDMLContext()
+			objRef, tableDef, err := builder.compCtx.Resolve("constraint_test", "fake_pk_composite_t", nil)
+			require.NoError(t, err)
+			dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
+			dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
+			require.Len(t, tableDef.Indexes, 1)
+			require.True(t, tableDef.Indexes[0].Unique)
+
+			lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+				bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
+			)
+			require.NoError(t, err)
+			require.Len(t, skipUniqueIdx, 1)
+			require.Equal(t, tt.wantSkip, skipUniqueIdx[0])
+
+			rootID, err := builder.appendDedupAndMultiUpdateNodesForBindReplace(
+				bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, getIrregularIndexes(tableDef),
+			)
+			require.NoError(t, err)
+			require.NotZero(t, rootID)
+
+			leftJoinFound := false
+			for _, n := range builder.qry.Nodes {
+				if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_LEFT {
+					leftJoinFound = true
+					break
+				}
+			}
+			require.Equal(t, tt.wantLeftJoin, leftJoinFound)
+		})
+	}
 }

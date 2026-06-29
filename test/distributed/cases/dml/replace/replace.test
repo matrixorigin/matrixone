@@ -237,7 +237,6 @@ insert into t_replace_multi_uk_batch (name, email, value) values ('a', 'x@a.com'
 replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com', 111), ('b', 'z@a.com', 222);
 select name, email, value from t_replace_multi_uk_batch order by name;
 drop table t_replace_multi_uk_batch;
-
 -- REPLACE ... SET evaluates an RHS column reference as DEFAULT(col), and
 -- omitted columns fall back to their defaults (MySQL-compatible).
 drop table if exists t_set_default;
@@ -256,3 +255,34 @@ insert into t_set_default2 values (1, 100, 200);
 replace into t_set_default2 set id = 1, a = b + 1;
 select * from t_set_default2 order by id;
 drop table t_set_default2;
+
+-- fake-PK table with a composite nullable unique key: a REPLACE whose composite
+-- unique-key part is statically NULL (column a omitted -> NULL) serializes to a NULL
+-- key, can never conflict, and behaves like a plain INSERT (no existing row deleted;
+-- a NULL key is allowed multiple times). A fully non-NULL key still conflicts and replaces.
+drop table if exists t_replace_fakepk_comp_null;
+create table t_replace_fakepk_comp_null (a int, b int, c varchar(20), unique key uk_ab(a, b));
+insert into t_replace_fakepk_comp_null values (1, 1, 'one'), (2, 2, 'two');
+replace into t_replace_fakepk_comp_null (b, c) values (1, 'null-a');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+replace into t_replace_fakepk_comp_null (b, c) values (1, 'null-a-2');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+replace into t_replace_fakepk_comp_null (a, b, c) values (1, 1, 'one-replaced');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+drop table t_replace_fakepk_comp_null;
+
+-- REPLACE enforces the child->parent foreign key on the inserted row (modern path).
+-- An orphan reference fails for both insert-only REPLACE and conflict REPLACE; a valid
+-- parent succeeds.
+drop table if exists t_replace_fk_child;
+drop table if exists t_replace_fk_parent;
+create table t_replace_fk_parent(id int primary key);
+create table t_replace_fk_child(id int primary key, pid int, foreign key(pid) references t_replace_fk_parent(id));
+insert into t_replace_fk_parent values (1), (2);
+replace into t_replace_fk_child values (1, 999);
+insert into t_replace_fk_child values (1, 1);
+replace into t_replace_fk_child values (1, 888);
+replace into t_replace_fk_child values (2, 2);
+select id, pid from t_replace_fk_child order by id;
+drop table if exists t_replace_fk_child;
+drop table if exists t_replace_fk_parent;

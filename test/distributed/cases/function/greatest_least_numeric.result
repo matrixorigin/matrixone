@@ -1,0 +1,116 @@
+select greatest(1, 2.0);
+➤ greatest(1, 2.0)[3,20,1]  𝄀
+2.0
+select least(1, 2.0);
+➤ least(1, 2.0)[3,20,1]  𝄀
+1.0
+select greatest(cast(1 as bigint), cast(2.0 as double));
+➤ greatest(cast(1 as bigint), cast(2.0 as double))[8,54,0]  𝄀
+2.0
+select least(cast(1 as bigint), cast(2.0 as double));
+➤ least(cast(1 as bigint), cast(2.0 as double))[8,54,0]  𝄀
+1.0
+select greatest(cast(1 as bigint), cast(2.0 as double)) as g, least(cast(1 as bigint), cast(2.0 as double)) as l;
+➤ g[8,54,0]  ¦  l[8,54,0]  𝄀
+2.0  ¦  1.0
+select greatest(cast(5 as bigint), cast(2.5 as decimal(10,2)));
+➤ greatest(cast(5 as bigint), cast(2.5 as decimal(10, 2)))[3,21,2]  𝄀
+5.00
+select least(cast(5 as bigint), cast(2.5 as decimal(10,2)));
+➤ least(cast(5 as bigint), cast(2.5 as decimal(10, 2)))[3,21,2]  𝄀
+2.50
+select greatest(cast(1 as bigint), cast(2 as bigint));
+➤ greatest(cast(1 as bigint), cast(2 as bigint))[-5,64,0]  𝄀
+2
+select greatest(cast(1.0 as double), cast(2.0 as double));
+➤ greatest(cast(1.0 as double), cast(2.0 as double))[8,54,0]  𝄀
+2.0
+select greatest(cast(1 as tinyint), cast(2000 as int));
+➤ greatest(cast(1 as tinyint), cast(2000 as int))[4,32,0]  𝄀
+2000
+select least(cast(1 as tinyint), cast(2000 as int));
+➤ least(cast(1 as tinyint), cast(2000 as int))[4,32,0]  𝄀
+1
+select greatest(1, null, 2.0);
+➤ greatest(1, null, 2.0)[3,20,1]  𝄀
+null
+select least(1, null, 2.0);
+➤ least(1, null, 2.0)[3,20,1]  𝄀
+null
+drop table if exists toll_transactions;
+create table toll_transactions(id int, gate_processing_sec double, lanes int);
+insert into toll_transactions values
+(1, 3.5, 2), (2, 7.0, 2), (3, 1.0, 4), (4, 12.5, 3);
+select greatest(count(*), avg(gate_processing_sec)) from toll_transactions;
+➤ greatest(count(*), avg(gate_processing_sec))[8,54,0]  𝄀
+6.0
+select least(count(*), avg(gate_processing_sec)) from toll_transactions;
+➤ least(count(*), avg(gate_processing_sec))[8,54,0]  𝄀
+4.0
+select greatest(0, count(*) - lanes * (3600.0 / avg(gate_processing_sec))) as est
+from toll_transactions group by lanes order by lanes;
+➤ est[8,54,0]  𝄀
+0.0  𝄀
+0.0  𝄀
+0.0
+drop table if exists mixed_num;
+create table mixed_num(a bigint, b double, c decimal(20,4));
+insert into mixed_num values (10, 2.5, 7.25), (3, 9.0, 4.5), (-5, -1.0, 100.0);
+select a, b, c, greatest(a, b) as gab, least(a, b) as lab from mixed_num order by a;
+➤ a[-5,64,0]  ¦  b[8,54,0]  ¦  c[3,20,4]  ¦  gab[8,54,0]  ¦  lab[8,54,0]  𝄀
+-5  ¦  -1.0  ¦  100.0000  ¦  -1.0  ¦  -5.0  𝄀
+3  ¦  9.0  ¦  4.5000  ¦  9.0  ¦  3.0  𝄀
+10  ¦  2.5  ¦  7.2500  ¦  10.0  ¦  2.5
+select a, c, greatest(a, c) as gac, least(a, c) as lac from mixed_num order by a;
+➤ a[-5,64,0]  ¦  c[3,20,4]  ¦  gac[3,23,4]  ¦  lac[3,23,4]  𝄀
+-5  ¦  100.0000  ¦  100.0000  ¦  -5.0000  𝄀
+3  ¦  4.5000  ¦  4.5000  ¦  3.0000  𝄀
+10  ¦  7.2500  ¦  10.0000  ¦  7.2500
+select greatest(a, b, c) as g3, least(a, b, c) as l3 from mixed_num order by a;
+➤ g3[8,54,0]  ¦  l3[8,54,0]  𝄀
+100.0  ¦  -5.0  𝄀
+9.0  ¦  3.0  𝄀
+10.0  ¦  2.5
+drop table if exists uns;
+create table uns(u1 tinyint unsigned, u2 int unsigned, u3 bigint unsigned);
+insert into uns values (1, 300, 5000000000), (200, 50, 1), (100, 70000, 9000000000);
+select greatest(u1, u2) as g_u, least(u1, u2) as l_u from uns order by u1;
+➤ g_u[4,32,0]  ¦  l_u[4,32,0]  𝄀
+300  ¦  1  𝄀
+70000  ¦  100  𝄀
+200  ¦  50
+select greatest(u1, u2, u3) as g3u, least(u1, u2, u3) as l3u from uns order by u1;
+➤ g3u[-5,64,0]  ¦  l3u[-5,64,0]  𝄀
+5000000000  ¦  1  𝄀
+9000000000  ¦  100  𝄀
+200  ¦  1
+select greatest(cast(-3 as bigint), cast(9000000000000000000 as bigint unsigned)) as g_su;
+➤ g_su[3,21,0]  𝄀
+9000000000000000000
+select least(cast(-3 as bigint), cast(9000000000000000000 as bigint unsigned)) as l_su;
+➤ l_su[3,21,0]  𝄀
+-3
+drop table if exists bt;
+create table bt(b bit(16), i int);
+insert into bt values (10, 3), (20, 25), (7, 7);
+select greatest(b, i) as g_bi, least(b, i) as l_bi from bt order by i;
+➤ g_bi[3,21,0]  ¦  l_bi[3,21,0]  𝄀
+10  ¦  3  𝄀
+7  ¦  7  𝄀
+25  ¦  20
+select greatest(cast(1.5 as decimal(10,1)), cast(2.25 as decimal(20,2))) as g_dec;
+➤ g_dec[3,20,2]  𝄀
+2.25
+select least(cast(1.5 as decimal(10,1)), cast(2.25 as decimal(20,2))) as l_dec;
+➤ l_dec[3,20,2]  𝄀
+1.50
+select greatest(cast(1234567890123456789012345678901234567890.12 as decimal(60,2)), cast(2 as bigint)) as g_d256;
+➤ g_d256[3,60,2]  𝄀
+1234567890123456789012345678901234567890.12
+select least(cast(1234567890123456789012345678901234567890.12 as decimal(60,2)), cast(2 as bigint)) as l_d256;
+➤ l_d256[3,60,2]  𝄀
+2.00
+drop table if exists toll_transactions;
+drop table if exists mixed_num;
+drop table if exists uns;
+drop table if exists bt;

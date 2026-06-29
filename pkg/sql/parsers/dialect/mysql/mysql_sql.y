@@ -9135,6 +9135,8 @@ create_table_stmt:
     {
         t := tree.NewCreateTable()
         t.IsAsLike = true
+        t.Temporary = $2
+        t.IfNotExists = $4
         t.Table = *$5
         t.LikeTableName = *$7
         $$ = t
@@ -11573,7 +11575,9 @@ mysql_cast_type:
 
 integer_opt:
     %prec LOWER_THAN_INT
-    {}
+    {
+        $$ = ""
+    }
 |    INTEGER
 |    INT
 

@@ -2531,7 +2531,7 @@ null    11    21    2
 select sex, avg(distinct id),rank() over (order by uids desc) `uids`
 from dense_rank01 u, dense_rank01 where dense_rank01.user_id = u.id group by sex
 order by sex;
-invalid input: ambiguouse column reference to 'sex'
+invalid input: ambiguous column reference to 'sex'
 select sex, avg(distinct id),rank() over (order by uids desc) `uids`
 from dense_rank01 u, dense_rank02 where dense_rank02.user_id = u.id
 group by sex order by sex;
