@@ -540,5 +540,7 @@ func (s *Service) newWALRecoveryClient(
 		MaxMessageSize:   int(cfg.RPC.MaxMessageSize),
 		EnableCompress:   cfg.RPC.EnableCompress,
 	}
-	return newClient(ctx, cfg.UUID, clientCfg)
+	connectCtx, cancel := context.WithTimeoutCause(ctx, 30*time.Second, moerr.CauseLogServiceBootstrap)
+	defer cancel()
+	return newClient(connectCtx, cfg.UUID, clientCfg)
 }
