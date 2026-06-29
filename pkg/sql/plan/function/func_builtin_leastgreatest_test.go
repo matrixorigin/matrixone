@@ -416,3 +416,266 @@ func TestGreatest(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+// TestLeastGreatestCheck verifies the type-promotion behavior of the
+// LEAST/GREATEST type checker (issue #25145): mixed numeric arguments are
+// promoted to a common type via an implicit cast, identical types succeed
+// directly, and non-promotable mixes are rejected.
+func TestLeastGreatestCheck(t *testing.T) {
+	dec := func(oid types.T, width, scale int32) types.Type {
+		typ := oid.ToType()
+		typ.Width = width
+		typ.Scale = scale
+		return typ
+	}
+
+	type tc struct {
+		name     string
+		inputs   []types.Type
+		wantOk   bool    // expect a successful check (no failure)
+		wantCast bool    // expect an implicit cast to be requested
+		target   types.T // expected common Oid when wantCast is true
+	}
+
+	cases := []tc{
+		{
+			name:   "no input",
+			inputs: []types.Type{},
+			wantOk: false,
+		},
+		{
+			name:   "all same int64",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+			wantOk: true,
+		},
+		{
+			name:   "all NULL literals",
+			inputs: []types.Type{types.T_any.ToType(), types.T_any.ToType()},
+			wantOk: true,
+		},
+		{
+			name:     "bigint + double -> double",
+			inputs:   []types.Type{types.T_int64.ToType(), types.T_float64.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_float64,
+		},
+		{
+			name:     "bigint + decimal -> decimal",
+			inputs:   []types.Type{types.T_int64.ToType(), dec(types.T_decimal64, 10, 2)},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_decimal128,
+		},
+		{
+			name:     "int + float32 -> double",
+			inputs:   []types.Type{types.T_int32.ToType(), types.T_float32.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_float64,
+		},
+		{
+			name:     "int8 + int32 -> int32",
+			inputs:   []types.Type{types.T_int8.ToType(), types.T_int32.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_int32,
+		},
+		{
+			name:     "int64 + uint64 -> decimal128",
+			inputs:   []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_decimal128,
+		},
+		{
+			name:     "int32 + uint16 -> int64",
+			inputs:   []types.Type{types.T_int32.ToType(), types.T_uint16.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_int64,
+		},
+		{
+			name:     "double + NULL literal -> double",
+			inputs:   []types.Type{types.T_float64.ToType(), types.T_any.ToType(), types.T_int64.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_float64,
+		},
+		{
+			name:     "uint8 + uint16 -> uint16",
+			inputs:   []types.Type{types.T_uint8.ToType(), types.T_uint16.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_uint16,
+		},
+		{
+			name:     "uint8 + uint32 -> uint32",
+			inputs:   []types.Type{types.T_uint8.ToType(), types.T_uint32.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_uint32,
+		},
+		{
+			name:     "uint16 + uint64 -> uint64",
+			inputs:   []types.Type{types.T_uint16.ToType(), types.T_uint64.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_uint64,
+		},
+		{
+			name:     "bit + bigint -> decimal128",
+			inputs:   []types.Type{types.T_bit.ToType(), types.T_int64.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_decimal128,
+		},
+		{
+			name:     "bit + uint32 -> uint64",
+			inputs:   []types.Type{types.T_bit.ToType(), types.T_uint32.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_uint64,
+		},
+		{
+			name:     "decimal256 + bigint -> decimal256",
+			inputs:   []types.Type{dec(types.T_decimal256, 40, 2), types.T_int64.ToType()},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_decimal256,
+		},
+		{
+			name:     "decimal128 + decimal64 -> decimal128",
+			inputs:   []types.Type{dec(types.T_decimal128, 20, 4), dec(types.T_decimal64, 10, 2)},
+			wantOk:   true,
+			wantCast: true,
+			target:   types.T_decimal128,
+		},
+		{
+			name:   "numeric + varchar rejected",
+			inputs: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+			wantOk: false,
+		},
+		{
+			name:   "varchar + int (first non-numeric) rejected",
+			inputs: []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+			wantOk: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := leastGreatestCheck(nil, c.inputs)
+			if !c.wantOk {
+				require.Equal(t, failedFunctionParametersWrong, res.status,
+					"case %q should fail the type check", c.name)
+				return
+			}
+			if c.wantCast {
+				require.Equal(t, succeedWithCast, res.status, "case %q should request a cast", c.name)
+				require.Len(t, res.finalType, len(c.inputs))
+				for i := range res.finalType {
+					require.Equal(t, c.target, res.finalType[i].Oid,
+						"case %q arg %d cast target", c.name, i)
+				}
+			} else {
+				require.Equal(t, succeedMatched, res.status, "case %q should match directly", c.name)
+			}
+		})
+	}
+}
+
+// TestLeastGreatestWidthHelpers covers every branch of the integer-width →
+// type helpers used by the LEAST/GREATEST promotion logic.
+func TestLeastGreatestWidthHelpers(t *testing.T) {
+	require.Equal(t, types.T_int8, signedTypeForWidth(1).Oid)
+	require.Equal(t, types.T_int8, signedTypeForWidth(3).Oid)
+	require.Equal(t, types.T_int16, signedTypeForWidth(5).Oid)
+	require.Equal(t, types.T_int32, signedTypeForWidth(10).Oid)
+	require.Equal(t, types.T_int64, signedTypeForWidth(19).Oid)
+
+	require.Equal(t, types.T_uint8, unsignedTypeForWidth(2).Oid)
+	require.Equal(t, types.T_uint8, unsignedTypeForWidth(3).Oid)
+	require.Equal(t, types.T_uint16, unsignedTypeForWidth(5).Oid)
+	require.Equal(t, types.T_uint32, unsignedTypeForWidth(10).Oid)
+	require.Equal(t, types.T_uint64, unsignedTypeForWidth(20).Oid)
+}
+
+// TestLeastGreatestCommonNumericType drives leastGreatestCommonNumericType
+// directly to cover the branches that are awkward to reach through the public
+// type checker: the all-unsigned/all-signed paths, the BIT operand, the
+// DECIMAL256 seed, and the DECIMAL-precision-overflow fallback to DOUBLE.
+func TestLeastGreatestCommonNumericType(t *testing.T) {
+	dec := func(oid types.T, width, scale int32) types.Type {
+		typ := oid.ToType()
+		typ.Width = width
+		typ.Scale = scale
+		return typ
+	}
+
+	cases := []struct {
+		name   string
+		inputs []types.Type
+		wantOk bool
+		oid    types.T
+	}{
+		{"all signed widens to widest", []types.Type{types.T_int16.ToType(), types.T_int8.ToType()}, true, types.T_int16},
+		{"all unsigned widens to widest", []types.Type{types.T_uint8.ToType(), types.T_uint32.ToType()}, true, types.T_uint32},
+		{"bit treated as unsigned 64-bit", []types.Type{types.T_bit.ToType(), types.T_uint16.ToType()}, true, types.T_uint64},
+		{"bit plus signed -> decimal128", []types.Type{types.T_bit.ToType(), types.T_int32.ToType()}, true, types.T_decimal128},
+		{"float beats everything", []types.Type{types.T_float32.ToType(), dec(types.T_decimal64, 10, 2)}, true, types.T_float64},
+		{"decimal256 source is kept", []types.Type{dec(types.T_decimal256, 50, 4), types.T_int64.ToType()}, true, types.T_decimal256},
+		{"decimal precision overflow falls back to double",
+			[]types.Type{dec(types.T_decimal128, 38, 38), dec(types.T_decimal256, 76, 0)}, true, types.T_float64},
+		{"non-numeric rejected", []types.Type{types.T_int64.ToType(), types.T_date.ToType()}, false, types.T_any},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			target, ok := leastGreatestCommonNumericType(c.inputs)
+			require.Equal(t, c.wantOk, ok, c.name)
+			if ok {
+				require.Equal(t, c.oid, target.Oid, c.name)
+			}
+		})
+	}
+}
+
+// TestLeastGreatestDecimal256 exercises the DECIMAL256 branch of the leastFn /
+// greatestFn executors (added so a promoted DECIMAL256 compares instead of
+// hitting the unreachable-code panic).
+func TestLeastGreatestDecimal256(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_decimal256, 40, 2)
+	mk := func(ss []string) []types.Decimal256 {
+		out := make([]types.Decimal256, len(ss))
+		for i, s := range ss {
+			v, err := types.ParseDecimal256(s, typ.Width, typ.Scale)
+			require.NoError(t, err)
+			out[i] = v
+		}
+		return out
+	}
+	a := []string{"10.00", "20.00", "-5.00"}
+	b := []string{"3.00", "25.00", "-1.00"}
+
+	tcLeast := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(typ, mk(a), nil),
+			NewFunctionTestInput(typ, mk(b), nil),
+		},
+		NewFunctionTestResult(typ, false, mk([]string{"3.00", "20.00", "-5.00"}), nil),
+		leastFn)
+	ok, info := tcLeast.Run()
+	require.True(t, ok, info)
+
+	tcGreatest := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(typ, mk(a), nil),
+			NewFunctionTestInput(typ, mk(b), nil),
+		},
+		NewFunctionTestResult(typ, false, mk([]string{"10.00", "25.00", "-1.00"}), nil),
+		greatestFn)
+	ok, info = tcGreatest.Run()
+	require.True(t, ok, info)
+}
