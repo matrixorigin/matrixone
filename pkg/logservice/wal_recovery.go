@@ -124,7 +124,7 @@ func (s *Service) RecoverWALData(ctx context.Context, cfg Config) error {
 		zap.Uint64("last_entry_safe_dsn", walData.Entries[len(walData.Entries)-1].SafeDSN))
 
 	// Replay WAL entries to Log shard
-	if err := s.replayWALEntries(ctx, walData); err != nil {
+	if err := s.replayWALEntries(ctx, cfg, walData); err != nil {
 		logger.Error("WAL recovery: failed to replay WAL entries", zap.Error(err))
 		return err
 	}
@@ -380,8 +380,14 @@ func buildUserEntryCmd(leaseHolderID uint64, payload []byte) []byte {
 	return cmd
 }
 
-// replayWALEntries replays WAL entries to the Log shard
-func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData) error {
+// replayWALEntries replays WAL entries to the Log shard.
+//
+// Only one LogService pod should be configured with wal-data-path. That pod
+// may not be the Log shard leader, so WAL replay appends through the normal
+// LogService client path. The client uses discovery/service addresses to reach
+// the current shard leader instead of proposing through this pod's local
+// NodeHost.
+func (s *Service) replayWALEntries(ctx context.Context, cfg Config, walData *WALRecoveryData) error {
 	logger := s.runtime.SubLogger(runtime.SystemInit)
 
 	// Get the Log shard ID (first log shard)
@@ -397,6 +403,7 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 
 	maxWaitTime := 5 * time.Minute
 	waitStart := time.Now()
+	leaderServiceAddress := ""
 	for {
 		if time.Since(waitStart) > maxWaitTime {
 			return moerr.NewInternalErrorf(ctx, "timeout waiting for Log shard %d to be ready", shardID)
@@ -411,9 +418,13 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 
 			info2, ok2 := s.getShardInfo(shardID)
 			if ok2 && info2.LeaderID != 0 {
+				if replicaInfo, ok := info2.Replicas[info2.LeaderID]; ok {
+					leaderServiceAddress = replicaInfo.ServiceAddress
+				}
 				logger.Info("WAL recovery: Log shard leader confirmed",
 					zap.Uint64("shard_id", shardID),
-					zap.Uint64("leader_id", info2.LeaderID))
+					zap.Uint64("leader_id", info2.LeaderID),
+					zap.String("leader_service_address", leaderServiceAddress))
 				break
 			}
 			logger.Warn("WAL recovery: Log shard leader lost after wait, retrying...")
@@ -445,6 +456,21 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 			zap.Uint64("lease_holder_id", leaseHolderID))
 	}
 
+	replayClient, err := s.newWALRecoveryClient(ctx, cfg, leaderServiceAddress)
+	if err != nil {
+		logger.Error("WAL recovery: failed to create replay client", zap.Error(err))
+		return err
+	}
+	defer func() {
+		if err := replayClient.close(); err != nil {
+			logger.Warn("WAL recovery: failed to close replay client", zap.Error(err))
+		}
+	}()
+	logger.Info("WAL recovery: replay client connected",
+		zap.String("address", replayClient.addr),
+		zap.String("discovery_address", cfg.HAKeeperClientConfig.DiscoveryAddress),
+		zap.Strings("service_addresses", cfg.HAKeeperClientConfig.ServiceAddresses))
+
 	for i, entry := range walData.Entries {
 		if i == 0 {
 			logger.Info("WAL recovery: processing first entry",
@@ -462,7 +488,7 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 				zap.Int("cmd_len", len(cmd)))
 		}
 
-		lsn, err := s.store.append(appendCtx, shardID, cmd)
+		lsn, err := replayClient.doAppend(appendCtx, pb.LogRecord{Data: cmd})
 		cancel()
 
 		if i == 0 {
@@ -494,4 +520,25 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 		zap.Int("entries_replayed", len(walData.Entries)))
 
 	return nil
+}
+
+func (s *Service) newWALRecoveryClient(
+	ctx context.Context,
+	cfg Config,
+	leaderServiceAddress string,
+) (*client, error) {
+	serviceAddresses := append([]string{}, cfg.HAKeeperClientConfig.ServiceAddresses...)
+	if cfg.HAKeeperClientConfig.DiscoveryAddress == "" && leaderServiceAddress != "" {
+		serviceAddresses = []string{leaderServiceAddress}
+	}
+	clientCfg := ClientConfig{
+		Tag:              "wal-recovery",
+		ReadOnly:         true,
+		LogShardID:       firstLogShardID,
+		DiscoveryAddress: cfg.HAKeeperClientConfig.DiscoveryAddress,
+		ServiceAddresses: serviceAddresses,
+		MaxMessageSize:   int(cfg.RPC.MaxMessageSize),
+		EnableCompress:   cfg.RPC.EnableCompress,
+	}
+	return newClient(ctx, cfg.UUID, clientCfg)
 }
