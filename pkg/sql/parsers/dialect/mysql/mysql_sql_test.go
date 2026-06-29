@@ -746,6 +746,16 @@ var (
 			input:  "select CAST('10 ' as unsigned integer);",
 			output: "select cast(10  as integer unsigned)",
 		}, {
+			// issue #25131: `cast(<col> as unsigned)` must render a stable
+			// target type. A preceding column reference must not leak into the
+			// cast's target type (previously rendered "as <col> unsigned"),
+			// otherwise GROUP BY / ORDER BY fail to match the same expression.
+			input:  "select cast(vgpos as unsigned) from t group by cast(vgpos as unsigned) order by cast(vgpos as unsigned)",
+			output: "select cast(vgpos as unsigned) from t group by cast(vgpos as unsigned) order by cast(vgpos as unsigned)",
+		}, {
+			input:  "select cast(vgpos as signed) from t group by cast(vgpos as signed)",
+			output: "select cast(vgpos as signed) from t group by cast(vgpos as signed)",
+		}, {
 			input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
 			output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
 		}, {

@@ -11578,7 +11578,9 @@ mysql_cast_type:
 
 integer_opt:
     %prec LOWER_THAN_INT
-    {}
+    {
+        $$ = ""
+    }
 |    INTEGER
 |    INT
 

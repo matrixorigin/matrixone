@@ -334,3 +334,44 @@ select * from t_replace_table_check order by id;
 id    a    b
 1    1    2
 drop table t_replace_table_check;
+drop table if exists t_replace_fakepk_comp_null;
+create table t_replace_fakepk_comp_null (a int, b int, c varchar(20), unique key uk_ab(a, b));
+insert into t_replace_fakepk_comp_null values (1, 1, 'one'), (2, 2, 'two');
+replace into t_replace_fakepk_comp_null (b, c) values (1, 'null-a');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+a    b    c
+null    1    null-a
+1    1    one
+2    2    two
+replace into t_replace_fakepk_comp_null (b, c) values (1, 'null-a-2');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+a    b    c
+null    1    null-a
+null    1    null-a-2
+1    1    one
+2    2    two
+replace into t_replace_fakepk_comp_null (a, b, c) values (1, 1, 'one-replaced');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+a    b    c
+null    1    null-a
+null    1    null-a-2
+1    1    one-replaced
+2    2    two
+drop table t_replace_fakepk_comp_null;
+drop table if exists t_replace_fk_child;
+drop table if exists t_replace_fk_parent;
+create table t_replace_fk_parent(id int primary key);
+create table t_replace_fk_child(id int primary key, pid int, foreign key(pid) references t_replace_fk_parent(id));
+insert into t_replace_fk_parent values (1), (2);
+replace into t_replace_fk_child values (1, 999);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t_replace_fk_child values (1, 1);
+replace into t_replace_fk_child values (1, 888);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+replace into t_replace_fk_child values (2, 2);
+select id, pid from t_replace_fk_child order by id;
+id    pid
+1    1
+2    2
+drop table if exists t_replace_fk_child;
+drop table if exists t_replace_fk_parent;
