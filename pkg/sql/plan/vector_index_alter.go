@@ -15,9 +15,12 @@
 package plan
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -33,23 +36,127 @@ func indexDependsOnColumn(indexDef *planpb.IndexDef, colName string) (bool, erro
 		}
 	}
 
-	return planplugin.IncludedColumnAffected(indexDef, colName), nil
+	return includedColumnAffected(indexDef, colName), nil
 }
 
-func renameColumnRequiresPluginIndexRebuild(tableDef *planpb.TableDef, oldColName string) bool {
-	if tableDef == nil {
+func includedColumnAffected(indexDef *planpb.IndexDef, colName string) bool {
+	if indexDef == nil {
 		return false
+	}
+	for _, includeCol := range indexDef.IncludedColumns {
+		if catalog.ResolveAlias(includeCol) == colName {
+			return true
+		}
+	}
+	return false
+}
+
+func renameIncludedColumnsForAlgo(tableDef *planpb.TableDef, algo, oldColName, newColName string, syncAlgoParams bool) ([]string, error) {
+	if tableDef == nil || oldColName == newColName {
+		return nil, nil
+	}
+
+	type includeUpdate struct {
+		cols       []string
+		algoParams string
+	}
+	updatedByIndexName := make(map[string]includeUpdate)
+	for _, indexDef := range tableDef.Indexes {
+		if indexDef == nil || !strings.EqualFold(indexDef.IndexAlgo, algo) {
+			continue
+		}
+		newIncludedColumns, changed := rewriteIncludedColumnNames(indexDef.IncludedColumns, oldColName, newColName)
+		if !changed {
+			continue
+		}
+
+		indexDef.IncludedColumns = newIncludedColumns
+		update := includeUpdate{cols: newIncludedColumns}
+		if syncAlgoParams {
+			params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+			if err != nil {
+				return nil, err
+			}
+			delete(params, "include_columns")
+			params[catalog.IncludedColumns] = strings.Join(newIncludedColumns, ",")
+			update.algoParams, err = catalog.IndexParamsMapToJsonString(params)
+			if err != nil {
+				return nil, err
+			}
+			indexDef.IndexAlgoParams = update.algoParams
+		}
+		updatedByIndexName[indexDef.IndexName] = update
+	}
+
+	if len(updatedByIndexName) == 0 {
+		return nil, nil
+	}
+
+	indexNames := make([]string, 0, len(updatedByIndexName))
+	for indexName := range updatedByIndexName {
+		indexNames = append(indexNames, indexName)
+	}
+	sort.Strings(indexNames)
+
+	sqls := make([]string, 0, len(indexNames))
+	for _, indexName := range indexNames {
+		update := updatedByIndexName[indexName]
+		encoded, err := catalog.MarshalIncludeColumnsValue(update.cols)
+		if err != nil {
+			return nil, err
+		}
+		setClause := fmt.Sprintf("included_columns = '%s'", sqlquote.EscapeString(encoded))
+		if syncAlgoParams {
+			setClause += fmt.Sprintf(", algo_params = '%s'", sqlquote.EscapeString(update.algoParams))
+		}
+		sqls = append(sqls, fmt.Sprintf(
+			"update `mo_catalog`.`mo_indexes` set %s where table_id = %d and name = '%s' ; ",
+			setClause, tableDef.TblId, sqlquote.EscapeString(indexName)))
+	}
+	return sqls, nil
+}
+
+func rewriteIncludedColumnNames(includedColumns []string, oldColName, newColName string) ([]string, bool) {
+	if oldColName == newColName || len(includedColumns) == 0 {
+		return includedColumns, false
+	}
+
+	newIncludedColumns := append([]string(nil), includedColumns...)
+	changed := false
+	for i, includeCol := range newIncludedColumns {
+		if catalog.ResolveAlias(includeCol) == oldColName {
+			newIncludedColumns[i] = newColName
+			changed = true
+		}
+	}
+	return newIncludedColumns, changed
+}
+
+func renameColumnRequiresPluginIndexRebuild(tableDef *planpb.TableDef, oldColName string) (bool, error) {
+	if tableDef == nil {
+		return false, nil
 	}
 	for _, indexDef := range tableDef.Indexes {
 		if indexDef == nil {
 			continue
 		}
-		if catalog.ToLower(indexDef.IndexAlgo) == catalog.MoIndexIvfFlatAlgo.ToString() &&
-			planplugin.IncludedColumnAffected(indexDef, oldColName) {
-			return true
+		p, ok := indexplugin.Get(indexDef.IndexAlgo)
+		if !ok {
+			continue
+		}
+		rebuildHook, ok := p.Plan().(planplugin.RenameColumnRebuildHook)
+		if !ok {
+			continue
+		}
+		requiresRebuild, err := rebuildHook.RenameColumnRequiresIndexRebuild(tableDef, indexDef, oldColName)
+		if err != nil {
+			return false, err
+		}
+		if requiresRebuild {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func collectAffectedIndexNamesForAlter(indexDefs []*planpb.IndexDef, affectedCols []string) ([]string, error) {

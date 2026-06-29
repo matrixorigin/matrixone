@@ -1162,11 +1162,10 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		return nil, nil
 	}
 
-	keyParts := getVectorIndexLogicalParts(multiTableIndex)
-	if len(keyParts) == 0 {
+	if len(idxDef.Parts) == 0 {
 		return nil, nil
 	}
-	keyPart := keyParts[0]
+	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
 	var vecLitArg *plan.Expr
 	var found bool
