@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -123,6 +124,10 @@ type tunnel struct {
 	// more proactive.
 	// It only works if RebalancePolicy is "active".
 	transferIntent atomic.Bool
+	// expectedCacheQuit indicates this tunnel already intercepted a client QUIT
+	// for connection caching, so the follow-up client EOF should not tear down
+	// the backend session that is being cached.
+	expectedCacheQuit atomic.Bool
 
 	mu struct {
 		sync.Mutex
@@ -248,6 +253,42 @@ func (t *tunnel) getServerConn() ServerConn {
 	return t.mu.sc
 }
 
+func (t *tunnel) markExpectedCacheQuit() {
+	if t != nil {
+		t.expectedCacheQuit.Store(true)
+	}
+}
+
+func (t *tunnel) hasExpectedCacheQuit() bool {
+	return t != nil && t.expectedCacheQuit.Load()
+}
+
+func wrapPipeSendError(name string, err error) error {
+	wrapped := errors.Join(
+		moerr.NewInternalErrorNoCtxf("send message error: %v", err),
+		err,
+	)
+	if name == pipeServerToClient && isConnEndErr(err) {
+		return withCode(wrapped, codeClientDisconnect)
+	}
+	return wrapped
+}
+
+func (t *tunnel) reportPipeError(err error, defaultCode errorCode) {
+	code := getErrorCode(err)
+	if code == codeNone {
+		code = defaultCode
+		err = withCode(err, code)
+	}
+	switch code {
+	case codeClientDisconnect:
+		v2.ProxyClientDisconnectCounter.Inc()
+	case codeServerDisconnect:
+		v2.ProxyServerDisconnectCounter.Inc()
+	}
+	t.setError(err)
+}
+
 // setError tries to set the tunnel error if there is no error.
 func (t *tunnel) setError(err error) {
 	select {
@@ -262,14 +303,12 @@ func (t *tunnel) kickoff() error {
 	csp, scp := t.getPipes()
 	go func() {
 		if err := csp.kickoff(t.ctx, scp); err != nil {
-			v2.ProxyClientDisconnectCounter.Inc()
-			t.setError(withCode(err, codeClientDisconnect))
+			t.reportPipeError(err, codeClientDisconnect)
 		}
 	}()
 	go func() {
 		if err := scp.kickoff(t.ctx, csp); err != nil {
-			v2.ProxyServerDisconnectCounter.Inc()
-			t.setError(withCode(err, codeServerDisconnect))
+			t.reportPipeError(err, codeServerDisconnect)
 		}
 	}()
 	if err := csp.waitReady(t.ctx); err != nil {
@@ -286,8 +325,19 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, s
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	oldServerConn := t.mu.serverConn
+
+	// Flush and preserve bufDst before closing old connection.
+	// bufDst wraps the client conn (unchanged), so it stays valid.
+	var savedBufDst *bufio.Writer
+	if oldServerConn != nil && oldServerConn.msgBuf != nil && oldServerConn.msgBuf.bufDst != nil {
+		_ = oldServerConn.flushBufDst()
+		savedBufDst = oldServerConn.msgBuf.bufDst
+		oldServerConn.msgBuf.bufDst = nil // detach before close
+	}
+
 	// close the old ones.
-	_ = t.mu.serverConn.Close()
+	_ = oldServerConn.Close()
 	_ = t.mu.sc.Close()
 
 	// set the new ones.
@@ -297,6 +347,10 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, s
 	if sync {
 		t.mu.csp.dst = t.mu.serverConn
 		t.mu.scp.src = t.mu.serverConn
+		// Transfer the write buffer to the new server conn's msgBuf.
+		if savedBufDst != nil {
+			t.mu.serverConn.msgBuf.bufDst = savedBufDst
+		}
 	} else {
 		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
 		t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
@@ -340,17 +394,41 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 }
 
 func (t *tunnel) setTransferIntent(i bool) {
-	if t.rebalancePolicy == RebalancePolicyPassive &&
-		t.getTransferType() == transferByRebalance {
+	t.setTransferIntentForType(i, t.getTransferType())
+}
+
+func (t *tunnel) setTransferIntentForType(i bool, typ transferType) {
+	if i &&
+		t.rebalancePolicy == RebalancePolicyPassive &&
+		typ == transferByRebalance {
+		return
+	}
+	if t.transferIntent.Swap(i) == i {
 		return
 	}
 	t.logger.Info("set tunnel transfer intent", zap.Bool("value", i))
-	t.transferIntent.Store(i)
 	if i {
 		v2.ProxyConnectionsTransferIntentGauge.Inc()
 	} else {
 		v2.ProxyConnectionsTransferIntentGauge.Dec()
 	}
+}
+
+func (t *tunnel) tryStartTransferAttempt() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.mu.inTransfer {
+		return false
+	}
+	t.mu.inTransfer = true
+	return true
+}
+
+// finishTransferAttempt clears the queue latch for attempts that exit before pipes are paused.
+func (t *tunnel) finishTransferAttempt() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.mu.inTransfer = false
 }
 
 func (t *tunnel) finishTransfer(start time.Time) {
@@ -396,7 +474,9 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	// Must check if it is safe to start the transfer.
 	if ok := t.canStartTransfer(false); !ok {
 		t.logger.Info("cannot start transfer safely")
-		t.setTransferIntent(true)
+		typ := t.getTransferType()
+		t.finishTransferAttempt()
+		t.setTransferIntentForType(true, typ)
 		t.counterSet.connMigrationCannotStart.Add(1)
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
@@ -434,8 +514,13 @@ func (t *tunnel) transfer(ctx context.Context) error {
 }
 
 func (t *tunnel) transferSync(ctx context.Context) error {
+	if ok := t.tryStartTransferAttempt(); !ok {
+		t.logger.Info("tunnel is already in transfer, skip sync transfer")
+		return nil
+	}
 	// Must check if it is safe to start the transfer.
 	if ok := t.canStartTransfer(true); !ok {
+		t.finishTransferAttempt()
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	start := time.Now()
@@ -571,6 +656,12 @@ func (t *tunnel) newPipe(name string, src, dst *MySQLConn) *pipe {
 		tun:    t,
 	}
 	p.mu.cond = sync.NewCond(&p.mu)
+	// Enable write batching for the server-to-client direction.
+	// Result sets flow s2c and generate many small write syscalls;
+	// bufDst accumulates them and flushes when the read buffer drains.
+	if name == pipeServerToClient {
+		src.msgBuf.bufDst = bufio.NewWriterSize(dst.Conn, writeBufLen)
+	}
 	return p
 }
 
@@ -594,6 +685,10 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		return false, nil
 	}
 	finish := func() {
+		// Best-effort flush of buffered writes before shutting down.
+		if p.src != nil && p.src.msgBuf != nil {
+			_ = p.src.flushBufDst()
+		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		if e != nil {
@@ -728,7 +823,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		p.wg.Wait()
 
 		if err = p.src.sendTo(p.dst); err != nil {
-			return moerr.NewInternalErrorNoCtxf("send message error: %v", err)
+			return wrapPipeSendError(p.name, err)
 		}
 	}
 	return ctx.Err()

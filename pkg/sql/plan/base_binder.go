@@ -60,6 +60,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			expr, err = b.bindNumVal(exprImpl, plan.Type{})
 		}
+	case *tree.TimeUnitExpr:
+		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
+		if d, ok := b.impl.(*DefaultBinder); ok {
+			expr, err = b.bindNumVal(numVal, d.typ)
+		} else {
+			expr, err = b.bindNumVal(numVal, plan.Type{})
+		}
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 
@@ -511,6 +518,16 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+
+	// A subquery is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. MySQL only locks rows in the outer query; rows reached through
+	// EXISTS/IN/scalar subqueries are not locked unless the subquery itself
+	// also specifies FOR UPDATE.
+	savedIsForUpdate := b.builder.isForUpdate
+	b.builder.isForUpdate = false
+	defer func() {
+		b.builder.isForUpdate = savedIsForUpdate
+	}()
 
 	var nodeID int32
 	var err error
@@ -1279,6 +1296,34 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 
+	//promote interval expr rewrite here
+	if name == "interval" {
+		if len(astArgs) == 2 {
+			//interval expr like 'interval 5 day'
+			if _, ok := astArgs[1].(*tree.TimeUnitExpr); ok {
+				// rewrite interval function to ListExpr, and return directly
+				return &plan.Expr{
+					Typ: plan.Type{
+						Id: int32(types.T_interval),
+					},
+					Expr: &plan.Expr_List{
+						List: &plan.ExprList{
+							List: args,
+						},
+					},
+				}, nil
+			}
+		}
+	}
+	if name == "name_const" {
+		if !validNameConstNameAst(astArgs) || !validNameConstValueAst(astArgs) {
+			return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
+		}
+		if err := validateNameConstArgs(b.GetContext(), args); err != nil {
+			return nil, err
+		}
+	}
+
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
@@ -1404,6 +1449,14 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
+		}
+
+	case "name_const":
+		if proc == nil {
+			return nil, moerr.NewInvalidInput(ctx, "can't use name_const without proc")
+		}
+		if err := foldNameConstArgs(ctx, proc, retExpr.GetF().Args); err != nil {
+			return nil, err
 		}
 
 	case "between":
@@ -1551,18 +1604,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return args[0], nil
 			}
 		}
-	case "interval":
-		// rewrite interval function to ListExpr, and return directly
-		return &plan.Expr{
-			Typ: plan.Type{
-				Id: int32(types.T_interval),
-			},
-			Expr: &plan.Expr_List{
-				List: &plan.ExprList{
-					List: args,
-				},
-			},
-		}, nil
+
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
@@ -1682,6 +1724,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
+		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int64) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int32) && intervalUnitIsDayOrLarger(args[0]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) && intervalUnitIsDayOrLarger(args[0]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "concat"
 		}
@@ -1711,6 +1765,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int64) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		}
 		if err != nil {
 			return nil, err
@@ -1728,6 +1788,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	case "unary_minus":
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
+		if argLit := args[0].GetLit(); args[0].Typ.Id == int32(types.T_uint64) && argLit != nil && argLit.GetU64Val() == 1<<63 {
+			return makePlan2Int64ConstExprWithType(math.MinInt64), nil
 		}
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
@@ -1947,6 +2010,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
+	case "pow":
+		name = "power"
 	}
 
 	// get args(exprs) & types
@@ -2076,6 +2141,39 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 	}
 
+	// Geometry constructors with an explicit constant SRID argument record the
+	// SRID in the result type's Width (geometry cells store bare WKB, so SRID
+	// lives in the type). A non-constant SRID cannot be represented this way.
+	if returnType.Oid == types.T_geometry || returnType.Oid == types.T_geometry32 {
+		switch name {
+		case "st_geomfromtext", "st_geomfromwkb", "st_geometryfromtext", "st_pointfromtext",
+			"st_linefromtext", "st_polygonfromtext", "st_mpointfromtext", "st_mlinefromtext",
+			"st_mpolyfromtext", "st_geomcollfromtext", "st_pointfromgeohash",
+			"st_geomfromgeojson":
+			if len(args) >= 2 {
+				// The SRID is carried in the result type's Width, so it must be
+				// a constant known at bind time. A non-constant SRID (column,
+				// parameter, or CAST/arithmetic expression) cannot be
+				// represented this way and is rejected rather than being
+				// silently dropped.
+				lit, ok := args[len(args)-1].Expr.(*plan.Expr_Lit)
+				if !ok || lit.Lit == nil {
+					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
+				}
+				if !lit.Lit.Isnull {
+					iv, ok := lit.Lit.GetValue().(*plan.Literal_I64Val)
+					if !ok {
+						return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
+					}
+					if err := validateGeometrySRID(iv.I64Val); err != nil {
+						return nil, err
+					}
+					returnType.Width = encodeGeometrySRIDWidth(uint32(iv.I64Val), true)
+				}
+			}
+		}
+	}
+
 	if function.GetFunctionIsAggregateByName(name) {
 		if constExpr := args[0].GetLit(); constExpr != nil && constExpr.Isnull {
 			args[0].Typ = makePlan2Type(&returnType)
@@ -2190,6 +2288,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		argsType = argsType[:size+1]
 		if len(argsCastType) > 0 {
 			argsCastType = argsCastType[:size+1]
+		}
+
+	case "lead", "lag":
+		// For lead/lag window functions, cast the default value (3rd arg)
+		// to match the value type (1st arg).
+		if len(args) >= 3 && !argsType[2].Eq(argsType[0]) {
+			argsCastType = []types.Type{argsType[0], argsType[1], argsType[0]}
 		}
 	}
 
@@ -2390,6 +2495,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	case tree.P_char:
 		expr := makePlan2StringConstExprWithType(astExpr.String())
 		return expr, nil
+	case tree.P_star:
+		expr := makePlan2StringConstExprWithType(astExpr.String())
+		return expr, nil
 	case tree.P_nulltext:
 		expr := MakePlan2NullTextConstExprWithType(astExpr.String())
 		return expr, nil
@@ -2437,8 +2545,12 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return nil, moerr.NewInvalidArg(ctx, "interval expression requires a value and a unit", intervalExpr)
+	}
+	firstExpr := list.List[0]
+	secondExpr := list.List[1]
 
 	// MySQL behavior: INTERVAL NULL SECOND is valid and returns NULL at execution time
 	// Only date_add(..., null) (without INTERVAL) should return syntax error
@@ -2648,8 +2760,12 @@ func resetIntervalFunction(ctx context.Context, intervalExpr *Expr) ([]*Expr, er
 }
 
 func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return nil, moerr.NewInvalidArg(ctx, "interval expression requires a value and a unit", intervalExpr)
+	}
+	firstExpr := list.List[0]
+	secondExpr := list.List[1]
 
 	// MySQL behavior: INTERVAL NULL SECOND is valid and returns NULL at execution time
 	// NULL values will be handled at execution time (null1 || null2 check)
@@ -2761,6 +2877,19 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 	}, nil
 }
 
+func intervalUnitIsDayOrLarger(intervalExpr *Expr) bool {
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return false
+	}
+	unitStr := list.List[1].GetLit().GetSval()
+	iTyp, err := types.IntervalTypeOf(unitStr)
+	if err != nil {
+		return false
+	}
+	return types.UnitIsDayOrLarger(iTyp)
+}
+
 func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, rightList *plan.ExprList) (*plan.Expr, error) {
 	var newExpr *plan.Expr
 	var err error
@@ -2810,4 +2939,117 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 		return BindFuncExprImplByPlanExpr(ctx, "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
+	if err := validateNameConstArgs(ctx, args); err != nil {
+		return err
+	}
+
+	foldedArg, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	if err != nil {
+		return err
+	}
+	args[1] = foldedArg
+
+	if args[1].GetLit() == nil {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
+}
+
+func validateNameConstArgs(ctx context.Context, args []*plan.Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
+	}
+
+	nameLit := args[0].GetLit()
+	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
+}
+
+func validNameConstValueExpr(arg *plan.Expr) bool {
+	if arg == nil {
+		return false
+	}
+	if arg.GetLit() != nil {
+		return true
+	}
+	if isDecimalLiteralCast(arg) {
+		return true
+	}
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return false
+	}
+	if fn.Func.GetObjName() != "unary_minus" && fn.Func.GetObjName() != "unary_plus" {
+		return false
+	}
+	return fn.Args[0].GetLit() != nil || isDecimalLiteralCast(fn.Args[0])
+}
+
+func validNameConstNameAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	name := stripNameConstParens(args[0])
+	nameLit, ok := name.(*tree.NumVal)
+	return ok && validNameConstNameLiteral(nameLit)
+}
+
+func validNameConstValueAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	return validNameConstLiteralValueAst(args[1])
+}
+
+func validNameConstLiteralValueAst(expr tree.Expr) bool {
+	expr = stripNameConstParens(expr)
+	switch value := expr.(type) {
+	case *tree.NumVal:
+		return true
+	case *tree.UnaryExpr:
+		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
+			return false
+		}
+		_, ok := stripNameConstParens(value.Expr).(*tree.NumVal)
+		return ok
+	default:
+		return false
+	}
+}
+
+func stripNameConstParens(expr tree.Expr) tree.Expr {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	return expr
+}
+
+func isDecimalLiteralCast(arg *plan.Expr) bool {
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return false
+	}
+	if !types.T(arg.Typ.Id).IsDecimal() || fn.Args[0].GetLit() == nil || fn.Args[1].GetT() == nil {
+		return false
+	}
+	lit := fn.Args[0].GetLit()
+	if lit.Isnull || lit.GetSval() == "" {
+		return false
+	}
+	if _, _, err := types.Parse128(lit.GetSval()); err == nil {
+		return true
+	}
+	if _, _, err := types.Parse256(lit.GetSval()); err == nil {
+		return true
+	}
+	return false
 }

@@ -411,6 +411,117 @@ func TestHashBuildHashOnPK(t *testing.T) {
 	tc.proc.Free()
 }
 
+// TestHashBuildRuntimeFilterWithNulls verifies that NULLs in the build side
+// don't corrupt the runtime filter. Before the fix, InplaceSort reordered
+// data but NOT the null bitmap, corrupting the serialized filter.
+func TestHashBuildRuntimeFilterWithNulls(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
+	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ch2: make(chan process.PipelineSignal, 10),
+	}
+
+	arg := &HashBuild{
+		JoinMapTag:    1,
+		JoinMapRefCnt: 1,
+		Conditions: []*plan.Expr{
+			newExpr(0, types.T_int32.ToType()),
+		},
+		NeedHashMap: true,
+		RuntimeFilterSpec: &plan.RuntimeFilterSpec{
+			Tag:        1,
+			UpperLimit: 10000,
+			Expr:       newExpr(0, types.T_int32.ToType()),
+		},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+	}
+
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	// Create a batch with NULLs at every even index.
+	bat := testutil.NewBatchWithNulls(
+		[]types.Type{types.T_int32.ToType()}, false, 10, proc.Mp(),
+	)
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, proc.Mp())
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, proc.Mp())
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
+
+	marg := &merge.Merge{}
+	err = marg.Prepare(proc)
+	require.NoError(t, err)
+	arg.SetChildren([]vm.Operator{marg})
+
+	ok, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, ok.Status)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+}
+
+// TestHashBuildRuntimeFilterWithNullsHashOnPK tests the hashOnPK path
+// where UniqueJoinKeys include NULLs from UnionBatch.
+func TestHashBuildRuntimeFilterWithNullsHashOnPK(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
+	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ch2: make(chan process.PipelineSignal, 10),
+	}
+
+	arg := &HashBuild{
+		JoinMapTag:    1,
+		JoinMapRefCnt: 1,
+		HashOnPK:      true,
+		Conditions: []*plan.Expr{
+			newExpr(0, types.T_int32.ToType()),
+		},
+		NeedHashMap: true,
+		RuntimeFilterSpec: &plan.RuntimeFilterSpec{
+			Tag:        1,
+			UpperLimit: 10000,
+			Expr:       newExpr(0, types.T_int32.ToType()),
+		},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+	}
+
+	err := arg.Prepare(proc)
+	require.NoError(t, err)
+
+	bat := testutil.NewBatchWithNulls(
+		[]types.Type{types.T_int32.ToType()}, false, 10, proc.Mp(),
+	)
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, proc.Mp())
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, proc.Mp())
+	proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
+
+	marg := &merge.Merge{}
+	err = marg.Prepare(proc)
+	require.NoError(t, err)
+	arg.SetChildren([]vm.Operator{marg})
+
+	ok, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, ok.Status)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+}
+
 func TestHashBuildIsShuffle(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.IsShuffle = true

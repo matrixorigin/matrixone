@@ -37,10 +37,10 @@ Table    Create Table
 distinct    CREATE TABLE `distinct` (\n  `div` int DEFAULT NULL,\n  `drop` bigint DEFAULT NULL,\n  `else` smallint DEFAULT NULL,\n  `elseif` decimal(38,0) DEFAULT NULL,\n  `enclosed` char(1) DEFAULT NULL,\n  `end` varchar(65535) DEFAULT NULL,\n  `escape` int DEFAULT NULL,\n  `escaped` float DEFAULT NULL\n)
 drop table `distinct`;
 drop table if exists `except`;
-create table `except` (`exists` int, `explain` bigint, `false` smallint, `for` decimal, `force` char, `foreign` varchar, `from` int, `fulltext` float);
+create table `except` (`exists` int, `explain` bigint, `false` smallint, `for` decimal, `force` char, `foreign` varchar, `from` int, `full` float, `fulltext` double);
 show create table `except`;
 Table    Create Table
-except    CREATE TABLE `except` (\n  `exists` int DEFAULT NULL,\n  `explain` bigint DEFAULT NULL,\n  `false` smallint DEFAULT NULL,\n  `for` decimal(38,0) DEFAULT NULL,\n  `force` char(1) DEFAULT NULL,\n  `foreign` varchar(65535) DEFAULT NULL,\n  `from` int DEFAULT NULL,\n  `fulltext` float DEFAULT NULL\n)
+except    CREATE TABLE `except` (\n  `exists` int DEFAULT NULL,\n  `explain` bigint DEFAULT NULL,\n  `false` smallint DEFAULT NULL,\n  `for` decimal(38,0) DEFAULT NULL,\n  `force` char(1) DEFAULT NULL,\n  `foreign` varchar(65535) DEFAULT NULL,\n  `from` int DEFAULT NULL,\n  `full` float DEFAULT NULL,\n  `fulltext` double DEFAULT NULL\n)
 drop table `except`;
 drop table if exists `function`;
 create table `function` (`group` int, `groups` bigint, `having` smallint, `high_priority` decimal, `hour_microsecond` char, `hour_minute` varchar, `hour_second` int, `if` float);

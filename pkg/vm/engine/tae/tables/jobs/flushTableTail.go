@@ -859,10 +859,10 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 			dataVer.Batch,
 			task.Name(),
 		)
+		subtasks[i] = aobjectTask
 		if err = task.rt.Scheduler.Schedule(aobjectTask); err != nil {
 			return
 		}
-		subtasks[i] = aobjectTask
 	}
 	return
 }
@@ -884,7 +884,6 @@ func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, su
 		if err = subtask.WaitDone(ictx); err != nil {
 			return moerr.AttachCause(ictx, err)
 		}
-		subtask.done = true
 		stat := subtask.stat.Clone()
 		if err = handles[i].UpdateStats(*stat); err != nil {
 			return

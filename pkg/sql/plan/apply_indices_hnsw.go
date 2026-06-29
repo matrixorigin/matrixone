@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -55,6 +56,11 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		return nil, nil
 	}
 
+	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
+	if err != nil || !rewriteAllowed {
+		return nil, err
+	}
+
 	metaDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
 	idxDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Storage]
 	if metaDef == nil || idxDef == nil {
@@ -77,7 +83,17 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
-	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	var vecLitArg *plan.Expr
+	var found bool
+	if vecCtx.vecArgExpr != nil {
+		_, vecLitArg, found = builder.getArgsFromDistFnForJoin(
+			vecCtx.distFnExpr,
+			partPos,
+			vecCtx.scanNode.BindingTags[0],
+		)
+	} else {
+		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	}
 	if !found {
 		return nil, nil
 	}
@@ -140,12 +156,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  kHNSWSearchFuncName,
+				Name:  hnswplan.HNSWSearchFuncName,
 				Param: []byte(hnswCtx.params),
 			},
-			Cols: DeepCopyColDefList(kHNSWSearchColDefs),
+			Cols: DeepCopyColDefList(hnswplan.HNSWSearchColDefs),
 		},
 		BindingTags: []int32{tableFuncTag},
+		Children:    vectorSearchProviderChildren(vecCtx),
 		TblFuncExprList: []*plan.Expr{
 			{
 				Typ: plan.Type{
@@ -259,6 +276,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		OrderBy:  orderByScore,
 		Limit:    limit,                         // Apply LIMIT after sorting
 		Offset:   DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
+		SpillMem: builder.sortSpillMem,
 	}, ctx)
 
 	projNode.Children[0] = sortByID
@@ -322,4 +340,30 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	}
 
 	return vecColArg, vecLitArg, true
+}
+
+func (builder *QueryBuilder) getArgsFromDistFnForJoin(
+	distFnExpr *plan.Function,
+	partPos int32,
+	scanTag int32,
+) (key *plan.Expr, value *plan.Expr, found bool) {
+	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+		return
+	}
+
+	distFnArgs := distFnExpr.Args
+	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) &&
+		distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
+		return
+	}
+
+	if col := distFnArgs[0].GetCol(); col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+		distFnArgs[1].Typ = distFnArgs[0].Typ
+		return distFnArgs[0], distFnArgs[1], true
+	}
+	if col := distFnArgs[1].GetCol(); col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+		distFnArgs[0].Typ = distFnArgs[1].Typ
+		return distFnArgs[1], distFnArgs[0], true
+	}
+	return
 }

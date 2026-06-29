@@ -28,7 +28,14 @@ import (
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.state = vm.Build
+	if mergeGroup.ctr.mp != nil {
+		mergeGroup.ctr.free()
+	}
 	mergeGroup.ctr.mp = mpool.MustNew("merge_group_mpool")
+	mergeGroup.ctr.groupByTypes = nil
+	mergeGroup.ctr.keyNullable = false
+	mergeGroup.ctr.keyWidth = 0
+	mergeGroup.ctr.mtyp = 0
 
 	if mergeGroup.OpAnalyzer != nil {
 		mergeGroup.OpAnalyzer.Reset()
@@ -128,16 +135,17 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
 	var err error
 
-	defer func() {
-		if err != nil {
-			mergeGroup.ctr.freeSpillAggList()
-		}
-	}()
-
+	mergeGroup.ctr.freeSpillAggList()
 	mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
 	if err != nil {
 		return false, err
 	}
+	needCleanupSpillAggList := true
+	defer func() {
+		if needCleanupSpillAggList {
+			mergeGroup.ctr.freeSpillAggList()
+		}
+	}()
 
 	// deserialize extra buf2.
 	if len(bat.ExtraBuf) != 0 {
@@ -145,6 +153,9 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 
 		// XXX: Here, the mtyp is critical.  It will affect how later we unmarshal and merge.
 		if mergeGroup.ctr.mtyp, err = types.ReadInt32(reader); err != nil {
+			return false, err
+		}
+		if mergeGroup.ctr.keyNullable, err = types.ReadBool(reader); err != nil {
 			return false, err
 		}
 
@@ -191,6 +202,9 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	} else {
 		if mergeGroup.ctr.hr.IsEmpty() {
+			// MergeGroup restores nullable-key metadata from the serialized
+			// partial-group payload rather than guessing it from the first batch.
+			mergeGroup.ctr.initGroupKeyTypesFromBatch(bat.Vecs)
 			if err := mergeGroup.ctr.buildHashTable(proc.Ctx); err != nil {
 				return false, err
 			}
@@ -233,5 +247,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	}
 
+	mergeGroup.ctr.freeSpillAggList()
+	needCleanupSpillAggList = false
 	return mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer), nil
 }

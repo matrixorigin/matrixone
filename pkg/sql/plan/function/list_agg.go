@@ -618,6 +618,69 @@ var supportedAggInNewFramework = []FuncNew{
 			},
 		},
 	},
+
+	// function `HLL_ADD_AGG`
+	{
+		functionId: HLL_ADD_AGG,
+		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				if inputs[0].Oid == types.T_any {
+					return newCheckResultWithCast(0, []types.Type{types.T_uint64.ToType()})
+				}
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedAggParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
+				aggFramework: aggregationLogicOfOverload{
+					str:         "hll_add_agg",
+					aggRegister: aggexec.RegisterHllAddAgg,
+				},
+			},
+		},
+	},
+
+	// function `HLL_MERGE_AGG`
+	{
+		functionId: HLL_MERGE_AGG,
+		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 1 {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			switch inputs[0].Oid {
+			case types.T_any:
+				return newCheckResultWithCast(0, []types.Type{types.T_varbinary.ToType()})
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedAggParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
+				aggFramework: aggregationLogicOfOverload{
+					str:         "hll_merge_agg",
+					aggRegister: aggexec.RegisterHllMergeAgg,
+				},
+			},
+		},
+	},
 }
 
 var SumSupportedTypes = []types.T{
@@ -648,13 +711,16 @@ var AnyValueSupportedTypes = []types.T{
 	types.T_float32, types.T_float64,
 	types.T_date, types.T_datetime,
 	types.T_timestamp, types.T_time,
-	types.T_decimal64, types.T_decimal128,
+	types.T_decimal64, types.T_decimal128, types.T_decimal256,
 	types.T_bit, types.T_year,
 	types.T_bool,
 	types.T_bit,
 	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary, types.T_json,
+	types.T_array_float32, types.T_array_float64,
+	types.T_geometry, types.T_geometry32,
+	types.T_enum,
 	types.T_Rowid,
 }
 

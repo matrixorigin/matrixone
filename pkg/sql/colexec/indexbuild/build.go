@@ -133,6 +133,9 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 			panic("there must be only 1 vector in index build batch")
 		}
 		vec := ctr.buf.Vecs[0]
+		// InplaceSort reorders data but NOT the null bitmap.
+		// NULLs are irrelevant for IN-filter: clear bitmap before sort.
+		vec.GetNulls().Reset()
 		vec.InplaceSort()
 		data, err := vec.MarshalBinary()
 		if err != nil {

@@ -26,11 +26,14 @@ import (
 )
 
 type eventLogger struct {
-	begin  time.Time
-	mu     sync.Mutex
-	events *[]event
-	closed bool
+	begin   time.Time
+	mu      sync.Mutex
+	events  *[]event
+	dropped int
+	closed  bool
 }
+
+const maxEventLoggerEvents = 1024
 
 type event struct {
 	time  time.Duration
@@ -61,17 +64,28 @@ func WithEventLogger(ctx context.Context) context.Context {
 
 func LogEvent(ctx context.Context, ev stringRef, args ...any) {
 	v := ctx.Value(EventLoggerKey)
-	if v == nil {
+	logger, ok := v.(*eventLogger)
+	if !ok || logger == nil {
 		return
 	}
-	logger := v.(*eventLogger)
 	logger.emit(ev, args...)
+}
+
+func withoutEventLogger(ctx context.Context) context.Context {
+	if ctx.Value(EventLoggerKey) == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, EventLoggerKey, nil)
 }
 
 func (e *eventLogger) emit(ev stringRef, args ...any) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
+		return
+	}
+	if len(*e.events) >= maxEventLoggerEvents {
+		e.dropped++
 		return
 	}
 	*e.events = append(*e.events, event{})
@@ -91,8 +105,17 @@ func LogSlowEvent(ctx context.Context, threshold time.Duration) {
 
 	logger.mu.Lock()
 	defer func() {
-		*logger.events = (*logger.events)[:0]
-		eventsPool.Put(logger.events)
+		events := *logger.events
+		for i := range events {
+			events[i].args = nil
+			for j := range events[i]._args {
+				events[i]._args[j] = nil
+			}
+		}
+		*logger.events = events[:0]
+		if cap(*logger.events) <= maxEventLoggerEvents {
+			eventsPool.Put(logger.events)
+		}
 		logger.events = nil
 		logger.closed = true
 		logger.mu.Unlock()
@@ -122,6 +145,7 @@ func LogSlowEvent(ctx context.Context, threshold time.Duration) {
 
 	logutil.Info("slow event",
 		zap.String("events", buf.String()),
+		zap.Int("dropped-events", logger.dropped),
 	)
 }
 

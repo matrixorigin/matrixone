@@ -94,7 +94,6 @@ func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
 	timer := time.NewTimer(k.keepRemoteLockInterval)
 	defer timer.Stop()
 
-	services := make(map[string]pb.LockTable)
 	var futures []*morpc.Future
 	var binds []pb.LockTable
 	for {
@@ -105,7 +104,6 @@ func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
 			futures, binds = k.doKeepRemoteLock(
 				ctx,
 				futures,
-				services,
 				binds)
 			timer.Reset(k.keepRemoteLockInterval)
 		}
@@ -115,28 +113,46 @@ func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
 func (k *lockTableKeeper) doKeepRemoteLock(
 	ctx context.Context,
 	futures []*morpc.Future,
-	services map[string]pb.LockTable,
 	binds []pb.LockTable) ([]*morpc.Future, []pb.LockTable) {
-	for k := range services {
-		delete(services, k)
+	type bindKey struct {
+		group     uint32
+		table     uint64
+		serviceID string
+		version   uint64
 	}
+
+	allBinds := make([]pb.LockTable, 0, cap(binds))
 	binds = binds[:0]
 	futures = futures[:0]
+	checkedBinds := make(map[bindKey]struct{})
+	maybeHandleRemoteBindChanged := func(bind pb.LockTable) {
+		key := bindKey{
+			group:     bind.Group,
+			table:     bind.Table,
+			serviceID: bind.ServiceID,
+			version:   bind.Version,
+		}
+		if _, ok := checkedBinds[key]; ok {
+			return
+		}
+		checkedBinds[key] = struct{}{}
+		k.maybeHandleRemoteBindChanged(bind)
+	}
 
 	k.groupTables.iter(func(_ uint64, v lockTable) bool {
 		bind := v.getBind()
 		if bind.ServiceID != k.serviceID {
-			services[bind.ServiceID] = bind
+			allBinds = append(allBinds, bind)
 		}
 		return true
 	})
-	if len(services) == 0 {
+	if len(allBinds) == 0 {
 		return futures[:0], binds[:0]
 	}
 
 	ctx, cancel := context.WithTimeoutCause(ctx, defaultRPCTimeout, moerr.CauseDoKeepRemoteLock)
 	defer cancel()
-	for _, bind := range services {
+	for _, bind := range allBinds {
 		req := acquireRequest()
 		defer releaseRequest(req)
 
@@ -152,6 +168,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		}
 		err = moerr.AttachCause(ctx, err)
 		logKeepRemoteLocksFailed(k.service.logger, bind, err)
+		maybeHandleRemoteBindChanged(bind)
 		if !isRetryError(err) {
 			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
 				return !v.getBind().Changed(bind)
@@ -162,14 +179,47 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	for idx, f := range futures {
 		v, err := f.Get()
 		if err == nil {
-			releaseResponse(v.(*pb.Response))
+			resp := v.(*pb.Response)
+			if err = resp.UnwrapError(); err != nil {
+				logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
+				if canRefreshRemoteBindOnKeepError(err) {
+					maybeHandleRemoteBindChanged(binds[idx])
+				}
+			} else if resp.NewBind != nil {
+				k.service.handleBindChanged(*resp.NewBind)
+			}
+			releaseResponse(resp)
 		} else {
 			logKeepRemoteLocksFailed(k.service.logger, binds[idx], err)
+			maybeHandleRemoteBindChanged(binds[idx])
 		}
 		f.Close()
 		futures[idx] = nil // gc
 	}
 	return futures[:0], binds[:0]
+}
+
+func canRefreshRemoteBindOnKeepError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound)
+}
+
+func (k *lockTableKeeper) maybeHandleRemoteBindChanged(bind pb.LockTable) {
+	newBind, err := getLockTableBind(
+		k.client,
+		bind.Group,
+		bind.Table,
+		bind.OriginTable,
+		k.serviceID,
+		bind.Sharding,
+	)
+	if err != nil {
+		logGetRemoteBindFailed(k.service.logger, bind.Table, err)
+		return
+	}
+	if newBind.Changed(bind) {
+		k.service.handleBindChanged(newBind)
+	}
 }
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
@@ -190,7 +240,16 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxnID()
 	}
 
-	ctx, cancel := context.WithTimeoutCause(ctx, k.keepLockTableBindInterval, moerr.CauseDoKeepLockTableBind)
+	timeout := k.keepLockTableBindInterval
+	if keepBindTimeout := k.service.cfg.KeepBindTimeout.Duration; keepBindTimeout > 0 {
+		if v := keepBindTimeout / 2; v > timeout {
+			timeout = v
+		}
+	}
+	if timeout > defaultRPCTimeout {
+		timeout = defaultRPCTimeout
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseDoKeepLockTableBind)
 	defer cancel()
 	resp, err := k.client.Send(ctx, req)
 	if err != nil {

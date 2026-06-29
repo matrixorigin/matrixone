@@ -417,19 +417,11 @@ func TestCloseIdleBackends(t *testing.T) {
 	tb.activeTime = time.Time{}
 	tb.Unlock()
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
-		defer cancel()
-		st, err := activeBackend.NewStream(false)
-		assert.NoError(t, err)
-		for i := 0; i < 50; i++ {
-			_ = st.Send(ctx, newTestMessage(1))
-			runtime.Gosched()
-		}
-	}()
-
 	gcDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(gcDeadline) {
+		// Refresh the non-idle backend inline so GC deterministically closes only the
+		// backend we explicitly marked idle, without relying on goroutine scheduling.
+		activeBackend.(*testBackend).active()
 		globalClientGC.doGCIdle()
 		runtime.Gosched()
 		c.mu.Lock()

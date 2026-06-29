@@ -88,7 +88,10 @@ func genWriteReqs(
 	}
 	trace.GetService(txnCommit.proc.GetService()).TxnCommit(op, entries)
 	reqs := make([]txn.TxnRequest, 0, len(entries))
-	payload, err := types.Encode(&api.PrecommitWriteCmd{EntryList: entries})
+	payload, err := types.Encode(&api.PrecommitWriteCmd{
+		EntryList:           entries,
+		SyncProtectionJobId: txnCommit.GetSyncProtectionJobID(),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -161,6 +164,9 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 
 	} else if e.typ == ALTER {
 		typ = api.Entry_Alter
+	} else if e.typ == SOFT_DELETE_OBJECT {
+		typ = api.Entry_Delete
+		ebat = e.bat
 	}
 	bat, err := toPBBatch(ebat)
 	if err != nil {
@@ -215,6 +221,13 @@ func getAccessInfo(ctx context.Context) (uint32, uint32, uint32, error) {
 	userId = defines.GetUserId(ctx)
 	roleId = defines.GetRoleId(ctx)
 	return accountId, userId, roleId, nil
+}
+
+func getDDLOwnerRoleId(ctx context.Context) uint32 {
+	if ownerRoleId, ok := defines.GetDDLOwnerRoleId(ctx); ok {
+		return ownerRoleId
+	}
+	return defines.GetRoleId(ctx)
 }
 
 func genDatabaseKey(id uint32, name string) databaseKey {

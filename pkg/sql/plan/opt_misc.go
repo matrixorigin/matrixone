@@ -42,6 +42,10 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	if node.DedupJoinCtx != nil {
 		increaseRefCntForColRefList(node.DedupJoinCtx.OldColList, 2, colRefCnt)
 		increaseRefCntForExprList(node.DedupJoinCtx.UpdateColExprList, 2, colRefCnt)
+		for _, cap := range node.DedupJoinCtx.OldColCaptureList {
+			colRefCnt[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}] += 2
+			colRefCnt[[2]int32{cap.ProbeSource.RelPos, cap.ProbeSource.ColPos}] += 2
+		}
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -80,7 +84,18 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			projMap[ref] = expr
 		}
 
+		origRightID := node.Children[1]
 		newChildID, childProjMap = builder.removeSimpleProjections(node.Children[1], plan.Node_JOIN, rightFlag, colRefCnt)
+		// When OldColCaptureList is set, the build-side (right child) PROJECT
+		// contains NULL placeholder slots that the DEDUP JOIN writes captured
+		// values into at runtime. Removing this PROJECT would lose those
+		// slots and leave OldColCaptureList.BuildPlaceholder references
+		// dangling (they point to Lit expressions that can't be remapped to
+		// column references). Keep the original PROJECT in the tree.
+		if node.DedupJoinCtx != nil && len(node.DedupJoinCtx.OldColCaptureList) > 0 && newChildID != origRightID {
+			newChildID = origRightID
+			childProjMap = nil
+		}
 		node.Children[1] = newChildID
 		for ref, expr := range childProjMap {
 			projMap[ref] = expr
@@ -243,6 +258,24 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	if node.DedupJoinCtx != nil {
 		replaceColumnsForColRefList(node.DedupJoinCtx.OldColList, projMap)
 		replaceColumnsForExprList(node.DedupJoinCtx.UpdateColExprList, projMap)
+		for i := range node.DedupJoinCtx.OldColCaptureList {
+			cap := &node.DedupJoinCtx.OldColCaptureList[i]
+			if projExpr, ok := projMap[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}]; ok {
+				if col := projExpr.GetCol(); col != nil {
+					cap.BuildPlaceholder.RelPos = col.RelPos
+					cap.BuildPlaceholder.ColPos = col.ColPos
+				}
+				// Lit expressions (NULL placeholders) are left unchanged —
+				// they will be resolved by the fullProjTag PROJECT which
+				// must not be removed (see removeSimpleProjections guard).
+			}
+			if projExpr, ok := projMap[[2]int32{cap.ProbeSource.RelPos, cap.ProbeSource.ColPos}]; ok {
+				if col := projExpr.GetCol(); col != nil {
+					cap.ProbeSource.RelPos = col.RelPos
+					cap.ProbeSource.ColPos = col.ColPos
+				}
+			}
+		}
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -635,6 +668,12 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 			expr = condImpl.F.Args[1]
 			switch exprImpl := expr.Expr.(type) {
 			case *plan.Expr_Col:
+				//the nullable column ref is not primary key.
+				//can not use the hashOnPk.
+				//it assume build hashamp on right side.
+				if !expr.Typ.NotNullable {
+					return nil
+				}
 				exprRightCols[i] = (uint64(exprImpl.Col.RelPos) << 32) | uint64(exprImpl.Col.ColPos)
 			}
 		}
@@ -1107,6 +1146,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
 	ReCalcNodeStats(rootID, builder, true, true, true)
+	builder.rewriteInDomainNotInFilters(rootID)
 	builder.mergeFiltersOnCompositeKey(rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)

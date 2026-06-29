@@ -76,11 +76,14 @@ type HashBuild struct {
 	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	SpillThreshold    int64
 
-	IsDedup           bool
-	DelColIdx         int32
-	OnDuplicateAction plan.Node_OnDuplicateAction
-	DedupColName      string
-	DedupColTypes     []plan.Type
+	IsDedup                   bool
+	DedupBuildKeepLast        bool
+	DelColIdx                 int32
+	OnDuplicateAction         plan.Node_OnDuplicateAction
+	DedupColName              string
+	DedupColTypes             []plan.Type
+	DedupDeleteMarkerColIdx   int32
+	DedupDeleteKeepColIdxList []int32
 
 	vm.OperatorBase
 }
@@ -141,6 +144,11 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 	hashBuild.ctr.cleanSpillBufferPool(proc)
+	hashBuild.ctr.freeSpillExprExecs()
+	hashBuild.ctr.spillKeyVecs = nil
+	hashBuild.ctr.spillHashValues = nil
+	hashBuild.ctr.spillBucketRowIds = nil
+	hashBuild.ctr.spillNonEmptyBuckets = nil
 }
 
 func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {

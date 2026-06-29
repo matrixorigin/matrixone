@@ -21,10 +21,17 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	hll "github.com/axiomhq/hyperloglog"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,6 +40,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -961,6 +970,2067 @@ func TestSoundex(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func initStAsTextTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_astext point and polygon",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))"},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_astext null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,1 1)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStAsText(t *testing.T) {
+	testCases := initStAsTextTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StAsText)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initStGeomFromTextTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_geomfromtext point polygon and empty",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))", "POINT EMPTY", "LINESTRING EMPTY"},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{"POINT(1 2)", "POLYGON((0 0,1 0,1 1,0 0))", "POINT EMPTY", "LINESTRING EMPTY"},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_geomfromtext null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"LINESTRING(0 0,1 1)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStGeomFromText(t *testing.T) {
+	testCases := initStGeomFromTextTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StGeomFromText)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStGeomFromTextRejectNonFiniteCoordinates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(NaN 1)"}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromText)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid geometry payload")
+}
+
+func TestStGeomFromTextRejectMalformedStructure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, input := range []string{
+		"POINT(1",
+		"LINESTRING(0 0,1",
+		"GEOMETRYCOLLECTION(POINT(1 1),)",
+	} {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, []bool{false}),
+		}
+		expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+		fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromText)
+		s, info := fcTC.Run()
+		require.False(t, s, input)
+		require.Contains(t, info, "invalid geometry payload")
+	}
+}
+
+func TestStGeomFromTextRejectTooManyPoints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "max_points_in_geometry" {
+			return int64(3), nil
+		}
+		return nil, nil
+	})
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"LINESTRING(0 0,1 1,2 2,3 3)"}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromText)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "max_points_in_geometry=3")
+}
+
+func TestStGeomFromTextRejectExcessiveCollectionDepth(t *testing.T) {
+	buildNestedCollection := func(depth int) string {
+		wkt := "POINT(0 0)"
+		for i := 0; i < depth; i++ {
+			wkt = "GEOMETRYCOLLECTION(" + wkt + ")"
+		}
+		return wkt
+	}
+
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{buildNestedCollection(maxGeometryCollectionNestingDepth + 1)}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromText)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry collection nesting depth exceeds")
+}
+
+func TestStGeomFromTextWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)", "POINT EMPTY", "LINESTRING EMPTY"}, []bool{false, false, false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, int64(geo.MaxSRID), 0}, []bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"SRID=4326;POINT(1 2)", "SRID=2147483646;POINT EMPTY", "SRID=0;LINESTRING EMPTY"}, []bool{false, false, false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
+}
+
+func TestStGeomFromTextWithSRIDRejectNonFiniteCoordinates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"LINESTRING(0 0,Inf 1)"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid geometry payload")
+}
+
+func TestStGeomFromTextWithSRIDRejectMalformedStructure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid geometry payload")
+}
+
+func TestStGeomFromTextWithSRIDRejectTooManyPoints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "max_points_in_geometry" {
+			return int64(3), nil
+		}
+		return nil, nil
+	})
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"LINESTRING(0 0,1 1,2 2,3 3)"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "max_points_in_geometry=3")
+}
+
+func TestStGeomFromTextWithSRIDOutOfRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{5000000000}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), true, []string{""}, []bool{true})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StGeomFromTextWithSRID)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
+}
+
+func TestTypedTextConstructors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	run := func(fn fEvalFn, wkt, want string, wantErr bool) {
+		inputs := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{wkt}, []bool{false})}
+		expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{want}, []bool{false})
+		tc := NewFunctionTestCase(proc, inputs, expect, fn)
+		ok, info := tc.Run()
+		if wantErr {
+			require.False(t, ok, "%s should be rejected", wkt)
+		} else {
+			require.True(t, ok, info)
+		}
+	}
+	// Each constructor accepts its subtype and rejects others.
+	run(StPointFromText, "POINT(1 2)", "POINT(1 2)", false)
+	run(StPointFromText, "LINESTRING(0 0,1 1)", "", true)
+	run(StLineFromText, "LINESTRING(0 0,1 1,2 3)", "LINESTRING(0 0,1 1,2 3)", false)
+	run(StLineFromText, "POINT(1 2)", "", true)
+	run(StPolyFromText, "POLYGON((0 0,1 0,1 1,0 0))", "POLYGON((0 0,1 0,1 1,0 0))", false)
+	run(StPolyFromText, "POINT(1 2)", "", true)
+	run(StMPointFromText, "MULTIPOINT(1 1,2 2)", "MULTIPOINT(1 1,2 2)", false)
+	run(StMLineFromText, "MULTILINESTRING((0 0,1 1),(2 2,3 3))", "MULTILINESTRING((0 0,1 1),(2 2,3 3))", false)
+	run(StMPolyFromText, "MULTIPOLYGON(((0 0,1 0,1 1,0 0)))", "MULTIPOLYGON(((0 0,1 0,1 1,0 0)))", false)
+	run(StGeomCollFromText, "GEOMETRYCOLLECTION(POINT(1 1))", "GEOMETRYCOLLECTION(POINT(1 1))", false)
+	run(StGeomCollFromText, "POINT(1 1)", "", true)
+}
+
+func TestTypedWKBConstructors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	run := func(fn fEvalFn, wkt, want string, wantErr bool) {
+		wkb := string(encodeGeometryPayload(wkt, 0, false))
+		inputs := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{wkb}, []bool{false})}
+		expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{want}, []bool{false})
+		tc := NewFunctionTestCase(proc, inputs, expect, fn)
+		ok, info := tc.Run()
+		if wantErr {
+			require.False(t, ok, "%s should be rejected", wkt)
+		} else {
+			require.True(t, ok, info)
+		}
+	}
+	run(StPointFromWKB, "POINT(1 2)", "POINT(1 2)", false)
+	run(StPointFromWKB, "LINESTRING(0 0,1 1)", "", true)
+	run(StLineFromWKB, "LINESTRING(0 0,1 1,2 3)", "LINESTRING(0 0,1 1,2 3)", false)
+	run(StPolyFromWKB, "POLYGON((0 0,1 0,1 1,0 0))", "POLYGON((0 0,1 0,1 1,0 0))", false)
+	run(StMPointFromWKB, "MULTIPOINT(1 1,2 2)", "MULTIPOINT(1 1,2 2)", false)
+	run(StGeomCollFromWKB, "GEOMETRYCOLLECTION(POINT(1 1))", "GEOMETRYCOLLECTION(POINT(1 1))", false)
+	run(StGeomCollFromWKB, "POINT(1 1)", "", true)
+}
+
+func TestStSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// SRID lives in the column/expression type (Width = srid+1), not in the
+	// payload, so every row of a vector shares the type's SRID.
+	geomType := types.T_geometry.ToType()
+	geomType.Width = 4327 // encodes SRID 4326
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{"POINT(1 2)", "POINT(3 4)"}, []bool{false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{4326, 4326}, []bool{false, false})
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StSRID)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
+
+	// An undefined SRID (Width 0) reports SRID 0.
+	inputs2 := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+	}
+	expect2 := NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0}, []bool{false})
+	fcTC2 := NewFunctionTestCase(proc, inputs2, expect2, StSRID)
+	s2, info2 := fcTC2.Run()
+	require.True(t, s2, fmt.Sprintf("err info is '%s'", info2))
+}
+
+func initStGeometryTypeTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_geometrytype basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)", "LINESTRING(0 0,1 1)", "POLYGON((0 0,1 0,1 1,0 0))", "MULTIPOINT((1 2),(3 4))"},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"POINT", "LINESTRING", "POLYGON", "MULTIPOINT"},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_geometrytype null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStGeometryType(t *testing.T) {
+	testCases := initStGeometryTypeTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StGeometryType)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initStXYTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_x point",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)", "POINT(-3.5 4.25)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, -3.5},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_y point",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)", "POINT(-3.5 4.25)"},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{2, 4.25},
+				[]bool{false, false}),
+		},
+		{
+			info: "test st_xy null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStX(t *testing.T) {
+	testCases := initStXYTestCase()
+
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc, testCases[0].inputs, testCases[0].expect, StX)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", testCases[0].info, info))
+
+	fcTC = NewFunctionTestCase(proc, testCases[2].inputs, testCases[2].expect, StX)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", testCases[2].info, info))
+}
+
+func TestStY(t *testing.T) {
+	testCases := initStXYTestCase()
+
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc, testCases[1].inputs, testCases[1].expect, StY)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", testCases[1].info, info))
+
+	fcTC = NewFunctionTestCase(proc, testCases[2].inputs, testCases[2].expect, StY)
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", testCases[2].info, info))
+}
+
+// geom32WKB builds the float32-coordinate WKB payload a GEOMETRY32 cell stores.
+func geom32WKB(t *testing.T, wkt string) string {
+	t.Helper()
+	g, err := geo.ParseWKT(wkt)
+	require.NoError(t, err)
+	return string(geo.WriteWKBFloat32(g))
+}
+
+func TestStXY32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// GEOMETRY32 ST_X / ST_Y return float32, for both text and float32-WKB input.
+	run := func(fn fEvalFn, input string, want float32) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{input}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float32.ToType(), false, []float32{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	run(StX32, "POINT(1.5 2.5)", 1.5)
+	run(StY32, "POINT(1.5 2.5)", 2.5)
+	run(StLongitude32, "POINT(1.5 2.5)", 1.5)
+	run(StLatitude32, "POINT(1.5 2.5)", 2.5)
+	// Real float32 WKB payload.
+	run(StX32, geom32WKB(t, "POINT(1.5 2.5)"), 1.5)
+	run(StY32, geom32WKB(t, "POINT(1.5 2.5)"), 2.5)
+
+	// The float64 forms still return float64 on a GEOMETRY input.
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1.5 2.5)"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1.5}, []bool{false}), StX)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestGeometry32ReturningUnary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// For a GEOMETRY32 input, a geometry-returning function must emit float32 WKB
+	// (shorter than float64 WKB) and round-trip to the expected WKT.
+	check := func(fn fEvalFn, in, wantWKT string) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{geom32WKB(t, in)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{wantWKT}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+		// The output must be float32 WKB (decodable by the float32 reader).
+		raw := tc.GetResultVectorDirectly().GetBytesAt(0)
+		g, ferr := geo.ReadWKBFloat32(raw)
+		require.NoError(t, ferr, "output should be float32 WKB")
+		require.Equal(t, wantWKT, geo.WriteWKT(g))
+	}
+
+	check(StSwapXY, "POINT(1.5 2.5)", "POINT(2.5 1.5)")
+	check(StConvexHull, "MULTIPOINT(0 0, 4 0, 4 4, 0 4, 2 2)", "POLYGON((0 0,4 0,4 4,0 4,0 0))")
+	check(StEnvelope, "LINESTRING(0 0, 2 3)", "POLYGON((0 0,2 0,2 3,0 3,0 0))")
+	check(StStartPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(1 2)")
+	check(StEndPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(5 6)")
+	check(StExteriorRing, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", "LINESTRING(0 0,4 0,4 4,0 4,0 0)")
+}
+
+func TestGeometry32Measures(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	runF32 := func(fn fEvalFn, in string, want float32) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry32.ToType(), []string{geom32WKB(t, in)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_float32.ToType(), false, []float32{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	// ST_Length32 / ST_Area32 return float32 for a GEOMETRY32 input.
+	runF32(StLength32, "LINESTRING(0 0, 3 4)", 5.0)
+	runF32(StArea32, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", 16.0)
+}
+
+func TestStXYRejectNonPoint(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0,1 1)"},
+			[]bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StX)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a POINT")
+
+	fcTC = NewFunctionTestCase(proc, inputs, expect, StY)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a POINT")
+}
+
+func TestStXYRejectNonFinitePoint(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(NaN 1)"},
+			[]bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StX)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid point payload")
+
+	fcTC = NewFunctionTestCase(proc, inputs, expect, StY)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid point payload")
+}
+
+func initStNumGeometriesTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_numgeometries basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 2)",
+						"MULTIPOINT((1 2),(3 4))",
+						"MULTILINESTRING((0 0,1 1),(2 2,3 3))",
+						"MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))",
+						"GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))",
+						"GEOMETRYCOLLECTION()",
+						"MULTIPOINT()",
+					},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 2, 2, 2, 2, 0, 0},
+				[]bool{false, false, false, false, false, true, true}),
+		},
+		{
+			info: "test st_numgeometries null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStNumGeometries(t *testing.T) {
+	testCases := initStNumGeometriesTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StNumGeometries)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initStGeometryNTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_geometryn basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"MULTIPOINT((1 2),(3 4))",
+						"MULTILINESTRING((0 0,1 1),(2 2,3 3))",
+						"MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))",
+						"GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))",
+					},
+					[]bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{2, 1, 2, 2},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"POINT(3 4)",
+					"LINESTRING(0 0,1 1)",
+					"POLYGON((2 2,3 2,3 3,2 2))",
+					"LINESTRING(0 0,1 1)",
+				},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_geometryn geometry null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"MULTIPOINT((1 2),(3 4))"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+		{
+			info: "test st_geometryn index null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"MULTIPOINT((1 2),(3 4))"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStGeometryN(t *testing.T) {
+	testCases := initStGeometryNTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StGeometryN)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStGeometryNRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	nonCollectionInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 2)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{1},
+			[]bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, nonCollectionInputs, expect, StGeometryN)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a collection")
+
+	outOfRangeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"MULTIPOINT((1 2),(3 4))"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{3},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, outOfRangeInputs, expect, StGeometryN)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry index out of range")
+}
+
+func initStStartPointTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_startpoint basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,3 4)",
+						"LINESTRING(1 2,3 4,5 6)",
+						"SRID=4326;LINESTRING(7 8,9 10)",
+					},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"POINT(0 0)",
+					"POINT(1 2)",
+					"SRID=4326;POINT(7 8)",
+				},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test st_startpoint null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,3 4)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStStartPoint(t *testing.T) {
+	testCases := initStStartPointTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StStartPoint)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStStartPointRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	nonLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, nonLineInputs, expect, StStartPoint)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a LINESTRING")
+
+	invalidLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(1 1)"},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, invalidLineInputs, expect, StStartPoint)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid linestring payload")
+}
+
+func initStEndPointTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_endpoint basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,3 4)",
+						"LINESTRING(1 2,3 4,5 6)",
+						"SRID=4326;LINESTRING(7 8,9 10)",
+					},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"POINT(3 4)",
+					"POINT(5 6)",
+					"SRID=4326;POINT(9 10)",
+				},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test st_endpoint null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,3 4)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStEndPoint(t *testing.T) {
+	testCases := initStEndPointTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StEndPoint)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStEndPointRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	nonLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, nonLineInputs, expect, StEndPoint)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a LINESTRING")
+
+	invalidLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(1 1)"},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, invalidLineInputs, expect, StEndPoint)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid linestring payload")
+}
+
+func initStPointNTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_pointn basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,3 4)",
+						"LINESTRING(1 2,3 4,5 6)",
+						"SRID=4326;LINESTRING(7 8,9 10)",
+					},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{2, 2, 1},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"POINT(3 4)",
+					"POINT(3 4)",
+					"SRID=4326;POINT(7 8)",
+				},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test st_pointn geometry null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,3 4)"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+		{
+			info: "test st_pointn index null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,3 4)"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStPointN(t *testing.T) {
+	testCases := initStPointNTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StPointN)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStPointNRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	nonLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{1},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, nonLineInputs, expect, StPointN)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a LINESTRING")
+
+	zeroIndexInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0,3 4)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{0},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, zeroIndexInputs, expect, StPointN)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "point index must be greater than 0")
+
+	outOfRangeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0,3 4)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{3},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, outOfRangeInputs, expect, StPointN)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "point index out of range")
+}
+
+func initStNumPointsTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_numpoints basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,3 4)",
+						"LINESTRING(1 2,3 4,5 6)",
+						"SRID=4326;LINESTRING(7 8,9 10)",
+					},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{2, 3, 2},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test st_numpoints null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,3 4)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStNumPoints(t *testing.T) {
+	testCases := initStNumPointsTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StNumPoints)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStNumPointsRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false})
+
+	nonLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, nonLineInputs, expect, StNumPoints)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a LINESTRING")
+
+	invalidLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0)"},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, invalidLineInputs, expect, StNumPoints)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid linestring payload")
+}
+
+func initStIsClosedTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_isclosed basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,3 4)",
+						"LINESTRING(0 0,3 4,0 0)",
+						"SRID=4326;LINESTRING(1 1,2 2,1 1)",
+					},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, true},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test st_isclosed null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,3 4,0 0)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStIsClosed(t *testing.T) {
+	testCases := initStIsClosedTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StIsClosed)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStIsClosedRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	nonLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, nonLineInputs, expect, StIsClosed)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a LINESTRING")
+
+	invalidLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0)"},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, invalidLineInputs, expect, StIsClosed)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid linestring payload")
+}
+
+func initStIsCollectionTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_iscollection basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 2)",
+						"MULTIPOINT((1 2),(3 4))",
+						"MULTILINESTRING((0 0,1 1),(2 2,3 3))",
+						"MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 2,3 2,3 3,2 2)))",
+						"GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))",
+						"SRID=4326;MULTIPOINT((7 8),(9 10))",
+					},
+					[]bool{false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, true, true, true, true},
+				[]bool{false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_iscollection null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStIsCollection(t *testing.T) {
+	testCases := initStIsCollectionTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StIsCollection)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initStDimensionTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_dimension basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 2)",
+						"LINESTRING(0 0,1 1)",
+						"POLYGON((0 0,1 0,1 1,0 0))",
+						"MULTILINESTRING((0 0,1 1),(2 2,3 3))",
+						"GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))",
+						"GEOMETRYCOLLECTION(POINT(1 2),POLYGON((0 0,1 0,1 1,0 0)))",
+						"SRID=4326;MULTIPOINT((7 8),(9 10))",
+						"GEOMETRYCOLLECTION()",
+						"MULTIPOINT()",
+						"GEOMETRYCOLLECTION(GEOMETRYCOLLECTION())",
+					},
+					[]bool{false, false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 2, 1, 1, 2, 0, -1, -1, -1},
+				[]bool{false, false, false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_dimension null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStDimension(t *testing.T) {
+	testCases := initStDimensionTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StDimension)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestGeometryDimensionFromTextRejectExcessiveCollectionDepth(t *testing.T) {
+	buildNestedCollection := func(depth int) string {
+		wkt := "POINT(0 0)"
+		for i := 0; i < depth; i++ {
+			wkt = "GEOMETRYCOLLECTION(" + wkt + ")"
+		}
+		return wkt
+	}
+
+	dimension, err := geometryDimensionFromText(buildNestedCollection(maxGeometryCollectionNestingDepth))
+	require.NoError(t, err)
+	require.Equal(t, int64(0), dimension)
+
+	_, err = geometryDimensionFromText(buildNestedCollection(maxGeometryCollectionNestingDepth + 1))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "geometry collection nesting depth exceeds")
+}
+
+func initStIsSimpleTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_issimple basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 2)",
+						"LINESTRING(0 0,1 0,2 0)",
+						"LINESTRING(0 0,2 0,1 1,0 0)",
+						"LINESTRING(0 0,2 2,0 2,2 0)",
+						"LINESTRING(0 0,1 0,0 0)",
+					},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, true, true, false, false},
+				[]bool{false, false, false, false, false}),
+		},
+		{
+			info: "test st_issimple null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStIsSimple(t *testing.T) {
+	testCases := initStIsSimpleTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StIsSimple)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStIsSimpleRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,1 0,1 1,0 0))"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StIsSimple)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry type is not supported by ST_IsSimple")
+
+	invalidLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0)"},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, invalidLineInputs, expect, StIsSimple)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid linestring payload")
+}
+
+func initStIsRingTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_isring basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,1 0,2 0)",
+						"LINESTRING(0 0,2 0,1 1,0 0)",
+						"LINESTRING(0 0,2 2,0 2,2 0)",
+						"LINESTRING(0 0,1 0,0 0)",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false, false},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_isring null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 0,1 1,0 0)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStIsRing(t *testing.T) {
+	testCases := initStIsRingTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StIsRing)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStIsRingRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 2)"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StIsRing)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a LINESTRING")
+
+	invalidLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0)"},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, invalidLineInputs, expect, StIsRing)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid linestring payload")
+}
+
+func initStEnvelopeTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_envelope basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 2)",
+						"LINESTRING(0 0,2 3,1 1)",
+						"LINESTRING(1 1,1 3,1 2)",
+						"POLYGON((0 0,3 0,2 2,0 1,0 0))",
+						"SRID=4326;LINESTRING(5 2,5 7,5 4)",
+					},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"POINT(1 2)",
+					"POLYGON((0 0,2 0,2 3,0 3,0 0))",
+					"LINESTRING(1 1,1 3)",
+					"POLYGON((0 0,3 0,3 2,0 2,0 0))",
+					"SRID=4326;LINESTRING(5 2,5 7)",
+				},
+				[]bool{false, false, false, false, false}),
+		},
+		{
+			info: "test st_envelope null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStEnvelope(t *testing.T) {
+	testCases := initStEnvelopeTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StEnvelope)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStEnvelopeRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StEnvelope)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry type is not supported by ST_Envelope")
+}
+
+func initStCentroidTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_centroid basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 2)",
+						"LINESTRING(0 0,2 0,2 2)",
+						"POLYGON((0 0,10 0,10 10,0 10,0 0),(0 0,2 0,2 2,0 2,0 0))",
+						"SRID=4326;LINESTRING(0 0,0 4)",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"POINT(1 2)",
+					"POINT(1.5 0.5)",
+					"POINT(5.166666666666667 5.166666666666667)",
+					"SRID=4326;POINT(0 2)",
+				},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_centroid null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStCentroid(t *testing.T) {
+	testCases := initStCentroidTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StCentroid)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStCentroidRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StCentroid)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry type is not supported by ST_Centroid")
+}
+
+func initStBoundaryTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_boundary basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,2 2,4 2)",
+						"LINESTRING(0 0,2 0,1 1,0 0)",
+						"POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,3 1,3 3,1 3,1 1))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"MULTIPOINT((0 0),(4 2))",
+					"MULTIPOINT()",
+					"MULTILINESTRING((0 0,4 0,4 4,0 4,0 0),(1 1,3 1,3 3,1 3,1 1))",
+					"SRID=4326;MULTILINESTRING((0 0,2 0,2 2,0 2,0 0))",
+				},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_boundary null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,2 2,4 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStBoundary(t *testing.T) {
+	testCases := initStBoundaryTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StBoundary)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStBoundaryRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 2)"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StBoundary)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry type is not supported by ST_Boundary")
+}
+
+func initStIsValidTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_isvalid basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 2)",
+						"LINESTRING(0 0,1 1)",
+						"LINESTRING(0 0,-0.00 0,0.0 0)",
+						"POLYGON((0 0,4 0,4 4,0 4,0 0))",
+						"POLYGON((0 0,4 4,4 0,0 4,0 0))",
+						"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1))",
+						"POLYGON((0 0,6 0,6 6,0 6,0 0),(0 1,2 1,2 2,0 2,0 1))",
+						"GEOMETRYCOLLECTION()",
+					},
+					[]bool{false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, true, false, true, false, true, false, true},
+				[]bool{false, false, false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_isvalid null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStIsValid(t *testing.T) {
+	testCases := initStIsValidTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StIsValid)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStIsValidRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StIsValid)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry type is not supported by ST_IsValid")
+}
+
+func initStPointOnSurfaceTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_pointonsurface basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT(1 2)",
+						"LINESTRING(0 0,4 0,4 2)",
+						"POLYGON((0 0,4 0,4 4,0 4,0 0))",
+						"POLYGON((0 0,6 0,6 6,0 6,0 0),(2 2,4 2,4 4,2 4,2 2))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"POINT(1 2)",
+					"POINT(3 0)",
+					"POINT(2 2)",
+					"POINT(3 1)",
+					"SRID=4326;POINT(1 1)",
+				},
+				[]bool{false, false, false, false, false}),
+		},
+		{
+			info: "test st_pointonsurface null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStPointOnSurface(t *testing.T) {
+	testCases := initStPointOnSurfaceTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StPointOnSurface)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStPointOnSurfaceRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	unsupportedInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StPointOnSurface)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry type is not supported by ST_PointOnSurface")
+}
+
+func initStExteriorRingTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_exteriorring basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
+						"POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"LINESTRING(0 0,10 0,10 10,0 10,0 0)",
+					"LINESTRING(0 0,20 0,20 20,0 20,0 0)",
+					"SRID=4326;LINESTRING(0 0,2 0,2 2,0 2,0 0)",
+				},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test st_exteriorring null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POLYGON((0 0,10 0,10 10,0 10,0 0))"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStExteriorRing(t *testing.T) {
+	testCases := initStExteriorRingTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StExteriorRing)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStExteriorRingRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	nonPolygonInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, nonPolygonInputs, expect, StExteriorRing)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a POLYGON")
+
+	invalidPolygonInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,1 1))"},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, invalidPolygonInputs, expect, StExteriorRing)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid polygon payload")
+}
+
+func initStNumInteriorRingsTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_numinteriorrings basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,10 0,10 10,0 10,0 0))",
+						"POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))",
+						"POLYGON((0 0,30 0,30 30,0 30,0 0),(5 5,10 5,10 10,5 10,5 5),(15 15,20 15,20 20,15 20,15 15))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0),(0.5 0.5,1 0.5,1 1,0.5 1,0.5 0.5))",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 1, 2, 1},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_numinteriorrings null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POLYGON((0 0,10 0,10 10,0 10,0 0))"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStNumInteriorRings(t *testing.T) {
+	testCases := initStNumInteriorRingsTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StNumInteriorRings)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStNumInteriorRingsRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false})
+
+	nonPolygonInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, nonPolygonInputs, expect, StNumInteriorRings)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a POLYGON")
+
+	invalidPolygonInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,1 1))"},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, invalidPolygonInputs, expect, StNumInteriorRings)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid polygon payload")
+}
+
+func initStInteriorRingNTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_interiorringn basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))",
+						"POLYGON((0 0,30 0,30 30,0 30,0 0),(5 5,10 5,10 10,5 10,5 5),(15 15,20 15,20 20,15 20,15 15))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0),(0.5 0.5,1 0.5,1 1,0.5 1,0.5 0.5))",
+					},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1, 2, 1},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{
+					"LINESTRING(5 5,15 5,15 15,5 15,5 5)",
+					"LINESTRING(15 15,20 15,20 20,15 20,15 15)",
+					"SRID=4326;LINESTRING(0.5 0.5,1 0.5,1 1,0.5 1,0.5 0.5)",
+				},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test st_interiorringn geometry null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))"},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+		{
+			info: "test st_interiorringn index null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStInteriorRingN(t *testing.T) {
+	testCases := initStInteriorRingNTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StInteriorRingN)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStInteriorRingNRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
+
+	nonPolygonInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{1},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, nonPolygonInputs, expect, StInteriorRingN)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a POLYGON")
+
+	zeroIndexInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{0},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, zeroIndexInputs, expect, StInteriorRingN)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "ring index must be greater than 0")
+
+	outOfRangeInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{2},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, outOfRangeInputs, expect, StInteriorRingN)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "ring index out of range")
+
+	invalidPolygonInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POLYGON((0 0,1 1),(0.1 0.1,0.2 0.2))"},
+			[]bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(),
+			[]int64{1},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, invalidPolygonInputs, expect, StInteriorRingN)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid polygon payload")
+}
+
+func initStIsEmptyTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_isempty basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POINT EMPTY",
+						"POINT(1 2)",
+						"LINESTRING EMPTY",
+						"GEOMETRYCOLLECTION()",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, true, true},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_isempty null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POINT(1 2)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStIsEmpty(t *testing.T) {
+	testCases := initStIsEmptyTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StIsEmpty)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initStLengthTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_length basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"LINESTRING(0 0,3 4)",
+						"LINESTRING(0 0,3 4,6 4)",
+						"MULTILINESTRING((0 0,3 4),(3 4,6 8))",
+						"SRID=4326;LINESTRING(0 0,3 4)",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{5, 8, 10, 5},
+				[]bool{false, false, false, false}),
+		},
+		{
+			info: "test st_length null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"LINESTRING(0 0,3 4)"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStLength(t *testing.T) {
+	testCases := initStLengthTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StLength)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStLengthRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StLength)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a LINESTRING or MULTILINESTRING")
+
+	invalidLineInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"LINESTRING(0 0,Inf 1)"},
+			[]bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, invalidLineInputs, expect, StLength)
+	s, info = fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "invalid linestring payload")
+}
+
+func initStAreaTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test st_area basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{
+						"POLYGON((0 0,3 0,3 4,0 4,0 0))",
+						"POLYGON((0 0,4 0,0 3,0 0))",
+						"POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))",
+						"MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)),((2 2,4 2,4 4,2 4,2 2)))",
+						"MULTIPOLYGON(((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 2,1 1)),((10 10,12 10,12 12,10 12,10 10)))",
+						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
+					},
+					[]bool{false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{12, 6, 300, 5, 19, 4},
+				[]bool{false, false, false, false, false, false}),
+		},
+		{
+			info: "test st_area null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(),
+					[]string{"POLYGON((0 0,1 0,1 1,0 1,0 0))"},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestStArea(t *testing.T) {
+	testCases := initStAreaTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StArea)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStAreaRejectInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	pointInputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(),
+			[]string{"POINT(1 1)"},
+			[]bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+
+	fcTC := NewFunctionTestCase(proc, pointInputs, expect, StArea)
+	s, info := fcTC.Run()
+	require.False(t, s)
+	require.Contains(t, info, "geometry is not a POLYGON or MULTIPOLYGON")
 }
 
 func initBinTestCase() []tcTemp {
@@ -2399,6 +4469,42 @@ func TestFromBase64(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestVecFromBase64(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// float32 roundtrip: encode [1.5, -2.25, 0, 3.14159] → base64, decode back
+	f32 := []float32{1.5, -2.25, 0, 3.14159}
+	b64 := types.ArrayToBase64(f32)
+
+	tc := tcTemp{
+		info: "vecf32_from_base64 roundtrip",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{b64}, []bool{}),
+		},
+		expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			[][]float32{f32}, []bool{}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, VecFromBase64[float32])
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("vecf32 case failed: %s", info))
+
+	// float64 roundtrip
+	f64 := []float64{1.5, -2.25, 0, 3.141592653589793}
+	b64 = types.ArrayToBase64(f64)
+
+	tc = tcTemp{
+		info: "vecf64_from_base64 roundtrip",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{b64}, []bool{}),
+		},
+		expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
+			[][]float64{f64}, []bool{}),
+	}
+	fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, VecFromBase64[float64])
+	s, info = fcTC.Run()
+	require.True(t, s, fmt.Sprintf("vecf64 case failed: %s", info))
 }
 
 func initValidatePasswordStrengthTestCase() []tcTemp {
@@ -5047,6 +7153,948 @@ func TestSleep(t *testing.T) {
 	}
 }
 
+func resetUserLevelLocksForTest(t *testing.T) {
+	t.Helper()
+	userLevelLocks.Lock()
+	userLevelLocks.counts = make(map[userLevelLockKey]uint64)
+	userLevelLocks.byOwner = make(map[string]map[string]struct{})
+	userLevelLocks.Unlock()
+}
+
+func newUserLevelLockTestProcess(t *testing.T, ls lockservice.LockService, account string) *process.Process {
+	proc := testutil.NewProcess(t)
+	proc.Base.LockService = ls
+	proc.GetSessionInfo().SessionId = uuid.New()
+	proc.GetSessionInfo().ConnectionID = uint64(time.Now().Nanosecond())
+	proc.GetSessionInfo().Account = account
+	return proc
+}
+
+type userLevelLockTestState struct {
+	sync.Mutex
+	locks map[string]string
+}
+
+type userLevelLockTestService struct {
+	id               string
+	state            *userLevelLockTestState
+	unlockErr        error
+	unlockErrByTxnID map[string]error
+}
+
+type userLevelLockNotSupportedService struct {
+	lockservice.LockService
+}
+
+func (s *userLevelLockNotSupportedService) GetLockHolder(context.Context, uint64, []byte, lockpb.LockOptions) (lockpb.WaitTxn, bool, error) {
+	return lockpb.WaitTxn{}, false, moerr.NewNotSupportedNoCtx("GetLockHolder")
+}
+
+func (s *userLevelLockTestService) GetServiceID() string {
+	return s.id
+}
+
+func (s *userLevelLockTestService) GetConfig() lockservice.Config {
+	return lockservice.Config{ServiceID: s.id}
+}
+
+func (s *userLevelLockTestService) Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options lockpb.LockOptions) (lockpb.Result, error) {
+	key := string(rows[0])
+	owner := string(txnID)
+	for {
+		s.state.Lock()
+		holder := s.state.locks[key]
+		if holder == "" || holder == owner {
+			s.state.locks[key] = owner
+			s.state.Unlock()
+			return lockpb.Result{}, nil
+		}
+		s.state.Unlock()
+
+		if options.Policy == lockpb.WaitPolicy_FastFail {
+			return lockpb.Result{}, lockservice.ErrLockConflict
+		}
+
+		timer := time.NewTimer(5 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return lockpb.Result{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *userLevelLockTestService) Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...lockpb.ExtraMutation) error {
+	if s.unlockErr != nil {
+		return s.unlockErr
+	}
+	if s.unlockErrByTxnID != nil {
+		if err := s.unlockErrByTxnID[string(txnID)]; err != nil {
+			return err
+		}
+	}
+	owner := string(txnID)
+	s.state.Lock()
+	defer s.state.Unlock()
+	for key, holder := range s.state.locks {
+		if holder == owner {
+			delete(s.state.locks, key)
+		}
+	}
+	return nil
+}
+
+func (s *userLevelLockTestService) IsOrphanTxn(context.Context, []byte) (bool, error) {
+	return false, nil
+}
+
+func (s *userLevelLockTestService) Close() error {
+	return nil
+}
+
+func (s *userLevelLockTestService) GetWaitingList(ctx context.Context, txnID []byte) (bool, []lockpb.WaitTxn, error) {
+	return false, nil, nil
+}
+
+func (s *userLevelLockTestService) GetLockHolder(ctx context.Context, tableID uint64, row []byte, options lockpb.LockOptions) (lockpb.WaitTxn, bool, error) {
+	s.state.Lock()
+	defer s.state.Unlock()
+	holder := s.state.locks[string(row)]
+	if holder == "" {
+		return lockpb.WaitTxn{}, false, nil
+	}
+	return lockpb.WaitTxn{TxnID: []byte(holder)}, true, nil
+}
+
+func (s *userLevelLockTestService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lockpb.LockTable) bool) {
+}
+
+func (s *userLevelLockTestService) GetLockTableBind(group uint32, tableID uint64) (lockpb.LockTable, error) {
+	return lockpb.LockTable{}, nil
+}
+
+func (s *userLevelLockTestService) GetLatestLockTableBind(bind lockpb.LockTable) (lockpb.LockTable, error) {
+	return bind, nil
+}
+
+func (s *userLevelLockTestService) IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool) {
+}
+
+func (s *userLevelLockTestService) CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error) {
+	return false, nil
+}
+
+func runUserLevelLockTest(t *testing.T, fn func([]lockservice.LockService)) {
+	t.Helper()
+	resetUserLevelLocksForTest(t)
+	state := &userLevelLockTestState{locks: make(map[string]string)}
+	fn([]lockservice.LockService{
+		&userLevelLockTestService{id: "user-level-lock-1", state: state},
+		&userLevelLockTestService{id: "user-level-lock-2", state: state},
+	})
+	resetUserLevelLocksForTest(t)
+}
+
+func TestUserLevelLockConnectionIDFromProbeTxnID(t *testing.T) {
+	txnID := userLevelLockProbeTxnID("owner-1", 1001, "probe_lock", "is_free")
+	connID, ok := userLevelLockConnectionIDFromTxnID(txnID)
+	require.False(t, ok)
+	require.Equal(t, uint64(0), connID)
+}
+
+func TestUserLevelLockFunctions(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		cases := []struct {
+			name   string
+			inputs []FunctionTestInput
+			expect FunctionTestResult
+			fn     fEvalFn
+		}{
+			{
+				name: "get lock succeeds",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+				fn:     GetLock,
+			},
+			{
+				name: "held lock is not free",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+				fn:     IsFreeLock,
+			},
+			{
+				name: "used lock returns holder connection id",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{proc.GetSessionInfo().ConnectionID}, []bool{false}),
+				fn:     IsUsedLock,
+			},
+			{
+				name: "release held lock",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+				fn:     ReleaseLock,
+			},
+			{
+				name: "released lock is free",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+				fn:     IsFreeLock,
+			},
+			{
+				name: "get lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				fn:     GetLock,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
+				s, info := fcTC.Run()
+				require.True(t, s, info)
+			})
+		}
+	})
+}
+
+func TestUserLevelLockFunctionNullInputs(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		cases := []struct {
+			name   string
+			inputs []FunctionTestInput
+			expect FunctionTestResult
+			fn     fEvalFn
+		}{
+			{
+				name: "release lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				fn:     ReleaseLock,
+			},
+			{
+				name: "is free lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				fn:     IsFreeLock,
+			},
+			{
+				name: "is used lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+				},
+				expect: NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0}, []bool{true}),
+				fn:     IsUsedLock,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
+				s, info := fcTC.Run()
+				require.True(t, s, info)
+			})
+		}
+	})
+}
+
+func TestUserLevelLockContention(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		v, err := getUserLevelLock("busy_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("busy_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+		v, isNull, err := releaseUserLevelLock("busy_lock", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(0), v)
+		v, isNull, err = releaseUserLevelLock("busy_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("busy_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestUserLevelLockWaitThenAcquire(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("wait_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		resultC := make(chan int64, 1)
+		errC := make(chan error, 1)
+		go func() {
+			defer wg.Done()
+			v, err := getUserLevelLock("wait_lock", -1, proc2)
+			resultC <- v
+			errC <- err
+		}()
+
+		time.Sleep(100 * time.Millisecond)
+		v, isNull, err := releaseUserLevelLock("wait_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		wg.Wait()
+		require.NoError(t, <-errC)
+		require.Equal(t, int64(1), <-resultC)
+	})
+}
+
+func TestUserLevelLockTimeoutAndCancellation(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("timeout_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock("timeout_lock", 0.05, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		proc2.BuildPipelineContext(ctx)
+		done := make(chan error, 1)
+		go func() {
+			_, err := getUserLevelLock("timeout_lock", -1, proc2)
+			done <- err
+		}()
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+	})
+}
+
+func TestUserLevelLockReentrantRefCount(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("reentrant_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("reentrant_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock("reentrant_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("reentrant_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		v, isNull, err = releaseUserLevelLock("reentrant_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("reentrant_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseUserLevelLocksCleanup(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("cleanup_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		ReleaseUserLevelLocks(proc1)
+
+		v, err = getUserLevelLock("cleanup_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestUserLevelLockConcurrentSessionOperations(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		const (
+			workers    = 8
+			iterations = 40
+		)
+
+		lockName := "concurrent_lock"
+		procs := make([]*process.Process, 0, workers)
+		for i := 0; i < workers; i++ {
+			procs = append(procs, newUserLevelLockTestProcess(t, services[i%len(services)], "acc"))
+		}
+
+		start := make(chan struct{})
+		errCh := make(chan error, workers)
+		var wg sync.WaitGroup
+
+		for idx, proc := range procs {
+			wg.Add(1)
+			go func(worker int, proc *process.Process) {
+				defer wg.Done()
+				<-start
+
+				for iter := 0; iter < iterations; iter++ {
+					value, err := getUserLevelLock(lockName, 0, proc)
+					if err != nil {
+						errCh <- fmt.Errorf("worker %d iter %d get lock: %w", worker, iter, err)
+						return
+					}
+					if value == 1 {
+						if iter%3 == 0 {
+							reentrant, err := getUserLevelLock(lockName, 0, proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d reentrant get: %w", worker, iter, err)
+								return
+							}
+							if reentrant != 1 {
+								errCh <- fmt.Errorf("worker %d iter %d expected reentrant get to succeed, got %d", worker, iter, reentrant)
+								return
+							}
+						}
+
+						if iter%2 == 0 {
+							released, isNull, err := releaseUserLevelLock(lockName, proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d release lock: %w", worker, iter, err)
+								return
+							}
+							if isNull || released != 1 {
+								errCh <- fmt.Errorf("worker %d iter %d unexpected release result: released=%d isNull=%v", worker, iter, released, isNull)
+								return
+							}
+						} else {
+							released, err := releaseAllUserLevelLocks(proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d release_all: %w", worker, iter, err)
+								return
+							}
+							if released < 1 {
+								errCh <- fmt.Errorf("worker %d iter %d expected release_all to release at least one lock, got %d", worker, iter, released)
+								return
+							}
+						}
+					} else {
+						_, _, err := isUserLevelLockUsed(lockName, proc)
+						if err != nil {
+							errCh <- fmt.Errorf("worker %d iter %d is_used_lock: %w", worker, iter, err)
+							return
+						}
+						if iter%5 == 0 {
+							released, err := releaseAllUserLevelLocks(proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d release_all: %w", worker, iter, err)
+								return
+							}
+							if released != 0 {
+								errCh <- fmt.Errorf("worker %d iter %d expected release_all to release 0 locks, got %d", worker, iter, released)
+								return
+							}
+						}
+					}
+				}
+			}(idx, proc)
+		}
+
+		close(start)
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			require.NoError(t, err)
+		}
+
+		for _, proc := range procs {
+			released, err := releaseAllUserLevelLocks(proc)
+			require.NoError(t, err)
+			require.Equal(t, int64(0), released)
+		}
+
+		finalProc := newUserLevelLockTestProcess(t, services[0], "acc")
+		value, err := getUserLevelLock(lockName, 0, finalProc)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), value)
+		released, isNull, err := releaseUserLevelLock(lockName, finalProc)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), released)
+	})
+}
+
+func TestIsUsedLockReturnsHolderConnectionID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		proc1.GetSessionInfo().ConnectionID = 1001
+		proc2.GetSessionInfo().ConnectionID = 1002
+
+		v, err := getUserLevelLock("holder_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		holder, isNull, err := isUserLevelLockUsed("holder_lock", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, uint64(1001), holder)
+
+		holder, isNull, err = isUserLevelLockUsed("missing_holder_lock", proc2)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestIsUsedLockReturnsNullForLegacyHolderTxnID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		state := services[0].(*userLevelLockTestService).state
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc, "legacy_holder"))] = string(userLevelLockTxnIDOld(userLevelLockOwner(proc), "legacy_holder"))
+		state.Unlock()
+
+		holder, isNull, err := isUserLevelLockUsed("legacy_holder", proc)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestIsUsedLockReturnsNullWhenHolderLookupNotSupported(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, &userLevelLockNotSupportedService{LockService: services[0]}, "acc")
+
+		holder, isNull, err := isUserLevelLockUsed("holder_lookup_not_supported", proc)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestIsUsedLockReturnsZeroConnectionID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		state := services[0].(*userLevelLockTestService).state
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc, "zero_conn_holder"))] = string(userLevelLockTxnID(userLevelLockOwner(proc), 0, "zero_conn_holder"))
+		state.Unlock()
+
+		holder, isNull, err := isUserLevelLockUsed("zero_conn_holder", proc)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestIsUsedLockReturnsNullForMalformedHolderTxnID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		state := services[0].(*userLevelLockTestService).state
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc, "bad_holder"))] = "not-a-user-level-lock-txn"
+		state.Unlock()
+
+		holder, isNull, err := isUserLevelLockUsed("bad_holder", proc)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestReleaseAllUserLevelLocksReturnsReleasedCount(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		v, err := getUserLevelLock("release_all_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_b", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), released)
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), released)
+
+		v, err = getUserLevelLock("release_all_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, isNull, err := releaseUserLevelLock("release_all_a", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		fcTC := NewFunctionTestCase(
+			proc1,
+			nil,
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+			ReleaseAllLocks,
+		)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
+func TestReleaseAllUserLevelLocksReturnsCountWhenUnlockFails(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		services[0].(*userLevelLockTestService).unlockErr = moerr.NewInternalErrorNoCtx("unlock failed")
+
+		v, err := getUserLevelLock("release_all_fail_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_fail_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_fail_b", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.Error(t, err)
+		require.Equal(t, int64(0), released)
+
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.Error(t, err)
+		require.Equal(t, int64(0), released)
+
+		services[0].(*userLevelLockTestService).unlockErr = nil
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), released)
+
+		v, err = getUserLevelLock("release_all_fail_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseAllUserLevelLocksStopsAtFirstUnlockFailure(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		service := services[0].(*userLevelLockTestService)
+		owner := userLevelLockOwner(proc1)
+		connID := userLevelLockConnectionID(proc1)
+
+		v, err := getUserLevelLock("release_all_partial_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_partial_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_partial_b", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		service.unlockErrByTxnID = map[string]error{
+			string(userLevelLockTxnID(owner, connID, "release_all_partial_b")): moerr.NewInternalErrorNoCtx("unlock failed"),
+		}
+
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.Error(t, err)
+		require.Equal(t, int64(2), released)
+
+		v, err = getUserLevelLock("release_all_partial_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock("release_all_partial_b", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		service.unlockErrByTxnID = nil
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), released)
+
+		v, err = getUserLevelLock("release_all_partial_b", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseLockLegacyTxnIDCompatible(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		owner := userLevelLockOwner(proc1)
+		state := services[0].(*userLevelLockTestService).state
+		name := "legacy_release"
+
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc1, name))] = string(userLevelLockTxnIDOld(owner, name))
+		state.Unlock()
+		trackUserLevelLock(owner, name)
+
+		v, isNull, err := releaseUserLevelLock(name, proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock(name, 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseAllUserLevelLocksLegacyTxnIDCompatible(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		owner := userLevelLockOwner(proc1)
+		state := services[0].(*userLevelLockTestService).state
+
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc1, "legacy_all_a"))] = string(userLevelLockTxnIDOld(owner, "legacy_all_a"))
+		state.locks[string(userLevelLockRow(proc1, "legacy_all_b"))] = string(userLevelLockTxnIDOld(owner, "legacy_all_b"))
+		state.Unlock()
+		trackUserLevelLock(owner, "legacy_all_a")
+		trackUserLevelLock(owner, "legacy_all_a")
+		trackUserLevelLock(owner, "legacy_all_b")
+
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), released)
+
+		v, err := getUserLevelLock("legacy_all_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock("legacy_all_b", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseLockNeverCreatedReturnsNull(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		v, isNull, err := releaseUserLevelLock("missing_lock", proc1)
+		require.NoError(t, err)
+		require.True(t, isNull, "RELEASE_LOCK on never-created lock should return NULL")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestReleaseLockAlreadyReleasedReturnsNull(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		v, err := getUserLevelLock("release_twice", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock("release_twice", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err = releaseUserLevelLock("release_twice", proc1)
+		require.NoError(t, err)
+		require.True(t, isNull, "RELEASE_LOCK on already-released lock should return NULL")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestReleaseLockHeldByOtherSessionReturnsZero(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		v, err := getUserLevelLock("other_session", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock("other_session", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull, "RELEASE_LOCK held by other session should return 0 (not NULL)")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestUserLevelLockNameTooLong(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		overlong := strings.Repeat("x", maxUserLevelLockNameLength+1)
+
+		_, err := getUserLevelLock(overlong, 0, proc1)
+		require.Error(t, err)
+
+		_, _, err = releaseUserLevelLock(overlong, proc1)
+		require.Error(t, err)
+
+		_, err = isUserLevelLockFree(overlong, proc1)
+		require.Error(t, err)
+	})
+}
+
+func TestUserLevelLockNameMaxLength(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		exact64 := strings.Repeat("x", maxUserLevelLockNameLength)
+
+		v, err := getUserLevelLock(exact64, 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock(exact64, proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, err = isUserLevelLockFree(exact64, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestUserLevelLockEmptyName(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		_, err := getUserLevelLock("", 0, proc1)
+		require.Error(t, err, "GET_LOCK with empty name should return error")
+
+		_, _, err = releaseUserLevelLock("", proc1)
+		require.Error(t, err, "RELEASE_LOCK with empty name should return error")
+
+		_, err = isUserLevelLockFree("", proc1)
+		require.Error(t, err, "IS_FREE_LOCK with empty name should return error")
+	})
+}
+
+func TestUserLevelLockNameContainsNUL(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		name := "bad\x00lock"
+
+		_, err := getUserLevelLock(name, 0, proc1)
+		require.Error(t, err)
+
+		_, _, err = releaseUserLevelLock(name, proc1)
+		require.Error(t, err)
+
+		_, err = isUserLevelLockFree(name, proc1)
+		require.Error(t, err)
+
+		_, _, err = isUserLevelLockUsed(name, proc1)
+		require.Error(t, err)
+	})
+}
+
+func TestUserLevelLockCaseInsensitive(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		// Session A acquires lock with mixed-case name.
+		v, err := getUserLevelLock("Case_Lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		// Session B attempts to acquire the same lock with different case —
+		// MySQL treats these as the same lock, so B should fail to acquire.
+		v, err = getUserLevelLock("CASE_LOCK", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive: session B should not acquire lock held by A")
+
+		// Session B should also fail with lowercase variant.
+		v, err = getUserLevelLock("case_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive: session B should not acquire lock held by A")
+
+		// IS_FREE_LOCK should also be case-insensitive: lock is held, so it's not free.
+		v, err = isUserLevelLockFree("case_lock", proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive IS_FREE_LOCK should see lock as held")
+
+		// Session A releases the lock.
+		v, isNull, err := releaseUserLevelLock("case_LOCK", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v, "case-insensitive release should succeed for lock owner")
+
+		// Now session B can acquire the lock.
+		v, err = getUserLevelLock("case_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v, "after release, session B should acquire the lock")
+
+		// Cleanup.
+		releaseUserLevelLock("CASE_LOCK", proc2)
+	})
+}
+
+func TestUserLevelLockMultibyteBoundary(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		// 64 Chinese characters — each is 3 bytes in UTF-8, so 192 bytes total.
+		// MySQL enforces the limit in characters, not bytes, so this should be valid.
+		exact64chars := strings.Repeat("中", maxUserLevelLockNameLength)
+
+		v, err := getUserLevelLock(exact64chars, 0, proc1)
+		require.NoError(t, err, "64 Chinese characters should be valid")
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock(exact64chars, proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		// 65 Chinese characters — exceeds the 64-character limit.
+		overlongChars := strings.Repeat("中", maxUserLevelLockNameLength+1)
+		_, err = getUserLevelLock(overlongChars, 0, proc1)
+		require.Error(t, err, "65 Chinese characters should be rejected")
+
+		_, _, err = releaseUserLevelLock(overlongChars, proc1)
+		require.Error(t, err)
+
+		_, err = isUserLevelLockFree(overlongChars, proc1)
+		require.Error(t, err)
+	})
+}
+
 func initBitCastTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -5143,6 +8191,47 @@ func TestSHA1(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, SHA1Func)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestHllCardinality(t *testing.T) {
+	sketch := hll.NewNoSparse()
+	sketch.Insert([]byte("a"))
+	sketch.Insert([]byte("b"))
+	sketch.Insert([]byte("b"))
+	data, err := sketch.MarshalBinary()
+	require.NoError(t, err)
+
+	testCases := []tcTemp{
+		{
+			info: "test hll cardinality",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varbinary.ToType(),
+					[]string{string(data), "", string(data)},
+					[]bool{false, true, false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{2, 0, 2},
+				[]bool{false, true, false}),
+		},
+		{
+			info: "test invalid hll sketch",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varbinary.ToType(),
+					[]string{"bad"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), true,
+				[]uint64{0},
+				[]bool{false}),
+		},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HllCardinality)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

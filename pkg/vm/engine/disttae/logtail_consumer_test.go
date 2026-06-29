@@ -492,18 +492,24 @@ func TestPushClient_UnusedTableGCTicker(t *testing.T) {
 	t.Run("subscriber nil", func(t *testing.T) {
 		var c PushClient
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go c.unusedTableGCTicker(ctx)
+		done := startTickerForTest(t, func() {
+			c.unusedTableGCTicker(ctx)
+		})
 		time.Sleep(time.Millisecond * 10)
+		cancel()
+		waitTickerStopped(t, done)
 	})
 
 	t.Run("context done", func(t *testing.T) {
 		var c PushClient
 		c.subscriber = &logTailSubscriber{}
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go c.unusedTableGCTicker(ctx)
+		done := startTickerForTest(t, func() {
+			c.unusedTableGCTicker(ctx)
+		})
 		time.Sleep(time.Millisecond * 10)
+		cancel()
+		waitTickerStopped(t, done)
 	})
 }
 
@@ -600,26 +606,19 @@ func TestPushClient_PartitionStateGCTicker(t *testing.T) {
 		gcPartitionStateTicker = orig
 	}()
 
-	startPStateGCTicker := func(c *PushClient, ctx context.Context) {
-		var (
-			wait sync.WaitGroup
-		)
-
-		wait.Add(1)
-		go func() {
-			wait.Done()
+	startPStateGCTicker := func(t *testing.T, c *PushClient, ctx context.Context) <-chan struct{} {
+		return startTickerForTest(t, func() {
 			c.partitionStateGCTicker(ctx, nil)
-		}()
-
-		wait.Wait()
+		})
 	}
 
 	t.Run("subscriber nil", func(t *testing.T) {
 		var c PushClient
 		ctx, cancel := context.WithCancel(context.Background())
-		startPStateGCTicker(&c, ctx)
+		done := startPStateGCTicker(t, &c, ctx)
 		time.Sleep(time.Millisecond * 10)
 		cancel()
+		waitTickerStopped(t, done)
 	})
 
 	t.Run("context done", func(t *testing.T) {
@@ -627,11 +626,34 @@ func TestPushClient_PartitionStateGCTicker(t *testing.T) {
 		c.subscriber = &logTailSubscriber{}
 		ctx, cancel := context.WithCancel(context.Background())
 
-		startPStateGCTicker(&c, ctx)
+		done := startPStateGCTicker(t, &c, ctx)
 
 		time.Sleep(time.Millisecond * 10)
 		cancel()
+		waitTickerStopped(t, done)
 	})
+}
+
+func startTickerForTest(t *testing.T, run func()) <-chan struct{} {
+	t.Helper()
+	done := make(chan struct{})
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		defer close(done)
+		run()
+	}()
+	<-started
+	return done
+}
+
+func waitTickerStopped(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ticker goroutine did not stop")
+	}
 }
 
 func TestPushClient_DoGCPartitionState(t *testing.T) {
@@ -971,6 +993,106 @@ func TestRoutineControllerSendMethods(t *testing.T) {
 			assert.IsType(t, &cmdToUpdateTime{}, cmd)
 		}
 	})
+}
+
+func TestDispatchUpdateResponseCoalescesTimestampCommands(t *testing.T) {
+	ctx := context.Background()
+	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
+	defer tw.Close()
+
+	e := &Engine{}
+	e.pClient.receivedLogTailTime.initLogTailTimestamp(tw)
+
+	recRoutines := newTestRoutineControllers(8)
+
+	to := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	response := &logtail.UpdateResponse{
+		To: &to,
+		LogtailList: []logtail.TableLogtail{
+			{Table: &api.TableID{DbId: 10, TbId: 101}},
+			{Table: &api.TableID{DbId: 10, TbId: 105}},
+			{Table: &api.TableID{DbId: 10, TbId: 102}},
+		},
+	}
+	require.NoError(t, dispatchUpdateResponse(ctx, e, response, recRoutines, time.Now()))
+
+	require.Equal(t, 2, len(recRoutines[1].signalChan))
+	cmd := (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
+	assert.False(t, cmd.notifyApplied)
+	cmd = (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
+	assert.True(t, cmd.notifyApplied)
+	assert.Equal(t, to, cmd.applied)
+
+	require.Equal(t, 1, len(recRoutines[2].signalChan))
+	cmd = (<-recRoutines[2].signalChan).(*cmdToConsumeLog)
+	assert.True(t, cmd.notifyApplied)
+	assert.Equal(t, to, cmd.applied)
+
+	require.Equal(t, 1, len(recRoutines[0].signalChan))
+	_, ok := (<-recRoutines[0].signalChan).(*cmdToUpdateTime)
+	assert.True(t, ok)
+	require.Equal(t, 1, len(recRoutines[3].signalChan))
+	_, ok = (<-recRoutines[3].signalChan).(*cmdToUpdateTime)
+	assert.True(t, ok)
+}
+
+func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
+	ctx := context.Background()
+	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
+	defer tw.Close()
+
+	e := &Engine{
+		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
+		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 8)},
+		skipConsume: true,
+	}
+	e.pClient.receivedLogTailTime.initLogTailTimestamp(tw)
+
+	recRoutines := newTestRoutineControllers(8)
+	to := timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 1}
+	response := &logtail.UpdateResponse{
+		To: &to,
+		LogtailList: []logtail.TableLogtail{
+			{Table: &api.TableID{DbId: 10, TbId: 101, DbName: "db", TbName: "t1"}},
+			{Table: &api.TableID{DbId: 10, TbId: 105, DbName: "db", TbName: "t2"}},
+		},
+	}
+	require.NoError(t, dispatchUpdateResponse(ctx, e, response, recRoutines, time.Now()))
+
+	cmd := (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
+	require.False(t, cmd.notifyApplied)
+	require.NoError(t, cmd.action(ctx, e, recRoutines[1]))
+	assert.Equal(t, timestamp.Timestamp{}, e.pClient.receivedLogTailTime.tList[1].Load().(timestamp.Timestamp))
+
+	cmd = (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
+	require.True(t, cmd.notifyApplied)
+	require.NoError(t, cmd.action(ctx, e, recRoutines[1]))
+	assert.Equal(t, to, e.pClient.receivedLogTailTime.tList[1].Load().(timestamp.Timestamp))
+
+	timeCmd := (<-recRoutines[0].signalChan).(*cmdToUpdateTime)
+	require.NoError(t, timeCmd.action(ctx, e, recRoutines[0]))
+	assert.Equal(t, to, e.pClient.receivedLogTailTime.tList[0].Load().(timestamp.Timestamp))
+}
+
+func newTestRoutineControllers(buffer int) []*routineController {
+	recRoutines := make([]*routineController, consumerNumber)
+	for i := range recRoutines {
+		recRoutines[i] = &routineController{
+			routineId:  i,
+			signalChan: make(chan routineControlCmd, buffer),
+			cmdLogPool: sync.Pool{
+				New: func() any {
+					return &cmdToConsumeLog{}
+				},
+			},
+			cmdTimePool: sync.Pool{
+				New: func() any {
+					return &cmdToUpdateTime{}
+				},
+			},
+		}
+	}
+	return recRoutines
 }
 
 // TestCommandActions verifies that command actions can be created and their basic functionality works

@@ -188,6 +188,24 @@ func (ss *snapshotRecord) removeFirst() error {
 	return nil
 }
 
+// removeLast removes the last (newest) snapshot from the snapshot item
+// list. Used by the truncation loop's timeout-path escape valve to
+// prefer preserving older items, which are more likely to be importable
+// once the next SyncRead recovers. See issue #24315.
+func (ss *snapshotRecord) removeLast() error {
+	l := len(ss.items)
+	if l == 0 {
+		return nil
+	}
+	last := ss.items[l-1]
+	if err := last.Remove(); err != nil {
+		return err
+	}
+	putSnapshotItem(last)
+	ss.items = ss.items[:l-1]
+	return nil
+}
+
 // remove the snapshots whose index is LE than the index.
 func (ss *snapshotRecord) remove(index snapshotIndex) error {
 	items := make([]*snapshotItem, len(ss.items))
@@ -222,6 +240,7 @@ func (ss *snapshotRecord) remove(index snapshotIndex) error {
 // external directory, the snapshot would be imported to system. And then,
 // the log entries can be removed safely.
 type snapshotManager struct {
+	mu        sync.RWMutex
 	cfg       *Config
 	snapshots map[nodeID]*snapshotRecord // shardID => *snapshotRecord
 }
@@ -293,9 +312,11 @@ func (sm *snapshotManager) Init(shardID uint64, replicaID uint64) error {
 	}
 	// The snapshots in the manager must be sorted.
 	sort.Ints(indexes)
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	for _, idx := range indexes {
 		if idx > 0 {
-			_ = sm.Add(shardID, replicaID, uint64(idx))
+			_ = sm.addLocked(shardID, replicaID, uint64(idx))
 		}
 	}
 	return nil
@@ -303,6 +324,8 @@ func (sm *snapshotManager) Init(shardID uint64, replicaID uint64) error {
 
 // Count implements the ISnapshotManager interface.
 func (sm *snapshotManager) Count(shardID uint64, replicaID uint64) int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	if s, ok := sm.snapshots[nid]; ok {
 		return len(s.items)
@@ -312,6 +335,12 @@ func (sm *snapshotManager) Count(shardID uint64, replicaID uint64) int {
 
 // Add implements the ISnapshotManager interface.
 func (sm *snapshotManager) Add(shardID uint64, replicaID uint64, index uint64) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	return sm.addLocked(shardID, replicaID, index)
+}
+
+func (sm *snapshotManager) addLocked(shardID uint64, replicaID uint64, index uint64) error {
 	si := snapshotIndex(index)
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	dir := sm.snapshotPath(nid, si)
@@ -324,6 +353,8 @@ func (sm *snapshotManager) Add(shardID uint64, replicaID uint64, index uint64) e
 
 // Remove implements the ISnapshotManager interface.
 func (sm *snapshotManager) Remove(shardID uint64, replicaID uint64, index uint64) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	si := snapshotIndex(index)
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	if ss, ok := sm.snapshots[nid]; ok {
@@ -332,8 +363,77 @@ func (sm *snapshotManager) Remove(shardID uint64, replicaID uint64, index uint64
 	return nil
 }
 
+// RemoveReplica removes all exported snapshots tracked for the specified
+// replica. It is used when local metadata still references a replica that has
+// already been superseded on this store.
+func (sm *snapshotManager) RemoveReplica(shardID uint64, replicaID uint64) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	if err := sm.cfg.FS.RemoveAll(sm.exportPath(shardID, replicaID)); err != nil {
+		return err
+	}
+	delete(sm.snapshots, nid)
+	return nil
+}
+
+// NewestIndex returns the index of the newest exported snapshot tracked
+// by the manager for (shardID, replicaID), or 0 if no items exist.
+// Callers use this to realign shardSnapshotInfo.snapshotIndex after an
+// escape-valve deletion so shouldDoExport does not suppress a needed
+// re-export on a quiescent shard. See issue #24315.
+func (sm *snapshotManager) NewestIndex(shardID uint64, replicaID uint64) uint64 {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	ss, ok := sm.snapshots[nid]
+	if !ok {
+		return 0
+	}
+	last := ss.last()
+	if last == nil {
+		return 0
+	}
+	return uint64(last.index)
+}
+
+// DropNewest drops the latest exported snapshot for (shardID, replicaID)
+// from both memory and disk. Returns the index of the dropped item, or 0
+// if no items exist.
+//
+// This is the escape valve used by the truncation loop when getTruncatedLsn
+// times out while the export quota is full. Dropping an exported snapshot
+// is always safe: the underlying raft log range is still present (tan WAL
+// compaction only happens as a side effect of a successful
+// importSnapshot), so a subsequent exportSnapshot can reproduce the same
+// content. We drop the *newest* rather than the oldest because the
+// oldest item is the most likely to be importable (its index <= current
+// lsnInSM) once SyncRead recovers; preserving it keeps the shard on a
+// direct path back to a successful import. The cost is at most one
+// redundant export round. See issue #24315.
+func (sm *snapshotManager) DropNewest(shardID uint64, replicaID uint64) (uint64, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	ss, ok := sm.snapshots[nid]
+	if !ok {
+		return 0, nil
+	}
+	last := ss.last()
+	if last == nil {
+		return 0, nil
+	}
+	idx := uint64(last.index)
+	if err := ss.removeLast(); err != nil {
+		return 0, err
+	}
+	return idx, nil
+}
+
 // EvalImportSnapshot implements the ISnapshotManager interface.
 func (sm *snapshotManager) EvalImportSnapshot(shardID uint64, replicaID uint64, index uint64) (string, uint64) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	ss, ok := sm.snapshots[nid]
 	if !ok {

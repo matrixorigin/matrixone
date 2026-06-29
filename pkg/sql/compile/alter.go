@@ -18,12 +18,16 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -51,6 +55,222 @@ func convertDBEOBToNoSuchTable(ctx context.Context, e error, dbName, tblName str
 		return moerr.NewNoSuchTable(ctx, dbName, tblName)
 	}
 	return e
+}
+
+func shouldEnableAlterCopyPipelineFlush(opt *plan.AlterCopyOpt) bool {
+	return opt != nil && opt.SkipPkDedup
+}
+
+func alterCopyStatementOption(alterOpt *plan.AlterCopyOpt) executor.StatementOption {
+	opt := executor.StatementOption{}
+	if alterOpt != nil &&
+		(alterOpt.SkipPkDedup || len(alterOpt.SkipUniqueIdxDedup) > 0) {
+		opt = opt.WithAlterCopyOpt(alterOpt)
+	}
+	return opt
+}
+
+func alterCopyPkPrecheckColumns(tableDef *plan.TableDef) []string {
+	if tableDef == nil || tableDef.GetPkey() == nil {
+		return nil
+	}
+	pk := tableDef.GetPkey()
+	if len(pk.GetNames()) > 0 {
+		return slices.DeleteFunc(slices.Clone(pk.GetNames()), func(name string) bool { return name == "" })
+	}
+
+	pkColName := pk.GetPkeyColName()
+	if pkColName == "" || catalog.IsFakePkName(pkColName) || pkColName == catalog.CPrimaryKeyColName {
+		return nil
+	}
+	return []string{pkColName}
+}
+
+func alterCopyPkColumnValueUnchanged(oldCol, newCol *plan.ColDef) bool {
+	if oldCol == nil || newCol == nil {
+		return false
+	}
+	oldTyp := oldCol.GetTyp()
+	newTyp := newCol.GetTyp()
+	return oldTyp.GetId() == newTyp.GetId() &&
+		oldTyp.GetAutoIncr() == newTyp.GetAutoIncr() &&
+		oldTyp.GetWidth() == newTyp.GetWidth() &&
+		oldTyp.GetScale() == newTyp.GetScale() &&
+		oldTyp.GetTable() == newTyp.GetTable() &&
+		oldTyp.GetEnumvalues() == newTyp.GetEnumvalues()
+}
+
+// Only precheck source rows when the copied PK columns keep value-preserving
+// definitions. If ALTER changes the key value during copy, insert-time dedup
+// must remain enabled for the target table.
+func getAlterCopyPkPrecheck(qry *plan.AlterTable) (pkCols []string, checkNotNull bool) {
+	if qry == nil || qry.Options == nil || qry.Options.GetSkipPkDedup() {
+		return nil, false
+	}
+
+	pkCols = alterCopyPkPrecheckColumns(qry.CopyTableDef)
+	if len(pkCols) == 0 {
+		return nil, false
+	}
+	for _, colName := range pkCols {
+		oldCol := plan2.FindColumn(qry.GetTableDef().GetCols(), colName)
+		newCol := plan2.FindColumn(qry.CopyTableDef.GetCols(), colName)
+		if !alterCopyPkColumnValueUnchanged(oldCol, newCol) {
+			return nil, false
+		}
+		if !oldCol.GetNotNull() && !oldCol.GetTyp().NotNullable {
+			checkNotNull = true
+		}
+	}
+	return pkCols, checkNotNull
+}
+
+func quoteAlterCopyIdentifier(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+func quoteAlterCopyTableName(dbName, tblName string) string {
+	return quoteAlterCopyIdentifier(dbName) + "." + quoteAlterCopyIdentifier(tblName)
+}
+
+func buildAlterCopyPkNullCheckSQL(dbName, tblName string, pkCols []string) string {
+	selectCols := make([]string, 0, len(pkCols))
+	nullPredicates := make([]string, 0, len(pkCols))
+	for _, col := range pkCols {
+		quotedCol := quoteAlterCopyIdentifier(col)
+		selectCols = append(selectCols, quotedCol)
+		nullPredicates = append(nullPredicates, quotedCol+" IS NULL")
+	}
+	return fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1",
+		strings.Join(selectCols, ", "),
+		quoteAlterCopyTableName(dbName, tblName),
+		strings.Join(nullPredicates, " OR "),
+	)
+}
+
+func buildAlterCopyPkDuplicateCheckSQL(dbName, tblName string, pkCols []string) string {
+	groupByCols := make([]string, 0, len(pkCols))
+	for _, col := range pkCols {
+		groupByCols = append(groupByCols, quoteAlterCopyIdentifier(col))
+	}
+	groupBy := strings.Join(groupByCols, ", ")
+	return fmt.Sprintf("SELECT %s FROM %s GROUP BY %s HAVING count(*) > 1 LIMIT 1",
+		groupBy,
+		quoteAlterCopyTableName(dbName, tblName),
+		groupBy,
+	)
+}
+
+func firstAlterCopyResultRow(res executor.Result, colCount int) ([]string, []bool, bool) {
+	for _, bat := range res.Batches {
+		if bat == nil || bat.RowCount() == 0 {
+			continue
+		}
+
+		values := make([]string, colCount)
+		nulls := make([]bool, colCount)
+		for i := 0; i < colCount; i++ {
+			if i >= len(bat.Vecs) || bat.Vecs[i] == nil || bat.Vecs[i].Length() == 0 {
+				continue
+			}
+			nulls[i] = bat.Vecs[i].IsNull(0)
+			if nulls[i] {
+				values[i] = "null"
+				continue
+			}
+			values[i] = bat.Vecs[i].RowToString(0)
+		}
+		return values, nulls, true
+	}
+	return nil, nil, false
+}
+
+func formatAlterCopyPkValue(values []string) string {
+	if len(values) == 1 {
+		return values[0]
+	}
+	return "(" + strings.Join(values, ",") + ")"
+}
+
+func alterCopyDedupColName(pkCols []string) string {
+	if len(pkCols) == 1 {
+		return pkCols[0]
+	}
+	return "(" + strings.Join(pkCols, ",") + ")"
+}
+
+func cloneAlterCopyOpt(opt *plan.AlterCopyOpt) *plan.AlterCopyOpt {
+	if opt == nil {
+		return nil
+	}
+	clone := *opt
+	if opt.SkipUniqueIdxDedup != nil {
+		clone.SkipUniqueIdxDedup = make(map[string]bool, len(opt.SkipUniqueIdxDedup))
+		for k, v := range opt.SkipUniqueIdxDedup {
+			clone.SkipUniqueIdxDedup[k] = v
+		}
+	}
+	if opt.SkipIndexesCopy != nil {
+		clone.SkipIndexesCopy = make(map[string]bool, len(opt.SkipIndexesCopy))
+		for k, v := range opt.SkipIndexesCopy {
+			clone.SkipIndexesCopy[k] = v
+		}
+	}
+	return &clone
+}
+
+func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.AlterTable) (*plan.AlterCopyOpt, error) {
+	if qry == nil || qry.Options == nil {
+		return nil, nil
+	}
+	if qry.Options.GetSkipPkDedup() {
+		return qry.Options, nil
+	}
+
+	pkCols, checkNotNull := getAlterCopyPkPrecheck(qry)
+	if len(pkCols) == 0 {
+		return qry.Options, nil
+	}
+
+	// Prove PK validity on the source snapshot first, then let insert-copy avoid
+	// building the target-side PK dedup hash table for the full backfill.
+	if checkNotNull {
+		nullCheckSQL := buildAlterCopyPkNullCheckSQL(dbName, tblName, pkCols)
+		nullCheckRes, err := c.runSqlWithResultAndOptions(nullCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())
+		if err != nil {
+			c.proc.Errorf(c.proc.Ctx, "alter copy primary key null check failed, sql is %s", nullCheckSQL)
+			return nil, err
+		}
+		defer nullCheckRes.Close()
+
+		if _, nulls, ok := firstAlterCopyResultRow(nullCheckRes, len(pkCols)); ok {
+			for i, isNull := range nulls {
+				if isNull {
+					return nil, moerr.NewConstraintViolation(c.proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", pkCols[i]))
+				}
+			}
+			return nil, moerr.NewConstraintViolation(c.proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", pkCols[0]))
+		}
+	}
+
+	duplicateCheckSQL := buildAlterCopyPkDuplicateCheckSQL(dbName, tblName, pkCols)
+	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())
+	if err != nil {
+		c.proc.Errorf(c.proc.Ctx, "alter copy primary key duplicate check failed, sql is %s", duplicateCheckSQL)
+		return nil, err
+	}
+	defer duplicateCheckRes.Close()
+
+	if values, _, ok := firstAlterCopyResultRow(duplicateCheckRes, len(pkCols)); ok {
+		return nil, moerr.NewDuplicateEntry(c.proc.Ctx, formatAlterCopyPkValue(values), alterCopyDedupColName(pkCols))
+	}
+
+	opt := cloneAlterCopyOpt(qry.Options)
+	if opt.TargetTableName == "" {
+		opt.TargetTableName = qry.CopyTableDef.GetName()
+	}
+	opt.SkipPkDedup = true
+	return opt, nil
 }
 
 func (s *Scope) AlterTableCopy(c *Compile) error {
@@ -160,10 +380,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.Error(err))
 		return err
 	}
-	opt := executor.StatementOption{}
-	if qry.Options.SkipPkDedup || len(qry.Options.SkipUniqueIdxDedup) > 0 {
-		opt = opt.WithAlterCopyOpt(qry.Options)
-	}
 
 	//4. obtain relation for new tables
 	newRel, err := dbSource.Relation(c.proc.Ctx, qry.CopyTableDef.Name, nil)
@@ -191,7 +407,37 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// 6. copy the original table data to the temporary replica table
-	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
+	alterCopyOpt, err := c.precheckAlterCopyPkDedup(dbName, tblName, qry)
+	if err != nil {
+		c.proc.Error(c.proc.Ctx, "precheck primary key for alter table copy",
+			zap.String("databaseName", dbName),
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy tableName", qry.CopyTableDef.Name),
+			zap.Error(err))
+		return err
+	}
+	opt := alterCopyStatementOption(alterCopyOpt)
+	err = func() error {
+		if !shouldEnableAlterCopyPipelineFlush(alterCopyOpt) {
+			return c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
+		}
+
+		// Enable pipeline flush only when PK dedup can be skipped or was proven safe
+		// by the alter-copy precheck.
+		origCtx := c.proc.Ctx
+		restoreCtx := origCtx
+		if restoreCtx == nil {
+			restoreCtx = c.proc.GetTopContext()
+			if restoreCtx == nil {
+				restoreCtx = context.Background()
+			}
+		}
+		c.proc.Ctx = context.WithValue(restoreCtx, ioutil.PipelineFlushKey, true)
+		defer func() {
+			c.proc.Ctx = restoreCtx
+		}()
+		return c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
+	}()
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "insert data to copy table for alter table",
 			zap.String("databaseName", dbName),
@@ -268,6 +514,9 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			return affected
 		}
 
+		// cctx for the idxcron re-registration arm below — lazy-init,
+		// reused across loop iterations.
+		var idxcronCctx *pluginCompileCtx
 		for _, indexDef := range newTableDef.Indexes {
 
 			// DO NOT check SkipIndexesCopy here.  SkipIndexesCopy only valids for the unique/master/regular index.
@@ -275,10 +524,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			// check affectedCols to see it is affected or not.  If affected is true, it means the secondary index
 			// are cloned in cloneUnaffectedIndexes().  Otherwise, build the index again.
 
-			if !indexDef.Unique && (catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
-				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) ||
-				catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo)) {
-				// ivf/hnsw/fulltext index
+			if !indexDef.Unique && indexplugin.IsPluginAlgo(indexDef.IndexAlgo) {
+				// vector (ivf/hnsw/cagra/ivfpq) or fulltext index
 
 				if !isAffectedIndex(indexDef, qry.AffectedCols) {
 					// column not affected means index already cloned in cloneUnaffectedIndexes()
@@ -300,7 +547,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 							// clone index table (with ISCP) may not be a complete clone
 							// so register ISCP job with startFromNow = false
 							sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false, "")
+							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, newTableDef.TblId, indexDef.IndexName, sinker_type, false, "", newTableDef)
 							if err != nil {
 								return err
 							}
@@ -310,26 +557,31 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 					}
 
 					{
-						// idxcron
-						metadata, _, err := getIvfflatMetadata(c)
-						if err != nil {
-							return err
-						}
-
-						if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
-
-							err = idxcron.RegisterUpdate(c.proc.Ctx,
-								c.proc.GetService(),
-								c.proc.GetTxnOperator(),
-								id,
-								dbName,
-								newTableDef.Name,
-								indexDef.IndexName,
-								idxcron.Action_Ivfflat_Reindex,
-								string(metadata))
-
-							if err != nil {
-								return err
+						// idxcron — register the algorithm's scheduled
+						// maintenance task via the plugin. Plugins
+						// without IdxcronAction (HNSW / CAGRA / IVF-PQ
+						// today) are skipped.
+						if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
+							d := p.Catalog().SyncDescriptor()
+							if d.IdxcronAction != "" {
+								if idxcronCctx == nil {
+									idxcronCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
+								}
+								metadata, err := p.Compile().IdxcronMetadata(idxcronCctx)
+								if err != nil {
+									return err
+								}
+								if err = idxcron.RegisterUpdate(c.proc.Ctx,
+									c.proc.GetService(),
+									c.proc.GetTxnOperator(),
+									id,
+									dbName,
+									newTableDef.Name,
+									indexDef.IndexName,
+									d.IdxcronAction,
+									string(metadata)); err != nil {
+									return err
+								}
 							}
 						}
 					}
@@ -344,9 +596,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				continue
 			}
 
-			// only affected ivf/hnsw/fulltext index will go here
-			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
-				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
+			// Only affected vector (ivf/hnsw/cagra/ivfpq) or fulltext
+			// indexes reach here. All are plugin-registered today, so
+			// aggregate into multiTableIndexes; the loop below
+			// dispatches each through its plugin's HandleCreateIndex.
+			if indexplugin.IsPluginAlgo(indexDef.IndexAlgo) {
 				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -357,31 +611,16 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				ty := catalog.ToLower(indexDef.IndexAlgoTableType)
 				multiTableIndexes[indexDef.IndexName].IndexDefs[ty] = indexDef
 			}
-			if catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
-				err = s.handleFullTextIndexTable(c, id, extra, dbSource, indexDef, qry.Database, newTableDef, nil)
-				if err != nil {
-					c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
-						zap.String("origin tableName", qry.GetTableDef().Name),
-						zap.String("copy table name", qry.CopyTableDef.Name),
-						zap.String("indexAlgo", indexDef.IndexAlgo),
-						zap.Error(err))
-					return err
-				}
-			}
 		}
+		// cctx is loop-invariant — hoist to avoid per-index allocs.
+		var aggCctx *pluginCompileCtx
 		for _, multiTableIndex := range multiTableIndexes {
 
-			switch multiTableIndex.IndexAlgo {
-			case catalog.MoIndexIvfFlatAlgo.ToString():
-				err = s.handleVectorIvfFlatIndex(
-					c, id, extra, dbSource, multiTableIndex.IndexDefs,
-					qry.Database, newTableDef, nil, false,
-				)
-			case catalog.MoIndexHnswAlgo.ToString():
-				err = s.handleVectorHnswIndex(
-					c, id, extra, dbSource, multiTableIndex.IndexDefs,
-					qry.Database, newTableDef, nil,
-				)
+			if p, ok := indexplugin.Get(multiTableIndex.IndexAlgo); ok {
+				if aggCctx == nil {
+					aggCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
+				}
+				err = p.Compile().HandleCreateIndex(aggCctx, multiTableIndex.IndexDefs)
 			}
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
@@ -470,6 +709,11 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetAlterTable()
+
+	// Check if target table is a CCPR shared table (from publication)
+	if c.shouldBlockCCPRReadOnly(qry.TableDef) {
+		return moerr.NewCCPRReadOnly(c.proc.Ctx)
+	}
 
 	ps := c.proc.GetPartitionService()
 	if !ps.Enabled() ||
@@ -838,10 +1082,8 @@ func cloneUnaffectedIndexes(
 		}
 
 		affected := false
-		if !idxTbl.Unique && (catalog.IsFullTextIndexAlgo(idxTbl.IndexAlgo) ||
-			catalog.IsHnswIndexAlgo(idxTbl.IndexAlgo) ||
-			catalog.IsIvfIndexAlgo(idxTbl.IndexAlgo)) {
-			// only check parts when fulltext/hnsw/ivfflat index
+		if !idxTbl.Unique && indexplugin.IsPluginAlgo(idxTbl.IndexAlgo) {
+			// only check parts for fulltext + vector (ivf/hnsw/cagra/ivfpq)
 
 			for _, part := range idxTbl.Parts {
 				if slices.Index(affectedCols, part) != -1 {
@@ -915,12 +1157,35 @@ func cloneUnaffectedIndexes(
 			return err
 		}
 
-		if !oriIdxTblNames.Unique &&
-			((catalog.IsFullTextIndexAlgo(oriIdxTblNames.IndexAlgo) && async) ||
-				catalog.IsHnswIndexAlgo(oriIdxTblNames.IndexAlgo)) {
-			// skip fultext async index and hsnw index clone because index table may not be fully sync'd
-			logutil.Infof("cloneUnaffectedIndex: skip async index %v\n", oriIdxTblNames)
-			continue
+		// Per-algo clone semantics live entirely on the plugin's
+		// AlterTableCloneBehavior, which declares two mutually exclusive
+		// policies:
+		//   - SkipWholeIndex: skip the entire index when async. Algorithms that
+		//     leave every hidden table empty at CREATE and rebuild all of them
+		//     via CDC from ts=0 (HNSW / CAGRA / IVF-PQ / fulltext). HNSW is
+		//     AlwaysAsync; the others gate on the per-index async param.
+		//   - DeleteBeforeClone + SkipWhenAsync (per hidden table): IVF-FLAT is
+		//     the only case today. All three hidden tables get DELETE'd (the
+		//     CREATE on the temp table already seeded them), entries are
+		//     additionally skipped when async (CDC rebuilds entries from ts=0),
+		//     while metadata + centroids ARE cloned so the sinker has a k-means
+		//     model to write against.
+		var cloneBehavior catalogplugin.AlterTableCloneBehavior
+		if !oriIdxTblNames.Unique {
+			if p, ok := indexplugin.Get(oriIdxTblNames.IndexAlgo); ok {
+				d := p.Catalog().SyncDescriptor()
+				cloneBehavior = p.Catalog().AlterTableCloneBehavior()
+				// Whole-index skip is an EXPLICIT policy (SkipWholeIndex), not
+				// inferred from UsesCDC — a CDC algorithm can still need its model
+				// tables cloned (IVF-FLAT clones metadata + centroids and only
+				// CDC-rebuilds entries via the per-hidden-table policy below).
+				// HNSW is AlwaysAsync; CAGRA / IVF-PQ / fulltext gate on the
+				// per-index async param.
+				if (d.AlwaysAsync || async) && cloneBehavior.SkipWholeIndex {
+					logutil.Infof("cloneUnaffectedIndex: skip whole async index %v\n", oriIdxTblNames)
+					continue
+				}
+			}
 		}
 
 		for _, oriIdxTblName := range oriIdxTblNames.Indexes {
@@ -939,24 +1204,22 @@ func cloneUnaffectedIndexes(
 				continue
 			}
 
-			// IVF index table is NOT empty and clone will have duplicate rows
-			// Delete the table
-			if !oriIdxTblNames.Unique &&
-				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) {
+			// Hidden tables that were seeded by the temp table's
+			// CREATE-INDEX side effects must be emptied before the
+			// clone copies source rows on top of the seed.
+			if cloneBehavior.ContainsDelete(oriIdxTblName.AlgoTableType) {
 				// delete all content but avoid truncate table with WHERE TRUE
 				sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE TRUE", dbName, newIdxTblName.IndexTableName)
-				err := c.runSql(sql)
-				if err != nil {
+				if err := c.runSql(sql); err != nil {
 					return err
 				}
 			}
 
-			if !oriIdxTblNames.Unique &&
-				async &&
-				catalog.IsIvfIndexAlgo(oriIdxTblNames.IndexAlgo) &&
-				oriIdxTblName.AlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-				// skip async IVF entries index table
-				logutil.Infof("cloneUnaffectedIndex: skip async IVF entries index table %v\n", oriIdxTblName)
+			// Hidden tables the algorithm rebuilds via CDC from ts=0
+			// on the new table — cloning them and letting CDC rebuild
+			// produces duplicates.
+			if async && cloneBehavior.ContainsSkipWhenAsync(oriIdxTblName.AlgoTableType) {
+				logutil.Infof("cloneUnaffectedIndex: skip async index hidden table %v\n", oriIdxTblName)
 				continue
 			}
 

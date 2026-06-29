@@ -159,6 +159,9 @@ type Cleaner interface {
 	RemoveBackupProtection()
 	GetBackupProtection() (protectedTS types.TS, lastUpdateTime time.Time, isActive bool)
 
+	// Sync protection methods (for cross-cluster sync)
+	GetSyncProtectionManager() *SyncProtectionManager
+
 	// For testing
 	GetTablePK(tableId uint64) string
 }

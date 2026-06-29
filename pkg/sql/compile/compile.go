@@ -19,10 +19,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -409,8 +413,6 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropIndex(c)
 	case TruncateTable:
 		return s.TruncateTable(c)
-	case Replace:
-		return s.replace(c)
 	case TableClone:
 		return s.TableClone(c)
 	}
@@ -501,6 +503,26 @@ func (c *Compile) runOnce() (err error) {
 		c.proc.Base.StageCache.Clear()
 	}()
 
+	// Pre-check: REPLACE parent→child FK RESTRICT constraints must be
+	// verified before the REPLACE execution modifies any rows.
+	query := c.pn.GetQuery()
+	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
+		for _, sql := range query.DetectSqls {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+				if err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")); err != nil {
+					// Only translate the "check returned false" signal into the
+					// parent-row-referenced error; pass through real execution
+					// errors (syntax, permissions, network, txn conflicts) so
+					// they are not masked.
+					if moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2) {
+						return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
+					}
+					return err
+				}
+			}
+		}
+	}
+
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
 			return err
@@ -578,10 +600,20 @@ func (c *Compile) runOnce() (err error) {
 
 	//detect fk self refer
 	//update, insert
-	query := c.pn.GetQuery()
+	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		err = detectFkSelfRefer(c, query.DetectSqls)
+		// Filter out pre-check SQLs (already executed before the main operation).
+		// The modern INSERT path enforces child→parent existence in-plan now, so the
+		// remaining DetectSqls are self-referencing FK checks (plain 1452 message).
+		var postCheckSqls []string
+		for _, sql := range query.DetectSqls {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+				continue
+			}
+			postCheckSqls = append(postCheckSqls, sql)
+		}
+		err = detectFkSelfRefer(c, postCheckSqls)
 	}
 	//alter table ... add/drop foreign key
 	if err == nil && c.pn.GetDdl() != nil {
@@ -607,13 +639,6 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 	}()
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
-		switch qry.Query.StmtType {
-		case plan.Query_REPLACE:
-			return []*Scope{
-				newScope(Replace).
-					withPlan(pn),
-			}, nil
-		}
 		scopes, err := c.compileQuery(qry.Query)
 		if err != nil {
 			return nil, err
@@ -743,17 +768,51 @@ func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
 }
 
 func (c *Compile) lockTable() error {
-	for _, tbl := range c.lockTables {
+	tableIDs := make([]uint64, 0, len(c.lockTables))
+	for tableID := range c.lockTables {
+		tableIDs = append(tableIDs, tableID)
+	}
+	sort.Slice(tableIDs, func(i, j int) bool {
+		return tableIDs[i] < tableIDs[j]
+	})
+	for _, tableID := range tableIDs {
+		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
-		return lockop.LockTable(
+		if err := lockop.LockTable(
 			c.e,
 			c.proc,
 			tbl.TableId,
 			typ,
-			false)
-
+			false); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
+	target.LockTableAtTheEnd = false
+	if !target.LockTable {
+		return false
+	}
+	qry := c.pn.GetQuery()
+	if qry == nil {
+		return true
+	}
+	// For INSERT statements, pre-run table locking can stretch the target-table
+	// lock hold window. Keep the same table-lock semantics by letting LockOp
+	// acquire it when the first batch reaches the target pipeline and by
+	// falling back to EOF-time table locking if the child produces no rows.
+	if qry.StmtType == plan.Query_INSERT {
+		// LOAD DATA always plans a table-locking LockOp. Keeping the pre-pipeline
+		// lock avoids retrying the same whole-table lock on every non-empty batch.
+		if qry.LoadTag {
+			return true
+		}
+		target.LockTableAtTheEnd = true
+		return false
+	}
+	return true
 }
 
 // func (c *Compile) compileAttachedScope(attachedPlan *plan.Plan) ([]*Scope, error) {
@@ -1196,6 +1255,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		ss = c.compileSort(node, c.compileUnionAll(node, left, right))
 		return ss, nil
 	case plan.Node_DELETE:
+		// Check if target table is a CCPR shared table (from publication)
+		if node.DeleteCtx != nil && c.shouldBlockCCPRReadOnly(node.DeleteCtx.TableDef) {
+			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+		}
 		if node.DeleteCtx.CanTruncate {
 			s := newScope(TruncateTable)
 			s.Plan = &plan.Plan{
@@ -1220,18 +1283,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		node.NotCacheable = true
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileDelete(node, ss)
-	case plan.Node_ON_DUPLICATE_KEY:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
-		if err != nil {
-			return nil, err
-		}
-
-		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss, err = c.compileOnduplicateKey(node, ss)
-		if err != nil {
-			return nil, err
-		}
-		return ss, nil
 	case plan.Node_FUZZY_FILTER:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -1271,6 +1322,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compilePreInsert(nodes, node, ss)
 	case plan.Node_INSERT:
+		// Check if target table is a CCPR shared table (from publication)
+		if node.InsertCtx != nil && c.shouldBlockCCPRReadOnly(node.InsertCtx.TableDef) {
+			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+		}
 		c.appendMetaTables(node.ObjRef)
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -1281,7 +1336,11 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileInsert(nodes, node, ss)
 	case plan.Node_MULTI_UPDATE:
+		// Check if any target table is a CCPR shared table (from publication)
 		for _, updateCtx := range node.UpdateCtxList {
+			if c.shouldBlockCCPRReadOnly(updateCtx.TableDef) {
+				return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+			}
 			c.appendMetaTables(updateCtx.ObjRef)
 		}
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -1473,7 +1532,7 @@ func calculatePartitions(start, end, n int64) [][2]int64 {
 }
 
 func StrictSqlMode(proc *process.Process) (error, bool) {
-	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	mode, err := resolveVariableOrDefault(proc, "sql_mode", true, false)
 	if err != nil {
 		return err, false
 	}
@@ -1533,6 +1592,9 @@ func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []s
 	if !param.Parallel {
 		return false, false
 	}
+	if param.Format == tree.PARQUET {
+		return false, true
+	}
 	if param.Local || crt.GetCompressType(param.CompressType, fileList[0]) != tree.NOCOMPRESS {
 		return false, true
 	}
@@ -1540,6 +1602,11 @@ func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []s
 }
 
 func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.ExternParam) (fileList []string, fileSize []int64, err error) {
+	// Hive partition tables use recursive list-and-filter discovery, not ReadDir.
+	// ReadDir requires glob patterns in filepath; Hive base paths are opaque directories.
+	if param.HivePartitioning {
+		return c.getHivePartitionFileList(node, param)
+	}
 	switch node.ExternScan.Type {
 	case int32(plan.ExternType_EXTERNAL_TB):
 		t := time.Now()
@@ -1567,10 +1634,207 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 			return nil, nil, err
 		}
 	case int32(plan.ExternType_LOAD):
-		fileList = []string{param.Filepath}
-		fileSize = []int64{param.FileSize}
+		if param.Format == tree.PARQUET && strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[") {
+			fileList, fileSize, err = plan2.ReadDir(param)
+			if err != nil {
+				return nil, nil, err
+			}
+		} else {
+			fileList = []string{param.Filepath}
+			fileSize = []int64{param.FileSize}
+		}
 	}
 	return fileList, fileSize, nil
+}
+
+func (c *Compile) getHivePartitionFileList(node *plan.Node, param *tree.ExternParam) ([]string, []int64, error) {
+	partColSet := toLowerSet(param.HivePartitionCols)
+	partFilters, fpFilters, rowFilters := external.ClassifyFilters(
+		node.TableDef, node.FilterList, partColSet)
+
+	pruneExpr := external.ExtractPartitionPruneExprFromExprs(node.TableDef, partFilters, partColSet)
+
+	listDir := external.NewListDirFunc(param)
+	options, err := c.getHivePartitionDiscoverOptions(param)
+	if err != nil {
+		return nil, nil, err
+	}
+	result, err := external.DiscoverHivePartitionsWithPruneExpr(
+		c.proc.Ctx, listDir, param.Filepath,
+		param.HivePartitionCols, param.HivePartitionColTypes, pruneExpr, options)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	fileList := make([]string, len(result.Files))
+	fileSize := make([]int64, len(result.Files))
+	for i, f := range result.Files {
+		fileList[i] = f.FilePath
+		fileSize[i] = f.FileSize
+	}
+
+	if len(fpFilters) > 0 {
+		var leftover []*plan.Expr
+		fileList, fileSize, leftover, err = runFilePathFilters(c.proc.Ctx, c.proc, node.TableDef, fpFilters, fileList, fileSize)
+		if err != nil {
+			return nil, nil, err
+		}
+		rowFilters = append(rowFilters, leftover...)
+	}
+
+	updateHivePartitionScanStats(node, param.Filepath, result, fileSize)
+	node.FilterList = rowFilters
+	return fileList, fileSize, nil
+}
+
+const (
+	hivePartitionCacheTTLVar        = "hive_partition_cache_ttl"
+	hivePartitionCacheMaxEntriesVar = "hive_partition_cache_max_entries"
+	hivePartitionCacheMaxBytesVar   = "hive_partition_cache_max_bytes"
+	hivePartitionListConcurrencyVar = "hive_partition_list_concurrency"
+)
+
+func (c *Compile) getHivePartitionDiscoverOptions(param *tree.ExternParam) (*external.DiscoverOptions, error) {
+	resolve := c.proc.GetResolveVariableFunc()
+	if resolve == nil {
+		return nil, nil
+	}
+	cacheTTLSeconds, err := resolveHivePartitionIntVar(resolve, hivePartitionCacheTTLVar)
+	if err != nil {
+		return nil, err
+	}
+	cacheMaxEntries, err := resolveHivePartitionIntVar(resolve, hivePartitionCacheMaxEntriesVar)
+	if err != nil {
+		return nil, err
+	}
+	cacheMaxBytes, err := resolveHivePartitionIntVar(resolve, hivePartitionCacheMaxBytesVar)
+	if err != nil {
+		return nil, err
+	}
+	listConcurrency, err := resolveHivePartitionIntVar(resolve, hivePartitionListConcurrencyVar)
+	if err != nil {
+		return nil, err
+	}
+
+	if cacheTTLSeconds <= 0 && cacheMaxEntries <= 0 && cacheMaxBytes <= 0 && listConcurrency <= 0 {
+		return nil, nil
+	}
+	opts := &external.DiscoverOptions{}
+	if listConcurrency > 0 {
+		opts.ListConcurrency = int(listConcurrency)
+	}
+	if cacheTTLSeconds > 0 {
+		accountID := uint32(0)
+		if id, err := defines.GetAccountId(c.proc.Ctx); err == nil {
+			accountID = id
+		}
+		opts.CacheTTL = time.Duration(cacheTTLSeconds) * time.Second
+		opts.CacheKeyPrefix = external.BuildHivePartitionListCacheKeyPrefix(param, accountID, param.Filepath)
+	}
+	if cacheMaxEntries > 0 {
+		opts.CacheMaxEntries = int(cacheMaxEntries)
+	}
+	if cacheMaxBytes > 0 {
+		opts.CacheMaxBytes = cacheMaxBytes
+	}
+	return opts, nil
+}
+
+func resolveHivePartitionIntVar(
+	resolve func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error),
+	name string,
+) (int64, error) {
+	v, err := resolve(name, true, false)
+	if err != nil {
+		return 0, err
+	}
+	switch x := v.(type) {
+	case nil:
+		return 0, nil
+	case int:
+		return int64(x), nil
+	case int8:
+		return int64(x), nil
+	case int16:
+		return int64(x), nil
+	case int32:
+		return int64(x), nil
+	case int64:
+		return x, nil
+	case uint:
+		return int64(x), nil
+	case uint8:
+		return int64(x), nil
+	case uint16:
+		return int64(x), nil
+	case uint32:
+		return int64(x), nil
+	case uint64:
+		if x > uint64(^uint64(0)>>1) {
+			return 0, moerr.NewInvalidInputNoCtxf("%s is too large: %d", name, x)
+		}
+		return int64(x), nil
+	case string:
+		if strings.TrimSpace(x) == "" {
+			return 0, nil
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(x), 10, 64)
+		if err != nil {
+			return 0, moerr.NewInvalidInputNoCtxf("invalid %s value %q: %v", name, x, err)
+		}
+		return n, nil
+	default:
+		return 0, moerr.NewInvalidInputNoCtxf("invalid %s type %T", name, v)
+	}
+}
+
+func updateHivePartitionScanStats(node *plan.Node, basePath string, result *external.PartitionDiscoveryResult, fileSize []int64) {
+	if node.Stats == nil {
+		node.Stats = &plan.Stats{}
+	}
+	var prunedBytes int64
+	for _, size := range fileSize {
+		prunedBytes += size
+	}
+	node.Stats.BlockNum = int32(len(fileSize))
+	node.Stats.Cost = float64(prunedBytes)
+	if node.Stats.TableCnt == 0 {
+		node.Stats.TableCnt = float64(len(fileSize))
+	}
+	if node.Stats.Outcnt == 0 {
+		node.Stats.Outcnt = float64(len(fileSize))
+	}
+	logutil.Debugf("hive partition discovery summary: base=%s files=%d bytes=%d pruned_files=%d pruned_bytes=%d partitions=%d pruned=%d list_calls=%d cache_hits=%d cache_misses=%d direct_prefix_hits=%d direct_prefix_misses=%d duration=%s",
+		basePath, len(fileSize), prunedBytes, result.PrunedFiles, result.PrunedBytes,
+		result.PartitionCount, result.PrunedCount, result.ListCalls, result.CacheHits, result.CacheMisses,
+		result.DirectPrefixHits, result.DirectPrefixMisses, result.DiscoveryDuration)
+}
+
+func runFilePathFilters(
+	ctx context.Context,
+	proc *process.Process,
+	tableDef *plan.TableDef,
+	fpFilters []*plan.Expr,
+	fileList []string,
+	fileSize []int64,
+) ([]string, []int64, []*plan.Expr, error) {
+	tmpNode := &plan.Node{
+		TableDef:   tableDef,
+		FilterList: fpFilters,
+	}
+	outFileList, outFileSize, err := external.FilterFileList(ctx, tmpNode, proc, fileList, fileSize)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return outFileList, outFileSize, tmpNode.FilterList, nil
+}
+
+func toLowerSet(cols []string) map[string]bool {
+	m := make(map[string]bool, len(cols))
+	for _, col := range cols {
+		m[strings.ToLower(col)] = true
+	}
+	return m
 }
 
 func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
@@ -1624,6 +1888,27 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 		return []*Scope{ret}, nil
 	}
 
+	if param.HivePartitioning {
+		return c.compileExternScanHiveFileFanout(node, param, fileList, fileSize, strictSqlMode)
+	}
+	if param.ExternType == int32(plan.ExternType_LOAD) &&
+		param.Format == tree.PARQUET &&
+		param.Parallel {
+		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(param, fileList, fileSize)
+		if err != nil {
+			return nil, err
+		}
+		logutil.Debugf("parquet load footer metadata: files=%d row_groups=%d rows=%d read_calls=%d read_bytes=%d duration=%s",
+			footerStats.Files, footerStats.RowGroups, footerStats.Rows,
+			footerStats.ReadCalls, footerStats.ReadBytes, footerStats.Duration)
+		if footerStats.RowGroups > len(fileList) {
+			return c.compileExternScanParquetRowGroupFanout(node, param, fileList, fileSize, rowGroups, strictSqlMode)
+		}
+		if len(fileList) > 1 {
+			return c.compileExternScanParquetLoadFileFanout(node, param, fileList, fileSize, strictSqlMode)
+		}
+	}
+
 	readParallel, writeParallel := c.getReadWriteParallelFlag(param, fileList)
 
 	if readParallel && writeParallel {
@@ -1663,6 +1948,8 @@ func (c *Compile) compileExternValueScan(node *plan.Node, param *tree.ExternPara
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
 func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	loadEmptyNumericAsZero := param.ExternType == int32(plan.ExternType_LOAD) &&
+		(param.Parallel || param.ParallelLoadRequested)
 	param.Parallel = false
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
@@ -1678,6 +1965,7 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 		parallelLoad = false
 	}
 	extern.Es.ParallelLoad = parallelLoad
+	extern.Es.LoadEmptyNumericAsZero = loadEmptyNumericAsZero
 	extern.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false
@@ -1711,7 +1999,482 @@ func GetExternParallelSize(totalSize int64, cpuNum int) int {
 	return cpuNum
 }
 
+type hiveFileShard struct {
+	node     engine.Node
+	fileList []string
+	fileSize []int64
+}
+
+type parquetRowGroupMeta struct {
+	fileIndex     int32
+	rowGroupIndex int32
+	numRows       int64
+	bytes         int64
+}
+
+type parquetFooterStats struct {
+	Files     int
+	RowGroups int
+	Rows      int64
+	Bytes     int64
+	ReadCalls int64
+	ReadBytes int64
+	Duration  time.Duration
+}
+
+type parquetRowGroupScopeShard struct {
+	node            engine.Node
+	fileList        []string
+	fileSize        []int64
+	rowGroupShards  []*pipeline.ParquetRowGroupShard
+	originalToLocal map[int32]int32
+}
+
+func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+}
+
+func (c *Compile) compileExternScanParquetLoadFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+}
+
+func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
+	shards := splitHiveFileShards(fileList, fileSize, nodes)
+	if len(shards) <= 1 {
+		serialParam := *param
+		serialParam.Parallel = false
+		return c.compileExternScanSerialReadWrite(node, &serialParam, fileList, fileSize, strictSqlMode)
+	}
+
+	ss := make([]*Scope, 0, len(shards))
+	currentFirstFlag := c.anal.isFirst
+	for i := range shards {
+		shard := shards[i]
+		shardParam := new(tree.ExternParam)
+		*shardParam = *param
+		// Each fanout scope scans whole parquet files. Keeping Parallel=false
+		// avoids the generic parallel path's per-file offset splitting while
+		// preserving Extern.Filepath as the Hive base path for partition fills.
+		shardParam.Parallel = false
+
+		remote := param.ScanType == tree.S3 && len(c.cnList) > 0
+		scope := c.constructScopeForExternal(shard.node.Addr, remote)
+		scope.NodeInfo.Mcpu = 1
+		scope.IsLoad = true
+		op := constructExternal(
+			node, shardParam, c.proc.Ctx,
+			shard.fileList, shard.fileSize,
+			makeWholeFileOffsets(len(shard.fileList)),
+			strictSqlMode,
+		)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		scope.setRootOperator(op)
+		ss = append(ss, scope)
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileExternScanParquetRowGroupFanout(
+	node *plan.Node,
+	param *tree.ExternParam,
+	fileList []string,
+	fileSize []int64,
+	rowGroups []parquetRowGroupMeta,
+	strictSqlMode bool,
+) ([]*Scope, error) {
+	nodes := c.getHiveFileFanoutNodes(param, len(rowGroups))
+	shards, err := splitParquetRowGroupShards(fileList, fileSize, rowGroups, nodes)
+	if err != nil {
+		return nil, err
+	}
+	if len(shards) <= 1 {
+		serialParam := *param
+		serialParam.Parallel = false
+		return c.compileExternScanSerialReadWrite(node, &serialParam, fileList, fileSize, strictSqlMode)
+	}
+
+	ss := make([]*Scope, 0, len(shards))
+	currentFirstFlag := c.anal.isFirst
+	for i := range shards {
+		shard := shards[i]
+		shardParam := new(tree.ExternParam)
+		*shardParam = *param
+		shardParam.Parallel = false
+
+		remote := param.ScanType == tree.S3 && len(c.cnList) > 0
+		scope := c.constructScopeForExternal(shard.node.Addr, remote)
+		scope.NodeInfo.Mcpu = 1
+		scope.IsLoad = true
+		op := constructExternal(
+			node, shardParam, c.proc.Ctx,
+			shard.fileList, shard.fileSize,
+			makeWholeFileOffsets(len(shard.fileList)),
+			strictSqlMode,
+		)
+		op.Es.ParquetRowGroupShards = shard.rowGroupShards
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		scope.setRootOperator(op)
+		ss = append(ss, scope)
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) readLoadParquetRowGroupMetadata(
+	param *tree.ExternParam,
+	fileList []string,
+	fileSize []int64,
+) ([]parquetRowGroupMeta, parquetFooterStats, error) {
+	ctx := param.Ctx
+	if ctx == nil && c.proc != nil {
+		ctx = c.proc.Ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	start := time.Now()
+	stats := parquetFooterStats{Files: len(fileList)}
+	metas := make([]parquetRowGroupMeta, 0)
+	for fileIdx, filePath := range fileList {
+		size := hiveFileSizeAt(fileSize, fileIdx)
+		var reader io.ReaderAt
+		var footerReader *compileParquetFooterReaderAt
+		if param.ScanType == tree.INLINE {
+			reader = strings.NewReader(param.Data)
+			size = int64(len(param.Data))
+		} else {
+			fs, readPath, err := plan2.GetForETLWithType(param, filePath)
+			if err != nil {
+				return nil, stats, err
+			}
+			if size <= 0 {
+				st, err := fs.StatFile(ctx, readPath)
+				if err != nil {
+					return nil, stats, err
+				}
+				size = st.Size
+			}
+			footerReader = &compileParquetFooterReaderAt{
+				fs:       fs,
+				readPath: readPath,
+				ctx:      ctx,
+			}
+			reader = footerReader
+		}
+		stats.Bytes += size
+
+		f, err := parquet.OpenFile(reader, size)
+		if footerReader != nil {
+			stats.ReadCalls += footerReader.readCalls
+			stats.ReadBytes += footerReader.readBytes
+		}
+		if err != nil {
+			return nil, stats, moerr.ConvertGoError(ctx, err)
+		}
+		rowGroups := f.RowGroups()
+		stats.RowGroups += len(rowGroups)
+		totalRows := f.NumRows()
+		for rowGroupIdx, rowGroup := range rowGroups {
+			rows := rowGroup.NumRows()
+			stats.Rows += rows
+			metas = append(metas, parquetRowGroupMeta{
+				fileIndex:     int32(fileIdx),
+				rowGroupIndex: int32(rowGroupIdx),
+				numRows:       rows,
+				bytes:         estimateParquetRowGroupBytes(size, totalRows, rows, len(rowGroups)),
+			})
+		}
+	}
+	stats.Duration = time.Since(start)
+	return metas, stats, nil
+}
+
+type compileParquetFooterReaderAt struct {
+	fs        fileservice.ETLFileService
+	readPath  string
+	ctx       context.Context
+	readCalls int64
+	readBytes int64
+}
+
+func (r *compileParquetFooterReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
+	vec := fileservice.IOVector{
+		FilePath: r.readPath,
+		Policy:   fileservice.SkipFullFilePreloads,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: off,
+				Size:   int64(len(p)),
+				Data:   p,
+			},
+		},
+	}
+	if err := r.fs.Read(r.ctx, &vec); err != nil {
+		return 0, err
+	}
+	size := vec.Entries[0].Size
+	r.readCalls++
+	r.readBytes += size
+	return int(size), nil
+}
+
+func estimateParquetRowGroupBytes(fileSize, totalRows, rowGroupRows int64, rowGroupCount int) int64 {
+	if fileSize <= 0 {
+		return 1
+	}
+	if totalRows > 0 && rowGroupRows > 0 {
+		size := int64(float64(fileSize) * float64(rowGroupRows) / float64(totalRows))
+		if size > 0 {
+			return size
+		}
+		return 1
+	}
+	if rowGroupCount > 0 {
+		size := fileSize / int64(rowGroupCount)
+		if size > 0 {
+			return size
+		}
+	}
+	return 1
+}
+
+func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
+	if fileCount <= 0 {
+		return nil
+	}
+	if param.ScanType == tree.S3 && len(c.cnList) > 0 {
+		nodes := make([]engine.Node, 0, fileCount)
+		for _, node := range c.cnList {
+			mcpu := node.Mcpu
+			if mcpu <= 0 {
+				mcpu = 1
+			}
+			if mcpu > external.S3ParallelMaxnum {
+				mcpu = external.S3ParallelMaxnum
+			}
+			for i := 0; i < mcpu && len(nodes) < fileCount; i++ {
+				n := node
+				n.Mcpu = 1
+				nodes = append(nodes, n)
+			}
+			if len(nodes) >= fileCount {
+				break
+			}
+		}
+		if len(nodes) > 0 {
+			return nodes
+		}
+	}
+
+	mcpu := c.ncpu
+	if mcpu <= 0 {
+		mcpu = 1
+	}
+	if mcpu > fileCount {
+		mcpu = fileCount
+	}
+	nodes := make([]engine.Node, mcpu)
+	for i := range nodes {
+		nodes[i] = engine.Node{Addr: c.addr, Mcpu: 1}
+	}
+	return nodes
+}
+
+func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Node) []hiveFileShard {
+	if len(fileList) == 0 || len(nodes) == 0 {
+		return nil
+	}
+	shardCount := len(nodes)
+	if shardCount > len(fileList) {
+		shardCount = len(fileList)
+	}
+	shards := make([]hiveFileShard, shardCount)
+	loads := make([]int64, shardCount)
+	for i := range shards {
+		shards[i].node = nodes[i]
+	}
+
+	indices := make([]int, len(fileList))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		return hiveFileSizeAt(fileSize, indices[i]) > hiveFileSizeAt(fileSize, indices[j])
+	})
+
+	for _, fileIdx := range indices {
+		shardIdx := 0
+		for i := 1; i < shardCount; i++ {
+			if loads[i] < loads[shardIdx] ||
+				(loads[i] == loads[shardIdx] && len(shards[i].fileList) < len(shards[shardIdx].fileList)) {
+				shardIdx = i
+			}
+		}
+		shards[shardIdx].fileList = append(shards[shardIdx].fileList, fileList[fileIdx])
+		size := hiveFileSizeAt(fileSize, fileIdx)
+		shards[shardIdx].fileSize = append(shards[shardIdx].fileSize, size)
+		loads[shardIdx] += size
+	}
+
+	nonEmpty := shards[:0]
+	for _, shard := range shards {
+		if len(shard.fileList) > 0 {
+			nonEmpty = append(nonEmpty, shard)
+		}
+	}
+	return nonEmpty
+}
+
+func splitParquetRowGroupShards(
+	fileList []string,
+	fileSize []int64,
+	rowGroups []parquetRowGroupMeta,
+	nodes []engine.Node,
+) ([]parquetRowGroupScopeShard, error) {
+	if len(rowGroups) == 0 || len(nodes) == 0 {
+		return nil, nil
+	}
+	shardCount := len(nodes)
+	if shardCount > len(rowGroups) {
+		shardCount = len(rowGroups)
+	}
+	shards := make([]parquetRowGroupScopeShard, shardCount)
+	loads := make([]int64, shardCount)
+	for i := range shards {
+		shards[i].node = nodes[i]
+		shards[i].originalToLocal = make(map[int32]int32)
+	}
+
+	indices := make([]int, len(rowGroups))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		left := rowGroups[indices[i]]
+		right := rowGroups[indices[j]]
+		if parquetRowGroupLoad(left) != parquetRowGroupLoad(right) {
+			return parquetRowGroupLoad(left) > parquetRowGroupLoad(right)
+		}
+		if left.fileIndex != right.fileIndex {
+			return left.fileIndex < right.fileIndex
+		}
+		return left.rowGroupIndex < right.rowGroupIndex
+	})
+
+	for _, rowGroupIdx := range indices {
+		meta := rowGroups[rowGroupIdx]
+		if meta.fileIndex < 0 || int(meta.fileIndex) >= len(fileList) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"invalid parquet row group file index %d for %d files",
+				meta.fileIndex, len(fileList),
+			)
+		}
+		if meta.rowGroupIndex < 0 {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"invalid parquet row group index %d for file index %d",
+				meta.rowGroupIndex, meta.fileIndex,
+			)
+		}
+
+		shardIdx := 0
+		for i := 1; i < shardCount; i++ {
+			if loads[i] < loads[shardIdx] ||
+				(loads[i] == loads[shardIdx] && len(shards[i].rowGroupShards) < len(shards[shardIdx].rowGroupShards)) {
+				shardIdx = i
+			}
+		}
+
+		localFileIndex := appendParquetShardFile(&shards[shardIdx], fileList, fileSize, meta.fileIndex)
+		shards[shardIdx].rowGroupShards = append(shards[shardIdx].rowGroupShards, &pipeline.ParquetRowGroupShard{
+			FileIndex:     localFileIndex,
+			RowGroupStart: meta.rowGroupIndex,
+			RowGroupEnd:   meta.rowGroupIndex + 1,
+			NumRows:       meta.numRows,
+			Bytes:         meta.bytes,
+		})
+		loads[shardIdx] += parquetRowGroupLoad(meta)
+	}
+
+	nonEmpty := shards[:0]
+	for _, shard := range shards {
+		if len(shard.rowGroupShards) == 0 {
+			continue
+		}
+		sort.SliceStable(shard.rowGroupShards, func(i, j int) bool {
+			left := shard.rowGroupShards[i]
+			right := shard.rowGroupShards[j]
+			if left.FileIndex != right.FileIndex {
+				return left.FileIndex < right.FileIndex
+			}
+			return left.RowGroupStart < right.RowGroupStart
+		})
+		shard.rowGroupShards = mergeAdjacentParquetRowGroupShards(shard.rowGroupShards)
+		shard.originalToLocal = nil
+		nonEmpty = append(nonEmpty, shard)
+	}
+	return nonEmpty, nil
+}
+
+func appendParquetShardFile(shard *parquetRowGroupScopeShard, fileList []string, fileSize []int64, originalFileIndex int32) int32 {
+	if localFileIndex, ok := shard.originalToLocal[originalFileIndex]; ok {
+		return localFileIndex
+	}
+	localFileIndex := int32(len(shard.fileList))
+	shard.originalToLocal[originalFileIndex] = localFileIndex
+	shard.fileList = append(shard.fileList, fileList[originalFileIndex])
+	shard.fileSize = append(shard.fileSize, hiveFileSizeAt(fileSize, int(originalFileIndex)))
+	return localFileIndex
+}
+
+func mergeAdjacentParquetRowGroupShards(shards []*pipeline.ParquetRowGroupShard) []*pipeline.ParquetRowGroupShard {
+	merged := shards[:0]
+	for _, shard := range shards {
+		if len(merged) > 0 {
+			last := merged[len(merged)-1]
+			if last.FileIndex == shard.FileIndex && last.RowGroupEnd == shard.RowGroupStart {
+				last.RowGroupEnd = shard.RowGroupEnd
+				last.NumRows += shard.NumRows
+				last.Bytes += shard.Bytes
+				continue
+			}
+		}
+		merged = append(merged, shard)
+	}
+	return merged
+}
+
+func parquetRowGroupLoad(meta parquetRowGroupMeta) int64 {
+	if meta.bytes > 0 {
+		return meta.bytes
+	}
+	if meta.numRows > 0 {
+		return meta.numRows
+	}
+	return 1
+}
+
+func hiveFileSizeAt(fileSize []int64, idx int) int64 {
+	if idx >= 0 && idx < len(fileSize) {
+		return fileSize[idx]
+	}
+	return 0
+}
+
+func makeWholeFileOffsets(count int) []*pipeline.FileOffset {
+	offsets := make([]*pipeline.FileOffset, count)
+	for i := range offsets {
+		offsets[i] = &pipeline.FileOffset{Offset: []int64{0, -1}}
+	}
+	return offsets
+}
+
 func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	if param.Format == tree.PARQUET {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "parquet load cannot use byte-offset parallel read")
+	}
 	visibleCols := make([]*plan.ColDef, 0)
 	if param.Strict {
 		for _, col := range node.TableDef.Cols {
@@ -2449,7 +3212,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 
 	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
-	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI:
+	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_OUTER:
 		for i := range shuffleJoins {
 			op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
 			op.ShuffleIdx = int32(i)
@@ -2472,6 +3235,9 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 				shuffleJoins[i].setRootOperator(op)
 			}
 		} else {
+			if node.DedupJoinCtx != nil && len(node.DedupJoinCtx.OldColCaptureList) > 0 {
+				panic(moerr.NewNYI(c.proc.Ctx, "shuffle DedupJoin with OldColCapture is not supported"))
+			}
 			for i := range shuffleJoins {
 				op := constructDedupJoin(node, leftTypes, rightTypes, c.proc)
 				op.ShuffleIdx = int32(i)
@@ -2551,7 +3317,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				} else {
-					op := constructLoopJoin(node, rightTypes, c.proc)
+					op := constructLoopJoin(node, leftTypes, rightTypes, c.proc)
 					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				}
@@ -2594,7 +3360,28 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			}
 		} else {
 			for i := range rs {
-				op := constructLoopJoin(node, rightTypes, c.proc)
+				op := constructLoopJoin(node, leftTypes, rightTypes, c.proc)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+				rs[i].setRootOperator(op)
+			}
+		}
+		c.anal.isFirst = false
+	case plan.Node_OUTER:
+		// FULL OUTER JOIN: equi → hashjoin (Phase 1); non-equi → loopjoin
+		// (Phase 4). IsRightJoin=true (set in stats.go for Node_OUTER) routes
+		// the probe scope through forceOneCN, avoiding distributed
+		// double-emission of unmatched-build rows.
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+		currentFirstFlag := c.anal.isFirst
+		if isEq {
+			for i := range rs {
+				op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+				rs[i].setRootOperator(op)
+			}
+		} else {
+			for i := range rs {
+				op := constructLoopJoin(node, leftTypes, rightTypes, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
@@ -2625,7 +3412,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
-			op := constructLoopJoin(node, rightTypes, c.proc)
+			op := constructLoopJoin(node, leftTypes, rightTypes, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 		}
@@ -2648,23 +3435,23 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		return rs
 	}
 
+	buildScopeAttached := false
 	for i := range rs {
 		if isSameCN(rs[i].NodeInfo.Addr, buildScopes[0].NodeInfo.Addr) {
 			rs[i].PreScopes = append(rs[i].PreScopes, buildScopes[0])
+			buildScopeAttached = true
 			break
 		}
 	}
+	if !buildScopeAttached {
+		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
+	}
 
 	buildOpScopes := make([]*Scope, 0, len(c.cnList))
+	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs)
 
-	if len(rs) > len(c.cnList) { // probe side is shuffle scopes
-		for i := range c.cnList {
-			var tmp []*Scope
-			for j := range rs {
-				if isSameCN(c.cnList[i].Addr, rs[j].NodeInfo.Addr) {
-					tmp = append(tmp, rs[j])
-				}
-			}
+	if len(rs) > len(c.cnList) || hasMultiScopeGroup(probeScopeGroups) { // probe side is shuffle scopes
+		for _, tmp := range probeScopeGroups {
 			bs := newScope(Remote)
 			bs.NodeInfo = engine.Node{Addr: tmp[0].NodeInfo.Addr, Mcpu: 1}
 			bs.Proc = c.proc.NewNoContextChildProc(0)
@@ -2707,6 +3494,50 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	buildScopes[0].setRootOperator(dispatchArg)
 	return rs
+}
+
+func (c *Compile) groupBroadcastProbeScopesByCN(rs []*Scope) [][]*Scope {
+	groups := make([][]*Scope, 0, len(rs))
+	used := make([]bool, len(rs))
+
+	for _, cn := range c.cnList {
+		var group []*Scope
+		for i := range rs {
+			if !used[i] && isSameCN(cn.Addr, rs[i].NodeInfo.Addr) {
+				group = append(group, rs[i])
+				used[i] = true
+			}
+		}
+		if len(group) > 0 {
+			groups = append(groups, group)
+		}
+	}
+
+	for i := range rs {
+		if used[i] {
+			continue
+		}
+		group := []*Scope{rs[i]}
+		used[i] = true
+		for j := i + 1; j < len(rs); j++ {
+			if !used[j] && isSameCN(rs[i].NodeInfo.Addr, rs[j].NodeInfo.Addr) {
+				group = append(group, rs[j])
+				used[j] = true
+			}
+		}
+		groups = append(groups, group)
+	}
+
+	return groups
+}
+
+func hasMultiScopeGroup(groups [][]*Scope) bool {
+	for _, group := range groups {
+		if len(group) > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
@@ -3141,6 +3972,17 @@ func (c *Compile) compileShuffleGroupV2(node *plan.Node, inputSS []*Scope, nodes
 		return inputSS
 	}
 
+	//fallback to non-shuffle group
+	if len(inputSS) != 1 || inputSS[0].NodeInfo.Mcpu <= 1 || inputSS[0].NodeInfo.Mcpu != int(node.Stats.Dop) {
+		if c.IsSingleScope(inputSS) {
+			return c.compileTPGroup(node, inputSS, nodes)
+		}
+
+		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
+		defer groupInfo.Release()
+		return c.compileMergeGroup(node, inputSS, nodes, groupInfo.AnyDistinctAgg())
+	}
+
 	shuffleArg := constructShuffleArgForGroupV2(node, node.Stats.Dop)
 	shuffleArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	inputSS[0].setRootOperator(shuffleArg)
@@ -3252,11 +4094,65 @@ func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Sc
 }
 
 func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	// Writable external table: each parallel pipeline owns one writer/file.
+	// Reuse the simple (non-S3, no merge-block) layout: one insert operator per
+	// source scope, with no shuffle.
+	if isExternalWriteInsert(node) {
+		currentFirstFlag := c.anal.isFirst
+		// One timestamp per statement: all scopes must expand WRITE_FILE_PATTERN
+		// time directives against the same instant.
+		stmtAt := externalInsertStmtTime(c.proc, c.startAt)
+		localFileStage, err := externalInsertTargetIsLocalFile(c.proc, node, stmtAt)
+		if err != nil {
+			return nil, err
+		}
+		if localFileStage {
+			// Only merge scopes on remote CNs onto the current CN.
+			// Same-CN parallel writers share the same filesystem and
+			// use unique filename directives (%U / %<n>N), so they are safe
+			// to keep unmerged.
+			var localSS, remoteSS []*Scope
+			for _, s := range ss {
+				if isSameCN(s.NodeInfo.Addr, c.addr) {
+					localSS = append(localSS, s)
+				} else {
+					remoteSS = append(remoteSS, s)
+				}
+			}
+			if len(remoteSS) > 0 {
+				mergedRemote := c.newMergeScope(remoteSS)
+				localSS = append(localSS, mergedRemote)
+			}
+			ss = localSS
+		}
+		for i := range ss {
+			insertArg, err := constructExternalInsert(c.proc, node, c.e, stmtAt)
+			if err != nil {
+				return nil, err
+			}
+			insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			ss[i].setRootOperator(insertArg)
+		}
+		c.anal.isFirst = false
+		return ss, nil
+	}
+
 	// Determine whether to Write S3
 	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
 	if !toWriteS3 {
+		// A non-S3 INSERT can still drive a cross-CN shuffle join: toWriteS3 is decided by the
+		// INSERT *output* row count, while shuffle is decided by the JOIN *input* table size and
+		// CN count -- independent decisions. A large shuffle join with a highly selective filter
+		// can produce few output rows (non-S3) yet still shuffle across CNs. So group the same-CN
+		// shuffle buckets (with their nested cross-CN dispatch) into one per-CN send unit *before*
+		// attaching Insert. This (a) keeps the dispatch in the same tree as all its local buckets
+		// so it is sent to its own CN instead of being converted to local on the coordinator and
+		// hanging (issue #24919), and (b) puts Insert on the per-CN container's RootOp chain
+		// (Insert -> Merge), so affectedRows() -- which walks the RootOp chain -- still counts it.
+		// Noop when ss carries no cross-CN shuffle dispatch.
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		currentFirstFlag := c.anal.isFirst
 		// Not write S3
 		for i := range ss {
@@ -3277,6 +4173,10 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		// todo : pipelines with sink scan ,must refactor this in the future
 		currentFirstFlag := c.anal.isFirst
 		c.anal.isFirst = false
+		// dataScope merges the buckets, but dataScope.MergeRun still sends each bucket as an
+		// individual RemoteRun unit, so a cross-CN shuffle dispatch here would hit the same
+		// convert-to-local hang. Group same-CN buckets into one per-CN send unit first (issue #24919).
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		dataScope := c.newMergeScope(ss)
 		if c.anal.qry.LoadTag {
 			// reset the channel buffer of sink for load
@@ -3344,6 +4244,11 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		ss[i].setRootOperator(insertArg)
 	}
 	currentFirstFlag = false
+	// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
+	// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
+	// to and executed at its own CN instead of being converted to local on the coordinator
+	// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+	ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 	rs := c.newMergeScope(ss)
 	rs.Magic = MergeInsert
 	mergeInsertArg := constructMergeblock(c.e, node)
@@ -3393,6 +4298,11 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 			ss[i].setRootOperator(multiUpdateArg)
 		}
 
+		// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
+		// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
+		// to and executed at its own CN instead of being converted to local on the coordinator
+		// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		rs := ss[0]
 		if len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1 {
 			rs = c.newMergeScope(ss)
@@ -3407,6 +4317,8 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		ss = []*Scope{rs}
 	} else {
 		if !c.IsTpQuery() {
+			// keep a cross-CN shuffle dispatch in the same send unit as all its local buckets (issue #24919).
+			ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
@@ -3494,7 +4406,7 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
 	for _, tbl := range node.LockTargets {
-		if tbl.LockTable {
+		if c.shouldPrePipelineLockTable(tbl) {
 			c.lockTables[tbl.TableId] = tbl
 		} else {
 			if _, ok := c.lockTables[tbl.TableId]; !ok {
@@ -3629,18 +4541,6 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 	dispatchLocal := constructDispatchLocal(true, true, node.RecursiveSink, node.RecursiveCte, receivers)
 	dispatchLocal.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(dispatchLocal)
-	c.anal.isFirst = false
-
-	ss = []*Scope{rs}
-	return ss, nil
-}
-func (c *Compile) compileOnduplicateKey(node *plan.Node, ss []*Scope) ([]*Scope, error) {
-	rs := c.newMergeScope(ss)
-
-	currentFirstFlag := c.anal.isFirst
-	arg := constructOnduplicateKey(node, c.e)
-	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.setRootOperator(arg)
 	c.anal.isFirst = false
 
 	ss = []*Scope{rs}
@@ -3828,6 +4728,70 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 		}
 	}
 	return rs
+}
+
+// scopeTreeHasCrossCNDispatch reports whether the scope tree rooted at s contains a
+// dispatch operator that sends to remote (cross-CN) receivers. A non-empty RemoteRegs is
+// the signature of a cross-CN shuffle dispatch (see constructDispatchLocalAndRemote).
+//
+// Precondition: it only inspects each scope's RootOp, assuming a shuffle dispatch is always
+// the root operator of its scope (constructDispatch results are attached via setRootOperator
+// with IsEnd=true, so nothing is appended on top of them). A dispatch nested as a child of
+// another operator would be missed -- which does not happen for shuffle dispatches today.
+//
+// Scope of the check (intentionally narrower than checkPipelineStandaloneExecutableAtRemote,
+// which rejects out-of-tree dispatch *and* out-of-tree connector targets): this gate only
+// looks for a cross-CN dispatch, because per-CN grouping only reorganizes the same-CN shuffle
+// dispatch together with its dop buckets. A scope tree that crosses CNs solely via a connector
+// is not the shuffle-bucket pattern grouping addresses and is intentionally left untouched.
+func scopeTreeHasCrossCNDispatch(s *Scope) bool {
+	if d, ok := s.RootOp.(*dispatch.Dispatch); ok && len(d.RemoteRegs) > 0 {
+		return true
+	}
+	for _, pre := range s.PreScopes {
+		if scopeTreeHasCrossCNDispatch(pre) {
+			return true
+		}
+	}
+	return false
+}
+
+// groupShuffleBucketsByCNIfNeeded groups the same-CN shuffle buckets (together with the
+// shuffle dispatch nested under them) into one per-CN send unit, so a cross-CN shuffle
+// dispatch always travels in the same pipeline tree as all of its dop local buckets.
+//
+// Background (issue #24919): newShuffleJoinScopeList leaves a CN's dop join buckets in
+// separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
+// When the consumer (here compileInsert) sends each bucket individually, RemoteRun ->
+// checkPipelineStandaloneExecutableAtRemote sees the dispatch.LocalRegs pointing to the
+// sibling out-of-tree buckets, converts the pipeline to local on the coordinator, and the
+// dispatch then runs on the coordinator instead of its compile-time CN -- mispaired with
+// the cross-CN receiver's FromAddr -> the remote receiver's GetProcByUuid spins / merge
+// WaitingEnd waits forever -> hang. Regrouping by CN keeps all of a CN's buckets in one
+// tree, so the whole group is really executed at the remote CN and the pairing is correct.
+//
+// It is a no-op unless we are multi-CN and ss actually carries a cross-CN shuffle dispatch,
+// so single-CN and non-shuffle inserts are completely unaffected.
+//
+// Operator-chain note: callers attach their own root operator to each bucket first (e.g.
+// the insert / multiUpdate operator). mergeScopesByCN (via newMergeScopeByCN ->
+// doSetRootOperator) appends a connector *on top of* that existing root using AppendChild
+// semantics, so the caller's operator is preserved as the connector's child, not replaced.
+func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
+	if len(c.cnList) <= 1 || len(ss) <= len(c.cnList) {
+		return ss
+	}
+	hasCrossCNDispatch := false
+	for _, s := range ss {
+		if scopeTreeHasCrossCNDispatch(s) {
+			hasCrossCNDispatch = true
+			break
+		}
+	}
+	if !hasCrossCNDispatch {
+		return ss
+	}
+	return c.mergeScopesByCN(ss)
 }
 
 func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
@@ -4233,10 +5197,14 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 
 	// scan on multi CN
 	for i := range c.cnList {
+		mcpu := max(c.cnList[i].Mcpu, 1)
+		if node.Stats.Dop > 0 {
+			mcpu = min(mcpu, int(node.Stats.Dop))
+		}
 		engNode := engine.Node{
 			Id:    c.cnList[i].Id,
 			Addr:  c.cnList[i].Addr,
-			Mcpu:  c.cnList[i].Mcpu,
+			Mcpu:  mcpu,
 			CNCNT: int32(len(c.cnList)),
 			CNIDX: int32(i),
 		}
@@ -4612,12 +5580,12 @@ func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {
-		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'; treating as same-CN", addr)
 		return true
 	}
 	parts2 := strings.Split(currentCNAddr, ":")
 	if len(parts2) != 2 {
-		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
+		logutil.Warnf("compileScope received a malformed current-cn address '%s', expected 'ip:port'; treating as same-CN", currentCNAddr)
 		return true
 	}
 	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
@@ -4697,6 +5665,16 @@ func (c *Compile) runSqlWithResultAndOptions(
 	}
 
 	exec := v.(executor.SQLExecutor)
+	// Propagate the IsFrontend signal from the outer Compile's proc
+	// to the sub-execution. Without this, sub-Compiles spawned for
+	// internal sub-SQL (e.g. ALTER TABLE COPY's CreateTmpTableSql)
+	// default to IsFrontend=false even when the outer caller is
+	// user-driven, and any downstream code that gates on
+	// ctx.IsFrontend() / proc.Base.IsFrontend silently misfires —
+	// most notably CreateAllIndexUpdateTasks, which would otherwise
+	// see metadata=nil from BuildIdxcronMetadata and write '' into
+	// mo_index_update's JSON column. Mirrors the propagation already
+	// in pkg/vectorindex/sqlexec/sqlexec.go.
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -4706,7 +5684,8 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower).
 		WithStatementOption(options).
-		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
+		WithResolveVariableFunc(c.proc.GetResolveVariableFunc()).
+		WithFrontend(c.proc.Base.IsFrontend)
 
 	ctx := c.proc.Ctx
 	if ctx == nil {
@@ -4894,4 +5873,47 @@ func (c *Compile) compileTableClone(
 	s1.setRootOperator(copyOp)
 
 	return []*Scope{s1}, nil
+}
+
+// isTableFromPublication checks if a table is a CCPR shared table (from publication)
+func isTableFromPublication(tableDef *plan.TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	for _, def := range tableDef.Defs {
+		if propDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+			for _, prop := range propDef.Properties.Properties {
+				if prop.Key == catalog.PropFromPublication && prop.Value == "true" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// shouldBlockCCPRReadOnly checks if the CCPR read-only check should block the operation.
+// Returns true if the operation should be blocked (table is from publication AND this is NOT a CCPR task transaction).
+func (c *Compile) shouldBlockCCPRReadOnly(tableDef *plan.TableDef) bool {
+	if !isTableFromPublication(tableDef) {
+		return false
+	}
+	// If this is a CCPR task transaction with a valid task ID, allow the operation
+	if c.isCCPRTaskTransaction() {
+		return false
+	}
+	return true
+}
+
+// isCCPRTaskTransaction checks if the current transaction is a CCPR task transaction.
+// Returns true if the transaction has a valid CCPR task ID.
+func (c *Compile) isCCPRTaskTransaction() bool {
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		if ws := txnOp.GetWorkspace(); ws != nil {
+			if ws.GetCCPRTaskID() != "" {
+				return true
+			}
+		}
+	}
+	return false
 }

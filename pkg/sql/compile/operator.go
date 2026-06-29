@@ -16,8 +16,11 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -38,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
@@ -61,7 +65,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
@@ -89,6 +92,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -146,10 +151,13 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op.SpillThreshold = t.SpillThreshold
 		op.IsDedup = t.IsDedup
+		op.DedupBuildKeepLast = t.DedupBuildKeepLast
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColTypes = t.DedupColTypes
 		op.DedupColName = t.DedupColName
 		op.DelColIdx = t.DelColIdx
+		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
+		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
 		return op
 
 	case vm.Group:
@@ -202,6 +210,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*loopjoin.LoopJoin)
 		op := loopjoin.NewArgument()
 		op.ResultCols = t.ResultCols
+		op.LeftTypes = t.LeftTypes
 		op.RightTypes = t.RightTypes
 		op.NonEqCond = t.NonEqCond
 		op.JoinMapTag = t.JoinMapTag
@@ -288,6 +297,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*mergeorder.MergeOrder)
 		op := mergeorder.NewArgument()
 		op.OrderBySpecs = t.OrderBySpecs
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 	case vm.Intersect:
@@ -340,16 +350,19 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
-					Attrs:           t.Es.Attrs,
-					Cols:            t.Es.Cols,
-					ColumnListLen:   t.Es.ColumnListLen,
-					Idx:             index,
-					CreateSql:       t.Es.CreateSql,
-					FileList:        t.Es.FileList,
-					FileSize:        t.Es.FileSize,
-					FileOffsetTotal: t.Es.FileOffsetTotal,
-					Extern:          t.Es.Extern,
-					StrictSqlMode:   t.Es.StrictSqlMode,
+					Attrs:                  t.Es.Attrs,
+					Cols:                   t.Es.Cols,
+					ColumnListLen:          t.Es.ColumnListLen,
+					Idx:                    index,
+					CreateSql:              t.Es.CreateSql,
+					FileList:               t.Es.FileList,
+					FileSize:               t.Es.FileSize,
+					FileOffsetTotal:        t.Es.FileOffsetTotal,
+					ParquetRowGroupShards:  t.Es.ParquetRowGroupShards,
+					Extern:                 t.Es.Extern,
+					StrictSqlMode:          t.Es.StrictSqlMode,
+					ParallelLoad:           t.Es.ParallelLoad,
+					LoadEmptyNumericAsZero: t.Es.LoadEmptyNumericAsZero,
 				},
 				ExParam: external.ExParam{
 					Filter: &external.FilterParam{
@@ -397,6 +410,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.BucketNum = sourceArg.BucketNum
 		op.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
 		op.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
+		op.ShuffleExpr = sourceArg.ShuffleExpr
 		op.CurrentShuffleIdx = int32(index)
 		op.SetInfo(&info)
 		return op
@@ -414,6 +428,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.BucketNum = sourceArg.BucketNum
 		op.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
 		op.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
+		op.ShuffleExpr = sourceArg.ShuffleExpr
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.SetInfo(&info)
 		return op
@@ -442,6 +457,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := insert.NewArgument()
 		op.InsertCtx = t.InsertCtx
 		op.ToWriteS3 = t.ToWriteS3
+		// External-write inserts must stay external when a scope is parallelized;
+		// each duplicated instance opens its own writer/file in Prepare.
+		op.ToExternal = t.ToExternal
 		op.SetInfo(&info)
 		return op
 	case vm.PartitionInsert:
@@ -544,7 +562,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*dedupjoin.DedupJoin)
 		op := dedupjoin.NewArgument()
 		if t.Channel == nil {
-			t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			t.Channel = make(chan *dedupjoin.WorkerJoinMsg, maxParallel)
 		}
 		op.Channel = t.Channel
 		op.NumCPU = uint64(maxParallel)
@@ -561,11 +579,16 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.OnDuplicateAction = t.OnDuplicateAction
+		op.DedupBuildKeepLast = t.DedupBuildKeepLast
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
+		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
+		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
+		op.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
+		op.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		return op
 	case vm.RightDedupJoin:
 		t := sourceOp.(*rightdedupjoin.RightDedupJoin)
@@ -629,19 +652,6 @@ func constructDeletion(
 		return op, nil
 	}
 	return deletion.NewPartitionDelete(op, oldCtx.TableDef.TblId), nil
-}
-
-func constructOnduplicateKey(node *plan.Node, _ engine.Engine) *onduplicatekey.OnDuplicatekey {
-	oldCtx := node.OnDuplicateKey
-	op := onduplicatekey.NewArgument()
-	op.OnDuplicateIdx = oldCtx.OnDuplicateIdx
-	op.OnDuplicateExpr = oldCtx.OnDuplicateExpr
-	op.Attrs = oldCtx.Attrs
-	op.InsertColCount = oldCtx.InsertColCount
-	op.UniqueCols = oldCtx.UniqueCols
-	op.UniqueColCheckExpr = oldCtx.UniqueColCheckExpr
-	op.IsIgnore = oldCtx.IsIgnore
-	return op
 }
 
 func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.FuzzyFilter {
@@ -814,11 +824,13 @@ func constructMultiUpdate(
 		}
 
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
-			ObjRef:        updateCtx.ObjRef,
-			TableDef:      updateCtx.TableDef,
-			InsertCols:    insertCols,
-			DeleteCols:    deleteCols,
-			PartitionCols: partitionCols,
+			ObjRef:             updateCtx.ObjRef,
+			TableDef:           updateCtx.TableDef,
+			InsertCols:         insertCols,
+			DeleteCols:         deleteCols,
+			PartitionCols:      partitionCols,
+			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
+			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
 		}
 	}
 	arg.Action = action
@@ -866,6 +878,189 @@ func constructInsert(
 	return insert.NewPartitionInsert(arg, oldCtx.TableDef.TblId), nil
 }
 
+// isExternalWriteInsert reports whether an INSERT node targets a writable
+// external table (TableType == external and a WRITE_FILE_PATTERN is set).
+func isExternalWriteInsert(node *plan.Node) bool {
+	if node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return false
+	}
+	td := node.InsertCtx.TableDef
+	if td.TableType != catalog.SystemExternalRel {
+		return false
+	}
+	param := &tree.ExternParam{}
+	if err := json.Unmarshal([]byte(td.Createsql), param); err != nil {
+		return false
+	}
+	_, ok := plan2.GetWriteFilePattern(param)
+	return ok
+}
+
+// externalInsertStmtTime resolves the statement-start timestamp that
+// WRITE_FILE_PATTERN time directives are evaluated against, so that every
+// parallel pipeline / CN resolves the same path. Preference order: the
+// frontend's per-statement defines.StartTS on the context, then the Compile's
+// startAt (set on every construction path, including the internal SQL
+// executor), then the wall clock as a last resort.
+func externalInsertStmtTime(proc *process.Process, startAt time.Time) time.Time {
+	if proc != nil && proc.Ctx != nil {
+		if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
+			if t, ok := v.(time.Time); ok {
+				return t
+			}
+		}
+	}
+	if !startAt.IsZero() {
+		return startAt
+	}
+	return time.Now()
+}
+
+// constructExternalInsert builds an INSERT operator that writes into a writable
+// external table's backing files. Each parallel instance owns one writer/file.
+// stmtAt is the statement-start timestamp (externalInsertStmtTime), resolved
+// once per statement by the caller so all scopes share it.
+func constructExternalInsert(
+	proc *process.Process,
+	node *plan.Node,
+	eng engine.Engine,
+	stmtAt time.Time,
+) (vm.Operator, error) {
+	oldCtx := node.InsertCtx
+	return buildExternalInsertArg(proc.Ctx, oldCtx.Ref, oldCtx.TableDef, oldCtx.AddAffectedRows, eng, stmtAt)
+}
+
+// externalInsertTargetIsLocalFile reports whether WRITE_FILE_PATTERN resolves
+// through a stage backed by file://. Such paths are local to the CN that writes
+// them, so remote CN writers would make files invisible to the coordinator's
+// follow-up external-table scan.
+func externalInsertTargetIsLocalFile(proc *process.Process, node *plan.Node, stmtAt time.Time) (bool, error) {
+	if node == nil || node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return false, nil
+	}
+	param := &tree.ExternParam{}
+	if err := json.Unmarshal([]byte(node.InsertCtx.TableDef.Createsql), param); err != nil {
+		return false, err
+	}
+	pattern, ok := plan2.GetWriteFilePattern(param)
+	if !ok {
+		return false, nil
+	}
+	expanded, err := externalwrite.ExpandFilePattern(pattern, stmtAt)
+	if err != nil {
+		return false, err
+	}
+	sdef, err := stageutil.UrlToStageDef(expanded, proc)
+	if err != nil {
+		return false, err
+	}
+	return sdef.Url.Scheme == stage.FILE_PROTOCOL, nil
+}
+
+// buildExternalInsertArg builds the external-write insert operator from the
+// target's TableDef, whose Createsql stores the ExternParam (pattern, format,
+// FIELDS/LINES). Shared by local compile and remote-run decode; everything but
+// the statement-start timestamp is rebuilt from the TableDef. The writer's
+// session time zone is resolved later, in the operator's Prepare.
+func buildExternalInsertArg(
+	ctx context.Context,
+	ref *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	addAffectedRows bool,
+	eng engine.Engine,
+	stmtAt time.Time,
+) (*insert.Insert, error) {
+	param := &tree.ExternParam{}
+	if err := json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
+		return nil, err
+	}
+	pattern, ok := plan2.GetWriteFilePattern(param)
+	if !ok {
+		return nil, moerr.NewNotSupportedf(ctx, "insert into read-only external table %s", tableDef.Name)
+	}
+
+	attrs := make([]string, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		// Skip Row_ID and any hidden/synthetic columns (e.g. __mo_filepath that
+		// the resolver attaches to external tables) — only the declared columns
+		// are written to the output file.
+		if col.Name == catalog.Row_ID || col.Hidden || col.Name == catalog.ExternalFilePath {
+			continue
+		}
+		attrs = append(attrs, col.GetOriginCaseName())
+	}
+
+	// Format is stored in the option list; param.Format is only materialized by
+	// the read-side init, which we do not run here.
+	format := strings.ToLower(param.Format)
+	if format == "" {
+		for i := 0; i+1 < len(param.Option); i += 2 {
+			if strings.ToLower(param.Option[i]) == "format" {
+				format = strings.ToLower(param.Option[i+1])
+				break
+			}
+		}
+	}
+	cfg := externalwrite.WriterConfig{
+		Pattern: pattern,
+		Format:  format,
+		Attrs:   attrs,
+		Stmt:    stmtAt,
+	}
+	// The reader skips lines whose raw prefix matches the COMMENT marker; the
+	// writer uses it to enclose the first field of any row that would otherwise
+	// collide, so a row written here always reads back.
+	if c := plan2.GetCSVComment(param); c != "" {
+		cfg.Comment = []byte(c)
+	}
+	if cfg.Format == "" {
+		cfg.Format = externalwrite.FormatCSV
+	}
+	// CSV delimiters from the external table's FIELDS/LINES config, if present.
+	if param.Tail != nil {
+		if f := param.Tail.Fields; f != nil {
+			if f.Terminated != nil {
+				cfg.FieldTerminator = []byte(f.Terminated.Value)
+			}
+			if f.EnclosedBy != nil {
+				cfg.EnclosedBy = f.EnclosedBy.Value
+			}
+			// Mirror the reader: nil -> default '\\', explicit '' -> escaping
+			// disabled, anything else -> that character.
+			if f.EscapedBy != nil {
+				if f.EscapedBy.Value == 0 {
+					cfg.NoEscape = true
+				} else {
+					cfg.EscapedBy = f.EscapedBy.Value
+				}
+			}
+		}
+		if l := param.Tail.Lines; l != nil {
+			if l.TerminatedBy != nil {
+				cfg.LineTerminator = []byte(l.TerminatedBy.Value)
+			}
+			// The reader strips (and requires) this prefix per line; emit it so
+			// the table can read back its own files.
+			if l.StartingBy != "" {
+				cfg.LineStartingBy = []byte(l.StartingBy)
+			}
+		}
+	}
+
+	newCtx := &insert.InsertCtx{
+		Ref:             ref,
+		AddAffectedRows: addAffectedRows,
+		Engine:          eng,
+		Attrs:           attrs,
+		TableDef:        tableDef,
+		ExternalConfig:  cfg,
+	}
+	arg := insert.NewArgument()
+	arg.InsertCtx = newCtx
+	arg.ToExternal = true
+	return arg, nil
+}
+
 func constructProjection(node *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
 	arg.ProjectList = node.ProjectList
@@ -898,6 +1093,8 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 				FileSize:        FileSize,
 				ClusterTable:    node.GetClusterTable(),
 				StrictSqlMode:   strictSqlMode,
+				LoadEmptyNumericAsZero: param.ExternType == int32(plan.ExternType_LOAD) &&
+					(param.Parallel || param.ParallelLoadRequested),
 			},
 			ExParam: external.ExParam{
 				Fileparam: new(external.ExFileparam),
@@ -996,11 +1193,25 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 	arg.DedupColName = node.DedupColName
 	arg.DedupColTypes = node.DedupColTypes
 	arg.DelColIdx = -1
+	arg.DedupDeleteMarkerColIdx = -1
 	if node.DedupJoinCtx != nil {
+		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
 		if node.OnDuplicateAction == plan.Node_FAIL && len(node.DedupJoinCtx.OldColList) > 0 {
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
+			if len(node.DedupJoinCtx.OldColList) > 1 {
+				arg.DedupDeleteMarkerColIdx = node.DedupJoinCtx.OldColList[1].ColPos
+				arg.DedupDeleteKeepColIdxList = dedupDeleteKeepColIdxList(node)
+			}
+		}
+		if len(node.DedupJoinCtx.OldColCaptureList) > 0 {
+			arg.OldColCapturePlaceholderIdxList = make([]int32, len(node.DedupJoinCtx.OldColCaptureList))
+			arg.OldColCaptureProbeIdxList = make([]int32, len(node.DedupJoinCtx.OldColCaptureList))
+			for i, capture := range node.DedupJoinCtx.OldColCaptureList {
+				arg.OldColCapturePlaceholderIdxList[i] = capture.BuildPlaceholder.ColPos
+				arg.OldColCaptureProbeIdxList[i] = capture.ProbeSource.ColPos
+			}
 		}
 	}
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
@@ -1013,6 +1224,23 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		panic("wrong joinmap tag!")
 	}
 	return arg
+}
+
+func dedupDeleteKeepColIdxList(node *plan.Node) []int32 {
+	if node.DedupJoinCtx == nil {
+		return nil
+	}
+
+	seen := make(map[int32]struct{}, len(node.DedupJoinCtx.OldColList))
+	keepCols := make([]int32, 0, len(node.DedupJoinCtx.OldColList))
+	for _, col := range node.DedupJoinCtx.OldColList {
+		if _, ok := seen[col.ColPos]; ok {
+			continue
+		}
+		seen[col.ColPos] = struct{}{}
+		keepCols = append(keepCols, col.ColPos)
+	}
+	return keepCols
 }
 
 func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *rightdedupjoin.RightDedupJoin {
@@ -1327,7 +1555,12 @@ func constructShuffleOperatorForJoinV2(bucketNum int32, node *plan.Node, left bo
 	}
 
 	hashCol, typ := plan2.GetHashColumn(expr)
-	arg.ShuffleColIdx = hashCol.ColPos
+	if hashCol != nil {
+		arg.ShuffleColIdx = hashCol.ColPos
+	} else {
+		// expression-based shuffle (e.g., serial_full)
+		arg.ShuffleExpr = plan2.DeepCopyExpr(expr)
+	}
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
@@ -1355,7 +1588,12 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	}
 
 	hashCol, typ := plan2.GetHashColumn(expr)
-	arg.ShuffleColIdx = hashCol.ColPos
+	if hashCol != nil {
+		arg.ShuffleColIdx = hashCol.ColPos
+	} else {
+		// expression-based shuffle (e.g., serial_full)
+		arg.ShuffleExpr = plan2.DeepCopyExpr(expr)
+	}
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
@@ -1449,6 +1687,7 @@ func constructMergeTop(node *plan.Node, topN *plan.Expr) *mergetop.MergeTop {
 func constructMergeOrder(node *plan.Node) *mergeorder.MergeOrder {
 	arg := mergeorder.NewArgument()
 	arg.OrderBySpecs = node.OrderBy
+	arg.SpillThreshold = node.SpillMem
 	return arg
 }
 
@@ -1493,13 +1732,14 @@ func constructProductL2(node *plan.Node, proc *process.Process) *productl2.Produ
 	return arg
 }
 
-func constructLoopJoin(node *plan.Node, rightTypes []types.Type, proc *process.Process) *loopjoin.LoopJoin {
+func constructLoopJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *loopjoin.LoopJoin {
 	result := make([]colexec.ResultPos, len(node.ProjectList))
 	for i, expr := range node.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := loopjoin.NewArgument()
 	arg.ResultCols = result
+	arg.LeftTypes = leftTypes
 	arg.RightTypes = rightTypes
 	arg.NonEqCond = colexec.RewriteFilterExprList(node.OnList)
 	arg.JoinType = node.JoinType
@@ -1620,10 +1860,13 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
 		ret.IsDedup = true
+		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DelColIdx = arg.DelColIdx
+		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
+		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
@@ -1694,10 +1937,13 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
 		ret.IsDedup = true
+		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DelColIdx = arg.DelColIdx
+		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
+		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}

@@ -106,7 +106,8 @@ type uuidProcMapItem struct {
 
 type UuidProcMap struct {
 	sync.Mutex
-	mp map[uuid.UUID]uuidProcMapItem
+	mp      map[uuid.UUID]uuidProcMapItem
+	changed chan struct{}
 }
 
 const (

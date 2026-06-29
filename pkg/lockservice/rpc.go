@@ -34,6 +34,7 @@ import (
 
 var (
 	defaultRPCTimeout          = time.Second * 10
+	defaultRPCWriteTimeout     = time.Second * 3
 	defaultHandleWorkers       = 12
 	defaultHandleGetTxnWorkers = 4
 )
@@ -169,6 +170,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		case pb.Method_Lock,
 			pb.Method_Unlock,
 			pb.Method_GetTxnLock,
+			pb.Method_GetLockHolder,
 			pb.Method_KeepRemoteLock:
 			sid = getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
 			c.cluster.GetCNServiceWithoutWorkingState(
@@ -442,6 +444,18 @@ func writeResponse(
 	err error,
 	cs morpc.ClientSession,
 ) {
+	_ = writeResponseWithDeadline(logger, cancel, resp, err, cs, defaultRPCWriteTimeout, nil)
+}
+
+func writeResponseWithDeadline(
+	logger *log.MOLogger,
+	cancel context.CancelFunc,
+	resp *pb.Response,
+	err error,
+	cs morpc.ClientSession,
+	timeout time.Duration,
+	extraFields func() []zap.Field,
+) error {
 	if cancel != nil {
 		defer cancel()
 	}
@@ -455,12 +469,45 @@ func writeResponse(
 		logger.Debug("handle request completed",
 			zap.String("response", detail))
 	}
-	// after write, response will be released by rpc
-	if err := cs.AsyncWrite(resp); err != nil {
-		logger.Error("write response failed",
-			zap.Error(err),
-			zap.String("response", detail))
+	requestID := resp.RequestID
+	method := resp.Method.String()
+	remote := cs.RemoteAddress()
+
+	writeCtx, writeCancel := context.WithTimeout(context.Background(), timeout)
+	defer writeCancel()
+	if sessionCtx := cs.SessionCtx(); sessionCtx != nil {
+		stop := context.AfterFunc(sessionCtx, writeCancel)
+		defer stop()
 	}
+	if err := cs.Write(writeCtx, resp); err != nil {
+		var extra []zap.Field
+		if extraFields != nil {
+			extra = extraFields()
+		}
+		fields := []zap.Field{
+			zap.Error(err),
+			zap.Uint64("request-id", requestID),
+			zap.String("method", method),
+			zap.String("remote", remote),
+			zap.String("response", detail),
+		}
+		fields = append(fields, extra...)
+		logger.Error("write response failed", fields...)
+		// A dropped response leaves the peer's Future waiting unless the
+		// session is closed and the client-side backend fails pending futures.
+		if closeErr := cs.Close(); closeErr != nil {
+			closeFields := []zap.Field{
+				zap.Error(closeErr),
+				zap.Uint64("request-id", requestID),
+				zap.String("method", method),
+				zap.String("remote", remote),
+			}
+			closeFields = append(closeFields, extra...)
+			logger.Error("close client session after write response failed", closeFields...)
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *server) setupRemoteHandles(

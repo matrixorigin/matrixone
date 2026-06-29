@@ -86,6 +86,11 @@ func WithDisttaeEngineQuota(v uint64) TestDisttaeEngineOptions {
 		e.quota = v
 	}
 }
+func WithDisttaeEngineExtraWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.extraWorkspaceThreshold = v
+	}
+}
 
 func CreateEngines(
 	ctx context.Context,

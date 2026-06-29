@@ -63,3 +63,208 @@ REPLACE INTO bug_22340 VALUES (1,100,'[1, 2, 3]'),(2,100,'[1, 2, 3]'),(3,100,'[1
 drop table bug_22340;
 
 drop database replace_db;
+use `replace`;
+
+-- test NULL on unique key column: multiple NULLs should not conflict
+drop table if exists t_null_uk;
+create table t_null_uk(id int primary key, a int, b varchar(64), unique key(a));
+replace into t_null_uk values (1, NULL, 'first');
+replace into t_null_uk values (2, NULL, 'second');
+select id, a, b from t_null_uk order by id;
+replace into t_null_uk values (3, 1, 'third');
+select id, a, b from t_null_uk order by id;
+drop table t_null_uk;
+
+-- test fake PK table with unique key only
+drop table if exists t_fake_pk;
+create table t_fake_pk(a int unique key, b varchar(64));
+replace into t_fake_pk values (1, 'hello');
+select * from t_fake_pk;
+replace into t_fake_pk values (1, 'world');
+select * from t_fake_pk;
+replace into t_fake_pk values (2, 'foo');
+select * from t_fake_pk order by a;
+drop table t_fake_pk;
+
+-- test duplicate source keys within one REPLACE statement
+drop table if exists t_replace_dup_pk;
+create table t_replace_dup_pk(id int primary key, v int);
+replace into t_replace_dup_pk values (1, 10), (1, 20), (2, 30);
+select * from t_replace_dup_pk order by id;
+drop table t_replace_dup_pk;
+
+drop table if exists t_replace_dup_pk_src;
+create table t_replace_dup_pk_src(id int primary key, v int);
+drop table if exists s_replace_dup_pk;
+create table s_replace_dup_pk(id int, v int);
+insert into s_replace_dup_pk values (1, 10), (1, 20), (2, 30);
+replace into t_replace_dup_pk_src select * from s_replace_dup_pk order by v;
+select * from t_replace_dup_pk_src order by id;
+drop table s_replace_dup_pk;
+drop table t_replace_dup_pk_src;
+
+drop table if exists t_replace_dup_uk;
+create table t_replace_dup_uk(id int primary key, u int unique, v int);
+replace into t_replace_dup_uk values (1, 1, 10), (2, 1, 20), (3, 2, 30);
+select * from t_replace_dup_uk order by u;
+drop table t_replace_dup_uk;
+
+drop table if exists t_replace_dup_pk_existing;
+create table t_replace_dup_pk_existing(id int primary key, v int);
+insert into t_replace_dup_pk_existing values (1, 5);
+replace into t_replace_dup_pk_existing values (1, 10), (1, 20), (2, 30);
+select * from t_replace_dup_pk_existing order by id;
+drop table t_replace_dup_pk_existing;
+
+drop table if exists t_replace_dup_uk_existing;
+create table t_replace_dup_uk_existing(id int primary key, u int unique, v int);
+insert into t_replace_dup_uk_existing values (9, 1, 5);
+replace into t_replace_dup_uk_existing values (1, 1, 10), (2, 1, 20), (3, 2, 30);
+select * from t_replace_dup_uk_existing order by u;
+drop table t_replace_dup_uk_existing;
+
+-- test INSERT ON DUPLICATE KEY UPDATE rewrite to REPLACE
+drop table if exists t_odku;
+create table t_odku(id int primary key, name varchar(64), val int);
+insert into t_odku values (1, 'a', 10);
+insert into t_odku values (1, 'b', 20) on duplicate key update name = values(name), val = values(val);
+select * from t_odku;
+drop table t_odku;
+
+-- test PK + UK conflict
+drop table if exists t_pk_uk;
+create table t_pk_uk(id int primary key, a int unique, b varchar(64));
+insert into t_pk_uk values (1, 10, 'first'), (2, 20, 'second');
+replace into t_pk_uk values (1, 30, 'updated');
+select * from t_pk_uk order by id;
+drop table t_pk_uk;
+
+-- test REPLACE on AUTO_INCREMENT table with UNIQUE constraint
+-- only the UNIQUE column conflicts; PK is auto-generated
+drop table if exists ai_replace_test;
+create table ai_replace_test (id int auto_increment primary key, name varchar(50) unique, value int);
+insert into ai_replace_test (name, value) values ('key1', 100), ('key2', 200);
+replace into ai_replace_test (name, value) values ('key1', 300);
+select * from ai_replace_test order by id;
+insert into ai_replace_test (name, value) values ('key3', 400);
+select * from ai_replace_test order by id;
+drop table ai_replace_test;
+
+-- test REPLACE on AUTO_INCREMENT table with composite UNIQUE key
+-- Distractor row (1, 2) shares the first key part with (1, 1) but must NOT be
+-- deleted when REPLACE targets (1, 1). This ensures the planner matches on
+-- ALL composite-key parts, not just the first one.
+drop table if exists ai_composite_uk;
+create table ai_composite_uk (id int auto_increment primary key, a int, b int, value int, unique key uk_ab(a, b));
+insert into ai_composite_uk (a, b, value) values (1, 1, 100), (1, 2, 150), (2, 2, 200);
+replace into ai_composite_uk (a, b, value) values (1, 1, 300);
+select * from ai_composite_uk order by id;
+drop table ai_composite_uk;
+
+-- test REPLACE on AUTO_INCREMENT table with multiple UNIQUE indexes
+drop table if exists ai_multi_uk;
+create table ai_multi_uk (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into ai_multi_uk (name, email, value) values ('n1', 'n1@a.com', 100), ('n2', 'n2@a.com', 200);
+replace into ai_multi_uk (name, email, value) values ('n1', 'n1_new@a.com', 300);
+select * from ai_multi_uk order by id;
+replace into ai_multi_uk (name, email, value) values ('n_new', 'n2@a.com', 400);
+select * from ai_multi_uk order by id;
+drop table ai_multi_uk;
+
+-- test cross-key REPLACE keeps old-row delete side effects
+drop table if exists t_replace_cross_key_keep_last;
+create table t_replace_cross_key_keep_last(id int primary key, u int unique, v int);
+insert into t_replace_cross_key_keep_last values (1, 100, 0);
+replace into t_replace_cross_key_keep_last values (1, 200, 10), (2, 200, 20);
+select * from t_replace_cross_key_keep_last order by id;
+drop table t_replace_cross_key_keep_last;
+
+-- test REPLACE NULL-PK filtering uses the actual primary key column
+drop table if exists t_replace_pk_not_first;
+create table t_replace_pk_not_first(a int null, id int primary key, u int unique);
+insert into t_replace_pk_not_first values (0, 1, 100);
+replace into t_replace_pk_not_first values (null, 1, 200), (null, 2, 200);
+select * from t_replace_pk_not_first order by id;
+drop table t_replace_pk_not_first;
+
+-- test REPLACE rechecks NOT NULL after filtering delete-only rows
+drop table if exists t_replace_not_null_after_filter;
+create table t_replace_not_null_after_filter(a int null, id int primary key, u int unique, b int not null);
+insert into t_replace_not_null_after_filter values (0, 1, 100, 1);
+replace into t_replace_not_null_after_filter values (null, 1, 200, 10), (5, 2, 200, null);
+select * from t_replace_not_null_after_filter order by id;
+drop table t_replace_not_null_after_filter;
+
+-- one new row conflicts with different old rows via different unique keys:
+-- delete every matched old row and insert the new row exactly once
+drop table if exists t_replace_multi_uk_fanout;
+create table t_replace_multi_uk_fanout (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into t_replace_multi_uk_fanout (name, email, value) values ('a', 'x@a.com', 100), ('b', 'y@a.com', 200);
+replace into t_replace_multi_uk_fanout (name, email, value) values ('a', 'y@a.com', 300);
+select name, email, value from t_replace_multi_uk_fanout order by name;
+drop table t_replace_multi_uk_fanout;
+
+-- new row's explicit primary key matches one old row while two unique keys
+-- match two other old rows (three-way fan-out)
+drop table if exists t_replace_pk_and_uk_fanout;
+create table t_replace_pk_and_uk_fanout (id int primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into t_replace_pk_and_uk_fanout values (1, 'a', 'x@a.com', 100), (2, 'b', 'y@a.com', 200), (3, 'c', 'z@a.com', 300);
+replace into t_replace_pk_and_uk_fanout values (1, 'b', 'z@a.com', 999);
+select * from t_replace_pk_and_uk_fanout order by id;
+drop table t_replace_pk_and_uk_fanout;
+
+-- fake-PK table (no real primary key) with multiple unique keys: a new row
+-- conflicting on different unique keys must also delete all matched old rows
+drop table if exists t_replace_fakepk_multi_uk;
+create table t_replace_fakepk_multi_uk (a varchar(50) unique, b varchar(100) unique, v int);
+insert into t_replace_fakepk_multi_uk values ('a', 'x', 100), ('b', 'y', 200);
+replace into t_replace_fakepk_multi_uk values ('a', 'y', 300);
+select * from t_replace_fakepk_multi_uk order by a;
+drop table t_replace_fakepk_multi_uk;
+
+-- composite unique key fan-out
+drop table if exists t_replace_composite_uk_fanout;
+create table t_replace_composite_uk_fanout (id int primary key, a int, b int, v int, unique key uk(a, b));
+insert into t_replace_composite_uk_fanout values (1, 10, 20, 100), (2, 30, 40, 200);
+replace into t_replace_composite_uk_fanout values (3, 10, 20, 999);
+select * from t_replace_composite_uk_fanout order by id;
+drop table t_replace_composite_uk_fanout;
+
+-- multi-row REPLACE batch where each row independently fans out
+drop table if exists t_replace_multi_uk_batch;
+create table t_replace_multi_uk_batch (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into t_replace_multi_uk_batch (name, email, value) values ('a', 'x@a.com', 100), ('b', 'y@a.com', 200), ('c', 'z@a.com', 300);
+replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com', 111), ('b', 'z@a.com', 222);
+select name, email, value from t_replace_multi_uk_batch order by name;
+drop table t_replace_multi_uk_batch;
+
+-- fake-PK table with a composite nullable unique key: a REPLACE whose composite
+-- unique-key part is statically NULL (column a omitted -> NULL) serializes to a NULL
+-- key, can never conflict, and behaves like a plain INSERT (no existing row deleted;
+-- a NULL key is allowed multiple times). A fully non-NULL key still conflicts and replaces.
+drop table if exists t_replace_fakepk_comp_null;
+create table t_replace_fakepk_comp_null (a int, b int, c varchar(20), unique key uk_ab(a, b));
+insert into t_replace_fakepk_comp_null values (1, 1, 'one'), (2, 2, 'two');
+replace into t_replace_fakepk_comp_null (b, c) values (1, 'null-a');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+replace into t_replace_fakepk_comp_null (b, c) values (1, 'null-a-2');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+replace into t_replace_fakepk_comp_null (a, b, c) values (1, 1, 'one-replaced');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+drop table t_replace_fakepk_comp_null;
+
+-- REPLACE enforces the child->parent foreign key on the inserted row (modern path).
+-- An orphan reference fails for both insert-only REPLACE and conflict REPLACE; a valid
+-- parent succeeds.
+drop table if exists t_replace_fk_child;
+drop table if exists t_replace_fk_parent;
+create table t_replace_fk_parent(id int primary key);
+create table t_replace_fk_child(id int primary key, pid int, foreign key(pid) references t_replace_fk_parent(id));
+insert into t_replace_fk_parent values (1), (2);
+replace into t_replace_fk_child values (1, 999);
+insert into t_replace_fk_child values (1, 1);
+replace into t_replace_fk_child values (1, 888);
+replace into t_replace_fk_child values (2, 2);
+select id, pid from t_replace_fk_child order by id;
+drop table if exists t_replace_fk_child;
+drop table if exists t_replace_fk_parent;

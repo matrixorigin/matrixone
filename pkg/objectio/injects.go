@@ -57,6 +57,10 @@ const (
 	FJ_CDCExecutor  = "fj/cdc/executor"
 	FJ_CDCScanTable = "fj/cdc/scantable"
 
+	FJ_PublicationSnapshotFinished = "fj/publication/snapshot/finished"
+
+	FJ_UpstreamSQLHelper = "fj/publication/upstream/sqlhelper"
+
 	FJ_WALReplayFailed = "fj/wal/replay/failed"
 
 	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
@@ -69,8 +73,9 @@ const (
 	FJ_CNSubscribeTableFail  = "fj/cn/subscribe_table_fail"
 	FJ_CNWorkspaceForceFlush = "fj/cn/workspace_force_flush"
 
-	FJ_CNCLONEFailed    = "fj/cn/clone_fails"
-	FJ_CNNeedRetryError = "fj/cn/need_retry_error"
+	FJ_CNCLONEFailed                    = "fj/cn/clone_fails"
+	FJ_CNCommitAfterWorkspaceDumpFailed = "fj/cn/commit_after_workspace_dump_fails"
+	FJ_CNNeedRetryError                 = "fj/cn/need_retry_error"
 )
 
 const (
@@ -197,6 +202,11 @@ func LogCNFlushSmallObjsInjected(args ...string) (bool, int) {
 func CNWorkspaceForceFlushInjected() bool {
 	_, _, injected := fault.TriggerFault(FJ_CNWorkspaceForceFlush)
 	return injected
+}
+
+func CNCommitAfterWorkspaceDumpFailedInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CNCommitAfterWorkspaceDumpFailed)
+	return sarg, injected
 }
 
 func LogCNNeedRetryErrorInjected(args ...string) (bool, int) {
@@ -698,4 +708,50 @@ func InjectWALReplayFailed(msg string) (rmFault func() (bool, error), err error)
 		return fault.RemoveFaultPoint(context.Background(), FJ_WALReplayFailed)
 	}
 	return
+}
+
+func InjectPublicationSnapshotFinished(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_PublicationSnapshotFinished,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_PublicationSnapshotFinished)
+	}
+	return
+}
+
+func PublicationSnapshotFinishedInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_PublicationSnapshotFinished)
+	return sarg, injected
+}
+
+func InjectUpstreamSQLHelper(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_UpstreamSQLHelper,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_UpstreamSQLHelper)
+	}
+	return
+}
+
+func UpstreamSQLHelperInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_UpstreamSQLHelper)
+	return sarg, injected
 }

@@ -92,6 +92,12 @@ const (
 	FPPauseDaemonTask
 	FPCancelDaemonTask
 	FPResumeDaemonTask
+	FPCreateSQLTask
+	FPAlterSQLTask
+	FPDropSQLTask
+	FPExecuteSQLTask
+	FPShowSQLTasks
+	FPShowSQLTaskRuns
 	FPDropConnector
 	FPShowConnectors
 	FPDeallocate
@@ -102,9 +108,17 @@ const (
 	FPAnalyzeStmt
 	FPExplainStmt
 	FPInternalCmdFieldList
+	FPInternalCmdGetSnapshotTs
+	FPInternalCmdGetDatabases
+	FPInternalCmdGetMoIndexes
+	FPInternalCmdGetDdl
+	FPInternalCmdGetObject
+	FPInternalCmdObjectList
+	FPInternalCmdCheckSnapshotFlushed
 	FPCreatePublication
 	FPAlterPublication
 	FPDropPublication
+	FPCreateSubscription
 	FPShowSubscriptions
 	FPCreateStage
 	FPDropStage
@@ -138,6 +152,7 @@ const (
 	FPBackupStart
 	FPCreateSnapShot
 	FPDropSnapShot
+	FPCheckSnapshotFlushed
 	FPRestoreSnapShot
 	FPUpgradeStatement
 	FPCreatePitr
@@ -196,6 +211,9 @@ const (
 	FPShowRecoveryWindow
 	FPCloneDatabase
 	FPCloneTable
+	FPObjectList
+	FPGetDdl
+	FPGetObject
 	FPDataBranch
 )
 
@@ -294,14 +312,28 @@ type PrepareStmt struct {
 Disguise the COMMAND CMD_FIELD_LIST as sql query.
 */
 const (
-	cmdFieldListSql           = "__++__internal_cmd_field_list"
-	cmdFieldListSqlLen        = len(cmdFieldListSql)
-	cloudUserTag              = "cloud_user"
-	cloudNoUserTag            = "cloud_nonuser"
-	saveResultTag             = "save_result"
-	validatePasswordPolicyTag = "validate_password.policy"
-	validatePasswordPolicyLow = "low"
-	validatePasswordPolicyMed = "medium"
+	cmdFieldListSql               = "__++__internal_cmd_field_list"
+	cmdFieldListSqlLen            = len(cmdFieldListSql)
+	cmdGetSnapshotTsSql           = "__++__internal_get_snapshot_ts"
+	cmdGetSnapshotTsSqlLen        = len(cmdGetSnapshotTsSql)
+	cmdGetDatabasesSql            = "__++__internal_get_databases"
+	cmdGetDatabasesSqlLen         = len(cmdGetDatabasesSql)
+	cmdGetMoIndexesSql            = "__++__internal_get_mo_indexes"
+	cmdGetMoIndexesSqlLen         = len(cmdGetMoIndexesSql)
+	cmdGetDdlSql                  = "__++__internal_get_ddl"
+	cmdGetDdlSqlLen               = len(cmdGetDdlSql)
+	cmdGetObjectSql               = "__++__internal_get_object"
+	cmdGetObjectSqlLen            = len(cmdGetObjectSql)
+	cmdObjectListSql              = "__++__internal_object_list"
+	cmdObjectListSqlLen           = len(cmdObjectListSql)
+	cmdCheckSnapshotFlushedSql    = "__++__internal_check_snapshot_flushed"
+	cmdCheckSnapshotFlushedSqlLen = len(cmdCheckSnapshotFlushedSql)
+	cloudUserTag                  = "cloud_user"
+	cloudNoUserTag                = "cloud_nonuser"
+	saveResultTag                 = "save_result"
+	validatePasswordPolicyTag     = "validate_password.policy"
+	validatePasswordPolicyLow     = "low"
+	validatePasswordPolicyMed     = "medium"
 )
 
 var _ tree.Statement = &InternalCmdFieldList{}
@@ -329,6 +361,224 @@ func (icfl *InternalCmdFieldList) StmtKind() tree.StmtKind {
 
 func (icfl *InternalCmdFieldList) GetStatementType() string { return "InternalCmd" }
 func (icfl *InternalCmdFieldList) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetSnapshotTs{}
+
+// InternalCmdGetSnapshotTs the internal command to get snapshot ts by publication permission
+type InternalCmdGetSnapshotTs struct {
+	snapshotName    string
+	accountName     string
+	publicationName string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetSnapshotTs) Free() {
+}
+
+func (ic *InternalCmdGetSnapshotTs) String() string {
+	return makeGetSnapshotTsSql(ic.snapshotName, ic.accountName, ic.publicationName)
+}
+
+func (ic *InternalCmdGetSnapshotTs) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetSnapshotTsSql(ic.snapshotName, ic.accountName, ic.publicationName))
+}
+
+func (ic *InternalCmdGetSnapshotTs) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetSnapshotTs) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetSnapshotTs) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetDatabases{}
+
+// InternalCmdGetDatabases the internal command to get databases by publication permission
+// Parameters: snapshotName, accountName, publicationName, level, dbName, tableName
+// Returns: list of database names covered by the snapshot
+type InternalCmdGetDatabases struct {
+	snapshotName    string
+	accountName     string
+	publicationName string
+	level           string
+	dbName          string
+	tableName       string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetDatabases) Free() {
+}
+
+func (ic *InternalCmdGetDatabases) String() string {
+	return makeGetDatabasesSql(ic.snapshotName, ic.accountName, ic.publicationName, ic.level, ic.dbName, ic.tableName)
+}
+
+func (ic *InternalCmdGetDatabases) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetDatabasesSql(ic.snapshotName, ic.accountName, ic.publicationName, ic.level, ic.dbName, ic.tableName))
+}
+
+func (ic *InternalCmdGetDatabases) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetDatabases) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetDatabases) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetMoIndexes{}
+
+// InternalCmdGetMoIndexes the internal command to get mo_indexes by publication permission
+// Parameters: tableId, subscriptionAccountName, publicationName, snapshotName
+// Returns: list of index records from mo_indexes table
+type InternalCmdGetMoIndexes struct {
+	tableId                 uint64
+	subscriptionAccountName string
+	publicationName         string
+	snapshotName            string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetMoIndexes) Free() {
+}
+
+func (ic *InternalCmdGetMoIndexes) String() string {
+	return makeGetMoIndexesSql(ic.tableId, ic.subscriptionAccountName, ic.publicationName, ic.snapshotName)
+}
+
+func (ic *InternalCmdGetMoIndexes) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetMoIndexesSql(ic.tableId, ic.subscriptionAccountName, ic.publicationName, ic.snapshotName))
+}
+
+func (ic *InternalCmdGetMoIndexes) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetMoIndexes) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetMoIndexes) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetDdl{}
+
+// InternalCmdGetDdl the internal command to get DDL by publication permission
+// Parameters: snapshotName, subscriptionAccountName, publicationName, level, dbName, tableName
+// Returns: list of DDL records (dbname, tablename, tableid, tablesql)
+type InternalCmdGetDdl struct {
+	snapshotName            string
+	subscriptionAccountName string
+	publicationName         string
+	level                   string
+	dbName                  string
+	tableName               string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetDdl) Free() {
+}
+
+func (ic *InternalCmdGetDdl) String() string {
+	return makeGetDdlSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName, ic.level, ic.dbName, ic.tableName)
+}
+
+func (ic *InternalCmdGetDdl) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetDdlSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName, ic.level, ic.dbName, ic.tableName))
+}
+
+func (ic *InternalCmdGetDdl) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetDdl) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetDdl) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetObject{}
+
+// InternalCmdGetObject the internal command to get object data by publication permission
+// Parameters: subscriptionAccountName, publicationName, objectName, chunkIndex
+// Returns: data chunk from the object file
+type InternalCmdGetObject struct {
+	subscriptionAccountName string
+	publicationName         string
+	objectName              string
+	chunkIndex              int64
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetObject) Free() {
+}
+
+func (ic *InternalCmdGetObject) String() string {
+	return makeGetObjectSql(ic.subscriptionAccountName, ic.publicationName, ic.objectName, ic.chunkIndex)
+}
+
+func (ic *InternalCmdGetObject) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetObjectSql(ic.subscriptionAccountName, ic.publicationName, ic.objectName, ic.chunkIndex))
+}
+
+func (ic *InternalCmdGetObject) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetObject) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetObject) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdObjectList{}
+
+// InternalCmdObjectList the internal command to get object list by publication permission
+// Parameters: snapshotName, againstSnapshotName, subscriptionAccountName, publicationName
+// The handler will use the snapshot's level to determine dbName and tableName scope
+// Returns: object list records
+type InternalCmdObjectList struct {
+	snapshotName            string
+	againstSnapshotName     string
+	subscriptionAccountName string
+	publicationName         string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdObjectList) Free() {
+}
+
+func (ic *InternalCmdObjectList) String() string {
+	return makeObjectListSql(ic.snapshotName, ic.againstSnapshotName, ic.subscriptionAccountName, ic.publicationName)
+}
+
+func (ic *InternalCmdObjectList) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeObjectListSql(ic.snapshotName, ic.againstSnapshotName, ic.subscriptionAccountName, ic.publicationName))
+}
+
+func (ic *InternalCmdObjectList) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdObjectList) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdObjectList) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdCheckSnapshotFlushed{}
+
+// InternalCmdCheckSnapshotFlushed the internal command to check if snapshot is flushed by publication permission
+// Parameters: snapshotName, subscriptionAccountName, publicationName
+// Returns: result (bool)
+type InternalCmdCheckSnapshotFlushed struct {
+	snapshotName            string
+	subscriptionAccountName string
+	publicationName         string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdCheckSnapshotFlushed) Free() {
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) String() string {
+	return makeCheckSnapshotFlushedSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName)
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeCheckSnapshotFlushedSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName))
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdCheckSnapshotFlushed) GetQueryType() string     { return tree.QueryTypeDQL }
 
 // ExecResult is the result interface of the execution
 type ExecResult interface {
@@ -474,9 +724,13 @@ func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
 	// base
 	allocator := baseSessionAllocator()
 	// size bounded
+	var guestMmuLimit int64 = 1099511627776 // default: 1 << 40
+	if pu != nil && pu.SV != nil {
+		guestMmuLimit = pu.SV.GuestMmuLimitation
+	}
 	allocator = malloc.NewSizeBoundedAllocator(
 		allocator,
-		uint64(pu.SV.GuestMmuLimitation),
+		uint64(guestMmuLimit),
 		nil,
 	)
 	ret := &SessionAllocator{
@@ -487,10 +741,16 @@ func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
 }
 
 func (s *SessionAllocator) Alloc(capacity int) ([]byte, error) {
+	if capacity == 0 {
+		return []byte{}, nil
+	}
 	return s.allocator.Allocate(uint64(capacity), malloc.NoClear)
 }
 
 func (s SessionAllocator) Free(bs []byte) {
+	if bs == nil {
+		return
+	}
 	s.allocator.Deallocate(bs)
 }
 
@@ -1073,11 +1333,6 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
 	}
 
-	// Cloud policy: forbid setting global wait_timeout/interactive_timeout.
-	if name == "wait_timeout" || name == "interactive_timeout" {
-		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
-	}
-
 	if def.Scope == ScopeSession {
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
 	}
@@ -1109,6 +1364,21 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return err
 	}
 
+	if name == "wait_timeout" || name == "interactive_timeout" {
+		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
+			return err
+		}
+	}
+
+	if name == ProtectedDatabases {
+		if newValue, ok := val.(string); ok && len(protectedDatabaseSetFromString(ses, newValue)) == 0 {
+			oldValue, _ := ses.GetGlobalSysVar(name)
+			if oldString, ok := oldValue.(string); ok && len(protectedDatabaseSetFromString(ses, oldString)) != 0 {
+				return moerr.NewInternalErrorNoCtx("protected_databases cannot be cleared directly")
+			}
+		}
+	}
+
 	// save to table first
 	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
 		return
@@ -1133,7 +1403,21 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	if ses.sesSysVars == nil {
 		return gSysVarsDefs[name].Default, nil
 	}
-	return ses.sesSysVars.Get(name), nil
+	// sesSysVars is a clone of gSysVars (the per-account catalog
+	// snapshot from mo_mysql_compatibility_mode). Sysvars added to
+	// gSysVarsDefs after that snapshot — or never explicitly SET
+	// GLOBAL — are absent from the per-session map; SystemVariables.Get
+	// returns interface{}(nil) on map miss. Falling back to the
+	// registered Default matches MySQL `SELECT @@name` semantics
+	// (session value > global default, never nil for a registered
+	// name) and fixes downstream consumers like sub-Compiles spawned
+	// by CREATE TABLE CLONE that would otherwise see nil for
+	// vector-index sysvars (ivf_threads_build, kmeans_train_percent,
+	// …) and trip BuildIdxcronMetadata or similar nil-rejecting paths.
+	if v := ses.sesSysVars.Get(name); v != nil {
+		return v, nil
+	}
+	return gSysVarsDefs[name].Default, nil
 }
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
@@ -1157,7 +1441,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 
 	if name == "wait_timeout" || name == "interactive_timeout" {
-		if err = validateSessionTimeoutLimits(ctx, ses, name, val); err != nil {
+		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
 			return err
 		}
 	}
@@ -1189,7 +1473,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	return
 }
 
-func validateSessionTimeoutLimits(ctx context.Context, ses *Session, name string, val interface{}) error {
+func validateTimeoutLimits(ctx context.Context, ses *Session, name string, val interface{}) error {
 	v, ok := val.(int64)
 	if !ok {
 		return moerr.NewInvalidInputf(ctx, "invalid %s value type", name)

@@ -1,7 +1,10 @@
 .idea/
-.kiro
+.kiro/
+.cursor/
+/CLAUDE.md
 *.o
 *.a
+*.so
 *.exe
 *.lib
 *.swp
@@ -54,6 +57,9 @@ thirdparties/fp16/*
 thirdparties/install/*
 thirdparties/usearch-*/*
 **/lib
+# Staged at the repo root by `make jieba-dict`, alongside `lib/` from thirdparties.
+# Source-of-truth dict lives at pkg/monlp/tokenizer/dict and stays tracked.
+/dict
 
 # bvt generate files
 test/distributed/resources/into_outfile/outfile_*.csv

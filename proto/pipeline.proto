@@ -69,6 +69,7 @@ message Shuffle {
   repeated uint64 shuffle_ranges_uint64 = 6;
   repeated int64 shuffle_ranges_int64 = 7;
   plan.RuntimeFilterSpec runtimeFilterSpec = 8;
+  plan.Expr ShuffleExpr = 9;
 }
 
 message Dispatch {
@@ -131,6 +132,16 @@ message Insert {
   int32 partition_idx = 8;
   bool is_end = 9;
   plan.TableDef table_def = 10;
+  // Writable external table: this insert writes stage files instead of an
+  // engine relation. The writer config is rebuilt on the receiving CN from
+  // table_def's stored ExternParam; the statement-start timestamp (used to
+  // expand WRITE_FILE_PATTERN time directives consistently) and the session
+  // time zone (name + offset-at-statement-time fallback; the generic session
+  // codec round-trips zones lossily) travel here.
+  bool to_external = 11;
+  int64 external_stmt_unix_nano = 12;
+  string external_tz_name = 13;
+  int32 external_tz_offset_sec = 14;
 }
 
 message MultiUpdate {
@@ -218,16 +229,7 @@ message PreInsertSecondaryIndex {
   plan.PreInsertUkCtx pre_insert_sk_ctx = 1;
 }
 
-message OnDuplicateKey {
-  // letter case: origin
-  repeated string attrs = 1;
-  int32 insert_col_count = 2;
-  repeated plan.Expr unique_col_check_expr = 3;
-  repeated string unique_cols = 4;
-  repeated int32 on_duplicate_idx = 5;
-  map<string, plan.Expr> on_duplicate_expr = 6;
-  bool is_ignore = 7;
-}
+// OnDuplicateKey removed: legacy ON DUPLICATE KEY operator path eliminated.
 
 message FuzzyFilter {
   float N = 1;
@@ -260,8 +262,9 @@ message LoopJoin {
   repeated int32 rel_list = 2;
   repeated int32 col_list = 3;
   plan.Expr non_eq_cond = 4;
-  repeated plan.Type right_types = 5 [(gogoproto.nullable) = false];
-  int32 join_map_tag = 6;
+  repeated plan.Type left_types = 5 [(gogoproto.nullable) = false];
+  repeated plan.Type right_types = 6 [(gogoproto.nullable) = false];
+  int32 join_map_tag = 7;
 }
 
 message SetOp {}
@@ -283,6 +286,15 @@ message DedupJoin {
   repeated int32 update_col_idx_list = 14;
   repeated plan.Expr update_col_expr_list = 15;
   int32 del_col_idx = 16;
+  // Parallel arrays for the REPLACE INTO merged main-table scan. Each entry
+  // at index i means: at probe time, when the build bucket for a row is hit,
+  // capture left (probe) column old_col_capture_probe_idx_list[i] and emit
+  // it in finalize() into right (build) column old_col_capture_placeholder_idx_list[i].
+  repeated int32 old_col_capture_placeholder_idx_list = 17;
+  repeated int32 old_col_capture_probe_idx_list = 18;
+  bool dedup_build_keep_last = 19;
+  repeated int32 dedup_delete_keep_col_idx_list = 20;
+  int32 dedup_delete_marker_col_idx = 21;
 }
 
 message RightDedupJoin {
@@ -342,6 +354,14 @@ message file_offset {
   repeated int64 offset = 1;
 }
 
+message parquet_row_group_shard {
+  int32 file_index = 1;
+  int32 row_group_start = 2;
+  int32 row_group_end = 3;
+  int64 num_rows = 4;
+  int64 bytes = 5;
+}
+
 message ExternalScan {
   repeated plan.ExternAttr attrs = 1 [(gogoproto.nullable) = false];
   repeated int64 file_size = 2;
@@ -353,6 +373,9 @@ message ExternalScan {
   plan.Expr filter = 8;
   bool strict_sql_mode = 9;
   int32 column_list_len = 10;
+  bool parallel_load = 11;
+  bool load_empty_numeric_as_zero = 12;
+  repeated parquet_row_group_shard parquet_row_group_shards = 13;
 }
 
 message StreamScan {
@@ -388,6 +411,9 @@ message HashBuild {
   string dedup_col_name = 13;
   repeated plan.Type dedup_col_types = 14 [(gogoproto.nullable) = false];
   int32 del_col_idx = 15;
+  bool dedup_build_keep_last = 16;
+  int32 dedup_delete_marker_col_idx = 17;
+  repeated int32 dedup_delete_keep_col_idx_list = 18;
 }
 
 message Indexbuild {
@@ -425,7 +451,8 @@ message Instruction {
   TableFunction table_function = 14;
   ExternalScan external_scan = 15;
   Insert insert = 16;
-  OnDuplicateKey on_duplicate_key = 17;
+  // OnDuplicateKey on_duplicate_key = 17; // removed: legacy ON DUPLICATE KEY operator path eliminated
+  reserved 17;
   PreInsert pre_insert = 18;
   PreInsertUnique pre_insert_unique = 19;
   repeated plan.OrderBySpec order_by = 20;
@@ -462,6 +489,7 @@ message Instruction {
   Apply apply = 51;
   MultiUpdate multi_update = 52;
   PostDml post_dml = 53;
+  int64 spill_mem = 54;
 }
 
 message AnalysisList {
@@ -482,7 +510,7 @@ message Source {
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
   bool is_const = 12;
   repeated plan.msgHeader recv_msg_list = 13 [(gogoproto.nullable) = false];
-  bytes bloom_filter = 14;
+  bytes membership_filter = 14;
 }
 
 message NodeInfo {
@@ -531,6 +559,7 @@ message SessionInfo {
   bytes time_zone = 7;
   string account = 8;
   repeated string query_id = 9;
+  int64 lock_wait_timeout = 10;
 }
 
 message SessionLoggerInfo {

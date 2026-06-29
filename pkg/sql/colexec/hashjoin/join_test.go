@@ -144,6 +144,120 @@ func TestJoin(t *testing.T) {
 	}
 }
 
+func TestHashJoinResetAfterEmptyProbe(t *testing.T) {
+	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	}, [][]*plan.Expr{
+		{
+			newExpr(0, types.T_int32.ToType()),
+		},
+		{
+			newExpr(0, types.T_int32.ToType()),
+		},
+	})
+	tc.arg.JoinType = plan.Node_LEFT
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.True(t, res.Batch.Vecs[1].IsConst())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	tc.proc.GetMessageBoard().Reset()
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err = vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.False(t, res.Batch.Vecs[1].IsConst())
+	require.Equal(t, 2, res.Batch.Vecs[1].Length())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestHashJoinConstNullAfterNonEmptyProbe(t *testing.T) {
+	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	}, [][]*plan.Expr{
+		{
+			newExpr(0, types.T_int32.ToType()),
+		},
+		{
+			newExpr(0, types.T_int32.ToType()),
+		},
+	})
+	tc.arg.JoinType = plan.Node_LEFT
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.False(t, res.Batch.Vecs[1].IsConst())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	tc.proc.GetMessageBoard().Reset()
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err = vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.True(t, res.Batch.Vecs[1].IsConstNull())
+	require.Equal(t, 2, res.Batch.Vecs[1].Length())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
 /*
 	func BenchmarkJoin(b *testing.B) {
 		for i := 0; i < b.N; i++ {
@@ -294,14 +408,20 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 }
 
 func resetChildren(arg *HashJoin, m *mpool.MPool) {
-	bat := colexec.MakeMockBatchs(m)
+	resetChildrenWithBatch(arg, colexec.MakeMockBatchs(m))
+}
+
+func resetChildrenWithBatch(arg *HashJoin, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
 
 func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
-	bat := colexec.MakeMockBatchs(m)
+	resetHashBuildChildrenWithBatch(arg, colexec.MakeMockBatchs(m))
+}
+
+func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
@@ -342,6 +462,7 @@ func TestHashJoinTypeCheckers(t *testing.T) {
 			checks: map[string]bool{
 				"IsInner": true, "IsLeftOuter": false, "IsRightOuter": false,
 				"IsFullOuter": false, "IsSemi": false, "IsAnti": false, "IsSingle": false,
+				"EmitUnmatchedProbe": false, "EmitUnmatchedBuild": false,
 			},
 		},
 		{
@@ -349,20 +470,29 @@ func TestHashJoinTypeCheckers(t *testing.T) {
 			joinType: plan.Node_LEFT,
 			checks: map[string]bool{
 				"IsInner": false, "IsLeftOuter": true, "IsRightOuter": false,
+				"EmitUnmatchedProbe": true, "EmitUnmatchedBuild": false,
 			},
 		},
 		{
-			name:     "right outer join",
-			joinType: plan.Node_RIGHT,
+			name:        "right outer join",
+			joinType:    plan.Node_RIGHT,
+			isRightJoin: true,
 			checks: map[string]bool{
 				"IsInner": false, "IsLeftOuter": false, "IsRightOuter": true,
+				"EmitUnmatchedProbe": false, "EmitUnmatchedBuild": true,
 			},
 		},
 		{
-			name:     "full outer join",
-			joinType: plan.Node_OUTER,
+			name:        "full outer join",
+			joinType:    plan.Node_OUTER,
+			isRightJoin: true,
 			checks: map[string]bool{
 				"IsFullOuter": true, "IsInner": false,
+				"IsLeftOuter": false, "IsRightOuter": false,
+				"IsLeftSemi": false, "IsRightSemi": false,
+				"IsLeftAnti": false, "IsRightAnti": false,
+				"IsLeftSingle": false, "IsRightSingle": false,
+				"EmitUnmatchedProbe": true, "EmitUnmatchedBuild": true,
 			},
 		},
 		{
@@ -457,6 +587,14 @@ func TestHashJoinTypeCheckers(t *testing.T) {
 			}
 			if expected, ok := tt.checks["IsRightSingle"]; ok {
 				require.Equal(t, expected, arg.IsRightSingle())
+			}
+			if expected, ok := tt.checks["EmitUnmatchedProbe"]; ok {
+				require.Equal(t, expected, arg.EmitUnmatchedProbe(),
+					"EmitUnmatchedProbe mismatch for %s", tt.name)
+			}
+			if expected, ok := tt.checks["EmitUnmatchedBuild"]; ok {
+				require.Equal(t, expected, arg.EmitUnmatchedBuild(),
+					"EmitUnmatchedBuild mismatch for %s", tt.name)
 			}
 		})
 	}

@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -102,6 +103,9 @@ func (l *localLockTable) doLock(
 	var oldOffset int
 	var err error
 	table := l.bind.Table
+	// Session-level SET lock_wait_timeout takes highest priority (passed via
+	// pb.LockOptions). The budget only counts time actually spent waiting.
+	leftTimeout := time.Duration(c.opts.LockWaitTimeout) * time.Second
 	for {
 		// blocked used for async callback, waiter is created, and added to wait list.
 		// So only need wait notify.
@@ -163,10 +167,38 @@ func (l *localLockTable) doLock(
 			l.options.beforeWait(c)()
 		}
 
-		v := c.w.wait(c.ctx, l.logger)
+		waitCtx := c.ctx
+		var cancel context.CancelFunc
+		if leftTimeout > 0 {
+			waitCtx, cancel = context.WithTimeoutCause(c.ctx, leftTimeout, ErrLockTimeout)
+		}
+		waitStart := time.Now()
+		v := c.w.wait(waitCtx, l.logger)
+		lockWaitTimeoutHit := leftTimeout > 0 &&
+			errors.Is(v.err, context.DeadlineExceeded) &&
+			context.Cause(waitCtx) == ErrLockTimeout
+		if cancel != nil {
+			cancel()
+		}
 
 		if l.options.afterWait != nil {
 			l.options.afterWait(c)()
+		}
+
+		// Update the remaining lock_wait_timeout budget using only wait time.
+		if leftTimeout > 0 {
+			waited := time.Since(waitStart)
+			if waited < leftTimeout {
+				leftTimeout -= waited
+			} else {
+				leftTimeout = 0
+			}
+			if lockWaitTimeoutHit {
+				// lock_wait_timeout expired: return ErrLockTimeout directly
+				// (not errors.Join) so upper layers can recognize it via
+				// moerr.IsMoErrCode(err, moerr.ErrInvalidState).
+				v.err = ErrLockTimeout
+			}
 		}
 
 		c.txn.Lock()
@@ -354,6 +386,26 @@ func (l *localLockTable) getLock(
 	}
 }
 
+func (l *localLockTable) getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.mu.closed {
+		return pb.WaitTxn{}, false, nil
+	}
+	lock, ok := l.mu.store.Get(key)
+	if !ok {
+		return pb.WaitTxn{}, false, nil
+	}
+	var holder pb.WaitTxn
+	var found bool
+	lock.IterHolders(func(v pb.WaitTxn) bool {
+		holder = v
+		found = true
+		return false
+	})
+	return holder, found, nil
+}
+
 func (l *localLockTable) getBind() pb.LockTable {
 	return l.bind
 }
@@ -514,6 +566,13 @@ func (l *localLockTable) handleLockConflictLocked(
 	if c.opts.Policy == pb.WaitPolicy_FastFail {
 		return ErrLockConflict
 	}
+	if c.opts.async && !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
+		return ErrLockTimeout
+	}
+
+	if c.opts.Granularity == pb.Granularity_Range {
+		l.closeRangeLastWaiterLocked(c)
+	}
 
 	c.w.conflictKey.Store(&key)
 	c.w.lt.Store(l)
@@ -541,21 +600,48 @@ func (l *localLockTable) handleLockConflictLocked(
 	// waiter added, we need to active deadlock check.
 	logLocalLockWaitOn(l.logger, c.txn, l.bind.Table, c.w, key, conflictWith)
 
-	if c.opts.Granularity != pb.Granularity_Range {
-		return nil
+	c.rangeLastWaitKey = key
+	return nil
+}
+
+func (l *localLockTable) closeRangeLastWaiterLocked(c *lockContext) {
+	if len(c.rangeLastWaitKey) == 0 {
+		return
 	}
 
-	if len(c.rangeLastWaitKey) > 0 {
-		v, ok := l.mu.store.Get(c.rangeLastWaitKey)
-		if !ok {
-			panic("BUG: missing range last wait key")
+	v, ok := l.mu.store.Get(c.rangeLastWaitKey)
+	if ok {
+		removed, empty := v.removeWaiter(c.w, l.logger)
+		if removed {
+			if empty {
+				l.mu.store.Delete(c.rangeLastWaitKey)
+			}
+			c.rangeLastWaitKey = nil
+			return
 		}
-		if ok && v.closeWaiter(c.w, l.logger) {
+		if empty {
 			l.mu.store.Delete(c.rangeLastWaitKey)
 		}
 	}
-	c.rangeLastWaitKey = key
-	return nil
+
+	l.logger.Error("missing range last wait key when moving waiter to next conflict",
+		zap.Uint64("table", l.bind.Table),
+		zap.String("txn", c.txn.txnKey),
+		zap.Binary("last-wait-key", c.rangeLastWaitKey),
+		zap.Bool("last-wait-key-exists", ok))
+
+	var deleteKeys [][]byte
+	l.mu.store.Iter(func(key []byte, lock Lock) bool {
+		removed, empty := lock.removeWaiter(c.w, l.logger)
+		if removed && empty {
+			deleteKeys = append(deleteKeys, append([]byte(nil), key...))
+		}
+		return true
+	})
+	for _, key := range deleteKeys {
+		l.mu.store.Delete(key)
+	}
+	c.rangeLastWaitKey = nil
 }
 
 func (l *localLockTable) addRangeLockLocked(

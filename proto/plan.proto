@@ -580,24 +580,32 @@ message FrameBound {
   Expr val = 3;
 }
 
-message OnDuplicateKeyCtx {
-  // letter case: origin
-  repeated string attrs = 1;
-  int32 insert_col_count = 2;
-  repeated Expr unique_col_check_expr = 3;
-  repeated string unique_cols = 4;
-  repeated int32 on_duplicate_idx = 5;
-  map<string, Expr> on_duplicate_expr = 6;
-  bool is_ignore = 7;
-  string table_name = 8;
-  uint64 table_id = 9;
-  uint32 table_version = 10;
+// OnDuplicateKeyCtx removed: legacy ON DUPLICATE KEY operator path eliminated.
+// ON DUPLICATE KEY UPDATE is now planned on the DEDUP JOIN + MULTI_UPDATE path.
+
+message OldColCapture {
+  // build_placeholder: position on the DEDUP JOIN build (right) side that
+  // holds a NULL placeholder for the "old row" column. The operator will
+  // emit the captured probe-side value into this slot in finalize().
+  ColRef build_placeholder = 1 [(gogoproto.nullable) = false];
+  // probe_source: position on the DEDUP JOIN probe (left) side. When a
+  // build row matches a probe row via hashmap lookup, the value at this
+  // column of the probe row is captured into a per-bucket buffer.
+  ColRef probe_source = 2 [(gogoproto.nullable) = false];
 }
 
 message DedupJoinCtx {
   repeated ColRef old_col_list = 1 [(gogoproto.nullable) = false];
   repeated int32 update_col_idx_list = 2;
   repeated Expr update_col_expr_list = 3;
+  // old_col_capture_list: used by REPLACE INTO's merged main-table scan.
+  // When non-empty, the DEDUP JOIN captures probe-side columns on match
+  // and emits them in finalize() into the build-side placeholder slots,
+  // eliminating the need for a preceding LEFT JOIN to fetch old row data.
+  repeated OldColCapture old_col_capture_list = 4 [(gogoproto.nullable) = false];
+  // dedup_build_keep_last is set only by REPLACE INTO. It allows duplicate
+  // keys on the DEDUP JOIN build side and keeps the last source row.
+  bool dedup_build_keep_last = 5;
 }
 
 message UpdateCtx {
@@ -607,6 +615,8 @@ message UpdateCtx {
   repeated ColRef insert_cols = 7 [(gogoproto.nullable) = false];
   repeated ColRef delete_cols = 8 [(gogoproto.nullable) = false];
   repeated ColRef partition_cols = 9 [(gogoproto.nullable) = false];
+  bool skip_insert_on_null_pk = 10;
+  int32 insert_pk_col_idx = 11;
 }
 
 message InsertCtx {
@@ -616,13 +626,11 @@ message InsertCtx {
   TableDef table_def = 4;
 }
 
+// ReplaceCtx removed: legacy REPLACE path eliminated.
+// Keep field tag numbers reserved so they cannot be silently reused
+// by a future re-introduction with a different schema (wire-compat).
 message ReplaceCtx {
-  ObjectRef ref = 1;
-  bool add_affected_rows = 2;
-  bool is_cluster_table = 3;
-  TableDef table_def = 4;
-  string delete_cond = 5;
-  bool rewrite_from_on_duplicate_key = 9;
+  reserved 1 to 9;
 }
 
 message AnalyzeInfo {
@@ -743,9 +751,11 @@ message Node {
     // DML
     INSERT = 30;
     DELETE = 31;
-    REPLACE = 32;
+    // REPLACE = 32; // removed: legacy REPLACE path eliminated
+    reserved 32;
     LOCK_OP = 33;
-    ON_DUPLICATE_KEY = 34;
+    // ON_DUPLICATE_KEY = 34; // removed: legacy ON DUPLICATE KEY operator path eliminated
+    reserved 34;
     PRE_INSERT = 35;
 
     FUZZY_FILTER = 37;
@@ -866,7 +876,8 @@ message Node {
   ClusterTable cluster_table = 28;
   bool not_cacheable = 29;
   InsertCtx insert_ctx = 30;
-  ReplaceCtx replace_ctx = 31;
+  // ReplaceCtx replace_ctx = 31; // removed: legacy REPLACE path eliminated
+  reserved 31;
 
   IndexReaderParam index_reader_param = 32;
 
@@ -874,7 +885,8 @@ message Node {
   // build unique key batch before insert into hidden table which keep the
   // unique key
   PreInsertUkCtx pre_insert_uk_ctx = 35;
-  OnDuplicateKeyCtx on_duplicate_key = 36;
+  // OnDuplicateKeyCtx on_duplicate_key = 36; // removed: legacy ON DUPLICATE KEY operator path eliminated
+  reserved 36;
 
   bool IsEnd = 37;
   repeated LockTarget lock_targets = 38;
@@ -1018,7 +1030,7 @@ message RuntimeFilterSpec {
   int32 upper_limit = 3;
   Expr expr = 4;
   bool not_on_pk = 5;
-  bool use_bloom_filter = 6;
+  bool use_membership_filter = 6;
 }
 
 message IdList {
@@ -1063,7 +1075,8 @@ message Query {
     UNKNOWN = 0;
     SELECT = 1;
     INSERT = 2;
-    REPLACE = 3;
+    // REPLACE = 3; // removed: legacy REPLACE path eliminated
+    reserved 3;
     DELETE = 4;
     UPDATE = 5;
     MERGE = 6;

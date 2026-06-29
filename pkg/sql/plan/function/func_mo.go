@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"go.uber.org/zap"
 
@@ -958,6 +959,9 @@ var (
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_MERGE_SETTINGS:     0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_CCPR_LOG:           0,
+		catalog.MO_CCPR_TABLES:        0,
+		catalog.MO_CCPR_DBS:           0,
 
 		catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME: 0,
 		catalog.MO_FEATURE_LIMIT:                      0,
@@ -1138,6 +1142,324 @@ func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResu
 		}
 	}
 	return nil
+}
+
+// CastGeometryToSubtype validates a geometry value against a column's subtype
+// constraint and normalizes the stored bytes to bare WKB. The first argument is
+// the column subtype name (e.g. "POINT", or empty for a generic GEOMETRY
+// column); SRID is enforced at bind time from the value/column types, not here,
+// because the WKB payload does not carry an SRID.
+func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(targetSubtype, payload []byte) ([]byte, error) {
+		columnSubtype := strings.ToUpper(strings.TrimSpace(functionUtil.QuickBytesToStr(targetSubtype)))
+		// A "32:" prefix marks a GEOMETRY32 (float32-coordinate) column.
+		float32Column := false
+		if strings.HasPrefix(columnSubtype, "32:") {
+			float32Column = true
+			columnSubtype = strings.TrimPrefix(columnSubtype, "32:")
+		}
+		// Tolerate any legacy "SUBTYPE;SRID=n" metadata: keep only the subtype.
+		if idx := strings.IndexByte(columnSubtype, ';'); idx >= 0 {
+			columnSubtype = strings.TrimSpace(columnSubtype[:idx])
+		}
+		if strings.HasPrefix(columnSubtype, "SRID=") {
+			columnSubtype = ""
+		}
+
+		wkt, valueSubtype, _, _, err := validateGeometryPayload(payload, maxPointsInGeometryLimit(proc))
+		if err != nil {
+			return nil, err
+		}
+		if columnSubtype != "" && columnSubtype != "GEOMETRY" && valueSubtype != "GEOMETRY" && valueSubtype != columnSubtype {
+			return nil, moerr.NewInvalidInputNoCtxf("cannot store %s in %s column", valueSubtype, columnSubtype)
+		}
+		// Store bare WKB — float32 coordinates for a GEOMETRY32 column, float64
+		// otherwise — regardless of whether the input was WKB or (legacy) WKT.
+		if float32Column {
+			return encodeGeometryPayloadFloat32(wkt), nil
+		}
+		return encodeGeometryPayload(wkt, 0, false), nil
+	}, selectList)
+}
+
+func CastJsonToArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(targetArrayType, payload []byte) ([]byte, error) {
+		declaredType := strings.TrimSpace(functionUtil.QuickBytesToStr(targetArrayType))
+		elemSpec, err := parseTypedArrayElementSpec(declaredType)
+		if err != nil {
+			return nil, err
+		}
+
+		bj := types.DecodeJson(payload)
+		if bj.Type != bytejson.TpCodeArray {
+			return nil, moerr.NewInvalidInputNoCtxf("cannot store JSON %s in %s column", bj.TYPE(), declaredType)
+		}
+		if !typedArrayElementsCompatible(elemSpec, bj) {
+			return nil, moerr.NewInvalidInputNoCtxf("cannot store JSON value with incompatible element type in %s column", declaredType)
+		}
+		return payload, nil
+	}, selectList)
+}
+
+type typedArrayElementSpec struct {
+	raw      string
+	name     string
+	width    int
+	unsigned bool
+	nested   *typedArrayElementSpec
+}
+
+func parseTypedArrayElementSpec(declaredType string) (typedArrayElementSpec, error) {
+	arraySpec, err := parseTypedArrayTypeSpec(declaredType)
+	if err != nil {
+		return typedArrayElementSpec{}, err
+	}
+	if arraySpec.nested == nil {
+		return typedArrayElementSpec{}, moerr.NewInvalidInputNoCtxf("invalid ARRAY type metadata %s", declaredType)
+	}
+	return *arraySpec.nested, nil
+}
+
+func parseTypedArrayTypeSpec(declaredType string) (typedArrayElementSpec, error) {
+	raw := strings.TrimSpace(declaredType)
+	lower := strings.ToLower(raw)
+	if !strings.HasPrefix(lower, "array(") || !strings.HasSuffix(raw, ")") {
+		return typedArrayElementSpec{}, moerr.NewInvalidInputNoCtxf("invalid ARRAY type metadata %s", declaredType)
+	}
+	elem, err := parseTypedArrayScalarSpec(strings.TrimSpace(raw[len("array(") : len(raw)-1]))
+	if err != nil {
+		return typedArrayElementSpec{}, err
+	}
+	return typedArrayElementSpec{raw: raw, name: "array", nested: &elem}, nil
+}
+
+func parseTypedArrayScalarSpec(rawType string) (typedArrayElementSpec, error) {
+	raw := strings.TrimSpace(rawType)
+	if raw == "" {
+		return typedArrayElementSpec{}, moerr.NewInvalidInputNoCtx("invalid ARRAY element type metadata")
+	}
+	if strings.HasPrefix(strings.ToLower(raw), "array(") {
+		return parseTypedArrayTypeSpec(raw)
+	}
+
+	lower := strings.ToLower(raw)
+	unsigned := false
+	if strings.HasSuffix(lower, " unsigned") {
+		unsigned = true
+		lower = strings.TrimSpace(strings.TrimSuffix(lower, " unsigned"))
+	} else if strings.HasSuffix(lower, " signed") {
+		lower = strings.TrimSpace(strings.TrimSuffix(lower, " signed"))
+	}
+
+	name := lower
+	params := ""
+	if idx := strings.IndexByte(lower, '('); idx >= 0 {
+		if !strings.HasSuffix(lower, ")") {
+			return typedArrayElementSpec{}, moerr.NewInvalidInputNoCtxf("invalid ARRAY element type metadata %s", rawType)
+		}
+		name = strings.TrimSpace(lower[:idx])
+		params = strings.TrimSpace(lower[idx+1 : len(lower)-1])
+	}
+
+	spec := typedArrayElementSpec{raw: raw, name: normalizeTypedArrayElementName(name), width: -1, unsigned: unsigned}
+	if params != "" {
+		if width, ok := parseFirstArrayTypeParam(params); ok {
+			spec.width = width
+		}
+	}
+	if spec.name == "" {
+		return typedArrayElementSpec{}, moerr.NewInvalidInputNoCtxf("unsupported ARRAY element type %s", rawType)
+	}
+	return spec, nil
+}
+
+func normalizeTypedArrayElementName(name string) string {
+	switch strings.TrimSpace(name) {
+	case "bool", "boolean":
+		return "bool"
+	case "int1":
+		return "tinyint"
+	case "int2":
+		return "smallint"
+	case "int3":
+		return "mediumint"
+	case "int4":
+		return "int"
+	case "int8":
+		return "bigint"
+	case "tinyint", "smallint", "int", "integer", "mediumint", "bigint":
+		if name == "integer" {
+			return "int"
+		}
+		return name
+	case "float", "double", "real":
+		return "float"
+	case "decimal", "numeric", "dec":
+		return "decimal"
+	case "char", "varchar", "text":
+		return name
+	case "binary", "varbinary", "blob":
+		return name
+	case "json", "date", "time", "datetime", "timestamp", "year", "uuid":
+		return name
+	default:
+		return ""
+	}
+}
+
+func parseFirstArrayTypeParam(params string) (int, bool) {
+	first := strings.TrimSpace(strings.Split(params, ",")[0])
+	if first == "" {
+		return -1, false
+	}
+	width, err := strconv.Atoi(first)
+	if err != nil {
+		return -1, false
+	}
+	return width, true
+}
+
+func typedArrayElementsCompatible(spec typedArrayElementSpec, array bytejson.ByteJson) bool {
+	for i := 0; i < array.GetElemCnt(); i++ {
+		if !typedArrayElementCompatible(spec, array.GetArrayElem(i)) {
+			return false
+		}
+	}
+	return true
+}
+
+func typedArrayElementCompatible(spec typedArrayElementSpec, elem bytejson.ByteJson) bool {
+	if elem.IsNull() {
+		return true
+	}
+
+	switch spec.name {
+	case "array":
+		return elem.Type == bytejson.TpCodeArray && spec.nested != nil && typedArrayElementsCompatible(*spec.nested, elem)
+	case "json":
+		return true
+	case "bool":
+		return elem.Type == bytejson.TpCodeLiteral && elem.Data[0] != bytejson.LiteralNull
+	case "tinyint":
+		return jsonIntegerFits(elem, -128, 127, spec.unsigned, 255)
+	case "smallint":
+		return jsonIntegerFits(elem, -32768, 32767, spec.unsigned, 65535)
+	case "mediumint", "int":
+		return jsonIntegerFits(elem, -2147483648, 2147483647, spec.unsigned, 4294967295)
+	case "bigint":
+		return jsonIntegerFits(elem, -1<<63, 1<<63-1, spec.unsigned, ^uint64(0))
+	case "float", "decimal":
+		return jsonNumberCompatible(elem)
+	case "char", "varchar":
+		return elem.Type == bytejson.TpCodeString && jsonStringFitsWidth(elem, spec.width)
+	case "text":
+		return elem.Type == bytejson.TpCodeString
+	case "binary", "varbinary":
+		return (elem.Type == bytejson.TpCodeString || elem.Type == bytejson.TpCodeBlob) && jsonBinaryStringFitsWidth(elem, spec.width)
+	case "blob":
+		return elem.Type == bytejson.TpCodeString || elem.Type == bytejson.TpCodeBlob
+	case "date":
+		return elem.Type == bytejson.TpCodeDate || jsonStringParses(elem, func(s string) bool {
+			_, err := types.ParseDateCast(s)
+			return err == nil
+		})
+	case "time":
+		return elem.Type == bytejson.TpCodeTime || jsonStringParses(elem, func(s string) bool {
+			_, err := types.ParseTime(s, 6)
+			return err == nil
+		})
+	case "datetime":
+		return elem.Type == bytejson.TpCodeDatetime || elem.Type == bytejson.TpCodeDate || jsonStringParses(elem, func(s string) bool {
+			_, err := types.ParseDatetime(s, 6)
+			return err == nil
+		})
+	case "timestamp":
+		return elem.Type == bytejson.TpCodeDatetime || jsonStringParses(elem, func(s string) bool {
+			_, err := types.ParseTimestamp(time.UTC, s, 6)
+			return err == nil
+		})
+	case "year":
+		return jsonYearCompatible(elem)
+	case "uuid":
+		return jsonStringParses(elem, func(s string) bool {
+			_, err := types.ParseUuid(s)
+			return err == nil
+		})
+	default:
+		return false
+	}
+}
+
+func jsonIntegerFits(elem bytejson.ByteJson, signedMin, signedMax int64, unsigned bool, unsignedMax uint64) bool {
+	switch elem.Type {
+	case bytejson.TpCodeInt64:
+		v := elem.GetInt64()
+		if unsigned {
+			return v >= 0 && uint64(v) <= unsignedMax
+		}
+		return v >= signedMin && v <= signedMax
+	case bytejson.TpCodeUint64:
+		v := elem.GetUint64()
+		if unsigned {
+			return v <= unsignedMax
+		}
+		return v <= uint64(signedMax)
+	default:
+		return false
+	}
+}
+
+func jsonNumberCompatible(elem bytejson.ByteJson) bool {
+	switch elem.Type {
+	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeDecimal:
+		return true
+	default:
+		return false
+	}
+}
+
+func jsonStringFitsWidth(elem bytejson.ByteJson, width int) bool {
+	if width < 0 {
+		return true
+	}
+	return utf8.RuneCount(elem.GetString()) <= width
+}
+
+func jsonBinaryStringFitsWidth(elem bytejson.ByteJson, width int) bool {
+	if width < 0 {
+		return true
+	}
+	s, err := elem.Unquote()
+	if err != nil {
+		return false
+	}
+	return len(s) <= width
+}
+
+func jsonStringParses(elem bytejson.ByteJson, parse func(string) bool) bool {
+	if elem.Type != bytejson.TpCodeString {
+		return false
+	}
+	s, err := elem.Unquote()
+	return err == nil && parse(s)
+}
+
+func jsonYearCompatible(elem bytejson.ByteJson) bool {
+	switch elem.Type {
+	case bytejson.TpCodeInt64:
+		return elem.GetInt64() >= 0 && elem.GetInt64() <= 9999
+	case bytejson.TpCodeUint64:
+		return elem.GetUint64() <= 9999
+	case bytejson.TpCodeString:
+		s, err := elem.Unquote()
+		if err != nil {
+			return false
+		}
+		year, err := strconv.ParseUint(s, 10, 16)
+		return err == nil && year <= 9999
+	default:
+		return false
+	}
 }
 
 // CastNanoToTimestamp returns timestamp string according to the nano

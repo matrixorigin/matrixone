@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/stretchr/testify/require"
@@ -106,6 +107,7 @@ type mockClientConn struct {
 	router     Router
 	tun        *tunnel
 	redoStmts  []internalStmt
+	killFn     func(ServerConn) error
 }
 
 var _ ClientConn = (*mockClientConn)(nil)
@@ -178,7 +180,97 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		return moerr.NewInternalErrorNoCtx("type not supported")
 	}
 }
+func (c *mockClientConn) KillCurrentBackendConn(sc ServerConn) error {
+	if c.killFn != nil {
+		return c.killFn(sc)
+	}
+	return nil
+}
 func (c *mockClientConn) Close() error { return nil }
+
+type mockConnCache struct {
+	pushFn func(cacheKey, ServerConn) bool
+}
+
+func (m *mockConnCache) Push(key cacheKey, sc ServerConn) bool {
+	if m.pushFn != nil {
+		return m.pushFn(key, sc)
+	}
+	return true
+}
+
+func (m *mockConnCache) Pop(cacheKey, uint32, []byte, []byte) ServerConn { return nil }
+func (m *mockConnCache) Count() int                                      { return 0 }
+func (m *mockConnCache) Close() error                                    { return nil }
+
+type killTestRouter struct {
+	connectFn func(*CNServer, *frontend.Packet, *tunnel) (ServerConn, []byte, error)
+}
+
+func (r *killTestRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *killTestRouter) SelectByConnID(connID uint32) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *killTestRouter) AllServers(sid string) ([]*CNServer, error) {
+	return nil, nil
+}
+
+func (r *killTestRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	return r.connectFn(c, handshakeResp, t)
+}
+
+type killCurrentServerConn struct {
+	cn      *CNServer
+	closeFn func() error
+}
+
+func (s *killCurrentServerConn) ConnID() uint32 { return s.cn.connID }
+func (s *killCurrentServerConn) RawConn() net.Conn {
+	return nil
+}
+func (s *killCurrentServerConn) HandleHandshake(_ *frontend.Packet, _ time.Duration) (*frontend.Packet, error) {
+	return nil, nil
+}
+func (s *killCurrentServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error) {
+	return true, nil
+}
+func (s *killCurrentServerConn) GetCNServer() *CNServer   { return s.cn }
+func (s *killCurrentServerConn) SetConnResponse(_ []byte) {}
+func (s *killCurrentServerConn) GetConnResponse() []byte  { return nil }
+func (s *killCurrentServerConn) CreateTime() time.Time    { return time.Now() }
+func (s *killCurrentServerConn) Quit() error              { return nil }
+func (s *killCurrentServerConn) Close() error {
+	if s.closeFn != nil {
+		return s.closeFn()
+	}
+	return nil
+}
+
+type killExecServerConn struct {
+	stmt internalStmt
+}
+
+func (s *killExecServerConn) ConnID() uint32 { return 0 }
+func (s *killExecServerConn) RawConn() net.Conn {
+	return nil
+}
+func (s *killExecServerConn) HandleHandshake(_ *frontend.Packet, _ time.Duration) (*frontend.Packet, error) {
+	return nil, nil
+}
+func (s *killExecServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error) {
+	s.stmt = stmt
+	return true, nil
+}
+func (s *killExecServerConn) GetCNServer() *CNServer   { return nil }
+func (s *killExecServerConn) SetConnResponse(_ []byte) {}
+func (s *killExecServerConn) GetConnResponse() []byte  { return nil }
+func (s *killExecServerConn) CreateTime() time.Time    { return time.Now() }
+func (s *killExecServerConn) Quit() error              { return nil }
+func (s *killExecServerConn) Close() error             { return nil }
 
 func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNServer) func() {
 	if cn.salt == nil || len(cn.salt) != 20 {
@@ -211,6 +303,59 @@ func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNSe
 		_ = tu.Close()
 		_ = sc.Close()
 	}
+}
+
+func TestClientConn_KillCurrentBackendConn(t *testing.T) {
+	currentCN := &CNServer{
+		connID: 10,
+		uuid:   "cn1",
+		addr:   "127.0.0.1:6001",
+		salt:   testSlat,
+	}
+	execSC := &killExecServerConn{}
+	router := &killTestRouter{
+		connectFn: func(c *CNServer, handshakeResp *frontend.Packet, tun *tunnel) (ServerConn, []byte, error) {
+			require.Equal(t, currentCN.uuid, c.uuid)
+			require.Equal(t, currentCN.addr, c.addr)
+			require.Equal(t, currentCN.salt, c.salt)
+			require.NotZero(t, c.connID)
+			return execSC, makeOKPacket(8), nil
+		},
+	}
+
+	c := &clientConn{
+		connID: 42,
+		router: router,
+	}
+	err := c.KillCurrentBackendConn(&killCurrentServerConn{cn: currentCN})
+	require.NoError(t, err)
+	require.Equal(t, cmdQuery, execSC.stmt.cmdType)
+	require.Equal(t, "kill connection 42", execSC.stmt.s)
+}
+
+func TestClientConn_HandleQuitEventMarksExpectedCacheQuit(t *testing.T) {
+	tun := &tunnel{}
+	tun.mu.scp = &pipe{}
+	tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+
+	c := &clientConn{
+		tun: tun,
+		sc:  &killCurrentServerConn{cn: &CNServer{connID: 11, uuid: "cn1"}},
+		connCache: &mockConnCache{
+			pushFn: func(key cacheKey, sc ServerConn) bool {
+				return true
+			},
+		},
+	}
+
+	e := makeQuitEvent().(*quitEvent)
+	errC := make(chan error, 1)
+	go func() {
+		errC <- c.HandleEvent(context.Background(), e, nil)
+	}()
+	e.wait()
+	require.NoError(t, <-errC)
+	require.True(t, tun.hasExpectedCacheQuit())
 }
 
 func copyCNServer(dst, src *CNServer) {
@@ -607,6 +752,45 @@ func (router *testRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t
 	return newMockServerConn(nil), nil, nil
 }
 
+type testRouteSelectedRouter struct {
+	connectCalls              int
+	connectRouteSelectedCalls int
+	routeCalls                int
+	routeForTransferCalls     int
+}
+
+func (r *testRouteSelectedRouter) Route(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	r.routeCalls++
+	addr := "127.0.0.1:6001"
+	if filter != nil && filter(addr) {
+		return nil, noCNServerErr
+	}
+	return &CNServer{addr: addr}, nil
+}
+
+func (r *testRouteSelectedRouter) RouteForTransfer(ctx context.Context, sid string, client clientInfo, filter func(string) bool) (*CNServer, error) {
+	r.routeForTransferCalls++
+	return r.Route(ctx, sid, client, filter)
+}
+
+func (r *testRouteSelectedRouter) SelectByConnID(connID uint32) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *testRouteSelectedRouter) AllServers(sid string) ([]*CNServer, error) {
+	return nil, nil
+}
+
+func (r *testRouteSelectedRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	r.connectCalls++
+	return nil, nil, newConnectErr(moerr.NewInternalErrorNoCtx("connect failed"))
+}
+
+func (r *testRouteSelectedRouter) ConnectRouteSelected(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	r.connectRouteSelectedCalls++
+	return nil, nil, newConnectErr(moerr.NewInternalErrorNoCtx("connect failed"))
+}
+
 var _ client.QueryClient = &testQueryClient{}
 
 type testQueryClient struct {
@@ -724,6 +908,53 @@ func Test_connectToBackend_SkipCacheOnMigration(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, sConn)
 	require.Equal(t, 0, cache.popCount)
+}
+
+func Test_connectToBackend_SkipCacheWhenPluginRouterEnabled(t *testing.T) {
+	cache := &popCountConnCache{}
+	cc, cleanup := createNewClientConn(t)
+	defer cleanup()
+	cConn, ok := cc.(*clientConn)
+	require.True(t, ok)
+	cConn.connCache = cache
+	cConn.router = newPluginRouter("", &routeErrRouter{}, &mockPlugin{
+		mockRecommendCNFn: func(ctx context.Context, clientInfo clientInfo) (*plugin.Recommendation, error) {
+			return &plugin.Recommendation{Action: plugin.Bypass}, nil
+		},
+	})
+
+	sConn, err := cConn.connectToBackend("")
+	require.Error(t, err)
+	require.Nil(t, sConn)
+	require.Equal(t, 0, cache.popCount, "plugin routing must not reuse cached sessions")
+}
+
+func Test_connectToBackend_UsesRouteSelectedOnlyForFirstLogin(t *testing.T) {
+	router := &testRouteSelectedRouter{}
+	cc, cleanup := createNewClientConn(t)
+	defer cleanup()
+	cConn, ok := cc.(*clientConn)
+	require.True(t, ok)
+	cConn.router = router
+
+	// First login: Route-selected new-session connect should use
+	// ConnectRouteSelected.
+	sConn, err := cConn.connectToBackend("")
+	require.Error(t, err)
+	require.Nil(t, sConn)
+	require.Greater(t, router.connectRouteSelectedCalls, 0, "first login must use ConnectRouteSelected")
+	require.Equal(t, 0, router.connectCalls)
+	require.Greater(t, router.routeCalls, 0, "first login must route through Route")
+	require.Equal(t, 0, router.routeForTransferCalls)
+
+	// Migration / transfer: must use plain Connect and NOT mutate breaker
+	// state via ConnectRouteSelected.
+	sConn, err = cConn.connectToBackend("127.0.0.1:7000")
+	require.Error(t, err)
+	require.Nil(t, sConn)
+	require.GreaterOrEqual(t, router.connectRouteSelectedCalls, 1)
+	require.Greater(t, router.connectCalls, 0, "migration must use plain Connect")
+	require.Greater(t, router.routeForTransferCalls, 0, "migration must use RouteForTransfer when available")
 }
 
 func TestHandleSetVar(t *testing.T) {

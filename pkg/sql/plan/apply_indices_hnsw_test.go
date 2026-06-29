@@ -93,6 +93,41 @@ func TestPrepareHnswIndexContext_ForceModeEnabled(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+func TestPrepareHnswIndexContext_ImplicitDescendingOrderDisablesRewrite(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	vecCtx := &vectorSortContext{
+		distFnExpr: &plan.Function{
+			Func: &ObjectRef{
+				ObjName: "l2_distance",
+			},
+		},
+		sortDirection: plan.OrderBySpec_DESC,
+	}
+	multiTableIndex := &MultiTableIndex{}
+
+	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
+	assert.NoError(t, err)
+	assert.Nil(t, result)
+}
+
+func TestPrepareHnswIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearch(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	vecCtx := &vectorSortContext{
+		distFnExpr: &plan.Function{
+			Func: &ObjectRef{
+				ObjName: "l2_distance",
+			},
+		},
+		sortDirection: plan.OrderBySpec_DESC,
+		rankOption:    &plan.RankOption{Mode: "post"},
+	}
+	multiTableIndex := &MultiTableIndex{}
+
+	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
+	assert.NoError(t, err)
+	assert.Nil(t, result)
+}
+
 // TestPrepareHnswIndexContext_NilMetaDef tests the case where metaDef is nil
 func TestPrepareHnswIndexContext_NilMetaDef(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)

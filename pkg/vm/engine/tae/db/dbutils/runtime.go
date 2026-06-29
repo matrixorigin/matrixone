@@ -166,6 +166,11 @@ type Runtime struct {
 	Logtail struct {
 		CompactStats stats.Counter
 	}
+
+	// SyncProtectionValidator validates sync protection during CCPR transaction commit.
+	// This is set by the DB when DiskCleaner is initialized.
+	// Returns nil if validation succeeds, or an error if the protection is invalid/expired.
+	SyncProtectionValidator func(jobID string, prepareTS int64) error
 }
 
 func NewRuntime(opts ...RuntimeOption) *Runtime {

@@ -349,7 +349,11 @@ type VarExpressionExecutor struct {
 }
 
 func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	val, err := proc.GetResolveVariableFunc()(expr.name, expr.system, expr.global)
+	resolveVariableFunc := proc.GetResolveVariableFunc()
+	if resolveVariableFunc == nil {
+		return nil, moerr.NewInternalErrorf(proc.Ctx, "resolve variable function is not set for variable %s", expr.name)
+	}
+	val, err := resolveVariableFunc(expr.name, expr.system, expr.global)
 	if err != nil {
 		return nil, err
 	}
@@ -817,6 +821,8 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 			// Distinguish binary with non-binary string.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
 				vec, err = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
+			} else if typ.Oid == types.T_geometry {
+				vec, err = vector.NewConstBytes(typ, []byte(sval), 1, proc.Mp())
 			} else if typ.Oid == types.T_array_float32 {
 				array, err1 := types.StringToArray[float32](sval)
 				if err1 != nil {
@@ -934,7 +940,11 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 				veccol[i] = types.Timestamp(val.Timestampval)
 			case *plan.Literal_Sval:
 				sval := val.Sval
-				err = vector.SetStringAt(vec, i, sval, proc.Mp())
+				if expr.Typ.Id == int32(types.T_geometry) {
+					err = vector.SetBytesAt(vec, i, []byte(sval), proc.Mp())
+				} else {
+					err = vector.SetStringAt(vec, i, sval, proc.Mp())
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -1239,6 +1249,19 @@ func GetExprZoneMap(
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
 				return zms[expr.AuxId]
 
+			case "prefix_in_range":
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				if !lhs.IsInited() {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				lb := []byte(args[1].GetLit().GetSval())
+				ub := []byte(args[2].GetLit().GetSval())
+
+				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
+				return zms[expr.AuxId]
+
 			case "prefix_in":
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
@@ -1392,6 +1415,13 @@ func GetExprZoneMap(
 			default:
 				ivecs := make([]*vector.Vector, len(args))
 				if isAllConst(args) { // constant fold
+					defer func() {
+						for _, v := range ivecs {
+							if v != nil {
+								v.Free(proc.Mp())
+							}
+						}
+					}()
 					for i, arg := range args {
 						if vecs[arg.AuxId] != nil {
 							vecs[arg.AuxId].Free(proc.Mp())

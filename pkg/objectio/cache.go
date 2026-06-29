@@ -18,7 +18,9 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
@@ -76,6 +78,25 @@ type mataCacheKey [cacheKeyLen]byte
 var metaCache *fifocache.Cache[mataCacheKey, []byte]
 var onceInit sync.Once
 
+var (
+	metaCachePressureMu            sync.Mutex
+	metaCachePressureTargetPercent atomic.Int64
+	metaCachePressureDeadline      atomic.Int64
+)
+
+// metaLoadGroup deduplicates concurrent loads for the same cache key,
+// preventing cache stampede when many goroutines miss the same entry simultaneously.
+// Uses mutex+map instead of sync.Map so entries are fully reclaimed after deletion.
+var metaLoadMu sync.Mutex
+var metaLoadCalls = make(map[mataCacheKey]*loadCall)
+
+type loadCall struct {
+	done      chan struct{}
+	val       []byte
+	err       error
+	completed bool
+}
+
 func metaCacheSize() int64 {
 	v, err := mem.VirtualMemory()
 	if err != nil {
@@ -120,21 +141,68 @@ func InitMetaCache(size int64) {
 	})
 }
 
+func SetMetaCachePressureTargetPercent(percent int64, until time.Time) {
+	now := time.Now()
+	if percent <= 0 || !until.After(now) {
+		metaCachePressureMu.Lock()
+		metaCachePressureTargetPercent.Store(0)
+		metaCachePressureDeadline.Store(0)
+		metaCachePressureMu.Unlock()
+		return
+	}
+	if percent > 100 {
+		percent = 100
+	}
+
+	metaCachePressureMu.Lock()
+	defer metaCachePressureMu.Unlock()
+
+	oldDeadline := metaCachePressureDeadline.Load()
+	oldPercent := metaCachePressureTargetPercent.Load()
+	if oldDeadline > now.UnixNano() && oldPercent > 0 && oldPercent < percent {
+		return
+	}
+	metaCachePressureTargetPercent.Store(percent)
+	metaCachePressureDeadline.Store(until.UnixNano())
+}
+
+func clearMetaCachePressureTargetForTest() {
+	metaCachePressureTargetPercent.Store(0)
+	metaCachePressureDeadline.Store(0)
+}
+
+func metaCachePressureTarget(capacity int64) (int64, bool) {
+	deadline := metaCachePressureDeadline.Load()
+	if deadline == 0 || time.Now().UnixNano() > deadline {
+		return 0, false
+	}
+	percent := metaCachePressureTargetPercent.Load()
+	if percent <= 0 {
+		return 0, false
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	return capacity * percent / 100, true
+}
+
 func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, []byte] {
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge("", "meta")
 	capacityBytes.Set(float64(capacity()))
-	return fifocache.New[mataCacheKey, []byte](
+	ret := fifocache.New[mataCacheKey, []byte](
 		capacity,
 		shardMetaCacheKey,
-		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postSet
+		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postSet
 			inuseBytes.Add(float64(size))
 			capacityBytes.Set(float64(capacity()))
 		},
 		nil,
-		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postEvict
+		func(_ context.Context, _ mataCacheKey, _ []byte, size int64, _ uint64) { // postEvict
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacity()))
 		})
+	ret.SetAdmissionTarget(metaCachePressureTarget)
+	return ret
 }
 
 func EvictCache(ctx context.Context) (target int64) {
@@ -143,6 +211,38 @@ func EvictCache(ctx context.Context) (target int64) {
 	target = <-ch
 	logutil.Info("metadata cache forced evicted",
 		zap.Any("target", target),
+	)
+	return
+}
+
+func EvictCacheToCapacityPercent(ctx context.Context, percent int64) (used int64) {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	capacity := metaCache.Capacity()
+	target := capacity * percent / 100
+	beforeUsed := metaCache.Used()
+	start := time.Now()
+	logutil.Info("metadata cache pressure evict begin",
+		zap.Int64("used-before", beforeUsed),
+		zap.Int64("capacity", capacity),
+		zap.Int64("target", target),
+		zap.Int64("target-percent", percent),
+	)
+	used = metaCache.EvictToTargetWithWait(ctx, target)
+	metric.FSCachePressureMetaEvictCounter.Inc()
+	metric.FSCachePressureMetaEvictDuration.Observe(time.Since(start).Seconds())
+	logutil.Info("metadata cache pressure evicted",
+		zap.Int64("used-before", beforeUsed),
+		zap.Int64("used-after", used),
+		zap.Int64("capacity", capacity),
+		zap.Int64("target", target),
+		zap.Int64("target-percent", percent),
+		zap.Duration("duration", time.Since(start)),
+		zap.Error(ctx.Err()),
 	)
 	return
 }
@@ -174,11 +274,13 @@ func LoadObjectMetaByExtent(
 			zap.String("name", name.String()),
 			zap.String("extent", extent.String()))
 	}
-	if v, err = ReadExtent(ctx, name.UnsafeString(), extent, policy, fs, constructorFactory); err != nil {
+	v, err = dedupLoad(ctx, key, func() ([]byte, error) {
+		return ReadExtent(ctx, name.UnsafeString(), extent, policy, fs, constructorFactory)
+	})
+	if err != nil {
 		return
 	}
 	meta = MustObjectMeta(v)
-	metaCache.Set(ctx, key, v[:], int64(len(v)))
 	return
 }
 
@@ -216,12 +318,64 @@ func LoadBFWithMeta(
 		return v, nil
 	}
 	extent := meta.BlockHeader().BFExtent()
-	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipFullFilePreloads, fs)
+	bf, err := dedupLoad(ctx, key, func() ([]byte, error) {
+		return ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipFullFilePreloads, fs)
+	})
 	if err != nil {
 		return nil, err
 	}
-	metaCache.Set(ctx, key, bf, int64(len(bf)))
 	return bf, nil
+}
+
+// dedupLoad ensures that for a given cache key, only one goroutine performs
+// the actual I/O load. Other concurrent callers for the same key wait and
+// share the result. This prevents cache stampede under high concurrency.
+//
+// Uses mutex+map (not sync.Map) so the map shrinks naturally when keys are
+// deleted. Waiters read through metaCache after the load finishes so they do
+// not keep per-call copies of large metadata buffers.
+func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error)) ([]byte, error) {
+	metaLoadMu.Lock()
+	if call, ok := metaLoadCalls[key]; ok {
+		metaLoadMu.Unlock()
+		select {
+		case <-call.done:
+			if v, ok := metaCache.Get(ctx, key); ok {
+				return v, nil
+			}
+			if call.err != nil {
+				return nil, call.err
+			}
+			if !call.completed {
+				return nil, moerr.NewInternalErrorNoCtx("dedup load did not complete")
+			}
+			return call.val, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	call := &loadCall{done: make(chan struct{})}
+	metaLoadCalls[key] = call
+	metaLoadMu.Unlock()
+
+	defer func() {
+		metaLoadMu.Lock()
+		close(call.done)
+		delete(metaLoadCalls, key)
+		metaLoadMu.Unlock()
+	}()
+
+	call.val, call.err = load()
+	call.completed = true
+	if call.err == nil {
+		if target, ok := metaCachePressureTarget(metaCache.Capacity()); ok &&
+			metaCache.Used()+int64(len(call.val)) > target {
+			metric.FSCachePressureMetaSkipCounter.Inc()
+			return call.val, call.err
+		}
+		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
+	}
+	return call.val, call.err
 }
 
 func FastLoadObjectMeta(

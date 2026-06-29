@@ -2055,12 +2055,19 @@ func TestIssue3288(t *testing.T) {
 			// No flakiness: no sleep; outcome is determined only by retry-until-success. CI stable
 			// unless the environment is so slow that allocator cannot move bind within 10s.
 			var result pb.Result
+			txnID := []byte("txn2")
+			txnSeq := byte(3)
 			for {
-				result, err = l2.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+				result, err = l2.Lock(ctx, 0, [][]byte{{1}}, txnID, option)
 				if err == nil {
 					break
 				}
-				if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) || moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+				if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+					txnID = []byte{txnSeq}
+					txnSeq++
+					continue
+				}
+				if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
 					continue
 				}
 				require.NoError(t, err, "lock must succeed or return retryable error (ErrBackendClosed/ErrLockTableBindChanged)")
@@ -2114,15 +2121,27 @@ func TestIssue3538(t *testing.T) {
 
 			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
 
+			txnID := []byte("txn2")
+			txnSeq := byte(3)
 			for {
 				_, err = l2.Lock(
 					ctx,
 					0,
 					[][]byte{{1}},
-					[]byte("txn2"),
+					txnID,
 					option)
 				if err == nil {
 					break
+				}
+				if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+					txnID = []byte{txnSeq}
+					txnSeq++
+				} else if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+					moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+					moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+					// retry with the same txn while the old owner is draining
+				} else {
+					require.NoError(t, err)
 				}
 				select {
 				case <-ctx.Done():
@@ -4204,7 +4223,121 @@ func TestIssue2128(t *testing.T) {
 				[][]byte{{1}},
 				[]byte("txn1"),
 				option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+		},
+	)
+}
+
+func TestBindChangedFencesActiveTxnHoldingOldBind(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, ss []*service) {
+			s := ss[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			option := newTestRowExclusiveOptions()
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			_, err := s.Lock(ctx, 0, [][]byte{{1}}, txn1, option)
 			require.NoError(t, err)
+			_, err = s.Lock(ctx, 1, [][]byte{{1}}, txn2, option)
+			require.NoError(t, err)
+
+			oldBind := s.tableGroups.get(0, 0).getBind()
+			newBind := oldBind
+			newBind.Version++
+			newBind.ServiceID = "new-service"
+			s.handleBindChanged(newBind)
+
+			_, err = s.Lock(ctx, 1, [][]byte{{2}}, txn1, option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+			_, err = s.Lock(ctx, 1, [][]byte{{2}}, txn2, option)
+			require.NoError(t, err)
+
+			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestBindChangedFencesActiveTxnAfterOldTableRemoved(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, ss []*service) {
+			s := ss[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txnID := []byte("txn1")
+			_, err := s.Lock(ctx, 0, [][]byte{{1}}, txnID, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+
+			oldBind := s.tableGroups.get(0, 0).getBind()
+			s.tableGroups.removeWithFilter(func(table uint64, lt lockTable) bool {
+				return table == oldBind.Table
+			}, closeReasonBindChanged)
+
+			newBind := oldBind
+			newBind.Version++
+			newBind.ServiceID = "new-service"
+			s.handleBindChanged(newBind)
+
+			_, err = s.Lock(ctx, 1, [][]byte{{1}}, txnID, newTestRowExclusiveOptions())
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestBindChangedBeforeLockSuccessReturnsBindChanged(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, ss []*service) {
+			s := ss[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txnID := []byte("txn1")
+			txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
+			fenceDone := make(chan struct{})
+			var once sync.Once
+			txn.beforeLockAdded = func([]byte, [][]byte) error {
+				once.Do(func() {
+					oldBind := s.tableGroups.get(0, 0).getBind()
+					newBind := oldBind
+					newBind.Version++
+					newBind.ServiceID = "new-service"
+					go func() {
+						s.handleBindChanged(newBind)
+						close(fenceDone)
+					}()
+					require.Eventually(t, func() bool {
+						if s.bindChangeMu.TryRLock() {
+							s.bindChangeMu.RUnlock()
+							return false
+						}
+						return true
+					}, time.Second, time.Millisecond)
+				})
+				return nil
+			}
+
+			_, err := s.Lock(ctx, 0, [][]byte{{1}}, txnID, newTestRowExclusiveOptions())
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.Eventually(t, func() bool {
+				select {
+				case <-fenceDone:
+					return true
+				default:
+					return false
+				}
+			}, time.Second, time.Millisecond)
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
 		},
 	)
 }
@@ -4348,6 +4481,162 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 				s.handleBindChanged(bind)
 			}
 			wg.Wait()
+		},
+	)
+}
+
+func TestLockWaitTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Use a long-lived context so it doesn't interfere with LockWaitTimeout.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			// txn1 acquires and holds the lock.
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			// txn2 tries to lock the same row with a 1-second LockWaitTimeout.
+			option2 := option
+			option2.LockWaitTimeout = 1 // 1 second
+
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			elapsed := time.Since(start)
+
+			// Should time out after ~1 second, not immediately and not indefinitely.
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+				"expected lock-timeout error (ErrInvalidState), got %v", err)
+			require.Contains(t, err.Error(), "lock timeout")
+			require.GreaterOrEqual(t, elapsed, time.Second)
+			require.Less(t, elapsed, 3*time.Second)
+		},
+	)
+}
+
+func TestLockWaitTimeoutDefaultNoTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Short context to bound the test.
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			// txn1 holds the lock.
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			// txn2 tries to lock the same row WITHOUT LockWaitTimeout.
+			// Should be blocked until ctx expires (no internal/default timeout interception).
+			option2 := option
+			option2.LockWaitTimeout = 0 // no session/internal timeout; rely on caller context deadline
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			elapsed := time.Since(start)
+
+			// Should have waited for the context timeout (~2s), not failed immediately.
+			require.Error(t, err)
+			require.GreaterOrEqual(t, elapsed, time.Second)
+		},
+	)
+}
+
+func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			// txn1 holds the lock briefly then releases.
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			option2 := option
+			option2.LockWaitTimeout = 3 // 3 seconds, more than enough
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				time.Sleep(200 * time.Millisecond)
+				require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+			}()
+
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			elapsed := time.Since(start)
+
+			wg.Wait()
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
+			require.Less(t, elapsed, 2*time.Second) // well within LockWaitTimeout
+		},
+	)
+}
+
+func TestLockWaitTimeoutZeroMeansFallbackToContext(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Short context to trigger fast timeout.
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+
+			// txn1 holds the lock.
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			// txn2 with LockWaitTimeout=0 should wait for context expiry (500ms),
+			// NOT the default 5-minute configLockWaitTimeout.
+			option2 := option
+			option2.LockWaitTimeout = 0
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			// Should have completed near the context deadline, not after 5 minutes.
+			require.GreaterOrEqual(t, elapsed, 300*time.Millisecond)
+			require.Less(t, elapsed, 2*time.Second)
 		},
 	)
 }

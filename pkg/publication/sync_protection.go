@@ -1,0 +1,488 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package publication
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+)
+
+// Note: SyncProtectionTTLDuration and SyncProtectionRenewInterval are now
+// managed through the config center. Use GetSyncProtectionTTLDuration() and
+// GetSyncProtectionRenewInterval() to access their values.
+
+// RegisterSyncProtectionOnDownstreamFn is a function variable that can be stubbed in tests
+var RegisterSyncProtectionOnDownstreamFn = func(
+	ctx context.Context,
+	downstreamExecutor SQLExecutor,
+	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+	mp *mpool.MPool,
+	taskID string,
+) (jobID string, ttlExpireTS int64, retryable bool, err error) {
+	return registerSyncProtectionOnDownstreamImpl(ctx, downstreamExecutor, objectMap, mp, taskID)
+}
+
+// Note: BloomFilterExpectedItems and BloomFilterFalsePositiveRate are now
+// managed through the config center. Use GetBloomFilterExpectedItems() and
+// GetBloomFilterFalsePositiveRate() to access their values.
+
+// GCStatus represents the response from gc_status mo_ctl command
+type GCStatus struct {
+	Running     bool  `json:"running"`
+	Protections int   `json:"protections"`
+	TS          int64 `json:"ts"`
+}
+
+// SyncProtectionResponse represents the response from sync protection mo_ctl commands
+type SyncProtectionResponse struct {
+	Status  string `json:"status"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// MoCtlResponse represents the outer response from mo_ctl commands
+// Format: {"method":"...", "result":[{"ReturnStr":"..."}]}
+type MoCtlResponse struct {
+	Method string             `json:"method"`
+	Result []MoCtlResultEntry `json:"result"`
+}
+
+// MoCtlResultEntry represents a single result entry from mo_ctl
+type MoCtlResultEntry struct {
+	ReturnStr string `json:"ReturnStr"`
+}
+
+// parseMoCtlResponse parses the mo_ctl response and extracts the inner ReturnStr
+func parseMoCtlResponse(responseJSON string) (string, error) {
+	var moCtlResp MoCtlResponse
+	if err := json.Unmarshal([]byte(responseJSON), &moCtlResp); err != nil {
+		return "", err
+	}
+	if len(moCtlResp.Result) == 0 {
+		return "", moerr.NewInternalErrorNoCtx("mo_ctl response has no result")
+	}
+	return moCtlResp.Result[0].ReturnStr, nil
+}
+
+// QueryGCStatus queries the GC status from upstream
+func QueryGCStatus(ctx context.Context, executor SQLExecutor) (*GCStatus, error) {
+	sql := PublicationSQLBuilder.GCStatusSQL()
+
+	result, cancel, err := executor.ExecSQL(ctx, nil, InvalidAccountID, sql, false, true, time.Minute)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to query GC status: %v", err)
+	}
+	defer func() {
+		if result != nil {
+			result.Close()
+		}
+		if cancel != nil {
+			cancel()
+		}
+	}()
+
+	var responseJSON string
+	if !result.Next() {
+		if err := result.Err(); err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to read GC status result: %v", err)
+		}
+		return nil, moerr.NewInternalErrorNoCtx("no rows returned for GC status query")
+	}
+
+	if err := result.Scan(&responseJSON); err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to scan GC status result: %v", err)
+	}
+
+	if responseJSON == "" {
+		return nil, moerr.NewInternalErrorNoCtx("GC status response is empty")
+	}
+
+	var status GCStatus
+	if err := json.Unmarshal([]byte(responseJSON), &status); err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to parse GC status response: %v", err)
+	}
+
+	return &status, nil
+}
+
+// RegisterSyncProtection registers a sync protection with the upstream GC
+func RegisterSyncProtection(
+	ctx context.Context,
+	executor SQLExecutor,
+	jobID string,
+	bfBase64 string,
+	gcTS int64,
+	ttlExpireTS int64,
+	taskID string,
+) error {
+	sql := PublicationSQLBuilder.RegisterSyncProtectionSQL(jobID, bfBase64, gcTS, ttlExpireTS, taskID)
+
+	result, cancel, err := executor.ExecSQL(ctx, nil, InvalidAccountID, sql, false, true, time.Minute)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to register sync protection: %v", err)
+	}
+	defer func() {
+		if result != nil {
+			result.Close()
+		}
+		if cancel != nil {
+			cancel()
+		}
+	}()
+
+	var responseJSON string
+	if !result.Next() {
+		if err := result.Err(); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to read register sync protection result: %v", err)
+		}
+		return moerr.NewInternalErrorNoCtx("no rows returned for register sync protection")
+	}
+
+	if err := result.Scan(&responseJSON); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to scan register sync protection result: %v", err)
+	}
+
+	if responseJSON == "" {
+		return moerr.NewInternalErrorNoCtx("register sync protection response is empty")
+	}
+
+	// Parse mo_ctl outer response to get ReturnStr
+	innerJSON, err := parseMoCtlResponse(responseJSON)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to parse mo_ctl response: %v", err)
+	}
+
+	var response SyncProtectionResponse
+	if err := json.Unmarshal([]byte(innerJSON), &response); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to parse register sync protection response: %v", err)
+	}
+
+	if response.Status != "ok" {
+		// Return error with code for retry logic
+		if response.Code == "ErrGCRunning" {
+			return moerr.NewInternalErrorf(ctx, "ErrGCRunning: %s", response.Message)
+		}
+		return moerr.NewInternalErrorf(ctx, "register sync protection failed: %s - %s", response.Code, response.Message)
+	}
+
+	return nil
+}
+
+// RenewSyncProtection renews the TTL of a sync protection
+func RenewSyncProtection(
+	ctx context.Context,
+	executor SQLExecutor,
+	jobID string,
+	ttlExpireTS int64,
+) error {
+	sql := PublicationSQLBuilder.RenewSyncProtectionSQL(jobID, ttlExpireTS)
+
+	result, cancel, err := executor.ExecSQL(ctx, nil, InvalidAccountID, sql, false, true, time.Minute)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to renew sync protection: %v", err)
+	}
+	defer func() {
+		if result != nil {
+			result.Close()
+		}
+		if cancel != nil {
+			cancel()
+		}
+	}()
+
+	var responseJSON string
+	if !result.Next() {
+		if err := result.Err(); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to read renew sync protection result: %v", err)
+		}
+		return moerr.NewInternalErrorNoCtx("no rows returned for renew sync protection")
+	}
+
+	if err := result.Scan(&responseJSON); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to scan renew sync protection result: %v", err)
+	}
+
+	if responseJSON == "" {
+		return moerr.NewInternalErrorNoCtx("renew sync protection response is empty")
+	}
+
+	// Parse mo_ctl outer response to get ReturnStr
+	innerJSON, err := parseMoCtlResponse(responseJSON)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to parse mo_ctl response: %v", err)
+	}
+
+	var response SyncProtectionResponse
+	if err := json.Unmarshal([]byte(innerJSON), &response); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to parse renew sync protection response: %v", err)
+	}
+
+	if response.Status != "ok" {
+		return moerr.NewInternalErrorf(ctx, "renew sync protection failed: %s - %s", response.Code, response.Message)
+	}
+
+	return nil
+}
+
+// UnregisterSyncProtection unregisters a sync protection
+func UnregisterSyncProtection(
+	ctx context.Context,
+	executor SQLExecutor,
+	jobID string,
+) error {
+	sql := PublicationSQLBuilder.UnregisterSyncProtectionSQL(jobID)
+
+	result, cancel, err := executor.ExecSQL(ctx, nil, InvalidAccountID, sql, false, true, time.Minute)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to unregister sync protection: %v", err)
+	}
+	defer func() {
+		if result != nil {
+			result.Close()
+		}
+		if cancel != nil {
+			cancel()
+		}
+	}()
+
+	var responseJSON string
+	if !result.Next() {
+		if err := result.Err(); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to read unregister sync protection result: %v", err)
+		}
+		return moerr.NewInternalErrorNoCtx("no rows returned for unregister sync protection")
+	}
+
+	if err := result.Scan(&responseJSON); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to scan unregister sync protection result: %v", err)
+	}
+
+	// Unregister always succeeds even if job doesn't exist
+	return nil
+}
+
+// BuildBloomFilterFromObjectMap builds a bloom filter from the object map using object name strings
+// TODO(M4): Bloom filter false positive rate may cause unnecessary GC protection retention.
+// Consider evaluating the impact and tuning parameters, or using an exact-match structure
+// when the object count is small enough.
+func BuildBloomFilterFromObjectMap(objectMap map[objectio.ObjectId]*ObjectWithTableInfo, mp *mpool.MPool) (string, error) {
+	if len(objectMap) == 0 {
+		return "", nil
+	}
+
+	// Create bloom filter with appropriate size from config
+	expectedItems := len(objectMap)
+	configExpectedItems := GetBloomFilterExpectedItems()
+	if expectedItems < configExpectedItems {
+		expectedItems = configExpectedItems
+	}
+
+	bf := bloomfilter.New(int64(expectedItems), GetBloomFilterFalsePositiveRate())
+
+	// Add all object names (strings) to bloom filter
+	vec := vector.NewVec(types.T_varchar.ToType())
+	for objID := range objectMap {
+		// Convert ObjectId to ObjectName string
+		objName := objectio.BuildObjectNameWithObjectID(&objID).String()
+		if err := vector.AppendBytes(vec, []byte(objName), false, mp); err != nil {
+			vec.Free(mp)
+			return "", moerr.NewInternalErrorf(context.Background(), "failed to append to vector: %v", err)
+		}
+	}
+	bf.Add(vec)
+	vec.Free(mp)
+
+	// Marshal and encode to base64
+	bfBytes, err := bf.Marshal()
+	if err != nil {
+		return "", moerr.NewInternalErrorf(context.Background(), "failed to marshal bloom filter: %v", err)
+	}
+
+	return base64.StdEncoding.EncodeToString(bfBytes), nil
+}
+
+// IsGCRunningError checks if the error is a GC running error
+func IsGCRunningError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "GC is running")
+}
+
+// IsSyncProtectionNotFoundError checks if the error indicates sync protection not found
+func IsSyncProtectionNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "sync protection not found")
+}
+
+// IsSyncProtectionExistsError checks if the error indicates sync protection already exists
+func IsSyncProtectionExistsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "sync protection already exists")
+}
+
+// IsSyncProtectionMaxCountError checks if the error indicates max count reached
+func IsSyncProtectionMaxCountError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "sync protection max count reached")
+}
+
+// IsSyncProtectionSoftDeleteError checks if the error indicates sync protection is soft deleted
+func IsSyncProtectionSoftDeleteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "sync protection is soft deleted")
+}
+
+// IsSyncProtectionInvalidError checks if the error indicates invalid sync protection request
+func IsSyncProtectionInvalidError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "invalid sync protection request")
+}
+
+// RegisterSyncProtectionOnDownstream registers sync protection on the downstream cluster
+// It generates a new UUID for the jobID and sends all commands to downstream
+// No retry is performed here - executor already has retry mechanism
+// Returns retryable=true if the error is retriable (GC running, max count reached)
+func RegisterSyncProtectionOnDownstream(
+	ctx context.Context,
+	downstreamExecutor SQLExecutor,
+	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+	mp *mpool.MPool,
+	taskID string,
+) (jobID string, ttlExpireTS int64, retryable bool, err error) {
+	return RegisterSyncProtectionOnDownstreamFn(ctx, downstreamExecutor, objectMap, mp, taskID)
+}
+
+// registerSyncProtectionOnDownstreamImpl is the actual implementation
+func registerSyncProtectionOnDownstreamImpl(
+	ctx context.Context,
+	downstreamExecutor SQLExecutor,
+	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+	mp *mpool.MPool,
+	taskID string,
+) (jobID string, ttlExpireTS int64, retryable bool, err error) {
+	// Generate a new UUID for job ID
+	jobID = uuid.New().String()
+
+	// 1. Build Bloom Filter
+	bfBase64, err := BuildBloomFilterFromObjectMap(objectMap, mp)
+	if err != nil {
+		return "", 0, false, moerr.NewInternalErrorf(ctx, "failed to build bloom filter: %v", err)
+	}
+
+	// 2. Register protection on downstream (gcTS=0 since we skip gc_status query)
+	// TODO(LOW): The TTL duration (default ~20 min) may be insufficient for large replication
+	// jobs. Consider dynamically adjusting TTL based on estimated job duration or object count.
+	ttlExpireTS = time.Now().Add(GetSyncProtectionTTLDuration()).UnixNano()
+	err = RegisterSyncProtection(ctx, downstreamExecutor, jobID, bfBase64, 0, ttlExpireTS, taskID)
+	if err != nil {
+		retryable = IsGCRunningError(err) || IsSyncProtectionMaxCountError(err)
+		return "", 0, retryable, moerr.NewInternalErrorf(ctx, "failed to register sync protection on downstream: %v", err)
+	}
+
+	return jobID, ttlExpireTS, false, nil
+}
+
+// RegisterSyncProtectionWithRetry registers sync protection with timeout-based retry
+// Similar to WaitForSnapshotFlushed, it retries on ErrGCRunning and ErrMaxCountReached
+// until the total timeout is reached.
+//
+// TODO(LOW): Current sync protection is at the object level via bloom filter. Consider
+// adding table-level merge exclusion to prevent merges on downstream tables during
+// active replication, which could cause object ID conflicts.
+//
+// Parameters:
+//   - ctx: context for cancellation
+//   - downstreamExecutor: SQL executor for downstream cluster
+//   - objectMap: map of objects to protect
+//   - mp: memory pool
+//   - retryOpt: retry options (nil to use default: 1s initial, 5min total timeout)
+//   - taskID: CCPR iteration task ID with LSN (e.g., "taskID-123")
+//
+// Returns:
+//   - jobID: the registered job ID
+//   - ttlExpireTS: the TTL expiration timestamp
+//   - err: error if registration failed after all retries
+func RegisterSyncProtectionWithRetry(
+	ctx context.Context,
+	downstreamExecutor SQLExecutor,
+	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+	mp *mpool.MPool,
+	retryOpt *SyncProtectionRetryOption,
+	taskID string,
+) (jobID string, ttlExpireTS int64, err error) {
+	if retryOpt == nil {
+		retryOpt = DefaultSyncProtectionRetryOption()
+	}
+
+	// If MaxTotalTime is 0 or negative, no retry - fail immediately on first error
+	if retryOpt.MaxTotalTime <= 0 {
+		jobID, ttlExpireTS, _, err = RegisterSyncProtectionOnDownstream(ctx, downstreamExecutor, objectMap, mp, taskID)
+		return
+	}
+
+	startTime := time.Now()
+	interval := retryOpt.InitialInterval
+	if interval <= 0 {
+		interval = 1 * time.Second
+	}
+
+	for {
+		jobID, ttlExpireTS, retryable, err := RegisterSyncProtectionOnDownstream(ctx, downstreamExecutor, objectMap, mp, taskID)
+		if err == nil {
+			return jobID, ttlExpireTS, nil
+		}
+
+		// Check if error is retryable
+		if !retryable {
+			return "", 0, err
+		}
+
+		// Check if we've exceeded the total timeout
+		elapsed := time.Since(startTime)
+		if elapsed >= retryOpt.MaxTotalTime {
+			return "", 0, moerr.NewInternalErrorf(ctx, "sync protection registration timeout after %v: %v", elapsed, err)
+		}
+
+		// Wait before retry
+		select {
+		case <-ctx.Done():
+			return "", 0, ctx.Err()
+		case <-time.After(interval):
+			// Continue to next retry
+		}
+	}
+}

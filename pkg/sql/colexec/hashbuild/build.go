@@ -58,11 +58,18 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	}
 
 	hashBuild.ctr.hashmapBuilder.IsDedup = hashBuild.IsDedup
+	hashBuild.ctr.hashmapBuilder.DedupBuildKeepLast = hashBuild.DedupBuildKeepLast
 	hashBuild.ctr.hashmapBuilder.OnDuplicateAction = hashBuild.OnDuplicateAction
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
 	hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
 
-	return hashBuild.ctr.hashmapBuilder.Prepare(hashBuild.Conditions, hashBuild.DelColIdx, proc)
+	return hashBuild.ctr.hashmapBuilder.Prepare(
+		hashBuild.Conditions,
+		hashBuild.DelColIdx,
+		hashBuild.DedupDeleteMarkerColIdx,
+		hashBuild.DedupDeleteKeepColIdxList,
+		proc,
+	)
 }
 
 func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
@@ -296,9 +303,9 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 
 	spec := hashBuild.RuntimeFilterSpec
 
-	// use bloom filter runtime filter when requested
-	if spec.UseBloomFilter {
-		// currently only support single-column key for bloom runtime filter
+	// send the unique join keys (doc_id membership pushdown) when requested
+	if spec.UseMembershipFilter {
+		// currently only support single-column key for this runtime filter;
 		// composite key still uses original IN / PASS logic
 		if spec.Expr != nil && spec.Expr.GetF() != nil {
 			runtimeFilter.Typ = message.RuntimeFilter_PASS
@@ -318,10 +325,10 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		keyVec := ctr.hashmapBuilder.UniqueJoinKeys[0]
 		rowCount := keyVec.Length()
 
-		// Always send BLOOMFILTER with the serialized unique join keys.
-		// The consumer (ivfflat search) decides whether to use them as
-		// an exact pk IN filter or a bloom filter based on its own threshold.
-		runtimeFilter.Typ = message.RuntimeFilter_BLOOMFILTER
+		// Always send the unique join keys; the consumer (ivfflat / fulltext
+		// search) decides whether to use them as an exact pk IN filter or to
+		// build a membership filter, based on its own threshold.
+		runtimeFilter.Typ = message.RuntimeFilter_UNIQUEJOINKEYS
 
 		data, err := keyVec.MarshalBinary()
 		if err != nil {
@@ -372,10 +379,14 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 			if erg != nil {
 				return erg
 			}
+			// InplaceSort reorders data but NOT the null bitmap.
+			// NULLs are irrelevant for IN-filter: clear bitmap before sort.
+			vec.GetNulls().Reset()
 			vec.InplaceSort()
 			data, err = vec.MarshalBinary()
 			free()
 		} else {
+			ctr.hashmapBuilder.UniqueJoinKeys[0].GetNulls().Reset()
 			ctr.hashmapBuilder.UniqueJoinKeys[0].InplaceSort()
 			data, err = ctr.hashmapBuilder.UniqueJoinKeys[0].MarshalBinary()
 		}

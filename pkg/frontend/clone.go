@@ -17,7 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -62,6 +61,13 @@ type cloneReceipt struct {
 	opAccount  uint32
 	toAccount  uint32
 	srcAccount uint32
+
+	// Resolved identifiers used by branch bookkeeping. They are populated by
+	// updateBranchMetaTable so the matching branch-protect snapshot insert can
+	// reuse them without a second catalog round-trip.
+	srcTableID     uint64
+	dstTableID     uint64
+	srcAccountName string
 }
 
 func getBackExecutor(
@@ -119,6 +125,39 @@ func resolveSnapshot(
 	}
 
 	return snapshot, nil
+}
+
+func newMoTimestampHint(snapshotTS int64) *tree.AtTimeStamp {
+	origin := strconv.FormatInt(snapshotTS, 10)
+	return &tree.AtTimeStamp{
+		Type: tree.ATMOTIMESTAMP,
+		Expr: tree.NewNumVal[int64](snapshotTS, origin, false, tree.P_int64),
+	}
+}
+
+func cloneTableRestoreSQL(stmt *tree.CloneTable, snapshotTS int64) string {
+	restoreStmt := *stmt
+	restoreStmt.ToAccountOpt = nil
+	if snapshotTS != 0 {
+		restoreStmt.SrcTable.AtTsExpr = newMoTimestampHint(snapshotTS)
+	}
+	return tree.StringWithOpts(
+		&restoreStmt,
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+}
+
+func newQualifiedCloneTableName(dbName, tblName string, atTsExpr *tree.AtTimeStamp) tree.TableName {
+	return *tree.NewTableName(
+		tree.Identifier(tblName),
+		tree.ObjectNamePrefix{
+			SchemaName:     tree.Identifier(dbName),
+			ExplicitSchema: true,
+		},
+		atTsExpr,
+	)
 }
 
 func getOpAndToAccountId(
@@ -254,11 +293,7 @@ func handleCloneTable(
 
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
 
-	sql := execCtx.input.sql
-	if stmt.ToAccountOpt != nil {
-		// create table to account x
-		sql, _, _ = strings.Cut(strings.ToLower(sql), " to account ")
-	}
+	var sql string
 
 	if snapshot == nil {
 		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
@@ -266,10 +301,8 @@ func handleCloneTable(
 		); err != nil {
 			return
 		}
-
-		sql, _ = strings.CutSuffix(sql, ";")
-		sql = sql + fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
 	}
+	sql = cloneTableRestoreSQL(stmt, snapshotTS)
 
 	if err = bh.ExecRestore(ctx, sql, opAccountId, toAccountId); err != nil {
 		return
@@ -294,8 +327,6 @@ func handleCloneTable(
 	return
 }
 
-var snapConditionRegex = regexp.MustCompile(`\{[^}]+}`)
-
 // create database x clone y {MO_TS, SNAPSHOT}
 // create database x clone y {MO_TS, SNAPSHOT} to account t
 func handleCloneDatabase(
@@ -304,29 +335,28 @@ func handleCloneDatabase(
 	bh BackgroundExec,
 	stmt *tree.CloneDatabase,
 ) (receipts []cloneReceipt, err error) {
+	return handleCloneDatabaseWithSource(execCtx, ses, bh, stmt, nil)
+}
+
+func handleCloneDatabaseWithSource(
+	execCtx *ExecCtx,
+	ses *Session,
+	bh BackgroundExec,
+	stmt *tree.CloneDatabase,
+	resolvedSource *cloneDatabaseSource,
+) (receipts []cloneReceipt, err error) {
 
 	var (
 		reqCtx = execCtx.reqCtx
 
 		deferred func(error) error
 
-		toAccountId uint32
-		opAccountId uint32
-
 		ctx1 context.Context
 
-		srcTblInfos []*tableInfo
-		snapshot    *plan2.Snapshot
-
-		viewMap = make(map[string]*tableInfo)
-
-		sortedViews   []string
-		sortedFkTbls  []string
-		fkTableMap    map[string]*tableInfo
-		snapCondition string
+		sortedViews []string
 
 		snapshotTS int64
-		subMeta    *plan2.SubscriptionMeta
+		source     cloneDatabaseSource
 	)
 
 	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
@@ -350,68 +380,22 @@ func handleCloneDatabase(
 		}()
 	}
 
-	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
-		reqCtx, ses, bh, stmt.ToAccountOpt, stmt.AtTsExpr,
-	); err != nil {
-		return
-	}
-
-	if snapshot == nil && opAccountId != toAccountId {
-		err = moerr.NewInternalErrorNoCtxf("clone database between different accounts need a snapshot")
-		return
-	}
-
-	if opAccountId != sysAccountID && opAccountId != toAccountId {
-		err = moerr.NewInternalError(reqCtx, "only sys can clone table to another account")
-		return
-	}
-
-	ctx1 = defines.AttachAccountId(reqCtx, toAccountId)
-	if err = bh.Exec(ctx1,
-		fmt.Sprintf("create database `%s`", stmt.DstDatabase),
-	); err != nil {
-		return
-	}
-
-	if subMeta, err = ses.GetTxnCompileCtx().GetSubscriptionMeta(
-		string(stmt.SrcDatabase), snapshot,
-	); err != nil {
-		return
-	}
-
-	srcDBName := stmt.SrcDatabase.String()
-	if subMeta != nil {
-		srcDBName = subMeta.DbName
-		if snapshot != nil {
-			snapshot.Tenant = &plan.SnapshotTenant{TenantID: uint32(subMeta.AccountId)}
-		} else {
-			snapshot = &plan.Snapshot{
-				Tenant: &plan.SnapshotTenant{TenantID: uint32(subMeta.AccountId)},
-			}
+	if resolvedSource != nil {
+		source = *resolvedSource
+	} else {
+		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt); err != nil {
+			return
 		}
 	}
 
-	if srcTblInfos, err = getTableInfos(
-		reqCtx, ses.GetService(), bh, snapshot, srcDBName, "",
+	ctx1 = defines.AttachAccountId(reqCtx, source.toAccountId)
+	if err = bh.Exec(ctx1,
+		fmt.Sprintf("create database %s", quoteIdentifierForSQL(stmt.DstDatabase.String())),
 	); err != nil {
 		return
 	}
 
-	snapCondition = snapConditionRegex.FindString(execCtx.input.sql)
-
-	if sortedFkTbls, err = fkTablesTopoSort(
-		reqCtx, bh, snapshot, srcDBName, "",
-	); err != nil {
-		return
-	}
-
-	if fkTableMap, err = getTableInfoMap(
-		reqCtx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls,
-	); err != nil {
-		return
-	}
-
-	if len(snapCondition) == 0 {
+	if stmt.AtTsExpr == nil {
 		// consider the following example:
 		// (within a session)
 		//   ...
@@ -432,40 +416,30 @@ func handleCloneDatabase(
 	}
 
 	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
-		sql := fmt.Sprintf(
-			"create table `%s`.`%s` clone `%s`.`%s`",
-			dstDb, dstTbl, srcDb, srcTbl,
-		)
-
-		if len(snapCondition) != 0 {
-			sql = sql + " " + snapCondition
-		} else {
-			sql = sql + fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+		srcTable := newQualifiedCloneTableName(srcDb, srcTbl, stmt.AtTsExpr)
+		if stmt.AtTsExpr == nil && snapshotTS != 0 {
+			srcTable.AtTsExpr = newMoTimestampHint(snapshotTS)
 		}
-
-		if stmt.ToAccountOpt != nil {
-			sql = sql + fmt.Sprintf(" to account %s", stmt.ToAccountOpt.AccountName)
+		dstTable := newQualifiedCloneTableName(dstDb, dstTbl, nil)
+		cloneStmt := &tree.CloneTable{
+			SrcTable: srcTable,
+			CreateTable: tree.CreateTable{
+				Table:         dstTable,
+				LikeTableName: srcTable,
+				IsAsLike:      true,
+			},
+			ToAccountOpt: stmt.ToAccountOpt,
 		}
 
 		var (
 			receipt     cloneReceipt
-			cloneStmts  []tree.Statement
 			tempExecCtx = &ExecCtx{
 				reqCtx: reqCtx,
-				input:  &UserInput{sql: sql},
 			}
 		)
 
-		if cloneStmts, err = parsers.Parse(reqCtx, dialect.MYSQL, sql, 0); err != nil {
-			return err
-		}
-
-		defer func() {
-			cloneStmts[0].Free()
-		}()
-
 		if receipt, err = handleCloneTable(
-			tempExecCtx, ses, cloneStmts[0].(*tree.CloneTable), bh,
+			tempExecCtx, ses, cloneStmt, bh,
 		); err != nil {
 			return err
 		}
@@ -474,15 +448,14 @@ func handleCloneDatabase(
 		return nil
 	}
 
-	for _, srcTbl := range srcTblInfos {
+	for _, srcTbl := range source.srcTblInfos {
 
 		key := genKey(srcTbl.dbName, srcTbl.tblName)
-		if _, ok := fkTableMap[key]; ok {
+		if _, ok := source.fkTableMap[key]; ok {
 			continue
 		}
 
 		if srcTbl.typ == view {
-			viewMap[key] = srcTbl
 			continue
 		}
 
@@ -495,8 +468,8 @@ func handleCloneDatabase(
 	}
 
 	// clone foreign key related table
-	for _, key := range sortedFkTbls {
-		if tblInfo := fkTableMap[key]; tblInfo != nil {
+	for _, key := range source.sortedFkTbls {
+		if tblInfo := source.fkTableMap[key]; tblInfo != nil {
 			if err = cloneTable(
 				stmt.DstDatabase.String(), tblInfo.tblName,
 				stmt.SrcDatabase.String(), tblInfo.tblName,
@@ -507,38 +480,81 @@ func handleCloneDatabase(
 	}
 
 	// clone view table
-	if len(viewMap) != 0 {
-		fromAccount := opAccountId
-		if snapshot != nil && snapshot.Tenant != nil {
-			fromAccount = snapshot.Tenant.TenantID
+	if len(source.viewMap) != 0 {
+		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, snapshotTS)
+		fromAccount := source.opAccountId
+		if viewSnapshot != nil && viewSnapshot.Tenant != nil {
+			fromAccount = viewSnapshot.Tenant.TenantID
 		}
 
 		if sortedViews, err = sortedViewInfos(
-			reqCtx, ses, bh, "", snapshot, viewMap, fromAccount, toAccountId,
+			reqCtx, ses, bh, "", viewSnapshot, source.viewMap, fromAccount, source.toAccountId,
 		); err != nil {
 			return
 		}
 
-		for i := range sortedViews {
-			sortedViews[i] = strings.ReplaceAll(
-				sortedViews[i], stmt.SrcDatabase.String(), stmt.DstDatabase.String())
-		}
+		rewrittenViewMap, rewrittenViews := rewriteCloneViewInfos(
+			source.viewMap, sortedViews, source.srcResolveDBName, stmt.DstDatabase.String(),
+		)
 
-		newViewMap := make(map[string]*tableInfo)
-		for key, info := range viewMap {
-			key = strings.ReplaceAll(key, stmt.SrcDatabase.String(), stmt.DstDatabase.String())
-			info.createSql = strings.ReplaceAll(info.createSql, stmt.SrcDatabase.String(), stmt.DstDatabase.String())
-			info.dbName = stmt.DstDatabase.String()
-
-			newViewMap[key] = info
-		}
-
-		if err = restoreViews(reqCtx, ses, bh, "", newViewMap, toAccountId, sortedViews); err != nil {
+		if err = restoreViews(reqCtx, ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
 			return
 		}
 	}
 
 	return
+}
+
+func prepareCloneViewSnapshot(snapshot *plan.Snapshot, snapshotTS int64) *plan.Snapshot {
+	if plan.IsSnapshotValid(snapshot) || snapshotTS == 0 {
+		return snapshot
+	}
+	if snapshot == nil {
+		return &plan.Snapshot{
+			TS: &timestamp.Timestamp{PhysicalTime: snapshotTS},
+		}
+	}
+
+	cloned := *snapshot
+	cloned.TS = &timestamp.Timestamp{PhysicalTime: snapshotTS}
+	return &cloned
+}
+
+func rewriteCloneViewInfos(
+	viewMap map[string]*tableInfo,
+	sortedViews []string,
+	srcDBName string,
+	dstDBName string,
+) (map[string]*tableInfo, []string) {
+	rewrittenViews := make([]string, 0, len(sortedViews))
+	for _, key := range sortedViews {
+		dbName, tblName := splitKey(key)
+		if tblName == "" {
+			rewrittenViews = append(rewrittenViews, strings.ReplaceAll(key, srcDBName, dstDBName))
+			continue
+		}
+		if dbName == srcDBName {
+			key = genKey(dstDBName, tblName)
+		}
+		rewrittenViews = append(rewrittenViews, key)
+	}
+
+	rewrittenViewMap := make(map[string]*tableInfo, len(viewMap))
+	for key, info := range viewMap {
+		dbName, tblName := splitKey(key)
+		if tblName == "" {
+			key = strings.ReplaceAll(key, srcDBName, dstDBName)
+		} else if dbName == srcDBName {
+			key = genKey(dstDBName, tblName)
+		}
+
+		clonedInfo := *info
+		clonedInfo.dbName = dstDBName
+		clonedInfo.createSql = strings.ReplaceAll(info.createSql, srcDBName, dstDBName)
+		rewrittenViewMap[key] = &clonedInfo
+	}
+
+	return rewrittenViewMap, rewrittenViews
 }
 
 func tryToIncreaseTxnPhysicalTS(
@@ -575,7 +591,7 @@ func updateBranchMetaTable(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
-	receipt cloneReceipt,
+	receipt *cloneReceipt,
 ) (err error) {
 
 	var (
@@ -631,6 +647,11 @@ func updateBranchMetaTable(
 	if receipt.snapshot != nil {
 		receipt.snapshotTS = receipt.snapshot.TS.PhysicalTime
 	}
+
+	// Persist the resolved ids so the branch-protect snapshot insert (and any
+	// other downstream bookkeeping) can avoid re-resolving them.
+	receipt.srcTableID = srcTblDef.TblId
+	receipt.dstTableID = dstTblDef.TblId
 
 	// write branch info into branch_metadata table
 	updateMetadataSql := fmt.Sprintf(

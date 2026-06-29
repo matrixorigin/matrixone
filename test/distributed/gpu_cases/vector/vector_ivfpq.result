@@ -1,0 +1,81 @@
+SET experimental_ivfpq_index = 1;
+SET ivfpq_threads_build = 6;
+SET ivfpq_max_index_capacity = 99999;
+SET kmeans_train_percent = 100;
+SET kmeans_max_iteration = 12;
+SET probe_limit = 16;
+drop database if exists ivfpq_sync;
+create database ivfpq_sync;
+use ivfpq_sync;
+create table t (id bigint primary key, v vecf32(8));
+insert into t values
+( 1, '[1,1,1,1,1,1,1,1]'),     ( 2, '[2,2,2,2,2,2,2,2]'),
+( 3, '[3,3,3,3,3,3,3,3]'),     ( 4, '[4,4,4,4,4,4,4,4]'),
+( 5, '[5,5,5,5,5,5,5,5]'),     ( 6, '[6,6,6,6,6,6,6,6]'),
+( 7, '[7,7,7,7,7,7,7,7]'),     ( 8, '[8,8,8,8,8,8,8,8]'),
+( 9, '[9,9,9,9,9,9,9,9]'),     (10, '[10,10,10,10,10,10,10,10]'),
+(11, '[11,11,11,11,11,11,11,11]'), (12, '[12,12,12,12,12,12,12,12]'),
+(13, '[13,13,13,13,13,13,13,13]'), (14, '[14,14,14,14,14,14,14,14]'),
+(15, '[15,15,15,15,15,15,15,15]'), (16, '[16,16,16,16,16,16,16,16]'),
+(17, '[17,17,17,17,17,17,17,17]'), (18, '[18,18,18,18,18,18,18,18]'),
+(19, '[19,19,19,19,19,19,19,19]'), (20, '[20,20,20,20,20,20,20,20]');
+create index ix using ivfpq on t (v)
+op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8;
+show create table t;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` bigint NOT NULL,
+  `v` vecf32(8) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix` USING ivfpq (`v`) lists = 10  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8 
+)
+desc t;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+v  ¦  VECF32(8)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  
+select name, type, algo, algo_table_type from mo_catalog.mo_indexes
+where table_id = (select rel_id from mo_catalog.mo_tables
+where relname='t' and reldatabase='ivfpq_sync')
+order by algo_table_type;
+➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  𝄀
+PRIMARY  ¦  PRIMARY  ¦    ¦    𝄀
+ix  ¦  MULTIPLE  ¦  ivfpq  ¦  ivfpq_index  𝄀
+ix  ¦  MULTIPLE  ¦  ivfpq  ¦  ivfpq_meta
+set @stbl = (select index_table_name from mo_catalog.mo_indexes
+where table_id=(select rel_id from mo_catalog.mo_tables
+where relname='t' and reldatabase='ivfpq_sync')
+and name='ix' and algo_table_type='ivfpq_index');
+set @q = concat('select distinct tag from `', @stbl, '` order by tag');
+prepare s from @q; execute s; deallocate prepare s;
+select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
+➤ id[-5,64,0]  𝄀
+1
+select id from t order by l2_distance(v, '[10,10,10,10,10,10,10,10]') limit 1;
+➤ id[-5,64,0]  𝄀
+10
+select id from t order by l2_distance(v, '[15,15,15,15,15,15,15,15]') limit 1;
+➤ id[-5,64,0]  𝄀
+15
+select id from t order by l2_distance(v, '[20,20,20,20,20,20,20,20]') limit 1;
+➤ id[-5,64,0]  𝄀
+20
+drop index ix on t;
+show create table t;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` bigint NOT NULL,
+  `v` vecf32(8) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+select count(*) from mo_catalog.mo_indexes
+where table_id = (select rel_id from mo_catalog.mo_tables
+where relname='t' and reldatabase='ivfpq_sync')
+and algo='ivfpq';
+➤ count(*)[-5,64,0]  𝄀
+0
+create index ix using ivfpq on t (v)
+op_type 'vector_l2_ops' lists=10 m=8 bits_per_code=8;
+select id from t order by l2_distance(v, '[7,7,7,7,7,7,7,7]') limit 1;
+➤ id[-5,64,0]  𝄀
+7
+drop database ivfpq_sync;

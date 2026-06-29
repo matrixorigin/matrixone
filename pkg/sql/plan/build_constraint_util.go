@@ -99,6 +99,13 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		return nil, err
 	}
 
+	// A PostgreSQL-style UPDATE ... FROM may match a single target row from
+	// multiple source rows. Mark it for dedup so the planner does not
+	// produce duplicate-row writes.
+	if stmt.From != nil && len(stmt.From.Tables) > 0 {
+		tblInfo.needAggFilter = true
+	}
+
 	// check update field and set updateKeys
 	usedTbl := make(map[string]map[string]tree.Expr)
 	allColumns := make(map[string]map[string]struct{})
@@ -107,6 +114,30 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		for _, col := range tblInfo.tableDefs[idx].Cols {
 			allColumns[alias][col.Name] = struct{}{}
 		}
+	}
+
+	// checkSetGeneratedCol returns skip=true when the SET assigns DEFAULT to a
+	// stored generated column (which should be silently dropped so the base
+	// column's recomputation fills it), or an error when a non-DEFAULT value
+	// is assigned to any generated column. Mirrors bind_update.go's behaviour.
+	checkSetGeneratedCol := func(alias, column string, expr tree.Expr) (bool, error) {
+		idx, ok := tblInfo.alias[alias]
+		if !ok {
+			return false, nil
+		}
+		tableDef := tblInfo.tableDefs[idx]
+		for _, col := range tableDef.Cols {
+			if col.Name != column || col.GeneratedCol == nil {
+				continue
+			}
+			if _, ok := expr.(*tree.DefaultVal); ok {
+				return true, nil
+			}
+			return false, moerr.NewInvalidInputf(ctx.GetContext(),
+				"the value specified for generated column '%s' in table '%s' is not allowed",
+				column, tableDef.Name)
+		}
+		return false, nil
 	}
 
 	appendToTbl := func(table, column string, expr tree.Expr) {
@@ -127,7 +158,13 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 			tblName := parts.TblName()
 			if _, tblExists := tblInfo.alias[tblName]; tblExists {
 				if _, colExists := allColumns[tblName][colName]; colExists {
-					appendToTbl(tblName, colName, expr)
+					skip, err := checkSetGeneratedCol(tblName, colName, expr)
+					if err != nil {
+						return nil, err
+					}
+					if !skip {
+						appendToTbl(tblName, colName, expr)
+					}
 				} else {
 					return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
 				}
@@ -144,7 +181,13 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 						return nil, moerr.NewInternalErrorf(ctx.GetContext(), "Column '%v' in field list is ambiguous", parts.ColNameOrigin())
 					}
 					found = true
-					appendToTbl(alias, colName, expr)
+					skip, err := checkSetGeneratedCol(alias, colName, expr)
+					if err != nil {
+						return nil, err
+					}
+					if !skip {
+						appendToTbl(alias, colName, expr)
+					}
 				}
 			}
 			if !found && stmt.With != nil {
@@ -170,7 +213,19 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		isMulti:       tblInfo.isMulti,
 		needAggFilter: tblInfo.needAggFilter,
 	}
-	for alias, columns := range usedTbl {
+	// Preserve the original target-table order from tblInfo. Iterating
+	// usedTbl directly would randomize order across runs (Go map
+	// iteration), which makes the fallback UPDATE planner emit the
+	// per-target column blocks in a non-deterministic layout.
+	aliasByIdx := make([]string, len(tblInfo.tableDefs))
+	for alias, idx := range tblInfo.alias {
+		aliasByIdx[idx] = alias
+	}
+	for _, alias := range aliasByIdx {
+		columns, ok := usedTbl[alias]
+		if !ok {
+			continue
+		}
 		idx := tblInfo.alias[alias]
 		tblDef := tblInfo.tableDefs[idx]
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
@@ -203,10 +258,17 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	return newTblInfo, nil
 }
 
-func checkTableType(ctx context.Context, tableDef *TableDef) error {
+func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 	if tableDef.TableType == catalog.SystemSourceRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from source")
 	} else if tableDef.TableType == catalog.SystemExternalRel {
+		// A writable external table (created with WRITE_FILE_PATTERN) accepts
+		// INSERT/LOAD; everything else on an external table is rejected.
+		if op == "insert" {
+			if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
+				return nil
+			}
+		}
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from view")
@@ -267,7 +329,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	if err := checkTableType(ctx.GetContext(), tableDef); err != nil {
+	if err := checkTableType(ctx.GetContext(), tableDef, tblInfo.typ); err != nil {
 		return err
 	}
 
@@ -542,6 +604,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			if err != nil {
 				return false, nil, nil, err
 			}
+		} else if isGeometryPlanType(&tableDef.Cols[colIdx].Typ) {
+			projExpr, err = funcCastForGeometryType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			if err != nil {
+				return false, nil, nil, err
+			}
 		} else {
 			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
@@ -593,8 +660,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// select 'select 0, _t.column_0 from (select * from values (1)) _t(column_0)
 	projectList := make([]*Expr, 0, len(tableDef.Cols))
 	pkCols := make(map[string]struct{})
-	for _, name := range tableDef.Pkey.Names {
-		pkCols[name] = struct{}{}
+	// External tables have no primary key (not even a fake hidden one).
+	if tableDef.Pkey != nil {
+		for _, name := range tableDef.Pkey.Names {
+			pkCols[name] = struct{}{}
+		}
 	}
 	for _, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
@@ -931,6 +1001,9 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	if targetType.Typ.Id == 0 {
 		return expr, nil
 	}
+	if isTypedArrayPlanType(&targetType.Typ) {
+		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
+	}
 	t1 := makeTypeByPlan2Expr(expr)
 	if t1.Eq(t2) {
 		return expr, nil
@@ -955,6 +1028,9 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
+	}
+	if isTypedArrayPlanType(&targetType) {
+		return funcCastForTypedArrayType(ctx, expr, targetType)
 	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if t1.Eq(t2) {
@@ -1075,13 +1151,17 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		}
 		planType := MakePlan2TypeValue(colType)
 		return MakePlan2Decimal128ExprWithType(num, &planType), err
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry,
 		types.T_array_float32, types.T_array_float64:
 		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
 		}
-		return MakePlan2StringConstExprWithType(string(num)), err
+		expr := MakePlan2StringConstExprWithType(string(num))
+		if colType.Oid == types.T_geometry {
+			return appendCastBeforeExpr(proc.Ctx, expr, MakePlan2TypeValue(colType))
+		}
+		return expr, err
 	case types.T_json:
 		canInsert, num, err := util.SetInsertValueJSON(proc, numVal)
 		if err != nil || !canInsert {
@@ -1193,7 +1273,7 @@ func buildValueScan(
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) {
+				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
 					if err != nil {
 						return err
@@ -1223,6 +1303,11 @@ func buildValueScan(
 						}
 					} else if isSetPlanType(&col.Typ) {
 						defExpr, err = funcCastForSetType(builder.GetContext(), defExpr, col.Typ)
+						if err != nil {
+							return err
+						}
+					} else if isGeometryPlanType(&col.Typ) {
+						defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
 							return err
 						}

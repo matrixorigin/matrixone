@@ -162,11 +162,11 @@ var (
 	defaultOBBufferSize int64 = 10485760
 
 	// defaultOBCollectorCntPercent
-	defaultOBCollectorCntPercent = 1000
+	defaultOBCollectorCntPercent = 10
 	// defaultOBGeneratorCntPercent
-	defaultOBGeneratorCntPercent = 1000
+	defaultOBGeneratorCntPercent = 20
 	// defaultOBExporterCntPercent
-	defaultOBExporterCntPercent = 1000
+	defaultOBExporterCntPercent = 80
 
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30
@@ -366,6 +366,13 @@ type FrontendParameters struct {
 	// timeout of authenticating user. different from session timeout
 	// including mysql protocol handshake, checking user, loading session variables
 	ConnectTimeout toml.Duration `toml:"connectTimeout" user_setting:"advanced"`
+
+	// SidecarURL is the DuckDB sidecar HTTP endpoint for offloading queries
+	// via /*+ SIDECAR */ or /*+ SIDECAR GPU */ hints.
+	// When set, this becomes the default for the sidecar_url session variable.
+	// Can be overridden per-session with SET sidecar_url = '...' or
+	// globally for new sessions with SET GLOBAL sidecar_url = '...'.
+	SidecarURL string `toml:"sidecarUrl" user_setting:"advanced"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {

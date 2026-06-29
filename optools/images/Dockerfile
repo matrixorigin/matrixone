@@ -32,6 +32,9 @@ FROM matrixorigin/ubuntu:22.04
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/local/lib
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/cgo/*.so /usr/local/lib
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/pkg/monlp/tokenizer/dict /usr/local/share/jieba
+ENV MO_JIEBA_DICT_DIR=/usr/local/share/jieba
 
 # ldconfig and run mo-service to check if the shared library is found
 RUN ldconfig && /mo-service -h

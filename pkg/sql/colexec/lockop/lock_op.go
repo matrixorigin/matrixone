@@ -17,14 +17,17 @@ package lockop
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -47,8 +50,17 @@ import (
 )
 
 var (
-	retryError               = moerr.NewTxnNeedRetryNoCtx()
-	retryWithDefChangedError = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	retryError                 = moerr.NewTxnNeedRetryNoCtx()
+	retryWithDefChangedError   = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	defaultWaitTimeOnRetryLock = time.Second
+	// Keep backend/CN-restart retries bounded so abnormal txns fail instead of
+	// holding CN resources for hours while the outer statement context is still alive.
+	defaultMaxWaitTimeOnRetryBackendLock = 10 * time.Second
+	lockRetryMemoryBackoff               = 5 * time.Second
+	lockRetryHighMemoryPercent           = uint64(80)
+	lockRetryCriticalMemoryPercent       = uint64(90)
+	getLockRetryMemoryPressureLevel      = defaultLockRetryMemoryPressureLevel
+	lockRetryHighMemorySlots             = make(chan struct{}, 16)
 )
 
 const opName = "lock_op"
@@ -109,7 +121,11 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 			}
 		}
 	}
-	lockOp.ctr.parker = types.NewPacker()
+	if lockOp.ctr.parker == nil {
+		lockOp.ctr.parker = types.NewPacker()
+	} else {
+		lockOp.ctr.parker.Reset()
+	}
 	return nil
 }
 
@@ -510,6 +526,10 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	if g == lock.Granularity_Row && len(rows) > 1 {
+		rows = dedupLockRows(rows)
+	}
+
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
 		Granularity:     g,
@@ -529,6 +549,15 @@ func doLock(
 		// FIXME: in launch model, multi-cn will use same process level runtime. So lockservice will be wrong.
 		if txn.LockService != lockService.GetServiceID() {
 			lockService = lockservice.GetLockServiceByServiceID(txn.LockService)
+		}
+	}
+
+	// Attach the current statement/session lock_wait_timeout to the lock options.
+	if d := lockWaitTimeout(proc, txnOp); d > 0 {
+		options.LockWaitDeadline = time.Now().Add(d).UnixNano()
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
 		}
 	}
 
@@ -757,7 +786,52 @@ func doLock(
 	return true, result.TableDefChanged, newTS, nil
 }
 
-const defaultWaitTimeOnRetryLock = time.Second
+type lockRetryState struct {
+	backendRetryDeadline time.Time
+	useMemoryRetrySlot   bool
+}
+
+func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
+	if proc != nil && proc.GetResolveVariableFunc() != nil {
+		if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
+			switch n := v.(type) {
+			case int64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case int:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case uint64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			}
+		}
+	}
+	if proc != nil && proc.GetSessionInfo() != nil {
+		if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	return client.LockWaitTimeoutFromTxn(txnOp)
+}
+
+func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) {
+	if options.LockWaitDeadline <= 0 {
+		return options, nil
+	}
+	remaining := time.Until(time.Unix(0, options.LockWaitDeadline))
+	if remaining <= 0 {
+		return options, lockservice.ErrLockTimeout
+	}
+	options.LockWaitTimeout = int64(math.Ceil(remaining.Seconds()))
+	if options.LockWaitTimeout <= 0 {
+		options.LockWaitTimeout = 1
+	}
+	return options, nil
+}
 
 func lockWithRetry(
 	ctx context.Context,
@@ -774,15 +848,24 @@ func lockWithRetry(
 ) (lock.Result, error) {
 	var result lock.Result
 	var err error
+	retryState := lockRetryState{}
 
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return result, err
+	}
 	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
-	if !canRetryLock(ctx, tableID, txnOp, err) {
+	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 		return result, getLockRetryExitError(ctx, err)
 	}
 
 	for {
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return result, err
+		}
 		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
-		if !canRetryLock(ctx, tableID, txnOp, err) {
+		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 			return result, getLockRetryExitError(ctx, err)
 		}
 	}
@@ -800,6 +883,11 @@ func LockWithMayUpgrade(
 	opts LockOptions,
 	pkType types.Type,
 ) (lock.Result, error) {
+	var err error
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
 	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
 		return result, err
@@ -818,48 +906,210 @@ func LockWithMayUpgrade(
 		opts.filterCols,
 	)
 	options.Granularity = ng
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	return lockService.Lock(ctx, tableID, nrows, txnID, options)
 }
 
-func canRetryLock(ctx context.Context, table uint64, txn client.TxnOperator, err error) bool {
+func canRetryLock(
+	ctx context.Context,
+	table uint64,
+	txn client.TxnOperator,
+	err error,
+	retryState *lockRetryState,
+) bool {
 	if ctx.Err() != nil || !isRetryLockError(err) {
 		return false
 	}
-	if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) &&
+	if !shouldBypassHeldLockTableCheck(err) &&
 		txn.HasLockTable(table) {
+		// Once this CN already recorded the lock table, backend availability errors
+		// or bind changes should fail fast and let whole-txn rollback tear the txn
+		// down. Continuing to retry here only extends the lifetime of an already
+		// broken explicit txn.
 		return false
 	}
-	return waitToRetryLock(ctx)
+
+	wait, ok := getRetryWaitDuration(err, retryState)
+	if !ok {
+		logLockRetryBudgetStop(err, table, txn, *retryState)
+		return false
+	}
+	return waitToRetryLock(ctx, wait, retryState)
 }
 
-func waitToRetryLock(ctx context.Context) bool {
-	timer := time.NewTimer(defaultWaitTimeOnRetryLock)
+func waitToRetryLock(ctx context.Context, wait time.Duration, retryState *lockRetryState) bool {
+	if retryState.useMemoryRetrySlot {
+		if !retryState.backendRetryDeadline.IsZero() {
+			remaining := time.Until(retryState.backendRetryDeadline)
+			if remaining <= 0 {
+				return false
+			}
+			deadlineTimer := time.NewTimer(remaining)
+			defer deadlineTimer.Stop()
+			select {
+			case lockRetryHighMemorySlots <- struct{}{}:
+				defer func() { <-lockRetryHighMemorySlots }()
+			case <-ctx.Done():
+				return false
+			case <-deadlineTimer.C:
+				return false
+			}
+
+			remaining = time.Until(retryState.backendRetryDeadline)
+			if remaining <= 0 {
+				return false
+			}
+			if remaining < wait {
+				wait = remaining
+			}
+		} else {
+			select {
+			case lockRetryHighMemorySlots <- struct{}{}:
+				defer func() { <-lockRetryHighMemorySlots }()
+			case <-ctx.Done():
+				return false
+			}
+		}
+	}
+
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
 		return false
 	case <-timer.C:
+		// Honor cancellation that races with timer delivery so we stop retrying a
+		// txn that is already doomed to exit.
 		return ctx.Err() == nil
 	}
 }
 
+func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration, bool) {
+	retryState.useMemoryRetrySlot = false
+	if defaultMaxWaitTimeOnRetryBackendLock <= 0 {
+		return 0, false
+	}
+
+	now := time.Now()
+	if isBoundedRetryLockError(err) && retryState.backendRetryDeadline.IsZero() {
+		retryState.backendRetryDeadline = now.Add(defaultMaxWaitTimeOnRetryBackendLock)
+	}
+	if retryState.backendRetryDeadline.IsZero() {
+		return defaultWaitTimeOnRetryLock, true
+	}
+	if !retryState.backendRetryDeadline.After(now) {
+		return 0, false
+	}
+
+	remaining := time.Until(retryState.backendRetryDeadline)
+	switch getLockRetryMemoryPressureLevel() {
+	case lockRetryMemoryPressureCritical:
+		logLockRetryMemoryPressureStop(err, *retryState)
+		return 0, false
+	case lockRetryMemoryPressureHigh:
+		retryState.useMemoryRetrySlot = true
+		if remaining < lockRetryMemoryBackoff {
+			return remaining, true
+		}
+		return lockRetryMemoryBackoff, true
+	}
+	if remaining < defaultWaitTimeOnRetryLock {
+		return remaining, true
+	}
+	return defaultWaitTimeOnRetryLock, true
+}
+
 func getLockRetryExitError(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil && isRetryLockError(err) {
+		if isBoundedRetryLockError(err) {
+			// Preserve the backend failure so explicit txns do not survive on a raw
+			// context error after backend retry has already proven the path unhealthy.
+			return err
+		}
 		return ctxErr
 	}
 	return err
 }
 
 func isRetryLockError(err error) bool {
-	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
-		return true
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
+		isBoundedRetryLockError(err)
+}
+
+func shouldBypassHeldLockTableCheck(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart)
+}
+
+func isBoundedRetryLockError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)
+}
+
+type lockRetryMemoryPressureLevel int
+
+const (
+	lockRetryMemoryPressureNormal lockRetryMemoryPressureLevel = iota
+	lockRetryMemoryPressureHigh
+	lockRetryMemoryPressureCritical
+)
+
+func defaultLockRetryMemoryPressureLevel() lockRetryMemoryPressureLevel {
+	total := system.MemoryTotal()
+	if total == 0 {
+		return lockRetryMemoryPressureNormal
 	}
-	// Use morpc unified RPC error classification, but intentionally exclude
-	// client-side cancellation from retry semantics.
-	return morpc.IsConnectionError(err)
+	used := system.MemoryUsed()
+	if used >= total*lockRetryCriticalMemoryPercent/100 {
+		return lockRetryMemoryPressureCritical
+	}
+	if used >= total*lockRetryHighMemoryPercent/100 {
+		return lockRetryMemoryPressureHigh
+	}
+	return lockRetryMemoryPressureNormal
+}
+
+func logLockRetryBudgetStop(
+	err error,
+	table uint64,
+	txn client.TxnOperator,
+	retryState lockRetryState,
+) {
+	fields := []zap.Field{
+		zap.Uint64("table-id", table),
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendLock),
+	}
+	if txn != nil {
+		fields = append(fields, zap.String("txn-id", hex.EncodeToString(txn.Txn().ID)))
+	}
+	if defaultMaxWaitTimeOnRetryBackendLock <= 0 || retryState.backendRetryDeadline.IsZero() {
+		logutil.Warn("lock retry disabled by non-positive backend retry budget", fields...)
+		return
+	}
+	fields = append(fields, zap.Time("retry-deadline", retryState.backendRetryDeadline))
+	logutil.Warn("lock retry budget exhausted for backend availability error", fields...)
+}
+
+func logLockRetryMemoryPressureStop(
+	err error,
+	retryState lockRetryState,
+) {
+	fields := []zap.Field{
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendLock),
+	}
+	if !retryState.backendRetryDeadline.IsZero() {
+		fields = append(fields, zap.Time("retry-deadline", retryState.backendRetryDeadline))
+	}
+	logutil.Warn("lock retry stopped under memory pressure", fields...)
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to
@@ -1032,6 +1282,39 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 	return lockOp
 }
 
+func (lockOp *LockOp) GetLockRowsExpressions() []*plan.Expr {
+	exprs := make([]*plan.Expr, 0, len(lockOp.targets))
+	for i := range lockOp.targets {
+		if lockOp.targets[i].lockRows != nil {
+			exprs = append(exprs, lockOp.targets[i].lockRows)
+		}
+	}
+	return exprs
+}
+
+func (lockOp *LockOp) RewriteLockRowsExpressions(rewrite func(*plan.Expr) (*plan.Expr, bool, error)) (bool, error) {
+	folded := false
+	targets := make([]lockTarget, len(lockOp.targets))
+	copy(targets, lockOp.targets)
+	for i := range targets {
+		if targets[i].lockRows == nil {
+			continue
+		}
+		expr, exprFolded, err := rewrite(targets[i].lockRows)
+		if err != nil {
+			return false, err
+		}
+		if exprFolded {
+			targets[i].lockRows = expr
+			folded = true
+		}
+	}
+	if folded {
+		lockOp.targets = targets
+	}
+	return folded, nil
+}
+
 // LockTable lock all table, used for delete, truncate and drop table
 func (lockOp *LockOp) LockTable(
 	tableID uint64,
@@ -1159,6 +1442,22 @@ func (lockOp *LockOp) cleanParker() {
 		lockOp.ctr.parker.Close()
 		lockOp.ctr.parker = nil
 	}
+}
+
+func dedupLockRows(rows [][]byte) [][]byte {
+	if len(rows) <= 1 {
+		return rows
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return bytes.Compare(rows[i], rows[j]) < 0
+	})
+	deduped := rows[:1]
+	for i := 1; i < len(rows); i++ {
+		if !bytes.Equal(rows[i], rows[i-1]) {
+			deduped = append(deduped, rows[i])
+		}
+	}
+	return deduped
 }
 
 func getRowsFilter(

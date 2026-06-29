@@ -134,6 +134,8 @@ type TxnOperator interface {
 	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// SnapshotTS returns the snapshot timestamp of the transaction.
 	SnapshotTS() timestamp.Timestamp
+	// SetSnapshotTS updates the snapshot timestamp of the transaction.
+	SetSnapshotTS(ts timestamp.Timestamp)
 	// CreateTS returns the creation timestamp of the txnOperator.
 	CreateTS() timestamp.Timestamp
 	// Status returns the current transaction status.
@@ -169,6 +171,8 @@ type TxnOperator interface {
 	AddLockTable(locktable lock.LockTable) error
 	// HasLockTable check if had locked table
 	HasLockTable(table uint64) bool
+	// CheckLockTableBinds checks held lock table binds without changing commit state.
+	CheckLockTableBinds(ctx context.Context) error
 	// AddWaitLock add wait lock for current txn
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
@@ -263,6 +267,11 @@ type Workspace interface {
 	Adjust(writeOffset uint64) error
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
+	FinalizeCommit(ctx context.Context)
+	// FinalizeCommitWithUnknownResult is called after the commit request may
+	// have reached TN, but the final commit result is unknown. It must not run
+	// rollback cleanup, because the transaction may have committed.
+	FinalizeCommitWithUnknownResult(ctx context.Context)
 	Rollback(ctx context.Context) error
 
 	IncrSQLCount()
@@ -279,6 +288,29 @@ type Workspace interface {
 	PPString() string
 
 	SetCloneTxn(snapshot int64)
+
+	// SetCCPRTxn marks this transaction as a CCPR transaction.
+	// CCPR transactions will call CCPRTxnCache.OnTxnCommit/OnTxnRollback when committing/rolling back.
+	SetCCPRTxn()
+
+	// IsCCPRTxn returns true if this is a CCPR transaction.
+	IsCCPRTxn() bool
+
+	// SetCCPRTaskID sets the CCPR task ID for this transaction.
+	// When a CCPR task ID is set, the transaction can bypass shared object read-only checks.
+	SetCCPRTaskID(taskID string)
+
+	// GetCCPRTaskID returns the CCPR task ID for this transaction.
+	// Returns empty string if no task ID is set.
+	GetCCPRTaskID() string
+
+	// SetSyncProtectionJobID sets the sync protection job ID for this transaction.
+	// This is used to pass the job ID to TN for commit-time validation.
+	SetSyncProtectionJobID(jobID string)
+
+	// GetSyncProtectionJobID returns the sync protection job ID for this transaction.
+	// Returns empty string if no job ID is set.
+	GetSyncProtectionJobID() string
 }
 
 // TxnOverview txn overview include meta and status

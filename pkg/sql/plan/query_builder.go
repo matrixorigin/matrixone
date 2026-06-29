@@ -37,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
@@ -85,6 +87,14 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		}
 	}
 
+	var sortSpillMem int64
+	sortSpillMemInt, err := ctx.ResolveVariable("sort_spill_mem", true, false)
+	if err == nil {
+		if sortSpillMemVal, ok := sortSpillMemInt.(int64); ok {
+			sortSpillMem = sortSpillMemVal
+		}
+	}
+
 	var maxDop int64
 	maxDopInt, err := ctx.ResolveVariable("max_dop", true, false)
 	if err == nil {
@@ -107,12 +117,16 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		mysqlCompatible:      mysqlCompatible,
 		aggSpillMem:          aggSpillMem,
 		joinSpillMem:         joinSpillMem,
+		sortSpillMem:         sortSpillMem,
 		tag2Table:            make(map[int32]*TableDef),
 		tag2NodeID:           make(map[int32]int32),
 		isPrepareStatement:   isPrepareStatement,
 		deleteNode:           make(map[uint64]int32),
 		skipStats:            skipStats,
 		optimizationHistory:  make([]string, 0),
+		// -1 means "no old-row delete maintenance" (set only on ODKU into an
+		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
+		irregularMaintDeleteStep: -1,
 	}
 }
 
@@ -697,6 +711,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
 				increaseRefCnt(expr, 1, colRefCnt)
 			}
+
+			// OldColCaptureList: build_placeholder points to the build-side
+			// (right child) NULL column whose slot will receive the captured
+			// probe value; probe_source points to the probe-side (left child)
+			// column to capture. Both must survive refcount pruning.
+			for _, cap := range node.DedupJoinCtx.OldColCaptureList {
+				colRefCnt[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}]++
+				colRefCnt[[2]int32{cap.ProbeSource.RelPos, cap.ProbeSource.ColPos}]++
+			}
 		}
 
 		leftID := node.Children[0]
@@ -742,6 +765,18 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapInfo.srcExprIdx = idx
 				err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
 				if err != nil {
+					return nil, err
+				}
+			}
+
+			for i := range node.DedupJoinCtx.OldColCaptureList {
+				cap := &node.DedupJoinCtx.OldColCaptureList[i]
+				colRefCnt[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}]--
+				if err := builder.remapSingleColRef(&cap.BuildPlaceholder, internalMap, &remapInfo); err != nil {
+					return nil, err
+				}
+				colRefCnt[[2]int32{cap.ProbeSource.RelPos, cap.ProbeSource.ColPos}]--
+				if err := builder.remapSingleColRef(&cap.ProbeSource, internalMap, &remapInfo); err != nil {
 					return nil, err
 				}
 			}
@@ -2176,6 +2211,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
 	}
 
+	// Expose the SINK column remap so irregular-index maintenance sub-plans built
+	// after createQuery can translate pre-prune positions into the materialized
+	// sink's post-prune layout.
+	builder.sinkColRef = sinkColRef
+
 	err = builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
 	if err != nil {
 		return nil, err
@@ -2439,6 +2479,10 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
 		for _, order := range astOrderBy {
+			if isNullAstExpr(unwrapParenExpr(order.Expr)) {
+				continue
+			}
+
 			expr, err := orderBinder.BindExpr(order.Expr)
 			if err != nil {
 				return 0, err
@@ -2481,6 +2525,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			NodeType: plan.Node_SORT,
 			Children: []int32{lastNodeID},
 			OrderBy:  orderBys,
+			SpillMem: builder.sortSpillMem,
 		}, ctx)
 	}
 
@@ -2495,14 +2540,15 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	if astLimit != nil {
 		node := builder.qry.Nodes[lastNodeID]
 
-		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
-			node.Offset, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
+			offsetBinder := NewLimitBinder(builder, ctx, true)
+			node.Offset, err = offsetBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
 				return 0, err
 			}
 		}
 		if astLimit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
 			node.Limit, err = limitBinder.BindExpr(astLimit.Count, 0, true)
 			if err != nil {
 				return 0, err
@@ -2577,7 +2623,15 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 
 	oldSnapshot := builder.compCtx.GetSnapshot()
 	builder.compCtx.SetSnapshot(subCtx.snapshot)
+	// A CTE body is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. Otherwise the CTE would emit its own LOCK_OP (e.g. above its
+	// LIMIT) on top of the outer LOCK_OP that collectLockTargets injects
+	// after the outer query's FROM, locking rows that fall outside the final
+	// result set.
+	savedIsForUpdate := builder.isForUpdate
+	builder.isForUpdate = false
 	nodeID, err = builder.bindSelect(s, subCtx, false)
+	builder.isForUpdate = savedIsForUpdate
 	builder.compCtx.SetSnapshot(oldSnapshot)
 	if err != nil {
 		return
@@ -2611,6 +2665,14 @@ func (builder *QueryBuilder) bindRecursiveCte(
 ) (nodeID int32, err error) {
 	if len(s.OrderBy) > 0 {
 		return 0, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
+	}
+	if builder.isForUpdate {
+		// The outer SELECT is FOR UPDATE but the recursive CTE body emits a
+		// SINK_SCAN to the outer query. collectLockTargets does not follow
+		// SourceStep, so the outer LOCK_OP would never reach the underlying
+		// base tables -- the query would silently take no lock. Reject this
+		// up front instead of letting the user think rows are locked.
+		return 0, moerr.NewNotSupported(builder.GetContext(), "SELECT ... FOR UPDATE on a recursive CTE")
 	}
 	//1. bind initial statement
 	initCtx := NewBindContext(builder, ctx)
@@ -2705,14 +2767,15 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	var limitExpr *Expr
 	var offsetExpr *Expr
 	if s.Limit != nil {
-		limitBinder := NewLimitBinder(builder, ctx)
 		if s.Limit.Offset != nil {
-			offsetExpr, err = limitBinder.BindExpr(s.Limit.Offset, 0, true)
+			offsetBinder := NewLimitBinder(builder, ctx, true)
+			offsetExpr, err = offsetBinder.BindExpr(s.Limit.Offset, 0, true)
 			if err != nil {
 				return 0, err
 			}
 		}
 		if s.Limit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
 			limitExpr, err = limitBinder.BindExpr(s.Limit.Count, 0, true)
 			if err != nil {
 				return 0, err
@@ -3151,6 +3214,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			NodeType: plan.Node_SORT,
 			Children: []int32{nodeID},
 			OrderBy:  sortSpecs,
+			SpillMem: builder.sortSpillMem,
 		}, ctx)
 	}
 
@@ -3255,7 +3319,7 @@ func (builder *QueryBuilder) bindSelectClause(
 		case tree.UnqualifiedStar:
 			if astLimit != nil && astLimit.Count != nil {
 				var limitExpr *plan.Expr
-				limitBinder := NewLimitBinder(builder, ctx)
+				limitBinder := NewLimitBinder(builder, ctx, false)
 				if limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
 					return
 				}
@@ -3286,6 +3350,21 @@ func (builder *QueryBuilder) bindSelectClause(
 		return
 	}
 
+	// rewrite right join to left join
+	builder.rewriteRightJoinToLeftJoin(nodeID)
+	if clause.Where != nil {
+		var boundFilterList []*plan.Expr
+		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(ctx, clause.Where, nodeID); err != nil {
+			return
+		}
+
+		nodeID = builder.appendWhereNode(ctx, nodeID, boundFilterList, notCacheable)
+	}
+
+	// Lock_OP must sit above WHERE/subquery rewrites so that EXISTS/IN/scalar
+	// subqueries (which get flattened into SEMI/ANTI joins on top of the FROM
+	// tree) restrict the row set the lock observes -- otherwise rows that the
+	// final result set filters out would still get locked.
 	if builder.isForUpdate {
 		lockTargets := builder.collectLockTargets(nodeID)
 		if len(lockTargets) > 0 {
@@ -3301,17 +3380,6 @@ func (builder *QueryBuilder) bindSelectClause(
 				nodeID = builder.appendNode(lockNode, ctx)
 			}
 		}
-	}
-
-	// rewrite right join to left join
-	builder.rewriteRightJoinToLeftJoin(nodeID)
-	if clause.Where != nil {
-		var boundFilterList []*plan.Expr
-		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(ctx, clause.Where, nodeID); err != nil {
-			return
-		}
-
-		nodeID = builder.appendWhereNode(ctx, nodeID, boundFilterList, notCacheable)
 	}
 
 	// Preprocess aliases
@@ -3744,6 +3812,10 @@ func (builder *QueryBuilder) bindOrderBy(
 	orderBinder := NewOrderBinder(projectionBinder, selectList)
 	boundOrderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 	for _, order := range astOrderBy {
+		if isNullAstExpr(unwrapParenExpr(order.Expr)) {
+			continue
+		}
+
 		var expr *plan.Expr
 		if expr, err = orderBinder.BindExpr(order.Expr); err != nil {
 			return
@@ -3833,13 +3905,14 @@ func (builder *QueryBuilder) bindLimit(
 	astRankOption *tree.RankOption,
 ) (boundOffsetExpr, boundCountExpr *Expr, rankOption *plan.RankOption, err error) {
 	if astLimit != nil {
-		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
-			if boundOffsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
+			offsetBinder := NewLimitBinder(builder, ctx, true)
+			if boundOffsetExpr, err = offsetBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
 				return
 			}
 		}
 		if astLimit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
 			if boundCountExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
 				return
 			}
@@ -3989,10 +4062,6 @@ func (builder *QueryBuilder) appendAggNode(
 ) (newNodeID int32, err error) {
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
-		return
-	}
-	if builder.isForUpdate {
-		err = moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
 		return
 	}
 
@@ -4213,6 +4282,7 @@ func (builder *QueryBuilder) appendSortNode(ctx *BindContext, nodeID int32, boun
 		NodeType: plan.Node_SORT,
 		Children: []int32{nodeID},
 		OrderBy:  boundOrderBys,
+		SpillMem: builder.sortSpillMem,
 	}, ctx)
 }
 
@@ -4249,7 +4319,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 	h := &helpFunc{}
 
 	name := tree.NewUnresolvedColName("interval")
-	arg2 := tree.NewNumVal(astTimeWindow.Interval.Unit, astTimeWindow.Interval.Unit, false, tree.P_char)
+	arg2 := tree.NewTimeUnitExpr(astTimeWindow.Interval.Unit)
 	h.interval = &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(name),
 		Exprs: tree.Exprs{astTimeWindow.Interval.Val, arg2},
@@ -4259,7 +4329,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 
 	if astTimeWindow.Sliding != nil {
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewNumVal(astTimeWindow.Sliding.Unit, astTimeWindow.Sliding.Unit, false, tree.P_char)
+		arg2 = tree.NewTimeUnitExpr(astTimeWindow.Sliding.Unit)
 		h.sliding = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{astTimeWindow.Sliding.Val, arg2},
@@ -4272,7 +4342,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewNumVal("second", "second", false, tree.P_char)
+		arg2 = tree.NewTimeUnitExpr("second")
 		expr = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{div, arg2},
@@ -4398,7 +4468,11 @@ func appendSelectList(
 						break
 					}
 				}
-				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				if heading, ok := nameConstHeading(expr); ok {
+					ctx.headings = append(ctx.headings, heading)
+				} else {
+					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				}
 			}
 
 			newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
@@ -4413,6 +4487,37 @@ func appendSelectList(
 		}
 	}
 	return selectList, nil
+}
+
+func nameConstHeading(expr tree.Expr) (string, bool) {
+	fn, ok := expr.(*tree.FuncExpr)
+	if !ok || fn.FuncName == nil || !strings.EqualFold(fn.FuncName.Origin(), "name_const") || len(fn.Exprs) != 2 {
+		return "", false
+	}
+
+	nameExpr := fn.Exprs[0]
+	for {
+		paren, ok := nameExpr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		nameExpr = paren.Expr
+	}
+
+	name, ok := nameExpr.(*tree.NumVal)
+	if !ok || !validNameConstNameLiteral(name) {
+		return "", false
+	}
+	return name.String(), true
+}
+
+func validNameConstNameLiteral(name *tree.NumVal) bool {
+	switch name.ValType {
+	case tree.P_null, tree.P_nulltext, tree.P_star:
+		return false
+	default:
+		return true
+	}
 }
 
 func bindProjectionList(
@@ -4583,8 +4688,8 @@ func (builder *QueryBuilder) checkRecursiveTable(stmt tree.TableExpr, name strin
 
 	case *tree.JoinTableExpr:
 		var err, err0 error
-		if tbl.JoinType == tree.JOIN_TYPE_LEFT || tbl.JoinType == tree.JOIN_TYPE_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
-			err0 = moerr.NewParseErrorf(builder.GetContext(), "unsupport LEFT, RIGHT or OUTER JOIN in recursive CTE: %T", stmt)
+		if tbl.JoinType == tree.JOIN_TYPE_LEFT || tbl.JoinType == tree.JOIN_TYPE_RIGHT || tbl.JoinType == tree.JOIN_TYPE_FULL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_FULL {
+			err0 = moerr.NewParseErrorf(builder.GetContext(), "unsupport outer join (LEFT/RIGHT/FULL) in recursive CTE: %T", stmt)
 		}
 		c1, err1 := builder.checkRecursiveTable(tbl.Left, name)
 		c2, err2 := builder.checkRecursiveTable(tbl.Right, name)
@@ -4691,6 +4796,16 @@ func (builder *QueryBuilder) bindView(
 	}
 	viewCtx.cteName = table
 
+	// A view body is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. Otherwise the view body could emit its own LOCK_OP (e.g. above an
+	// ORDER BY/LIMIT inside the view) on top of the outer LOCK_OP, locking
+	// rows that fall outside the final result set.
+	savedIsForUpdate := builder.isForUpdate
+	builder.isForUpdate = false
+	defer func() {
+		builder.isForUpdate = savedIsForUpdate
+	}()
+
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
@@ -4703,11 +4818,14 @@ func (builder *QueryBuilder) bindView(
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
-		if builder.isForUpdate {
-			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from derived table for update")
-		}
 		subCtx := NewBindContext(builder, ctx)
+		// Nested SELECT must not inherit FOR UPDATE: the outer collectLockTargets
+		// recurses into all TABLE_SCAN nodes (including ones inside derived tables),
+		// so the derived subplan itself should be built without lock injection.
+		savedIsForUpdate := builder.isForUpdate
+		builder.isForUpdate = false
 		nodeID, err = builder.bindSelect(tbl, subCtx, false)
+		builder.isForUpdate = savedIsForUpdate
 		if subCtx.isCorrelated {
 			return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
 		}
@@ -5224,7 +5342,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		joinType = plan.Node_LEFT
 	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
 		joinType = plan.Node_RIGHT
-	case tree.JOIN_TYPE_FULL:
+	case tree.JOIN_TYPE_FULL, tree.JOIN_TYPE_NATURAL_FULL:
 		joinType = plan.Node_OUTER
 	case tree.JOIN_TYPE_DEDUP:
 		joinType = plan.Node_DEDUP
@@ -5295,7 +5413,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			}
 		}
 	default:
-		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
+		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_FULL {
 			leftCols := make(map[string]bool)
 			for _, binding := range leftCtx.bindings {
 				for i, col := range binding.cols {
@@ -5390,6 +5508,18 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		exprs = append(exprs, curExpr)
 	}
 	id := tbl.Id()
+
+	// Plugin-registered table functions (hnsw_create / hnsw_search /
+	// ivf_create / ivf_search / cagra_create / cagra_search /
+	// ivfpq_create / ivfpq_search) live under
+	// pkg/vectorindex/<algo>/plugin/plan/tablefunc.go. The plugin
+	// registers each builder via planplugin.RegisterTableFunc at init
+	// time; this lookup routes the parser-side dispatch through that
+	// registry before the hardcoded switch below.
+	if b, ok := planplugin.TableFunc(id); ok {
+		return b(builder, tbl, ctx, exprs, children)
+	}
+
 	switch id {
 	case "unnest":
 		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, children)
@@ -5423,14 +5553,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildStageList(tbl, ctx, exprs, children)
 	case "moplugin_table":
 		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, children)
-	case "hnsw_create":
-		nodeId, err = builder.buildHnswCreate(tbl, ctx, exprs, children)
-	case "hnsw_search":
-		nodeId, err = builder.buildHnswSearch(tbl, ctx, exprs, children)
-	case "ivf_create":
-		nodeId, err = builder.buildIvfCreate(tbl, ctx, exprs, children)
-	case "ivf_search":
-		nodeId, err = builder.buildIvfSearch(tbl, ctx, exprs, children)
 	case "parse_jsonl_data":
 		nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, children)
 	case "parse_jsonl_file":
@@ -5592,12 +5714,21 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 		} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 			return builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
 		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
-			var ts timestamp.Timestamp
-			if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
-				return
+			// try human-readable datetime first, fall back to debug timestamp format
+			if ts, err2 := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval); err2 == nil {
+				tsNano := ts.UTC().UnixNano()
+				if tsNano <= 0 {
+					err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+					return
+				}
+				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
+			} else {
+				var ts timestamp.Timestamp
+				if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
+					return
+				}
+				snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 			}
-
-			snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 		} else if tsExpr.Type == tree.ASOFTIMESTAMP {
 			var ts int64
 			if ts, err = doResolveTimeStamp(lit.Sval); err != nil {
@@ -5673,9 +5804,24 @@ func getPartitionColNameFromExpr(expr *plan.Expr) string {
 // collectLockTargets traverses the plan tree rooted at nodeID and collects
 // LockTarget entries for all TABLE_SCAN nodes found. This supports SELECT ... FOR UPDATE
 // with JOIN tables by locking rows from every table involved in the query.
+//
+// For SEMI / ANTI / SINGLE joins we only walk the left child: the right side
+// (typically the flattened body of an EXISTS / IN / scalar subquery) does not
+// contribute to the outer result rows and must not be locked, matching MySQL's
+// rule that an outer FOR UPDATE does not lock subquery tables.
 func (builder *QueryBuilder) collectLockTargets(nodeID int32) []*plan.LockTarget {
 	node := builder.qry.Nodes[nodeID]
 	var targets []*plan.LockTarget
+
+	if node.NodeType == plan.Node_JOIN {
+		switch node.JoinType {
+		case plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
+			if len(node.Children) > 0 {
+				targets = append(targets, builder.collectLockTargets(node.Children[0])...)
+			}
+			return targets
+		}
+	}
 
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		tableDef := node.GetTableDef()

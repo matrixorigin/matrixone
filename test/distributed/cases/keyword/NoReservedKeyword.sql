@@ -22,7 +22,7 @@ select 1 as events, 1 as exclusive, 1 as execute, 1 as expansion, 1 as expire, 1
 
 select 1 as file, 1 as filesystem, 1 as fill, 1 as first, 1 as fixed, 1 as float, 1 as following, 1 as force_quote, 1 as format;
 
-select 1 as full, 1 as geometry, 1 as geometrycollection, 1 as global, 1 as grant, 1 as grants, 1 as handler, 1 as hash;
+select 1 as geometry, 1 as geometrycollection, 1 as global, 1 as grant, 1 as grants, 1 as handler, 1 as hash;
 
 select 1 as header, 1 as history, 1 as hour, 1 as identified, 1 as import, 1 as increment, 1 as indexes, 1 as inline;
 

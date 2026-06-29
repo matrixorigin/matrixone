@@ -103,6 +103,10 @@ type ClientConn interface {
 	BuildConnWithServer(prevAddr string) (ServerConn, error)
 	// HandleEvent handles event that comes from tunnel data flow.
 	HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error
+	// KillCurrentBackendConn kills the backend connection that is currently
+	// serving this client connection. It is used when the client side has
+	// already disconnected, but the backend statement may still be blocked.
+	KillCurrentBackendConn(sc ServerConn) error
 	// Close closes the client connection.
 	Close() error
 }
@@ -327,11 +331,17 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 	case *setVarEvent:
 		return c.handleSetVar(ev)
 	case *quitEvent:
-		defer ev.notify()
-		if err := c.handleQuitEvent(ctx); err != nil {
-			c.log.Error("failed to exec quit cmd", zap.Error(err))
-			return err
+		if c.tun != nil {
+			c.tun.markExpectedCacheQuit()
 		}
+		// Notify/finish the event immediately.
+		ev.notify()
+		// Then handle the quit event async.
+		go func() {
+			if err := c.handleQuitEvent(ctx); err != nil {
+				c.log.Error("failed to exec quit cmd", zap.Error(err))
+			}
+		}()
 		return nil
 	case *upgradeEvent:
 		return c.handleUpgradeEvent(ev, resp)
@@ -382,6 +392,34 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 		return moerr.NewInternalErrorNoCtx("exec error")
 	}
 	return nil
+}
+
+// KillCurrentBackendConn implements the ClientConn interface.
+func (c *clientConn) KillCurrentBackendConn(sc ServerConn) error {
+	if sc == nil {
+		return nil
+	}
+	currentCN := sc.GetCNServer()
+	if currentCN == nil {
+		return nil
+	}
+
+	tempCN := &CNServer{
+		uuid: currentCN.uuid,
+		addr: currentCN.addr,
+		salt: currentCN.salt,
+	}
+	if c.mysqlProto != nil {
+		tempCN.salt = c.mysqlProto.GetSalt()
+	}
+
+	cid, err := c.genConnID()
+	if err != nil {
+		return err
+	}
+	tempCN.connID = cid
+
+	return c.connAndExec(tempCN, fmt.Sprintf("kill connection %d", c.ConnID()), nil)
 }
 
 // handleKill handles the kill event.
@@ -545,6 +583,12 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 	// migration (prevAdd != ""), we must build a fresh backend connection and
 	// migrate session state from the previous CN.
 	if c.connCache != nil && prevAdd == "" {
+		// Plugin routing decisions may depend on Username / OriginIP and other
+		// per-login context not captured by the connCache key. Never reuse a
+		// cached backend session in front of a plugin router.
+		if _, pluginMode := c.router.(*pluginRouter); pluginMode {
+			goto skipConnCache
+		}
 		sc = c.connCache.Pop(c.clientInfo.hash, c.connID, c.mysqlProto.GetSalt(), c.mysqlProto.GetAuthResponse())
 		if sc != nil {
 			// get the response from the cn server.
@@ -556,6 +600,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 			return sc, nil
 		}
 	}
+skipConnCache:
 
 	badCNServers := make(map[string]struct{})
 	// timeoutCNServers tracks CN servers that failed due to timeout.
@@ -578,7 +623,13 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		// Select the best CN server from backend.
 		//
 		// NB: The selected CNServer must have label hash in it.
-		cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
+		if prevAdd == "" {
+			cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
+		} else if tr, ok := c.router.(transferRouter); ok {
+			cn, err = tr.RouteForTransfer(c.ctx, c.sid, c.clientInfo, filterFn)
+		} else {
+			cn, err = c.router.Route(c.ctx, c.sid, c.clientInfo, filterFn)
+		}
 		if err != nil {
 			v2.ProxyConnectRouteFailCounter.Inc()
 			// Check if all failed CN servers were due to timeout.
@@ -604,7 +655,21 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 
 		// After select a CN server, we try to connect to it. If connect
 		// fails, and it is a retryable error, we reselect another CN server.
-		sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
+		// Route-selected new-session connects should feed timeout/overload
+		// feedback into the CN health breaker; internal/admin connects use
+		// plain Router.Connect and intentionally do not.
+		if prevAdd == "" {
+			if rr, ok := c.router.(routeSelectedConnector); ok {
+				sc, r, err = rr.ConnectRouteSelected(cn, c.handshakePack, c.tun)
+			} else {
+				sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
+			}
+		} else {
+			// Session transfer / migration must not feed success/failure back
+			// into the global CN breaker. It is control-plane traffic, not a
+			// Route-selected new-session connect.
+			sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
+		}
 		if err != nil {
 			if isRetryableErr(err) {
 				v2.ProxyConnectRetryCounter.Inc()

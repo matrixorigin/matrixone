@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
@@ -63,6 +65,36 @@ type externalTestCase struct {
 var (
 	defaultOption = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 )
+
+type checkLockTableBindsTxnOp struct {
+	client.TxnOperator
+	err   error
+	calls int
+}
+
+func (op *checkLockTableBindsTxnOp) CheckLockTableBinds(context.Context) error {
+	op.calls++
+	return op.err
+}
+
+type checkLockTableBindsReader struct{}
+
+func (r *checkLockTableBindsReader) Open(*ExternalParam, *process.Process) (bool, error) {
+	return false, nil
+}
+
+func (r *checkLockTableBindsReader) ReadBatch(
+	context.Context,
+	*batch.Batch,
+	*process.Process,
+	process.Analyzer,
+) (bool, error) {
+	return false, nil
+}
+
+func (r *checkLockTableBindsReader) Close() error {
+	return nil
+}
 
 func newTestCase(t *testing.T, format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess(t)
@@ -102,6 +134,387 @@ func makeCases(t *testing.T) []externalTestCase {
 		newTestCase(t, tree.JSONLINE, tree.OBJECT),
 		newTestCase(t, tree.JSONLINE, tree.ARRAY),
 	}
+}
+
+func TestCallPropagatesLoadLockTableBindCheckError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.Background()
+	expected := moerr.NewLockTableBindChangedNoCtx()
+	op := &checkLockTableBindsTxnOp{err: expected}
+	proc.Base.TxnOperator = op
+
+	arg := &External{
+		ctr:    container{},
+		reader: &checkLockTableBindsReader{},
+		Es: &ExternalParam{
+			ExParamConst: ExParamConst{
+				FileList: []string{"test.csv"},
+				Extern: &tree.ExternParam{
+					ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+				},
+			},
+			ExParam: ExParam{Fileparam: &ExFileparam{}},
+		},
+		OperatorBase: vm.OperatorBase{
+			OpAnalyzer: process.NewAnalyzer(0, false, false, "external"),
+		},
+	}
+
+	_, err := arg.Call(proc)
+	require.Equal(t, expected, err)
+	require.Equal(t, 1, op.calls)
+}
+
+func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			ParallelLoad: true,
+			Cols: []*plan.ColDef{{
+				Name: "d",
+				Typ:  plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2},
+			}},
+			Extern: &tree.ExternParam{
+				ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: ""}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "d", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.NoError(t, err)
+	require.False(t, bat.Vecs[0].GetNulls().Contains(0))
+	require.Equal(t, "0", string(bat.Vecs[0].GetBytesAt(0)))
+
+	bat.CleanOnlyData()
+	err = getColData(
+		bat,
+		[]csvparser.Field{{Val: "", IsNull: true}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "d", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.NoError(t, err)
+	require.False(t, bat.Vecs[0].GetNulls().Contains(0))
+	require.Equal(t, "0", string(bat.Vecs[0].GetBytesAt(0)))
+
+	bat.CleanOnlyData()
+	err = getColData(
+		bat,
+		[]csvparser.Field{{Val: "\\N", IsNull: true}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "d", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.NoError(t, err)
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+}
+
+func TestGetColDataParallelLoadEmptyNumericAsTypedZero(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	typ := types.T_decimal64.ToType()
+	typ.Width = 10
+	typ.Scale = 2
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(typ)
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			LoadEmptyNumericAsZero: true,
+			Cols: []*plan.ColDef{{
+				Name: "d",
+				Typ:  plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2},
+			}},
+			Extern: &tree.ExternParam{
+				ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: ""}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "d", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.NoError(t, err)
+	require.False(t, bat.Vecs[0].GetNulls().Contains(0))
+	require.Equal(t, []types.Decimal64{0}, vector.MustFixedColWithTypeCheck[types.Decimal64](bat.Vecs[0]))
+}
+
+func TestAppendLoadEmptyNumericZeroAppendsTypedZero(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	cases := []struct {
+		name string
+		id   types.T
+		typ  types.Type
+		want any
+	}{
+		{name: "bool", id: types.T_bool, typ: types.T_bool.ToType(), want: false},
+		{name: "int8", id: types.T_int8, typ: types.T_int8.ToType(), want: int8(0)},
+		{name: "int16", id: types.T_int16, typ: types.T_int16.ToType(), want: int16(0)},
+		{name: "int32", id: types.T_int32, typ: types.T_int32.ToType(), want: int32(0)},
+		{name: "int64", id: types.T_int64, typ: types.T_int64.ToType(), want: int64(0)},
+		{name: "uint8", id: types.T_uint8, typ: types.T_uint8.ToType(), want: uint8(0)},
+		{name: "uint16", id: types.T_uint16, typ: types.T_uint16.ToType(), want: uint16(0)},
+		{name: "uint32", id: types.T_uint32, typ: types.T_uint32.ToType(), want: uint32(0)},
+		{name: "uint64", id: types.T_uint64, typ: types.T_uint64.ToType(), want: uint64(0)},
+		{name: "float32", id: types.T_float32, typ: types.T_float32.ToType(), want: float32(0)},
+		{name: "float64", id: types.T_float64, typ: types.T_float64.ToType(), want: float64(0)},
+		{name: "decimal64", id: types.T_decimal64, typ: types.T_decimal64.ToType(), want: types.Decimal64(0)},
+		{name: "decimal128", id: types.T_decimal128, typ: types.T_decimal128.ToType(), want: types.Decimal128{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ)
+			defer vec.Free(proc.Mp())
+
+			require.NoError(t, appendLoadEmptyNumericZero(vec, tc.id, false, proc.Mp()))
+			require.Equal(t, 1, vec.Length())
+			require.False(t, vec.GetNulls().Contains(0))
+
+			switch want := tc.want.(type) {
+			case bool:
+				require.Equal(t, []bool{want}, vector.MustFixedColWithTypeCheck[bool](vec))
+			case int8:
+				require.Equal(t, []int8{want}, vector.MustFixedColWithTypeCheck[int8](vec))
+			case int16:
+				require.Equal(t, []int16{want}, vector.MustFixedColWithTypeCheck[int16](vec))
+			case int32:
+				require.Equal(t, []int32{want}, vector.MustFixedColWithTypeCheck[int32](vec))
+			case int64:
+				require.Equal(t, []int64{want}, vector.MustFixedColWithTypeCheck[int64](vec))
+			case uint8:
+				require.Equal(t, []uint8{want}, vector.MustFixedColWithTypeCheck[uint8](vec))
+			case uint16:
+				require.Equal(t, []uint16{want}, vector.MustFixedColWithTypeCheck[uint16](vec))
+			case uint32:
+				require.Equal(t, []uint32{want}, vector.MustFixedColWithTypeCheck[uint32](vec))
+			case uint64:
+				require.Equal(t, []uint64{want}, vector.MustFixedColWithTypeCheck[uint64](vec))
+			case float32:
+				require.Equal(t, []float32{want}, vector.MustFixedColWithTypeCheck[float32](vec))
+			case float64:
+				require.Equal(t, []float64{want}, vector.MustFixedColWithTypeCheck[float64](vec))
+			case types.Decimal64:
+				require.Equal(t, []types.Decimal64{want}, vector.MustFixedColWithTypeCheck[types.Decimal64](vec))
+			case types.Decimal128:
+				require.Equal(t, []types.Decimal128{want}, vector.MustFixedColWithTypeCheck[types.Decimal128](vec))
+			default:
+				t.Fatalf("unexpected want type %T", want)
+			}
+		})
+	}
+}
+
+func TestAppendLoadEmptyNumericZeroUnsupportedTypeReturnsError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	defer bat.Clean(proc.Mp())
+
+	err := appendLoadEmptyNumericZero(bat.Vecs[0], types.T_varchar, false, proc.Mp())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported type")
+}
+
+func TestPrepareSetsLoadEmptyNumericAsZeroForParallelRequestedLoad(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			FileList: []string{"unused.csv"},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{
+					Format: tree.CSV,
+					Tail:   &tree.TailParameter{},
+				},
+				ExParam: tree.ExParam{
+					ExternType:            int32(plan.ExternType_LOAD),
+					ParallelLoadRequested: true,
+				},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+	arg := &External{Es: param}
+
+	require.NoError(t, arg.Prepare(proc))
+	require.True(t, param.LoadEmptyNumericAsZero)
+	if arg.ctr.buf != nil {
+		arg.ctr.buf.Clean(proc.Mp())
+	}
+}
+
+func TestGetColDataParallelLoadNullNumericRemainsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			ParallelLoad: true,
+			Cols: []*plan.ColDef{{
+				Name: "d",
+				Typ:  plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2},
+			}},
+			Extern: &tree.ExternParam{
+				ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: "\\N", IsNull: true}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "d", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.NoError(t, err)
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+}
+
+func TestGetColDataLoadDataYear(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_year.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Cols: []*plan.ColDef{{
+				Name: "y",
+				Typ:  plan.Type{Id: int32(types.T_year), Width: 4},
+			}},
+			Extern: &tree.ExternParam{
+				ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+	attr := plan.ExternAttr{ColName: "y", ColIndex: 0, ColFieldIndex: 0}
+
+	require.NoError(t, getColData(
+		bat,
+		[]csvparser.Field{{Val: "2024"}},
+		0,
+		param,
+		proc.Mp(),
+		attr,
+		proc,
+	))
+	require.Equal(t, []types.MoYear{2024}, vector.MustFixedColWithTypeCheck[types.MoYear](bat.Vecs[0]))
+
+	bat.CleanOnlyData()
+	require.NoError(t, getColData(
+		bat,
+		[]csvparser.Field{{Val: "0", HasStringQuote: true}},
+		0,
+		param,
+		proc.Mp(),
+		attr,
+		proc,
+	))
+	require.Equal(t, []types.MoYear{2000}, vector.MustFixedColWithTypeCheck[types.MoYear](bat.Vecs[0]))
+
+	bat.CleanOnlyData()
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: "2156"}},
+		0,
+		param,
+		proc.Mp(),
+		attr,
+		proc,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not Year type")
+}
+
+func TestIsLegalLineLoadDataYear(t *testing.T) {
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.CSV}}
+	cols := []*plan.ColDef{{
+		Name: "y",
+		Typ:  plan.Type{Id: int32(types.T_year), Width: 4},
+	}}
+
+	require.True(t, isLegalLine(param, cols, []csvparser.Field{{Val: "2024"}}))
+	require.False(t, isLegalLine(param, cols, []csvparser.Field{{Val: "2156"}}))
+}
+
+func TestGetOneRowDataParallelLoadMissingNumericRemainsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			ParallelLoad:  true,
+			ColumnListLen: 1,
+			Attrs: []plan.ExternAttr{{
+				ColName:       "d",
+				ColIndex:      0,
+				ColFieldIndex: 0,
+			}},
+			Cols: []*plan.ColDef{{
+				Name: "d",
+				Typ:  plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2},
+			}},
+			Extern: &tree.ExternParam{
+				ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+
+	err := getOneRowData(proc, bat, nil, 0, param)
+	require.NoError(t, err)
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
 }
 
 func Test_String(t *testing.T) {

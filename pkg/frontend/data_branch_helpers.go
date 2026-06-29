@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,90 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 )
+
+var snapConditionRegex = regexp.MustCompile(`\{[^}]+}`)
+
+func containsDataBranchTempTableName(sqlLower string) bool {
+	return containsTempTableMarker(sqlLower, "__mo_diff_del_") ||
+		containsTempTableMarker(sqlLower, "__mo_diff_ins_")
+}
+
+func dataBranchTempSQLNeedsBackExec(sqlLower string) bool {
+	return containsDataBranchTempTableName(sqlLower)
+}
+
+func containsTempTableMarker(sqlLower, marker string) bool {
+	for idx := 0; idx < len(sqlLower); idx++ {
+		switch sqlLower[idx] {
+		case '\'', '"':
+			idx = skipSQLQuotedLiteral(sqlLower, idx, sqlLower[idx]) - 1
+			continue
+		case '-':
+			if idx+1 < len(sqlLower) && sqlLower[idx+1] == '-' {
+				idx = skipSQLLineComment(sqlLower, idx+2) - 1
+				continue
+			}
+		case '#':
+			idx = skipSQLLineComment(sqlLower, idx+1) - 1
+			continue
+		case '/':
+			if idx+1 < len(sqlLower) && sqlLower[idx+1] == '*' {
+				idx = skipSQLBlockComment(sqlLower, idx+2) - 1
+				continue
+			}
+		}
+		if strings.HasPrefix(sqlLower[idx:], marker) && isSQLIdentifierBoundary(sqlLower, idx) {
+			return true
+		}
+	}
+	return false
+}
+
+func skipSQLQuotedLiteral(sql string, start int, quote byte) int {
+	for idx := start + 1; idx < len(sql); idx++ {
+		if sql[idx] == '\\' {
+			idx++
+			continue
+		}
+		if sql[idx] == quote {
+			if idx+1 < len(sql) && sql[idx+1] == quote {
+				idx++
+				continue
+			}
+			return idx + 1
+		}
+	}
+	return len(sql)
+}
+
+func skipSQLLineComment(sql string, start int) int {
+	for idx := start; idx < len(sql); idx++ {
+		if sql[idx] == '\n' || sql[idx] == '\r' {
+			return idx + 1
+		}
+	}
+	return len(sql)
+}
+
+func skipSQLBlockComment(sql string, start int) int {
+	for idx := start; idx+1 < len(sql); idx++ {
+		if sql[idx] == '*' && sql[idx+1] == '/' {
+			return idx + 2
+		}
+	}
+	return len(sql)
+}
+
+func isSQLIdentifierBoundary(sql string, idx int) bool {
+	return idx == 0 || !isSQLIdentifierChar(sql[idx-1])
+}
+
+func isSQLIdentifierChar(ch byte) bool {
+	return ch == '_' ||
+		ch >= '0' && ch <= '9' ||
+		ch >= 'a' && ch <= 'z' ||
+		ch >= 'A' && ch <= 'Z'
+}
 
 func acquireBuffer(pool *sync.Pool) *bytes.Buffer {
 	if pool == nil {
@@ -100,6 +185,11 @@ func runSql(
 	trimmedLower := strings.ToLower(strings.TrimSpace(sql))
 	if strings.HasPrefix(trimmedLower, "drop database") {
 		// Internal executor does not support DROP DATABASE (IsPublishing panics).
+		useBackExec = true
+	} else if dataBranchTempSQLNeedsBackExec(trimmedLower) {
+		// Branch diff/merge/pick temp tables do repeated DDL/DML in one shared txn.
+		// The internal SQL fast path skips per-statement workspace increments and can
+		// hit ErrTxnNeedRetryWithDefChanged in RC mode while these temp definitions churn.
 		useBackExec = true
 	} else if strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
 		// SQLExecutor cannot resolve snapshot by name.
@@ -168,7 +258,8 @@ func runSql(
 		WithDisableIncrStatement().
 		WithTxn(backSes.GetTxnHandler().GetTxn()).
 		WithKeepTxnAlive().
-		WithTimeZone(ses.GetTimeZone())
+		WithTimeZone(ses.GetTimeZone()).
+		WithDatabase(ses.GetDatabaseName())
 
 	if streamChan != nil && errChan != nil {
 		opts = opts.WithStreaming(streamChan, errChan)
@@ -466,6 +557,29 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	return nil
 }
 
+func extractDataBranchSQLRowValue(
+	ctx context.Context,
+	ses *Session,
+	vec *vector.Vector,
+	colIdx int,
+	row []any,
+	rowIdx int,
+) error {
+	if vec.GetNulls().Contains(uint64(rowIdx)) {
+		row[colIdx] = nil
+		return nil
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_datetime, types.T_timestamp, types.T_decimal64,
+		types.T_decimal128, types.T_decimal256, types.T_time:
+		row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
+		return nil
+	default:
+		return extractRowFromVector(ctx, ses, vec, colIdx, row, rowIdx, false)
+	}
+}
+
 // writeEscapedSQLString escapes special and control characters for SQL literal output.
 func writeEscapedSQLString(buf *bytes.Buffer, b []byte) {
 	buf.WriteByte('\'')
@@ -624,7 +738,7 @@ func compareSingleValInVector(
 			vector.GetFixedAtNoTypeCheck[float64](vec1, rowIdx1),
 			vector.GetFixedAtNoTypeCheck[float64](vec2, rowIdx2),
 		), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
 		return bytes.Compare(
 			vec1.GetBytesAt(rowIdx1),
 			vec2.GetBytesAt(rowIdx2),

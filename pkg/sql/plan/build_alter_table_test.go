@@ -53,6 +53,67 @@ func TestAlterTableAddColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestAlterTableRejectsNonGeometrySRIDAttribute(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "add non-geometry srid column",
+			sql:  "alter table t1 add column d int srid 4326;",
+		},
+		{
+			name: "modify non-geometry srid column",
+			sql:  "alter table t1 modify column b int srid 4326;",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildSingleStmt(mock, t, tt.sql)
+			assert.ErrorContains(t, err, "SRID is only supported for GEOMETRY columns")
+		})
+	}
+}
+
+func TestBuildNotNullColumnValGeometry(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  plan.Type
+		want string
+	}{
+		{
+			name: "point",
+			typ:  *geometryPlanType(types.T_geometry, "POINT", 0, false),
+			want: "st_geomfromtext('POINT EMPTY')",
+		},
+		{
+			name: "point with srid",
+			typ:  *geometryPlanType(types.T_geometry, "POINT", 4326, true),
+			want: "st_geomfromtext('POINT EMPTY', 4326)",
+		},
+		{
+			name: "generic geometry",
+			typ:  *geometryPlanType(types.T_geometry, "GEOMETRY", 0, false),
+			want: "st_geomfromtext('GEOMETRYCOLLECTION EMPTY')",
+		},
+		{
+			name: "multipolygon with srid",
+			typ:  *geometryPlanType(types.T_geometry, "MULTIPOLYGON", 0, true),
+			want: "st_geomfromtext('MULTIPOLYGON EMPTY', 0)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			col := &ColDef{Name: "g", Typ: tt.typ}
+			assert.Equal(t, tt.want, buildNotNullColumnVal(col))
+		})
+	}
+}
+
 func Test_checkChangeTypeCompatible(t *testing.T) {
 	type args struct {
 		ctx    context.Context
@@ -98,6 +159,51 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 				ctx:    context.Background(),
 				origin: &plan.Type{Id: int32(types.T_varchar)},
 				to:     &plan.Type{Id: int32(types.T_enum)},
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "geometry subtype mismatch",
+			args: args{
+				ctx:    context.Background(),
+				origin: geometryPlanType(types.T_geometry, "POINT", 0, false),
+				to:     geometryPlanType(types.T_geometry, "LINESTRING", 0, false),
+			},
+			wantErr: assert.Error,
+		},
+		{
+			name: "geometry generic target accepts subtype",
+			args: args{
+				ctx:    context.Background(),
+				origin: geometryPlanType(types.T_geometry, "POINT", 0, false),
+				to:     geometryPlanType(types.T_geometry, "GEOMETRY", 0, false),
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "geometry identical subtype",
+			args: args{
+				ctx:    context.Background(),
+				origin: geometryPlanType(types.T_geometry, "POINT", 0, false),
+				to:     geometryPlanType(types.T_geometry, "POINT", 0, false),
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "geometry srid mismatch",
+			args: args{
+				ctx:    context.Background(),
+				origin: geometryPlanType(types.T_geometry, "POINT", 4326, true),
+				to:     geometryPlanType(types.T_geometry, "POINT", 0, true),
+			},
+			wantErr: assert.Error,
+		},
+		{
+			name: "geometry identical srid",
+			args: args{
+				ctx:    context.Background(),
+				origin: geometryPlanType(types.T_geometry, "POINT", 4326, true),
+				to:     geometryPlanType(types.T_geometry, "POINT", 4326, true),
 			},
 			wantErr: assert.NoError,
 		},

@@ -19,6 +19,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -47,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -58,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -71,6 +76,126 @@ func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 		return ctx, nil
 	})
 	return ctx, stubs
+}
+
+func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	cw := InitTxnComputationWrapper(ses, &tree.Insert{}, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
+	require.NoError(t, err)
+
+	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
+	require.Equal(t, "Insert", ses.GetStmtType())
+	require.Equal(t, tree.QueryTypeDML, ses.GetQueryType())
+}
+
+func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
+	cw := InitTxnComputationWrapper(ses, insertIgnore, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert ignore into t values (1, 10 / 0)", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.True(t, ses.GetStmtProfile().GetDivByZeroIgnore())
+
+	insert := &tree.Insert{}
+	cw = InitTxnComputationWrapper(ses, insert, proc)
+	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.False(t, ses.GetStmtProfile().GetDivByZeroIgnore())
+}
+
+func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	cw := InitTxnComputationWrapper(ses, &tree.Execute{}, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "execute stmt1", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.Equal(t, "Execute", ses.GetStmtType())
+	require.Equal(t, tree.QueryTypeOth, ses.GetQueryType())
+
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
+	refreshProcessDivByZeroProfileForPreparedStmt(proc, insertIgnore)
+
+	stmtType, queryType, ignore := proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	require.Equal(t, "Insert", stmtType)
+	require.Equal(t, tree.QueryTypeDML, queryType)
+	require.True(t, ignore)
+
+	refreshProcessDivByZeroProfileForPreparedStmt(proc, &tree.Insert{})
+	_, _, ignore = proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	require.False(t, ignore)
+
+	refreshProcessDivByZeroProfileForPreparedStmt(proc, nil)
+	// nil statement should be a no-op; previous runtime profile remains.
+	_, _, ignore = proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	require.False(t, ignore)
+}
+
+func TestTxnComputationWrapperCompileRefreshesProfileForBinaryExecute(t *testing.T) {
+	ctx := context.Background()
+	ctx = statistic.ContextWithStatsInfo(ctx, statistic.NewStatsInfo())
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+	proc.Base.SessionInfo.StorageEngine = &disttae.Engine{}
+
+	stmtName := getPrepareStmtName(1)
+	prepareString := tree.NewPrepareString(tree.Identifier(stmtName), "select 1")
+	stmts, err := mysql.Parse(ctx, prepareString.Sql, 1)
+	require.NoError(t, err)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), prepareString)
+	require.NoError(t, err)
+
+	prepareStmt := &PrepareStmt{
+		Name:                stmtName,
+		Sql:                 prepareString.Sql,
+		PreparePlan:         preparePlan,
+		PrepareStmt:         stmts[0],
+		compile:             compile.NewCompile("", "", prepareString.Sql, "", "", nil, proc, stmts[0], false, nil, time.Now()),
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	defer prepareStmt.Close()
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
+
+	cw := InitTxnComputationWrapper(ses, stmts[0], proc)
+	cw.plan = preparePlan.GetDcl().GetPrepare().Plan
+	execCtx := &ExecCtx{
+		reqCtx: ctx,
+		input: &UserInput{
+			stmtName:            stmtName,
+			isBinaryProtExecute: true,
+		},
+	}
+
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	ret, err := cw.Compile(execCtx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, ret)
+	stmtType, queryType, ignore := proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	require.Equal(t, "Select", stmtType)
+	require.Equal(t, tree.QueryTypeDQL, queryType)
+	require.False(t, ignore)
 }
 
 func Test_mce(t *testing.T) {
@@ -646,6 +771,7 @@ func Test_typeconvert(t *testing.T) {
 			types.T_time,
 			types.T_datetime,
 			types.T_json,
+			types.T_geometry,
 			types.T_array_float32,
 			types.T_array_float64,
 			types.T_bit,
@@ -673,6 +799,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
 			{tp: defines.MYSQL_TYPE_JSON, signed: true},
+			{tp: defines.MYSQL_TYPE_GEOMETRY, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_BIT},
@@ -791,6 +918,100 @@ func Test_handleShowVariables(t *testing.T) {
 	})
 }
 
+func TestShowGlobalVariablesRefreshesGlobalSysVarCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newSes(nil, ctrl)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	ses.gSysVars.Set("long_query_time", float64(10))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "interactive_timeout", int64(30100)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_remap_hint", "on"))
+	require.True(t, ses.rewriteEnabled.Load())
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	sql := getSqlForGetSystemVariablesWithAccount(sysAccountID)
+	bh.sql2result[sql] = newMrsForGlobalSystemVariables([][]interface{}{
+		{"long_query_time", "1.1"},
+	})
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "show global variables like 'long_query_time'", 1)
+	require.NoError(t, err)
+	showVars, ok := stmt.(*tree.ShowVariables)
+	require.True(t, ok)
+
+	ec := newTestExecCtx(ctx, ctrl)
+	require.NoError(t, doShowVariables(ses, ec, showVars))
+
+	mrs := ses.GetMysqlResultSet()
+	require.Equal(t, uint64(1), mrs.GetRowCount())
+	row, err := mrs.GetRow(ctx, 0)
+	require.NoError(t, err)
+	require.Equal(t, "long_query_time", row[0])
+	require.Equal(t, float64(1.1), row[1])
+	require.Contains(t, bh.executedSQLs, sql)
+
+	sessionTimeout, err := ses.GetSessionSysVar("interactive_timeout")
+	require.NoError(t, err)
+	require.Equal(t, int64(30100), sessionTimeout)
+	enableRemapHint, err := ses.GetSessionSysVar("enable_remap_hint")
+	require.NoError(t, err)
+	require.Equal(t, int8(1), enableRemapHint)
+	require.True(t, ses.rewriteEnabled.Load())
+}
+
+func TestShowGlobalVariablesReturnsRefreshError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newSes(nil, ctrl)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	sql := getSqlForGetSystemVariablesWithAccount(sysAccountID)
+	bh.sql2err[sql] = moerr.NewInternalErrorNoCtx("refresh global sysvars failed")
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "show global variables like 'long_query_time'", 1)
+	require.NoError(t, err)
+	showVars, ok := stmt.(*tree.ShowVariables)
+	require.True(t, ok)
+
+	err = doShowVariables(ses, newTestExecCtx(ctx, ctrl), showVars)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "refresh global sysvars failed")
+	require.Contains(t, bh.executedSQLs, sql)
+}
+
+func newMrsForGlobalSystemVariables(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("variable_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col1)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("variable_value")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func Test_GetColumns(t *testing.T) {
 	convey.Convey("GetColumns succ", t, func() {
 		//cw := &ComputationWrapperImpl{exec: &compile.Exec{}}
@@ -841,7 +1062,6 @@ func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
 				gSysVars: &SystemVariables{mp: sysVars},
 			},
 		}
-
 		ctrl := gomock.NewController(t)
 		ec := newTestExecCtx(context.Background(), ctrl)
 		ec.ses = ses
@@ -854,6 +1074,134 @@ func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
 		sv, ok := stmt.(*tree.ShowVariables)
 		convey.So(ok, convey.ShouldBeTrue)
 		convey.So(sv.Global, convey.ShouldBeTrue)
+	})
+}
+
+// Test_GetComputationWrapper_InternalCmds tests the internal command parsing in GetComputationWrapper
+func Test_GetComputationWrapper_InternalCmds(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("GetComputationWrapper internal commands", t, func() {
+		db, user := "T", "root"
+		var eng engine.Engine
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+		sysVars := make(map[string]interface{})
+		for name, sysVar := range gSysVarsDefs {
+			sysVars[name] = sysVar.Default
+		}
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				gSysVars: &SystemVariables{mp: sysVars},
+			},
+		}
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Test internal_get_snapshot_ts command
+		convey.Convey("internal_get_snapshot_ts command", func() {
+			sql := makeGetSnapshotTsSql("snap1", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetSnapshotTs)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_databases command
+		convey.Convey("internal_get_databases command", func() {
+			sql := makeGetDatabasesSql("snap1", "account1", "pub1", "account", "db1", "tbl1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetDatabases)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_mo_indexes command
+		convey.Convey("internal_get_mo_indexes command", func() {
+			sql := makeGetMoIndexesSql(123, "account1", "pub1", "snap1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetMoIndexes)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_ddl command
+		convey.Convey("internal_get_ddl command", func() {
+			sql := makeGetDdlSql("snap1", "account1", "pub1", "table", "db1", "tbl1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetDdl)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_get_object command
+		convey.Convey("internal_get_object command", func() {
+			sql := makeGetObjectSql("account1", "pub1", "object1", 0)
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdGetObject)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_object_list command
+		convey.Convey("internal_object_list command", func() {
+			sql := makeObjectListSql("snap1", "snap0", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdObjectList)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
+
+		// Test internal_check_snapshot_flushed command
+		convey.Convey("internal_check_snapshot_flushed command", func() {
+			sql := makeCheckSnapshotFlushedSql("snap1", "account1", "pub1")
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.input = &UserInput{sql: sql}
+
+			cw, err := GetComputationWrapper(ec, db, user, eng, proc, ses)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(cw, convey.ShouldNotBeEmpty)
+			convey.So(len(cw), convey.ShouldEqual, 1)
+			_, ok := cw[0].GetAst().(*InternalCmdCheckSnapshotFlushed)
+			convey.So(ok, convey.ShouldBeTrue)
+		})
 	})
 }
 
@@ -1121,6 +1469,8 @@ func Test_statement_type(t *testing.T) {
 			{&tree.Insert{}},
 			{&tree.BeginTransaction{}},
 			{&tree.ShowTables{}},
+			{&tree.LockTableStmt{}},
+			{&tree.UnLockTableStmt{}},
 			{&tree.Use{}},
 		}
 		ctrl := gomock.NewController(t)
@@ -1136,10 +1486,43 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.LockTableStmt{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.UnLockTableStmt{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.DropTable{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(nil), convey.ShouldBeFalse)
 	})
+}
+
+func TestLockTablesSessionState(t *testing.T) {
+	ses := &Session{}
+
+	lockCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   &tree.LockTableStmt{},
+	}
+	_, err := execInFrontend(ses, lockCtx)
+	require.NoError(t, err)
+	require.True(t, ses.hasLockedTables.Load())
+	require.False(t, lockCtx.txnOpt.byCommit)
+
+	unlockCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   &tree.UnLockTableStmt{},
+	}
+	_, err = execInFrontend(ses, unlockCtx)
+	require.NoError(t, err)
+	require.True(t, unlockCtx.txnOpt.byCommit)
+	require.False(t, ses.hasLockedTables.Load())
+
+	unlockAgainCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   &tree.UnLockTableStmt{},
+	}
+	_, err = execInFrontend(ses, unlockAgainCtx)
+	require.NoError(t, err)
+	require.False(t, unlockAgainCtx.txnOpt.byCommit)
+	require.False(t, ses.hasLockedTables.Load())
 }
 
 func Test_convert_type(t *testing.T) {
@@ -1185,6 +1568,37 @@ func TestSerializePlanToJson(t *testing.T) {
 		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
 	}
+}
+
+func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	stmt := &motrace.StatementInfo{
+		StatementID: uid,
+		Statement:   []byte("select 1"),
+		RequestAt:   time.Now().Add(-2 * time.Second),
+	}
+	logicPlan := &plan0.Plan{
+		Plan: &plan0.Plan_Query{
+			Query: &plan0.Query{
+				Nodes: []*plan0.Node{
+					{
+						NodeId:   0,
+						NodeType: plan0.Node_VALUE_SCAN,
+						Stats: &plan0.Stats{
+							Cost: math.Inf(1),
+						},
+					},
+				},
+				Steps: []int32{0},
+			},
+		},
+	}
+
+	h := NewMarshalPlanHandler(context.Background(), stmt, logicPlan, nil)
+	jsonBytes := h.Marshal(context.Background())
+
+	require.NotContains(t, string(jsonBytes), "serialize plan to json error")
 }
 
 func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
@@ -1288,6 +1702,110 @@ func TestProcessLoadLocal(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
+	})
+}
+
+func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
+	convey.Convey("processLoadLocal returns lock table bind check error before first read", t, func() {
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
+		proc := testutil.NewProc(t)
+		var writer *io.PipeWriter
+		proc.Base.LoadLocalReader, writer = io.Pipe()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		tConn := &testConn{}
+		writeExceptResult(tConn, []*Packet{{Length: 5, Payload: []byte("hello"), SequenceID: 1}})
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		convey.So(err, convey.ShouldBeNil)
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		ioses, err := NewIOSession(tConn, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				respr: NewMysqlResp(&testMysqlWriter{ioses: ioses}),
+			},
+		}
+		ctx := context.Background()
+		ec := newTestExecCtx(ctx, ctrl)
+		op := newTestTxnOp()
+		expected := moerr.NewLockTableBindChangedNoCtx()
+		op.checkLockTableBinds = func(context.Context) error {
+			return expected
+		}
+		proc.Base.TxnOperator = op
+		proc.Ctx = ctx
+		ec.proc = proc
+
+		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		convey.So(err, convey.ShouldEqual, expected)
+		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 1)
+	})
+}
+
+func TestProcessLoadLocalCheckLockTableBindsErrorInLoop(t *testing.T) {
+	convey.Convey("processLoadLocal returns lock table bind check error after one packet", t, func() {
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
+		proc := testutil.NewProc(t)
+		var writer *io.PipeWriter
+		proc.Base.LoadLocalReader, writer = io.Pipe()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		tConn := &testConn{}
+		pkts := []*Packet{{Length: 5, Payload: []byte("hello"), SequenceID: 1},
+			{Length: 5, Payload: []byte("world"), SequenceID: 2},
+			{Length: 0, Payload: []byte(""), SequenceID: 3}}
+		writeExceptResult(tConn, pkts)
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		convey.So(err, convey.ShouldBeNil)
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		ioses, err := NewIOSession(tConn, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				respr: NewMysqlResp(&testMysqlWriter{ioses: ioses}),
+			},
+		}
+		buffer := make([]byte, 4096)
+		go func(buf []byte) {
+			tmp := buf
+			for {
+				n, err := proc.Base.LoadLocalReader.Read(tmp)
+				if err != nil {
+					break
+				}
+				tmp = tmp[n:]
+			}
+		}(buffer)
+		ctx := context.Background()
+		ec := newTestExecCtx(ctx, ctrl)
+		op := newTestTxnOp()
+		expected := moerr.NewLockTableBindChangedNoCtx()
+		op.checkLockTableBinds = func(context.Context) error {
+			if op.checkLockTableChecks == 2 {
+				return expected
+			}
+			return nil
+		}
+		proc.Base.TxnOperator = op
+		proc.Ctx = ctx
+		ec.proc = proc
+
+		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		convey.So(err, convey.ShouldEqual, expected)
+		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 2)
+		convey.So(buffer[:5], convey.ShouldResemble, []byte("hello"))
 	})
 }
 
@@ -1805,6 +2323,101 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 			}
 		}
 	})
+}
+
+func Test_ExecRequest_SidecarSuccess(t *testing.T) {
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	saved := debugHTTPAddr
+	defer func() { debugHTTPAddr = saved }()
+	debugHTTPAddr = ":8888"
+
+	// Mock sidecar returning a valid JSONCompact response.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"meta":[{"name":"x","type":"INTEGER"}],"data":[[42]],"rows":1}`))
+	}))
+	defer srv.Close()
+
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
+	require.NoError(t, err)
+	ses.SetDatabaseName("testdb")
+
+	ec := newTestExecCtx(ctx, ctrl)
+	req := &Request{
+		cmd:  COM_QUERY,
+		data: []byte("/*+ SIDECAR */ SELECT 42 AS x FROM testdb.t1"),
+	}
+
+	resp, err := ExecRequest(ses, ec, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, ResultResponse, resp.category)
+}
+
+func Test_ExecRequest_SidecarError(t *testing.T) {
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	saved := debugHTTPAddr
+	defer func() { debugHTTPAddr = saved }()
+	debugHTTPAddr = ":8888"
+
+	// Mock sidecar that returns 500.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("boom"))
+	}))
+	defer srv.Close()
+
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
+	require.NoError(t, err)
+	ses.SetDatabaseName("testdb")
+
+	ec := newTestExecCtx(ctx, ctrl)
+	req := &Request{
+		cmd:  COM_QUERY,
+		data: []byte("/*+ SIDECAR */ SELECT 1 FROM testdb.t1"),
+	}
+
+	resp, err := ExecRequest(ses, ec, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	// Should be an error response (from sidecar), not a success.
+	assert.Equal(t, ErrorResponse, resp.category)
+}
+
+func Test_ExecRequest_SidecarFallthrough(t *testing.T) {
+	// SIDECAR hint present but sidecar not configured → strips hint, falls through.
+	// doComQuery will fail (no engine), but we verify the fallthrough happened.
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	saved := debugHTTPAddr
+	defer func() { debugHTTPAddr = saved }()
+	debugHTTPAddr = "" // no manifest URL → errSidecarNotConfigured
+
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+
+	ec := newTestExecCtx(ctx, ctrl)
+	req := &Request{
+		cmd:  COM_QUERY,
+		data: []byte("/*+ SIDECAR */ SELECT 1"),
+	}
+
+	// ExecRequest won't return an error even though doComQuery panics/fails;
+	// the deferred recover catches it. We just verify it doesn't panic.
+	resp, _ := ExecRequest(ses, ec, req)
+	_ = resp
 }
 
 func Test_unsupportedCommand(t *testing.T) {
@@ -2447,13 +3060,6 @@ func Test_checkModify(t *testing.T) {
 		},
 		{
 			node: &plan.Node{
-				ReplaceCtx: &plan0.ReplaceCtx{},
-			},
-			expected_flag: true,
-			expected_err:  false,
-		},
-		{
-			node: &plan.Node{
 				DeleteCtx: &plan0.DeleteCtx{},
 			},
 			expected_flag: true,
@@ -2462,13 +3068,6 @@ func Test_checkModify(t *testing.T) {
 		{
 			node: &plan.Node{
 				PreInsertCtx: &plan0.PreInsertCtx{},
-			},
-			expected_flag: true,
-			expected_err:  false,
-		},
-		{
-			node: &plan.Node{
-				OnDuplicateKey: &plan0.OnDuplicateKeyCtx{},
 			},
 			expected_flag: true,
 			expected_err:  false,

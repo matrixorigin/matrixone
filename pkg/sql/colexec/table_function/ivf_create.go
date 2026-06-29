@@ -25,12 +25,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/device"
+	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -46,9 +50,11 @@ const (
 )
 
 var (
-	ClusterCentersSupportTypes = []types.T{
-		types.T_array_float32, types.T_array_float64,
-	}
+	// ivfflatCatalogHooks is the shared (stateless) catalog-hooks instance used
+	// for plugin-declared vector-type validation (see pkg/indexplugin/catalog).
+	// It replaces the former ClusterCentersSupportTypes list so the supported
+	// vector types live in one place — the IVF-FLAT plugin's catalog hooks.
+	ivfflatCatalogHooks = ivfflatrt.CatalogHooks{}
 
 	ivf_runSql = sqlexec.RunSql
 )
@@ -84,14 +90,16 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	logutil.Infof("IVFFLAT START: Kmeans clustering CREATE")
 	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
 	var centers [][]T
+	gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
 	if clusterer, err = device.NewKMeans(
 		data, int(u.idxcfg.Ivfflat.Lists),
-		int(u.tblcfg.KmeansMaxIteration),
+		int(u.idxcfg.Ivfflat.KmeansMaxIteration),
 		defaultKmeansDeltaThreshold,
 		metric.MetricType(u.idxcfg.Ivfflat.Metric),
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
 		u.idxcfg.Ivfflat.Spherical, // For dense vector, spherical kmeans is false.
-		int(nworker)); err != nil {
+		int(nworker),
+		gpuMode); err != nil {
 		return err
 	}
 	logutil.Infof("IVFFLAT END: Kmeans clustering CREATE")
@@ -252,8 +260,23 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 		u.idxcfg.Type = vectorindex.IVFFLAT
 
+		// kmeans_train_percent / kmeans_max_iteration: the flat algo_params key
+		// (u.param, present only when set in CREATE INDEX) wins; otherwise the
+		// session variable controls the build, then the hardcoded default.
+		resolve := proc.GetResolveVariableFunc()
+		u.idxcfg.Ivfflat.KmeansTrainPercent, err = indexplugin.AlgoParamFloat(
+			u.param.KmeansTrainPercent, resolve, "kmeans_train_percent", ivfflatrt.DefaultKmeansTrainPercent)
+		if err != nil {
+			return err
+		}
+		u.idxcfg.Ivfflat.KmeansMaxIteration, err = indexplugin.AlgoParamInt(
+			u.param.KmeansMaxIteration, resolve, "kmeans_max_iteration", ivfflatrt.DefaultKmeansMaxIteration)
+		if err != nil {
+			return err
+		}
+
 		u.nsample = u.idxcfg.Ivfflat.Lists * 50
-		train_percent := float64(u.tblcfg.KmeansTrainPercent) / float64(100)
+		train_percent := u.idxcfg.Ivfflat.KmeansTrainPercent / float64(100)
 		if u.tblcfg.DataSize > 0 {
 			ns := uint(train_percent * float64(u.tblcfg.DataSize))
 			if u.nsample > ns {
@@ -296,18 +319,13 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		logutil.Infof("IVFFLAT END: pick sample")
 
 		if len(res.Batches) == 0 {
+			u.batch = tf.createResultBatch()
+			u.inited = true
 			return nil
 		}
 
 		embedvec := res.Batches[0].Vecs[0]
-		supported := false
-		for _, t := range ClusterCentersSupportTypes {
-			if embedvec.GetType().Oid == t {
-				supported = true
-				break
-			}
-		}
-		if !supported {
+		if !catalogplugin.SupportsVectorType(ivfflatCatalogHooks, embedvec.GetType().Oid) {
 			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
 		}
 
@@ -347,7 +365,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 		u.batch = tf.createResultBatch()
 		u.inited = true
-		//os.Stderr.WriteString(fmt.Sprintf("nsample %d, train_percent %f, iter %d\n", u.nsample, train_percent, u.tblcfg.KmeansMaxIteration))
+		//os.Stderr.WriteString(fmt.Sprintf("nsample %d, train_percent %f, iter %d\n", u.nsample, train_percent, u.idxcfg.Ivfflat.KmeansMaxIteration))
 		// cleanup the batch
 		u.batch.CleanOnlyData()
 	}

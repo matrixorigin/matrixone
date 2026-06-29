@@ -29,7 +29,8 @@ import (
 
 const (
 	// for schema
-	PropSchemaExtra = "schema_extra"
+	PropSchemaExtra     = "schema_extra"
+	PropFromPublication = "from_publication"
 
 	Row_ID           = objectio.PhysicalAddr_Attr
 	PrefixPriColName = "__mo_cpkey_"
@@ -138,6 +139,12 @@ const (
 	// MOSysAsyncTask is the table name of async task table in mo_task.
 	MOSysAsyncTask = "sys_async_task"
 
+	// MOSQLTask is the table name of sql task table in mo_task.
+	MOSQLTask = "sql_task"
+
+	// MOSQLTaskRun is the table name of sql task run table in mo_task.
+	MOSQLTaskRun = "sql_task_run"
+
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
 
@@ -174,11 +181,16 @@ const (
 	MO_ISCP_LOG         = "mo_iscp_log"
 	MO_STORED_PROCEDURE = "mo_stored_procedure"
 
+	MO_CCPR_LOG = "mo_ccpr_log"
+
 	MO_INDEX_UPDATE = "mo_index_update"
 
 	MO_BRANCH_METADATA  = "mo_branch_metadata"
 	MO_FEATURE_LIMIT    = "mo_feature_limit"
 	MO_FEATURE_REGISTRY = "mo_feature_registry"
+
+	MO_CCPR_TABLES = "mo_ccpr_tables"
+	MO_CCPR_DBS    = "mo_ccpr_dbs"
 )
 
 func IsSystemTable(id uint64) bool {
@@ -333,6 +345,8 @@ const (
 	UniqueIndexSuffix             = "unique_"
 	FullTextIndexSuffix           = "fulltext_"
 	HnswIndexSuffix               = "hnsw_"
+	CagraIndexSuffix              = "cagra_"
+	IvfpqIndexSuffix              = "ivfpq_"
 	SecondaryIndexSuffix          = "secondary_"
 	PrefixIndexTableName          = "__mo_index_"
 	IndexTableNamePrefix          = PrefixIndexTableName
@@ -340,6 +354,8 @@ const (
 	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
 	FullTextIndexTableNamePrefix  = PrefixIndexTableName + FullTextIndexSuffix
 	HnswIndexTableNamePrefix      = PrefixIndexTableName + HnswIndexSuffix
+	CagraIndexTableNamePrefix     = PrefixIndexTableName + CagraIndexSuffix
+	IvfpqIndexTableNamePrefix     = PrefixIndexTableName + IvfpqIndexSuffix
 
 	/************ 0. Regular Secondary Index ************/
 
@@ -407,6 +423,44 @@ const (
 	Hnsw_TblCol_Metadata_Timestamp = "timestamp"
 	Hnsw_TblCol_Metadata_Checksum  = "checksum"
 	Hnsw_TblCol_Metadata_Filesize  = "filesize"
+
+	/************ Cagra Index *************/
+
+	// CAGRA Table Types
+	// NOTE: avoid duplicate TblType name with IVFFLAT or other index
+	Cagra_TblType_Metadata = "cagra_meta"
+	Cagra_TblType_Storage  = "cagra_index"
+
+	// CAGRA Storage - Column names
+	Cagra_TblCol_Storage_Index_Id = "index_id"
+	Cagra_TblCol_Storage_Chunk_Id = "chunk_id"
+	Cagra_TblCol_Storage_Data     = "data"
+	Cagra_TblCol_Storage_Tag      = "tag"
+
+	// CAGRA Metadata - Column names
+	Cagra_TblCol_Metadata_Index_Id  = "index_id"
+	Cagra_TblCol_Metadata_Timestamp = "timestamp"
+	Cagra_TblCol_Metadata_Checksum  = "checksum"
+	Cagra_TblCol_Metadata_Filesize  = "filesize"
+
+	/************ IVF-PQ Index *************/
+
+	// IVF-PQ Table Types
+	// NOTE: avoid duplicate TblType name with IVFFLAT, CAGRA or other index
+	Ivfpq_TblType_Metadata = "ivfpq_meta"
+	Ivfpq_TblType_Storage  = "ivfpq_index"
+
+	// IVF-PQ Storage - Column names
+	Ivfpq_TblCol_Storage_Index_Id = "index_id"
+	Ivfpq_TblCol_Storage_Chunk_Id = "chunk_id"
+	Ivfpq_TblCol_Storage_Data     = "data"
+	Ivfpq_TblCol_Storage_Tag      = "tag"
+
+	// IVF-PQ Metadata - Column names
+	Ivfpq_TblCol_Metadata_Index_Id  = "index_id"
+	Ivfpq_TblCol_Metadata_Timestamp = "timestamp"
+	Ivfpq_TblCol_Metadata_Checksum  = "checksum"
+	Ivfpq_TblCol_Metadata_Filesize  = "filesize"
 
 	/************ 5. Logical ID Index (mo_tables) ************/
 
@@ -803,6 +857,36 @@ var (
 		types.New(types.T_TS, 0, 0),                        // committs
 		types.New(types.T_uuid, 0, 0),                      // segment_id
 		types.New(types.T_TS, 0, 0),                        // flush_point
+	}
+
+	// mo_ccpr_tables schema: tableid (pk), taskid, dbname, tablename, account_id
+	MoCCPRTablesSchema = []string{
+		"tableid",
+		"taskid",
+		"dbname",
+		"tablename",
+		"account_id",
+	}
+	MoCCPRTablesTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),    // tableid (primary key)
+		types.New(types.T_uuid, 0, 0),      // taskid
+		types.New(types.T_varchar, 256, 0), // dbname
+		types.New(types.T_varchar, 256, 0), // tablename
+		types.New(types.T_uint32, 0, 0),    // account_id
+	}
+
+	// mo_ccpr_dbs schema: dbid (pk), taskid, dbname, account_id
+	MoCCPRDbsSchema = []string{
+		"dbid",
+		"taskid",
+		"dbname",
+		"account_id",
+	}
+	MoCCPRDbsTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),    // dbid (primary key)
+		types.New(types.T_uuid, 0, 0),      // taskid
+		types.New(types.T_varchar, 256, 0), // dbname
+		types.New(types.T_uint32, 0, 0),    // account_id
 	}
 )
 

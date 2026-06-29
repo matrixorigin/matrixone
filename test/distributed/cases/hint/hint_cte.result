@@ -608,7 +608,7 @@ n,
 FROM numbers
 )
 SELECT * FROM sales_with_numbers;
-aggregation with non equal predicate in SCALAR subquery  will be supported in future version is not yet implemented
+aggregation with non equal predicate in scalar subquery on derived tables will be supported in future version is not yet implemented
 /*+ {
 "rewrites" : {
 "test_cte_rewrite.sales" : "SELECT * FROM test_cte_rewrite.sales"

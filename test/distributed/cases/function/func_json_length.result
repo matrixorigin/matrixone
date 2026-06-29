@@ -1,0 +1,48 @@
+SELECT JSON_LENGTH(NULL) AS result;
+➤ result[-5,64,0]  𝄀
+null
+SELECT JSON_LENGTH('{}') AS result;
+➤ result[-5,64,0]  𝄀
+0
+SELECT JSON_LENGTH('[]') AS result;
+➤ result[-5,64,0]  𝄀
+0
+SELECT JSON_LENGTH('{"a":1,"b":2}') AS result;
+➤ result[-5,64,0]  𝄀
+2
+SELECT JSON_LENGTH('[1,2,3]') AS result;
+➤ result[-5,64,0]  𝄀
+3
+SELECT JSON_LENGTH('true') AS result;
+➤ result[-5,64,0]  𝄀
+1
+SELECT JSON_LENGTH('false') AS result;
+➤ result[-5,64,0]  𝄀
+1
+SELECT JSON_LENGTH('null') AS result;
+➤ result[-5,64,0]  𝄀
+null
+SELECT JSON_LENGTH('"hello"') AS result;
+➤ result[-5,64,0]  𝄀
+1
+SELECT JSON_LENGTH('42') AS result;
+➤ result[-5,64,0]  𝄀
+1
+SELECT JSON_LENGTH('{"a":{"b":[1,2,3]}}', '$.a.b') AS result;
+➤ result[-5,64,0]  𝄀
+3
+SELECT JSON_LENGTH('{"a":1}', '$.x') AS result;
+➤ result[-5,64,0]  𝄀
+null
+SELECT JSON_LENGTH('not-json');
+invalid input: json text not-json
+SELECT JSON_LENGTH('{"a":{"x":1,"y":2}}', '$.a.*') AS result;
+➤ result[-5,64,0]  𝄀
+2
+DROP TABLE IF EXISTS t_json_len;
+CREATE TABLE t_json_len (id INT PRIMARY KEY, payload JSON);
+INSERT INTO t_json_len VALUES (1, '{"meta":{"level":{"nested":{"value":{"deep":"2924"}},"flag":true}}}');
+SELECT id, JSON_LENGTH(payload) FROM t_json_len;
+➤ id[4,32,0]  ¦  JSON_LENGTH(payload)[-5,64,0]  𝄀
+1  ¦  1
+DROP TABLE t_json_len;

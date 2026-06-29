@@ -680,6 +680,10 @@ func AesCFBEncode(data []byte) (string, error) {
 	return aesCFBEncodeWithKey(data, []byte(AesKey))
 }
 
+func AesCFBEncodeWithKey(data []byte, aesKey []byte) (string, error) {
+	return aesCFBEncodeWithKey(data, aesKey)
+}
+
 func aesCFBEncodeWithKey(data []byte, aesKey []byte) (string, error) {
 	if len(aesKey) == 0 {
 		return "", moerr.NewInternalErrorNoCtx("AesKey is not initialized")

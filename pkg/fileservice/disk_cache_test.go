@@ -28,11 +28,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func countLoggedEvents(ctx context.Context, ev stringRef) int {
+	logger, _ := ctx.Value(EventLoggerKey).(*eventLogger)
+	if logger == nil {
+		return 0
+	}
+	logger.mu.Lock()
+	defer logger.mu.Unlock()
+
+	var count int
+	for _, event := range *logger.events {
+		if event.ev == ev {
+			count++
+		}
+	}
+	return count
+}
 
 func TestDiskCache(t *testing.T) {
 	dir := t.TempDir()
@@ -288,6 +306,231 @@ func TestDiskCacheFileCache(t *testing.T) {
 	assert.Equal(t, []byte("ar"), readVector.Entries[2].Data)
 	readVector.Release()
 
+}
+
+func TestDiskCacheSetFileRepairsStaleIndex(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("foo"))), nil
+	})
+	require.NoError(t, err)
+
+	diskPath := cache.pathForFile("foo")
+	require.NoError(t, os.Remove(diskPath))
+	require.True(t, cache.cache.Contains(diskPath))
+
+	err = cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("bar"))), nil
+	})
+	require.NoError(t, err)
+
+	readVector := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Offset: 0,
+				Size:   3,
+			},
+		},
+	}
+	err = cache.Read(ctx, readVector)
+	require.NoError(t, err)
+	require.True(t, readVector.Entries[0].done)
+	require.Equal(t, []byte("bar"), readVector.Entries[0].Data)
+	readVector.Release()
+}
+
+func TestDiskCacheEvictSkipsPathBeingUpdated(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("foo"))), nil
+	})
+	require.NoError(t, err)
+
+	diskPath := cache.pathForFile("foo")
+	doneUpdate := cache.startUpdate(diskPath)
+	cache.cache.Delete(ctx, diskPath)
+	doneUpdate()
+
+	_, err = os.Stat(diskPath)
+	require.NoError(t, err)
+	require.False(t, cache.cache.Contains(diskPath))
+}
+
+func TestDiskCacheUpdateCleanupRemovesUnindexedFile(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("foo"))), nil
+	})
+	require.NoError(t, err)
+
+	diskPath := cache.pathForFile("foo")
+	doneUpdate := cache.startUpdateWithCleanup(diskPath, func() error {
+		return cache.removeUnindexedFile(diskPath)
+	})
+	cache.cache.Delete(ctx, diskPath)
+	require.NoError(t, doneUpdate())
+
+	_, err = os.Stat(diskPath)
+	require.True(t, os.IsNotExist(err))
+	require.False(t, cache.cache.Contains(diskPath))
+}
+
+func TestDiskCacheReadSkipsFullFileWhileUpdating(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	diskPath := cache.pathForFile("foo")
+	doneUpdate := cache.startUpdate(diskPath)
+	defer doneUpdate()
+
+	readVector := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Offset: 1,
+				Size:   2,
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cache.Read(ctx, readVector)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("disk cache read should not wait for an in-progress full-file update")
+	}
+	require.False(t, readVector.Entries[0].done)
+	readVector.Release()
+}
+
+func TestDiskCacheReadWaitsForFullFileUpdateWithinShortWait(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("abcdef"))), nil
+	})
+	require.NoError(t, err)
+
+	diskPath := cache.pathForFile("foo")
+	doneUpdate := cache.startUpdate(diskPath)
+	released := false
+	release := func() {
+		if !released {
+			doneUpdate()
+			released = true
+		}
+	}
+	defer release()
+
+	readCtx := WithEventLogger(ctx)
+	readVector := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Offset: 1,
+				Size:   3,
+			},
+		},
+	}
+	defer readVector.Release()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cache.Read(readCtx, readVector)
+	}()
+
+	require.Eventually(t, func() bool {
+		return countLoggedEvents(readCtx, str_disk_cache_wait_update_complete_begin) >= 2
+	}, time.Second, time.Millisecond)
+
+	release()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("disk cache read should finish after the full-file update completes")
+	}
+	require.True(t, readVector.Entries[0].done)
+	require.Equal(t, []byte("bcd"), readVector.Entries[0].Data)
+	require.Equal(t, cache, readVector.Entries[0].fromCache)
+}
+
+func TestDiskCacheStaleRepairReplacesCacheEntrySize(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(8192+4096-1), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("foo"))), nil
+	})
+	require.NoError(t, err)
+
+	fooPath := cache.pathForFile("foo")
+	require.NoError(t, os.Remove(fooPath))
+	require.True(t, cache.cache.Contains(fooPath))
+
+	err = cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("x"), 8192))), nil
+	})
+	require.NoError(t, err)
+	require.True(t, cache.cache.Contains(fooPath))
+
+	err = cache.SetFile(ctx, "bar", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("xy"))), nil
+	})
+	require.NoError(t, err)
+
+	require.False(t, cache.cache.Contains(fooPath))
+	require.True(t, cache.cache.Contains(cache.pathForFile("bar")))
+}
+
+func TestDiskCacheRemovesFileEvictedDuringWrite(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(4096), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("x"), 8192))), nil
+	})
+	require.NoError(t, err)
+
+	fooPath := cache.pathForFile("foo")
+	require.False(t, cache.cache.Contains(fooPath))
+	_, err = os.Stat(fooPath)
+	require.True(t, os.IsNotExist(err))
 }
 
 func TestDiskCacheDirSize(t *testing.T) {
@@ -698,6 +941,43 @@ func TestDiskCacheSetFromFile(t *testing.T) {
 	require.True(t, written)
 }
 
+func TestDiskCacheReadEnsuresMemoryCacheCapacity(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.Nil(t, err)
+	defer cache.Close(ctx)
+
+	dataCache := new(countingDataCache)
+	cache.memoryCache = dataCache
+
+	err = cache.Update(ctx, &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset: 0,
+			Size:   3,
+			Data:   []byte("foo"),
+		}},
+	}, false)
+	require.Nil(t, err)
+
+	vec := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset: 0,
+			Size:   3,
+			ToCacheData: func(ctx context.Context, _ io.Reader, _ []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+				return allocator.AllocateCacheDataWithHint(ctx, 10, malloc.NoClear), nil
+			},
+		}},
+	}
+	err = cache.Read(ctx, vec)
+	require.Nil(t, err)
+	require.Equal(t, 1, dataCache.ensureCalls)
+	require.Equal(t, 10, dataCache.ensureBytes)
+	require.True(t, vec.Entries[0].done)
+	require.NotNil(t, vec.Entries[0].CachedData)
+}
+
 func TestDiskCacheQuotaExceeded(t *testing.T) {
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(3), nil, false, nil, "")
@@ -713,3 +993,35 @@ func TestDiskCacheQuotaExceeded(t *testing.T) {
 	)
 
 }
+
+type countingDataCache struct {
+	ensureCalls int
+	ensureBytes int
+}
+
+func (c *countingDataCache) EnsureNBytes(_ context.Context, want int) {
+	c.ensureCalls++
+	c.ensureBytes += want
+}
+
+func (*countingDataCache) Capacity() int64 { return 0 }
+
+func (*countingDataCache) Used() int64 { return 0 }
+
+func (*countingDataCache) Available() int64 { return 0 }
+
+func (*countingDataCache) Get(context.Context, fscache.CacheKey) (fscache.Data, bool) {
+	return nil, false
+}
+
+func (*countingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) error {
+	return nil
+}
+
+func (*countingDataCache) DeletePaths(context.Context, []string) {}
+
+func (*countingDataCache) Flush(context.Context) {}
+
+func (*countingDataCache) Evict(context.Context, chan int64) {}
+
+func (*countingDataCache) EvictToTargetWithWait(context.Context, int64) int64 { return 0 }

@@ -58,6 +58,14 @@ func WithServerGoettyOptions(options ...goetty.Option) ServerOption {
 	}
 }
 
+// WithServerMessageReleaseFunc sets the release callback used for responses
+// dropped before goetty takes ownership of them.
+func WithServerMessageReleaseFunc(release func(Message)) ServerOption {
+	return func(s *server) {
+		s.options.releaseMessageFunc = release
+	}
+}
+
 // WithServerBatchSendSize set the maximum number of messages to be sent together
 // at each batch. Default is 8.
 func WithServerBatchSendSize(size int) ServerOption {
@@ -107,6 +115,7 @@ type server struct {
 		bufferSize               int
 		batchSendSize            int
 		filter                   func(Message) bool
+		releaseMessageFunc       func(Message)
 		disableAutoCancelContext bool
 	}
 	pool struct {
@@ -362,24 +371,41 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 				written := responses[:0]
 				timeout := time.Duration(0)
-				for _, f := range responses {
+				closeNeedClose := func() {
+					for _, f := range needClose {
+						f.Close()
+					}
+				}
+				failUnwritten := func(values []*Future, err error) {
+					for _, f := range values {
+						cs.releaseMessage(f.send)
+						f.messageSent(err)
+						if f.oneWay {
+							f.Close()
+						}
+					}
+				}
+				for idx, f := range responses {
 					s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
 					if f.oneWay {
 						needClose = append(needClose, f)
 					}
 
 					if !s.options.filter(f.send.Message) {
+						cs.releaseMessage(f.send)
 						f.messageSent(messageSkipped)
 						continue
 					}
 
 					if f.send.Timeout() {
+						cs.releaseMessage(f.send)
 						f.messageSent(f.send.Ctx.Err())
 						continue
 					}
 
 					v, err := f.send.GetTimeoutFromContext()
 					if err != nil {
+						cs.releaseMessage(f.send)
 						f.messageSent(err)
 						continue
 					}
@@ -401,7 +427,15 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						s.logger.Error("write response failed",
 							zap.Uint64("request-id", f.send.Message.GetID()),
 							zap.Error(err))
+						if err == goetty.ErrIllegalState {
+							cs.releaseMessage(f.send)
+						}
 						f.messageSent(err)
+						for _, writtenFuture := range written {
+							writtenFuture.messageSent(err)
+						}
+						failUnwritten(responses[idx+1:], err)
+						closeNeedClose()
 						return
 					}
 					written = append(written, f)
@@ -428,6 +462,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						ce.Write(fields...)
 					}
 					if err != nil {
+						closeNeedClose()
 						return
 					}
 				}
@@ -435,9 +470,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 				for _, f := range written {
 					f.messageSent(nil)
 				}
-				for _, f := range needClose {
-					f.Close()
-				}
+				closeNeedClose()
 
 				s.metrics.writeDurationHistogram.Observe(time.Since(start).Seconds())
 			}
@@ -463,7 +496,7 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 		return v.(*clientSession), nil
 	}
 
-	cs := newClientSession(s.metrics, rs, s.codec, s.newFuture)
+	cs := newClientSession(s.metrics, rs, s.codec, s.newFuture, s.options.releaseMessageFunc)
 	v, loaded := s.sessions.LoadOrStore(rs.ID(), cs)
 	if loaded {
 		close(cs.c)
@@ -531,6 +564,7 @@ type clientSession struct {
 	sentStreamSequences   sync.Map
 	cancel                context.CancelFunc
 	ctx                   context.Context
+	releaseMessageFunc    func(Message)
 	checkTimeoutCacheOnce sync.Once
 	closedC               chan struct{}
 	disconnectedC         chan struct{}
@@ -545,7 +579,8 @@ func newClientSession(
 	metrics *serverMetrics,
 	conn goetty.IOSession,
 	codec Codec,
-	newFutureFunc func() *Future) *clientSession {
+	newFutureFunc func() *Future,
+	releaseMessageFunc func(Message)) *clientSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	cs := &clientSession{
 		metrics:                 metrics,
@@ -558,6 +593,7 @@ func newClientSession(
 		ctx:                     ctx,
 		cancel:                  cancel,
 		newFutureFunc:           newFutureFunc,
+		releaseMessageFunc:      releaseMessageFunc,
 	}
 	cs.mu.caches = make(map[uint64]cacheWithContext)
 	return cs
@@ -603,7 +639,11 @@ func (cs *clientSession) cleanSend() {
 			if !ok {
 				return
 			}
+			cs.releaseMessage(f.send)
 			f.messageSent(backendClosed)
+			if f.oneWay {
+				f.Close()
+			}
 		default:
 			return
 		}
@@ -647,6 +687,7 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 
 	response := msg.Message
 	if err := cs.codec.Valid(response); err != nil {
+		cs.releaseMessage(msg)
 		return nil, err
 	}
 
@@ -654,6 +695,7 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	defer cs.mu.RUnlock()
 
 	if cs.mu.closed {
+		cs.releaseMessage(msg)
 		return nil, moerr.NewClientClosedNoCtx()
 	}
 
@@ -670,9 +712,25 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	if !f.oneWay {
 		f.ref()
 	}
-	cs.c <- f
+	select {
+	case cs.c <- f:
+	case <-msg.Ctx.Done():
+		cs.releaseMessage(msg)
+		f.Close()
+		if !f.oneWay {
+			f.unRef()
+		}
+		return nil, msg.Ctx.Err()
+	}
 	cs.metrics.sendingQueueSizeGauge.Set(float64(len(cs.c)))
 	return f, nil
+}
+
+func (cs *clientSession) releaseMessage(msg RPCMessage) {
+	if cs.releaseMessageFunc == nil || msg.InternalMessage() {
+		return
+	}
+	cs.releaseMessageFunc(msg.Message)
 }
 
 func (cs *clientSession) startCheckCacheTimeout() {

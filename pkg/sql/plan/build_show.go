@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -861,7 +862,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 
 	sql := "select " +
 		"'%s' as `Table`, " +
-		"if(`idx`.`type` = 'MULTIPLE', 1, 0) as `Non_unique`, " +
+		"if(`idx`.`type` IN ('PRIMARY', 'UNIQUE'), 0, 1) as `Non_unique`, " +
 		"`idx`.`name` as `Key_name`, " +
 		"`idx`.`ordinal_position` as `Seq_in_index`, " +
 		"`idx`.`column_name` as `Column_name`, " +
@@ -971,7 +972,15 @@ func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) 
 
 func buildShowSnapShots(stmt *tree.ShowSnapShots, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := fmt.Sprintf("SELECT sname as `SNAPSHOT_NAME`, CAST_NANO_TO_TIMESTAMP(ts) as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME` FROM %s.mo_snapshots ORDER BY ts DESC", MO_CATALOG_DB_NAME)
+	// Filter out ccpr snapshots (snapshots with names starting with 'ccpr_')
+	// and branch-managed snapshots (mo_snapshots.kind = 'branch', inserted
+	// by `DATA BRANCH CREATE` to protect LCA-side history — they are an
+	// implementation detail and must stay invisible to users; see
+	// docs/design/data_branch_protect_snapshot.md §7.1).
+	sql := fmt.Sprintf(
+		"SELECT sname as `SNAPSHOT_NAME`, CAST_NANO_TO_TIMESTAMP(ts) as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME` FROM %s.mo_snapshots WHERE sname NOT LIKE 'ccpr_%%' AND kind != '%s' ORDER BY ts DESC",
+		MO_CATALOG_DB_NAME, databranchutils.BranchSnapshotKind,
+	)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -1089,6 +1098,15 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 		return nil, err
 	}
 	sql := fmt.Sprintf("SELECT pub_name AS Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || CASE table_list WHEN '*' THEN '' ELSE ' TABLE ' || table_list END || ' ACCOUNT ' || account_list AS 'Create Publication' FROM mo_catalog.mo_pubs WHERE account_id = %d AND pub_name='%s';", accountId, stmt.Name)
+	ctx.SetContext(defines.AttachAccountId(ctx.GetContext(), catalog.System_Account))
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowPublicationCoverage(stmt *tree.ShowPublicationCoverage, ctx CompilerContext) (*Plan, error) {
+	// This will be handled in frontend, return a placeholder plan
+	// The actual implementation will be in doShowPublicationCoverage
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := fmt.Sprintf("SELECT database_name as `Database`, table_name as `Table` FROM mo_catalog.mo_pubs WHERE pub_name = '%s' LIMIT 0", stmt.Name)
 	ctx.SetContext(defines.AttachAccountId(ctx.GetContext(), catalog.System_Account))
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }

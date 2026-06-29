@@ -247,6 +247,37 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag in
 	return
 }
 
+func getJoinSideWithOuterScope(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag int32) (side int8) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
+		}
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
+		}
+
+	case *plan.Expr_Col:
+		tag := exprImpl.Col.RelPos
+		if leftTags[tag] {
+			side = JoinSideLeft
+		} else if rightTags[tag] {
+			side = JoinSideRight
+		} else if tag == markTag {
+			side = JoinSideMark
+		} else {
+			side = JoinSideOuter
+		}
+
+	case *plan.Expr_Corr:
+		side = JoinSideCorrelated
+	}
+
+	return
+}
+
 func containsTag(expr *plan.Expr, tag int32) bool {
 	if expr == nil {
 		return false
@@ -291,6 +322,36 @@ func containsTag(expr *plan.Expr, tag int32) bool {
 	}
 
 	return false
+}
+
+func containsOnlyTags(expr *plan.Expr, tags map[int32]bool) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if !containsOnlyTags(arg, tags) {
+				return false
+			}
+		}
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if !containsOnlyTags(arg, tags) {
+				return false
+			}
+		}
+
+	case *plan.Expr_Col:
+		return tags[exprImpl.Col.RelPos]
+
+	case *plan.Expr_Corr, *plan.Expr_Sub:
+		return false
+	}
+
+	return true
 }
 
 func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
@@ -382,6 +443,12 @@ func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 
 // applyDistributivity (X AND B) OR (X AND C) OR (X AND D) => X AND (B OR C OR D)
 // TODO: move it into optimizer
+//
+// Conjuncts are compared via a structural fingerprint (exprStructuralHash +
+// exprStructuralEqual) rather than proto serialization. For deeply nested
+// IN/OR trees the old Marshal path walked every expression twice (ProtoSize
+// + writeTo) per lookup and dominated CPU; hashing traverses once with no
+// allocation and collisions are rare enough that Equal rarely runs.
 func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -396,11 +463,24 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		leftConds := splitPlanConjunction(exprImpl.F.Args[0])
 		rightConds := splitPlanConjunction(exprImpl.F.Args[1])
 
-		condMap := make(map[string]int)
+		// Bucket right conjuncts by structural hash. Each bucket stores the
+		// original expr + the per-bucket side state, so the left scan can
+		// collision-check with exprStructuralEqual against the few conds
+		// sharing a hash (normally 1).
+		type rightEntry struct {
+			cond *plan.Expr
+			side int
+		}
+		rightBuckets := make(map[uint64][]*rightEntry, len(rightConds))
+		rightEntries := make([]*rightEntry, len(rightConds))
 
 		relPos := int32(-1)
-		for _, cond := range rightConds {
-			condMap[cond.ExprString()] = JoinSideRight
+		for i, cond := range rightConds {
+			h := exprStructuralHash(cond)
+			entry := &rightEntry{cond: cond, side: JoinSideRight}
+			rightEntries[i] = entry
+			rightBuckets[h] = append(rightBuckets[h], entry)
+
 			args := cond.GetF().GetArgs()
 			if len(args) != 2 {
 				continue
@@ -420,19 +500,28 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		var commonConds, leftOnlyConds, rightOnlyConds []*plan.Expr
 
 		for _, cond := range leftConds {
-			exprStr := cond.ExprString()
-
-			if condMap[exprStr] == JoinSideRight {
+			h := exprStructuralHash(cond)
+			bucket := rightBuckets[h]
+			var matched *rightEntry
+			for _, entry := range bucket {
+				if entry.side != JoinSideRight {
+					continue
+				}
+				if exprStructuralEqual(entry.cond, cond) {
+					matched = entry
+					break
+				}
+			}
+			if matched != nil {
 				commonConds = append(commonConds, cond)
-				condMap[exprStr] = JoinSideBoth
+				matched.side = JoinSideBoth
 			} else {
 				leftOnlyConds = append(leftOnlyConds, cond)
-				condMap[exprStr] = JoinSideLeft
 			}
 		}
 
-		for _, cond := range rightConds {
-			if condMap[cond.ExprString()] == JoinSideRight {
+		for i, cond := range rightConds {
+			if rightEntries[i].side == JoinSideRight {
 				rightOnlyConds = append(rightOnlyConds, cond)
 			}
 		}
@@ -1829,9 +1918,66 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 
 }
 
+// parseHiveOptionKV handles hive_partitioning / hive_partition_columns keys in
+// Init*Param. It is defensive against legacy JSON where stripHiveOptionKeys
+// (build_ddl.go) had not run; when the param already has values normalized
+// during DDL, the legacy option is skipped to avoid case-flip or type drift.
+//
+// Each key's skip guard MUST inspect only its own field. An earlier version
+// coupled the hive_partitioning guard to HivePartitionCols; for legacy option
+// orders like "hive_partition_columns=year, hive_partitioning=true" that caused
+// hive_partitioning to be silently skipped after cols was populated, leaving
+// HivePartitioning=false and the table mis-classified as non-hive.
+//
+// Returns (handled, err):
+//   - (false, nil)  : key is not a hive key; caller should fall through to its own switch
+//   - (true, nil)   : key handled (either applied or intentionally skipped)
+//   - (true, err)   : key handled but value invalid
+func parseHiveOptionKV(param *tree.ExternParam, key, val string) (bool, error) {
+	switch key {
+	case "hive_partitioning":
+		// Guard only on HivePartitioning itself — do NOT consult HivePartitionCols.
+		if param.HivePartitioning {
+			return true, nil
+		}
+		v := strings.ToLower(val)
+		if v != "true" && v != "false" {
+			return true, moerr.NewBadConfigf(param.Ctx, "hive_partitioning must be 'true' or 'false'")
+		}
+		param.HivePartitioning = (v == "true")
+		return true, nil
+	case "hive_partition_columns":
+		if len(param.HivePartitionCols) > 0 {
+			return true, nil
+		}
+		for _, p := range strings.Split(val, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				param.HivePartitionCols = append(param.HivePartitionCols, strings.ToLower(p))
+			}
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func validateHiveOptionConsistency(param *tree.ExternParam) error {
+	if !param.HivePartitioning && len(param.HivePartitionCols) > 0 {
+		return moerr.NewBadConfig(param.Ctx, "hive_partition_columns requires hive_partitioning='true'")
+	}
+	return nil
+}
+
 func InitInfileParam(param *tree.ExternParam) error {
 	for i := 0; i < len(param.Option); i += 2 {
-		switch strings.ToLower(param.Option[i]) {
+		key := strings.ToLower(param.Option[i])
+		if handled, err := parseHiveOptionKV(param, key, param.Option[i+1]); handled {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		switch key {
 		case "filepath":
 			param.Filepath = param.Option[i+1]
 		case "compression":
@@ -1849,9 +1995,15 @@ func InitInfileParam(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case ExternalWriteFilePatternKey, CSVCommentKey:
+			// write_file_pattern is write-only; comment is read at parse time. Both
+			// are kept in Option and consumed elsewhere, ignored here.
 		default:
-			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
+	}
+	if err := validateHiveOptionConsistency(param); err != nil {
+		return err
 	}
 	if len(param.Filepath) == 0 {
 		return moerr.NewBadConfig(param.Ctx, "the filepath must be specified")
@@ -1868,7 +2020,14 @@ func InitInfileParam(param *tree.ExternParam) error {
 func InitS3Param(param *tree.ExternParam) error {
 	param.S3Param = &tree.S3Parameter{}
 	for i := 0; i < len(param.Option); i += 2 {
-		switch strings.ToLower(param.Option[i]) {
+		key := strings.ToLower(param.Option[i])
+		if handled, err := parseHiveOptionKV(param, key, param.Option[i+1]); handled {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		switch key {
 		case "endpoint":
 			param.S3Param.Endpoint = param.Option[i+1]
 		case "region":
@@ -1902,10 +2061,15 @@ func InitS3Param(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
-
+		case ExternalWriteFilePatternKey, CSVCommentKey:
+			// write_file_pattern is write-only; comment is read at parse time. Both
+			// are kept in Option and consumed elsewhere, ignored here.
 		default:
-			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
+	}
+	if err := validateHiveOptionConsistency(param); err != nil {
+		return err
 	}
 	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
 		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
@@ -1927,6 +2091,44 @@ func GetFilePathFromParam(param *tree.ExternParam) string {
 	}
 
 	return fpath
+}
+
+// ExternalWriteFilePatternKey is the external-table option that turns the table
+// into a writable external table. Its value is a strftime template (with the
+// %nN and %U MatrixOne extensions) that must resolve to a stage:// path.
+const ExternalWriteFilePatternKey = "write_file_pattern"
+
+// GetWriteFilePattern returns the WRITE_FILE_PATTERN option of an external table
+// and whether it was set. An external table is writable iff this returns ok.
+func GetWriteFilePattern(param *tree.ExternParam) (string, bool) {
+	if param == nil {
+		return "", false
+	}
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.ToLower(param.Option[i]) == ExternalWriteFilePatternKey {
+			return param.Option[i+1], true
+		}
+	}
+	return "", false
+}
+
+// CSVCommentKey is the external-table option that sets the CSV reader's comment
+// marker: a line whose raw prefix (before unquoting) equals it is skipped on
+// read. The default (option absent or empty) is no marker — every line is data.
+const CSVCommentKey = "comment"
+
+// GetCSVComment returns the COMMENT option of an external table (empty when
+// unset, meaning no comment marker).
+func GetCSVComment(param *tree.ExternParam) string {
+	if param == nil {
+		return ""
+	}
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.ToLower(param.Option[i]) == CSVCommentKey {
+			return param.Option[i+1]
+		}
+	}
+	return ""
 }
 
 func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
@@ -1975,8 +2177,26 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 	param.S3Param.Provider, _ = s.GetCredentials(stage.PARAMKEY_PROVIDER, stage.S3_PROVIDER_AMAZON)
 	param.CompressType, _ = s.GetCredentials(stage.PARAMKEY_COMPRESSION, "auto")
 
+	// Note: the parseHiveOptionKV call below is kept for parity with the other
+	// two Init*Param functions, but hive_partitioning on a stage external table
+	// is rejected at DDL (build_ddl.go validateAndSetHivePartitionOptions). The
+	// hive branch here is therefore unreachable via normal DDL; it exists only
+	// so every Init*Param follows the same shape and would tolerate legacy JSON
+	// that snuck hive keys past validation.
 	for i := 0; i < len(param.Option); i += 2 {
-		switch strings.ToLower(param.Option[i]) {
+		key := strings.ToLower(param.Option[i])
+		if handled, err := parseHiveOptionKV(param, key, param.Option[i+1]); handled {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		switch key {
+		case "filepath":
+			// stage:// paths have already been expanded to s.Url by
+			// InitInfileOrStageParam. Keep the raw option for show/serialization
+			// compatibility, but never let it override the resolved S3 prefix.
+			continue
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
@@ -1990,12 +2210,17 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
-
+		case ExternalWriteFilePatternKey, CSVCommentKey:
+			// write_file_pattern is write-only; comment is read at parse time. Both
+			// are kept in Option and consumed elsewhere, ignored here.
 		default:
-			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
 	}
 
+	if err := validateHiveOptionConsistency(param); err != nil {
+		return err
+	}
 	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
 		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
 	}

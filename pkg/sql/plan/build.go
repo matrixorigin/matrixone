@@ -73,7 +73,15 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 
 	rootId, err := builder.bindInsert(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
+		// never fall back to the legacy ODKU operator. Two exceptions still fall
+		// back: plain INSERT (e.g. inserting into a system index table); and the
+		// degenerate ODKU on a table with no primary/unique key (no dedup key to
+		// represent the upsert; legacy treats it as a plain INSERT and preserves
+		// the prepared-statement parameters).
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
+			(len(stmt.OnDuplicateUpdate) == 0 ||
+				err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
 		}
 		return nil, err
@@ -86,6 +94,38 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	if err != nil {
 		return nil, err
 	}
+
+	// Append synchronous IVF/fulltext index maintenance (modern path, no legacy
+	// fallback) from the materialized new-row image; no-op without such indexes.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
+	// Enforce foreign key constraints for the modern insert path. The child→parent
+	// parent-existence check is row-scoped and in-plan for every conflict action:
+	// plain INSERT / ON DUPLICATE KEY UPDATE assert over the materialized image (see
+	// modernInsertFkCheckEnabled / appendForeignConstrantPlan), and INSERT IGNORE
+	// drops the offending rows (see buildInsertIgnoreFkFilter). Only self-referencing
+	// FKs still need a post-execution DetectSql, generated here for all of them.
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
+		enabled, err := IsForeignKeyChecksEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if enabled {
+			sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(), tblInfo.objRef[0].SchemaName,
+				tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
+			if err != nil {
+				return nil, err
+			}
+			query.DetectSqls = sqls
+		}
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -108,8 +148,12 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 
 	rootId, err := builder.bindReplace(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
-			return buildReplace(stmt, ctx, false, isPrepareStmt)
+		// REPLACE is the one DML entry point with no legacy-planner fallback:
+		// map the resolver's external-table fallback sentinel (raised for
+		// writable external tables) to the user-facing error every other DML
+		// kind produces, instead of leaking the internal signal to the client.
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) && err.Error() == externalTableUnsupportedDMLMsg {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
 		}
 		return nil, err
 	}
@@ -121,6 +165,49 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 	if err != nil {
 		return nil, err
 	}
+
+	// Append synchronous IVF/fulltext index maintenance (delete the conflicting
+	// rows' old entries + insert the new ones) from the materialized image; no-op
+	// without such indexes. Fixes issue #25000.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
+	// Generate DetectSqls for self-referencing FK constraint checks.
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 {
+		sqls, err := genSqlsForCheckFKSelfRefer(
+			ctx.GetContext(),
+			tblInfo.objRef[0].SchemaName,
+			tblInfo.tableDefs[0].Name,
+			tblInfo.tableDefs[0].Cols,
+			tblInfo.tableDefs[0].Fkeys,
+		)
+		if err != nil {
+			return nil, err
+		}
+		query.DetectSqls = sqls
+
+		// Generate pre-check SQLs for parent→child safety (RESTRICT).
+		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
+			ctx.GetContext(),
+			tblInfo.objRef[0].SchemaName,
+			tblInfo.tableDefs[0].Name,
+			tblInfo.tableDefs[0].Cols,
+			tblInfo.tableDefs[0].Fkeys,
+			stmt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for _, sql := range preCheckSqls {
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_CHK:"+sql)
+		}
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -156,6 +243,13 @@ func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStm
 	if err != nil {
 		return nil, err
 	}
+
+	// Append synchronous IVF/fulltext index maintenance (modern path, no legacy
+	// fallback) from the materialized new-row image; no-op without such indexes.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -402,6 +496,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildUnLockTables(stmt, ctx)
 	case *tree.ShowCreatePublications:
 		return buildShowCreatePublications(stmt, ctx)
+	case *tree.ShowPublicationCoverage:
+		return buildShowPublicationCoverage(stmt, ctx)
 	case *tree.ShowStages:
 		return buildShowStages(stmt, ctx)
 	case *tree.ShowSnapShots:

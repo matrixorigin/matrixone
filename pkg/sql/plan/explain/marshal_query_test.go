@@ -31,6 +31,10 @@ func TestGetLabelOrTitle(t *testing.T) {
 	m := MarshalNodeImpl{}
 	errCount := 0
 	for _, v := range plan2.Node_NodeType_value {
+		// Skip reserved/removed node type numbers (e.g. REPLACE = 32).
+		if _, ok := plan2.Node_NodeType_name[v]; !ok {
+			continue
+		}
 		node := &plan2.Node{
 			NodeType: plan2.Node_NodeType(v),
 			NodeId:   0,

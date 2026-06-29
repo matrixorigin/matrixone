@@ -392,10 +392,11 @@ func (db *txnDatabase) createWithID(
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
-	accountId, userId, roleId, err := getAccessInfo(ctx)
+	accountId, userId, _, err := getAccessInfo(ctx)
 	if err != nil {
 		return err
 	}
+	roleId := getDDLOwnerRoleId(ctx)
 	txn := db.getTxn()
 	m := txn.proc.Mp()
 
@@ -436,7 +437,18 @@ func (db *txnDatabase) createWithID(
 						tbl.createSql = property.Value
 					case catalog.PropSchemaExtra:
 						if extra == nil {
+							// Save current FromPublication value before overwriting
+							fromPub := tbl.extraInfo.FromPublication
 							tbl.extraInfo = api.MustUnmarshalTblExtra([]byte(property.Value))
+							// Restore FromPublication if it was set (in case PropFromPublication was processed first)
+							if fromPub {
+								tbl.extraInfo.FromPublication = true
+							}
+						}
+					case catalog.PropFromPublication:
+						// Store from_publication flag in extraInfo for TN to read
+						if strings.ToLower(property.Value) == "true" {
+							tbl.extraInfo.FromPublication = true
 						}
 					default:
 					}

@@ -138,8 +138,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreInsert UniqueKey"
 	case plan.Node_PRE_INSERT_SK:
 		pname = "PreInsert SecondaryKey"
-	case plan.Node_ON_DUPLICATE_KEY:
-		pname = "On Duplicate Key"
 	case plan.Node_FUZZY_FILTER:
 		pname = "Fuzzy Filter for duplicate key"
 	case plan.Node_LOCK_OP:
@@ -497,10 +495,17 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Join Type: "
-	if ndesc.Node.IsRightJoin && ndesc.Node.JoinType != plan.Node_RIGHT {
-		result += "RIGHT " + ndesc.Node.JoinType.String()
-	} else {
-		result += ndesc.Node.JoinType.String()
+	switch ndesc.Node.JoinType {
+	case plan.Node_OUTER:
+		// FULL OUTER JOIN — IsRightJoin here is just an internal build-side flag
+		// (we always use the right side as hash build for FOJ), not a semantic swap.
+		result += "FULL OUTER"
+	default:
+		if ndesc.Node.IsRightJoin && ndesc.Node.JoinType != plan.Node_RIGHT {
+			result += "RIGHT " + ndesc.Node.JoinType.String()
+		} else {
+			result += ndesc.Node.JoinType.String()
+		}
 	}
 	if ndesc.Node.JoinType == plan.Node_DEDUP {
 		result += " (" + ndesc.Node.OnDuplicateAction.String() + ")"

@@ -1268,7 +1268,7 @@ func (p *PartitionState) countVisibleRowsInAppendableObject(
 	objectio.ForeachBlkInObjStatsList(true, nil,
 		func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 			loc := blk.MetaLocation()
-			_, release, err := ioutil.LoadColumnsData(ctx, cols, typs, fs, loc, cacheVectors, mp, fileservice.Policy(0))
+			_, release, _, err := ioutil.LoadColumnsData(ctx, cols, typs, fs, loc, cacheVectors, mp, fileservice.Policy(0))
 			if err != nil {
 				loadErr = err
 				return false // stop and propagate error
@@ -1627,8 +1627,10 @@ func (p *PartitionState) countTombstoneStatsLinear(
 			rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
 
 			var commitTSs []types.TS
+			// When cnCreated=false (TN created), ReadDeletes reads [Rowid, CommitTS] at indices [0, 1]
+			// When cnCreated=true (CN created), ReadDeletes only reads [Rowid] at index [0], no CommitTS
 			if needCheckCommitTs && len(persistedDeletes) > 2 {
-				commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[len(persistedDeletes)-1])
+				commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[1])
 			}
 
 			var lastObjId types.Objectid
@@ -1724,8 +1726,10 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
 
 				var commitTSs []types.TS
+				// When cnCreated=false (TN created), ReadDeletes reads [Rowid, CommitTS] at indices [0, 1]
+				// When cnCreated=true (CN created), ReadDeletes only reads [Rowid] at index [0], no CommitTS
 				if needCheckCommitTs && len(persistedDeletes) > 2 {
-					commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[len(persistedDeletes)-1])
+					commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[1])
 				}
 
 				var lastObjId types.Objectid

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -61,7 +62,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
@@ -77,6 +77,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -111,15 +112,18 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	proc.Base.Lim = process.Limitation{}
 	proc.Base.UnixTime = 1000000
 	proc.Base.SessionInfo = process.SessionInfo{
-		Account:        "",
-		User:           "",
-		Host:           "",
-		Role:           "",
-		ConnectionID:   0,
-		LastInsertID:   0,
-		Database:       "",
-		Version:        "",
-		TimeZone:       time.Local,
+		Account:      "",
+		User:         "",
+		Host:         "",
+		Role:         "",
+		ConnectionID: 0,
+		LastInsertID: 0,
+		Database:     "",
+		Version:      "",
+		// Pin to UTC: time.Time{}.In(time.Local).MarshalBinary() can fail
+		// on hosts whose historical zone data for year 1 has an offset
+		// outside the int16 minute range MarshalBinary accepts.
+		TimeZone:       time.UTC,
 		StorageEngine:  nil,
 		QueryId:        nil,
 		ResultColTypes: nil,
@@ -183,7 +187,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&deletion.Deletion{
 			DeleteCtx: &deletion.DeleteCtx{},
 		},
-		&onduplicatekey.OnDuplicatekey{},
 		&preinsert.PreInsert{},
 		&lockop.LockOp{},
 		&preinsertunique.PreInsertUnique{},
@@ -264,7 +267,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.PreInsert), PreInsert: &pipeline.PreInsert{}},
 		{Op: int32(vm.LockOp), LockOp: &pipeline.LockOp{}},
 		{Op: int32(vm.PreInsertUnique), PreInsertUnique: &pipeline.PreInsertUnique{}},
-		{Op: int32(vm.OnDuplicateKey), OnDuplicateKey: &pipeline.OnDuplicateKey{}},
 		{Op: int32(vm.Shuffle), Shuffle: &pipeline.Shuffle{}},
 		{Op: int32(vm.Dispatch), Dispatch: &pipeline.Dispatch{}},
 		{Op: int32(vm.Group), Agg: &pipeline.Group{}},
@@ -303,7 +305,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
-func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
+func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
 		root:   &scopeContext{},
@@ -312,21 +314,48 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
 
-	t.Run("OnDuplicateKey_IsIgnore", func(t *testing.T) {
-		op := &onduplicatekey.OnDuplicatekey{
-			IsIgnore:       true,
-			InsertColCount: 3,
-		}
-		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
-		require.NoError(t, err)
-		require.True(t, pipeInstr.OnDuplicateKey.IsIgnore)
+	shards := []*pipeline.ParquetRowGroupShard{
+		{
+			FileIndex:     2,
+			RowGroupStart: 3,
+			RowGroupEnd:   5,
+			NumRows:       1024,
+			Bytes:         4096,
+		},
+	}
+	op := external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{
+				FileList:              []string{"s3://bucket/part.parquet"},
+				FileSize:              []int64{8192},
+				FileOffsetTotal:       []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
+				ParquetRowGroupShards: shards,
+			},
+			ExParam: external.ExParam{
+				Fileparam: &external.ExFileparam{},
+				Filter:    &external.FilterParam{},
+			},
+		},
+	)
 
-		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
-		require.NoError(t, err)
-		restoredOp := restored.(*onduplicatekey.OnDuplicatekey)
-		require.True(t, restoredOp.IsIgnore)
-		require.Equal(t, int32(3), restoredOp.InsertColCount)
-	})
+	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, shards, pipeInstr.ExternalScan.ParquetRowGroupShards)
+
+	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+	require.NoError(t, err)
+	restoredExternal := restored.(*external.External)
+	require.Equal(t, shards, restoredExternal.Es.ParquetRowGroupShards)
+}
+
+func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
 
 	t.Run("FuzzyFilter_BuildIdx", func(t *testing.T) {
 		op := &fuzzyfilter.FuzzyFilter{
@@ -349,11 +378,12 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:        &plan.ObjectRef{ObjName: "t1"},
-					TableDef:      &plan.TableDef{Name: "t1"},
-					InsertCols:    []int{0, 1, 2},
-					DeleteCols:    []int{3, 4},
-					PartitionCols: []int{5, 6},
+					ObjRef:         &plan.ObjectRef{ObjName: "t1"},
+					TableDef:       &plan.TableDef{Name: "t1"},
+					InsertCols:     []int{0, 1, 2},
+					DeleteCols:     []int{3, 4},
+					PartitionCols:  []int{5, 6},
+					InsertPkColIdx: 1,
 				},
 			},
 			Action: multi_update.UpdateWriteTable,
@@ -368,7 +398,40 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, []int{5, 6}, restoredOp.MultiUpdateCtx[0].PartitionCols)
 		require.Equal(t, []int{0, 1, 2}, restoredOp.MultiUpdateCtx[0].InsertCols)
 		require.Equal(t, []int{3, 4}, restoredOp.MultiUpdateCtx[0].DeleteCols)
+		require.Equal(t, 1, restoredOp.MultiUpdateCtx[0].InsertPkColIdx)
 		require.True(t, restoredOp.IsRemote)
+	})
+
+	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
+		op := &dedupjoin.DedupJoin{
+			Conditions:         [][]*plan.Expr{nil, nil},
+			DedupBuildKeepLast: true,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.DedupJoin.DedupBuildKeepLast)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		require.True(t, restored.(*dedupjoin.DedupJoin).DedupBuildKeepLast)
+	})
+
+	t.Run("MergeOrder_SpillThreshold", func(t *testing.T) {
+		op := &mergeorder.MergeOrder{
+			OrderBySpecs:   []*planpb.OrderBySpec{{Flag: planpb.OrderBySpec_DESC}},
+			SpillThreshold: 4096,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, int64(4096), pipeInstr.SpillMem)
+		require.Len(t, pipeInstr.OrderBy, 1)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*mergeorder.MergeOrder)
+		require.Equal(t, int64(4096), restoredOp.SpillThreshold)
+		require.Len(t, restoredOp.OrderBySpecs, 1)
+		require.Equal(t, planpb.OrderBySpec_DESC, restoredOp.OrderBySpecs[0].Flag)
 	})
 
 	t.Run("Deletion_Engine", func(t *testing.T) {
@@ -514,7 +577,7 @@ func Test_GetProcByUuid(t *testing.T) {
 		colexec.Get().DeleteUuids([]uuid.UUID{uid})
 
 		// get a nil p and c.
-		p, c, err := receiver.GetProcByUuid(uid, time.Second)
+		p, c, err := receiver.GetProcByUuid(uid)
 		require.Nil(t, err)
 		require.Nil(t, p)
 		require.Nil(t, c)
@@ -531,25 +594,11 @@ func Test_GetProcByUuid(t *testing.T) {
 			connectionCtx: cctx,
 		}
 		ccancel()
-		p, _, err := receiver.GetProcByUuid(uuid.UUID{}, time.Second)
+		p, _, err := receiver.GetProcByUuid(uuid.UUID{})
 		require.Nil(t, err)
 		require.Nil(t, p)
 
 		// two action to delete the uuid can make sure the producer and consumer flag uuid done.
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
-		colexec.Get().DeleteUuids([]uuid.UUID{{}})
-	}
-
-	{
-		// if receiver gets proc timeout, should exit.
-		// 1. return error.
-		receiver := &messageReceiverOnServer{
-			connectionCtx: context.TODO(),
-		}
-		p, _, err := receiver.GetProcByUuid(uuid.UUID{}, time.Second)
-		require.NotNil(t, err)
-		require.Nil(t, p)
-
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 	}
@@ -567,7 +616,7 @@ func Test_GetProcByUuid(t *testing.T) {
 		c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
 		require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
 
-		p, c, err := receiver.GetProcByUuid(uid, time.Second)
+		p, c, err := receiver.GetProcByUuid(uid)
 		require.Nil(t, err)
 		require.Equal(t, p0, p)
 		require.Equal(t, c0, c)
@@ -585,6 +634,51 @@ func Test_GetProcByUuid(t *testing.T) {
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
 	}
+}
+
+func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.Nil(t, err)
+
+	receiver := &messageReceiverOnServer{
+		connectionCtx: context.TODO(),
+		messageCtx:    context.TODO(),
+	}
+
+	// Start GetProcByUuid in a goroutine BEFORE PutProcIntoUuidMap.
+	// This tests the wait-then-wake path: the receiver must block on the
+	// changed channel and wake exactly once when the UUID is inserted.
+	type result struct {
+		proc *process.Process
+		ch   process.RemotePipelineInformationChannel
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, c, e := receiver.GetProcByUuid(uid)
+		done <- result{p, c, e}
+	}()
+
+	// Give the goroutine time to enter the wait.
+	time.Sleep(10 * time.Millisecond)
+
+	p0 := &process.Process{}
+	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
+	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+
+	select {
+	case r := <-done:
+		require.Nil(t, r.err)
+		require.Equal(t, p0, r.proc)
+		require.Equal(t, c0, r.ch)
+	case <-time.After(3 * time.Second):
+		t.Fatal("GetProcByUuid did not wake after PutProcIntoUuidMap")
+	}
+
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
 }
 
 var _ morpc.Stream = &fakeStreamSender{}
@@ -634,6 +728,10 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 	proc.Base.TxnOperator = fakeTxnOperator{}
+	// time.Time{}.In(time.Local).MarshalBinary() can fail on hosts where
+	// the historical zone data for year 1 has an offset outside the
+	// int16 minute range MarshalBinary accepts. Pin to UTC for the test.
+	proc.Base.SessionInfo.TimeZone = time.UTC
 
 	// if this is a pipeline with operator list "connector / dispatch".
 	// this should return withoutOut == false.
@@ -641,7 +739,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		Proc:   proc,
 		RootOp: connector.NewArgument(),
 	}
-	_, withoutOut, _, err := prepareRemoteRunSendingData("", s1)
+	_, withoutOut, _, _, err := prepareRemoteRunSendingData("", s1, proc)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.NotNil(t, s1.RootOp)
@@ -655,7 +753,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	}
 	s2.RootOp.AppendChild(value_scan.NewArgument())
 	originChild := s2.RootOp.GetOperatorBase().GetChildren(0)
-	_, withoutOut, _, err = prepareRemoteRunSendingData("", s2)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s2, proc)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.Equal(t, 1, s2.RootOp.GetOperatorBase().NumChildren())
@@ -668,7 +766,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		RootOp: value_scan.NewArgument(),
 	}
 	s3.RootOp.AppendChild(value_scan.NewArgument())
-	_, withoutOut, _, err = prepareRemoteRunSendingData("", s3)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s3, proc)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
 }
@@ -1092,45 +1190,110 @@ func TestDeletionCanTruncateSerializationRoundtrip(t *testing.T) {
 	require.True(t, restored.DeleteCtx.AddAffectedRows)
 }
 
-// TestOnDuplicateKeyIsIgnoreSerializationRoundtrip verifies that IsIgnore is
-// properly serialized and deserialized when OnDuplicateKey operators are sent to remote CN.
-func TestOnDuplicateKeyIsIgnoreSerializationRoundtrip(t *testing.T) {
-	// Create an OnDuplicateKey operator with IsIgnore=true
-	arg := onduplicatekey.NewArgument()
-	arg.Attrs = []string{"col1", "col2"}
-	arg.InsertColCount = 2
-	arg.IsIgnore = true
-
-	// Create minimal context for serialization
-	ctx := &scopeContext{
-		id:       0,
-		plan:     &plan.Plan{},
-		scope:    &Scope{},
-		root:     &scopeContext{},
-		parent:   nil,
-		children: nil,
-		pipe:     nil,
-		regs:     make(map[*process.WaitRegister]int32),
+// newDispatchSrcScopeForTest builds a cross-CN shuffle dispatch source scope:
+// its dispatch sends to localBuckets via LocalRegs (same CN) and to remoteBuckets
+// via RemoteRegs (other CN), exactly like constructDispatchLocalAndRemote does.
+func newDispatchSrcScopeForTest(proc *process.Process, addr string, localBuckets, remoteBuckets []*Scope) *Scope {
+	src := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: addr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(0),
 	}
-	ctx.root = ctx
-
-	// Serialize to pipeline instruction
-	_, in, err := convertToPipelineInstruction(arg, nil, ctx, 0)
-	require.NoError(t, err)
-	require.NotNil(t, in.OnDuplicateKey)
-	require.True(t, in.OnDuplicateKey.IsIgnore, "IsIgnore should be serialized")
-
-	// Deserialize back to operator
-	opr := &pipeline.Instruction{
-		Op:             int32(vm.OnDuplicateKey),
-		OnDuplicateKey: in.OnDuplicateKey,
+	d := dispatch.NewArgument()
+	d.FuncId = dispatch.ShuffleToAllFunc
+	for _, b := range localBuckets {
+		d.LocalRegs = append(d.LocalRegs, b.Proc.Reg.MergeReceivers[0])
 	}
-	op, err := convertToVmOperator(opr, ctx, nil)
-	require.NoError(t, err)
-	require.NotNil(t, op)
+	for _, b := range remoteBuckets {
+		uid, _ := uuid.NewV7()
+		d.RemoteRegs = append(d.RemoteRegs, colexec.ReceiveInfo{Uuid: uid, NodeAddr: b.NodeInfo.Addr})
+	}
+	src.setRootOperator(d)
+	src.IsEnd = true
+	return src
+}
 
-	restored := op.(*onduplicatekey.OnDuplicatekey)
-	require.True(t, restored.IsIgnore, "IsIgnore should be deserialized")
-	require.Equal(t, []string{"col1", "col2"}, restored.Attrs)
-	require.Equal(t, int32(2), restored.InsertColCount)
+// TestGroupShuffleBucketsByCNIfNeeded reproduces the issue #24919 root cause and
+// verifies the per-CN regrouping fix:
+//
+//	before regrouping, the bucket that carries a cross-CN shuffle dispatch is wrongly
+//	judged non-standalone-executable (its dispatch LocalRegs point to a sibling bucket
+//	that lives in a separate send tree) -> RemoteRun converts it to local -> the dispatch
+//	lands on the coordinator, mispaired with the compile-time cross-CN receiver FromAddr
+//	-> hang.
+//
+//	after regrouping, the dop same-CN buckets (and the nested dispatch) become one per-CN
+//	send unit, so checkPipelineStandaloneExecutableAtRemote returns true and the whole
+//	group is really executed at the remote CN.
+func TestGroupShuffleBucketsByCNIfNeeded(t *testing.T) {
+	c := NewMockCompile(t)
+	c.cnList = engine.Nodes{
+		engine.Node{Addr: "cn1:6001", Mcpu: 2},
+		engine.Node{Addr: "cn2:6001", Mcpu: 2},
+	}
+	c.addr = "cn1:6001"
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+	c.proc.Base.TxnOperator = fakeTxnOperator{}
+	proc := c.proc
+
+	// dop=2, 2 CN -> bucketNum=4. buckets[0,1] on cn1, buckets[2,3] on cn2.
+	addrs := []string{"cn1:6001", "cn1:6001", "cn2:6001", "cn2:6001"}
+	buckets := make([]*Scope, 4)
+	for i := range buckets {
+		buckets[i] = &Scope{
+			Magic:    Remote,
+			NodeInfo: engine.Node{Addr: addrs[i], Mcpu: 1},
+			Proc:     proc.NewContextChildProc(1),
+		}
+		buckets[i].setRootOperator(merge.NewArgument())
+	}
+
+	// each CN's dispatch source is attached to that CN's first bucket (like compile.go:4500).
+	srcCN1 := newDispatchSrcScopeForTest(proc, "cn1:6001",
+		[]*Scope{buckets[0], buckets[1]}, []*Scope{buckets[2], buckets[3]})
+	buckets[0].PreScopes = append(buckets[0].PreScopes, srcCN1)
+	srcCN2 := newDispatchSrcScopeForTest(proc, "cn2:6001",
+		[]*Scope{buckets[2], buckets[3]}, []*Scope{buckets[0], buckets[1]})
+	buckets[2].PreScopes = append(buckets[2].PreScopes, srcCN2)
+
+	// before regrouping: the dispatch-carrying buckets are wrongly judged not standalone.
+	require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[0]))
+	require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[2]))
+
+	// after regrouping: one per-CN container each, all standalone-executable at remote.
+	grouped := c.groupShuffleBucketsByCNIfNeeded(buckets)
+	require.Equal(t, 2, len(grouped))
+	for _, container := range grouped {
+		require.Equal(t, Remote, container.Magic)
+		require.True(t, checkPipelineStandaloneExecutableAtRemote(container))
+	}
+}
+
+// TestGroupShuffleBucketsByCNIfNeeded_Gating verifies the regrouping is a no-op when
+// there is no cross-CN shuffle dispatch (single CN, or no dispatch), so non-shuffle /
+// single-CN inserts are completely unaffected.
+func TestGroupShuffleBucketsByCNIfNeeded_Gating(t *testing.T) {
+	c := NewMockCompile(t)
+	c.cnList = engine.Nodes{
+		engine.Node{Addr: "cn1:6001", Mcpu: 2},
+		engine.Node{Addr: "cn2:6001", Mcpu: 2},
+	}
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+	proc := c.proc
+
+	// scopes without any cross-CN dispatch -> returned unchanged.
+	ss := make([]*Scope, 4)
+	for i := range ss {
+		ss[i] = &Scope{
+			Magic:    Remote,
+			NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+			Proc:     proc.NewContextChildProc(0),
+		}
+		ss[i].setRootOperator(merge.NewArgument())
+	}
+	require.Equal(t, 4, len(c.groupShuffleBucketsByCNIfNeeded(ss)))
+
+	// single CN -> returned unchanged even if a cross-CN dispatch is present.
+	c.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 2}}
+	require.Equal(t, 4, len(c.groupShuffleBucketsByCNIfNeeded(ss)))
 }

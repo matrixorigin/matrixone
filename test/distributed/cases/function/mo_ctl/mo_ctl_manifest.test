@@ -1,0 +1,39 @@
+create table t1(
+id int primary key,
+name varchar(100),
+value float
+);
+
+-- empty table manifest
+-- @ignore:0
+select mo_ctl('dn', 'inspect', 'manifest -t mo_ctl_manifest.t1');
+
+-- insert data and flush to create objects
+insert into t1 values (1, 'alice', 10.5), (2, 'bob', 20.5), (3, 'carol', 30.5);
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_manifest.t1');
+select sleep(1);
+
+-- manifest after flush should contain objects
+-- @ignore:0
+select mo_ctl('dn', 'inspect', 'manifest -t mo_ctl_manifest.t1');
+
+-- second batch + flush
+insert into t1 values (4, 'dave', 40.5), (5, 'eve', 50.5);
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'mo_ctl_manifest.t1');
+select sleep(1);
+
+-- manifest should now show two objects
+-- @ignore:0
+select mo_ctl('dn', 'inspect', 'manifest -t mo_ctl_manifest.t1');
+
+-- error: missing target
+-- @ignore:0
+select mo_ctl('dn', 'inspect', 'manifest');
+
+-- error: invalid target
+-- @ignore:0
+select mo_ctl('dn', 'inspect', 'manifest -t nonexistent_db.nonexistent_table');
+
+drop table t1;

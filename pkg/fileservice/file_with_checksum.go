@@ -20,6 +20,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -92,37 +93,110 @@ var emptyFileWithChecksumOSFile FileWithChecksum[*os.File]
 
 var _ FileLike = new(FileWithChecksum[*os.File])
 
+// _ReadCoalesceSize bounds how many bytes of on-disk (checksummed) blocks ReadAt
+// pulls per underlying read. The on-disk layout interleaves a 4-byte CRC32 before
+// every blockContentSize bytes, so a naive reader does one tiny pread per block
+// (e.g. 2KB) — ~N syscalls for an N-block range. Instead we read up to this many
+// bytes of contiguous blocks in a single underlying ReadAt, then verify the CRCs
+// and de-interleave the payloads in memory.
+//
+// 128 KiB is the measured knee: a 24MB read drops from ~12k syscalls (2KB blocks)
+// to ~190, collapsing the per-2KB syscall overhead from ~12ms to ~0.2ms.
+// Throughput is flat from ~64 KiB up to 2 MiB (a benchmark sweep showed <6%
+// difference across that range), so we pick the small end of the plateau: it
+// matches the typical NVMe MDTS / block-layer max request (a larger pread is just
+// split into MDTS-sized device commands by the kernel) and keeps the pooled
+// scratch small per concurrent reader. The per-2KB CRC32 + de-interleave copy are
+// inherent to the on-disk format and unaffected by this size.
+const _ReadCoalesceSize = 128 << 10 // 128 KiB (≈ NVMe MDTS)
+
+var readCoalesceBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, _ReadCoalesceSize)
+		return &b
+	},
+}
+
 func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error) {
+	if len(buf) == 0 {
+		return 0, nil
+	}
+
+	blockSize := int64(f.blockSize)
+	blockContentSize := int64(f.blockContentSize)
+	// max whole on-disk blocks to pull per underlying read.
+	maxBlocks := int64(_ReadCoalesceSize) / blockSize
+	if maxBlocks < 1 {
+		maxBlocks = 1
+	}
+
+	bufp := readCoalesceBufPool.Get().(*[]byte)
+	scratch := *bufp
+	defer readCoalesceBufPool.Put(bufp)
+
 	for len(buf) > 0 {
-
 		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
-		var data []byte
-		var putback PutBack[[]byte]
-		data, putback, err = f.readBlock(blockOffset)
-		if err != nil && err != io.EOF {
-			// read error
-			putback.Put()
-			return
+
+		// whole blocks needed to cover the remaining buf (offsetInBlock only
+		// applies to the first block of the run), capped at maxBlocks.
+		need := (offsetInBlock + int64(len(buf)) + blockContentSize - 1) / blockContentSize
+		if need > maxBlocks {
+			need = maxBlocks
+		}
+		chunkBytes := need * blockSize
+		var raw []byte
+		if chunkBytes <= int64(len(scratch)) {
+			raw = scratch[:chunkBytes]
+		} else {
+			// blockSize larger than the pooled buffer (uncommon) — one-off alloc.
+			raw = make([]byte, chunkBytes)
 		}
 
-		data = data[offsetInBlock:]
-		nBytes := copy(buf, data)
-		buf = buf[nBytes:]
-		if err == io.EOF && nBytes != len(data) {
-			// not fully read
-			err = nil
+		rn, rerr := f.underlying.ReadAt(raw, blockOffset)
+		if rerr != nil && rerr != io.EOF {
+			return n, rerr
 		}
-		putback.Put()
+		raw = raw[:rn]
 
-		offset += int64(nBytes)
-		n += nBytes
-		if err == io.EOF && nBytes == 0 {
-			// no more data
+		// de-interleave: each on-disk block = [crc32 4B][content]. The last block
+		// at EOF may be short (content < blockContentSize) — slice to what's there.
+		for len(raw) >= _ChecksumSize && len(buf) > 0 {
+			blkLen := int(blockSize)
+			if blkLen > len(raw) {
+				blkLen = len(raw)
+			}
+			block := raw[:blkLen]
+			content := block[_ChecksumSize:]
+			sum := binary.LittleEndian.Uint32(block[:_ChecksumSize])
+			if crc32.Checksum(content, crcTable) != sum {
+				return n, moerr.NewInternalErrorNoCtx("checksum not match")
+			}
+
+			if offsetInBlock > 0 {
+				if offsetInBlock >= int64(len(content)) {
+					content = content[len(content):]
+				} else {
+					content = content[offsetInBlock:]
+				}
+				offsetInBlock = 0
+			}
+
+			c := copy(buf, content)
+			buf = buf[c:]
+			n += c
+			offset += int64(c)
+			raw = raw[blkLen:]
+		}
+
+		if rerr == io.EOF {
+			// reached end of file; if buf isn't full, report short read per io.ReaderAt.
+			if len(buf) > 0 {
+				err = io.EOF
+			}
 			break
 		}
-
 	}
-	return
+	return n, err
 }
 
 func (f *FileWithChecksum[T]) Read(buf []byte) (n int, err error) {
@@ -260,4 +334,29 @@ func (f *FileWithChecksum[T]) readBlock(offset int64) (data []byte, putback PutB
 	}
 
 	return
+}
+
+func (f *FileWithChecksum[T]) dontNeedContentRange(contentOffset int64, contentSize int64) {
+	file, ok := any(f.underlying).(*os.File)
+	if !ok {
+		return
+	}
+
+	blockOffset, _ := f.contentOffsetToBlockOffset(contentOffset)
+	if contentSize < 0 {
+		fadviseDontNeed(file, blockOffset, 0)
+		return
+	}
+	if contentSize == 0 {
+		return
+	}
+
+	endBlockOffset, endOffsetInBlock := f.contentOffsetToBlockOffset(contentOffset + contentSize)
+	if endOffsetInBlock > 0 {
+		endBlockOffset += int64(f.blockSize)
+	}
+	if endBlockOffset <= blockOffset {
+		return
+	}
+	fadviseDontNeed(file, blockOffset, endBlockOffset-blockOffset)
 }

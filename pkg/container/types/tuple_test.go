@@ -1083,3 +1083,81 @@ func TestDecodeTupleWithSchema(t *testing.T) {
 		})
 	}
 }
+
+func TestUnpackNthElement(t *testing.T) {
+	uuid, _ := BuildUuid()
+
+	tuple := Tuple{
+		nil,
+		int8(8),
+		int16(16),
+		int32(32),
+		int64(64),
+		uint8(18),
+		uint16(116),
+		uint32(132),
+		uint64(164),
+		true,
+		false,
+		float32(3.14),
+		float64(2.718),
+		Date(100),
+		Datetime(200),
+		Timestamp(300),
+		Decimal64(999),
+		Decimal128{1, 2},
+		[]byte("hello"),
+		uuid,
+	}
+	p := NewPacker()
+	encodeBufToPacker(tuple, p)
+	encoded := p.GetBuf()
+
+	fullTuple, fullSchema, err := UnpackWithSchema(encoded)
+	require.NoError(t, err)
+	for i := 0; i < len(fullTuple); i++ {
+		el, schema, err := UnpackNthElement(encoded, i)
+		require.NoError(t, err, "UnpackNthElement(%d) should not error", i)
+		require.Equal(t, fullSchema[i], schema, "schema mismatch at index %d", i)
+		require.Equal(t, fullTuple[i], el, "value mismatch at index %d", i)
+	}
+
+	// Out of range
+	_, _, err = UnpackNthElement(encoded, len(fullTuple))
+	require.Error(t, err)
+
+	// Types that use special Packer API (not encodeBufToPacker)
+	type nthCase struct {
+		name   string
+		encode func(*Packer)
+		idx    int
+		schema T
+		value  any
+	}
+	var oid Objectid
+	_, _ = crand.Read(oid[:])
+	cases := []nthCase{
+		{"time", func(pk *Packer) { pk.EncodeTime(Time(400)); pk.EncodeNull() }, 0, T_time, Time(400)},
+		{"year", func(pk *Packer) { pk.EncodeMoYear(MoYear(2024)); pk.EncodeNull() }, 0, T_year, MoYear(2024)},
+		{"bit", func(pk *Packer) { pk.EncodeBit(0xBEEF); pk.EncodeNull() }, 0, T_bit, uint64(0xBEEF)},
+		{"objectid", func(pk *Packer) { pk.EncodeObjectid(&oid); pk.EncodeNull() }, 0, T_Objectid, oid},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pk := NewPacker()
+			c.encode(pk)
+			el, schema, err := UnpackNthElement(pk.GetBuf(), c.idx)
+			require.NoError(t, err)
+			require.Equal(t, c.schema, schema)
+			require.Equal(t, c.value, el)
+		})
+	}
+
+	// Unknown typecode
+	_, _, err = UnpackNthElement([]byte{0xFF}, 0)
+	require.Error(t, err)
+
+	// Empty input
+	_, _, err = UnpackNthElement([]byte{}, 0)
+	require.Error(t, err)
+}

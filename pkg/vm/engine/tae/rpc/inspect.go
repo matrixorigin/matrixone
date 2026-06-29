@@ -32,6 +32,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -117,6 +119,9 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 
 	applyTable := &ApplyTableDataArg{}
 	rootCmd.AddCommand(applyTable.PrepareCommand())
+
+	manifest := &manifestArg{}
+	rootCmd.AddCommand(manifest.PrepareCommand())
 	return rootCmd
 }
 
@@ -835,6 +840,12 @@ func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*cata
 	}
 
 	txn, _ := db.StartTxn(nil)
+	committed := false
+	defer func() {
+		if !committed {
+			txn.Rollback(context.Background())
+		}
+	}()
 	if ac != nil {
 		txn.BindAccessInfo(ac.AccountID, ac.UserID, ac.RoleID)
 	}
@@ -852,7 +863,10 @@ func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*cata
 			return nil, err
 		}
 		tbl := tblHdl.GetMeta().(*catalog.TableEntry)
-		txn.Commit(context.Background())
+		if err := txn.Commit(context.Background()); err != nil {
+			return nil, err
+		}
+		committed = true
 		return tbl, nil
 	} else {
 		dbHdl, err := txn.GetDatabase(parts[0])
@@ -864,7 +878,10 @@ func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*cata
 			return nil, err
 		}
 		tbl := tblHdl.GetMeta().(*catalog.TableEntry)
-		txn.Commit(context.Background())
+		if err := txn.Commit(context.Background()); err != nil {
+			return nil, err
+		}
+		committed = true
 		return tbl, nil
 	}
 }
@@ -1267,4 +1284,64 @@ func (c *transferArg) Run() error {
 	model.SetTTL(time.Duration(c.mem) * time.Second)
 	model.SetDiskTTL(time.Duration(c.disk) * time.Minute)
 	return nil
+}
+
+// manifestArg implements the "manifest" inspect subcommand.
+// Usage: mo_ctl inspect manifest -t db.table
+type manifestArg struct {
+	ctx     *inspectContext
+	tbl     *catalog.TableEntry
+	dataDir string
+}
+
+func (c *manifestArg) PrepareCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "manifest",
+		Short: "generate DuckDB TAE scanner manifest for a table",
+		Run:   RunFactory(c),
+	}
+	cmd.Flags().StringP("target", "t", "", "target table in db.table format (required)")
+	return cmd
+}
+
+func (c *manifestArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	address, _ := cmd.Flags().GetString("target")
+	if address == "" || address == "*" {
+		return moerr.NewInvalidInputNoCtx("manifest requires a target table (-t db.table)")
+	}
+	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
+	if err != nil {
+		return err
+	}
+	c.dataDir = sharedFSRootPath(c.ctx.db)
+	return nil
+}
+
+func (c *manifestArg) String() string {
+	schema := c.tbl.GetLastestSchema(false)
+	return fmt.Sprintf("manifest for %s.%s", c.tbl.GetDB().GetName(), schema.Name)
+}
+
+func (c *manifestArg) Run() error {
+	data, err := GenerateManifestPretty(c.tbl, c.dataDir)
+	if err != nil {
+		return err
+	}
+	c.ctx.resp.Typ = cmd_util.InspectJSON
+	c.ctx.resp.Payload = data
+	return nil
+}
+
+// sharedFSRootPath extracts the filesystem root path from the shared
+// LocalFS. Returns empty string if the FileService is not local (e.g., S3).
+func sharedFSRootPath(d *db.DB) string {
+	if d.Runtime == nil || d.Runtime.Fs == nil {
+		return ""
+	}
+	local, err := fileservice.Get[*fileservice.LocalFS](d.Runtime.Fs, defines.SharedFileServiceName)
+	if err != nil {
+		return ""
+	}
+	return local.RootPath()
 }

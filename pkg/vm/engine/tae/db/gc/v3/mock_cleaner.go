@@ -171,3 +171,7 @@ func (c *MockCleaner) RemoveBackupProtection() {
 func (c *MockCleaner) GetBackupProtection() (protectedTS types.TS, lastUpdateTime time.Time, isActive bool) {
 	return types.TS{}, time.Time{}, false
 }
+
+func (c *MockCleaner) GetSyncProtectionManager() *SyncProtectionManager {
+	return nil
+}

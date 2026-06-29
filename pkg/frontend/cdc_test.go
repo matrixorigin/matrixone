@@ -652,13 +652,15 @@ func (ts *testTaskService) HeartbeatDaemonTask(ctx context.Context, task task.Da
 }
 
 func (ts *testTaskService) StartScheduleCronTask() {
-	//TODO implement me
-	panic("implement me")
+}
+
+func (ts *testTaskService) StartScheduleSQLTask() {
 }
 
 func (ts *testTaskService) StopScheduleCronTask() {
-	//TODO implement me
-	panic("implement me")
+}
+
+func (ts *testTaskService) StopScheduleSQLTask() {
 }
 
 func (ts *testTaskService) GetStorage() taskservice.TaskStorage {
@@ -841,6 +843,26 @@ func (tier *testIER) GetString(ctx context.Context, row uint64, col uint64) (str
 func (tie *testIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
 	//TODO implement me
 	panic("implement me")
+}
+
+var _ ie.InternalExecutor = new(captureExecContextIE)
+
+type captureExecContextIE struct {
+	execCtxErr error
+	execSQL    string
+}
+
+func (e *captureExecContextIE) Exec(ctx context.Context, sql string, options ie.SessionOverrideOptions) error {
+	e.execCtxErr = ctx.Err()
+	e.execSQL = sql
+	return nil
+}
+
+func (e *captureExecContextIE) Query(ctx context.Context, sql string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	panic("unexpected query")
+}
+
+func (e *captureExecContextIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
 }
 
 const (
@@ -1167,7 +1189,7 @@ func Test_updateCdcTask_cancel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName, false)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 		})
 	}
@@ -1194,7 +1216,7 @@ func Test_updateCdcTask_pause(t *testing.T) {
 	mock.ExpectPrepare(sql11)
 
 	sql12 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
-	mock.ExpectExec(sql12).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(sql12).WithArgs("pausing").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	sql13 := "DELETE FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
 	mock.ExpectExec(sql13).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -1250,7 +1272,7 @@ func Test_updateCdcTask_pause(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName, false)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 		})
 	}
@@ -1323,7 +1345,7 @@ func Test_updateCdcTask_restart(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName, false)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
@@ -1407,7 +1429,7 @@ func Test_updateCdcTask_resume(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName, false)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 		})
 	}
@@ -1505,6 +1527,31 @@ func Test_updateCdc_cancel(t *testing.T) {
 			assert.NoError(t, err, fmt.Sprintf("updateCdc(%v, %v, %v)", tt.args.ctx, tt.args.ses, tt.args.st))
 		})
 	}
+}
+
+func Test_updateCdc_cancelIfExistsIgnoresMissingTask(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	sqlSelectTask := "SELECT task_id FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 0 AND task_name = 'missing_task'"
+	mock.ExpectQuery(sqlSelectTask).WillReturnRows(sqlmock.NewRows([]string{"task_id"}))
+
+	sqlDeleteTask := "DELETE FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 0 AND task_name = 'missing_task'"
+	mock.ExpectExec(sqlDeleteTask).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	tx := &testSqlExecutor{db: db}
+	_, err = onPreUpdateCDCTasks(
+		context.Background(),
+		task.TaskStatus_CancelRequested,
+		map[taskservice.CDCTaskKey]struct{}{},
+		tx,
+		sysAccountID,
+		"missing_task",
+		true,
+	)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func Test_updateCdc_cancel_all(t *testing.T) {
@@ -2326,6 +2373,83 @@ func TestCdcTask_Pause(t *testing.T) {
 	_ = executor.stateMachine.Transition(TransitionStartSuccess)
 	err := executor.Pause()
 	assert.NoErrorf(t, err, "Pause()")
+}
+
+func TestCdcTask_PauseAlreadyPausedIsIdempotent(t *testing.T) {
+	executor := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
+			TaskName: "task1",
+		},
+		stateMachine: NewExecutorStateMachine(),
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, executor.stateMachine.Transition(TransitionPause))
+	require.NoError(t, executor.stateMachine.Transition(TransitionPauseComplete))
+
+	require.NoError(t, executor.Pause())
+	require.Equal(t, StatePaused, executor.stateMachine.State())
+}
+
+func TestCDCPauseTaskCompleteHookUpdatesCatalogState(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	sql := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = 'paused' WHERE 1=1 AND account_id = 1 AND task_id = 'task1' AND state = 'pausing'"
+	mock.ExpectExec(sql).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	hook := CDCPauseTaskCompleteHook(func() ie.InternalExecutor {
+		return &testIE{
+			db: db,
+			genIdx: func(sql string) int {
+				return -1
+			},
+		}
+	})
+
+	require.NoError(t, hook(context.Background(), task.DaemonTask{
+		Details: &task.Details{
+			Details: &task.Details_CreateCdc{
+				CreateCdc: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					TaskName: "task1",
+					Accounts: []*task.Account{
+						{Id: 1},
+					},
+				},
+			},
+		},
+	}))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCDCPauseTaskCompleteHookUsesFreshContext(t *testing.T) {
+	capture := &captureExecContextIE{}
+	hook := CDCPauseTaskCompleteHook(func() ie.InternalExecutor {
+		return capture
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, hook(ctx, task.DaemonTask{
+		Details: &task.Details{
+			Details: &task.Details_CreateCdc{
+				CreateCdc: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					TaskName: "task1",
+					Accounts: []*task.Account{
+						{Id: 1},
+					},
+				},
+			},
+		},
+	}))
+	require.NoError(t, capture.execCtxErr)
+	require.Contains(t, capture.execSQL, "state = 'paused'")
+	require.Contains(t, capture.execSQL, "AND state = 'pausing'")
 }
 
 func TestCdcTask_PauseWhileStarting(t *testing.T) {
@@ -3724,6 +3848,61 @@ func TestCDCTaskExecutor_Pause_WithWatermarkFlushSuccess(t *testing.T) {
 	err := executor.Pause()
 	assert.NoError(t, err)
 	assert.Equal(t, StatePaused, executor.stateMachine.State())
+}
+
+func TestCDCTaskExecutor_Pause_RetriesForceFlushBeforePaused(t *testing.T) {
+	holdCh := make(chan int, 1)
+	flushCalls := 0
+	u := cdc.NewCDCWatermarkUpdater(
+		t.Name(),
+		&mockLogWatermarksIe{hasError: false, rowCount: 1},
+		cdc.WithCustomizedScheduleJob(func(job *cdc.UpdaterJob) error {
+			flushCalls++
+			if flushCalls == 1 {
+				return moerr.NewInternalErrorNoCtx("force flush failed")
+			}
+			job.DoneWithResult(nil)
+			return nil
+		}),
+	)
+
+	executor := &CDCTaskExecutor{
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: u,
+		cnUUID:           "test-cn",
+		runningReaders:   &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
+			TaskName: "task1",
+			Accounts: []*task.Account{
+				{Id: 100},
+			},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       holdCh,
+		ie:           &mockLogWatermarksIe{hasError: false, rowCount: 1},
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+
+	err := executor.Pause()
+	require.ErrorContains(t, err, "force flush failed")
+	require.Equal(t, StatePausing, executor.stateMachine.State())
+	require.Equal(t, 1, flushCalls)
+	select {
+	case <-holdCh:
+		t.Fatal("pause should not release Start before ForceFlush succeeds")
+	default:
+	}
+
+	require.NoError(t, executor.Pause())
+	require.Equal(t, StatePaused, executor.stateMachine.State())
+	require.Equal(t, 2, flushCalls)
+	select {
+	case <-holdCh:
+	default:
+		t.Fatal("pause should release Start after ForceFlush succeeds")
+	}
 }
 
 // Mock IE for logCurrentWatermarks tests

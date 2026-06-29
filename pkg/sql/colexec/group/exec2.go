@@ -48,6 +48,9 @@ const (
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
+	if group.ctr.mp != nil {
+		group.ctr.free()
+	}
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
 
 	// debug,
@@ -386,6 +389,19 @@ func (ctr *container) buildHashTable(ctx context.Context) error {
 	return nil
 }
 
+func (ctr *container) initGroupKeyTypesFromBatch(vs []*vector.Vector) {
+	if len(vs) == 0 {
+		return
+	}
+
+	if len(ctr.groupByTypes) == 0 {
+		ctr.groupByTypes = make([]types.Type, len(vs))
+		for i, vec := range vs {
+			ctr.groupByTypes[i] = *vec.GetType()
+		}
+	}
+}
+
 func (ctr *container) createNewGroupByBatch(vs []*vector.Vector, size int) *batch.Batch {
 	// initialize the groupByTypes.   this is again very bad design.
 	// types should be resolved at plan time.
@@ -493,6 +509,7 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	// But well,
 	var buf bytes.Buffer
 	buf.Write(types.EncodeInt32(&group.ctr.mtyp))
+	buf.Write(types.EncodeBool(&group.ctr.keyNullable))
 	nAggs := int32(len(group.ctr.aggList))
 	buf.Write(types.EncodeInt32(&nAggs))
 	for _, ag := range group.ctr.aggList {

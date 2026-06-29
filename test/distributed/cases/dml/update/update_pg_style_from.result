@@ -1,0 +1,413 @@
+DROP TABLE IF EXISTS company;
+DROP TABLE IF EXISTS vec_join_case;
+CREATE TABLE company (
+id INT PRIMARY KEY,
+province VARCHAR(50)
+);
+INSERT INTO company VALUES (101, 'BJ'), (102, 'SH'), (103, 'GZ');
+CREATE TABLE vec_join_case (
+id INT PRIMARY KEY,
+embedding VECF32(4),
+company_id INT,
+remark VARCHAR(100)
+);
+INSERT INTO vec_join_case VALUES
+(10, '[0.1,0.2,0.3,0.4]', 101, 'init'),
+(20, '[0.3,0.1,0.4,0.2]', 102, 'init'),
+(30, '[0.5,0.6,0.4,0.3]', 103, 'init');
+UPDATE vec_join_case t
+SET remark = CONCAT('hot-', c.province)
+FROM company c
+WHERE c.id = t.company_id
+AND l2_distance(embedding, '[0.2,0.2,0.3,0.3]') < 0.35;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  remark[12,-1,0]  𝄀
+10  ¦  101  ¦  hot-BJ  𝄀
+20  ¦  102  ¦  hot-SH  𝄀
+30  ¦  103  ¦  init
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case
+SET remark = company.province
+FROM company
+WHERE company.id = vec_join_case.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  remark[12,-1,0]  𝄀
+10  ¦  101  ¦  BJ  𝄀
+20  ¦  102  ¦  SH  𝄀
+30  ¦  103  ¦  GZ
+DROP TABLE IF EXISTS region;
+CREATE TABLE region (id INT PRIMARY KEY, name VARCHAR(20));
+INSERT INTO region VALUES (1, 'east'), (2, 'south');
+ALTER TABLE company ADD COLUMN region_id INT;
+UPDATE company SET region_id = 1 WHERE id = 101;
+UPDATE company SET region_id = 1 WHERE id = 102;
+UPDATE company SET region_id = 2 WHERE id = 103;
+UPDATE vec_join_case t
+SET remark = r.name
+FROM company c, region r
+WHERE c.id = t.company_id AND c.region_id = r.id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  remark[12,-1,0]  𝄀
+10  ¦  101  ¦  east  𝄀
+20  ¦  102  ¦  east  𝄀
+30  ¦  103  ¦  south
+WITH cc AS (SELECT id, province FROM company)
+UPDATE vec_join_case t
+SET remark = c.province
+FROM cc c
+WHERE c.id = t.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  remark[12,-1,0]  𝄀
+10  ¦  101  ¦  BJ  𝄀
+20  ¦  102  ¦  SH  𝄀
+30  ¦  103  ¦  GZ
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case t
+SET remark = COALESCE(r.name, 'no-region')
+FROM company c LEFT JOIN region r ON c.region_id = r.id
+WHERE c.id = t.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  remark[12,-1,0]  𝄀
+10  ¦  101  ¦  east  𝄀
+20  ¦  102  ¦  east  𝄀
+30  ¦  103  ¦  south
+DROP VIEW IF EXISTS v_company;
+CREATE VIEW v_company AS SELECT id, province FROM company;
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case t
+SET remark = v.province
+FROM v_company v
+WHERE v.id = t.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  remark[12,-1,0]  𝄀
+10  ¦  101  ¦  BJ  𝄀
+20  ¦  102  ¦  SH  𝄀
+30  ¦  103  ¦  GZ
+DROP VIEW v_company;
+DROP TABLE IF EXISTS src_overlap;
+CREATE TABLE src_overlap (company_id INT, remark VARCHAR(100));
+INSERT INTO src_overlap VALUES (101, 'src-BJ'), (102, 'src-SH'), (103, 'src-GZ');
+UPDATE vec_join_case SET remark = 'init';
+UPDATE vec_join_case
+SET remark = src_overlap.remark
+FROM src_overlap
+WHERE src_overlap.company_id = vec_join_case.company_id;
+SELECT id, company_id, remark FROM vec_join_case ORDER BY id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  remark[12,-1,0]  𝄀
+10  ¦  101  ¦  src-BJ  𝄀
+20  ¦  102  ¦  src-SH  𝄀
+30  ¦  103  ¦  src-GZ
+DROP TABLE src_overlap;
+DROP TABLE IF EXISTS gen_t;
+CREATE TABLE gen_t (
+id INT PRIMARY KEY,
+base INT,
+gen_col INT AS (base * 2) STORED
+);
+INSERT INTO gen_t (id, base) VALUES (1, 10), (2, 20), (3, 30);
+DROP TABLE IF EXISTS gen_src;
+CREATE TABLE gen_src (id INT PRIMARY KEY, new_base INT);
+INSERT INTO gen_src VALUES (1, 100), (2, 200);
+UPDATE gen_t SET gen_col = 999 FROM gen_src WHERE gen_src.id = gen_t.id;
+invalid input: the value specified for generated column 'gen_col' in table 'gen_t' is not allowed
+UPDATE gen_t SET base = gen_src.new_base FROM gen_src WHERE gen_src.id = gen_t.id;
+SELECT id, base, gen_col FROM gen_t ORDER BY id;
+➤ id[4,32,0]  ¦  base[4,32,0]  ¦  gen_col[4,32,0]  𝄀
+1  ¦  100  ¦  200  𝄀
+2  ¦  200  ¦  400  𝄀
+3  ¦  30  ¦  60
+DROP TABLE gen_t;
+DROP TABLE gen_src;
+DROP TABLE IF EXISTS gen_dup_t;
+DROP TABLE IF EXISTS gen_dup_s;
+CREATE TABLE gen_dup_t (
+id INT PRIMARY KEY,
+base INT,
+gen_col INT AS (ifnull(base, 0)) STORED
+);
+INSERT INTO gen_dup_t (id, base) VALUES (1, 5);
+CREATE TABLE gen_dup_s (t_id INT, new_base INT);
+INSERT INTO gen_dup_s VALUES (1, NULL), (1, 7);
+UPDATE gen_dup_t SET base = s.new_base FROM gen_dup_s s WHERE s.t_id = gen_dup_t.id;
+SELECT COUNT(*) AS valid_generated_row FROM gen_dup_t
+WHERE (base IS NULL AND gen_col = 0) OR (base = 7 AND gen_col = 7);
+➤ valid_generated_row[-5,64,0]  𝄀
+1
+DROP TABLE gen_dup_t;
+DROP TABLE gen_dup_s;
+DROP TABLE IF EXISTS whole_row_t;
+DROP TABLE IF EXISTS whole_row_s;
+CREATE TABLE whole_row_t (
+id INT PRIMARY KEY,
+a INT,
+b VARCHAR(20)
+);
+CREATE TABLE whole_row_s (
+t_id INT,
+new_a INT,
+new_b VARCHAR(20)
+);
+INSERT INTO whole_row_t VALUES (1, 0, 'orig');
+INSERT INTO whole_row_s VALUES (1, NULL, 'from-null-a'), (1, 7, NULL);
+UPDATE whole_row_t SET a = s.new_a, b = s.new_b FROM whole_row_s s WHERE s.t_id = whole_row_t.id;
+SELECT COUNT(*) AS valid_whole_row FROM whole_row_t
+WHERE (a IS NULL AND b = 'from-null-a') OR (a = 7 AND b IS NULL);
+➤ valid_whole_row[-5,64,0]  𝄀
+1
+SELECT COUNT(*) AS synthesized_row FROM whole_row_t WHERE a = 7 AND b = 'from-null-a';
+➤ synthesized_row[-5,64,0]  𝄀
+0
+DROP TABLE whole_row_t;
+DROP TABLE whole_row_s;
+DROP TABLE IF EXISTS fk_parent;
+DROP TABLE IF EXISTS fk_child;
+DROP TABLE IF EXISTS fk_src;
+CREATE TABLE fk_parent (id INT PRIMARY KEY);
+INSERT INTO fk_parent VALUES (1), (2), (3);
+CREATE TABLE fk_child (
+id INT PRIMARY KEY,
+parent_id INT,
+base INT,
+gen_col INT AS (base * 10) STORED,
+FOREIGN KEY (parent_id) REFERENCES fk_parent(id)
+);
+INSERT INTO fk_child (id, parent_id, base) VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+CREATE TABLE fk_src (id INT PRIMARY KEY, new_base INT);
+INSERT INTO fk_src VALUES (1, 11), (2, 22), (3, 33);
+UPDATE fk_child SET gen_col = 999 FROM fk_src WHERE fk_src.id = fk_child.id;
+invalid input: the value specified for generated column 'gen_col' in table 'fk_child' is not allowed
+UPDATE fk_child SET base = fk_src.new_base FROM fk_src WHERE fk_src.id = fk_child.id;
+SELECT id, parent_id, base, gen_col FROM fk_child ORDER BY id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  base[4,32,0]  ¦  gen_col[4,32,0]  𝄀
+1  ¦  1  ¦  11  ¦  110  𝄀
+2  ¦  2  ¦  22  ¦  220  𝄀
+3  ¦  3  ¦  33  ¦  330
+DROP TABLE fk_child;
+DROP TABLE fk_parent;
+DROP TABLE fk_src;
+DROP TABLE IF EXISTS sj;
+CREATE TABLE sj (id INT PRIMARY KEY, parent_id INT, v VARCHAR(20));
+INSERT INTO sj VALUES (1, NULL, 'root'), (2, 1, 'child2'), (3, 1, 'child3'), (4, 2, 'leaf');
+UPDATE sj t SET v = p.v FROM sj p WHERE t.parent_id = p.id;
+SELECT id, parent_id, v FROM sj ORDER BY id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  null  ¦  root  𝄀
+2  ¦  1  ¦  root  𝄀
+3  ¦  1  ¦  root  𝄀
+4  ¦  2  ¦  child2
+DROP TABLE sj;
+DROP TABLE IF EXISTS ob_t;
+DROP TABLE IF EXISTS ob_s;
+CREATE TABLE ob_t (id INT PRIMARY KEY, v INT);
+CREATE TABLE ob_s (id INT PRIMARY KEY, v INT);
+INSERT INTO ob_t VALUES (1, 0), (2, 0);
+INSERT INTO ob_s VALUES (1, 9), (2, 9);
+UPDATE ob_t SET v = ob_s.v FROM ob_s WHERE ob_t.id = ob_s.id ORDER BY ob_t.id;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 66 near " ORDER BY ob_t.id;";
+UPDATE ob_t SET v = ob_s.v FROM ob_s WHERE ob_t.id = ob_s.id LIMIT 1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 66 near " LIMIT 1;";
+DROP TABLE ob_t;
+DROP TABLE ob_s;
+DROP TABLE IF EXISTS dup_t;
+DROP TABLE IF EXISTS dup_p;
+DROP TABLE IF EXISTS dup_s;
+CREATE TABLE dup_p (id INT PRIMARY KEY);
+INSERT INTO dup_p VALUES (1), (2);
+CREATE TABLE dup_t (
+id INT PRIMARY KEY,
+p_id INT,
+v VARCHAR(20),
+FOREIGN KEY (p_id) REFERENCES dup_p(id)
+);
+INSERT INTO dup_t VALUES (1, 1, 'a'), (2, 2, 'b');
+CREATE TABLE dup_s (id INT PRIMARY KEY, t_id INT, v VARCHAR(20));
+INSERT INTO dup_s VALUES (10, 1, 's1-first'), (11, 1, 's1-second'), (20, 2, 's2');
+UPDATE dup_t SET v = s.v FROM dup_s s WHERE s.t_id = dup_t.id;
+SELECT id, p_id, v FROM dup_t ORDER BY id;
+➤ id[4,32,0]  ¦  p_id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  1  ¦  s1-first  𝄀
+2  ¦  2  ¦  s2
+DROP TABLE dup_t;
+DROP TABLE dup_p;
+DROP TABLE dup_s;
+DROP TABLE IF EXISTS fk_whole_row_t;
+DROP TABLE IF EXISTS fk_whole_row_p;
+DROP TABLE IF EXISTS fk_whole_row_s;
+CREATE TABLE fk_whole_row_p (id INT PRIMARY KEY);
+INSERT INTO fk_whole_row_p VALUES (1);
+CREATE TABLE fk_whole_row_t (
+id INT PRIMARY KEY,
+p_id INT,
+a INT,
+b VARCHAR(20),
+FOREIGN KEY (p_id) REFERENCES fk_whole_row_p(id)
+);
+CREATE TABLE fk_whole_row_s (
+t_id INT,
+new_a INT,
+new_b VARCHAR(20)
+);
+INSERT INTO fk_whole_row_t VALUES (1, 1, 0, 'orig');
+INSERT INTO fk_whole_row_s VALUES (1, NULL, 'from-null-a'), (1, 7, NULL);
+UPDATE fk_whole_row_t SET a = s.new_a, b = s.new_b FROM fk_whole_row_s s WHERE s.t_id = fk_whole_row_t.id;
+SELECT COUNT(*) AS valid_whole_row FROM fk_whole_row_t
+WHERE (a IS NULL AND b = 'from-null-a') OR (a = 7 AND b IS NULL);
+➤ valid_whole_row[-5,64,0]  𝄀
+1
+SELECT COUNT(*) AS synthesized_row FROM fk_whole_row_t WHERE a = 7 AND b = 'from-null-a';
+➤ synthesized_row[-5,64,0]  𝄀
+0
+DROP TABLE fk_whole_row_t;
+DROP TABLE fk_whole_row_p;
+DROP TABLE fk_whole_row_s;
+DROP TABLE IF EXISTS dup_no_fk_t;
+DROP TABLE IF EXISTS dup_no_fk_s;
+CREATE TABLE dup_no_fk_t (
+id INT PRIMARY KEY,
+v VARCHAR(20)
+);
+CREATE TABLE dup_no_fk_s (
+t_id INT,
+v VARCHAR(20)
+);
+INSERT INTO dup_no_fk_t VALUES (1, 'orig'), (2, 'orig');
+INSERT INTO dup_no_fk_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE dup_no_fk_t SET v = s.v FROM dup_no_fk_s s WHERE s.t_id = dup_no_fk_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM dup_no_fk_t;
+➤ row_cnt[-5,64,0]  ¦  id_cnt[-5,64,0]  𝄀
+2  ¦  2
+SELECT id, COUNT(*) AS per_id_cnt FROM dup_no_fk_t GROUP BY id ORDER BY id;
+➤ id[4,32,0]  ¦  per_id_cnt[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT v FROM dup_no_fk_t WHERE id = 2;
+➤ v[12,-1,0]  𝄀
+only
+DROP TABLE dup_no_fk_t;
+DROP TABLE dup_no_fk_s;
+DROP TABLE IF EXISTS geo_dedup_t;
+DROP TABLE IF EXISTS geo_dedup_s;
+CREATE TABLE geo_dedup_t (
+id INT PRIMARY KEY,
+g GEOMETRY32,
+v VARCHAR(20)
+);
+CREATE TABLE geo_dedup_s (
+t_id INT,
+v VARCHAR(20)
+);
+INSERT INTO geo_dedup_t VALUES
+(1, ST_GeomFromText('POINT(1 2)'), 'orig'),
+(2, ST_GeomFromText('POINT(3 4)'), 'orig');
+INSERT INTO geo_dedup_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE geo_dedup_t SET v = s.v FROM geo_dedup_s s WHERE s.t_id = geo_dedup_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM geo_dedup_t;
+➤ row_cnt[-5,64,0]  ¦  id_cnt[-5,64,0]  𝄀
+2  ¦  2
+SELECT id, COUNT(*) AS per_id_cnt FROM geo_dedup_t GROUP BY id ORDER BY id;
+➤ id[4,32,0]  ¦  per_id_cnt[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT v FROM geo_dedup_t WHERE id = 2;
+➤ v[12,-1,0]  𝄀
+only
+DROP TABLE geo_dedup_t;
+DROP TABLE geo_dedup_s;
+DROP TABLE IF EXISTS geo_fk_dedup_t;
+DROP TABLE IF EXISTS geo_fk_dedup_p;
+DROP TABLE IF EXISTS geo_fk_dedup_s;
+CREATE TABLE geo_fk_dedup_p (id INT PRIMARY KEY);
+INSERT INTO geo_fk_dedup_p VALUES (1), (2);
+CREATE TABLE geo_fk_dedup_t (
+id INT PRIMARY KEY,
+p_id INT,
+g GEOMETRY32,
+v VARCHAR(20),
+FOREIGN KEY (p_id) REFERENCES geo_fk_dedup_p(id)
+);
+CREATE TABLE geo_fk_dedup_s (
+t_id INT,
+v VARCHAR(20)
+);
+INSERT INTO geo_fk_dedup_t VALUES
+(1, 1, ST_GeomFromText('POINT(1 2)'), 'orig'),
+(2, 2, ST_GeomFromText('POINT(3 4)'), 'orig');
+INSERT INTO geo_fk_dedup_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE geo_fk_dedup_t SET v = s.v FROM geo_fk_dedup_s s WHERE s.t_id = geo_fk_dedup_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM geo_fk_dedup_t;
+➤ row_cnt[-5,64,0]  ¦  id_cnt[-5,64,0]  𝄀
+2  ¦  2
+SELECT id, COUNT(*) AS per_id_cnt FROM geo_fk_dedup_t GROUP BY id ORDER BY id;
+➤ id[4,32,0]  ¦  per_id_cnt[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT v FROM geo_fk_dedup_t WHERE id = 2;
+➤ v[12,-1,0]  𝄀
+only
+DROP TABLE geo_fk_dedup_t;
+DROP TABLE geo_fk_dedup_p;
+DROP TABLE geo_fk_dedup_s;
+DROP TABLE IF EXISTS jt1;
+DROP TABLE IF EXISTS jt2;
+DROP TABLE IF EXISTS js;
+CREATE TABLE jt1 (id INT PRIMARY KEY, v VARCHAR(20));
+CREATE TABLE jt2 (id INT PRIMARY KEY, k INT, v VARCHAR(20));
+CREATE TABLE js (t_id INT, v VARCHAR(20));
+INSERT INTO jt1 VALUES (1, 'a'), (2, 'b');
+INSERT INTO jt2 VALUES (10, 1, 'x');
+INSERT INTO js VALUES (1, 'new1'), (2, 'new2');
+UPDATE jt1 LEFT JOIN jt2 ON jt2.k = jt1.id SET jt1.v = s.v, jt2.v = s.v FROM js s WHERE s.t_id = jt1.id;
+SELECT id, v FROM jt1 ORDER BY id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  new1  𝄀
+2  ¦  new2
+SELECT id, k, v FROM jt2 ORDER BY id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  v[12,-1,0]  𝄀
+10  ¦  1  ¦  new1
+SELECT COUNT(*) AS jt2_cnt FROM jt2;
+➤ jt2_cnt[-5,64,0]  𝄀
+1
+DROP TABLE jt1;
+DROP TABLE jt2;
+DROP TABLE js;
+DROP TABLE IF EXISTS left_src_t;
+DROP TABLE IF EXISTS left_src_s1;
+DROP TABLE IF EXISTS left_src_s2;
+CREATE TABLE left_src_t (id INT PRIMARY KEY, v VARCHAR(20));
+CREATE TABLE left_src_s1 (t_id INT, v VARCHAR(20));
+CREATE TABLE left_src_s2 (t_id INT, tag VARCHAR(10));
+INSERT INTO left_src_t VALUES (1, 'orig'), (2, 'orig');
+INSERT INTO left_src_s1 VALUES (1, 'first'), (1, 'second'), (2, 'only');
+INSERT INTO left_src_s2 VALUES (1, 'tag1');
+UPDATE left_src_t SET v = s1.v FROM left_src_s1 s1 LEFT JOIN left_src_s2 s2 ON s1.t_id = s2.t_id WHERE s1.t_id = left_src_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM left_src_t;
+➤ row_cnt[-5,64,0]  ¦  id_cnt[-5,64,0]  𝄀
+2  ¦  2
+SELECT id, COUNT(*) AS per_id_cnt FROM left_src_t GROUP BY id ORDER BY id;
+➤ id[4,32,0]  ¦  per_id_cnt[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT v FROM left_src_t WHERE id = 2;
+➤ v[12,-1,0]  𝄀
+only
+DROP TABLE left_src_t;
+DROP TABLE left_src_s1;
+DROP TABLE left_src_s2;
+DROP TABLE IF EXISTS no_pk_t;
+DROP TABLE IF EXISTS no_pk_s;
+CREATE TABLE no_pk_t (v VARCHAR(20));
+CREATE TABLE no_pk_s (t_id INT, v VARCHAR(20));
+INSERT INTO no_pk_t VALUES ('orig');
+INSERT INTO no_pk_s VALUES (1, 'first'), (1, 'second');
+UPDATE no_pk_t SET v = s.v FROM no_pk_s s;
+SELECT COUNT(*) AS row_cnt FROM no_pk_t;
+➤ row_cnt[-5,64,0]  𝄀
+1
+SELECT v FROM no_pk_t;
+➤ v[12,-1,0]  𝄀
+first
+DROP TABLE no_pk_t;
+DROP TABLE no_pk_s;
+DROP TABLE IF EXISTS company;
+DROP TABLE IF EXISTS vec_join_case;
+DROP TABLE IF EXISTS region;

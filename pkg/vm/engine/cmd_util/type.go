@@ -33,4 +33,9 @@ const (
 
 	GCDetails = "details"
 	GCVerify  = "verify"
+
+	// Sync protection operations for cross-cluster sync
+	RegisterSyncProtection   = "register_sync_protection"
+	RenewSyncProtection      = "renew_sync_protection"
+	UnregisterSyncProtection = "unregister_sync_protection"
 )

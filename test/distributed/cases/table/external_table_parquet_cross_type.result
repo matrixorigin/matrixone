@@ -1,0 +1,124 @@
+drop database if exists parquet_cross_type_db;
+create database parquet_cross_type_db;
+use parquet_cross_type_db;
+drop table if exists ext_bool_tinyint;
+create external table ext_bool_tinyint (
+col_bool tinyint,
+part_id int
+) infile{'filepath'='$resources/hive_partition/cross_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_bool, part_id from ext_bool_tinyint where part_id = 1 order by col_bool, part_id;
+col_bool    part_id
+0    1
+1    1
+1    1
+drop table if exists ext_bool_varchar;
+create external table ext_bool_varchar (
+col_bool varchar(5),
+part_id int
+) infile{'filepath'='$resources/hive_partition/cross_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_bool, part_id from ext_bool_varchar where part_id = 1 order by col_bool, part_id;
+col_bool    part_id
+false    1
+true    1
+true    1
+drop table if exists ext_int64_int;
+create external table ext_int64_int (
+col_int64 int,
+part_id int
+) infile{'filepath'='$resources/hive_partition/cross_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_int64, part_id from ext_int64_int where part_id = 1 order by col_int64;
+col_int64    part_id
+100    1
+200    1
+300    1
+drop table if exists ext_int64_varchar;
+create external table ext_int64_varchar (
+col_int64 varchar(20),
+part_id int
+) infile{'filepath'='$resources/hive_partition/cross_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_int64, part_id from ext_int64_varchar where part_id = 1 order by col_int64;
+col_int64    part_id
+100    1
+200    1
+300    1
+drop table if exists ext_double_float;
+create external table ext_double_float (
+col_double float,
+part_id int
+) infile{'filepath'='$resources/hive_partition/cross_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_double, part_id from ext_double_float where part_id = 1 order by col_double;
+col_double    part_id
+1.25    1
+2.5    1
+3.75    1
+drop table if exists ext_decimal_double;
+create external table ext_decimal_double (
+col_decimal double,
+part_id int
+) infile{'filepath'='$resources/hive_partition/cross_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_decimal, part_id from ext_decimal_double where part_id = 1 order by col_decimal;
+col_decimal    part_id
+100.0    1
+200.5    1
+301.25    1
+drop table if exists ext_decimal_varchar;
+create external table ext_decimal_varchar (
+col_decimal varchar(20),
+part_id int
+) infile{'filepath'='$resources/hive_partition/cross_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_decimal, part_id from ext_decimal_varchar where part_id = 1 order by col_decimal;
+col_decimal    part_id
+100.00    1
+200.50    1
+301.25    1
+drop table if exists ext_date_varchar;
+create external table ext_date_varchar (
+col_date varchar(20),
+part_id int
+) infile{'filepath'='$resources/hive_partition/cross_type/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_date, part_id from ext_date_varchar where part_id = 1 order by col_date;
+col_date    part_id
+2024-01-01    1
+2024-06-01    1
+2024-12-01    1
+drop table if exists ext_int8_bit;
+create external table ext_int8_bit (
+col_int8 bit(8),
+part_id int
+) infile{'filepath'='$resources/hive_partition/bit_int8/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_int8 + 0 as col_int8, part_id from ext_int8_bit where part_id = 1 order by col_int8, part_id;
+col_int8    part_id
+0    1
+1    1
+127    1
+drop table if exists ext_string_uuid;
+create external table ext_string_uuid (
+col_uuid uuid,
+part_id int
+) infile{'filepath'='$resources/hive_partition/cross_type_extra/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_uuid, part_id from ext_string_uuid where part_id = 1 order by col_uuid, part_id;
+col_uuid    part_id
+00000000-0000-0000-0000-000000000001    1
+00000000-0000-0000-0000-000000000002    1
+c8477387-eb5b-4d97-af1b-48d9db74856d    1
+drop table if exists ext_int64_time;
+create external table ext_int64_time (
+col_time_us time(6),
+part_id int
+) infile{'filepath'='$resources/hive_partition/cross_type_extra/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_time_us, part_id from ext_int64_time where part_id = 1 order by col_time_us, part_id;
+col_time_us    part_id
+00:00:00    1
+12:34:56.123456000    1
+23:59:59.999999000    1
+drop table if exists ext_string_enum;
+create external table ext_string_enum (
+col_enum enum('red','green','blue'),
+part_id int
+) infile{'filepath'='$resources/hive_partition/cross_type_extra/', 'format'='parquet', 'hive_partitioning'='true', 'hive_partition_columns'='part_id'};
+select col_enum, part_id from ext_string_enum where part_id = 1 order by col_enum, part_id;
+col_enum    part_id
+red    1
+green    1
+blue    1
+drop database if exists parquet_cross_type_db;

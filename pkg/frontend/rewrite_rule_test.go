@@ -22,6 +22,13 @@ import (
 	"testing"
 	"testing/quick"
 	"unicode/utf8"
+
+	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // Feature: role-rewrite-rules, Property 9: Hint 序列化往返一致性
@@ -418,4 +425,567 @@ func TestRuleCacheDoubleCheckLocking(t *testing.T) {
 	// This is tested indirectly through the existing property-based tests
 	// and the concurrent access test above.
 	t.Skip("Double-check locking test requires complex mocking - covered by integration tests")
+}
+
+func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ses := newSes(&privilege{}, ctrl)
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          "test_rule_user",
+		DefaultRole:   "role10",
+		TenantID:      sysAccountID,
+		UserID:        42,
+		DefaultRoleID: 10,
+	}
+	tenant.SetUseSecondaryRole(true)
+	ses.SetTenantInfo(tenant)
+
+	// Granted-role result order represents grant-time priority. It is
+	// intentionally opposite of role_id order to ensure rewrite conflict
+	// resolution does not depend on internal role ids.
+	bh.sql2result[getSqlForRoleIDsOfUserForRuleCache(42)] = newMrsForRoleIdOfUserId([][]interface{}{
+		{30, false},
+		{20, false},
+	})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(30)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+		{40, false},
+	})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(20)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(40)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10, 30, 20, 40})] = newMrsForRewriteRules([][]interface{}{
+		{20, "db1.t1", "select A, Age from db1.t1 where age > 28"},
+		{30, "db1.t1", "select a, age from db1.t1 where age < 3"},
+		{20, "db2.t2", "select a from db2.t2 where a = 20"},
+		{30, "db2.t2", "select * from db2.t2 where age > 30"},
+	})
+
+	rules, err := loadRuleCache(context.Background(), ses)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{
+		"db1.t1": "select a, age from db1.t1 where (age < 3) or (age > 28)",
+		"db2.t2": "select a from db2.t2 where a = 20",
+	}, rules)
+}
+
+func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ses := newSes(&privilege{}, ctrl)
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          "test_rule_user",
+		DefaultRole:   "role10",
+		TenantID:      sysAccountID,
+		UserID:        42,
+		DefaultRoleID: 10,
+	}
+	ses.SetTenantInfo(tenant)
+
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10})] = newMrsForRewriteRules([][]interface{}{
+		{10, "db1.t1", "select a from db1.t1"},
+		{10, "db1.t1", "select a from"},
+	})
+
+	_, err := loadRuleCache(context.Background(), ses)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to parse rewrite rule")
+}
+
+func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ses := newSes(&privilege{}, ctrl)
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          "test_rule_user",
+		DefaultRole:   "role10",
+		TenantID:      sysAccountID,
+		UserID:        42,
+		DefaultRoleID: 10,
+	}
+	ses.SetTenantInfo(tenant)
+	ses.rewriteEnabled.Store(true)
+
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10})] = newMrsForRewriteRules([][]interface{}{
+		{10, "db1.t1", "select a from db1.t1"},
+		{10, "db1.t1", "select a from"},
+	})
+
+	sql := "select * from db1.t1"
+	rewritten, err := rewriteSQL(context.Background(), ses, sql)
+	require.Error(t, err)
+	require.Equal(t, sql, rewritten)
+}
+
+func TestValidateRewriteRuleSQL(t *testing.T) {
+	ctx := context.Background()
+
+	validRules := []string{
+		"select a from db1.t1",
+		"(select a from db1.t1)",
+	}
+	for _, rule := range validRules {
+		t.Run("valid "+rule, func(t *testing.T) {
+			require.NoError(t, validateRewriteRuleSQL(ctx, rule))
+		})
+	}
+
+	invalidRules := []struct {
+		name string
+		rule string
+		err  string
+	}{
+		{name: "empty", rule: "  ", err: "rewrite rule SQL is empty"},
+		{name: "syntax error", rule: "select a from", err: "invalid rewrite rule SQL"},
+		{name: "non select", rule: "delete from db1.t1 where a = 1", err: "only accept SELECT-like statements"},
+	}
+	for _, tc := range invalidRules {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRewriteRuleSQL(ctx, tc.rule)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.err)
+		})
+	}
+}
+
+func TestHandleAlterRoleAddRuleRejectsInvalidRuleSQLBeforeWriting(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ctx := context.Background()
+	ses := newSes(&privilege{}, ctrl)
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+
+	roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
+	require.NoError(t, err)
+	bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+
+	stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from", "db1", "t1")
+	err = handleAlterRoleAddRule(ses, execCtx, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid rewrite rule SQL")
+
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, strings.ToLower(sql), "delete from mo_catalog.mo_role_rule")
+		require.NotContains(t, strings.ToLower(sql), "insert into mo_catalog.mo_role_rule")
+	}
+}
+
+func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ctx := context.Background()
+	ses := newSes(&privilege{}, ctrl)
+	ses.ruleCache = map[string]string{"db1.t1": "select old_a from db1.t1"}
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+
+	roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
+	require.NoError(t, err)
+	bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+
+	stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from db1.t1", "db1", "t1")
+	require.NoError(t, handleAlterRoleAddRule(ses, execCtx, stmt))
+
+	var deleted, inserted bool
+	for _, sql := range bh.executedSQLs {
+		lowerSQL := strings.ToLower(sql)
+		if strings.Contains(lowerSQL, "delete from mo_catalog.mo_role_rule") &&
+			strings.Contains(lowerSQL, "role_id = 10") &&
+			strings.Contains(lowerSQL, "'db1.t1'") {
+			deleted = true
+		}
+		if strings.Contains(lowerSQL, "insert into mo_catalog.mo_role_rule") &&
+			strings.Contains(lowerSQL, "10") &&
+			strings.Contains(lowerSQL, "'db1.t1'") &&
+			strings.Contains(lowerSQL, "'select a from db1.t1'") {
+			inserted = true
+		}
+	}
+	require.True(t, deleted)
+	require.True(t, inserted)
+
+	ses.ruleCacheMu.RLock()
+	defer ses.ruleCacheMu.RUnlock()
+	require.Nil(t, ses.ruleCache)
+}
+
+func TestHandleAlterRoleAddRuleRejectsNonSelectRuleSQLBeforeWriting(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ctx := context.Background()
+	ses := newSes(&privilege{}, ctrl)
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+
+	roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
+	require.NoError(t, err)
+	bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+
+	stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "delete from db1.t1 where a = 1", "db1", "t1")
+	err = handleAlterRoleAddRule(ses, execCtx, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "only accept SELECT-like statements")
+
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, strings.ToLower(sql), "delete from mo_catalog.mo_role_rule")
+		require.NotContains(t, strings.ToLower(sql), "insert into mo_catalog.mo_role_rule")
+	}
+}
+
+func TestMergeRewriteRules(t *testing.T) {
+	ctx := context.Background()
+
+	left := "select a from db1.t1 where a = 1"
+	right := "select a from db1.t1 where a = 2"
+	merged, err := mergeRewriteRules(ctx, left, right)
+	require.NoError(t, err)
+	require.Equal(t, "select a from db1.t1 where (a = 1) or (a = 2)", merged)
+
+	// Role rule merging is a base-row visibility union, not UNION DISTINCT over
+	// projected values. Partial projections are intentionally OR-merged so two
+	// visible rows with the same projected value are not collapsed here.
+	rowUnionMerged, err := mergeRewriteRules(
+		ctx,
+		"select a from db1.t1 where role_marker = 1",
+		"select a from db1.t1 where role_marker = 2",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "select a from db1.t1 where (role_marker = 1) or (role_marker = 2)", rowUnionMerged)
+
+	merged, err = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3")
+	require.NoError(t, err)
+	require.Equal(t, "select a from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", merged)
+
+	merged, err = mergeRewriteRules(ctx, "select a, age from db1.t1 where age > 28", "select a from db1.t1 where a = 2")
+	require.NoError(t, err)
+	require.Equal(t,
+		"select a from db1.t1 where a = 2",
+		merged,
+	)
+
+	merged, err = mergeRewriteRules(ctx, "select * from db1.t1 where age > 28", "select * from db1.t1 where age < 3")
+	require.NoError(t, err)
+	require.Equal(t,
+		"select * from db1.t1 where (age > 28) or (age < 3)",
+		merged,
+	)
+
+	merged, err = mergeRewriteRules(ctx, "select t.* from db1.t1 as t where age > 28", "select t.* from db1.t1 as t where age < 3")
+	require.NoError(t, err)
+	require.Equal(t,
+		"select t.* from db1.t1 as t where (age > 28) or (age < 3)",
+		merged,
+	)
+
+	fallbackCases := []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{
+			name:  "top-level order by",
+			left:  "select a from db1.t1 where age > 28 order by a",
+			right: "select a from db1.t1 where age < 3",
+		},
+		{
+			name:  "top-level limit",
+			left:  "select a from db1.t1 where age > 28 limit 1",
+			right: "select a from db1.t1 where age < 3",
+		},
+		{
+			name:  "distinct",
+			left:  "select distinct a from db1.t1 where age > 28",
+			right: "select distinct a from db1.t1 where age < 3",
+		},
+		{
+			name:  "group by",
+			left:  "select a from db1.t1 where age > 28 group by a",
+			right: "select a from db1.t1 where age < 3 group by a",
+		},
+		{
+			name:  "having",
+			left:  "select a from db1.t1 where age > 28 having a > 1",
+			right: "select a from db1.t1 where age < 3 having a > 1",
+		},
+		{
+			name:  "aggregate",
+			left:  "select count(*) as c from db1.t1 where age > 28",
+			right: "select count(*) as c from db1.t1 where age < 3",
+		},
+		{
+			name:  "window",
+			left:  "select row_number() over () as rn from db1.t1 where age > 28",
+			right: "select row_number() over () as rn from db1.t1 where age < 3",
+		},
+		{
+			name:  "same output names with different column expressions",
+			left:  "select a, age from db1.t1 where age > 28",
+			right: "select age as a, a as age from db1.t1 where age < 3",
+		},
+		{
+			name:  "same alias with different expressions",
+			left:  "select a + 1 as b from db1.t1 where age > 28",
+			right: "select a + 2 as b from db1.t1 where age < 3",
+		},
+	}
+	for _, tc := range fallbackCases {
+		t.Run(tc.name, func(t *testing.T) {
+			merged, err = mergeRewriteRules(ctx, tc.left, tc.right)
+			require.NoError(t, err)
+			require.Equal(t, tc.right, merged)
+		})
+	}
+
+	merged, err = mergeRewriteRules(ctx, "select a as x from db1.t1 where age > 28", "select a as x from db1.t1 where age < 3")
+	require.NoError(t, err)
+	require.Equal(t, "select a as x from db1.t1 where (age > 28) or (age < 3)", merged)
+
+	merged, err = mergeRewriteRules(ctx, "select a + 1 as b from db1.t1 where age > 28", "select a + 1 as b from db1.t1 where age < 3")
+	require.NoError(t, err)
+	require.Equal(t, "select a + 1 as b from db1.t1 where (age > 28) or (age < 3)", merged)
+
+	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1")
+	require.Error(t, err)
+}
+
+func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
+	ctx := context.Background()
+
+	cases := []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{
+			name:  "left has order by",
+			left:  "select a from db1.t1 where a = 1 order by a",
+			right: "select a from db1.t1 where a = 2",
+		},
+		{
+			name:  "right has order by",
+			left:  "select a from db1.t1 where a = 1",
+			right: "select a from db1.t1 where a = 2 order by a",
+		},
+		{
+			name:  "left has aggregate",
+			left:  "select count(*) as c from db1.t1 where a = 1",
+			right: "select count(*) as c from db1.t1 where a = 2",
+		},
+		{
+			name:  "right has aggregate",
+			left:  "select a from db1.t1 where a = 1",
+			right: "select count(*) as a from db1.t1 where a = 2",
+		},
+		{
+			name:  "right has unsupported expression",
+			left:  "select a from db1.t1 where a = 1",
+			right: "select @@sql_mode as a from db1.t1 where a = 2",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			merged, err := mergeRewriteRules(ctx, tc.left, tc.right)
+			require.NoError(t, err)
+			require.Equal(t, tc.right, merged)
+		})
+	}
+}
+
+func TestTrimRewriteRuleForMerge(t *testing.T) {
+	require.Equal(t, "select a from db1.t1", trimRewriteRuleForMerge("  select a from db1.t1  ;;  ; "))
+	require.Equal(t, "select a from db1.t1", trimRewriteRuleForMerge("select a from db1.t1"))
+	require.Equal(t, "", trimRewriteRuleForMerge(" ; ; "))
+}
+
+func TestRewriteRuleMergeShapeForRule(t *testing.T) {
+	cases := []struct {
+		name       string
+		rule       string
+		ok         bool
+		selectList string
+		table      string
+	}{
+		{
+			name:       "simple select",
+			rule:       "select A, Age from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "a, age",
+			table:      "db1.t1",
+		},
+		{
+			name:       "star projection",
+			rule:       "select * from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "*",
+			table:      "db1.t1",
+		},
+		{
+			name:       "qualified star with alias",
+			rule:       "select t.* from db1.t1 as t where age > 28",
+			ok:         true,
+			selectList: "t.*",
+			table:      "db1.t1 as t",
+		},
+		{
+			name:       "aliased column",
+			rule:       "select a as x from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "a as x",
+			table:      "db1.t1",
+		},
+		{
+			name:       "where subquery with order by and limit",
+			rule:       "select a from db1.t1 where a in (select a from db1.t2 order by a limit 1)",
+			ok:         true,
+			selectList: "a",
+			table:      "db1.t1",
+		},
+		{
+			name:       "parenthesized single table",
+			rule:       "select a from (db1.t1) where age > 28",
+			ok:         true,
+			selectList: "a",
+			table:      "db1.t1",
+		},
+		{
+			name:       "scalar expression",
+			rule:       "select a + 1 from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "a + 1",
+			table:      "db1.t1",
+		},
+		{
+			name: "aggregate",
+			rule: "select count(*) from db1.t1 where age > 28",
+			ok:   false,
+		},
+		{
+			name: "window",
+			rule: "select row_number() over () from db1.t1 where age > 28",
+			ok:   false,
+		},
+		{
+			name: "top-level order by",
+			rule: "select a from db1.t1 where age > 28 order by a",
+			ok:   false,
+		},
+		{
+			name: "top-level limit",
+			rule: "select a from db1.t1 where age > 28 limit 1",
+			ok:   false,
+		},
+		{
+			name: "distinct",
+			rule: "select distinct a from db1.t1 where age > 28",
+			ok:   false,
+		},
+		{
+			name: "group by",
+			rule: "select a from db1.t1 where age > 28 group by a",
+			ok:   false,
+		},
+		{
+			name: "having",
+			rule: "select a from db1.t1 where age > 28 having a > 1",
+			ok:   false,
+		},
+		{
+			name: "union",
+			rule: "select a from db1.t1 where age > 28 union all select a from db1.t1 where age < 3",
+			ok:   false,
+		},
+		{
+			name: "join",
+			rule: "select t1.a from db1.t1 join db1.t2 on t1.a = t2.a where t1.age > 28",
+			ok:   false,
+		},
+	}
+
+	ctx := context.Background()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			shape, ok, err := rewriteRuleMergeShapeForRule(ctx, tc.rule)
+			require.NoError(t, err)
+			require.Equal(t, tc.ok, ok)
+			if !tc.ok {
+				require.Nil(t, shape)
+				return
+			}
+			require.NotNil(t, shape)
+			require.Equal(t, tc.selectList, shape.selectList)
+			require.Equal(t, tc.table, shape.table)
+		})
+	}
+}
+
+func newMrsForRewriteRules(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("role_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("rule_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("rule")
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
 }

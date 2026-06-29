@@ -15,8 +15,8 @@
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
-USEARCH_DIR=USearch-2.23.0
-USEARCH_TAR=usearch-2.23.0.tar.gz
+USEARCH_DIR=_usearch_build
+USEARCH_TAR=usearch-2.25.3.tar.gz
 STRINGZILLA_DIR=StringZilla-4.2.1
 STRINGZILLA_TAR=$(STRINGZILLA_DIR).tar.gz
 SIMSIMD_DIR=SimSIMD-6.5.3
@@ -25,8 +25,13 @@ FP16_DIR=fp16
 FP16_TAR=$(FP16_DIR).tar.gz
 XXHASH_DIR=xxHash-0.8.3
 XXHASH_TAR=$(XXHASH_DIR).tar.gz
+XXHASH_TMP=_xxhash_build
+CROARING_DIR=CRoaring-4.7.0
+CROARING_TAR=$(CROARING_DIR).tar.gz
+CROARING_TMP=_croaring_build
+CROARING_CFLAGS=-O3 -fPIC -std=c11
 
-all: init usearch xxhash
+all: init usearch xxhash croaring
 
 init:
 	mkdir -p install
@@ -45,9 +50,10 @@ simsimd: install/include/simsimd/simsimd.h
 xxhash: install/include/xxhash.h
 
 install/include/xxhash.h:
-	tar zxvf $(XXHASH_TAR)
-	cp -r $(XXHASH_DIR)/xxhash.h install/include
-	rm -rf $(XXHASH_DIR)
+	mkdir -p $(XXHASH_TMP)
+	tar zxvf $(XXHASH_TAR) -C $(XXHASH_TMP) --strip-components=1
+	cp $(XXHASH_TMP)/xxhash.h install/include
+	rm -rf $(XXHASH_TMP)
 
 install/include/fp16.h:
 	tar zxvf $(FP16_TAR)
@@ -80,7 +86,9 @@ endif
 
 install/include/usearch.h:
 	rm -rf $(USEARCH_DIR)
-	tar zxvf $(USEARCH_TAR)
+	mkdir -p $(USEARCH_DIR)
+	tar zxvf $(USEARCH_TAR) -C $(USEARCH_DIR) --strip-components=1
+	mkdir -p $(USEARCH_DIR)/fp16 $(USEARCH_DIR)/simsimd $(USEARCH_DIR)/stringzilla
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
 	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
 	cp -r $(STRINGZILLA_DIR)/* $(USEARCH_DIR)/stringzilla
@@ -101,7 +109,21 @@ endif
 	rm -rf $(STRINGZILLA_DIR)
 	rm -rf $(USEARCH_DIR)
 
-clean:
-	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR)
+croaring: install/lib/libroaring.a
 
-.PHONY: usearch stringzilla fp16 simsimd init
+# Build CRoaring as a static lib from its single-file amalgamation, and install
+# the amalgamated header. Used by the cgo doc_id filter (roaring64 bitset).
+install/lib/libroaring.a:
+	rm -rf $(CROARING_TMP)
+	mkdir -p $(CROARING_TMP)
+	tar zxf $(CROARING_TAR) -C $(CROARING_TMP) --strip-components=1
+	(cd $(CROARING_TMP) && bash amalgamation.sh)
+	$(CC) $(CROARING_CFLAGS) -I$(CROARING_TMP) -c $(CROARING_TMP)/roaring.c -o $(CROARING_TMP)/roaring.o
+	ar rcs install/lib/libroaring.a $(CROARING_TMP)/roaring.o
+	cp $(CROARING_TMP)/roaring.h install/include/roaring.h
+	rm -rf $(CROARING_TMP)
+
+clean:
+	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP)
+
+.PHONY: usearch stringzilla fp16 simsimd init croaring

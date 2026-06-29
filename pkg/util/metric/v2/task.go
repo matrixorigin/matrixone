@@ -132,6 +132,16 @@ var (
 	TransferPageFlushLatencyHistogram    = transferDurationHistogram.WithLabelValues("page_flush_latency")
 	TransferPageMergeLatencyHistogram    = transferDurationHistogram.WithLabelValues("page_merge_latency")
 
+	transferPageWriteCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_page_write_retry_total",
+		Help:      "Total number of transfer page write retries by outcome.",
+	}, []string{"outcome"})
+
+	TransferPageWriteRetrySucceededCounter = transferPageWriteCounter.WithLabelValues("succeeded")
+	TransferPageWriteRetryExhaustedCounter = transferPageWriteCounter.WithLabelValues("exhausted")
+
 	transferShortDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "mo",
 		Subsystem: "task",

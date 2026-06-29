@@ -30,12 +30,24 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 		return -1, err
 	}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, dmlCtx.tableDefs[0], dmlCtx.objRefs[0], insertColToExpr)
+	// Capture irregular (IVF/fulltext) indexes before appendNodesForInsertStmt
+	// strips them from the 1:1 dedup+MULTI_UPDATE plan; LOAD maintains them with
+	// the same modern sink-fanout the INSERT path uses (see bindInsert).
+	tableDef := dmlCtx.tableDefs[0]
+
+	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForInsertStmt
+	// strips them. HNSW/CAGRA/IVF-PQ are cron-maintained and ride the modern path.
+	irregularIndexes := getIrregularIndexes(tableDef)
+
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr)
 	if err != nil {
 		return -1, err
 	}
 
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil)
+	// LOAD never carries ON DUPLICATE KEY UPDATE, so the irregular-index
+	// maintenance source is the pre-dedup new-row image set up inside
+	// appendDedupAndMultiUpdateNodesForBindInsert (insert-only, no old-row delete).
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes)
 }
 
 func (builder *QueryBuilder) bindExternalScan(
@@ -56,6 +68,9 @@ func (builder *QueryBuilder) bindExternalScan(
 	}
 
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
+		return -1, nil, err
+	}
+	if err := validateLoadParquetOptions(stmt.Param, ctx); err != nil {
 		return -1, nil, err
 	}
 
@@ -145,6 +160,7 @@ func (builder *QueryBuilder) bindExternalScan(
 		}
 		stmt.Param.FileStartOff = offset
 	}
+	stmt.Param.ParallelLoadRequested = stmt.Param.ParallelLoadRequested || stmt.Param.Parallel
 
 	if stmt.Param.FileSize-offset < int64(LoadParallelMinSize) {
 		stmt.Param.Parallel = false
@@ -180,7 +196,7 @@ func (builder *QueryBuilder) bindExternalScan(
 
 	externalScanNode := &plan.Node{
 		NodeType: plan.Node_EXTERNAL_SCAN,
-		Stats:    &plan.Stats{},
+		Stats:    makeLoadExternalStats(stmt.Param, tableDef, offset, ctx.GetContext()),
 		ObjRef:   objRef,
 		TableDef: tableDef,
 		ExternScan: &plan.ExternScan{

@@ -451,7 +451,7 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 	case types.T_Blockid:
 		return GetFixedAtNoTypeCheck[types.Blockid](vec, i)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
 		ret := vec.GetBytesAt(i)
 		if deepCopy {
 			copied := make([]byte, len(ret))
@@ -1050,7 +1050,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	case types.T_float64:
 		shrinkFixed[float64](v, sels, negate)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -1122,7 +1122,7 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	case types.T_float64:
 		shrinkFixedByMask[float64](v, sels, negate, offset)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -1190,7 +1190,7 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	case types.T_float64:
 		err = shuffleFixedNoTypeCheck[float64](v, sels, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
 		err = shuffleFixedNoTypeCheck[types.Varlena](v, sels, mp)
 	case types.T_date:
 		err = shuffleFixedNoTypeCheck[types.Date](v, sels, mp)
@@ -1264,7 +1264,7 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	case types.T_float64:
 		err = shuffleFixedNoTypeCheckWithBuf[float64](v, sels, buf)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
 		err = shuffleFixedNoTypeCheckWithBuf[types.Varlena](v, sels, buf)
 	case types.T_date:
 		err = shuffleFixedNoTypeCheckWithBuf[types.Date](v, sels, buf)
@@ -1303,10 +1303,25 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	if w.class == CONSTANT {
 		if w.IsConstNull() {
+			if !v.typ.IsFixedLen() {
+				vva := MustFixedColNoTypeCheck[types.Varlena](v)
+				// Null varlen slots may retain stale offset/len metadata, so clear
+				// the destination header before marking the row null.
+				vva[vi] = types.Varlena{}
+			}
 			v.nsp.Set(uint64(vi))
 			return nil
 		}
+		// Non-null constant vectors still share the regular null/data path below.
 		wi = 0
+	}
+	if w.GetNulls().Contains(uint64(wi)) {
+		if !v.typ.IsFixedLen() {
+			vva := MustFixedColNoTypeCheck[types.Varlena](v)
+			vva[vi] = types.Varlena{}
+		}
+		v.GetNulls().Set(uint64(vi))
+		return nil
 	}
 	if v.typ.IsFixedLen() {
 		sz := v.typ.TypeSize()
@@ -1326,11 +1341,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 		}
 	}
 
-	if w.GetNulls().Contains(uint64(wi)) {
-		v.GetNulls().Set(uint64(vi))
-	} else {
-		v.GetNulls().Unset(uint64(vi))
-	}
+	v.GetNulls().Unset(uint64(vi))
 	return nil
 }
 
@@ -2056,7 +2067,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -2415,7 +2426,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
@@ -2441,6 +2452,51 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.GetConstSetFunction", typ))
 	}
+}
+
+// fillSlice broadcasts val across s[start:end] using exponential copy doubling:
+// write one element, then double the filled region with copy() — O(log n) memmoves
+// instead of n scalar element stores. Used on the hot const-broadcast path.
+func fillSlice[T any](s []T, start, end int, val T) {
+	if start >= end {
+		return
+	}
+	s[start] = val
+	for n := 1; start+n < end; n *= 2 {
+		copy(s[start+n:end], s[start:start+n])
+	}
+}
+
+// broadcastFixed fills dst (whose length is a multiple of unit and whose leading
+// `unit` bytes already hold the value) by repeating that unit across the rest via
+// copy doubling — one growing memmove region instead of a per-slot copy loop.
+func broadcastFixed(dst []byte, unit int) {
+	for n := unit; n < len(dst); {
+		n += copy(dst[n:], dst[:n])
+	}
+}
+
+// pregrowVarlenaArea grows vec.area's capacity once (a single mpool realloc) to fit
+// an additional totalBytes of non-inline varlena content, so the subsequent per-row
+// BuildVarlenaNoInline appends never re-grow — eliminating incremental realloc churn.
+// Length is preserved; only capacity grows. No-op without an mpool or when capacity
+// already suffices. totalBytes may be an over-estimate (e.g. counting null rows that
+// are later skipped) — over-reserving is harmless.
+func pregrowVarlenaArea(vec *Vector, totalBytes int, mp *mpool.MPool) error {
+	if mp == nil || totalBytes <= 0 {
+		return nil
+	}
+	need := len(vec.area) + totalBytes
+	if need <= cap(vec.area) {
+		return nil
+	}
+	origLen := len(vec.area)
+	grown, err := mp.Grow(vec.area, need, vec.offHeap)
+	if err != nil {
+		return err
+	}
+	vec.area = grown[:origLen]
+	return nil
 }
 
 func (v *Vector) UnionNull(mp *mpool.MPool) error {
@@ -2539,31 +2595,11 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 		}
 		var col []types.Varlena
 		ToSliceNoTypeCheck(v, &col)
-		for i := oldLen; i < v.length; i++ {
-			col[i] = va
-		}
+		fillSlice(col, oldLen, v.length, va)
 	} else {
 		tlen := v.GetType().TypeSize()
-		for i := oldLen; i < v.length; i++ {
-			switch tlen {
-			case 8:
-				p1 := unsafe.Pointer(&v.data[i*8])
-				p2 := unsafe.Pointer(&w.data[sel*8])
-				*(*int64)(p1) = *(*int64)(p2)
-			case 4:
-				p1 := unsafe.Pointer(&v.data[i*4])
-				p2 := unsafe.Pointer(&w.data[sel*4])
-				*(*int32)(p1) = *(*int32)(p2)
-			case 2:
-				p1 := unsafe.Pointer(&v.data[i*2])
-				p2 := unsafe.Pointer(&w.data[sel*2])
-				*(*int16)(p1) = *(*int16)(p2)
-			case 1:
-				v.data[i] = w.data[sel]
-			default:
-				copy(v.data[i*tlen:(i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
-			}
-		}
+		copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+		broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 	}
 
 	return nil
@@ -2604,14 +2640,11 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			}
 			var col []types.Varlena
 			ToSliceNoTypeCheck(v, &col)
-			for i := oldLen; i < v.length; i++ {
-				col[i] = va
-			}
+			fillSlice(col, oldLen, v.length, va)
 		} else {
 			tlen := v.GetType().TypeSize()
-			for i := oldLen; i < v.length; i++ {
-				copy(v.data[i*tlen:(i+1)*tlen], w.data[:tlen])
-			}
+			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[:tlen])
+			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 		}
 
 		return nil
@@ -2622,6 +2655,25 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		var vCol, wCol []types.Varlena
 		ToSliceNoTypeCheck(v, &vCol)
 		ToSliceNoTypeCheck(w, &wCol)
+		// pre-grow the area once for the selected non-inline, non-null rows so the
+		// per-row BuildVarlenaNoInline appends below never realloc. Null rows are NOT
+		// copied (the loop below skips them via w.nsp), and a reused vector can retain
+		// a stale non-inline header in a null slot — counting those would reserve area
+		// for dead payload (large needless mp.Grow / alloc failure), so exclude them.
+		total := 0
+		hasNull := !w.GetNulls().EmptyByFlag()
+		for _, sel := range sels {
+			if hasNull && w.nsp.Contains(uint64(sel)) {
+				continue
+			}
+			if !wCol[sel].IsSmall() {
+				_, l := wCol[sel].OffsetLen()
+				total += int(l)
+			}
+		}
+		if err = pregrowVarlenaArea(v, total, mp); err != nil {
+			return err
+		}
 		if !w.GetNulls().EmptyByFlag() {
 			for i, sel := range sels {
 				if w.gsp.Contains(uint64(sel)) {
@@ -2730,14 +2782,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			}
 			var col []types.Varlena
 			ToSliceNoTypeCheck(v, &col)
-			for i := oldLen; i < v.length; i++ {
-				col[i] = va
-			}
+			fillSlice(col, oldLen, v.length, va)
 		} else {
 			tlen := v.GetType().TypeSize()
-			for i := oldLen; i < v.length; i++ {
-				copy(v.data[i*tlen:(i+1)*tlen], w.data[:tlen])
-			}
+			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[:tlen])
+			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 		}
 
 		return nil
@@ -2749,6 +2798,114 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 
 		vCol = toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+addCnt)
 		ToSliceNoTypeCheck(w, &wCol)
+
+		// Fast path: appending an entire in-order source varlen vector — the block-scan
+		// materialization path. The general loop below calls BuildVarlenaFromVarlena
+		// per row, which copies each row's content and writes each header individually:
+		// N small memmoves plus incremental area growth, which the scan CPU profile
+		// showed is ~50% of a table scan. Here we instead copy the whole source area in
+		// ONE memmove and the whole header array in another, then rebase the non-inline
+		// offsets with an unsafe walk. Nulls are fine: a null row's content is not in
+		// w.area, and its header is never read — we just propagate w's null/grouping
+		// bitmaps (shifted by oldLen) and zero the null rows' copied headers so no
+		// rebased garbage offset lingers. Semantically identical to the loop.
+		if flags == nil && offset == 0 && cnt == w.length {
+			oldLen := v.length
+			baseOff := len(v.area)
+			if len(w.area) > 0 {
+				// preserve mpool semantics: append within cap, else mpool Grow2 (so
+				// v.area stays mpool-tracked rather than escaping to the Go heap).
+				if baseOff+len(w.area) <= cap(v.area) || mp == nil {
+					v.area = append(v.area, w.area...)
+				} else if v.area, err = mp.Grow2(v.area, w.area, baseOff+len(w.area), v.offHeap); err != nil {
+					return err
+				}
+			}
+			// one memmove of the header array; inline varlenas carry their bytes here.
+			copy(vCol[oldLen:oldLen+cnt], wCol[:cnt])
+			// non-inline headers hold an offset into w.area; rebase into v.area. An
+			// inline varlena has s[0] <= 23 (its length byte), never the 0xffffffff
+			// big-header sentinel, so the check is exact.
+			if baseOff != 0 && len(w.area) > 0 {
+				p := unsafe.Pointer(&vCol[oldLen])
+				for i := 0; i < cnt; i++ {
+					s := (*[6]uint32)(p)
+					if s[0] == types.VarlenaBigHdr {
+						s[1] += uint32(baseOff)
+					}
+					p = unsafe.Add(p, types.VarlenaSize)
+				}
+			}
+			// propagate grouping bits (value is still real for these rows).
+			// Bound to [0,cnt): Foreach walks every set bit in the underlying
+			// bitmap, but w may carry stale bits at index >= w.length (SetLength
+			// shrinks length without clearing nsp/gsp, and vectors are reused).
+			// The per-row path only consults [0,cnt) via Contains, so we must skip
+			// stale bits here too — otherwise they pollute v.gsp / index past vCol.
+			if !w.gsp.EmptyByFlag() {
+				base, ucnt := uint64(oldLen), uint64(cnt)
+				w.gsp.Foreach(func(i uint64) bool {
+					if i < ucnt {
+						nulls.Add(&v.gsp, base+i)
+					}
+					return true
+				})
+			}
+			// propagate null bits and clear those (never-read) headers so a copied
+			// big-header offset can't linger as a dangling reference into v.area.
+			// Same [0,cnt) bound as gsp above: a stale nsp bit at i >= cnt would
+			// index vCol (len oldLen+cnt) out of range and panic.
+			if !w.nsp.EmptyByFlag() {
+				base, ucnt := uint64(oldLen), uint64(cnt)
+				w.nsp.Foreach(func(i uint64) bool {
+					if i < ucnt {
+						nulls.Add(&v.nsp, base+i)
+						vCol[oldLen+int(i)] = types.Varlena{}
+					}
+					return true
+				})
+			}
+			v.length += cnt
+			return nil
+		}
+
+		// pre-grow the area once for the non-inline, non-null source rows in this
+		// append so the per-row BuildVarlenaNoInline calls below never realloc. Null
+		// rows are NOT copied (the loops below skip them via w.nsp), and a reused
+		// vector can retain a stale non-inline header in a null slot — counting those
+		// would reserve area for dead payload (large needless mp.Grow / alloc
+		// failure), so exclude them to match what's actually appended.
+		{
+			total := 0
+			hasNull := !w.nsp.EmptyByFlag()
+			if flags == nil {
+				for i := 0; i < cnt; i++ {
+					if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
+						continue
+					}
+					if s := &wCol[int(offset)+i]; !s.IsSmall() {
+						_, l := s.OffsetLen()
+						total += int(l)
+					}
+				}
+			} else {
+				for i := range flags {
+					if flags[i] == 0 {
+						continue
+					}
+					if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
+						continue
+					}
+					if s := &wCol[int(offset)+i]; !s.IsSmall() {
+						_, l := s.OffsetLen()
+						total += int(l)
+					}
+				}
+			}
+			if err = pregrowVarlenaArea(v, total, mp); err != nil {
+				return err
+			}
+		}
 
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
@@ -2930,7 +3087,7 @@ func (v *Vector) String() string {
 		return vecToString[types.Rowid](v)
 	case types.T_Blockid:
 		return vecToString[types.Blockid](v)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col := InefficientMustStrCol(v)
 		if len(col) == 1 {
 			if nulls.Contains(&v.nsp, 0) {
@@ -3133,7 +3290,7 @@ func (v *Vector) RowToString(idx int) string {
 		return implFixedRowToString[types.Rowid](v, idx)
 	case types.T_Blockid:
 		return implFixedRowToString[types.Blockid](v, idx)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col := MustFixedColNoTypeCheck[types.Varlena](v)
 		if len(col) == 1 {
 			if nulls.Contains(&v.nsp, 0) {
@@ -3288,7 +3445,7 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	case types.T_Blockid:
 		return appendOneFixed(vec, val.(types.Blockid), false, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
@@ -3490,9 +3647,7 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 		// XXX check cnt > 0 to avoid issue #23295
 		var col []T
 		ToSlice(vec, &col)
-		for i := 0; i < cnt; i++ {
-			col[length+i] = val
-		}
+		fillSlice(col, length, length+cnt, val)
 	}
 	return nil
 }
@@ -4267,7 +4422,7 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		minv = types.EncodeFixed(minVal)
 		maxv = types.EncodeFixed(maxVal)
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		minv, maxv = VarlenGetMinMax(v)
 	case types.T_array_float32:
 		// Zone map Comparator should be consistent with the SQL Comparator for Array.
@@ -4598,7 +4753,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			appendList(v, newCol, nil, nil)
 		}
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
 			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
@@ -4798,7 +4953,7 @@ func (v *Vector) InplaceSort() {
 			return col[i].LT(&col[j])
 		})
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
 			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0

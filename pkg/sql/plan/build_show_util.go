@@ -42,6 +42,11 @@ func ConstructCreateTableSQL(
 
 	var err error
 	var createStr string
+	rewritePairs := make([]struct {
+		display string
+		rewrite string
+	}, 0)
+	checkDefs := extractTopLevelCheckDefs(tableDef)
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
@@ -248,16 +253,31 @@ func ConstructCreateTableSQL(
 				}
 
 			} else {
-				if indexdef.Unique {
+				rewriteIndexStr := ""
+				if catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
+					indexStr = "  SPATIAL KEY "
+					rewriteIndexStr = "  KEY "
+				} else if indexdef.Unique {
 					indexStr = "  UNIQUE KEY "
+					rewriteIndexStr = "  UNIQUE KEY "
 				} else {
 					indexStr = "  KEY "
+					rewriteIndexStr = "  KEY "
 				}
 				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+				rewriteIndexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) && !catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
 					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 				}
+				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+					rewriteIndexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
+				}
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexdef.IndexAlgoParams)
+				if err != nil {
+					return "", nil, err
+				}
 				indexStr += "("
+				rewriteIndexStr += "("
 				i := 0
 				for _, part := range indexdef.Parts {
 					if catalog.IsAlias(part) {
@@ -265,14 +285,22 @@ func ConstructCreateTableSQL(
 					}
 					if i > 0 {
 						indexStr += ","
+						rewriteIndexStr += ","
 					}
 
-					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					originPart := colNameToOriginName[part]
+					indexStr += fmt.Sprintf("`%s`", formatStr(originPart))
+					rewriteIndexStr += fmt.Sprintf("`%s`", formatStr(originPart))
+					if length, ok := prefixLengths[part]; ok {
+						prefixLength := fmt.Sprintf("(%d)", length)
+						indexStr += prefixLength
+						rewriteIndexStr += prefixLength
+					}
 					i++
 				}
 
 				indexStr += ")"
+				rewriteIndexStr += ")"
 				if indexdef.IndexAlgoParams != "" {
 					var paramList string
 					paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
@@ -280,11 +308,28 @@ func ConstructCreateTableSQL(
 						return "", nil, err
 					}
 					indexStr += paramList
+					rewriteIndexStr += paramList
+				}
+				if indexStr != rewriteIndexStr {
+					rewritePairs = append(rewritePairs, struct {
+						display string
+						rewrite string
+					}{display: indexStr, rewrite: rewriteIndexStr})
 				}
 			}
 			if indexdef.Comment != "" {
 				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
 				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
+					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
+					rewritePairs[len(rewritePairs)-1] = struct {
+						display string
+						rewrite string
+					}{
+						display: indexStr,
+						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment)),
+					}
+				}
 			}
 			if rowCount != 0 {
 				createStr += ",\n"
@@ -418,17 +463,28 @@ func ConstructCreateTableSQL(
 			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
+	for _, checkDef := range checkDefs {
+		createStr += ",\n  " + checkDef
+	}
+
 	if rowCount != 0 {
 		createStr += "\n"
 	}
 	createStr += ")"
 
 	var comment string
+	var properties []*plan.Property // Collect non-system properties for PROPERTIES clause
 	for _, def := range tableDef.Defs {
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
 					comment = " COMMENT='" + kv.Value + "'"
+				} else if kv.Key != catalog.SystemRelAttr_Kind &&
+					kv.Key != catalog.SystemRelAttr_CreateSQL &&
+					kv.Key != catalog.PropSchemaExtra {
+					// Collect non-system properties (excluding Comment, Kind, CreateSQL, SchemaExtra)
+					// These will be included in PROPERTIES clause
+					properties = append(properties, kv)
 				}
 			}
 		}
@@ -479,6 +535,20 @@ func ConstructCreateTableSQL(
 		}
 	}
 
+	// Add PROPERTIES clause if there are any non-system properties
+	// PROPERTIES is a table option and should be before CLUSTER BY
+	if len(properties) > 0 {
+		propsStr := " PROPERTIES("
+		for i, prop := range properties {
+			if i > 0 {
+				propsStr += ", "
+			}
+			propsStr += fmt.Sprintf(`"%s" = "%s"`, prop.Key, prop.Value)
+		}
+		propsStr += ")"
+		createStr += propsStr
+	}
+
 	/**
 	Fix issue: https://github.com/matrixorigin/MO-Cloud/issues/1028#issuecomment-1667642384
 	Based on the grammar of the 'create table' in the file pkg/sql/parsers/dialect/mysql/mysql_sql.y
@@ -520,8 +590,7 @@ func ConstructCreateTableSQL(
 				return "", nil, err
 			}
 		}
-		// hide file path
-		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.CompressType, param.Format, param.JsonData)
+		createStr += formatExternalTableOptionsForShowCreate(param)
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
@@ -529,17 +598,26 @@ func ConstructCreateTableSQL(
 				if param.Tail.Fields.Terminated.Value == "" {
 					fields += " TERMINATED BY \"\""
 				} else {
-					fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+					fields += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotes(param.Tail.Fields.Terminated.Value))
 				}
 			}
 
 			escape := func(value byte) string {
-				if value == byte(0) {
+				switch value {
+				case 0:
 					return ""
-				} else if value == byte('\\') {
+				case '\\':
 					return "\\\\"
+				case '\'':
+					// The byte sits inside a single-quoted SQL literal. Use quote
+					// doubling rather than a backslash escape: the SHOW CREATE
+					// result embeds this string in a double-quoted SELECT literal
+					// that consumes one level of backslashes, and '' survives that
+					// round-trip displayable and re-executable.
+					return "''"
+				default:
+					return fmt.Sprintf("%c", value)
 				}
-				return fmt.Sprintf("%c", value)
 			}
 			if param.Tail.Fields.EnclosedBy != nil {
 				fields += " ENCLOSED BY '" + escape(param.Tail.Fields.EnclosedBy.Value) + "'"
@@ -552,14 +630,10 @@ func ConstructCreateTableSQL(
 		line := ""
 		if param.Tail != nil && param.Tail.Lines != nil {
 			if param.Tail.Lines.StartingBy != "" {
-				line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
+				line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.StartingBy))
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
-				if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
-					line += " TERMINATED BY '\\\\n'"
-				} else {
-					line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
-				}
+				line += fmt.Sprintf(" TERMINATED BY '%s'", formatLinesTerminatedBy(param.Tail.Lines.TerminatedBy.Value))
 			}
 		}
 
@@ -578,13 +652,237 @@ func ConstructCreateTableSQL(
 	}
 	var stmt tree.Statement
 	if ctx != nil {
-		stmt, err = getRewriteSQLStmt(ctx, createStr)
+		rewriteStr := createStr
+		for _, pair := range rewritePairs {
+			rewriteStr = strings.Replace(rewriteStr, pair.display, pair.rewrite, 1)
+		}
+		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
 	}
 	return createStr, stmt, err
 }
 
+func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
+	if tableDef == nil || tableDef.Createsql == "" || tableDef.TableType == catalog.SystemExternalRel {
+		return nil
+	}
+	if !containsKeywordOutsideQuotes(tableDef.Createsql, "CHECK") {
+		return nil
+	}
+
+	defsSection, ok := extractCreateTableDefsSection(tableDef.Createsql)
+	if !ok {
+		return nil
+	}
+
+	segments := splitTopLevelDefs(defsSection)
+	checks := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if isTopLevelCheckDef(segment) {
+			checks = append(checks, segment)
+		}
+	}
+	return checks
+}
+
+func extractCreateTableDefsSection(createSQL string) (string, bool) {
+	start := findTopLevelByte(createSQL, '(')
+	if start == -1 {
+		return "", false
+	}
+
+	end := findMatchingParen(createSQL, start)
+	if end == -1 || end <= start {
+		return "", false
+	}
+	return createSQL[start+1 : end], true
+}
+
+func splitTopLevelDefs(defs string) []string {
+	parts := make([]string, 0, 8)
+	start := 0
+	depth := 0
+	for i := 0; i < len(defs); i++ {
+		switch defs[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(defs, i)
+		case '#':
+			i = skipLineComment(defs, i)
+		case '-':
+			if i+1 < len(defs) && defs[i+1] == '-' {
+				i = skipLineComment(defs, i+1)
+			}
+		case '/':
+			if i+1 < len(defs) && defs[i+1] == '*' {
+				i = skipBlockComment(defs, i)
+			}
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, defs[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, defs[start:])
+	return parts
+}
+
+func isTopLevelCheckDef(def string) bool {
+	if def == "" {
+		return false
+	}
+
+	trimmed := strings.TrimSpace(def)
+	upper := strings.ToUpper(trimmed)
+	if strings.HasPrefix(upper, "CHECK") {
+		return true
+	}
+	if !strings.HasPrefix(upper, "CONSTRAINT") {
+		return false
+	}
+	return containsKeywordOutsideQuotes(trimmed, "CHECK")
+}
+
+func containsKeywordOutsideQuotes(s string, keyword string) bool {
+	upper := strings.ToUpper(s)
+	for i := 0; i < len(upper); i++ {
+		switch upper[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(upper, i)
+		case '#':
+			i = skipLineComment(upper, i)
+		case '-':
+			if i+1 < len(upper) && upper[i+1] == '-' {
+				i = skipLineComment(upper, i+1)
+			}
+		case '/':
+			if i+1 < len(upper) && upper[i+1] == '*' {
+				i = skipBlockComment(upper, i)
+			}
+		default:
+			if hasKeywordAt(upper, keyword, i) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasKeywordAt(s string, keyword string, pos int) bool {
+	end := pos + len(keyword)
+	if end > len(s) || s[pos:end] != keyword {
+		return false
+	}
+	prevIsIdent := pos > 0 && isIdentChar(s[pos-1])
+	nextIsIdent := end < len(s) && isIdentChar(s[end])
+	return !prevIsIdent && !nextIsIdent
+}
+
+func isIdentChar(ch byte) bool {
+	return ch == '_' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
+}
+
+func findTopLevelByte(s string, target byte) int {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(s, i)
+		case '#':
+			i = skipLineComment(s, i)
+		case '-':
+			if i+1 < len(s) && s[i+1] == '-' {
+				i = skipLineComment(s, i+1)
+			}
+		case '/':
+			if i+1 < len(s) && s[i+1] == '*' {
+				i = skipBlockComment(s, i)
+			}
+		default:
+			if s[i] == target {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func findMatchingParen(s string, start int) int {
+	depth := 0
+	for i := start; i < len(s); i++ {
+		switch s[i] {
+		case '\'', '"', '`':
+			i = skipQuoted(s, i)
+		case '#':
+			i = skipLineComment(s, i)
+		case '-':
+			if i+1 < len(s) && s[i+1] == '-' {
+				i = skipLineComment(s, i+1)
+			}
+		case '/':
+			if i+1 < len(s) && s[i+1] == '*' {
+				i = skipBlockComment(s, i)
+			}
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func skipQuoted(s string, start int) int {
+	quote := s[start]
+	for i := start + 1; i < len(s); i++ {
+		if s[i] == '\\' && quote != '`' {
+			i++
+			continue
+		}
+		if s[i] != quote {
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == quote && quote != '`' {
+			i++
+			continue
+		}
+		return i
+	}
+	return len(s) - 1
+}
+
+func skipLineComment(s string, start int) int {
+	for i := start + 1; i < len(s); i++ {
+		if s[i] == '\n' {
+			return i
+		}
+	}
+	return len(s) - 1
+}
+
+func skipBlockComment(s string, start int) int {
+	for i := start + 2; i < len(s); i++ {
+		if s[i-1] == '*' && s[i] == '/' {
+			return i
+		}
+	}
+	return len(s) - 1
+}
+
 // FormatColType Get the formatted description of the column type.
 func FormatColType(colType plan.Type) string {
+	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
+		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
+	}
+
 	typ := types.T(colType.Id).ToType()
 
 	ts := typ.String()
@@ -594,6 +892,17 @@ func FormatColType(colType plan.Type) string {
 	}
 	if isSetPlanType(&colType) {
 		ts = "SET"
+	}
+	if subtype := geometrySubtypeName(&colType); subtype != "" {
+		ts = subtype
+		// A GEOMETRY32 subtype column renders with the "32" suffix (e.g.
+		// POINT32) so SHOW CREATE round-trips the float32 family.
+		if types.T(colType.Id) == types.T_geometry32 {
+			ts += "32"
+		}
+	}
+	if srid, ok := geometrySRIDValue(&colType); ok {
+		ts = fmt.Sprintf("%s SRID %d", ts, srid)
 	}
 
 	suffix := ""
@@ -636,6 +945,154 @@ func FormatColType(colType plan.Type) string {
 	return ts + suffix
 }
 
+// formatStrInSingleQuotes escapes s for emission inside a single-quoted SQL
+// string literal. A single quote is written as two single quotes (doubling)
+// rather than backslash-escaped: the
+// SHOW CREATE result embeds the DDL in a double-quoted SELECT literal that
+// consumes one level of backslashes, and quote doubling survives that
+// round-trip both displayable and re-executable.
+func formatStrInSingleQuotes(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `'`, `''`)
+}
+
+// formatLinesTerminatedBy renders a LINES TERMINATED BY value for SHOW CREATE.
+// TerminatedBy.Value holds the raw bytes, so the newline (\n) and CRLF (\r\n)
+// defaults must be emitted as escape sequences — a literal CR/LF byte in the DDL
+// would be an unparseable embedded newline. The backslashes are doubled because
+// the SHOW CREATE result is delivered through a double-quoted SELECT literal that
+// consumes one backslash level before the DDL is re-parsed (mirrors the \n case
+// that already shipped). \n and \r\n must stay distinct so a CRLF table is
+// recreatable as CRLF, not silently downgraded to LF.
+func formatLinesTerminatedBy(value string) string {
+	switch value {
+	case "\n":
+		return `\\n`
+	case "\r\n":
+		return `\\r\\n`
+	default:
+		return formatStrInSingleQuotes(value)
+	}
+}
+
+func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
+	if param.ScanType == tree.S3 {
+		return formatS3ExternalOptionsForShowCreate(param)
+	}
+	return formatInfileExternalOptionsForShowCreate(param)
+}
+
+func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
+	if pattern, writable := GetWriteFilePattern(param); writable {
+		// Writable external tables must be recreatable from their own DDL:
+		// snapshot/PITR restore replays SHOW CREATE output, so masking the
+		// read FILEPATH (or emitting empty optional keys, which the read-side
+		// option validator rejects — e.g. 'JSONDATA'='') would silently
+		// produce a table that can write but not read its files.
+		parts := make([]string, 0, 6)
+		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath)
+		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType)
+		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format)
+		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData)
+		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern)
+		// The CSV reader skips lines whose raw prefix matches COMMENT (the writer
+		// encloses colliding first fields), so the marker affects readback and
+		// must round-trip; omitted when unset.
+		appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
+		return " INFILE{" + strings.Join(parts, ",") + "}"
+	}
+	filepath := ""
+	if param.HivePartitioning {
+		filepath = param.Filepath
+	}
+	parts := []string{
+		"'FILEPATH'=" + formatStrLit(filepath),
+		"'COMPRESSION'=" + formatStrLit(param.CompressType),
+		"'FORMAT'=" + formatStrLit(param.Format),
+		"'JSONDATA'=" + formatStrLit(param.JsonData),
+	}
+	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
+	// changes which rows are returned; round-trip it (omitted when unset).
+	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
+	appendHivePartitionOptionsForShowCreate(&parts, param, true)
+	return " INFILE{" + strings.Join(parts, ",") + "}"
+}
+
+// appendInfileOptionForShowCreate appends 'KEY'='value' when the value is
+// non-empty (the read-side option validators reject empty values for keys
+// like jsondata, so omitted is the recreatable form of "unset").
+func appendInfileOptionForShowCreate(parts *[]string, key, value string) {
+	if value == "" {
+		return
+	}
+	*parts = append(*parts, "'"+key+"'="+formatStrLit(value))
+}
+
+func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam) string {
+	parts := make([]string, 0, len(param.Option)/2+2)
+	if param.S3Param != nil {
+		appendExternalOptionForShowCreate(&parts, "endpoint", param.S3Param.Endpoint, false)
+		appendExternalOptionForShowCreate(&parts, "region", param.S3Param.Region, false)
+		if hasExternalOption(param, "access_key_id") {
+			appendExternalOptionForShowCreate(&parts, "access_key_id", param.S3Param.APIKey, true)
+		}
+		if hasExternalOption(param, "secret_access_key") {
+			appendExternalOptionForShowCreate(&parts, "secret_access_key", param.S3Param.APISecret, true)
+		}
+		appendExternalOptionForShowCreate(&parts, "bucket", param.S3Param.Bucket, false)
+	}
+	appendExternalOptionForShowCreate(&parts, "filepath", param.Filepath, false)
+	if param.S3Param != nil {
+		appendExternalOptionForShowCreate(&parts, "provider", param.S3Param.Provider, false)
+		appendExternalOptionForShowCreate(&parts, "role_arn", param.S3Param.RoleArn, false)
+		appendExternalOptionForShowCreate(&parts, "external_id", param.S3Param.ExternalId, false)
+	}
+	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false)
+	appendExternalOptionForShowCreate(&parts, "format", param.Format, false)
+	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false)
+	if pattern, ok := GetWriteFilePattern(param); ok {
+		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false)
+	}
+	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
+	// changes which rows are returned; round-trip it (omitted when unset).
+	appendExternalOptionForShowCreate(&parts, CSVCommentKey, GetCSVComment(param), false)
+	appendHivePartitionOptionsForShowCreate(&parts, param, false)
+	return " URL s3option{" + strings.Join(parts, ",") + "}"
+}
+
+func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.ExternParam, upperKey bool) {
+	if !param.HivePartitioning {
+		return
+	}
+	hivePartitioningKey := "hive_partitioning"
+	hivePartitionColsKey := "hive_partition_columns"
+	if upperKey {
+		hivePartitioningKey = "HIVE_PARTITIONING"
+		hivePartitionColsKey = "HIVE_PARTITION_COLUMNS"
+	}
+	appendExternalOptionForShowCreate(parts, hivePartitioningKey, "true", false)
+	appendExternalOptionForShowCreate(parts, hivePartitionColsKey, strings.Join(param.HivePartitionCols, ","), false)
+}
+
+func appendExternalOptionForShowCreate(parts *[]string, key, value string, mask bool) {
+	if value == "" && !mask {
+		return
+	}
+	if mask {
+		value = "******"
+	}
+	*parts = append(*parts, formatStrLit(key)+"="+formatStrLit(value))
+}
+
+func hasExternalOption(param *tree.ExternParam, key string) bool {
+	for i := 0; i < len(param.Option); i += 2 {
+		if strings.EqualFold(param.Option[i], key) {
+			return true
+		}
+	}
+	return false
+}
+
 // Character replace mapping maps certain special characters to their escape sequences.
 var replaceMap = map[rune]string{
 	'\000': "\\0",
@@ -654,6 +1111,30 @@ func EscapeFormat(s string) string {
 		}
 		buf.WriteRune(old)
 	}
+	return buf.String()
+}
+
+func formatStrLit(s string) string {
+	var buf strings.Builder
+	buf.Grow(len(s) + 2)
+	buf.WriteByte('\'')
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			buf.WriteString("\\\\")
+		case '\'':
+			buf.WriteString("''")
+		case '\n':
+			buf.WriteString("\\n")
+		case '\r':
+			buf.WriteString("\\r")
+		case '\x00':
+			buf.WriteString("\\0")
+		default:
+			buf.WriteByte(s[i])
+		}
+	}
+	buf.WriteByte('\'')
 	return buf.String()
 }
 

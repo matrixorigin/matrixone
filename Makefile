@@ -178,6 +178,8 @@ pb: vendor-build generate-pb fmt
 
 VERSION_INFO :=-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'
 THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
+CGO_DIR=$(ROOT_DIR)/cgo
+JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
@@ -188,7 +190,7 @@ ifeq ($(MO_CL_CUDA),1)
     $(error CONDA_PREFIX env variable not found.)
   endif
 	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
-	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/envs/go/lib -lcuvs -lcuvs_c
+	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c
 	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
 	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
 	TAGS += -tags "gpu"
@@ -198,11 +200,11 @@ ifeq ($(TYPECHECK),1)
 	TAGS += -tags "typecheck"
 endif
 
-CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
-GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
+CGO_OPTS :=CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
+GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
-GOLDFLAGS:=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
+GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
 endif
 
 ifeq ($(GOBUILD_OPT),)
@@ -218,9 +220,20 @@ thirdparties:
 	@(cd thirdparties; ${MAKE})
 	cp -r $(THIRDPARTIES_INSTALL_DIR)/lib $(ROOT_DIR)/
 
+# Stage the jieba dictionary next to the binary, the same way thirdparties/lib
+# is staged. jiebaDictPaths() in pkg/monlp/tokenizer/jieba_dict.go searches
+# <executable-dir>/dict at runtime, so a packaged tarball/RPM can ship the
+# binary + dict/ + lib/ as a self-contained tree without requiring
+# MO_JIEBA_DICT_DIR to be set.
+.PHONY: jieba-dict
+jieba-dict:
+	$(info [Stage jieba dict])
+	rm -rf $(ROOT_DIR)/dict
+	cp -r $(JIEBA_DICT_SRC_DIR) $(ROOT_DIR)/dict
+
 # build mo-service binary
 .PHONY: build
-build: config cgo thirdparties
+build: config cgo thirdparties jieba-dict
 	$(info [Build binary])
 	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
@@ -249,7 +262,7 @@ musl-thirdparties: musl-install
 musl: override CGO_OPTS += CC=$(MUSL_CC)
 musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
 musl: override TAGS := -tags musl
-musl: musl-install musl-cgo config musl-thirdparties
+musl: musl-install musl-cgo config musl-thirdparties jieba-dict
 musl:
 	$(info [Build binary(musl)])
 	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
@@ -1015,6 +1028,7 @@ clean:
 	$(MAKE) -C cgo clean
 	$(MAKE) -C thirdparties clean
 	rm -rf $(ROOT_DIR)/lib
+	rm -rf $(ROOT_DIR)/dict
 
 ###############################################################################
 # static checks
