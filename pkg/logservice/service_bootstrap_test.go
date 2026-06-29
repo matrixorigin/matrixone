@@ -16,7 +16,8 @@ package logservice
 
 import (
 	"context"
-	"path"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -59,8 +60,9 @@ func TestGetBackupData(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, restore)
 
+	const localBackupData = "restore_data"
 	ioVec := fileservice.IOVector{
-		FilePath: path.Join(dir, name),
+		FilePath: localBackupData,
 		Entries:  make([]fileservice.IOEntry, 1),
 	}
 	ioVec.Entries[0] = fileservice.IOEntry{
@@ -75,7 +77,21 @@ func TestGetBackupData(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, restore)
 
-	s.cfg.BootstrapConfig.Restore.FilePath = path.Join(dir, name)
+	s.cfg.BootstrapConfig.Restore.FilePath = "missing_backup_data"
+	restore, err = s.getBackupData(ctx)
+	assert.Error(t, err)
+	assert.Nil(t, restore)
+
+	s.cfg.BootstrapConfig.Restore.FilePath = localBackupData
+	restore, err = s.getBackupData(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, restore)
+	assert.Equal(t, nextID, restore.NextID)
+	assert.Equal(t, nextIDByKey, restore.NextIDByKey)
+
+	rawPath := filepath.Join(dir, "raw_backup_data")
+	assert.NoError(t, os.WriteFile(rawPath, data, 0644))
+	s.cfg.BootstrapConfig.Restore.FilePath = rawPath
 	restore, err = s.getBackupData(ctx)
 	assert.NoError(t, err)
 	assert.NotNil(t, restore)
