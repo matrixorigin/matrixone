@@ -571,7 +571,11 @@ func ResolveAlterTableAlgorithm(
 		case *tree.AlterTableChangeColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableRenameColumnClause:
-			if renameColumnRequiresPluginIndexRebuild(tableDef, option.OldColumnName.ColName()) {
+			requiresRebuild, err := renameColumnRequiresPluginIndexRebuild(tableDef, option.OldColumnName.ColName())
+			if err != nil {
+				return plan.AlterTable_DEFAULT, err
+			}
+			if requiresRebuild {
 				algorithm = plan.AlterTable_COPY
 			} else {
 				algorithm = plan.AlterTable_INPLACE
