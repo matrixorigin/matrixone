@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -262,6 +263,38 @@ func TestRecoveryFromMultiTNShardWithCommitting(t *testing.T) {
 
 	checkData(t, wTxn, s1, 2, 1, true)
 	checkData(t, wTxn, s2, 2, 2, true)
+}
+
+func TestRecoveryEndDoesNotPanicWhenStopperUnavailable(t *testing.T) {
+	for _, status := range []txn.TxnStatus{
+		txn.TxnStatus_Prepared,
+		txn.TxnStatus_Committing,
+	} {
+		t.Run(status.String(), func(t *testing.T) {
+			sender := NewTestSender()
+			defer func() {
+				assert.NoError(t, sender.Close())
+			}()
+
+			s := NewTestTxnServiceWithLog(t, 1, sender, NewTestClock(0), nil).(*service)
+			s.stopper.Stop()
+
+			wTxn := NewTestTxn(1, 1, 1, 2)
+			wTxn.Status = status
+			wTxn.PreparedTS = NewTestTimestamp(2)
+			wTxn.CommitTS = NewTestTimestamp(2)
+			s.maybeAddTxn(wTxn)
+
+			assert.NotPanics(t, s.end)
+			select {
+			case <-s.recoveryC:
+			case <-time.After(time.Second):
+				t.Fatal("recovery end did not close recovery channel")
+			}
+
+			assert.NotNil(t, s.getTxnContext(wTxn.ID))
+		})
+	}
 }
 
 func addLog(t *testing.T, l logservice.Client, wTxn txn.TxnMeta, keys ...byte) {
