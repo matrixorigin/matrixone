@@ -129,6 +129,25 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	return nil
 }
 
+// externalTableUnsupportedDMLCause is the cause string of the fallback sentinel
+// ResolveSingleTable raises for writable external tables; entry points without
+// a legacy fallback (REPLACE) match the full message to convert it into a
+// user-facing error.
+const externalTableUnsupportedDMLCause = "external table"
+
+// externalTableUnsupportedDMLMsg is the full message of that sentinel, as
+// moerr.NewUnsupportedDML formats it ("unsupported DML: %s").
+const externalTableUnsupportedDMLMsg = "unsupported DML: " + externalTableUnsupportedDMLCause
+
+// noPkOnDupUpdateCause is the cause bindInsert raises for ON DUPLICATE KEY
+// UPDATE on a table with neither a primary key nor a unique key: the modern
+// dedup+MULTI_UPDATE has no key to represent the upsert, so this degenerate
+// corner (semantically a plain INSERT) is deferred to the legacy planner. The
+// INSERT entry point matches the full message to allow the fallback for this
+// case only, without re-routing real PK/unique-key ODKU off the modern path.
+const noPkOnDupUpdateCause = "on duplicate key update without primary or unique key"
+const noPkOnDupUpdateMsg = "unsupported DML: " + noPkOnDupUpdateCause
+
 func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
 	if with != nil {
@@ -208,7 +227,19 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	if err := checkTableType(ctx.GetContext(), tableDef); err != nil {
+	// External tables are not handled by the modern DML binder. Writable ones
+	// (WRITE_FILE_PATTERN) defer to the legacy planner, whose buildInsert /
+	// buildLoad implement INSERT/LOAD into them; read-only ones reject all DML
+	// directly with the user-facing error, so statement kinds without a legacy
+	// fallback (REPLACE) don't leak the internal fallback sentinel.
+	if tableDef.TableType == catalog.SystemExternalRel {
+		if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
+			return moerr.NewUnsupportedDML(ctx.GetContext(), externalTableUnsupportedDMLCause)
+		}
+		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
+	}
+
+	if err := checkTableType(ctx.GetContext(), tableDef, ""); err != nil {
 		return err
 	}
 
@@ -233,9 +264,6 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table")
 	}
 
-	if util.TableIsClusterTable(tableDef.GetTableType()) && accountId != catalog.System_Account {
-		return moerr.NewInternalErrorf(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
-	}
 	if objRef.PubInfo != nil {
 		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
 	}

@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -34,6 +35,150 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type checkLockTableBindLockService struct {
+	lockservice.LockService
+	binds  []lock.LockTable
+	err    error
+	calls  int
+	cancel context.CancelFunc
+}
+
+func (s *checkLockTableBindLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
+	s.calls++
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.err != nil {
+		return lock.LockTable{}, s.err
+	}
+	if len(s.binds) >= s.calls {
+		return s.binds[s.calls-1], nil
+	}
+	return bind, nil
+}
+
+type trackingWorkspace struct {
+	readonly        bool
+	commitRequests  []txn.TxnRequest
+	commitErr       error
+	commitCount     int
+	rollbackCount   int
+	finalizeCount   int
+	unknownCount    int
+	haveDDL         bool
+	snapshotOffset  int
+	sqlCount        uint64
+	boundTxn        TxnOperator
+	cloneSnapshotTS int64
+	ccprTxn         bool
+	ccprTaskID      string
+	syncJobID       string
+}
+
+func (w *trackingWorkspace) Readonly() bool {
+	return w.readonly
+}
+
+func (w *trackingWorkspace) StartStatement() {
+}
+
+func (w *trackingWorkspace) EndStatement() {
+}
+
+func (w *trackingWorkspace) IncrStatementID(context.Context, bool) error {
+	return nil
+}
+
+func (w *trackingWorkspace) RollbackLastStatement(context.Context) error {
+	return nil
+}
+
+func (w *trackingWorkspace) UpdateSnapshotWriteOffset() {
+	w.snapshotOffset = len(w.commitRequests)
+}
+
+func (w *trackingWorkspace) GetSnapshotWriteOffset() int {
+	return w.snapshotOffset
+}
+
+func (w *trackingWorkspace) Adjust(uint64) error {
+	return nil
+}
+
+func (w *trackingWorkspace) Commit(context.Context) ([]txn.TxnRequest, error) {
+	w.commitCount++
+	return w.commitRequests, w.commitErr
+}
+
+func (w *trackingWorkspace) FinalizeCommit(context.Context) {
+	w.finalizeCount++
+}
+
+func (w *trackingWorkspace) FinalizeCommitWithUnknownResult(context.Context) {
+	w.unknownCount++
+}
+
+func (w *trackingWorkspace) Rollback(context.Context) error {
+	w.rollbackCount++
+	return nil
+}
+
+func (w *trackingWorkspace) IncrSQLCount() {
+	w.sqlCount++
+}
+
+func (w *trackingWorkspace) GetSQLCount() uint64 {
+	return w.sqlCount
+}
+
+func (w *trackingWorkspace) CloneSnapshotWS() Workspace {
+	return w
+}
+
+func (w *trackingWorkspace) BindTxnOp(op TxnOperator) {
+	w.boundTxn = op
+}
+
+func (w *trackingWorkspace) SetHaveDDL(flag bool) {
+	w.haveDDL = flag
+}
+
+func (w *trackingWorkspace) GetHaveDDL() bool {
+	return w.haveDDL
+}
+
+func (w *trackingWorkspace) PPString() string {
+	return "trackingWorkspace"
+}
+
+func (w *trackingWorkspace) SetCloneTxn(snapshot int64) {
+	w.cloneSnapshotTS = snapshot
+}
+
+func (w *trackingWorkspace) SetCCPRTxn() {
+	w.ccprTxn = true
+}
+
+func (w *trackingWorkspace) IsCCPRTxn() bool {
+	return w.ccprTxn
+}
+
+func (w *trackingWorkspace) SetCCPRTaskID(taskID string) {
+	w.ccprTaskID = taskID
+}
+
+func (w *trackingWorkspace) GetCCPRTaskID() string {
+	return w.ccprTaskID
+}
+
+func (w *trackingWorkspace) SetSyncProtectionJobID(jobID string) {
+	w.syncJobID = jobID
+}
+
+func (w *trackingWorkspace) GetSyncProtectionJobID() string {
+	return w.syncJobID
+}
 
 func TestRead(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
@@ -121,6 +266,61 @@ func TestCommit(t *testing.T) {
 		requests := ts.getLastRequests()
 		assert.Equal(t, 1, len(requests))
 		assert.Equal(t, txn.TxnMethod_Commit, requests[0].Method)
+	})
+}
+
+func TestCommitFinalizesPreparedWorkspaceAfterCommitSuccess(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		ws := &trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		}
+		tc.AddWorkspace(ws)
+
+		err := tc.Commit(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, ws.commitCount)
+		require.Equal(t, 1, ws.finalizeCount)
+		require.Zero(t, ws.rollbackCount)
+		require.Equal(t, txn.TxnStatus_Committed, tc.mu.txn.Status)
+	})
+}
+
+func TestCommitRollsBackPreparedWorkspaceAfterCommitSendError(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		ws := &trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		}
+		tc.AddWorkspace(ws)
+		ts.setManual(func(*rpc.SendResult, error) (*rpc.SendResult, error) {
+			return nil, assert.AnError
+		})
+
+		err := tc.Commit(ctx)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, 1, ws.commitCount)
+		require.Zero(t, ws.finalizeCount)
+		require.Equal(t, 1, ws.rollbackCount)
+		require.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
+	})
+}
+
+func TestCommitKeepsPreparedWorkspaceAfterTxnUnknown(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		ws := &trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		}
+		tc.AddWorkspace(ws)
+		ts.setManual(func(*rpc.SendResult, error) (*rpc.SendResult, error) {
+			return nil, moerr.NewTxnUnknown(ctx, "test")
+		})
+
+		err := tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.Equal(t, 1, ws.commitCount)
+		require.Zero(t, ws.finalizeCount)
+		require.Equal(t, 1, ws.unknownCount)
+		require.Zero(t, ws.rollbackCount)
+		require.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
 	})
 }
 
@@ -229,6 +429,162 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 				require.NotEqual(t, lock.LockTable{}, bind)
 			},
 			nil)
+	})
+}
+
+func TestCheckLockTableBindsChanged(t *testing.T) {
+	tableID := uint64(10)
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		lockservice.RunLockServicesForTest(
+			zap.DebugLevel,
+			[]string{"s1"},
+			time.Second,
+			func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
+				s := ls[0]
+
+				_, err := s.Lock(ctx, tableID, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
+				require.NoError(t, err)
+
+				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+				tc.lockService = s
+				require.NoError(t, tc.AddLockTable(lock.LockTable{
+					Table:     tableID,
+					ServiceID: s.GetServiceID(),
+					Version:   lta.GetVersion() - 1,
+					Valid:     true,
+				}))
+
+				err = tc.CheckLockTableBinds(ctx)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+				err = tc.CheckLockTableBinds(ctx)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			},
+			nil)
+	})
+}
+
+func TestCheckLockTableBindsChangedWithStaleLocalCache(t *testing.T) {
+	tableID := uint64(10)
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		lockservice.RunLockServicesForTest(
+			zap.DebugLevel,
+			[]string{"s1"},
+			time.Second,
+			func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
+				s := ls[0]
+
+				_, err := s.Lock(ctx, tableID, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
+				require.NoError(t, err)
+				hold, err := s.GetLockTableBind(0, tableID)
+				require.NoError(t, err)
+				require.True(t, hold.Valid)
+
+				newerServiceID := fmt.Sprintf("%019d%s", time.Now().UnixNano()+int64(time.Second), hold.ServiceID[19:])
+				current := lta.Get(newerServiceID, hold.Group, hold.Table, hold.OriginTable, hold.Sharding)
+				require.True(t, current.Valid)
+				require.True(t, current.Changed(hold))
+
+				local, err := s.GetLockTableBind(0, tableID)
+				require.NoError(t, err)
+				require.False(t, local.Changed(hold))
+
+				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+				tc.lockService = s
+				require.NoError(t, tc.AddLockTable(hold))
+
+				err = tc.CheckLockTableBinds(ctx)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			},
+			nil)
+	})
+}
+
+func TestCheckLockTableBindsRPCErrClearsThrottle(t *testing.T) {
+	hold := lock.LockTable{Table: 10, ServiceID: "s1", Version: 1, Valid: true}
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		s := &checkLockTableBindLockService{err: moerr.NewInternalErrorNoCtx("test")}
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.lockService = s
+		require.NoError(t, tc.AddLockTable(hold))
+
+		err := tc.CheckLockTableBinds(ctx)
+		require.Error(t, err)
+		require.Equal(t, 1, s.calls)
+		require.True(t, tc.mu.lastLockTableBindCheck.IsZero())
+
+		s.err = nil
+		err = tc.CheckLockTableBinds(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 2, s.calls)
+	})
+}
+
+func TestCheckLockTableBindsCanceledContextClearsThrottle(t *testing.T) {
+	hold := lock.LockTable{Table: 10, ServiceID: "s1", Version: 1, Valid: true}
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		s := &checkLockTableBindLockService{}
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.lockService = s
+		require.NoError(t, tc.AddLockTable(hold))
+
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		err := tc.CheckLockTableBinds(cancelled)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, 0, s.calls)
+		require.True(t, tc.mu.lastLockTableBindCheck.IsZero())
+
+		err = tc.CheckLockTableBinds(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, s.calls)
+	})
+}
+
+func TestCheckLockTableBindsCanceledContextDuringLoopClearsThrottle(t *testing.T) {
+	hold1 := lock.LockTable{Table: 10, ServiceID: "s1", Version: 1, Valid: true}
+	hold2 := lock.LockTable{Table: 20, ServiceID: "s1", Version: 1, Valid: true}
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		cancelled, cancel := context.WithCancel(ctx)
+		s := &checkLockTableBindLockService{cancel: cancel}
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.lockService = s
+		require.NoError(t, tc.AddLockTable(hold1))
+		require.NoError(t, tc.AddLockTable(hold2))
+
+		err := tc.CheckLockTableBinds(cancelled)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, 1, s.calls)
+		require.True(t, tc.mu.lastLockTableBindCheck.IsZero())
+	})
+}
+
+func TestCheckLockTableBindsClosedTxnSkipsBindLookup(t *testing.T) {
+	hold := lock.LockTable{Table: 10, ServiceID: "s1", Version: 1, Valid: true}
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		s := &checkLockTableBindLockService{}
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.lockService = s
+		require.NoError(t, tc.AddLockTable(hold))
+		tc.mu.closed = true
+
+		err := tc.CheckLockTableBinds(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+		require.Equal(t, 0, s.calls)
+	})
+}
+
+func TestCheckLockTableBindsCleanSecondCallIsThrottled(t *testing.T) {
+	hold := lock.LockTable{Table: 10, ServiceID: "s1", Version: 1, Valid: true}
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		s := &checkLockTableBindLockService{}
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.lockService = s
+		require.NoError(t, tc.AddLockTable(hold))
+
+		require.NoError(t, tc.CheckLockTableBinds(ctx))
+		require.NoError(t, tc.CheckLockTableBinds(ctx))
+		require.Equal(t, 1, s.calls)
 	})
 }
 
@@ -660,6 +1016,29 @@ func TestBase(t *testing.T) {
 	)
 }
 
+func TestInitResetsLockTableBindCheckThrottle(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender,
+		) {
+			tc.mu.Lock()
+			tc.mu.lastLockTableBindCheck = time.Now()
+			tc.mu.lockTableBindChanged = true
+			tc.mu.Unlock()
+
+			tc.init(txn.TxnMeta{ID: []byte("reused-txn")})
+
+			tc.mu.RLock()
+			defer tc.mu.RUnlock()
+			require.True(t, tc.mu.lastLockTableBindCheck.IsZero())
+			require.False(t, tc.mu.lockTableBindChanged)
+		},
+	)
+}
+
 func runOperatorTests(
 	t *testing.T,
 	tc func(context.Context, *txnOperator, *testTxnSender),
@@ -803,5 +1182,25 @@ func TestCancelAndWaitRunningSQL_Timeout(t *testing.T) {
 			err := tc.CancelAndWaitRunningSQL(ctx, 0)
 			require.NoError(t, err)
 		},
+	)
+}
+
+func TestWithTxnLockWaitTimeout(t *testing.T) {
+	runOperatorTests(
+		t,
+		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+			require.Equal(t, time.Duration(0), LockWaitTimeoutFromTxn(tc))
+		},
+		WithTxnLockWaitTimeout(0),
+	)
+
+	runOperatorTests(
+		t,
+		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+			require.Equal(t, 60*time.Second, LockWaitTimeoutFromTxn(tc))
+			wrapped := struct{ TxnOperator }{TxnOperator: tc}
+			require.Equal(t, 60*time.Second, LockWaitTimeoutFromTxn(wrapped))
+		},
+		WithTxnLockWaitTimeout(60*time.Second),
 	)
 }

@@ -850,6 +850,25 @@ func CollectOffsetsByBetweenString(lval, rval string, hint uint8) func(*Vector) 
 	}
 }
 
+// CollectOffsetsByPrefixInFactory builds a "prefix IN" probe: for each row of
+// lvec it emits that row's offset when some entry of the captured rvec is a
+// prefix of it (types.PrefixCompare == 0). Each matching row is emitted once,
+// and offsets come back in ascending order.
+//
+// PRECONDITION: both lvec (the data column) and rvec (the needles) MUST be sorted
+// ascending. The routine is a single forward merge with galloping over runs of
+// non-matching rows, which is correct ONLY on sorted input. This contract is
+// enforced by the caller, not checked here, on both sides:
+//   - lvec (the block column) is sorted because this is wired exclusively as a
+//     SortedSearchFunc, reached only via BlockReadFilter.DecideSearchFunc when the
+//     block metadata reports IsSorted(); unsorted (or fake-PK) blocks are routed to
+//     the brute-force LinearCollectOffsetsByPrefixInFactory, which needs no ordering.
+//   - rvec (the needles) is the planner-built IN-list, normalized to ascending
+//     order at construction (InplaceSortAndCompact, tracked by the vector's
+//     GetSorted flag) — the same guarantee the binary-search IN filter and the
+//     zone-map PrefixIn rely on.
+//
+// Do not call this directly on data that is not known to be sorted.
 func CollectOffsetsByPrefixInFactory(rvec *Vector) func(*Vector) []int64 {
 	return func(lvec *Vector) []int64 {
 		lvlen := lvec.Length()
@@ -857,30 +876,75 @@ func CollectOffsetsByPrefixInFactory(rvec *Vector) func(*Vector) []int64 {
 			return nil
 		}
 
+		rvlen := rvec.Length()
+		if rvlen == 0 {
+			return nil
+		}
+
 		lcol, larea := MustVarlenaRawData(lvec)
 		rcol, rarea := MustVarlenaRawData(rvec)
 
-		rval := rcol[0].GetByteSlice(rarea)
-		rpos := 0
-		rvlen := rvec.Length()
-
 		sels := make([]int64, 0, rvlen)
-		for i := 0; i < lvlen; i++ {
+
+		rpos := 0
+		rval := rcol[0].GetByteSlice(rarea)
+		i := 0
+		for i < lvlen {
 			lval := lcol[i].GetByteSlice(larea)
-			for types.PrefixCompare(lval, rval) > 0 {
+			cmp := types.PrefixCompare(lval, rval)
+			if cmp > 0 {
+				// lval sorts past the current needle: advance to the next needle.
 				rpos++
 				if rpos == rvlen {
-					return sels
+					break
 				}
-
 				rval = rcol[rpos].GetByteSlice(rarea)
+				continue
 			}
-
-			if bytes.HasPrefix(lval, rval) {
+			if cmp == 0 {
+				// lval has rval as a prefix (PrefixCompare == 0 iff HasPrefix).
 				sels = append(sels, int64(i))
+				i++
+				continue
 			}
+			// cmp < 0: a run of rows here all sort below the current needle, so
+			// none can match it. PrefixCompare(lcol[k], rval) is monotonic in k
+			// (lcol is sorted; prefix truncation preserves lexicographic order),
+			// so gallop past the run to the first row >= rval instead of stepping
+			// one at a time. Output is identical to the linear merge (each row is
+			// tested once, offsets stay ascending); the win is turning the
+			// O(block-rows) walk into O(needles·log gap) when the needle set is
+			// sparse relative to the block — the IVF top-k -> base-row case.
+			i = gallopPrefixGE(lcol, larea, rval, i+1, lvlen)
 		}
 
 		return sels
 	}
+}
+
+// gallopPrefixGE returns the smallest index idx in [lo, hi) for which
+// PrefixCompare(lcol[idx].GetByteSlice(area), rval) >= 0, or hi if every row in
+// the range sorts below rval. It assumes that comparison is monotonic
+// non-decreasing over [lo, hi) (true when lcol is sorted). Exponential probing
+// makes a unit gap cost O(1) and a gap of g cost O(log g), so it never does
+// worse than the linear scan it replaces.
+func gallopPrefixGE(lcol []types.Varlena, area, rval []byte, lo, hi int) int {
+	prev, cur, step := lo, lo, 1
+	for cur < hi && types.PrefixCompare(lcol[cur].GetByteSlice(area), rval) < 0 {
+		prev = cur + 1
+		cur += step
+		step <<= 1
+	}
+	if cur > hi {
+		cur = hi
+	}
+	for prev < cur {
+		mid := int(uint(prev+cur) >> 1)
+		if types.PrefixCompare(lcol[mid].GetByteSlice(area), rval) < 0 {
+			prev = mid + 1
+		} else {
+			cur = mid
+		}
+	}
+	return prev
 }

@@ -37,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
@@ -122,6 +124,9 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		deleteNode:           make(map[uint64]int32),
 		skipStats:            skipStats,
 		optimizationHistory:  make([]string, 0),
+		// -1 means "no old-row delete maintenance" (set only on ODKU into an
+		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
+		irregularMaintDeleteStep: -1,
 	}
 }
 
@@ -2205,6 +2210,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
 	}
+
+	// Expose the SINK column remap so irregular-index maintenance sub-plans built
+	// after createQuery can translate pre-prune positions into the materialized
+	// sink's post-prune layout.
+	builder.sinkColRef = sinkColRef
 
 	err = builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
 	if err != nil {
@@ -4309,7 +4319,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 	h := &helpFunc{}
 
 	name := tree.NewUnresolvedColName("interval")
-	arg2 := tree.NewNumVal(astTimeWindow.Interval.Unit, astTimeWindow.Interval.Unit, false, tree.P_char)
+	arg2 := tree.NewTimeUnitExpr(astTimeWindow.Interval.Unit)
 	h.interval = &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(name),
 		Exprs: tree.Exprs{astTimeWindow.Interval.Val, arg2},
@@ -4319,7 +4329,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 
 	if astTimeWindow.Sliding != nil {
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewNumVal(astTimeWindow.Sliding.Unit, astTimeWindow.Sliding.Unit, false, tree.P_char)
+		arg2 = tree.NewTimeUnitExpr(astTimeWindow.Sliding.Unit)
 		h.sliding = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{astTimeWindow.Sliding.Val, arg2},
@@ -4332,7 +4342,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewNumVal("second", "second", false, tree.P_char)
+		arg2 = tree.NewTimeUnitExpr("second")
 		expr = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{div, arg2},
@@ -4458,7 +4468,11 @@ func appendSelectList(
 						break
 					}
 				}
-				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				if heading, ok := nameConstHeading(expr); ok {
+					ctx.headings = append(ctx.headings, heading)
+				} else {
+					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				}
 			}
 
 			newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
@@ -4473,6 +4487,37 @@ func appendSelectList(
 		}
 	}
 	return selectList, nil
+}
+
+func nameConstHeading(expr tree.Expr) (string, bool) {
+	fn, ok := expr.(*tree.FuncExpr)
+	if !ok || fn.FuncName == nil || !strings.EqualFold(fn.FuncName.Origin(), "name_const") || len(fn.Exprs) != 2 {
+		return "", false
+	}
+
+	nameExpr := fn.Exprs[0]
+	for {
+		paren, ok := nameExpr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		nameExpr = paren.Expr
+	}
+
+	name, ok := nameExpr.(*tree.NumVal)
+	if !ok || !validNameConstNameLiteral(name) {
+		return "", false
+	}
+	return name.String(), true
+}
+
+func validNameConstNameLiteral(name *tree.NumVal) bool {
+	switch name.ValType {
+	case tree.P_null, tree.P_nulltext, tree.P_star:
+		return false
+	default:
+		return true
+	}
 }
 
 func bindProjectionList(
@@ -5463,6 +5508,18 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		exprs = append(exprs, curExpr)
 	}
 	id := tbl.Id()
+
+	// Plugin-registered table functions (hnsw_create / hnsw_search /
+	// ivf_create / ivf_search / cagra_create / cagra_search /
+	// ivfpq_create / ivfpq_search) live under
+	// pkg/vectorindex/<algo>/plugin/plan/tablefunc.go. The plugin
+	// registers each builder via planplugin.RegisterTableFunc at init
+	// time; this lookup routes the parser-side dispatch through that
+	// registry before the hardcoded switch below.
+	if b, ok := planplugin.TableFunc(id); ok {
+		return b(builder, tbl, ctx, exprs, children)
+	}
+
 	switch id {
 	case "unnest":
 		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, children)
@@ -5496,14 +5553,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildStageList(tbl, ctx, exprs, children)
 	case "moplugin_table":
 		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, children)
-	case "hnsw_create":
-		nodeId, err = builder.buildHnswCreate(tbl, ctx, exprs, children)
-	case "hnsw_search":
-		nodeId, err = builder.buildHnswSearch(tbl, ctx, exprs, children)
-	case "ivf_create":
-		nodeId, err = builder.buildIvfCreate(tbl, ctx, exprs, children)
-	case "ivf_search":
-		nodeId, err = builder.buildIvfSearch(tbl, ctx, exprs, children)
 	case "parse_jsonl_data":
 		nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, children)
 	case "parse_jsonl_file":
@@ -5512,14 +5561,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId = builder.buildTableStats(tbl, ctx, exprs, children)
 	case "load_file_chunks":
 		nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, children)
-	case "cagra_create":
-		nodeId, err = builder.buildCagraCreate(tbl, ctx, exprs, children)
-	case "cagra_search":
-		nodeId, err = builder.buildCagraSearch(tbl, ctx, exprs, children)
-	case "ivfpq_create":
-		nodeId, err = builder.buildIvfpqCreate(tbl, ctx, exprs, children)
-	case "ivfpq_search":
-		nodeId, err = builder.buildIvfpqSearch(tbl, ctx, exprs, children)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}
@@ -5673,12 +5714,21 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 		} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 			return builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
 		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
-			var ts timestamp.Timestamp
-			if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
-				return
+			// try human-readable datetime first, fall back to debug timestamp format
+			if ts, err2 := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval); err2 == nil {
+				tsNano := ts.UTC().UnixNano()
+				if tsNano <= 0 {
+					err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+					return
+				}
+				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
+			} else {
+				var ts timestamp.Timestamp
+				if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
+					return
+				}
+				snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 			}
-
-			snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 		} else if tsExpr.Type == tree.ASOFTIMESTAMP {
 			var ts int64
 			if ts, err = doResolveTimeStamp(lit.Sval); err != nil {

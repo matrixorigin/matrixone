@@ -375,12 +375,13 @@ func sqlTaskInt64(v any) int64 {
 
 // Type
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
-%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE
+%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE PRECISION
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
+%token <str> GEOMETRY32 GEOGRAPHY GEOGRAPHY32 POINT32 LINESTRING32 POLYGON32 GEOMETRYCOLLECTION32 MULTIPOINT32 MULTILINESTRING32 MULTIPOLYGON32
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
 
 // Select option
@@ -415,7 +416,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -478,7 +479,8 @@ func sqlTaskInt64(v any) int64 {
 %token <str> RECURSIVE CONFIG DRAINER
 
 // Source
-%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME SCHEDULE TIMEZONE TIMEOUT
+%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL RESUME SCHEDULE TIMEZONE TIMEOUT
+%nonassoc <str> TASK
 
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
@@ -541,7 +543,9 @@ func sqlTaskInt64(v any) int64 {
 %token <str> MO_TS
 
 // PITR
-%token <str> PITR RECOVERY_WINDOW INTERNAL
+%token <str> PITR RECOVERY_WINDOW
+%nonassoc <str> INTERNAL
+%nonassoc CDC_TASK_NAME
 
 // CDC
 %token <str> CDC
@@ -875,7 +879,7 @@ func sqlTaskInt64(v any) int64 {
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 %type <snapshotObject> snapshot_object_opt
-%type <allCDCOption> all_cdc_opt
+%type <allCDCOption> all_cdc_opt show_cdc_opt drop_cdc_opt
 
 %type <indexHintType> index_hint_type
 %type <indexHintScope> index_hint_scope
@@ -887,6 +891,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> BACKUP FILESYSTEM PARALLELISM RESTORE
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
+%token <str> ARRAY
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -1103,7 +1108,7 @@ create_cdc_opt:
     }
 
 show_cdc_stmt:
-    SHOW CDC all_cdc_opt
+    SHOW CDC show_cdc_opt
     {
         $$ = &tree.ShowCDC{
                     Option:      $3,
@@ -1119,9 +1124,35 @@ pause_cdc_stmt:
     }
 
 drop_cdc_stmt:
-    DROP CDC all_cdc_opt internal_opt
+    DROP CDC exists_opt drop_cdc_opt internal_opt
     {
-        $$ = tree.NewDropCDC($3, $4)
+        $$ = tree.NewDropCDC($4, $3, $5)
+    }
+
+show_cdc_opt:
+    {
+        $$ = &tree.AllOrNotCDC{
+                    All: true,
+                    TaskName: "",
+        }
+    }
+|   all_cdc_opt
+    {
+        $$ = $1
+    }
+
+drop_cdc_opt:
+    all_cdc_opt
+    {
+        $$ = $1
+    }
+|   ident
+    %prec CDC_TASK_NAME
+    {
+        $$ = &tree.AllOrNotCDC{
+            All: false,
+            TaskName: tree.Identifier($1.Compare()),
+        }
     }
 
 all_cdc_opt:
@@ -4097,12 +4128,16 @@ alter_table_alter:
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
-| REINDEX ident HNSW
+| REINDEX ident HNSW index_option_list
     {
-	
         var io *tree.IndexOption = nil
-        io = tree.NewIndexOption()
-        io.IType = tree.INDEX_TYPE_HNSW
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_HNSW
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_HNSW
+        }
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
@@ -4119,11 +4154,16 @@ alter_table_alter:
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
-| REINDEX ident CAGRA
+| REINDEX ident CAGRA index_option_list
     {
         var io *tree.IndexOption = nil
-        io = tree.NewIndexOption()
-        io.IType = tree.INDEX_TYPE_CAGRA
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_CAGRA
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_CAGRA
+        }
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
@@ -8263,6 +8303,12 @@ index_option_list:
               opt1.BitsPerCode = opt2.BitsPerCode
             } else if opt2.ITopkSize > 0 {
               opt1.ITopkSize = opt2.ITopkSize
+            } else if opt2.KmeansTrainPercent > 0 {
+              opt1.KmeansTrainPercent = opt2.KmeansTrainPercent
+            } else if opt2.KmeansMaxIteration > 0 {
+              opt1.KmeansMaxIteration = opt2.KmeansMaxIteration
+            } else if opt2.MaxIndexCapacity > 0 {
+              opt1.MaxIndexCapacity = opt2.MaxIndexCapacity
             } else if len(opt2.IncludeColumns) > 0 {
               opt1.IncludeColumns = opt2.IncludeColumns
             }
@@ -8412,6 +8458,39 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.BitsPerCode = val
+	$$ = io
+    }
+|   KMEANS_TRAIN_PERCENT equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("KMEANS_TRAIN_PERCENT should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.KmeansTrainPercent = val
+	$$ = io
+    }
+|   KMEANS_MAX_ITERATION equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("KMEANS_MAX_ITERATION should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.KmeansMaxIteration = val
+	$$ = io
+    }
+|   MAX_INDEX_CAPACITY equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("MAX_INDEX_CAPACITY should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.MaxIndexCapacity = val
 	$$ = io
     }
 |    ASYNC
@@ -9070,13 +9149,15 @@ create_table_stmt:
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name to_account_opt
     {
-	t := tree.NewCloneTable()
-	t.CreateTable.Table = *$5
-	t.CreateTable.LikeTableName = *$7
-	t.CreateTable.IsAsLike = true
-	t.SrcTable = *$7
-	t.ToAccountOpt = $8
-	$$ = t
+        t := tree.NewCloneTable()
+        t.CreateTable.Temporary = $2
+        t.CreateTable.IfNotExists = $4
+        t.CreateTable.Table = *$5
+        t.CreateTable.LikeTableName = *$7
+        t.CreateTable.IsAsLike = true
+        t.SrcTable = *$7
+        t.ToAccountOpt = $8
+        $$ = t
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name FROM STRING ident PUBLICATION ident sync_interval_opt
     {
@@ -11491,7 +11572,9 @@ mysql_cast_type:
 
 integer_opt:
     %prec LOWER_THAN_INT
-    {}
+    {
+        $$ = ""
+    }
 |    INTEGER
 |    INT
 
@@ -11911,6 +11994,17 @@ function_call_generic:
             Exprs: $3,
         }
     }
+|   INTERVAL '(' bit_expr ',' expression_list ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        exprs := tree.Exprs{$3}
+        exprs = append(exprs, $5...)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: exprs,
+        }
+    }
 |   substr_option '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
@@ -11947,6 +12041,15 @@ function_call_generic:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{timeUinit, $5},
+        }
+    }
+|   POSITION '(' bit_expr IN bit_expr ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
         }
     }
 |   func_not_keyword '(' expression_list_opt ')'
@@ -12615,7 +12718,7 @@ predicate:
     {
         $$ = tree.NewRangeCond(true, $1, $4, $6)
     }
-|   bit_expr
+|   bit_expr %prec LOWER_THAN_COMMA
 
 like_escape_opt:
     {
@@ -12764,10 +12867,7 @@ literal:
     }
 |   UNDERSCORE_BINARY HEXNUM
     {
-        if strings.HasPrefix($2, "0x") {
-            $2 = $2[2:]
-        }
-        $$ = tree.NewNumVal($2, $2, false, tree.P_bit)
+        $$ = tree.NewNumVal($2, $2, false, tree.P_hexnum)
     }
 |   DECIMAL_VALUE
     {
@@ -12796,6 +12896,19 @@ column_type:
 |   char_type
 |   time_type
 |   spatial_type
+|   ARRAY '(' column_type ')'
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                FamilyString: $1,
+                Locale: &locale,
+                Oid:uint32(defines.MYSQL_TYPE_TYPED_ARRAY),
+                ArrayContents: $3,
+            },
+        }
+    }
 
 numeric_type:
     int_type length_opt
@@ -13014,6 +13127,34 @@ decimal_type:
        			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
                 Scale: $2.Scale,
+        	},
+        }
+    }
+|   DOUBLE PRECISION float_length_opt
+    {
+        // DOUBLE PRECISION is the SQL-standard synonym for DOUBLE (float64).
+        locale := ""
+        if $3.DisplayWith > 255 {
+            yylex.Error("Display width for double out of range (max = 255)")
+            goto ret1
+        }
+        if $3.Scale > 30 {
+            yylex.Error("Display scale for double out of range (max = 30)")
+            goto ret1
+        }
+        if $3.Scale != tree.NotDefineDec && $3.Scale > $3.DisplayWith {
+            yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+                goto ret1
+        }
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+        		Family: tree.FloatFamily,
+                FamilyString: $1,
+        		Width:  64,
+        		Locale: &locale,
+       			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
+                DisplayWith: $3.DisplayWith,
+                Scale: $3.Scale,
         	},
         }
     }
@@ -13528,15 +13669,7 @@ declare_stmt:
 spatial_type:
     spatial_type_name
     {
-        locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
-                Family: tree.GeometryFamily,
-                FamilyString: $1,
-                Locale: &locale,
-                Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
-            },
-        }
+        $$ = tree.NewSpatialType($1)
     }
 
 spatial_type_name:
@@ -13548,6 +13681,16 @@ spatial_type_name:
 |   MULTIPOINT
 |   MULTILINESTRING
 |   MULTIPOLYGON
+|   GEOGRAPHY
+|   GEOMETRY32
+|   GEOGRAPHY32
+|   POINT32
+|   LINESTRING32
+|   POLYGON32
+|   GEOMETRYCOLLECTION32
+|   MULTIPOINT32
+|   MULTILINESTRING32
+|   MULTIPOLYGON32
 
 // TODO:
 // need to encode SQL string
@@ -13873,6 +14016,7 @@ non_reserved_keyword:
 |   ACCOUNTS
 |   AGAINST
 |   ALWAYS
+|   ARRAY
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
 |   ATTRIBUTE
@@ -13946,6 +14090,16 @@ non_reserved_keyword:
 |   GENERATED
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
+|   GEOMETRY32
+|   GEOGRAPHY
+|   GEOGRAPHY32
+|   POINT32
+|   LINESTRING32
+|   POLYGON32
+|   GEOMETRYCOLLECTION32
+|   MULTIPOINT32
+|   MULTILINESTRING32
+|   MULTIPOLYGON32
 |   GLOBAL
 |   GRAPH_DEGREE
 |   HNSW
@@ -13966,6 +14120,9 @@ non_reserved_keyword:
 |   KEY_BLOCK_SIZE
 |   LISTS
 |   OP_TYPE
+|   KMEANS_TRAIN_PERCENT
+|   KMEANS_MAX_ITERATION
+|   MAX_INDEX_CAPACITY
 |   KEYS
 |   LANGUAGE
 |   LESS
@@ -14276,7 +14433,6 @@ func_not_keyword:
 |   NOW
 |    ADDDATE
 |   CURDATE
-|   POSITION
 |   SESSION_USER
 |   SUBDATE
 |   SYSTEM_USER

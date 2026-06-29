@@ -171,6 +171,8 @@ type TxnOperator interface {
 	AddLockTable(locktable lock.LockTable) error
 	// HasLockTable check if had locked table
 	HasLockTable(table uint64) bool
+	// CheckLockTableBinds checks held lock table binds without changing commit state.
+	CheckLockTableBinds(ctx context.Context) error
 	// AddWaitLock add wait lock for current txn
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
@@ -265,6 +267,11 @@ type Workspace interface {
 	Adjust(writeOffset uint64) error
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
+	FinalizeCommit(ctx context.Context)
+	// FinalizeCommitWithUnknownResult is called after the commit request may
+	// have reached TN, but the final commit result is unknown. It must not run
+	// rollback cleanup, because the transaction may have committed.
+	FinalizeCommitWithUnknownResult(ctx context.Context)
 	Rollback(ctx context.Context) error
 
 	IncrSQLCount()

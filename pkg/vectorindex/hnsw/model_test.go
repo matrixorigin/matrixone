@@ -440,9 +440,9 @@ func TestLoadIndex_NewlyCreated(t *testing.T) {
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.IndexCapacity = 64
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
-		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
-		IndexCapacity: 64}
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
 	// FileSize=0, Path="" triggers the initIndex path.
 	idx := &HnswModel[float32]{MaxCapacity: 64, NThread: 1}
@@ -570,9 +570,9 @@ func TestCorruptedIndexFile(t *testing.T) {
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.IndexCapacity = 64
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
-		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
-		IndexCapacity: 64}
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
 	garbage := []byte{}
 

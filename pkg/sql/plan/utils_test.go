@@ -566,6 +566,34 @@ func TestInitInfileParam_Plain(t *testing.T) {
 	param.Option = []string{"filepath", "/csv"}
 	require.NoError(t, InitInfileParam(param))
 	assert.Equal(t, "csv", param.Format)
+
+	// the write_file_pattern and comment keys are accepted (no-op on the read
+	// init) and the comment value remains retrievable from Option.
+	param = &tree.ExternParam{}
+	param.Option = []string{"filepath", "/csv", "comment", "REM", "write_file_pattern", "stage://s/p-%U.csv"}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, "csv", param.Format)
+	assert.Equal(t, "REM", GetCSVComment(param))
+}
+
+// TestGetCSVComment covers the COMMENT option accessor.
+func TestGetCSVComment(t *testing.T) {
+	assert.Equal(t, "", GetCSVComment(nil))
+	assert.Equal(t, "", GetCSVComment(&tree.ExternParam{}))
+
+	p := &tree.ExternParam{}
+	p.Option = []string{"format", "csv", "comment", "#"}
+	assert.Equal(t, "#", GetCSVComment(p))
+
+	// case-insensitive key, multi-char value
+	p = &tree.ExternParam{}
+	p.Option = []string{"COMMENT", "REM"}
+	assert.Equal(t, "REM", GetCSVComment(p))
+
+	// absent -> empty (no comment marker)
+	p = &tree.ExternParam{}
+	p.Option = []string{"format", "csv"}
+	assert.Equal(t, "", GetCSVComment(p))
 }
 
 // TestInitInfileParam_HiveLegacyOption exercises parseHiveOptionKV via
@@ -1444,6 +1472,21 @@ func TestInitStageS3Param_HappyAndErrors(t *testing.T) {
 			Credentials: baseCreds,
 		}
 		require.Error(t, InitStageS3Param(param, sd))
+	})
+
+	t.Run("stage_filepath_option_ignored", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		param.Option = []string{"filepath", "stage://pq_stage/data.parquet", "format", "parquet"}
+		sd := stage.StageDef{
+			Url:         parse("s3://b/prefix/data.parquet"),
+			Credentials: baseCreds,
+		}
+		require.NoError(t, InitStageS3Param(param, sd))
+		assert.Equal(t, tree.S3, param.ScanType)
+		assert.Equal(t, "parquet", param.Format)
+		assert.Equal(t, "b", param.S3Param.Bucket)
+		assert.Equal(t, "/prefix/data.parquet", param.Filepath)
 	})
 
 	t.Run("jsonline_without_jsondata", func(t *testing.T) {

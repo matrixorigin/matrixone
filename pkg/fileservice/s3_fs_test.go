@@ -36,6 +36,46 @@ import (
 	"go.uber.org/zap"
 )
 
+type objectStorageReadRange struct {
+	key string
+	min *int64
+	max *int64
+}
+
+type readRangeRecordingObjectStorage struct {
+	ObjectStorage
+	mu    sync.Mutex
+	reads []objectStorageReadRange
+}
+
+func (r *readRangeRecordingObjectStorage) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+	r.mu.Lock()
+	r.reads = append(r.reads, objectStorageReadRange{
+		key: key,
+		min: cloneInt64Pointer(min),
+		max: cloneInt64Pointer(max),
+	})
+	r.mu.Unlock()
+	return r.ObjectStorage.Read(ctx, key, min, max)
+}
+
+func (r *readRangeRecordingObjectStorage) lastRead() (objectStorageReadRange, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.reads) == 0 {
+		return objectStorageReadRange{}, false
+	}
+	return r.reads[len(r.reads)-1], true
+}
+
+func cloneInt64Pointer(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	ret := *v
+	return &ret
+}
+
 func TestS3FS(
 	t *testing.T,
 ) {
@@ -682,6 +722,63 @@ func TestS3FSFullObjectDiskCacheFillDoesNotRetainWholeObjectBuffer(t *testing.T)
 	hitVec.Release()
 }
 
+func TestS3FSFullObjectDiskCacheFillDoesNotReturnWholeObjectDataWithCachedData(t *testing.T) {
+	ctx := context.Background()
+	var pcSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &pcSet)
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close(ctx)
+
+	data := bytes.Repeat([]byte("abcd"), 1<<18)
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+				Data: data,
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+
+	vec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size:        int64(len(data)),
+				ToCacheData: CacheOriginalData,
+			},
+		},
+	}
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
+	assert.NotNil(t, vec.Entries[0].CachedData)
+	if vec.Entries[0].CachedData != nil {
+		assert.Equal(t, data, vec.Entries[0].CachedData.Bytes())
+	}
+	assert.Nil(t, vec.Entries[0].Data)
+	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
+	vec.Release()
+}
+
 func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 	ctx := context.Background()
 	fs, err := NewS3FS(
@@ -818,6 +915,11 @@ func TestS3FSRangeReadSkipsFullObjectIOMergeBeforeDiskCacheUpdate(t *testing.T) 
 	})
 	assert.Nil(t, err)
 
+	recorder := &readRangeRecordingObjectStorage{
+		ObjectStorage: fs.storage,
+	}
+	fs.storage = recorder
+
 	fullObjectVec := &IOVector{
 		FilePath: "foo/bar",
 		Entries: []IOEntry{
@@ -866,7 +968,16 @@ func TestS3FSRangeReadSkipsFullObjectIOMergeBeforeDiskCacheUpdate(t *testing.T) 
 	case result := <-readDone:
 		assert.Nil(t, result.err)
 		assert.Equal(t, data[123:130], result.data)
+		assert.True(t, fs.ioMerger.IsMerging(fullObjectVec.ioMergeKey()))
 		assert.False(t, fs.diskCache.isUpdating(fs.diskCache.pathForFile("foo/bar")))
+		read, ok := recorder.lastRead()
+		assert.True(t, ok)
+		if assert.NotNil(t, read.min) {
+			assert.Equal(t, int64(123), *read.min)
+		}
+		if assert.NotNil(t, read.max) {
+			assert.Equal(t, int64(130), *read.max)
+		}
 	case <-time.After(2 * time.Second):
 		releaseMerge()
 		result := <-readDone

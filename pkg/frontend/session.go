@@ -145,6 +145,8 @@ type Session struct {
 
 	priv *privilege
 
+	ddlOwnerRoleID uint32
+
 	errInfo *errInfo
 
 	cache       *privilegeCache
@@ -1719,6 +1721,17 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 	return
 }
 
+func (ses *Session) refreshGlobalSysVars(ctx context.Context, bh BackgroundExec) (err error) {
+	var sv *SystemVariables
+	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.gSysVars = sv
+	return
+}
+
 func (ses *Session) GetPrivilege() *privilege {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1729,6 +1742,22 @@ func (ses *Session) SetPrivilege(priv *privilege) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.priv = priv
+}
+
+func (ses *Session) SetDDLOwnerRoleID(roleID uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.ddlOwnerRoleID = roleID
+}
+
+func (ses *Session) GetDDLOwnerRoleID() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.ddlOwnerRoleID
+}
+
+func (ses *Session) ClearDDLOwnerRoleID() {
+	ses.SetDDLOwnerRoleID(0)
 }
 
 func (ses *Session) SetFromRealUser(b bool) {

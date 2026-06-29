@@ -644,10 +644,125 @@ const (
 	JSON_SCHEMA_VALID_REPORT = 461
 	JSON_VALUE               = 462
 
+	// GIS binary I/O
+	ST_ASWKB       = 463
+	ST_GEOMFROMWKB = 464
+
+	// GIS typed text constructors
+	ST_POINTFROMTEXT    = 465
+	ST_LINEFROMTEXT     = 466
+	ST_POLYFROMTEXT     = 467
+	ST_MPOINTFROMTEXT   = 468
+	ST_MLINEFROMTEXT    = 469
+	ST_MPOLYFROMTEXT    = 470
+	ST_GEOMCOLLFROMTEXT = 471
+
+	// GIS typed WKB constructors
+	ST_POINTFROMWKB    = 472
+	ST_LINEFROMWKB     = 473
+	ST_POLYFROMWKB     = 474
+	ST_MPOINTFROMWKB   = 475
+	ST_MLINEFROMWKB    = 476
+	ST_MPOLYFROMWKB    = 477
+	ST_GEOMCOLLFROMWKB = 478
+
+	// GIS point/misc
+	ST_LONGITUDE       = 479
+	ST_LATITUDE        = 480
+	ST_SWAPXY          = 481
+	ST_VALIDATE        = 482
+	ST_MAKEENVELOPE    = 483
+	ST_DISTANCE_SPHERE = 484
+
+	// GIS GeoHash
+	ST_GEOHASH          = 485
+	ST_LATFROMGEOHASH   = 486
+	ST_LONGFROMGEOHASH  = 487
+	ST_POINTFROMGEOHASH = 488
+
+	// GIS MBR (minimum bounding rectangle) predicates
+	MBRCONTAINS   = 489
+	MBRCOVEREDBY  = 490
+	MBRCOVERS     = 491
+	MBRDISJOINT   = 492
+	MBREQUALS     = 493
+	MBRINTERSECTS = 494
+	MBROVERLAPS   = 495
+	MBRTOUCHES    = 496
+	MBRWITHIN     = 497
+
+	// GIS GeoJSON
+	ST_ASGEOJSON       = 498
+	ST_GEOMFROMGEOJSON = 499
+
+	// GIS constructive operations
+	ST_CONVEXHULL = 500
+	ST_SIMPLIFY   = 501
+	ST_COLLECT    = 502
+
+	// GIS linear referencing
+	ST_LINEINTERPOLATEPOINT  = 503
+	ST_LINEINTERPOLATEPOINTS = 504
+	ST_POINTATDISTANCE       = 505
+
+	// GIS discrete curve distances
+	ST_FRECHETDISTANCE   = 506
+	ST_HAUSDORFFDISTANCE = 507
+
+	// GIS Boolean overlay operations
+	ST_UNION         = 508
+	ST_INTERSECTION  = 509
+	ST_DIFFERENCE    = 510
+	ST_SYMDIFFERENCE = 511
+
+	// GIS buffer
+	ST_BUFFER = 512
+
+	// merged from upstream/main (renumbered to avoid colliding with the GIS block above)
+	CAST_JSON_TO_ARRAY = 513
+
+	BIT_COUNT   = 514
+	IS_UUID     = 515
+	UUID_TO_BIN = 516
+	BIN_TO_UUID = 517
+
+	NAME_CONST        = 518
+	GET_LOCK          = 519
+	RELEASE_LOCK      = 520
+	IS_FREE_LOCK      = 521
+	IS_USED_LOCK      = 522
+	RELEASE_ALL_LOCKS = 523
+
+	// S2 geometry (github.com/golang/geo/s2) cell functions. A CellId is a
+	// BIGINT UNSIGNED (uint64). See docs/design/s2h3_funcs.md.
+	S2_CELLID               = 524
+	S2_CELLID_LEVEL         = 525
+	S2_CELLID_CENTER        = 526
+	S2_CELLID_AREA          = 527
+	S2_CELLID_PARENT        = 528
+	S2_CELLID_EDGENEIGHBORS = 529
+	S2_CELLID_ALLNEIGHBORS  = 530
+	S2_CELLID_ARENEIGHBORS  = 531
+
+	// H3 hierarchical hexagonal index (github.com/uber/h3-go) functions. An
+	// H3Index is a BIGINT UNSIGNED (uint64). See docs/design/s2h3_funcs.md.
+	H3_H3INDEX              = 532
+	H3_H3INDEX_RESOLUTION   = 533
+	H3_H3INDEX_CENTER       = 534
+	H3_H3INDEX_BOUNDARY     = 535
+	H3_H3INDEX_PARENT       = 536
+	H3_H3INDEX_NEIGHBORS    = 537
+	H3_H3INDEX_ARENEIGHBORS = 538
+
+	// GIS numeric point constructors: ST_Point(x, y) -> GEOMETRY (POINT),
+	// ST_Point32(x, y) -> GEOMETRY32 (POINT), where x is longitude/X and y is
+	// latitude/Y.
+	ST_POINT   = 539
+	ST_POINT32 = 540
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-
-	FUNCTION_END_NUMBER = 463
+	FUNCTION_END_NUMBER = 541
 )
 
 // functionIdRegister is what function we have registered already.
@@ -725,6 +840,7 @@ var functionIdRegister = map[string]int32{
 	"bit_or":                BIT_OR,
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
+	"bit_count":             BIT_COUNT,
 	"cluster_centers":       CLUSTER_CENTERS,
 	"subvector":             SUB_VECTOR,
 	"std":                   STDDEV_POP,
@@ -798,6 +914,7 @@ var functionIdRegister = map[string]int32{
 	"from_days":         FROM_DAYS,
 	"from_unixtime":     FROM_UNIXTIME,
 	"get_format":        GET_FORMAT,
+	"interval":          INTERVAL,
 	"left":              LEFT,
 	"right":             RIGHT,
 	// unary functions
@@ -943,6 +1060,9 @@ var functionIdRegister = map[string]int32{
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"mo_win_truncate":                MO_WIN_TRUNCATE,
 	"uuid":                           UUID,
+	"is_uuid":                        IS_UUID,
+	"uuid_to_bin":                    UUID_TO_BIN,
+	"bin_to_uuid":                    BIN_TO_UUID,
 	"load_file":                      LOAD_FILE,
 	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
@@ -988,6 +1108,11 @@ var functionIdRegister = map[string]int32{
 	"field":                          FIELD,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
+	"get_lock":                       GET_LOCK,
+	"release_lock":                   RELEASE_LOCK,
+	"is_free_lock":                   IS_FREE_LOCK,
+	"is_used_lock":                   IS_USED_LOCK,
+	"release_all_locks":              RELEASE_ALL_LOCKS,
 	"split_part":                     SPLIT_PART,
 	"insert":                         INSERT,
 	"instr":                          INSTR,
@@ -1019,6 +1144,7 @@ var functionIdRegister = map[string]int32{
 	"mo_explain_phy":                 MO_EXPLAIN_PHY,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
+	"name_const":                     NAME_CONST,
 	"values":                         VALUES,
 	"binary":                         BINARY,
 	"internal_char_length":           INTERNAL_CHAR_LENGTH,
@@ -1039,8 +1165,99 @@ var functionIdRegister = map[string]int32{
 	"cast_set_value_to_index":        CAST_SET_VALUE_TO_INDEX,
 	"cast_set_index_value_to_index":  CAST_SET_INDEX_VALUE_TO_INDEX,
 	"cast_geometry_to_subtype":       CAST_GEOMETRY_TO_SUBTYPE,
+	"cast_json_to_array":             CAST_JSON_TO_ARRAY,
 	"st_astext":                      ST_ASTEXT,
+	"st_aswkt":                       ST_ASTEXT,
+	"st_aswkb":                       ST_ASWKB,
+	"st_asbinary":                    ST_ASWKB,
 	"st_geomfromtext":                ST_GEOMFROMTEXT,
+	"st_geometryfromtext":            ST_GEOMFROMTEXT,
+	"st_geomfromwkb":                 ST_GEOMFROMWKB,
+	"st_geomfrombinary":              ST_GEOMFROMWKB,
+	"st_point":                       ST_POINT,
+	"st_point32":                     ST_POINT32,
+	"st_pointfromtext":               ST_POINTFROMTEXT,
+	"st_linefromtext":                ST_LINEFROMTEXT,
+	"st_linestringfromtext":          ST_LINEFROMTEXT,
+	"st_polyfromtext":                ST_POLYFROMTEXT,
+	"st_polygonfromtext":             ST_POLYFROMTEXT,
+	"st_mpointfromtext":              ST_MPOINTFROMTEXT,
+	"st_multipointfromtext":          ST_MPOINTFROMTEXT,
+	"st_mlinefromtext":               ST_MLINEFROMTEXT,
+	"st_multilinestringfromtext":     ST_MLINEFROMTEXT,
+	"st_mpolyfromtext":               ST_MPOLYFROMTEXT,
+	"st_multipolygonfromtext":        ST_MPOLYFROMTEXT,
+	"st_geomcollfromtext":            ST_GEOMCOLLFROMTEXT,
+	"st_geomcollfromtxt":             ST_GEOMCOLLFROMTEXT,
+	"st_geometrycollectionfromtext":  ST_GEOMCOLLFROMTEXT,
+	"st_geometryfromwkb":             ST_GEOMFROMWKB,
+	"st_pointfromwkb":                ST_POINTFROMWKB,
+	"st_linefromwkb":                 ST_LINEFROMWKB,
+	"st_linestringfromwkb":           ST_LINEFROMWKB,
+	"st_polyfromwkb":                 ST_POLYFROMWKB,
+	"st_polygonfromwkb":              ST_POLYFROMWKB,
+	"st_mpointfromwkb":               ST_MPOINTFROMWKB,
+	"st_multipointfromwkb":           ST_MPOINTFROMWKB,
+	"st_mlinefromwkb":                ST_MLINEFROMWKB,
+	"st_multilinestringfromwkb":      ST_MLINEFROMWKB,
+	"st_mpolyfromwkb":                ST_MPOLYFROMWKB,
+	"st_multipolygonfromwkb":         ST_MPOLYFROMWKB,
+	"st_geomcollfromwkb":             ST_GEOMCOLLFROMWKB,
+	"st_geometrycollectionfromwkb":   ST_GEOMCOLLFROMWKB,
+	"st_longitude":                   ST_LONGITUDE,
+	"st_latitude":                    ST_LATITUDE,
+	"st_swapxy":                      ST_SWAPXY,
+	"st_validate":                    ST_VALIDATE,
+	"st_makeenvelope":                ST_MAKEENVELOPE,
+	"st_distance_sphere":             ST_DISTANCE_SPHERE,
+	"st_geohash":                     ST_GEOHASH,
+	"st_latfromgeohash":              ST_LATFROMGEOHASH,
+	"st_longfromgeohash":             ST_LONGFROMGEOHASH,
+	"st_pointfromgeohash":            ST_POINTFROMGEOHASH,
+	"mbrcontains":                    MBRCONTAINS,
+	"mbrcoveredby":                   MBRCOVEREDBY,
+	"mbrcovers":                      MBRCOVERS,
+	"mbrdisjoint":                    MBRDISJOINT,
+	"mbrequals":                      MBREQUALS,
+	"mbrintersects":                  MBRINTERSECTS,
+	"mbroverlaps":                    MBROVERLAPS,
+	"mbrtouches":                     MBRTOUCHES,
+	"mbrwithin":                      MBRWITHIN,
+	"st_asgeojson":                   ST_ASGEOJSON,
+	"st_geomfromgeojson":             ST_GEOMFROMGEOJSON,
+	"st_convexhull":                  ST_CONVEXHULL,
+	"st_simplify":                    ST_SIMPLIFY,
+	"st_collect":                     ST_COLLECT,
+	"st_lineinterpolatepoint":        ST_LINEINTERPOLATEPOINT,
+	"st_lineinterpolatepoints":       ST_LINEINTERPOLATEPOINTS,
+	"st_pointatdistance":             ST_POINTATDISTANCE,
+	"st_frechetdistance":             ST_FRECHETDISTANCE,
+	"st_hausdorffdistance":           ST_HAUSDORFFDISTANCE,
+	"st_union":                       ST_UNION,
+	"st_intersection":                ST_INTERSECTION,
+	"st_difference":                  ST_DIFFERENCE,
+	"st_symdifference":               ST_SYMDIFFERENCE,
+	"st_buffer":                      ST_BUFFER,
+	"s2_cellid":                      S2_CELLID,
+	"s2_cellid_level":                S2_CELLID_LEVEL,
+	"s2_cellid_center":               S2_CELLID_CENTER,
+	"s2_cellid_area":                 S2_CELLID_AREA,
+	"s2_cellid_parent":               S2_CELLID_PARENT,
+	"s2_cellid_edgeneighbours":       S2_CELLID_EDGENEIGHBORS,
+	"s2_cellid_edgeneighbors":        S2_CELLID_EDGENEIGHBORS,
+	"s2_cellid_allneighbours":        S2_CELLID_ALLNEIGHBORS,
+	"s2_cellid_allneighbors":         S2_CELLID_ALLNEIGHBORS,
+	"s2_cellid_areneighbours":        S2_CELLID_ARENEIGHBORS,
+	"s2_cellid_areneighbors":         S2_CELLID_ARENEIGHBORS,
+	"h3_h3index":                     H3_H3INDEX,
+	"h3_h3index_resolution":          H3_H3INDEX_RESOLUTION,
+	"h3_h3index_center":              H3_H3INDEX_CENTER,
+	"h3_h3index_boundary":            H3_H3INDEX_BOUNDARY,
+	"h3_h3index_parent":              H3_H3INDEX_PARENT,
+	"h3_h3index_neighbours":          H3_H3INDEX_NEIGHBORS,
+	"h3_h3index_neighbors":           H3_H3INDEX_NEIGHBORS,
+	"h3_h3index_areneighbours":       H3_H3INDEX_ARENEIGHBORS,
+	"h3_h3index_areneighbors":        H3_H3INDEX_ARENEIGHBORS,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,
@@ -1066,6 +1283,7 @@ var functionIdRegister = map[string]int32{
 	"st_pointn":                      ST_POINTN,
 	"st_exteriorring":                ST_EXTERIORRING,
 	"st_numinteriorrings":            ST_NUMINTERIORRINGS,
+	"st_numinteriorring":             ST_NUMINTERIORRINGS,
 	"st_interiorringn":               ST_INTERIORRINGN,
 	"st_numpoints":                   ST_NUMPOINTS,
 	"st_isclosed":                    ST_ISCLOSED,

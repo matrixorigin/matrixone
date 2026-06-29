@@ -168,6 +168,7 @@ const (
 type TenantIDKey struct{}
 type UserIDKey struct{}
 type RoleIDKey struct{}
+type DDLOwnerRoleIDKey struct{}
 type NodeIDKey struct{}
 type InternalExecutorKey struct{}
 
@@ -176,6 +177,10 @@ func IsInternalExecutor(ctx context.Context) bool {
 		return v.(bool)
 	}
 	return false
+}
+
+type DDLOwnerRoleIDProvider interface {
+	GetDDLOwnerRoleID() uint32
 }
 
 func GetAccountId(ctx context.Context) (uint32, error) {
@@ -202,6 +207,18 @@ func GetRoleId(ctx context.Context) uint32 {
 	return 0
 }
 
+func GetDDLOwnerRoleId(ctx context.Context) (uint32, bool) {
+	switch v := ctx.Value(DDLOwnerRoleIDKey{}).(type) {
+	case uint32:
+		return v, true
+	case DDLOwnerRoleIDProvider:
+		if roleId := v.GetDDLOwnerRoleID(); roleId != 0 {
+			return roleId, true
+		}
+	}
+	return 0, false
+}
+
 func AttachAccount(ctx context.Context, accId uint32, userId uint32, roleId uint32) context.Context {
 	return AttachRoleId(AttachUserId(AttachAccountId(ctx, accId), userId), roleId)
 }
@@ -216,6 +233,14 @@ func AttachUserId(ctx context.Context, userId uint32) context.Context {
 
 func AttachRoleId(ctx context.Context, roleId uint32) context.Context {
 	return context.WithValue(ctx, RoleIDKey{}, roleId)
+}
+
+func AttachDDLOwnerRoleId(ctx context.Context, roleId uint32) context.Context {
+	return context.WithValue(ctx, DDLOwnerRoleIDKey{}, roleId)
+}
+
+func AttachDDLOwnerRoleIDProvider(ctx context.Context, provider DDLOwnerRoleIDProvider) context.Context {
+	return context.WithValue(ctx, DDLOwnerRoleIDKey{}, provider)
 }
 
 // EngineKey use EngineKey{} to get engine from Context
@@ -250,13 +275,15 @@ type VarScopeKey struct{}
 // Determine if it is a stored procedure
 type InSp struct{}
 
-// IvfBloomFilter carries BloomFilter bytes for ivf entries scan in internal SQL executor.
+// IvfMembershipFilter carries doc_id membership-filter bytes (tagged docfilter
+// payload) for the ivf entries scan in the internal SQL executor.
 // This key is set on context when invoking internal SQL from ivf_search.
-type IvfBloomFilter struct{}
+type IvfMembershipFilter struct{}
 
-// FulltextBloomFilter carries BloomFilter bytes for fulltext index scan in internal SQL executor.
+// FulltextMembershipFilter carries doc_id membership-filter bytes (tagged
+// docfilter payload) for the fulltext index scan in the internal SQL executor.
 // This key is set on context when invoking internal SQL from fulltext_index_match.
-type FulltextBloomFilter struct{}
+type FulltextMembershipFilter struct{}
 
 // IvfReaderParam carries DistRange for ivf entries scan in internal SQL executor.
 // This key is set on context when invoking internal SQL from ivf_search.

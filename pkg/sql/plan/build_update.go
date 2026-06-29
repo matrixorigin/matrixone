@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -46,6 +47,27 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId)
 	if err != nil {
 		return nil, err
+	}
+	if stmt.From != nil && len(stmt.From.Tables) > 0 && tblInfo.needAggFilter {
+		lastNode := builder.qry.Nodes[lastNodeId]
+		lastNodeId, _, _, err = builder.appendRowNumberDedupNode(
+			queryBindCtx,
+			lastNodeId,
+			lastNode,
+			lastNode.BindingTags[0],
+			fallbackUpdateFromDedupPartitionCols(updatePlanCtxs),
+		)
+		if err != nil {
+			return nil, err
+		}
+		// Duplicate source matches are now deduped by the row_number() window
+		// above, so the per-table plan must skip the any_value aggregation. Keep
+		// needAggFilter set, though: it also drives the join-target NULL-row
+		// filter (row_id IS NOT NULL) that must survive for joined-target
+		// UPDATE ... FROM.
+		for _, updatePlanCtx := range updatePlanCtxs {
+			updatePlanCtx.dedupByRowNumber = true
+		}
 	}
 
 	sourceStep := builder.appendStep(lastNodeId)
@@ -256,6 +278,24 @@ func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlan
 	return nil
 }
 
+// fallbackUpdateFromDedupPartitionCols returns the projection positions used to
+// dedup duplicate source matches on the fallback (buildTableUpdate) path. The
+// key is each updated target table's row_id, a stable row identity, rather than
+// the whole old target row: partitioning on every old column would crash on
+// GEOMETRY32 (no comparator), miss dedup on float columns holding NaN
+// (NaN != NaN), and wrongly merge distinct rows whose columns happen to match.
+func fallbackUpdateFromDedupPartitionCols(planCtxs []*dmlPlanCtx) []int32 {
+	partitionCols := make([]int32, 0)
+	offset := int32(0)
+	for _, planCtx := range planCtxs {
+		if planCtx.updateColLength > 0 && planCtx.rowIdPos >= 0 {
+			partitionCols = append(partitionCols, offset+int32(planCtx.rowIdPos))
+		}
+		offset += int32(len(planCtx.tableDef.Cols) + planCtx.updateColLength)
+	}
+	return partitionCols
+}
+
 func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo) (int32, []*dmlPlanCtx, error) {
 	// Merge target table list with PostgreSQL-style FROM sources so that the
 	// inner SELECT can resolve column references against both. tableInfo only
@@ -308,7 +348,21 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 			}
 		}
 
-		for colName, updateKey := range updateKeys {
+		// Emit the update columns in a deterministic order. updateKeys is a Go
+		// map, so ranging it directly appended the update exprs to the project
+		// list (and recorded updateColPosMap) in random order across runs — the
+		// per-target column-block half of the same nondeterministic-layout bug
+		// the table-order fix in getUpdateTableInfo addresses. Sorting the column
+		// names emits exactly the same set in a stable order. (Order only affects
+		// layout, not correctness: downstream looks columns up by name via
+		// updateColPosMap, not by position.)
+		updateColNames := make([]string, 0, len(updateKeys))
+		for colName := range updateKeys {
+			updateColNames = append(updateColNames, colName)
+		}
+		sort.Strings(updateColNames)
+		for _, colName := range updateColNames {
+			updateKey := updateKeys[colName]
 			for _, coldef := range tableDef.Cols {
 				if coldef.Name == colName && isEnumOrSetPlanType(&coldef.Typ) {
 					updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)

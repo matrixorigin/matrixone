@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
@@ -49,6 +50,30 @@ func (s *service) GetWaitingList(
 	return true, waitingList, nil
 }
 
+func (s *service) GetLockHolder(
+	ctx context.Context,
+	tableID uint64,
+	row []byte,
+	options pb.LockOptions) (pb.WaitTxn, bool, error) {
+	s.wait()
+	for {
+		if err := ctx.Err(); err != nil {
+			return pb.WaitTxn{}, false, err
+		}
+		s.bindChangeMu.RLock()
+		l, err := s.getLockTableWithCreate(options.Group, tableID, [][]byte{row}, options.Sharding)
+		if err != nil {
+			s.bindChangeMu.RUnlock()
+			return pb.WaitTxn{}, false, err
+		}
+		holder, ok, err := l.getLockHolder(ctx, row)
+		s.bindChangeMu.RUnlock()
+		if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			return holder, ok, err
+		}
+	}
+}
+
 func (s *service) ForceRefreshLockTableBinds(
 	targets []uint64,
 	matcher func(bind pb.LockTable) bool) {
@@ -79,6 +104,16 @@ func (s *service) GetLockTableBind(
 		return pb.LockTable{}, nil
 	}
 	return l.getBind(), nil
+}
+
+func (s *service) GetLatestLockTableBind(bind pb.LockTable) (pb.LockTable, error) {
+	return getLockTableBind(
+		s.remote.client,
+		bind.Group,
+		bind.Table,
+		bind.OriginTable,
+		s.serviceID,
+		bind.Sharding)
 }
 
 func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bool) {

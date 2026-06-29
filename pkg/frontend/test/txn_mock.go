@@ -412,6 +412,20 @@ func (mr *MockTxnOperatorMockRecorder) AddLockTable(locktable interface{}) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddLockTable", reflect.TypeOf((*MockTxnOperator)(nil).AddLockTable), locktable)
 }
 
+// CheckLockTableBinds mocks base method.
+func (m *MockTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CheckLockTableBinds", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CheckLockTableBinds indicates an expected call of CheckLockTableBinds.
+func (mr *MockTxnOperatorMockRecorder) CheckLockTableBinds(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckLockTableBinds", reflect.TypeOf((*MockTxnOperator)(nil).CheckLockTableBinds), ctx)
+}
+
 // AddWaitLock mocks base method.
 func (m *MockTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
 	m.ctrl.T.Helper()
@@ -1120,6 +1134,30 @@ func (m *MockWorkspace) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 func (mr *MockWorkspaceMockRecorder) Commit(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Commit", reflect.TypeOf((*MockWorkspace)(nil).Commit), ctx)
+}
+
+// FinalizeCommit mocks base method.
+func (m *MockWorkspace) FinalizeCommit(ctx context.Context) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "FinalizeCommit", ctx)
+}
+
+// FinalizeCommit indicates an expected call of FinalizeCommit.
+func (mr *MockWorkspaceMockRecorder) FinalizeCommit(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinalizeCommit", reflect.TypeOf((*MockWorkspace)(nil).FinalizeCommit), ctx)
+}
+
+// FinalizeCommitWithUnknownResult mocks base method.
+func (m *MockWorkspace) FinalizeCommitWithUnknownResult(ctx context.Context) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "FinalizeCommitWithUnknownResult", ctx)
+}
+
+// FinalizeCommitWithUnknownResult indicates an expected call of FinalizeCommitWithUnknownResult.
+func (mr *MockWorkspaceMockRecorder) FinalizeCommitWithUnknownResult(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinalizeCommitWithUnknownResult", reflect.TypeOf((*MockWorkspace)(nil).FinalizeCommitWithUnknownResult), ctx)
 }
 
 // EndStatement mocks base method.

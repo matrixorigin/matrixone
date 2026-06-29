@@ -15,7 +15,9 @@
 package compile
 
 import (
+	"context"
 	"fmt"
+	"time"
 	"unsafe"
 
 	"github.com/google/uuid"
@@ -55,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
@@ -216,20 +217,20 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		}
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.BloomFilter) > 0 {
-				p.DataSource.BloomFilter = s.DataSource.BloomFilter
-			} else if bfVal := s.Proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if len(s.DataSource.MembershipFilterBytes) > 0 {
+				p.DataSource.MembershipFilter = s.DataSource.MembershipFilterBytes
+			} else if bfVal := s.Proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					p.DataSource.BloomFilter = bf
+					p.DataSource.MembershipFilter = bf
 				}
 			}
 		}
-		// Fulltext index table: attach FulltextBloomFilter from context.
+		// Fulltext index table: attach FulltextMembershipFilter from context.
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := s.Proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
+			if bfVal := s.Proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					p.DataSource.BloomFilter = bf
+					p.DataSource.MembershipFilter = bf
 				}
 			}
 		}
@@ -333,19 +334,19 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	dsc := p.GetDataSource()
 	if dsc != nil {
 		s.DataSource = &Source{
-			SchemaName:         dsc.SchemaName,
-			RelationName:       dsc.TableName,
-			Attributes:         dsc.ColList,
-			PushdownId:         dsc.PushdownId,
-			PushdownAddr:       dsc.PushdownAddr,
-			FilterExpr:         dsc.Expr,
-			TableDef:           dsc.TableDef,
-			node:               dsc.Node,
-			Timestamp:          *dsc.Timestamp,
-			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
-			isConst:            dsc.IsConst,
-			RecvMsgList:        dsc.RecvMsgList,
-			BloomFilter:        dsc.BloomFilter,
+			SchemaName:            dsc.SchemaName,
+			RelationName:          dsc.TableName,
+			Attributes:            dsc.ColList,
+			PushdownId:            dsc.PushdownId,
+			PushdownAddr:          dsc.PushdownAddr,
+			FilterExpr:            dsc.Expr,
+			TableDef:              dsc.TableDef,
+			node:                  dsc.Node,
+			Timestamp:             *dsc.Timestamp,
+			RuntimeFilterSpecs:    dsc.RuntimeFilterProbeList,
+			isConst:               dsc.IsConst,
+			RecvMsgList:           dsc.RecvMsgList,
+			MembershipFilterBytes: dsc.MembershipFilter,
 		}
 		// Extract IndexReaderParam from node for remote CN execution
 		if dsc.Node != nil {
@@ -435,6 +436,22 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Attrs:           t.InsertCtx.Attrs,
 			AddAffectedRows: t.InsertCtx.AddAffectedRows,
 			TableDef:        t.InsertCtx.TableDef,
+			ToExternal:      t.ToExternal,
+		}
+		if t.ToExternal {
+			// The rest of the writer config is rebuilt from TableDef on the
+			// receiving CN; the statement-start timestamp and the session time
+			// zone travel so every CN expands WRITE_FILE_PATTERN time directives
+			// and renders TIMESTAMP values identically. Resolve the timestamp
+			// the same way the local Prepare does (prepared statements reuse
+			// the compiled operator, so the config value may be stale).
+			stmtAt := externalInsertStmtTime(proc, t.InsertCtx.ExternalConfig.Stmt)
+			in.Insert.ExternalStmtUnixNano = stmtAt.UnixNano()
+			if loc := proc.GetSessionInfo().TimeZone; loc != nil {
+				in.Insert.ExternalTzName = loc.String()
+				_, off := stmtAt.In(loc).Zone()
+				in.Insert.ExternalTzOffsetSec = int32(off)
+			}
 		}
 	case *deletion.Deletion:
 		in.Delete = &pipeline.Deletion{
@@ -449,16 +466,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			AddAffectedRows: t.DeleteCtx.AddAffectedRows,
 			Ref:             t.DeleteCtx.Ref,
 			PrimaryKeyIdx:   int32(t.DeleteCtx.PrimaryKeyIdx),
-		}
-	case *onduplicatekey.OnDuplicatekey:
-		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
-			Attrs:              t.Attrs,
-			InsertColCount:     t.InsertColCount,
-			UniqueColCheckExpr: t.UniqueColCheckExpr,
-			UniqueCols:         t.UniqueCols,
-			OnDuplicateIdx:     t.OnDuplicateIdx,
-			OnDuplicateExpr:    t.OnDuplicateExpr,
-			IsIgnore:           t.IsIgnore,
 		}
 	case *fuzzyfilter.FuzzyFilter:
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
@@ -664,6 +671,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			StrictSqlMode:          t.Es.StrictSqlMode,
 			ParallelLoad:           t.Es.ParallelLoad,
 			LoadEmptyNumericAsZero: t.Es.LoadEmptyNumericAsZero,
+			ParquetRowGroupShards:  t.Es.ParquetRowGroupShards,
 		}
 		in.ProjectList = t.ProjectList
 	case *source.Source:
@@ -859,6 +867,31 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.Insert:
 		t := opr.GetInsert()
+		if t.ToExternal {
+			// Writable external table: rebuild the external writer config from
+			// TableDef's stored ExternParam, against the sender's statement-start
+			// timestamp.
+			arg, err := buildExternalInsertArg(context.TODO(), t.Ref, t.TableDef,
+				t.AddAffectedRows, eng, time.Unix(0, t.ExternalStmtUnixNano))
+			if err != nil {
+				return nil, err
+			}
+			// Use the sender's session time zone rather than this CN's
+			// reconstructed session info: the generic codec round-trips zones
+			// as a year-1 fixed offset (LMT), shifting rendered TIMESTAMPs.
+			// Fall back to the offset at statement time when the zone name is
+			// not loadable here ("Local", "", or missing tzdata).
+			if name := t.ExternalTzName; name != "" && name != "Local" {
+				if loc, lerr := time.LoadLocation(name); lerr == nil {
+					arg.InsertCtx.ExternalConfig.TimeZone = loc
+				}
+			}
+			if arg.InsertCtx.ExternalConfig.TimeZone == nil && t.ExternalTzName != "" {
+				arg.InsertCtx.ExternalConfig.TimeZone = time.FixedZone("", int(t.ExternalTzOffsetSec))
+			}
+			op = arg
+			break
+		}
 		arg := insert.NewArgument()
 		arg.ToWriteS3 = t.ToWriteS3
 		arg.InsertCtx = &insert.InsertCtx{
@@ -905,17 +938,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetPreInsertSecondaryIndex()
 		arg := preinsertsecondaryindex.NewArgument()
 		arg.PreInsertCtx = t.GetPreInsertSkCtx()
-		op = arg
-	case vm.OnDuplicateKey:
-		t := opr.GetOnDuplicateKey()
-		arg := onduplicatekey.NewArgument()
-		arg.Attrs = t.Attrs
-		arg.InsertColCount = t.InsertColCount
-		arg.UniqueColCheckExpr = t.UniqueColCheckExpr
-		arg.UniqueCols = t.UniqueCols
-		arg.OnDuplicateIdx = t.OnDuplicateIdx
-		arg.OnDuplicateExpr = t.OnDuplicateExpr
-		arg.IsIgnore = t.IsIgnore
 		op = arg
 	case vm.FuzzyFilter:
 		t := opr.GetFuzzyFilter()
@@ -1124,6 +1146,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					StrictSqlMode:          t.StrictSqlMode,
 					ParallelLoad:           t.ParallelLoad,
 					LoadEmptyNumericAsZero: t.LoadEmptyNumericAsZero,
+					ParquetRowGroupShards:  t.ParquetRowGroupShards,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
