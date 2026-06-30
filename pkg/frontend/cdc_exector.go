@@ -411,12 +411,13 @@ func (exec *CDCTaskExecutor) Resume() error {
 func (exec *CDCTaskExecutor) Restart() error {
 	stateBeforeRestart := exec.stateMachine.State()
 	shouldStopOldExecution := stateBeforeRestart == StateRunning || stateBeforeRestart == StateStarting
-	shouldClearTableErrors := stateBeforeRestart == StateFailed
+	shouldClearTableErrors := stateBeforeRestart == StateFailed || stateBeforeRestart == StatePaused
 
 	// Transition to Restarting state
 	if err := exec.stateMachine.Transition(TransitionRestart); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot restart: %v", err)
 	}
+	exec.recordLeavingFailedMetrics(stateBeforeRestart, StateRestarting)
 
 	// FIX: Unmark task as paused to allow watermark updates after restart
 	// Without this, if task was paused before restart, it would remain in pausedTasks
@@ -603,12 +604,14 @@ func (exec *CDCTaskExecutor) Pause() error {
 // Cancel cdc task
 func (exec *CDCTaskExecutor) Cancel() error {
 	// Check if running before state transition
-	wasRunning := exec.stateMachine.IsRunning()
+	stateBeforeCancel := exec.stateMachine.State()
+	wasRunning := stateBeforeCancel == StateRunning || stateBeforeCancel == StateStarting
 
 	// Transition to Cancelling state
 	if err := exec.stateMachine.Transition(TransitionCancel); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot cancel: %v", err)
 	}
+	exec.recordLeavingFailedMetrics(stateBeforeCancel, StateCancelling)
 
 	// FIX: Unmark task as paused to prevent pausedTasks leakage
 	// If task was paused before cancel, we need to clean up the pause mark
@@ -663,6 +666,37 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		}
 	}
 	return nil
+}
+
+func (exec *CDCTaskExecutor) recordLeavingFailedMetrics(fromState ExecutorState, toState ExecutorState) {
+	if fromState != StateFailed {
+		return
+	}
+	v2.CdcTaskTotalGauge.WithLabelValues("failed").Dec()
+	v2.CdcTaskStateChangeCounter.WithLabelValues("failed", cdcTaskMetricStateLabel(toState)).Inc()
+}
+
+func cdcTaskMetricStateLabel(state ExecutorState) string {
+	switch state {
+	case StateStarting:
+		return "starting"
+	case StateRunning:
+		return "running"
+	case StatePausing:
+		return "pausing"
+	case StatePaused:
+		return "paused"
+	case StateRestarting:
+		return "restarting"
+	case StateCancelling:
+		return "cancelling"
+	case StateCancelled:
+		return "cancelled"
+	case StateFailed:
+		return "failed"
+	default:
+		return "unknown"
+	}
 }
 
 // logCurrentWatermarks logs current watermarks for all tables in this task

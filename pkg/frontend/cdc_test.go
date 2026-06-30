@@ -32,6 +32,8 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
@@ -51,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -2857,6 +2860,13 @@ func (e *captureCDCExecutor) capturedExecSQLs() []string {
 	return sqls
 }
 
+func readFrontendGaugeValue(t *testing.T, gauge prometheus.Gauge) float64 {
+	t.Helper()
+	var metric dto.Metric
+	require.NoError(t, gauge.Write(&metric))
+	return metric.GetGauge().GetValue()
+}
+
 type mockIe struct {
 	cnt int
 }
@@ -3234,6 +3244,81 @@ func TestCdcTask_PermanentTableErrorDoesNotFailWhilePausing(t *testing.T) {
 		t.Fatal("permanent error should not release Start while pause owns the state transition")
 	default:
 	}
+}
+
+func TestCdcTask_RestartFromPausedClearsPermanentTableErrors(t *testing.T) {
+	executor := &captureCDCExecutor{}
+	started := make(chan struct{}, 1)
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		ie:             executor,
+		stateMachine:   NewExecutorStateMachine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		holdCh:         make(chan int, 1),
+		runningReaders: &sync.Map{},
+		startFunc: func(context.Context) error {
+			started <- struct{}{}
+			return nil
+		},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionPause))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionPauseComplete))
+
+	require.NoError(t, cdcTask.Restart())
+	<-started
+
+	require.True(t, executor.tableErrorsAreCleared())
+	sqls := executor.capturedExecSQLs()
+	require.Len(t, sqls, 1)
+	require.Contains(t, sqls[0], "UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg = ''")
+	require.Contains(t, sqls[0], "task-1")
+}
+
+func TestCdcTask_RestartFromFailedUpdatesFailedMetrics(t *testing.T) {
+	failedGauge := v2.CdcTaskTotalGauge.WithLabelValues("failed")
+	failedBefore := readFrontendGaugeValue(t, failedGauge)
+
+	executor := &captureCDCExecutor{}
+	started := make(chan struct{}, 1)
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		ie:             executor,
+		stateMachine:   NewExecutorStateMachine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		holdCh:         make(chan int, 1),
+		runningReaders: &sync.Map{},
+		startFunc: func(context.Context) error {
+			started <- struct{}{}
+			return nil
+		},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+
+	err := cdcTask.failTaskForPermanentTableError(context.Background(), &cdc.DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "tb1",
+	})
+	require.Error(t, err)
+	require.Equal(t, failedBefore+1, readFrontendGaugeValue(t, failedGauge))
+
+	require.NoError(t, cdcTask.Restart())
+	<-started
+	require.Equal(t, failedBefore, readFrontendGaugeValue(t, failedGauge))
 }
 
 func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
