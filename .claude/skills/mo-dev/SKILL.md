@@ -1,22 +1,24 @@
-# MatrixOne Development Skill (mo-dev)
-
-## Trigger
-Activated automatically when operating in the MatrixOne codebase.
-
+---
+name: mo-dev
+description: MatrixOne database kernel development - CGo build/test environment setup, operator lifecycle contracts (Call/Reset), pipeline protocol, layered testing strategy. Use when modifying colexec operators, process signal types, compile pipeline construction, or debugging CGo link errors (undefined symbols, missing headers, library not found).
+compatibility: Designed for Codex CLI and compatible agents. Requires Go 1.22+, GNU Make, C/C++ toolchain (gcc/clang), and pre-built thirdparties.
+metadata:
+  project: matrixone
+  repository: matrixorigin/matrixone
+  language: go
+  cgo: true
 ---
 
-## Enforcement Gates (READ FIRST)
+## Enforcement Gates
 
-This skill is not optional reference — activate it at these **mandatory checkpoints**:
+This skill gates four decision points. Consult the corresponding section before acting:
 
 | Gate | When | Action |
 |------|------|--------|
-| **G-MODIFY** | Before any `str_replace`/`write_file` on a `colexec` operator or `process` signal type | Read §3 (operator contract) + §7 (forbidden patterns) |
+| **G-MODIFY** | Before editing any `colexec` operator or `process` signal type | Read §3 (operator contract) + §7 (forbidden patterns) |
 | **G-CGO-ERR** | Any build/test returns `file not found`, `Undefined symbols`/`undefined symbol:`, or `dyld:`/`error while loading shared libraries:` | Read §2.2 (symptom table) + §2.4 (stash protocol) |
 | **G-DONE** | Before declaring "done"/"complete"/"passes" | Read §4.3 (completion gate) — all 5 boxes MUST be checked |
 | **G-TEST-FAIL** | `go test` returns non-zero or hangs >10s | Read §5 (diagnosis) + §2.4 (stash protocol) before attributing cause |
-
-**How to use**: At each gate, verify the corresponding section's conditions. If a condition fails, fix it before proceeding. Never skip a gate.
 
 ---
 
@@ -31,10 +33,10 @@ pkg/container/         ← Batch/Vector/pSpool and other base data structures
 pkg/frontend/          ← MySQL protocol compatibility layer
 pkg/txn/               ← transaction management and MVCC
 pkg/sql/plan/          ← query plan construction
-cgo/                   ← CGo adapter layer (libmo.dylib)
+cgo/                   ← CGo adapter layer (libmo.dylib / libmo.so)
 ```
 
-**Operator file convention**: under `pkg/sql/colexec/<op>/`:
+**Operator file convention** under `pkg/sql/colexec/<op>/`:
 - `types.go` — Arg struct definition
 - `<op>.go` — main logic (Prepare/Call/Reset)
 - Optional `sendfunc.go`/`dispatch.go` helpers
@@ -66,7 +68,7 @@ go test -v -count=1 -timeout 120s ./pkg/target/...
 
 ### 2.2 CGo Environment (Three-Layer Variables)
 
-MO's CGo involves **compilation** (headers), **linking** (own library `libmo`), and **third-party libraries** (`libusearch_c`) as three independent layers. Corresponding Makefile config:
+MO's CGo involves three independent layers: **compilation** (headers), **linking own lib** (`libmo`), and **third-party libs** (`libusearch_c`).
 
 ```makefile
 # Makefile:203 — header paths for compilation
@@ -78,35 +80,22 @@ CGO_OPTS := CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include"
 GOLDFLAGS := -ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(RPATH)'"
 ```
 
-**Note**: Makefile does **not** set `CGO_LDFLAGS` — `libmo` link flags all go through `-ldflags` → `-extldflags`. However, the `usearch` Go module ships its own `#cgo LDFLAGS: -lusearch_c`, causing the linker to prefer system paths which may find an outdated version missing required symbols. In that case, `CGO_LDFLAGS` is needed to point to the MO-compiled version.
+**Note**: Makefile does **not** set `CGO_LDFLAGS` — `libmo` link flags all go through `-ldflags` → `-extldflags`. However, the `usearch` Go module ships its own `#cgo LDFLAGS: -lusearch_c`, causing the linker to prefer system paths. `CGO_LDFLAGS` overrides this.
 
-#### macOS vs Linux — All Differences
+#### macOS vs Linux
 
 | Aspect | macOS | Linux |
 |--------|-------|-------|
-| Dynamic library name | `libmo.dylib` | `libmo.so` |
-| Third-party lib prefix | `libusearch_c.dylib` | `libusearch_c.so` |
-| Linker flag (make static) | `gcc -dynamiclib` | `gcc -shared` |
-| Runtime library path env | `DYLD_LIBRARY_PATH` | `LD_LIBRARY_PATH` |
-| rpath in ldflags | `@executable_path/lib` | `$$ORIGIN/lib` (double-escape in Makefile) |
-| `-rpath` flag | `-Wl,-rpath,@executable_path/lib` | `-Wl,-rpath,\$\$ORIGIN/lib` or `-Wl,-rpath,$ORIGIN/lib` in shell |
-| C header flags | `CGO_CFLAGS="-I.../cgo -I.../thirdparties/install/include"` | **Same** |
-| usearch link flags | `CGO_LDFLAGS="-L.../thirdparties/install/lib -lusearch_c"` | **Same** |
+| Dynamic library | `libmo.dylib` | `libmo.so` |
+| Runtime path env | `DYLD_LIBRARY_PATH` | `LD_LIBRARY_PATH` |
+| rpath flag | `-Wl,-rpath,@executable_path/lib` | `-Wl,-rpath,\$ORIGIN/lib` |
+| C header flags | `CGO_CFLAGS="-I{root}/cgo -I{root}/thirdparties/install/include"` | Same |
+| usearch link flags | `CGO_LDFLAGS="-L{root}/thirdparties/install/lib -lusearch_c"` | Same |
 
-#### Full Test Environment Variables
+#### Full Test Commands
 
 **macOS:**
 ```bash
-# 1. Headers (required for any package with CGo code)
-export CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include"
-
-# 2. libusearch_c (required for packages needing usearch symbols)
-export CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c"
-
-# 3. Runtime dynamic library (required when running tests)
-export DYLD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib:$DYLD_LIBRARY_PATH"
-
-# go test one-liner:
 CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include" \
 CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c" \
 DYLD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib" \
@@ -116,16 +105,6 @@ go test -ldflags="-extldflags '-L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/l
 
 **Linux:**
 ```bash
-# 1. Headers
-export CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include"
-
-# 2. libusearch_c
-export CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c"
-
-# 3. Runtime dynamic library
-export LD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib:$LD_LIBRARY_PATH"
-
-# go test one-liner:
 CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include" \
 CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c" \
 LD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib" \
@@ -133,49 +112,39 @@ go test -ldflags="-extldflags '-L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/l
   -v -count=1 -timeout 120s ./pkg/target/...
 ```
 
-#### Symptom → Root Cause Quick Reference
+#### Symptom → Root Cause
 
-| Symptom (macOS) | Symptom (Linux) | Missing Variable | Root Cause |
-|-----------------|-----------------|-----------------|------------|
-| `fatal error: 'xxhash.h' file not found` | **Same error** | `CGO_CFLAGS` | Compiler can't find thirdparties headers |
-| `Undefined symbols: _usearch_hardware_acceleration_*` | **Same error** (`undefined symbol:` prefix) | `CGO_LDFLAGS` | usearch module's `#cgo LDFLAGS` found an old `libusearch_c` without this symbol |
-| `ld: library 'mo' not found` | `/usr/bin/ld: cannot find -lmo` | `-ldflags="-extldflags '-L... -lmo'"` | Linker can't find `libmo.dylib`/`libmo.so` |
-| `dyld: Library not loaded: libmo.dylib` | `error while loading shared libraries: libmo.so` | `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` | Runtime can't find dynamic library |
+| Symptom | Missing Variable | Root Cause |
+|---------|-----------------|------------|
+| `fatal error: 'xxhash.h' file not found` | `CGO_CFLAGS` | Compiler can't find thirdparties headers |
+| `Undefined symbols: _usearch_hardware_acceleration_*` (macOS) or `undefined symbol:` (Linux) | `CGO_LDFLAGS` | usearch module's `#cgo LDFLAGS` found old `libusearch_c` |
+| `ld: library 'mo' not found` (macOS) or `cannot find -lmo` (Linux) | `-ldflags="-extldflags '-L... -lmo'"` | Linker can't find `libmo` |
+| `dyld: Library not loaded: libmo.dylib` (macOS) or `error while loading shared libraries: libmo.so` (Linux) | `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` | Runtime can't find dynamic library |
 
 ### 2.3 Layered Testing Strategy
 
-MO packages fall into four layers by CGo dependency depth. **Must validate bottom-up**.
+| Layer | Example Packages | CGo Behavior | Variables Needed |
+|-------|-----------------|-------------|-----------------|
+| **Pure Go** | `pkg/vm/process`, `pkg/container/pSpool`, `pkg/vm/pipeline` | Zero CGo in transitive closure | None |
+| **CGo-transitive** | `pkg/sql/colexec/connector`, `dispatch`, `merge` | Test binary links usearch Go module | `CGO_CFLAGS` + `CGO_LDFLAGS` |
+| **CGo-direct** | `pkg/sql/compile` | Test binary directly links `libmo` + `libusearch_c` | All four: CGO_CFLAGS + CGO_LDFLAGS + ldflags + DYLD/LD_LIBRARY_PATH |
+| **Integration** | `pkg/frontend`, cmd packages | Full MO binary, needs external services | All + services |
 
-#### Layer Map
+**Copy-paste per layer:**
 
-| Layer | Example Packages | What Happens at `go test` | Variables Needed |
-|-------|-----------------|--------------------------|-----------------|
-| **Pure Go** | `pkg/vm/process`, `pkg/container/pSpool`, `pkg/vm/pipeline` | Compiles + links test binary. Zero CGo code in the transitive closure. | **None** |
-| **CGo-transitive** | `pkg/sql/colexec/connector`, `dispatch`, `merge` | Test binary links `usearch` Go module, which has `#cgo LDFLAGS: -lusearch_c`. Full CGo compile + link path fires. | `CGO_CFLAGS` + `CGO_LDFLAGS` |
-| **CGo-direct** | `pkg/sql/compile`, `pkg/sql/colexec/...` (some) | Test binary directly links `libmo` + `libusearch_c`. Both libraries must be findable at build-time AND loadable at run-time. | `CGO_CFLAGS` + `CGO_LDFLAGS` + `-ldflags "-extldflags ..."` + `DYLD_LIBRARY_PATH`/`LD_LIBRARY_PATH` |
-| **Integration** | `pkg/frontend`, cmd packages | Full MO binary. Needs external services (MySQL protocol, storage, etc). | All + services |
-
-#### Copy-Paste Commands Per Layer
-
-**Layer 1 — Pure Go** (nothing needed):
+Layer 1 (Pure Go):
 ```bash
 go test -v -count=1 -timeout 120s ./pkg/vm/process/... ./pkg/container/pSpool/...
 ```
 
-**Layer 2 — CGo-transitive** (needs headers + usearch link):
+Layer 2 (CGo-transitive, macOS):
 ```bash
-# macOS
 export CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include"
 export CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c"
 go test -v -count=1 -timeout 120s ./pkg/sql/colexec/connector/... ./pkg/sql/colexec/dispatch/...
-
-# Linux
-export CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include"
-export CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c"
-go test -v -count=1 -timeout 120s ./pkg/sql/colexec/connector/...
 ```
 
-**Layer 3 — CGo-direct** (all four — macOS):
+Layer 3 (CGo-direct, macOS):
 ```bash
 export CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include"
 export CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c"
@@ -184,173 +153,137 @@ go test -ldflags="-extldflags '-L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/l
   -v -count=1 -timeout 120s ./pkg/sql/compile/...
 ```
 
-Layer 3 — Linux:
-```bash
-export CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include"
-export CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c"
-export LD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib"
-go test -ldflags="-extldflags '-L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/lib -Wl,-rpath,\$ORIGIN/lib'" \
-  -v -count=1 -timeout 120s ./pkg/sql/compile/...
-```
-
-#### Variable → Purpose Quick Card
+#### Variable → Purpose
 
 | Variable | What It Does | When Needed |
 |---------|-------------|-------------|
-| `CGO_CFLAGS` | Tells the C compiler where to find headers (`xxhash.h`, `mo.h`, etc.) | Anytime a package in the transitive closure has CGo C code |
-| `CGO_LDFLAGS` | Tells the Go linker where to find `libusearch_c` (overrides the outdated path in usearch module's own `#cgo LDFLAGS`) | Anytime the usearch Go module is linked (most `colexec` packages) |
-| `-ldflags "-extldflags ..."` | Tells the external linker where to find `libmo` + sets rpath for runtime | Only when the package directly links `libmo` (CGo-direct layer) |
-| `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` | Tells the OS runtime loader where to find `.dylib` / `.so` files | Only when the test binary loads `libmo` (CGo-direct layer) |
+| `CGO_CFLAGS` | Tells C compiler where to find headers | Package in transitive closure has CGo C code |
+| `CGO_LDFLAGS` | Overrides usearch module's own `#cgo LDFLAGS` path | usearch Go module is linked |
+| `-ldflags "-extldflags ..."` | Tells external linker where to find `libmo` + sets rpath | Package directly links `libmo` |
+| `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` | Tells OS runtime loader where to find `.dylib` / `.so` | Test binary loads `libmo` at runtime |
 
-**Why this order matters**: Pure Go package tests are fastest (seconds), and failures are 100% code issues. If pure Go fails, don't waste time debugging CGo link errors on upper layers.
+**Why bottom-up matters**: Pure Go tests finish in seconds with zero env setup. If they fail, the problem is in your code — not CGo. Debug top-down wastes time chasing link errors when there's a real bug.
 
-#### 2.3.1 `go build` vs `go test` — Not the Same
+#### 2.3.1 `go build` vs `go test` — Not Equivalent
 
-| Command | What It Does | CGo Impact |
-|---------|-------------|------------|
-| `go build ./pkg/sql/colexec/connector/...` | Compiles the **package**, does not link a test binary | May succeed without CGo flags |
-| `go test ./pkg/sql/colexec/connector/...` | Compiles and links a **test binary** including all transitive deps | May fail if transitive deps need CGo symbols |
+| Command | CGo Behavior |
+|---------|-------------|
+| `go build ./pkg/sql/colexec/connector/...` | May succeed without CGo flags (compiles package only, no test binary linking) |
+| `go test ./pkg/sql/colexec/connector/...` | Compiles AND links test binary — full CGo path fires |
 
-**Consequence**: `go build` passing does NOT prove `go test` will pass. When adding a new import chain that reaches `cgo/`, `go build` may still succeed while `go test` breaks. Only `go test` output is authoritative.
+**Rule**: "`go build` passes" does not mean "`go test` will pass." Always verify with `go test`.
 
-### 2.4 Isolate Environment Issues (Stash Verification Protocol)
+### 2.4 Stash Protocol — Verify "Pre-existing" Claims
+
+**Hard rule**: Never claim a test failure is "pre-existing" without proving it.
 
 ```bash
-# Step 1: Save current changes
+# 1. Stash current changes
 git stash
 
-# Step 2: Run same test with same variables
-CGO_CFLAGS="..." go test -count=1 ./failing/package/...
+# 2. Run the same test from clean state
+go test -v -count=1 -timeout 120s ./pkg/target/...
 
-# Step 3a: Still fails → environment issue, unrelated to code changes
-# Step 3b: Passes       → code change introduced the problem
-
-# Step 4: Restore changes
+# 3. If it fails: genuinely pre-existing — document it
+# 4. If it passes: YOUR code caused it — investigate
 git stash pop
 ```
 
-**Hard rule**: A "pre-existing issue" claim without stash verification is not credible. When seeing `Undefined symbols` or `file not found`, never assert "this is pre-existing" — must prove it via stash.
+---
+
+## 3. Operator Lifecycle Contracts
+
+### 3.1 Call() vs Reset() — Hard Boundary
+
+| Method | Purpose | Must NOT Do |
+|--------|---------|-------------|
+| `Call()` | Process one batch. Receive from upstream, compute, send downstream. | Send terminal signals (End/Error/Abort). That's `Reset()`'s job. |
+| `Reset()` | Cleanup. Notify downstream the operator is done. | Block waiting for receiver acknowledgment. Use Abort(), not CloseWithTimeout(). |
+
+**This is the single most common source of subtle bugs.** Violating it causes: premature pipeline termination, spurious timeouts, dead receivers.
+
+### 3.2 PipelineSpool Lifecycle
+
+| Method | Behavior | Use When |
+|--------|---------|---------|
+| `Close()` | Wait for all consumers to acknowledge end of stream (consumes nil batches from spool) | Graceful completion path |
+| `CloseWithTimeout()` | Same as `Close()` but with timeout | Legacy cleanup — deprecated for typed signals |
+| `ForceCleanup()` / `Abort()` | Synchronous release of all un-consumed slots. No waiting. Idempotent (`sync.Once`). | Cleanup path with explicit terminal signals |
+
+**Critical rule**: If you replaced implicit nil-batch end-of-stream with explicit typed signals (EventEnd/EventError/EventAbort), use `Abort()` instead of `CloseWithTimeout()`. `CloseWithTimeout()` waits for nil batches that will never arrive.
+
+### 3.3 Pipeline Signal Types (Explicit Protocol)
+
+| Signal | Constructor | Meaning |
+|--------|------------|---------|
+| `EventData` | `NewDataSignal(batch)` | Normal data batch |
+| `EventEnd` | `NewEndSignal()` | Graceful end of stream |
+| `EventError` | `NewErrorSignal(err)` | Operator encountered an error |
+| `EventAbort` | `NewAbortSignal()` | Forceful termination |
+
+**Dual-protocol compatibility**: `GetNextBatch` handles both explicit typed signals AND legacy nil-batch convention (`content == nil`). Old operators using implicit nil-batch continue to work.
 
 ---
 
-## 3. Operator Lifecycle
+## 4. Post-Modification Verification
 
-MatrixOne `colexec` operators follow a three-phase lifecycle:
+### 4.1 Test Freshness
 
-| Phase | Method | When Called | Constraint |
-|-------|--------|-------------|------------|
-| Init | `Prepare()` | After DAG compile, before first execution | Allocate Reg, init state |
-| Execute | `Call()` | Called repeatedly as each batch of data arrives | Data forwarding only, **never send terminal signals** |
-| Cleanup | `Reset()` | During Pipeline Cleanup phase | Release resources, **solely responsible for sending terminal signals** |
+Test output must be **from the current turn**. Verify:
+1. `go test` command appears in current turn's bash calls
+2. Exit code 0 (not "it compiled" or "trust me")
+3. Timestamp is after the last `str_replace`/`write_file`
 
-**Hard boundary between Call() and Reset()**: This is the most important operator contract in MO. `Call()` handles the "still has data" path. `Reset()` handles the "completely done" path. Confusing the two causes receivers to terminate early or dead-wait for timeout.
+### 4.2 Completion Gate (G-DONE)
+
+Before declaring any change "done", all 5 boxes must be checked:
+
+```
+□ go build ./pkg/.../modified_package...    → exit 0
+□ go vet ./pkg/.../modified_package...      → exit 0
+□ go test -v -count=1 ./pkg/.../...         → exit 0, no hangs
+□ git diff --stat                            → inspected, no unintended files
+□ Regression: at least one test from dependent package passes
+```
+
+**Hang = failure**: If `go test` produces >10s of no output → the test is hung, not "still running." Investigate.
 
 ---
 
-## 4. Code Change Workflow
+## 5. Fault Diagnosis
 
-### 4.1 Before Changing
-
-1. Read target files to confirm current content
-2. `grep` for all references to the symbol being changed (code + tests)
-3. Confirm whether each reference is affected by the change
-4. List packages to test manually (starting from bottom pure-Go packages)
-
-### 4.2 After Changing (Strict Order)
-
-```
-go build ./pkg/A/... ./pkg/B/...    ← Compile (all changed packages)
-go vet ./pkg/A/... ./pkg/B/...      ← Static check
-go test -v -count=1 ./pkg/A/...     ← Unit tests (bottom-up)
-go test -v -count=1 ./pkg/B/...
-git diff --stat                      ← Confirm no unexpected file changes
-go test -count=1 ./pkg/upstream/...  ← Regression tests
-```
-
-**Hard rule**: Test output must be fresh from this turn's `go test -count=1`. Results from previous turns are stale and cannot be used to justify "it passes."
-
-**Freshness verification**: A test result is only valid if ALL of these hold:
-1. The `go test -count=1` command ran in the **current turn** (not a previous turn)
-2. The output includes the **test binary's own timestamp** (e.g., `ok  pkg/vm/process  0.123s`), not just a cached summary
-3. If the test package is CGo-transitive, the command includes the full `CGO_CFLAGS` + `CGO_LDFLAGS` + `DYLD_LIBRARY_PATH` prefix
-
-**Anti-pattern**: Seeing `go test` output in context and concluding "tests pass" without checking whether that output is from the current turn or a stale earlier turn.
-
-### 4.3 Completion Gate
-
-Before claiming any change is "done" or "complete", all of the following MUST be true:
-
-```
-□ All changed packages pass go build
-□ All changed packages pass go vet
-□ All changed packages pass go test -count=1 (fresh output from this turn)
-□ No test hung >10s (each package must print "ok" or "FAIL" within expected time)
-□ git diff --stat shows only intended files
-□ Upstream regression tests pass or failures are confirmed pre-existing via stash
-```
-
-**Never claim done when any box is unchecked.** If a test fails, fix it; if an environment blocks testing, state it explicitly rather than implying it passed.
-
-**Test hang is a failure**: A test that produces no output for >10s is either deadlocked or blocked. It is not "still running" — it is a bug. Common MO causes:
-- `sp.CloseWithTimeout()` waiting for nil-batch that never arrives → exactly 30s hang
-- goroutine blocked on channel send/receive with no timeout → infinite hang
-- `context.TODO()` used where a real context with deadline was needed → infinite hang
+| Symptom | Look At |
+|---------|---------|
+| Test hangs exactly 30s | `CloseWithTimeout` waiting for nil-batch that never arrives. Check if typed signals are being sent instead. |
+| Test hangs >5s, no output | Deadlock or blocking channel send. Check: is `done` channel closed? Is `sendSignal` using a non-blocking `select`? |
+| `context deadline exceeded` after 30s | `WaitingEndWithTimeout` timed out. Check: did all senders call `Reset()`? Did they send typed terminal signals? |
+| `CGO_CFLAGS` not working | Run `go env CGO_CFLAGS` to verify. Use `export` (not inline without export) if the package has sub-packages. |
 
 ---
 
-## 5. Test Failure Diagnosis
+## 6. Common Pitfalls
 
-### 5.1 Test Hangs With No Output (>10s)
+### 6.1 Structural Changes — Check Both Ends
+When changing the communication protocol between operators (connector ↔ merge, dispatch ↔ merge), both sender and receiver must be updated. A sender change without the corresponding receiver change causes deadlock.
 
-```
-→ goroutine blocked or deadlocked
-→ Analyze the wait chain: who is blocking on select/recv?
-→ Check whether the channel communication peer is working
-```
+**Identification**: exact 30s timeout in cleanup → `CloseWithTimeout` + typed signal mismatch.
 
-### 5.2 Exact 30s Timeout
+### 6.2 CGo Link Errors — Verify the Third Party Build
+CGo link errors (`Undefined symbols`, `cannot find -lmo`) are environment issues, not code bugs. The C shared libraries (`libmo.dylib`, `libusearch_c.dylib`) must be pre-built via `make cgo` and `make thirdparties`.
 
-```
-→ Some wait path triggered context/time.Sleep timeout
-→ Usually waiting for a signal or data that will never arrive
-→ Check whether upstream changed send timing
-```
+### 6.3 Pipeline Cleanup — Abort, Don't Wait
+During pipeline cleanup, operators should use non-blocking or timeout-gated communication. Never block waiting for a receiver that may have already exited.
 
-### 5.3 CGo Link Error
-
-```
-→ First, stash-verify it's not a code issue (see §2.4)
-→ Environment: DYLD_LIBRARY_PATH, libmo.dylib version
-→ Code: check whether cgo/lib.go was accidentally modified
-```
-
-### 5.4 Vet Error
-
-Do not ignore. Packages that pass vet may still have runtime bugs, but packages that **fail** vet almost certainly have code problems.
-
----
-
-## 6. MO Common Pitfalls
-
-1. **Operators are modified in pairs**: connector/dispatch (send side) and merge (receive side) share a communication protocol. Changing one side must check the other.
-
-2. **Protocol migration compatibility window**: When adding new signal types, the old path must remain compatible until all callers are migrated.
-
-3. **Channel capacity**: `make(chan T, N)` — N determines buffer size. N=0 means senders drop data when receivers are not ready. Check whether channel capacity fits the use case.
-
-4. **Resource ownership**: `Batch` in MO is a heavyweight object. Confirm who creates it, who holds the last reference, and who is responsible for `Clean()`.
+### 6.4 Channel Full Edge Cases
+When sending terminal signals into a bounded channel, the send may fail because the channel is full. Ensure the terminal state is still recorded even when the channel send fails — the `done` channel must close regardless of delivery success.
 
 ---
 
 ## 7. Forbidden Patterns
 
-These are HARD rules. Violating any of them has caused real bugs in past MO development sessions.
-
-| # | Pattern | Why Forbidden |
-|---|---------|---------------|
-| 7.1 | Modifying `Call()` to send terminal signals | Violates the operator lifecycle contract (§3). Terminal signals go in `Reset()` only. |
-| 7.2 | Using `sp.CloseWithTimeout()` after switching from implicit nil-batch to explicit signals | `CloseWithTimeout` waits for a nil-batch that will never arrive → guaranteed 30s timeout |
-| 7.3 | Claiming a test failure is "pre-existing" without `git stash` proof | The failure may actually be caused by your change. §2.4 protocol is mandatory. |
-| 7.4 | Adding `CGO_CFLAGS` directives to `cgo/lib.go` | This file is committed to the repo. Environment-specific paths belong in shell variables, not source files. |
-| 7.5 | Declaring completion without fresh `go test -count=1` output in the current turn | Stale test results from earlier turns do not prove the current code works. |
-| 7.6 | Changing protocol on one side of a sender/receiver pair without checking the other | Every sender has a corresponding receiver. connector↔merge, dispatch↔merge. |
+1. **Never send terminal signals (End/Error/Abort) from `Call()`.** Only `Reset()` sends terminal signals.
+2. **Never call `sp.CloseWithTimeout()` after switching to explicit typed terminal signals.** Use `sp.Abort()`.
+3. **Never claim "pre-existing" without `git stash` proof.** Run the test on clean HEAD first.
+4. **Never declare done without fresh test output.** All 5 completion gate boxes must be checked.
+5. **Never assume `go build` success means `go test` will pass.** Build only compiles packages; test compiles AND links test binaries.
+6. **Never skip bottom-up testing.** Start with pure Go packages, then CGo-transitive, then CGo-direct.
