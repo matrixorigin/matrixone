@@ -963,17 +963,13 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 
 	if n.NodeType == plan.Node_SINK_SCAN || n.NodeType == plan.Node_RECURSIVE_SCAN || n.NodeType == plan.Node_RECURSIVE_CTE {
 		for _, s := range n.SourceStep {
-			var wr *process.WaitRegister
+			var edge *process.PipelineEdge
 			if c.anal.qry.LoadTag {
-				wr = &process.WaitRegister{
-					Ch2: make(chan process.PipelineSignal, c.ncpu),
-				}
+				edge = process.NewPipelineEdge(int(c.ncpu), 0)
 			} else {
-				wr = &process.WaitRegister{
-					Ch2: make(chan process.PipelineSignal, 1),
-				}
+				edge = process.NewPipelineEdge(1, 0)
 			}
-			c.appendStepRegs(s, nodeId, wr)
+			c.appendStepRegs(s, nodeId, edge.AsWaitRegister())
 		}
 	}
 	return nil
@@ -3455,8 +3451,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 			bs := newScope(Remote)
 			bs.NodeInfo = engine.Node{Addr: tmp[0].NodeInfo.Addr, Mcpu: 1}
 			bs.Proc = c.proc.NewNoContextChildProc(0)
-			w := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 10)}
-			bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
+			edge := process.NewPipelineEdge(10, 0)
+			bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge.AsWaitRegister())
 
 			mergeOp := merge.NewArgument()
 			c.hasMergeOp = true
@@ -3478,8 +3474,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		bs := newScope(Remote)
 		bs.NodeInfo = engine.Node{Addr: rs[i].NodeInfo.Addr, Mcpu: 1}
 		bs.Proc = c.proc.NewNoContextChildProc(0)
-		w := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 10)}
-		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
+		edge := process.NewPipelineEdge(10, 0)
+		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge.AsWaitRegister())
 
 		mergeOp := merge.NewArgument()
 		c.hasMergeOp = true

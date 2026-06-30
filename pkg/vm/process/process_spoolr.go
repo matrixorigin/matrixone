@@ -41,8 +41,51 @@ const (
 	GetDirectly
 )
 
+// PipelineEventType is the typed terminal event for pipeline edges.
+// It makes the termination protocol explicit instead of relying on nil-batch
+// conventions and NilBatchCnt counting.
+type PipelineEventType uint8
+
+const (
+	// EventData carries a normal data batch. Batch may be nil for empty
+	// intermediate results; nil alone is NOT a terminal signal.
+	EventData PipelineEventType = iota
+	// EventEnd signals graceful pipeline completion with no error.
+	EventEnd
+	// EventError signals pipeline completion due to an error.
+	EventError
+	// EventAbort signals forced pipeline teardown (cancellation, remote failure, etc.).
+	EventAbort
+)
+
+func (t PipelineEventType) IsTerminal() bool {
+	return t == EventEnd || t == EventError || t == EventAbort
+}
+
+func (t PipelineEventType) String() string {
+	switch t {
+	case EventData:
+		return "Data"
+	case EventEnd:
+		return "End"
+	case EventError:
+		return "Error"
+	case EventAbort:
+		return "Abort"
+	default:
+		return "Unknown"
+	}
+}
+
 type PipelineSignal struct {
 	typ PipelineActionType
+
+	// EventType is set for typed terminal events (EventEnd/EventError/EventAbort).
+	// When EventType != EventData, this signal carries a terminal event, not a data batch.
+	EventType PipelineEventType
+
+	// terminalErr carries the error for EventError and EventAbort.
+	terminalErr error
 
 	// for case: GetFromIndex
 	index  int
@@ -57,24 +100,74 @@ type PipelineSignal struct {
 // NewPipelineSignalToGetFromSpool return a signal indicate the receiver to get data from source by index.
 func NewPipelineSignalToGetFromSpool(source *pSpool.PipelineSpool, index int) PipelineSignal {
 	return PipelineSignal{
-		typ:      GetFromIndex,
-		source:   source,
-		index:    index,
-		mp:       nil,
-		directly: nil,
+		typ:       GetFromIndex,
+		EventType: EventData,
+		source:    source,
+		index:     index,
+		mp:        nil,
+		directly:  nil,
 	}
 }
 
 // NewPipelineSignalToDirectly return a signal indicates the receiver to get data from signal directly.
 func NewPipelineSignalToDirectly(data *batch.Batch, err error, mp *mpool.MPool) PipelineSignal {
 	return PipelineSignal{
-		typ:      GetDirectly,
-		source:   nil,
-		index:    0,
-		directly: data,
-		mp:       mp,
-		errInfo:  err,
+		typ:       GetDirectly,
+		EventType: EventData,
+		source:    nil,
+		index:     0,
+		directly:  data,
+		mp:        mp,
+		errInfo:   err,
 	}
+}
+
+// NewEndSignal returns a PipelineSignal carrying an explicit EventEnd.
+// It is idempotent: receivers must treat multiple End signals safely.
+func NewEndSignal() PipelineSignal {
+	return PipelineSignal{
+		typ:       GetDirectly,
+		EventType: EventEnd,
+	}
+}
+
+// NewErrorSignal returns a PipelineSignal carrying an explicit EventError.
+// It is idempotent: receivers must treat multiple Error signals safely.
+func NewErrorSignal(err error) PipelineSignal {
+	return PipelineSignal{
+		typ:         GetDirectly,
+		EventType:   EventError,
+		terminalErr: err,
+	}
+}
+
+// NewAbortSignal returns a PipelineSignal carrying an explicit EventAbort.
+// It is idempotent: receivers must treat multiple Abort signals safely.
+func NewAbortSignal(err error) PipelineSignal {
+	return PipelineSignal{
+		typ:         GetDirectly,
+		EventType:   EventAbort,
+		terminalErr: err,
+	}
+}
+
+// BuildCleanupSignal returns the appropriate terminal signal for pipeline cleanup.
+// EventError is used when pipelineFailed=true or err!=nil; EventEnd otherwise.
+func BuildCleanupSignal(pipelineFailed bool, err error) PipelineSignal {
+	if pipelineFailed || err != nil {
+		return NewErrorSignal(err)
+	}
+	return NewEndSignal()
+}
+
+// IsTerminal returns true for End, Error, or Abort signals.
+func (signal PipelineSignal) IsTerminal() bool {
+	return signal.EventType.IsTerminal()
+}
+
+// TerminalErr returns the error carried by EventError or EventAbort.
+func (signal PipelineSignal) TerminalErr() error {
+	return signal.terminalErr
 }
 
 func SendPipelineSignalWithTimeout(reg *WaitRegister, signal PipelineSignal, timeout time.Duration) bool {
@@ -128,8 +221,14 @@ func WaitRegisterChannelState(reg *WaitRegister) (int, int) {
 
 // Action will get the input batch from one place according to which type this signal is.
 //
-// the result batch of this function is an READ-ONLY one.
+// For terminal events (EventEnd/EventError/EventAbort), nil batch is returned.
+// The result batch of this function is an READ-ONLY one.
 func (signal PipelineSignal) Action() (data *batch.Batch, info error) {
+	// Terminal events never carry data.
+	if signal.EventType.IsTerminal() {
+		return nil, signal.terminalErr
+	}
+
 	if signal.typ == GetFromIndex {
 		data, info = signal.source.ReceiveBatch(signal.index)
 		return data, info
@@ -201,6 +300,12 @@ func (receiver *PipelineSignalReceiver) setCurrent(current *PipelineSignal) {
 
 func (receiver *PipelineSignalReceiver) releaseCurrent() {
 	if receiver.currentSignal != nil {
+		// Terminal events (End/Error/Abort) don't carry batch data,
+		// so there is nothing to release.
+		if receiver.currentSignal.EventType.IsTerminal() {
+			receiver.currentSignal = nil
+			return
+		}
 		if receiver.currentSignal.typ == GetFromIndex {
 			receiver.currentSignal.source.ReleaseCurrent(
 				receiver.currentSignal.index)
@@ -241,10 +346,26 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 			}
 		}
 
+		// Handle typed terminal events: End, Error, Abort.
+		// Sender protocol guarantee: each sender sends exactly one terminal signal
+		// per edge (either typed or legacy nil-batch, never both). This prevents
+		// double-decrementing nbs[idx] in removeIdxReceiver.
+		if msg.EventType.IsTerminal() {
+			receiver.removeIdxReceiver(chosen)
+			if msg.EventType == EventEnd {
+				// Graceful end from one sender — continue draining others.
+				continue
+			}
+			// EventError or EventAbort: propagate the error.
+			return nil, msg.terminalErr
+		}
+
 		content, info = msg.Action()
 		if content == nil {
+			// Legacy nil-batch path: treat nil batch from GetFromIndex or
+			// GetDirectly as a per-sender end signal (backward compat with
+			// operators that don't yet send typed terminal events).
 			receiver.removeIdxReceiver(chosen)
-
 			if info != nil {
 				return nil, info
 			}

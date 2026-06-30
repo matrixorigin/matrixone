@@ -189,6 +189,14 @@ func (ps *PipelineSpool) ForceCleanup() {
 	ps.cleanupOnce.Do(ps.forceCleanup)
 }
 
+// Abort immediately releases all spool resources without waiting for receivers.
+// It is idempotent and safe to call from any goroutine during pipeline teardown.
+// Unlike Close/CloseWithTimeout, Abort does not block waiting for consumer
+// acknowledgement.
+func (ps *PipelineSpool) Abort() {
+	ps.ForceCleanup()
+}
+
 func (ps *PipelineSpool) forceCleanup() {
 	// All receivers have reached End. The only remaining non-free slots are the
 	// End markers themselves (nil dataContent, no cached buffer memory); every

@@ -139,13 +139,44 @@ func (dispatch *Dispatch) AdoptCleanupState(from *Dispatch) {
 	from.ctr = nil
 }
 
-func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	newDirectSignal := func() process.PipelineSignal {
-		if proc == nil {
-			return process.NewPipelineSignalToDirectly(nil, err, nil)
+// sendTerminalSignalsToLocalRegs sends terminalSignal to each local receiver.
+// It first tries non-blocking sends via TrySendPipelineSignal, then retries
+// any pending receivers with a timeout via SendPipelineSignalWithContext.
+// Timeout failures are logged via WarnPipelineCleanupf.
+func sendTerminalSignalsToLocalRegs(proc *process.Process, localRegs []*process.WaitRegister, signal process.PipelineSignal, pipelineFailed bool, err error) {
+	pendingLocalRegs := make([]int, 0, len(localRegs))
+	for i, reg := range localRegs {
+		if process.TrySendPipelineSignal(reg, signal) {
+			continue
 		}
-		return process.NewPipelineSignalToDirectly(nil, err, proc.Mp())
+		pendingLocalRegs = append(pendingLocalRegs, i)
 	}
+	if len(pendingLocalRegs) == 0 {
+		return
+	}
+	signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
+	defer signalCancel()
+	for _, i := range pendingLocalRegs {
+		if process.SendPipelineSignalWithContext(signalCtx, localRegs[i], signal) {
+			continue
+		}
+		chLen, chCap := process.WaitRegisterChannelState(localRegs[i])
+		process.WarnPipelineCleanupf(
+			proc,
+			"dispatch_cleanup_send_terminal_signal",
+			"dispatch cleanup timed out sending terminal %s signal: timeout=%s local_reg_idx=%d channel_len=%d channel_cap=%d pipeline_failed=%t err=%v",
+			signal.EventType.String(),
+			process.PipelineSignalSendTimeout,
+			i,
+			chLen,
+			chCap,
+			pipelineFailed,
+			err)
+	}
+}
+
+func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	terminalSignal := process.BuildCleanupSignal(pipelineFailed, err)
 
 	if dispatch.ctr != nil {
 		if dispatch.ctr.isRemote {
@@ -181,125 +212,28 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		}
 	}
 
-	// told the local receiver to stop if it is still running.
 	if dispatch.ctr != nil && dispatch.ctr.sp != nil {
 		sp := dispatch.ctr.sp
-		sendCtx, cancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-		queryDone, sendErr := sp.SendBatch(sendCtx, pSpool.SendToAllLocal, nil, err)
-		cancel()
 
-		terminalSignalName := "direct"
-		if sendErr == nil && !queryDone {
-			terminalSignalName = "spool"
-		} else {
-			process.WarnPipelineCleanupf(
-				proc,
-				"dispatch_cleanup_enqueue_terminal_spool",
-				"dispatch cleanup timed out enqueueing terminal spool message: timeout=%s query_done=%t err=%v",
-				process.PipelineSignalSendTimeout,
-				queryDone,
-				sendErr)
-		}
+		// Send typed terminal signals to all local receivers.
+		sendTerminalSignalsToLocalRegs(proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, err)
 
-		allTerminalSignalsSent := true
-		pendingLocalRegs := make([]int, 0, len(dispatch.LocalRegs))
-		for i, reg := range dispatch.LocalRegs {
-			terminalSignal := newDirectSignal()
-			if terminalSignalName == "spool" {
-				terminalSignal = process.NewPipelineSignalToGetFromSpool(sp, i)
-			}
-			if process.TrySendPipelineSignal(reg, terminalSignal) {
-				continue
-			}
-			pendingLocalRegs = append(pendingLocalRegs, i)
-		}
-
-		signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-		for _, i := range pendingLocalRegs {
-			terminalSignal := newDirectSignal()
-			if terminalSignalName == "spool" {
-				terminalSignal = process.NewPipelineSignalToGetFromSpool(sp, i)
-			}
-			sentTerminalSignal := process.SendPipelineSignalWithContext(signalCtx, dispatch.LocalRegs[i], terminalSignal)
-			if !sentTerminalSignal {
-				allTerminalSignalsSent = false
-			}
-			if !sentTerminalSignal {
-				chLen, chCap := process.WaitRegisterChannelState(dispatch.LocalRegs[i])
-				process.WarnPipelineCleanupf(
-					proc,
-					"dispatch_cleanup_send_terminal_signal",
-					"dispatch cleanup timed out sending terminal %s signal: timeout=%s local_reg_idx=%d channel_len=%d channel_cap=%d pipeline_failed=%t err=%v",
-					terminalSignalName,
-					process.PipelineSignalSendTimeout,
-					i,
-					chLen,
-					chCap,
-					pipelineFailed,
-					err)
-			}
-		}
-		signalCancel()
-
-		spoolClosed := false
-		if terminalSignalName == "spool" && allTerminalSignalsSent {
-			spoolClosed = sp.CloseWithTimeout(process.PipelineSignalSendTimeout)
-			if !spoolClosed {
-				process.WarnPipelineCleanupf(
-					proc,
-					"dispatch_cleanup_close_spool",
-					"dispatch cleanup timed out closing pipeline spool: timeout=%s pipeline_failed=%t err=%v",
-					process.PipelineSignalSendTimeout,
-					pipelineFailed,
-					err)
-			}
-		} else {
-			process.WarnPipelineCleanupf(
-				proc,
-				"dispatch_cleanup_skip_spool_close",
-				"dispatch cleanup skipped waiting for pipeline spool close after terminal %s signal delivery failed or fell back: delivered_all=%t pipeline_failed=%t err=%v",
-				terminalSignalName,
-				allTerminalSignalsSent,
-				pipelineFailed,
-				err)
-		}
-		if !spoolClosed {
-			dispatch.cleanupSpool = sp
-		}
+		// Since we send typed terminal signals directly (not via spool),
+		// the receiver exits without draining the spool. Use Abort()
+		// for immediate resource release instead of CloseWithTimeout.
+		sp.Abort()
 		dispatch.ctr.sp = nil
 	} else {
-		pendingLocalRegs := make([]int, 0, len(dispatch.LocalRegs))
-		for i, reg := range dispatch.LocalRegs {
-			if process.TrySendPipelineSignal(reg, newDirectSignal()) {
-				continue
-			}
-			pendingLocalRegs = append(pendingLocalRegs, i)
-		}
-
-		signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-		for _, i := range pendingLocalRegs {
-			if !process.SendPipelineSignalWithContext(
-				signalCtx,
-				dispatch.LocalRegs[i],
-				newDirectSignal()) {
-				chLen, chCap := process.WaitRegisterChannelState(dispatch.LocalRegs[i])
-				process.WarnPipelineCleanupf(
-					proc,
-					"dispatch_cleanup_send_terminal_signal",
-					"dispatch cleanup timed out sending terminal direct signal: timeout=%s local_reg_idx=%d channel_len=%d channel_cap=%d pipeline_failed=%t err=%v",
-					process.PipelineSignalSendTimeout,
-					i,
-					chLen,
-					chCap,
-					pipelineFailed,
-					err)
-			}
-		}
-		signalCancel()
+		// No spool: send typed terminal signals directly.
+		sendTerminalSignalsToLocalRegs(proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, err)
 	}
 	dispatch.ctr = nil
 }
 
+// cleanupSpool is deprecated. With typed terminal signals + sp.Abort() in Reset(),
+// deferred cleanup is no longer needed. The field and method exist only to satisfy
+// the vm.Operator interface (called by pkg/vm/pipeline/types.go cleanup walks).
+// Kept for backward compatibility — will be removed when the interface is updated.
 func (dispatch *Dispatch) CleanupDeferredSpool() {
 	if dispatch.cleanupSpool == nil {
 		return

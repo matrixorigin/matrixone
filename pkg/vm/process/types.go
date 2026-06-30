@@ -75,7 +75,15 @@ type WaitRegister struct {
 	// Ch2, data receiver's channel for receive-action-signal.
 	Ch2 chan PipelineSignal
 
-	// how many nil-batches this channel can receive, default 0 means every nil batch close channel
+	// NilBatchCnt is the number of nil-batches this channel can receive before
+	// it is considered done.
+	//
+	// When using typed EventEnd, NilBatchCnt must be ≤ 1 — the event itself
+	// signals termination and a value > 1 would cause the receiver to double-
+	// count sender closure (once via the event type, once via the legacy
+	// nil-batch counter).
+	//
+	// Deprecated: prefer typed EventEnd over nil-batch counting.
 	NilBatchCnt int
 }
 
