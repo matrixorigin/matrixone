@@ -4676,20 +4676,24 @@ func TestLockWaitTimeoutZeroMeansFallbackToContext(t *testing.T) {
 				Policy:      pb.WaitPolicy_Wait,
 			}
 
-			// Short context to trigger fast timeout.
-			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			defer cancel()
+			holderCtx, holderCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer holderCancel()
+			waitCtx, waitCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer waitCancel()
 
 			// txn1 holds the lock.
-			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			_, err := l.Lock(holderCtx, 0, [][]byte{{1}}, []byte("txn1"), option)
 			require.NoError(t, err)
+			defer func() {
+				_ = l.Unlock(holderCtx, []byte("txn1"), timestamp.Timestamp{})
+			}()
 
 			// txn2 with LockWaitTimeout=0 should wait for context expiry (500ms),
 			// NOT the default 5-minute configLockWaitTimeout.
 			option2 := option
 			option2.LockWaitTimeout = 0
 			start := time.Now()
-			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			_, err = l.Lock(waitCtx, 0, [][]byte{{1}}, []byte("txn2"), option2)
 			elapsed := time.Since(start)
 
 			require.Error(t, err)
