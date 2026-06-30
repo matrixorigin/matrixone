@@ -413,6 +413,10 @@ func TestCompareValues(t *testing.T) {
 	d64b, _ := Decimal64FromFloat64(12, 18, 0)
 	d128a, _ := Decimal128FromFloat64(100, 38, 0)
 	d128b, _ := Decimal128FromFloat64(101, 38, 0)
+	d256a, err := ParseDecimal256("100", 39, 0)
+	require.NoError(t, err)
+	d256b, err := ParseDecimal256("101", 39, 0)
+	require.NoError(t, err)
 
 	var uuidA, uuidB Uuid
 	copy(uuidA[:], []byte("aaaaaaaaaaaaaaaa"))
@@ -450,6 +454,7 @@ func TestCompareValues(t *testing.T) {
 	require.Equal(t, int(float64a-float64b), CompareValue(float64a, float64b))
 	require.Equal(t, -1, CompareValue(d64a, d64b))
 	require.Equal(t, -1, CompareValue(d128a, d128b))
+	require.Equal(t, -1, CompareValue(d256a, d256b))
 	require.Equal(t, -1, CompareValue(Date(1), Date(2)))
 	require.Equal(t, -1, CompareValue(Time(1), Time(2)))
 	require.Equal(t, -1, CompareValue(Timestamp(1), Timestamp(2)))

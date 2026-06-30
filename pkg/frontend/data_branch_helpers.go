@@ -752,6 +752,8 @@ func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
 		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIdx), nil
 	case types.T_decimal128:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIdx), nil
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, rowIdx), nil
 	case types.T_uuid:
 		return vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIdx), nil
 	case types.T_Rowid:
@@ -857,7 +859,7 @@ func compareSingleValueByType(typ types.T, left any, right any) (int, error) {
 		int8, int16, int32, int64,
 		uint8, uint16, uint32,
 		float32, float64,
-		types.Decimal64, types.Decimal128,
+		types.Decimal64, types.Decimal128, types.Decimal256,
 		types.Date, types.Time, types.Timestamp, types.Datetime, types.MoYear,
 		types.Uuid, types.TS, types.Blockid, types.Rowid,
 		[]byte, bytejson.ByteJson,

@@ -498,6 +498,19 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 			},
 		},
 		{
+			name: "decimal256",
+			build: func(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector, int) {
+				typ := types.New(types.T_decimal256, 39, 4)
+				leftVal, err := types.ParseDecimal256("12345678901234567890123456789012344.1234", typ.Width, typ.Scale)
+				require.NoError(t, err)
+				rightVal, err := types.ParseDecimal256("12345678901234567890123456789012345.1234", typ.Width, typ.Scale)
+				require.NoError(t, err)
+				leftVec := buildFixedVector(t, mp, typ, leftVal)
+				rightVec := buildFixedVector(t, mp, typ, rightVal)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
+			},
+		},
+		{
 			name: "uuid",
 			build: func(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector, int) {
 				typ := types.T_uuid.ToType()
@@ -586,6 +599,28 @@ func TestCompareSingleValInVector_ConstVectors(t *testing.T) {
 	cmp, err := compareSingleValInVector(ctx, ses, 0, 2, leftVec, rightVec)
 	require.NoError(t, err)
 	require.Equal(t, types.CompareValue(int32(5), int32(7)), cmp)
+}
+
+func TestCompareTupleValueWithVectorDecimal256(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	typ := types.New(types.T_decimal256, 39, 4)
+	leftVal, err := types.ParseDecimal256("12345678901234567890123456789012344.1234", typ.Width, typ.Scale)
+	require.NoError(t, err)
+	rightVal, err := types.ParseDecimal256("12345678901234567890123456789012345.1234", typ.Width, typ.Scale)
+	require.NoError(t, err)
+
+	vec := buildFixedVector(t, mp, typ, rightVal)
+	defer vec.Free(mp)
+
+	cmp, err := compareTupleValueWithVector(leftVal, vec, 0)
+	require.NoError(t, err)
+	require.Equal(t, types.CompareValue(leftVal, rightVal), cmp)
+
+	cmp, err = compareTupleValueWithVector(rightVal, vec, 0)
+	require.NoError(t, err)
+	require.Equal(t, 0, cmp)
 }
 
 func buildFixedVector[T any](t *testing.T, mp *mpool.MPool, typ types.Type, vals ...T) *vector.Vector {
