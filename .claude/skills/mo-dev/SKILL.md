@@ -1,7 +1,13 @@
 ---
 name: mo-dev
 description: MatrixOne database kernel development - CGo build/test environment setup, operator lifecycle contracts (Call/Reset), pipeline protocol, layered testing strategy. Use when modifying colexec operators, process signal types, compile pipeline construction, or debugging CGo link errors (undefined symbols, missing headers, library not found).
-compatibility: Designed for Codex CLI and compatible agents. Requires Go 1.22+, GNU Make, C/C++ toolchain (gcc/clang), and pre-built thirdparties.
+compatibility:
+  agents: Codex CLI and compatible agents
+  requires:
+    - Go 1.22+
+    - GNU Make
+    - C/C++ toolchain (gcc/clang)
+    - pre-built thirdparties
 metadata:
   project: matrixone
   repository: matrixorigin/matrixone
