@@ -409,9 +409,9 @@ func (exec *CDCTaskExecutor) Resume() error {
 
 // Restart cdc task from init watermark
 func (exec *CDCTaskExecutor) Restart() error {
-	state := exec.stateMachine.State()
-	wasRunning := state == StateRunning || state == StateStarting
-	wasFailed := state == StateFailed
+	stateBeforeRestart := exec.stateMachine.State()
+	shouldStopOldExecution := stateBeforeRestart == StateRunning || stateBeforeRestart == StateStarting
+	shouldClearTableErrors := stateBeforeRestart == StateFailed
 
 	// Transition to Restarting state
 	if err := exec.stateMachine.Transition(TransitionRestart); err != nil {
@@ -425,7 +425,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 		exec.watermarkUpdater.UnmarkTaskPaused(exec.spec.TaskId)
 	}
 
-	if wasFailed {
+	if shouldClearTableErrors {
 		ctx := defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId()))
 		if err := exec.clearAllTableErrors(ctx); err != nil {
 			logutil.Warn(
@@ -452,7 +452,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 		)
 	}()
 
-	if wasRunning {
+	if shouldStopOldExecution {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.CloseCancel()
 		// let Start() go
@@ -1097,9 +1097,9 @@ func (exec *CDCTaskExecutor) failTaskForPermanentTableError(ctx context.Context,
 		tbl.SourceTblName,
 	)
 
-	wasRunning := false
+	stateBeforeFail := StateIdle
 	if exec.stateMachine != nil {
-		wasRunning = exec.stateMachine.IsRunning()
+		stateBeforeFail = exec.stateMachine.State()
 		if err := exec.stateMachine.SetFailed(taskErr.Error()); err != nil {
 			logutil.Warn(
 				"cdc.frontend.task.set_state_failed",
@@ -1112,6 +1112,8 @@ func (exec *CDCTaskExecutor) failTaskForPermanentTableError(ctx context.Context,
 			return err
 		}
 	}
+
+	wasRunning := stateBeforeFail == StateRunning || stateBeforeFail == StateStarting
 
 	if err := exec.updateErrMsg(ctx, taskErr.Error()); err != nil {
 		logutil.Warn(
