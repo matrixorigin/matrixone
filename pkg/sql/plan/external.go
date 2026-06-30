@@ -217,7 +217,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 		return DefaultStats()
 	}
 
-	size := readExternalFirstLineSize(param, 0, param.Ctx)
+	size := readExternalFirstLineSize(param, totalLoadFileSize(fileSize), 0, param.Ctx)
 	if size == 0 {
 		return DefaultHugeStats()
 	}
