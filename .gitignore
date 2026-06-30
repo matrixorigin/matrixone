@@ -1,6 +1,7 @@
 .idea/
 .kiro/
 .cursor/
+.claude/
 /CLAUDE.md
 *.o
 *.a
@@ -81,3 +82,4 @@ etc/docker-multi-cn-local-disk/*.toml
 # python
 **/__pycache__/
 *.pyc
+.agents/
