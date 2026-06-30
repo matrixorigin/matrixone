@@ -186,7 +186,13 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 					maybeHandleRemoteBindChanged(binds[idx])
 				}
 			} else if resp.NewBind != nil {
-				k.service.handleBindChanged(*resp.NewBind)
+				if binds[idx].AllocatorID != "" &&
+					resp.NewBind.AllocatorID != "" &&
+					binds[idx].AllocatorID != resp.NewBind.AllocatorID {
+					maybeHandleRemoteBindChanged(binds[idx])
+				} else {
+					k.service.handleBindChanged(*resp.NewBind)
+				}
 			}
 			releaseResponse(resp)
 		} else {
