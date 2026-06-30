@@ -115,8 +115,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// Skip the LEFT JOIN to avoid a cross join (empty join condition) that would incorrectly
 	// match and delete all existing rows.
 	hasUniqueIdx := false
-	for _, idxDef := range tableDef.Indexes {
-		if idxDef.Unique {
+	for i, idxDef := range tableDef.Indexes {
+		if idxDef.Unique && !skipUniqueIdx[i] {
 			hasUniqueIdx = true
 			break
 		}
@@ -186,6 +186,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		var err error
 		for i, idxDef := range tableDef.Indexes {
+			if skipUniqueIdx[i] {
+				continue
+			}
 			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
 			if err != nil {
 				return 0, err
@@ -241,6 +244,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		var err error
 		for i, idxDef := range tableDef.Indexes {
+			if skipUniqueIdx[i] {
+				continue
+			}
 			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
 			if err != nil {
 				return 0, err
@@ -290,8 +296,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		if isFakePK {
 			// Fake-PK tables previously joined on only the first unique key,
 			// missing conflicts on the others; OR one condition per unique key.
-			for _, idxDef := range tableDef.Indexes {
-				if !idxDef.Unique {
+			for i, idxDef := range tableDef.Indexes {
+				if !idxDef.Unique || skipUniqueIdx[i] {
 					continue
 				}
 				var ukPartConds []*plan.Expr
@@ -353,8 +359,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			pkCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{leftExpr, rightExpr})
 			joinConds = append(joinConds, pkCond)
 
-			for _, idxDef := range tableDef.Indexes {
-				if !idxDef.Unique {
+			for i, idxDef := range tableDef.Indexes {
+				if !idxDef.Unique || skipUniqueIdx[i] {
 					continue
 				}
 				var ukPartConds []*plan.Expr
@@ -519,7 +525,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			requiredOldCols := make(map[string]struct{}, 2+len(tableDef.Indexes))
 			requiredOldCols[catalog.Row_ID] = struct{}{}
 			requiredOldCols[tableDef.Pkey.PkeyColName] = struct{}{}
-			for _, idxDef := range tableDef.Indexes {
+			for i, idxDef := range tableDef.Indexes {
+				if skipUniqueIdx[i] {
+					continue
+				}
 				if !indexTableStoresSerializedKey(idxDef) {
 					requiredOldCols[indexPrimaryPartName(idxDef)] = struct{}{}
 				}
@@ -564,7 +573,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	// detect unique key confliction
 	for i, idxDef := range tableDef.Indexes {
-		if !idxDef.Unique {
+		if !idxDef.Unique || skipUniqueIdx[i] {
 			continue
 		}
 
@@ -648,6 +657,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	// get old RowID for index tables
 	for i, idxDef := range tableDef.Indexes {
+		if skipUniqueIdx[i] {
+			continue
+		}
 		idxTag := builder.genNewBindTag()
 		builder.addNameByColRef(idxTag, idxTableDefs[i])
 
@@ -817,6 +829,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	}
 
 	for i, idxDef := range tableDef.Indexes {
+		if skipUniqueIdx[i] {
+			continue
+		}
 		insertCols := make([]plan.ColRef, 2)
 		deleteCols := make([]plan.ColRef, 2)
 
@@ -995,6 +1010,9 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
+			if !col.Typ.AutoIncr && replaceExprAlwaysStaticNull(oldExpr, builder.qry, 0) {
+				columnIsNull[col.Name] = true
+			}
 			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
 				Typ: oldExpr.Typ,
@@ -1094,11 +1112,12 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 	pkName := tableDef.Pkey.PkeyColName
 	pkPos := tableDef.Name2ColIndex[pkName]
 	for i, idxDef := range tableDef.Indexes {
-		skipUniqueIdx[i] = true
-		for _, part := range idxDef.Parts {
-			if !columnIsNull[catalog.ResolveAlias(part)] {
-				skipUniqueIdx[i] = false
-				break
+		if idxDef.Unique {
+			for _, part := range idxDef.Parts {
+				if columnIsNull[catalog.ResolveAlias(part)] {
+					skipUniqueIdx[i] = true
+					break
+				}
 			}
 		}
 
@@ -1161,4 +1180,67 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 	}, tmpCtx)
 
 	return lastNodeID, colName2Idx, skipUniqueIdx, nil
+}
+
+func replaceExprAlwaysStaticNull(expr *plan.Expr, query *plan.Query, depth int) bool {
+	if expr == nil || query == nil || depth > 32 {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return lit.GetIsnull()
+	}
+	if colRef := expr.GetCol(); colRef != nil {
+		node := replaceNodeByTag(query, colRef.GetRelPos())
+		if node == nil {
+			return false
+		}
+		colPos := int(colRef.GetColPos())
+		switch node.GetNodeType() {
+		case plan.Node_PROJECT:
+			if colPos < 0 || colPos >= len(node.GetProjectList()) {
+				return false
+			}
+			return replaceExprAlwaysStaticNull(node.GetProjectList()[colPos], query, depth+1)
+		case plan.Node_VALUE_SCAN:
+			rowsetData := node.GetRowsetData()
+			if rowsetData == nil || colPos < 0 || colPos >= len(rowsetData.GetCols()) {
+				return false
+			}
+			colData := rowsetData.GetCols()[colPos]
+			if colData == nil || len(colData.GetData()) == 0 {
+				return false
+			}
+			for _, rowExpr := range colData.GetData() {
+				if rowExpr == nil || !replaceExprAlwaysStaticNull(rowExpr.GetExpr(), query, depth+1) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		args := fn.GetArgs()
+		if len(args) == 1 && replaceFunctionPreservesNull(fn) {
+			return replaceExprAlwaysStaticNull(args[0], query, depth+1)
+		}
+	}
+	return false
+}
+
+func replaceNodeByTag(query *plan.Query, tag int32) *plan.Node {
+	for _, node := range query.GetNodes() {
+		for _, bindingTag := range node.GetBindingTags() {
+			if bindingTag == tag {
+				return node
+			}
+		}
+	}
+	return nil
+}
+
+func replaceFunctionPreservesNull(fn *plan.Function) bool {
+	if fn == nil || fn.GetFunc() == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(fn.GetFunc().GetObjName()), "cast")
 }

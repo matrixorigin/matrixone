@@ -930,6 +930,48 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	/*
+		create table fake_pk_composite_t (
+			a int,
+			b int,
+			c varchar(64),
+			unique key(a, b)
+		);
+		-- table with no real PK, only a composite unique key ("fake PK" table)
+	*/
+	constraintTestSchema["fake_pk_composite_t"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, true, 32, 0},
+			{"b", types.T_int32, true, 32, 0},
+			{"c", types.T_varchar, true, 64, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{3}, // fake PK column
+		idxs: []index{
+			{
+				indexName: "uk_a_b",
+				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-composite-t-uk-a-b",
+				parts:     []string{"a", "b"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 5,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"fake-pk-composite-t-uk-a-b"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint64, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
 		create table self_ref (
 			id int primary key,
 			parent_id int,
