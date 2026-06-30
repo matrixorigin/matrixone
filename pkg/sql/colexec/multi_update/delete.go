@@ -75,6 +75,7 @@ func (update *MultiUpdate) delete_table(
 	rowCount = deleteBatch.Vecs[0].Length()
 	if rowCount > 0 {
 		deleteBatch.SetRowCount(rowCount)
+
 		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 		update.addDeleteAffectRows(tableType, uint64(rowCount))
 		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source

@@ -37,12 +37,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -211,6 +213,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			runCompile.Release()
 		}()
 
+		if err := registerRemoteDispatchReceivers(s, runCompile.proc); err != nil {
+			return err
+		}
 		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
@@ -231,6 +236,29 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
+	}
+	return nil
+}
+
+func registerRemoteDispatchReceivers(s *Scope, proc *process.Process) error {
+	if s == nil {
+		return nil
+	}
+	if s.RootOp != nil {
+		if err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			d, ok := op.(*dispatch.Dispatch)
+			if !ok {
+				return nil
+			}
+			return d.RegisterRemoteReceivers(proc)
+		}); err != nil {
+			return err
+		}
+	}
+	for _, pre := range s.PreScopes {
+		if err := registerRemoteDispatchReceivers(pre, proc); err != nil {
+			return err
+		}
 	}
 	return nil
 }
