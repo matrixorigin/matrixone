@@ -475,3 +475,29 @@ func TestMakePlan2AssignmentCastExprUsesStrictForCharVarchar(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "cast", intExpr.GetF().GetFunc().GetObjName())
 }
+
+// A generated CHAR/VARCHAR column is materialized as a real column write, so
+// buildGeneratedExpr must wrap its expression with the strict assignment cast
+// (cast_strict): an over-length value is rejected, not silently truncated.
+func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	stmt, err := mysql.ParseOne(context.Background(),
+		"create table t (t text, g varchar(1) generated always as (coalesce(t, '')) stored)", 1)
+	require.NoError(t, err)
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+
+	var genCol *tree.ColumnTableDef
+	for _, def := range createTable.Defs {
+		if cd, ok := def.(*tree.ColumnTableDef); ok && cd.Name.ColNameOrigin() == "g" {
+			genCol = cd
+		}
+	}
+	require.NotNil(t, genCol)
+
+	existingCols := []*ColDef{{Name: "t", Typ: plan.Type{Id: int32(types.T_text)}}}
+	gen, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_varchar), Width: 1}, existingCols, proc)
+	require.NoError(t, err)
+	require.NotNil(t, gen)
+	require.Equal(t, "cast_strict", gen.Expr.GetF().GetFunc().GetObjName())
+}

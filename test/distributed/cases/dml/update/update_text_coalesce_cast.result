@@ -52,5 +52,21 @@ length(txt)
 261
 6
 drop table t_multi;
+drop table if exists t_gen;
+create table t_gen(id int primary key, t text, g varchar(1) generated always as (coalesce(t, '')) stored);
+insert into t_gen(id, t) values (1, 'x');
+select length(g) from t_gen order by id;
+length(g)
+1
+insert into t_gen(id, t) values (2, 'ab');
+internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
+update t_gen set t = 'cd' where id = 1;
+internal error: Can't cast 'cd' from VARCHAR type to VARCHAR type. Src length 2 is larger than Dest length 1
+replace into t_gen(id, t) values (1, 'ef');
+internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
+select length(g) from t_gen order by id;
+length(g)
+1
+drop table t_gen;
 drop table t1;
 drop database update_text_coalesce_cast;
