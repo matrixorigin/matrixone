@@ -22,6 +22,16 @@ convert('42', unsigned) as convert_unsigned,
 convert('42.50', decimal(6,2)) as convert_decimal;
 convert_signed    convert_unsigned    convert_decimal
 42    42    42.50
+select convert('AZ', char(2)) as convert_char_explicit,
+length(convert('AZ', char(2))) as convert_char_len,
+convert(12345, char(5)) as convert_int_char,
+length(convert(12345, char(5))) as convert_int_char_len;
+convert_char_explicit    convert_char_len    convert_int_char    convert_int_char_len
+AZ    2    12345    5
+select hex(convert('AZ', binary(4))) as convert_binary_fixed_hex,
+length(convert('AZ', binary(4))) as convert_binary_fixed_len;
+convert_binary_fixed_hex    convert_binary_fixed_len
+415A0000    4
 select cast(12345 as char) as int_to_char,
 cast(-12.50 as char) as decimal_to_char,
 hex(cast('AZ' as binary)) as binary_hex,
@@ -42,6 +52,12 @@ cast('20240102030405' as datetime) as compact_datetime,
 cast('030405' as time) as compact_time,
 cast('34:05' as time) as hour_minute_time;
 compact_date    compact_datetime    compact_time    hour_minute_time
+2024-01-02    2024-01-02 03:04:05    03:04:05    34:05:00
+select convert('20240102', date) as convert_compact_date,
+convert('20240102030405', datetime) as convert_compact_datetime,
+convert('030405', time) as convert_compact_time,
+convert('34:05', time) as convert_hour_minute_time;
+convert_compact_date    convert_compact_datetime    convert_compact_time    convert_hour_minute_time
 2024-01-02    2024-01-02 03:04:05    03:04:05    34:05:00
 select cast(cast('2024-01-02' as date) as char) as date_to_char,
 cast(cast('2024-01-02 03:04:05.123456' as datetime(6)) as char) as datetime_to_char,
@@ -72,6 +88,15 @@ cast('  +0' as signed) as signed_plus_zero_ws,
 cast('000.00' as decimal(6,2)) as decimal_zero_padded;
 signed_neg_zero    signed_plus_zero_ws    decimal_zero_padded
 0    0    0.00
+select cast(9223372036854775807 as signed) as signed_max,
+cast(18446744073709551615 as unsigned) as unsigned_max,
+cast('18446744073709551615' as unsigned) as unsigned_string_max;
+signed_max    unsigned_max    unsigned_string_max
+9223372036854775807    18446744073709551615    18446744073709551615
+select cast('0000-00-00' as date) as zero_date,
+cast('00:00:00' as time) as zero_time;
+zero_date    zero_time
+null    00:00:00
 select convert(null, signed) as convert_null_signed,
 convert(null, unsigned) as convert_null_unsigned,
 convert(null, decimal(6,2)) as convert_null_decimal;

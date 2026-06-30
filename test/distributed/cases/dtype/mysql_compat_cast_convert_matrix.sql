@@ -26,6 +26,14 @@ select convert('42', signed) as convert_signed,
        convert('42', unsigned) as convert_unsigned,
        convert('42.50', decimal(6,2)) as convert_decimal;
 
+select convert('AZ', char(2)) as convert_char_explicit,
+       length(convert('AZ', char(2))) as convert_char_len,
+       convert(12345, char(5)) as convert_int_char,
+       length(convert(12345, char(5))) as convert_int_char_len;
+
+select hex(convert('AZ', binary(4))) as convert_binary_fixed_hex,
+       length(convert('AZ', binary(4))) as convert_binary_fixed_len;
+
 select cast(12345 as char) as int_to_char,
        cast(-12.50 as char) as decimal_to_char,
        hex(cast('AZ' as binary)) as binary_hex,
@@ -42,6 +50,11 @@ select cast('20240102' as date) as compact_date,
        cast('20240102030405' as datetime) as compact_datetime,
        cast('030405' as time) as compact_time,
        cast('34:05' as time) as hour_minute_time;
+
+select convert('20240102', date) as convert_compact_date,
+       convert('20240102030405', datetime) as convert_compact_datetime,
+       convert('030405', time) as convert_compact_time,
+       convert('34:05', time) as convert_hour_minute_time;
 
 select cast(cast('2024-01-02' as date) as char) as date_to_char,
        cast(cast('2024-01-02 03:04:05.123456' as datetime(6)) as char) as datetime_to_char,
@@ -66,6 +79,13 @@ select cast(null as signed) as null_signed,
 select cast('-0' as signed) as signed_neg_zero,
        cast('  +0' as signed) as signed_plus_zero_ws,
        cast('000.00' as decimal(6,2)) as decimal_zero_padded;
+
+select cast(9223372036854775807 as signed) as signed_max,
+       cast(18446744073709551615 as unsigned) as unsigned_max,
+       cast('18446744073709551615' as unsigned) as unsigned_string_max;
+
+select cast('0000-00-00' as date) as zero_date,
+       cast('00:00:00' as time) as zero_time;
 
 select convert(null, signed) as convert_null_signed,
        convert(null, unsigned) as convert_null_unsigned,
