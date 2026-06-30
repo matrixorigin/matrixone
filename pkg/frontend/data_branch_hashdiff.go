@@ -1171,6 +1171,38 @@ func compareRowInWrappedBatches(
 	return 0, nil
 }
 
+func compareTupleWithBatchRow(
+	tblStuff tableStuff,
+	tuple types.Tuple,
+	bat *batch.Batch,
+	rowIdx int,
+	skipPKCols bool,
+) (int, error) {
+	for _, colIdx := range tblStuff.def.visibleIdxes {
+		if skipPKCols && slices.Index(tblStuff.def.pkColIdxes, colIdx) != -1 {
+			continue
+		}
+		if colIdx < 0 || colIdx >= bat.VectorCount() {
+			return 0, moerr.NewInternalErrorNoCtxf(
+				"column index %d out of range for batch width %d",
+				colIdx, bat.VectorCount(),
+			)
+		}
+		val, err := getTupleColumnValue(tuple, tblStuff, colIdx)
+		if err != nil {
+			return 0, err
+		}
+		cmp, err := compareTupleValueWithVector(val, bat.Vecs[colIdx], rowIdx)
+		if err != nil {
+			return 0, err
+		}
+		if cmp != 0 {
+			return cmp, nil
+		}
+	}
+	return 0, nil
+}
+
 func findDeleteAndUpdateBat(
 	ctx context.Context, ses *Session, bh BackgroundExec,
 	tblStuff tableStuff, tblName string, side int, tmpCh chan batchWithKind, branchTS types.TS,
@@ -1284,6 +1316,22 @@ func findDeleteAndUpdateBat(
 					[]*vector.Vector{dBat.Vecs[tblStuff.def.pkColIdx]}, false,
 					func(idx int, _ []byte, row []byte) error {
 						seen[idx] = true
+
+						if tuple, _, err2 = dataHashmap.DecodeRow(row); err2 != nil {
+							return err2
+						}
+
+						var cmp int
+						skipPKCols := tblStuff.def.pkKind != fakeKind
+						if cmp, err2 = compareTupleWithBatchRow(
+							tblStuff, tuple, dBat, idx, skipPKCols,
+						); err2 != nil {
+							return err2
+						}
+						if cmp == 0 {
+							return nil
+						}
+
 						// delete on lca and insert into tar ==> update
 						if updateBat == nil {
 							updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
@@ -1291,17 +1339,11 @@ func findDeleteAndUpdateBat(
 						if expandUpdate && updateDeleteBat == nil {
 							updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 						}
-
-						if tuple, _, err2 = dataHashmap.DecodeRow(row); err2 != nil {
-							return err2
-						}
-
 						if expandUpdate {
 							if err2 = updateDeleteBat.UnionOne(dBat, int64(idx), ses.proc.Mp()); err2 != nil {
 								return err2
 							}
 						}
-
 						if err2 = appendTupleToBat(ses, updateBat, tuple, tblStuff); err2 != nil {
 							return err2
 						}
@@ -1343,17 +1385,15 @@ func findDeleteAndUpdateBat(
 				if updateBat != nil {
 					updateBat.SetRowCount(updateBat.Vecs[0].Length())
 					if expandUpdate {
-						if updateDeleteBat != nil {
-							updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
-							if err2 = send(batchWithKind{
-								name:       tblName,
-								side:       side,
-								fromUpdate: true,
-								batch:      updateDeleteBat,
-								kind:       diffDelete,
-							}); err2 != nil {
-								return err2
-							}
+						updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
+						if err2 = send(batchWithKind{
+							name:       tblName,
+							side:       side,
+							fromUpdate: true,
+							batch:      updateDeleteBat,
+							kind:       diffDelete,
+						}); err2 != nil {
+							return err2
 						}
 						if err2 = send(batchWithKind{
 							name:  tblName,
@@ -1688,6 +1728,12 @@ func diffDataHelper(
 
 	// if no pk, we cannot use the fake pk to probe.
 	// must probe with full columns
+	var migratedHashmaps []databranchutils.BranchHashmap
+	defer func() {
+		for _, hashmap := range migratedHashmaps {
+			err = errors.Join(err, hashmap.Close())
+		}
+	}()
 
 	if tblStuff.def.pkKind == fakeKind {
 		var (
@@ -1695,21 +1741,17 @@ func diffDataHelper(
 			newHashmap databranchutils.BranchHashmap
 		)
 
-		if newHashmap, err = baseDataHashmap.Migrate(keyIdxes, -1); err != nil {
-			return err
-		}
-		if err = baseDataHashmap.Close(); err != nil {
+		if newHashmap, err = migrateAndCloseSourceHashmap(baseDataHashmap, keyIdxes, -1); err != nil {
 			return err
 		}
 		baseDataHashmap = newHashmap
+		migratedHashmaps = append(migratedHashmaps, baseDataHashmap)
 
-		if newHashmap, err = tarDataHashmap.Migrate(keyIdxes, -1); err != nil {
-			return err
-		}
-		if err = tarDataHashmap.Close(); err != nil {
+		if newHashmap, err = migrateAndCloseSourceHashmap(tarDataHashmap, keyIdxes, -1); err != nil {
 			return err
 		}
 		tarDataHashmap = newHashmap
+		migratedHashmaps = append(migratedHashmaps, tarDataHashmap)
 	}
 
 	if err = tarDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
@@ -1922,6 +1964,23 @@ func diffDataHelper(
 
 	return nil
 }
+
+func migrateAndCloseSourceHashmap(
+	source databranchutils.BranchHashmap,
+	keyIdxes []int,
+	parallelism int,
+) (databranchutils.BranchHashmap, error) {
+	newHashmap, err := source.Migrate(keyIdxes, parallelism)
+	if err != nil {
+		return nil, err
+	}
+	if err = source.Close(); err != nil {
+		_ = newHashmap.Close()
+		return nil, err
+	}
+	return newHashmap, nil
+}
+
 func buildHashmapForTable(
 	ctx context.Context,
 	mp *mpool.MPool,

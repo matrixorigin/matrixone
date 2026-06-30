@@ -20,9 +20,9 @@ label
 from issue_24211_load_empty_numeric
 order by id;
 ➤ id[4,32,0]  ¦  qty[4,32,0]  ¦  amount[3,7,2]  ¦  profit[3,7,2]  ¦  label[12,-1,0]  𝄀
-1  ¦  0  ¦  0.00  ¦  null  ¦  blank_qty_amount_null_profit  𝄀
+1  ¦  null  ¦  null  ¦  null  ¦  blank_qty_amount_null_profit  𝄀
 2  ¦  5  ¦  1.25  ¦  2.50  ¦  normal  𝄀
-3  ¦  0  ¦  3.50  ¦  0.00  ¦  blank_qty_profit
+3  ¦  null  ¦  3.50  ¦  null  ¦  blank_qty_profit
 select
 sum(qty),
 sum(amount),
@@ -30,7 +30,7 @@ sum(ifnull(profit, 0)),
 count(profit)
 from issue_24211_load_empty_numeric;
 ➤ sum(qty)[-5,64,0]  ¦  sum(amount)[3,38,2]  ¦  sum(ifnull(profit, 0))[3,38,2]  ¦  count(profit)[-5,64,0]  𝄀
-5  ¦  4.75  ¦  2.50  ¦  2
+5  ¦  4.75  ¦  2.50  ¦  1
 drop table if exists issue_24211_load_empty_numeric_nonparallel;
 create table issue_24211_load_empty_numeric_nonparallel(
 id int,
