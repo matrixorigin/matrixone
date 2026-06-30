@@ -581,7 +581,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 		for i, data := range node.RowsetData.Cols[idx].Data {
 			rowExpr := DeepCopyExpr(data.Expr)
-			e, err := forceAssignmentCastExpr(builder.GetContext(), rowExpr, col.Typ)
+			e, err := forceAssignmentCastExprWithIgnore(builder.GetContext(), rowExpr, col.Typ, builder.isInsertIgnore)
 			if err != nil {
 				return nil, err
 			}

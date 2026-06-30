@@ -30,6 +30,11 @@ import (
 )
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
+	// INSERT IGNORE is parsed as OnDuplicateUpdate == [nil] (see mysql_sql.y).
+	// Under IGNORE, over-length CHAR/VARCHAR writes are downgraded to truncation
+	// instead of being rejected (1406), matching MySQL.
+	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+
 	dmlCtx := NewDMLContext()
 	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
 	if err != nil {
@@ -1145,7 +1150,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		case isGeometryPlanType(&colTyp):
 			projExpr, err = funcCastForGeometryType(builder.GetContext(), projExpr, colTyp)
 		default:
-			projExpr, err = forceAssignmentCastExpr(builder.GetContext(), projExpr, colTyp)
+			projExpr, err = forceAssignmentCastExprWithIgnore(builder.GetContext(), projExpr, colTyp, builder.isInsertIgnore)
 		}
 		if err != nil {
 			return 0, nil, nil, err
@@ -1385,7 +1390,7 @@ func (builder *QueryBuilder) buildValueScan(
 			binder.builder = builder
 			for _, r := range stmt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) {
-					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
+					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return 0, err
 					}

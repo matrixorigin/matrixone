@@ -191,6 +191,7 @@ type QueryBuilder struct {
 	isPrepareStatement    bool
 	mysqlCompatible       bool
 	haveOnDuplicateKey    bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
+	isInsertIgnore        bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool

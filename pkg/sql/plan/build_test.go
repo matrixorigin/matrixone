@@ -222,7 +222,7 @@ func exprHasTextToCharOrVarcharCast(expr *plan.Expr) bool {
 		return false
 	}
 	if f := expr.GetF(); f != nil {
-		if (f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict") && len(f.Args) > 0 &&
+		if (f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict" || f.Func.GetObjName() == "cast_assign") && len(f.Args) > 0 &&
 			f.Args[0].Typ.Id == int32(types.T_text) &&
 			(expr.Typ.Id == int32(types.T_char) || expr.Typ.Id == int32(types.T_varchar)) {
 			return true
@@ -251,6 +251,10 @@ func planHasTextToVarcharStrictCastWithWidth(p *Plan, width int32) bool {
 	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_strict", width)
 }
 
+func planHasTextToVarcharAssignCastWithWidth(p *Plan, width int32) bool {
+	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_assign", width)
+}
+
 func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width int32) bool {
 	p = resolveQueryPlan(p)
 	if p == nil || p.GetQuery() == nil {
@@ -264,7 +268,7 @@ func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width in
 		if f := expr.GetF(); f != nil {
 			nameMatches := f.Func.GetObjName() == funcName
 			if funcName == "" {
-				nameMatches = f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict"
+				nameMatches = f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict" || f.Func.GetObjName() == "cast_assign"
 			}
 			if nameMatches && len(f.Args) > 0 &&
 				f.Args[0].Typ.Id == int32(types.T_text) &&
@@ -370,22 +374,36 @@ func TestUpdateVarcharFromTextKeepsVarcharWidthCast(t *testing.T) {
 	assert.True(t, planHasTextToVarcharCastWithWidth(logicPlan, 255))
 }
 
-func TestInsertSelectVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+func TestInsertSelectVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
 
+	// DML write paths use cast_assign (sql_mode-gated width check), not cast_strict.
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, vc) select id, txt from text_cast_t")
 	assert.NoError(t, err)
-	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
+	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
 }
 
-func TestOnDuplicateUpdateVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+func TestOnDuplicateUpdateVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
 
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
 	assert.NoError(t, err)
-	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
+	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
+}
+
+func TestInsertIgnoreVarcharFromTextDowngradesToLenientCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	// INSERT IGNORE downgrades over-length errors to truncation, so the
+	// assignment uses the lenient `cast` instead of the sql_mode-gated
+	// `cast_assign`.
+	logicPlan, err := runOneStmt(mock, t, "insert ignore into text_cast_t(id, vc) select id, txt from text_cast_t")
+	assert.NoError(t, err)
+	assert.True(t, planHasTextToVarcharCastWithNameAndWidth(logicPlan, "cast", 255))
+	assert.False(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
 }
 
 //Test Query Node Tree

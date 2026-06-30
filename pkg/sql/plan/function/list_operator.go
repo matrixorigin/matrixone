@@ -2602,6 +2602,38 @@ var supportedOperators = []FuncNew{
 		},
 	},
 
+	// operator `cast_assign`
+	// Used by DML assignment paths (INSERT/UPDATE projection) for CHAR/VARCHAR
+	// targets. Unlike `cast_strict` (which always rejects over-length writes),
+	// `cast_assign` honors `sql_mode` at runtime: strict mode rejects (1406),
+	// non-strict mode truncates. Over-length that is only trailing spaces is
+	// accepted (truncated) even in strict mode, matching MySQL.
+	{
+		functionId: CAST_ASSIGN,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 2 {
+				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewAssignCast
+				},
+			},
+		},
+	},
+
 	// operator `bit_cast`
 	{
 		functionId: BIT_CAST,

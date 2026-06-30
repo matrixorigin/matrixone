@@ -953,12 +953,13 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	// Assigning a value to a real CHAR/VARCHAR(N) column must keep the strict
-	// width check: an over-length value errors instead of being silently
-	// truncated. Generic casts stay lenient (MySQL-compatible truncation).
+	// Assigning a value to a real CHAR/VARCHAR(N) column routes through
+	// cast_assign, which honors sql_mode at runtime (strict rejects over-length,
+	// non-strict truncates). Generic casts stay lenient (MySQL-compatible
+	// truncation).
 	funcName := "cast"
 	if t2.Oid == types.T_char || t2.Oid == types.T_varchar {
-		funcName = "cast_strict"
+		funcName = "cast_assign"
 	}
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
@@ -980,9 +981,22 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, err
 }
 
 func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	return forceAssignmentCastExprWithIgnore(ctx, expr, targetType, false)
+}
+
+// forceAssignmentCastExprWithIgnore builds the assignment cast for a DML write.
+// For CHAR/VARCHAR targets it normally uses cast_assign (sql_mode-gated width
+// check). When isIgnore is true (INSERT IGNORE), over-length writes are
+// downgraded to truncation regardless of sql_mode, so the generic lenient cast
+// is used instead, matching MySQL's INSERT IGNORE behavior.
+func forceAssignmentCastExprWithIgnore(ctx context.Context, expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
 	funcName := "cast"
 	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
-		funcName = "cast_strict"
+		if isIgnore {
+			funcName = "cast"
+		} else {
+			funcName = "cast_assign"
+		}
 	}
 	return forceCastExprWithName(ctx, expr, targetType, funcName)
 }
@@ -1018,7 +1032,7 @@ func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, fun
 	}, nil
 }
 
-func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type) (*plan.Expr, error) {
+func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (*plan.Expr, error) {
 	if numVal.ValType == tree.P_null || numVal.ValType == tree.P_nulltext {
 		return makePlan2NullConstExprWithType(), nil
 	}
@@ -1112,7 +1126,7 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		return MakePlan2Decimal128ExprWithType(num, &planType), err
 	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
 		types.T_array_float32, types.T_array_float64:
-		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
+		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType, isIgnore)
 		if err != nil || !canInsert {
 			return nil, err
 		}
@@ -1235,7 +1249,7 @@ func buildValueScan(
 			binder.builder = builder
 			for _, r := range slt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) {
-					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
+					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return err
 					}
