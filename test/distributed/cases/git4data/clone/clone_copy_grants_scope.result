@@ -1,0 +1,175 @@
+set global enable_privilege_cache = off;
+drop account if exists acc_clone_copy_grants_scope;
+create account acc_clone_copy_grants_scope admin_name "root1" identified by "111";
+drop database if exists cg_scope_src;
+drop database if exists cg_scope_dst;
+create database cg_scope_src;
+create database cg_scope_dst;
+create table cg_scope_src.src(a int primary key, b varchar(20));
+insert into cg_scope_src.src values(1, 'one'), (2, 'two');
+create role cg_scope_r_dt, cg_scope_r_t, cg_scope_r_parent, cg_scope_r_child;
+grant connect on account * to cg_scope_r_dt;
+grant connect on account * to cg_scope_r_t;
+grant connect on account * to cg_scope_r_child;
+create user cg_scope_u_dt identified by '111' default role cg_scope_r_dt;
+create user cg_scope_u_t identified by '111' default role cg_scope_r_t;
+create user cg_scope_u_child identified by '111' default role cg_scope_r_child;
+grant select on table cg_scope_src.src to cg_scope_r_dt with grant option;
+use cg_scope_src;
+grant select on table src to cg_scope_r_t;
+grant select on table cg_scope_src.src to cg_scope_r_parent;
+grant cg_scope_r_parent to cg_scope_r_child;
+create role cg_scope_r_db_star, cg_scope_r_global_star, cg_scope_r_db_object, cg_scope_r_account_object;
+grant connect on account * to cg_scope_r_db_star;
+grant connect on account * to cg_scope_r_global_star;
+grant connect on account * to cg_scope_r_db_object;
+grant connect on account * to cg_scope_r_account_object;
+create user cg_scope_u_db_star identified by '111' default role cg_scope_r_db_star;
+create user cg_scope_u_global_star identified by '111' default role cg_scope_r_global_star;
+create user cg_scope_u_db_object identified by '111' default role cg_scope_r_db_object;
+create user cg_scope_u_account_object identified by '111' default role cg_scope_r_account_object;
+grant select on table cg_scope_src.* to cg_scope_r_db_star;
+grant select on table *.* to cg_scope_r_global_star;
+grant create table on database cg_scope_src to cg_scope_r_db_object;
+grant create database on account * to cg_scope_r_account_object;
+create table cg_scope_src.same_plain clone cg_scope_src.src;
+create table cg_scope_src.same_copy clone cg_scope_src.src copy grants;
+create table cg_scope_dst.cross_copy clone cg_scope_src.src copy grants;
+select t.reldatabase, t.relname, count(rp.role_name) as direct_table_grants
+from mo_catalog.mo_tables t
+left join mo_catalog.mo_role_privs rp
+on rp.obj_type = 'table'
+and rp.obj_id = t.rel_logical_id
+and rp.role_name like 'cg_scope_r_%'
+where t.reldatabase in ('cg_scope_src', 'cg_scope_dst')
+and t.relname in ('src', 'same_plain', 'same_copy', 'cross_copy')
+group by t.reldatabase, t.relname
+order by t.reldatabase, t.relname;
+➤ reldatabase[12,-1,0]  ¦  relname[12,-1,0]  ¦  direct_table_grants[-5,64,0]  𝄀
+cg_scope_dst  ¦  cross_copy  ¦  3  𝄀
+cg_scope_src  ¦  same_copy  ¦  3  𝄀
+cg_scope_src  ¦  same_plain  ¦  0  𝄀
+cg_scope_src  ¦  src  ¦  3
+select t.reldatabase, t.relname, rp.role_name, rp.privilege_name, rp.privilege_level, rp.with_grant_option
+from mo_catalog.mo_tables t
+join mo_catalog.mo_role_privs rp
+on rp.obj_type = 'table'
+and rp.obj_id = t.rel_logical_id
+where t.reldatabase in ('cg_scope_src', 'cg_scope_dst')
+and t.relname in ('src', 'same_copy', 'cross_copy')
+and rp.role_name like 'cg_scope_r_%'
+order by t.reldatabase, t.relname, rp.role_name, rp.privilege_name;
+➤ reldatabase[12,-1,0]  ¦  relname[12,-1,0]  ¦  role_name[12,-1,0]  ¦  privilege_name[12,-1,0]  ¦  privilege_level[12,-1,0]  ¦  with_grant_option[-7,1,0]  𝄀
+cg_scope_dst  ¦  cross_copy  ¦  cg_scope_r_dt  ¦  select  ¦  d.t  ¦  1  𝄀
+cg_scope_dst  ¦  cross_copy  ¦  cg_scope_r_parent  ¦  select  ¦  d.t  ¦  0  𝄀
+cg_scope_dst  ¦  cross_copy  ¦  cg_scope_r_t  ¦  select  ¦  t  ¦  0  𝄀
+cg_scope_src  ¦  same_copy  ¦  cg_scope_r_dt  ¦  select  ¦  d.t  ¦  1  𝄀
+cg_scope_src  ¦  same_copy  ¦  cg_scope_r_parent  ¦  select  ¦  d.t  ¦  0  𝄀
+cg_scope_src  ¦  same_copy  ¦  cg_scope_r_t  ¦  select  ¦  t  ¦  0  𝄀
+cg_scope_src  ¦  src  ¦  cg_scope_r_dt  ¦  select  ¦  d.t  ¦  1  𝄀
+cg_scope_src  ¦  src  ¦  cg_scope_r_parent  ¦  select  ¦  d.t  ¦  0  𝄀
+cg_scope_src  ¦  src  ¦  cg_scope_r_t  ¦  select  ¦  t  ¦  0
+select role_name, obj_type, privilege_name, privilege_level
+from mo_catalog.mo_role_privs
+where role_name in ('cg_scope_r_db_star', 'cg_scope_r_global_star', 'cg_scope_r_db_object', 'cg_scope_r_account_object')
+and privilege_name <> 'connect'
+order by role_name, obj_type, privilege_name, privilege_level;
+➤ role_name[12,-1,0]  ¦  obj_type[12,-1,0]  ¦  privilege_name[12,-1,0]  ¦  privilege_level[12,-1,0]  𝄀
+cg_scope_r_account_object  ¦  account  ¦  create database  ¦  *  𝄀
+cg_scope_r_db_object  ¦  database  ¦  create table  ¦  d  𝄀
+cg_scope_r_db_star  ¦  table  ¦  select  ¦  d.*  𝄀
+cg_scope_r_global_star  ¦  table  ¦  select  ¦  *.*
+select * from cg_scope_src.src order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_src.same_plain order by a;
+internal error: do not have privilege to execute the statement
+select * from cg_scope_src.same_copy order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_dst.cross_copy order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_src.src order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_src.same_copy order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_dst.cross_copy order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_src.src order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_src.same_plain order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_src.same_copy order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_dst.cross_copy order by a;
+internal error: do not have privilege to execute the statement
+select * from cg_scope_src.src order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_src.same_plain order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_src.same_copy order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_dst.cross_copy order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_src.src order by a;
+internal error: do not have privilege to execute the statement
+select * from cg_scope_src.same_copy order by a;
+internal error: do not have privilege to execute the statement
+select * from cg_scope_src.src order by a;
+internal error: do not have privilege to execute the statement
+select * from cg_scope_src.same_copy order by a;
+internal error: do not have privilege to execute the statement
+select * from cg_scope_src.same_plain order by a;
+internal error: do not have privilege to execute the statement
+select * from cg_scope_src.same_copy order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select * from cg_scope_dst.cross_copy order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select t.reldatabase, t.relname, rp.role_name, rp.privilege_name
+from mo_catalog.mo_tables t
+join mo_catalog.mo_role_privs rp
+on rp.obj_type = 'table'
+and rp.obj_id = t.rel_logical_id
+where t.reldatabase in ('cg_scope_src', 'cg_scope_dst')
+and t.relname in ('same_copy', 'cross_copy')
+and rp.role_name in ('cg_scope_r_parent', 'cg_scope_r_child')
+order by t.reldatabase, t.relname, rp.role_name, rp.privilege_name;
+➤ reldatabase[12,-1,0]  ¦  relname[12,-1,0]  ¦  role_name[12,-1,0]  ¦  privilege_name[12,-1,0]  𝄀
+cg_scope_dst  ¦  cross_copy  ¦  cg_scope_r_parent  ¦  select  𝄀
+cg_scope_src  ¦  same_copy  ¦  cg_scope_r_parent  ¦  select
+drop user cg_scope_u_dt, cg_scope_u_t, cg_scope_u_child;
+drop user cg_scope_u_db_star, cg_scope_u_global_star, cg_scope_u_db_object, cg_scope_u_account_object;
+drop role cg_scope_r_dt, cg_scope_r_t, cg_scope_r_parent, cg_scope_r_child;
+drop role cg_scope_r_db_star, cg_scope_r_global_star, cg_scope_r_db_object, cg_scope_r_account_object;
+drop database cg_scope_src;
+drop database cg_scope_dst;
+drop account if exists acc_clone_copy_grants_scope;
+set global enable_privilege_cache = on;
