@@ -9,11 +9,11 @@ max-size = 512
 
 [[fileservice]]
 name = "LOCAL"
-backend = "DISK"
+backend = "DISK-V2"
 
 [[fileservice]]
 name = "SHARED"
-backend = "DISK"
+backend = "DISK-V2"
 data-dir = "mo-data/shared"
 
 [fileservice.cache]

@@ -59,6 +59,11 @@ type LocalFS struct {
 	perfCounterSets []*perfcounter.CounterSet
 
 	ioMerger *IOMerger
+
+	// noChecksum, when true, stores files as raw bytes (no per-2KB-block CRC32
+	// framing), matching the S3 (disk-backed) on-disk format. Selected by the
+	// DISK-V2 backend.
+	noChecksum bool
 }
 
 var _ FileService = new(LocalFS)
@@ -74,6 +79,30 @@ func NewLocalFS(
 	rootPath string,
 	cacheConfig CacheConfig,
 	perfCounterSets []*perfcounter.CounterSet,
+) (*LocalFS, error) {
+	return newLocalFS(ctx, name, rootPath, cacheConfig, perfCounterSets, false)
+}
+
+// NewLocalFS2 creates a LocalFS that stores files in the raw (checksum-free)
+// format used by the DISK-V2 backend. The on-disk layout matches the S3
+// (disk-backed) file service.
+func NewLocalFS2(
+	ctx context.Context,
+	name string,
+	rootPath string,
+	cacheConfig CacheConfig,
+	perfCounterSets []*perfcounter.CounterSet,
+) (*LocalFS, error) {
+	return newLocalFS(ctx, name, rootPath, cacheConfig, perfCounterSets, true)
+}
+
+func newLocalFS(
+	ctx context.Context,
+	name string,
+	rootPath string,
+	cacheConfig CacheConfig,
+	perfCounterSets []*perfcounter.CounterSet,
+	noChecksum bool,
 ) (*LocalFS, error) {
 
 	// get absolute path
@@ -110,6 +139,7 @@ func NewLocalFS(
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
 		ioMerger:        NewIOMerger(),
+		noChecksum:      noChecksum,
 	}
 
 	if err := fs.initCaches(ctx, cacheConfig); err != nil {
@@ -117,6 +147,37 @@ func NewLocalFS(
 	}
 
 	return fs, nil
+}
+
+// newChecksumOSFile wraps a *os.File for read/write, honoring l.noChecksum to
+// select the raw (passthrough) or CRC32-framed format.
+func (l *LocalFS) newChecksumOSFile(
+	ctx context.Context, f *os.File,
+) (*FileWithChecksum[*os.File], PutBack[*FileWithChecksum[*os.File]]) {
+	if l.noChecksum {
+		return NewFileWithoutChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
+	}
+	return NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
+}
+
+// newChecksumFile is the non-pooled counterpart of newChecksumOSFile.
+func (l *LocalFS) newChecksumFile(
+	ctx context.Context, f *os.File,
+) *FileWithChecksum[*os.File] {
+	if l.noChecksum {
+		return NewFileWithoutChecksum(ctx, f, _BlockContentSize, l.perfCounterSets)
+	}
+	return NewFileWithChecksum(ctx, f, _BlockContentSize, l.perfCounterSets)
+}
+
+// contentSize converts a physical file size to the logical content size,
+// accounting for the per-block CRC32 overhead unless running checksum-free.
+func (l *LocalFS) contentSize(fileSize int64) int64 {
+	if l.noChecksum {
+		return fileSize
+	}
+	nBlock := ceilingDiv(fileSize, _BlockSize)
+	return fileSize - _ChecksumSize*nBlock
 }
 
 func (l *LocalFS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
@@ -275,7 +336,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 		}
 	}()
 
-	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
+	fileWithChecksum, put := l.newChecksumOSFile(ctx, f)
 	defer put.Put()
 
 	r := newIOEntriesReader(ctx, vector.Entries)
@@ -566,7 +627,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 		numNotDoneEntries++
 
 		if entry.WriterForRead != nil {
-			fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, file, _BlockContentSize, l.perfCounterSets)
+			fileWithChecksum, put := l.newChecksumOSFile(ctx, file)
 			defer put.Put()
 
 			if entry.Offset > 0 {
@@ -632,7 +693,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 			}
 
 		} else {
-			fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, file, _BlockContentSize, l.perfCounterSets)
+			fileWithChecksum, put := l.newChecksumOSFile(ctx, file)
 			defer put.Put()
 
 			if entry.Offset > 0 {
@@ -711,7 +772,7 @@ func (l *LocalFS) handleReadCloserForRead(
 		return err
 	}
 
-	fileWithChecksum := NewFileWithChecksum(ctx, file, _BlockContentSize, l.perfCounterSets)
+	fileWithChecksum := l.newChecksumFile(ctx, file)
 
 	entry := vector.Entries[i]
 	if entry.Offset > 0 {
@@ -806,8 +867,7 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry,
 				return
 			}
 			fileSize := info.Size()
-			nBlock := ceilingDiv(fileSize, _BlockSize)
-			contentSize := fileSize - _ChecksumSize*nBlock
+			contentSize := l.contentSize(fileSize)
 
 			isDir, err := entryIsDir(nativePath, name, info)
 			if err != nil {
@@ -858,8 +918,7 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 	}
 
 	fileSize := stat.Size()
-	nBlock := ceilingDiv(fileSize, _BlockSize)
-	contentSize := fileSize - _ChecksumSize*nBlock
+	contentSize := l.contentSize(fileSize)
 
 	return &DirEntry{
 		Name:  pathpkg.Base(filePath),
@@ -967,7 +1026,7 @@ func (l *LocalFS) NewReader(ctx context.Context, filePath string) (io.ReadCloser
 		}
 	}()
 
-	fileWithChecksum := NewFileWithChecksum(ctx, file, _BlockContentSize, l.perfCounterSets)
+	fileWithChecksum := l.newChecksumFile(ctx, file)
 
 	return &readCloser{
 		r: fileWithChecksum,
@@ -1010,7 +1069,7 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 		}
 	}()
 
-	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
+	fileWithChecksum, put := l.newChecksumOSFile(ctx, f)
 
 	return &writeCloser{
 		w: fileWithChecksum,
@@ -1130,7 +1189,7 @@ func (l *LocalFS) NewMutator(ctx context.Context, filePath string) (Mutator, err
 	}
 	return &LocalFSMutator{
 		osFile:           f,
-		fileWithChecksum: NewFileWithChecksum(ctx, f, _BlockContentSize, l.perfCounterSets),
+		fileWithChecksum: l.newChecksumFile(ctx, f),
 	}, nil
 }
 

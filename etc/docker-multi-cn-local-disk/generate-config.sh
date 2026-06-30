@@ -139,11 +139,11 @@ service-addresses = [
 
 [[fileservice]]
 name = "LOCAL"
-backend = "DISK"
+backend = "DISK-V2"
 
 [[fileservice]]
 name = "SHARED"
-backend = "DISK"
+backend = "DISK-V2"
 data-dir = "/mo-data/shared"
 
 [fileservice.cache]
@@ -220,11 +220,11 @@ service-addresses = [
 
 [[fileservice]]
 name = "LOCAL"
-backend = "DISK"
+backend = "DISK-V2"
 
 [[fileservice]]
 name = "SHARED"
-backend = "DISK"
+backend = "DISK-V2"
 data-dir = "/mo-data/shared"
 
 [fileservice.cache]
@@ -321,11 +321,11 @@ filename = "/logs/logservice.log"
 
 [[fileservice]]
 name = "LOCAL"
-backend = "DISK"
+backend = "DISK-V2"
 
 [[fileservice]]
 name = "SHARED"
-backend = "DISK"
+backend = "DISK-V2"
 data-dir = "/mo-data/shared"
 
 [fileservice.cache]
@@ -390,11 +390,11 @@ service-addresses = [
 
 [[fileservice]]
 name = "LOCAL"
-backend = "DISK"
+backend = "DISK-V2"
 
 [[fileservice]]
 name = "SHARED"
-backend = "DISK"
+backend = "DISK-V2"
 data-dir = "/mo-data/shared"
 
 [fileservice.cache]
@@ -472,11 +472,11 @@ service-addresses = [
 
 [[fileservice]]
 name = "LOCAL"
-backend = "DISK"
+backend = "DISK-V2"
 
 [[fileservice]]
 name = "SHARED"
-backend = "DISK"
+backend = "DISK-V2"
 data-dir = "/mo-data/shared"
 
 [fileservice.cache]
