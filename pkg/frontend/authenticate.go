@@ -5118,6 +5118,100 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 	}
 }
 
+func copyTablePrivileges(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	srcDB, srcTable, dstDB, dstTable string,
+) error {
+	srcObjID, err := getDatabaseOrTableId(ctx, bh, false, srcDB, srcTable)
+	if err != nil {
+		return err
+	}
+	dstObjID, err := getDatabaseOrTableId(ctx, bh, false, dstDB, dstTable)
+	if err != nil {
+		return err
+	}
+
+	sql := fmt.Sprintf(
+		`select role_id, role_name, privilege_id, privilege_name, privilege_level, with_grant_option
+		 from mo_catalog.mo_role_privs
+		 where obj_type = "%s" and obj_id = %d
+		 order by role_id, privilege_id, privilege_level;`,
+		objectTypeTable.String(), srcObjID,
+	)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(erArray) {
+		return nil
+	}
+
+	var operationUserID int64
+	if account := ses.GetTenantInfo(); account != nil {
+		operationUserID = int64(account.GetUserID())
+	} else {
+		operationUserID = int64(defines.GetUserId(ctx))
+	}
+
+	for row := uint64(0); row < erArray[0].GetRowCount(); row++ {
+		roleID, err := erArray[0].GetInt64(ctx, row, 0)
+		if err != nil {
+			return err
+		}
+		roleName, err := erArray[0].GetString(ctx, row, 1)
+		if err != nil {
+			return err
+		}
+		privilegeID, err := erArray[0].GetInt64(ctx, row, 2)
+		if err != nil {
+			return err
+		}
+		privilegeName, err := erArray[0].GetString(ctx, row, 3)
+		if err != nil {
+			return err
+		}
+		privilegeLevel, err := erArray[0].GetString(ctx, row, 4)
+		if err != nil {
+			return err
+		}
+		withGrantOptionStr, err := erArray[0].GetString(ctx, row, 5)
+		if err != nil {
+			return err
+		}
+		withGrantOption, err := strconv.ParseBool(strings.TrimSpace(withGrantOptionStr))
+		if err != nil {
+			return moerr.NewInvalidInputNoCtxf("invalid with_grant_option value %q", withGrantOptionStr)
+		}
+
+		insertSQL := fmt.Sprintf(
+			insertRolePrivsFormat,
+			roleID,
+			roleName,
+			objectTypeTable.String(),
+			dstObjID,
+			privilegeID,
+			privilegeName,
+			privilegeLevel,
+			operationUserID,
+			types.CurrentTimestamp().String2(time.UTC, 0),
+			withGrantOption,
+		)
+		bh.ClearExecResultSet()
+		if err = bh.Exec(ctx, insertSQL); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func getViewId(ctx context.Context, bh BackgroundExec, dbName, viewName string) (int64, error) {
 	sql, err := getSqlForCheckDatabaseView(ctx, dbName, viewName)
 	if err != nil {

@@ -138,6 +138,7 @@ func newMoTimestampHint(snapshotTS int64) *tree.AtTimeStamp {
 func cloneTableRestoreSQL(stmt *tree.CloneTable, snapshotTS int64) string {
 	restoreStmt := *stmt
 	restoreStmt.ToAccountOpt = nil
+	restoreStmt.CopyGrants = false
 	if snapshotTS != 0 {
 		restoreStmt.SrcTable.AtTsExpr = newMoTimestampHint(snapshotTS)
 	}
@@ -238,6 +239,11 @@ func handleCloneTable(
 		return
 	}
 
+	if stmt.CopyGrants && stmt.ToAccountOpt != nil {
+		err = moerr.NewInvalidInputNoCtx("COPY GRANTS cannot be used with TO ACCOUNT")
+		return
+	}
+
 	if snapshot == nil && opAccountId != toAccountId {
 		err = moerr.NewInternalErrorNoCtxf("clone table between different accounts need a snapshot")
 		return
@@ -306,6 +312,15 @@ func handleCloneTable(
 
 	if err = bh.ExecRestore(ctx, sql, opAccountId, toAccountId); err != nil {
 		return
+	}
+
+	if stmt.CopyGrants {
+		if err = copyTablePrivileges(ctx, ses, bh,
+			stmt.SrcTable.SchemaName.String(), stmt.SrcTable.ObjectName.String(),
+			stmt.CreateTable.Table.SchemaName.String(), stmt.CreateTable.Table.ObjectName.String(),
+		); err != nil {
+			return
+		}
 	}
 
 	receipt.srcDb = stmt.SrcTable.SchemaName.String()
