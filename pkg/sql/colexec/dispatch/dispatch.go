@@ -209,14 +209,19 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 	if needRegister {
 		dispatch.ctr.remoteInfo = make(chan *process.WrapCs)
 	}
+	registered := make([]uuid.UUID, 0, len(dispatch.RemoteRegs))
 	for i, rr := range dispatch.RemoteRegs {
 		if dispatch.FuncId == ShuffleToAllFunc {
 			dispatch.ctr.remoteToIdx[rr.Uuid] = dispatch.ShuffleRegIdxRemote[i]
 		}
 		if needRegister {
 			if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc, dispatch.ctr.remoteInfo); err != nil {
+				colexec.Get().DeleteUuids(registered)
+				colexec.Get().DeleteUuids(registered)
+				dispatch.ctr.remoteInfo = nil
 				return err
 			}
+			registered = append(registered, rr.Uuid)
 		}
 	}
 	return nil

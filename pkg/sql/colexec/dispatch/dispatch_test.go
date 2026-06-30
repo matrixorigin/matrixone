@@ -89,6 +89,34 @@ func TestRegisterRemoteReceiversBeforePrepare(t *testing.T) {
 	colexec.Get().DeleteUuids([]uuid.UUID{uid})
 }
 
+func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	proc := testutil.NewProcess(t)
+
+	uid1, err := uuid.NewV7()
+	require.NoError(t, err)
+	uid2, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	colexec.Get().GetProcByUuid(uid2, true)
+	d := Dispatch{
+		FuncId: SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: uid1},
+			{Uuid: uid2},
+		},
+	}
+
+	require.Error(t, d.RegisterRemoteReceivers(proc))
+	require.Nil(t, d.ctr.remoteInfo)
+
+	p, notifyCh, ok := colexec.Get().GetProcByUuid(uid1, false)
+	require.False(t, ok)
+	require.Nil(t, p)
+	require.Nil(t, notifyCh)
+}
+
 func TestDispatchAdoptCleanupState_TransfersOwnership(t *testing.T) {
 	original := &container{sendCnt: 1}
 	target := &Dispatch{ctr: &container{sendCnt: 99}}
