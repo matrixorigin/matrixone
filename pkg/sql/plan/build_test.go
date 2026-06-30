@@ -247,10 +247,6 @@ func planHasTextToVarcharCastWithWidth(p *Plan, width int32) bool {
 	return planHasTextToVarcharCastWithNameAndWidth(p, "", width)
 }
 
-func planHasTextToVarcharStrictCastWithWidth(p *Plan, width int32) bool {
-	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_strict", width)
-}
-
 func planHasTextToVarcharAssignCastWithWidth(p *Plan, width int32) bool {
 	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_assign", width)
 }
