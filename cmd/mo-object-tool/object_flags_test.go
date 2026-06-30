@@ -31,8 +31,29 @@ func TestOfflineKindFlags(t *testing.T) {
 		require.NotNilf(t, cmd.PersistentFlags().Lookup(name), "object --%s", name)
 	}
 
-	// resolver maps the flags to the right offline kind
-	require.Equal(t, objectio.OfflineKindLocal, objectio.OfflineKind(false, false, false, objectio.OfflineKindLocal))
-	require.Equal(t, objectio.OfflineKindLocal2, objectio.OfflineKind(false, false, true, objectio.OfflineKindLocal))
-	require.Equal(t, objectio.OfflineKindS3, objectio.OfflineKind(false, true, false, objectio.OfflineKindLocal))
+	// no flag set -> error (no silent default)
+	_, err := kindFromFlags(cmd)
+	require.Error(t, err)
+
+	// resolver: each single flag maps to its kind; none/multiple -> error
+	for _, tc := range []struct {
+		local, s3, local2 bool
+		want              string
+		wantErr           bool
+	}{
+		{true, false, false, objectio.OfflineKindLocal, false},
+		{false, true, false, objectio.OfflineKindS3, false},
+		{false, false, true, objectio.OfflineKindLocal2, false},
+		{false, false, false, "", true},  // none
+		{true, false, true, "", true},    // conflicting
+		{true, true, true, "", true},     // all
+	} {
+		got, err := objectio.OfflineKindStrict(tc.local, tc.s3, tc.local2)
+		if tc.wantErr {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		}
+	}
 }

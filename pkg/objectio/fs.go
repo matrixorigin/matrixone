@@ -35,19 +35,29 @@ const (
 	OfflineKindS3     = "s3"
 )
 
-// OfflineKind resolves the offline fs kind from the mutually-exclusive flags,
-// falling back to deflt when none is set.
-func OfflineKind(local, s3, local2 bool, deflt string) string {
-	switch {
-	case local2:
-		return OfflineKindLocal2
-	case s3:
-		return OfflineKindS3
-	case local:
-		return OfflineKindLocal
-	default:
-		return deflt
+// OfflineKindStrict resolves exactly one of the --local/--s3/--local2 flags.
+// It errors when none, or more than one, is set: the formats are mutually
+// incompatible and cannot be auto-detected, so the operator must state which
+// one the data dir is in rather than rely on a silent (possibly wrong) default.
+func OfflineKindStrict(local, s3, local2 bool) (string, error) {
+	kind := ""
+	n := 0
+	if local {
+		kind = OfflineKindLocal
+		n++
 	}
+	if s3 {
+		kind = OfflineKindS3
+		n++
+	}
+	if local2 {
+		kind = OfflineKindLocal2
+		n++
+	}
+	if n != 1 {
+		return "", moerr.NewInvalidInputNoCtx("specify exactly one of --local, --s3, --local2")
+	}
+	return kind, nil
 }
 
 func TmpNewFileservice(ctx context.Context, dir string) fileservice.FileService {

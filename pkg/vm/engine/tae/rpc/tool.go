@@ -353,8 +353,11 @@ func (c *moObjStatArg) initFs(
 
 func (c *moObjStatArg) InitReader(ctx context.Context, name string) (err error) {
 	if c.fs == nil {
-		// default S3 (raw) preserves the prior behavior (fromS3 = !local)
-		kind := objectio.OfflineKind(c.local, c.s3, c.local2, objectio.OfflineKindS3)
+		// exactly one of --local/--s3/--local2 must state the data dir's format
+		kind, kerr := objectio.OfflineKindStrict(c.local, c.s3, c.local2)
+		if kerr != nil {
+			return kerr
+		}
 		if err = c.initFs(ctx, kind); err != nil {
 			return
 		}
@@ -708,8 +711,11 @@ func (c *objGetArg) initFs(
 
 func (c *objGetArg) InitReader(ctx context.Context, name string) (err error) {
 	if c.fs == nil {
-		// default S3 (raw) preserves the prior behavior (fromS3 = !local)
-		kind := objectio.OfflineKind(c.local, c.s3, c.local2, objectio.OfflineKindS3)
+		// exactly one of --local/--s3/--local2 must state the data dir's format
+		kind, kerr := objectio.OfflineKindStrict(c.local, c.s3, c.local2)
+		if kerr != nil {
+			return kerr
+		}
 		if err = c.initFs(ctx, kind); err != nil {
 			return
 		}
@@ -1110,8 +1116,11 @@ func (c *storageCkpBaseArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *storageCkpBaseArg) initOfflineFS(
 	ctx context.Context,
 ) (err error) {
-	// default local (CRC) preserves the prior behavior (fromS3 defaulted false)
-	kind := objectio.OfflineKind(c.local, c.fromS3, c.local2, objectio.OfflineKindLocal)
+	// exactly one of --local/--s3/--local2 must state the data dir's format
+	kind, kerr := objectio.OfflineKindStrict(c.local, c.fromS3, c.local2)
+	if kerr != nil {
+		return kerr
+	}
 	c.fs, err = objectio.NewOfflineFS(ctx, c.dir, kind)
 	return
 }

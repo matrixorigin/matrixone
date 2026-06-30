@@ -26,13 +26,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// kindFromFlags resolves the offline fs kind from the --local/--s3/--local2
-// flags, defaulting to local.
-func kindFromFlags(cmd *cobra.Command) string {
+// kindFromFlags resolves the offline fs kind; exactly one of --local/--s3/
+// --local2 must be set, else it returns an error.
+func kindFromFlags(cmd *cobra.Command) (string, error) {
 	local, _ := cmd.Flags().GetBool("local")
 	s3, _ := cmd.Flags().GetBool("s3")
 	local2, _ := cmd.Flags().GetBool("local2")
-	return objectio.OfflineKind(local, s3, local2, objectio.OfflineKindLocal)
+	return objectio.OfflineKindStrict(local, s3, local2)
 }
 
 func PrepareCommand() *cobra.Command {
@@ -46,13 +46,17 @@ func PrepareCommand() *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runViewer(dir, kindFromFlags(cmd))
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			return runViewer(dir, kind)
 		},
 	}
 
-	// Persistent so the info/view subcommands inherit them. Default (none set) is
-	// local DISK (CRC). --local2 / --s3 select the raw formats.
-	cmd.PersistentFlags().Bool("local", false, "local DISK (CRC) format (default)")
+	// Persistent so the info/view subcommands inherit them. Exactly one of these
+	// must be set to state the data dir's on-disk format.
+	cmd.PersistentFlags().Bool("local", false, "local DISK (CRC) format")
 	cmd.PersistentFlags().Bool("s3", false, "S3 (raw) format")
 	cmd.PersistentFlags().Bool("local2", false, "local DISK-V2 (raw) format")
 
@@ -126,8 +130,12 @@ func infoCommand() *cobra.Command {
 			}
 			defer logFile.Close()
 
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
 			ctx := context.Background()
-			reader, err := checkpointtool.Open(ctx, dir, checkpointtool.WithKind(kindFromFlags(cmd)))
+			reader, err := checkpointtool.Open(ctx, dir, checkpointtool.WithKind(kind))
 			if err != nil {
 				return fmt.Errorf("open checkpoint dir: %w", err)
 			}
@@ -160,7 +168,11 @@ func viewCommand() *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runViewer(dir, kindFromFlags(cmd))
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			return runViewer(dir, kind)
 		},
 	}
 }
