@@ -4574,24 +4574,47 @@ func TestLockWaitTimeoutDefaultNoTimeout(t *testing.T) {
 				Policy:      pb.WaitPolicy_Wait,
 			}
 
-			// Short context to bound the test.
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
+			holderCtx, holderCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer holderCancel()
+			waitCtx, waitCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer waitCancel()
 
 			// txn1 holds the lock.
-			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			_, err := l.Lock(holderCtx, 0, [][]byte{{1}}, []byte("txn1"), option)
 			require.NoError(t, err)
+			defer func() {
+				_ = l.Unlock(holderCtx, []byte("txn1"), timestamp.Timestamp{})
+			}()
 
 			// txn2 tries to lock the same row WITHOUT LockWaitTimeout.
-			// Should be blocked until ctx expires (no internal/default timeout interception).
+			// It should wait for the holder to release instead of using an
+			// internal/default lock wait timeout.
 			option2 := option
-			option2.LockWaitTimeout = 0 // no session/internal timeout; rely on caller context deadline
+			option2.LockWaitTimeout = 0
 			start := time.Now()
-			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := l.Lock(waitCtx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+				resultC <- err
+			}()
+
+			select {
+			case err := <-resultC:
+				require.NoError(t, err)
+				require.FailNow(t, "lock waiter completed before holder released")
+			case <-time.After(time.Second):
+			}
+
+			require.NoError(t, l.Unlock(holderCtx, []byte("txn1"), timestamp.Timestamp{}))
+
+			select {
+			case err = <-resultC:
+			case <-time.After(3 * time.Second):
+				require.FailNow(t, "lock waiter did not complete after holder released")
+			}
 			elapsed := time.Since(start)
 
-			// Should have waited for the context timeout (~2s), not failed immediately.
-			require.Error(t, err)
+			require.NoError(t, err)
 			require.GreaterOrEqual(t, elapsed, time.Second)
 		},
 	)

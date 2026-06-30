@@ -892,12 +892,15 @@ func TestLockRetryStopsUnderCriticalMemoryPressure(t *testing.T) {
 }
 
 func TestLockRetryBudgetUsesLockWaitDeadline(t *testing.T) {
+	oldWait := defaultWaitTimeOnRetryLock
 	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
 	oldPressure := getLockRetryMemoryPressureLevel
 	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
 		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
 		getLockRetryMemoryPressureLevel = oldPressure
 	}()
+	defaultWaitTimeOnRetryLock = time.Second
 	defaultMaxWaitTimeOnRetryBackendLock = 10 * time.Second
 	getLockRetryMemoryPressureLevel = defaultLockRetryMemoryPressureLevel
 
