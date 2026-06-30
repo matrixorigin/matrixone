@@ -904,6 +904,10 @@ func updateCDCTaskState(
 // This is called during Resume/Restart to allow retrying tables that had non-retryable errors
 // after user has fixed the underlying issues
 func (exec *CDCTaskExecutor) clearAllTableErrors(ctx context.Context) error {
+	if exec.ie == nil {
+		return moerr.NewInternalErrorNoCtx("cannot clear CDC table errors: internal executor is not initialized")
+	}
+
 	accountId := uint64(exec.spec.Accounts[0].GetId())
 	taskId := exec.spec.TaskId
 
