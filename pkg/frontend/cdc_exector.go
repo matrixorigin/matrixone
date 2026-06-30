@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -133,6 +134,9 @@ type CDCTaskExecutor struct {
 	// stateMachine manages executor state transitions
 	stateMachine *ExecutorStateMachine
 	holdCh       chan int
+
+	callbackMu         sync.RWMutex
+	callbackGeneration atomic.Uint64
 
 	// start wrapper, for ut
 	startFunc func(ctx context.Context) error
@@ -280,7 +284,10 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	exec.watermarkUpdater = cdc.GetCDCWatermarkUpdater(exec.cnUUID, exec.ie)
 
 	// register to table scanner
-	if !detector.RegisterIfAbsent(taskId, accountId, dbs, tables, exec.handleNewTables) {
+	callbackGeneration := exec.callbackGeneration.Load()
+	if !detector.RegisterIfAbsent(taskId, accountId, dbs, tables, func(tbls map[uint32]cdc.TblMap) error {
+		return exec.handleNewTablesForGeneration(callbackGeneration, tbls)
+	}) {
 		logutil.Warn(
 			"cdc.frontend.task.duplicate_registration_detected",
 			zap.String("task-id", taskId),
@@ -344,10 +351,14 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 
 // Resume cdc task from last recorded watermark
 func (exec *CDCTaskExecutor) Resume() error {
+	exec.callbackMu.Lock()
+	defer exec.callbackMu.Unlock()
+
 	// Transition to Starting state (via Resume transition)
 	if err := exec.stateMachine.Transition(TransitionResume); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot resume: %v", err)
 	}
+	exec.callbackGeneration.Add(1)
 
 	// Log watermark states before resume
 	exec.logCurrentWatermarks("before_resume")
@@ -409,6 +420,9 @@ func (exec *CDCTaskExecutor) Resume() error {
 
 // Restart cdc task from init watermark
 func (exec *CDCTaskExecutor) Restart() error {
+	exec.callbackMu.Lock()
+	defer exec.callbackMu.Unlock()
+
 	stateBeforeRestart := exec.stateMachine.State()
 	shouldStopOldExecution := stateBeforeRestart == StateRunning || stateBeforeRestart == StateStarting
 	shouldClearTableErrors := stateBeforeRestart == StateFailed || stateBeforeRestart == StatePaused
@@ -418,6 +432,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 		return moerr.NewInternalErrorf(context.Background(), "cannot restart: %v", err)
 	}
 	exec.recordLeavingFailedMetrics(stateBeforeRestart, StateRestarting)
+	exec.callbackGeneration.Add(1)
 
 	// FIX: Unmark task as paused to allow watermark updates after restart
 	// Without this, if task was paused before restart, it would remain in pausedTasks
@@ -962,10 +977,28 @@ func (exec *CDCTaskExecutor) clearAllTableErrors(ctx context.Context) error {
 }
 
 func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMap) error {
+	return exec.handleNewTablesForGeneration(exec.callbackGeneration.Load(), allAccountTbls)
+}
+
+func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
+	callbackGeneration uint64,
+	allAccountTbls map[uint32]cdc.TblMap,
+) error {
+	exec.callbackMu.RLock()
+	defer exec.callbackMu.RUnlock()
+
+	if !exec.isCurrentCallbackGeneration(callbackGeneration) {
+		return nil
+	}
+
 	// lock to avoid create pipelines for the same table
 	// 2025.7, this lock might be needless now
 	exec.Lock()
 	defer exec.Unlock()
+
+	if !exec.isCurrentCallbackGeneration(callbackGeneration) {
+		return nil
+	}
 
 	// if injected, we expect nothing
 	if sleepSeconds, injected := objectio.CDCHandleSlowInjected(); injected {
@@ -1055,6 +1088,9 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 			continue
 		}
 		if hasError {
+			if !exec.isCurrentCallbackGeneration(callbackGeneration) {
+				return nil
+			}
 			err = exec.failTaskForPermanentTableError(ctx, newTableInfo)
 			return err
 		}
@@ -1124,6 +1160,10 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 	}
 
 	return nil
+}
+
+func (exec *CDCTaskExecutor) isCurrentCallbackGeneration(callbackGeneration uint64) bool {
+	return exec.callbackGeneration.Load() == callbackGeneration
 }
 
 func (exec *CDCTaskExecutor) failTaskForPermanentTableError(ctx context.Context, tbl *cdc.DbTableInfo) error {
