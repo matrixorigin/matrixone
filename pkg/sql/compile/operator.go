@@ -555,7 +555,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Action = t.Action
 		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
-		op.NeedDedupDelete = t.NeedDedupDelete
 		op.Engine = t.Engine
 		op.SetInfo(&info)
 		return op
@@ -802,12 +801,10 @@ func constructMultiUpdate(
 	proc *process.Process,
 	action multi_update.UpdateAction,
 	isRemote bool,
-	needDedup bool,
 ) (vm.Operator, error) {
 	arg := multi_update.NewArgument()
 	arg.Engine = eng
 	arg.IsRemote = isRemote
-	arg.NeedDedupDelete = needDedup
 
 	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(node.UpdateCtxList))
 	for i, updateCtx := range node.UpdateCtxList {

@@ -74,9 +74,7 @@ type MultiUpdate struct {
 	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
 	IsRemote               bool
-	NeedDedupDelete        bool // set when DELETE comes from a JOIN (duplicates possible)
-
-	Engine engine.Engine
+	Engine                 engine.Engine
 
 	getS3WriterFunc          func(sid string, id uint64) (*s3WriterDelegate, error)
 	getFlushableS3WriterFunc func() *s3WriterDelegate
