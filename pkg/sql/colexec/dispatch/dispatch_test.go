@@ -58,6 +58,37 @@ func TestPrepareRemote(t *testing.T) {
 	require.Equal(t, d.ctr.remoteInfo, c)
 }
 
+func TestRegisterRemoteReceiversBeforePrepare(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	proc := testutil.NewProcess(t)
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	d := Dispatch{
+		FuncId: SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: uid},
+		},
+	}
+
+	require.NoError(t, d.RegisterRemoteReceivers(proc))
+	require.NotNil(t, d.ctr)
+	earlyNotifyCh := d.ctr.remoteInfo
+	require.NotNil(t, earlyNotifyCh)
+
+	require.NoError(t, d.Prepare(proc))
+	require.Equal(t, earlyNotifyCh, d.ctr.remoteInfo)
+
+	p, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+	require.True(t, ok)
+	require.Same(t, proc, p)
+	require.Equal(t, earlyNotifyCh, notifyCh)
+
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+}
+
 func TestDispatchAdoptCleanupState_TransfersOwnership(t *testing.T) {
 	original := &container{sendCnt: 1}
 	target := &Dispatch{ctr: &container{sendCnt: 99}}
