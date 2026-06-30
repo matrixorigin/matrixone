@@ -7,20 +7,20 @@ insert into t values ('abcd');
 internal error: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
 insert into t values ('abc   ');
 select c, char_length(c) from t;
-➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
-abc  ¦  3
+c    char_length(c)
+abc    3
 set session sql_mode = '';
 insert into t values ('wxyz');
 select c, char_length(c) from t order by c;
-➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
-abc  ¦  3  𝄀
-wxy  ¦  3
+c    char_length(c)
+abc    3
+wxy    3
 set session sql_mode = 'STRICT_TRANS_TABLES';
 truncate table t;
 insert ignore into t values ('abcd');
 select c, char_length(c) from t;
-➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
-abc  ¦  3
+c    char_length(c)
+abc    3
 create table src (c varchar(10));
 insert into src values ('1234567');
 truncate table t;
@@ -30,8 +30,8 @@ internal error: Can't cast column from VARCHAR type to VARCHAR type because of o
 set session sql_mode = '';
 insert into t select c from src;
 select c, char_length(c) from t;
-➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
-123  ¦  3
+c    char_length(c)
+123    3
 truncate table t;
 set session sql_mode = '';
 insert into t values ('ab');
@@ -41,8 +41,8 @@ internal error: Can't cast 'abcd' from VARCHAR type to VARCHAR type. Src length 
 set session sql_mode = '';
 update t set c = 'abcd';
 select c, char_length(c) from t;
-➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
-abc  ¦  3
+c    char_length(c)
+abc    3
 create table p (id int primary key, c varchar(3));
 insert into p values (1, 'ab');
 set session sql_mode = 'STRICT_TRANS_TABLES';
@@ -51,8 +51,8 @@ internal error: Can't cast 'abcd' from VARCHAR type to VARCHAR type. Src length 
 set session sql_mode = '';
 insert into p values (1, 'xx') on duplicate key update c = 'abcd';
 select id, c, char_length(c) from p;
-➤ id[4,32,0]  ¦  c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
-1  ¦  abc  ¦  3
+id    c    char_length(c)
+1    abc    3
 set session sql_mode = '';
 create table d (c varchar(3) default 'abcd');
 internal error: Can't cast 'abcd' from VARCHAR type to VARCHAR type. Src length 4 is larger than Dest length 3
