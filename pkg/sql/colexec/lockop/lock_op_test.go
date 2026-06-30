@@ -910,7 +910,7 @@ func TestLockRetryBudgetUsesLockWaitDeadline(t *testing.T) {
 	wait, ok := getRetryWaitDuration(moerr.NewLockTableBindChangedNoCtx(), &state)
 	require.WithinDuration(t, state.lockWaitDeadline, state.backendRetryDeadline, 100*time.Millisecond)
 	if ok {
-		require.Equal(t, defaultWaitTimeOnRetryLock, wait)
+		require.Equal(t, time.Second, wait)
 	}
 }
 
