@@ -1,0 +1,12 @@
+logservices = [
+    "./etc/v1/launch/log.toml",
+]
+
+tnservices = [
+    "./etc/v1/launch/tn.toml"
+]
+
+cnservices = [
+    "./etc/v1/launch/cn.toml"
+]
+
