@@ -174,6 +174,14 @@ func SendPipelineSignalWithTimeout(reg *WaitRegister, signal PipelineSignal, tim
 	if reg == nil || reg.Ch2 == nil {
 		return false
 	}
+	if signal.EventType.IsTerminal() {
+		if timeout <= 0 {
+			return reg.sendTerminalWithContext(context.TODO(), signal)
+		}
+		ctx, cancel := context.WithTimeout(context.TODO(), timeout)
+		defer cancel()
+		return reg.sendTerminalWithContext(ctx, signal)
+	}
 	if timeout <= 0 {
 		reg.Ch2 <- signal
 		return true
@@ -192,6 +200,9 @@ func SendPipelineSignalWithContext(ctx context.Context, reg *WaitRegister, signa
 	if ctx == nil {
 		ctx = context.TODO()
 	}
+	if signal.EventType.IsTerminal() {
+		return reg.sendTerminalWithContext(ctx, signal)
+	}
 	select {
 	case reg.Ch2 <- signal:
 		return true
@@ -203,6 +214,9 @@ func SendPipelineSignalWithContext(ctx context.Context, reg *WaitRegister, signa
 func TrySendPipelineSignal(reg *WaitRegister, signal PipelineSignal) bool {
 	if reg == nil || reg.Ch2 == nil {
 		return false
+	}
+	if signal.EventType.IsTerminal() {
+		return reg.trySendTerminal(signal)
 	}
 	select {
 	case reg.Ch2 <- signal:
@@ -363,8 +377,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 		content, info = msg.Action()
 		if content == nil {
 			// Legacy nil-batch path: treat nil batch from GetFromIndex or
-			// GetDirectly as a per-sender end signal (backward compat with
-			// operators that don't yet send typed terminal events).
+			// GetDirectly as a per-sender end signal.
 			receiver.removeIdxReceiver(chosen)
 			if info != nil {
 				return nil, info

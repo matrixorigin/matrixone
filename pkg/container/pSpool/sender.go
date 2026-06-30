@@ -16,6 +16,7 @@ package pSpool
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,7 +31,11 @@ const (
 	SendToAnyLocal = -2
 )
 
+var ErrPipelineSpoolAborted = errors.New("pipeline spool aborted")
+
 type PipelineSpool struct {
+	mu sync.RWMutex
+
 	shardPool  []pipelineSpoolMessage
 	shardRefs  []atomic.Int32
 	doRefCheck []bool
@@ -54,6 +59,11 @@ type PipelineSpool struct {
 	// close/cleanup path). It is only touched from the single owner goroutine
 	// that runs Close / CloseWithTimeout / forceCleanup, never concurrently.
 	drainedReceivers int
+
+	abortOnce sync.Once
+	abortDone chan struct{}
+	aborted   bool
+	abortErr  error
 
 	cleanupOnce sync.Once
 }
@@ -85,6 +95,12 @@ func (ps *PipelineSpool) SendBatch(
 		return true, nil
 	}
 
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	if ps.aborted {
+		return true, ps.abortErr
+	}
+
 	dst, useCache, cacheID, err := ps.cache.GetCopiedBatch(data)
 	if err != nil {
 		return false, err
@@ -101,27 +117,32 @@ func (ps *PipelineSpool) SendBatch(
 
 // ReleaseCurrent force to release the last received one.
 func (ps *PipelineSpool) ReleaseCurrent(idx int) {
-	if last, hasLast := ps.rs[idx].getLastPop(); hasLast {
-		if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
-			ps.cache.CacheBatch(
-				ps.shardPool[last].useCache, ps.shardPool[last].cacheID, ps.shardPool[last].dataContent)
-			ps.freeShardPool <- last
-		}
-		ps.rs[idx].flagLastPopRelease()
-	}
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	ps.releaseCurrentLocked(idx)
 }
 
 // ReceiveBatch get data from the idx-th receiver.
 func (ps *PipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
-	ps.ReleaseCurrent(idx)
+	ps.mu.RLock()
+	ps.releaseCurrentLocked(idx)
+	if ps.aborted {
+		info = ps.abortErr
+		ps.mu.RUnlock()
+		return nil, info
+	}
 
 	next := ps.rs[idx].popNextIndex()
-	if ps.shardPool[next].dataContent == nil {
+	data = ps.shardPool[next].dataContent
+	info = ps.shardPool[next].errContent
+	ps.mu.RUnlock()
+
+	if data == nil {
 		defer func() {
 			ps.csDoneSignal <- struct{}{}
 		}()
 	}
-	return ps.shardPool[next].dataContent, ps.shardPool[next].errContent
+	return data, info
 }
 
 // Close the sender and receivers, and do memory clean.
@@ -139,14 +160,20 @@ func (ps *PipelineSpool) CloseWithTimeout(timeout time.Duration) bool {
 	// wait for all receivers done its work first.
 	for ps.drainedReceivers < len(ps.rs) {
 		if timer == nil {
-			<-ps.csDoneSignal
-			ps.drainedReceivers++
+			select {
+			case <-ps.csDoneSignal:
+				ps.drainedReceivers++
+			case <-ps.abortDone:
+				return true
+			}
 			continue
 		}
 
 		select {
 		case <-ps.csDoneSignal:
 			ps.drainedReceivers++
+		case <-ps.abortDone:
+			return true
 		case <-timer.C:
 			return false
 		}
@@ -177,6 +204,12 @@ func (ps *PipelineSpool) ForceCleanup() {
 		return
 	}
 
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	if ps.aborted {
+		return
+	}
+
 	for ps.drainedReceivers < len(ps.rs) {
 		select {
 		case <-ps.csDoneSignal:
@@ -189,12 +222,23 @@ func (ps *PipelineSpool) ForceCleanup() {
 	ps.cleanupOnce.Do(ps.forceCleanup)
 }
 
-// Abort immediately releases all spool resources without waiting for receivers.
-// It is idempotent and safe to call from any goroutine during pipeline teardown.
-// Unlike Close/CloseWithTimeout, Abort does not block waiting for consumer
-// acknowledgement.
+// Abort terminates the spool without waiting for receiver acknowledgement.
+// Pending, not-yet-consumed slots are released immediately. Slots already handed
+// to receivers stay valid until their receiver calls ReleaseCurrent.
 func (ps *PipelineSpool) Abort() {
-	ps.ForceCleanup()
+	if ps == nil {
+		return
+	}
+
+	ps.abortOnce.Do(func() {
+		ps.mu.Lock()
+		defer ps.mu.Unlock()
+
+		ps.aborted = true
+		ps.abortErr = ErrPipelineSpoolAborted
+		close(ps.abortDone)
+		ps.abortLocked()
+	})
 }
 
 func (ps *PipelineSpool) forceCleanup() {
@@ -209,6 +253,8 @@ func (ps *PipelineSpool) getFreeIdFromSharedPool(
 	ctx context.Context) (queryDone bool, id uint32) {
 	select {
 	case <-ctx.Done():
+		return true, 0
+	case <-ps.abortDone:
 		return true, 0
 	case id = <-ps.freeShardPool:
 		return false, id
@@ -241,4 +287,64 @@ func (ps *PipelineSpool) sendToIdx(sharedPoolIndex uint32, idx int) {
 	ps.doRefCheck[sharedPoolIndex] = false
 
 	ps.rs[idx].pushNextIndex(sharedPoolIndex)
+}
+
+func (ps *PipelineSpool) releaseCurrentLocked(idx int) {
+	if last, hasLast := ps.rs[idx].getLastPop(); hasLast {
+		if ps.aborted {
+			if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
+				ps.cleanSlotLocked(last)
+			}
+		} else if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
+			ps.cache.CacheBatch(
+				ps.shardPool[last].useCache, ps.shardPool[last].cacheID, ps.shardPool[last].dataContent)
+			ps.freeShardPool <- last
+		}
+		ps.rs[idx].flagLastPopRelease()
+	}
+}
+
+func (ps *PipelineSpool) abortLocked() {
+	if ps.shardRefs == nil {
+		ps.shardRefs = make([]atomic.Int32, len(ps.shardPool))
+	}
+
+	// Abort has two cleanup classes:
+	//   - slots already handed to receivers are kept until ReleaseCurrent drops
+	//     their ref count;
+	//   - all other slots can be cleaned immediately.
+	//
+	// cleanSlotLocked releases per-batch vector memory for each non-current slot
+	// and clears the slot so the batch cannot be released twice. cache.free only
+	// cleans byte slices that have already been returned to the spool cache; it
+	// does not own current batches still held by receivers. Those are released
+	// later by releaseCurrentLocked when their last receiver drops the ref.
+	currentRefs := make([]int32, len(ps.shardPool))
+	for i := range ps.rs {
+		if last, hasLast := ps.rs[i].getLastPop(); hasLast {
+			currentRefs[last]++
+		}
+	}
+
+	for i := range ps.shardPool {
+		if currentRefs[i] > 0 {
+			ps.doRefCheck[i] = true
+			ps.shardRefs[i].Store(currentRefs[i])
+			continue
+		}
+		ps.cleanSlotLocked(uint32(i))
+	}
+
+	ps.cleanupOnce.Do(ps.forceCleanup)
+}
+
+func (ps *PipelineSpool) cleanSlotLocked(idx uint32) {
+	msg := &ps.shardPool[idx]
+	if msg.useCache && msg.dataContent != nil {
+		msg.dataContent.Clean(ps.cache.mp)
+	}
+	msg.dataContent = nil
+	msg.errContent = nil
+	msg.useCache = false
+	msg.cacheID = 0
 }

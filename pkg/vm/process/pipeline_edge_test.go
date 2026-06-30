@@ -123,8 +123,8 @@ func TestPipelineEdgeTrySendEndOnFullChannel(t *testing.T) {
 	}
 }
 
-// TestPipelineEdgeAsWaitRegister verifies backward compatibility
-// with WaitRegister-based code.
+// TestPipelineEdgeAsWaitRegister verifies that WaitRegister is the same edge
+// object, not a second state holder.
 func TestPipelineEdgeAsWaitRegister(t *testing.T) {
 	edge := NewPipelineEdge(1, 1)
 	reg := edge.AsWaitRegister()
@@ -132,13 +132,20 @@ func TestPipelineEdgeAsWaitRegister(t *testing.T) {
 	if reg == nil {
 		t.Fatal("AsWaitRegister returned nil")
 	}
-	if reg.Ch2 != edge.Ch2 {
-		t.Fatal("AsWaitRegister Ch2 does not match edge Ch2")
+	if reg != edge {
+		t.Fatal("AsWaitRegister must return the same edge object")
 	}
 
-	// Send a signal through the WaitRegister channel.
 	signal := NewEndSignal()
-	reg.Ch2 <- signal
+	if !SendPipelineSignalWithTimeout(reg, signal, time.Second) {
+		t.Fatal("failed to send terminal signal through WaitRegister name")
+	}
+
+	select {
+	case <-edge.Done():
+	default:
+		t.Fatal("terminal send through WaitRegister name did not close edge Done")
+	}
 
 	// Receive through edge channel.
 	select {
@@ -302,6 +309,12 @@ func TestSendPipelineSignalWithContextCanceled(t *testing.T) {
 	if SendPipelineSignalWithContext(ctx, reg, NewEndSignal()) {
 		t.Fatal("SendPipelineSignalWithContext succeeded with cancelled context")
 	}
+
+	select {
+	case <-reg.Done():
+	default:
+		t.Fatal("cancelled terminal send did not close Done")
+	}
 }
 
 // TestPipelineEventTypeString verifies String representation.
@@ -448,15 +461,11 @@ func TestPipelineEdgeMixedConcurrentTerminal(t *testing.T) {
 	// Aborted may or may not be closed depending on which won the Once.
 }
 
-// TestPipelineEdgeTimeoutSendDoneClosesAfterTimeout verifies that
-// SendSignalWithTimeout on a full channel still marks the edge as
-// terminal via the typed signal path in connector/dispatch. This is
-// an integration-level invariant: the helper that sends with timeout
-// does NOT close the edge's Done channel (it's a WaitRegister helper),
-// but the edge itself must handle this case correctly.
+// TestPipelineEdgeTimeoutSendDoneClosesAfterTimeout verifies that the
+// production terminal helper closes Done even if the terminal signal cannot be
+// delivered because the channel is full.
 func TestPipelineEdgeTimeoutSendDoneClosesAfterTimeout(t *testing.T) {
-	// Create a WaitRegister with a full channel.
-	reg := &WaitRegister{Ch2: make(chan PipelineSignal, 1)}
+	reg := NewPipelineEdge(1, 0)
 	reg.Ch2 <- NewEndSignal() // fill it
 
 	// With a very short timeout, this must fail.
@@ -464,15 +473,119 @@ func TestPipelineEdgeTimeoutSendDoneClosesAfterTimeout(t *testing.T) {
 		t.Fatal("SendPipelineSignalWithTimeout should fail on a full channel")
 	}
 
-	// The WaitRegister does NOT close Done — that's the edge's job.
-	// This test documents the split responsibility.
-	// PipelineEdge.sendTerminal always closes done regardless of delivery.
-	edge := NewPipelineEdgeFromReg(reg)
-	edge.SendEnd() // sendTerminal fires terminalOnce, closes done
+	select {
+	case <-reg.Done():
+	default:
+		t.Fatal("PipelineEdge Done was not closed")
+	}
+}
 
+func TestPipelineEdgeTerminalRetryAfterFullChannelUsesFirstTerminal(t *testing.T) {
+	edge := NewPipelineEdge(1, 0)
+	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
+	firstErr := moerr.NewInternalErrorNoCtx("first terminal")
+	secondErr := moerr.NewInternalErrorNoCtx("second terminal")
+
+	if TrySendPipelineSignal(edge, NewErrorSignal(firstErr)) {
+		t.Fatal("TrySendPipelineSignal should fail while the channel is full")
+	}
 	select {
 	case <-edge.Done():
 	default:
-		t.Fatal("PipelineEdge Done was not closed")
+		t.Fatal("failed terminal try did not close Done")
+	}
+	if edge.Err() != firstErr {
+		t.Fatal("edge did not preserve the first terminal error")
+	}
+
+	<-edge.Ch2
+	if !SendPipelineSignalWithTimeout(edge, NewAbortSignal(secondErr), time.Second) {
+		t.Fatal("terminal retry did not deliver after the channel drained")
+	}
+	signal := <-edge.Ch2
+	if signal.EventType != EventError {
+		t.Fatalf("retry delivered %s, want first EventError", signal.EventType)
+	}
+	if signal.TerminalErr() != firstErr {
+		t.Fatal("retry did not deliver the first terminal error")
+	}
+}
+
+func TestPipelineEdgeResetForReuseClearsTerminalState(t *testing.T) {
+	edge := NewPipelineEdge(1, 0)
+	if !edge.SendEnd() {
+		t.Fatal("initial SendEnd failed")
+	}
+	select {
+	case <-edge.Done():
+	default:
+		t.Fatal("Done was not closed before reset")
+	}
+
+	edge.ResetForReuse(2, 3)
+	if cap(edge.Ch2) != 2 {
+		t.Fatalf("channel cap after reset = %d, want 2", cap(edge.Ch2))
+	}
+	if edge.NilBatchCnt != 3 {
+		t.Fatalf("NilBatchCnt after reset = %d, want 3", edge.NilBatchCnt)
+	}
+	select {
+	case <-edge.Done():
+		t.Fatal("Done stayed closed after reset")
+	default:
+	}
+	if edge.Err() != nil {
+		t.Fatal("Err was not cleared after reset")
+	}
+
+	testErr := moerr.NewInternalErrorNoCtx("after reset")
+	if !edge.SendError(testErr) {
+		t.Fatal("SendError after reset failed")
+	}
+	select {
+	case <-edge.Done():
+	default:
+		t.Fatal("Done was not closed after reset terminal")
+	}
+	if edge.Err() != testErr {
+		t.Fatal("Err after reset terminal mismatch")
+	}
+}
+
+func TestPipelineEdgeSetNilBatchCntForReusePreservesChannel(t *testing.T) {
+	edge := NewPipelineEdge(2, 1)
+	originalCh := edge.Ch2
+	if !edge.SendEnd() {
+		t.Fatal("initial SendEnd failed")
+	}
+
+	edge.SetNilBatchCntForReuse(4)
+	if edge.Ch2 != originalCh {
+		t.Fatal("SetNilBatchCntForReuse should not recreate Ch2")
+	}
+	if edge.NilBatchCnt != 4 {
+		t.Fatalf("NilBatchCnt after update = %d, want 4", edge.NilBatchCnt)
+	}
+	select {
+	case <-edge.Ch2:
+		t.Fatal("SetNilBatchCntForReuse did not drain stale buffered signal")
+	default:
+	}
+	select {
+	case <-edge.Done():
+		t.Fatal("Done stayed closed after SetNilBatchCntForReuse")
+	default:
+	}
+
+	if !edge.SendEnd() {
+		t.Fatal("SendEnd after SetNilBatchCntForReuse failed")
+	}
+	select {
+	case signal := <-edge.Ch2:
+		if signal.EventType != EventEnd {
+			t.Fatalf("signal after reuse = %s, want End", signal.EventType)
+		}
+	default:
+		t.Fatal("SendEnd after reuse did not enqueue terminal signal")
 	}
 }

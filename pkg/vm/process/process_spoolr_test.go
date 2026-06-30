@@ -106,3 +106,7 @@ func TestCleanupWarnLimiterSuppressesStorm(t *testing.T) {
 		t.Fatalf("unexpected suppressed count: got %d, want %d", suppressed, wantSuppressed)
 	}
 }
+
+func TestWarnPipelineCleanupfNilProcessIsSafe(t *testing.T) {
+	WarnPipelineCleanupf(nil, "nil_proc_cleanup", "cleanup warning with nil process")
+}

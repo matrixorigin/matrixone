@@ -969,7 +969,7 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 			} else {
 				edge = process.NewPipelineEdge(1, 0)
 			}
-			c.appendStepRegs(s, nodeId, edge.AsWaitRegister())
+			c.appendStepRegs(s, nodeId, edge)
 		}
 	}
 	return nil
@@ -3452,7 +3452,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 			bs.NodeInfo = engine.Node{Addr: tmp[0].NodeInfo.Addr, Mcpu: 1}
 			bs.Proc = c.proc.NewNoContextChildProc(0)
 			edge := process.NewPipelineEdge(10, 0)
-			bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge.AsWaitRegister())
+			bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge)
 
 			mergeOp := merge.NewArgument()
 			c.hasMergeOp = true
@@ -3475,7 +3475,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		bs.NodeInfo = engine.Node{Addr: rs[i].NodeInfo.Addr, Mcpu: 1}
 		bs.Proc = c.proc.NewNoContextChildProc(0)
 		edge := process.NewPipelineEdge(10, 0)
-		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge.AsWaitRegister())
+		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge)
 
 		mergeOp := merge.NewArgument()
 		c.hasMergeOp = true
@@ -4022,7 +4022,7 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
-				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+				rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 			}
 		}
 		shuffleGroups = append(shuffleGroups, scopes...)
@@ -4176,7 +4176,9 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		dataScope := c.newMergeScope(ss)
 		if c.anal.qry.LoadTag {
 			// reset the channel buffer of sink for load
-			dataScope.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, dataScope.NodeInfo.Mcpu)
+			dataScope.Proc.Reg.MergeReceivers[0].ResetForReuse(
+				dataScope.NodeInfo.Mcpu,
+				dataScope.Proc.Reg.MergeReceivers[0].NilBatchCnt)
 		}
 		parallelSize := c.getParallelSizeForExternalScan(node, c.ncpu)
 		scopes := make([]*Scope, 0, parallelSize)
@@ -4190,7 +4192,7 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			scopes[i].Proc = c.proc.NewNoContextChildProc(1)
 			if c.anal.qry.LoadTag {
 				for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
-					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+					rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 				}
 			}
 		}
@@ -4611,12 +4613,11 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 
 	j := 0
 	for i := range ss {
+		nilBatchCnt := 1
 		if isSameCN(rs.NodeInfo.Addr, ss[i].NodeInfo.Addr) {
-			rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = ss[i].NodeInfo.Mcpu
-		} else {
-			rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = 1
+			nilBatchCnt = ss[i].NodeInfo.Mcpu
 		}
-		rs.Proc.Reg.MergeReceivers[j].Ch2 = make(chan process.PipelineSignal, ss[i].NodeInfo.Mcpu)
+		rs.Proc.Reg.MergeReceivers[j].ResetForReuse(ss[i].NodeInfo.Mcpu, nilBatchCnt)
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
@@ -4643,7 +4644,11 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	rs.NodeInfo.Mcpu = 1 // merge scope is single parallel by default
 	rs.PreScopes = ss
 	rs.Proc = c.proc.NewNoContextChildProc(1)
-	rs.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, len(ss))
+	nilBatchCnt := 0
+	for i := range ss {
+		nilBatchCnt += ss[i].NodeInfo.Mcpu
+	}
+	rs.Proc.Reg.MergeReceivers[0].ResetForReuse(len(ss), nilBatchCnt)
 
 	// waring: `Merge` operator` is not used as an input/output analyze,
 	// and `Merge` operator cannot play the role of IsFirst/IsLast
@@ -4652,8 +4657,6 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	rs.setRootOperator(mergeOp)
 	for i := range ss {
-		rs.Proc.Reg.MergeReceivers[0].NilBatchCnt += ss[i].NodeInfo.Mcpu
-
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[0])
@@ -4721,7 +4724,7 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 	rs := c.mergeScopesByCN(ss)
 	for i := range rs {
 		for _, rr := range rs[i].Proc.Reg.MergeReceivers {
-			rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+			rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 		}
 	}
 	return rs
@@ -4855,10 +4858,10 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 
 				probes[i].PreScopes = []*Scope{builds[i]}
 				for _, rr := range probes[i].Proc.Reg.MergeReceivers {
-					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+					rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 				}
 				for _, rr := range builds[i].Proc.Reg.MergeReceivers {
-					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+					rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 				}
 			}
 			shuffleProbes = append(shuffleProbes, probes...)
@@ -4871,7 +4874,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 			buildscope.NodeInfo = shuffleProbes[i].NodeInfo
 			buildscope.Proc = c.proc.NewNoContextChildProc(lenRight)
 			for _, rr := range buildscope.Proc.Reg.MergeReceivers {
-				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+				rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 			}
 			shuffleBuilds = append(shuffleBuilds, buildscope)
 			prescopes := shuffleProbes[i].PreScopes

@@ -70,22 +70,12 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 	}
 }
 
-// WaitRegister channel
-type WaitRegister struct {
-	// Ch2, data receiver's channel for receive-action-signal.
-	Ch2 chan PipelineSignal
-
-	// NilBatchCnt is the number of nil-batches this channel can receive before
-	// it is considered done.
-	//
-	// When using typed EventEnd, NilBatchCnt must be ≤ 1 — the event itself
-	// signals termination and a value > 1 would cause the receiver to double-
-	// count sender closure (once via the event type, once via the legacy
-	// nil-batch counter).
-	//
-	// Deprecated: prefer typed EventEnd over nil-batch counting.
-	NilBatchCnt int
-}
+// WaitRegister is the historical name for a pipeline edge.
+//
+// Keep the old type name at API boundaries, but do not keep a second state
+// object. Ch2, the nil-batch counter, and typed terminal state all live in
+// PipelineEdge.
+type WaitRegister = PipelineEdge
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
 type Register struct {

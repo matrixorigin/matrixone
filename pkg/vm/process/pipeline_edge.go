@@ -25,7 +25,7 @@ import (
 )
 
 // PipelineEdge is an explicit pipeline edge abstraction with typed lifecycle events.
-// It wraps WaitRegister and adds idempotent terminal-state management.
+// It owns both the signal channel and the idempotent terminal state.
 //
 // Invariants:
 //  1. Terminal state (End/Error/Abort) is a protocol event, not an implicit nil batch.
@@ -40,15 +40,20 @@ type PipelineEdge struct {
 
 	// NilBatchCnt is the number of nil-batches this channel can receive before
 	// it is considered done. Deprecated: prefer explicit terminal events.
-	// Kept for backward compatibility with existing WaitRegister usage.
+	// This only exists for legacy nil-batch senders.
 	NilBatchCnt int
 
 	// --- terminal state ---
 	done chan struct{}
 	abrt chan struct{}
 
-	terminalOnce sync.Once
-	terminalErr  error
+	initOnce sync.Once
+
+	terminalOnce      sync.Once
+	terminalMu        sync.Mutex
+	terminalSignal    PipelineSignal
+	terminalDelivered bool
+	terminalErr       error
 }
 
 // NewPipelineEdge creates a new PipelineEdge.
@@ -66,29 +71,77 @@ func NewPipelineEdge(channelBufferSize int, nilBatchCnt int) *PipelineEdge {
 	}
 }
 
-// NewPipelineEdgeFromReg wraps an existing WaitRegister as a PipelineEdge.
+// ResetForReuse reinitializes the edge before it is wired into a newly compiled
+// pipeline. It must not be called while senders or receivers can still access
+// the edge.
+func (e *PipelineEdge) ResetForReuse(channelBufferSize int, nilBatchCnt int) {
+	if e == nil {
+		return
+	}
+	if channelBufferSize <= 0 {
+		channelBufferSize = 1
+	}
+
+	e.terminalMu.Lock()
+	defer e.terminalMu.Unlock()
+
+	e.Ch2 = make(chan PipelineSignal, channelBufferSize)
+	e.NilBatchCnt = nilBatchCnt
+	e.resetTerminalStateLocked()
+}
+
+// SetNilBatchCntForReuse updates the legacy nil-batch count while preserving
+// the channel buffer. It also drains buffered stale signals and resets terminal
+// state. It is compile/reuse-time only and must not race with live senders or
+// receivers.
+func (e *PipelineEdge) SetNilBatchCntForReuse(nilBatchCnt int) {
+	if e == nil {
+		return
+	}
+
+	e.terminalMu.Lock()
+	defer e.terminalMu.Unlock()
+
+	e.NilBatchCnt = nilBatchCnt
+	e.drainChannelLocked()
+	e.resetTerminalStateLocked()
+}
+
+func (e *PipelineEdge) drainChannelLocked() {
+	for {
+		select {
+		case <-e.Ch2:
+		default:
+			return
+		}
+	}
+}
+
+func (e *PipelineEdge) resetTerminalStateLocked() {
+	e.done = make(chan struct{})
+	e.abrt = make(chan struct{})
+	e.initOnce = sync.Once{}
+	e.terminalOnce = sync.Once{}
+	e.terminalSignal = PipelineSignal{}
+	e.terminalDelivered = false
+	e.terminalErr = nil
+}
+
+// NewPipelineEdgeFromReg returns the same edge object behind a WaitRegister name.
 // If reg is nil, a new edge with buffer size 1 is created.
 func NewPipelineEdgeFromReg(reg *WaitRegister) *PipelineEdge {
 	if reg == nil {
 		return NewPipelineEdge(1, 0)
 	}
-	return &PipelineEdge{
-		Ch2:         reg.Ch2,
-		NilBatchCnt: reg.NilBatchCnt,
-		done:        make(chan struct{}),
-		abrt:        make(chan struct{}),
-	}
+	return reg
 }
 
-// AsWaitRegister returns the edge as a *WaitRegister for backward compat.
+// AsWaitRegister returns the same edge object under the historical type name.
 func (e *PipelineEdge) AsWaitRegister() *WaitRegister {
 	if e == nil {
 		return nil
 	}
-	return &WaitRegister{
-		Ch2:         e.Ch2,
-		NilBatchCnt: e.NilBatchCnt,
-	}
+	return e
 }
 
 // Done returns a channel that is closed when the edge reaches a terminal state
@@ -99,6 +152,7 @@ func (e *PipelineEdge) Done() <-chan struct{} {
 		close(c)
 		return c
 	}
+	e.initTerminalState()
 	return e.done
 }
 
@@ -109,6 +163,7 @@ func (e *PipelineEdge) Aborted() <-chan struct{} {
 		c := make(chan struct{})
 		return c
 	}
+	e.initTerminalState()
 	return e.abrt
 }
 
@@ -117,6 +172,8 @@ func (e *PipelineEdge) Err() error {
 	if e == nil {
 		return nil
 	}
+	e.terminalMu.Lock()
+	defer e.terminalMu.Unlock()
 	return e.terminalErr
 }
 
@@ -137,67 +194,130 @@ func (e *PipelineEdge) SendDataDirect(ctx context.Context, bat *batch.Batch, mp 
 	return e.sendSignal(ctx, NewPipelineSignalToDirectly(bat, nil, mp))
 }
 
-// SendEnd sends an End signal through the edge. It is idempotent: after the first
-// call, subsequent calls are no-ops. It returns true if the End signal was delivered.
+// SendEnd marks the edge ended and tries to enqueue an End signal. Terminal
+// state is idempotent; delivery may be retried until one terminal signal is
+// successfully enqueued.
 func (e *PipelineEdge) SendEnd() bool {
-	return e.sendTerminal(NewEndSignal())
+	return e.trySendTerminal(NewEndSignal())
 }
 
-// SendError sends an Error signal through the edge. Idempotent.
+// SendError marks the edge failed and tries to enqueue an Error signal.
 func (e *PipelineEdge) SendError(err error) bool {
-	return e.sendTerminal(NewErrorSignal(err))
+	return e.trySendTerminal(NewErrorSignal(err))
 }
 
-// Abort sends an Abort signal through the edge and closes the abort channel.
-// Idempotent. This is the strongest terminal signal — it indicates forced teardown.
+// Abort marks the edge aborted and tries to enqueue an Abort signal.
 func (e *PipelineEdge) Abort(err error) bool {
-	return e.sendTerminal(NewAbortSignal(err))
+	return e.trySendTerminal(NewAbortSignal(err))
 }
 
 // TrySendEnd attempts a non-blocking End send. Returns true if delivered.
 func (e *PipelineEdge) TrySendEnd() bool {
-	return e.trySend(NewEndSignal())
+	return e.trySendTerminal(NewEndSignal())
 }
 
 // TrySendError attempts a non-blocking Error send. Returns true if delivered.
 func (e *PipelineEdge) TrySendError(err error) bool {
-	return e.trySend(NewErrorSignal(err))
+	return e.trySendTerminal(NewErrorSignal(err))
 }
 
 // TryAbort attempts a non-blocking Abort. Returns true if delivered.
 func (e *PipelineEdge) TryAbort(err error) bool {
-	return e.trySend(NewAbortSignal(err))
+	return e.trySendTerminal(NewAbortSignal(err))
 }
 
 // --- internal ---
 
-func (e *PipelineEdge) sendTerminal(signal PipelineSignal) bool {
-	if e == nil || e.Ch2 == nil {
-		return false
-	}
-	delivered := false
-	e.terminalOnce.Do(func() {
-		e.terminalErr = signal.TerminalErr()
-		// Best-effort non-blocking send; if channel is full or receiver gone,
-		// we still mark the edge terminal so Done() unblocks.
-		select {
-		case e.Ch2 <- signal:
-			delivered = true
-		default:
+func (e *PipelineEdge) initTerminalState() {
+	e.initOnce.Do(func() {
+		if e.done == nil {
+			e.done = make(chan struct{})
 		}
-		// Always close done — even if signal was dropped, the state is terminal.
+		if e.abrt == nil {
+			e.abrt = make(chan struct{})
+		}
+	})
+}
+
+func (e *PipelineEdge) markTerminal(signal PipelineSignal) PipelineSignal {
+	e.initTerminalState()
+	e.terminalOnce.Do(func() {
+		e.terminalMu.Lock()
+		e.terminalSignal = signal
+		e.terminalErr = signal.TerminalErr()
+		e.terminalMu.Unlock()
+
 		close(e.done)
 		if signal.EventType == EventAbort {
 			close(e.abrt)
 		}
 	})
-	return delivered
+
+	e.terminalMu.Lock()
+	defer e.terminalMu.Unlock()
+	if e.terminalSignal.EventType.IsTerminal() {
+		return e.terminalSignal
+	}
+	return signal
+}
+
+func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
+	if e == nil || e.Ch2 == nil {
+		return false
+	}
+	if !signal.EventType.IsTerminal() {
+		return e.trySend(signal)
+	}
+	signal = e.markTerminal(signal)
+
+	e.terminalMu.Lock()
+	defer e.terminalMu.Unlock()
+	if e.terminalDelivered {
+		return false
+	}
+	select {
+	case e.Ch2 <- signal:
+		e.terminalDelivered = true
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal PipelineSignal) bool {
+	if e == nil || e.Ch2 == nil {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.TODO()
+	}
+	if !signal.EventType.IsTerminal() {
+		return e.sendSignal(ctx, signal)
+	}
+	signal = e.markTerminal(signal)
+
+	e.terminalMu.Lock()
+	defer e.terminalMu.Unlock()
+	if e.terminalDelivered {
+		return false
+	}
+	select {
+	case e.Ch2 <- signal:
+		e.terminalDelivered = true
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (e *PipelineEdge) sendSignal(ctx context.Context, signal PipelineSignal) bool {
 	if e == nil {
 		return false
 	}
+	if signal.EventType.IsTerminal() {
+		return e.sendTerminalWithContext(ctx, signal)
+	}
+	e.initTerminalState()
 	// Fast-path reject: if a terminal event was already dispatched,
 	// refuse data sends so batches don't leak into a channel that
 	// no receiver will drain.
@@ -214,46 +334,36 @@ func (e *PipelineEdge) sendSignal(ctx context.Context, signal PipelineSignal) bo
 		return true
 	case <-ctx.Done():
 	case <-e.abrt:
+	case <-e.done:
 	}
 	return false
 }
 
-// trySend is the non-blocking counterpart of sendTerminal.
-// If the receiver is ready it delivers the signal; otherwise it drops the
-// signal but still records the terminal state (done is always closed).
-//
-// This is safe because cleanup signals only need to reach the receiver once —
-// timeout-based retry in the caller provides a fallback path.
-//
-// Return semantics:
-//   - First call (fires terminalOnce): returns true if signal reached channel,
-//     false if channel was full (signal dropped but state is terminal).
-//   - Subsequent calls: returns false (done is already closed by the first call).
-//
-// The caller should use SendSignalWithTimeout as a fallback when trySend
-// returns false and delivery confirmation is needed.
+// trySend is the non-blocking path for data signals. Terminal signals are
+// routed through trySendTerminal so Done() and Err() are updated consistently.
 func (e *PipelineEdge) trySend(signal PipelineSignal) bool {
 	if e == nil || e.Ch2 == nil {
 		return false
 	}
+	if signal.EventType.IsTerminal() {
+		return e.trySendTerminal(signal)
+	}
+	e.initTerminalState()
+	select {
+	case <-e.done:
+		return false
+	default:
+	}
 	delivered := false
-	e.terminalOnce.Do(func() {
-		e.terminalErr = signal.TerminalErr()
-		select {
-		case e.Ch2 <- signal:
-			delivered = true
-		default:
-		}
-		// Always close done — even if signal was dropped, the state is terminal.
-		close(e.done)
-		if signal.EventType == EventAbort {
-			close(e.abrt)
-		}
-	})
+	select {
+	case e.Ch2 <- signal:
+		delivered = true
+	default:
+	}
 	return delivered
 }
 
-// --- send helpers compatible with existing WaitRegister-based code ---
+// --- send helpers ---
 
 // SendSignalWithTimeout sends a signal to the edge's channel with optional timeout.
 func (e *PipelineEdge) SendSignalWithTimeout(signal PipelineSignal, timeout time.Duration) bool {

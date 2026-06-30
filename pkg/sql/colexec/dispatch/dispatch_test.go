@@ -15,6 +15,7 @@
 package dispatch
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -23,7 +24,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -205,6 +210,77 @@ func TestDispatchResetSendsHealthyLocalRegWhenEarlierRegIsFull(t *testing.T) {
 	}
 }
 
+func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newDispatchSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 2)
+	queryDone, err := sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	fullReg := process.NewPipelineEdge(1, 0)
+	fullReg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	healthyReg := process.NewPipelineEdge(1, 0)
+	d := &Dispatch{
+		ctr:       &container{sp: sp},
+		LocalRegs: []*process.WaitRegister{fullReg, healthyReg},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		d.Reset(nil, true, moerr.NewInternalErrorNoCtx("cleanup"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Dispatch.Reset blocked on a full local receiver channel")
+	}
+	require.Equal(t, int64(0), mp.CurrNB())
+	require.Nil(t, d.ctr)
+	select {
+	case <-fullReg.Done():
+	default:
+		t.Fatal("Dispatch.Reset did not close the full receiver edge Done")
+	}
+	select {
+	case <-healthyReg.Done():
+	default:
+		t.Fatal("Dispatch.Reset did not close the healthy receiver edge Done")
+	}
+
+	staleSignal := <-fullReg.Ch2
+	got, info := staleSignal.Action()
+	require.Nil(t, got)
+	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+
+	select {
+	case signal := <-healthyReg.Ch2:
+		require.True(t, signal.IsTerminal())
+	default:
+		t.Fatal("Dispatch.Reset did not notify the healthy local receiver")
+	}
+}
+
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
 func TestReceiverDone_OldBehavior(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -225,6 +301,19 @@ func TestReceiverDone_OldBehavior(t *testing.T) {
 
 	err = sendBatToMultiMatchedReg(d, proc, bat, 0)
 	require.Error(t, err, "shuffle should fail when receiver is done")
+}
+
+func newDispatchSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {
+	t.Helper()
+	src := batch.NewWithSize(1)
+	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+	values := make([]int64, rows)
+	for i := range values {
+		values[i] = int64(i + 1)
+	}
+	require.NoError(t, vector.AppendFixedList[int64](src.Vecs[0], values, nil, mp))
+	src.SetRowCount(len(values))
+	return src
 }
 
 // Test_sendBatToMultiMatchedReg_ReceiverRemoved tests the specific error path in sendBatToMultiMatchedReg
