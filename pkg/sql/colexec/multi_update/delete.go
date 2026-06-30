@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -75,26 +74,7 @@ func (update *MultiUpdate) delete_table(
 	}
 	rowCount = deleteBatch.Vecs[0].Length()
 	if rowCount > 0 {
-		if update.NeedDedupDelete {
-			// Deduplicate target rowids — a join may produce duplicate
-			// target rows when the right side has multiple matches.
-			dedup := newDeleteBatch(inputBatch, updateCtx.DeleteCols[1])
-			if err = colexec.FilterRowIdForDel(proc, dedup, deleteBatch, 0, 1); err != nil {
-				dedup.Clean(proc.Mp())
-				return
-			}
-			dedupCnt := dedup.Vecs[0].Length()
-			if dedupCnt < rowCount {
-				rowCount = dedupCnt
-				deleteBatch = dedup
-				defer deleteBatch.Clean(proc.Mp())
-			} else {
-				dedup.Clean(proc.Mp())
-				deleteBatch.SetRowCount(rowCount)
-			}
-		} else {
-			deleteBatch.SetRowCount(rowCount)
-		}
+		deleteBatch.SetRowCount(rowCount)
 
 		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 		update.addDeleteAffectRows(tableType, uint64(rowCount))

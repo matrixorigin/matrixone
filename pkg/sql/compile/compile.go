@@ -4293,16 +4293,6 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
-	// If any descendant is a JOIN, the DELETE path may produce duplicate
-	// target rows — mark for rowid dedup in delete_table.
-	needDedup := false
-	for _, childID := range node.Children {
-		if c.hasJoinDescendant(childID) {
-			needDedup = true
-			break
-		}
-	}
-
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {
 		if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
@@ -4329,7 +4319,7 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		}
 
 		for i := range ss {
-			multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateWriteS3, ss[i].IsRemote, false) // S3 writer never calls delete_table
+			multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateWriteS3, ss[i].IsRemote)
 			if err != nil {
 				return nil, err
 			}
@@ -4348,7 +4338,7 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 			rs = c.newMergeScope(ss)
 		}
 
-		multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateFlushS3Info, rs.IsRemote, false) // flush calls source.Delete directly
+		multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateFlushS3Info, rs.IsRemote)
 		if err != nil {
 			return nil, err
 		}
@@ -4362,7 +4352,7 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
-		multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateWriteTable, ss[0].IsRemote, needDedup)
+		multiUpdateArg, err := constructMultiUpdate(node, c.e, c.proc, multi_update.UpdateWriteTable, ss[0].IsRemote)
 		if err != nil {
 			return nil, err
 		}
@@ -5955,21 +5945,6 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 			if ws.GetCCPRTaskID() != "" {
 				return true
 			}
-		}
-	}
-	return false
-}
-
-// hasJoinDescendant returns true if any node in the subtree rooted at nodeID
-// is a JOIN node.
-func (c *Compile) hasJoinDescendant(nodeID int32) bool {
-	node := c.anal.qry.Nodes[nodeID]
-	if node.NodeType == plan.Node_JOIN {
-		return true
-	}
-	for _, childID := range node.Children {
-		if c.hasJoinDescendant(childID) {
-			return true
 		}
 	}
 	return false

@@ -142,6 +142,15 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectNodeTag := selectNode.BindingTags[0]
 
+	// When DELETE has joins, duplicate target rows may be produced if the
+	// right side has multiple matches. A DISTINCT node above the select
+	// eliminates them — the select projects only target-table columns
+	// including the unique Row_ID, so exact-duplicate rows are guaranteed
+	// to be the same physical row.
+	if len(stmt.TableRefs) > 0 {
+		lastNodeID = builder.appendDistinctNode(selectCtx, lastNodeID)
+	}
+
 	makeDeleteIndexPartExpr := func(colPos int32, partName string, prefixLengths map[string]int) (*plan.Expr, error) {
 		partName = catalog.ResolveAlias(partName)
 		inputExpr := &plan.Expr{
