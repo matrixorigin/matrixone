@@ -497,24 +497,40 @@ func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
 	if resp.NewBind == nil {
 		return nil
 	}
-	newBind := resp.NewBind
+	newBind := *resp.NewBind
 	if l.allocatorBindChangedHandler != nil &&
 		l.allocatorStateProvider != nil &&
+		l.client != nil &&
 		l.bind.AllocatorID != "" &&
 		newBind.AllocatorID != "" &&
 		l.bind.AllocatorID != newBind.AllocatorID {
 		requestAllocator := l.allocatorStateProvider()
+		refreshedBind, allocator, err := getLockTableBind(
+			l.client,
+			newBind.Group,
+			newBind.Table,
+			newBind.OriginTable,
+			l.serviceID,
+			newBind.Sharding,
+		)
+		if err != nil {
+			logGetRemoteBindFailed(l.logger, newBind.Table, err)
+			return ErrLockTableBindChanged
+		}
+		if !refreshedBind.Changed(l.bind) {
+			return ErrLockTableBindChanged
+		}
 		if err := l.allocatorBindChangedHandler(
 			"remote-new-bind",
 			l.bind,
-			*newBind,
-			allocatorState{id: newBind.AllocatorID, version: newBind.Version},
+			refreshedBind,
+			allocator,
 			requestAllocator); err != nil {
 			return err
 		}
 		return ErrLockTableBindChanged
 	}
-	l.bindChangedHandler(*newBind)
+	l.bindChangedHandler(newBind)
 	return ErrLockTableBindChanged
 }
 
