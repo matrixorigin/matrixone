@@ -75,7 +75,8 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 					ExpandFunc: expandObjectStats,
 				},
 				ObjectNameCol:  4,                    // object_name column after expansion
-				BaseDir:        m.state.reader.Dir(), // Base directory for nested objects
+				BaseDir:        m.state.reader.Dir(),  // Base directory for nested objects
+				Kind:           m.state.reader.Kind(), // read nested objects in the same on-disk format
 				CustomOverview: ckpDataOverview,
 			}
 			if err := objectinteractive.RunUnified(context.Background(), um.GetObjectToOpen(), opts); err != nil {

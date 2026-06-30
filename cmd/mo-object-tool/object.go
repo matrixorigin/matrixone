@@ -15,6 +15,7 @@
 package object
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool/interactive"
 	"github.com/spf13/cobra"
 )
@@ -28,15 +29,37 @@ func PrepareCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// If file path is provided, enter view mode directly
 			if len(args) == 1 {
-				return interactive.Run(args[0])
+				return interactive.RunWithKind(args[0], kindFromFlags(cmd))
 			}
 			// Otherwise show help
 			return cmd.Help()
 		},
 	}
 
+	// Persistent so the view/info subcommands inherit them. Default (none set) is
+	// local DISK (CRC). --local2 / --s3 select the raw formats.
+	addOfflineKindFlags(cmd)
+
 	cmd.AddCommand(viewCommand())
 	cmd.AddCommand(infoCommand())
 
 	return cmd
+}
+
+// addOfflineKindFlags registers the --local / --s3 / --local2 format flags as
+// persistent flags so subcommands inherit them.
+func addOfflineKindFlags(cmd *cobra.Command) {
+	fs := cmd.PersistentFlags()
+	fs.Bool("local", false, "local DISK (CRC) format (default)")
+	fs.Bool("s3", false, "S3 (raw) format")
+	fs.Bool("local2", false, "local DISK-V2 (raw) format")
+}
+
+// kindFromFlags resolves the offline fs kind from the format flags, defaulting
+// to local.
+func kindFromFlags(cmd *cobra.Command) string {
+	local, _ := cmd.Flags().GetBool("local")
+	s3, _ := cmd.Flags().GetBool("s3")
+	local2, _ := cmd.Flags().GetBool("local2")
+	return objectio.OfflineKind(local, s3, local2, objectio.OfflineKindLocal)
 }

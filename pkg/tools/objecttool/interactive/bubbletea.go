@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
@@ -1155,6 +1156,15 @@ type ViewOptions struct {
 	ObjectNameCol  int                          // Column index containing object name for drill-down (-1 to disable)
 	BaseDir        string                       // Base directory for opening nested objects
 	CustomOverview func(rows [][]string) string // Custom overview function
+	Kind           string                       // offline fs kind of the data dir: "local" (default), "local2" or "s3"
+}
+
+// optsKind returns the configured offline fs kind, defaulting to legacy local.
+func optsKind(opts *ViewOptions) string {
+	if opts != nil && opts.Kind != "" {
+		return opts.Kind
+	}
+	return objectio.OfflineKindLocal
 }
 
 // ColumnExpander defines how to expand a column into multiple columns
@@ -1169,7 +1179,7 @@ type ColumnExpander struct {
 func RunBubbleteaWithOptions(path string, opts *ViewOptions) error {
 	ctx := context.Background()
 
-	reader, err := objecttool.Open(ctx, path)
+	reader, err := objecttool.OpenWithKind(ctx, path, optsKind(opts))
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to open object: %v", err)
 	}

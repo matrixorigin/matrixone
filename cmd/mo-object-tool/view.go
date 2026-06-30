@@ -27,7 +27,7 @@ func viewCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
-			return interactive.Run(path)
+			return interactive.RunWithKind(path, kindFromFlags(cmd))
 		},
 	}
 
