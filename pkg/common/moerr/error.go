@@ -88,6 +88,7 @@ const (
 	ErrUpgrateError         uint16 = 20311
 	ErrInvalidTz            uint16 = 20312
 	ErrUnsupportedDML       uint16 = 20313
+	ErrOperandColumns       uint16 = 20314
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -387,6 +388,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
 	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
+	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1400,6 +1402,10 @@ func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 
 func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 	return newError(ctx, ErrWrongValueCountOnRow, row)
+}
+
+func NewOperandColumns(ctx context.Context, columns int) *Error {
+	return newError(ctx, ErrOperandColumns, columns)
 }
 
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
