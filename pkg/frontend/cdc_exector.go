@@ -409,7 +409,9 @@ func (exec *CDCTaskExecutor) Resume() error {
 
 // Restart cdc task from init watermark
 func (exec *CDCTaskExecutor) Restart() error {
-	wasFailed := exec.stateMachine.State() == StateFailed
+	state := exec.stateMachine.State()
+	wasRunning := state == StateRunning || state == StateStarting
+	wasFailed := state == StateFailed
 
 	// Transition to Restarting state
 	if err := exec.stateMachine.Transition(TransitionRestart); err != nil {
@@ -450,7 +452,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 		)
 	}()
 
-	if exec.stateMachine.IsRunning() {
+	if wasRunning {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.CloseCancel()
 		// let Start() go
@@ -1095,17 +1097,6 @@ func (exec *CDCTaskExecutor) failTaskForPermanentTableError(ctx context.Context,
 		tbl.SourceTblName,
 	)
 
-	if err := exec.updateErrMsg(ctx, taskErr.Error()); err != nil {
-		logutil.Warn(
-			"cdc.frontend.task.update_task_error_failed",
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("task-name", exec.spec.TaskName),
-			zap.String("db", tbl.SourceDbName),
-			zap.String("table", tbl.SourceTblName),
-			zap.Error(err),
-		)
-	}
-
 	wasRunning := false
 	if exec.stateMachine != nil {
 		wasRunning = exec.stateMachine.IsRunning()
@@ -1118,7 +1109,19 @@ func (exec *CDCTaskExecutor) failTaskForPermanentTableError(ctx context.Context,
 				zap.String("table", tbl.SourceTblName),
 				zap.Error(err),
 			)
+			return err
 		}
+	}
+
+	if err := exec.updateErrMsg(ctx, taskErr.Error()); err != nil {
+		logutil.Warn(
+			"cdc.frontend.task.update_task_error_failed",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+			zap.String("db", tbl.SourceDbName),
+			zap.String("table", tbl.SourceTblName),
+			zap.Error(err),
+		)
 	}
 
 	cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
