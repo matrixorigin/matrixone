@@ -16,9 +16,9 @@ package process
 
 import (
 	"context"
-	"errors"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
@@ -36,7 +36,7 @@ var (
 
 	// ErrPipelineEndSignalDeliveryFailed marks a successful cleanup path that
 	// could not enqueue its normal End signal and had to fall back to abort.
-	ErrPipelineEndSignalDeliveryFailed = errors.New("pipeline end signal delivery failed")
+	ErrPipelineEndSignalDeliveryFailed = moerr.NewInternalErrorNoCtx("pipeline end signal delivery failed")
 )
 
 type PipelineActionType uint8

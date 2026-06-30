@@ -16,11 +16,11 @@ package pSpool
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
@@ -31,7 +31,7 @@ const (
 	SendToAnyLocal = -2
 )
 
-var ErrPipelineSpoolAborted = errors.New("pipeline spool aborted")
+var ErrPipelineSpoolAborted = moerr.NewInternalErrorNoCtx("pipeline spool aborted")
 
 type PipelineSpool struct {
 	mu sync.RWMutex
