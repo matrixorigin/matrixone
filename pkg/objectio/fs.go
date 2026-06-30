@@ -70,8 +70,12 @@ func TmpNewSharedFileservice(ctx context.Context, dir string) fileservice.FileSe
 
 func tmpNewFileservice(ctx context.Context, kind string, dir string) fileservice.FileService {
 	c := fileservice.Config{
-		Name:    kind,
-		Backend: "DISK",
+		Name: kind,
+		// DISK-V2 (raw) to match the default cluster data format. This is only a
+		// fallback for tests / standalone TAE that build options without a
+		// configured fileservice; a real cluster always injects its .toml-driven
+		// fileservices (tnservice/factory.go), so this path is never hit there.
+		Backend: "DISK-V2",
 		DataDir: dir,
 		Cache:   fileservice.DisabledCacheConfig,
 	}
