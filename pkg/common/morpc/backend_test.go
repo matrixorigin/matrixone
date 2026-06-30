@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -752,6 +753,7 @@ func TestDynamicReadTimeoutUsesLatestFutureDeadline(t *testing.T) {
 
 func TestDynamicReadTimeoutDoesNotLetShortFutureCloseBackend(t *testing.T) {
 	longResponseSent := make(chan struct{})
+	var userRequests atomic.Int32
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
 			request := msg.(RPCMessage)
@@ -765,14 +767,14 @@ func TestDynamicReadTimeoutDoesNotLetShortFutureCloseBackend(t *testing.T) {
 				}
 				return nil
 			}
-			if request.Message.GetID() == 2 {
+			if userRequests.Add(1) == 1 {
 				return nil
 			}
-			go func() {
-				time.Sleep(200 * time.Millisecond)
-				_ = conn.Write(msg, goetty.WriteOptions{Flush: true})
-				close(longResponseSent)
-			}()
+			time.Sleep(200 * time.Millisecond)
+			if err := conn.Write(msg, goetty.WriteOptions{Flush: true}); err != nil {
+				return err
+			}
+			close(longResponseSent)
 			return nil
 		},
 		func(b *remoteBackend) {
