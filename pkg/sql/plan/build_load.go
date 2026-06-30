@@ -614,7 +614,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET {
-		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode, loadUsesStrictAssignmentCast(stmt, ctx))
+		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode)
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 	builder.qry.LoadTag = true
@@ -843,28 +843,12 @@ func getCompressType(param *tree.ExternParam, filepath string) string {
 	}
 }
 
-// loadUsesStrictAssignmentCast mirrors checkLineStrict() in
-// pkg/sql/colexec/external: a LOCAL load, or a non-strict SQL mode, keeps the
-// lenient (truncating) cast; only a non-LOCAL load under strict SQL mode rejects
-// over-width CHAR/VARCHAR values. The parallel-load projection cast must follow
-// the same predicate so behavior does not flip between the serial and parallel
-// (large/compressed) paths.
-func loadUsesStrictAssignmentCast(stmt *tree.Load, ctx CompilerContext) bool {
-	if stmt.Param.Local {
-		return false
-	}
-	mode, err := ctx.ResolveVariable("sql_mode", true, false)
-	if err != nil {
-		return false
-	}
-	modeStr, ok := mode.(string)
-	if !ok {
-		return false
-	}
-	return strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
-}
-
-func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node, strictStringWidth bool) []*plan.Expr {
+// The execution-time width check in getColData (external.go), gated by
+// checkLineStrict(param), is the single source of truth for strict vs
+// lenient handling. Using lenient cast here avoids baking a strictness
+// decision into the plan at PREPARE time, which would become stale when
+// a prepared LOAD statement is EXECUTEd under a different sql_mode.
+func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node) []*plan.Expr {
 	ret := make([]*plan.Expr, 0)
 	stringTyp := &plan.Type{
 		Id: int32(types.T_varchar),
@@ -877,15 +861,7 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 			Expr: expr,
 		}
 
-		// Loading into a real CHAR/VARCHAR column is an assignment. Use the strict
-		// cast (reject over-width) only when the load is restrictive, matching the
-		// serial path's checkLineStrict(); otherwise keep the lenient (truncate)
-		// cast so parallel and non-parallel loads behave the same.
-		if strictStringWidth {
-			planExpr, _ = makePlan2AssignmentCastExpr(stmt.Param.Ctx, planExpr, typ)
-		} else {
-			planExpr, _ = makePlan2CastExpr(stmt.Param.Ctx, planExpr, typ)
-		}
+		planExpr, _ = makePlan2CastExpr(stmt.Param.Ctx, planExpr, typ)
 		ret = append(ret, planExpr)
 	}
 
