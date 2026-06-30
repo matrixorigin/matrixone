@@ -7,12 +7,12 @@ data-dir = "./mo-data"
 [[fileservice]]
 name = "LOCAL"
 backend = "DISK-V2"
-data-dir = "./mo-data/local2"
+data-dir = "./mo-data/local"
 
 [[fileservice]]
 name = "SHARED"
 backend = "DISK-V2"
-data-dir = "./mo-data/shared2"
+data-dir = "./mo-data/shared"
 
 [log]
 level = "info"
