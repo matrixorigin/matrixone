@@ -51,12 +51,17 @@ func Backup(
 	// step 1 : setup fileservice
 	//1.1 setup ETL fileservice for general usage
 	if !bs.IsS3 {
-		cfg.GeneralDir, _, err = setupFilesystem(ctx, bs.Dir, true)
+		// The local backup archive must use the same on-disk format as the
+		// cluster's data fileservice (SharedFs, configured by the .toml), so
+		// restore reads it in the cluster's format. DISK-V2 cluster -> raw
+		// archive; legacy DISK cluster -> CRC archive.
+		backend := fileservice.LocalBackendOf(cfg.SharedFs)
+		cfg.GeneralDir, _, err = setupFilesystem(ctx, bs.Dir, true, backend)
 		if err != nil {
 			return err
 		}
 		// for tae hakeeper
-		cfg.TaeDir, _, err = setupFilesystem(ctx, bs.Dir, false)
+		cfg.TaeDir, _, err = setupFilesystem(ctx, bs.Dir, false, backend)
 		if err != nil {
 			return err
 		}

@@ -25,18 +25,42 @@ import (
 func TestGetForBackup(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	fs, err := GetForBackup(ctx, dir)
+	fs, err := GetForBackup(ctx, dir, "DISK")
 	assert.Nil(t, err)
 	localFS, ok := fs.(*LocalFS)
 	assert.True(t, ok)
 	assert.Equal(t, dir, localFS.rootPath)
+	assert.False(t, localFS.noChecksum)
+
+	// DISK-V2 backend yields a raw (checksum-free) LocalFS
+	fs2, err := GetForBackup(ctx, t.TempDir(), "DISK-V2")
+	assert.Nil(t, err)
+	localFS2, ok := fs2.(*LocalFS)
+	assert.True(t, ok)
+	assert.True(t, localFS2.noChecksum)
+}
+
+func TestLocalBackendOf(t *testing.T) {
+	ctx := context.Background()
+	disk, err := NewLocalFS(ctx, "s", t.TempDir(), DisabledCacheConfig, nil)
+	assert.Nil(t, err)
+	assert.Equal(t, "DISK", LocalBackendOf(disk))
+
+	diskV2, err := NewLocalFS2(ctx, "s", t.TempDir(), DisabledCacheConfig, nil)
+	assert.Nil(t, err)
+	assert.Equal(t, "DISK-V2", LocalBackendOf(diskV2))
+
+	// non-LocalFS (e.g. memory/S3) is raw -> DISK-V2
+	mem, err := NewMemoryFS("mem", DisabledCacheConfig, nil)
+	assert.Nil(t, err)
+	assert.Equal(t, "DISK-V2", LocalBackendOf(mem))
 }
 
 func TestGetForBackupS3Opts(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	spec := JoinPath("s3-opts,endpoint=disk,bucket="+dir+",prefix=backup-prefix,name=backup", "object")
-	fs, err := GetForBackup(ctx, spec)
+	fs, err := GetForBackup(ctx, spec, "DISK")
 	assert.Nil(t, err)
 	s3fs, ok := fs.(*S3FS)
 	assert.True(t, ok)
