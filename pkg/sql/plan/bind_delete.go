@@ -140,6 +140,13 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 	selectNode := builder.qry.Nodes[lastNodeID]
 
+	// When DELETE has joins, duplicate target rows may be produced if the
+	// right side has multiple matches. A DISTINCT node above the select
+	// eliminates them.
+	if len(stmt.TableRefs) > 0 {
+		lastNodeID = builder.appendDistinctNode(selectCtx, lastNodeID)
+	}
+
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
 
 	for i, tableDef := range dmlCtx.tableDefs {
