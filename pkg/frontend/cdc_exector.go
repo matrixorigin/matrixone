@@ -409,6 +409,8 @@ func (exec *CDCTaskExecutor) Resume() error {
 
 // Restart cdc task from init watermark
 func (exec *CDCTaskExecutor) Restart() error {
+	wasFailed := exec.stateMachine.State() == StateFailed
+
 	// Transition to Restarting state
 	if err := exec.stateMachine.Transition(TransitionRestart); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot restart: %v", err)
@@ -419,6 +421,18 @@ func (exec *CDCTaskExecutor) Restart() error {
 	// and all watermark updates would be blocked, causing CDC to stop working
 	if exec.watermarkUpdater != nil {
 		exec.watermarkUpdater.UnmarkTaskPaused(exec.spec.TaskId)
+	}
+
+	if wasFailed {
+		ctx := defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId()))
+		if err := exec.clearAllTableErrors(ctx); err != nil {
+			logutil.Warn(
+				"cdc.frontend.task.restart_clear_errors_failed",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.Error(err),
+			)
+			// Don't fail Restart if clearing errors fails - continue anyway
+		}
 	}
 
 	logutil.Info(
@@ -885,7 +899,7 @@ func updateCDCTaskState(
 }
 
 // clearAllTableErrors clears error messages for all tables in this task
-// This is called during Resume to allow retrying tables that had non-retryable errors
+// This is called during Resume/Restart to allow retrying tables that had non-retryable errors
 // after user has fixed the underlying issues
 func (exec *CDCTaskExecutor) clearAllTableErrors(ctx context.Context) error {
 	accountId := uint64(exec.spec.Accounts[0].GetId())
