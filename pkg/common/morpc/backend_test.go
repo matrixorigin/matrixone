@@ -719,6 +719,29 @@ func TestReadLoopInternalMessageDoesNotUpdateLastActive(t *testing.T) {
 	)
 }
 
+func TestDynamicReadTimeoutUsesFutureDeadline(t *testing.T) {
+	rb := &remoteBackend{}
+	WithBackendReadTimeout(10 * time.Second)(rb)
+	WithBackendDynamicReadTimeout()(rb)
+	rb.mu.futures = make(map[uint64]*Future)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	f := newFuture(nil)
+	f.init(RPCMessage{Ctx: ctx, Message: newTestMessage(1)})
+	rb.addFuture(f)
+
+	timeout := rb.getReadTimeout()
+	require.Greater(t, timeout, 25*time.Second)
+	require.LessOrEqual(t, timeout, 30*time.Second)
+
+	f.Close()
+	rb.mu.Lock()
+	delete(rb.mu.futures, f.getSendMessageID())
+	rb.mu.Unlock()
+	require.Equal(t, 10*time.Second, rb.getReadTimeout())
+}
+
 func TestBackendConnectTimeout(t *testing.T) {
 	rb, err := NewRemoteBackend(
 		testAddr,

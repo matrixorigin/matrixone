@@ -92,6 +92,7 @@ func NewClient(
 	// due to tcp disconnected.
 	c.cfg.BackendOptions = append(c.cfg.BackendOptions,
 		morpc.WithBackendReadTimeout(defaultRPCTimeout),
+		morpc.WithBackendDynamicReadTimeout(),
 		morpc.WithBackendFreeOrphansResponse(releaseResponse))
 	// Set bounded wait for auto-create to enable fast failure detection in lockservice.
 	// This is specifically needed for orphan transaction cleanup, where we need to quickly
