@@ -390,6 +390,22 @@ func TestFileWithoutChecksum(t *testing.T) {
 	info, err = f.Stat()
 	require.NoError(t, err)
 	require.Equal(t, int64(len(src)), info.Size()) // overwrite, not append
+
+	// append: WriteAt at the current EOF extends the file (1:1, no framing) and
+	// Seek(SeekEnd) tracks the new size.
+	appended := []byte("APPENDED-AT-THE-END")
+	_, err = fw.WriteAt(appended, int64(len(src)))
+	require.NoError(t, err)
+	info, err = f.Stat()
+	require.NoError(t, err)
+	require.Equal(t, int64(len(src)+len(appended)), info.Size())
+	end, err = fw.Seek(0, io.SeekEnd)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(src)+len(appended)), end)
+	got = make([]byte, len(appended))
+	_, err = fw.ReadAt(got, int64(len(src)))
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(appended, got))
 }
 
 // BenchmarkChecksumVsRaw measures the read/write throughput of the checksummed
