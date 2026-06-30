@@ -78,6 +78,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -302,6 +303,49 @@ func Test_convertToVmInstruction(t *testing.T) {
 		_, err := convertToVmOperator(instruction, ctx, nil)
 		require.Nil(t, err)
 	}
+}
+
+func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+
+	shards := []*pipeline.ParquetRowGroupShard{
+		{
+			FileIndex:     2,
+			RowGroupStart: 3,
+			RowGroupEnd:   5,
+			NumRows:       1024,
+			Bytes:         4096,
+		},
+	}
+	op := external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{
+				FileList:              []string{"s3://bucket/part.parquet"},
+				FileSize:              []int64{8192},
+				FileOffsetTotal:       []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
+				ParquetRowGroupShards: shards,
+			},
+			ExParam: external.ExParam{
+				Fileparam: &external.ExFileparam{},
+				Filter:    &external.FilterParam{},
+			},
+		},
+	)
+
+	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, shards, pipeInstr.ExternalScan.ParquetRowGroupShards)
+
+	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+	require.NoError(t, err)
+	restoredExternal := restored.(*external.External)
+	require.Equal(t, shards, restoredExternal.Es.ParquetRowGroupShards)
 }
 
 func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
@@ -1199,4 +1243,112 @@ func TestOnDuplicateKeyIsIgnoreSerializationRoundtrip(t *testing.T) {
 	require.True(t, restored.IsIgnore, "IsIgnore should be deserialized")
 	require.Equal(t, []string{"col1", "col2"}, restored.Attrs)
 	require.Equal(t, int32(2), restored.InsertColCount)
+}
+
+// newDispatchSrcScopeForTest builds a cross-CN shuffle dispatch source scope:
+// its dispatch sends to localBuckets via LocalRegs (same CN) and to remoteBuckets
+// via RemoteRegs (other CN), exactly like constructDispatchLocalAndRemote does.
+func newDispatchSrcScopeForTest(proc *process.Process, addr string, localBuckets, remoteBuckets []*Scope) *Scope {
+	src := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: addr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(0),
+	}
+	d := dispatch.NewArgument()
+	d.FuncId = dispatch.ShuffleToAllFunc
+	for _, b := range localBuckets {
+		d.LocalRegs = append(d.LocalRegs, b.Proc.Reg.MergeReceivers[0])
+	}
+	for _, b := range remoteBuckets {
+		uid, _ := uuid.NewV7()
+		d.RemoteRegs = append(d.RemoteRegs, colexec.ReceiveInfo{Uuid: uid, NodeAddr: b.NodeInfo.Addr})
+	}
+	src.setRootOperator(d)
+	src.IsEnd = true
+	return src
+}
+
+// TestGroupShuffleBucketsByCNIfNeeded reproduces the issue #24919 root cause and
+// verifies the per-CN regrouping fix:
+//
+//	before regrouping, the bucket that carries a cross-CN shuffle dispatch is wrongly
+//	judged non-standalone-executable (its dispatch LocalRegs point to a sibling bucket
+//	that lives in a separate send tree) -> RemoteRun converts it to local -> the dispatch
+//	lands on the coordinator, mispaired with the compile-time cross-CN receiver FromAddr
+//	-> hang.
+//
+//	after regrouping, the dop same-CN buckets (and the nested dispatch) become one per-CN
+//	send unit, so checkPipelineStandaloneExecutableAtRemote returns true and the whole
+//	group is really executed at the remote CN.
+func TestGroupShuffleBucketsByCNIfNeeded(t *testing.T) {
+	c := NewMockCompile(t)
+	c.cnList = engine.Nodes{
+		engine.Node{Addr: "cn1:6001", Mcpu: 2},
+		engine.Node{Addr: "cn2:6001", Mcpu: 2},
+	}
+	c.addr = "cn1:6001"
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+	c.proc.Base.TxnOperator = fakeTxnOperator{}
+	proc := c.proc
+
+	// dop=2, 2 CN -> bucketNum=4. buckets[0,1] on cn1, buckets[2,3] on cn2.
+	addrs := []string{"cn1:6001", "cn1:6001", "cn2:6001", "cn2:6001"}
+	buckets := make([]*Scope, 4)
+	for i := range buckets {
+		buckets[i] = &Scope{
+			Magic:    Remote,
+			NodeInfo: engine.Node{Addr: addrs[i], Mcpu: 1},
+			Proc:     proc.NewContextChildProc(1),
+		}
+		buckets[i].setRootOperator(merge.NewArgument())
+	}
+
+	// each CN's dispatch source is attached to that CN's first bucket (like compile.go:4500).
+	srcCN1 := newDispatchSrcScopeForTest(proc, "cn1:6001",
+		[]*Scope{buckets[0], buckets[1]}, []*Scope{buckets[2], buckets[3]})
+	buckets[0].PreScopes = append(buckets[0].PreScopes, srcCN1)
+	srcCN2 := newDispatchSrcScopeForTest(proc, "cn2:6001",
+		[]*Scope{buckets[2], buckets[3]}, []*Scope{buckets[0], buckets[1]})
+	buckets[2].PreScopes = append(buckets[2].PreScopes, srcCN2)
+
+	// before regrouping: the dispatch-carrying buckets are wrongly judged not standalone.
+	require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[0]))
+	require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[2]))
+
+	// after regrouping: one per-CN container each, all standalone-executable at remote.
+	grouped := c.groupShuffleBucketsByCNIfNeeded(buckets)
+	require.Equal(t, 2, len(grouped))
+	for _, container := range grouped {
+		require.Equal(t, Remote, container.Magic)
+		require.True(t, checkPipelineStandaloneExecutableAtRemote(container))
+	}
+}
+
+// TestGroupShuffleBucketsByCNIfNeeded_Gating verifies the regrouping is a no-op when
+// there is no cross-CN shuffle dispatch (single CN, or no dispatch), so non-shuffle /
+// single-CN inserts are completely unaffected.
+func TestGroupShuffleBucketsByCNIfNeeded_Gating(t *testing.T) {
+	c := NewMockCompile(t)
+	c.cnList = engine.Nodes{
+		engine.Node{Addr: "cn1:6001", Mcpu: 2},
+		engine.Node{Addr: "cn2:6001", Mcpu: 2},
+	}
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+	proc := c.proc
+
+	// scopes without any cross-CN dispatch -> returned unchanged.
+	ss := make([]*Scope, 4)
+	for i := range ss {
+		ss[i] = &Scope{
+			Magic:    Remote,
+			NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+			Proc:     proc.NewContextChildProc(0),
+		}
+		ss[i].setRootOperator(merge.NewArgument())
+	}
+	require.Equal(t, 4, len(c.groupShuffleBucketsByCNIfNeeded(ss)))
+
+	// single CN -> returned unchanged even if a cross-CN dispatch is present.
+	c.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 2}}
+	require.Equal(t, 4, len(c.groupShuffleBucketsByCNIfNeeded(ss)))
 }

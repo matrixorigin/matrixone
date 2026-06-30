@@ -19,11 +19,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -1598,6 +1601,9 @@ func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []s
 	if !param.Parallel {
 		return false, false
 	}
+	if param.Format == tree.PARQUET {
+		return false, true
+	}
 	if param.Local || crt.GetCompressType(param.CompressType, fileList[0]) != tree.NOCOMPRESS {
 		return false, true
 	}
@@ -1637,8 +1643,15 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 			return nil, nil, err
 		}
 	case int32(plan.ExternType_LOAD):
-		fileList = []string{param.Filepath}
-		fileSize = []int64{param.FileSize}
+		if param.Format == tree.PARQUET && strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[") {
+			fileList, fileSize, err = plan2.ReadDir(param)
+			if err != nil {
+				return nil, nil, err
+			}
+		} else {
+			fileList = []string{param.Filepath}
+			fileSize = []int64{param.FileSize}
+		}
 	}
 	return fileList, fileSize, nil
 }
@@ -1887,6 +1900,23 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 	if param.HivePartitioning {
 		return c.compileExternScanHiveFileFanout(node, param, fileList, fileSize, strictSqlMode)
 	}
+	if param.ExternType == int32(plan.ExternType_LOAD) &&
+		param.Format == tree.PARQUET &&
+		param.Parallel {
+		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(node, param, fileList, fileSize)
+		if err != nil {
+			return nil, err
+		}
+		logutil.Debugf("parquet load footer metadata: files=%d row_groups=%d rows=%d read_calls=%d read_bytes=%d duration=%s",
+			footerStats.Files, footerStats.RowGroups, footerStats.Rows,
+			footerStats.ReadCalls, footerStats.ReadBytes, footerStats.Duration)
+		if footerStats.RowGroups > parquetRowGroupFileCount(rowGroups) {
+			return c.compileExternScanParquetRowGroupFanout(node, param, fileList, fileSize, rowGroups, strictSqlMode)
+		}
+		if len(fileList) > 1 {
+			return c.compileExternScanParquetLoadFileFanout(node, param, fileList, fileSize, strictSqlMode)
+		}
+	}
 
 	readParallel, writeParallel := c.getReadWriteParallelFlag(param, fileList)
 
@@ -1984,7 +2014,40 @@ type hiveFileShard struct {
 	fileSize []int64
 }
 
+type parquetRowGroupMeta struct {
+	fileIndex     int32
+	rowGroupIndex int32
+	numRows       int64
+	bytes         int64
+}
+
+type parquetFooterStats struct {
+	Files     int
+	RowGroups int
+	Rows      int64
+	Bytes     int64
+	ReadCalls int64
+	ReadBytes int64
+	Duration  time.Duration
+}
+
+type parquetRowGroupScopeShard struct {
+	node            engine.Node
+	fileList        []string
+	fileSize        []int64
+	rowGroupShards  []*pipeline.ParquetRowGroupShard
+	originalToLocal map[int32]int32
+}
+
 func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+}
+
+func (c *Compile) compileExternScanParquetLoadFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode)
+}
+
+func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
 	shards := splitHiveFileShards(fileList, fileSize, nodes)
 	if len(shards) <= 1 {
@@ -2020,6 +2083,227 @@ func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.E
 	}
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+func (c *Compile) compileExternScanParquetRowGroupFanout(
+	node *plan.Node,
+	param *tree.ExternParam,
+	fileList []string,
+	fileSize []int64,
+	rowGroups []parquetRowGroupMeta,
+	strictSqlMode bool,
+) ([]*Scope, error) {
+	nodes := c.getHiveFileFanoutNodes(param, len(rowGroups))
+	shards, err := splitParquetRowGroupShards(fileList, fileSize, rowGroups, nodes)
+	if err != nil {
+		return nil, err
+	}
+	if len(shards) <= 1 {
+		serialParam := *param
+		serialParam.Parallel = false
+		return c.compileExternScanSerialReadWrite(node, &serialParam, fileList, fileSize, strictSqlMode)
+	}
+
+	ss := make([]*Scope, 0, len(shards))
+	currentFirstFlag := c.anal.isFirst
+	for i := range shards {
+		shard := shards[i]
+		shardParam := new(tree.ExternParam)
+		*shardParam = *param
+		shardParam.Parallel = false
+
+		remote := param.ScanType == tree.S3 && len(c.cnList) > 0
+		scope := c.constructScopeForExternal(shard.node.Addr, remote)
+		scope.NodeInfo.Mcpu = 1
+		scope.IsLoad = true
+		op := constructExternal(
+			node, shardParam, c.proc.Ctx,
+			shard.fileList, shard.fileSize,
+			makeWholeFileOffsets(len(shard.fileList)),
+			strictSqlMode,
+		)
+		op.Es.ParquetRowGroupShards = shard.rowGroupShards
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		scope.setRootOperator(op)
+		ss = append(ss, scope)
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) readLoadParquetRowGroupMetadata(
+	node *plan.Node,
+	param *tree.ExternParam,
+	fileList []string,
+	fileSize []int64,
+) ([]parquetRowGroupMeta, parquetFooterStats, error) {
+	ctx := param.Ctx
+	if ctx == nil && c.proc != nil {
+		ctx = c.proc.Ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	start := time.Now()
+	stats := parquetFooterStats{Files: len(fileList)}
+	metas := make([]parquetRowGroupMeta, 0)
+	for fileIdx, filePath := range fileList {
+		size := hiveFileSizeAt(fileSize, fileIdx)
+		var reader io.ReaderAt
+		var footerReader *compileParquetFooterReaderAt
+		if param.ScanType == tree.INLINE {
+			reader = strings.NewReader(param.Data)
+			size = int64(len(param.Data))
+		} else {
+			fs, readPath, err := plan2.GetForETLWithType(param, filePath)
+			if err != nil {
+				return nil, stats, err
+			}
+			if size <= 0 {
+				st, err := fs.StatFile(ctx, readPath)
+				if err != nil {
+					return nil, stats, err
+				}
+				size = st.Size
+			}
+			footerReader = &compileParquetFooterReaderAt{
+				fs:       fs,
+				readPath: readPath,
+				ctx:      ctx,
+			}
+			reader = footerReader
+		}
+		stats.Bytes += size
+
+		f, err := parquet.OpenFile(reader, size)
+		if footerReader != nil {
+			stats.ReadCalls += footerReader.readCalls
+			stats.ReadBytes += footerReader.readBytes
+		}
+		if err != nil {
+			return nil, stats, moerr.ConvertGoError(ctx, err)
+		}
+		if f.NumRows() == 0 {
+			if err := validateEmptyParquetLoadFile(ctx, node, param, f); err != nil {
+				return nil, stats, err
+			}
+			continue
+		}
+		rowGroups := f.RowGroups()
+		stats.RowGroups += len(rowGroups)
+		totalRows := f.NumRows()
+		for rowGroupIdx, rowGroup := range rowGroups {
+			rows := rowGroup.NumRows()
+			stats.Rows += rows
+			metas = append(metas, parquetRowGroupMeta{
+				fileIndex:     int32(fileIdx),
+				rowGroupIndex: int32(rowGroupIdx),
+				numRows:       rows,
+				bytes:         estimateParquetRowGroupBytes(size, totalRows, rows, len(rowGroups)),
+			})
+		}
+	}
+	stats.Duration = time.Since(start)
+	return metas, stats, nil
+}
+
+func validateEmptyParquetLoadFile(ctx context.Context, node *plan.Node, param *tree.ExternParam, f *parquet.File) error {
+	if param == nil || f == nil {
+		return nil
+	}
+	attrs := buildExternalAttrs(node)
+	if param.ExternType == int32(plan.ExternType_LOAD) &&
+		externalColumnListLen(node) > int32(len(attrs)) {
+		return moerr.NewNYI(ctx, "parquet load with @variables in column list")
+	}
+	if param.HivePartitioning {
+		return nil
+	}
+	parquetColCnt := len(f.Root().Columns())
+	tableColCnt := getCompileParquetExpectedColCnt(param, attrs)
+	if parquetColCnt != tableColCnt {
+		return moerr.NewInvalidInputf(ctx,
+			"column count mismatch: parquet file has %d columns, but table has %d columns",
+			parquetColCnt, tableColCnt)
+	}
+	return nil
+}
+
+func getCompileParquetExpectedColCnt(param *tree.ExternParam, attrs []plan.ExternAttr) int {
+	cnt := 0
+	for _, attr := range attrs {
+		if catalog.ContainExternalHidenCol(attr.ColName) {
+			continue
+		}
+		if compileParquetIsHivePartitionCol(param, attr.ColName) {
+			continue
+		}
+		cnt++
+	}
+	return cnt
+}
+
+func compileParquetIsHivePartitionCol(param *tree.ExternParam, colName string) bool {
+	if param == nil || !param.HivePartitioning {
+		return false
+	}
+	lower := strings.ToLower(colName)
+	for _, pc := range param.HivePartitionCols {
+		if pc == lower {
+			return true
+		}
+	}
+	return false
+}
+
+type compileParquetFooterReaderAt struct {
+	fs        fileservice.ETLFileService
+	readPath  string
+	ctx       context.Context
+	readCalls int64
+	readBytes int64
+}
+
+func (r *compileParquetFooterReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
+	vec := fileservice.IOVector{
+		FilePath: r.readPath,
+		Policy:   fileservice.SkipFullFilePreloads,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: off,
+				Size:   int64(len(p)),
+				Data:   p,
+			},
+		},
+	}
+	if err := r.fs.Read(r.ctx, &vec); err != nil {
+		return 0, err
+	}
+	size := vec.Entries[0].Size
+	r.readCalls++
+	r.readBytes += size
+	return int(size), nil
+}
+
+func estimateParquetRowGroupBytes(fileSize, totalRows, rowGroupRows int64, rowGroupCount int) int64 {
+	if fileSize <= 0 {
+		return 1
+	}
+	if totalRows > 0 && rowGroupRows > 0 {
+		size := int64(float64(fileSize) * float64(rowGroupRows) / float64(totalRows))
+		if size > 0 {
+			return size
+		}
+		return 1
+	}
+	if rowGroupCount > 0 {
+		size := fileSize / int64(rowGroupCount)
+		if size > 0 {
+			return size
+		}
+	}
+	return 1
 }
 
 func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
@@ -2109,6 +2393,142 @@ func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Nod
 	return nonEmpty
 }
 
+func splitParquetRowGroupShards(
+	fileList []string,
+	fileSize []int64,
+	rowGroups []parquetRowGroupMeta,
+	nodes []engine.Node,
+) ([]parquetRowGroupScopeShard, error) {
+	if len(rowGroups) == 0 || len(nodes) == 0 {
+		return nil, nil
+	}
+	shardCount := len(nodes)
+	if shardCount > len(rowGroups) {
+		shardCount = len(rowGroups)
+	}
+	shards := make([]parquetRowGroupScopeShard, shardCount)
+	loads := make([]int64, shardCount)
+	for i := range shards {
+		shards[i].node = nodes[i]
+		shards[i].originalToLocal = make(map[int32]int32)
+	}
+
+	indices := make([]int, len(rowGroups))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		left := rowGroups[indices[i]]
+		right := rowGroups[indices[j]]
+		if parquetRowGroupLoad(left) != parquetRowGroupLoad(right) {
+			return parquetRowGroupLoad(left) > parquetRowGroupLoad(right)
+		}
+		if left.fileIndex != right.fileIndex {
+			return left.fileIndex < right.fileIndex
+		}
+		return left.rowGroupIndex < right.rowGroupIndex
+	})
+
+	for _, rowGroupIdx := range indices {
+		meta := rowGroups[rowGroupIdx]
+		if meta.fileIndex < 0 || int(meta.fileIndex) >= len(fileList) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"invalid parquet row group file index %d for %d files",
+				meta.fileIndex, len(fileList),
+			)
+		}
+		if meta.rowGroupIndex < 0 {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"invalid parquet row group index %d for file index %d",
+				meta.rowGroupIndex, meta.fileIndex,
+			)
+		}
+
+		shardIdx := 0
+		for i := 1; i < shardCount; i++ {
+			if loads[i] < loads[shardIdx] ||
+				(loads[i] == loads[shardIdx] && len(shards[i].rowGroupShards) < len(shards[shardIdx].rowGroupShards)) {
+				shardIdx = i
+			}
+		}
+
+		localFileIndex := appendParquetShardFile(&shards[shardIdx], fileList, fileSize, meta.fileIndex)
+		shards[shardIdx].rowGroupShards = append(shards[shardIdx].rowGroupShards, &pipeline.ParquetRowGroupShard{
+			FileIndex:     localFileIndex,
+			RowGroupStart: meta.rowGroupIndex,
+			RowGroupEnd:   meta.rowGroupIndex + 1,
+			NumRows:       meta.numRows,
+			Bytes:         meta.bytes,
+		})
+		loads[shardIdx] += parquetRowGroupLoad(meta)
+	}
+
+	nonEmpty := shards[:0]
+	for _, shard := range shards {
+		if len(shard.rowGroupShards) == 0 {
+			continue
+		}
+		sort.SliceStable(shard.rowGroupShards, func(i, j int) bool {
+			left := shard.rowGroupShards[i]
+			right := shard.rowGroupShards[j]
+			if left.FileIndex != right.FileIndex {
+				return left.FileIndex < right.FileIndex
+			}
+			return left.RowGroupStart < right.RowGroupStart
+		})
+		shard.rowGroupShards = mergeAdjacentParquetRowGroupShards(shard.rowGroupShards)
+		shard.originalToLocal = nil
+		nonEmpty = append(nonEmpty, shard)
+	}
+	return nonEmpty, nil
+}
+
+func appendParquetShardFile(shard *parquetRowGroupScopeShard, fileList []string, fileSize []int64, originalFileIndex int32) int32 {
+	if localFileIndex, ok := shard.originalToLocal[originalFileIndex]; ok {
+		return localFileIndex
+	}
+	localFileIndex := int32(len(shard.fileList))
+	shard.originalToLocal[originalFileIndex] = localFileIndex
+	shard.fileList = append(shard.fileList, fileList[originalFileIndex])
+	shard.fileSize = append(shard.fileSize, hiveFileSizeAt(fileSize, int(originalFileIndex)))
+	return localFileIndex
+}
+
+func mergeAdjacentParquetRowGroupShards(shards []*pipeline.ParquetRowGroupShard) []*pipeline.ParquetRowGroupShard {
+	merged := shards[:0]
+	for _, shard := range shards {
+		if len(merged) > 0 {
+			last := merged[len(merged)-1]
+			if last.FileIndex == shard.FileIndex && last.RowGroupEnd == shard.RowGroupStart {
+				last.RowGroupEnd = shard.RowGroupEnd
+				last.NumRows += shard.NumRows
+				last.Bytes += shard.Bytes
+				continue
+			}
+		}
+		merged = append(merged, shard)
+	}
+	return merged
+}
+
+func parquetRowGroupLoad(meta parquetRowGroupMeta) int64 {
+	if meta.bytes > 0 {
+		return meta.bytes
+	}
+	if meta.numRows > 0 {
+		return meta.numRows
+	}
+	return 1
+}
+
+func parquetRowGroupFileCount(rowGroups []parquetRowGroupMeta) int {
+	files := make(map[int32]struct{})
+	for _, meta := range rowGroups {
+		files[meta.fileIndex] = struct{}{}
+	}
+	return len(files)
+}
+
 func hiveFileSizeAt(fileSize []int64, idx int) int64 {
 	if idx >= 0 && idx < len(fileSize) {
 		return fileSize[idx]
@@ -2125,6 +2545,9 @@ func makeWholeFileOffsets(count int) []*pipeline.FileOffset {
 }
 
 func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	if param.Format == tree.PARQUET {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "parquet load cannot use byte-offset parallel read")
+	}
 	visibleCols := make([]*plan.ColDef, 0)
 	if param.Strict {
 		for _, col := range node.TableDef.Cols {
@@ -3749,6 +4172,17 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
 	if !toWriteS3 {
+		// A non-S3 INSERT can still drive a cross-CN shuffle join: toWriteS3 is decided by the
+		// INSERT *output* row count, while shuffle is decided by the JOIN *input* table size and
+		// CN count -- independent decisions. A large shuffle join with a highly selective filter
+		// can produce few output rows (non-S3) yet still shuffle across CNs. So group the same-CN
+		// shuffle buckets (with their nested cross-CN dispatch) into one per-CN send unit *before*
+		// attaching Insert. This (a) keeps the dispatch in the same tree as all its local buckets
+		// so it is sent to its own CN instead of being converted to local on the coordinator and
+		// hanging (issue #24919), and (b) puts Insert on the per-CN container's RootOp chain
+		// (Insert -> Merge), so affectedRows() -- which walks the RootOp chain -- still counts it.
+		// Noop when ss carries no cross-CN shuffle dispatch.
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		currentFirstFlag := c.anal.isFirst
 		// Not write S3
 		for i := range ss {
@@ -3769,6 +4203,10 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		// todo : pipelines with sink scan ,must refactor this in the future
 		currentFirstFlag := c.anal.isFirst
 		c.anal.isFirst = false
+		// dataScope merges the buckets, but dataScope.MergeRun still sends each bucket as an
+		// individual RemoteRun unit, so a cross-CN shuffle dispatch here would hit the same
+		// convert-to-local hang. Group same-CN buckets into one per-CN send unit first (issue #24919).
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		dataScope := c.newMergeScope(ss)
 		if c.anal.qry.LoadTag {
 			// reset the channel buffer of sink for load
@@ -3836,6 +4274,11 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		ss[i].setRootOperator(insertArg)
 	}
 	currentFirstFlag = false
+	// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
+	// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
+	// to and executed at its own CN instead of being converted to local on the coordinator
+	// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+	ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 	rs := c.newMergeScope(ss)
 	rs.Magic = MergeInsert
 	mergeInsertArg := constructMergeblock(c.e, node)
@@ -3885,6 +4328,11 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 			ss[i].setRootOperator(multiUpdateArg)
 		}
 
+		// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
+		// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
+		// to and executed at its own CN instead of being converted to local on the coordinator
+		// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		rs := ss[0]
 		if len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1 {
 			rs = c.newMergeScope(ss)
@@ -3899,6 +4347,8 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		ss = []*Scope{rs}
 	} else {
 		if !c.IsTpQuery() {
+			// keep a cross-CN shuffle dispatch in the same send unit as all its local buckets (issue #24919).
+			ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
@@ -4320,6 +4770,70 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 		}
 	}
 	return rs
+}
+
+// scopeTreeHasCrossCNDispatch reports whether the scope tree rooted at s contains a
+// dispatch operator that sends to remote (cross-CN) receivers. A non-empty RemoteRegs is
+// the signature of a cross-CN shuffle dispatch (see constructDispatchLocalAndRemote).
+//
+// Precondition: it only inspects each scope's RootOp, assuming a shuffle dispatch is always
+// the root operator of its scope (constructDispatch results are attached via setRootOperator
+// with IsEnd=true, so nothing is appended on top of them). A dispatch nested as a child of
+// another operator would be missed -- which does not happen for shuffle dispatches today.
+//
+// Scope of the check (intentionally narrower than checkPipelineStandaloneExecutableAtRemote,
+// which rejects out-of-tree dispatch *and* out-of-tree connector targets): this gate only
+// looks for a cross-CN dispatch, because per-CN grouping only reorganizes the same-CN shuffle
+// dispatch together with its dop buckets. A scope tree that crosses CNs solely via a connector
+// is not the shuffle-bucket pattern grouping addresses and is intentionally left untouched.
+func scopeTreeHasCrossCNDispatch(s *Scope) bool {
+	if d, ok := s.RootOp.(*dispatch.Dispatch); ok && len(d.RemoteRegs) > 0 {
+		return true
+	}
+	for _, pre := range s.PreScopes {
+		if scopeTreeHasCrossCNDispatch(pre) {
+			return true
+		}
+	}
+	return false
+}
+
+// groupShuffleBucketsByCNIfNeeded groups the same-CN shuffle buckets (together with the
+// shuffle dispatch nested under them) into one per-CN send unit, so a cross-CN shuffle
+// dispatch always travels in the same pipeline tree as all of its dop local buckets.
+//
+// Background (issue #24919): newShuffleJoinScopeList leaves a CN's dop join buckets in
+// separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
+// When the consumer (here compileInsert) sends each bucket individually, RemoteRun ->
+// checkPipelineStandaloneExecutableAtRemote sees the dispatch.LocalRegs pointing to the
+// sibling out-of-tree buckets, converts the pipeline to local on the coordinator, and the
+// dispatch then runs on the coordinator instead of its compile-time CN -- mispaired with
+// the cross-CN receiver's FromAddr -> the remote receiver's GetProcByUuid spins / merge
+// WaitingEnd waits forever -> hang. Regrouping by CN keeps all of a CN's buckets in one
+// tree, so the whole group is really executed at the remote CN and the pairing is correct.
+//
+// It is a no-op unless we are multi-CN and ss actually carries a cross-CN shuffle dispatch,
+// so single-CN and non-shuffle inserts are completely unaffected.
+//
+// Operator-chain note: callers attach their own root operator to each bucket first (e.g.
+// the insert / multiUpdate operator). mergeScopesByCN (via newMergeScopeByCN ->
+// doSetRootOperator) appends a connector *on top of* that existing root using AppendChild
+// semantics, so the caller's operator is preserved as the connector's child, not replaced.
+func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
+	if len(c.cnList) <= 1 || len(ss) <= len(c.cnList) {
+		return ss
+	}
+	hasCrossCNDispatch := false
+	for _, s := range ss {
+		if scopeTreeHasCrossCNDispatch(s) {
+			hasCrossCNDispatch = true
+			break
+		}
+	}
+	if !hasCrossCNDispatch {
+		return ss
+	}
+	return c.mergeScopesByCN(ss)
 }
 
 func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
@@ -5108,12 +5622,12 @@ func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {
-		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'; treating as same-CN", addr)
 		return true
 	}
 	parts2 := strings.Split(currentCNAddr, ":")
 	if len(parts2) != 2 {
-		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
+		logutil.Warnf("compileScope received a malformed current-cn address '%s', expected 'ip:port'; treating as same-CN", currentCNAddr)
 		return true
 	}
 	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
