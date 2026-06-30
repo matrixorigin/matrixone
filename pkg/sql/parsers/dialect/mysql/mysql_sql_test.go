@@ -919,6 +919,12 @@ var (
 			input:  "replace into t_table_dst (id, v) table t_table_src;",
 			output: "replace into t_table_dst (id, v) select * from t_table_src",
 		}, {
+			input:  "replace into t_table_dst table t_table_src order by id desc limit 1;",
+			output: "replace into t_table_dst select * from t_table_src order by id desc limit 1",
+		}, {
+			input:  "replace into t_table_dst (id, v) table t_table_src order by id limit 1 offset 1;",
+			output: "replace into t_table_dst (id, v) select * from t_table_src order by id limit 1 offset 1",
+		}, {
 			input:  "replace low_priority into t_mod values(1, 20);",
 			output: "replace into t_mod values (1, 20)",
 		}, {

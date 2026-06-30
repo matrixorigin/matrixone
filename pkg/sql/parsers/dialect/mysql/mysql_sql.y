@@ -640,7 +640,7 @@ func sqlTaskInt64(v any) int64 {
 %type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
-%type <select> select_stmt select_no_parens
+%type <select> select_stmt select_no_parens replace_table_source
 %type <selectStatement> simple_select select_with_parens simple_select_clause
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
@@ -5405,20 +5405,17 @@ replace_data:
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
-|   TABLE table_name
+|   replace_table_source
     {
-        // MySQL `REPLACE ... TABLE src` is equivalent to `REPLACE ... SELECT * FROM src`.
         $$ = &tree.Replace{
-            Rows: tree.NewSelect(makeSelectStarFromTable($2), nil, nil),
+            Rows: $1,
         }
     }
-|   '(' insert_column_list ')' TABLE table_name
+|   '(' insert_column_list ')' replace_table_source
     {
-        // MySQL allows an optional target column list before TABLE:
-        // `REPLACE INTO dst (cols) TABLE src` == `REPLACE INTO dst (cols) SELECT * FROM src`.
         $$ = &tree.Replace{
             Columns: $2,
-            Rows: tree.NewSelect(makeSelectStarFromTable($5), nil, nil),
+            Rows: $4,
         }
     }
 |   select_stmt
@@ -5467,6 +5464,14 @@ replace_data:
 			Rows: tree.NewSelect(vc, nil, nil),
 		}
 	}
+
+replace_table_source:
+    TABLE table_name order_by_opt limit_opt
+    {
+        // MySQL treats TABLE as a query source, so ORDER BY and LIMIT belong to
+        // the SELECT wrapper produced by the TABLE-to-SELECT rewrite.
+        $$ = tree.NewSelect(makeSelectStarFromTable($2), $3, $4)
+    }
 
 insert_stmt:
     insert_no_with_stmt
