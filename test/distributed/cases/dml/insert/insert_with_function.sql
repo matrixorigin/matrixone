@@ -31,7 +31,7 @@ SELECT * FROM char_test;
 DELETE FROM char_test;
 
 -- EMPTY()
-INSERT INTO char_test(str1) VALUES(SPACE(100));
+INSERT INTO char_test(str1) VALUES(REPEAT('x', 100));
 INSERT INTO char_test(str1) VALUES('RONALDOSHOOTGOAL');
 INSERT INTO char_test(str2) VALUES(EMPTY(""));
 INSERT INTO char_test(str2) VALUES(EMPTY(null));
