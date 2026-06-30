@@ -1,5 +1,7 @@
 -- Test: INSERT ON DUPLICATE KEY UPDATE edge cases
 -- Covers: NULL values, multi-unique-key, VALUES() function, rewrite-to-REPLACE paths
+-- Unique-key conflicts (primary or secondary) update the first conflicting row,
+-- aligning with MySQL: priority is PRIMARY > unique keys in definition order.
 
 -- ============================================================
 -- Part 1: NULL handling with unique keys
@@ -20,12 +22,10 @@ select * from t_odku_null order by id;
 insert into t_odku_null values (1, NULL, 'updated') on duplicate key update val = 'pk_conflict_null_uk';
 select * from t_odku_null order by id;
 
--- Conflict on unique key (non-NULL)
+-- Conflict on unique key (non-NULL): updates the conflicting row, keeps its id=1
 insert into t_odku_null values (3, NULL, 'third');
 update t_odku_null set uk_col = 100 where id = 1;
--- @regex("Duplicate entry '100' for key", true)
 insert into t_odku_null values (99, 100, 'conflict') on duplicate key update val = 'uk_conflict';
--- @regex("(?s)1.*(pk_conflict_null_uk|uk_conflict).*2.*null.*second.*3.*null.*third", true)
 select * from t_odku_null order by id;
 
 drop table if exists t_odku_null;
@@ -44,28 +44,22 @@ create table t_odku_multi_uk (
 insert into t_odku_multi_uk values (1, 10, 'a', 100);
 insert into t_odku_multi_uk values (2, 20, 'b', 200);
 
--- Conflict on uk1 only
--- @regex("Duplicate entry '10' for key", true)
+-- Conflict on uk1 only: updates row 1 (val 100 -> 101)
 insert into t_odku_multi_uk values (3, 10, 'c', 300) on duplicate key update val = val + 1;
--- @regex("(?s)1.*10.*a.*(100|101).*2.*20.*b.*200", true)
 select * from t_odku_multi_uk order by id;
 
--- Conflict on uk2 only
--- @regex("Duplicate entry 'b' for key", true)
+-- Conflict on uk2 only: updates row 2 (val 200 -> 202)
 insert into t_odku_multi_uk values (4, 40, 'b', 400) on duplicate key update val = val + 2;
--- @regex("(?s)1.*10.*a.*(100|101).*2.*20.*b.*(200|202)", true)
 select * from t_odku_multi_uk order by id;
 
--- Conflict on both uk1 and uk2 pointing to SAME row
--- @regex("Duplicate entry '10' for key", true)
+-- Conflict on both uk1 and uk2 pointing to the SAME row: updates row 1 (val 101 -> 111)
 insert into t_odku_multi_uk values (5, 10, 'a', 500) on duplicate key update val = val + 10;
--- @regex("(?s)1.*10.*a.*(100|111).*2.*20.*b.*(200|202)", true)
 select * from t_odku_multi_uk order by id;
 
--- Conflict on uk1 and uk2 pointing to DIFFERENT rows
--- This should be an error (MySQL errno 1062)
--- @regex("Duplicate entry", true)
+-- Conflict on uk1 and uk2 pointing to DIFFERENT rows: uk1 wins (definition order),
+-- updates row 1 (val 111 -> 211); aligns with MySQL (no error)
 insert into t_odku_multi_uk values (5, 10, 'b', 500) on duplicate key update val = val + 100;
+select * from t_odku_multi_uk order by id;
 
 drop table if exists t_odku_multi_uk;
 
@@ -88,10 +82,8 @@ insert into t_odku_composite values (1, 2, 'y', 20);
 insert into t_odku_composite values (1, 1, 'z', 30) on duplicate key update val = val + 100;
 select * from t_odku_composite order by a, b;
 
--- Conflict on unique key
--- @regex("Duplicate entry 'y' for key", true)
+-- Conflict on unique key c: updates row (1,2) (val 20 -> 220), keeps its (a,b) and c
 insert into t_odku_composite values (2, 1, 'y', 40) on duplicate key update val = val + 200;
--- @regex("(?s)1.*1.*x.*110.*1.*2.*y.*(20|220)", true)
 select * from t_odku_composite order by a, b;
 
 drop table if exists t_odku_composite;
@@ -151,20 +143,18 @@ create table t_odku_auto (
 
 insert into t_odku_auto (uk_val, data) values (1, 'first');
 insert into t_odku_auto (uk_val, data) values (2, 'second');
--- @regex("Duplicate entry '1' for key", true)
+-- Unique-key (uk_val) conflict updates the conflicting row, keeps its id=1
 insert into t_odku_auto (uk_val, data) values (1, 'conflict') on duplicate key update data = 'updated_first';
--- @regex("(?s)1.*1.*(first|updated_first).*2.*2.*second", true)
 select * from t_odku_auto order by id;
 
 -- auto_increment should not create gaps unnecessarily
 insert into t_odku_auto (uk_val, data) values (3, 'third');
--- @regex("(?s)1.*1.*(first|updated_first).*2.*2.*second.*(3|4).*3.*third", true)
 select * from t_odku_auto order by id;
 
 drop table if exists t_odku_auto;
 
--- Issue #23145: ODKU only handles primary-key conflicts. Unique-key conflicts
--- on auto_increment tables intentionally return duplicate-key errors.
+-- Unique-key conflicts on auto_increment tables update the conflicting row
+-- (aligns with MySQL: any unique-key conflict triggers the update).
 drop table if exists ai_duplicate_test;
 create table ai_duplicate_test (
     id int auto_increment primary key,
@@ -173,7 +163,6 @@ create table ai_duplicate_test (
 );
 
 insert into ai_duplicate_test (code, count) values ('A', 1), ('B', 2);
--- @regex("Duplicate entry 'A' for key", true)
 insert into ai_duplicate_test (code, count) values ('A', 5)
     on duplicate key update count = count + 1;
 select * from ai_duplicate_test order by id;

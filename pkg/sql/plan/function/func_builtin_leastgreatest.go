@@ -23,30 +23,175 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// check input types for least and greatest function
-// it should be at least 1 input, and all non-NULL inputs should share the same type.
-// NULL arguments (T_any) are allowed and produce NULL results per MySQL behavior.
+// check input types for least and greatest function.
+// It requires at least 1 input. NULL arguments (T_any) are allowed and produce
+// NULL results per MySQL behavior.
+//
+// When every non-NULL argument already shares the same type, the call succeeds
+// directly. When the non-NULL arguments have different numeric types, they are
+// promoted to a common numeric type and compared on that type, matching MySQL's
+// implicit numeric promotion (issue #25145). Mixing non-numeric types that do
+// not already match is still rejected.
 func leastGreatestCheck(_ []overload, inputs []types.Type) checkResult {
 	if len(inputs) < 1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	// find the base type: first non-T_any type, or first type if all are T_any
-	baseOid := inputs[0].Oid
-	for i := 0; i < len(inputs); i++ {
+
+	// Collect the non-NULL (non-T_any) argument types. A NULL literal is typed
+	// T_any and always evaluates to NULL regardless of the resolved type.
+	nonNull := make([]types.Type, 0, len(inputs))
+	for i := range inputs {
 		if inputs[i].Oid != types.T_any {
-			baseOid = inputs[i].Oid
+			nonNull = append(nonNull, inputs[i])
+		}
+	}
+	// All arguments are NULL literals: nothing to compare, evaluate as varchar.
+	if len(nonNull) == 0 {
+		return newCheckResultWithSuccess(0)
+	}
+
+	// Fast path: every non-NULL argument already shares the same type Oid. This
+	// preserves the original behavior (including any per-type scale handling) for
+	// the common case where no promotion is needed.
+	baseOid := nonNull[0].Oid
+	sameOid := true
+	for i := 1; i < len(nonNull); i++ {
+		if nonNull[i].Oid != baseOid {
+			sameOid = false
 			break
 		}
 	}
-	for i := 0; i < len(inputs); i++ {
-		if inputs[i].Oid == types.T_any {
-			continue // skip NULL arguments
-		}
-		if inputs[i].Oid != baseOid {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+	if sameOid {
+		return newCheckResultWithSuccess(0)
+	}
+
+	// Mixed argument types. MySQL promotes numeric arguments to a common type
+	// and compares on that. If the arguments are not all numeric we cannot
+	// promote them, so reject the call as before.
+	target, ok := leastGreatestCommonNumericType(nonNull)
+	if !ok {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	castType := make([]types.Type, len(inputs))
+	for i := range castType {
+		castType[i] = target
+	}
+	return newCheckResultWithCast(0, castType)
+}
+
+// leastGreatestCommonNumericType derives the common type used to compare a set
+// of mixed numeric arguments to LEAST/GREATEST. It follows MySQL's promotion
+// rules: any floating-point operand makes the result DOUBLE; otherwise any
+// DECIMAL operand makes the result a DECIMAL wide enough to hold every operand;
+// otherwise the operands are integers and the narrowest integer type that holds
+// them all is chosen. It returns (_, false) if any argument is not numeric.
+func leastGreatestCommonNumericType(inputs []types.Type) (types.Type, bool) {
+	hasFloat, hasDecimal, hasSigned, hasUnsigned := false, false, false, false
+	for i := range inputs {
+		t := inputs[i]
+		switch {
+		case t.IsFloat():
+			hasFloat = true
+		case t.IsDecimal():
+			hasDecimal = true
+		case t.IsInt():
+			hasSigned = true
+		case t.IsUInt(), t.Oid == types.T_bit:
+			hasUnsigned = true
+		default:
+			// non-numeric argument: cannot promote
+			return types.Type{}, false
 		}
 	}
-	return newCheckResultWithSuccess(0)
+
+	// 1. Any floating-point argument: compare as DOUBLE.
+	if hasFloat {
+		return types.T_float64.ToType(), true
+	}
+
+	// 2. Any DECIMAL argument: widen to a decimal that holds every decimal and
+	//    integer operand without losing integral digits or scale, promoting to
+	//    DECIMAL128/256 as needed. Fall back to DOUBLE if the required precision
+	//    exceeds DECIMAL256.
+	if hasDecimal {
+		target := types.T_decimal64.ToType()
+		for i := range inputs {
+			if inputs[i].Oid == types.T_decimal256 {
+				target.Oid = types.T_decimal256
+				break
+			}
+			if inputs[i].Oid == types.T_decimal128 {
+				target.Oid = types.T_decimal128
+			}
+		}
+		target.Size = int32(target.Oid.TypeLen())
+		if !setSafeDecimalWidthAndScaleFromSource(&target, inputs) {
+			return types.T_float64.ToType(), true
+		}
+		return target, true
+	}
+
+	// 3. Integer-only operands (including BIT). Choose the narrowest integer type
+	//    that holds every operand. Mixing signed and unsigned operands that do
+	//    not fit a signed 64-bit integer widens to DECIMAL128 to stay lossless.
+	maxWidth := int32(0)
+	for i := range inputs {
+		w := integerIntegralWidth(inputs[i].Oid)
+		if inputs[i].Oid == types.T_bit {
+			w = 20 // BIT holds up to a 64-bit unsigned value
+		}
+		if w > maxWidth {
+			maxWidth = w
+		}
+	}
+	switch {
+	case hasSigned && hasUnsigned:
+		// uint32 (10 digits) and narrower fit losslessly in int64 (19 digits).
+		if maxWidth <= 10 {
+			return types.T_int64.ToType(), true
+		}
+		// A uint64/BIT operand alongside a signed operand cannot fit any signed
+		// integer; use DECIMAL128, which holds the full unsigned 64-bit range.
+		dt := types.T_decimal128.ToType()
+		dt.Scale = 0
+		dt.Width = 20
+		dt.Size = int32(types.T_decimal128.TypeLen())
+		return dt, true
+	case hasUnsigned:
+		return unsignedTypeForWidth(maxWidth), true
+	default:
+		return signedTypeForWidth(maxWidth), true
+	}
+}
+
+// signedTypeForWidth returns the narrowest signed integer type whose integral
+// width covers w decimal digits.
+func signedTypeForWidth(w int32) types.Type {
+	switch {
+	case w <= 3:
+		return types.T_int8.ToType()
+	case w <= 5:
+		return types.T_int16.ToType()
+	case w <= 10:
+		return types.T_int32.ToType()
+	default:
+		return types.T_int64.ToType()
+	}
+}
+
+// unsignedTypeForWidth returns the narrowest unsigned integer type whose
+// integral width covers w decimal digits.
+func unsignedTypeForWidth(w int32) types.Type {
+	switch {
+	case w <= 3:
+		return types.T_uint8.ToType()
+	case w <= 5:
+		return types.T_uint16.ToType()
+	case w <= 10:
+		return types.T_uint32.ToType()
+	default:
+		return types.T_uint64.ToType()
+	}
 }
 
 func leastGreatestFnFixed[T types.FixedSizeTExceptStrType](
@@ -449,6 +594,17 @@ func leastFn(parameters []*vector.Vector,
 				return v1.Compare(v2) < 0
 			})
 
+	case types.T_decimal256:
+		return leastGreatestFnFixed(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 types.Decimal256) bool {
+				return v1.Compare(v2) < 0
+			})
+
 	case types.T_Rowid:
 		return leastGreatestFnFixed(
 			parameters,
@@ -728,6 +884,17 @@ func greatestFn(parameters []*vector.Vector,
 			length,
 			selectList,
 			func(v1, v2 types.Decimal128) bool {
+				return v1.Compare(v2) > 0
+			})
+
+	case types.T_decimal256:
+		return leastGreatestFnFixed(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 types.Decimal256) bool {
 				return v1.Compare(v2) > 0
 			})
 

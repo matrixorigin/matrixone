@@ -487,6 +487,14 @@ var (
 		input:  "CREATE TABLE new_t1 LIKE test.t1",
 		output: "create table new_t1 like test.t1",
 	}, {
+		// issue #25119: the IF NOT EXISTS clause must be preserved for the
+		// CREATE TABLE ... LIKE form (it was previously dropped by the parser).
+		input:  "CREATE TABLE IF NOT EXISTS new_t1 LIKE t1",
+		output: "create table if not exists new_t1 like t1",
+	}, {
+		input:  "CREATE TEMPORARY TABLE IF NOT EXISTS new_t1 LIKE t1",
+		output: "create temporary table if not exists new_t1 like t1",
+	}, {
 		input: "show privileges",
 	}, {
 		input: "show events from db1",
@@ -693,6 +701,16 @@ var (
 		}, {
 			input:  "select CAST('10 ' as unsigned integer);",
 			output: "select cast(10  as integer unsigned)",
+		}, {
+			// issue #25131: `cast(<col> as unsigned)` must render a stable
+			// target type. A preceding column reference must not leak into the
+			// cast's target type (previously rendered "as <col> unsigned"),
+			// otherwise GROUP BY / ORDER BY fail to match the same expression.
+			input:  "select cast(vgpos as unsigned) from t group by cast(vgpos as unsigned) order by cast(vgpos as unsigned)",
+			output: "select cast(vgpos as unsigned) from t group by cast(vgpos as unsigned) order by cast(vgpos as unsigned)",
+		}, {
+			input:  "select cast(vgpos as signed) from t group by cast(vgpos as signed)",
+			output: "select cast(vgpos as signed) from t group by cast(vgpos as signed)",
 		}, {
 			input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
 			output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
