@@ -216,8 +216,7 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 		}
 		if needRegister {
 			if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc, dispatch.ctr.remoteInfo); err != nil {
-				colexec.Get().DeleteUuids(registered)
-				colexec.Get().DeleteUuids(registered)
+				rollbackRemoteReceiverRegistrations(registered)
 				dispatch.ctr.remoteInfo = nil
 				return err
 			}
@@ -225,6 +224,13 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 		}
 	}
 	return nil
+}
+
+func rollbackRemoteReceiverRegistrations(registered []uuid.UUID) {
+	colexec.Get().DeleteUuids(registered)
+	for _, u := range registered {
+		colexec.Get().GetProcByUuid(u, false)
+	}
 }
 
 func (dispatch *Dispatch) prepareLocal() {
