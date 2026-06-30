@@ -49,5 +49,18 @@ update t_multi set txt = concat(coalesce(txt, ''), 'x');
 select length(txt) from t_multi order by id;
 drop table t_multi;
 
+-- A generated CHAR/VARCHAR column fed by a TEXT expression is materialized as a
+-- real column write: an over-width generated value is rejected on INSERT, UPDATE
+-- and REPLACE, while a value that fits is stored.
+drop table if exists t_gen;
+create table t_gen(id int primary key, t text, g varchar(1) generated always as (coalesce(t, '')) stored);
+insert into t_gen(id, t) values (1, 'x');
+select length(g) from t_gen order by id;
+insert into t_gen(id, t) values (2, 'ab');
+update t_gen set t = 'cd' where id = 1;
+replace into t_gen(id, t) values (1, 'ef');
+select length(g) from t_gen order by id;
+drop table t_gen;
+
 drop table t1;
 drop database update_text_coalesce_cast;

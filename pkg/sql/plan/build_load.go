@@ -605,7 +605,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET {
-		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode)
+		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode, loadUsesStrictAssignmentCast(stmt, ctx))
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 	builder.qry.LoadTag = true
@@ -821,7 +821,28 @@ func getCompressType(param *tree.ExternParam, filepath string) string {
 	}
 }
 
-func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node) []*plan.Expr {
+// loadUsesStrictAssignmentCast mirrors checkLineStrict() in
+// pkg/sql/colexec/external: a LOCAL load, or a non-strict SQL mode, keeps the
+// lenient (truncating) cast; only a non-LOCAL load under strict SQL mode rejects
+// over-width CHAR/VARCHAR values. The parallel-load projection cast must follow
+// the same predicate so behavior does not flip between the serial and parallel
+// (large/compressed) paths.
+func loadUsesStrictAssignmentCast(stmt *tree.Load, ctx CompilerContext) bool {
+	if stmt.Param.Local {
+		return false
+	}
+	mode, err := ctx.ResolveVariable("sql_mode", true, false)
+	if err != nil {
+		return false
+	}
+	modeStr, ok := mode.(string)
+	if !ok {
+		return false
+	}
+	return strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
+}
+
+func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node, strictStringWidth bool) []*plan.Expr {
 	ret := make([]*plan.Expr, 0)
 	stringTyp := &plan.Type{
 		Id: int32(types.T_varchar),
@@ -834,9 +855,15 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 			Expr: expr,
 		}
 
-		// Loading into a real CHAR/VARCHAR column is an assignment: use the
-		// strict cast so an over-width value is rejected, not truncated.
-		planExpr, _ = makePlan2AssignmentCastExpr(stmt.Param.Ctx, planExpr, typ)
+		// Loading into a real CHAR/VARCHAR column is an assignment. Use the strict
+		// cast (reject over-width) only when the load is restrictive, matching the
+		// serial path's checkLineStrict(); otherwise keep the lenient (truncate)
+		// cast so parallel and non-parallel loads behave the same.
+		if strictStringWidth {
+			planExpr, _ = makePlan2AssignmentCastExpr(stmt.Param.Ctx, planExpr, typ)
+		} else {
+			planExpr, _ = makePlan2CastExpr(stmt.Param.Ctx, planExpr, typ)
+		}
 		ret = append(ret, planExpr)
 	}
 
