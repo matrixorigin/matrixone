@@ -18,6 +18,9 @@ create table db7.t1 (a int primary key);
 create table mo_catalog.t1 clone db7.t1;
 create table system.t1 clone db7.t1;
 
+-- COPY GRANTS basic coverage inside a non-sys account.
+-- The plain clone is the negative control; dst_copy should receive the source
+-- table grants and preserve with_grant_option.
 create database clone_copy_grants_db;
 use clone_copy_grants_db;
 create table src(a int primary key, b int);
@@ -33,6 +36,7 @@ grant select on table clone_copy_grants_db.src to clone_copy_grants_r_select wit
 grant select, insert on table clone_copy_grants_db.src to clone_copy_grants_r_insert;
 
 create table dst_plain clone src;
+-- Plain clone should not copy source table grants.
 select count(*) from mo_catalog.mo_role_privs
 where obj_type = 'table'
   and obj_id = (
@@ -43,6 +47,7 @@ where obj_type = 'table'
   and role_name like 'clone_copy_grants_r_%';
 
 create table dst_copy clone src copy grants;
+-- COPY GRANTS should copy role grants to the new table obj_id, including WGO.
 select role_name, privilege_name, privilege_level, with_grant_option
 from mo_catalog.mo_role_privs
 where obj_type = 'table'
@@ -55,11 +60,14 @@ where obj_type = 'table'
 order by role_name, privilege_name;
 -- @session
 -- @session:id=2&user=acc1:clone_copy_grants_u_select:clone_copy_grants_r_select&password=111
+-- Runtime check: select role can read source and dst_copy, but not dst_plain.
 select * from clone_copy_grants_db.src order by a;
 select * from clone_copy_grants_db.dst_plain order by a;
 select * from clone_copy_grants_db.dst_copy order by a;
 -- @session
 -- @session:id=3&user=acc1:clone_copy_grants_u_insert:clone_copy_grants_r_insert&password=111
+-- Runtime check: insert role can write dst_copy, but not dst_plain. Select is
+-- also granted because inserting into a primary-key table performs read checks.
 insert into clone_copy_grants_db.dst_copy values(3, 30);
 insert into clone_copy_grants_db.dst_plain values(4, 40);
 -- @session
@@ -86,6 +94,7 @@ create table system.t1 clone db4.t1;
 use mo_catalog;
 create database db5 clone db4;
 
+-- COPY GRANTS cannot cross tenant boundaries; grants are tenant-local metadata.
 create table db4.copy_grants_to_account_src(a int);
 create table db4.copy_grants_to_account_dst clone db4.copy_grants_to_account_src copy grants to account acc1;
 drop table db4.copy_grants_to_account_src;
