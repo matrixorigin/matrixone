@@ -44,9 +44,9 @@ func TestOfflineKindFlags(t *testing.T) {
 		{true, false, false, objectio.OfflineKindLocal, false},
 		{false, true, false, objectio.OfflineKindS3, false},
 		{false, false, true, objectio.OfflineKindLocal2, false},
-		{false, false, false, "", true},  // none
-		{true, false, true, "", true},    // conflicting
-		{true, true, true, "", true},     // all
+		{false, false, false, "", true}, // none
+		{true, false, true, "", true},   // conflicting
+		{true, true, true, "", true},    // all
 	} {
 		got, err := objectio.OfflineKindStrict(tc.local, tc.s3, tc.local2)
 		if tc.wantErr {
