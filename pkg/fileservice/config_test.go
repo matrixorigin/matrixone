@@ -77,4 +77,15 @@ func TestNewFileServiceBackendDispatch(t *testing.T) {
 		require.True(t, ok)
 		require.True(t, local.noChecksum)
 	})
+
+	t.Run("DISK-V2 with empty data dir panics", func(t *testing.T) {
+		// matches the DISK backend guard: a disk-backed fs needs a data dir
+		require.Panics(t, func() {
+			_, _ = NewFileService(ctx, Config{
+				Name:    "LOCAL",
+				Backend: "DISK-V2",
+				Cache:   DisabledCacheConfig,
+			}, nil)
+		})
+	})
 }

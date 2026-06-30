@@ -15,6 +15,7 @@
 package object
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -56,4 +57,20 @@ func TestOfflineKindFlags(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		}
 	}
+}
+
+// TestObjectInfoViewCommands drives the info/view subcommands. `info` with a
+// format flag on a missing object file opens the fs then fails to read the
+// object (error, no TUI). `view` with no format flag fails at the resolver,
+// before the interactive viewer launches.
+func TestObjectInfoViewCommands(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nope.obj")
+
+	c := PrepareCommand()
+	c.SetArgs([]string{"info", "--local", missing})
+	require.Error(t, c.Execute())
+
+	c2 := PrepareCommand()
+	c2.SetArgs([]string{"view", missing})
+	require.Error(t, c2.Execute())
 }
