@@ -966,3 +966,64 @@ func TestRemoteLockWaitTimeoutLongerThanTransportReadTimeout(t *testing.T) {
 		},
 	)
 }
+
+func TestRemoteLongLockWaitSurvivesConcurrentShortRPCDeadline(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			errC := make(chan error, 1)
+			elapsedC := make(chan time.Duration, 1)
+			go func() {
+				start := time.Now()
+				_, err := l2.Lock(ctx, tableID, [][]byte{row1}, txn2, pb.LockOptions{
+					Granularity:     pb.Granularity_Row,
+					Mode:            pb.LockMode_Exclusive,
+					Policy:          pb.WaitPolicy_Wait,
+					LockWaitTimeout: 11,
+				})
+				elapsedC <- time.Since(start)
+				errC <- err
+			}()
+
+			time.Sleep(100 * time.Millisecond)
+			shortCtx, shortCancel := context.WithTimeout(context.Background(), time.Millisecond)
+			defer shortCancel()
+			_, _ = l2.remote.client.Send(shortCtx, &pb.Request{
+				Method: pb.Method_GetLockHolder,
+				LockTable: pb.LockTable{
+					ServiceID: l1.serviceID,
+					Table:     tableID,
+				},
+				GetLockHolder: pb.GetLockHolderRequest{
+					Row:      row1,
+					Sharding: pb.Sharding_None,
+				},
+			})
+
+			err := <-errC
+			elapsed := <-elapsedC
+
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+				"expected lock timeout, got %v", err)
+			require.Contains(t, err.Error(), "lock timeout")
+			require.GreaterOrEqual(t, elapsed, 10*time.Second,
+				"remote lock wait should survive concurrent short RPC deadline")
+			require.Less(t, elapsed, 20*time.Second,
+				"remote lock wait should finish at LockWaitTimeout, elapsed=%v", elapsed)
+		},
+	)
+}

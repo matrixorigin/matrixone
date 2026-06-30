@@ -121,7 +121,7 @@ func WithBackendReadTimeout(value time.Duration) BackendOption {
 	}
 }
 
-// WithBackendDynamicReadTimeout makes the read loop use the earliest pending
+// WithBackendDynamicReadTimeout makes the read loop use the latest pending
 // request deadline when one exists, and fall back to readTimeout otherwise.
 func WithBackendDynamicReadTimeout() BackendOption {
 	return func(rb *remoteBackend) {
@@ -1168,15 +1168,15 @@ func (rb *remoteBackend) getReadTimeout() time.Duration {
 		return rb.options.readTimeout
 	}
 
-	if timeout, ok := rb.getEarliestFutureTimeout(); ok {
+	if timeout, ok := rb.getLatestFutureTimeout(); ok {
 		return timeout
 	}
 	return rb.options.readTimeout
 }
 
-func (rb *remoteBackend) getEarliestFutureTimeout() (time.Duration, bool) {
+func (rb *remoteBackend) getLatestFutureTimeout() (time.Duration, bool) {
 	now := time.Now()
-	var earliest time.Time
+	var latest time.Time
 
 	rb.mu.RLock()
 	defer rb.mu.RUnlock()
@@ -1185,15 +1185,15 @@ func (rb *remoteBackend) getEarliestFutureTimeout() (time.Duration, bool) {
 		if !ok {
 			continue
 		}
-		if earliest.IsZero() || deadline.Before(earliest) {
-			earliest = deadline
+		if latest.IsZero() || deadline.After(latest) {
+			latest = deadline
 		}
 	}
 
-	if earliest.IsZero() {
+	if latest.IsZero() {
 		return 0, false
 	}
-	timeout := earliest.Sub(now)
+	timeout := latest.Sub(now)
 	if timeout <= 0 {
 		return time.Millisecond, true
 	}

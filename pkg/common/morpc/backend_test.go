@@ -719,27 +719,92 @@ func TestReadLoopInternalMessageDoesNotUpdateLastActive(t *testing.T) {
 	)
 }
 
-func TestDynamicReadTimeoutUsesFutureDeadline(t *testing.T) {
+func TestDynamicReadTimeoutUsesLatestFutureDeadline(t *testing.T) {
 	rb := &remoteBackend{}
 	WithBackendReadTimeout(10 * time.Second)(rb)
 	WithBackendDynamicReadTimeout()(rb)
 	rb.mu.futures = make(map[uint64]*Future)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	f := newFuture(nil)
-	f.init(RPCMessage{Ctx: ctx, Message: newTestMessage(1)})
-	rb.addFuture(f)
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), time.Second)
+	defer shortCancel()
+	shortFuture := newFuture(nil)
+	shortFuture.init(RPCMessage{Ctx: shortCtx, Message: newTestMessage(1)})
+	rb.addFuture(shortFuture)
+
+	longCtx, longCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer longCancel()
+	longFuture := newFuture(nil)
+	longFuture.init(RPCMessage{Ctx: longCtx, Message: newTestMessage(2)})
+	rb.addFuture(longFuture)
 
 	timeout := rb.getReadTimeout()
 	require.Greater(t, timeout, 25*time.Second)
 	require.LessOrEqual(t, timeout, 30*time.Second)
 
-	f.Close()
+	shortFuture.Close()
+	longFuture.Close()
 	rb.mu.Lock()
-	delete(rb.mu.futures, f.getSendMessageID())
+	delete(rb.mu.futures, shortFuture.getSendMessageID())
+	delete(rb.mu.futures, longFuture.getSendMessageID())
 	rb.mu.Unlock()
 	require.Equal(t, 10*time.Second, rb.getReadTimeout())
+}
+
+func TestDynamicReadTimeoutDoesNotLetShortFutureCloseBackend(t *testing.T) {
+	longResponseSent := make(chan struct{})
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			if request.InternalMessage() {
+				if m, ok := request.Message.(*flagOnlyMessage); ok && m.flag == flagPing {
+					return conn.Write(RPCMessage{
+						Ctx:      request.Ctx,
+						internal: true,
+						Message:  &flagOnlyMessage{flag: flagPong, id: m.id},
+					}, goetty.WriteOptions{Flush: true})
+				}
+				return nil
+			}
+			if request.Message.GetID() == 2 {
+				return nil
+			}
+			go func() {
+				time.Sleep(200 * time.Millisecond)
+				_ = conn.Write(msg, goetty.WriteOptions{Flush: true})
+				close(longResponseSent)
+			}()
+			return nil
+		},
+		func(b *remoteBackend) {
+			shortCtx, shortCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer shortCancel()
+			shortFuture, err := b.Send(shortCtx, newTestMessage(1))
+			require.NoError(t, err)
+			defer shortFuture.Close()
+
+			longCtx, longCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer longCancel()
+			longReq := newTestMessage(2)
+			longFuture, err := b.Send(longCtx, longReq)
+			require.NoError(t, err)
+			defer longFuture.Close()
+
+			_, err = shortFuture.Get()
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+
+			resp, err := longFuture.Get()
+			require.NoError(t, err)
+			require.Equal(t, longReq, resp)
+
+			select {
+			case <-longResponseSent:
+			case <-time.After(time.Second):
+				t.Fatal("long response was not sent")
+			}
+		},
+		WithBackendReadTimeout(100*time.Millisecond),
+		WithBackendDynamicReadTimeout(),
+	)
 }
 
 func TestBackendConnectTimeout(t *testing.T) {
