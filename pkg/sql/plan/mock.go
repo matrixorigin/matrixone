@@ -164,6 +164,9 @@ type Schema struct {
 	tblId     int64
 	isView    bool
 	viewCfg   ViewCfg
+	// tableType overrides TableType when non-empty; used to mock index tables
+	// carrying an algo-specific type (e.g. ivfflat "metadata").
+	tableType string
 }
 
 type ViewCfg struct {
@@ -777,6 +780,71 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	/*
+		create table dept_ck(
+			deptno int primary key,
+			dname varchar(15),
+			loc varchar(50),
+			note varchar(20),
+			unique key uk_dname_loc(dname, loc)
+		);
+		-- real PK + composite unique key + a free (non-key) column, for testing
+		-- real-PK ON DUPLICATE KEY UPDATE composite unique-key conflict resolution.
+	*/
+	constraintTestSchema["dept_ck"] = &Schema{
+		tblId: 88890,
+		cols: []col{
+			{"deptno", types.T_int32, true, 32, 0},
+			{"dname", types.T_varchar, true, 15, 0},
+			{"loc", types.T_varchar, true, 50, 0},
+			{"note", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "uk_dname_loc",
+				tableName: catalog.UniqueIndexTableNamePrefix + "dept-ck-idx",
+				parts:     []string{"dname", "loc"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"dept-ck-idx"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		The index metadata table that ivfflat/hnsw/cagra maintenance upserts a
+		version counter into via ON DUPLICATE KEY UPDATE. It is a plain real-PK
+		key/value table whose name carries the secondary-index prefix (so
+		canSkipDedup is true) and whose TableType is the algo-specific "metadata"
+		type (so it is neither SystemOrdinaryRel nor SystemIndexRel). Used to test
+		that such an ODKU is handled by the modern path instead of being rejected.
+	*/
+	constraintTestSchema[catalog.SecondaryIndexTableNamePrefix+"meta"] = &Schema{
+		tblId: 88891,
+		cols: []col{
+			{catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, types.T_varchar, true, 255, 0},
+			{catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, types.T_varchar, true, 255, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:       []int{0},
+		outcnt:    1,
+		tableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+	}
+
+	/*
 		create table fake_pk_t (
 			a int,
 			b varchar(64),
@@ -809,6 +877,93 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"fake-pk-t-uk-a"] = &Schema{
 		cols: []col{
 			{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint64, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		create table fake_pk_comp (
+			a int,
+			b int,
+			c varchar(64),
+			unique key uk_ab(a, b)
+		);
+		-- fake-PK table (no real PK) with a COMPOSITE unique key(a, b). Used to test
+		-- that a REPLACE whose composite unique key serializes to NULL (a statically
+		-- NULL part, e.g. column a omitted/defaulting to NULL) is planned insert-only
+		-- rather than delete-capable.
+	*/
+	constraintTestSchema["fake_pk_comp"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, true, 32, 0},
+			{"b", types.T_int32, true, 32, 0},
+			{"c", types.T_varchar, true, 64, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{3}, // fake PK column
+		idxs: []index{
+			{
+				indexName: "uk_ab",
+				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-comp-uk-ab",
+				parts:     []string{"a", "b"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"fake-pk-comp-uk-ab"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint64, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		create table fake_pk_composite_t (
+			a int,
+			b int,
+			c varchar(64),
+			unique key(a, b)
+		);
+		-- table with no real PK, only a composite unique key ("fake PK" table)
+	*/
+	constraintTestSchema["fake_pk_composite_t"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, true, 32, 0},
+			{"b", types.T_int32, true, 32, 0},
+			{"c", types.T_varchar, true, 64, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{3}, // fake PK column
+		idxs: []index{
+			{
+				indexName: "uk_a_b",
+				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-composite-t-uk-a-b",
+				parts:     []string{"a", "b"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 5,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"fake-pk-composite-t-uk-a-b"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
 			{catalog.IndexTablePrimaryColName, types.T_uint64, true, 0, 0},
 			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
 		},
@@ -1228,8 +1383,12 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				ObjName:    tableName,
 			}
 
+			tableType := catalog.SystemOrdinaryRel
+			if table.tableType != "" {
+				tableType = table.tableType
+			}
 			tableDef := &TableDef{
-				TableType: catalog.SystemOrdinaryRel,
+				TableType: tableType,
 				TblId:     uint64(tblId),
 				Name:      tableName,
 				Cols:      colDefs,
