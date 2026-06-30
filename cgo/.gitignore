@@ -1,4 +1,5 @@
 *.o
 *.a
 *.so
+*.dylib
 __.SYMDEF*
