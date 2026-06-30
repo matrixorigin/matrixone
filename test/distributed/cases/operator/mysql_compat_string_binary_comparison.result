@@ -59,4 +59,62 @@ id    vc_regexp_prefix    vc_rlike_suffix    id_regexp_small_set
 2    1    0    1
 3    1    0    0
 4    1    1    0
+select binary null = 'a' as bin_null_eq_str,
+binary 'a' = null as bin_str_eq_null,
+binary null <=> null as bin_null_safe_null,
+binary null <=> binary 'a' as bin_null_safe_str;
+bin_null_eq_str    bin_str_eq_null    bin_null_safe_null    bin_null_safe_str
+null    null    1    0
+select '' like '' as empty_like_empty,
+'' like '_' as empty_like_one_char,
+'abc' like '' as nonempty_like_empty,
+'abc' not like null as not_like_null_pat,
+null not like 'a%' as null_not_like_pat;
+empty_like_empty    empty_like_one_char    nonempty_like_empty    not_like_null_pat    null_not_like_pat
+1    0    0    null    null
+select '' regexp '^$' as empty_regexp_anchor,
+'abc' not regexp null as not_regexp_null_pat,
+null not regexp 'a' as null_not_regexp_pat;
+empty_regexp_anchor    not_regexp_null_pat    null_not_regexp_pat
+1    null    null
+drop table if exists t_string_binary_unhappy;
+create table t_string_binary_unhappy (
+id int primary key,
+vc varchar(8),
+vb varbinary(8),
+b binary(4)
+);
+insert into t_string_binary_unhappy values
+(1, '', '', ''),
+(2, null, null, null),
+(3, 'a', 'a', 'a');
+select id, hex(vc) as vc_hex, hex(vb) as vb_hex, hex(b) as b_hex
+from t_string_binary_unhappy
+order by id;
+id    vc_hex    vb_hex    b_hex
+1        00000000
+2    null    null    null
+3    61    61    61000000
+select id,
+binary vc = 'a' as bin_vc_eq_a,
+vc like '' as vc_like_empty,
+vc not like null as vc_not_like_null,
+vb = 'a' as vb_eq_char_a,
+b like binary '' as b_like_empty
+from t_string_binary_unhappy
+order by id;
+id    bin_vc_eq_a    vc_like_empty    vc_not_like_null    vb_eq_char_a    b_like_empty
+1    0    1    null    0    0
+2    null    null    null    null    null
+3    1    0    null    1    0
+select id,
+vc regexp '^$' as vc_regexp_empty,
+vc not regexp null as vc_not_regexp_null,
+id not regexp '^[12]$' as id_not_regexp_small_set
+from t_string_binary_unhappy
+order by id;
+id    vc_regexp_empty    vc_not_regexp_null    id_not_regexp_small_set
+1    1    null    0
+2    null    null    0
+3    0    null    1
 drop database mysql_compat_string_binary_cmp;
