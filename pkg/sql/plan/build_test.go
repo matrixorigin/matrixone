@@ -1405,6 +1405,27 @@ func exprContainsDefaultVal(expr *plan.Expr) bool {
 	return false
 }
 
+func exprContainsFuncName(expr *plan.Expr, name string) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F.Func != nil && e.F.Func.ObjName == name {
+			return true
+		}
+		for _, arg := range e.F.Args {
+			if exprContainsFuncName(arg, name) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsFuncName(item, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func exprContainsColName(expr *plan.Expr, name string) bool {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
