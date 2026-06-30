@@ -98,6 +98,39 @@ func TestPipelineSpoolForceCleanupRetainsUntilReceiversDrained(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestPipelineSpoolForceCleanupAfterTerminalSignalDoesNotNeedNilEndMessage(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := InitMyPipelineSpool(mp, 1)
+	queryDone, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	got, info := sp.ReceiveBatch(0)
+	require.NoError(t, info)
+	require.NotNil(t, got)
+	sp.ReleaseCurrent(0)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	sp.ForceCleanupAfterTerminalSignal()
+	require.Equal(t, int64(0), mp.CurrNB())
+	sp.ForceCleanupAfterTerminalSignal()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestPipelineSpoolCloseWithTimeoutCleansMemoryExactlyOnce(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {

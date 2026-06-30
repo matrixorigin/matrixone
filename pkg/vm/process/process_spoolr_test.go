@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 func TestPipelineSignalReceiverWaitingEndUsesCleanupTimeout(t *testing.T) {
@@ -68,6 +70,25 @@ func TestPipelineSignalReceiverWaitingEndWithTimeoutCompletesWhenEndSignalArrive
 
 	if !receiver.WaitingEndWithTimeout(time.Second) {
 		t.Fatal("WaitingEndWithTimeout timed out after receiving an end signal")
+	}
+}
+
+func TestPipelineSignalReceiverSharedEdgeContinuesAfterFirstEndSignal(t *testing.T) {
+	reg := NewPipelineEdge(3, 2)
+	reg.Ch2 <- NewEndSignal()
+	reg.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+	reg.Ch2 <- NewEndSignal()
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{reg})
+	got, err := receiver.GetNextBatch(nil)
+	if err != nil {
+		t.Fatalf("GetNextBatch returned error: %v", err)
+	}
+	if got != batch.EmptyBatch {
+		t.Fatal("receiver did not continue to data after the first shared End signal")
+	}
+	if !receiver.WaitingEndWithTimeout(time.Second) {
+		t.Fatal("receiver did not complete after the second shared End signal")
 	}
 }
 

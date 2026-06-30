@@ -222,6 +222,27 @@ func (ps *PipelineSpool) ForceCleanup() {
 	ps.cleanupOnce.Do(ps.forceCleanup)
 }
 
+// ForceCleanupAfterTerminalSignal reclaims cache memory after a typed terminal
+// signal has been delivered outside the spool.
+//
+// Typed terminal receivers do not consume a nil End-message from the spool, so
+// they never write csDoneSignal. The caller must invoke this only after the
+// receiver cleanup loop has drained all queued GetFromSpool signals and released
+// its current batch reference.
+func (ps *PipelineSpool) ForceCleanupAfterTerminalSignal() {
+	if ps == nil {
+		return
+	}
+
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	if ps.aborted {
+		return
+	}
+
+	ps.cleanupOnce.Do(ps.forceCleanup)
+}
+
 // Abort terminates the spool without waiting for receiver acknowledgement.
 // Pending, not-yet-consumed slots are released immediately. Slots already handed
 // to receivers stay valid until their receiver calls ReleaseCurrent.

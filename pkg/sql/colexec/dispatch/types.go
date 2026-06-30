@@ -218,10 +218,12 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		// Send typed terminal signals to all local receivers.
 		sendTerminalSignalsToLocalRegs(proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, err)
 
-		// Since we send typed terminal signals directly (not via spool),
-		// the receiver exits without draining the spool. Use Abort()
-		// for immediate resource release instead of CloseWithTimeout.
-		sp.Abort()
+		if terminalSignal.EventType == process.EventEnd {
+			dispatch.cleanupSpool = sp
+		} else {
+			sp.Abort()
+			dispatch.cleanupSpool = nil
+		}
 		dispatch.ctr.sp = nil
 	} else {
 		// No spool: send typed terminal signals directly.
@@ -230,15 +232,13 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 	dispatch.ctr = nil
 }
 
-// cleanupSpool is deprecated. With typed terminal signals + sp.Abort() in Reset(),
-// deferred cleanup is no longer needed. The field and method exist only to satisfy
-// the vm.Operator interface (called by pkg/vm/pipeline/types.go cleanup walks).
-// Kept for backward compatibility — will be removed when the interface is updated.
+// CleanupDeferredSpool reclaims spool cache memory after the paired Merge
+// cleanup has drained all queued GetFromSpool signals on a normal End path.
 func (dispatch *Dispatch) CleanupDeferredSpool() {
 	if dispatch.cleanupSpool == nil {
 		return
 	}
-	dispatch.cleanupSpool.ForceCleanup()
+	dispatch.cleanupSpool.ForceCleanupAfterTerminalSignal()
 	dispatch.cleanupSpool = nil
 }
 

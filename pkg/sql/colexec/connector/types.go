@@ -84,10 +84,12 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 		sp := connector.ctr.sp
 		connector.sendTerminalWithLog(proc, terminalSignal, pipelineFailed, err)
 
-		// Since we send typed terminal signals directly (not via spool),
-		// the receiver exits without draining the spool. Use Abort()
-		// for immediate resource release instead of CloseWithTimeout.
-		sp.Abort()
+		if terminalSignal.EventType == process.EventEnd {
+			connector.cleanupSpool = sp
+		} else {
+			sp.Abort()
+			connector.cleanupSpool = nil
+		}
 		connector.ctr.sp = nil
 	} else {
 		connector.sendTerminalWithLog(proc, terminalSignal, pipelineFailed, err)
@@ -122,15 +124,13 @@ func (connector *Connector) sendTerminalWithLog(proc *process.Process, signal pr
 		err)
 }
 
-// cleanupSpool is deprecated. With typed terminal signals + sp.Abort() in Reset(),
-// deferred cleanup is no longer needed. The field and method exist only to satisfy
-// the vm.Operator interface (called by pkg/vm/pipeline/types.go cleanup walks).
-// Kept for backward compatibility — will be removed when the interface is updated.
+// CleanupDeferredSpool reclaims spool cache memory after the paired Merge
+// cleanup has drained all queued GetFromSpool signals on a normal End path.
 func (connector *Connector) CleanupDeferredSpool() {
 	if connector.cleanupSpool == nil {
 		return
 	}
-	connector.cleanupSpool.ForceCleanup()
+	connector.cleanupSpool.ForceCleanupAfterTerminalSignal()
 	connector.cleanupSpool = nil
 }
 

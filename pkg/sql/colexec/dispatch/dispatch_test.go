@@ -281,6 +281,63 @@ func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
 	}
 }
 
+func TestDispatchResetEndPreservesQueuedBroadcastBatchUntilDeferredCleanup(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newDispatchSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 2)
+	queryDone, err := sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	reg0 := process.NewPipelineEdge(2, 0)
+	reg1 := process.NewPipelineEdge(2, 0)
+	reg0.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	reg1.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 1)
+	d := &Dispatch{
+		ctr:       &container{sp: sp},
+		LocalRegs: []*process.WaitRegister{reg0, reg1},
+	}
+
+	d.Reset(nil, false, nil)
+	require.Nil(t, d.ctr)
+	require.Same(t, sp, d.cleanupSpool)
+
+	for i, reg := range []*process.WaitRegister{reg0, reg1} {
+		select {
+		case <-reg.Done():
+		default:
+			t.Fatalf("Dispatch.Reset did not close Done for receiver %d", i)
+		}
+
+		dataSignal := <-reg.Ch2
+		got, info := dataSignal.Action()
+		require.NoError(t, info)
+		require.NotNil(t, got)
+		require.Equal(t, 1024, got.RowCount())
+		sp.ReleaseCurrent(i)
+
+		terminalSignal := <-reg.Ch2
+		require.Equal(t, process.EventEnd, terminalSignal.EventType)
+	}
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	d.CleanupDeferredSpool()
+	require.Nil(t, d.cleanupSpool)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
 func TestReceiverDone_OldBehavior(t *testing.T) {
 	proc := testutil.NewProcess(t)

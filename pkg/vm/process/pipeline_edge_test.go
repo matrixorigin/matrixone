@@ -123,6 +123,57 @@ func TestPipelineEdgeTrySendEndOnFullChannel(t *testing.T) {
 	}
 }
 
+func TestPipelineEdgeSharedEndRequiresAllSenders(t *testing.T) {
+	edge := NewPipelineEdge(3, 2)
+
+	if !edge.SendEnd() {
+		t.Fatal("first SendEnd failed")
+	}
+	select {
+	case <-edge.Done():
+		t.Fatal("Done closed after only one of two expected End signals")
+	default:
+	}
+
+	if !edge.SendDataDirect(context.Background(), nil, nil) {
+		t.Fatal("data send was rejected before all shared senders ended")
+	}
+
+	if !edge.SendEnd() {
+		t.Fatal("second SendEnd failed")
+	}
+	select {
+	case <-edge.Done():
+	default:
+		t.Fatal("Done was not closed after all expected End signals")
+	}
+}
+
+func TestPipelineEdgeSharedEndDeliversOneTerminalPerSender(t *testing.T) {
+	edge := NewPipelineEdge(2, 2)
+
+	if !edge.SendEnd() {
+		t.Fatal("first SendEnd failed")
+	}
+	if !edge.SendEnd() {
+		t.Fatal("second SendEnd failed")
+	}
+	if edge.SendEnd() {
+		t.Fatal("third SendEnd should be rejected after expected terminal count")
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case signal := <-edge.Ch2:
+			if signal.EventType != EventEnd {
+				t.Fatalf("signal %d = %s, want End", i, signal.EventType)
+			}
+		default:
+			t.Fatalf("missing End signal %d", i)
+		}
+	}
+}
+
 // TestPipelineEdgeAsWaitRegister verifies that WaitRegister is the same edge
 // object, not a second state holder.
 func TestPipelineEdgeAsWaitRegister(t *testing.T) {
@@ -312,8 +363,8 @@ func TestSendPipelineSignalWithContextCanceled(t *testing.T) {
 
 	select {
 	case <-reg.Done():
+		t.Fatal("cancelled End send closed Done before receiver observed the terminal")
 	default:
-		t.Fatal("cancelled terminal send did not close Done")
 	}
 }
 
@@ -333,28 +384,27 @@ func TestPipelineEventTypeString(t *testing.T) {
 	}
 }
 
-// TestPipelineEdgeChannelFullDoneStillCloses verifies the bugfix:
-// Done() must close even if the terminal signal couldn't be delivered
-// because the channel was full. The edge is terminal regardless of
-// whether the signal reached the channel.
-func TestPipelineEdgeChannelFullDoneStillCloses(t *testing.T) {
+// TestPipelineEdgeChannelFullFatalStillCloses verifies that fatal terminals
+// close Done even if the terminal signal cannot be delivered because the
+// channel is full.
+func TestPipelineEdgeChannelFullFatalStillCloses(t *testing.T) {
 	// Buffer size 1, but we'll fill it with a data signal first,
-	// then TrySendEnd should hit the default branch.
+	// then TrySendError should hit the default branch.
 	edge := NewPipelineEdge(1, 1)
 
 	// Pre-fill channel with a data signal so the next send hits channel full.
 	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
 
-	// Channel full => delivered = false, but Done() must still close.
-	if edge.TrySendEnd() {
-		t.Fatal("TrySendEnd should fail to deliver on a full channel")
+	// Channel full => delivered = false, but Done() must still close for fatal.
+	if edge.TrySendError(moerr.NewInternalErrorNoCtx("fatal")) {
+		t.Fatal("TrySendError should fail to deliver on a full channel")
 	}
 
 	select {
 	case <-edge.Done():
-		// Correct: Done closed even though channel delivery failed.
+		// Correct: Done closed even though fatal delivery failed.
 	default:
-		t.Fatal("Done was not closed after TrySendEnd failed to deliver")
+		t.Fatal("Done was not closed after TrySendError failed to deliver")
 	}
 }
 
@@ -461,15 +511,15 @@ func TestPipelineEdgeMixedConcurrentTerminal(t *testing.T) {
 	// Aborted may or may not be closed depending on which won the Once.
 }
 
-// TestPipelineEdgeTimeoutSendDoneClosesAfterTimeout verifies that the
-// production terminal helper closes Done even if the terminal signal cannot be
-// delivered because the channel is full.
-func TestPipelineEdgeTimeoutSendDoneClosesAfterTimeout(t *testing.T) {
+// TestPipelineEdgeTimeoutFatalSendDoneClosesAfterTimeout verifies that the
+// production terminal helper closes Done for fatal terminal signals even if the
+// signal cannot be delivered because the channel is full.
+func TestPipelineEdgeTimeoutFatalSendDoneClosesAfterTimeout(t *testing.T) {
 	reg := NewPipelineEdge(1, 0)
 	reg.Ch2 <- NewEndSignal() // fill it
 
 	// With a very short timeout, this must fail.
-	if SendPipelineSignalWithTimeout(reg, NewEndSignal(), 10*time.Millisecond) {
+	if SendPipelineSignalWithTimeout(reg, NewErrorSignal(moerr.NewInternalErrorNoCtx("fatal")), 10*time.Millisecond) {
 		t.Fatal("SendPipelineSignalWithTimeout should fail on a full channel")
 	}
 

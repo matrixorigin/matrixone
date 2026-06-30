@@ -29,8 +29,9 @@ import (
 //
 // Invariants:
 //  1. Terminal state (End/Error/Abort) is a protocol event, not an implicit nil batch.
-//  2. End, Error, Abort are idempotent — calling them multiple times is safe.
-//  3. Done() provides an observable terminal signal.
+//  2. End is counted per expected sender; Error and Abort are fatal first-wins
+//     terminals.
+//  3. Done() provides an observable whole-edge terminal signal.
 //  4. Every send/receive is cancelable via context, or bounded by the edge
 //     timeout configuration.
 type PipelineEdge struct {
@@ -38,9 +39,8 @@ type PipelineEdge struct {
 	// Exposed for direct select compatibility with PipelineSignalReceiver.
 	Ch2 chan PipelineSignal
 
-	// NilBatchCnt is the number of nil-batches this channel can receive before
-	// it is considered done. Deprecated: prefer explicit terminal events.
-	// This only exists for legacy nil-batch senders.
+	// NilBatchCnt is the number of legacy nil-batches or typed End signals this
+	// channel must receive before it is considered done. 0 defaults to 1.
 	NilBatchCnt int
 
 	// --- terminal state ---
@@ -49,11 +49,15 @@ type PipelineEdge struct {
 
 	initOnce sync.Once
 
-	terminalOnce      sync.Once
-	terminalMu        sync.Mutex
-	terminalSignal    PipelineSignal
-	terminalDelivered bool
-	terminalErr       error
+	terminalMu  sync.Mutex
+	terminalErr error
+
+	fatalSignal    PipelineSignal
+	fatalTerminal  bool
+	fatalDelivered bool
+	endDelivered   int
+	doneClosed     bool
+	abortClosed    bool
 }
 
 // NewPipelineEdge creates a new PipelineEdge.
@@ -121,10 +125,13 @@ func (e *PipelineEdge) resetTerminalStateLocked() {
 	e.done = make(chan struct{})
 	e.abrt = make(chan struct{})
 	e.initOnce = sync.Once{}
-	e.terminalOnce = sync.Once{}
-	e.terminalSignal = PipelineSignal{}
-	e.terminalDelivered = false
 	e.terminalErr = nil
+	e.fatalSignal = PipelineSignal{}
+	e.fatalTerminal = false
+	e.fatalDelivered = false
+	e.endDelivered = 0
+	e.doneClosed = false
+	e.abortClosed = false
 }
 
 // NewPipelineEdgeFromReg returns the same edge object behind a WaitRegister name.
@@ -144,8 +151,9 @@ func (e *PipelineEdge) AsWaitRegister() *WaitRegister {
 	return e
 }
 
-// Done returns a channel that is closed when the edge reaches a terminal state
-// (any of End, Error, or Abort). It never blocks.
+// Done returns a channel that is closed once the whole edge is terminal:
+// all expected End signals have been delivered, or the edge receives Error/Abort.
+// It never blocks.
 func (e *PipelineEdge) Done() <-chan struct{} {
 	if e == nil {
 		c := make(chan struct{})
@@ -194,9 +202,8 @@ func (e *PipelineEdge) SendDataDirect(ctx context.Context, bat *batch.Batch, mp 
 	return e.sendSignal(ctx, NewPipelineSignalToDirectly(bat, nil, mp))
 }
 
-// SendEnd marks the edge ended and tries to enqueue an End signal. Terminal
-// state is idempotent; delivery may be retried until one terminal signal is
-// successfully enqueued.
+// SendEnd sends one sender's End signal. Done closes after the edge has
+// delivered the expected number of End signals.
 func (e *PipelineEdge) SendEnd() bool {
 	return e.trySendTerminal(NewEndSignal())
 }
@@ -239,26 +246,52 @@ func (e *PipelineEdge) initTerminalState() {
 	})
 }
 
-func (e *PipelineEdge) markTerminal(signal PipelineSignal) PipelineSignal {
-	e.initTerminalState()
-	e.terminalOnce.Do(func() {
-		e.terminalMu.Lock()
-		e.terminalSignal = signal
-		e.terminalErr = signal.TerminalErr()
-		e.terminalMu.Unlock()
-
-		close(e.done)
-		if signal.EventType == EventAbort {
-			close(e.abrt)
-		}
-	})
-
-	e.terminalMu.Lock()
-	defer e.terminalMu.Unlock()
-	if e.terminalSignal.EventType.IsTerminal() {
-		return e.terminalSignal
+func (e *PipelineEdge) expectedEndCountLocked() int {
+	if e.NilBatchCnt <= 0 {
+		return 1
 	}
-	return signal
+	return e.NilBatchCnt
+}
+
+func (e *PipelineEdge) closeDoneLocked() {
+	if !e.doneClosed {
+		close(e.done)
+		e.doneClosed = true
+	}
+}
+
+func (e *PipelineEdge) closeAbortLocked() {
+	if !e.abortClosed {
+		close(e.abrt)
+		e.abortClosed = true
+	}
+}
+
+func (e *PipelineEdge) canDeliverEndLocked() bool {
+	return !e.fatalTerminal && e.endDelivered < e.expectedEndCountLocked()
+}
+
+func (e *PipelineEdge) recordEndDeliveredLocked() {
+	if e.fatalTerminal || e.doneClosed {
+		return
+	}
+	e.endDelivered++
+	if e.endDelivered >= e.expectedEndCountLocked() {
+		e.closeDoneLocked()
+	}
+}
+
+func (e *PipelineEdge) recordFatalTerminalLocked(signal PipelineSignal) PipelineSignal {
+	if !e.fatalTerminal {
+		e.fatalTerminal = true
+		e.fatalSignal = signal
+		e.terminalErr = signal.TerminalErr()
+		e.closeDoneLocked()
+		if signal.EventType == EventAbort {
+			e.closeAbortLocked()
+		}
+	}
+	return e.fatalSignal
 }
 
 func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
@@ -268,16 +301,34 @@ func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
 	if !signal.EventType.IsTerminal() {
 		return e.trySend(signal)
 	}
-	signal = e.markTerminal(signal)
+	e.initTerminalState()
 
 	e.terminalMu.Lock()
 	defer e.terminalMu.Unlock()
-	if e.terminalDelivered {
+
+	if signal.EventType == EventEnd {
+		if !e.canDeliverEndLocked() {
+			return false
+		}
+		select {
+		case e.Ch2 <- signal:
+			e.recordEndDeliveredLocked()
+			return true
+		default:
+			return false
+		}
+	}
+
+	if e.doneClosed && !e.fatalTerminal {
+		return false
+	}
+	signal = e.recordFatalTerminalLocked(signal)
+	if e.fatalDelivered {
 		return false
 	}
 	select {
 	case e.Ch2 <- signal:
-		e.terminalDelivered = true
+		e.fatalDelivered = true
 		return true
 	default:
 		return false
@@ -294,16 +345,34 @@ func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal Pipel
 	if !signal.EventType.IsTerminal() {
 		return e.sendSignal(ctx, signal)
 	}
-	signal = e.markTerminal(signal)
+	e.initTerminalState()
 
 	e.terminalMu.Lock()
 	defer e.terminalMu.Unlock()
-	if e.terminalDelivered {
+
+	if signal.EventType == EventEnd {
+		if !e.canDeliverEndLocked() {
+			return false
+		}
+		select {
+		case e.Ch2 <- signal:
+			e.recordEndDeliveredLocked()
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	if e.doneClosed && !e.fatalTerminal {
+		return false
+	}
+	signal = e.recordFatalTerminalLocked(signal)
+	if e.fatalDelivered {
 		return false
 	}
 	select {
 	case e.Ch2 <- signal:
-		e.terminalDelivered = true
+		e.fatalDelivered = true
 		return true
 	case <-ctx.Done():
 		return false
@@ -318,13 +387,11 @@ func (e *PipelineEdge) sendSignal(ctx context.Context, signal PipelineSignal) bo
 		return e.sendTerminalWithContext(ctx, signal)
 	}
 	e.initTerminalState()
-	// Fast-path reject: if a terminal event was already dispatched,
-	// refuse data sends so batches don't leak into a channel that
-	// no receiver will drain.
-	select {
-	case <-e.done:
+	e.terminalMu.Lock()
+	closedForData := e.doneClosed || e.fatalTerminal
+	e.terminalMu.Unlock()
+	if closedForData {
 		return false
-	default:
 	}
 	if ctx.Err() != nil {
 		return false
@@ -349,10 +416,11 @@ func (e *PipelineEdge) trySend(signal PipelineSignal) bool {
 		return e.trySendTerminal(signal)
 	}
 	e.initTerminalState()
-	select {
-	case <-e.done:
+	e.terminalMu.Lock()
+	closedForData := e.doneClosed || e.fatalTerminal
+	e.terminalMu.Unlock()
+	if closedForData {
 		return false
-	default:
 	}
 	delivered := false
 	select {
