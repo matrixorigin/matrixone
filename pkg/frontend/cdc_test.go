@@ -3167,6 +3167,75 @@ func TestCdcTask_handleNewTables_PermanentTableErrorFailsTask(t *testing.T) {
 	require.Contains(t, executor.execSQLs[0], "task-1")
 }
 
+func TestCdcTask_RestartRunningTaskUnregistersOldDetector(t *testing.T) {
+	detector := createMockTableDetectorForTest()("test-cn")
+	require.True(t, detector.RegisterIfAbsent("task-1", 0, []string{"db1"}, []string{"tb1"}, func(map[uint32]cdc.TblMap) error {
+		return nil
+	}))
+	require.True(t, detector.IsTaskRegistered("task-1"))
+
+	stubDetector := gostub.Stub(&cdc.GetTableDetector, func(string) *cdc.TableDetector {
+		return detector
+	})
+	defer stubDetector.Reset()
+
+	started := make(chan struct{}, 1)
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+		},
+		stateMachine:  NewExecutorStateMachine(),
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		holdCh:        make(chan int, 1),
+		startFunc: func(context.Context) error {
+			started <- struct{}{}
+			return nil
+		},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+
+	require.NoError(t, cdcTask.Restart())
+	<-started
+
+	require.False(t, detector.IsTaskRegistered("task-1"))
+}
+
+func TestCdcTask_PermanentTableErrorDoesNotFailWhilePausing(t *testing.T) {
+	executor := &captureCDCExecutor{}
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		ie:             executor,
+		stateMachine:   NewExecutorStateMachine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		holdCh:         make(chan int, 1),
+		runningReaders: &sync.Map{},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionPause))
+
+	err := cdcTask.failTaskForPermanentTableError(context.Background(), &cdc.DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "tb1",
+	})
+	require.Error(t, err)
+	require.Equal(t, StatePausing, cdcTask.stateMachine.State())
+	require.Empty(t, executor.capturedExecSQLs())
+	select {
+	case <-cdcTask.holdCh:
+		t.Fatal("permanent error should not release Start while pause owns the state transition")
+	default:
+	}
+}
+
 func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
