@@ -604,7 +604,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		prevRuntimeFilterData := sqlproc.IvfRuntimeFilterData
 		prevMembershipFilter := sqlproc.IvfMembershipFilter
 		prevExactPkFilter := sqlproc.ExactPkFilter
-		sqlproc.IvfRuntimeFilterData = rt.BloomFilter
+		sqlproc.IvfRuntimeFilterData = rt.RuntimeFilterData
 		defer func() {
 			sqlproc.IvfRuntimeFilterData = prevRuntimeFilterData
 			sqlproc.IvfMembershipFilter = prevMembershipFilter
