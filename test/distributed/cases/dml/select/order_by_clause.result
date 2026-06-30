@@ -129,7 +129,7 @@ TURNER    CHICAGO    30
 JAMES    CHICAGO    30
 ALLEN    CHICAGO    30
 select t1.ename, t2.loc from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
-invalid input: ambiguouse column reference to 'deptno'
+invalid input: ambiguous column reference to 'deptno'
 select t1.ename, t2.loc, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno+33;
 ename    loc    deptno
 CLARK    NEW YORK    10
@@ -147,7 +147,7 @@ TURNER    CHICAGO    30
 JAMES    CHICAGO    30
 ALLEN    CHICAGO    30
 select t1.ename, t2.loc from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
-invalid input: ambiguouse column reference to 'deptno'
+invalid input: ambiguous column reference to 'deptno'
 select ename, (select ename from emp i1 where i1.empno = emp.mgr order by 1 limit 1) as ename from emp order by ename;
 invalid input: Column 'ename' in order clause is ambiguous
 select empno, (select ename from emp i1 where i1.empno = emp.mgr order by 1 limit 1) as ename, ename from emp order by ename;
@@ -195,7 +195,7 @@ TURNER    CHICAGO    30    30
 JAMES    CHICAGO    30    30
 ALLEN    CHICAGO    30    30
 select t1.ename, t2.loc, deptno, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
-invalid input: ambiguouse column reference to 'deptno'
+invalid input: ambiguous column reference to 'deptno'
 select t1.ename, t2.loc, t1.deptno, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
 invalid input: Column 'deptno' in order clause is ambiguous
 drop table if exists dept;
