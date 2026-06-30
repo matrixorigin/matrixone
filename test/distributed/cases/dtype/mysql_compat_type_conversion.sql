@@ -52,4 +52,14 @@ select ifnull(null, '8') as ifnull_string,
        ifnull(null, '8') + 1 as ifnull_plus_one,
        ifnull(7, '8') as ifnull_first_number;
 
+drop table if exists t_string_number_unhappy;
+create table t_string_number_unhappy (id int primary key, s varchar(20));
+insert into t_string_number_unhappy values
+  (1, null),
+  (2, '-0'),
+  (3, '000');
+select id, s, s + 1 as plus_one, cast(s as signed) as as_signed, cast(s as decimal(6,2)) as as_decimal
+from t_string_number_unhappy order by id;
+drop table t_string_number_unhappy;
+
 drop database mysql_compat_type_conversion;

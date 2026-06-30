@@ -34,4 +34,23 @@ select json_extract(cast('{"a": 1, "b": "2"}' as json), '$.a') as json_a,
 json_unquote(json_extract(cast('{"a": 1, "b": "2"}' as json), '$.b')) as json_b;
 json_a    json_b
 1    2
+select cast(null as signed) as null_signed,
+cast(null as unsigned) as null_unsigned,
+cast(null as decimal(6,2)) as null_decimal,
+cast(null as char) as null_char,
+cast(null as date) as null_date,
+cast(null as datetime(6)) as null_datetime,
+cast(null as time(6)) as null_time;
+null_signed    null_unsigned    null_decimal    null_char    null_date    null_datetime    null_time
+null    null    null    null    null    null    null
+select cast('-0' as signed) as signed_neg_zero,
+cast('  +0' as signed) as signed_plus_zero_ws,
+cast('000.00' as decimal(6,2)) as decimal_zero_padded;
+signed_neg_zero    signed_plus_zero_ws    decimal_zero_padded
+0    0    0.00
+select convert(null, signed) as convert_null_signed,
+convert(null, unsigned) as convert_null_unsigned,
+convert(null, decimal(6,2)) as convert_null_decimal;
+convert_null_signed    convert_null_unsigned    convert_null_decimal
+null    null    null
 drop database mysql_compat_cast_convert_matrix;

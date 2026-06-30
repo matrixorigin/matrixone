@@ -35,4 +35,20 @@ select cast(cast('2024-01-02' as date) as char) as date_to_char,
 select json_extract(cast('{"a": 1, "b": "2"}' as json), '$.a') as json_a,
        json_unquote(json_extract(cast('{"a": 1, "b": "2"}' as json), '$.b')) as json_b;
 
+select cast(null as signed) as null_signed,
+       cast(null as unsigned) as null_unsigned,
+       cast(null as decimal(6,2)) as null_decimal,
+       cast(null as char) as null_char,
+       cast(null as date) as null_date,
+       cast(null as datetime(6)) as null_datetime,
+       cast(null as time(6)) as null_time;
+
+select cast('-0' as signed) as signed_neg_zero,
+       cast('  +0' as signed) as signed_plus_zero_ws,
+       cast('000.00' as decimal(6,2)) as decimal_zero_padded;
+
+select convert(null, signed) as convert_null_signed,
+       convert(null, unsigned) as convert_null_unsigned,
+       convert(null, decimal(6,2)) as convert_null_decimal;
+
 drop database mysql_compat_cast_convert_matrix;
