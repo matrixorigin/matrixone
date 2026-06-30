@@ -1630,8 +1630,9 @@ var supportedStringBuiltIns = []FuncNew{
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 			// First parameter can be any type (string or numeric)
-			// Second and third parameters must be int64 (bases)
-			if inputs[1].Oid != types.T_int64 || inputs[2].Oid != types.T_int64 {
+			// Second and third parameters must be int64, but NULL constants arrive as ANY
+			if (inputs[1].Oid != types.T_int64 && inputs[1].Oid != types.T_any) ||
+				(inputs[2].Oid != types.T_int64 && inputs[2].Oid != types.T_any) {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 			return newCheckResultWithSuccess(0)
