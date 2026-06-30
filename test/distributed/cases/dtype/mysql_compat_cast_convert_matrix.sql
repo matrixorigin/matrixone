@@ -42,6 +42,14 @@ select cast(12345 as char) as int_to_char,
 select hex(cast('AZ' as binary(4))) as binary_fixed_hex,
        length(cast('AZ' as binary(4))) as binary_fixed_len;
 
+select cast(_binary X'4142' as char) as binary_literal_to_char,
+       hex(cast(_binary X'4142' as binary(4))) as binary_literal_to_fixed_binary;
+
+select cast(b'1010' as unsigned) as bit_literal_unsigned,
+       cast(b'1010' as signed) as bit_literal_signed,
+       cast(true as signed) as bool_true_signed,
+       cast(false as unsigned) as bool_false_unsigned;
+
 select cast('2024-01-02' as date) as cast_date,
        cast('2024-01-02 03:04:05.123456' as datetime(6)) as cast_datetime6,
        cast('03:04:05.123456' as time(6)) as cast_time6;
