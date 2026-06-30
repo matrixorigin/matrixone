@@ -465,15 +465,28 @@ func (s *service) handleRemoteGetLockHolder(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	s.bindChangeMu.RLock()
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil || l == nil {
-		s.bindChangeMu.RUnlock()
 		writeResponse(s.logger, cancel, resp, err, cs)
 		return
 	}
 
-	holder, found, err := l.getLockHolder(ctx, req.GetLockHolder.Row)
+	bind := l.getBind()
+	s.bindChangeMu.RLock()
+	current := s.tableGroups.get(bind.Group, bind.Table)
+	if current == nil {
+		s.bindChangeMu.RUnlock()
+		writeResponse(s.logger, cancel, resp, ErrLockTableNotFound, cs)
+		return
+	}
+	if current.getBind().Changed(bind) {
+		newBind := current.getBind()
+		resp.NewBind = &newBind
+		s.bindChangeMu.RUnlock()
+		writeResponse(s.logger, cancel, resp, nil, cs)
+		return
+	}
+	holder, found, err := current.getLockHolder(ctx, req.GetLockHolder.Row)
 	s.bindChangeMu.RUnlock()
 	if err == nil && found {
 		resp.GetLockHolder.Holder = holder
