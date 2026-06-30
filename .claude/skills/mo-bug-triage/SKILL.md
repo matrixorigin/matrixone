@@ -1,7 +1,11 @@
 ---
 name: mo-bug-triage
 description: Systematic triage and classification of MatrixOne kind/bug issues — calibrated severity assessment, batched GitHub metadata updates (milestone, severity, project), rollback-safe batch processing, and drift prevention. Use when asked to triage, classify, or bulk-update MO bugs.
-compatibility: Designed for Codex CLI and compatible agents. Requires GitHub CLI (gh) with authenticated access (5000 req/hr) and repo write scope.
+compatibility:
+  agents: Codex CLI and compatible agents
+  requires:
+    - GitHub CLI (gh) with authenticated access (5000 req/hr)
+    - repo write scope
 metadata:
   project: matrixone
   repository: matrixorigin/matrixone
