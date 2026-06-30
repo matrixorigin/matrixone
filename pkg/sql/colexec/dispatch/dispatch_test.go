@@ -281,6 +281,82 @@ func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
 	}
 }
 
+func TestDispatchResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newDispatchSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 2)
+	queryDone, err := sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	fullReg := process.NewPipelineEdge(1, 0)
+	fullReg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	healthyReg := process.NewPipelineEdge(2, 0)
+	healthyReg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 1)
+	d := &Dispatch{
+		ctr:       &container{sp: sp},
+		LocalRegs: []*process.WaitRegister{fullReg, healthyReg},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		d.Reset(nil, false, nil)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Dispatch.Reset blocked after normal End delivery failed")
+	}
+	require.Nil(t, d.ctr)
+	require.Nil(t, d.cleanupSpool)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	select {
+	case <-fullReg.Done():
+	default:
+		t.Fatal("fallback abort did not close Done for full receiver")
+	}
+	require.ErrorIs(t, fullReg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+	select {
+	case <-healthyReg.Done():
+	default:
+		t.Fatal("End did not close Done for healthy receiver")
+	}
+
+	staleSignal := <-fullReg.Ch2
+	got, info := staleSignal.Action()
+	require.Nil(t, got)
+	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+
+	staleSignal = <-healthyReg.Ch2
+	got, info = staleSignal.Action()
+	require.Nil(t, got)
+	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+
+	terminalSignal := <-healthyReg.Ch2
+	require.Equal(t, process.EventEnd, terminalSignal.EventType)
+}
+
 func TestDispatchResetEndPreservesQueuedBroadcastBatchUntilDeferredCleanup(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {

@@ -79,25 +79,30 @@ func (connector *Connector) Release() {
 
 func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	terminalSignal := process.BuildCleanupSignal(pipelineFailed, err)
+	terminalDelivered := connector.sendTerminalWithLog(proc, terminalSignal, pipelineFailed, err)
 
 	if connector.ctr.sp != nil {
 		sp := connector.ctr.sp
-		connector.sendTerminalWithLog(proc, terminalSignal, pipelineFailed, err)
 
-		if terminalSignal.EventType == process.EventEnd {
+		if terminalSignal.EventType == process.EventEnd && terminalDelivered {
 			connector.cleanupSpool = sp
 		} else {
+			if terminalSignal.EventType == process.EventEnd && !terminalDelivered {
+				fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
+				connector.sendTerminalWithLog(proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
+			}
 			sp.Abort()
 			connector.cleanupSpool = nil
 		}
 		connector.ctr.sp = nil
-	} else {
-		connector.sendTerminalWithLog(proc, terminalSignal, pipelineFailed, err)
+	} else if terminalSignal.EventType == process.EventEnd && !terminalDelivered {
+		fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
+		connector.sendTerminalWithLog(proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
 	}
 }
 
 // sendTerminalWithLog sends a terminal signal to Reg, logging a warning on failure.
-func (connector *Connector) sendTerminalWithLog(proc *process.Process, signal process.PipelineSignal, pipelineFailed bool, err error) {
+func (connector *Connector) sendTerminalWithLog(proc *process.Process, signal process.PipelineSignal, pipelineFailed bool, err error) bool {
 	if connector.Reg == nil {
 		process.WarnPipelineCleanupf(
 			proc,
@@ -106,10 +111,10 @@ func (connector *Connector) sendTerminalWithLog(proc *process.Process, signal pr
 			signal.EventType.String(),
 			pipelineFailed,
 			err)
-		return
+		return false
 	}
 	if process.SendPipelineSignalWithTimeout(connector.Reg, signal, process.PipelineSignalSendTimeout) {
-		return
+		return true
 	}
 	chLen, chCap := process.WaitRegisterChannelState(connector.Reg)
 	process.WarnPipelineCleanupf(
@@ -122,6 +127,7 @@ func (connector *Connector) sendTerminalWithLog(proc *process.Process, signal pr
 		chCap,
 		pipelineFailed,
 		err)
+	return false
 }
 
 // CleanupDeferredSpool reclaims spool cache memory after the paired Merge

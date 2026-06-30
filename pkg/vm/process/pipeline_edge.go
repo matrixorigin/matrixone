@@ -30,7 +30,7 @@ import (
 // Invariants:
 //  1. Terminal state (End/Error/Abort) is a protocol event, not an implicit nil batch.
 //  2. End is counted per expected sender; Error and Abort are fatal first-wins
-//     terminals.
+//     terminals that consume the edge's remaining sender count.
 //  3. Done() provides an observable whole-edge terminal signal.
 //  4. Every send/receive is cancelable via context, or bounded by the edge
 //     timeout configuration.
@@ -54,7 +54,8 @@ type PipelineEdge struct {
 
 	fatalSignal    PipelineSignal
 	fatalTerminal  bool
-	fatalDelivered bool
+	fatalDelivered int
+	fatalRemaining int
 	endDelivered   int
 	doneClosed     bool
 	abortClosed    bool
@@ -128,7 +129,8 @@ func (e *PipelineEdge) resetTerminalStateLocked() {
 	e.terminalErr = nil
 	e.fatalSignal = PipelineSignal{}
 	e.fatalTerminal = false
-	e.fatalDelivered = false
+	e.fatalDelivered = 0
+	e.fatalRemaining = 0
 	e.endDelivered = 0
 	e.doneClosed = false
 	e.abortClosed = false
@@ -286,6 +288,10 @@ func (e *PipelineEdge) recordFatalTerminalLocked(signal PipelineSignal) Pipeline
 		e.fatalTerminal = true
 		e.fatalSignal = signal
 		e.terminalErr = signal.TerminalErr()
+		e.fatalRemaining = e.expectedEndCountLocked() - e.endDelivered
+		if e.fatalRemaining <= 0 {
+			e.fatalRemaining = 1
+		}
 		e.closeDoneLocked()
 		if signal.EventType == EventAbort {
 			e.closeAbortLocked()
@@ -323,16 +329,18 @@ func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
 		return false
 	}
 	signal = e.recordFatalTerminalLocked(signal)
-	if e.fatalDelivered {
+	if e.fatalDelivered >= e.fatalRemaining {
 		return false
 	}
-	select {
-	case e.Ch2 <- signal:
-		e.fatalDelivered = true
-		return true
-	default:
-		return false
+	for e.fatalDelivered < e.fatalRemaining {
+		select {
+		case e.Ch2 <- signal:
+			e.fatalDelivered++
+		default:
+			return false
+		}
 	}
+	return true
 }
 
 func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal PipelineSignal) bool {
@@ -367,16 +375,18 @@ func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal Pipel
 		return false
 	}
 	signal = e.recordFatalTerminalLocked(signal)
-	if e.fatalDelivered {
+	if e.fatalDelivered >= e.fatalRemaining {
 		return false
 	}
-	select {
-	case e.Ch2 <- signal:
-		e.fatalDelivered = true
-		return true
-	case <-ctx.Done():
-		return false
+	for e.fatalDelivered < e.fatalRemaining {
+		select {
+		case e.Ch2 <- signal:
+			e.fatalDelivered++
+		case <-ctx.Done():
+			return false
+		}
 	}
+	return true
 }
 
 func (e *PipelineEdge) sendSignal(ctx context.Context, signal PipelineSignal) bool {

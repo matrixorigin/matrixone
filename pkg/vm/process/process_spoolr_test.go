@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
@@ -89,6 +90,18 @@ func TestPipelineSignalReceiverSharedEdgeContinuesAfterFirstEndSignal(t *testing
 	}
 	if !receiver.WaitingEndWithTimeout(time.Second) {
 		t.Fatal("receiver did not complete after the second shared End signal")
+	}
+}
+
+func TestPipelineSignalReceiverSharedFatalCompletesRemainingCount(t *testing.T) {
+	reg := NewPipelineEdge(2, 2)
+	if !reg.SendError(moerr.NewInternalErrorNoCtx("shared fatal")) {
+		t.Fatal("failed to send shared fatal")
+	}
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{reg})
+	if !receiver.WaitingEndWithTimeout(time.Second) {
+		t.Fatal("shared fatal did not complete the receiver terminal count")
 	}
 }
 

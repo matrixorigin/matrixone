@@ -174,6 +174,73 @@ func TestPipelineEdgeSharedEndDeliversOneTerminalPerSender(t *testing.T) {
 	}
 }
 
+func TestPipelineEdgeSharedFatalConsumesRemainingSenderCount(t *testing.T) {
+	edge := NewPipelineEdge(2, 2)
+	testErr := moerr.NewInternalErrorNoCtx("shared fatal")
+
+	if !edge.SendError(testErr) {
+		t.Fatal("SendError failed")
+	}
+	select {
+	case <-edge.Done():
+	default:
+		t.Fatal("Done was not closed after shared fatal")
+	}
+	if edge.Err() != testErr {
+		t.Fatal("Err did not preserve the first fatal error")
+	}
+	if edge.SendError(moerr.NewInternalErrorNoCtx("second fatal")) {
+		t.Fatal("second fatal should be a no-op after all fatal signals are delivered")
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case signal := <-edge.Ch2:
+			if signal.EventType != EventError {
+				t.Fatalf("signal %d = %s, want Error", i, signal.EventType)
+			}
+			if signal.TerminalErr() != testErr {
+				t.Fatalf("signal %d did not preserve the first fatal error", i)
+			}
+		default:
+			t.Fatalf("missing fatal signal %d", i)
+		}
+	}
+}
+
+func TestPipelineEdgeSharedFatalRetryAfterPartialDelivery(t *testing.T) {
+	edge := NewPipelineEdge(1, 2)
+	testErr := moerr.NewInternalErrorNoCtx("shared fatal")
+
+	if edge.TrySendError(testErr) {
+		t.Fatal("TrySendError should report false when only part of the shared fatal count was delivered")
+	}
+	select {
+	case <-edge.Done():
+	default:
+		t.Fatal("Done was not closed after partial fatal delivery")
+	}
+
+	signal := <-edge.Ch2
+	if signal.EventType != EventError {
+		t.Fatalf("first signal = %s, want Error", signal.EventType)
+	}
+	if signal.TerminalErr() != testErr {
+		t.Fatal("first signal did not preserve fatal error")
+	}
+
+	if !SendPipelineSignalWithTimeout(edge, NewAbortSignal(moerr.NewInternalErrorNoCtx("second fatal")), time.Second) {
+		t.Fatal("fatal retry did not deliver the remaining shared fatal signal")
+	}
+	signal = <-edge.Ch2
+	if signal.EventType != EventError {
+		t.Fatalf("retry signal = %s, want original Error", signal.EventType)
+	}
+	if signal.TerminalErr() != testErr {
+		t.Fatal("retry signal did not preserve the first fatal error")
+	}
+}
+
 // TestPipelineEdgeAsWaitRegister verifies that WaitRegister is the same edge
 // object, not a second state holder.
 func TestPipelineEdgeAsWaitRegister(t *testing.T) {
@@ -572,9 +639,9 @@ func TestPipelineEdgeResetForReuseClearsTerminalState(t *testing.T) {
 		t.Fatal("Done was not closed before reset")
 	}
 
-	edge.ResetForReuse(2, 3)
-	if cap(edge.Ch2) != 2 {
-		t.Fatalf("channel cap after reset = %d, want 2", cap(edge.Ch2))
+	edge.ResetForReuse(3, 3)
+	if cap(edge.Ch2) != 3 {
+		t.Fatalf("channel cap after reset = %d, want 3", cap(edge.Ch2))
 	}
 	if edge.NilBatchCnt != 3 {
 		t.Fatalf("NilBatchCnt after reset = %d, want 3", edge.NilBatchCnt)

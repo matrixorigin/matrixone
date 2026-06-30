@@ -86,6 +86,64 @@ func TestConnectorResetAbortsSpoolWhenTerminalSignalCannotBeDelivered(t *testing
 	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
 }
 
+func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newConnectorSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	queryDone, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	conn := &Connector{Reg: reg}
+	conn.ctr.sp = sp
+
+	done := make(chan struct{})
+	go func() {
+		conn.Reset(nil, false, nil)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Connector.Reset blocked after normal End delivery failed")
+	}
+	require.Nil(t, conn.ctr.sp)
+	require.Nil(t, conn.cleanupSpool)
+	require.Equal(t, int64(0), mp.CurrNB())
+	select {
+	case <-reg.Done():
+	default:
+		t.Fatal("fallback abort did not close Done")
+	}
+	require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+
+	staleSignal := <-reg.Ch2
+	got, info := staleSignal.Action()
+	require.Nil(t, got)
+	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+}
+
 func TestConnectorResetEndPreservesQueuedSpoolBatchUntilDeferredCleanup(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {
