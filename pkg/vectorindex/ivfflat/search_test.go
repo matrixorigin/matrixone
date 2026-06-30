@@ -482,8 +482,8 @@ func TestIvfSearchIncludeModeConvertsRuntimePayloadBeforeRunSql(t *testing.T) {
 		SearchCursor: &vectorindex.IvfSearchCursor{
 			RankedCentroidIDs: []int64{101},
 		},
-		SearchRoundLimit: 3,
-		BloomFilter:      rawPayload,
+		SearchRoundLimit:  3,
+		RuntimeFilterData: rawPayload,
 	}
 
 	idx := &IvfflatSearchIndex[float32]{Version: 7}

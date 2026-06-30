@@ -258,8 +258,8 @@ type RuntimeConfig struct {
 
 	// Optional raw runtime-filter payload from the build side. IVF search turns
 	// this into either an exact-pk filter or a membership filter for entries.
-	BloomFilter []byte
-	NThreads    uint // Brute Force Index
+	RuntimeFilterData []byte
+	NThreads          uint // Brute Force Index
 
 	// Query-scoped IVF search state. These fields must not be cached on the
 	// shared index object because every query can ask for different output

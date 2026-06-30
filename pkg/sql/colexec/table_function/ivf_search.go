@@ -66,8 +66,8 @@ type ivfSearchState struct {
 
 	// Raw runtime-filter payload from the hash build side (optional).
 	// IVF code converts it into an exact-pk filter or entries membership filter.
-	bloomFilter      []byte
-	indexReaderParam *plan.IndexReaderParam
+	runtimeFilterData []byte
+	indexReaderParam  *plan.IndexReaderParam
 }
 
 // stub function
@@ -103,7 +103,7 @@ func (u *ivfSearchState) reset(tf *TableFunction, proc *process.Process) {
 	u.includeNulls = nil
 	u.seenPK = nil
 	u.cursor = nil
-	// Note: bloomFilter is kept across resets as it's only set once during initialization
+	// Note: runtimeFilterData is kept across resets as it's only set once during initialization
 	// It will be cleared in free() method
 }
 
@@ -185,8 +185,8 @@ func (u *ivfSearchState) free(tf *TableFunction, proc *process.Process, pipeline
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
-	// Clear bloomFilter bytes to release memory
-	u.bloomFilter = nil
+	// Clear runtime-filter bytes to release memory
+	u.runtimeFilterData = nil
 	u.keys = nil
 	u.distances = nil
 	u.includeData = nil
@@ -195,12 +195,12 @@ func (u *ivfSearchState) free(tf *TableFunction, proc *process.Process, pipeline
 	u.seenPK = nil
 }
 
-// waitBloomFilterForTableFunction blocks until it receives a membership runtime
+// waitRuntimeFilterDataForTableFunction blocks until it receives a membership runtime
 // filter that matches tf.RuntimeFilterSpecs (if any). It is used when ivf_search
 // acts as probe side in a join and the build side produces a runtime filter.
 // We keep the raw serialized unique-join-key payload here and let IVF search
 // decide whether to build an exact-pk predicate or an entries membership filter.
-func waitBloomFilterForTableFunction(tf *TableFunction, proc *process.Process) ([]byte, error) {
+func waitRuntimeFilterDataForTableFunction(tf *TableFunction, proc *process.Process) ([]byte, error) {
 	if len(tf.RuntimeFilterSpecs) == 0 {
 		return nil, nil
 	}
@@ -267,10 +267,10 @@ func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
 
 	if !u.inited {
-		if bf, err := waitBloomFilterForTableFunction(tf, proc); err != nil {
+		if runtimeFilterData, err := waitRuntimeFilterDataForTableFunction(tf, proc); err != nil {
 			return err
 		} else {
-			u.bloomFilter = bf
+			u.runtimeFilterData = runtimeFilterData
 		}
 
 		if len(tf.Params) > 0 {
@@ -548,7 +548,7 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 		Probe:                   uint(u.tblcfg.Nprobe),
 		OrigFuncName:            u.tblcfg.OrigFuncName,
 		BackgroundQueries:       make([]*plan.Query, 1),
-		BloomFilter:             u.bloomFilter,
+		RuntimeFilterData:       u.runtimeFilterData,
 		RequestedIncludeColumns: requestedIncludeColumns,
 		PushdownFilterSQL:       pushdownFilterSQL,
 		IncludeResult:           includeResult,

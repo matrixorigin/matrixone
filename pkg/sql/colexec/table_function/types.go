@@ -38,7 +38,7 @@ type TableFunction struct {
 	Limit    *plan.Expr
 	IsSingle bool
 
-	// probe side runtime filter specs (including BloomFilter)
+	// probe side runtime filter specs
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
 	IndexReaderParam *plan.IndexReaderParam
