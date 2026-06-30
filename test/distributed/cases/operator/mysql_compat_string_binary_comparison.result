@@ -1,0 +1,62 @@
+drop database if exists mysql_compat_string_binary_cmp;
+create database mysql_compat_string_binary_cmp;
+use mysql_compat_string_binary_cmp;
+select binary 'a' = 'A' as bin_left_case_eq,
+'a' = binary 'A' as bin_right_case_eq,
+binary 'a' < binary 'b' as bin_lt,
+binary 'a ' = binary 'a' as bin_trailing_eq;
+bin_left_case_eq    bin_right_case_eq    bin_lt    bin_trailing_eq
+0    0    1    0
+select 'a ' like 'a' as like_no_space,
+'a ' like 'a ' as like_space,
+'abc' regexp '^a' as regexp_prefix,
+12345 regexp '^123' as regexp_numeric_prefix,
+null regexp 'a' as regexp_null_left,
+'abc' not regexp null as not_regexp_null_pat;
+like_no_space    like_space    regexp_prefix    regexp_numeric_prefix    regexp_null_left    not_regexp_null_pat
+0    1    1    1    null    null
+drop table if exists t_string_binary_cmp;
+create table t_string_binary_cmp (
+id int primary key,
+vc varchar(8),
+vb varbinary(8),
+b binary(4)
+);
+insert into t_string_binary_cmp values
+(1, 'a', 'a', 'a'),
+(2, 'a ', 'a ', 'a '),
+(3, 'A', 'A', 'A'),
+(4, 'abc', 'abc', 'abc');
+select id, hex(vc) as vc_hex, hex(vb) as vb_hex, hex(b) as b_hex
+from t_string_binary_cmp
+order by id;
+id    vc_hex    vb_hex    b_hex
+1    61    61    61000000
+2    6120    6120    61200000
+3    41    41    41000000
+4    616263    616263    61626300
+select id,
+binary vc = 'a' as bin_vc_eq_a,
+vc like 'a ' as vc_like_a_space,
+vc like binary 'a%' as vc_like_binary_prefix,
+vb = 'a' as vb_eq_char_a,
+b like binary 'a%' as b_like_binary_prefix
+from t_string_binary_cmp
+order by id;
+id    bin_vc_eq_a    vc_like_a_space    vc_like_binary_prefix    vb_eq_char_a    b_like_binary_prefix
+1    1    0    1    1    1
+2    0    1    1    0    1
+3    0    0    0    0    0
+4    0    0    1    0    1
+select id,
+vc regexp '^[aA]' as vc_regexp_prefix,
+vc rlike 'c$' as vc_rlike_suffix,
+id regexp '^[12]$' as id_regexp_small_set
+from t_string_binary_cmp
+order by id;
+id    vc_regexp_prefix    vc_rlike_suffix    id_regexp_small_set
+1    1    0    1
+2    1    0    1
+3    1    0    0
+4    1    1    0
+drop database mysql_compat_string_binary_cmp;
