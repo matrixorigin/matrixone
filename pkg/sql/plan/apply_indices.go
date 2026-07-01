@@ -1265,8 +1265,79 @@ func (builder *QueryBuilder) replaceLeadingFilter(idxDef *IndexDef, filterList [
 	return builder.replaceEqualCondition(idxDef, filterList, leadingPos, idxTag, idxTableDef)
 }
 
-func needsIndexOnlyResidualLeadingFilters(idxDef *IndexDef) bool {
-	return indexTableLookupSerialFunc(idxDef) == "serial_full"
+func needsIndexOnlyResidualLeadingFilters(idxDef *IndexDef, filterList []*plan.Expr, leadingPos []int32) bool {
+	if indexTableLookupSerialFunc(idxDef) != "serial_full" {
+		return false
+	}
+	for _, pos := range leadingPos {
+		if pos < 0 || int(pos) >= len(filterList) {
+			continue
+		}
+		if indexFilterMayCompareNullAtRuntime(filterList[pos]) {
+			return true
+		}
+	}
+	return false
+}
+
+func indexFilterMayCompareNullAtRuntime(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "=":
+		return len(fn.Args) > 1 && (runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1]))
+	case "in":
+		return len(fn.Args) > 1 && runtimeConstMayBeNull(fn.Args[1])
+	case "between":
+		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
+	case ">", ">=", "<", "<=":
+		return len(fn.Args) > 1 && (runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1]))
+	case "in_range":
+		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
+	case "or":
+		for _, arg := range fn.Args {
+			if indexFilterMayCompareNullAtRuntime(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func runtimeConstMayBeNull(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V:
+		return true
+	case *plan.Expr_Lit:
+		return exprImpl.Lit != nil && exprImpl.Lit.GetIsnull()
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return false
+		}
+		for _, item := range exprImpl.List.List {
+			if runtimeConstMayBeNull(item) {
+				return true
+			}
+		}
+	case *plan.Expr_F:
+		if exprImpl.F == nil {
+			return false
+		}
+		for _, arg := range exprImpl.F.Args {
+			if runtimeConstMayBeNull(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
@@ -1373,7 +1444,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	newLeadingFilter := builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, leadingEqualCond, idxTag, idxTableDef)
 	newFilterList := make([]*plan.Expr, 0, len(node.FilterList))
 	newFilterList = append(newFilterList, newLeadingFilter)
-	if needsIndexOnlyResidualLeadingFilters(idxDef) {
+	if needsIndexOnlyResidualLeadingFilters(idxDef, node.FilterList, leadingPos) {
 		// serial_full preserves NULL as key bytes. Keep the original SQL
 		// predicate as a residual recheck so prepared NULL values still follow
 		// SQL three-valued logic on covering index-only scans.

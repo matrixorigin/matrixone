@@ -589,7 +589,7 @@ explain select * from t5 where val >= 100 and val <= 50;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t5.idx_val  𝄀
-        Filter Cond: (__mo_index_idx_col >= ':d'), (serial_extract(__mo_index_idx_col, 0, INT)) >= 100), (serial_extract(__mo_index_idx_col, 0, INT)) <= 50)
+        Filter Cond: (__mo_index_idx_col >= ':d'), (serial_extract(__mo_index_idx_col, 0, INT)) <= 50)
 select * from t5 where val >= 100 and val <= 50;
 ➤ id[4,32,0]  ¦  val[4,32,0]
 select * from t5 where val > 30 and val < 10;
@@ -694,7 +694,7 @@ explain select * from t7 where d >= '2024-03-01' and d <= '2024-09-30';
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t7.idx_d  𝄀
-        Filter Cond: (__mo_index_idx_col >= 'AF�'), (serial_extract(__mo_index_idx_col, 0, DATE)) >= 2024-03-01), (serial_extract(__mo_index_idx_col, 0, DATE)) <= 2024-09-30)
+        Filter Cond: (__mo_index_idx_col >= 'AF�'), (serial_extract(__mo_index_idx_col, 0, DATE)) <= 2024-09-30)
 select * from t7 where d >= '2024-03-01' and d <= '2024-09-30' order by id;
 ➤ id[4,32,0]  ¦  d[91,64,0]  𝄀
 2  ¦  2024-03-15  𝄀
@@ -813,7 +813,7 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Index Table Scan on t9.idx_ret  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'active')
+              Filter Cond: prefix_eq(__mo_index_idx_col)
 explain select count(*) from t9 where status in ('active', 'expiring');
 -- @regex("prefix_in", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
@@ -821,7 +821,7 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Index Table Scan on t9.idx_ret  𝄀
-              Filter Cond: prefix_in(__mo_index_idx_col), serial_extract(__mo_index_idx_col, 0, VARCHAR)) in ([active expiring])
+              Filter Cond: prefix_in(__mo_index_idx_col)
 select count(*) as count_eq from t9 where status = 'active';
 ➤ count_eq[-5,64,0]  𝄀
 2
