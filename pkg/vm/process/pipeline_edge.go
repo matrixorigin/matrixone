@@ -403,6 +403,9 @@ func (e *PipelineEdge) sendSignal(ctx context.Context, signal PipelineSignal) bo
 	if closedForData {
 		return false
 	}
+	if ctx == nil {
+		ctx = context.TODO()
+	}
 	if ctx.Err() != nil {
 		return false
 	}

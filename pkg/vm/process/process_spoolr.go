@@ -37,6 +37,12 @@ var (
 	// ErrPipelineEndSignalDeliveryFailed marks a successful cleanup path that
 	// could not enqueue its normal End signal and had to fall back to abort.
 	ErrPipelineEndSignalDeliveryFailed = moerr.NewInternalErrorNoCtx("pipeline end signal delivery failed")
+
+	// ErrPipelineTerminalWithoutCause marks a failure/abort terminal event whose
+	// caller did not provide the original cause. Error and Abort terminal events
+	// must always carry a non-nil error so receivers cannot confuse failure with
+	// graceful End.
+	ErrPipelineTerminalWithoutCause = moerr.NewInternalErrorNoCtx("pipeline terminal event missing cause")
 )
 
 type PipelineActionType uint8
@@ -139,6 +145,9 @@ func NewEndSignal() PipelineSignal {
 // NewErrorSignal returns a PipelineSignal carrying an explicit EventError.
 // It is idempotent: receivers must treat multiple Error signals safely.
 func NewErrorSignal(err error) PipelineSignal {
+	if err == nil {
+		err = ErrPipelineTerminalWithoutCause
+	}
 	return PipelineSignal{
 		typ:         GetDirectly,
 		EventType:   EventError,
@@ -149,6 +158,9 @@ func NewErrorSignal(err error) PipelineSignal {
 // NewAbortSignal returns a PipelineSignal carrying an explicit EventAbort.
 // It is idempotent: receivers must treat multiple Abort signals safely.
 func NewAbortSignal(err error) PipelineSignal {
+	if err == nil {
+		err = ErrPipelineTerminalWithoutCause
+	}
 	return PipelineSignal{
 		typ:         GetDirectly,
 		EventType:   EventAbort,
@@ -156,11 +168,21 @@ func NewAbortSignal(err error) PipelineSignal {
 	}
 }
 
+func NormalizePipelineCleanupError(pipelineFailed bool, err error) error {
+	if err != nil {
+		return err
+	}
+	if pipelineFailed {
+		return ErrPipelineTerminalWithoutCause
+	}
+	return nil
+}
+
 // BuildCleanupSignal returns the appropriate terminal signal for pipeline cleanup.
 // EventError is used when pipelineFailed=true or err!=nil; EventEnd otherwise.
 func BuildCleanupSignal(pipelineFailed bool, err error) PipelineSignal {
-	if pipelineFailed || err != nil {
-		return NewErrorSignal(err)
+	if cleanupErr := NormalizePipelineCleanupError(pipelineFailed, err); cleanupErr != nil {
+		return NewErrorSignal(cleanupErr)
 	}
 	return NewEndSignal()
 }

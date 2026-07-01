@@ -176,6 +176,32 @@ func TestDispatchResetDoesNotBlockWhenRemoteErrChannelIsFull(t *testing.T) {
 	}
 }
 
+func TestDispatchResetFailedNilErrorNotifiesRemoteWithCause(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	errCh := make(chan error, 1)
+	d := &Dispatch{
+		ctr: &container{
+			isRemote: true,
+			remoteReceivers: []*process.WrapCs{
+				{Err: errCh, Uid: uid, MsgId: 1},
+			},
+		},
+	}
+
+	d.Reset(nil, true, nil)
+
+	select {
+	case got := <-errCh:
+		require.ErrorIs(t, got, process.ErrPipelineTerminalWithoutCause)
+	default:
+		t.Fatal("Dispatch.Reset did not notify remote receiver")
+	}
+}
+
 func TestDispatchResetSendsHealthyLocalRegWhenEarlierRegIsFull(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 10 * time.Millisecond

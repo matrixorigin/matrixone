@@ -144,6 +144,22 @@ func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing
 	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
 }
 
+func TestConnectorResetFailedNilErrorSendsTypedErrorWithCause(t *testing.T) {
+	reg := process.NewPipelineEdge(1, 0)
+	conn := &Connector{Reg: reg}
+
+	conn.Reset(nil, true, nil)
+
+	require.ErrorIs(t, reg.Err(), process.ErrPipelineTerminalWithoutCause)
+	select {
+	case signal := <-reg.Ch2:
+		require.Equal(t, process.EventError, signal.EventType)
+		require.ErrorIs(t, signal.TerminalErr(), process.ErrPipelineTerminalWithoutCause)
+	default:
+		t.Fatal("Connector.Reset did not send a typed failure terminal")
+	}
+}
+
 func TestConnectorResetEndPreservesQueuedSpoolBatchUntilDeferredCleanup(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {

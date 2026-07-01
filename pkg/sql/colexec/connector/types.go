@@ -79,7 +79,8 @@ func (connector *Connector) Release() {
 
 func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	terminalSignal := process.BuildCleanupSignal(pipelineFailed, err)
-	terminalDelivered := connector.sendTerminalWithLog(proc, terminalSignal, pipelineFailed, err)
+	terminalErr := terminalSignal.TerminalErr()
+	terminalDelivered := connector.sendTerminalWithLog(proc, terminalSignal, pipelineFailed, terminalErr)
 
 	if connector.ctr.sp != nil {
 		sp := connector.ctr.sp

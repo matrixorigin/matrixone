@@ -212,6 +212,7 @@ func sendAbortSignalsToFailedLocalRegs(proc *process.Process, localRegs []*proce
 
 func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	terminalSignal := process.BuildCleanupSignal(pipelineFailed, err)
+	terminalErr := terminalSignal.TerminalErr()
 
 	if dispatch.ctr != nil {
 		if dispatch.ctr.isRemote {
@@ -222,11 +223,11 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 						"dispatch_cleanup_remote_receiver_nil",
 						"dispatch cleanup skipped remote receiver error notification because receiver is nil: pipeline_failed=%t err=%v",
 						pipelineFailed,
-						err)
+						terminalErr)
 					continue
 				}
 				select {
-				case r.Err <- err:
+				case r.Err <- terminalErr:
 				default:
 					process.WarnPipelineCleanupf(
 						proc,
@@ -235,7 +236,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 						r.Uid.String(),
 						r.MsgId,
 						pipelineFailed,
-						err)
+						terminalErr)
 				}
 			}
 
@@ -251,7 +252,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		sp := dispatch.ctr.sp
 
 		// Send typed terminal signals to all local receivers.
-		terminalDelivered := sendTerminalSignalsToLocalRegs(proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, err)
+		terminalDelivered := sendTerminalSignalsToLocalRegs(proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, terminalErr)
 
 		if terminalSignal.EventType == process.EventEnd && allTerminalSignalsDelivered(terminalDelivered) {
 			dispatch.cleanupSpool = sp
@@ -266,7 +267,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		dispatch.ctr.sp = nil
 	} else {
 		// No spool: send typed terminal signals directly.
-		terminalDelivered := sendTerminalSignalsToLocalRegs(proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, err)
+		terminalDelivered := sendTerminalSignalsToLocalRegs(proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, terminalErr)
 		if terminalSignal.EventType == process.EventEnd && !allTerminalSignalsDelivered(terminalDelivered) {
 			fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
 			sendAbortSignalsToFailedLocalRegs(proc, dispatch.LocalRegs, terminalDelivered, fallbackErr)

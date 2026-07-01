@@ -105,6 +105,22 @@ func TestPipelineSignalReceiverSharedFatalCompletesRemainingCount(t *testing.T) 
 	}
 }
 
+func TestPipelineSignalReceiverFailedCleanupWithoutCauseReturnsError(t *testing.T) {
+	reg := NewPipelineEdge(1, 1)
+	if !SendPipelineSignalWithTimeout(reg, BuildCleanupSignal(true, nil), time.Second) {
+		t.Fatal("failed to send cleanup failure signal")
+	}
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{reg})
+	got, err := receiver.GetNextBatch(nil)
+	if got != nil {
+		t.Fatal("failure terminal returned a batch")
+	}
+	if err != ErrPipelineTerminalWithoutCause {
+		t.Fatal("failure terminal without cause did not return ErrPipelineTerminalWithoutCause")
+	}
+}
+
 func TestSendPipelineSignalWithTimeoutReturnsWhenChannelIsFull(t *testing.T) {
 	reg := &WaitRegister{Ch2: make(chan PipelineSignal, 1)}
 	reg.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)

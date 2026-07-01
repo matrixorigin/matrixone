@@ -107,6 +107,14 @@ func TestPipelineEdgeSendDataCancelsWithContext(t *testing.T) {
 	}
 }
 
+func TestPipelineEdgeSendDataNilContextDoesNotPanic(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+
+	if !edge.SendDataDirect(nil, nil, nil) {
+		t.Fatal("SendDataDirect with nil context should use a background cleanup context")
+	}
+}
+
 // TestPipelineEdgeTrySendEndOnFullChannel verifies that TrySendEnd
 // succeeds when the channel has buffer space.
 func TestPipelineEdgeTrySendEndOnFullChannel(t *testing.T) {
@@ -380,6 +388,37 @@ func TestNewSignalConstructors(t *testing.T) {
 	}
 	if abortSignal.TerminalErr() != testErr {
 		t.Fatal("NewAbortSignal TerminalErr mismatch")
+	}
+}
+
+func TestFailureTerminalWithoutCauseUsesSentinel(t *testing.T) {
+	errSignal := NewErrorSignal(nil)
+	if errSignal.EventType != EventError {
+		t.Fatalf("NewErrorSignal(nil) EventType: got %s, want EventError", errSignal.EventType)
+	}
+	if !moerr.IsMoErrCode(errSignal.TerminalErr(), moerr.ErrInternal) {
+		t.Fatal("NewErrorSignal(nil) did not attach an internal error cause")
+	}
+	if errSignal.TerminalErr() != ErrPipelineTerminalWithoutCause {
+		t.Fatal("NewErrorSignal(nil) did not use ErrPipelineTerminalWithoutCause")
+	}
+
+	abortSignal := NewAbortSignal(nil)
+	if abortSignal.EventType != EventAbort {
+		t.Fatalf("NewAbortSignal(nil) EventType: got %s, want EventAbort", abortSignal.EventType)
+	}
+	if abortSignal.TerminalErr() != ErrPipelineTerminalWithoutCause {
+		t.Fatal("NewAbortSignal(nil) did not use ErrPipelineTerminalWithoutCause")
+	}
+}
+
+func TestBuildCleanupSignalFailedNilErrorUsesSentinel(t *testing.T) {
+	signal := BuildCleanupSignal(true, nil)
+	if signal.EventType != EventError {
+		t.Fatalf("BuildCleanupSignal(true, nil) EventType: got %s, want EventError", signal.EventType)
+	}
+	if signal.TerminalErr() != ErrPipelineTerminalWithoutCause {
+		t.Fatal("BuildCleanupSignal(true, nil) did not attach ErrPipelineTerminalWithoutCause")
 	}
 }
 
