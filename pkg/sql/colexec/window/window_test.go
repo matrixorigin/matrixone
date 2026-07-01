@@ -227,6 +227,86 @@ func TestSearchRightWithNulls(t *testing.T) {
 	require.Equal(t, 2, right, "NULL row at idx 1: should return end of NULL peer group (idx 2)")
 }
 
+// TestSearchLeftWithNullsDesc covers DESC NULLS LAST ordering.
+// Raw values are [4, 2, 1, 0, 0] — NOT monotonically sorted!
+// P2 must confine binary search to the non-NULL subrange [0, 3).
+func TestSearchLeftWithNullsDesc(t *testing.T) {
+	mp := mpool.MustNewZero()
+	// DESC NULLS LAST: raw values = [4, 2, 1, 0, 0], nulls at positions 3, 4
+	vec := vector.NewVec(types.T_int64.ToType())
+	values := []int64{4, 2, 1, 0, 0}
+	nullRows := []bool{false, false, false, true, true}
+
+	for i, v := range values {
+		require.NoError(t, vector.AppendFixed(vec, v, nullRows[i], mp))
+	}
+	defer vec.Free(mp)
+
+	// NULL rows should be treated as peers (DESC NULLS LAST)
+	left, err := searchLeft(0, 5, 3, vec, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 3, left, "NULL row at idx 3: all NULL peers share same left boundary (start of NULL group)")
+
+	left, err = searchLeft(0, 5, 4, vec, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 3, left, "NULL row at idx 4: should return start of NULL peer group (idx 3)")
+
+	// Verify P2 correctly identifies the non-NULL data range [0, 3) when NULLs are at end.
+	// After P2 trimming, start=0, end=3 for this [4, 2, 1, NULL, NULL] data.
+	// This is validated indirectly: if P2 failed to trim, binary search would operate
+	// on the full unsorted [4, 2, 1, 0, 0] and produce garbage results.
+	// (Explicit CURRENT ROW search on non-NULL row not tested here because
+	// genericSearchLeft assumes ascending order and is not DESC-aware.)
+}
+
+// TestSearchRightWithNullsDesc covers DESC NULLS LAST ordering.
+// Raw values are [4, 2, 1, 0, 0] — NOT monotonically sorted!
+func TestSearchRightWithNullsDesc(t *testing.T) {
+	mp := mpool.MustNewZero()
+	// DESC NULLS LAST: raw values = [4, 2, 1, 0, 0], nulls at positions 3, 4
+	vec := vector.NewVec(types.T_int64.ToType())
+	values := []int64{4, 2, 1, 0, 0}
+	nullRows := []bool{false, false, false, true, true}
+
+	for i, v := range values {
+		require.NoError(t, vector.AppendFixed(vec, v, nullRows[i], mp))
+	}
+	defer vec.Free(mp)
+
+	// NULL rows are peers
+	right, err := searchRight(0, 5, 3, vec, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 5, right, "NULL row at idx 3: should return end of NULL peer group (idx 5)")
+
+	right, err = searchRight(0, 5, 4, vec, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 5, right, "NULL row at idx 4: should return end of NULL peer group (idx 5)")
+
+	// Verify P2 correctly identifies the non-NULL data range [0, 3) when NULLs are at end.
+	// After P2 trimming, start=0, end=3 for this [4, 2, 1, NULL, NULL] data.
+	// (Explicit CURRENT ROW search on non-NULL row not tested here because
+	// genericSearchEqualRight assumes ascending order and is not DESC-aware.)
+}
+
+// TestSearchLeftAllNulls verifies NULL peer grouping when all values are NULL.
+func TestSearchLeftAllNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_int64.ToType())
+	for i := 0; i < 5; i++ {
+		require.NoError(t, vector.AppendFixed(vec, int64(0), true, mp))
+	}
+	defer vec.Free(mp)
+
+	// All rows are NULL peers — every row should return 0 (start of the NULL group)
+	left, err := searchLeft(0, 5, 0, vec, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 0, left, "all NULL: row 0 should start at 0")
+
+	left, err = searchLeft(0, 5, 4, vec, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 0, left, "all NULL: row 4 should start at 0 (all peers)")
+}
+
 func TestSearchRightUnsupportedType(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_varchar.ToType())

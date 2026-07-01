@@ -1189,12 +1189,6 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 	default:
 		return left, moerr.NewInternalErrorNoCtxf("unsupported type %v for RANGE frame in window function", vec.GetType().Oid)
 	}
-	// If the search landed on a NULL row (raw value coincidence), skip past all NULLs.
-	// NULLs are contiguous at one end of the sort order, so advancing past them
-	// reaches the first non-NULL matching value.
-	for left < end && vec.GetNulls().Contains(uint64(left)) {
-		left++
-	}
 	return left, nil
 }
 
@@ -1555,11 +1549,8 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 	default:
 		return right, moerr.NewInternalErrorNoCtxf("unsupported type %v for RANGE frame in window function", vec.GetType().Oid)
 	}
-	// If the search landed on a NULL row (raw value coincidence), retreat before all NULLs.
-	// NULLs are contiguous, so retreating past them reaches the last non-NULL matching value.
-	for right >= start && right < end && vec.GetNulls().Contains(uint64(right)) {
-		right--
-	}
+	// genericSearchRight returns high in [start-1, end-1]. When all values > target,
+	// high = start-1, so right+1 = start (correct exclusive upper bound).
 	return right + 1, nil
 }
 
