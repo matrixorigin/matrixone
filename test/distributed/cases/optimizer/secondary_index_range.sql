@@ -281,6 +281,13 @@ select count(*) as count_range from t9 where status >= 'active' and status <= 'e
 select count(*) as count_nullsafe from t9 where status <=> 'active';
 -- @sortkey:0
 select id, status, status = 'active' as row_eq, status <=> 'active' as row_nullsafe from t9 order by id;
+prepare stmt_t9_status_in from 'select count(*) as count_prepare_in from t9 where status in (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+set @t9_active = 'active';
+set @t9_expired = 'expired';
+set @t9_expiring = 'expiring';
+set @t9_missing = 'missing';
+execute stmt_t9_status_in using @t9_active,@t9_expired,@t9_expiring,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing;
+deallocate prepare stmt_t9_status_in;
 
 update t9 set status = 'active', due = '2026-07-05 00:00:00.000004' where id = 'a2';
 select count(*) as count_after_update_into_active from t9 where status = 'active';

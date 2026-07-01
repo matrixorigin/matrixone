@@ -839,6 +839,15 @@ a1  ¦  active  ¦  1  ¦  1  𝄀
 a2  ¦  expired  ¦  0  ¦  0  𝄀
 a3  ¦  expiring  ¦  0  ¦  0  𝄀
 a4  ¦  active  ¦  1  ¦  1
+prepare stmt_t9_status_in from 'select count(*) as count_prepare_in from t9 where status in (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+set @t9_active = 'active';
+set @t9_expired = 'expired';
+set @t9_expiring = 'expiring';
+set @t9_missing = 'missing';
+execute stmt_t9_status_in using @t9_active,@t9_expired,@t9_expiring,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing;
+➤ count_prepare_in[-5,64,0]  𝄀
+4
+deallocate prepare stmt_t9_status_in;
 update t9 set status = 'active', due = '2026-07-05 00:00:00.000004' where id = 'a2';
 select count(*) as count_after_update_into_active from t9 where status = 'active';
 ➤ count_after_update_into_active[-5,64,0]  𝄀
