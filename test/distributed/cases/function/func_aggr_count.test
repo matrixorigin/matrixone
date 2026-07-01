@@ -265,3 +265,25 @@ SELECT COUNT(a) FROM t1;
 DELETE FROM t1 WHERE a%2=1;
 SELECT COUNT(*) FROM t1;
 DROP TABLE t1;
+
+# COUNT(DISTINCT expr1, expr2) — multi-column distinct count
+create table t_count_distinct_multi(g int, v int, txt varchar(8));
+insert into t_count_distinct_multi values
+  (null, null, 'n1'),
+  (null, 10,   'n2'),
+  (1,    null, 'a'),
+  (1,    5,    'b'),
+  (1,    5,    null),
+  (2,    null, null),
+  (2,    7,    'c'),
+  (3,    null, null);
+
+select count(distinct g, v) as cnt_g_v,
+       count(distinct g, txt) as cnt_g_txt
+from t_count_distinct_multi;
+
+select count(distinct g, v) as cnt_g_v
+from t_count_distinct_multi
+where g = 1;
+
+drop table t_count_distinct_multi;

@@ -104,15 +104,15 @@ func buildTestDataVecs(t *testing.T, mp *mpool.MPool) ([]types.Type, []*vector.V
 }
 
 func makeCountStarExec(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec {
-	return newCountStarExec(mp, AggIdOfCountStar, false, typ)
+	return newCountStarExec(mp, AggIdOfCountStar, false, []types.Type{typ})
 }
 
 func makeCountColumnExec(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec {
-	return newCountColumnExec(mp, AggIdOfCountColumn, false, typ)
+	return newCountColumnExec(mp, AggIdOfCountColumn, false, []types.Type{typ})
 }
 
 func makeCountColumnDistinctExec(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec {
-	return newCountColumnExec(mp, AggIdOfCountColumn, true, typ)
+	return newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{typ})
 }
 
 type expectedCount struct {
@@ -130,6 +130,137 @@ func TestCountColumnExec(t *testing.T) {
 
 func TestCountColumnDistinctExec(t *testing.T) {
 	testAggExec(t, makeCountColumnDistinctExec, expectedCount{count: 11, count20k: 36000})
+}
+
+// TestCountMultiColumnDistinct tests COUNT(DISTINCT col1, col2) with multiple args.
+// This verifies the fix for issue #25284.
+func TestCountMultiColumnDistinct(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	// Create two int64 columns.
+	// col1: [1, 1, 1, 2, 2, 3, null, null, 4, 4]
+	// col2: [null, 5, 5, null, 7, null, 10, null, null, 5]
+	// MySQL COUNT(DISTINCT col1, col2) should count distinct non-null (col1, col2) pairs.
+	// Non-null pairs: (1,5), (2,7), (4,5) — (1,5) appears twice, so distinct = 3
+	col1 := testutil.NewInt64Vector(10, types.T_int64.ToType(), mp, false, []bool{false, false, false, false, false, false, true, true, false, false}, []int64{1, 1, 1, 2, 2, 3, 0, 0, 4, 4})
+	col2 := testutil.NewInt64Vector(10, types.T_int64.ToType(), mp, false, []bool{true, false, false, true, false, true, false, true, true, false}, []int64{0, 5, 5, 0, 7, 0, 10, 0, 0, 5})
+	defer col1.Free(mp)
+	defer col2.Free(mp)
+
+	t.Run("multi-int64-distinct", func(t *testing.T) {
+		curNB := mp.CurrNB()
+		exec := newCountColumnExec(mp, AggIdOfCountColumn, true,
+			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+		require.NoError(t, exec.GroupGrow(1))
+
+		// Pass both column vectors.
+		require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []*vector.Vector{col1, col2}))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		vals := vector.MustFixedColNoTypeCheck[int64](results[0])
+		require.Equal(t, int64(3), vals[0], "COUNT(DISTINCT col1, col2) should be 3: (1,5), (2,7), (4,5)")
+
+		exec.Free()
+		for _, result := range results {
+			result.Free(mp)
+		}
+		require.Equal(t, curNB, mp.CurrNB())
+	})
+
+	t.Run("multi-int64-null-only", func(t *testing.T) {
+		// All rows have at least one NULL column → no row should be counted.
+		nullCol1 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, []bool{false, true, false}, []int64{1, 0, 2})
+		nullCol2 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, []bool{true, false, true}, []int64{0, 5, 0})
+		defer nullCol1.Free(mp)
+		defer nullCol2.Free(mp)
+
+		curNB := mp.CurrNB()
+		exec := newCountColumnExec(mp, AggIdOfCountColumn, true,
+			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+		require.NoError(t, exec.GroupGrow(1))
+
+		require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{nullCol1, nullCol2}))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		vals := vector.MustFixedColNoTypeCheck[int64](results[0])
+		require.Equal(t, int64(0), vals[0], "All rows have NULL, count should be 0")
+
+		exec.Free()
+		for _, result := range results {
+			result.Free(mp)
+		}
+		require.Equal(t, curNB, mp.CurrNB())
+	})
+
+	t.Run("multi-two-group-distinct", func(t *testing.T) {
+		curNB := mp.CurrNB()
+		exec := newCountColumnExec(mp, AggIdOfCountColumn, true,
+			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+		require.NoError(t, exec.GroupGrow(2))
+
+		// Group 1: rows 0-4, Group 2: rows 5-9
+		groups := []uint64{1, 1, 1, 1, 1, 2, 2, 2, 2, 2}
+		require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{col1, col2}))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		vals := vector.MustFixedColNoTypeCheck[int64](results[0])
+		require.Equal(t, 2, len(vals))
+		// Group 1 (first 5 rows): (1,null)→skip, (1,5), (1,5)→dup, (2,null)→skip, (2,7) → 2
+		require.Equal(t, int64(2), vals[0])
+		// Group 2 (last 5 rows): (3,null)→skip, (null,10)→skip, (null,null)→skip, (4,null)→skip, (4,5) → 1
+		require.Equal(t, int64(1), vals[1])
+
+		exec.Free()
+		for _, result := range results {
+			result.Free(mp)
+		}
+		require.Equal(t, curNB, mp.CurrNB())
+	})
+
+	t.Run("multi-merge-distinct", func(t *testing.T) {
+		curNB := mp.CurrNB()
+
+		colA1 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{1, 2, 3})
+		colA2 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{10, 20, 30})
+		colB1 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{3, 4, 5})
+		colB2 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{30, 40, 50})
+		defer colA1.Free(mp)
+		defer colA2.Free(mp)
+		defer colB1.Free(mp)
+		defer colB2.Free(mp)
+
+		execA := newCountColumnExec(mp, AggIdOfCountColumn, true,
+			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+		execA.GetOptResult().modifyChunkSize(1)
+		require.NoError(t, execA.GroupGrow(1))
+
+		execB := newCountColumnExec(mp, AggIdOfCountColumn, true,
+			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+		execB.GetOptResult().modifyChunkSize(1)
+		require.NoError(t, execB.GroupGrow(1))
+
+		require.NoError(t, execA.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{colA1, colA2}))
+		require.NoError(t, execB.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{colB1, colB2}))
+
+		execA.Merge(execB, 0, 0)
+		results, err := execA.Flush()
+		require.NoError(t, err)
+		vals := vector.MustFixedColNoTypeCheck[int64](results[0])
+		// (1,10),(2,20),(3,30) from A + (3,30) dup + (4,40),(5,50) from B = 5 distinct
+		require.Equal(t, int64(5), vals[0])
+
+		execA.Free()
+		execB.Free()
+		for _, result := range results {
+			result.Free(mp)
+		}
+		require.Equal(t, curNB, mp.CurrNB())
+	})
 }
 
 func testAggExec(t *testing.T,

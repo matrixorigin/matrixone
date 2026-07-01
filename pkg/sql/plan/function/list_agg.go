@@ -30,7 +30,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 1 {
+			if len(inputs) >= 1 {
 				if inputs[0].Oid == types.T_any {
 					return newCheckResultWithCast(0, []types.Type{types.T_int64.ToType()})
 				}

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -40,6 +41,20 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 
 		aggFunc := node.AggList[0].GetF()
 		if uint64(aggFunc.Func.Obj)&function.Distinct == 0 || (aggFunc.Func.ObjName != "count" && aggFunc.Func.ObjName != "sum") {
+			return
+		}
+
+		// Multi-arg COUNT(DISTINCT col1, col2, ...) cannot be optimized into a simple
+		// GROUP BY because the distinct combination spans multiple columns.
+		if len(aggFunc.Args) > 1 {
+			return
+		}
+
+		// COUNT(DISTINCT (col1, col2)) — tuple syntax creates a single T_tuple arg.
+		// Expand the tuple into multiple args so that the executor's multi-vector
+		// encoding path handles them correctly, then skip GROUP BY optimization.
+		if aggFunc.Args[0].Typ.Id == int32(types.T_tuple) {
+			aggFunc.Args = aggFunc.Args[0].GetList().List
 			return
 		}
 

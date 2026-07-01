@@ -193,7 +193,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 		vectors := []*vector.Vector{intVec}
 		b.StopTimer()
 		for i := 0; i < b.N; i++ {
-			exec := newCountColumnExec(mp, AggIdOfCountColumn, false, types.T_int64.ToType())
+			exec := newCountColumnExec(mp, AggIdOfCountColumn, false, []types.Type{types.T_int64.ToType()})
 			if err := exec.GroupGrow(groupSize); err != nil {
 				b.Fatal(err)
 			}
@@ -240,7 +240,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 	b.Run("CountColumn/BatchMerge", func(b *testing.B) {
 		b.ReportAllocs()
 		b.StopTimer()
-		source := newCountColumnExec(mp, AggIdOfCountColumn, false, types.T_int64.ToType())
+		source := newCountColumnExec(mp, AggIdOfCountColumn, false, []types.Type{types.T_int64.ToType()})
 		if err := source.GroupGrow(groupSize); err != nil {
 			b.Fatal(err)
 		}
@@ -255,7 +255,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 		}
 
 		for i := 0; i < b.N; i++ {
-			target := newCountColumnExec(mp, AggIdOfCountColumn, false, types.T_int64.ToType())
+			target := newCountColumnExec(mp, AggIdOfCountColumn, false, []types.Type{types.T_int64.ToType()})
 			if err := target.GroupGrow(groupSize); err != nil {
 				b.Fatal(err)
 			}
@@ -393,7 +393,7 @@ func TestLocalAccumulatorOverflow(t *testing.T) {
 	})
 
 	t.Run("CountColumn", func(t *testing.T) {
-		exec := newCountColumnExec(mp, AggIdOfCountColumn, false, types.T_int64.ToType())
+		exec := newCountColumnExec(mp, AggIdOfCountColumn, false, []types.Type{types.T_int64.ToType()})
 		if err := exec.GroupGrow(numGroups); err != nil {
 			t.Fatal(err)
 		}

@@ -146,6 +146,11 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		}
 	}
 
+	// MySQL rejects COUNT with multiple arguments unless DISTINCT is specified.
+	if funcName == "count" && len(astExpr.Exprs) > 1 && astExpr.Type != tree.FUNC_TYPE_DISTINCT {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "Incorrect arguments to COUNT")
+	}
+
 	b.insideAgg = true
 	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 	if err != nil {
