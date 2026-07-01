@@ -15,6 +15,8 @@
 package connector
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
@@ -80,7 +82,10 @@ func (connector *Connector) Release() {
 func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	terminalSignal := process.BuildCleanupSignal(pipelineFailed, err)
 	terminalErr := terminalSignal.TerminalErr()
-	terminalDelivered := connector.sendTerminalWithLog(proc, terminalSignal, pipelineFailed, terminalErr)
+	signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
+	defer signalCancel()
+
+	terminalDelivered := connector.sendTerminalWithLog(signalCtx, proc, terminalSignal, pipelineFailed, terminalErr)
 
 	if connector.ctr.sp != nil {
 		sp := connector.ctr.sp
@@ -90,7 +95,7 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 		} else {
 			if terminalSignal.EventType == process.EventEnd && !terminalDelivered {
 				fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
-				connector.sendTerminalWithLog(proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
+				connector.sendTerminalWithLog(signalCtx, proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
 			}
 			sp.Abort()
 			connector.cleanupSpool = nil
@@ -98,12 +103,12 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 		connector.ctr.sp = nil
 	} else if terminalSignal.EventType == process.EventEnd && !terminalDelivered {
 		fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
-		connector.sendTerminalWithLog(proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
+		connector.sendTerminalWithLog(signalCtx, proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
 	}
 }
 
 // sendTerminalWithLog sends a terminal signal to Reg, logging a warning on failure.
-func (connector *Connector) sendTerminalWithLog(proc *process.Process, signal process.PipelineSignal, pipelineFailed bool, err error) bool {
+func (connector *Connector) sendTerminalWithLog(ctx context.Context, proc *process.Process, signal process.PipelineSignal, pipelineFailed bool, err error) bool {
 	if connector.Reg == nil {
 		process.WarnPipelineCleanupf(
 			proc,
@@ -114,7 +119,7 @@ func (connector *Connector) sendTerminalWithLog(proc *process.Process, signal pr
 			err)
 		return false
 	}
-	if process.SendPipelineSignalWithTimeout(connector.Reg, signal, process.PipelineSignalSendTimeout) {
+	if process.SendPipelineSignalWithContext(ctx, connector.Reg, signal) {
 		return true
 	}
 	chLen, chCap := process.WaitRegisterChannelState(connector.Reg)

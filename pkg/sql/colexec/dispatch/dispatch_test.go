@@ -383,25 +383,25 @@ func TestDispatchResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.
 	require.Equal(t, process.EventEnd, terminalSignal.EventType)
 }
 
-func TestDispatchFallbackAbortUsesSharedTimeoutBudget(t *testing.T) {
+func TestDispatchResetUsesSharedTerminalSendBudget(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
-	process.PipelineSignalSendTimeout = 50 * time.Millisecond
+	process.PipelineSignalSendTimeout = 100 * time.Millisecond
 	t.Cleanup(func() {
 		process.PipelineSignalSendTimeout = oldSignalSendTimeout
 	})
 
 	regs := make([]*process.WaitRegister, 4)
-	delivered := make([]bool, len(regs))
 	for i := range regs {
 		regs[i] = process.NewPipelineEdge(1, 0)
 		regs[i].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
 	}
+	d := &Dispatch{LocalRegs: regs}
 
 	start := time.Now()
-	sendAbortSignalsToFailedLocalRegs(nil, regs, delivered, process.ErrPipelineEndSignalDeliveryFailed)
+	d.Reset(nil, false, nil)
 	elapsed := time.Since(start)
 
-	require.Less(t, elapsed, 150*time.Millisecond)
+	require.Less(t, elapsed, 180*time.Millisecond)
 	for _, reg := range regs {
 		select {
 		case <-reg.Done():

@@ -144,6 +144,30 @@ func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing
 	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
 }
 
+func TestConnectorResetUsesSharedTerminalSendBudget(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 100 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+	conn := &Connector{Reg: reg}
+
+	start := time.Now()
+	conn.Reset(nil, false, nil)
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 180*time.Millisecond)
+	select {
+	case <-reg.Done():
+	default:
+		t.Fatal("fallback abort should mark the receiver edge terminal")
+	}
+	require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+}
+
 func TestConnectorResetFailedNilErrorSendsTypedErrorWithCause(t *testing.T) {
 	reg := process.NewPipelineEdge(1, 0)
 	conn := &Connector{Reg: reg}

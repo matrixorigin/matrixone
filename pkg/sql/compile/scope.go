@@ -876,7 +876,10 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 
 func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitRegister, err error) bool {
 	terminalSignal := process.BuildCleanupSignal(false, err)
-	if process.SendPipelineSignalWithTimeout(reg, terminalSignal, process.PipelineSignalSendTimeout) {
+	signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
+	defer signalCancel()
+
+	if process.SendPipelineSignalWithContext(signalCtx, reg, terminalSignal) {
 		return true
 	}
 	logRemoteNotifyCleanupSendFailure(
@@ -893,7 +896,7 @@ func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitReg
 
 	fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
 	fallbackSignal := process.NewAbortSignal(fallbackErr)
-	if process.SendPipelineSignalWithTimeout(reg, fallbackSignal, process.PipelineSignalSendTimeout) {
+	if process.SendPipelineSignalWithContext(signalCtx, reg, fallbackSignal) {
 		return false
 	}
 	logRemoteNotifyCleanupSendFailure(

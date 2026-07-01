@@ -1012,6 +1012,29 @@ func TestRemoteNotifyCleanupUsesTypedEndForSingleSender(t *testing.T) {
 	}
 }
 
+func TestRemoteNotifyCleanupUsesSharedTerminalSendBudget(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 100 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+
+	start := time.Now()
+	require.False(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 180*time.Millisecond)
+	select {
+	case <-reg.Done():
+	default:
+		t.Fatal("fallback abort should mark the remote notify edge terminal")
+	}
+	require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+}
+
 func TestReceiveMessageFromCnServerIfDispatch_PreservesCleanupOnOriginalRoot(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
