@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -48,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -88,6 +90,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -460,6 +463,17 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		// External-write inserts must stay external when a scope is parallelized;
 		// each duplicated instance opens its own writer/file in Prepare.
 		op.ToExternal = t.ToExternal
+		op.SetInfo(&info)
+		return op
+	case vm.IcebergWrite:
+		t := sourceOp.(*icebergwrite.IcebergWrite)
+		op := icebergwrite.NewArgument(t.Request).WithCoordinatorFactory(t.Factory)
+		// Factory coordinators are execution state. A parallel clone must create
+		// its own scope from the factory instead of copying a possibly-open or
+		// terminal coordinator from the source operator.
+		if t.Factory == nil {
+			op.WithCoordinator(t.Coordinator)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.PartitionInsert:
@@ -886,6 +900,121 @@ func constructInsert(
 	}
 
 	return insert.NewPartitionInsert(arg, oldCtx.TableDef.TblId), nil
+}
+
+func isIcebergAppendInsert(ctx context.Context, node *plan.Node) (bool, error) {
+	if node == nil || node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return false, nil
+	}
+	return plan2.IsIcebergTableDef(ctx, node.InsertCtx.TableDef)
+}
+
+func constructIcebergInsert(proc *process.Process, node *plan.Node) (vm.Operator, error) {
+	if node == nil || node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "Iceberg append insert requires insert context")
+	}
+	oldCtx := node.InsertCtx
+	env, found, err := sqliceberg.ParseCreateSQLEnvelope(proc.Ctx, oldCtx.TableDef.Createsql)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "Iceberg append insert requires Iceberg table mapping metadata")
+	}
+	attrs := make([]string, 0, len(oldCtx.TableDef.Cols))
+	dataFilePathColumnIndex := int32(-1)
+	rowOrdinalColumnIndex := int32(-1)
+	mergeActionColumnIndex := int32(-1)
+	for _, col := range oldCtx.TableDef.Cols {
+		isIcebergDMLMetadata := false
+		switch col.Name {
+		case icebergapi.DMLDataFilePathColumnName:
+			dataFilePathColumnIndex = int32(len(attrs))
+			isIcebergDMLMetadata = true
+		case icebergapi.DMLRowOrdinalColumnName:
+			rowOrdinalColumnIndex = int32(len(attrs))
+			isIcebergDMLMetadata = true
+		case icebergapi.DMLMergeActionColumnName:
+			mergeActionColumnIndex = int32(len(attrs))
+			isIcebergDMLMetadata = true
+		}
+		if isIcebergDMLMetadata {
+			attrs = append(attrs, col.GetOriginCaseName())
+			continue
+		}
+		if col.Name == catalog.Row_ID || col.Hidden || col.Name == catalog.ExternalFilePath {
+			continue
+		}
+		attrs = append(attrs, col.GetOriginCaseName())
+	}
+	planExtra, err := icebergapi.DecodeDMLPlanExtraOptions(node.ExtraOptions)
+	if err != nil {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "invalid Iceberg DML plan options: "+err.Error())
+	}
+	operation := icebergwrite.OperationAppend
+	switch planExtra.Kind {
+	case icebergapi.DMLDeletePlanExtraOptions:
+		operation = icebergwrite.OperationDelete
+	case icebergapi.DMLUpdatePlanExtraOptions:
+		operation = icebergwrite.OperationUpdate
+	case icebergapi.DMLMergePlanExtraOptions:
+		operation = icebergwrite.OperationMerge
+	case icebergapi.DMLOverwritePlanExtraOptions:
+		operation = icebergwrite.OperationOverwrite
+	}
+	var accountID uint32
+	var roleID, userID uint64
+	if proc != nil {
+		if id, err := defines.GetAccountId(proc.Ctx); err == nil {
+			accountID = id
+		}
+		roleID = uint64(defines.GetRoleId(proc.Ctx))
+		userID = uint64(defines.GetUserId(proc.Ctx))
+	}
+	statementID := icebergWriteStatementID(proc)
+	arg := icebergwrite.NewArgument(icebergwrite.AppendRequest{
+		Ref:             oldCtx.Ref,
+		AddAffectedRows: oldCtx.AddAffectedRows,
+		Attrs:           attrs,
+		TableDef:        oldCtx.TableDef,
+		AccountID:       accountID,
+		RoleID:          roleID,
+		UserID:          userID,
+		StatementID:     statementID,
+		IdempotencyKey:  statementID,
+		CatalogName:     env.Catalog,
+		Namespace:       env.Namespace,
+		Table:           env.Table,
+		DefaultRef:      env.DefaultRef,
+		ReadMode:        env.ReadMode,
+		WriteMode:       env.WriteMode,
+		Operation:       operation,
+		DMLScan: icebergwrite.DMLScanMetadata{
+			OverwriteScope:     planExtra.OverwriteScope,
+			OverwritePartition: planExtra.OverwritePartition,
+		},
+
+		DataFilePathColumnIndex: dataFilePathColumnIndex,
+		RowOrdinalColumnIndex:   rowOrdinalColumnIndex,
+		MergeActionColumnIndex:  mergeActionColumnIndex,
+	})
+	factory, err := icebergAppendCoordinatorFactoryForCompile(proc.Ctx, proc)
+	if err != nil {
+		return nil, err
+	}
+	return arg.WithCoordinatorFactory(factory), nil
+}
+
+func icebergWriteStatementID(proc *process.Process) string {
+	if proc == nil {
+		return ""
+	}
+	if profile := proc.GetStmtProfile(); profile != nil {
+		if id := strings.TrimSpace(profile.GetStmtId().String()); id != "" && strings.Trim(id, "0-") != "" {
+			return id
+		}
+	}
+	return strings.TrimSpace(proc.QueryId())
 }
 
 // isExternalWriteInsert reports whether an INSERT node targets a writable

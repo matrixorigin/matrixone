@@ -21,7 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -354,6 +356,60 @@ func buildTestShowCreateExternalTable(t *testing.T, tableName string, param *tre
 	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
 	require.NoError(t, err)
 	return showSQL
+}
+
+func TestShowCreateIcebergExternalTable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := &plan.TableDef{
+		Name:      "gold_orders",
+		TableType: catalog.SystemExternalRel,
+		Createsql: sqliceberg.BuildCreateSQLEnvelope(model.TableMapping{
+			Namespace:  "sales",
+			TableName:  "orders",
+			DefaultRef: model.DefaultRefMain,
+			ReadMode:   model.ReadModeAppendOnly,
+			WriteMode:  model.WriteModeReadOnly,
+		}, "ksa_gold"),
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int32)},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+	}
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, "CREATE EXTERNAL TABLE `gold_orders` (\n  `id` int DEFAULT NULL\n) ENGINE = ICEBERG WITH (\"catalog\" = 'ksa_gold', \"namespace\" = 'sales', \"table\" = 'orders', \"ref\" = 'main', \"read_mode\" = 'append_only', \"write_mode\" = 'read_only')", showSQL)
+}
+
+func TestShowCreateLegacyExternalTablesIgnoreIcebergEnvelope(t *testing.T) {
+	tests := []struct {
+		name   string
+		format string
+		option []string
+	}{
+		{name: "csv", format: tree.CSV, option: []string{"format", tree.CSV}},
+		{name: "jsonline", format: tree.JSONLINE, option: []string{"format", tree.JSONLINE, "jsondata", "object"}},
+		{name: "parquet", format: tree.PARQUET, option: []string{"format", tree.PARQUET}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildTestShowCreateExternalTable(t, "legacy_"+tt.name, &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{
+					ScanType: tree.INFILE,
+					Filepath: "/data/legacy/*." + tt.name,
+					Format:   tt.format,
+					Option:   tt.option,
+				},
+			})
+			require.Contains(t, got, "CREATE EXTERNAL TABLE `legacy_"+tt.name+"`")
+			require.Contains(t, got, "'FORMAT'='"+tt.format+"'")
+			require.NotContains(t, got, "ENGINE = ICEBERG")
+			require.NotContains(t, got, sqliceberg.CreateSQLEnvelopePrefix)
+		})
+	}
 }
 
 func TestShowCreateHiveExternalTableKeepsFilepath(t *testing.T) {
