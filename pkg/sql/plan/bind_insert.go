@@ -2359,6 +2359,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	if onDupAction == plan.Node_UPDATE {
+		updateCtx.CountDeleteAffectRows = true
+
 		deleteCols := make([]plan.ColRef, 2)
 		updateCtx.DeleteCols = deleteCols
 
@@ -2407,6 +2409,54 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
+	}
+
+	// ODKU no-op guard: drop rows where every non-hidden, non-row_id column of
+	// the old image (scanTag) is NULL-safe-equal to the corresponding column of
+	// the new image (selectTag). MySQL returns affected-rows=0 for such rows.
+	if onDupAction == plan.Node_UPDATE {
+		var allColsEqual *plan.Expr
+		for i, col := range tableDef.Cols {
+			if col.Name == catalog.Row_ID || col.Hidden {
+				continue
+			}
+			newColPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+			if !ok {
+				continue
+			}
+			oldColExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanTag,
+						ColPos: int32(i),
+					},
+				},
+			}
+			newColExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectTag,
+						ColPos: newColPos,
+					},
+				},
+			}
+			eqExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldColExpr, newColExpr})
+			if allColsEqual == nil {
+				allColsEqual = eqExpr
+			} else {
+				allColsEqual, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{allColsEqual, eqExpr})
+			}
+		}
+		if allColsEqual != nil {
+			keepExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allColsEqual})
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{lastNodeID},
+				FilterList: []*plan.Expr{keepExpr},
+			}, bindCtx)
+		}
 	}
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
