@@ -895,8 +895,24 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 
 func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool) (int, error) {
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
-		return rowIdx, nil
+		// NULL order-key rows are peers; find the start of the NULL peer group
+		left := rowIdx
+		for left > start && vec.GetNulls().Contains(uint64(left-1)) {
+			left--
+		}
+		return left, nil
 	}
+
+	// Confine the binary search to the non-NULL data range within [start, end).
+	// When NULLs sort last, the raw-value array is not monotonically sorted
+	// (e.g. [1,2,4,0,0]), so binary search must operate on the non-NULL subrange only.
+	for start < end && vec.GetNulls().Contains(uint64(start)) {
+		start++
+	}
+	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
+		end--
+	}
+
 	var left int
 	switch vec.GetType().Oid {
 	case types.T_bit:
@@ -1173,6 +1189,12 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 	default:
 		return left, moerr.NewInternalErrorNoCtxf("unsupported type %v for RANGE frame in window function", vec.GetType().Oid)
 	}
+	// If the search landed on a NULL row (raw value coincidence), skip past all NULLs.
+	// NULLs are contiguous at one end of the sort order, so advancing past them
+	// reaches the first non-NULL matching value.
+	for left < end && vec.GetNulls().Contains(uint64(left)) {
+		left++
+	}
 	return left, nil
 }
 
@@ -1230,8 +1252,24 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit 
 
 func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, sub bool) (int, error) {
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
-		return rowIdx + 1, nil
+		// NULL order-key rows are peers; find the end of the NULL peer group (exclusive)
+		right := rowIdx + 1
+		for right < end && vec.GetNulls().Contains(uint64(right)) {
+			right++
+		}
+		return right, nil
 	}
+
+	// Confine the binary search to the non-NULL data range within [start, end).
+	// When NULLs sort last, the raw-value array is not monotonically sorted,
+	// so binary search must operate on the non-NULL subrange only.
+	for start < end && vec.GetNulls().Contains(uint64(start)) {
+		start++
+	}
+	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
+		end--
+	}
+
 	var right int
 	switch vec.GetType().Oid {
 	case types.T_bit:
@@ -1516,6 +1554,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 		}
 	default:
 		return right, moerr.NewInternalErrorNoCtxf("unsupported type %v for RANGE frame in window function", vec.GetType().Oid)
+	}
+	// If the search landed on a NULL row (raw value coincidence), retreat before all NULLs.
+	// NULLs are contiguous, so retreating past them reaches the last non-NULL matching value.
+	for right >= start && right < end && vec.GetNulls().Contains(uint64(right)) {
+		right--
 	}
 	return right + 1, nil
 }

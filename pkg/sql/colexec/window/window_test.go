@@ -167,6 +167,66 @@ func TestSearchLeftUnsupportedType(t *testing.T) {
 	require.Contains(t, err.Error(), "unsupported type")
 }
 
+func TestSearchLeftWithNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	// Simulate sorted order with ASC NULLS FIRST: [NULL, NULL, 1, 2, 2, 4]
+	vec := vector.NewVec(types.T_int64.ToType())
+	values := []int64{0, 0, 1, 2, 2, 4}
+	nullRows := []bool{true, true, false, false, false, false}
+
+	for i, v := range values {
+		require.NoError(t, vector.AppendFixed(vec, v, nullRows[i], mp))
+	}
+	defer vec.Free(mp)
+
+	// NULL rows should be treated as peers
+	// For rowIdx=0 (NULL), searchLeft should return 0 (start of NULL peer group)
+	left, err := searchLeft(0, 6, 0, vec, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 0, left, "NULL row at idx 0: all NULL peers should share the same left boundary")
+
+	// For rowIdx=1 (NULL), searchLeft should also return 0 (peer with row 0)
+	left, err = searchLeft(0, 6, 1, vec, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 0, left, "NULL row at idx 1: should return start of NULL peer group, not its own index")
+
+	// For non-NULL row (k=1 at idx=2), searchLeft with 1 PRECEDING should NOT include NULL rows
+	// Target = 1 - 1 = 0, but NULL rows' raw value=0 should NOT match
+	left, err = searchLeft(0, 6, 2, vec, &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: 1},
+			},
+		},
+	}, false)
+	require.NoError(t, err)
+	require.Equal(t, 2, left, "k=1 with 1 PRECEDING: should start at first non-NULL (idx 2), not include NULLs")
+}
+
+func TestSearchRightWithNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	// Simulate sorted order with ASC NULLS FIRST: [NULL, NULL, 1, 2, 2, 4]
+	vec := vector.NewVec(types.T_int64.ToType())
+	values := []int64{0, 0, 1, 2, 2, 4}
+	nullRows := []bool{true, true, false, false, false, false}
+
+	for i, v := range values {
+		require.NoError(t, vector.AppendFixed(vec, v, nullRows[i], mp))
+	}
+	defer vec.Free(mp)
+
+	// NULL rows should be treated as peers
+	// For rowIdx=0 (NULL), searchRight should return 2 (end of NULL peer group, exclusive)
+	right, err := searchRight(0, 6, 0, vec, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 2, right, "NULL row at idx 0: should return end of NULL peer group (idx 2)")
+
+	// For rowIdx=1 (NULL), searchRight should also return 2
+	right, err = searchRight(0, 6, 1, vec, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 2, right, "NULL row at idx 1: should return end of NULL peer group (idx 2)")
+}
+
 func TestSearchRightUnsupportedType(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_varchar.ToType())
