@@ -19,6 +19,8 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,6 +147,99 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
+}
+
+func TestClientCreationFallsBackFromUnreachableReplicaAddress(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getServiceTestConfig()
+		return cfg
+	}
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	service, err := NewServiceWithRetry(
+		genCfg,
+		newFS(),
+		nil,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service.Close())
+	}()
+
+	init := make(map[uint64]string)
+	init[2] = service.ID()
+	require.NoError(t, service.store.startReplica(1, 2, init, false))
+
+	hangingAddress, cleanup := startHangingTCPServer(t)
+	defer cleanup()
+
+	scfg := ClientConfig{
+		LogShardID:     1,
+		TNReplicaID:    2,
+		MaxMessageSize: defaultMaxMessageSize,
+	}
+
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectFallbackDelay = 50 * time.Millisecond
+	defer func() { logServiceConnectFallbackDelay = origFallbackDelay }()
+
+	timeout := 5 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	start := time.Now()
+	c, err := connectToLogServiceAddresses(ctx, "", []string{
+		hangingAddress,
+		cfg.LogServiceServiceAddr(),
+	}, scfg)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	defer func() {
+		assert.NoError(t, c.close())
+	}()
+	assert.Less(t, elapsed, time.Second)
+}
+
+func startHangingTCPServer(t *testing.T) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() {
+					assert.NoError(t, conn.Close())
+				}()
+				<-done
+			}()
+		}
+	}()
+
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			assert.NoError(t, ln.Close())
+			close(done)
+			wg.Wait()
+		})
+	}
+	return ln.Addr().String(), cleanup
 }
 
 func TestClientGetTSOTimestamp(t *testing.T) {
