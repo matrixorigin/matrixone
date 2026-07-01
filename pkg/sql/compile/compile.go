@@ -4351,6 +4351,7 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		ss[0].setRootOperator(multiUpdateArg)
 	}
 	c.anal.isFirst = false
+
 	return ss, nil
 }
 
