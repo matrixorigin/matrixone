@@ -1265,6 +1265,10 @@ func (builder *QueryBuilder) replaceLeadingFilter(idxDef *IndexDef, filterList [
 	return builder.replaceEqualCondition(idxDef, filterList, leadingPos, idxTag, idxTableDef)
 }
 
+func needsIndexOnlyResidualLeadingFilters(idxDef *IndexDef) bool {
+	return indexTableLookupSerialFunc(idxDef) == "serial_full"
+}
+
 func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
 	// check if this index contains all columns needed
 	for i := range node.TableDef.Cols {
@@ -1369,6 +1373,14 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	newLeadingFilter := builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, leadingEqualCond, idxTag, idxTableDef)
 	newFilterList := make([]*plan.Expr, 0, len(node.FilterList))
 	newFilterList = append(newFilterList, newLeadingFilter)
+	if needsIndexOnlyResidualLeadingFilters(idxDef) {
+		// serial_full preserves NULL as key bytes. Keep the original SQL
+		// predicate as a residual recheck so prepared NULL values still follow
+		// SQL three-valued logic on covering index-only scans.
+		for _, idx := range leadingPos {
+			newFilterList = append(newFilterList, replaceColumnsForExpr(DeepCopyExpr(node.FilterList[idx]), idxColMap))
+		}
+	}
 	for _, idx := range missFilterIdx {
 		newFilterList = append(newFilterList, replaceColumnsForExpr(node.FilterList[idx], idxColMap))
 	}
@@ -1920,7 +1932,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	indexes := leftChild.TableDef.Indexes
 	condIdx := make([]int, 0, len(col2Cond))
 	for _, idxDef := range indexes {
-		if !idxDef.TableExist {
+		if !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
 			continue
 		}
 

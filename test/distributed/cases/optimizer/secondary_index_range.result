@@ -589,7 +589,7 @@ explain select * from t5 where val >= 100 and val <= 50;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t5.idx_val  𝄀
-        Filter Cond: (__mo_index_idx_col >= ':d'), (serial_extract(__mo_index_idx_col, 0, INT)) <= 50)
+        Filter Cond: (__mo_index_idx_col >= ':d'), (serial_extract(__mo_index_idx_col, 0, INT)) >= 100), (serial_extract(__mo_index_idx_col, 0, INT)) <= 50)
 select * from t5 where val >= 100 and val <= 50;
 ➤ id[4,32,0]  ¦  val[4,32,0]
 select * from t5 where val > 30 and val < 10;
@@ -694,7 +694,7 @@ explain select * from t7 where d >= '2024-03-01' and d <= '2024-09-30';
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t7.idx_d  𝄀
-        Filter Cond: (__mo_index_idx_col >= 'AF�'), (serial_extract(__mo_index_idx_col, 0, DATE)) <= 2024-09-30)
+        Filter Cond: (__mo_index_idx_col >= 'AF�'), (serial_extract(__mo_index_idx_col, 0, DATE)) >= 2024-03-01), (serial_extract(__mo_index_idx_col, 0, DATE)) <= 2024-09-30)
 select * from t7 where d >= '2024-03-01' and d <= '2024-09-30' order by id;
 ➤ id[4,32,0]  ¦  d[91,64,0]  𝄀
 2  ¦  2024-03-15  𝄀
@@ -780,7 +780,7 @@ create table t9 (
 id varchar(64) not null,
 user_id varchar(64) not null,
 session_id varchar(64) not null,
-status varchar(32) not null,
+status varchar(32) null,
 due datetime(6) null,
 attempts int not null,
 primary key (user_id, session_id, id),
@@ -790,7 +790,8 @@ insert into t9 values
 ('a1', 'u1', 's1', 'active', '2026-07-02 00:00:00.000001', 10),
 ('a2', 'u1', 's2', 'expired', '2026-07-03 00:00:00.000002', 20),
 ('a3', 'u2', 's1', 'expiring', '2026-07-04 00:00:00.000003', 30),
-('a4', 'u2', 's2', 'active', NULL, 40);
+('a4', 'u2', 's2', 'active', NULL, 40),
+('a5', 'u3', 's1', NULL, '2026-07-05 00:00:00.000004', 50);
 select mo_ctl('dn', 'flush', 'd1.t9');
 ➤ mo_ctl(dn, flush, d1.t9)[12,-1,0]  𝄀
 {
@@ -812,7 +813,7 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Index Table Scan on t9.idx_ret  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, VARCHAR)) = 'active')
 explain select count(*) from t9 where status in ('active', 'expiring');
 -- @regex("prefix_in", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
@@ -820,7 +821,7 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Index Table Scan on t9.idx_ret  𝄀
-              Filter Cond: prefix_in(__mo_index_idx_col)
+              Filter Cond: prefix_in(__mo_index_idx_col), serial_extract(__mo_index_idx_col, 0, VARCHAR)) in ([active expiring])
 select count(*) as count_eq from t9 where status = 'active';
 ➤ count_eq[-5,64,0]  𝄀
 2
@@ -834,20 +835,37 @@ select count(*) as count_nullsafe from t9 where status <=> 'active';
 ➤ count_nullsafe[-5,64,0]  𝄀
 2
 select id, status, status = 'active' as row_eq, status <=> 'active' as row_nullsafe from t9 order by id;
-➤ id[12,-1,0]  ¦  status[12,-1,0]  ¦  row_eq[1,0,0]  ¦  row_nullsafe[1,0,0]  𝄀
+➤ id[12,-1,0]  ¦  status[12,-1,0]  ¦  row_eq[-7,1,0]  ¦  row_nullsafe[-7,1,0]  𝄀
 a1  ¦  active  ¦  1  ¦  1  𝄀
 a2  ¦  expired  ¦  0  ¦  0  𝄀
 a3  ¦  expiring  ¦  0  ¦  0  𝄀
-a4  ¦  active  ¦  1  ¦  1
+a4  ¦  active  ¦  1  ¦  1  𝄀
+a5  ¦  null  ¦  null  ¦  0
 prepare stmt_t9_status_in from 'select count(*) as count_prepare_in from t9 where status in (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
 set @t9_active = 'active';
 set @t9_expired = 'expired';
 set @t9_expiring = 'expiring';
 set @t9_missing = 'missing';
+set @t9_null = NULL;
 execute stmt_t9_status_in using @t9_active,@t9_expired,@t9_expiring,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing;
 ➤ count_prepare_in[-5,64,0]  𝄀
 4
 deallocate prepare stmt_t9_status_in;
+prepare stmt_t9_status_eq_null from 'select count(*) as count_prepare_eq_null from t9 where status = ?';
+execute stmt_t9_status_eq_null using @t9_null;
+➤ count_prepare_eq_null[-5,64,0]  𝄀
+0
+deallocate prepare stmt_t9_status_eq_null;
+prepare stmt_t9_status_in_null from 'select count(*) as count_prepare_in_null from t9 where status in (?, ?)';
+execute stmt_t9_status_in_null using @t9_null,@t9_missing;
+➤ count_prepare_in_null[-5,64,0]  𝄀
+0
+deallocate prepare stmt_t9_status_in_null;
+prepare stmt_t9_status_between_null from 'select count(*) as count_prepare_between_null from t9 where status between ? and ?';
+execute stmt_t9_status_between_null using @t9_null,@t9_active;
+➤ count_prepare_between_null[-5,64,0]  𝄀
+0
+deallocate prepare stmt_t9_status_between_null;
 update t9 set status = 'active', due = '2026-07-05 00:00:00.000004' where id = 'a2';
 select count(*) as count_after_update_into_active from t9 where status = 'active';
 ➤ count_after_update_into_active[-5,64,0]  𝄀
@@ -885,5 +903,6 @@ select id, status, attempts from t9 order by id;
 ➤ id[12,-1,0]  ¦  status[12,-1,0]  ¦  attempts[4,32,0]  𝄀
 a1  ¦  done  ¦  10  𝄀
 a2  ¦  active  ¦  20  𝄀
-a3  ¦  closed  ¦  55
+a3  ¦  closed  ¦  55  𝄀
+a5  ¦  null  ¦  50
 drop database d1;
