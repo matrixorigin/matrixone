@@ -166,25 +166,6 @@ func TestAddDeleteAffectRows(t *testing.T) {
 	}
 }
 
-func TestReplaceIntoAffectedRows(t *testing.T) {
-	// Test REPLACE INTO scenario: should only count INSERT rows, not DELETE rows
-	update := &MultiUpdate{
-		ctr: container{
-			action:       actionUpdate, // REPLACE INTO uses actionUpdate
-			affectedRows: 0,
-		},
-	}
-	update.addAffectedRowsFunc = update.doAddAffectedRows
-
-	// Simulate REPLACE INTO: DELETE 2 rows, INSERT 2 rows
-	// Should only count INSERT rows (2), not DELETE rows
-	update.addDeleteAffectRows(UpdateMainTable, 2) // Should not count
-	require.Equal(t, uint64(0), update.ctr.affectedRows, "DELETE rows should not be counted for REPLACE INTO")
-
-	update.addInsertAffectRows(UpdateMainTable, 2) // Should count
-	require.Equal(t, uint64(2), update.ctr.affectedRows, "INSERT rows should be counted for REPLACE INTO")
-}
-
 func TestUpdateAffectedRows(t *testing.T) {
 	// Test UPDATE scenario: should only count INSERT rows (updated rows), not DELETE rows
 	update := &MultiUpdate{
