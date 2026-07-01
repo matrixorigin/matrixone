@@ -1679,6 +1679,22 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 			residualFunc: "in",
 		},
 		{
+			name: "literal null equality",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeNullEqFilterExpr(relPos, 1)
+			},
+			lookupFunc:   "prefix_eq",
+			residualFunc: "=",
+		},
+		{
+			name: "literal null in list",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeIntInFilterExprWithNull(relPos, 1)
+			},
+			lookupFunc:   "prefix_in",
+			residualFunc: "in",
+		},
+		{
 			name: "prepared between",
 			makeFilter: func(relPos int32) *planpb.Expr {
 				return makeParamBetweenFilterExpr(relPos, 1, 0, 1)
@@ -1734,6 +1750,80 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 			require.NotNil(t, residual)
 			require.Equal(t, tt.residualFunc, residual.Func.ObjName)
 			require.Equal(t, "serial_extract", wrappedSerialFuncName(t, residual.Args[0]))
+		})
+	}
+}
+
+func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *testing.T) {
+	tests := []struct {
+		name       string
+		makeFilter func(relPos int32) *planpb.Expr
+		lookupFunc string
+	}{
+		{
+			name: "literal equality",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringEqFilterExpr(relPos, 1, "active")
+			},
+			lookupFunc: "prefix_eq",
+		},
+		{
+			name: "literal in list",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringInFilterExpr(relPos, 1, "active", "expired")
+			},
+			lookupFunc: "prefix_in",
+		},
+		{
+			name: "literal between",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringBetweenFilterExpr(relPos, 1, "active", "expired")
+			},
+			lookupFunc: "prefix_between",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			ctx := NewBindContext(builder, nil)
+			bindTag := builder.genNewBindTag()
+			idxDef := &planpb.IndexDef{
+				IndexName:      "idx_status_id",
+				IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+				IndexTableName: "__mo_idx_status_id",
+				Parts:          []string{"status", "id"},
+				Unique:         false,
+				TableExist:     true,
+			}
+			registerMockIndexTable(t, builder, idxDef.IndexTableName)
+			node := &planpb.Node{
+				NodeType:    planpb.Node_TABLE_SCAN,
+				ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+				BindingTags: []int32{bindTag},
+				TableDef: &planpb.TableDef{
+					Name: "t",
+					Cols: []*planpb.ColDef{
+						{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+						{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					},
+					Name2ColIndex: map[string]int32{
+						"id":     0,
+						"status": 1,
+					},
+					Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				},
+				Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
+				FilterList: []*planpb.Expr{tt.makeFilter(bindTag)},
+			}
+			scanID := builder.appendNode(node, ctx)
+
+			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			require.NotEqual(t, int32(-1), idxNodeID)
+
+			idxNode := builder.qry.Nodes[idxNodeID]
+			require.Len(t, idxNode.FilterList, 1)
+			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
 		})
 	}
 }
@@ -1989,6 +2079,35 @@ func makeParamEqFilterExpr(relPos, colPos, paramPos int32) *planpb.Expr {
 	}
 }
 
+func makeNullEqFilterExpr(relPos, colPos int32) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int32)}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "="},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{Isnull: true},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func makeStringInFilterExpr(relPos, colPos int32, vals ...string) *planpb.Expr {
 	typ := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
 	list := make([]*planpb.Expr, 0, len(vals))
@@ -2021,6 +2140,89 @@ func makeStringInFilterExpr(relPos, colPos int32, vals ...string) *planpb.Expr {
 						Typ: typ,
 						Expr: &planpb.Expr_List{
 							List: &planpb.ExprList{List: list},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeIntInFilterExprWithNull(relPos, colPos int32) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int32)}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in"},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_List{
+							List: &planpb.ExprList{List: []*planpb.Expr{
+								{
+									Typ: typ,
+									Expr: &planpb.Expr_Lit{
+										Lit: &planpb.Literal{
+											Value: &planpb.Literal_I32Val{I32Val: 1},
+										},
+									},
+								},
+								{
+									Typ: typ,
+									Expr: &planpb.Expr_Lit{
+										Lit: &planpb.Literal{Isnull: true},
+									},
+								},
+							}},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeStringBetweenFilterExpr(relPos, colPos int32, lower, upper string) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "between"},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_Sval{Sval: lower},
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_Sval{Sval: upper},
+							},
 						},
 					},
 				},
