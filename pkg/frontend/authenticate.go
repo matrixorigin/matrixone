@@ -2068,12 +2068,6 @@ func getSqlForCheckDatabaseTable(
 	dbName string,
 	tableName string,
 ) (string, error) {
-
-	err := inputNameIsInvalid(ctx, dbName, tableName)
-	if err != nil {
-		return "", err
-	}
-
 	var (
 		account uint32
 	)
@@ -2084,9 +2078,31 @@ func getSqlForCheckDatabaseTable(
 		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
 	}
 
-	// we need the account id here to filter out the same dbName and tableName that exist in the
-	// different accounts.
-	return fmt.Sprintf(checkDatabaseTableFormat, tableName, dbName, account), nil
+	return getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, account, 0)
+}
+
+func getSqlForCheckDatabaseTableWithSnapshot(
+	ctx context.Context,
+	dbName string,
+	tableName string,
+	account uint32,
+	snapshotTS int64,
+) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName, tableName)
+	if err != nil {
+		return "", err
+	}
+
+	snapshotSpec := ""
+	if snapshotTS != 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	}
+
+	// The account id disambiguates identical database/table names across tenants.
+	return fmt.Sprintf(
+		`select rel_logical_id from mo_catalog.mo_tables%s where relname = "%s" and reldatabase = "%s" and account_id = %d;`,
+		snapshotSpec, tableName, dbName, account,
+	), nil
 }
 
 func getSqlForCheckDatabaseView(
@@ -5123,29 +5139,38 @@ func copyTablePrivileges(
 	ses *Session,
 	bh BackgroundExec,
 	srcDB, srcTable, dstDB, dstTable string,
+	srcAccountID, dstAccountID uint32,
+	snapshotTS int64,
 ) error {
-	srcObjID, err := getDatabaseOrTableId(ctx, bh, false, srcDB, srcTable)
+	srcCtx := defines.AttachAccountId(ctx, srcAccountID)
+	dstCtx := defines.AttachAccountId(ctx, dstAccountID)
+
+	srcObjID, err := getTableIdWithSnapshot(srcCtx, bh, srcDB, srcTable, srcAccountID, snapshotTS)
 	if err != nil {
 		return err
 	}
-	dstObjID, err := getDatabaseOrTableId(ctx, bh, false, dstDB, dstTable)
+	dstObjID, err := getTableIdWithSnapshot(dstCtx, bh, dstDB, dstTable, dstAccountID, 0)
 	if err != nil {
 		return err
 	}
 
+	snapshotSpec := ""
+	if snapshotTS != 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	}
 	sql := fmt.Sprintf(
 		`select role_id, role_name, privilege_id, privilege_name, privilege_level, with_grant_option
-		 from mo_catalog.mo_role_privs
+		 from mo_catalog.mo_role_privs%s
 		 where obj_type = "%s" and obj_id = %d
 		 order by role_id, privilege_id, privilege_level;`,
-		objectTypeTable.String(), srcObjID,
+		snapshotSpec, objectTypeTable.String(), srcObjID,
 	)
 	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
+	if err = bh.Exec(srcCtx, sql); err != nil {
 		return err
 	}
 
-	erArray, err := getResultSet(ctx, bh)
+	erArray, err := getResultSet(srcCtx, bh)
 	if err != nil {
 		return err
 	}
@@ -5204,12 +5229,42 @@ func copyTablePrivileges(
 			withGrantOption,
 		)
 		bh.ClearExecResultSet()
-		if err = bh.Exec(ctx, insertSQL); err != nil {
+		if err = bh.Exec(dstCtx, insertSQL); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func getTableIdWithSnapshot(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName, tableName string,
+	accountID uint32,
+	snapshotTS int64,
+) (int64, error) {
+	sql, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, accountID, snapshotTS)
+	if err != nil {
+		return 0, err
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return 0, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return 0, err
+	}
+	if execResultArrayHasData(erArray) {
+		id, err := erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return 0, err
+		}
+		return id, nil
+	}
+	return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
 }
 
 func getViewId(ctx context.Context, bh BackgroundExec, dbName, viewName string) (int64, error) {

@@ -253,6 +253,10 @@ func handleCloneTable(
 	if snapshot != nil && snapshot.Tenant != nil {
 		fromAccountId = snapshot.Tenant.TenantID
 	}
+	if stmt.CopyGrants && fromAccountId != toAccountId {
+		err = moerr.NewInvalidInputNoCtx("COPY GRANTS cannot be used when cloning across accounts")
+		return
+	}
 
 	if stmt.SrcTable.SchemaName == "" {
 		// src acc = op acc
@@ -315,9 +319,14 @@ func handleCloneTable(
 	}
 
 	if stmt.CopyGrants {
+		copyGrantsSnapshotTS := snapshotTS
+		if snapshot != nil && snapshot.TS != nil {
+			copyGrantsSnapshotTS = snapshot.TS.PhysicalTime
+		}
 		if err = copyTablePrivileges(ctx, ses, bh,
 			stmt.SrcTable.SchemaName.String(), stmt.SrcTable.ObjectName.String(),
 			stmt.CreateTable.Table.SchemaName.String(), stmt.CreateTable.Table.ObjectName.String(),
+			fromAccountId, toAccountId, copyGrantsSnapshotTS,
 		); err != nil {
 			return
 		}

@@ -132,7 +132,18 @@ select * from cg_src.dst_plain order by a;
 select * from cg_src.dst_copy order by a;
 select * from cg_dst.dst_cross order by a;
 select * from cg_dst.dst_snapshot order by a;
+-- @session
 
+-- Semantic restriction: COPY GRANTS cannot be used when the source snapshot
+-- belongs to another account, even if TO ACCOUNT is not present.
+drop snapshot if exists sp_cg_cross_account;
+create snapshot sp_cg_cross_account for account acc_clone_copy_grants_complex;
+create database cg_sys_copy_grants;
+create table cg_sys_copy_grants.cross_snapshot clone cg_src.src {snapshot = "sp_cg_cross_account"} copy grants;
+drop database cg_sys_copy_grants;
+drop snapshot if exists sp_cg_cross_account;
+
+-- @session:id=1&user=acc_clone_copy_grants_complex:root1&password=111
 drop snapshot if exists sp_cg_src;
 drop user cg_u_select, cg_u_insert, cg_u_delete, cg_u_all, cg_u_child;
 drop role cg_r_select, cg_r_insert, cg_r_delete, cg_r_all, cg_r_child, cg_r_parent;

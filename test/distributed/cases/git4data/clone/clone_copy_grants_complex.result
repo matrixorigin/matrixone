@@ -154,6 +154,13 @@ select * from cg_dst.dst_snapshot order by a;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
 2  ¦  two  𝄀
 5  ¦  snapshot
+drop snapshot if exists sp_cg_cross_account;
+create snapshot sp_cg_cross_account for account acc_clone_copy_grants_complex;
+create database cg_sys_copy_grants;
+create table cg_sys_copy_grants.cross_snapshot clone cg_src.src {snapshot = "sp_cg_cross_account"} copy grants;
+invalid input: COPY GRANTS cannot be used when cloning across accounts
+drop database cg_sys_copy_grants;
+drop snapshot if exists sp_cg_cross_account;
 drop snapshot if exists sp_cg_src;
 drop user cg_u_select, cg_u_insert, cg_u_delete, cg_u_all, cg_u_child;
 drop role cg_r_select, cg_r_insert, cg_r_delete, cg_r_all, cg_r_child, cg_r_parent;

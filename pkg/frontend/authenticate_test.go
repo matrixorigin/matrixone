@@ -15932,16 +15932,16 @@ func TestCopyTablePrivileges(t *testing.T) {
 	newBackgroundExec := func(t *testing.T, srcRows, dstRows [][]interface{}, privRows [][]interface{}) *backgroundExecTest {
 		t.Helper()
 
-		srcSQL, err := getSqlForCheckDatabaseTable(ctx, "src_db", "src_tbl")
+		srcSQL, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, "src_db", "src_tbl", 1001, 0)
 		require.NoError(t, err)
-		dstSQL, err := getSqlForCheckDatabaseTable(ctx, "dst_db", "dst_tbl")
+		dstSQL, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, "dst_db", "dst_tbl", 1001, 0)
 		require.NoError(t, err)
 
 		bh := &backgroundExecTest{}
 		bh.init()
 		bh.sql2result[srcSQL] = newMrsForCheckDatabaseTable(srcRows)
 		bh.sql2result[dstSQL] = newMrsForCheckDatabaseTable(dstRows)
-		bh.sql2result[copyTablePrivilegesSelectSQLForTest(srcID)] = newMrsForCopyTablePrivileges(privRows)
+		bh.sql2result[copyTablePrivilegesSelectSQLForTest(srcID, 0)] = newMrsForCopyTablePrivileges(privRows)
 		return bh
 	}
 
@@ -15955,7 +15955,7 @@ func TestCopyTablePrivileges(t *testing.T) {
 			},
 		)
 
-		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl")
+		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl", 1001, 1001, 0)
 		require.NoError(t, err)
 
 		inserts := filterExecutedSQLsForTest(bh.executedSQLs, "insert into mo_catalog.mo_role_privs")
@@ -15969,7 +15969,7 @@ func TestCopyTablePrivileges(t *testing.T) {
 	t.Run("does nothing when source table has no explicit table grants", func(t *testing.T) {
 		bh := newBackgroundExec(t, [][]interface{}{{srcID}}, [][]interface{}{{dstID}}, nil)
 
-		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl")
+		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl", 1001, 1001, 0)
 		require.NoError(t, err)
 
 		require.Empty(t, filterExecutedSQLsForTest(bh.executedSQLs, "insert into mo_catalog.mo_role_privs"))
@@ -15983,7 +15983,7 @@ func TestCopyTablePrivileges(t *testing.T) {
 			[][]interface{}{{int64(3001), "reader", int64(PrivilegeTypeSelect), "select", "d.t", "true"}},
 		)
 
-		err := copyTablePrivileges(ctxWithUser, &Session{}, bh, "src_db", "src_tbl", "dst_db", "dst_tbl")
+		err := copyTablePrivileges(ctxWithUser, &Session{}, bh, "src_db", "src_tbl", "dst_db", "dst_tbl", 1001, 1001, 0)
 		require.NoError(t, err)
 
 		inserts := filterExecutedSQLsForTest(bh.executedSQLs, "insert into mo_catalog.mo_role_privs")
@@ -15994,7 +15994,7 @@ func TestCopyTablePrivileges(t *testing.T) {
 	t.Run("returns error when source table cannot be resolved", func(t *testing.T) {
 		bh := newBackgroundExec(t, nil, [][]interface{}{{dstID}}, nil)
 
-		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl")
+		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl", 1001, 1001, 0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), `there is no table "src_tbl" in database "src_db"`)
 	})
@@ -16002,36 +16002,36 @@ func TestCopyTablePrivileges(t *testing.T) {
 	t.Run("returns error when destination table cannot be resolved", func(t *testing.T) {
 		bh := newBackgroundExec(t, [][]interface{}{{srcID}}, nil, nil)
 
-		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl")
+		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl", 1001, 1001, 0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), `there is no table "dst_tbl" in database "dst_db"`)
 	})
 
 	t.Run("returns source lookup exec error", func(t *testing.T) {
 		bh := newBackgroundExec(t, [][]interface{}{{srcID}}, [][]interface{}{{dstID}}, nil)
-		srcSQL, err := getSqlForCheckDatabaseTable(ctx, "src_db", "src_tbl")
+		srcSQL, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, "src_db", "src_tbl", 1001, 0)
 		require.NoError(t, err)
 		bh.sql2err[srcSQL] = fmt.Errorf("source lookup failed")
 
-		err = copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl")
+		err = copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl", 1001, 1001, 0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "source lookup failed")
 	})
 
 	t.Run("returns privilege query exec error", func(t *testing.T) {
 		bh := newBackgroundExec(t, [][]interface{}{{srcID}}, [][]interface{}{{dstID}}, nil)
-		bh.sql2err[copyTablePrivilegesSelectSQLForTest(srcID)] = fmt.Errorf("privilege lookup failed")
+		bh.sql2err[copyTablePrivilegesSelectSQLForTest(srcID, 0)] = fmt.Errorf("privilege lookup failed")
 
-		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl")
+		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl", 1001, 1001, 0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "privilege lookup failed")
 	})
 
 	t.Run("returns privilege result set type error", func(t *testing.T) {
 		bh := newBackgroundExec(t, [][]interface{}{{srcID}}, [][]interface{}{{dstID}}, nil)
-		bh.sql2result[copyTablePrivilegesSelectSQLForTest(srcID)] = nil
+		bh.sql2result[copyTablePrivilegesSelectSQLForTest(srcID, 0)] = nil
 
-		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl")
+		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl", 1001, 1001, 0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "it is not the type of result set")
 	})
@@ -16043,7 +16043,7 @@ func TestCopyTablePrivileges(t *testing.T) {
 			[][]interface{}{{int64(3001), "reader", int64(PrivilegeTypeSelect), "select", "d.t", "not-bool"}},
 		)
 
-		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl")
+		err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl", 1001, 1001, 0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), `invalid with_grant_option value "not-bool"`)
 	})
@@ -16083,20 +16083,58 @@ func TestCopyTablePrivileges(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				bh := newBackgroundExec(t, [][]interface{}{{srcID}}, [][]interface{}{{dstID}}, [][]interface{}{tc.row})
 
-				err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl")
+				err := copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl", 1001, 1001, 0)
 				require.Error(t, err)
 			})
 		}
 	})
+
+	t.Run("reads source table and grants from snapshot source account", func(t *testing.T) {
+		const (
+			sourceAccount = uint32(1002)
+			targetAccount = uint32(1001)
+			snapshotTS    = int64(123456)
+		)
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		srcSQL, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, "src_db", "src_tbl", sourceAccount, snapshotTS)
+		require.NoError(t, err)
+		liveSrcSQL, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, "src_db", "src_tbl", sourceAccount, 0)
+		require.NoError(t, err)
+		dstSQL, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, "dst_db", "dst_tbl", targetAccount, 0)
+		require.NoError(t, err)
+
+		bh.sql2result[srcSQL] = newMrsForCheckDatabaseTable([][]interface{}{{srcID}})
+		bh.sql2result[liveSrcSQL] = newMrsForCheckDatabaseTable([][]interface{}{{int64(99999)}})
+		bh.sql2result[dstSQL] = newMrsForCheckDatabaseTable([][]interface{}{{dstID}})
+		bh.sql2result[copyTablePrivilegesSelectSQLForTest(srcID, snapshotTS)] = newMrsForCopyTablePrivileges(
+			[][]interface{}{{int64(3001), "reader", int64(PrivilegeTypeSelect), "select", "d.t", "true"}},
+		)
+
+		err = copyTablePrivileges(ctx, newSession(), bh, "src_db", "src_tbl", "dst_db", "dst_tbl", sourceAccount, targetAccount, snapshotTS)
+		require.NoError(t, err)
+
+		require.Contains(t, bh.executedSQLs, srcSQL)
+		require.NotContains(t, bh.executedSQLs, liveSrcSQL)
+		require.Contains(t, bh.executedSQLs, copyTablePrivilegesSelectSQLForTest(srcID, snapshotTS))
+		inserts := filterExecutedSQLsForTest(bh.executedSQLs, "insert into mo_catalog.mo_role_privs")
+		require.Len(t, inserts, 1)
+		require.Contains(t, inserts[0], `values (3001,"reader","table",10002,30,"select","d.t",2001,`)
+	})
 }
 
-func copyTablePrivilegesSelectSQLForTest(srcObjID int64) string {
+func copyTablePrivilegesSelectSQLForTest(srcObjID, snapshotTS int64) string {
+	snapshotSpec := ""
+	if snapshotTS != 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	}
 	return fmt.Sprintf(
 		`select role_id, role_name, privilege_id, privilege_name, privilege_level, with_grant_option
-		 from mo_catalog.mo_role_privs
+		 from mo_catalog.mo_role_privs%s
 		 where obj_type = "%s" and obj_id = %d
 		 order by role_id, privilege_id, privilege_level;`,
-		objectTypeTable.String(), srcObjID,
+		snapshotSpec, objectTypeTable.String(), srcObjID,
 	)
 }
 
