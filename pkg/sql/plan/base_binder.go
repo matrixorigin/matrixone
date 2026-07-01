@@ -1586,6 +1586,37 @@ between_fallback:
 	return retExpr, nil
 }
 
+func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) (*plan.Expr, bool, error) {
+	if name != function.SerialFunctionName && name != function.SerialFullFunctionName {
+		return nil, false, nil
+	}
+	if len(args) != 1 {
+		return nil, false, nil
+	}
+
+	listExpr, ok := args[0].Expr.(*plan.Expr_List)
+	if !ok {
+		return nil, false, nil
+	}
+	if listExpr.List == nil || len(listExpr.List.List) == 0 {
+		return args[0], true, nil
+	}
+
+	// An IN-list is a set of scalar candidates, not one row-wise vector argument.
+	// Bind serial(v0, v1, ...) as list(serial(v0), serial(v1), ...).
+	for i, subExpr := range listExpr.List.List {
+		newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{subExpr})
+		if err != nil {
+			return nil, true, err
+		}
+		listExpr.List.List[i] = newSubExpr
+		if i == 0 {
+			args[0].Typ = newSubExpr.Typ
+		}
+	}
+	return args[0], true, nil
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
@@ -2986,37 +3017,6 @@ func validNameConstValueExpr(arg *plan.Expr) bool {
 		return false
 	}
 	return fn.Args[0].GetLit() != nil || isDecimalLiteralCast(fn.Args[0])
-}
-
-func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) (*plan.Expr, bool, error) {
-	if name != function.SerialFunctionName && name != function.SerialFullFunctionName {
-		return nil, false, nil
-	}
-	if len(args) != 1 {
-		return nil, false, nil
-	}
-
-	listExpr, ok := args[0].Expr.(*plan.Expr_List)
-	if !ok {
-		return nil, false, nil
-	}
-	if listExpr.List == nil || len(listExpr.List.List) == 0 {
-		return args[0], true, nil
-	}
-
-	// An IN-list is a set of scalar candidates, not one row-wise vector argument.
-	// Bind serial(v0, v1, ...) as list(serial(v0), serial(v1), ...).
-	for i, subExpr := range listExpr.List.List {
-		newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{subExpr})
-		if err != nil {
-			return nil, true, err
-		}
-		listExpr.List.List[i] = newSubExpr
-		if i == 0 {
-			args[0].Typ = newSubExpr.Typ
-		}
-	}
-	return args[0], true, nil
 }
 
 func validNameConstNameAst(args []tree.Expr) bool {
