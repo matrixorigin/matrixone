@@ -206,7 +206,7 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return err
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, v)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry:
 		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
 	case types.T_array_float32:
 		v, err := types.StringToArrayToBytes[float32](val)
@@ -322,6 +322,18 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			res, err = types.ParseTimestamp(zone, s, typ.Scale)
 			if err != nil {
 				return false, false, res, err
+			}
+			// Validate TIMESTAMP minimum value: '1970-01-01 00:00:01.000000' (MySQL behavior)
+			// Note: We don't enforce maximum value limit to allow values beyond MySQL's 2038 limit
+			// MySQL behavior: TIMESTAMP column valid range is always UTC [1970-01-01 00:00:01, 2038-01-19 03:14:07]
+			// The input local time is converted to UTC using the current time_zone, then checked against the range.
+			// The value 'res' is already the UTC timestamp after conversion from the session timezone.
+			// So we directly compare 'res' with TimestampMinValue (which is also in UTC).
+			// This matches MySQL: timezones further west (smaller UTC offset) allow earlier local dates.
+			if res < types.TimestampMinValue {
+				// MySQL error format: "Incorrect datetime value: 'value' for column 'column' at row 1"
+				// Use row 1 as default since we don't have row number in this context
+				return false, false, res, moerr.NewTruncatedValueForField(proc.Ctx, "datetime", s, "ts_min", 1)
 			}
 			return true, false, res, err
 		}
@@ -521,11 +533,11 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 		canInsert = false
 	case tree.P_char:
 		originStr := numVal.String()
-		if len(originStr) == 4 && strings.ToLower(originStr) == "true" {
-			num = true
-		} else {
-			num = false
+		bval, err := types.ParseBool(originStr)
+		if err != nil {
+			return false, false, err
 		}
+		num = bval
 
 	default:
 		canInsert = false

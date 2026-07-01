@@ -1151,13 +1151,17 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		}
 		expr := MakePlan2StringConstExprWithType(string(num))
 		return forceAssignmentCastExprWithIgnore(proc.Ctx, expr, makePlan2Type(colType), isIgnore)
-	case types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
+	case types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry,
 		types.T_array_float32, types.T_array_float64:
 		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
 		}
-		return MakePlan2StringConstExprWithType(string(num)), err
+		expr := MakePlan2StringConstExprWithType(string(num))
+		if colType.Oid == types.T_geometry {
+			return appendCastBeforeExpr(proc.Ctx, expr, makePlan2TypeValue(colType))
+		}
+		return expr, err
 	case types.T_json:
 		canInsert, num, err := util.SetInsertValueJSON(proc, numVal)
 		if err != nil || !canInsert {

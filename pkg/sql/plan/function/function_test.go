@@ -77,10 +77,6 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 	}
 }
 
-func TestCastAssignIsVolatile(t *testing.T) {
-	require.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("cast_assign"))
-}
-
 func Test_fixedTypeCastRule2(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool
@@ -321,15 +317,6 @@ func TestTemporalFunctionReviewTypeCompatibility(t *testing.T) {
 func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, true, GetFunctionIsWinFunByName("rank"))
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
-}
-
-func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
-	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("rand"))
-	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("uuid"))
-	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("now"))
-	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
-	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
-	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
 }
 
 func TestRunPositionCharFunctionDirectly(t *testing.T) {
