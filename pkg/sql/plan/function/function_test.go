@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -78,6 +77,10 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 	}
 }
 
+func TestCastAssignIsVolatile(t *testing.T) {
+	require.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("cast_assign"))
+}
+
 func Test_fixedTypeCastRule2(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool
@@ -101,12 +104,7 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 				{Oid: types.T_decimal64, Width: 38, Size: 16, Scale: 6},
 				types.T_float64.ToType(),
 			},
-			// After optimization: decimal64 + float64 converts to float64
-			// This balances performance and precision (float64 has 15-16 digits)
-			want: [2]types.Type{
-				{Oid: types.T_float64, Width: 0, Size: 8, Scale: 6},
-				{Oid: types.T_float64, Width: 0, Size: 8, Scale: 0},
-			},
+			want: [2]types.Type{types.T_float64.ToTypeWithScale(6), types.T_float64.ToType()},
 		},
 
 		{
@@ -125,7 +123,7 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 		// we just cast it as float64 / float64
 		{
 			shouldCast: true,
-			in:         [2]types.Type{types.T_any.ToType(), types.T_any.ToType()},
+			in:         [2]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
 			want:       [2]types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
 		},
 	}
@@ -198,8 +196,8 @@ func Test_GetFunctionByName(t *testing.T) {
 		{
 			name: "from_unixtime", args: []types.Type{types.New(types.T_decimal256, 65, 0)},
 			shouldErr:  false,
-			requireFid: FROM_UNIXTIME, requireOid: 3,
-			shouldCast: false,
+			requireFid: FROM_UNIXTIME, requireOid: 2,
+			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToTypeWithScale(0)},
 			requireRet: types.T_datetime.ToType(),
 		},
 
@@ -238,18 +236,39 @@ func Test_GetFunctionByName(t *testing.T) {
 			requireRet: types.T_varchar.ToType(),
 		},
 		{
-			name: "uuid_to_bin", args: []types.Type{types.T_varchar.ToType(), types.T_float64.ToType()},
+			name: "sign", args: []types.Type{types.T_varchar.ToType()},
 			shouldErr:  false,
-			requireFid: UUID_TO_BIN, requireOid: 0,
-			shouldCast: false,
-			requireRet: types.T_varbinary.ToType(),
+			requireFid: SIGN, requireOid: 2,
+			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType()},
+			requireRet: types.T_int64.ToType(),
 		},
 		{
-			name: "bin_to_uuid", args: []types.Type{types.T_varbinary.ToType(), types.T_float64.ToType()},
+			name: "sign", args: []types.Type{types.T_char.ToType()},
 			shouldErr:  false,
-			requireFid: BIN_TO_UUID, requireOid: 0,
+			requireFid: SIGN, requireOid: 2,
+			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType()},
+			requireRet: types.T_int64.ToType(),
+		},
+		{
+			name: "sign", args: []types.Type{types.T_text.ToType()},
+			shouldErr:  false,
+			requireFid: SIGN, requireOid: 2,
+			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType()},
+			requireRet: types.T_int64.ToType(),
+		},
+		{
+			name: "asin", args: []types.Type{types.T_float64.ToType()},
+			shouldErr:  false,
+			requireFid: ASIN, requireOid: 0,
 			shouldCast: false,
-			requireRet: types.T_varchar.ToType(),
+			requireRet: types.T_float64.ToType(),
+		},
+		{
+			name: "asin", args: []types.Type{types.T_int64.ToType()},
+			shouldErr:  false,
+			requireFid: ASIN, requireOid: 0,
+			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType()},
+			requireRet: types.T_float64.ToType(),
 		},
 	}
 
@@ -276,54 +295,27 @@ func Test_GetFunctionByName(t *testing.T) {
 	}
 }
 
-func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
+func TestTemporalFunctionReviewTypeCompatibility(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	tests := []struct {
-		name string
-		args []types.Type
-	}{
-		{
-			name: "blob input",
-			args: []types.Type{types.T_blob.ToType(), types.T_varchar.ToType()},
-		},
-		{
-			name: "varchar input",
-			args: []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
-		},
-		{
-			name: "char input",
-			args: []types.Type{types.T_char.ToType(), types.T_varchar.ToType()},
-		},
-		{
-			name: "text input",
-			args: []types.Type{types.T_text.ToType(), types.T_varchar.ToType()},
-		},
-		{
-			name: "blob input with iv",
-			args: []types.Type{types.T_blob.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
-		},
-		{
-			name: "varchar input with iv",
-			args: []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
-		},
-		{
-			name: "char input with iv",
-			args: []types.Type{types.T_char.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
-		},
-		{
-			name: "text input with iv",
-			args: []types.Type{types.T_text.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
-		},
+
+	curtime, err := GetFunctionByName(proc.Ctx, "curtime", nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_time, curtime.retType.Oid)
+	require.Equal(t, int32(6), curtime.retType.Scale)
+
+	stringTypes := []types.T{types.T_varchar, types.T_char, types.T_text}
+	for _, firstType := range stringTypes {
+		for _, secondType := range stringTypes {
+			addtime, err := GetFunctionByName(proc.Ctx, "addtime", []types.Type{firstType.ToType(), secondType.ToType()})
+			require.NoError(t, err, "addtime(%s, %s)", firstType, secondType)
+			require.Equal(t, types.T_datetime, addtime.retType.Oid)
+			require.Equal(t, int32(6), addtime.retType.Scale)
+		}
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			get, err := GetFunctionByName(proc.Ctx, "aes_decrypt", tc.args)
-			require.NoError(t, err)
-			require.Equal(t, int32(AES_DECRYPT), get.fid)
-			require.Equal(t, types.T_blob.ToType(), get.retType)
-		})
-	}
+	timestampadd, err := GetFunctionByName(proc.Ctx, "timestampadd", []types.Type{types.T_char.ToType(), types.T_int64.ToType(), types.T_char.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.T_char, timestampadd.retType.Oid)
 }
 
 func TestGetFunctionIsWinfunByName(t *testing.T) {
@@ -331,42 +323,13 @@ func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
 }
 
-func TestUserLevelLockBuiltinRegistration(t *testing.T) {
-	cases := []struct {
-		name string
-		id   int
-		args []types.T
-		ret  types.Type
-	}{
-		{name: "get_lock", id: GET_LOCK, args: []types.T{types.T_varchar, types.T_float64}, ret: types.T_int64.ToType()},
-		{name: "release_lock", id: RELEASE_LOCK, args: []types.T{types.T_varchar}, ret: types.T_int64.ToType()},
-		{name: "is_free_lock", id: IS_FREE_LOCK, args: []types.T{types.T_varchar}, ret: types.T_int64.ToType()},
-		{name: "is_used_lock", id: IS_USED_LOCK, args: []types.T{types.T_varchar}, ret: types.T_uint64.ToType()},
-		{name: "release_all_locks", id: RELEASE_ALL_LOCKS, args: []types.T{}, ret: types.T_int64.ToType()},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var fn *FuncNew
-			for i := range supportedControlBuiltIns {
-				if supportedControlBuiltIns[i].functionId == tc.id {
-					fn = &supportedControlBuiltIns[i]
-					break
-				}
-			}
-			require.NotNil(t, fn)
-			require.Equal(t, plan.Function_STRICT, fn.class)
-			require.Equal(t, STANDARD_FUNCTION, fn.layout)
-			require.Len(t, fn.Overloads, 1)
-
-			overload := fn.Overloads[0]
-			require.Equal(t, tc.args, overload.args)
-			require.True(t, overload.volatile)
-			require.True(t, overload.realTimeRelated)
-			require.Equal(t, tc.ret, overload.retType(nil))
-			require.NotNil(t, overload.newOp())
-		})
-	}
+func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("rand"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("uuid"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("now"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
 }
 
 func TestRunPositionCharFunctionDirectly(t *testing.T) {

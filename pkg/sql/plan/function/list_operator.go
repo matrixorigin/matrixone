@@ -130,9 +130,6 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if jsonOrderingWithStringNotSupported(inputs) {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
@@ -168,9 +165,6 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if jsonOrderingWithStringNotSupported(inputs) {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
@@ -206,9 +200,6 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if jsonOrderingWithStringNotSupported(inputs) {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
@@ -244,9 +235,6 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if jsonOrderingWithStringNotSupported(inputs) {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
@@ -284,9 +272,25 @@ var supportedOperators = []FuncNew{
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 
-			if jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[1]}) ||
-				jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[2]}) {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			// All-numeric decimal BETWEEN: betweenImpl compares raw decimal
+			// values without rescaling at runtime, so the three operands must
+			// share one identical decimal type. Compute a common type that
+			// preserves the max integral width AND max scale across the three
+			// operands (issue #24565), promoting to decimal256 when decimal128
+			// would overflow, instead of only aligning scale (which could keep
+			// an under-sized width / family and overflow) or rejecting
+			// mixed-scale/mixed-family decimals.
+			anyDecimal := inputs[0].Oid.IsDecimal() || inputs[1].Oid.IsDecimal() || inputs[2].Oid.IsDecimal()
+			allDecimalOrInt := isDecimalOrInteger(inputs[0]) && isDecimalOrInteger(inputs[1]) && isDecimalOrInteger(inputs[2])
+			if anyDecimal && allDecimalOrInt {
+				target := widestDecimalFamily(inputs).ToType()
+				if !setSafeDecimalWidthAndScaleFromSource(&target, inputs) {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+				if !otherCompareOperatorSupports(target, target) {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+				return newCheckResultWithCast(0, []types.Type{target, target, target})
 			}
 
 			has0, t01, t1 := fixedTypeCastRule1(inputs[0], inputs[1])
@@ -294,24 +298,14 @@ var supportedOperators = []FuncNew{
 			if t01.Oid != t02.Oid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
-
-			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
-				if t01.Scale != t1.Scale || t02.Scale != t2.Scale {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
+			if !otherCompareOperatorSupports(t01, t1) || !otherCompareOperatorSupports(t01, t2) {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 
 			if has0 || has1 {
-				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
-					return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
-				}
-			} else {
-				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
-					return newCheckResultWithSuccess(0)
-				}
+				return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
 			}
-
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+			return newCheckResultWithSuccess(0)
 		},
 
 		Overloads: []overload{
@@ -667,16 +661,6 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 100,
-				args:       []types.T{types.T_decimal256, types.T_decimal256},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[types.Decimal256]().operatorIn
-				},
-			},
-			{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
@@ -794,16 +778,6 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpOperatorStrIn().operatorIn
-				},
-			},
-			{
-				overloadId: 24,
-				args:       []types.T{types.T_year, types.T_year},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[types.MoYear]().operatorIn
 				},
 			},
 			// {
@@ -1218,16 +1192,6 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 100,
-				args:       []types.T{types.T_decimal256, types.T_decimal256},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[types.Decimal256]().operatorNotIn
-				},
-			},
-			{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
@@ -1345,16 +1309,6 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpOperatorStrIn().operatorNotIn
-				},
-			},
-			{
-				overloadId: 24,
-				args:       []types.T{types.T_year, types.T_year},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[types.MoYear]().operatorNotIn
 				},
 			},
 
@@ -1669,24 +1623,6 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					// After type conversion, both parameters may be decimal128
-					// Check both parameters to determine result type
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal256, 65, scale1)
-					}
-					if parameters[0].Oid == types.T_decimal128 || parameters[1].Oid == types.T_decimal128 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal128, 38, scale1)
-					}
 					if parameters[0].Oid == types.T_decimal64 {
 						scale1 := parameters[0].Scale
 						scale2 := parameters[1].Scale
@@ -1694,6 +1630,14 @@ var supportedOperators = []FuncNew{
 							scale1 = scale2
 						}
 						return types.New(types.T_decimal64, 18, scale1)
+					}
+					if parameters[0].Oid == types.T_decimal128 {
+						scale1 := parameters[0].Scale
+						scale2 := parameters[1].Scale
+						if scale1 < scale2 {
+							scale1 = scale2
+						}
+						return types.New(types.T_decimal128, 38, scale1)
 					}
 					return parameters[0]
 				},
@@ -1746,14 +1690,6 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal256, 65, scale1)
-					}
 					if parameters[0].Oid == types.T_decimal64 {
 						scale1 := parameters[0].Scale
 						scale2 := parameters[1].Scale
@@ -1770,7 +1706,7 @@ var supportedOperators = []FuncNew{
 						}
 						return types.New(types.T_decimal128, 38, scale1)
 					}
-					if parameters[0].Oid == types.T_date || parameters[0].Oid == types.T_datetime || parameters[0].Oid == types.T_year {
+					if parameters[0].Oid == types.T_date || parameters[0].Oid == types.T_datetime {
 						return types.T_int64.ToType()
 					}
 					return parameters[0]
@@ -1803,23 +1739,6 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					// Multiply-specific: when coercion promotes intN×D64 to
-					// D128×D128, downgrade to D64×D64. The d64Mul kernel produces
-					// D128 output so overflow is impossible, and it's ~4× faster
-					// than d128Mul (1 vs 4 hardware MUL instructions).
-					// Exclude uint64 (values > max_int64 can't fit in D64=int64).
-					if t1.Oid == types.T_decimal128 && t2.Oid == types.T_decimal128 {
-						i0, i1 := inputs[0].Oid, inputs[1].Oid
-						hasD64 := i0 == types.T_decimal64 || i1 == types.T_decimal64
-						noD128 := i0 != types.T_decimal128 && i1 != types.T_decimal128
-						noU64 := i0 != types.T_uint64 && i1 != types.T_uint64
-						if hasD64 && noD128 && noU64 {
-							t1 = types.T_decimal64.ToType()
-							t2 = types.T_decimal64.ToType()
-							SetTargetScaleFromSource(&inputs[0], &t1)
-							SetTargetScaleFromSource(&inputs[1], &t2)
-						}
-					}
 					if multiOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})
 					} else if multiOperatorSupports(t1, t2) {
@@ -1838,21 +1757,6 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale := int32(12)
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 > scale {
-							scale = scale1
-						}
-						if scale2 > scale {
-							scale = scale2
-						}
-						if scale1+scale2 < scale {
-							scale = scale1 + scale2
-						}
-						return types.New(types.T_decimal256, 65, scale)
-					}
 					if parameters[0].Oid == types.T_decimal64 || parameters[0].Oid == types.T_decimal128 {
 						scale := int32(12)
 						scale1 := parameters[0].Scale
@@ -1867,9 +1771,6 @@ var supportedOperators = []FuncNew{
 							scale = scale1 + scale2
 						}
 						return types.New(types.T_decimal128, 38, scale)
-					}
-					if parameters[0].Oid == types.T_year {
-						return types.T_int64.ToType()
 					}
 					return parameters[0]
 				},
@@ -1922,17 +1823,6 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale := int32(12)
-						scale1 := parameters[0].Scale
-						if scale > scale1+6 {
-							scale = scale1 + 6
-						}
-						if scale < scale1 {
-							scale = scale1
-						}
-						return types.New(types.T_decimal256, 65, scale)
-					}
 					if parameters[0].Oid.IsDecimal() {
 						scale := int32(12)
 						scale1 := parameters[0].Scale
@@ -1943,9 +1833,6 @@ var supportedOperators = []FuncNew{
 							scale = scale1 + 6
 						}
 						return types.New(types.T_decimal128, 38, scale)
-					}
-					if parameters[0].Oid == types.T_year {
-						return types.T_float64.ToType()
 					}
 					return parameters[0]
 				},
@@ -2171,16 +2058,6 @@ var supportedOperators = []FuncNew{
 					return operatorUnaryPlus[types.Decimal128]
 				},
 			},
-			{
-				overloadId: 100,
-				args:       []types.T{types.T_decimal256},
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
-				},
-				newOp: func() executeLogicOfOverload {
-					return operatorUnaryPlus[types.Decimal256]
-				},
-			},
 		},
 	},
 
@@ -2274,7 +2151,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 100,
+				overloadId: 8,
 				args:       []types.T{types.T_decimal256},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
@@ -2577,16 +2454,6 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 100,
-				args:       []types.T{types.T_decimal256},
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
-				},
-				newOp: func() executeLogicOfOverload {
-					return CoalesceGeneral[types.Decimal256]
-				},
-			},
-			{
 				overloadId: 17,
 				args:       []types.T{types.T_date},
 				retType: func(parameters []types.Type) types.Type {
@@ -2666,6 +2533,16 @@ var supportedOperators = []FuncNew{
 					return CoalesceStr
 				},
 			},
+			{
+				overloadId: 25,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Decimal256]
+				},
+			},
 		},
 	},
 
@@ -2693,6 +2570,66 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return NewCast
+				},
+			},
+		},
+	},
+
+	// operator `cast_strict`
+	{
+		functionId: CAST_STRICT,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 2 {
+				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewStrictCast
+				},
+			},
+		},
+	},
+
+	// operator `cast_assign`
+	// Used by DML assignment paths (INSERT/UPDATE projection) for CHAR/VARCHAR
+	// targets. Unlike `cast_strict` (which always rejects over-length writes),
+	// `cast_assign` honors `sql_mode` at runtime: strict mode rejects (1406),
+	// non-strict mode truncates. Over-length that is only trailing spaces is
+	// accepted (truncated) even in strict mode, matching MySQL.
+	{
+		functionId: CAST_ASSIGN,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 2 {
+				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewAssignCast
 				},
 			},
 		},

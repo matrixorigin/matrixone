@@ -2923,7 +2923,7 @@ func (builder *QueryBuilder) buildValueScan(
 			if err != nil {
 				return 0, err
 			}
-			defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
+			defExpr, err = forceCastExpr2WithIgnore(builder.GetContext(), defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 			if err != nil {
 				return 0, err
 			}
@@ -2995,7 +2995,7 @@ func (builder *QueryBuilder) buildValueScan(
 						}
 					}
 				}
-				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
+				defExpr, err = forceCastExpr2WithIgnore(builder.GetContext(), defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
 					return 0, err
 				}

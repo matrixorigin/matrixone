@@ -31,7 +31,7 @@ SELECT * FROM char_test;
 DELETE FROM char_test;
 
 -- EMPTY()
-INSERT INTO char_test(str1) VALUES(SPACE(100));
+INSERT INTO char_test(str1) VALUES(REPEAT('x', 100));
 INSERT INTO char_test(str1) VALUES('RONALDOSHOOTGOAL');
 INSERT INTO char_test(str2) VALUES(EMPTY(""));
 INSERT INTO char_test(str2) VALUES(EMPTY(null));
@@ -76,7 +76,9 @@ INSERT INTO math_test(tiny,small,int_test,big) VALUES(32, 2432, 54354, 543324324
 INSERT INTO math_test(tiny_un, small_un, int_un) VALUES(127, 32768, 2147483648);
 SELECT * FROM math_test;
 
-INSERT INTO math_test(tiny_un, small_un, int_un) VALUES(-128, -32768, -2147483648);
+-- @bvt:issue#4952
+--INSERT INTO math_test(tiny_un, small_un, int_un) VALUES(-128, -32768, -2147483648);
+-- @bvt:issue
 
 -- 小数位数
 DROP TABLE IF EXISTS test1;

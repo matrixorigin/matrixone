@@ -192,6 +192,7 @@ type QueryBuilder struct {
 
 	isPrepareStatement    bool
 	mysqlCompatible       bool
+		isInsertIgnore        bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
