@@ -254,6 +254,7 @@ func (exec *bitOpExecBytes) SetExtraInformation(partialResult any, _ int) error 
 func (exec *bitOpExecBytes) Flush() ([]*vector.Vector, error) {
 	// transfer vector to result
 	vecs := make([]*vector.Vector, len(exec.state))
+	neutralBytesForAnd := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 	for i := range vecs {
 		vecs[i] = exec.state[i].vecs[0]
 		exec.state[i].vecs[0] = nil
@@ -263,12 +264,13 @@ func (exec *bitOpExecBytes) Flush() ([]*vector.Vector, error) {
 		// Replace NULL entries with neutral values per MySQL semantics:
 		// BIT_AND: neutral is all bits set (8 bytes of 0xFF)
 		// BIT_OR, BIT_XOR: neutral is empty bytes
-		var neutralBytesForAnd = []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 		for j := 0; j < vecs[i].Length(); j++ {
 			if vecs[i].IsNull(uint64(j)) {
 				vecs[i].UnsetNull(uint64(j))
 				if exec.op == bitAnd {
-					_ = vector.SetBytesAt(vecs[i], j, neutralBytesForAnd, exec.mp)
+					if err := vector.SetBytesAt(vecs[i], j, neutralBytesForAnd, exec.mp); err != nil {
+						return nil, err
+					}
 				}
 				// For bitOr and bitXor, the default zero bytes (empty) is already the neutral value
 			}

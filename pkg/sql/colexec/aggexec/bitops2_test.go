@@ -207,11 +207,11 @@ func TestBitOpsMultipleGroups(t *testing.T) {
 		groups := []uint64{1, 1, 1, 3, 3}
 
 		for _, tc := range []struct {
-			name          string
-			aggID         int64
-			expectGroup1  uint64
-			expectGroup2  uint64
-			expectGroup3  uint64
+			name         string
+			aggID        int64
+			expectGroup1 uint64
+			expectGroup2 uint64
+			expectGroup3 uint64
 		}{
 			{"bit_and multi-group", AggIdOfBitAnd, 1, math.MaxUint64, 2},
 			{"bit_or multi-group", AggIdOfBitOr, 7, 0, 6},
