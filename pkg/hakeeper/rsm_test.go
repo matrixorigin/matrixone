@@ -200,15 +200,18 @@ func TestGetIDCmd(t *testing.T) {
 	cmd := GetAllocateIDCmd(pb.CNAllocateID{Batch: 100})
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
-	assert.Equal(t, sm.Result{Value: 1}, result)
+	assert.Equal(t, sm.Result{Value: 300000001}, result)
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
-	assert.Equal(t, sm.Result{Value: 101}, result)
-	assert.Equal(t, uint64(201), tsm1.assignID())
+	assert.Equal(t, sm.Result{Value: 300000101}, result)
+	assert.Equal(t, uint64(300000201), tsm1.assignID())
 
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
-	assert.Equal(t, sm.Result{Value: 202}, result)
+	assert.Equal(t, sm.Result{Value: 300000202}, result)
+	assert.Equal(t, uint64(300000000), tsm1.state.NextIDByKey["index_key"])
+	assert.Equal(t, uint64(301500), tsm1.state.NextIDByKey["____server_conn_id"])
+	assert.Equal(t, uint64(1), tsm1.state.NextIDByKey["_mo_bootstrap"])
 }
 
 func TestGetIDCmdDuringBootstrapCommandsReceived(t *testing.T) {
@@ -220,14 +223,33 @@ func TestGetIDCmdDuringBootstrapCommandsReceived(t *testing.T) {
 	cmd := GetAllocateIDCmd(pb.CNAllocateID{Batch: 100})
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
-	assert.Equal(t, sm.Result{Value: 50000001}, result)
-	assert.Equal(t, uint64(50100000), tsm1.state.NextID)
+	assert.Equal(t, sm.Result{Value: 300000001}, result)
+	assert.Equal(t, uint64(300000100), tsm1.state.NextID)
 
 	cmd = GetAllocateIDCmd(pb.CNAllocateID{Key: "____server_conn_id", Batch: 100})
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 	assert.Equal(t, sm.Result{Value: 301501}, result)
 	assert.Equal(t, uint64(301600), tsm1.state.NextIDByKey["____server_conn_id"])
+	assert.Equal(t, uint64(300000000), tsm1.state.NextIDByKey["index_key"])
+	assert.Equal(t, uint64(1), tsm1.state.NextIDByKey["_mo_bootstrap"])
+}
+
+func TestRecoveryIDWatermarksDoNotOverwriteExistingKeyIDs(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	tsm1.state.State = pb.HAKeeperRunning
+	tsm1.state.NextID = 400000000
+	tsm1.state.NextIDByKey["index_key"] = 10
+	tsm1.state.NextIDByKey["____server_conn_id"] = 20
+	tsm1.state.NextIDByKey["_mo_bootstrap"] = 2
+
+	cmd := GetAllocateIDCmd(pb.CNAllocateID{Batch: 100})
+	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 400000001}, result)
+	assert.Equal(t, uint64(10), tsm1.state.NextIDByKey["index_key"])
+	assert.Equal(t, uint64(20), tsm1.state.NextIDByKey["____server_conn_id"])
+	assert.Equal(t, uint64(2), tsm1.state.NextIDByKey["_mo_bootstrap"])
 }
 
 func TestAllocateIDByKeyCmd(t *testing.T) {
