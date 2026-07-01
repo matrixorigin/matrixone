@@ -774,6 +774,14 @@ func (s *stateMachine) assertState() {
 	}
 }
 
+func (s *stateMachine) assertIDAllocState() {
+	if s.state.State != pb.HAKeeperRunning &&
+		s.state.State != pb.HAKeeperBootstrapping &&
+		s.state.State != pb.HAKeeperBootstrapCommandsReceived {
+		panic(fmt.Sprintf("HAKeeper not in the running state, in %s", s.state.State.String()))
+	}
+}
+
 func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	// TODO: we need to make sure InitialClusterRequestCmd is the
 	// first user cmd added to the Raft log
@@ -789,7 +797,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.TickUpdate:
 		return s.handleTick(cmd), nil
 	case pb.GetIDUpdate:
-		s.assertState()
+		s.assertIDAllocState()
 		return s.handleGetIDCmd(cmd), nil
 	case pb.ScheduleCommandUpdate:
 		return s.handleUpdateCommandsCmd(cmd), nil
