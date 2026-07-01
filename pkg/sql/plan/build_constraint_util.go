@@ -213,10 +213,17 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	return newTblInfo, nil
 }
 
-func checkTableType(ctx context.Context, tableDef *TableDef) error {
+func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 	if tableDef.TableType == catalog.SystemSourceRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from source")
 	} else if tableDef.TableType == catalog.SystemExternalRel {
+		// A writable external table (created with WRITE_FILE_PATTERN) accepts
+		// INSERT/LOAD; everything else on an external table is rejected.
+		if op == "insert" {
+			if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
+				return nil
+			}
+		}
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from view")
@@ -277,7 +284,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	if err := checkTableType(ctx.GetContext(), tableDef); err != nil {
+	if err := checkTableType(ctx.GetContext(), tableDef, tblInfo.typ); err != nil {
 		return err
 	}
 
