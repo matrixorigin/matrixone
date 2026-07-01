@@ -115,19 +115,21 @@ needed):
 - ngram/gojieba fulltext: `AlwaysAsync` returns false → their per-index `async`
   param is still honored exactly as today (behavior unchanged).
 
-### Architecture: CDC → segments + tombstone + merge
+### Architecture: CDC → single CdcTail log → full-reindex compaction
 ```
 source DML ─CDC─▶ ISCP retrieval sinker
-                   ├─ INSERT/UPSERT: jieba-tokenize CDC batch → Builder → pre-built segment → append as tag=1 delta (new index_id)
-                   └─ DELETE: append (pk, deleteLSN) as a tag=1 record in ft_index
-        idxcron ─▶ merge tag=0 main + tag=1 delta segments, apply tag=1 deletes → new tag=0, clear tag=1 (cuVS rebuild)
-         query  ─▶ load tag=0 main + tag=1 delta segments + tag=1 deletes → SearchSegments(allow ∩ live-by-LSN)
+                   ├─ INSERT/UPSERT: jieba-tokenize CDC batch → Builder → pre-built segment → append to tag=1 CdcTail log at next chunk_id
+                   └─ DELETE: append (op, pk) to tag=1 CdcTail log at next chunk_id
+        idxcron ─▶ full REINDEX from source → fresh tag=0; build txn wipes the tag=1 CdcTail (cuVS rebuild)
+         query  ─▶ load tag=0 + tag=1 CdcTail (chunk_id order) → SearchSegmentsLive(allow ∩ live-by-chunk_id)
 ```
 Storage mirrors cuVS in the **same `ft_index` table** via its existing `tag`
-column: **tag=0** = the **compacted main** index; **tag=1** = the **incremental
-delta** — pre-built insert segments **and** delete records. No separate tombstone
-table. Insert segments start in tag=1 and **graduate to tag=0 at compaction**, so
-**tag=1 size crossing a threshold is the natural compaction gate** (cuVS's
+column: **tag=0** = the **compacted main** index; **tag=1** = a **single append log**
+(`index_id = vectorindex.CdcTailId`) holding pre-built insert segments **and** delete
+records as `chunk_id`-ordered frames. No separate tombstone table, **no per-segment
+`index_id`** (that was the superseded multi-segment idea — see the dedup decision
+below). tag=1 grows until a **full reindex** wipes it and writes a fresh tag=0, so
+**tag=1 size crossing a threshold is the natural reindex gate** (cuVS's
 `countTag1Records`). The WAND engine core is already built + unit-tested in
 `pkg/fulltext/wand`: `Builder.FinishSegments(capacity)`, `SearchSegments`
 (corpus-global BM25 across segments), `Merge(id, segs…)`, and the `Membership`
@@ -144,17 +146,20 @@ instead of `[]float32`), so WAND reuses it directly instead of mirroring it:
 - **Tag constants are shared** — `pkg/vectorindex/types.go`: `Tag_ModelChunk=0`,
   `Tag_CdcEvents=1`, sentinel `CdcTailId="cdc_tail"`. Use these (the `ft_index`
   `tag` column already carries 0/1); don't invent new ones.
-- **Two kinds of tag=1 rows.** Delta **segments** are self-contained WAND models →
-  `index_id = batchLSN` (+ `ft_meta` rows, like tag=0). The **delete log** is
-  homogeneous small records → a `cdc_tail`-style single sentinel `index_id` with
-  appended framed chunks (no `ft_meta` row; per-chunk CRC like cuVS).
+- **One append log, two frame kinds** — reuse `CdcTailId`. Both insert **segments**
+  (pre-built WAND models) and **delete** records live in the single tag=1 log
+  (`index_id = CdcTailId`), interleaved and ordered by `chunk_id` via the existing
+  `NextChunkIdSql` (`COALESCE(MAX(chunk_id)+1,0)`). **No per-segment `index_id`, no
+  `segno`, no per-chunk timestamp** (see the dedup decision). One `ft_meta` row for
+  the tag=1 log (per-chunk CRC like cuVS).
 - **Codec reuse.** `FrameCdcChunk`/`UnframeCdcChunk` (`pkg/vectorindex/cuvs/cdc.go`:
-  magic+version+`n_inserts`/`n_deletes`/`n_upserts`+CRC32+footer) frames the delete
-  log. A WAND delete record = `(op, encodePk(pk), deleteLSN int64)` — pk via the
-  existing `encodePk`/`decodePk` (`serialize.go`) since WAND pk is `any` (cuVS
-  `Pkid` is int64). **WAND "replay" = the DELETE half of `ReplayEventLog` only**
-  (decode framed delete chunks → `pk→maxDeleteLSN` map); insert deltas are loaded
-  as pre-built segments, never replayed.
+  magic+version+`n_inserts`/`n_deletes`/`n_upserts`+CRC32+footer) frames both a
+  segment blob and a delete-record batch. A WAND delete record = `(op, encodePk(pk))`
+  — pk via the existing `encodePk`/`decodePk` (`serialize.go`) since WAND pk is `any`
+  (cuVS `Pkid` is int64); **no order field — the frame's `chunk_id` position is its
+  order**, so no LSN/segno/timestamp is stored. **WAND "replay" = the DELETE half of
+  `ReplayEventLog` only** (walk frames in `chunk_id` order → `pk→deleted-after-chunk_id`
+  map); insert frames are loaded as pre-built segments, never re-tokenized.
 - **No quant leakage / global-stats parallel.** cuVS keeps quant params in the
   tag=0 model tar, never in CDC (`cagra/model_gpu.go:75-81`). The exact analog:
   WAND's global `N`/`avgdl`/`df` are aggregated at query from segment metadata,
@@ -163,54 +168,111 @@ instead of `[]float32`), so WAND reuses it directly instead of mirroring it:
 
 ### Segment granularity: one segment per *flush*, not per row/event
 A segment = one sinker `FinishSegments` flush, batching **many** rows. A CDC batch
-of 100 inserts → **one** segment (`index_id=batchLSN`), not 100. `max_index_capacity`
-caps docs-per-segment (a huge insert yields a few segments, not thousands); idxcron
-tiered merge collapses small/recent segments so live count K stays small.
-**Load = O(K) `Deserialize` + read tag=1; it never merges or replays.** Compaction
-is background idxcron only. Build cost is paid **once at write** (row in hand);
-the read path stays cheap.
+of 100 inserts → **one** appended segment frame at the next `chunk_id`, not 100.
+`max_index_capacity` caps docs-per-segment (a huge insert yields a few segment
+frames, not thousands). **Load = O(K) `Deserialize` over the `chunk_id`-ordered
+tag=1 frames; it never re-tokenizes.** Reclamation is a background idxcron **full
+reindex** only (no incremental merge). Build cost is paid **once at write** (row in
+hand); the read path stays cheap.
 
 ### Write path: NO full-index download
 - **INSERT/UPSERT** → build a small new segment from only this CDC batch's rows →
-  append as a new tag=1 delta segment with `index_id=batchLSN` (chunk rows
-  `REPLACE INTO` → idempotent on replay). Existing segments untouched.
-- **DELETE** → append one tag=1 record `(pk, deleteLSN)`. Zero index I/O.
-- Big segments are downloaded **only at compaction**, under a **tiered/leveled
-  policy** (merge small/recent; leave the large base) — LSM/Lucene behavior.
+  append it as framed chunk(s) to the tag=1 `CdcTail` log at the next `chunk_id`
+  (`NextChunkIdSql`; a redelivered batch just becomes later frames at higher
+  `chunk_id`, masked at load). Existing frames untouched.
+- **DELETE** → append one `(op, pk)` frame at the next `chunk_id`. Zero index I/O.
+- The full index is downloaded **only at reindex** (idxcron full rebuild from
+  source, which wipes tag=1) — not on the write path.
 
-### CDC duplicates & ordering — LSN-as-identity (no separate segno)
-Two **distinct** duplicate problems; only the second needs an ordering, and the
-segment's LSN-based `index_id` already *is* it — so **no separate `segno`**.
+### CDC duplicates & ordering — single CdcTail log, `chunk_id`-ordered (cuVS-aligned)  [SUPERSEDES "LSN-as-identity" AND the interim "segno" note — DECISION 2026-07-01, revised]
 
-**Problem A — replay duplicates (the `REPLACE INTO` problem).** ISCP redelivers the
-same INSERTs (snapshot replay, watermark rewind, at-least-once). Postings solves
-this with `REPLACE INTO` on PK `(word, doc_id)`. **WAND does the same at chunk
-grain:** segment `index_id = batchLSN` (deterministic), chunk rows `REPLACE INTO`
-on `(index_id, chunk_id)`. The build is deterministic (same rows → same bytes →
-same chunks), so a redelivered batch **overwrites the identical segment** — no
-duplicate, no segno.
+**Decision (2026-07-01, revised):** follow cuVS/IVF-PQ exactly — tag=1 is a **single
+append log** (`index_id = vectorindex.CdcTailId`), ordered by **`chunk_id`** via the
+existing `NextChunkIdSql` (`COALESCE(MAX(chunk_id)+1, 0)`, `cuvs/cdc.go:945`).
+Dedup is a **load-time PK reconciliation ordered by `chunk_id`** (append order in
+that one log). There is **no ISCP LSN, no wall-clock timestamp, and no cross-segment
+`segno` counter** — the earlier `segno`/`WandModel.LSN` idea is dropped, and
+`DataRetriever.GetLSN()` is not added. This supersedes every "batchLSN /
+`index_id = LSN`" and interim "`segno`" reference elsewhere in this doc.
 
-**Problem B — UPDATE/UPSERT puts the same pk in two segments** (old + new). `REPLACE
-INTO` can't merge them (different `index_id`s); source PK is unique so this only
-arises from UPDATE/UPSERT. Showing both → INNER-JOIN-to-source yields the doc
-twice. Keep the **newest** copy (its score matches current text) via the LSN:
-- segment `index_id = batchLSN`; delete record = `(pk, deleteLSN = its own batch LSN)`.
-- a pk's live copy = the **highest-LSN segment** holding it; dead iff a delete with
-  `deleteLSN > thatSegmentLSN` (strict `>`).
-- **UPDATE in batch L** (ISCP → DELETE+INSERT both at L): delete `(pk, L)` kills
-  every older copy (`L > olderLSN`) but **not** the new copy in segment `index_id=L`
-  (`L` is not `> L`) → one live copy, newest wins. Resolved by LSN *value*, so
-  ISCP's delete-first / lost intra-ts order is **irrelevant**.
+**Why one log, not N segments.** The multi-`index_id`-segment design forced a
+cross-segment ordering key (LSN → segno → timestamp), and every candidate had a
+sharp edge (LSN restarts on ISCP re-snapshot; wall-clock goes backwards;
+`MAX(segno)+1` is a fragile read-modify-write; compaction stamping). cuVS sidesteps
+all of it: **one `CdcTail` log, `chunk_id` = `MAX(chunk_id)+1` as the order key**
+(`sync.go:245,272`), sorted at load (`model_gpu.go:652` `replayEventChunks` sorts by
+`chunk_id`). WAND reuses that primitive verbatim.
 
-**Idempotency falls out**: deletes record their own batch LSN, segments are keyed by
-batch LSN — nothing reads "current committed max," so replay reproduces identical
-state. This is cuVS's `ReplayEventLog` net-state using the LSN we already have, with
-the *segments themselves* as the ordered "overflow." (cuVS keeps a deleted-set +
-pk-keyed overflow-map and `CdcOpInsert` never clears the deleted-set,
-`cuvs/cdc.go:534-549` — we get the same effect structurally from LSN ordering.)
-**Cost:** at load, dedup multi-segment pks by max LSN (only *updated* pks appear in
->1 segment) → precompute a **per-segment deny-bitmap** so `Membership.Contains(ord)`
-is unchanged.
+**What WAND appends to the log** (heterogeneous frames, one chunk_id sequence):
+- **INSERT/UPSERT** → a *pre-built mini-`WandModel`* serialized and appended as
+  framed chunk(s) at the next `chunk_id`. (WAND's tag=1 stays *pre-built segments*,
+  never raw text — so load is `Deserialize`, never re-tokenize; this is the one
+  divergence from cuVS, whose tail is raw vectors.)
+- **DELETE** → a small framed `(op, pk)` record at the next `chunk_id` (reuse
+  `FrameCdcChunk` / the delete-log codec; **no `segno`/LSN field** — the record's
+  `chunk_id` position *is* its order).
+
+**Dedup at load — `chunk_id`-ordered PK reconciliation.** Read tag=0 base + the
+tag=1 `CdcTail` chunks sorted by `chunk_id`; deserialize insert frames into the
+ordered segment list `segs` and fold delete frames into `deletes`. Then
+`ComputeLiveness` (`search.go:83`, already implemented) resolves duplicates using
+each segment's own `pk→ord` dict (`s.pks`, from `Builder.docOrd` `wand.go:323`):
+`owner[pk] = the segment with the highest chunk_id holding pk`; a pk is dead in a
+segment iff a delete frame at a **higher** `chunk_id` exists (strict `>`). Only the
+ordering key changes — `s.LSN` → the segment's `chunk_id` (append position). The
+dedup identity is the **source PK**, exactly like HNSW (`Contains(PKey)`,
+`hnsw/sync.go:223,298`) and IVF-PQ (`pkid` fold, `cuvs/cdc.go` `ReplayEventLog`) —
+never ISCP's LSN.
+
+**Compaction = full REINDEX, not incremental merge.** Exactly as cuVS: the idxcron
+`Updatable` hook only *gates* when to fire (on tag=1 growth); the rebuild
+re-tokenizes from source into a fresh tag=0 and **the build txn wipes the tag=1
+`CdcTail` log** (`small_tail.go:43`). This is WAND's M1 synchronous build, re-run.
+No base+delta timestamp reconciliation, no tiered merge — so the "compaction must
+stamp `max(input ts)`" hazard never arises.
+
+**Two duplicate problems, resolved by `chunk_id` order:**
+- **Problem A — replay duplicates (at-least-once).** A redelivered batch is appended
+  as later frames (higher `chunk_id`) with the same pks → at load, `ComputeLiveness`
+  gives the later copy ownership → earlier copies masked → **correct top-K
+  immediately**; the next reindex wipes the redundant frames. (Idempotent-at-query,
+  convergent-at-reindex.)
+- **Problem B — UPDATE/UPSERT puts a pk in two frames** (old + new). The newer write
+  has the higher `chunk_id` → owns the pk; the old copy is denied. A same-batch
+  UPDATE's DELETE and its INSERT segment share adjacent `chunk_id`s; owner uses `>=`,
+  delete uses strict `>`, so newest survives — no dependence on ISCP intra-ts order.
+
+**Robustness to the ts=0 re-snapshot (the case that killed LSN-as-identity).** A full
+ISCP re-snapshot just re-appends frames to the `CdcTail` log at higher `chunk_id`,
+masking stale copies at load; a reindex then wipes the tail. **No ISCP LSN, no
+truncate-triggered-by-ISCP, no special snapshot path** — the store is an idempotent
+projection of the source.
+
+**Cost:** one O(total docs) load pass builds `owner[pk]` + the per-segment
+deny-bitmaps (already in `ComputeLiveness`); only pks present in >1 frame
+(updated/redelivered) get masked. Log size is bounded by reindex cadence (idxcron
+gate on tag=1 growth), same as cuVS.
+
+#### Ordering key — SETTLED, do not re-open
+
+This was debated to exhaustion; the ordering key is **`chunk_id` in the single tag=1
+`CdcTail` log**. The rejected alternatives and *why*, so this is not re-litigated:
+
+| Candidate | Rejected because |
+|---|---|
+| **ISCP LSN** (`batchLSN`) | Couples the persistent index to a transport-layer counter. A full ISCP restart re-snapshots from `ts=0` and **restarts the LSN sequence** → old frames collide with new → a rebuild forced by an ISCP event outside WAND's control. |
+| **Wall-clock timestamp** (`time.Now()`) | Not monotonic: NTP steps, VM migration, and per-CN clock skew (multi-CN) can make a *later* write get a *smaller* value → an update's old copy wins → silent corruption. |
+| **Cross-segment `segno` counter** (`MAX(segno)+1` over N `index_id`s) | Fragile read-modify-write; needs single-writer + must never desync/reset; and a *tiered/incremental* compaction would have to carefully stamp `max(input)` to avoid the merged base out-ranking a newer un-merged delta. Too many invariants. |
+| **Source-row commit TS** | Data-intrinsic and safe, but unnecessary: one append log already gives a total order for free, and `chunk_id` needs no extra column or plumbing. |
+
+**Chosen — `chunk_id` in one `CdcTail` log:** monotonic by construction
+(`NextChunkIdSql = MAX(chunk_id)+1` scoped to one `index_id`), no cross-segment
+sort, no timestamp, no ISCP coupling; **exactly the cuVS/IVF-PQ mechanism**
+(`cuvs/cdc.go`, `ivfpq/model_gpu.go:652`), which is already built and tested.
+Compaction is a **full reindex** (not incremental merge), so even the `segno`
+"stamp `max(input)`" hazard never arises. If a future change wants to reopen this,
+the burden is to show a concrete case `chunk_id` ordering gets wrong — the four
+rows above are already answered.
 
 ### Rejected alternative: replay RAW EVENTS at load (re-tokenize/rebuild)
 The rejected variant is storing **raw row text as CDC events** in tag=1 and
@@ -221,7 +283,8 @@ recent inserts must stay block-max/global-BM25 searchable, i.e. *postings*, so
 rebuilding them at load is the expensive part.) **We instead persist pre-built
 WAND segments in tag=1** so load is a pure `Deserialize` + `SearchSegments` — the
 build cost is paid once at write. This keeps cuVS's tag=0/tag=1 main/delta split
-and its ordering semantics (LSN-as-identity), without re-tokenizing.
+and its ordering semantics (**`chunk_id` order in the single `CdcTail` log**),
+without re-tokenizing.
 
 ### Components
 0. **Parser-aware async** (`pkg/indexplugin/catalog/hooks.go` + the two read sites):
@@ -240,38 +303,45 @@ and its ordering semantics (LSN-as-identity), without re-tokenizing.
    segments) — mirror the HNSW async branch.
 3. **WAND ISCP sinker** (`pkg/iscp` + `pkg/fulltext`): model on `index_consumer.go
    runHnsw` / `hnsw/sync.go sequentialUpdate`. Per batch: tokenize INSERT/UPSERT →
-   `Builder.Add` → on flush `FinishSegments` → `ToInsertSqls` as a **tag=1 delta
-   segment** with `index_id=batchLSN` (deterministic; chunk rows `REPLACE INTO` →
-   replay-safe); DELETE/UPSERT → append tag=1 `(pk, deleteLSN=batchLSN)`. Nothing
-   reads "current committed max." Advance watermark only after both commit.
-4. **idxcron compaction** (template `pkg/vectorindex/cuvs/idxcron`): the only op
-   that downloads segments; fires on tag=1 growth (`countTag1Records`). Tiered
-   policy → load tag=0 main + tag=1 deltas → `Merge` with tag=1 deletes as skip-set
-   → write merged **tag=0**, delete inputs, **clear tag=1** (LSN-bounded: only ≤ the
-   snapshot LSN; coordinate with sinker like cuVS's lease/swap).
-5. **Search adapter** (`wandsearch.go` + search TVF): load tag=0 main + tag=1 delta
-   segments + the tag=1 `pk→maxDeleteLSN` map; resolve liveness by LSN into a
-   **per-segment deny-bitmap** (`deny = {ord : a higher-LSN segment also holds pk,
-   OR maxDeleteLSN[pk] > segLSN}`) so `Membership.Contains(ord)` is unchanged and
-   the WHERE-prefilter is ANDed in; `Cache.Remove` on flush/merge.
-6. **`max_index_capacity`** algo-param/session-var — caps docs-per-segment; sinker
-   rolls at capacity. Default 0 = compaction *target* of one segment (NOT "no
-   deltas"; deltas always accumulate between compactions) — plumb like
-   `hnsw_max_index_capacity`.
+   `Builder.Add` → on flush `FinishSegments` → append the segment frame(s) to the
+   tag=1 `CdcTail` log at `chunk_id = NextChunkIdSql(CdcTailId, tag=1)`; DELETE/UPSERT
+   → append an `(op, pk)` frame at the next `chunk_id`. A redelivered batch just
+   becomes later frames (higher `chunk_id`), masked at load — see the dedup decision.
+   Advance watermark only after commit.
+4. **idxcron reindex** (template `pkg/vectorindex/cuvs/idxcron` + `small_tail.go`):
+   the only op that rebuilds; fires on tag=1 growth (`countTag1Records`). It runs a
+   **full reindex from source** (WAND's M1 build) → fresh tag=0, and **the build txn
+   wipes the tag=1 `CdcTail`** (`small_tail.go:43`). No incremental merge, no
+   base+delta reconciliation. Coordinate the wipe/swap with the sinker like cuVS's
+   lease (bound the wipe to the reindex's source snapshot; post-snapshot frames stay
+   in the fresh tail).
+5. **Search adapter** (`wandsearch.go` + search TVF): load tag=0 base + the tag=1
+   `CdcTail` frames sorted by `chunk_id` → ordered `segs` + `pk→deleted-after-chunk_id`
+   map; `ComputeLiveness` resolves liveness **by `chunk_id`** into a per-segment
+   deny-bitmap (`deny = {ord : a higher-chunk_id frame also holds pk, OR a delete
+   frame at a higher chunk_id}`) so `Membership.Contains(ord)` is unchanged and the
+   WHERE-prefilter is ANDed in; `Cache.Remove` on flush/reindex.
+6. **`max_index_capacity`** algo-param/session-var — caps docs-per-segment-frame;
+   sinker rolls at capacity. Frames always accumulate in the tag=1 log between
+   reindexes — plumb like `hnsw_max_index_capacity`.
 
 ### Consistency / concurrency notes
 - Async ⇒ eventually consistent (CDC lag), like HNSW/cuVS. **CREATE now returns
   before the index is populated**; queries until CDC catch-up are partial. REINDEX
   = an idxcron full-rebuild action (define à la cuVS reindex).
-- A deleted/superseded doc still contributes to `df`/`N`/`avgdl` until compaction
-  (standard Lucene/cuVS); `Merge` makes it exact. **Stat drift scales with the
-  un-compacted delete ratio**, so the compaction gate should weigh delete-ratio,
-  not only segment count (ranking is relative → top-K largely preserved; absolute
-  BM25 drifts).
-- UPDATE = DELETE record `(pk, batchLSN)` + new delta segment `index_id=batchLSN`;
-  newest-LSN copy wins, older copies denied at load.
-- **Compaction concurrency:** idxcron snapshots an LSN, applies + clears tag=1 only
-  ≤ that LSN, coordinated with the sinker (mirror cuVS's index lease/swap).
+- A deleted/superseded doc still contributes to `df`/`N`/`avgdl` until reindex
+  (standard Lucene/cuVS); the reindex makes it exact. **Stat drift scales with the
+  un-reindexed delete/update ratio**, so the reindex gate should weigh delete-ratio,
+  not only frame count (ranking is relative → top-K largely preserved; absolute
+  BM25 drifts). Also: masked frames still inflate block-max bounds → WAND prunes
+  fewer blocks (perf, not correctness) until the next reindex. **Invariant:** count
+  `N` and per-term `df` over the *same* frame set (both include masked, or both
+  exclude) — mixing them lets `df > N` → negative `idf` → NaN scores.
+- UPDATE = `(op, pk)` delete frame + new segment frame at higher `chunk_id`;
+  highest-`chunk_id` copy wins, older copies denied at load.
+- **Reindex concurrency:** idxcron takes a source snapshot, rebuilds tag=0, and
+  wipes tag=1 frames bounded to that snapshot — coordinated with the sinker (mirror
+  cuVS's index lease/swap in `small_tail.go`).
 
 ### Phasing
 - **B1**: parser-aware `AlwaysAsync(idx)` + unified `IndexIsAsync` helper (drops
@@ -293,18 +363,23 @@ is **green**, so the foundation below survived the merge unchanged.
 
 **✅ Done + unit-tested (committed in `eb94f4ae8`)** — every piece verifiable without a running server:
 - **Parser-aware async.** `SyncDescriptor.AlwaysAsync` bool → `Hooks.AlwaysAsync(indexAlgoParams string) bool` (`pkg/indexplugin/catalog/hooks.go`); HNSW/CAGRA/IVF-PQ=true, IVF-FLAT=false, **fulltext=`parser=="retrieval"`** via new `catalog.GetIndexParser` + `IndexAlgoParamParser`. Unified `indexplugin.IndexIsAsync(algo, params)` routed through CDC-registration (`iscp_util.go`), ALTER-clone (`alter.go`), and the three fulltext DML early-returns (`build_dml_util.go`). No `async`-param injection. Tests: `TestFullTextAlwaysAsync` + the vector runtime tests.
-- **LSN-as-identity liveness** (`pkg/fulltext/wand`). `WandModel.LSN`; `ComputeLiveness(segs, deletes) []Membership` (per-segment allow precomputed once at load: owner = max-LSN segment holding pk, dead iff `deletes[pk] > segLSN`); `SearchSegmentsLive(...)` ANDs liveness with the WHERE-prefilter; `SearchSegments` = the `nil` fast path. Fixes a latent bug: the old multi-segment path emitted a pk twice if it lived in two segments. Tests: `TestWandLiveness` (dedup_update / delete_then_reinsert / delete_after_insert / pure_delete / mixed). NB: assert the live **pk set**, not exact scores — global `N`/`df`/`avgdl` still include superseded+deleted docs until compaction (accepted drift).
-- **tag=1 delete-log codec** (`deletes.go`): `DeleteRecord{Pk, LSN}`, `EncodeDeleteLog`/`DecodeDeleteLog` (self-contained binary+crc32, **no** GPU-coupled cuVS import), `DeleteMap` (max-LSN fold → feeds `ComputeLiveness`). Tests: `TestWandDeleteLogRoundTrip` (int64/varchar/corruption/empty).
+- **PK-reconciliation liveness** (`pkg/fulltext/wand`). `ComputeLiveness(segs, deletes) []Membership` (per-segment allow precomputed once at load: owner = winning segment holding pk, dead iff a later delete). `SearchSegmentsLive(...)` ANDs liveness with the WHERE-prefilter; `SearchSegments` = the `nil` fast path. **[2026-07-01 revised: the mechanism is KEPT, but the ordering key becomes the segment's `chunk_id` (append position in the single tag=1 `CdcTail` log), NOT `WandModel.LSN` and NOT a `segno`/timestamp — see the "single CdcTail log, chunk_id-ordered" decision. The committed code still passes an `LSN`-typed key into `ComputeLiveness`; the load path will feed `chunk_id` instead.]** Fixes a latent bug: the old multi-segment path emitted a pk twice if it lived in two segments. Tests: `TestWandLiveness` (dedup_update / delete_then_reinsert / delete_after_insert / pure_delete / mixed). NB: assert the live **pk set**, not exact scores — global `N`/`df`/`avgdl` still include superseded+deleted docs until reindex (accepted drift).
+- **tag=1 delete-log codec** (`deletes.go`): `DeleteRecord{Pk, LSN}`, `EncodeDeleteLog`/`DecodeDeleteLog` (self-contained binary+crc32, **no** GPU-coupled cuVS import), `DeleteMap` fold → feeds `ComputeLiveness`. Tests: `TestWandDeleteLogRoundTrip` (int64/varchar/corruption/empty). **[2026-07-01 revised: the `LSN` field carries no meaning under the chunk_id model — a delete frame's order is its `chunk_id` position in the `CdcTail` log; drop/ignore the stored order field.]**
 - **`ToInsertSqls(cfg, ts, tag)`** — tag=0 compacted main / tag=1 CDC delta segment (`storage.go`; caller `fulltext_wand_create.go` passes 0). Test: `TestWandToInsertSqlsTag`.
 
 **⏳ Remaining = one interdependent unit (needs a live `mo_ctl` + CDC pipeline to validate e2e):**
-- **(a) `DataRetriever.GetLSN() uint64` accessor** — *interface gap*: `pkg/iscp/types.go:54` `DataRetriever` exposes no LSN, but `DataRetrieverImpl.lsn` exists (`data_retriever.go:96`). Needed for segment `index_id=batchLSN`. Impls to update: `DataRetrieverImpl` + `MockRetriever` (`index_consumer_test.go:63`).
-- **(b) `WandSqlWriter` + `RunWand`** in `pkg/iscp` — mirror `NewFulltextSqlWriter` (`index_sqlwriter.go:251`) + `runHnsw` (`index_consumer.go:240`). Writer accumulates insert `{pk,text}` + delete `{pk}` rows → blob; `RunWand` consumes blobs → tokenize via `tokenizer.SharedJiebaTokenizer(false)` (**same** path as search `parsePatternInNLModeJieba`, so build/query tokens match) → `Builder.Add` → on channel close `FinishSegments` → `ToInsertSqls(tag=1)` + `EncodeDeleteLog`(tag=1) + `UpdateWatermark`. (`pkg/iscp` already imports algo pkgs e.g. hnsw, so importing `pkg/fulltext/wand` is consistent — no cycle.)
+- **(a) ~~`DataRetriever.GetLSN()` accessor~~ — DROPPED (2026-07-01).** The dedup
+  decision orders frames by `chunk_id` in the single tag=1 `CdcTail` log, not ISCP's
+  LSN, so **no `DataRetriever` interface change is needed**. The sinker appends at
+  `chunk_id = NextChunkIdSql(CdcTailId, tag=1)` (item (b)). Rationale: the "single
+  CdcTail log, chunk_id-ordered" decision — neither HNSW (`Contains(pk)`) nor IVF-PQ
+  (`pkid` fold at `Load`) couples identity to ISCP's LSN.
+- **(b) `WandSqlWriter` + `RunWand`** in `pkg/iscp` — mirror `NewFulltextSqlWriter` (`index_sqlwriter.go:251`) + `runHnsw` (`index_consumer.go:240`). Writer accumulates insert `{pk,text}` + delete `{pk}` rows → blob; `RunWand` consumes blobs → tokenize via `tokenizer.SharedJiebaTokenizer(false)` (**same** path as search `parsePatternInNLModeJieba`, so build/query tokens match) → `Builder.Add` → on channel close `FinishSegments` → **append the segment frame(s) and delete frame(s) to the tag=1 `CdcTail` log at `NextChunkIdSql`** + `UpdateWatermark`. (`pkg/iscp` already imports algo pkgs e.g. hnsw, so importing `pkg/fulltext/wand` is consistent — no cycle.)
 - **(c)** Branch the fulltext plugin iscp `Hooks` (`pkg/fulltext/plugin/iscp/iscp.go` `NewSqlWriter`/`Run`) on `parser==retrieval` → Wand writer/run, else the postings writer/`RunIndex`.
 - **(d)** Flip `HandleCreateIndex` (`pkg/fulltext/plugin/compile/compile.go`) from `catalog.IsIndexAsync` → `indexplugin.IndexIsAsync`, and skip `genWandBuildSQL` for retrieval (CDC builds the initial segment via replay-from-creation).
-- **(e) Multi-segment search adapter** (`wandsearch.go`): `LoadFromStorage` currently loads ONE `index_id`; load **all** tag=0 + tag=1 segments + the tag=1 delete log → `DeleteMap` → `ComputeLiveness` → `SearchSegmentsLive`.
+- **(e) Multi-frame search adapter** (`wandsearch.go`): `LoadFromStorage` currently loads ONE `index_id`; instead load tag=0 base + the tag=1 `CdcTail` frames **sorted by `chunk_id`** → ordered `segs` + delete map → `ComputeLiveness` (keyed by `chunk_id`) → `SearchSegmentsLive`. Also `SELECT` the metadata needed (`chunk_id` order is intrinsic to the log).
 - **(f)** Drop the postings hidden table for `parser==retrieval` (`schema.go`).
-- **(g)** idxcron compaction (B3).
+- **(g)** idxcron **full-reindex** trigger + gate (B3) — full rebuild from source that wipes the tag=1 `CdcTail`; no incremental merge.
 
 ⚠ **Intermediate-state warning:** the committed parser-aware async change already makes retrieval **skip inline DML** (`AlwaysAsync=true`), but until the sinker (b–d) lands there is **no CDC maintenance** — so a retrieval index won't reflect INSERT/DELETE between CREATE and reindex. This is expected mid-implementation; B2 closes it.
 
