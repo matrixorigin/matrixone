@@ -383,6 +383,35 @@ func TestDispatchResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.
 	require.Equal(t, process.EventEnd, terminalSignal.EventType)
 }
 
+func TestDispatchFallbackAbortUsesSharedTimeoutBudget(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 50 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	regs := make([]*process.WaitRegister, 4)
+	delivered := make([]bool, len(regs))
+	for i := range regs {
+		regs[i] = process.NewPipelineEdge(1, 0)
+		regs[i].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+	}
+
+	start := time.Now()
+	sendAbortSignalsToFailedLocalRegs(nil, regs, delivered, process.ErrPipelineEndSignalDeliveryFailed)
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 150*time.Millisecond)
+	for _, reg := range regs {
+		select {
+		case <-reg.Done():
+		default:
+			t.Fatal("fallback abort should mark every failed receiver edge terminal")
+		}
+		require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+	}
+}
+
 func TestDispatchResetEndPreservesQueuedBroadcastBatchUntilDeferredCleanup(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {

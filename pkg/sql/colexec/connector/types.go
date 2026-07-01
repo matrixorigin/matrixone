@@ -132,7 +132,9 @@ func (connector *Connector) sendTerminalWithLog(proc *process.Process, signal pr
 }
 
 // CleanupDeferredSpool reclaims spool cache memory after the paired Merge
-// cleanup has drained all queued GetFromSpool signals on a normal End path.
+// cleanup has returned on a normal End path. The normal path drains queued
+// GetFromSpool signals; a cleanup-time timeout releases the current reference
+// and leaves no receiver goroutine that can read pending signals later.
 func (connector *Connector) CleanupDeferredSpool() {
 	if connector.cleanupSpool == nil {
 		return

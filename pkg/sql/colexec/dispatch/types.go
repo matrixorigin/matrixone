@@ -190,11 +190,13 @@ func allTerminalSignalsDelivered(delivered []bool) bool {
 
 func sendAbortSignalsToFailedLocalRegs(proc *process.Process, localRegs []*process.WaitRegister, delivered []bool, err error) {
 	fallbackSignal := process.NewAbortSignal(err)
+	signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
+	defer signalCancel()
 	for i, ok := range delivered {
 		if ok {
 			continue
 		}
-		if process.SendPipelineSignalWithTimeout(localRegs[i], fallbackSignal, process.PipelineSignalSendTimeout) {
+		if process.SendPipelineSignalWithContext(signalCtx, localRegs[i], fallbackSignal) {
 			continue
 		}
 		chLen, chCap := process.WaitRegisterChannelState(localRegs[i])
@@ -277,7 +279,9 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 // CleanupDeferredSpool reclaims spool cache memory after the paired Merge
-// cleanup has drained all queued GetFromSpool signals on a normal End path.
+// cleanup has returned on a normal End path. The normal path drains queued
+// GetFromSpool signals; a cleanup-time timeout releases the current reference
+// and leaves no receiver goroutine that can read pending signals later.
 func (dispatch *Dispatch) CleanupDeferredSpool() {
 	if dispatch.cleanupSpool == nil {
 		return

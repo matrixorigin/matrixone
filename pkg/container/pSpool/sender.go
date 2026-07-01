@@ -227,8 +227,10 @@ func (ps *PipelineSpool) ForceCleanup() {
 //
 // Typed terminal receivers do not consume a nil End-message from the spool, so
 // they never write csDoneSignal. The caller must invoke this only after the
-// receiver cleanup loop has drained all queued GetFromSpool signals and released
-// its current batch reference.
+// paired receiver cleanup loop has returned. On the normal path that loop drains
+// queued GetFromSpool signals; on the timeout path it releases its current batch
+// reference and exits, so no receiver goroutine can later read the pending
+// signals.
 func (ps *PipelineSpool) ForceCleanupAfterTerminalSignal() {
 	if ps == nil {
 		return
