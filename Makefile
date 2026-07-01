@@ -1040,7 +1040,7 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
+	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
