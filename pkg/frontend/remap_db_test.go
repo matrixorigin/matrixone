@@ -195,6 +195,24 @@ func TestApplyRemapDb(t *testing.T) {
 		require.NotContains(t, out, "dbxxx")
 	})
 
+	t.Run("truncate table", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "truncate table dbxxx.t", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("rename table remaps source and destination", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "rename table dbxxx.a to dbxxx.b", remap)
+		require.Contains(t, out, "dbyyy.a")
+		require.Contains(t, out, "dbyyy.b")
+		require.NotContains(t, out, "dbxxx")
+	})
+
+	t.Run("rename table unqualified untouched", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "rename table a to b", remap)
+		require.NotContains(t, out, "dbyyy")
+	})
+
 	// database-level DDL is NOT remapped
 	t.Run("create database is not remapped", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "create database dbxxx", map[string]string{"dbxxx": "dbyyy"})

@@ -55,6 +55,25 @@ drop table dsrc.qt;
 set remap_rewrites = '';
 select count(*) as remaining_qt_qv from information_schema.tables where table_name in ('qt','qv') and table_schema in ('dsrc','ddst');
 
+-- TRUNCATE / RENAME on a qualified dsrc.* reference also land in ddst.*
+-- (RENAME's privilege check needs a non-system current database, so use ddst;
+-- the qualified dsrc.* refs are still remapped to ddst regardless.)
+use ddst;
+set remap_rewrites = '{"remapdb": {"dsrc": "ddst"}}';
+create table dsrc.rt(a int);
+insert into dsrc.rt values (1),(2),(3);
+truncate table dsrc.rt;
+insert into dsrc.rt values (7),(8);
+rename table dsrc.rt to dsrc.rt2;
+set remap_rewrites = '';
+-- rt is gone, rt2 exists in ddst with the 2 post-truncate rows
+select concat(table_schema,'.',table_name) as renamed from information_schema.tables where table_name in ('rt','rt2') order by 1;
+select count(*) as rt2_rows from ddst.rt2;
+set remap_rewrites = '{"remapdb": {"dsrc": "ddst"}}';
+drop table dsrc.rt2;
+set remap_rewrites = '';
+use mysql;
+
 -- ========================================================================
 -- TABLE-LEVEL via the CURRENT DATABASE (unqualified, current db = dsrc)
 -- ========================================================================

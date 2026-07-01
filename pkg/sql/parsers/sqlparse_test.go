@@ -550,6 +550,46 @@ func TestAddRewriteHints_ParenSelectTopLevel(t *testing.T) {
 	require.NotNil(t, ps.Select.RewriteOption)
 }
 
+func TestAddRewriteHints_TrailingLineComment(t *testing.T) {
+	// A trailing "stmt; -- comment" splits into two fragments but parses into a
+	// single statement. The comment-only tail must not be counted, otherwise the
+	// hint/statement counts mismatch and this valid query is rejected.
+	t.Run("select with trailing line comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "select 1; -- a trailing comment")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+	})
+
+	t.Run("use with trailing line comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "use db1; -- USE is not remapped")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+	})
+
+	t.Run("trailing block comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "select 1; /* trailing block */")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+	})
+
+	t.Run("hint survives with trailing comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "/*+ {\"rewrites\": {\"db1.t1\": \"select 1\"}} */ select * from db1.t1; -- tail")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		sel := stmts[0].(*tree.Select)
+		require.NotNil(t, sel.RewriteOption)
+		require.Contains(t, sel.RewriteOption.Rewrites, "db1.t1")
+	})
+
+	t.Run("comment-only input is accepted", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "-- just a comment")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		_, ok := stmts[0].(*tree.EmptyStmt)
+		require.True(t, ok)
+	})
+}
+
 func TestAddRewriteHints_ParseHintsBug_MismatchedInputs(t *testing.T) {
 	ctx := context.TODO()
 	// Build stmts from two statements

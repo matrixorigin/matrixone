@@ -203,12 +203,40 @@ func SplitSqlBySemicolon(sql string) []string {
 	return ret
 }
 
+// fragmentHasStatement reports whether a semicolon-separated fragment carries an
+// actual statement rather than being blank or comment-only. The scanner skips
+// every comment form (-- , #, //, /* */, /*+ */) so the first token of a
+// comment-only or empty fragment is EOF. It is used to align the leading-hint
+// list with the parser's statement list: a trailing "stmt; -- comment" splits
+// into two fragments but parses into one statement, and the comment-only tail
+// must not be counted as a statement (otherwise the hint/statement counts
+// mismatch and AddRewriteHints rejects an otherwise valid query).
+func fragmentHasStatement(fragment string) bool {
+	if strings.TrimSpace(fragment) == "" {
+		return false
+	}
+	scanner := mysql.NewScanner(dialect.MYSQL, fragment)
+	defer mysql.PutScanner(scanner)
+	typ, _ := scanner.Scan()
+	return typ != 0 && typ != mysql.EofChar()
+}
+
+// extractLeadingHints returns, for each parsed statement (in order), the content
+// of the leading /*+ ... */ (or /*! ... */) hint on that statement, or "" if it
+// has none. Blank/comment-only fragments carry no statement and are skipped so
+// the returned slice lines up positionally with the parser's statement list.
 func extractLeadingHints(sql string) []string {
 	if len(sql) == 0 {
 		return []string{""}
 	}
 
-	stmts := SplitSqlBySemicolon(sql)
+	fragments := SplitSqlBySemicolon(sql)
+	stmts := make([]string, 0, len(fragments))
+	for _, f := range fragments {
+		if fragmentHasStatement(f) {
+			stmts = append(stmts, f)
+		}
+	}
 	results := make([]string, len(stmts))
 
 	isSpace := func(b byte) bool {
@@ -433,6 +461,14 @@ func DecodeRewriteHint(ctx context.Context, content string) (rewrites map[string
 func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) error {
 	hints := extractLeadingHints(sql)
 	if len(hints) != len(stmts) {
+		// A SQL that is entirely blank/comments carries no statement-bearing
+		// fragment, so hints is empty while the parser returns a single
+		// EmptyStmt. There is nothing to rewrite, so accept it.
+		if len(hints) == 0 && len(stmts) == 1 {
+			if _, ok := stmts[0].(*tree.EmptyStmt); ok {
+				return nil
+			}
+		}
 		return moerr.NewParseError(ctx, "parse hints bug")
 	}
 	for i, stmt := range stmts {

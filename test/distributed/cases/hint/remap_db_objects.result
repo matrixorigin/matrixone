@@ -54,33 +54,48 @@ set remap_rewrites = '';
 select count(*) as remaining_qt_qv from information_schema.tables where table_name in ('qt','qv') and table_schema in ('dsrc','ddst');
 ➤ remaining_qt_qv[-5,64,0]  𝄀
 0
+use ddst;
+set remap_rewrites = '{"remapdb": {"dsrc": "ddst"}}';
+create table dsrc.rt(a int);
+insert into dsrc.rt values (1),(2),(3);
+truncate table dsrc.rt;
+insert into dsrc.rt values (7),(8);
+rename table dsrc.rt to dsrc.rt2;
+set remap_rewrites = '';
+select concat(table_schema,'.',table_name) as renamed from information_schema.tables where table_name in ('rt','rt2') order by 1;
+➤ renamed[12,-1,0]  𝄀
+ddst.rt2
+select count(*) as rt2_rows from ddst.rt2;
+➤ rt2_rows[-5,64,0]  𝄀
+2
+set remap_rewrites = '{"remapdb": {"dsrc": "ddst"}}';
+drop table dsrc.rt2;
+set remap_rewrites = '';
+use mysql;
 set remap_rewrites = '{"remapdb": {"dsrc": "ddst"}}';
 use dsrc;                       -- USE is NOT remapped: current db is the real dsrc
-SQL parser error: parse hints bug
 select * from base order by id; -- ddst.base
-SQL parser error: parse hints bug
-insert into base values (50,500);
-no such table mysql.base
-update base set v = 888 where id = 30;
-no such table mysql.base
-delete from base where id = 40;
-no such table mysql.base
-create table ut(a int);
-internal error: do not have privilege to execute the statement
-create view uv as select id from base;
-internal error: do not have privilege to execute the statement
-create index uidx on ut(a);
-no such table mysql.ut
-alter table ut add column b int;
-internal error: do not have privilege to execute the statement
-set remap_rewrites = '';
-select concat(table_schema,'.',table_name) as obj from information_schema.tables where table_name in ('ut','uv') order by 1;
-➤ obj[12,-1,0]
-select * from ddst.base order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 10  ¦  999  𝄀
 30  ¦  300  𝄀
 40  ¦  400
+insert into base values (50,500);
+update base set v = 888 where id = 30;
+delete from base where id = 40;
+create table ut(a int);
+create view uv as select id from base;
+create index uidx on ut(a);
+alter table ut add column b int;
+set remap_rewrites = '';
+select concat(table_schema,'.',table_name) as obj from information_schema.tables where table_name in ('ut','uv') order by 1;
+➤ obj[12,-1,0]  𝄀
+ddst.ut  𝄀
+ddst.uv
+select * from ddst.base order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+10  ¦  999  𝄀
+30  ¦  888  𝄀
+50  ¦  500
 select * from dsrc.base order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  1  𝄀

@@ -73,8 +73,9 @@ func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
 
 	// Table-level DDL: the target table/view/index is a table-level object, so a
 	// qualified <src>.t is remapped. CREATE/ALTER ... AS SELECT bodies are walked
-	// too. Database-level DDL (CREATE/DROP/ALTER DATABASE, USE) is intentionally
-	// absent here and never remapped.
+	// too, as are TRUNCATE TABLE and RENAME TABLE. Database-level DDL
+	// (CREATE/DROP/ALTER DATABASE, USE) is intentionally absent here and never
+	// remapped.
 	case *tree.CreateTable:
 		remapTableName(&s.Table, remap)
 		remapTableName(&s.LikeTableName, remap)
@@ -105,6 +106,22 @@ func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
 		}
 	case *tree.DropIndex:
 		remapTableName(s.TableName, remap)
+	case *tree.TruncateTable:
+		remapTableName(s.Name, remap)
+	case *tree.RenameTable:
+		// rename src.a to src.b, ... : both the source table and the rename
+		// destination are qualified table-level references, so remap each.
+		for _, at := range s.AlterTables {
+			if at == nil {
+				continue
+			}
+			remapTableName(at.Table, remap)
+			for _, opt := range at.Options {
+				if rn, ok := opt.(*tree.AlterOptionTableName); ok {
+					remapObjectName(rn.Name, remap)
+				}
+			}
+		}
 	}
 }
 
@@ -247,5 +264,17 @@ func remapTableName(tn *tree.TableName, remap map[string]string) {
 	}
 	if target, ok := remap[string(tn.SchemaName)]; ok {
 		tn.SchemaName = tree.Identifier(target)
+	}
+}
+
+// remapObjectName substitutes the database of a qualified object name (used for
+// the destination of RENAME TABLE, carried as an UnresolvedObjectName). Parts[1]
+// holds the schema and is only present when NumParts >= 2 (i.e. it is qualified).
+func remapObjectName(on *tree.UnresolvedObjectName, remap map[string]string) {
+	if on == nil || on.NumParts < 2 {
+		return
+	}
+	if target, ok := remap[on.Parts[1]]; ok {
+		on.Parts[1] = target
 	}
 }

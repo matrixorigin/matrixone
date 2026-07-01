@@ -1486,6 +1486,14 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 			ses.rewriteEnabled.Store(on)
 		}
 	}
+
+	// A prepared statement bakes in the rewrite/remap state captured at PREPARE
+	// time (the injected hint and the remapdb applied to its AST). Changing that
+	// state must invalidate the cached prepared statements, otherwise a later
+	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
+	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
+		ses.RemoveAllPrepareStmts()
+	}
 	return
 }
 
