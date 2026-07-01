@@ -893,4 +893,39 @@ Year: 2021    70000.00
 Year: 2022    150000.00
 Year: Total    220000.00
 drop table sales_mixed_types;
+drop table if exists grouping_order;
+create table grouping_order (
+region varchar(8),
+product varchar(8),
+amount int
+);
+insert into grouping_order values
+(null, 'tea', 10),
+(null, 'tea', 20),
+('east', null, 5),
+('east', 'coffee', 7),
+('east', 'tea', null),
+('west', 'tea', 3);
+select
+if(grouping(region), 'ROLLUP', if(region is null, 'NULL', region)) as region_label,
+grouping(region) as grp_region,
+if(grouping(product), 'ROLLUP', if(product is null, 'NULL', product)) as product_label,
+grouping(product) as grp_product,
+count(*) as count_all,
+count(amount) as count_amount,
+sum(amount) as sum_amount
+from grouping_order
+group by region, product with rollup
+order by grouping(region), region_label, grouping(product), product_label;
+region_label    grp_region    product_label    grp_product    count_all    count_amount    sum_amount
+NULL    0    tea    0    2    2    30
+NULL    0    ROLLUP    1    2    2    30
+east    0    NULL    0    1    1    5
+east    0    coffee    0    1    1    7
+east    0    tea    0    1    0    null
+east    0    ROLLUP    1    3    2    12
+west    0    tea    0    1    1    3
+west    0    ROLLUP    1    1    1    3
+ROLLUP    1    ROLLUP    1    6    5    45
+drop table grouping_order;
 drop database rollup_test;

@@ -592,4 +592,32 @@ group by
 order by year_label;
 
 drop table sales_mixed_types;
+
+drop table if exists grouping_order;
+create table grouping_order (
+    region varchar(8),
+    product varchar(8),
+    amount int
+);
+insert into grouping_order values
+    (null, 'tea', 10),
+    (null, 'tea', 20),
+    ('east', null, 5),
+    ('east', 'coffee', 7),
+    ('east', 'tea', null),
+    ('west', 'tea', 3);
+
+select
+    if(grouping(region), 'ROLLUP', if(region is null, 'NULL', region)) as region_label,
+    grouping(region) as grp_region,
+    if(grouping(product), 'ROLLUP', if(product is null, 'NULL', product)) as product_label,
+    grouping(product) as grp_product,
+    count(*) as count_all,
+    count(amount) as count_amount,
+    sum(amount) as sum_amount
+from grouping_order
+group by region, product with rollup
+order by grouping(region), region_label, grouping(product), product_label;
+
+drop table grouping_order;
 drop database rollup_test;

@@ -3094,6 +3094,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
+				rewriteGroupingSetOrderBy(astOrderBy, selectClause.Exprs)
 				return builder.buildUnion(leftClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
 			}
 		}
@@ -3796,6 +3797,27 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 	return
+}
+
+func rewriteGroupingSetOrderBy(astOrderBy tree.OrderBy, selectList tree.SelectExprs) {
+	projectPosByAst := make(map[string]int64, len(selectList))
+	for i, selectExpr := range selectList {
+		astKey := tree.String(selectExpr.Expr, dialect.MYSQL)
+		if _, exists := projectPosByAst[astKey]; !exists {
+			projectPosByAst[astKey] = int64(i + 1)
+		}
+	}
+
+	for _, order := range astOrderBy {
+		if _, isOrdinal := order.Expr.(*tree.NumVal); isOrdinal {
+			continue
+		}
+
+		if projectPos, ok := projectPosByAst[tree.String(order.Expr, dialect.MYSQL)]; ok {
+			projectPosText := strconv.FormatInt(projectPos, 10)
+			order.Expr = tree.NewNumVal(projectPos, projectPosText, false, tree.P_int64)
+		}
+	}
 }
 
 func (builder *QueryBuilder) bindOrderBy(
