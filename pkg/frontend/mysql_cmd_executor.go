@@ -2383,6 +2383,9 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+	// Reset the per-statement database remap; it is (re)populated below only when
+	// the rewrite feature is enabled and a remapdb is configured.
+	execCtx.remapDb = nil
 	var cws []ComputationWrapper = nil
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
@@ -2473,6 +2476,19 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 				if err != nil {
 					return nil, err
 				}
+				// Apply remapdb (database-name substitution) on the parsed AST
+				// before privilege checks and planning resolve the original
+				// database. The effective remapdb (role rules carry none, the
+				// session variable and any inline hint are merged by rewriteSQL
+				// into the leading hint) is read back from the statement text and
+				// applied to qualified references in SELECT and INSERT/UPDATE/
+				// DELETE alike. Only the remapdb field is decoded here, so layered
+				// (array-form) rewrites in the merged hint do not interfere. It is
+				// also stashed on execCtx so DefaultDatabase can remap the current
+				// database for UNQUALIFIED references (USE itself is not remapped).
+				remapDb := extractInlineRemapDb(execCtx.input.getSql())
+				applyRemapDb(stmts, remapDb)
+				execCtx.remapDb = remapDb
 			}
 		}
 	}
