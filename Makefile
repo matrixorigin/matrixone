@@ -48,6 +48,12 @@
 #  % cd matrixone
 #  % MO_CL_CUDA=1 make
 
+# Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
+# Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
+ifeq ($(GO),)
+	GO=go
+endif
+
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
@@ -185,6 +191,28 @@ DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 TAGS :=
 
+# Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
+# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
+# (Haswell baseline -- AVX2/FMA/BMI, required by the Go simd experiment) and
+# GOEXPERIMENT defaults to simd (enables the goexperiment.simd build tag on Go 1.26+).
+# Disable the SIMD kernels with:
+#   make ARCHSIMD=0 build                       # plain x86 build, no SIMD kernels
+# Either default can still be overridden individually, e.g. `make GOAMD64=v4 build`.
+GOEXPERIMENT_OPT ?=
+ifeq ("$(UNAME_M)", "x86_64")
+  ARCHSIMD ?= 1
+  ifeq ($(ARCHSIMD),1)
+	GOAMD64 ?= v3
+	GOEXPERIMENT_SIMD ?= simd
+  endif
+  ifneq ($(GOAMD64),)
+	GOEXPERIMENT_OPT += GOAMD64=$(GOAMD64)
+  endif
+  ifneq ($(GOEXPERIMENT_SIMD),)
+	GOEXPERIMENT_OPT += GOEXPERIMENT=$(GOEXPERIMENT_SIMD)
+  endif
+endif
+
 ifeq ($(MO_CL_CUDA),1)
   ifeq ($(CONDA_PREFIX),)
     $(error CONDA_PREFIX env variable not found.)
@@ -235,7 +263,7 @@ jieba-dict:
 .PHONY: build
 build: config cgo thirdparties jieba-dict
 	$(info [Build binary])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -265,13 +293,13 @@ musl: override TAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties jieba-dict
 musl:
 	$(info [Build binary(musl)])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-tool
 .PHONY: mo-tool
 mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
-	$(CGO_OPTS) go build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory

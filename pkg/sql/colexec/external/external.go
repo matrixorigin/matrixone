@@ -736,6 +736,26 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 			if err != nil {
 				return false
 			}
+		case types.T_array_bf16:
+			_, err := types.StringToArrayToBytes[types.BF16](field.Val)
+			if err != nil {
+				return false
+			}
+		case types.T_array_float16:
+			_, err := types.StringToArrayToBytes[types.Float16](field.Val)
+			if err != nil {
+				return false
+			}
+		case types.T_array_int8:
+			_, err := types.StringToArrayToBytes[int8](field.Val)
+			if err != nil {
+				return false
+			}
+		case types.T_array_uint8:
+			_, err := types.StringToArrayToBytes[uint8](field.Val)
+			if err != nil {
+				return false
+			}
 		case types.T_json:
 			if param.Format == tree.CSV {
 				field.Val = fmt.Sprintf("%v", strings.Trim(field.Val, "\""))
@@ -1302,6 +1322,50 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
 		}
 		if err = vector.AppendBytes(vec, types.ArrayToBytes[float64](arr), false, mp); err != nil {
+			return err
+		}
+	case types.T_array_bf16:
+		arr, err := types.StringToArray[types.BF16](field.Val)
+		if err != nil {
+			return err
+		}
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[types.BF16](arr), false, mp); err != nil {
+			return err
+		}
+	case types.T_array_float16:
+		arr, err := types.StringToArray[types.Float16](field.Val)
+		if err != nil {
+			return err
+		}
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[types.Float16](arr), false, mp); err != nil {
+			return err
+		}
+	case types.T_array_int8:
+		arr, err := types.StringToArray[int8](field.Val)
+		if err != nil {
+			return err
+		}
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[int8](arr), false, mp); err != nil {
+			return err
+		}
+	case types.T_array_uint8:
+		arr, err := types.StringToArray[uint8](field.Val)
+		if err != nil {
+			return err
+		}
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[uint8](arr), false, mp); err != nil {
 			return err
 		}
 	case types.T_json:

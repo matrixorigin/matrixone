@@ -379,7 +379,7 @@ func (v *Vector) GetStringAt(i int) string {
 }
 
 // GetArrayAt Returns []T at the specific index of the vector
-func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
+func GetArrayAt[T types.ArrayElement](v *Vector, i int) []T {
 	if v.IsConst() {
 		i = 0
 	}
@@ -388,7 +388,7 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	return types.GetArray[T](&bs[i], v.area)
 }
 
-func GetArrayAt2[T types.RealNumbers](v *Vector, bs []types.Varlena, i int) []T {
+func GetArrayAt2[T types.ArrayElement](v *Vector, bs []types.Varlena, i int) []T {
 	if v.IsConst() {
 		i = 0
 	}
@@ -451,7 +451,7 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 	case types.T_Blockid:
 		return GetFixedAtNoTypeCheck[types.Blockid](vec, i)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		ret := vec.GetBytesAt(i)
 		if deepCopy {
 			copied := make([]byte, len(ret))
@@ -545,7 +545,7 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec
 }
 
 // NewConstArray Creates a Const_Array Vector
-func NewConstArray[T types.RealNumbers](typ types.Type, val []T, length int, mp *mpool.MPool) (vec *Vector, err error) {
+func NewConstArray[T types.ArrayElement](typ types.Type, val []T, length int, mp *mpool.MPool) (vec *Vector, err error) {
 	vec = NewVecFromReuse()
 	vec.typ = typ
 	vec.class = CONSTANT
@@ -1050,7 +1050,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	case types.T_float64:
 		shrinkFixed[float64](v, sels, negate)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -1122,7 +1122,7 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	case types.T_float64:
 		shrinkFixedByMask[float64](v, sels, negate, offset)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -1190,7 +1190,7 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	case types.T_float64:
 		err = shuffleFixedNoTypeCheck[float64](v, sels, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		err = shuffleFixedNoTypeCheck[types.Varlena](v, sels, mp)
 	case types.T_date:
 		err = shuffleFixedNoTypeCheck[types.Date](v, sels, mp)
@@ -1264,7 +1264,7 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	case types.T_float64:
 		err = shuffleFixedNoTypeCheckWithBuf[float64](v, sels, buf)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		err = shuffleFixedNoTypeCheckWithBuf[types.Varlena](v, sels, buf)
 	case types.T_date:
 		err = shuffleFixedNoTypeCheckWithBuf[types.Date](v, sels, buf)
@@ -2067,7 +2067,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -2426,7 +2426,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
@@ -3133,6 +3133,46 @@ func (v *Vector) String() string {
 			return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
 		}
 		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_bf16:
+		col := MustArrayCol[types.BF16](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			}
+			return types.ArrayToString[types.BF16](col[0])
+		}
+		str := types.ArraysToString[types.BF16](col, types.DefaultArraysToStringSep)
+		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_float16:
+		col := MustArrayCol[types.Float16](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			}
+			return types.ArrayToString[types.Float16](col[0])
+		}
+		str := types.ArraysToString[types.Float16](col, types.DefaultArraysToStringSep)
+		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_uint8:
+		col := MustArrayCol[uint8](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			}
+			return types.ArrayToString[uint8](col[0])
+		}
+		str := types.ArraysToString[uint8](col, types.DefaultArraysToStringSep)
+		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_int8:
+		col := MustArrayCol[int8](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			}
+			return types.ArrayToString[int8](col[0])
+		}
+		str := types.ArraysToString[int8](col, types.DefaultArraysToStringSep)
+		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
 	default:
 		panic("vec to string unknown types.")
 	}
@@ -3219,7 +3259,7 @@ func implDecimalRowToString[T types.DecimalWithFormat](v *Vector, idx int) strin
 	}
 }
 
-func implArrayRowToString[T types.RealNumbers](v *Vector, idx int) string {
+func implArrayRowToString[T types.ArrayElement](v *Vector, idx int) string {
 	if v.IsConstNull() {
 		return "null"
 	}
@@ -3309,6 +3349,14 @@ func (v *Vector) RowToString(idx int) string {
 		return implArrayRowToString[float32](v, idx)
 	case types.T_array_float64:
 		return implArrayRowToString[float64](v, idx)
+	case types.T_array_bf16:
+		return implArrayRowToString[types.BF16](v, idx)
+	case types.T_array_float16:
+		return implArrayRowToString[types.Float16](v, idx)
+	case types.T_array_int8:
+		return implArrayRowToString[int8](v, idx)
+	case types.T_array_uint8:
+		return implArrayRowToString[uint8](v, idx)
 	default:
 		panic("vec to string unknown types.")
 	}
@@ -3362,7 +3410,7 @@ func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.M
 }
 
 // SetConstArray set current vector as Constant_Array vector of given length.
-func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mpool.MPool) error {
+func SetConstArray[T types.ArrayElement](vec *Vector, val []T, length int, mp *mpool.MPool) error {
 	var err error
 
 	if err := extend(vec, 1, mp); err != nil {
@@ -3445,7 +3493,7 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	case types.T_Blockid:
 		return appendOneFixed(vec, val.(types.Blockid), false, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry, types.T_geometry32:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
@@ -3486,7 +3534,7 @@ func AppendByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MP
 }
 
 // AppendArray mainly used in tests
-func AppendArray[T types.RealNumbers](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
+func AppendArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
 	}
@@ -3556,7 +3604,7 @@ func AppendStringList(vec *Vector, ws []string, isNulls []bool, mp *mpool.MPool)
 }
 
 // AppendArrayList mainly used in unit tests
-func AppendArrayList[T types.RealNumbers](vec *Vector, ws [][]T, isNulls []bool, mp *mpool.MPool) error {
+func AppendArrayList[T types.ArrayElement](vec *Vector, ws [][]T, isNulls []bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
 	}
@@ -3620,7 +3668,7 @@ func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool
 }
 
 // appendOneArray mainly used for unit tests
-func appendOneArray[T types.RealNumbers](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
+func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
 	var err error
 	var va types.Varlena
 
@@ -3738,7 +3786,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 }
 
 // appendArrayList mainly used for unit tests
-func appendArrayList[T types.RealNumbers](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) error {
+func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) error {
 	var err error
 
 	if err = extend(vec, len(vals), mp); err != nil {
@@ -4437,6 +4485,22 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		_minv, _maxv := ArrayGetMinMax[float64](v)
 		minv = types.ArrayToBytes[float64](_minv)
 		maxv = types.ArrayToBytes[float64](_maxv)
+	case types.T_array_bf16:
+		_minv, _maxv := ArrayElementGetMinMax[types.BF16](v)
+		minv = types.ArrayToBytes[types.BF16](_minv)
+		maxv = types.ArrayToBytes[types.BF16](_maxv)
+	case types.T_array_float16:
+		_minv, _maxv := ArrayElementGetMinMax[types.Float16](v)
+		minv = types.ArrayToBytes[types.Float16](_minv)
+		maxv = types.ArrayToBytes[types.Float16](_maxv)
+	case types.T_array_int8:
+		_minv, _maxv := ArrayElementGetMinMax[int8](v)
+		minv = types.ArrayToBytes[int8](_minv)
+		maxv = types.ArrayToBytes[int8](_maxv)
+	case types.T_array_uint8:
+		_minv, _maxv := ArrayElementGetMinMax[uint8](v)
+		minv = types.ArrayToBytes[uint8](_minv)
+		maxv = types.ArrayToBytes[uint8](_maxv)
 	default:
 		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}
@@ -4804,6 +4868,36 @@ func (v *Vector) InplaceSortAndCompact() {
 			cleanDataNotResetArea()
 			appendList(v, newCol, nil, nil)
 		}
+	case types.T_array_bf16:
+		inplaceSortAndCompactArrayElement[types.BF16](v, cleanDataNotResetArea)
+	case types.T_array_float16:
+		inplaceSortAndCompactArrayElement[types.Float16](v, cleanDataNotResetArea)
+	case types.T_array_int8:
+		inplaceSortAndCompactArrayElement[int8](v, cleanDataNotResetArea)
+	case types.T_array_uint8:
+		inplaceSortAndCompactArrayElement[uint8](v, cleanDataNotResetArea)
+	}
+}
+
+// inplaceSortAndCompactArrayElement sorts+dedups a narrow-typed vector using the
+// float32-bridged comparator (so bf16/f16 order by value, not by raw bits).
+func inplaceSortAndCompactArrayElement[T types.ArrayElement](v *Vector, cleanDataNotResetArea func()) {
+	col, area := MustVarlenaRawData(v)
+	sort.Slice(col, func(i, j int) bool {
+		return types.ArrayElementCompare[T](
+			types.GetArray[T](&col[i], area),
+			types.GetArray[T](&col[j], area),
+		) < 0
+	})
+	newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
+		return types.ArrayElementCompare[T](
+			types.GetArray[T](&a, area),
+			types.GetArray[T](&b, area),
+		) == 0
+	})
+	if len(newCol) != len(col) {
+		cleanDataNotResetArea()
+		appendList(v, newCol, nil, nil)
 	}
 }
 
@@ -4975,7 +5069,27 @@ func (v *Vector) InplaceSort() {
 				types.GetArray[float64](&col[j], area),
 			) < 0
 		})
+	case types.T_array_bf16:
+		sortArrayElement[types.BF16](v)
+	case types.T_array_float16:
+		sortArrayElement[types.Float16](v)
+	case types.T_array_int8:
+		sortArrayElement[int8](v)
+	case types.T_array_uint8:
+		sortArrayElement[uint8](v)
 	}
+}
+
+// sortArrayElement sorts a narrow-typed vector in place using the
+// float32-bridged comparator.
+func sortArrayElement[T types.ArrayElement](v *Vector) {
+	col, area := MustVarlenaRawData(v)
+	sort.Slice(col, func(i, j int) bool {
+		return types.ArrayElementCompare[T](
+			types.GetArray[T](&col[i], area),
+			types.GetArray[T](&col[j], area),
+		) < 0
+	})
 }
 
 func BuildVarlenaInline(v1, v2 *types.Varlena) {
@@ -5074,7 +5188,7 @@ func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJso
 }
 
 // BuildVarlenaFromArray convert array to Varlena so that it can be stored in the vector
-func BuildVarlenaFromArray[T types.RealNumbers](vec *Vector, v *types.Varlena, array *[]T, m *mpool.MPool) error {
+func BuildVarlenaFromArray[T types.ArrayElement](vec *Vector, v *types.Varlena, array *[]T, m *mpool.MPool) error {
 	_bs := types.ArrayToBytes[T](*array)
 	bs := &_bs
 	vlen := len(*bs)

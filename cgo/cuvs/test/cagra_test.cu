@@ -21,8 +21,99 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <cuda_fp16.h>
 
 using namespace matrixone;
+
+// Native half (f16) build + search — validates the direct vecf16-base path
+// (gpu_cagra_t<half, half> native add_chunk/search, no quantizer). Linking this proves
+// cuVS supports cagra over half.
+TEST(GpuCagraTest, BasicLoadAndSearchHalf) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<half> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = __float2half((float)rand() / RAND_MAX);
+        ids[i] = (int64_t)(i + 1000);
+    }
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<half, half> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.build();
+
+    std::vector<half> queries(dataset.begin(), dataset.begin() + dimension);
+    cagra_search_params_t sp = cagra_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 1000LL);
+
+    index.destroy();
+}
+
+// vecf16 base -> int8/uint8 storage via the native B(half)-source quantizer for
+// CAGRA (gpu_cagra_t<half, T> + add_chunk_quantize). Mirrors the ivf_pq
+// HalfQuantizeToInt8Build coverage, which cagra previously lacked entirely.
+// Verifies: train the half-source quantizer on the buffered vecf16 sample,
+// transform half->T, build a CAGRA graph over the quantized codes, and search
+// it (both with a native-T query and with a half query quantized via
+// quantize_query). No f32 detour.
+namespace {
+template <typename T>
+void run_cagra_half_quantize_build(const char* label) {
+    TEST_LOG("CAGRA half-quantize build/search: " << label);
+    const uint32_t dimension = 16;
+    const uint64_t count = 2000;
+    std::vector<half> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = __float2half((float)(rand() % 256) / 255.0f);
+        ids[i] = (int64_t)(i + 5000);
+    }
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<half, T> index(count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.add_chunk_quantize(dataset.data(), count, -1, ids.data());
+    index.build();
+
+    cagra_search_params_t sp = cagra_search_params_default();
+
+    // 1) search with a native-T query (raw storage codes).
+    std::vector<T> qnative(dimension, 0);
+    auto r1 = index.search(qnative.data(), 1, dimension, 5, sp);
+    ASSERT_EQ(r1.neighbors.size(), (size_t)5);
+    for (auto n : r1.neighbors) {
+        ASSERT_GE(n, (int64_t)5000);
+        ASSERT_LT(n, (int64_t)(5000 + count));
+    }
+
+    // 2) search with a half query quantized through the half-source quantizer
+    // (the production path) — the nearest neighbor of base[0] must be itself.
+    std::vector<half> qhalf(dataset.begin(), dataset.begin() + dimension);
+    std::vector<T> qcodes(dimension);
+    index.quantize_query(qhalf.data(), 1, qcodes.data());
+    auto r2 = index.search(qcodes.data(), 1, dimension, 5, sp);
+    ASSERT_EQ(r2.neighbors.size(), (size_t)5);
+    ASSERT_EQ(r2.neighbors[0], (int64_t)5000);
+
+    index.destroy();
+}
+} // namespace
+
+TEST(GpuCagraTest, HalfQuantizeToInt8Build) {
+    run_cagra_half_quantize_build<int8_t>("f16->int8");
+}
+
+TEST(GpuCagraTest, HalfQuantizeToUint8Build) {
+    run_cagra_half_quantize_build<uint8_t>("f16->uint8");
+}
 
 TEST(GpuCagraTest, BasicLoadAndSearch) {
     const uint32_t dimension = 16;
@@ -32,7 +123,7 @@ TEST(GpuCagraTest, BasicLoadAndSearch) {
     
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
     index.build();
 
@@ -58,7 +149,7 @@ TEST(GpuCagraTest, BasicLoadAndSearchWithIds) {
     
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
     index.start();
     index.build();
 
@@ -93,7 +184,7 @@ TEST(GpuCagraTest, ParallelAddChunkWithOffset) {
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
     // Pre-allocate with total_count
-    gpu_cagra_t<float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    gpu_cagra_t<float, float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
 
     // Add chunks in parallel threads
@@ -128,7 +219,7 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
     // 1. Build and Save
     {
         cagra_build_params_t bp = cagra_build_params_default();
-        gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+        gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
         index.start();
         index.build();
         index.save(filename);
@@ -138,7 +229,7 @@ TEST(GpuCagraTest, SaveAndLoadFromFile) {
     // 2. Load and Search
     {
         cagra_build_params_t bp = cagra_build_params_default();
-        gpu_cagra_t<float> index(filename, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+        gpu_cagra_t<float, float> index(filename, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
         index.load(filename);
         
@@ -169,7 +260,7 @@ TEST(GpuCagraTest, ReplicatedModeSimulation) {
     gpu_get_device_list(devices.data(), dev_count);
 
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
     index.start();
     index.build();
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
@@ -198,7 +289,7 @@ TEST(GpuCagraTest, ManualShardedSearch) {
     gpu_get_device_list(devices.data(), dev_count);
 
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.start();
     index.build();
     
@@ -230,7 +321,7 @@ TEST(GpuCagraTest, ManualShardedSearchWithIds) {
     gpu_get_device_list(devices.data(), dev_count);
 
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED, ids.data());
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED, ids.data());
     index.start();
     index.build();
     
@@ -260,7 +351,7 @@ TEST(GpuCagraTest, SoftDeleteSearch) {
 
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
     index.build();
 
@@ -303,7 +394,7 @@ TEST(GpuCagraTest, SoftDeleteWithCustomIds) {
 
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
     index.start();
     index.build();
 
@@ -342,7 +433,7 @@ TEST(GpuCagraTest, FilteredSearchIncludesOnlyAllowedCategories) {
 
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension,
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension,
                              DistanceType_L2Expanded, bp, devices, 1,
                              DistributionMode_SINGLE_GPU);
     index.start();
@@ -393,7 +484,7 @@ TEST(GpuCagraTest, FilteredSearchCombinesWithDeleteBitset) {
 
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension,
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension,
                              DistanceType_L2Expanded, bp, devices, 1,
                              DistributionMode_SINGLE_GPU);
     index.start();
@@ -433,7 +524,7 @@ TEST(GpuCagraTest, FilteredSearchEmptyPredsMatchesUnfiltered) {
 
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension,
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension,
                              DistanceType_L2Expanded, bp, devices, 1,
                              DistributionMode_SINGLE_GPU);
     index.start();
@@ -472,7 +563,7 @@ TEST(GpuCagraTest, ExtendReplicatedWithHostIds) {
     }
 
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), n_base, dimension,
+    gpu_cagra_t<float, float> index(dataset.data(), n_base, dimension,
                              DistanceType_L2Expanded, bp, devices, 1,
                              DistributionMode_REPLICATED, base_ids.data());
     index.start();
@@ -523,7 +614,7 @@ TEST(GpuCagraTest, ExtendShardedThrows) {
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
 
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), n_base, dimension,
+    gpu_cagra_t<float, float> index(dataset.data(), n_base, dimension,
                              DistanceType_L2Expanded, bp, devices, 1,
                              DistributionMode_SHARDED);
     index.start();
@@ -552,7 +643,7 @@ TEST(GpuCagraTest, BuildParamsTooLargeForShardThrows) {
     for (size_t i = 0; i < dataset.size(); ++i) dataset[i] = (float)rand() / RAND_MAX;
 
     cagra_build_params_t bp = cagra_build_params_default(); // intermediate=128, graph=64
-    gpu_cagra_t<float> index(dataset.data(), n_base, dimension,
+    gpu_cagra_t<float, float> index(dataset.data(), n_base, dimension,
                              DistanceType_L2Expanded, bp, devices, 1,
                              DistributionMode_SHARDED);
     index.start();
@@ -572,7 +663,7 @@ TEST(GpuCagraTest, ExtendWithoutHostIds) {
 
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), n_base, dimension,
+    gpu_cagra_t<float, float> index(dataset.data(), n_base, dimension,
                              DistanceType_L2Expanded, bp, devices, 1,
                              DistributionMode_SINGLE_GPU);
     index.start();
@@ -615,7 +706,7 @@ TEST(GpuCagraTest, ExtendWithHostIds) {
 
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), n_base, dimension,
+    gpu_cagra_t<float, float> index(dataset.data(), n_base, dimension,
                              DistanceType_L2Expanded, bp, devices, 1,
                              DistributionMode_SINGLE_GPU, base_ids.data());
     index.start();
@@ -663,7 +754,7 @@ TEST(GpuCagraTest, KExceedsIndexSizeClampsAndPads) {
 
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
                              bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
     index.build();
@@ -708,7 +799,7 @@ TEST(GpuCagraTest, MultiQueryKExceedsIndexSize) {
 
     std::vector<int> devices = {0};
     cagra_build_params_t bp = cagra_build_params_default();
-    gpu_cagra_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
+    gpu_cagra_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
                              bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
     index.build();

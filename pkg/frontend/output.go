@@ -117,6 +117,36 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		} else {
 			row[i] = append([]float64(nil), arr...)
 		}
+	case types.T_array_bf16:
+		arr := vector.GetArrayAt[types.BF16](vec, rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]types.BF16(nil), arr...)
+		}
+	case types.T_array_float16:
+		arr := vector.GetArrayAt[types.Float16](vec, rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]types.Float16(nil), arr...)
+		}
+	case types.T_array_int8:
+		arr := vector.GetArrayAt[int8](vec, rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]int8(nil), arr...)
+		}
+	case types.T_array_uint8:
+		// vecuint8's element slice is []uint8, which is indistinguishable from a
+		// raw []byte (binary/varbinary) value once the column is mapped to
+		// MYSQL_TYPE_VARCHAR. Every value-based consumer of mrs.Data (GetString,
+		// the legacy row encoders, CSV export) would then treat it as raw bytes
+		// and emit corrupt output. Store the display string instead so it is
+		// unambiguous; the main SELECT path (extractRowFromVector2/GetStringBased)
+		// is oid-aware and renders directly from the vector, unaffected by this.
+		row[i] = types.ArrayToString[uint8](vector.GetArrayAt[uint8](vec, rowIndex))
 	case types.T_date:
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIndex)
 	case types.T_datetime:
@@ -247,6 +277,34 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 			row[i] = arr
 		} else {
 			row[i] = append([]float64(nil), arr...)
+		}
+	case types.T_array_bf16:
+		arr := vector.GetArrayAt2[types.BF16](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]types.BF16(nil), arr...)
+		}
+	case types.T_array_float16:
+		arr := vector.GetArrayAt2[types.Float16](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]types.Float16(nil), arr...)
+		}
+	case types.T_array_int8:
+		arr := vector.GetArrayAt2[int8](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]int8(nil), arr...)
+		}
+	case types.T_array_uint8:
+		arr := vector.GetArrayAt2[uint8](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]uint8(nil), arr...)
 		}
 	case types.T_date:
 		row[i] = colSlices.arrDate[sliceIdx][rowIndex]
@@ -570,6 +628,14 @@ func (slices *ColumnSlices) GetStringBased(r uint64, i uint64) (string, error) {
 		return types.ArrayToString[float32](vector.GetArrayAt2[float32](vec, slices.arrVarlena[sliceIdx], int(r))), nil
 	case types.T_array_float64:
 		return types.ArrayToString[float64](vector.GetArrayAt2[float64](vec, slices.arrVarlena[sliceIdx], int(r))), nil
+	case types.T_array_bf16:
+		return types.ArrayToString[types.BF16](vector.GetArrayAt2[types.BF16](vec, slices.arrVarlena[sliceIdx], int(r))), nil
+	case types.T_array_float16:
+		return types.ArrayToString[types.Float16](vector.GetArrayAt2[types.Float16](vec, slices.arrVarlena[sliceIdx], int(r))), nil
+	case types.T_array_int8:
+		return types.ArrayToString[int8](vector.GetArrayAt2[int8](vec, slices.arrVarlena[sliceIdx], int(r))), nil
+	case types.T_array_uint8:
+		return types.ArrayToString[uint8](vector.GetArrayAt2[uint8](vec, slices.arrVarlena[sliceIdx], int(r))), nil
 	case types.T_Rowid:
 		return slices.arrRowid[sliceIdx][r].String(), nil
 	case types.T_Blockid:
@@ -778,6 +844,9 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
 		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
 	case types.T_array_float64:
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
+		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrVarlena)
 		colSlices.arrVarlena = append(colSlices.arrVarlena, vector.ToSliceNoTypeCheck2[types.Varlena](vec))
 	case types.T_date:

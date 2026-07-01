@@ -20,6 +20,7 @@
 #include <raft/core/host_mdarray.hpp>
 #include <raft/core/resources.hpp>
 #include <raft/core/copy.cuh>
+#include <raft/linalg/unary_op.cuh>
 #include <cuvs/preprocessing/quantize/scalar.hpp>
 #include <fstream>
 #include <string>
@@ -27,6 +28,8 @@
 #include <stdexcept>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
+#include <limits>
 #include <algorithm>
 #include <type_traits>
 #include <cuda_fp16.h>
@@ -99,19 +102,98 @@ public:
                 auto out_view = raft::make_device_matrix_view<int8_t, int64_t>(out_ptr, n_rows, n_cols);
                 cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, out_view);
             } else {
-                // T is uint8_t, but cuVS transform expects int8_t output
+                // T is uint8_t. cuVS scalar transform only emits int8 [-128,127];
+                // map it to uint8 [0,255] with a MONOTONIC +128 shift, NOT a raw
+                // cast (raft::copy would value-cast and wrap negatives: -1->255,
+                // -128->128, scrambling the L2 ordering for signed/zero-centered
+                // data). The shift is L2-invariant — base and query both pass through
+                // here, so the constant cancels in (a-b) — so uint8 recall matches int8.
                 auto chunk_device_int8 = raft::make_device_matrix<int8_t, int64_t>(res, n_rows, n_cols);
                 cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, chunk_device_int8.view());
-                auto out_view = raft::make_device_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
-                raft::copy(res, out_view, chunk_device_int8.view());
+                raft::linalg::unaryOp(
+                    out_ptr, chunk_device_int8.data_handle(), n_rows * n_cols,
+                    [] __device__(int8_t v) { return static_cast<uint8_t>(static_cast<int>(v) + 128); },
+                    raft::resource::get_cuda_stream(res));
             }
         } else {
-            // For host pointers, we must use a temporary device buffer for the transform
+            // For host pointers, transform into a temporary device int8 buffer first.
             auto tmp_dev = raft::make_device_matrix<int8_t, int64_t>(res, n_rows, n_cols);
             cuvs::preprocessing::quantize::scalar::transform(res, *quantizer_, src_view, tmp_dev.view());
-            auto out_view = raft::make_host_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
-            raft::copy(res, out_view, tmp_dev.view());
+            if constexpr (std::is_same_v<T, uint8_t>) {
+                // Monotonic int8->uint8 (+128) on device, then copy to host — see
+                // the device path above for why a raw cast is wrong.
+                auto tmp_u8 = raft::make_device_matrix<uint8_t, int64_t>(res, n_rows, n_cols);
+                raft::linalg::unaryOp(
+                    tmp_u8.data_handle(), tmp_dev.data_handle(), n_rows * n_cols,
+                    [] __device__(int8_t v) { return static_cast<uint8_t>(static_cast<int>(v) + 128); },
+                    raft::resource::get_cuda_stream(res));
+                auto out_view = raft::make_host_matrix_view<uint8_t, int64_t>(out_ptr, n_rows, n_cols);
+                raft::copy(res, out_view, tmp_u8.view());
+            } else {
+                auto out_view = raft::make_host_matrix_view<T, int64_t>(out_ptr, n_rows, n_cols);
+                raft::copy(res, out_view, tmp_dev.view());
+            }
             raft::resource::sync_stream(res);
+        }
+    }
+
+    /**
+     * @brief Host (CPU) equivalent of transform(): quantizes a chunk of
+     * SOURCE-typed (S) elements into 1-byte T entirely on the CPU.
+     *
+     * Scalar quantization is a pure per-element affine map from the trained
+     * [min_, max_] range, so once the quantizer is trained no GPU is needed.
+     * This is a bit-for-bit port of cuVS' device quantize_op
+     * (cuvs/preprocessing/quantize/detail/scalar.cuh): the scale/offset are
+     * computed in `double` (the op's default TempT), the inner clamp uses the
+     * source-type comparison, ties round via lroundf, and uint8 storage applies
+     * the same monotonic +128 shift as the device path. Producing identical
+     * bytes to transform() keeps a CPU-built base consistent with a
+     * GPU-quantized query at search time.
+     *
+     * @tparam T Target storage type (int8_t or uint8_t).
+     * @param src        Source elements, row-major, n_elements long.
+     * @param out        Destination (host), n_elements long.
+     * @param n_elements Number of scalar elements (rows * dimension).
+     */
+    template <typename T>
+    void transform_host(const S* src, T* out, size_t n_elements) const {
+        if (!quantizer_) throw std::runtime_error("Quantizer not trained");
+        static_assert(sizeof(T) == 1, "Quantization target must be 1-byte");
+
+        // cuVS maps the float interval onto the signed range [-128, 127];
+        // uint8 is the same int8 result shifted by +128 (see transform()).
+        constexpr int q_type_min = std::numeric_limits<int8_t>::min(); // -128
+        constexpr int q_type_max = std::numeric_limits<int8_t>::max(); //  127
+
+        const double dmin = static_cast<double>(quantizer_->min_);
+        const double dmax = static_cast<double>(quantizer_->max_);
+        const double scalar = (dmax > dmin)
+            ? (static_cast<double>(q_type_max - q_type_min) / (dmax - dmin))
+            : 1.0;
+        const double offset = static_cast<double>(q_type_min) - dmin * scalar;
+
+        // fp_lt() compares in the source type's float domain (half is cast to
+        // float; float compares natively) — replicate with a float compare.
+        const float fmin = static_cast<float>(quantizer_->min_);
+        const float fmax = static_cast<float>(quantizer_->max_);
+
+        for (size_t i = 0; i < n_elements; ++i) {
+            const float xf = static_cast<float>(src[i]);
+            int8_t q;
+            if (!(fmin < xf)) {
+                q = static_cast<int8_t>(q_type_min);
+            } else if (!(xf < fmax)) {
+                q = static_cast<int8_t>(q_type_max);
+            } else {
+                q = static_cast<int8_t>(
+                    std::lroundf(static_cast<float>(scalar * static_cast<double>(src[i]) + offset)));
+            }
+            if constexpr (std::is_same_v<T, uint8_t>) {
+                out[i] = static_cast<uint8_t>(static_cast<int>(q) + 128);
+            } else {
+                out[i] = static_cast<T>(q);
+            }
         }
     }
 
@@ -242,10 +324,18 @@ void load_matrix_chunked_ptr(const raft::resources& res, const std::string& file
     if constexpr (DoQuantize) {
         int64_t n_train = std::min(n_rows, static_cast<int64_t>(500));
         std::vector<S> train_host(n_train * n_cols);
-        std::streamsize train_wanted = static_cast<std::streamsize>(train_host.size() * sizeof(S));
-        file.read(reinterpret_cast<char*>(train_host.data()), train_wanted);
-        if (file.gcount() != train_wanted) {
-            throw std::runtime_error("Truncated training-set read from: " + filename);
+        // Strided sample across ALL n_rows (not the first n_train contiguous
+        // rows) so the scalar quantizer learns the true [min,max] range even
+        // when the file is sorted/clustered — otherwise higher-magnitude rows
+        // past the prefix saturate to the storage extreme and recall collapses.
+        const int64_t stride = n_rows / n_train; // >= 1 since n_train <= n_rows
+        const std::streamsize row_bytes = static_cast<std::streamsize>(n_cols) * sizeof(S);
+        for (int64_t j = 0; j < n_train; ++j) {
+            file.seekg(sizeof(file_header_t) + static_cast<std::streamoff>(j) * stride * row_bytes);
+            file.read(reinterpret_cast<char*>(train_host.data() + j * n_cols), row_bytes);
+            if (file.gcount() != row_bytes) {
+                throw std::runtime_error("Truncated training-set read from: " + filename);
+            }
         }
         auto train_device = raft::make_device_matrix<S, int64_t>(res, n_train, n_cols);
         raft::copy(train_device.data_handle(), train_host.data(), train_host.size(), raft::resource::get_cuda_stream(res));

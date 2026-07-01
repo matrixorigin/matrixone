@@ -21,6 +21,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <cuda_fp16.h>
+#include <algorithm>
+#include <set>
+#include <vector>
+#include <utility>
 
 using namespace matrixone;
 
@@ -38,7 +43,7 @@ TEST(GpuIvfPqTest, BasicLoadSearchAndCenters) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 2;
     bp.m = 8;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
     index.build();
 
@@ -73,7 +78,7 @@ TEST(GpuIvfPqTest, BasicLoadAndSearchWithIds) {
     std::vector<int> devices = {0};
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 100;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
     index.start();
     index.build();
 
@@ -85,6 +90,353 @@ TEST(GpuIvfPqTest, BasicLoadAndSearchWithIds) {
     ASSERT_EQ(result.neighbors[0], 2000);
 
     index.destroy();
+}
+
+// Native half (f16) build + search — validates the direct vecf16-base path
+// (gpu_ivf_pq_t<half, half> native add_chunk/search, no quantizer). Linking this proves
+// cuVS supports ivf_pq over half (unlike brute force over int8/uint8).
+TEST(GpuIvfPqTest, BasicLoadAndSearchHalf) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 1000;
+    std::vector<half> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = __float2half((float)rand() / RAND_MAX);
+        ids[i] = (int64_t)(i + 2000);
+    }
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 100;
+    gpu_ivf_pq_t<half, half> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU, ids.data());
+    index.start();
+    index.build();
+
+    // Query == row 0, so the nearest neighbour must be its id (2000).
+    std::vector<half> queries(dataset.begin(), dataset.begin() + dimension);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    auto result = index.search(queries.data(), 1, dimension, 5, sp);
+
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    ASSERT_EQ(result.neighbors[0], 2000);
+
+    index.destroy();
+}
+
+// vecf16 base -> int8 storage via the native B(half)-source quantizer
+// (add_chunk_quantize). Verifies the quantize-build path: train the half-source
+// quantizer on the buffered vecf16 sample, transform half->int8, store as int8,
+// and build a searchable int8 index. No f32 detour.
+TEST(GpuIvfPqTest, HalfQuantizeToInt8Build) {
+    const uint32_t dimension = 16;
+    const uint64_t count = 2000;
+    std::vector<half> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = __float2half((float)(rand() % 256) / 255.0f);
+        ids[i] = (int64_t)(i + 5000);
+    }
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 50;
+    gpu_ivf_pq_t<half, int8_t> index(count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.add_chunk_quantize(dataset.data(), count, -1, ids.data());
+    index.build();
+
+    // The resulting int8 index is searchable with a native int8 query.
+    std::vector<int8_t> q(dimension, 0);
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 50;
+    auto result = index.search(q.data(), 1, dimension, 5, sp);
+    ASSERT_EQ(result.neighbors.size(), (size_t)5);
+    for (auto n : result.neighbors) {
+        ASSERT_GE(n, (int64_t)5000);
+        ASSERT_LT(n, (int64_t)(5000 + count));
+    }
+
+    index.destroy();
+}
+
+// ---------------------------------------------------------------------------
+// REPRODUCTION: f32 base -> int8 vs uint8 storage recall on SIGNED data.
+//
+// Isolates whether the uint8 quantization recall collapse (seen at 1M scale:
+// int8 ~0.83, uint8 ~0.24) is a cuVS-layer bug or mo Go plumbing. This test
+// builds BOTH indexes purely through the C++ cuVS wrapper (no mo storage/CDC),
+// from the SAME signed dataset with the SAME scalar quantizer. transform<uint8>
+// differs from transform<int8> only by a monotonic +128 shift (asserted below)
+// which is L2-invariant -- so cuVS uint8 recall MUST match int8 unless cuVS
+// mishandles uint8 datasets.
+namespace {
+struct RecallData {
+    uint32_t dim; uint64_t count; uint64_t nq;
+    std::vector<float> base, queries;
+    std::vector<int64_t> ids;
+    std::vector<std::vector<int64_t>> gt;
+};
+
+RecallData make_signed_recall_data(uint32_t dim, uint64_t count, uint64_t nq, uint32_t k) {
+    RecallData d; d.dim = dim; d.count = count; d.nq = nq;
+    d.base.resize(count * dim); d.queries.resize(nq * dim); d.ids.resize(count);
+    srand(1234);
+    auto sgn = []() { return ((float)rand() / RAND_MAX) * 2.0f - 1.0f; }; // [-1,1], zero-centered
+    for (uint64_t i = 0; i < count; ++i) {
+        for (uint32_t j = 0; j < dim; ++j) d.base[i * dim + j] = sgn();
+        d.ids[i] = (int64_t)i;
+    }
+    for (uint64_t q = 0; q < nq; ++q)
+        for (uint32_t j = 0; j < dim; ++j) d.queries[q * dim + j] = sgn();
+    d.gt.resize(nq);
+    for (uint64_t q = 0; q < nq; ++q) {
+        std::vector<std::pair<float, int64_t>> dist(count);
+        for (uint64_t i = 0; i < count; ++i) {
+            float s = 0;
+            for (uint32_t j = 0; j < dim; ++j) { float df = d.queries[q * dim + j] - d.base[i * dim + j]; s += df * df; }
+            dist[i] = {s, (int64_t)i};
+        }
+        std::partial_sort(dist.begin(), dist.begin() + k, dist.end());
+        d.gt[q].resize(k);
+        for (uint32_t r = 0; r < k; ++r) d.gt[q][r] = dist[r].second;
+    }
+    return d;
+}
+
+template <typename T>
+double measure_quantize_recall(RecallData& d, uint32_t k) {
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 64;
+    gpu_ivf_pq_t<float, T> index(d.count, d.dim, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.add_chunk_quantize(d.base.data(), d.count, -1, d.ids.data());
+    index.build();
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 64;
+    auto res = index.search_quantize(d.queries.data(), d.nq, d.dim, k, sp);
+    size_t hit = 0, tot = 0;
+    for (uint64_t q = 0; q < d.nq; ++q) {
+        std::set<int64_t> gt(d.gt[q].begin(), d.gt[q].end());
+        for (uint32_t r = 0; r < k; ++r) {
+            int64_t n = res.neighbors[q * k + r];
+            if (gt.count(n)) ++hit;
+        }
+        tot += k;
+    }
+    index.destroy();
+    return (double)hit / (double)tot;
+}
+} // namespace
+
+TEST(GpuIvfPqRecall, Int8VsUint8SignedData) {
+    const uint32_t dim = 32, k = 10;
+    const uint64_t count = 4000, nq = 200;
+    RecallData d = make_signed_recall_data(dim, count, nq, k);
+
+    double r_int8  = measure_quantize_recall<int8_t>(d, k);
+    double r_uint8 = measure_quantize_recall<uint8_t>(d, k);
+
+    // Confirm uint8 codes == int8 codes + 128 (monotonic, L2-invariant). If 0
+    // mismatches, the quantization is identical up to a constant shift, so any
+    // recall gap is purely cuVS's uint8 dataset handling.
+    int mism = 0;
+    {
+        std::vector<int> devices = {0};
+        ivf_pq_build_params_t bp = ivf_pq_build_params_default(); bp.n_lists = 64;
+        gpu_ivf_pq_t<float, int8_t>  qi(d.count, d.dim, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+        qi.start(); qi.add_chunk_quantize(d.base.data(), d.count, -1, d.ids.data()); qi.build();
+        gpu_ivf_pq_t<float, uint8_t> qu(d.count, d.dim, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+        qu.start(); qu.add_chunk_quantize(d.base.data(), d.count, -1, d.ids.data()); qu.build();
+        std::vector<int8_t> ci(dim); std::vector<uint8_t> cu(dim);
+        qi.quantize_query(d.queries.data(), 1, ci.data());
+        qu.quantize_query(d.queries.data(), 1, cu.data());
+        for (uint32_t j = 0; j < dim; ++j) if ((int)cu[j] != (int)ci[j] + 128) ++mism;
+        qi.destroy(); qu.destroy();
+    }
+
+    printf("[repro] +128 mismatches: %d / %u dims (0 => uint8==int8+128, L2-invariant)\n", mism, dim);
+    printf("[repro] f32->int8  recall@%u = %.4f\n", k, r_int8);
+    printf("[repro] f32->uint8 recall@%u = %.4f\n", k, r_uint8);
+    printf("[repro] VERDICT: int8 high + uint8 low + 0 mismatches => cuVS uint8 bug (not mo plumbing)\n");
+
+    ASSERT_TRUE(r_int8 > 0.5);  // int8 quantize recall should be reasonable
+    ASSERT_TRUE(mism == 0);     // uint8 codes must equal int8 codes + 128
+}
+
+// ---------------------------------------------------------------------------
+// PURE cuVS reproduction: calls cuvs::neighbors::ivf_pq::build/search DIRECTLY
+// on raw int8 vs uint8 device matrices. No gpu_ivf_pq_t wrapper, no
+// scalar_quantizer_t, no add_chunk/search_float -- zero matrixone code in the
+// index path. The uint8 dataset is the int8 dataset + 128 (an exact, monotonic,
+// L2-identical shift), so cuVS MUST return identical recall unless it mishandles
+// uint8 ivf_pq datasets. This is the definitive cuVS-vs-ours test.
+namespace {
+// CPU scalar quantize float -> int8 via a global [lo,hi] -> [-128,127] map.
+void cpu_quantize_int8(const std::vector<float>& src, std::vector<int8_t>& out, float lo, float hi) {
+    out.resize(src.size());
+    const float scale = 255.0f / (hi - lo);
+    for (size_t i = 0; i < src.size(); ++i) {
+        int iv = (int)lroundf((src[i] - lo) * scale - 128.0f); // [lo,hi] -> [-128,127]
+        iv = std::max(-128, std::min(127, iv));
+        out[i] = (int8_t)iv;
+    }
+}
+
+template <typename T>
+double pure_cuvs_ivfpq_recall(const std::vector<T>& base_q, const std::vector<T>& query_q,
+                              uint64_t count, uint64_t nq, uint32_t dim, uint32_t k,
+                              const std::vector<std::vector<int64_t>>& gt) {
+    raft::resources res;
+    auto base_dev = raft::make_device_matrix<T, int64_t>(res, count, dim);
+    raft::copy(res, base_dev.view(), raft::make_host_matrix_view<const T, int64_t>(base_q.data(), count, dim));
+    auto query_dev = raft::make_device_matrix<T, int64_t>(res, nq, dim);
+    raft::copy(res, query_dev.view(), raft::make_host_matrix_view<const T, int64_t>(query_q.data(), nq, dim));
+    raft::resource::sync_stream(res);
+
+    cuvs::neighbors::ivf_pq::index_params ip;
+    ip.metric = cuvs::distance::DistanceType::L2Expanded;
+    ip.n_lists = 64;
+    ip.pq_dim = dim / 2;
+    ip.pq_bits = 8;
+    auto index = cuvs::neighbors::ivf_pq::build(res, ip, raft::make_const_mdspan(base_dev.view()));
+
+    cuvs::neighbors::ivf_pq::search_params sp;
+    sp.n_probes = 64;
+    auto neighbors = raft::make_device_matrix<int64_t, int64_t>(res, nq, k);
+    auto distances = raft::make_device_matrix<float, int64_t>(res, nq, k);
+    cuvs::neighbors::ivf_pq::search(res, sp, index, raft::make_const_mdspan(query_dev.view()),
+                                    neighbors.view(), distances.view());
+    raft::resource::sync_stream(res);
+
+    std::vector<int64_t> nh(nq * k);
+    raft::copy(res, raft::make_host_matrix_view<int64_t, int64_t>(nh.data(), nq, k), neighbors.view());
+    raft::resource::sync_stream(res);
+
+    size_t hit = 0, tot = 0;
+    for (uint64_t q = 0; q < nq; ++q) {
+        std::set<int64_t> g(gt[q].begin(), gt[q].end());
+        for (uint32_t r = 0; r < k; ++r) if (g.count(nh[q * k + r])) ++hit;
+        tot += k;
+    }
+    return (double)hit / (double)tot;
+}
+} // namespace
+
+TEST(PureCuvsIvfPqRecall, Int8VsUint8SignedData) {
+    const uint32_t dim = 32, k = 10;
+    const uint64_t count = 4000, nq = 200;
+    RecallData d = make_signed_recall_data(dim, count, nq, k); // signed float data + float-L2 GT
+
+    float lo = 1e30f, hi = -1e30f;
+    for (float v : d.base) { lo = std::min(lo, v); hi = std::max(hi, v); }
+
+    std::vector<int8_t> base_i8, query_i8;
+    cpu_quantize_int8(d.base, base_i8, lo, hi);
+    cpu_quantize_int8(d.queries, query_i8, lo, hi);
+
+    // uint8 dataset = int8 dataset + 128 (exact; L2(a-b) is identical).
+    std::vector<uint8_t> base_u8(base_i8.size()), query_u8(query_i8.size());
+    for (size_t i = 0; i < base_i8.size(); ++i)  base_u8[i]  = (uint8_t)((int)base_i8[i]  + 128);
+    for (size_t i = 0; i < query_i8.size(); ++i) query_u8[i] = (uint8_t)((int)query_i8[i] + 128);
+
+    double r_i8 = pure_cuvs_ivfpq_recall<int8_t>(base_i8, query_i8, count, nq, dim, k, d.gt);
+    double r_u8 = pure_cuvs_ivfpq_recall<uint8_t>(base_u8, query_u8, count, nq, dim, k, d.gt);
+
+    printf("[pure-cuvs] f32->int8  recall@%u = %.4f\n", k, r_i8);
+    printf("[pure-cuvs] f32->uint8 recall@%u = %.4f (uint8 = int8+128, L2-identical)\n", k, r_u8);
+    printf("[pure-cuvs] VERDICT: int8 high + uint8 low => cuVS uint8 ivf_pq bug (zero matrixone code in path)\n");
+    ASSERT_TRUE(r_i8 > 0.3);
+}
+
+// ---------------------------------------------------------------------------
+// REPRODUCTION: f16 (half) base -> int8 vs uint8 storage recall on SIGNED data.
+//
+// Same isolation as GpuIvfPqRecall.Int8VsUint8SignedData, but the source
+// element type is half (gpu_ivf_pq_t<half, T> + the native half-source
+// quantizer) instead of float. The base/query halves are derived from the SAME
+// signed float dataset and graded against the SAME float-L2 ground truth.
+// transform<uint8> again differs from transform<int8> only by the monotonic
+// +128 shift (asserted below), which is L2-invariant -- so cuVS uint8 recall
+// MUST match int8 unless cuVS mishandles uint8 ivf_pq datasets. Proves the
+// uint8 collapse is independent of the source element type (f32 vs f16).
+namespace {
+template <typename T>
+double measure_half_quantize_recall(RecallData& d, uint32_t k) {
+    // Convert the float base/queries to half — the native B source type.
+    std::vector<half> base_h(d.base.size()), query_h(d.queries.size());
+    for (size_t i = 0; i < d.base.size(); ++i)   base_h[i]  = __float2half(d.base[i]);
+    for (size_t i = 0; i < d.queries.size(); ++i) query_h[i] = __float2half(d.queries[i]);
+
+    std::vector<int> devices = {0};
+    ivf_pq_build_params_t bp = ivf_pq_build_params_default();
+    bp.n_lists = 64;
+    gpu_ivf_pq_t<half, T> index(d.count, d.dim, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.add_chunk_quantize(base_h.data(), d.count, -1, d.ids.data());
+    index.build();
+
+    // Quantize the half queries to storage codes via the half-source quantizer,
+    // then run the native T search path (same as production).
+    std::vector<T> qcodes(d.nq * d.dim);
+    index.quantize_query(query_h.data(), d.nq, qcodes.data());
+    ivf_pq_search_params_t sp = ivf_pq_search_params_default();
+    sp.n_probes = 64;
+    auto res = index.search(qcodes.data(), d.nq, d.dim, k, sp);
+
+    size_t hit = 0, tot = 0;
+    for (uint64_t q = 0; q < d.nq; ++q) {
+        std::set<int64_t> gt(d.gt[q].begin(), d.gt[q].end());
+        for (uint32_t r = 0; r < k; ++r) {
+            int64_t n = res.neighbors[q * k + r];
+            if (gt.count(n)) ++hit;
+        }
+        tot += k;
+    }
+    index.destroy();
+    return (double)hit / (double)tot;
+}
+} // namespace
+
+TEST(GpuIvfPqRecall, Int8VsUint8SignedDataHalf) {
+    const uint32_t dim = 32, k = 10;
+    const uint64_t count = 4000, nq = 200;
+    RecallData d = make_signed_recall_data(dim, count, nq, k);
+
+    double r_int8  = measure_half_quantize_recall<int8_t>(d, k);
+    double r_uint8 = measure_half_quantize_recall<uint8_t>(d, k);
+
+    // Confirm uint8 query codes == int8 query codes + 128 (monotonic,
+    // L2-invariant), produced by the SAME half source. 0 mismatches => any
+    // recall gap is purely cuVS's uint8 dataset handling, not f16 conversion.
+    int mism = 0;
+    {
+        std::vector<half> base_h(d.base.size()), query_h(d.queries.size());
+        for (size_t i = 0; i < d.base.size(); ++i)   base_h[i]  = __float2half(d.base[i]);
+        for (size_t i = 0; i < d.queries.size(); ++i) query_h[i] = __float2half(d.queries[i]);
+
+        std::vector<int> devices = {0};
+        ivf_pq_build_params_t bp = ivf_pq_build_params_default(); bp.n_lists = 64;
+        gpu_ivf_pq_t<half, int8_t>  qi(d.count, d.dim, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+        qi.start(); qi.add_chunk_quantize(base_h.data(), d.count, -1, d.ids.data()); qi.build();
+        gpu_ivf_pq_t<half, uint8_t> qu(d.count, d.dim, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+        qu.start(); qu.add_chunk_quantize(base_h.data(), d.count, -1, d.ids.data()); qu.build();
+        std::vector<int8_t> ci(dim); std::vector<uint8_t> cu(dim);
+        qi.quantize_query(query_h.data(), 1, ci.data());
+        qu.quantize_query(query_h.data(), 1, cu.data());
+        for (uint32_t j = 0; j < dim; ++j) if ((int)cu[j] != (int)ci[j] + 128) ++mism;
+        qi.destroy(); qu.destroy();
+    }
+
+    printf("[repro-f16] +128 mismatches: %d / %u dims (0 => uint8==int8+128, L2-invariant)\n", mism, dim);
+    printf("[repro-f16] f16->int8  recall@%u = %.4f\n", k, r_int8);
+    printf("[repro-f16] f16->uint8 recall@%u = %.4f\n", k, r_uint8);
+    printf("[repro-f16] VERDICT: int8 high + uint8 low + 0 mismatches => cuVS uint8 bug (f16 source)\n");
+
+    ASSERT_TRUE(r_int8 > 0.5);  // f16->int8 quantize recall should be reasonable
+    ASSERT_TRUE(mism == 0);     // uint8 codes must equal int8 codes + 128
 }
 
 TEST(GpuIvfPqTest, ParallelAddChunkWithOffset) {
@@ -108,7 +460,7 @@ TEST(GpuIvfPqTest, ParallelAddChunkWithOffset) {
     std::vector<int> devices = {0};
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 100;
-    gpu_ivf_pq_t<float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    gpu_ivf_pq_t<float, float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
 
     std::thread t1([&]() { index.add_chunk(chunk1.data(), count_per_chunk, 0, ids1.data()); });
@@ -144,7 +496,7 @@ TEST(GpuIvfPqTest, SaveAndLoadFromFile) {
         ivf_pq_build_params_t bp = ivf_pq_build_params_default();
         bp.n_lists = 2;
         bp.m = 2;
-        gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+        gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
         index.build();
         index.save(filename);
@@ -156,7 +508,7 @@ TEST(GpuIvfPqTest, SaveAndLoadFromFile) {
         ivf_pq_build_params_t bp = ivf_pq_build_params_default();
         bp.n_lists = 2;
         bp.m = 2;
-        gpu_ivf_pq_t<float> index(filename, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+        gpu_ivf_pq_t<float, float> index(filename, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
         index.start();
         index.load(filename);
         
@@ -192,7 +544,7 @@ TEST(GpuIvfPqTest, ManualShardedSearch) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 50;
     bp.m = 8;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.start();
     index.build();
     
@@ -226,7 +578,7 @@ TEST(GpuIvfPqTest, ManualShardedSearchWithIds) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 50;
     bp.m = 8;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED, ids.data());
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED, ids.data());
     index.start();
     index.build();
     
@@ -258,7 +610,7 @@ TEST(GpuIvfPqTest, ManualShardedGetCenters) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 50;
     bp.m = 8;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SHARDED);
     index.start();
     index.build();
     
@@ -287,7 +639,7 @@ TEST(GpuIvfPqTest, ReplicatedModeSimulation) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 100;
     bp.m = 8;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_REPLICATED);
     index.start();
     index.build();
     std::vector<float> queries(dataset.begin(), dataset.begin() + dimension);
@@ -315,7 +667,7 @@ TEST(GpuIvfPqTest, ExtendWithoutHostIds) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 10;
     bp.m = 8;
-    gpu_ivf_pq_t<float> index(dataset.data(), n_base, dimension,
+    gpu_ivf_pq_t<float, float> index(dataset.data(), n_base, dimension,
                               DistanceType_L2Expanded, bp, devices, 1,
                               DistributionMode_SINGLE_GPU);
     index.start();
@@ -383,7 +735,7 @@ TEST(GpuIvfPqTest, ExtendWithHostIds) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 10;
     bp.m = 8;
-    gpu_ivf_pq_t<float> index(dataset.data(), n_base, dimension,
+    gpu_ivf_pq_t<float, float> index(dataset.data(), n_base, dimension,
                               DistanceType_L2Expanded, bp, devices, 1,
                               DistributionMode_SINGLE_GPU, base_ids.data());
     index.start();
@@ -439,7 +791,7 @@ TEST(GpuIvfPqTest, ExtendReplicatedWithHostIds) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 10;
     bp.m = 8;
-    gpu_ivf_pq_t<float> index(dataset.data(), n_base, dimension,
+    gpu_ivf_pq_t<float, float> index(dataset.data(), n_base, dimension,
                               DistanceType_L2Expanded, bp, devices, 1,
                               DistributionMode_REPLICATED, base_ids.data());
     index.start();
@@ -483,7 +835,7 @@ TEST(GpuIvfPqTest, ExtendShardedWithHostIds) {
 
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 10;
-    gpu_ivf_pq_t<float> index(dataset.data(), n_base, dimension,
+    gpu_ivf_pq_t<float, float> index(dataset.data(), n_base, dimension,
                                 DistanceType_L2Expanded, bp, devices, 1,
                                 DistributionMode_SHARDED, base_ids.data());
     index.start();
@@ -531,7 +883,7 @@ TEST(GpuIvfPqTest, ExtendShardedWithoutHostIds) {
 
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 10;
-    gpu_ivf_pq_t<float> index(dataset.data(), n_base, dimension,
+    gpu_ivf_pq_t<float, float> index(dataset.data(), n_base, dimension,
                                 DistanceType_L2Expanded, bp, devices, 1,
                                 DistributionMode_SHARDED, nullptr);
     index.start();
@@ -580,7 +932,7 @@ TEST(GpuIvfPqTest, FilteredSearchExcludesForbiddenCategory) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 4;
     bp.m = 4;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension,
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension,
                               DistanceType_L2Expanded, bp, devices, 1,
                               DistributionMode_SINGLE_GPU);
     index.start();
@@ -627,7 +979,7 @@ TEST(GpuIvfPqTest, FilteredSearchCombinesWithDeleteBitset) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 4;
     bp.m = 4;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension,
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension,
                               DistanceType_L2Expanded, bp, devices, 1,
                               DistributionMode_SINGLE_GPU);
     index.start();
@@ -689,7 +1041,7 @@ TEST(GpuIvfPqTest, FilteredSearchEmptyPredsMatchesUnfiltered) {
     ivf_pq_build_params_t bp = ivf_pq_build_params_default();
     bp.n_lists = 4;
     bp.m = 4;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension,
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension,
                               DistanceType_L2Expanded, bp, devices, 1,
                               DistributionMode_SINGLE_GPU);
     index.start();
@@ -729,7 +1081,7 @@ TEST(GpuIvfPqTest, KExceedsIndexSizeClampsAndPads) {
     bp.n_lists = 2;
     bp.m = 2;
     bp.bits_per_code = 8;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
                               bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
     index.build();
@@ -790,7 +1142,7 @@ TEST(GpuIvfPqTest, MultiQueryKExceedsIndexSize) {
     bp.n_lists = 2;
     bp.m = 2;
     bp.bits_per_code = 8;
-    gpu_ivf_pq_t<float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
+    gpu_ivf_pq_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded,
                               bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
     index.build();

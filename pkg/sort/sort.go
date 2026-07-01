@@ -40,7 +40,8 @@ type sortType interface {
 		~[]types.Time | ~[]types.Enum | ~[]types.MoYear | ~[]types.TS |
 		~[]types.Decimal64 | ~[]types.Decimal128 | ~[]types.Decimal256 |
 		~[]types.Rowid | ~[]types.Blockid | ~[]types.Uuid |
-		~[][]float32 | ~[][]float64
+		~[][]float32 | ~[][]float64 |
+		~[][]types.BF16 | ~[][]types.Float16 | ~[][]int8 | ~[][]uint8
 }
 
 type xorshift uint64
@@ -287,6 +288,34 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, arrayGreater[float64])
 		}
+	case types.T_array_bf16:
+		col := vector.MustArrayCol[types.BF16](vec)
+		if !desc {
+			genericSort(col, os, arrayElementLess[types.BF16])
+		} else {
+			genericSort(col, os, arrayElementGreater[types.BF16])
+		}
+	case types.T_array_float16:
+		col := vector.MustArrayCol[types.Float16](vec)
+		if !desc {
+			genericSort(col, os, arrayElementLess[types.Float16])
+		} else {
+			genericSort(col, os, arrayElementGreater[types.Float16])
+		}
+	case types.T_array_int8:
+		col := vector.MustArrayCol[int8](vec)
+		if !desc {
+			genericSort(col, os, arrayElementLess[int8])
+		} else {
+			genericSort(col, os, arrayElementGreater[int8])
+		}
+	case types.T_array_uint8:
+		col := vector.MustArrayCol[uint8](vec)
+		if !desc {
+			genericSort(col, os, arrayElementLess[uint8])
+		} else {
+			genericSort(col, os, arrayElementGreater[uint8])
+		}
 	case types.T_TS:
 		col := vector.MustFixedColNoTypeCheck[types.TS](vec)
 		if !desc {
@@ -392,6 +421,16 @@ func uuidGreater(data []types.Uuid, i, j int64) bool {
 
 func arrayGreater[T types.RealNumbers](data [][]T, i, j int64) bool {
 	return types.ArrayCompare[T](data[i], data[j]) > 0
+}
+
+// Narrow vector element types (bf16/f16/int8) order through the float32 bridge
+// so bf16/f16 sign bits do not corrupt the ordering.
+func arrayElementLess[T types.ArrayElement](data [][]T, i, j int64) bool {
+	return types.ArrayElementCompare[T](data[i], data[j]) < 0
+}
+
+func arrayElementGreater[T types.ArrayElement](data [][]T, i, j int64) bool {
+	return types.ArrayElementCompare[T](data[i], data[j]) > 0
 }
 
 func genericLess[T types.OrderedT](data []T, i, j int64) bool {

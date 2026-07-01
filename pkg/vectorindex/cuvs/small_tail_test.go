@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
@@ -46,12 +47,12 @@ func TestSaveSmallTailAsCdc_Empty(t *testing.T) {
 func TestSaveSmallTailAsCdc_NoInclude(t *testing.T) {
 	const dim = 3
 	rows := []PendingRecord{
-		{Pkid: 1, Vec: []float32{1, 2, 3}},
-		{Pkid: 2, Vec: []float32{4, 5, 6}},
-		{Pkid: -3, Vec: []float32{math.MaxFloat32, 0, -1}},
+		{Pkid: 1, Vec: util.UnsafeSliceToBytes([]float32{1, 2, 3})},
+		{Pkid: 2, Vec: util.UnsafeSliceToBytes([]float32{4, 5, 6})},
+		{Pkid: -3, Vec: util.UnsafeSliceToBytes([]float32{math.MaxFloat32, 0, -1})},
 	}
 
-	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, dim, 0, "")
+	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 4*dim, 0, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, sqls)
 
@@ -69,7 +70,7 @@ func TestSaveSmallTailAsCdc_NoInclude(t *testing.T) {
 		require.NoError(t, err)
 		pos := 0
 		for pos < len(records) {
-			rec, n, ok := DecodeEventRecord(records[pos:], dim, 0)
+			rec, n, ok := DecodeEventRecord(records[pos:], 4*dim, 0)
 			require.True(t, ok)
 			got = append(got, rec)
 			pos += n
@@ -80,9 +81,11 @@ func TestSaveSmallTailAsCdc_NoInclude(t *testing.T) {
 	for i, in := range rows {
 		require.Equal(t, CdcOpInsert, got[i].Op)
 		require.Equal(t, in.Pkid, got[i].Pkid)
-		require.Len(t, got[i].Vec, dim)
-		for j, v := range in.Vec {
-			require.Equal(t, math.Float32bits(v), math.Float32bits(got[i].Vec[j]),
+		require.Len(t, got[i].Vec, 4*dim)
+		inVec := util.UnsafeSliceCast[float32](in.Vec)
+		gotVec := util.UnsafeSliceCast[float32](got[i].Vec)
+		for j, v := range inVec {
+			require.Equal(t, math.Float32bits(v), math.Float32bits(gotVec[j]),
 				"row %d vec[%d] mismatch", i, j)
 		}
 	}
@@ -94,13 +97,13 @@ func TestSaveSmallTailAsCdc_WithInclude(t *testing.T) {
 	const dim = 2
 	const ibpr = 8 // one int64-shaped INCLUDE col + zero-mask byte rounded
 	rows := []PendingRecord{
-		{Pkid: 10, Vec: []float32{0.1, 0.2}, Include: []byte{1, 2, 3, 4, 5, 6, 7, 8}},
-		{Pkid: 11, Vec: []float32{0.3, 0.4}, Include: []byte{9, 10, 11, 12, 13, 14, 15, 16}},
+		{Pkid: 10, Vec: util.UnsafeSliceToBytes([]float32{0.1, 0.2}), Include: []byte{1, 2, 3, 4, 5, 6, 7, 8}},
+		{Pkid: 11, Vec: util.UnsafeSliceToBytes([]float32{0.3, 0.4}), Include: []byte{9, 10, 11, 12, 13, 14, 15, 16}},
 	}
 
 	// Empty colMetaJSON to keep this test focused on tag=1 INSERT
 	// round-trip; the header-emission case has its own test below.
-	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, dim, ibpr, "")
+	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 4*dim, ibpr, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, sqls)
 
@@ -116,7 +119,7 @@ func TestSaveSmallTailAsCdc_WithInclude(t *testing.T) {
 		require.NoError(t, err)
 		pos := 0
 		for pos < len(records) {
-			rec, n, ok := DecodeEventRecord(records[pos:], dim, ibpr)
+			rec, n, ok := DecodeEventRecord(records[pos:], 4*dim, ibpr)
 			require.True(t, ok)
 			got = append(got, rec)
 			pos += n
@@ -137,9 +140,9 @@ func TestSaveSmallTailAsCdc_IncludeMismatchErrors(t *testing.T) {
 	const dim = 2
 	const ibpr = 8
 	rows := []PendingRecord{
-		{Pkid: 1, Vec: []float32{0.1, 0.2}, Include: []byte{1, 2, 3}}, // wrong length
+		{Pkid: 1, Vec: util.UnsafeSliceToBytes([]float32{0.1, 0.2}), Include: []byte{1, 2, 3}}, // wrong length
 	}
-	_, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, dim, ibpr, "")
+	_, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 4*dim, ibpr, "")
 	require.Error(t, err)
 }
 
@@ -147,8 +150,8 @@ func TestSaveSmallTailAsCdc_IncludeMismatchErrors(t *testing.T) {
 // must be the well-known CdcTailId sentinel so the search-side
 // replay finds it.
 func TestSaveSmallTailAsCdc_UsesCdcTailId(t *testing.T) {
-	rows := []PendingRecord{{Pkid: 1, Vec: []float32{1, 2, 3, 4}}}
-	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 4, 0, "")
+	rows := []PendingRecord{{Pkid: 1, Vec: util.UnsafeSliceToBytes([]float32{1, 2, 3, 4})}}
+	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 16, 0, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, sqls)
 	require.Contains(t, sqls[0], "'"+vectorindex.CdcTailId+"'")
@@ -163,10 +166,10 @@ func TestSaveSmallTailAsCdc_EmbedsColMetaInEveryChunk(t *testing.T) {
 	const ibpr = 8
 	colMetaJSON := `[{"name":"a","type":1}]`
 	rows := []PendingRecord{
-		{Pkid: 1, Vec: []float32{0.1, 0.2}, Include: []byte{1, 2, 3, 4, 5, 6, 7, 8}},
-		{Pkid: 2, Vec: []float32{0.3, 0.4}, Include: []byte{9, 10, 11, 12, 13, 14, 15, 16}},
+		{Pkid: 1, Vec: util.UnsafeSliceToBytes([]float32{0.1, 0.2}), Include: []byte{1, 2, 3, 4, 5, 6, 7, 8}},
+		{Pkid: 2, Vec: util.UnsafeSliceToBytes([]float32{0.3, 0.4}), Include: []byte{9, 10, 11, 12, 13, 14, 15, 16}},
 	}
-	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, dim, ibpr, colMetaJSON)
+	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 4*dim, ibpr, colMetaJSON)
 	require.NoError(t, err)
 	require.NotEmpty(t, sqls)
 
@@ -183,7 +186,7 @@ func TestSaveSmallTailAsCdc_EmbedsColMetaInEveryChunk(t *testing.T) {
 			"every chunk's frame header section must carry colMetaJSON")
 		// Records are still pure Delete/Insert event ops (no special
 		// header record in the records section).
-		rec, _, ok := DecodeEventRecord(records, dim, ibpr)
+		rec, _, ok := DecodeEventRecord(records, 4*dim, ibpr)
 		require.True(t, ok)
 		require.Equal(t, CdcOpInsert, rec.Op)
 	}
@@ -193,11 +196,11 @@ func TestSaveSmallTailAsCdc_EmbedsColMetaInEveryChunk(t *testing.T) {
 // recovers the colMetaJSON from the chunk frame header.
 func TestPeekColMetaJSON_RoundTrip(t *testing.T) {
 	colMetaJSON := `[{"name":"a","type":1},{"name":"b","type":2}]`
-	rows := []PendingRecord{{Pkid: 1, Vec: []float32{1, 2}}}
+	rows := []PendingRecord{{Pkid: 1, Vec: util.UnsafeSliceToBytes([]float32{1, 2})}}
 	// Note: ibpr=0 here because rows[0].Include is empty; the embedded
 	// colMetaJSON is for the search side's INCLUDE-column wiring, not
 	// the encode-time layout in this contrived test.
-	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 2, 0, colMetaJSON)
+	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 8, 0, colMetaJSON)
 	require.NoError(t, err)
 	require.NotEmpty(t, sqls)
 
@@ -215,8 +218,8 @@ func TestPeekColMetaJSON_RoundTrip(t *testing.T) {
 // TestPeekColMetaJSON_NoHeader: when colMetaJSON is empty the chunk's
 // frame header section is empty too — PeekColMetaJSON returns "".
 func TestPeekColMetaJSON_NoHeader(t *testing.T) {
-	rows := []PendingRecord{{Pkid: 1, Vec: []float32{1, 2, 3, 4}}}
-	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 4, 0, "")
+	rows := []PendingRecord{{Pkid: 1, Vec: util.UnsafeSliceToBytes([]float32{1, 2, 3, 4})}}
+	sqls, err := SaveSmallTailAsCdc(smallTailTblcfg(), rows, 16, 0, "")
 	require.NoError(t, err)
 
 	re := regexp.MustCompile(`unhex\('([0-9a-fA-F]*)'\)`)

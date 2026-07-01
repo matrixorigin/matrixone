@@ -62,12 +62,12 @@ using ::distribution_mode_t;
 //
 // OVERVIEW
 // --------
-// gpu_index_base_t<T, BuildParams, IdT> is the CRTP-style base class shared by
+// gpu_index_base_t<B, T, BuildParams, IdT> is the CRTP-style base class shared by
 // all three GPU index types:
 //
-//   gpu_ivf_flat_t<T>  (IdT = int64_t)
-//   gpu_ivf_pq_t<T>    (IdT = int64_t)
-//   gpu_cagra_t<T>     (IdT = uint32_t)
+//   gpu_ivf_flat_t<T>   (IdT = int64_t)   // base hardcoded to float
+//   gpu_ivf_pq_t<B, T>  (IdT = int64_t)   // B = base/source element type, T = storage type
+//   gpu_cagra_t<B, T>   (IdT = uint32_t)  // B = base/source element type, T = storage type
 //
 // It provides:
 //   - Pre-build vector buffering (flattened_host_dataset)
@@ -202,17 +202,26 @@ using ::distribution_mode_t;
 //
 // QUANTIZER  (1-byte types only: int8_t, uint8_t)
 // ------------------------------------------------
-// scalar_quantizer_t<float> quantizer_ maps float32 values to [min, max] range
-// and packs them into int8/uint8.  It must be trained before add_chunk_float()
-// or extend_float() is called for 1-byte types.
+// scalar_quantizer_t<B> quantizer_ maps source-type B values into the storage
+// range [min, max] and packs them into int8/uint8.
 //
-// Training: quantizer_.train(res, train_matrix) or train_quantizer(data, n).
-//   - Auto-training occurs in add_chunk_float if not yet trained (uses up to 500
-//     samples from the first chunk).
-//   - For extend_float, the quantizer MUST already be trained (throws otherwise).
+// Training (on the ORIGINAL float/half source data only):
+//   - add_chunk_float() / add_chunk_quantize() buffer their raw B chunks in
+//     pending_float_chunks_; flush_pending_float_chunks_internal() — invoked at
+//     build time via train_quantizer_if_needed() — trains the quantizer on ALL
+//     buffered rows at once, then quantizes them into storage. (No "first chunk"
+//     or 500-sample heuristic; the full buffered set is used.)
+//   - The quantizer is NEVER trained from flattened_host_dataset: for a 1-byte T
+//     that buffer holds only storage bytes, so training on it would learn the
+//     COMPRESSED range, not the original float range.
+//   - A pre-quantized index (rows added via add_chunk(T*), with no original
+//     floats and no set_quantizer()) therefore leaves the quantizer UNTRAINED.
+//     Base-typed (B) search/extend on it requires an explicit range via
+//     set_quantizer() first — quantize_query() (search) and
+//     upload_float_matrix_as_T() (extend) throw "quantizer not trained" otherwise.
 //
-// Extended vectors must lie within the trained [min, max] range; vectors outside
-// this range will be clamped and produce degraded search quality.
+// Extended/searched vectors must lie within the trained [min, max] range; values
+// outside it are clamped and produce degraded search quality.
 //
 //
 // SERIALIZATION  (save_dir / load_dir)
@@ -330,27 +339,37 @@ inline void fill_all_sentinel(NeighborT* neighbors, float* distances,
     std::fill_n(distances, count, std::numeric_limits<float>::max());
 }
 
-// InnerProduct sign flip on the search result's distances. cuvs returns
-// inner-product distances negated (so smaller is "closer") — we flip back so
-// downstream callers see the true inner product. ±FLT_MAX sentinels are
-// preserved (they mark padded / filtered-out slots from scatter_with_padding
-// or fill_all_sentinel above). No-op for any other metric.
+// Post-process a search result's distances in place:
+//   - InnerProduct: flip the sign. cuvs returns inner-product distances negated
+//     (so smaller is "closer"); we flip back so callers see the true IP.
+//   - quantized L2 (dequant_factor != 1): rescale the quantized-domain distance
+//     back to the base (f32) scale, so a 1-byte (int8/uint8) main index merges
+//     on the same scale as the base-typed CDC overflow brute force. The factor
+//     comes from quantized_l2_dequant_factor() (1/scalar^2 for squared L2). IP
+//     and L2-dequant are mutually exclusive — IP/cosine + int8/uint8 is rejected
+//     at plan time (an affine quantizer is not a pure rescale for IP/cosine).
+// ±FLT_MAX sentinels (padded / filtered-out slots from scatter_with_padding or
+// fill_all_sentinel above) are preserved. No-op for plain f32/f16 L2.
 inline void transform_distance(distance_type_t metric,
-                               float* distances, size_t count) {
-    if (metric != DistanceType_InnerProduct) return;
+                               float* distances, size_t count,
+                               double dequant_factor = 1.0) {
+    const bool flip    = (metric == DistanceType_InnerProduct);
+    const bool rescale = (dequant_factor != 1.0);
+    if (!flip && !rescale) return;
     const float kSentinel = std::numeric_limits<float>::max();
     for (size_t i = 0; i < count; ++i) {
-        if (distances[i] != kSentinel && distances[i] != -kSentinel) {
-            distances[i] *= -1.0f;
-        }
+        if (distances[i] == kSentinel || distances[i] == -kSentinel) continue;
+        if (flip) distances[i] *= -1.0f;
+        else      distances[i] = static_cast<float>(static_cast<double>(distances[i]) * dequant_factor);
     }
 }
 
 // Convenience overload for the persistent-index path where distances live in
 // a std::vector. Same semantics as the (float*, size_t) form.
 inline void transform_distance(distance_type_t metric,
-                               std::vector<float>& distances) {
-    transform_distance(metric, distances.data(), distances.size());
+                               std::vector<float>& distances,
+                               double dequant_factor = 1.0) {
+    transform_distance(metric, distances.data(), distances.size(), dequant_factor);
 }
 
 /**
@@ -359,13 +378,16 @@ inline void transform_distance(distance_type_t metric,
  * See the Developer Guide block above for full details on lifecycle, locking,
  * distribution modes, ID mapping, and the soft-delete bitset system.
  *
- * @tparam T           Element type: float, half (__half), int8_t, uint8_t
+ * @tparam B           Base/query/quantizer-SOURCE element type: float or half
+ * @tparam T           Storage element type: float, half (__half), int8_t, uint8_t
  * @tparam BuildParams Index-specific build parameter struct
  * @tparam IdT         Neighbor ID type: int64_t (IVF) or uint32_t (CAGRA)
  */
-template <typename T, typename BuildParams, typename IdT = int64_t>
+template <typename B, typename T, typename BuildParams, typename IdT = int64_t>
 class gpu_index_base_t {
 public:
+    using base_type    = B;
+    using storage_type = T;
     // ---- Index configuration (immutable after build) ----
     uint32_t dimension = 0;          ///< Vector dimensionality
     distance_type_t metric;          ///< Distance metric (L2, IP, cosine, ...)
@@ -493,6 +515,42 @@ public:
             return info;
         }
         return it->second;
+    }
+
+    // Factor that rescales a quantized-domain L2 distance back to the base (f32)
+    // scale, for transform_distance(). For 1-byte storage (int8/uint8) the index
+    // computes L2 over the quantized vectors, where each element is
+    // q(x)=scalar*x+offset with scalar=255/(max-min); the per-element offset is a
+    // constant translation that cancels in a difference, so
+    // ||q(a)-q(b)||^2 = scalar^2*||a-b||^2 (and scalar*||a-b|| for the sqrt
+    // metrics). Returning 1/scalar^2 (resp. 1/scalar) undoes that, so a quantized
+    // main-index distance lands on the SAME scale as the base-typed CDC overflow
+    // brute force — otherwise mergeMultiResults compares scalar^2-scaled main
+    // distances against base-scale overflow distances and the overflow rows
+    // wrongly dominate the top-k. Also makes the reported l2_distance correct.
+    //
+    // Returns 1.0 (no-op) for plain f32/f16 storage, an untrained quantizer, a
+    // degenerate range, or a non-L2 metric (IP/cosine are not a pure rescale
+    // under an affine quantizer and are rejected at plan time).
+    double quantized_l2_dequant_factor() const {
+        if constexpr (sizeof(T) == 1) {
+            if (!this->quantizer_.is_trained()) return 1.0;
+            const double range = static_cast<double>(this->quantizer_.max()) -
+                                 static_cast<double>(this->quantizer_.min());
+            if (!(range > 0.0)) return 1.0;
+            const double s = 255.0 / range; // scalar
+            switch (this->metric) {
+                case DistanceType_L2Expanded:
+                case DistanceType_L2Unexpanded:
+                    return 1.0 / (s * s); // distances are squared L2
+                case DistanceType_L2SqrtExpanded:
+                case DistanceType_L2SqrtUnexpanded:
+                    return 1.0 / s;
+                default:
+                    return 1.0; // IP / cosine: scale alone can't reconcile them
+            }
+        }
+        return 1.0;
     }
 
     // Sync a shard-local slice of the deleted bitset to device (SHARDED mode).
@@ -1060,15 +1118,15 @@ public:
 
         auto res = handle.get_raft_resources();
 
-        // --- GPU work: train quantizer on ALL pending float data — NO LOCK ---
-        std::vector<float> all_floats;
+        // --- GPU work: train quantizer on ALL pending B-source data — NO LOCK ---
+        std::vector<B> all_floats;
         all_floats.reserve(total * dimension);
         for (auto& c : chunks) {
             all_floats.insert(all_floats.end(), c.data.begin(), c.data.end());
         }
-        auto train_host_view = raft::make_host_matrix_view<const float, int64_t>(
+        auto train_host_view = raft::make_host_matrix_view<const B, int64_t>(
             all_floats.data(), static_cast<int64_t>(total), static_cast<int64_t>(dimension));
-        auto train_device = raft::make_device_matrix<float, int64_t>(*res, total, dimension);
+        auto train_device = raft::make_device_matrix<B, int64_t>(*res, total, dimension);
         raft::copy(*res, train_device.view(), train_host_view);
         // Train without holding the lock: GPU kernels run while lock is not held,
         // so concurrent readers are not blocked for the duration of training.
@@ -1079,28 +1137,11 @@ public:
         // acquisition by a reader is guaranteed to see is_trained() == true.
         { std::unique_lock<std::shared_mutex> _pub_lock(mutex_); }
 
-        // --- GPU work + locked store: process each buffered chunk ---
+        // --- Quantize each buffered chunk on the CPU and store. The quantizer
+        // is trained (above), so the B->T transform is a pure host affine map —
+        // no per-chunk GPU round-trip (this is what made a 1M-row f16-base /
+        // add_chunk_quantize build crawl). See transform_host(). ---
         for (auto& c : chunks) {
-            // Upload and quantize — NO LOCK
-            auto chunk_host_view = raft::make_host_matrix_view<const float, int64_t>(
-                c.data.data(), static_cast<int64_t>(c.count), static_cast<int64_t>(dimension));
-            auto chunk_device = raft::make_device_matrix<float, int64_t>(*res, c.count, dimension);
-            raft::copy(*res, chunk_device.view(), chunk_host_view);
-
-            auto chunk_device_target = raft::make_device_matrix<T, int64_t>(*res, c.count, dimension);
-            
-            {
-                std::shared_lock<std::shared_mutex> lock(mutex_);
-                quantizer_.template transform<T>(*res, chunk_device.view(), chunk_device_target.data_handle(), true);
-            }
-
-            std::vector<T> chunk_host_target(c.count * dimension);
-            raft::copy(*res,
-                raft::make_host_matrix_view<T, int64_t>(chunk_host_target.data(), static_cast<int64_t>(c.count), static_cast<int64_t>(dimension)),
-                chunk_device_target.view());
-            handle.sync();
-
-            // Store into shared state — unique_lock
             std::unique_lock<std::shared_mutex> lock(mutex_);
             uint64_t target_offset;
             if (c.offset == -1) {
@@ -1118,8 +1159,10 @@ public:
             if (flattened_host_dataset.size() < required_elements) {
                 flattened_host_dataset.resize(required_elements);
             }
-            std::copy(chunk_host_target.begin(), chunk_host_target.end(),
-                      flattened_host_dataset.begin() + target_offset * dimension);
+            quantizer_.template transform_host<T>(
+                c.data.data(),
+                flattened_host_dataset.data() + target_offset * dimension,
+                static_cast<size_t>(c.count) * dimension);
 
             if (this->dist_mode == DistributionMode_SHARDED) {
                 int num_shards = static_cast<int>(this->devices_.size());
@@ -1152,10 +1195,16 @@ public:
                     if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
                 }
 
-                auto res = handle.get_raft_resources();
-                
                 // If quantization is needed (T is 1-byte)
                 if constexpr (sizeof(T) == 1) {
+                    // The deferred-quantize buffer and the quantizer both work on
+                    // the SOURCE type B. Convert the incoming f32 chunk to B once
+                    // (identical bytes when B==float; per-element float->half cast
+                    // when B==half).
+                    std::vector<B> chunk_b(chunk_count * dimension);
+                    for (size_t i = 0; i < chunk_count * dimension; ++i) {
+                        chunk_b[i] = static_cast<B>(chunk_data[i]);
+                    }
                     bool trained;
                     {
                         std::shared_lock<std::shared_mutex> lock(mutex_);
@@ -1165,7 +1214,7 @@ public:
                     if (!trained) {
                         // Buffer this chunk for deferred training.
                         pending_float_chunk_t c;
-                        c.data.assign(chunk_data, chunk_data + chunk_count * dimension);
+                        c.data = chunk_b;
                         c.count  = chunk_count;
                         c.offset = offset;
                         if (ids) c.ids.assign(ids, ids + chunk_count);
@@ -1195,22 +1244,14 @@ public:
                         // c was NOT pushed to pending, so fall through to process chunk_data directly.
                     }
 
-                    // Quantizer already trained: quantize this chunk immediately.
-                    auto queries_host_view = raft::make_host_matrix_view<const float, int64_t>(chunk_data, chunk_count, dimension);
-                    auto queries_device = raft::make_device_matrix<float, int64_t>(*res, chunk_count, dimension);
-                    raft::copy(*res, queries_device.view(), queries_host_view);
-
-                    auto chunk_device_target = raft::make_device_matrix<T, int64_t>(*res, chunk_count, dimension);
-                    
-                    {
-                        std::shared_lock<std::shared_mutex> lock(mutex_);
-                        quantizer_.template transform<T>(*res, queries_device.view(), chunk_device_target.data_handle(), true);
-                    }
-
-                    std::vector<T> chunk_host_target(chunk_count * dimension);
-                    raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(chunk_host_target.data(), chunk_count, dimension), chunk_device_target.view());
-                    handle.sync();
-
+                    // Quantizer already trained: quantize on the CPU and write
+                    // directly into flattened_host_dataset. Scalar quantization
+                    // is a pure affine map from the trained [min,max], so no GPU
+                    // round-trip (malloc + H2D copy + kernel + D2H copy + sync)
+                    // is needed per chunk — this is the same host-only fast path
+                    // as float/half storage. transform_host() produces bytes
+                    // identical to the device transform(), so a CPU-quantized
+                    // base stays consistent with a GPU-quantized query at search.
                     std::unique_lock<std::shared_mutex> lock(mutex_);
                     uint64_t target_offset;
                     if (offset == -1) {
@@ -1228,7 +1269,10 @@ public:
                     if (flattened_host_dataset.size() < required_elements) {
                         flattened_host_dataset.resize(required_elements);
                     }
-                    std::copy(chunk_host_target.begin(), chunk_host_target.end(), flattened_host_dataset.begin() + (target_offset * dimension));
+                    quantizer_.template transform_host<T>(
+                        chunk_b.data(),
+                        flattened_host_dataset.data() + (target_offset * dimension),
+                        static_cast<size_t>(chunk_count) * dimension);
 
                     if (this->dist_mode == DistributionMode_SHARDED) {
                         int num_shards = static_cast<int>(this->devices_.size());
@@ -1288,12 +1332,12 @@ public:
         if (res.error) std::rethrow_exception(res.error);
     }
 
-    void train_quantizer(const float* train_data, uint64_t n_samples) {
+    void train_quantizer(const B* train_data, uint64_t n_samples) {
         uint64_t job_id = worker->submit_main(
             [this, train_data, n_samples](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
-                auto train_host_view = raft::make_host_matrix_view<const float, int64_t>(train_data, n_samples, dimension);
-                auto train_device = raft::make_device_matrix<float, int64_t>(*res, n_samples, dimension);
+                auto train_host_view = raft::make_host_matrix_view<const B, int64_t>(train_data, n_samples, dimension);
+                auto train_device = raft::make_device_matrix<B, int64_t>(*res, n_samples, dimension);
                 raft::copy(*res, train_device.view(), train_host_view);
                 quantizer_.train(*res, train_device.view());
                 handle.sync();
@@ -1311,44 +1355,23 @@ public:
                     // 1. Flush any buffered chunks first
                     flush_pending_float_chunks_internal(handle);
 
-                    // 2. Check if still not trained (might have used add_chunk<T> instead of float).
-                    // WARNING: if data was added via add_chunk(T*) rather than add_chunk_float(),
-                    // flattened_host_dataset already holds T values (e.g. int8 in [-128,127]).
-                    // Casting them to float trains the quantizer on the compressed range, not the
-                    // original float range.  extend_float() will then clamp to the wrong range.
-                    // If extend_float() is needed after add_chunk(T*), call train_quantizer()
-                    // explicitly with representative original float data before calling build().
-                    bool needs_training;
-                    uint64_t n_train = 0;
-                    {
-                        std::shared_lock<std::shared_mutex> lock(mutex_);
-                        needs_training = !quantizer_.is_trained() && !flattened_host_dataset.empty();
-                        if (needs_training) {
-                            n_train = std::min(static_cast<uint64_t>(500), count);
-                            if (n_train == 0) needs_training = false;
-                        }
-                    }
-
-                    if (needs_training) {
-                        std::vector<float> train_data(n_train * dimension);
-                        {
-                            std::shared_lock<std::shared_mutex> lock(mutex_);
-                            for (size_t i = 0; i < n_train * dimension; ++i) {
-                                train_data[i] = static_cast<float>(flattened_host_dataset[i]);
-                            }
-                        }
-                        
-                        auto res = handle.get_raft_resources();
-                        auto train_host_view = raft::make_host_matrix_view<const float, int64_t>(train_data.data(), n_train, dimension);
-                        auto train_device = raft::make_device_matrix<float, int64_t>(*res, n_train, dimension);
-                        raft::copy(*res, train_device.view(), train_host_view);
-                        
-                        {
-                            std::unique_lock<std::shared_mutex> lock(mutex_);
-                            quantizer_.train(*res, train_device.view());
-                        }
-                        handle.sync();
-                    }
+                    // 2. Do NOT auto-train the quantizer from flattened_host_dataset.
+                    // For a 1-byte storage type that buffer only ever holds STORAGE
+                    // bytes — raw T from add_chunk(T*) (a pre-quantized index) or the
+                    // post-flush quantized output — never original floats. Training on
+                    // it would learn the COMPRESSED range (e.g. int8 [-128,127]) instead
+                    // of the true float range, so later base-typed search/extend would
+                    // silently quantize against the wrong min/max.
+                    //
+                    // Correct training happens above in flush_pending_float_chunks_internal()
+                    // on the ORIGINAL floats buffered by add_chunk_float()/add_chunk_quantize().
+                    // A pre-quantized index (built solely via add_chunk(T*)) therefore
+                    // leaves the quantizer untrained; base-typed (B) search/extend on it
+                    // requires an explicit range via set_quantizer() first. Both base-typed
+                    // entry points already throw "quantizer not trained" while it is
+                    // untrained — search via quantize_query() and extend via
+                    // upload_float_matrix_as_T() — so the op fails loudly instead of
+                    // mis-quantizing against a wrong range.
                     return std::any();
                 }
             );
@@ -1364,8 +1387,41 @@ public:
 
     void get_quantizer(float* min, float* max) {
         std::shared_lock<std::shared_mutex> lock(mutex_);
-        *min = quantizer_.min();
-        *max = quantizer_.max();
+        *min = static_cast<float>(quantizer_.min());
+        *max = static_cast<float>(quantizer_.max());
+    }
+
+    // ---- Native B-source quantization (base element B -> 1-byte T) ----
+    // Base-typed (B) add: converts the SOURCE-typed chunk to storage T, the add
+    // counterpart of search_quantize (symmetric: same B->T conversion). Routes by
+    // (B,T): B==T is a native store; sizeof(T)==1 buffers the B chunk for deferred
+    // quantizer training (the B->T transform happens at build via
+    // flush_pending_float_chunks_internal — B==float and B==half both supported,
+    // no f32 detour for half); the remaining (B=float, T=half) case casts f32->f16
+    // via add_chunk_float (std::copy into vector<half> = __half assignment).
+    void add_chunk_quantize(const B* chunk_data, uint64_t chunk_count, int64_t offset = -1, const IdT* ids = nullptr) {
+        if constexpr (std::is_same_v<B, T>) {
+            // B == T: no conversion — native storage add.
+            this->add_chunk(chunk_data, chunk_count, offset, ids);
+        } else if constexpr (sizeof(T) == 1) {
+            {
+                std::shared_lock<std::shared_mutex> lock(mutex_);
+                if (is_loaded_) throw std::runtime_error("Cannot add chunk to built index");
+            }
+            pending_float_chunk_t c;
+            c.data.assign(chunk_data, chunk_data + chunk_count * dimension);
+            c.count  = chunk_count;
+            c.offset = offset;
+            if (ids) c.ids.assign(ids, ids + chunk_count);
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            pending_total_count_ += chunk_count;
+            pending_float_chunks_.push_back(std::move(c));
+        } else if constexpr (std::is_same_v<B, float>) {
+            // B=float, T=half (sizeof(T)!=1): f32 -> T cast via add_chunk_float.
+            this->add_chunk_float(chunk_data, chunk_count, offset, ids);
+        } else {
+            throw std::runtime_error("add_chunk_quantize: unsupported (base,storage) type combination");
+        }
     }
 
     // Returns a snapshot of host_ids by value. The previous signature
@@ -1498,10 +1554,10 @@ public:
     struct manifest_data_t {
         std::string raw;          // full manifest.json content
         std::string comp_json;    // "components" sub-object
-        bool has_ids       = false;
-        bool has_quantizer = false;
-        bool has_bitset    = false;
-        bool has_filter    = false;
+        bool has_ids            = false;
+        bool has_quantizer      = false;
+        bool has_bitset         = false;
+        bool has_filter         = false;
     };
 
     // Saves ids, quantizer, bitset, and filter data (when present) to dir.
@@ -1513,23 +1569,23 @@ public:
         FilterStore filter_snapshot;
         {
             std::shared_lock<std::shared_mutex> lock(mutex_);
-            has_ids       = !this->host_ids.empty();
-            has_quantizer = this->quantizer_.is_trained();
-            has_bitset    = !this->deleted_bitset_.empty();
-            has_filter    = !this->filter_host_.empty();
+            has_ids            = !this->host_ids.empty();
+            has_quantizer      = this->quantizer_.is_trained();
+            has_bitset         = !this->deleted_bitset_.empty();
+            has_filter         = !this->filter_host_.empty();
             if (has_filter) filter_snapshot = this->filter_host_;  // copy
         }
 
-        if (has_ids)       this->save_ids(dir + "/ids.bin");
-        if (has_quantizer) this->quantizer_.save_to_file(dir + "/quantizer.bin");
-        if (has_bitset)    this->save_bitset(dir);
-        if (has_filter)    filter_snapshot.save(dir + "/filter_data.bin");
+        if (has_ids)            this->save_ids(dir + "/ids.bin");
+        if (has_quantizer)      this->quantizer_.save_to_file(dir + "/quantizer.bin");
+        if (has_bitset)         this->save_bitset(dir);
+        if (has_filter)         filter_snapshot.save(dir + "/filter_data.bin");
 
         std::vector<std::string> entries;
-        if (has_ids)       entries.push_back("    \"ids\": \"ids.bin\"");
-        if (has_quantizer) entries.push_back("    \"quantizer\": \"quantizer.bin\"");
-        if (has_bitset)    entries.push_back("    \"bitset\": \"bitset.bin\"");
-        if (has_filter)    entries.push_back("    \"filter_data\": \"filter_data.bin\"");
+        if (has_ids)            entries.push_back("    \"ids\": \"ids.bin\"");
+        if (has_quantizer)      entries.push_back("    \"quantizer\": \"quantizer.bin\"");
+        if (has_bitset)         entries.push_back("    \"bitset\": \"bitset.bin\"");
+        if (has_filter)         entries.push_back("    \"filter_data\": \"filter_data.bin\"");
         return entries;
     }
 
@@ -1554,10 +1610,10 @@ public:
         uint64_t cap_val, len_val, del_count, bs_ver;
         {
             std::shared_lock<std::shared_mutex> lock(mutex_);
-            has_ids       = !this->host_ids.empty();
-            has_quantizer = this->quantizer_.is_trained();
-            has_bitset    = !this->deleted_bitset_.empty();
-            has_filter    = !this->filter_host_.empty();
+            has_ids            = !this->host_ids.empty();
+            has_quantizer      = this->quantizer_.is_trained();
+            has_bitset         = !this->deleted_bitset_.empty();
+            has_filter         = !this->filter_host_.empty();
             cap_val       = this->count;
             len_val       = this->current_offset_;
             del_count     = this->deleted_count_;
@@ -1624,11 +1680,11 @@ public:
 
         manifest_data_t m;
         m.raw           = raw;
-        m.comp_json     = json_object(raw, "components");
-        m.has_ids       = json_bool(raw, "has_ids");
-        m.has_quantizer = json_bool(raw, "has_quantizer");
-        m.has_bitset    = json_bool(raw, "has_bitset");
-        m.has_filter    = json_bool(raw, "has_filter");
+        m.comp_json          = json_object(raw, "components");
+        m.has_ids            = json_bool(raw, "has_ids");
+        m.has_quantizer      = json_bool(raw, "has_quantizer");
+        m.has_bitset         = json_bool(raw, "has_bitset");
+        m.has_filter         = json_bool(raw, "has_filter");
         return m;
     }
 
@@ -1670,7 +1726,10 @@ public:
     }
 
 protected:
-    scalar_quantizer_t<float> quantizer_;
+    // Scalar quantizer over the SOURCE element type B (float or half). Used only
+    // when the STORAGE type T is 1-byte (int8/uint8); for float/half storage the
+    // add path casts B->T directly with no quantizer.
+    scalar_quantizer_t<B> quantizer_;
     uint64_t current_offset_ = 0;
     // Serializes concurrent extend() calls. Held across GPU work and count update so that
     // set_ids() offsets always match the GPU execution order. Does NOT block searches.
@@ -1820,8 +1879,20 @@ protected:
                     throw std::runtime_error(
                         "upload_float_matrix_as_T: quantizer not trained");
                 }
-                this->quantizer_.template transform<T>(
-                    *res, float_view, storage.data(), true);
+                if constexpr (std::is_same_v<B, float>) {
+                    this->quantizer_.template transform<T>(
+                        *res, float_view, storage.data(), true);
+                } else {
+                    // B == half: quantizer is half-source. Cast the f32 input to
+                    // half on-device, then transform half -> T.
+                    rmm::device_uvector<B> b_storage(
+                        static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+                    auto b_view = raft::make_device_matrix_view<B, int64_t>(
+                        b_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
+                    raft::copy(*res, b_view, float_view);
+                    this->quantizer_.template transform<T>(
+                        *res, b_view, storage.data(), true);
+                }
             } else {
                 // T is half — cast float → half
                 raft::copy(*res, device_view, float_view);
@@ -1830,13 +1901,15 @@ protected:
         return storage;
     }
 
-    // Deferred float chunk buffer for quantizer training (1-byte types only).
-    // See class-level comment block above for full description.
+    // Deferred B-source chunk buffer for quantizer training (1-byte storage T).
+    // See class-level comment block above for full description. Holds the raw
+    // SOURCE element type B (float or half); the quantizer trains on B and
+    // transforms B->T at flush time.
     struct pending_float_chunk_t {
-        std::vector<float> data;   ///< count * dimension floats
-        uint64_t           count;
-        int64_t            offset; ///< -1 = append; >= 0 = explicit position
-        std::vector<IdT>   ids;    ///< empty if caller supplied no IDs
+        std::vector<B>   data;   ///< count * dimension B elements
+        uint64_t         count;
+        int64_t          offset; ///< -1 = append; >= 0 = explicit position
+        std::vector<IdT> ids;    ///< empty if caller supplied no IDs
     };
     static constexpr uint64_t kQuantizerTrainThreshold = 1000;
     std::vector<pending_float_chunk_t> pending_float_chunks_;

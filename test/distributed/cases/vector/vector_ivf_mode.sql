@@ -285,16 +285,21 @@ UNION
 ORDER BY dist LIMIT 4;
 
 -- Test Case: UNION with mode=pre on different tables (mini_vector_data and mini_embed_data)
-(SELECT id, text AS content, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
- FROM mini_vector_data 
+-- round(dist,4): an exact-match cosine distance is 0 on scalar but ~1.1e-16 with the
+-- arch-specific SIMD kernels (FMA); the result comparator treats 0-vs-nonzero as a hard
+-- mismatch, so round it. round() wraps only the projection, leaving the ORDER BY on raw
+-- distance, so the ivfflat index is still used. ORDER BY dist, id makes the outer row
+-- order deterministic (it was under-determined for this UNION shape with ORDER BY id).
+(SELECT id, text AS content, round(l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),4) AS dist
+ FROM mini_vector_data
  ORDER BY id, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
  LIMIT 2 by rank with option 'mode=pre')
 UNION
-(SELECT id, content, cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]') AS dist
- FROM mini_embed_data 
- ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]') 
+(SELECT id, content, round(cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]'),4) AS dist
+ FROM mini_embed_data
+ ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]')
  LIMIT 2 by rank with option 'mode=pre')
-ORDER BY id
+ORDER BY dist, id
 LIMIT 4;
 
 -- Test Case: UNION with mode=pre and complex WHERE conditions

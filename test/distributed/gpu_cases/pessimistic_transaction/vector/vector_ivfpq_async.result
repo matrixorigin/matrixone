@@ -21,7 +21,7 @@ t  ¦  CREATE TABLE `t` (
   `id` bigint NOT NULL,
   `v` vecf32(8) DEFAULT NULL,
   PRIMARY KEY (`id`),
-  KEY `ix` USING ivfpq (`v`) lists = 2  m = 2  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8 
+  KEY `ix` USING ivfpq (`v`) lists = 2  m = 2  op_type 'vector_l2_ops'  async  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8 
 )
 insert into t values (100, '[100,100,100,100,100,100,100,100]');
 insert into t values (105, '[105,105,105,105,105,105,105,105]');

@@ -30,6 +30,7 @@ import (
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // actionIvfflatReindex mirrors idxcron.Action_Ivfflat_Reindex. Inlined
@@ -127,14 +128,35 @@ func (CatalogHooks) ExperimentalFlag() string { return "" }
 
 // SupportedOpTypes returns IVF-FLAT's metric registry. IVF uses a
 // distinct metric table from HNSW/USearch (OpTypeToIvfMetric).
-// SupportedVectorTypes: IVF-FLAT indexes f32 or f64 vectors.
+// SupportedVectorTypes: IVF-FLAT indexes all vector element types. Entries are
+// stored in their own (narrow) type; centroids are f32 (decoupled). kmeans runs
+// in f32, narrow distances go through the float32 bridge / narrow kernels.
 func (CatalogHooks) SupportedVectorTypes() []types.T {
-	return []types.T{types.T_array_float32, types.T_array_float64}
+	return []types.T{
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+	}
 }
 
 // SupportedPrimaryKeyTypes: IVF-FLAT imposes no PK-type constraint — the
 // primary key may be any type. nil = "no constraint".
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return nil }
+
+// ValidQuantization gates the quantization value for IVF-FLAT: it must name a
+// narrow vector type IVF-FLAT supports (float32/float16/bf16/int8/uint8, via
+// quantizer.ToVectorType). IVF-FLAT re-ranks on the CPU from the stored entries,
+// so unlike the cuvs backends it imposes no op_type restriction; op is unused.
+// One home for CREATE (plan/schema) and REINDEX (compile/ValidateReindexParams).
+func (CatalogHooks) ValidQuantization(quant, _ string) error {
+	if quant == "" {
+		return nil
+	}
+	if _, ok := quantizer.ToVectorType(quant); !ok {
+		return moerr.NewNotSupportedNoCtxf(
+			"ivfflat quantization %q (supported: float32, float16, bf16, int8, uint8)", quant)
+	}
+	return nil
+}
 
 // SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
 func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
@@ -221,6 +243,18 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.KmeansMaxIteration > 0 {
 		res[catalog.IndexAlgoParamKmeansMaxIteration] = strconv.FormatInt(idx.IndexOption.KmeansMaxIteration, 10)
+	}
+
+	// QUANTIZATION stores the ivfflat ENTRIES in a narrow type (float16/int8);
+	// the base column and f32 centroids are unchanged. Persist it in algo_params
+	// so the entries build (compile) and the search can read it back. Only the
+	// predefined names that map to a MO narrow vector type are accepted.
+	if q := idx.IndexOption.Quantization; q != "" {
+		if _, ok := quantizer.ToVectorType(q); !ok {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"ivfflat: unsupported quantization '%s' (supported: 'float32', 'float16', 'bf16', 'int8', 'uint8')", q))
+		}
+		res[catalog.Quantization] = catalog.ToLower(q)
 	}
 	return res, nil
 }

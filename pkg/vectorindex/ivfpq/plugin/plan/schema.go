@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	ivfpqrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // ivfpqCatalogHooks is the shared (stateless) catalog-hooks instance used for
@@ -88,7 +89,40 @@ func (Hooks) BuildSecondaryIndexDefs(
 			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
 		}
 		if !catalogplugin.SupportsVectorType(ivfpqCatalogHooks, types.T(colMap[name].Typ.Id)) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IvfPQ only supports VECF32 column types")
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IvfPQ only supports VECF32 / VECF16 base column types")
+		}
+		// QUANTIZATION is downcast-only: the storage element must be the same width
+		// or narrower than the base column (f16 base -> int8/uint8 OK; f16 base ->
+		// float32 is an upcast and rejected). Mirrors ivfflat's guard.
+		if indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != "" {
+			if qt, ok := quantizer.ToVectorType(indexInfo.IndexOption.Quantization); ok {
+				// bf16 storage does not exist on the GPU (cuVS/cgo has no bfloat16
+				// index or quantizer), so reject it explicitly rather than silently
+				// falling back to f32 storage. Supported cuvs storage = f16/int8/uint8.
+				if qt == types.T_array_bf16 {
+					return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
+						"IvfPQ does not support '%s' quantization (no GPU bfloat16 storage); use 'float16', 'int8', or 'uint8'",
+						indexInfo.IndexOption.Quantization)
+				}
+				baseSize := types.Type{Oid: types.T(colMap[name].Typ.Id)}.GetArrayElementSize()
+				quantSize := types.Type{Oid: qt}.GetArrayElementSize()
+				if quantSize > baseSize {
+					return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
+						"IvfPQ QUANTIZATION '%s' (%d bytes/element) cannot upcast base column %s (%d bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type",
+						indexInfo.IndexOption.Quantization, quantSize,
+						types.T(colMap[name].Typ.Id).String(), baseSize)
+				}
+				// int8/uint8 quantization is L2-only (the affine quantizer breaks
+				// inner-product / cosine geometry). Gated by the per-algo catalog
+				// hook — the single home shared with REINDEX
+				// (compile/ValidateReindexParams) — so CREATE and REINDEX cannot
+				// drift. (bf16 and width/upcast are rejected above with base-column-
+				// aware messages before reaching here.)
+				if err := ivfpqCatalogHooks.ValidQuantization(
+					indexInfo.IndexOption.Quantization, indexInfo.IndexOption.AlgoParamVectorOpType); err != nil {
+					return nil, nil, err
+				}
+			}
 		}
 		for _, existedIndex := range existedIndexes {
 			if existedIndex.IndexAlgo == catalog.MoIndexIvfpqAlgo.ToString() && existedIndex.Parts[0] == name {
