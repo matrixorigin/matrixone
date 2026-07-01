@@ -314,7 +314,7 @@ endif
 ###############################################################################
 UT_PARALLEL ?= 1
 ENABLE_UT ?= "false"
-GOPROXY ?= "https://proxy.golang.com.cn,https://goproxy.cn,https://proxy.golang.org"
+GOPROXY ?= https://proxy.golang.com.cn,https://goproxy.cn,https://proxy.golang.org
 export GOPROXY
 LAUNCH ?= "launch"
 
