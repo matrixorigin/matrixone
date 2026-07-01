@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"net"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -44,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/mysql"
 )
 
 // escapeSQLString escapes special characters in SQL string literals to prevent SQL injection.
@@ -557,10 +560,12 @@ func floatArrayToString[T float32 | float64](arr []T) string {
 
 var OpenDbConn = func(user, password string, ip string, port int, timeout string) (db *sql.DB, err error) {
 	logutil.Info("cdc.util.open_db_conn", zap.String("timeout", timeout))
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?readTimeout=%s&timeout=%s&writeTimeout=%s&multiStatements=true",
-		user, password, ip, port, timeout, timeout, timeout)
+	cfg, err := makeMysqlConfig(user, password, ip, port, timeout)
+	if err != nil {
+		return nil, err
+	}
 	for i := 0; i < 3; i++ {
-		if db, err = tryConn(dsn); err == nil {
+		if db, err = tryConn(cfg); err == nil {
 			// TODO check table existence
 			return
 		}
@@ -571,23 +576,40 @@ var OpenDbConn = func(user, password string, ip string, port int, timeout string
 	return
 }
 
-var openDb = sql.Open
-
-var tryConn = func(dsn string) (*sql.DB, error) {
-	db, err := openDb("mysql-mo", dsn)
+func makeMysqlConfig(user, password string, ip string, port int, timeout string) (*mysql.Config, error) {
+	timeoutDuration, err := time.ParseDuration(timeout)
 	if err != nil {
 		return nil, err
-	} else {
-		db.SetConnMaxLifetime(time.Minute * 3)
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
-		time.Sleep(time.Millisecond * 100)
+	}
+	cfg := mysql.NewConfig()
+	cfg.User = user
+	cfg.Passwd = password
+	cfg.Net = "tcp"
+	cfg.Addr = net.JoinHostPort(ip, strconv.Itoa(port))
+	cfg.Timeout = timeoutDuration
+	cfg.ReadTimeout = timeoutDuration
+	cfg.WriteTimeout = timeoutDuration
+	cfg.MultiStatements = true
+	return cfg, nil
+}
 
-		//ping opens the connection
-		err = db.Ping()
-		if err != nil {
-			return nil, err
-		}
+var openDbWithConnector = sql.OpenDB
+
+var tryConn = func(cfg *mysql.Config) (*sql.DB, error) {
+	connector, err := mysql.NewConnector(cfg)
+	if err != nil {
+		return nil, err
+	}
+	db := openDbWithConnector(connector)
+	db.SetConnMaxLifetime(time.Minute * 3)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	time.Sleep(time.Millisecond * 100)
+
+	//ping opens the connection
+	err = db.Ping()
+	if err != nil {
+		return nil, err
 	}
 	return db, err
 }
@@ -820,31 +842,35 @@ func ExtractUriInfo(
 
 // compositedUriInfo uri according to the format: mysql://root:111@127.0.0.1:6001
 // if valid, return true and extracted info
-// !!!NOTE!!!
-// user and password does not have the special character ( ':' '@' )
 func compositedUriInfo(uri string, uriPrefix string) (bool, UriInfo) {
 	if !uriHasPrefix(uri, uriPrefix) {
 		return false, UriInfo{}
 	}
 	//locate user password
 	rest := uri[len(uriPrefix):]
-	seps := strings.Split(rest, "@")
-	if len(seps) != 2 || len(seps[0]) == 0 || len(seps[1]) == 0 {
+	atIdx := strings.LastIndex(rest, "@")
+	if atIdx <= 0 || atIdx == len(rest)-1 {
 		return false, UriInfo{}
 	}
-	seps2 := strings.Split(seps[0], ":")
-	if len(seps2) < 2 {
+	userInfo := rest[:atIdx]
+	hostInfo := rest[atIdx+1:]
+
+	colonIdx := strings.LastIndex(userInfo, ":")
+	if colonIdx <= 0 || colonIdx == len(userInfo)-1 {
 		return false, UriInfo{}
 	}
-	userName := strings.Join(seps2[0:len(seps2)-1], ":")
-	password := seps2[len(seps2)-1]
-	passwordStart := len(uriPrefix) + len(userName) + 1
-	passwordEnd := passwordStart + len(password)
-	if passwordEnd > len(uri) || password != uri[passwordStart:passwordEnd] {
+	userName, err := url.PathUnescape(userInfo[:colonIdx])
+	if err != nil || userName == "" {
+		return false, UriInfo{}
+	}
+	passwordStart := len(uriPrefix) + colonIdx + 1
+	passwordEnd := len(uriPrefix) + atIdx
+	password, err := url.PathUnescape(uri[passwordStart:passwordEnd])
+	if err != nil {
 		return false, UriInfo{}
 	}
 
-	sep3 := strings.Split(seps[1], ":")
+	sep3 := strings.Split(hostInfo, ":")
 	if len(sep3) != 2 || len(sep3[0]) == 0 || len(sep3[1]) == 0 {
 		return false, UriInfo{}
 	}

@@ -287,6 +287,44 @@ name    email    value
 a    y@a.com    111
 b    z@a.com    222
 drop table t_replace_multi_uk_batch;
+drop table if exists t_replace_src;
+drop table if exists t_replace_dst;
+create table t_replace_src (id int primary key, v int);
+create table t_replace_dst (id int primary key, v int);
+insert into t_replace_src values (1, 10), (2, 20), (3, 30);
+insert into t_replace_dst values (1, 999);
+replace into t_replace_dst table t_replace_src;
+select * from t_replace_dst order by id;
+id    v
+1    10
+2    20
+3    30
+replace into t_replace_dst (id, v) table t_replace_src;
+select * from t_replace_dst order by id;
+id    v
+1    10
+2    20
+3    30
+truncate table t_replace_dst;
+replace into t_replace_dst table t_replace_src order by id desc limit 1;
+select * from t_replace_dst order by id;
+id    v
+3    30
+replace into t_replace_dst (id, v) table t_replace_src order by id limit 1 offset 1;
+select * from t_replace_dst order by id;
+id    v
+2    20
+3    30
+drop table t_replace_src;
+drop table t_replace_dst;
+drop table if exists t_replace_prio;
+create table t_replace_prio (id int primary key, v int);
+replace low_priority into t_replace_prio values (1, 20);
+replace delayed into t_replace_prio values (1, 30);
+select * from t_replace_prio order by id;
+id    v
+1    30
+drop table t_replace_prio;
 drop table if exists t_replace_check;
 create table t_replace_check(id int primary key, v int check (v > 0));
 insert into t_replace_check values (1, 10);
