@@ -979,6 +979,39 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	}
 }
 
+func TestRemoteNotifyCleanupUsesTypedErrorForSharedReceiver(t *testing.T) {
+	reg := process.NewPipelineEdge(3, 3)
+	testErr := moerr.NewInternalErrorNoCtx("remote notify failed")
+
+	require.True(t, sendRemoteNotifyCleanupTerminal(nil, reg, testErr))
+
+	receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+	bat, err := receiver.GetNextBatch(nil)
+	require.Nil(t, bat)
+	require.ErrorIs(t, err, testErr)
+
+	require.Equal(t, 2, len(reg.Ch2))
+	for len(reg.Ch2) > 0 {
+		signal := <-reg.Ch2
+		require.Equal(t, process.EventError, signal.EventType)
+		require.ErrorIs(t, signal.TerminalErr(), testErr)
+	}
+}
+
+func TestRemoteNotifyCleanupUsesTypedEndForSingleSender(t *testing.T) {
+	reg := process.NewPipelineEdge(1, 2)
+
+	require.True(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
+
+	signal := <-reg.Ch2
+	require.Equal(t, process.EventEnd, signal.EventType)
+	select {
+	case <-reg.Done():
+		require.Fail(t, "single remote End should not close a shared receiver edge")
+	default:
+	}
+}
+
 func TestReceiveMessageFromCnServerIfDispatch_PreservesCleanupOnOriginalRoot(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
