@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // Offline fs kinds, matching the --local / --s3 / --local2 tool flags. They
@@ -72,6 +73,14 @@ func TmpNewSharedFileservice(ctx context.Context, dir string) fileservice.FileSe
 }
 
 func tmpNewFileservice(ctx context.Context, kind string, dir string) fileservice.FileService {
+	// Fallback for tests / standalone TAE that build options without injecting a
+	// .toml-configured fileservice. A real cluster always injects its configured
+	// fileservices, so this should never fire in production; if it does, it means
+	// an injection was missed and DISK-V2 (raw) format may be written where DISK
+	// was expected — warn loudly rather than switch formats silently.
+	logutil.Warnf(
+		"objectio: tmpNewFileservice DISK-V2 fallback used (name=%s dir=%s); "+
+			"a .toml-configured fileservice should be injected instead", kind, dir)
 	c := fileservice.Config{
 		Name: kind,
 		// DISK-V2 (raw) to match the default cluster data format. This is only a
