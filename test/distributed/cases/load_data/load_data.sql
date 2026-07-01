@@ -459,6 +459,12 @@ drop database test_load_db;
 -- @session
 drop account test_load;
 
+-- These historical LOAD fixtures intentionally load values wider than the target
+-- CHAR/VARCHAR columns and rely on the legacy lenient (truncating) behavior. Run
+-- them under non-strict sql_mode so strict-mode width rejection does not change
+-- their expected results.
+set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY";
+
 drop table if exists load_data_t9;
 create table load_data_t9(col1 int, col2 varchar(100), col3 varchar(100));
 load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true';
@@ -610,6 +616,7 @@ delete from load_data_0303;
 LOAD DATA INFILE '$resources/load_data/test_parse_newline.csv' INTO TABLE load_data_0303 FIELDS TERMINATED BY ',';
 select count(*) from load_data_0303;
 drop table load_data_0303;
+set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 
 drop database if exists test;
 create database test;
