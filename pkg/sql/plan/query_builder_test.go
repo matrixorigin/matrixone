@@ -419,7 +419,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpression(t *testing.T) {
 		`select grouping(a) as grouping_a, grouping(b) as grouping_b, count(*)
 		from select_test.bind_select
 		group by a, b with rollup
-		order by grouping(a), grouping(b)`,
+		order by GROUPING(A), GROUPING(B)`,
 		1,
 	)
 	require.NoError(t, err)
@@ -476,6 +476,27 @@ func TestRewriteGroupingSetOrderBy(t *testing.T) {
 	require.Equal(t, int64(2), pos)
 
 	require.Equal(t, "grouping(a)", tree.String(selectStmt.OrderBy[2].Expr, dialect.MYSQL))
+}
+
+func TestRewriteGroupingSetOrderBySkipsAliasShadowing(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select grouping(a) as b, grouping(b) as grouping_b, count(*)
+		from select_test.bind_select
+		group by a, b with rollup
+		order by grouping(b)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	rewriteGroupingSetOrderBy(selectStmt.OrderBy, selectClause.Exprs)
+
+	_, rewritten := selectStmt.OrderBy[0].Expr.(*tree.NumVal)
+	require.False(t, rewritten)
+	require.Equal(t, "grouping(b)", tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL))
 }
 
 func TestQueryBuilder_bindHaving(t *testing.T) {

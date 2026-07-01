@@ -3800,11 +3800,21 @@ func (builder *QueryBuilder) bindTimeWindow(
 }
 
 func rewriteGroupingSetOrderBy(astOrderBy tree.OrderBy, selectList tree.SelectExprs) {
-	projectPosByAst := make(map[string]int64, len(selectList))
+	selectAliases := make(map[string]struct{}, len(selectList))
+	for _, selectExpr := range selectList {
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			selectAliases[selectExpr.As.Compare()] = struct{}{}
+		}
+	}
+
+	projectPosByKey := make(map[string]int64, len(selectList))
 	for i, selectExpr := range selectList {
-		astKey := tree.String(selectExpr.Expr, dialect.MYSQL)
-		if _, exists := projectPosByAst[astKey]; !exists {
-			projectPosByAst[astKey] = int64(i + 1)
+		key, ok := groupingSetOrderByKey(selectExpr.Expr, nil)
+		if !ok {
+			continue
+		}
+		if _, exists := projectPosByKey[key]; !exists {
+			projectPosByKey[key] = int64(i + 1)
 		}
 	}
 
@@ -3813,11 +3823,49 @@ func rewriteGroupingSetOrderBy(astOrderBy tree.OrderBy, selectList tree.SelectEx
 			continue
 		}
 
-		if projectPos, ok := projectPosByAst[tree.String(order.Expr, dialect.MYSQL)]; ok {
+		key, ok := groupingSetOrderByKey(order.Expr, selectAliases)
+		if !ok {
+			continue
+		}
+		if projectPos, ok := projectPosByKey[key]; ok {
 			projectPosText := strconv.FormatInt(projectPos, 10)
 			order.Expr = tree.NewNumVal(projectPos, projectPosText, false, tree.P_int64)
 		}
 	}
+}
+
+func groupingSetOrderByKey(astExpr tree.Expr, blockedAliases map[string]struct{}) (string, bool) {
+	funcExpr, ok := unwrapParenExpr(astExpr).(*tree.FuncExpr)
+	if !ok || funcExpr.FuncName == nil || funcExpr.FuncName.Compare() != "grouping" || funcExpr.WindowSpec != nil {
+		return "", false
+	}
+
+	var key strings.Builder
+	key.WriteString(funcExpr.FuncName.Compare())
+	key.WriteByte(':')
+	key.WriteString(strconv.Itoa(int(funcExpr.Type)))
+
+	for _, arg := range funcExpr.Exprs {
+		col, ok := unwrapParenExpr(arg).(*tree.UnresolvedName)
+		if !ok || col.Star || col.NumParts == 0 {
+			return "", false
+		}
+		if col.NumParts == 1 {
+			if _, blocked := blockedAliases[col.ColName()]; blocked {
+				return "", false
+			}
+		}
+
+		key.WriteByte('|')
+		for i := col.NumParts - 1; i >= 0; i-- {
+			if i < col.NumParts-1 {
+				key.WriteByte('.')
+			}
+			key.WriteString(col.CStrParts[i].Compare())
+		}
+	}
+
+	return key.String(), true
 }
 
 func (builder *QueryBuilder) bindOrderBy(
