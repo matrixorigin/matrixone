@@ -40,8 +40,9 @@ func PrepareCommand() *cobra.Command {
 		},
 	}
 
-	// Persistent so the view/info subcommands inherit them. Default (none set) is
-	// local DISK (CRC). --local2 / --s3 select the raw formats.
+	// Persistent so the view/info subcommands inherit them. Exactly one of
+	// --local (DISK/CRC), --local2 (DISK-V2 raw), or --s3 (raw) must be set;
+	// there is no default — kindFromFlags errors if none (or more than one) is given.
 	addOfflineKindFlags(cmd)
 
 	cmd.AddCommand(viewCommand())
