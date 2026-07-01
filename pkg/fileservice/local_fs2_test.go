@@ -135,10 +135,11 @@ func TestLocalFSChecksumInflation(t *testing.T) {
 }
 
 // TestLocalFSFormatsAreIncompatible documents that the two formats cannot be
-// mixed on the same data directory, since neither has a magic/header:
+// mixed on the same data directory, since neither payload has a magic/header:
 //   - DISK reading a DISK-V2 (raw) file fails loudly with a checksum error.
-//   - DISK-V2 reading a DISK (checksummed) file returns the raw bytes including
-//     the interleaved CRCs (silent corruption — there is no check to fail).
+//   - DISK-V2 opening a DISK (checksummed) directory is rejected at construction
+//     by the checkNotCRCFramed startup guard — otherwise it would silently return
+//     the raw bytes including the interleaved CRCs.
 func TestLocalFSFormatsAreIncompatible(t *testing.T) {
 	ctx := context.Background()
 
@@ -159,21 +160,47 @@ func TestLocalFSFormatsAreIncompatible(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "expected checksum mismatch, got %v", err)
 	})
 
-	// checksum-written, raw-read -> wrong bytes, no error (silent corruption)
+	// checksum-written, raw-read -> the startup guard rejects it at construction
+	// (previously this was a silent misread with no error).
 	t.Run("checksum write, raw read", func(t *testing.T) {
 		dir := t.TempDir()
 		crcFS, err := NewLocalFS(ctx, "local", dir, DisabledCacheConfig, nil)
 		require.NoError(t, err)
 		writeOne(t, crcFS, "f", content)
 
-		// physical file is larger than content; read that many raw bytes
-		onDisk, err := os.ReadFile(filepath.Join(dir, toOSPath("f")))
-		require.NoError(t, err)
-		rawFS, err := NewLocalFS2(ctx, "local", dir, DisabledCacheConfig, nil)
-		require.NoError(t, err)
-		vec, err := readOne(rawFS, "f", int64(len(onDisk)))
-		require.NoError(t, err) // no error: raw mode has nothing to validate
-		require.False(t, bytes.Equal(content, vec.Entries[0].Data[:len(content)]),
-			"raw read of checksummed data must not match the original content")
+		// Opening the DISK (checksum-framed) dir as raw DISK-V2 is rejected by
+		// checkNotCRCFramed instead of silently returning wrong bytes.
+		_, err = NewLocalFS2(ctx, "local", dir, DisabledCacheConfig, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "legacy DISK")
 	})
+}
+
+// TestLocalFS2FormatGuard covers checkNotCRCFramed: a DISK-V2 (raw) LocalFS
+// opened on a directory that already holds legacy DISK (CRC32-framed) data fails
+// fast at construction, while an empty dir (fresh deploy) or a dir holding
+// DISK-V2 data opens fine.
+func TestLocalFS2FormatGuard(t *testing.T) {
+	ctx := context.Background()
+
+	// Empty dir (fresh deploy) opens fine.
+	_, err := NewLocalFS2(ctx, "local", t.TempDir(), DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// DISK-V2 (raw) data reopens fine — the guard must not false-reject.
+	rawDir := t.TempDir()
+	rawFS, err := NewLocalFS2(ctx, "local", rawDir, DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	writeOne(t, rawFS, "a/b", []byte("raw DISK-V2 payload, not a checksum-framed block"))
+	_, err = NewLocalFS2(ctx, "local", rawDir, DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// Legacy DISK (CRC32-framed) data must be rejected when opened as DISK-V2.
+	crcDir := t.TempDir()
+	crcFS, err := NewLocalFS(ctx, "local", crcDir, DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	writeOne(t, crcFS, "a/b", []byte("legacy DISK payload"))
+	_, err = NewLocalFS2(ctx, "local", crcDir, DisabledCacheConfig, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "legacy DISK")
 }

@@ -17,7 +17,9 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"iter"
@@ -146,7 +148,60 @@ func newLocalFS(
 		return nil, err
 	}
 
+	// Fail fast at startup if a raw (DISK-V2) service is pointed at a directory
+	// that already holds legacy DISK (CRC32-framed) data — reading raw over
+	// framed bytes would otherwise silently return wrong bytes.
+	if noChecksum {
+		if err := fs.checkNotCRCFramed(); err != nil {
+			return nil, err
+		}
+	}
+
 	return fs, nil
+}
+
+// checkNotCRCFramed is a best-effort startup guard for a raw (DISK-V2) LocalFS:
+// pointing it at a directory that already contains legacy DISK (CRC32-framed)
+// data would silently return wrong bytes. It scans the first regular file under
+// rootPath and fails if that file is CRC-framed (first 4 bytes are a valid
+// crc32-Castagnoli of the rest of the block). An empty dir (a fresh deploy)
+// passes. A raw file coincidentally passing the CRC check is ~1/2^32, so this
+// never rejects valid DISK-V2 data; a false negative (e.g. an unframed cache
+// file scanned first) just falls back to the object-header magic guard on read.
+func (l *LocalFS) checkNotCRCFramed() error {
+	var first string
+	_ = filepath.WalkDir(l.rootPath, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		first = p
+		return filepath.SkipAll
+	})
+	if first == "" {
+		return nil // empty dir: fresh deploy
+	}
+
+	f, err := os.Open(first)
+	if err != nil {
+		return nil // unreadable: leave it to the read path
+	}
+	defer f.Close()
+
+	buf := make([]byte, _BlockSize)
+	rn, _ := io.ReadFull(f, buf) // partial read at EOF is fine
+	buf = buf[:rn]
+	if len(buf) <= _ChecksumSize {
+		return nil // too small to tell
+	}
+
+	sum := binary.LittleEndian.Uint32(buf[:_ChecksumSize])
+	if crc32.Checksum(buf[_ChecksumSize:], crcTable) == sum {
+		return moerr.NewInternalErrorNoCtxf(
+			"data-dir %q contains legacy DISK (CRC32-framed) data but this file "+
+				"service is DISK-V2 (raw); use the DISK backend to read it "+
+				"(e.g. the etc/v1 launch configs)", l.rootPath)
+	}
+	return nil
 }
 
 // newChecksumOSFile wraps a *os.File for read/write, honoring l.noChecksum to
