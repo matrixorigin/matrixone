@@ -911,6 +911,27 @@ func coalesceDecimalResult(overloads []overload, minOid types.T, inputs []types.
 	return types.Type{}, -1, false
 }
 
+func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+	target, aligned, ok := textStringCommonType(inputs)
+	if !ok {
+		return checkResult{}, false
+	}
+	for i, over := range overloads {
+		if len(over.args) != 1 || over.args[0] != target.Oid {
+			continue
+		}
+		if aligned {
+			return newCheckResultWithSuccess(i), true
+		}
+		castType := make([]types.Type, len(inputs))
+		for j := range castType {
+			castType[j] = target
+		}
+		return newCheckResultWithCast(i, castType), true
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong), true
+}
+
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 0 {
 		if retType, ok := mixedStringNumericToVarchar(inputs); ok {
@@ -924,6 +945,9 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				}
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
+			return result
 		}
 
 		minIndex := -1
@@ -11902,5 +11926,55 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		}
 	}
 
+	return nil
+}
+
+// StPoint builds a POINT geometry from numeric (x, y) coordinates, where x is
+// the X/longitude and y is the Y/latitude (matching WKT POINT(x y) order). It
+// is the numeric counterpart of ST_PointFromText('POINT(x y)') and returns a
+// plain GEOMETRY (SRID 0). The float32-coordinate variant is StPoint32.
+func StPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointImpl(ivecs, result, length, selectList, false)
+}
+
+// StPoint32 is the GEOMETRY32 (float32-coordinate) variant of ST_Point.
+func StPoint32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointImpl(ivecs, result, length, selectList, true)
+}
+
+func stPointImpl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, f32 bool) error {
+	xs := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+	ys := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		x, n1 := xs.GetValue(i)
+		y, n2 := ys.GetValue(i)
+		if n1 || n2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if math.IsNaN(x) || math.IsNaN(y) || math.IsInf(x, 0) || math.IsInf(y, 0) {
+			return moerr.NewInvalidInputNoCtxf("ST_Point coordinates must be finite: (%v, %v)", x, y)
+		}
+		pt := geo.Point{X: x, Y: y}
+		var wkb []byte
+		if f32 {
+			wkb = geo.WriteWKBFloat32(pt)
+		} else {
+			wkb = geo.WriteWKB(pt)
+		}
+		if err := rs.AppendBytes(wkb, false); err != nil {
+			return err
+		}
+	}
 	return nil
 }

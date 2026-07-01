@@ -138,8 +138,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreInsert UniqueKey"
 	case plan.Node_PRE_INSERT_SK:
 		pname = "PreInsert SecondaryKey"
-	case plan.Node_ON_DUPLICATE_KEY:
-		pname = "On Duplicate Key"
 	case plan.Node_FUZZY_FILTER:
 		pname = "Fuzzy Filter for duplicate key"
 	case plan.Node_LOCK_OP:
