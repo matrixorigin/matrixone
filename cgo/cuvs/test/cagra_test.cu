@@ -55,6 +55,66 @@ TEST(GpuCagraTest, BasicLoadAndSearchHalf) {
     index.destroy();
 }
 
+// vecf16 base -> int8/uint8 storage via the native B(half)-source quantizer for
+// CAGRA (gpu_cagra_t<half, T> + add_chunk_quantize). Mirrors the ivf_pq
+// HalfQuantizeToInt8Build coverage, which cagra previously lacked entirely.
+// Verifies: train the half-source quantizer on the buffered vecf16 sample,
+// transform half->T, build a CAGRA graph over the quantized codes, and search
+// it (both with a native-T query and with a half query quantized via
+// quantize_query). No f32 detour.
+namespace {
+template <typename T>
+void run_cagra_half_quantize_build(const char* label) {
+    TEST_LOG("CAGRA half-quantize build/search: " << label);
+    const uint32_t dimension = 16;
+    const uint64_t count = 2000;
+    std::vector<half> dataset(count * dimension);
+    std::vector<int64_t> ids(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = __float2half((float)(rand() % 256) / 255.0f);
+        ids[i] = (int64_t)(i + 5000);
+    }
+
+    std::vector<int> devices = {0};
+    cagra_build_params_t bp = cagra_build_params_default();
+    gpu_cagra_t<half, T> index(count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
+    index.start();
+    index.add_chunk_quantize(dataset.data(), count, -1, ids.data());
+    index.build();
+
+    cagra_search_params_t sp = cagra_search_params_default();
+
+    // 1) search with a native-T query (raw storage codes).
+    std::vector<T> qnative(dimension, 0);
+    auto r1 = index.search(qnative.data(), 1, dimension, 5, sp);
+    ASSERT_EQ(r1.neighbors.size(), (size_t)5);
+    for (auto n : r1.neighbors) {
+        ASSERT_GE(n, (int64_t)5000);
+        ASSERT_LT(n, (int64_t)(5000 + count));
+    }
+
+    // 2) search with a half query quantized through the half-source quantizer
+    // (the production path) — the nearest neighbor of base[0] must be itself.
+    std::vector<half> qhalf(dataset.begin(), dataset.begin() + dimension);
+    std::vector<T> qcodes(dimension);
+    index.quantize_query(qhalf.data(), 1, qcodes.data());
+    auto r2 = index.search(qcodes.data(), 1, dimension, 5, sp);
+    ASSERT_EQ(r2.neighbors.size(), (size_t)5);
+    ASSERT_EQ(r2.neighbors[0], (int64_t)5000);
+
+    index.destroy();
+}
+} // namespace
+
+TEST(GpuCagraTest, HalfQuantizeToInt8Build) {
+    run_cagra_half_quantize_build<int8_t>("f16->int8");
+}
+
+TEST(GpuCagraTest, HalfQuantizeToUint8Build) {
+    run_cagra_half_quantize_build<uint8_t>("f16->uint8");
+}
+
 TEST(GpuCagraTest, BasicLoadAndSearch) {
     const uint32_t dimension = 16;
     const uint64_t count = 1000;

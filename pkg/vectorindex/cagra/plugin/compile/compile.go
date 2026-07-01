@@ -258,9 +258,14 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 	return merged, nil
 }
 
-// HandleDropIndex is a no-op: generic hidden-table cleanup is sufficient.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] cagra HandleDropIndex: defs=%d", len(defs))
+	// Evict the cached search index so its GPU resources are freed NOW, rather
+	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
+	// Mirrors the create-side cache.Cache.Remove(storageDef.IndexTableName).
+	if storageDef, ok := defs[catalog.Cagra_TblType_Storage]; ok {
+		cache.Cache.Remove(storageDef.IndexTableName)
+	}
 	return nil
 }
 

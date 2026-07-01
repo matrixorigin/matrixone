@@ -48,8 +48,8 @@
 #  % cd matrixone
 #  % MO_CL_CUDA=1 make
 
-# Go toolchain (override with `make GO=/path/to/go1.26rc1 ...` for the archsimd
-# SIMD build); defaults to `go`.
+# Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
+# Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
 ifeq ($(GO),)
 	GO=go
 endif
@@ -191,13 +191,25 @@ DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 TAGS :=
 
-# Env-var prefix for the build command. Pass GOEXPERIMENT/GOAMD64 here for the
-# archsimd SIMD build, e.g.:
-#   make GO=/path/go1.26rc1 GOEXPERIMENT_OPT="GOEXPERIMENT=simd" GOAMD64=v3 build
+# Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
+# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
+# (Haswell baseline -- AVX2/FMA/BMI, required by the Go simd experiment) and
+# GOEXPERIMENT defaults to simd (enables the goexperiment.simd build tag on Go 1.26+).
+# Disable the SIMD kernels with:
+#   make ARCHSIMD=0 build                       # plain x86 build, no SIMD kernels
+# Either default can still be overridden individually, e.g. `make GOAMD64=v4 build`.
 GOEXPERIMENT_OPT ?=
 ifeq ("$(UNAME_M)", "x86_64")
+  ARCHSIMD ?= 1
+  ifeq ($(ARCHSIMD),1)
+	GOAMD64 ?= v3
+	GOEXPERIMENT_SIMD ?= simd
+  endif
   ifneq ($(GOAMD64),)
 	GOEXPERIMENT_OPT += GOAMD64=$(GOAMD64)
+  endif
+  ifneq ($(GOEXPERIMENT_SIMD),)
+	GOEXPERIMENT_OPT += GOEXPERIMENT=$(GOEXPERIMENT_SIMD)
   endif
 endif
 

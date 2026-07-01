@@ -914,13 +914,19 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					alterIndex = indexdef
 					alterIndex.Visible = tableAlterIndex.Visible
 					oTableDef.Indexes[i].Visible = tableAlterIndex.Visible
-					// update the index visibility in mo_catalog.mo_indexes
+					// update the index visibility in mo_catalog.mo_indexes.
+					// Escape the index name the same as the AUTO_UPDATE / REINDEX
+					// branches: it is user-supplied and a backticked identifier may
+					// contain single quotes or backslashes (the scanner still treats
+					// backslash as an escape inside '...'), which could corrupt or
+					// break out of name = '...'.
 					var updateSql string
+					visible := 0
 					if alterIndex.Visible {
-						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 1, oTableDef.TblId, indexdef.IndexName)
-					} else {
-						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 0, oTableDef.TblId, indexdef.IndexName)
+						visible = 1
 					}
+					updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, visible, oTableDef.TblId,
+						sqlquote.EscapeString(indexdef.IndexName))
 					if err = c.runSqlWithOptions(
 						updateSql, executor.StatementOption{}.WithDisableLog(),
 					); err != nil {
@@ -972,7 +978,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 2. Update IndexDef and mo_catalog.mo_indexes.
 					alterIndex.IndexAlgoParams = newAlgoParams
 					oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
-					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+					// Escape the SQL string literals, same as the REINDEX branch
+					// below: algo_params is a JSON blob (JSON does not escape SQL
+					// quotes/backslashes) and the index name is user-supplied, so
+					// an unescaped quote or backslash could corrupt or break out of
+					// algo_params = '...' / name = '...'.
+					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams,
+						sqlquote.EscapeString(newAlgoParams), oTableDef.TblId,
+						sqlquote.EscapeString(alterIndex.IndexName))
 					if err = c.runSqlWithOptions(
 						updateSql, executor.StatementOption{}.WithDisableLog(),
 					); err != nil {
@@ -2547,6 +2560,38 @@ func (s *Scope) DropIndex(c *Compile) error {
 	)
 	if err != nil {
 		return err
+	}
+
+	//6. Plugin-mediated drop hook — mirrors the HandleCreateIndex dispatch in
+	// CreateIndex. Vector-index plugins use it to evict their in-process search
+	// cache for the dropped index, so GPU/host resources are freed NOW instead of
+	// lingering until the 5-min VectorIndexCacheTTL housekeeping. Without this the
+	// hook (pkg/vectorindex/*/plugin/compile HandleDropIndex) was never invoked.
+	dropPluginIndexes := make(map[string]*MultiTableIndex)
+	for _, idef := range oldTableDef.Indexes {
+		if idef.IndexName != qry.IndexName || idef.Unique || !indexplugin.IsPluginAlgo(idef.IndexAlgo) {
+			continue
+		}
+		algo := catalog.ToLower(idef.IndexAlgo)
+		mti, ok := dropPluginIndexes[algo]
+		if !ok {
+			mti = &MultiTableIndex{IndexAlgo: algo, IndexDefs: make(map[string]*plan.IndexDef)}
+			dropPluginIndexes[algo] = mti
+		}
+		mti.IndexDefs[catalog.ToLower(idef.IndexAlgoTableType)] = idef
+	}
+	if len(dropPluginIndexes) > 0 {
+		dctx := newPluginCompileCtx(s, c, oldTableDef.TblId, nil, d, qry.Database, oldTableDef, nil)
+		for _, mti := range dropPluginIndexes {
+			if p, ok := indexplugin.Get(mti.IndexAlgo); ok {
+				// Best-effort cleanup: the 5-min TTL is the backstop, so don't
+				// fail the DROP if cache eviction errors — just log.
+				if e := p.Compile().HandleDropIndex(dctx, mti.IndexDefs); e != nil {
+					logutil.Warnf("[plugin] %s HandleDropIndex %s.%s/%s: %v",
+						mti.IndexAlgo, qry.Database, qry.Table, qry.IndexName, e)
+				}
+			}
+		}
 	}
 
 	return nil

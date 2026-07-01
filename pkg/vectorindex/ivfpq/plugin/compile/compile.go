@@ -315,6 +315,12 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 // so this is a no-op. Compare HNSW, which does maintain CDC tasks.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] ivfpq HandleDropIndex: defs=%d", len(defs))
+	// Evict the cached search index so its GPU resources are freed NOW, rather
+	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
+	// Mirrors the create-side cache.Cache.Remove(storageDef.IndexTableName).
+	if storageDef, ok := defs[catalog.Ivfpq_TblType_Storage]; ok {
+		cache.Cache.Remove(storageDef.IndexTableName)
+	}
 	return nil
 }
 

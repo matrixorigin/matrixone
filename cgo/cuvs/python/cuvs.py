@@ -64,6 +64,20 @@ class Quantization(IntEnum):
     INT8 = 2
     UINT8 = 3
 
+# numpy dtype for a base/storage element type. Base-typed buffers (dataset,
+# query, quantizer training data) must carry these exact bytes so the C side
+# reads them per btype — e.g. a vecf16 base must be passed as float16, NOT
+# coerced to float32 (which would double the width and misread the halfs).
+_NP_DTYPE = {
+    Quantization.F32: np.float32,
+    Quantization.F16: np.float16,
+    Quantization.INT8: np.int8,
+    Quantization.UINT8: np.uint8,
+}
+
+def _np_dtype_for(quant):
+    return _NP_DTYPE[Quantization(int(quant))]
+
 class DistributionMode(IntEnum):
     SINGLE_GPU = 0
     SHARDED = 1
@@ -139,11 +153,11 @@ if _lib:
     _lib.gpu_adhoc_brute_force_search_float.argtypes = [ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_uint32, ctypes.POINTER(ctypes.c_float), ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.POINTER(ctypes.c_float), ctypes.c_void_p]
 
     # CAGRA
-    _lib.gpu_cagra_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, CagraBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_cagra_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, CagraBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_cagra_new.restype = ctypes.c_void_p
-    _lib.gpu_cagra_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, CagraBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_cagra_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, CagraBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_cagra_new_empty.restype = ctypes.c_void_p
-    _lib.gpu_cagra_load_file.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_int, CagraBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    _lib.gpu_cagra_load_file.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_int, CagraBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
     _lib.gpu_cagra_load_file.restype = ctypes.c_void_p
     _lib.gpu_cagra_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_cagra_start.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -188,11 +202,11 @@ if _lib:
     _lib.gpu_cagra_search_quantize_with_filter.restype = CagraSearchRes
 
     # IVF-Flat
-    _lib.gpu_ivf_flat_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfFlatBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_ivf_flat_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfFlatBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_ivf_flat_new.restype = ctypes.c_void_p
-    _lib.gpu_ivf_flat_load_file.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_int, IvfFlatBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    _lib.gpu_ivf_flat_load_file.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_int, IvfFlatBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
     _lib.gpu_ivf_flat_load_file.restype = ctypes.c_void_p
-    _lib.gpu_ivf_flat_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfFlatBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_ivf_flat_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfFlatBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_ivf_flat_new_empty.restype = ctypes.c_void_p
     _lib.gpu_ivf_flat_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_ivf_flat_start.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -239,13 +253,13 @@ if _lib:
     _lib.gpu_ivf_flat_search_quantize_with_filter.restype = IvfFlatSearchRes
 
     # IVF-PQ
-    _lib.gpu_ivf_pq_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_ivf_pq_new.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_ivf_pq_new.restype = ctypes.c_void_p
-    _lib.gpu_ivf_pq_new_from_data_file.argtypes = [ctypes.c_char_p, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    _lib.gpu_ivf_pq_new_from_data_file.argtypes = [ctypes.c_char_p, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
     _lib.gpu_ivf_pq_new_from_data_file.restype = ctypes.c_void_p
-    _lib.gpu_ivf_pq_load_file.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    _lib.gpu_ivf_pq_load_file.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
     _lib.gpu_ivf_pq_load_file.restype = ctypes.c_void_p
-    _lib.gpu_ivf_pq_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
+    _lib.gpu_ivf_pq_new_empty.argtypes = [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_int, IvfPqBuildParams, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_uint32, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int64), ctypes.c_void_p]
     _lib.gpu_ivf_pq_new_empty.restype = ctypes.c_void_p
     _lib.gpu_ivf_pq_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     _lib.gpu_ivf_pq_start.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -387,31 +401,31 @@ class CagraIndex:
         self.dimension = dimension
 
     @classmethod
-    def create(cls, dataset, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32, ids=None):
+    def create(cls, dataset, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32, ids=None):
         if build_params is None: build_params = CagraBuildParams.default()
-        dataset = np.ascontiguousarray(dataset, dtype=np.float32)
+        dataset = np.ascontiguousarray(dataset, dtype=_np_dtype_for(btype))
         count, dim = dataset.shape
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_cagra_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
-        _check_error(errmsg); return cls(h, dim)
+        h = _lib.gpu_cagra_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), id_ptr, ctypes.byref(errmsg))
+        _check_error(errmsg); idx = cls(h, dim); idx.btype = int(btype); return idx
 
     @classmethod
-    def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32, ids=None):
+    def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32, ids=None):
         if build_params is None: build_params = CagraBuildParams.default()
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_cagra_new_empty(total_count, dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
+        h = _lib.gpu_cagra_new_empty(total_count, dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dimension)
 
     @classmethod
-    def load_file(cls, filename, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32):
+    def load_file(cls, filename, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32):
         if build_params is None: build_params = CagraBuildParams.default()
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_cagra_load_file(filename.encode('utf-8'), dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), ctypes.byref(errmsg))
+        h = _lib.gpu_cagra_load_file(filename.encode('utf-8'), dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dimension)
 
     def start(self):
@@ -443,7 +457,7 @@ class CagraIndex:
         id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p(); _lib.gpu_cagra_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), id_ptr, ctypes.byref(errmsg)); _check_error(errmsg)
     def train_quantizer(self, train_data):
-        train_data = np.ascontiguousarray(train_data, dtype=np.float32)
+        train_data = np.ascontiguousarray(train_data, dtype=_np_dtype_for(getattr(self, 'btype', Quantization.F32)))
         errmsg = ctypes.c_char_p(); _lib.gpu_cagra_train_quantizer(self.handle, train_data.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(train_data), ctypes.byref(errmsg)); _check_error(errmsg)
     
     def set_batch_window(self, window_us):
@@ -475,7 +489,7 @@ class CagraIndex:
 
     def search(self, queries, k, search_params=None):
         if search_params is None: search_params = CagraSearchParams.default()
-        queries = np.ascontiguousarray(queries, dtype=np.float32)
+        queries = np.ascontiguousarray(queries, dtype=_np_dtype_for(getattr(self, 'btype', Quantization.F32)))
         num_q, dim = queries.shape
         errmsg = ctypes.c_char_p()
         res = _lib.gpu_cagra_search_quantize(self.handle, queries.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), num_q, dim, k, search_params, ctypes.byref(errmsg))
@@ -547,31 +561,31 @@ class IvfFlatIndex:
         self.dimension = dimension
 
     @classmethod
-    def create(cls, dataset, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32, ids=None):
+    def create(cls, dataset, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32, ids=None):
         if build_params is None: build_params = IvfFlatBuildParams.default()
         dataset = np.ascontiguousarray(dataset, dtype=np.float32)
         count, dim = dataset.shape
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_ivf_flat_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
+        h = _lib.gpu_ivf_flat_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dim)
 
     @classmethod
-    def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32, ids=None):
+    def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32, ids=None):
         if build_params is None: build_params = IvfFlatBuildParams.default()
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_ivf_flat_new_empty(total_count, dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
+        h = _lib.gpu_ivf_flat_new_empty(total_count, dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dimension)
 
     @classmethod
-    def load_file(cls, filename, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32):
+    def load_file(cls, filename, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32):
         if build_params is None: build_params = IvfFlatBuildParams.default()
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_ivf_flat_load_file(filename.encode('utf-8'), dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), ctypes.byref(errmsg))
+        h = _lib.gpu_ivf_flat_load_file(filename.encode('utf-8'), dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dimension)
 
     def start(self):
@@ -717,39 +731,39 @@ class IvfPqIndex:
         self._dimension = dimension
 
     @classmethod
-    def create(cls, dataset, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32, ids=None):
+    def create(cls, dataset, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32, ids=None):
         if build_params is None: build_params = IvfPqBuildParams.default()
-        dataset = np.ascontiguousarray(dataset, dtype=np.float32)
+        dataset = np.ascontiguousarray(dataset, dtype=_np_dtype_for(btype))
         count, dim = dataset.shape
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_ivf_pq_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
-        _check_error(errmsg); return cls(h, dim)
+        h = _lib.gpu_ivf_pq_new(dataset.ctypes.data_as(ctypes.c_void_p), count, dim, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), id_ptr, ctypes.byref(errmsg))
+        _check_error(errmsg); idx = cls(h, dim); idx.btype = int(btype); return idx
 
     @classmethod
-    def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32, ids=None):
+    def create_empty(cls, total_count, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32, ids=None):
         if build_params is None: build_params = IvfPqBuildParams.default()
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         id_ptr = ids.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)) if ids is not None else None
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_ivf_pq_new_empty(total_count, dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), id_ptr, ctypes.byref(errmsg))
+        h = _lib.gpu_ivf_pq_new_empty(total_count, dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), id_ptr, ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dimension)
 
     @classmethod
-    def create_from_data_file(cls, filename, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32):
+    def create_from_data_file(cls, filename, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32):
         if build_params is None: build_params = IvfPqBuildParams.default()
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_ivf_pq_new_from_data_file(filename.encode('utf-8'), int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), ctypes.byref(errmsg))
+        h = _lib.gpu_ivf_pq_new_from_data_file(filename.encode('utf-8'), int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h)
 
     @classmethod
-    def load_file(cls, filename, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, qtype=Quantization.F32):
+    def load_file(cls, filename, dimension, metric=DistanceType.L2Expanded, build_params=None, devices=[0], nthread=4, dist_mode=DistributionMode.SINGLE_GPU, btype=Quantization.F32, qtype=Quantization.F32):
         if build_params is None: build_params = IvfPqBuildParams.default()
         dev_arr = (ctypes.c_int * len(devices))(*devices)
         errmsg = ctypes.c_char_p()
-        h = _lib.gpu_ivf_pq_load_file(filename.encode('utf-8'), dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(qtype), ctypes.byref(errmsg))
+        h = _lib.gpu_ivf_pq_load_file(filename.encode('utf-8'), dimension, int(metric), build_params, dev_arr, len(devices), nthread, int(dist_mode), int(btype), int(qtype), ctypes.byref(errmsg))
         _check_error(errmsg); return cls(h, dimension)
 
     def start(self):
@@ -779,7 +793,7 @@ class IvfPqIndex:
         errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_add_chunk_float(self.handle, chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(chunk), id_ptr, ctypes.byref(errmsg)); _check_error(errmsg)
     
     def train_quantizer(self, train_data):
-        train_data = np.ascontiguousarray(train_data, dtype=np.float32)
+        train_data = np.ascontiguousarray(train_data, dtype=_np_dtype_for(getattr(self, 'btype', Quantization.F32)))
         errmsg = ctypes.c_char_p(); _lib.gpu_ivf_pq_train_quantizer(self.handle, train_data.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), len(train_data), ctypes.byref(errmsg)); _check_error(errmsg)
     
     def set_batch_window(self, window_us):
@@ -811,7 +825,7 @@ class IvfPqIndex:
 
     def search(self, queries, k, search_params=None):
         if search_params is None: search_params = IvfPqSearchParams.default()
-        queries = np.ascontiguousarray(queries, dtype=np.float32)
+        queries = np.ascontiguousarray(queries, dtype=_np_dtype_for(getattr(self, 'btype', Quantization.F32)))
         num_q, dim = queries.shape
         errmsg = ctypes.c_char_p()
         res = _lib.gpu_ivf_pq_search_quantize(self.handle, queries.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), num_q, dim, k, search_params, ctypes.byref(errmsg))

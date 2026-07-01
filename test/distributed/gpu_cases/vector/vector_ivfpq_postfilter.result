@@ -1,0 +1,91 @@
+SET experimental_ivfpq_index = 1;
+SET ivfpq_threads_build = 6;
+SET ivfpq_max_index_capacity = 99999;
+SET kmeans_train_percent = 100;
+SET probe_limit = 16;
+drop database if exists ivfpq_postfilter;
+create database ivfpq_postfilter;
+use ivfpq_postfilter;
+create table t (id bigint primary key, v vecf32(8), c_inc int, c_noinc int);
+insert into t values
+(1, '[1,1,1,1,1,1,1,1]', 1, 101),
+(2, '[2,2,2,2,2,2,2,2]', 2, 102),
+(3, '[3,3,3,3,3,3,3,3]', 3, 103),
+(4, '[4,4,4,4,4,4,4,4]', 4, 104),
+(5, '[5,5,5,5,5,5,5,5]', 5, 105),
+(6, '[6,6,6,6,6,6,6,6]', 6, 106),
+(7, '[7,7,7,7,7,7,7,7]', 7, 107),
+(8, '[8,8,8,8,8,8,8,8]', 8, 108),
+(9, '[9,9,9,9,9,9,9,9]', 9, 109),
+(10, '[10,10,10,10,10,10,10,10]', 10, 110),
+(11, '[11,11,11,11,11,11,11,11]', 11, 111),
+(12, '[12,12,12,12,12,12,12,12]', 12, 112),
+(13, '[13,13,13,13,13,13,13,13]', 13, 113),
+(14, '[14,14,14,14,14,14,14,14]', 14, 114),
+(15, '[15,15,15,15,15,15,15,15]', 15, 115),
+(16, '[16,16,16,16,16,16,16,16]', 16, 116),
+(17, '[17,17,17,17,17,17,17,17]', 17, 117),
+(18, '[18,18,18,18,18,18,18,18]', 18, 118),
+(19, '[19,19,19,19,19,19,19,19]', 19, 119),
+(20, '[20,20,20,20,20,20,20,20]', 20, 120);
+create index ix using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 INCLUDE (c_inc);
+show create table t;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` bigint NOT NULL,
+  `v` vecf32(8) DEFAULT NULL,
+  `c_inc` int DEFAULT NULL,
+  `c_noinc` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix` USING ivfpq (`v`) lists = 2  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8  INCLUDE (c_inc) 
+)
+select id, c_noinc from t order by l2_distance(v, '[12,12,12,12,12,12,12,12]') asc limit 20;
+➤ id[-5,64,0]  ¦  c_noinc[4,32,0]  𝄀
+12  ¦  112  𝄀
+13  ¦  113  𝄀
+11  ¦  111  𝄀
+10  ¦  110  𝄀
+14  ¦  114  𝄀
+9  ¦  109  𝄀
+15  ¦  115  𝄀
+16  ¦  116  𝄀
+8  ¦  108  𝄀
+7  ¦  107  𝄀
+17  ¦  117  𝄀
+6  ¦  106  𝄀
+18  ¦  118  𝄀
+5  ¦  105  𝄀
+19  ¦  119  𝄀
+20  ¦  120  𝄀
+4  ¦  104  𝄀
+3  ¦  103  𝄀
+2  ¦  102  𝄀
+1  ¦  101
+select id from t where c_noinc < 105 order by l2_distance(v, '[12,12,12,12,12,12,12,12]') asc limit 20;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+3  𝄀
+2  𝄀
+1
+select id from t where c_noinc >= 116 order by l2_distance(v, '[12,12,12,12,12,12,12,12]') asc limit 20;
+➤ id[-5,64,0]  𝄀
+16  𝄀
+17  𝄀
+18  𝄀
+19  𝄀
+20
+select id from t where c_noinc = 102 order by l2_distance(v, '[12,12,12,12,12,12,12,12]') asc limit 20;
+➤ id[-5,64,0]  𝄀
+2
+select id from t where c_inc <= 14 and c_noinc >= 108 order by l2_distance(v, '[12,12,12,12,12,12,12,12]') asc limit 20;
+➤ id[-5,64,0]  𝄀
+12  𝄀
+13  𝄀
+11  𝄀
+10  𝄀
+14  𝄀
+9  𝄀
+8
+select id from t where c_noinc = 102 order by l2_distance(v, '[12,12,12,12,12,12,12,12]') asc limit 1;
+➤ id[-5,64,0]
+drop database ivfpq_postfilter;
