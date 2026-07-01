@@ -205,6 +205,69 @@ func TestClientCreationFallsBackFromUnreachableReplicaAddress(t *testing.T) {
 	assert.Less(t, elapsed, time.Second)
 }
 
+func TestConnectToLogServiceWithNoTargets(t *testing.T) {
+	c, err := connectToLogService(context.Background(), "", nil, ClientConfig{})
+	require.NoError(t, err)
+	require.Nil(t, c)
+}
+
+func TestConnectToLogServiceAddressesReturnsLastError(t *testing.T) {
+	origAttemptTimeout := logServiceConnectAttemptTimeout
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectAttemptTimeout = 50 * time.Millisecond
+	logServiceConnectFallbackDelay = time.Millisecond
+	defer func() {
+		logServiceConnectAttemptTimeout = origAttemptTimeout
+		logServiceConnectFallbackDelay = origFallbackDelay
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	c, err := connectToLogServiceAddresses(ctx, "", []string{
+		"127.0.0.1:1",
+		"127.0.0.1:2",
+	}, ClientConfig{MaxMessageSize: defaultMaxMessageSize})
+	require.Error(t, err)
+	require.Nil(t, c)
+}
+
+func TestConnectToLogServiceAddressesReturnsContextError(t *testing.T) {
+	hangingAddress, cleanup := startHangingTCPServer(t)
+	defer cleanup()
+
+	origAttemptTimeout := logServiceConnectAttemptTimeout
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectAttemptTimeout = time.Second
+	logServiceConnectFallbackDelay = time.Second
+	defer func() {
+		logServiceConnectAttemptTimeout = origAttemptTimeout
+		logServiceConnectFallbackDelay = origFallbackDelay
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	c, err := connectToLogServiceAddresses(
+		ctx,
+		"",
+		[]string{hangingAddress},
+		ClientConfig{MaxMessageSize: defaultMaxMessageSize},
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, c)
+}
+
+func TestStopConnectFallbackTimer(t *testing.T) {
+	stopConnectFallbackTimer(nil)
+
+	timer := time.NewTimer(time.Hour)
+	stopConnectFallbackTimer(timer)
+
+	expired := time.NewTimer(time.Nanosecond)
+	time.Sleep(time.Millisecond)
+	stopConnectFallbackTimer(expired)
+}
+
 func startHangingTCPServer(t *testing.T) (string, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
