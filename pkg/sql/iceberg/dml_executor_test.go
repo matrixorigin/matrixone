@@ -1,0 +1,556 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package iceberg
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/dml"
+)
+
+func TestDMLActionExecutorCommitDeleteWritesDeleteObjectAndCommits(t *testing.T) {
+	deleteWriter := &recordingDMLDeleteObjectWriter{}
+	manifestWriter := &fakeSQLManifestWriter{}
+	committer := &fakeDMLWorkflowCommitter{
+		result: &api.CommitResult{
+			SnapshotID:           31,
+			CommitID:             "commit-delete-31",
+			MetadataLocationHash: "metadata-delete-31",
+			Verified:             true,
+		},
+	}
+	executor := DMLActionExecutor{
+		Workflow: dml.CommitWorkflow{
+			ManifestWriter: manifestWriter,
+			Committer:      committer,
+		},
+		TableLocation:  "s3://warehouse/gold/orders/",
+		SnapshotID:     31,
+		SequenceNumber: 7,
+	}
+
+	result, err := executor.CommitDelete(context.Background(), DMLDeleteActionStreamRequest{
+		Schema: api.Schema{SchemaID: 9},
+		Base: dml.CommitBase{
+			Namespace:      api.Namespace{"gold"},
+			Table:          "orders",
+			TargetRef:      "main",
+			BaseSnapshotID: 30,
+			IdempotencyKey: "idem-delete",
+			StatementID:    "stmt-delete",
+		},
+		DeleteSchemaID: 9,
+		ObjectWriter:   deleteWriter,
+		Targets: []DMLMatchedDeleteTarget{{
+			DataFile:      api.DataFile{FilePath: "s3://warehouse/gold/orders/data/part-1.parquet", SpecID: 1},
+			HasRowOrdinal: true,
+			PositionRows:  []dml.PositionDeleteRow{{Pos: 5}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("commit DML delete: %v", err)
+	}
+	if result.CommitResult == nil || result.CommitResult.CommitID != "commit-delete-31" {
+		t.Fatalf("unexpected commit result: %+v", result.CommitResult)
+	}
+	if len(deleteWriter.objects) != 1 {
+		t.Fatalf("expected one delete object write, got %d", len(deleteWriter.objects))
+	}
+	for path := range deleteWriter.objects {
+		if !strings.Contains(path, "/mo-dml/delete/") || !strings.Contains(path, "/delete/position/") {
+			t.Fatalf("unexpected delete object path: %s", path)
+		}
+	}
+	if len(manifestWriter.paths) != 2 || result.Request.DeleteManifestPath == "" || result.Request.ManifestListPath == "" || result.Request.DataManifestPath != "" {
+		t.Fatalf("expected delete manifest and manifest list writes, paths=%#v request=%+v", manifestWriter.paths, result.Request)
+	}
+	if len(committer.requests) != 1 || committer.requests[0].IdempotencyKey != "idem-delete" || committer.requests[0].TargetRef != "main" {
+		t.Fatalf("unexpected catalog commit request: %+v", committer.requests)
+	}
+	if result.Profile["operation"] != "delete" || result.Profile["matched_rows"] != "1" || result.Profile["added_delete_files"] != "1" {
+		t.Fatalf("unexpected profile: %#v", result.Profile)
+	}
+	if result.Profile["delete_manifest"] == "" || strings.Contains(result.Profile["delete_manifest"], "s3://warehouse") {
+		t.Fatalf("delete manifest profile path must be redacted: %#v", result.Profile)
+	}
+}
+
+func TestDMLActionExecutorRejectsUnconfiguredWorkflowBeforeObjectWrite(t *testing.T) {
+	deleteWriter := &recordingDMLDeleteObjectWriter{}
+	executor := DMLActionExecutor{
+		TableLocation:  "s3://warehouse/gold/orders",
+		SnapshotID:     31,
+		SequenceNumber: 7,
+	}
+	_, err := executor.CommitDelete(context.Background(), DMLDeleteActionStreamRequest{
+		Schema: api.Schema{SchemaID: 9},
+		Base: dml.CommitBase{
+			Namespace:      api.Namespace{"gold"},
+			Table:          "orders",
+			TargetRef:      "main",
+			BaseSnapshotID: 30,
+			IdempotencyKey: "idem-delete",
+			StatementID:    "stmt-delete",
+		},
+		DeleteSchemaID: 9,
+		ObjectWriter:   deleteWriter,
+		Targets: []DMLMatchedDeleteTarget{{
+			DataFile:      api.DataFile{FilePath: "s3://warehouse/gold/orders/data/part-1.parquet", SpecID: 1},
+			HasRowOrdinal: true,
+			PositionRows:  []dml.PositionDeleteRow{{Pos: 5}},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires a manifest writer") {
+		t.Fatalf("expected manifest writer preflight error, got %v", err)
+	}
+	if len(deleteWriter.objects) != 0 {
+		t.Fatalf("preflight failure must not write delete objects: %#v", deleteWriter.objects)
+	}
+}
+
+func TestDMLActionExecutorCommitUpdateWritesDeleteAndDataManifests(t *testing.T) {
+	deleteWriter := &recordingDMLDeleteObjectWriter{}
+	manifestWriter := &fakeSQLManifestWriter{}
+	committer := &fakeDMLWorkflowCommitter{
+		result: &api.CommitResult{
+			SnapshotID:           35,
+			CommitID:             "commit-update-35",
+			MetadataLocationHash: "metadata-update-35",
+			Verified:             true,
+		},
+	}
+	executor := DMLActionExecutor{
+		Workflow: dml.CommitWorkflow{
+			ManifestWriter: manifestWriter,
+			Committer:      committer,
+		},
+		TableLocation:  "s3://warehouse/gold/orders",
+		SnapshotID:     35,
+		SequenceNumber: 9,
+	}
+
+	result, err := executor.CommitUpdate(context.Background(), DMLUpdateActionStreamRequest{
+		DMLDeleteActionStreamRequest: DMLDeleteActionStreamRequest{
+			Schema: api.Schema{SchemaID: 9},
+			Base: dml.CommitBase{
+				Namespace:      api.Namespace{"gold"},
+				Table:          "orders",
+				TargetRef:      "main",
+				BaseSnapshotID: 34,
+				IdempotencyKey: "idem-update",
+				StatementID:    "stmt-update",
+			},
+			DeleteSchemaID: 9,
+			ObjectWriter:   deleteWriter,
+			Targets: []DMLMatchedDeleteTarget{{
+				DataFile:      api.DataFile{FilePath: "s3://warehouse/gold/orders/data/update-target.parquet", SpecID: 1},
+				HasRowOrdinal: true,
+				PositionRows:  []dml.PositionDeleteRow{{Pos: 6}},
+			}},
+		},
+		AppendedDataFiles: []api.DataFile{{
+			FilePath:        "s3://warehouse/gold/orders/data/update-replacement.parquet",
+			FileFormat:      "parquet",
+			RecordCount:     1,
+			FileSizeInBytes: 32,
+			SpecID:          1,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("commit DML update: %v", err)
+	}
+	if result.Request.DataManifestPath == "" || result.Request.DeleteManifestPath == "" || result.Request.ManifestListPath == "" {
+		t.Fatalf("update should write data/delete manifests and manifest list: %+v", result.Request)
+	}
+	if len(deleteWriter.objects) != 1 {
+		t.Fatalf("expected one delete object write, got %d", len(deleteWriter.objects))
+	}
+	for path := range deleteWriter.objects {
+		if !strings.Contains(path, "/mo-dml/update/") {
+			t.Fatalf("update delete object must use update-scoped path: %s", path)
+		}
+	}
+	if len(manifestWriter.paths) != 3 {
+		t.Fatalf("expected data manifest, delete manifest, and manifest list writes, got %#v", manifestWriter.paths)
+	}
+	if result.Profile["operation"] != "update" || result.Profile["added_data_files"] != "1" || result.Profile["added_delete_files"] != "1" {
+		t.Fatalf("unexpected update profile: %#v", result.Profile)
+	}
+}
+
+func TestDMLActionExecutorRejectsTagUpdateBeforeObjectWrite(t *testing.T) {
+	deleteWriter := &recordingDMLDeleteObjectWriter{}
+	manifestWriter := &fakeSQLManifestWriter{}
+	committer := &fakeDMLWorkflowCommitter{}
+	executor := DMLActionExecutor{
+		Workflow: dml.CommitWorkflow{
+			ManifestWriter: manifestWriter,
+			Committer:      committer,
+		},
+		TableLocation:  "s3://warehouse/gold/orders",
+		SnapshotID:     35,
+		SequenceNumber: 9,
+	}
+
+	_, err := executor.CommitUpdate(context.Background(), DMLUpdateActionStreamRequest{
+		DMLDeleteActionStreamRequest: DMLDeleteActionStreamRequest{
+			Schema: api.Schema{SchemaID: 9},
+			Base: dml.CommitBase{
+				Namespace:      api.Namespace{"gold"},
+				Table:          "orders",
+				TargetRef:      "tag:release",
+				BaseSnapshotID: 34,
+				IdempotencyKey: "idem-update-tag",
+				StatementID:    "stmt-update-tag",
+			},
+			DeleteSchemaID: 9,
+			ObjectWriter:   deleteWriter,
+			Targets: []DMLMatchedDeleteTarget{{
+				DataFile:      api.DataFile{FilePath: "s3://warehouse/gold/orders/data/update-target.parquet", SpecID: 1},
+				HasRowOrdinal: true,
+				PositionRows:  []dml.PositionDeleteRow{{Pos: 6}},
+			}},
+		},
+		AppendedDataFiles: []api.DataFile{{
+			FilePath:        "s3://warehouse/gold/orders/data/update-replacement.parquet",
+			FileFormat:      "parquet",
+			RecordCount:     1,
+			FileSizeInBytes: 32,
+			SpecID:          1,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), string(api.ErrUnsupportedFeature)) {
+		t.Fatalf("expected tag write rejection, got %v", err)
+	}
+	if len(deleteWriter.objects) != 0 {
+		t.Fatalf("tag write gate must run before delete object writes: %#v", deleteWriter.objects)
+	}
+	if len(manifestWriter.paths) != 0 || len(committer.requests) != 0 {
+		t.Fatalf("tag write gate must run before manifest/catalog commit writes: paths=%#v requests=%#v", manifestWriter.paths, committer.requests)
+	}
+}
+
+func TestDMLActionExecutorCommitUpdateMaterializesReplacementBatch(t *testing.T) {
+	deleteWriter := &recordingDMLDeleteObjectWriter{}
+	manifestWriter := &fakeSQLManifestWriter{}
+	committer := &fakeDMLWorkflowCommitter{
+		result: &api.CommitResult{
+			SnapshotID:           36,
+			CommitID:             "commit-update-36",
+			MetadataLocationHash: "metadata-update-36",
+			Verified:             true,
+		},
+	}
+	executor := DMLActionExecutor{
+		Workflow: dml.CommitWorkflow{
+			ManifestWriter: manifestWriter,
+			Committer:      committer,
+		},
+		TableLocation:  "s3://warehouse/gold/orders",
+		SnapshotID:     36,
+		SequenceNumber: 10,
+	}
+	bat, cleanup := newReplacementExecutorBatch(t)
+	defer cleanup()
+
+	result, err := executor.CommitUpdate(context.Background(), DMLUpdateActionStreamRequest{
+		DMLDeleteActionStreamRequest: DMLDeleteActionStreamRequest{
+			Schema: api.Schema{SchemaID: 9, Fields: []api.SchemaField{
+				{ID: 1, Name: "id", Required: true, Type: api.IcebergType{Kind: api.TypeInt}},
+				{ID: 2, Name: "name", Type: api.IcebergType{Kind: api.TypeString}},
+			}},
+			Base: dml.CommitBase{
+				Namespace:      api.Namespace{"gold"},
+				Table:          "orders",
+				TargetRef:      "main",
+				BaseSnapshotID: 35,
+				IdempotencyKey: "idem-update-batch",
+				StatementID:    "stmt-update-batch",
+			},
+			DeleteSchemaID: 9,
+			ObjectWriter:   deleteWriter,
+			Targets: []DMLMatchedDeleteTarget{{
+				DataFile:      api.DataFile{FilePath: "s3://warehouse/gold/orders/data/update-target-batch.parquet", SpecID: 1},
+				HasRowOrdinal: true,
+				PositionRows:  []dml.PositionDeleteRow{{Pos: 9}},
+			}},
+		},
+		ReplacementBatch: DMLReplacementDataBatch{
+			Batch:               bat,
+			TargetFileSizeBytes: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("commit DML update with replacement batch: %v", err)
+	}
+	if result.Request.DataManifestPath == "" || result.Request.DeleteManifestPath == "" || result.Request.ManifestListPath == "" {
+		t.Fatalf("update should write data/delete manifests and manifest list: %+v", result.Request)
+	}
+	var replacementObjects, deleteObjects int
+	for path := range deleteWriter.objects {
+		switch {
+		case strings.Contains(path, "/replacement/"):
+			replacementObjects++
+			if !strings.Contains(path, "/mo-dml/update/") || strings.Contains(path, "stmt-update-batch") {
+				t.Fatalf("unexpected replacement object path: %s", path)
+			}
+		case strings.Contains(path, "/delete/position/"):
+			deleteObjects++
+		}
+	}
+	if replacementObjects != 1 || deleteObjects != 1 {
+		t.Fatalf("expected one replacement data object and one delete object, replacement=%d delete=%d paths=%#v", replacementObjects, deleteObjects, deleteWriter.objects)
+	}
+	if result.Profile["operation"] != "update" || result.Profile["added_data_files"] != "1" || result.Profile["added_delete_files"] != "1" {
+		t.Fatalf("unexpected update profile: %#v", result.Profile)
+	}
+}
+
+func TestDMLActionExecutorCommitMergeCombinesMatchedAndUnmatchedActions(t *testing.T) {
+	deleteWriter := &recordingDMLDeleteObjectWriter{}
+	manifestWriter := &fakeSQLManifestWriter{}
+	committer := &fakeDMLWorkflowCommitter{
+		result: &api.CommitResult{
+			SnapshotID:           38,
+			CommitID:             "commit-merge-38",
+			MetadataLocationHash: "metadata-merge-38",
+			Verified:             true,
+		},
+	}
+	executor := DMLActionExecutor{
+		Workflow: dml.CommitWorkflow{
+			ManifestWriter: manifestWriter,
+			Committer:      committer,
+		},
+		TableLocation:  "s3://warehouse/gold/orders",
+		SnapshotID:     38,
+		SequenceNumber: 10,
+	}
+
+	result, err := executor.CommitMerge(context.Background(), DMLMergeActionStreamRequest{
+		Schema:         api.Schema{SchemaID: 9},
+		DeleteSchemaID: 9,
+		Base: dml.CommitBase{
+			Namespace:      api.Namespace{"gold"},
+			Table:          "orders",
+			TargetRef:      "main",
+			BaseSnapshotID: 37,
+			IdempotencyKey: "idem-merge",
+			StatementID:    "stmt-merge",
+		},
+		ObjectWriter: deleteWriter,
+		MatchedDeletes: []DMLMatchedDeleteTarget{{
+			DataFile:      api.DataFile{FilePath: "s3://warehouse/gold/orders/data/delete-target.parquet", SpecID: 1},
+			HasRowOrdinal: true,
+			PositionRows:  []dml.PositionDeleteRow{{Pos: 7}},
+		}},
+		MatchedUpdates: []DMLMatchedUpdateTarget{{
+			DeleteTarget: DMLMatchedDeleteTarget{
+				DataFile:      api.DataFile{FilePath: "s3://warehouse/gold/orders/data/update-target.parquet", SpecID: 1},
+				HasRowOrdinal: true,
+				PositionRows:  []dml.PositionDeleteRow{{Pos: 8}},
+			},
+			ReplacementFiles: []api.DataFile{{
+				FilePath:        "s3://warehouse/gold/orders/data/merge-replacement.parquet",
+				FileFormat:      "parquet",
+				RecordCount:     1,
+				FileSizeInBytes: 64,
+				SpecID:          1,
+			}},
+		}},
+		UnmatchedAppends: []api.DataFile{{
+			FilePath:        "s3://warehouse/gold/orders/data/merge-insert.parquet",
+			FileFormat:      "parquet",
+			RecordCount:     1,
+			FileSizeInBytes: 64,
+			SpecID:          1,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("commit DML merge: %v", err)
+	}
+	if result.Request.DataManifestPath == "" || result.Request.DeleteManifestPath == "" || result.Request.ManifestListPath == "" {
+		t.Fatalf("merge should write data/delete manifests and manifest list: %+v", result.Request)
+	}
+	if len(deleteWriter.objects) != 2 {
+		t.Fatalf("expected two delete object writes, got %d", len(deleteWriter.objects))
+	}
+	for path := range deleteWriter.objects {
+		if !strings.Contains(path, "/mo-dml/merge/") {
+			t.Fatalf("merge delete object must use merge-scoped path: %s", path)
+		}
+	}
+	if result.Profile["operation"] != "merge" || result.Profile["added_data_files"] != "2" || result.Profile["added_delete_files"] != "2" {
+		t.Fatalf("unexpected merge profile: %#v", result.Profile)
+	}
+}
+
+func newReplacementExecutorBatch(t *testing.T) (*batch.Batch, func()) {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"id", "name"})
+	idVec := vector.NewVec(types.T_int32.ToType())
+	nameVec := vector.NewVec(types.T_varchar.ToType())
+	if err := vector.AppendFixed[int32](idVec, 42, false, mp); err != nil {
+		t.Fatalf("append replacement id: %v", err)
+	}
+	if err := vector.AppendBytes(nameVec, []byte("replacement"), false, mp); err != nil {
+		t.Fatalf("append replacement name: %v", err)
+	}
+	bat.Vecs[0] = idVec
+	bat.Vecs[1] = nameVec
+	bat.SetRowCount(1)
+	return bat, func() { bat.Clean(mp) }
+}
+
+func TestDMLActionExecutorCommitOverwriteBuildsDataManifestCommit(t *testing.T) {
+	manifestWriter := &fakeSQLManifestWriter{}
+	committer := &fakeDMLWorkflowCommitter{
+		result: &api.CommitResult{
+			SnapshotID:           41,
+			CommitID:             "commit-overwrite-41",
+			MetadataLocationHash: "metadata-overwrite-41",
+			Verified:             true,
+		},
+	}
+	oldFile := api.DataFile{
+		FilePath:        "s3://warehouse/gold/orders/data/old.parquet",
+		FileFormat:      "parquet",
+		RecordCount:     3,
+		FileSizeInBytes: 90,
+		SpecID:          1,
+	}
+	baseManifest := api.ManifestFile{
+		Path:            "s3://warehouse/gold/orders/metadata/base-manifest.avro",
+		Content:         api.ManifestContentData,
+		AddedSnapshotID: 40,
+		AddedFilesCount: 1,
+	}
+	executor := DMLActionExecutor{
+		Workflow: dml.CommitWorkflow{
+			ManifestWriter: manifestWriter,
+			Committer:      committer,
+		},
+		TableLocation:      "s3://warehouse/gold/orders",
+		SnapshotID:         41,
+		SequenceNumber:     8,
+		PreservedManifests: []api.ManifestFile{baseManifest},
+		PreservedSources: []dml.PreservedManifestSource{{
+			Manifest: baseManifest,
+			Entries: []api.ManifestEntry{{
+				Status:     api.ManifestEntryExisting,
+				SnapshotID: 40,
+				DataFile:   oldFile,
+			}},
+		}},
+	}
+
+	result, err := executor.CommitOverwrite(context.Background(), DMLOverwriteActionStreamRequest{
+		Base: dml.CommitBase{
+			Namespace:      api.Namespace{"gold"},
+			Table:          "orders",
+			TargetRef:      "main",
+			BaseSnapshotID: 40,
+			IdempotencyKey: "idem-overwrite",
+			StatementID:    "stmt-overwrite",
+		},
+		Scope:             dml.OverwriteTable,
+		AffectedDataFiles: []api.DataFile{oldFile},
+		ReplacementFiles: []api.DataFile{{
+			FilePath:        "s3://warehouse/gold/orders/data/new.parquet",
+			FileFormat:      "parquet",
+			RecordCount:     3,
+			FileSizeInBytes: 96,
+			SpecID:          1,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("commit DML overwrite: %v", err)
+	}
+	if result.Request.DataManifestPath == "" || result.Request.DeleteManifestPath != "" || result.Request.ManifestListPath == "" {
+		t.Fatalf("overwrite should write data manifest and manifest list only: %+v", result.Request)
+	}
+	if len(manifestWriter.paths) != 2 || manifestWriter.paths[0] != result.Request.DataManifestPath || manifestWriter.paths[1] != result.Request.ManifestListPath {
+		t.Fatalf("unexpected manifest writes: %#v request=%+v", manifestWriter.paths, result.Request)
+	}
+	if len(committer.requests) != 1 || len(committer.requests[0].Requirements) == 0 {
+		t.Fatalf("expected one commit request with requirements: %+v", committer.requests)
+	}
+	if got := committer.requests[0].Requirements[0]; got.Type != "assert-ref-snapshot-id" || got.SnapshotID != 40 {
+		t.Fatalf("unexpected snapshot requirement: %+v", got)
+	}
+	if result.Profile["operation"] != "overwrite" || result.Profile["deleted_data_files"] != "1" || result.Profile["added_data_files"] != "1" {
+		t.Fatalf("unexpected profile: %#v", result.Profile)
+	}
+}
+
+func TestDMLActionExecutorRejectsTagOverwriteBeforeObjectWrite(t *testing.T) {
+	bat, cleanup := newReplacementExecutorBatch(t)
+	defer cleanup()
+
+	deleteWriter := &recordingDMLDeleteObjectWriter{}
+	manifestWriter := &fakeSQLManifestWriter{}
+	committer := &fakeDMLWorkflowCommitter{}
+	executor := DMLActionExecutor{
+		Workflow: dml.CommitWorkflow{
+			ManifestWriter: manifestWriter,
+			Committer:      committer,
+		},
+		TableLocation:  "s3://warehouse/gold/orders",
+		SnapshotID:     41,
+		SequenceNumber: 8,
+	}
+
+	_, err := executor.CommitOverwrite(context.Background(), DMLOverwriteActionStreamRequest{
+		Schema: api.Schema{SchemaID: 9},
+		Base: dml.CommitBase{
+			Namespace:      api.Namespace{"gold"},
+			Table:          "orders",
+			TargetRef:      "tag:release",
+			BaseSnapshotID: 40,
+			IdempotencyKey: "idem-overwrite-tag",
+			StatementID:    "stmt-overwrite-tag",
+		},
+		ObjectWriter: deleteWriter,
+		AffectedDataFiles: []api.DataFile{{
+			FilePath:        "s3://warehouse/gold/orders/data/old.parquet",
+			FileFormat:      "parquet",
+			RecordCount:     3,
+			FileSizeInBytes: 90,
+			SpecID:          1,
+		}},
+		ReplacementBatches: []DMLReplacementDataBatch{{
+			Attrs:        []string{"id", "name"},
+			Batch:        bat,
+			ObjectWriter: deleteWriter,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), string(api.ErrUnsupportedFeature)) {
+		t.Fatalf("expected tag write rejection, got %v", err)
+	}
+	if len(deleteWriter.objects) != 0 {
+		t.Fatalf("tag write gate must run before overwrite object writes: %#v", deleteWriter.objects)
+	}
+	if len(manifestWriter.paths) != 0 || len(committer.requests) != 0 {
+		t.Fatalf("tag write gate must run before manifest/catalog commit writes: paths=%#v requests=%#v", manifestWriter.paths, committer.requests)
+	}
+}

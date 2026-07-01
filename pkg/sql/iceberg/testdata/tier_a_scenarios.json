@@ -1,0 +1,103 @@
+[
+  {
+    "id": "ICE-TEST-113",
+    "name": "read_current_count",
+    "mo_sql": "select count(*) from ${MO_ICEBERG_TIER_A_MO_ORDERS}",
+    "spark_sql": "select count(*) from ${MO_ICEBERG_TIER_A_SPARK_ORDERS}"
+  },
+  {
+    "id": "ICE-TEST-113",
+    "name": "read_projection_ordered_sample",
+    "mo_sql": "${MO_ICEBERG_TIER_A_READ_PROJECTION_MO_SQL}",
+    "spark_sql": "${MO_ICEBERG_TIER_A_READ_PROJECTION_SPARK_SQL}"
+  },
+  {
+    "id": "ICE-TEST-113",
+    "name": "read_partition_pruning",
+    "mo_sql": "${MO_ICEBERG_TIER_A_PARTITION_PRUNING_MO_SQL}",
+    "spark_sql": "${MO_ICEBERG_TIER_A_PARTITION_PRUNING_SPARK_SQL}"
+  },
+  {
+    "id": "ICE-TEST-114",
+    "name": "time_travel_snapshot",
+    "mo_sql": "${MO_ICEBERG_TIER_A_TIME_TRAVEL_SNAPSHOT_MO_SQL}",
+    "spark_sql": "${MO_ICEBERG_TIER_A_TIME_TRAVEL_SNAPSHOT_SPARK_SQL}"
+  },
+  {
+    "id": "ICE-TEST-114",
+    "name": "time_travel_timestamp_non_utc",
+    "mo_actions": [
+      "${MO_ICEBERG_TIER_A_TIME_TRAVEL_TIMESTAMP_MO_ACTION_SQL}"
+    ],
+    "mo_sql": "${MO_ICEBERG_TIER_A_TIME_TRAVEL_TIMESTAMP_MO_SQL}",
+    "spark_sql": "${MO_ICEBERG_TIER_A_TIME_TRAVEL_TIMESTAMP_SPARK_SQL}"
+  },
+  {
+    "id": "ICE-TEST-115",
+    "name": "schema_evolution_field_id",
+    "mo_sql": "${MO_ICEBERG_TIER_A_SCHEMA_EVOLUTION_MO_SQL}",
+    "spark_sql": "${MO_ICEBERG_TIER_A_SCHEMA_EVOLUTION_SPARK_SQL}"
+  },
+  {
+    "id": "ICE-TEST-116",
+    "name": "delete_apply_merge_on_read",
+    "mo_sql": "${MO_ICEBERG_TIER_A_DELETE_APPLY_MO_SQL}",
+    "spark_sql": "${MO_ICEBERG_TIER_A_DELETE_APPLY_SPARK_SQL}"
+  },
+  {
+    "id": "ICE-TEST-116",
+    "name": "delete_apply_append_only_fail_fast",
+    "mo_sql": "${MO_ICEBERG_TIER_A_APPEND_ONLY_DELETE_FAIL_MO_SQL}",
+    "expect_mo_error": "ICEBERG_UNSUPPORTED_FEATURE"
+  },
+  {
+    "id": "ICE-TEST-117",
+    "name": "append_gold_kpi_history_preserved",
+    "mo_actions": [
+      "${MO_ICEBERG_TIER_A_APPEND_MO_ACTION_SQL}"
+    ],
+    "mo_sql": "${MO_ICEBERG_TIER_A_APPEND_MO_SQL}",
+    "spark_sql": "${MO_ICEBERG_TIER_A_APPEND_SPARK_SQL}"
+  },
+  {
+    "id": "ICE-TEST-118",
+    "name": "import_native_pinned_snapshot",
+    "mo_actions": [
+      "${MO_ICEBERG_TIER_A_IMPORT_NATIVE_DROP_MO_SQL}",
+      "${MO_ICEBERG_TIER_A_IMPORT_NATIVE_CREATE_MO_SQL}"
+    ],
+    "mo_sql": "${MO_ICEBERG_TIER_A_IMPORT_NATIVE_MO_SQL}",
+    "spark_sql": "${MO_ICEBERG_TIER_A_IMPORT_NATIVE_SPARK_SQL}"
+  },
+  {
+    "id": "ICE-TEST-119",
+    "name": "dml_delete_update_merge_accounts",
+    "mo_actions": [
+      "delete from ${MO_ICEBERG_TIER_A_MO_DML_ACCOUNTS} where account_id = -9001",
+      "update ${MO_ICEBERG_TIER_A_MO_DML_ACCOUNTS} set balance = balance + 1 where account_id = -9002",
+      "merge into ${MO_ICEBERG_TIER_A_MO_DML_ACCOUNTS} t using (select cast(-9999 as bigint) as account_id, cast(0 as bigint) as balance where false) s on t.account_id = s.account_id when not matched then insert (account_id, balance) values (s.account_id, s.balance)"
+    ],
+    "mo_sql": "select account_id, balance, case when region is null then '<NULL>' else region end as region from ${MO_ICEBERG_TIER_A_MO_DML_ACCOUNTS} order by account_id",
+    "spark_sql": "select account_id, balance, case when region is null then '<NULL>' else region end as region from ${MO_ICEBERG_TIER_A_SPARK_DML_ACCOUNTS} order by account_id"
+  },
+  {
+    "id": "ICE-TEST-119",
+    "name": "dml_partition_overwrite_preserves_other_regions",
+    "mo_actions": [
+      "insert overwrite ${MO_ICEBERG_TIER_A_MO_DML_ACCOUNTS_BY_REGION} partition(region = 'ksa') select account_id, balance, region from ${MO_ICEBERG_TIER_A_MO_DML_ACCOUNTS_BY_REGION_STAGE} where region = 'ksa'"
+    ],
+    "mo_sql": "select region, account_id, balance from ${MO_ICEBERG_TIER_A_MO_DML_ACCOUNTS_BY_REGION} order by region, account_id",
+    "spark_sql": "select region, account_id, balance from ${MO_ICEBERG_TIER_A_SPARK_DML_ACCOUNTS_BY_REGION} order by region, account_id"
+  },
+  {
+    "id": "ICE-TEST-120",
+    "name": "maintenance_rewrite_expire_orders_small",
+    "mo_actions": [
+      "${MO_ICEBERG_TIER_A_MAINTENANCE_REWRITE_DATA_MO_SQL}",
+      "${MO_ICEBERG_TIER_A_MAINTENANCE_REWRITE_MANIFESTS_MO_SQL}",
+      "${MO_ICEBERG_TIER_A_MAINTENANCE_EXPIRE_MO_SQL}"
+    ],
+    "mo_sql": "${MO_ICEBERG_TIER_A_MAINTENANCE_MO_SQL}",
+    "spark_sql": "${MO_ICEBERG_TIER_A_MAINTENANCE_SPARK_SQL}"
+  }
+]

@@ -502,28 +502,68 @@ func Test_operatorAnalyzer_AddReadSizeInfo(t *testing.T) {
 func Test_operatorAnalyzer_AddParquetProfile(t *testing.T) {
 	opAlyzr := NewTempAnalyzer()
 	opAlyzr.AddParquetProfile(ParquetProfileStats{
-		Files:          1,
-		RowGroups:      2,
-		RowsRead:       100,
-		BytesRead:      1024,
-		PrefetchBytes:  512,
-		OpenTime:       10,
-		ReadPageTime:   20,
-		MapTime:        30,
-		RowModeTime:    40,
-		PeakBatchBytes: 4096,
+		Files:                             1,
+		RowGroups:                         2,
+		RowsRead:                          100,
+		BytesRead:                         1024,
+		PrefetchBytes:                     512,
+		ProjectedColumns:                  2,
+		TotalColumns:                      4,
+		SelectedFiles:                     1,
+		SelectedFileBytes:                 1024,
+		IcebergMetadataBytes:              10,
+		IcebergManifestListBytes:          20,
+		IcebergManifestBytes:              30,
+		IcebergManifestsSelected:          2,
+		IcebergManifestsPruned:            1,
+		IcebergDataFilesSelected:          2,
+		IcebergDataFilesPruned:            3,
+		IcebergDataFileBytesSelected:      100,
+		IcebergDataFileBytesPruned:        200,
+		IcebergPlanningCacheHits:          4,
+		IcebergPlanningCacheMiss:          5,
+		IcebergDeleteFilesRead:            1,
+		IcebergDeleteRowsFiltered:         6,
+		IcebergPositionDeleteRowsFiltered: 2,
+		IcebergEqualityDeleteRowsFiltered: 4,
+		IcebergDeleteApplyPeakMemoryBytes: 2048,
+		OpenTime:                          10,
+		ReadPageTime:                      20,
+		MapTime:                           30,
+		RowModeTime:                       40,
+		PeakBatchBytes:                    4096,
 	})
 	opAlyzr.AddParquetProfile(ParquetProfileStats{
-		Files:          2,
-		RowGroups:      3,
-		RowsRead:       200,
-		BytesRead:      2048,
-		PrefetchBytes:  256,
-		OpenTime:       11,
-		ReadPageTime:   21,
-		MapTime:        31,
-		RowModeTime:    41,
-		PeakBatchBytes: 1024,
+		Files:                             2,
+		RowGroups:                         3,
+		RowsRead:                          200,
+		BytesRead:                         2048,
+		PrefetchBytes:                     256,
+		ProjectedColumns:                  3,
+		TotalColumns:                      4,
+		SelectedFiles:                     2,
+		SelectedFileBytes:                 2048,
+		IcebergMetadataBytes:              11,
+		IcebergManifestListBytes:          21,
+		IcebergManifestBytes:              31,
+		IcebergManifestsSelected:          3,
+		IcebergManifestsPruned:            2,
+		IcebergDataFilesSelected:          3,
+		IcebergDataFilesPruned:            4,
+		IcebergDataFileBytesSelected:      300,
+		IcebergDataFileBytesPruned:        400,
+		IcebergPlanningCacheHits:          6,
+		IcebergPlanningCacheMiss:          7,
+		IcebergDeleteFilesRead:            2,
+		IcebergDeleteRowsFiltered:         8,
+		IcebergPositionDeleteRowsFiltered: 3,
+		IcebergEqualityDeleteRowsFiltered: 5,
+		IcebergDeleteApplyPeakMemoryBytes: 1024,
+		OpenTime:                          11,
+		ReadPageTime:                      21,
+		MapTime:                           31,
+		RowModeTime:                       41,
+		PeakBatchBytes:                    1024,
 	})
 
 	stats := opAlyzr.GetOpStats()
@@ -532,6 +572,26 @@ func Test_operatorAnalyzer_AddParquetProfile(t *testing.T) {
 	assert.Equal(t, int64(300), stats.ParquetRowsRead)
 	assert.Equal(t, int64(3072), stats.ParquetBytesRead)
 	assert.Equal(t, int64(768), stats.ParquetPrefetchBytes)
+	assert.Equal(t, int64(5), stats.ParquetProjectedColumns)
+	assert.Equal(t, int64(8), stats.ParquetTotalColumns)
+	assert.Equal(t, int64(3), stats.ParquetSelectedFiles)
+	assert.Equal(t, int64(3072), stats.ParquetSelectedFileBytes)
+	assert.Equal(t, int64(21), stats.IcebergMetadataBytes)
+	assert.Equal(t, int64(41), stats.IcebergManifestListBytes)
+	assert.Equal(t, int64(61), stats.IcebergManifestBytes)
+	assert.Equal(t, int64(5), stats.IcebergManifestsSelected)
+	assert.Equal(t, int64(3), stats.IcebergManifestsPruned)
+	assert.Equal(t, int64(5), stats.IcebergDataFilesSelected)
+	assert.Equal(t, int64(7), stats.IcebergDataFilesPruned)
+	assert.Equal(t, int64(400), stats.IcebergDataFileBytesSelected)
+	assert.Equal(t, int64(600), stats.IcebergDataFileBytesPruned)
+	assert.Equal(t, int64(10), stats.IcebergPlanningCacheHits)
+	assert.Equal(t, int64(12), stats.IcebergPlanningCacheMiss)
+	assert.Equal(t, int64(3), stats.IcebergDeleteFilesRead)
+	assert.Equal(t, int64(14), stats.IcebergDeleteRowsFiltered)
+	assert.Equal(t, int64(5), stats.IcebergPositionDeleteRowsFiltered)
+	assert.Equal(t, int64(9), stats.IcebergEqualityDeleteRowsFiltered)
+	assert.Equal(t, int64(2048), stats.IcebergDeleteApplyPeakMemoryBytes)
 	assert.Equal(t, int64(21), stats.ParquetOpenTime)
 	assert.Equal(t, int64(41), stats.ParquetReadPageTime)
 	assert.Equal(t, int64(61), stats.ParquetMapTime)
@@ -544,9 +604,33 @@ func Test_operatorAnalyzer_AddParquetProfile(t *testing.T) {
 	assert.Contains(t, got, "ParquetRowsRead:300 ")
 	assert.Contains(t, got, "ParquetBytesRead:3072bytes ")
 	assert.Contains(t, got, "ParquetPrefetchBytes:768bytes ")
+	assert.Contains(t, got, "ParquetProjectedColumns:5 ")
+	assert.Contains(t, got, "ParquetTotalColumns:8 ")
+	assert.Contains(t, got, "ParquetSelectedFiles:3 ")
+	assert.Contains(t, got, "ParquetSelectedFileBytes:3072bytes ")
+	assert.Contains(t, got, "IcebergMetadataBytes:21bytes ")
+	assert.Contains(t, got, "IcebergManifestListBytes:41bytes ")
+	assert.Contains(t, got, "IcebergManifestBytes:61bytes ")
+	assert.Contains(t, got, "IcebergManifestsSelected:5 ")
+	assert.Contains(t, got, "IcebergManifestsPruned:3 ")
+	assert.Contains(t, got, "IcebergDataFilesSelected:5 ")
+	assert.Contains(t, got, "IcebergDataFilesPruned:7 ")
+	assert.Contains(t, got, "IcebergDataFileBytesSelected:400bytes ")
+	assert.Contains(t, got, "IcebergDataFileBytesPruned:600bytes ")
+	assert.Contains(t, got, "IcebergPlanningCacheHits:10 ")
+	assert.Contains(t, got, "IcebergPlanningCacheMiss:12 ")
+	assert.Contains(t, got, "IcebergDeleteFilesRead:3 ")
+	assert.Contains(t, got, "IcebergDeleteRowsFiltered:14 ")
+	assert.Contains(t, got, "IcebergPositionDeleteRowsFiltered:5 ")
+	assert.Contains(t, got, "IcebergEqualityDeleteRowsFiltered:9 ")
+	assert.Contains(t, got, "IcebergDeleteApplyPeakMemoryBytes:2048bytes ")
 	assert.Contains(t, got, "ParquetOpenTime:21ns ")
 	assert.Contains(t, got, "ParquetReadPageTime:41ns ")
 	assert.Contains(t, got, "ParquetMapTime:61ns ")
 	assert.Contains(t, got, "ParquetRowModeTime:81ns ")
 	assert.Contains(t, got, "ParquetPeakBatchBytes:4096bytes ")
+	assert.NotContains(t, got, "s3://")
+	assert.NotContains(t, got, "warehouse")
+	assert.NotContains(t, got, "secret")
+	assert.NotContains(t, got, "CredentialScope")
 }

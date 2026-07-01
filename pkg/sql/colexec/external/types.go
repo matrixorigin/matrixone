@@ -25,10 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergdelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
@@ -40,6 +42,13 @@ var _ vm.Operator = new(External)
 
 const (
 	ColumnCntLargerErrorInfo = "the table column is larger than input data column"
+
+	// IcebergDMLDataFilePathAttr and IcebergDMLRowOrdinalAttr are internal
+	// scan-only columns used by Iceberg row-level DML collectors. They are
+	// materialized from the Parquet reader side channel and must never be
+	// exposed by ordinary SELECT projection.
+	IcebergDMLDataFilePathAttr = api.DMLDataFilePathColumnName
+	IcebergDMLRowOrdinalAttr   = api.DMLRowOrdinalColumnName
 )
 
 // Use for External table scan param
@@ -68,17 +77,31 @@ type ExParamConst struct {
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
 	// Optional Parquet row group shards. Empty means whole-file scan.
-	ParquetRowGroupShards []*pipeline.ParquetRowGroupShard
-	Ctx                   context.Context
-	Extern                *tree.ExternParam
-	ClusterTable          *plan.ClusterTable
+	ParquetRowGroupShards       []*pipeline.ParquetRowGroupShard
+	IcebergDataTasks            []*pipeline.IcebergDataFileTask
+	IcebergDeleteTasks          []*pipeline.IcebergDeleteFileTask
+	IcebergColumns              []*pipeline.IcebergColumnMapping
+	IcebergSnapshot             *pipeline.IcebergSnapshotRuntime
+	IcebergObjectIORef          string
+	IcebergHiddenReadCols       []int32
+	IcebergPlanningStats        process.ParquetProfileStats
+	NeedRowOrdinal              bool
+	IcebergDeleteMaxMemoryBytes int64
+	IcebergDeleteSpillEnabled   bool
+	Ctx                         context.Context
+	Extern                      *tree.ExternParam
+	ClusterTable                *plan.ClusterTable
 }
 
 type ExParam struct {
-	Fileparam         *ExFileparam
-	Filter            *FilterParam
-	currentPartValues map[string]string
-	parquetProfile    process.ParquetProfileStats
+	Fileparam                   *ExFileparam
+	Filter                      *FilterParam
+	currentPartValues           map[string]string
+	parquetProfile              process.ParquetProfileStats
+	icebergDeleteStates         map[string]*icebergdelete.ApplyState
+	icebergDeleteLoaded         bool
+	IcebergBatchDataFile        string
+	IcebergBatchStartRowOrdinal int64
 }
 
 type ExFileparam struct {
@@ -186,6 +209,43 @@ func (param *ExternalParam) flushParquetProfile(analyzer process.Analyzer) {
 	}
 }
 
+func icebergParquetProfileStats(param *ExternalParam) process.ParquetProfileStats {
+	if param == nil || !isIcebergParquetScan(param) {
+		return process.ParquetProfileStats{}
+	}
+	var stats process.ParquetProfileStats
+	stats.Add(param.IcebergPlanningStats)
+	for _, col := range param.Cols {
+		if col != nil && !col.Hidden {
+			stats.TotalColumns++
+		}
+	}
+	for _, mapping := range param.IcebergColumns {
+		if mapping != nil && !mapping.IsHidden && !mapping.DefaultNullFill {
+			stats.ProjectedColumns++
+		}
+	}
+	if stats.ProjectedColumns == 0 && len(param.Attrs) > 0 {
+		stats.ProjectedColumns = int64(len(param.Attrs))
+	}
+	if len(param.IcebergDataTasks) > 0 {
+		stats.SelectedFiles = int64(len(param.IcebergDataTasks))
+		for _, task := range param.IcebergDataTasks {
+			if task != nil && task.FileSize > 0 {
+				stats.SelectedFileBytes += task.FileSize
+			}
+		}
+		return stats
+	}
+	stats.SelectedFiles = int64(len(param.FileList))
+	for _, size := range param.FileSize {
+		if size > 0 {
+			stats.SelectedFileBytes += size
+		}
+	}
+	return stats
+}
+
 func (external *External) WithEs(es *ExternalParam) *External {
 	external.Es = es
 	return external
@@ -239,6 +299,8 @@ func (external *External) ExecProjection(proc *process.Process, input *batch.Bat
 	var err error
 	if external.ProjectList != nil {
 		batch, err = external.EvalProjection(input, proc)
+	} else if external.Es != nil {
+		maskIcebergHiddenReadColumns(external.Es, batch)
 	}
 	return batch, err
 }
@@ -307,29 +369,35 @@ func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.C
 }
 
 type ParquetHandler struct {
-	file         *parquet.File
-	rowGroup     parquet.RowGroup
-	rowGroups    []parquet.RowGroup
-	rowGroupRows int64
-	offset       int64
-	batchCnt     int64
-	cols         []*parquet.Column
-	mappers      []*columnMapper
-	pages        []parquet.Pages // cached pages iterators for each column
-	currentPage  []parquet.Page  // cached current page for each column
-	pageOffset   []int64         // current offset within each cached page
+	file           *parquet.File
+	rowGroup       parquet.RowGroup
+	rowGroups      []parquet.RowGroup
+	rowGroupRows   int64
+	rowOrdinalBase int64
+	offset         int64
+	batchCnt       int64
+	cols           []*parquet.Column
+	mappers        []*columnMapper
+	pages          []parquet.Pages // cached pages iterators for each column
+	currentPage    []parquet.Page  // cached current page for each column
+	pageOffset     []int64         // current offset within each cached page
+	// Iceberg optional columns added after an older data file was written are
+	// materialized as NULL when the file has no matching field id.
+	icebergNullFill []bool
 
 	// for nested types support
 	hasNestedCols bool
 	rowReader     parquet.Rows
 
 	// virtual column support (hive partitions + __mo_filepath)
-	partitionColIndices []int
-	filepathColIndex    int // -1 = not projected
-	hasPhysicalCol      bool
-	rowCountOnly        bool
-	currentRowGroup     int
-	rowCountRemaining   int
+	partitionColIndices            []int
+	filepathColIndex               int // -1 = not projected
+	icebergDMLDataFilePathColIndex int // -1 = not projected
+	icebergDMLRowOrdinalColIndex   int // -1 = not projected
+	hasPhysicalCol                 bool
+	rowCountOnly                   bool
+	currentRowGroup                int
+	rowCountRemaining              int
 }
 
 type columnMapper struct {

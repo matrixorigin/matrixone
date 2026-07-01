@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -50,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -958,45 +960,53 @@ var (
 	}
 	// predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":                 0,
-		"mo_tables":                   0,
-		"mo_columns":                  0,
-		"mo_account":                  0,
-		"mo_user":                     0,
-		"mo_role":                     0,
-		"mo_user_grant":               0,
-		"mo_role_grant":               0,
-		"mo_role_privs":               0,
-		"mo_user_defined_function":    0,
-		"mo_stored_procedure":         0,
-		"mo_mysql_compatibility_mode": 0,
-		catalog.MOAutoIncrTable:       0,
-		"mo_indexes":                  0,
-		"mo_table_partitions":         0,
-		"mo_pubs":                     0,
-		"mo_stages":                   0,
-		"mo_sessions":                 0,
-		"mo_configurations":           0,
-		"mo_locks":                    0,
-		"mo_variables":                0,
-		"mo_transactions":             0,
-		"mo_cache":                    0,
-		"mo_foreign_keys":             0,
-		"mo_snapshots":                0,
-		"mo_subs":                     0,
-		"mo_shards":                   0,
-		"mo_shards_metadata":          0,
-		"mo_cdc_task":                 0,
-		"mo_cdc_watermark":            0,
-		catalog.MO_TABLE_STATS:        0,
-		catalog.MO_ACCOUNT_LOCK:       0,
-		catalog.MO_MERGE_SETTINGS:     0,
-		catalog.MO_ISCP_LOG:           0,
-		catalog.MO_INDEX_UPDATE:       0,
-		catalog.MO_BRANCH_METADATA:    0,
-		catalog.MO_FEATURE_LIMIT:      0,
-		catalog.MO_FEATURE_REGISTRY:   0,
-		catalog.MO_ROLE_RULE:          0,
+		"mo_database":                   0,
+		"mo_tables":                     0,
+		"mo_columns":                    0,
+		"mo_account":                    0,
+		"mo_user":                       0,
+		"mo_role":                       0,
+		"mo_user_grant":                 0,
+		"mo_role_grant":                 0,
+		"mo_role_privs":                 0,
+		"mo_user_defined_function":      0,
+		"mo_stored_procedure":           0,
+		"mo_mysql_compatibility_mode":   0,
+		catalog.MOAutoIncrTable:         0,
+		"mo_indexes":                    0,
+		"mo_table_partitions":           0,
+		"mo_pubs":                       0,
+		"mo_stages":                     0,
+		"mo_sessions":                   0,
+		"mo_configurations":             0,
+		"mo_locks":                      0,
+		"mo_variables":                  0,
+		"mo_transactions":               0,
+		"mo_cache":                      0,
+		"mo_foreign_keys":               0,
+		"mo_snapshots":                  0,
+		"mo_subs":                       0,
+		"mo_shards":                     0,
+		"mo_shards_metadata":            0,
+		"mo_cdc_task":                   0,
+		"mo_cdc_watermark":              0,
+		catalog.MO_TABLE_STATS:          0,
+		catalog.MO_ACCOUNT_LOCK:         0,
+		catalog.MO_MERGE_SETTINGS:       0,
+		catalog.MO_ISCP_LOG:             0,
+		catalog.MO_INDEX_UPDATE:         0,
+		catalog.MO_BRANCH_METADATA:      0,
+		catalog.MO_FEATURE_LIMIT:        0,
+		catalog.MO_FEATURE_REGISTRY:     0,
+		catalog.MO_ROLE_RULE:            0,
+		icebergsql.TableCatalogs:        0,
+		icebergsql.TablePrincipalMap:    0,
+		icebergsql.TableResidencyPolicy: 0,
+		icebergsql.TableTables:          0,
+		icebergsql.TableRefs:            0,
+		icebergsql.TablePublishJobs:     0,
+		icebergsql.TableOrphanFiles:     0,
+		icebergsql.TableMaintenanceJobs: 0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1047,6 +1057,14 @@ var (
 		MoCatalogFeatureRegistryDDL,
 		MoCatalogFeatureRegistryInitData,
 		MoCatalogMoRoleRuleDDL,
+		icebergsql.CatalogsDDL,
+		icebergsql.PrincipalMapDDL,
+		icebergsql.ResidencyPolicyDDL,
+		icebergsql.TablesDDL,
+		icebergsql.RefsDDL,
+		icebergsql.PublishJobsDDL,
+		icebergsql.OrphanFilesDDL,
+		icebergsql.MaintenanceJobsDDL,
 	}
 
 	// drop tables for the tenant
@@ -1067,6 +1085,16 @@ var (
 		`drop view if exists mo_catalog.mo_cache;`,
 		`drop table if exists mo_catalog.mo_snapshots;`,
 		`drop table if exists mo_catalog.mo_role_rule;`,
+	}
+	dropIcebergSqls = []string{
+		`drop table if exists mo_catalog.mo_iceberg_refs;`,
+		`drop table if exists mo_catalog.mo_iceberg_maintenance_jobs;`,
+		`drop table if exists mo_catalog.mo_iceberg_orphan_files;`,
+		`drop table if exists mo_catalog.mo_iceberg_publish_jobs;`,
+		`drop table if exists mo_catalog.mo_iceberg_tables;`,
+		`drop table if exists mo_catalog.mo_iceberg_residency_policy;`,
+		`drop table if exists mo_catalog.mo_iceberg_principal_map;`,
+		`drop table if exists mo_catalog.mo_iceberg_catalogs;`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
@@ -4243,6 +4271,14 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
+		for _, sql = range dropIcebergSqls {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+			rtnErr = bh.Exec(deleteCtx, sql)
+			if rtnErr != nil {
+				return rtnErr
+			}
+		}
+
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getSubsSql)
 		// alter sub_account field in mo_pubs which contains accountName
 		subInfos, rtnErr := getSubInfosFromSub(deleteCtx, bh, "")
@@ -6345,6 +6381,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseAndTableDirectly = true
 		dbName = string(st.Name)
 		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
+	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
@@ -6548,6 +6588,20 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
 		canExecInRestricted = true
+	case *tree.Merge:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		if actionPrivs := mergeActionPrivilegeTypes(st); len(actionPrivs) > 0 {
+			items := make([]privilegeItem, 0, len(actionPrivs))
+			for _, typ := range actionPrivs {
+				items = append(items, privilegeItem{privilegeTyp: typ})
+			}
+			extraEntries = append(extraEntries, privilegeEntry{
+				privilegeEntryTyp: privilegeEntryTypeCompound,
+				compound:          &compoundEntry{items: items},
+			})
+		}
+		writeDatabaseAndTableDirectly = true
 	case *tree.CreateIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -6574,7 +6628,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.ShowRules, *tree.CheckTableStmt, *tree.ShowProfileStmt,
-		*tree.AnalyzeStmt:
+		*tree.AnalyzeStmt, *tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
@@ -6751,7 +6805,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			appendWriteTableNameDatabaseName(&st.DstTable)
 		}
 	default:
-		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
+		panic(fmt.Sprintf("does not have the privilege definition of statement type %T", stmt))
 	}
 
 	entries := make([]privilegeEntry, len(typs))
@@ -6773,6 +6827,34 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseTargets:          writeDatabaseTargets,
 		needMatchedRole:               needMatchedRole,
 	}
+}
+
+func mergeActionPrivilegeTypes(stmt *tree.Merge) []PrivilegeType {
+	if stmt == nil {
+		return nil
+	}
+	seen := make(map[PrivilegeType]struct{}, 3)
+	for _, clause := range stmt.Clauses {
+		if clause == nil {
+			continue
+		}
+		switch clause.Action {
+		case tree.MergeActionInsert:
+			seen[PrivilegeTypeInsert] = struct{}{}
+		case tree.MergeActionUpdate:
+			seen[PrivilegeTypeUpdate] = struct{}{}
+		case tree.MergeActionDelete:
+			seen[PrivilegeTypeDelete] = struct{}{}
+		}
+	}
+	ordered := []PrivilegeType{PrivilegeTypeInsert, PrivilegeTypeUpdate, PrivilegeTypeDelete}
+	out := make([]PrivilegeType, 0, len(seen))
+	for _, typ := range ordered {
+		if _, ok := seen[typ]; ok {
+			out = append(out, typ)
+		}
+	}
+	return out
 }
 
 // privilege will be done on the table
@@ -6922,6 +7004,10 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			} else if node.NodeType == plan.Node_PRE_INSERT ||
 				node.NodeType == plan.Node_PRE_INSERT_UK ||
 				node.NodeType == plan.Node_PRE_INSERT_SK {
+				if q.StmtType == plan.Query_MERGE &&
+					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+					continue
+				}
 				var objRef *plan.ObjectRef
 				var tableDef *plan.TableDef
 				if node.PreInsertCtx != nil {
@@ -6985,6 +7071,10 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					}
 				}
 			} else if node.NodeType == plan.Node_INSERT {
+				if q.StmtType == plan.Query_MERGE &&
+					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+					continue
+				}
 				var objRef *plan.ObjectRef
 				if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
 					objRef = node.InsertCtx.Ref
@@ -8661,6 +8751,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		if _, ok := stmt.(*tree.Replace); ok {
 			arr = addReplaceDeletePrivilegeTips(arr, p)
 		}
+		if mergeStmt, ok := stmt.(*tree.Merge); ok {
+			arr = appendMergeActionPrivilegeTips(ses, mergeStmt, p, arr)
+		}
 		if len(arr) == 0 {
 			if ins, ok := stmt.(*tree.Insert); ok {
 				dbName, tableName, ok := getInsertTargetTableName(ins, ses)
@@ -8702,6 +8795,97 @@ func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, 
 	if alias, ok := tbl.(*tree.AliasedTableExpr); ok {
 		tbl = alias.Expr
 	}
+	name, ok := tbl.(*tree.TableName)
+	if !ok || name == nil {
+		return "", "", false
+	}
+	dbName := string(name.SchemaName)
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := string(name.ObjectName)
+	if dbName == "" || tableName == "" {
+		return "", "", false
+	}
+	return dbName, tableName, true
+}
+
+func appendMergeActionPrivilegeTips(
+	ses *Session,
+	stmt *tree.Merge,
+	p *plan.Plan,
+	arr privilegeTipsArray,
+) privilegeTipsArray {
+	actionPrivs := mergeActionPrivilegeTypes(stmt)
+	if len(actionPrivs) == 0 {
+		return arr
+	}
+	dbName, tableName, ok := getMergeTargetTableName(stmt, ses)
+	var tableDef *plan.TableDef
+	if p != nil && p.GetQuery() != nil {
+		for _, node := range p.GetQuery().GetNodes() {
+			if node.GetExtraOptions() != icebergapi.DMLMergePlanExtraOptions {
+				continue
+			}
+			if node.GetInsertCtx() != nil && node.GetInsertCtx().GetRef() != nil {
+				ref := node.GetInsertCtx().GetRef()
+				if ref.GetSchemaName() != "" {
+					dbName = ref.GetSchemaName()
+				}
+				if ref.GetObjName() != "" {
+					tableName = ref.GetObjName()
+				}
+				ok = dbName != "" && tableName != ""
+			} else if node.GetObjRef() != nil {
+				ref := node.GetObjRef()
+				if ref.GetSchemaName() != "" {
+					dbName = ref.GetSchemaName()
+				}
+				if ref.GetObjName() != "" {
+					tableName = ref.GetObjName()
+				}
+				ok = dbName != "" && tableName != ""
+			}
+			tableDef = node.GetTableDef()
+			break
+		}
+	}
+	if !ok {
+		return arr
+	}
+	mergeClusterTable := isClusterTable(dbName, tableName)
+	if tableDef != nil && tableDef.GetTableType() == catalog.SystemClusterRel {
+		mergeClusterTable = true
+	}
+	for _, typ := range actionPrivs {
+		arr = append(arr, privilegeTips{
+			typ:                   typ,
+			objType:               objectTypeTable,
+			databaseName:          dbName,
+			tableName:             tableName,
+			isClusterTable:        mergeClusterTable,
+			clusterTableOperation: clusterTableModify,
+		})
+	}
+	return arr
+}
+
+func getMergeTargetTableName(stmt *tree.Merge, ses *Session) (string, string, bool) {
+	if stmt == nil || stmt.Target == nil {
+		return "", "", false
+	}
+	tbl := stmt.Target
+	for {
+		switch t := tbl.(type) {
+		case *tree.AliasedTableExpr:
+			tbl = t.Expr
+		case *tree.ParenTableExpr:
+			tbl = t.Expr
+		default:
+			goto done
+		}
+	}
+done:
 	name, ok := tbl.(*tree.TableName)
 	if !ok || name == nil {
 		return "", "", false
@@ -11317,6 +11501,12 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 }
 
 func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg bool) ([]ExecResult, error) {
+	if parsed, ok, err := parseIcebergBuiltinCall(ctx, call); ok || err != nil {
+		if err != nil {
+			return nil, err
+		}
+		return executeIcebergBuiltinCall(ctx, ses, parsed)
+	}
 	// fetch related
 	var spLang string
 	var spBody string

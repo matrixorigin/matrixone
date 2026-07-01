@@ -226,6 +226,18 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
 
+	if typ == FOR {
+		snapshot := *l.scanner
+		nextTyp, nextStr := l.scanner.Scan()
+		if nextTyp == ICEBERG {
+			l.lastToken = FOR_ICEBERG
+			lval.str = str + " " + nextStr
+			l.scanner.LastToken = lval.str
+			return FOR_ICEBERG
+		}
+		*l.scanner = snapshot
+	}
+
 	switch typ {
 	case INTEGRAL:
 		return l.toInt(lval, str)

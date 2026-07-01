@@ -16,6 +16,8 @@
 *.swp
 *.fatbin
 *.py
+!pkg/iceberg/metadata/testdata/generate_golden_vectors.py
+!optools/iceberg_external_runner.py
 *.sh
 bin/
 y.go
