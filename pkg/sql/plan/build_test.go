@@ -187,13 +187,6 @@ func nodeHasTextToCharOrVarcharCast(node *plan.Node) bool {
 			return true
 		}
 	}
-	if node.OnDuplicateKey != nil {
-		for _, expr := range node.OnDuplicateKey.OnDuplicateExpr {
-			if exprHasTextToCharOrVarcharCast(expr) {
-				return true
-			}
-		}
-	}
 	if node.DedupJoinCtx != nil {
 		for _, expr := range node.DedupJoinCtx.UpdateColExprList {
 			if exprHasTextToCharOrVarcharCast(expr) {
@@ -292,13 +285,6 @@ func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width in
 		for _, expr := range node.ProjectList {
 			if visit(expr) {
 				return true
-			}
-		}
-		if node.OnDuplicateKey != nil {
-			for _, expr := range node.OnDuplicateKey.OnDuplicateExpr {
-				if visit(expr) {
-					return true
-				}
 			}
 		}
 		if node.DedupJoinCtx != nil {
