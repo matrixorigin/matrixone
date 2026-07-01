@@ -759,11 +759,13 @@ const (
 	// latitude/Y.
 	ST_POINT   = 539
 	ST_POINT32 = 540
-	CAST_ASSIGN              = 541
+	// function `cast_strict`
+	CAST_STRICT = 541
+	CAST_ASSIGN = 542
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 542
+	FUNCTION_END_NUMBER = 543
 )
 
 // functionIdRegister is what function we have registered already.
@@ -800,7 +802,8 @@ var functionIdRegister = map[string]int32{
 	"case":         CASE,
 	"coalesce":     COALESCE,
 	"cast":         CAST,
-	"cast_assign":    CAST_ASSIGN,
+	"cast_assign":  CAST_ASSIGN,
+	"cast_strict":  CAST_STRICT,
 	"bit_cast":     BIT_CAST,
 	"is":           IS,
 	"is_not":       ISNOT,

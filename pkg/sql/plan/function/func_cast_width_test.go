@@ -27,7 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func runStrToStrWidth(t *testing.T, mp *mpool.MPool, input string, toType types.Type, strict, allowTrim bool) (string, bool, error) {
+func runStrToStrWidth(t *testing.T, mp *mpool.MPool, proc *process.Process, input string, toType types.Type, strict, allowTrim bool) (string, bool, error) {
 	t.Helper()
 	src := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(src, []byte(input), false, mp))
@@ -39,7 +39,7 @@ func runStrToStrWidth(t *testing.T, mp *mpool.MPool, input string, toType types.
 	defer to.Free()
 	require.NoError(t, to.PreExtendAndReset(1))
 
-	if err := strToStr(context.Background(), from, to, 1, toType, strict, allowTrim); err != nil {
+	if err := strToStr(context.Background(), proc, from, to, 1, toType, strict, allowTrim); err != nil {
 		return "", false, err
 	}
 	got, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
@@ -71,7 +71,8 @@ func TestStrToStrWidthEnforcement(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _, err := runStrToStrWidth(t, mp, c.input, vc3, c.strict, c.allowTrim)
+			proc := testutil.NewProcess(t)
+			got, _, err := runStrToStrWidth(t, mp, proc, c.input, vc3, c.strict, c.allowTrim)
 			if c.wantErr {
 				require.Error(t, err)
 				return
