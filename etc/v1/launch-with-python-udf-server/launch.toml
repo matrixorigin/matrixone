@@ -13,4 +13,3 @@ cnservices = [
 python-udf-services = [
     "./etc/v1/launch-with-python-udf-server/python-udf-server.toml"
 ]
-

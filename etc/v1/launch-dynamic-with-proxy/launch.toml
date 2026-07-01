@@ -10,7 +10,7 @@ proxy-services = [
     "./etc/v1/launch-dynamic-with-proxy/proxy.toml"
 ]
 
-# dynamic is used to launch dynamic cn service. Each cn service will run 
+# dynamic is used to launch dynamic cn service. Each cn service will run
 # in a separate process.
 [dynamic]
 enable = true
@@ -33,4 +33,3 @@ enable = false
 kill-interval = "10s"
 restart-interval = "5s"
 targets = [0, 1]
-

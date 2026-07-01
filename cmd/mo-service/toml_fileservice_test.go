@@ -51,6 +51,12 @@ func TestLaunchTomlsParse(t *testing.T) {
 		"etc/launch/*.toml",
 		"etc/launch-*/*.toml",
 		"etc/launch-*/config/*.toml",
+		// etc/v1 is the legacy-DISK compatibility tree shipped for
+		// "run old data after upgrading past the DISK-V2 default"; it must
+		// parse and use only known backends too.
+		"etc/v1/launch/*.toml",
+		"etc/v1/launch-*/*.toml",
+		"etc/v1/launch-*/config/*.toml",
 	)
 	for _, f := range files {
 		// launch.toml is a cluster manifest (lists of service files), not a
@@ -80,6 +86,11 @@ func TestLaunchTomlBackendsValid(t *testing.T) {
 		"etc/launch-*/*.toml",
 		"etc/launch-*/*.toml.base",
 		"etc/launch-*/config/*.toml",
+		// etc/v1 legacy-DISK compatibility tree (see TestLaunchTomlsParse).
+		"etc/v1/launch/*.toml",
+		"etc/v1/launch-*/*.toml",
+		"etc/v1/launch-*/*.toml.base",
+		"etc/v1/launch-*/config/*.toml",
 	)
 	// matches a fileservice backend line; excludes Clock/Txn `backend` keys,
 	// which live under [tn.Txn.Storage] / [clock] and use values like TAE/HLC.

@@ -14,11 +14,12 @@ service-addresses = [
 [[fileservice]]
 name = "LOCAL"
 backend = "DISK-V2"
+data-dir = "mo-data/local2"
 
 [[fileservice]]
 name = "SHARED"
 backend = "DISK-V2"
-data-dir = "mo-data/shared"
+data-dir = "mo-data/shared2"
 
 [fileservice.cache]
 memory-capacity = "512MB"

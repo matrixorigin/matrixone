@@ -21,4 +21,3 @@ kerberos-username = "" # kerberos username
 kerberos-realm = "" # kerberos realm
 kerberos-password = "" # kerberos password
 kerberos-keytab-path = "" # kerberos keytab path
-

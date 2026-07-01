@@ -9,4 +9,3 @@ tnservices = [
 cnservices = [
     "./etc/v1/launch-hdfs/cn.toml"
 ]
-

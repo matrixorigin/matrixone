@@ -101,7 +101,7 @@ MatrixOne provides three methods for local development, each with different stor
 
 **Best for:** Quick testing, simple development, learning MatrixOne
 
-**Storage:** Local file system (DISK backend)
+**Storage:** Local file system (**DISK-V2** backend — checksum-free raw format; see [DISK vs DISK-V2](#disk-vs-disk-v2-storage-format-after-upgrading) below)
 
 #### Quick Start
 
@@ -365,6 +365,40 @@ mv mo-data mo-data-multicn-backup
 # 3. Start launch method:
 ./mo-service -launch ./etc/launch/launch.toml
 ```
+
+---
+
+### DISK vs DISK-V2 storage format (after upgrading)
+
+The shipped launch configs (`etc/launch*`) now default the `LOCAL` and `SHARED`
+file services to the **`DISK-V2`** backend — a checksum-free, raw on-disk format
+byte-identical to the S3 (disk-backed) file service. The legacy **`DISK`** backend
+(per-2 KB-block CRC32 framing) is **not** interchangeable with `DISK-V2`, and
+neither format carries an on-disk magic/header, so pointing one backend at the
+other's data directory reads garbage.
+
+To keep the two safely separated, the `DISK-V2` launch configs write to **separate
+data directories** from the legacy `DISK` configs:
+
+| Backend | Config tree | LOCAL data dir | SHARED data dir |
+|---------|-------------|----------------|-----------------|
+| `DISK-V2` (default) | `etc/launch*` | `mo-data/local2` | `mo-data/shared2` |
+| `DISK` (legacy)     | `etc/v1/**`   | `mo-data/local`  | `mo-data/shared`  |
+
+**Upgrading the binary and re-running the same launch command is safe:** the
+`DISK-V2` config uses the fresh `local2`/`shared2` dirs and never opens old `DISK`
+data at `local`/`shared`. On the first run after upgrade the cluster starts empty.
+
+**To keep using data written by an older (DISK) build**, launch with the legacy
+compatibility tree, which pins the `DISK` backend at the original `local`/`shared`
+paths:
+
+```bash
+./mo-service -launch ./etc/v1/launch/launch.toml
+```
+
+⚠️ Never change a running deployment's backend between `DISK` and `DISK-V2` against
+the **same** data directory — the formats are not convertible in place.
 
 ---
 
