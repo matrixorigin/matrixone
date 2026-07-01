@@ -2347,16 +2347,6 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 					return true, err
 				}
 			}
-			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef, &plan.TableDef{
-					Name:    ctx.TableName,
-					TblId:   ctx.TableId,
-					Version: ctx.TableVersion,
-				})
-				if err != nil || flag {
-					return true, err
-				}
-			}
 		}
 	default:
 	}
