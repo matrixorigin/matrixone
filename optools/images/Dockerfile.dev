@@ -4,7 +4,7 @@
 # - Binary is built inside container using local make build
 # - Much faster iteration cycle for development
 
-FROM matrixorigin/golang:1.25-ubuntu22.04
+FROM matrixorigin/golang:1.26.4-ubuntu22.04
 
 # Install build dependencies and runtime libraries
 RUN apt-get update && apt-get install -y \
