@@ -32,6 +32,17 @@ func sqlTaskNodeString(node tree.NodeFormatter) string {
     return tree.StringWithOpts(node, dialect.MYSQL, tree.WithSingleQuoteString())
 }
 
+// makeSelectStarFromTable builds the `SELECT * FROM tbl` clause used to desugar
+// the MySQL `REPLACE ... TABLE tbl` source form.
+func makeSelectStarFromTable(tbl tree.TableExpr) *tree.SelectClause {
+    return &tree.SelectClause{
+        Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.StarExpr()}},
+        From: &tree.From{
+            Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tbl}},
+        },
+    }
+}
+
 func sqlTaskBodyString(stmt tree.Statement) string {
     compound, ok := stmt.(*tree.CompoundStmt)
     if !ok || compound == nil {
@@ -629,7 +640,7 @@ func sqlTaskInt64(v any) int64 {
 %type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
-%type <select> select_stmt select_no_parens
+%type <select> select_stmt select_no_parens replace_table_source
 %type <selectStatement> simple_select select_with_parens simple_select_clause
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
@@ -5369,13 +5380,21 @@ ignore_opt:
     {}
 |    IGNORE
 
+// MySQL REPLACE only allows LOW_PRIORITY or DELAYED (not HIGH_PRIORITY). Both are
+// accepted for compatibility and ignored: MatrixOne has no corresponding scheduling,
+// and DELAYED is treated as a plain REPLACE (as in MySQL 8.0).
+replace_priority_opt:
+    {}
+|    LOW_PRIORITY
+|    DELAYED
+
 replace_stmt:
-    REPLACE into_table_name partition_clause_opt replace_data
+    REPLACE replace_priority_opt into_table_name partition_clause_opt replace_data
     {
-    	rep := $4
-    	rep.Table = $2
-    	rep.PartitionNames = $3
-    	$$ = rep
+        rep := $5
+        rep.Table = $3
+        rep.PartitionNames = $4
+        $$ = rep
     }
 
 replace_data:
@@ -5384,6 +5403,19 @@ replace_data:
         vc := tree.NewValuesClause($2)
         $$ = &tree.Replace{
             Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   replace_table_source
+    {
+        $$ = &tree.Replace{
+            Rows: $1,
+        }
+    }
+|   '(' insert_column_list ')' replace_table_source
+    {
+        $$ = &tree.Replace{
+            Columns: $2,
+            Rows: $4,
         }
     }
 |   select_stmt
@@ -5433,6 +5465,14 @@ replace_data:
 			IsSetFormat: true,
 		}
 	}
+
+replace_table_source:
+    TABLE table_name order_by_opt limit_opt
+    {
+        // MySQL treats TABLE as a query source, so ORDER BY and LIMIT belong to
+        // the SELECT wrapper produced by the TABLE-to-SELECT rewrite.
+        $$ = tree.NewSelect(makeSelectStarFromTable($2), $3, $4)
+    }
 
 insert_stmt:
     insert_no_with_stmt
