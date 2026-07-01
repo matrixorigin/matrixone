@@ -538,6 +538,7 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 			return false, false, err
 		}
 		num = bval
+
 	default:
 		canInsert = false
 	}
@@ -549,9 +550,11 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 
 	checkStrLen := func(s string) ([]byte, error) {
 		destLen := int(typ.Width)
-		if typ.Oid != types.T_text && typ.Oid != types.T_datalink && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
+		if typ.Oid != types.T_char && typ.Oid != types.T_varchar && typ.Oid != types.T_text &&
+			typ.Oid != types.T_datalink && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
 			if utf8.RuneCountInString(s) > destLen {
-				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
+				return nil, function.FormatCastErrorForInsertValue(
+					proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 		}
 		if typ.Oid.IsDatalink() {
