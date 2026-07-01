@@ -131,6 +131,45 @@ func TestPipelineSpoolForceCleanupAfterTerminalSignalDoesNotNeedNilEndMessage(t 
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestPipelineSpoolLateReleaseAfterTerminalCleanupFreesDirectly(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := InitMyPipelineSpool(mp, 1)
+	for i := 0; i < 2; i++ {
+		queryDone, err := sp.SendBatch(context.Background(), 0, src, nil)
+		require.NoError(t, err)
+		require.False(t, queryDone)
+	}
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	got, info := sp.ReceiveBatch(0)
+	require.NoError(t, info)
+	require.NotNil(t, got)
+	sp.ReleaseCurrent(0)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	got, info = sp.ReceiveBatch(0)
+	require.NoError(t, info)
+	require.NotNil(t, got)
+	sp.ForceCleanupAfterTerminalSignal()
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	sp.ReleaseCurrent(0)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestPipelineSpoolCloseWithTimeoutCleansMemoryExactlyOnce(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {

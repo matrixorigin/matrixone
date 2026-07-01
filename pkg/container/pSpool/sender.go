@@ -66,6 +66,11 @@ type PipelineSpool struct {
 	abortErr  error
 
 	cleanupOnce sync.Once
+	// cleanupDone means the cache-wide cleanup pass has already run. A typed
+	// terminal receiver can still release its current batch afterward; that late
+	// release must free directly instead of putting memory back into a cache that
+	// will not be cleaned again.
+	cleanupDone bool
 }
 
 // pipelineSpoolMessage is the element of PipelineSpool.
@@ -265,11 +270,13 @@ func (ps *PipelineSpool) Abort() {
 }
 
 func (ps *PipelineSpool) forceCleanup() {
-	// All receivers have reached End. The only remaining non-free slots are the
-	// End markers themselves (nil dataContent, no cached buffer memory); every
-	// real-data slot was already released back to the cache on consumption, so
-	// freeing the whole buffer is now safe.
+	// Close/ForceCleanup callers only reach here after all receivers have
+	// reached End. Typed-terminal callers can reach here after receiver cleanup
+	// has returned but before a slower receiver's final ReleaseCurrent. In both
+	// cases this is the final cache-wide cleanup pass; any later release frees
+	// directly instead of returning memory to the cache.
 	ps.cache.free()
+	ps.cleanupDone = true
 }
 
 func (ps *PipelineSpool) getFreeIdFromSharedPool(
@@ -319,9 +326,13 @@ func (ps *PipelineSpool) releaseCurrentLocked(idx int) {
 				ps.cleanSlotLocked(last)
 			}
 		} else if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
-			ps.cache.CacheBatch(
-				ps.shardPool[last].useCache, ps.shardPool[last].cacheID, ps.shardPool[last].dataContent)
-			ps.freeShardPool <- last
+			if ps.cleanupDone {
+				ps.cleanSlotLocked(last)
+			} else {
+				ps.cache.CacheBatch(
+					ps.shardPool[last].useCache, ps.shardPool[last].cacheID, ps.shardPool[last].dataContent)
+				ps.freeShardPool <- last
+			}
 		}
 		ps.rs[idx].flagLastPopRelease()
 	}
