@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/assert"
@@ -151,6 +152,65 @@ func Test_fixedImplicitTypeCast_Decimal256MirrorsDecimal128(t *testing.T) {
 		require.Equal(t, can128, can256, target.String())
 		require.Equal(t, cost128, cost256, target.String())
 	}
+}
+
+func TestCheckConstraintAssertReturnsConstraintViolation(t *testing.T) {
+	proc := testutil.NewProc(t)
+	fn := allSupportedFunctions[CHECK_CONSTRAINT_ASSERT]
+	require.Equal(t, CHECK_CONSTRAINT_ASSERT, fn.functionId)
+	op := fn.Overloads[0].newOp()
+
+	run := func(flag bool, nullList []bool) error {
+		tc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_bool.ToType(), []bool{flag}, nullList),
+				NewFunctionTestConstInput(
+					types.T_varchar.ToType(),
+					[]string{"Check constraint '__mo_chk_1' is violated"},
+					nil,
+				),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{flag}, nil),
+			fEvalFn(op),
+		)
+
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		return tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength, nil)
+	}
+
+	require.NoError(t, run(true, nil))
+
+	err := run(false, nil)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
+	require.Contains(t, err.Error(), "Check constraint '__mo_chk_1' is violated")
+
+	err = run(false, []bool{true})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
+	require.Contains(t, err.Error(), "Check constraint '__mo_chk_1' is violated")
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+			NewFunctionTestConstInput(
+				types.T_varchar.ToType(),
+				[]string{"Check constraint '__mo_chk_1' is violated"},
+				nil,
+			),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true}, nil),
+		fEvalFn(op),
+	)
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	err = tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength, nil)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
+	got, isNull := vector.GenerateFunctionFixedTypeParameter[bool](tc.GetResultVectorDirectly()).GetValue(0)
+	require.False(t, isNull)
+	require.False(t, got)
 }
 
 func Test_GetFunctionByName(t *testing.T) {

@@ -662,7 +662,7 @@ func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int3
 	case *plan.Expr_Col:
 		if e.Col.RelPos == 0 {
 			pos := offset + e.Col.ColPos
-			if int(pos) < len(projList) {
+			if int(pos) < len(projList) && projList[pos] != nil {
 				return DeepCopyExpr(projList[pos])
 			}
 		}

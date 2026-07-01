@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -554,6 +555,128 @@ func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
 			require.Equal(t, tt.length, prefixLengths[tt.column])
 		})
 	}
+}
+
+func TestBuildCreateTableStoresCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "column",
+			sql:  "CREATE TABLE t_column_check (id INT PRIMARY KEY, v INT CHECK (v > 0));",
+		},
+		{
+			name: "table",
+			sql:  "CREATE TABLE t_table_check (id INT PRIMARY KEY, v INT, CHECK (v > 0));",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+
+			createTable := logicPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			require.Len(t, createTable.GetTableDef().GetChecks(), 1)
+			assert.True(t, exprContainsFuncName(createTable.GetTableDef().GetChecks()[0].GetCheck(), ">"))
+		})
+	}
+}
+
+func TestBuildCreateTableColumnCheckUsesTableColumnPosition(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, "CREATE TABLE t_column_check_position (id INT PRIMARY KEY, v INT CHECK (v > 0));")
+	require.NoError(t, err)
+
+	checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+	require.Len(t, checks, 1)
+	checkArgs := checks[0].GetCheck().GetF().GetArgs()
+	require.NotEmpty(t, checkArgs)
+	require.Equal(t, int32(1), checkArgs[0].GetCol().GetColPos())
+}
+
+func TestBuildCreateTableCheckConstraintEnforcement(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, tt := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "column default enforced",
+			sql:  "CREATE TABLE t_column_check_default_enforced (id INT PRIMARY KEY, v INT CHECK (v > 0));",
+		},
+		{
+			name: "column explicit enforced",
+			sql:  "CREATE TABLE t_column_check_explicit_enforced (id INT PRIMARY KEY, v INT CHECK (v > 0) ENFORCED);",
+		},
+		{
+			name: "table default enforced",
+			sql:  "CREATE TABLE t_table_check_default_enforced (id INT PRIMARY KEY, v INT, CHECK (v > 0));",
+		},
+		{
+			name: "table explicit enforced",
+			sql:  "CREATE TABLE t_table_check_explicit_enforced (id INT PRIMARY KEY, v INT, CHECK (v > 0) ENFORCED);",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+			require.Len(t, logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks(), 1)
+		})
+	}
+}
+
+func TestBuildCreateTableRejectsNotEnforcedCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, tt := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "column",
+			sql:  "CREATE TABLE t_column_check_not_enforced (id INT PRIMARY KEY, v INT CHECK (v > 0) NOT ENFORCED);",
+		},
+		{
+			name: "table",
+			sql:  "CREATE TABLE t_table_check_not_enforced (id INT PRIMARY KEY, v INT, CHECK (v > 0) NOT ENFORCED);",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := runOneStmt(mock, t, tt.sql)
+			require.Error(t, err)
+			require.Contains(t, strings.ToLower(err.Error()), "not enforced")
+		})
+	}
+}
+
+func TestBuildCreateTableCheckConstraintBindingScope(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	t.Run("table check can reference later columns", func(t *testing.T) {
+		logicPlan, err := runOneStmt(mock, t, "CREATE TABLE t_table_check_forward_ref (a INT, CHECK (b > a), b INT);")
+		require.NoError(t, err)
+		require.Len(t, logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks(), 1)
+	})
+
+	t.Run("column check only references defining column", func(t *testing.T) {
+		_, err := runOneStmt(mock, t, "CREATE TABLE t_column_check_scope (a INT, b INT CHECK (a > 0));")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "column 'a'")
+	})
+}
+
+func TestBuildCreateTableKeepsNamedTableCheckConstraint(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	logicPlan, err := runOneStmt(mock, t, "CREATE TABLE t_named_table_check (id INT, v INT, CONSTRAINT chk_v CHECK (v > 0));")
+	require.NoError(t, err)
+
+	checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+	require.Len(t, checks, 1)
+	require.Equal(t, "chk_v", checks[0].GetName())
 }
 
 func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {

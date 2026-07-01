@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -269,6 +270,7 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 	var primarykey *plan2.PrimaryKeyDef
 	var indexes []*plan2.IndexDef
 	var refChildTbls []uint64
+	var checks []*plan.CheckDef
 
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -329,7 +331,14 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
 				case *engine.StreamConfigsDef:
-					properties = append(properties, k.Configs...)
+					visibleConfigs, checkDefs, err := engine.SplitCheckConstraintsFromConfigs(k.Configs)
+					if err != nil {
+						logutil.Errorf("memory-engine error: unmarshal table check constraint information: %s-%s, err: %v",
+							t.databaseName, t.tableName, err)
+						return nil
+					}
+					properties = append(properties, visibleConfigs...)
+					checks = append(checks, checkDefs...)
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
@@ -373,6 +382,7 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 		RefChildTbls: refChildTbls,
 		ClusterBy:    clusterByDef,
 		Indexes:      indexes,
+		Checks:       checks,
 		Version:      schemaVersion,
 		IsTemporary:  t.GetEngineType() == engine.Memory,
 		DbName:       t.databaseName,
