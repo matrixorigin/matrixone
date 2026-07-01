@@ -266,3 +266,68 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
 }
+
+// TestCnServerMessageHandlerWaitObservesMessageCtxCancellation verifies that the
+// post-handling wait returns when the message context is cancelled (a killed
+// query), even though the TCP connection context is still open. Before the fix
+// this wait only observed connectionCtx, so a killed query could leave the
+// handler blocked forever waiting for the connection to close (issue #25025).
+func TestCnServerMessageHandlerWaitObservesMessageCtxCancellation(t *testing.T) {
+	messageCtx, cancelMessage := context.WithCancel(context.Background())
+	receiver := &messageReceiverOnServer{
+		connectionCtx: context.Background(), // never closed
+		messageCtx:    messageCtx,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		receiver.waitUntilDisconnectedOrCancelled()
+		close(done)
+	}()
+
+	// It must not return while neither context is done.
+	select {
+	case <-done:
+		t.Fatal("wait returned before connection close or message cancellation")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancelMessage()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wait did not observe messageCtx cancellation")
+	}
+}
+
+// TestCnServerMessageHandlerWaitObservesConnectionClose verifies the original
+// behavior is preserved: the wait still returns when the client connection is
+// closed.
+func TestCnServerMessageHandlerWaitObservesConnectionClose(t *testing.T) {
+	connectionCtx, closeConnection := context.WithCancel(context.Background())
+	receiver := &messageReceiverOnServer{
+		connectionCtx: connectionCtx,
+		messageCtx:    context.Background(), // never cancelled
+	}
+
+	done := make(chan struct{})
+	go func() {
+		receiver.waitUntilDisconnectedOrCancelled()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("wait returned before connection close or message cancellation")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	closeConnection()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wait did not observe connection close")
+	}
+}

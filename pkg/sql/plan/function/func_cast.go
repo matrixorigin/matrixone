@@ -443,6 +443,14 @@ func IfTypeCastSupported(sourceType, targetType types.T) bool {
 }
 
 func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return newCast(parameters, result, proc, length, selectList, false)
+}
+
+func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return newCast(parameters, result, proc, length, selectList, true)
+}
+
+func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, strictStringWidth bool) error {
 	var err error
 	// Cast Parameter1 as Type Parameter2
 	fromType := parameters[0].GetType()
@@ -516,7 +524,7 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = yearToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = strTypeToOthers(proc, s, *toType, result, length, selectList)
+		err = strTypeToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_array_float32, types.T_array_float64:
 		//NOTE: Don't mix T_array and T_varchar.
 		// T_varchar will have "[1,2,3]" string
@@ -1852,7 +1860,7 @@ func geometryToTextCast(
 
 func strTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth bool) error {
 	ctx := proc.Ctx
 
 	fromType := source.GetType()
@@ -1952,7 +1960,7 @@ func strTypeToOthers(proc *process.Process,
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToStr(ctx, proc, source, rs, length, toType)
+		return strToStr(ctx, proc, source, rs, length, toType, strictStringWidth)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -5488,7 +5496,7 @@ func strToStr(
 	ctx context.Context,
 	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+	to *vector.FunctionResult[types.Varlena], length int, toType types.Type, strictStringWidth bool) error {
 	totype := to.GetType()
 	destLen := int(totype.Width)
 	var i uint64
@@ -5542,9 +5550,6 @@ func strToStr(
 		}
 		return nil
 	}
-	// Get source type to check if it's TEXT
-	fromType := from.GetSourceVector().GetType()
-	isSourceText := fromType.Oid == types.T_text
 
 	if totype.Oid != types.T_text && destLen != 0 {
 		for i = 0; i < l; i++ {
@@ -5557,24 +5562,9 @@ func strToStr(
 			}
 			// check the length.
 			s := convertByteSliceToString(v)
-			// For explicit CAST operations (e.g., CAST(text_col AS CHAR(1))), we should
-			// always perform length validation, even if source is TEXT, because the user
-			// explicitly requested a specific type with a length limit.
-			//
-			// However, for implicit conversions in UPDATE statements where the target
-			// column is actually TEXT but misidentified as CHAR/VARCHAR, we should skip
-			// length validation. We distinguish this by checking the target width:
-			// - Small widths (like 1, 10, etc.) are likely explicit CASTs and should be validated
-			// - Large widths (>= 255) might be misidentified TEXT columns in UPDATE operations
-			//
-			// The threshold of 255 is chosen because:
-			// 1. It's a common default width for TEXT columns that get misidentified
-			// 2. Explicit CASTs to CHAR(255) are rare, and when they occur, the user
-			//    likely expects validation (though we skip it for compatibility)
-			// 3. This allows UPDATE operations on TEXT columns to work correctly
-			shouldSkipLengthCheck := isSourceText && (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && destLen >= 255
-
-			if !shouldSkipLengthCheck && utf8.RuneCountInString(s) > destLen {
+			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && !strictStringWidth && utf8.RuneCountInString(s) > destLen {
+				v = []byte(truncateStringByRunes(s, destLen))
+			} else if utf8.RuneCountInString(s) > destLen {
 				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
@@ -6341,6 +6331,20 @@ func appendNulls[T types.FixedSizeT](result vector.FunctionResultWrapper, length
 func convertByteSliceToString(v []byte) string {
 	return util.UnsafeBytesToString(v)
 	// return string(v)
+}
+
+func truncateStringByRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	count := 0
+	for idx := range s {
+		if count == maxRunes {
+			return s[:idx]
+		}
+		count++
+	}
+	return s
 }
 
 // shorten the string to the one with no more than 101 characters.

@@ -27,7 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func TestPipelineSpoolForceCleanupSkipsFreedSlotsAndIsIdempotent(t *testing.T) {
+// TestPipelineSpoolForceCleanupRetainsUntilReceiversDrained verifies that
+// ForceCleanup does NOT free spool memory while a receiver still has an
+// unconsumed batch (a pending reference). Freeing it then would let that
+// receiver later read emptied memory (silent batch loss / early EOS). Once every
+// receiver has drained to its End-message, ForceCleanup reclaims the memory.
+func TestPipelineSpoolForceCleanupRetainsUntilReceiversDrained(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {
 		mpool.DeleteMPool(mp)
@@ -51,6 +56,7 @@ func TestPipelineSpoolForceCleanupSkipsFreedSlotsAndIsIdempotent(t *testing.T) {
 
 	sp := InitMyPipelineSpool(mp, 1)
 
+	// first batch: consumed and released.
 	queryDone, err := sp.SendBatch(context.Background(), 0, src, nil)
 	require.NoError(t, err)
 	require.False(t, queryDone)
@@ -59,14 +65,35 @@ func TestPipelineSpoolForceCleanupSkipsFreedSlotsAndIsIdempotent(t *testing.T) {
 	require.NotNil(t, got)
 	sp.ReleaseCurrent(0)
 
+	// second batch: sent but NOT consumed, so the receiver still holds a pending
+	// reference to it.
 	queryDone, err = sp.SendBatch(context.Background(), 0, src, nil)
 	require.NoError(t, err)
 	require.False(t, queryDone)
 	require.Greater(t, mp.CurrNB(), int64(0))
 
+	// ForceCleanup must retain the memory because the receiver has not drained.
+	// It must also be retryable (cleanupOnce not consumed on retain).
+	sp.ForceCleanup()
+	require.Greater(t, mp.CurrNB(), int64(0))
+	sp.ForceCleanup()
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	// Drain the receiver: consume the pending batch, then read the End marker so
+	// the spool records the receiver as done.
+	got, info = sp.ReceiveBatch(0)
+	require.NoError(t, info)
+	require.NotNil(t, got)
+	queryDone, err = sp.SendBatch(context.Background(), 0, nil, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	got, info = sp.ReceiveBatch(0)
+	require.NoError(t, info)
+	require.Nil(t, got)
+
+	// Now fully drained: ForceCleanup reclaims, and stays idempotent.
 	sp.ForceCleanup()
 	require.Equal(t, int64(0), mp.CurrNB())
-
 	sp.ForceCleanup()
 	require.Equal(t, int64(0), mp.CurrNB())
 }
