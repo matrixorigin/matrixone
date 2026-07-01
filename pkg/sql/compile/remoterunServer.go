@@ -118,11 +118,23 @@ func CnServerMessageHandler(
 		// to prevent some strange handle order between 'stop sending message' and others.
 		// todo: it is tcp connection now. should be very careful, we should listen to stream context next day.
 		if err == nil {
-			<-receiver.connectionCtx.Done()
+			receiver.waitUntilDisconnectedOrCancelled()
 		}
 		colexec.Get().RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
+}
+
+// waitUntilDisconnectedOrCancelled blocks until either the client connection is
+// closed or the message context is cancelled (e.g. the query was killed). It
+// keeps listening so a remote dispatch can still stream data back, but no longer
+// hangs forever on the TCP connection alone when the query is cancelled
+// (issue #25025).
+func (receiver *messageReceiverOnServer) waitUntilDisconnectedOrCancelled() {
+	select {
+	case <-receiver.connectionCtx.Done():
+	case <-receiver.messageCtx.Done():
+	}
 }
 
 func handlePipelineMessage(receiver *messageReceiverOnServer) error {
