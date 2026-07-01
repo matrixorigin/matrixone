@@ -1339,7 +1339,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 
-			updateExpr, err = forceCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
+			updateExpr, err = forceAssignmentCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
 			if err != nil {
 				return 0, err
 			}
@@ -2649,7 +2649,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 				return 0, nil, nil, err
 			}
 		} else {
-			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			projExpr, err = forceAssignmentCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return 0, nil, nil, err
 			}

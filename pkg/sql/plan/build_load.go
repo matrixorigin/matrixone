@@ -821,6 +821,11 @@ func getCompressType(param *tree.ExternParam, filepath string) string {
 	}
 }
 
+// The execution-time width check in getColData (external.go), gated by
+// checkLineStrict(param), is the single source of truth for strict vs
+// lenient handling. Using lenient cast here avoids baking a strictness
+// decision into the plan at PREPARE time, which would become stale when
+// a prepared LOAD statement is EXECUTEd under a different sql_mode.
 func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node) []*plan.Expr {
 	ret := make([]*plan.Expr, 0)
 	stringTyp := &plan.Type{
