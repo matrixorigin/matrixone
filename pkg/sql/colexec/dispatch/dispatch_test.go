@@ -412,6 +412,47 @@ func TestDispatchResetUsesSharedTerminalSendBudget(t *testing.T) {
 	}
 }
 
+func TestDispatchResetNilLocalRegAbortsSpoolWithoutPanic(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newDispatchSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 2)
+	queryDone, err := sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	healthyReg := process.NewPipelineEdge(1, 0)
+	d := &Dispatch{
+		ctr:       &container{sp: sp},
+		LocalRegs: []*process.WaitRegister{nil, healthyReg},
+	}
+
+	require.NotPanics(t, func() {
+		d.Reset(nil, false, nil)
+	})
+	require.Nil(t, d.ctr)
+	require.Nil(t, d.cleanupSpool)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	select {
+	case signal := <-healthyReg.Ch2:
+		require.Equal(t, process.EventEnd, signal.EventType)
+	default:
+		t.Fatal("Dispatch.Reset did not notify the healthy local receiver")
+	}
+}
+
 func TestDispatchResetEndPreservesQueuedBroadcastBatchUntilDeferredCleanup(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {

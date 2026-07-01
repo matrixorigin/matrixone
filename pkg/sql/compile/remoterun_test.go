@@ -1001,6 +1001,50 @@ func TestReceiveMsgAndForward_ReturnsOnReceiverTerminal(t *testing.T) {
 	}
 }
 
+func TestReceiveMessageFromCnServerIfConnector_ReturnsOnReceiverTerminal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+
+	reg := process.NewPipelineEdge(1, 0)
+	require.True(t, reg.Abort(moerr.NewInternalErrorNoCtx("receiver terminal")))
+	s := &Scope{
+		Proc:   proc,
+		RootOp: connector.NewArgument().WithReg(reg),
+	}
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        proc.Mp(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMessageFromCnServerIfConnector(s, sender)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after receiver terminal")
+	}
+}
+
+func TestReceiveMsgAndForward_NilReceiverReturnsError(t *testing.T) {
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        mpool.MustNewZero(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	err := receiveMsgAndForward(sender, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "remote batch forward target is nil")
+}
+
 func TestRemoteNotifyCleanupUsesTypedErrorForSharedReceiver(t *testing.T) {
 	reg := process.NewPipelineEdge(3, 3)
 	testErr := moerr.NewInternalErrorNoCtx("remote notify failed")

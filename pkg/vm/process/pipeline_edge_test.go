@@ -314,6 +314,44 @@ func TestPipelineEdgeSendDataAbortedEdge(t *testing.T) {
 	}
 }
 
+func TestPipelineEdgeSendDataRejectedAfterNormalEnd(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	if !edge.SendEnd() {
+		t.Fatal("SendEnd failed")
+	}
+
+	if edge.SendDataDirect(context.Background(), nil, nil) {
+		t.Fatal("SendDataDirect succeeded after normal End closed the edge")
+	}
+}
+
+func TestPipelineEdgeBlockedDataSendUnblocksOnAbort(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- edge.SendDataDirect(context.Background(), nil, nil)
+	}()
+
+	select {
+	case ok := <-done:
+		t.Fatalf("blocked data send returned before terminal state: %v", ok)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	edge.Abort(moerr.NewInternalErrorNoCtx("abort"))
+
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("blocked data send succeeded after Abort")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked data send did not unblock after Abort")
+	}
+}
+
 // TestPipelineEdgeNilEdgeSafety verifies that methods on nil edges
 // do not panic.
 func TestPipelineEdgeNilEdgeSafety(t *testing.T) {

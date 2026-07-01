@@ -184,6 +184,37 @@ func TestConnectorResetFailedNilErrorSendsTypedErrorWithCause(t *testing.T) {
 	}
 }
 
+func TestConnectorResetNilRegAbortsSpoolWithoutPanic(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newConnectorSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	queryDone, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	conn := &Connector{}
+	conn.ctr.sp = sp
+
+	require.NotPanics(t, func() {
+		conn.Reset(nil, false, nil)
+	})
+	require.Nil(t, conn.ctr.sp)
+	require.Nil(t, conn.cleanupSpool)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestConnectorResetEndPreservesQueuedSpoolBatchUntilDeferredCleanup(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {
