@@ -162,7 +162,7 @@ vendor-build:
 config:
 	$(info [Create build config])
 	@for i in 1 2 3; do \
-		GOPROXY=$(GOPROXY) go mod tidy && exit 0; \
+		GOPROXY="$(GOPROXY)" go mod tidy && exit 0; \
 		echo "go mod tidy failed (attempt $$i/3), retrying..."; \
 		sleep $$((i * 5)); \
 	done; \
@@ -313,7 +313,7 @@ endif
 ###############################################################################
 UT_PARALLEL ?= 1
 ENABLE_UT ?= "false"
-GOPROXY ?= "https://goproxy.cn,https://proxy.golang.org,direct"
+GOPROXY ?= "https://proxy.golang.com.cn,direct"
 LAUNCH ?= "launch"
 
 .PHONY: ci
