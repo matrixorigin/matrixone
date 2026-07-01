@@ -56,6 +56,11 @@ const (
 	// shard.
 	DefaultHAKeeperShardID uint64 = 0
 	headerSize                    = pb.HeaderSize
+
+	recoveryIDWatermark           uint64 = 300000000
+	recoveryIndexKeyWatermark     uint64 = 300000000
+	recoveryServerConnIDWatermark uint64 = 301500
+	recoveryBootstrapIDWatermark  uint64 = 1
 )
 
 type IndexQuery struct{}
@@ -483,6 +488,8 @@ func (s *stateMachine) handleTick(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
+	s.ensureRecoveryIDWatermarks()
+
 	allocIDCmd := parseAllocateIDCmd(cmd)
 	// Empty key means it is a shared ID.
 	if len(allocIDCmd.Key) == 0 {
@@ -500,6 +507,32 @@ func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
 	v := s.state.NextIDByKey[allocIDCmd.Key]
 	s.state.NextIDByKey[allocIDCmd.Key] += allocIDCmd.Batch - 1
 	return sm.Result{Value: v}
+}
+
+func (s *stateMachine) ensureRecoveryIDWatermarks() {
+	if s.state.NextID < recoveryIDWatermark {
+		plog.Infof("bump HAKeeper NextID to recovery watermark, old %d, new %d",
+			s.state.NextID, recoveryIDWatermark)
+		s.state.NextID = recoveryIDWatermark
+	}
+	if s.state.NextIDByKey == nil {
+		s.state.NextIDByKey = make(map[string]uint64)
+	}
+	if s.state.NextIDByKey["index_key"] == 0 {
+		plog.Infof("set missing HAKeeper NextIDByKey[index_key] to recovery watermark %d",
+			recoveryIndexKeyWatermark)
+		s.state.NextIDByKey["index_key"] = recoveryIndexKeyWatermark
+	}
+	if s.state.NextIDByKey["____server_conn_id"] == 0 {
+		plog.Infof("set missing HAKeeper NextIDByKey[____server_conn_id] to recovery watermark %d",
+			recoveryServerConnIDWatermark)
+		s.state.NextIDByKey["____server_conn_id"] = recoveryServerConnIDWatermark
+	}
+	if s.state.NextIDByKey["_mo_bootstrap"] == 0 {
+		plog.Infof("set missing HAKeeper NextIDByKey[_mo_bootstrap] to recovery watermark %d",
+			recoveryBootstrapIDWatermark)
+		s.state.NextIDByKey["_mo_bootstrap"] = recoveryBootstrapIDWatermark
+	}
 }
 
 func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
@@ -674,10 +707,11 @@ func (s *stateMachine) handleLogShardUpdate(cmd []byte) sm.Result {
 // set to HAKeeperBootstrapping.
 func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	result := sm.Result{Value: uint64(s.state.State)}
+	req := parseInitialClusterRequestCmd(cmd)
 	if s.state.State != pb.HAKeeperCreated {
+		s.patchInitialClusterIDs(req)
 		return result
 	}
-	req := parseInitialClusterRequestCmd(cmd)
 
 	// The number of TN shard should only be 1.
 	// There is one corresponding Log shard with that TN shard.
@@ -744,8 +778,39 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	return result
 }
 
+func (s *stateMachine) patchInitialClusterIDs(req pb.InitialClusterRequest) {
+	updated := false
+	if req.NextID > s.state.NextID {
+		s.state.NextID = req.NextID
+		updated = true
+	}
+	if len(req.NextIDByKey) > 0 {
+		if s.state.NextIDByKey == nil {
+			s.state.NextIDByKey = make(map[string]uint64)
+		}
+		for key, nextID := range req.NextIDByKey {
+			if nextID > s.state.NextIDByKey[key] {
+				s.state.NextIDByKey[key] = nextID
+				updated = true
+			}
+		}
+	}
+	if updated {
+		plog.Infof("patched initial cluster IDs from restore data, next-id %d, next-id-by-key %v",
+			s.state.NextID, s.state.NextIDByKey)
+	}
+}
+
 func (s *stateMachine) assertState() {
 	if s.state.State != pb.HAKeeperRunning && s.state.State != pb.HAKeeperBootstrapping {
+		panic(fmt.Sprintf("HAKeeper not in the running state, in %s", s.state.State.String()))
+	}
+}
+
+func (s *stateMachine) assertIDAllocState() {
+	if s.state.State != pb.HAKeeperRunning &&
+		s.state.State != pb.HAKeeperBootstrapping &&
+		s.state.State != pb.HAKeeperBootstrapCommandsReceived {
 		panic(fmt.Sprintf("HAKeeper not in the running state, in %s", s.state.State.String()))
 	}
 }
@@ -765,7 +830,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.TickUpdate:
 		return s.handleTick(cmd), nil
 	case pb.GetIDUpdate:
-		s.assertState()
+		s.assertIDAllocState()
 		return s.handleGetIDCmd(cmd), nil
 	case pb.ScheduleCommandUpdate:
 		return s.handleUpdateCommandsCmd(cmd), nil

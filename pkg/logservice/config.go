@@ -218,6 +218,11 @@ type Config struct {
 			// Force means that we force to do restore even if RESTORED tag file
 			// already exists.
 			Force bool `toml:"force"`
+			// WALDataPath is the path to the WAL data file extracted from damaged LogService.
+			// When set, LogService will replay WAL entries from this file during bootstrap.
+			// This is used for disaster recovery when the original LogService cluster is
+			// completely damaged but Raft logs can still be read offline.
+			WALDataPath string `toml:"wal-data-path"`
 		} `toml:"restore"`
 		// NonVotingLocality is the locality for non-voting replicas.
 		NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
@@ -455,8 +460,9 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
 			InitHAKeeperMembers   []string `toml:"init-hakeeper-members" user_setting:"advanced"`
 			Restore               struct {
-				FilePath string `toml:"file-path"`
-				Force    bool   `toml:"force"`
+				FilePath    string `toml:"file-path"`
+				Force       bool   `toml:"force"`
+				WALDataPath string `toml:"wal-data-path"`
 			} `toml:"restore"`
 			NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
 			StandbyEnabled    bool   `toml:"standby-enabled" user_setting:"advanced"`
@@ -467,8 +473,9 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas uint64
 			InitHAKeeperMembers   []string
 			Restore               struct {
-				FilePath string
-				Force    bool
+				FilePath    string
+				Force       bool
+				WALDataPath string
 			}
 			NonVotingLocality string
 			StandbyEnabled    bool
@@ -479,11 +486,13 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas: 1,
 			InitHAKeeperMembers:   []string{"131072:" + uid},
 			Restore: struct {
-				FilePath string
-				Force    bool
+				FilePath    string
+				Force       bool
+				WALDataPath string
 			}{
-				FilePath: defaultRestoreFilePath,
-				Force:    false,
+				FilePath:    defaultRestoreFilePath,
+				Force:       false,
+				WALDataPath: "",
 			},
 			NonVotingLocality: "",
 			StandbyEnabled:    false,
@@ -565,6 +574,10 @@ type HAKeeperClientConfig struct {
 	AllocateIDBatch uint64 `toml:"allocate-id-batch"`
 	// EnableCompress enable compress
 	EnableCompress bool `toml:"enable-compress"`
+	// HAKeeperRunningTimeout is the timeout for waiting HAKeeper to be running.
+	// This is useful during disaster recovery when WAL recovery may take a long time.
+	// Default is 5 minutes. Set to a larger value (e.g., 30m) for disaster recovery.
+	HAKeeperRunningTimeout toml.Duration `toml:"hakeeper-running-timeout"`
 }
 
 // Validate validates the HAKeeperClientConfig.
@@ -575,7 +588,19 @@ func (c *HAKeeperClientConfig) Validate() error {
 	if c.AllocateIDBatch == 0 {
 		c.AllocateIDBatch = 100
 	}
+	if c.HAKeeperRunningTimeout.Duration == 0 {
+		c.HAKeeperRunningTimeout.Duration = time.Minute * 5
+	}
 	return nil
+}
+
+// GetHAKeeperRunningTimeout returns the timeout for waiting HAKeeper to be running.
+// Returns the configured value or default 5 minutes.
+func (c *HAKeeperClientConfig) GetHAKeeperRunningTimeout() time.Duration {
+	if c.HAKeeperRunningTimeout.Duration == 0 {
+		return time.Minute * 5
+	}
+	return c.HAKeeperRunningTimeout.Duration
 }
 
 // ClientConfig is the configuration for log service clients.

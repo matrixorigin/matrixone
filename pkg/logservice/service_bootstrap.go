@@ -16,6 +16,8 @@ package logservice
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
@@ -119,6 +121,26 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	} else {
 		s.runtime.SubLogger(runtime.SystemInit).Info("backup is nil")
 	}
+
+	// If WAL recovery is configured, set the flag before setInitialClusterInfo
+	// to prevent HAKeeperRunning state until WAL recovery completes.
+	// This ensures TN waits for WAL recovery before starting.
+	walRecoveryConfigured := cfg.BootstrapConfig.Restore.WALDataPath != ""
+	walRecoveryFlagSet := false
+	clearWALRecoveryFlag := func() {
+		if walRecoveryFlagSet {
+			s.store.walRecoveryInProgress.Store(false)
+			walRecoveryFlagSet = false
+		}
+	}
+	if walRecoveryConfigured {
+		s.store.walRecoveryInProgress.Store(true)
+		walRecoveryFlagSet = true
+		defer clearWALRecoveryFlag()
+		s.runtime.SubLogger(runtime.SystemInit).Info("WAL recovery: set walRecoveryInProgress flag",
+			zap.String("wal_data_path", cfg.BootstrapConfig.Restore.WALDataPath))
+	}
+
 	for i := 0; i < checkBootstrapCycles; i++ {
 		select {
 		case <-ctx.Done():
@@ -145,6 +167,22 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		s.runtime.SubLogger(runtime.SystemInit).Info("initial cluster info set")
 		break
 	}
+
+	// Recover WAL data if configured
+	// This must be done after the cluster is initialized and Log shard is running
+	if walRecoveryConfigured {
+		// walRecoveryInProgress flag was already set before setInitialClusterInfo
+		s.runtime.SubLogger(runtime.SystemInit).Info("WAL recovery: starting WAL data recovery",
+			zap.String("wal_data_path", cfg.BootstrapConfig.Restore.WALDataPath))
+		if err := s.RecoverWALData(ctx, cfg); err != nil {
+			s.runtime.SubLogger(runtime.SystemInit).Error("WAL recovery: failed to recover WAL data", zap.Error(err))
+			return err
+		}
+		// Clear the flag after WAL recovery completes
+		clearWALRecoveryFlag()
+		s.runtime.SubLogger(runtime.SystemInit).Info("WAL recovery: completed, HAKeeper can now report running state")
+	}
+
 	return nil
 }
 
@@ -152,6 +190,14 @@ func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 	filePath := s.cfg.BootstrapConfig.Restore.FilePath
 	if filePath == "" {
 		return nil, nil
+	}
+
+	if filepath.IsAbs(filePath) {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, err
+		}
+		return parseBackupData(data)
 	}
 
 	path, err := fileservice.ParsePath(filePath)
@@ -175,6 +221,9 @@ func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 	st, err := fs.StatFile(ctx, filePath)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			if filePath != defaultRestoreFilePath {
+				return nil, err
+			}
 			return nil, nil
 		}
 		return nil, err
@@ -195,9 +244,13 @@ func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 	}
 	defer ioVec.Release()
 
-	var data pb.BackupData
-	if err := data.Unmarshal(ioVec.Entries[0].Data); err != nil {
+	return parseBackupData(ioVec.Entries[0].Data)
+}
+
+func parseBackupData(data []byte) (*pb.BackupData, error) {
+	var backup pb.BackupData
+	if err := backup.Unmarshal(data); err != nil {
 		return nil, err
 	}
-	return &data, nil
+	return &backup, nil
 }
