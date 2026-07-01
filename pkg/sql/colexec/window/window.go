@@ -655,7 +655,10 @@ func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.
 
 func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
 	var err error
-	desc := ctr.desc[len(ctr.desc)-1]
+	var desc bool
+	if len(ctr.desc) > 0 {
+		desc = ctr.desc[len(ctr.desc)-1]
+	}
 	switch frame.Start.Type {
 	case plan.FrameBound_CURRENT_ROW:
 		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
