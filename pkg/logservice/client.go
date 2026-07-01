@@ -42,6 +42,8 @@ var (
 	logServiceConnectFallbackDelay  = 300 * time.Millisecond
 )
 
+var connectToLogServiceAddressFn = connectToLogServiceAddress
+
 // IsTempError returns a boolean value indicating whether the specified error
 // is a temp error that worth to be retried, e.g. timeouts, temp network
 // issues. Non-temp error caused by program logics rather than some external
@@ -473,7 +475,12 @@ func connectToLogServiceByReverseProxy(
 	if !ok {
 		return nil, moerr.NewLogServiceNotReady(ctx)
 	}
-	addresses := make([]string, 0)
+	addresses := shardInfoReplicaAddresses(si)
+	return connectToLogServiceAddresses(ctx, sid, addresses, cfg)
+}
+
+func shardInfoReplicaAddresses(si ShardInfo) []string {
+	addresses := make([]string, 0, len(si.Replicas))
 	leaderAddress, ok := si.Replicas[si.ReplicaID]
 	if ok {
 		addresses = append(addresses, leaderAddress)
@@ -483,7 +490,7 @@ func connectToLogServiceByReverseProxy(
 			addresses = append(addresses, address)
 		}
 	}
-	return connectToLogService(ctx, sid, addresses, cfg)
+	return addresses
 }
 
 func connectToLogService(
@@ -528,7 +535,7 @@ func connectToLogServiceAddress(
 		c.respPool,
 		c.cfg.MaxMessageSize,
 		cfg.EnableCompress,
-		time.Second*10,
+		0,
 		cfg.Tag,
 	)
 	if err != nil {
@@ -556,6 +563,11 @@ func connectToLogServiceAddress(
 	return c, nil
 }
 
+type connectResult struct {
+	client *client
+	err    error
+}
+
 func connectToLogServiceAddresses(
 	ctx context.Context,
 	sid string,
@@ -565,22 +577,18 @@ func connectToLogServiceAddresses(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	type result struct {
-		client *client
-		err    error
-	}
-	results := make(chan result, len(addresses))
+	results := make(chan connectResult, len(addresses))
 	var wg sync.WaitGroup
 	launch := func(addr string) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			attemptCtx, attemptCancel := context.WithTimeout(ctx, logServiceConnectAttemptTimeout)
-			c, err := connectToLogServiceAddress(attemptCtx, sid, addr, cfg)
+			c, err := connectToLogServiceAddressFn(attemptCtx, sid, addr, cfg)
 			attemptCancel()
 			if err == nil {
 				select {
-				case results <- result{client: c}:
+				case results <- connectResult{client: c}:
 				case <-ctx.Done():
 					if closeErr := c.close(); closeErr != nil {
 						logutil.Error("failed to close the client", zap.Error(closeErr))
@@ -589,7 +597,7 @@ func connectToLogServiceAddresses(
 				return
 			}
 			select {
-			case results <- result{err: err}:
+			case results <- connectResult{err: err}:
 			case <-ctx.Done():
 			}
 		}()
@@ -619,6 +627,7 @@ func connectToLogServiceAddresses(
 			if r.client != nil {
 				cancel()
 				wg.Wait()
+				closeUnusedConnectResultClients(results)
 				return r.client, nil
 			}
 			lastErr = r.err
@@ -630,6 +639,7 @@ func connectToLogServiceAddresses(
 			stopConnectFallbackTimer(timer)
 			cancel()
 			wg.Wait()
+			closeUnusedConnectResultClients(results)
 			if lastErr != nil {
 				return nil, lastErr
 			}
@@ -638,6 +648,21 @@ func connectToLogServiceAddresses(
 	}
 	wg.Wait()
 	return nil, lastErr
+}
+
+func closeUnusedConnectResultClients(results <-chan connectResult) {
+	for {
+		select {
+		case r := <-results:
+			if r.client != nil {
+				if closeErr := r.client.close(); closeErr != nil {
+					logutil.Error("failed to close the client", zap.Error(closeErr))
+				}
+			}
+		default:
+			return
+		}
+	}
 }
 
 func stopConnectFallbackTimer(timer *time.Timer) {
