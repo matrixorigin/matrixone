@@ -288,6 +288,14 @@ insert into t_replace_table_check values (2, 3, 2);
 select * from t_replace_table_check order by id;
 drop table t_replace_table_check;
 
+drop table if exists t_insert_check_no_key;
+create table t_insert_check_no_key(a int check (a > 0), b int);
+insert into t_insert_check_no_key values (-1, 2) on duplicate key update b = values(b);
+select * from t_insert_check_no_key order by a;
+insert into t_insert_check_no_key values (1, 2) on duplicate key update b = values(b);
+select * from t_insert_check_no_key order by a;
+drop table t_insert_check_no_key;
+
 -- fake-PK table with a composite nullable unique key: a REPLACE whose composite
 -- unique-key part is statically NULL (column a omitted -> NULL) serializes to a NULL
 -- key, can never conflict, and behaves like a plain INSERT (no existing row deleted;

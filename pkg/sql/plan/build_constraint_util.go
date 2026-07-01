@@ -119,6 +119,33 @@ func appendCheckConstraintPlan(builder *QueryBuilder, bindCtx *BindContext, tabl
 		}
 	}
 
+	return appendCheckConstraintPlanWithTableColProjections(builder, bindCtx, tableDef, lastNodeID, tableColProjList)
+}
+
+func appendCheckConstraintPlanFromLastNode(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32) (int32, error) {
+	if len(tableDef.Checks) == 0 {
+		return lastNodeID, nil
+	}
+
+	projection := getProjectionByLastNode(builder, lastNodeID)
+	tableColProjList := make([]*plan.Expr, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		if i >= len(projection) {
+			if col.Hidden {
+				continue
+			}
+			return 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot find column %s.%s for check constraint", tableDef.Name, col.Name)
+		}
+		tableColProjList[i] = projection[i]
+	}
+
+	return appendCheckConstraintPlanWithTableColProjections(builder, bindCtx, tableDef, lastNodeID, tableColProjList)
+}
+
+func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, tableColProjList []*plan.Expr) (int32, error) {
 	filterList := make([]*plan.Expr, 0, len(tableDef.Checks))
 	for _, check := range tableDef.Checks {
 		if colName, ok := checkConstraintReferencesSyntheticCol(check.Check, tableDef); ok {

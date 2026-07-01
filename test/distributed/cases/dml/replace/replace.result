@@ -372,6 +372,17 @@ select * from t_replace_table_check order by id;
 id    a    b
 1    1    2
 drop table t_replace_table_check;
+drop table if exists t_insert_check_no_key;
+create table t_insert_check_no_key(a int check (a > 0), b int);
+insert into t_insert_check_no_key values (-1, 2) on duplicate key update b = values(b);
+constraint violation: Check constraint '__mo_chk_1' is violated
+select * from t_insert_check_no_key order by a;
+a    b
+insert into t_insert_check_no_key values (1, 2) on duplicate key update b = values(b);
+select * from t_insert_check_no_key order by a;
+a    b
+1    2
+drop table t_insert_check_no_key;
 drop table if exists t_replace_fakepk_comp_null;
 create table t_replace_fakepk_comp_null (a int, b int, c varchar(20), unique key uk_ab(a, b));
 insert into t_replace_fakepk_comp_null values (1, 1, 'one'), (2, 2, 'two');

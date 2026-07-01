@@ -1989,6 +1989,19 @@ func TestInsertPlanChecksTableCheckConstraints(t *testing.T) {
 	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "INSERT")
 }
 
+func TestLegacyInsertFallbackChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addFakePkTPositiveCheckWithoutUniqueKey(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO fake_pk_t VALUES (-1, 'bad') ON DUPLICATE KEY UPDATE b = VALUES(b)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "legacy INSERT fallback")
+}
+
 func TestUpdatePlanChecksTableCheckConstraints(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addSingleIdxTPositiveCheck(t, mock)
@@ -1999,6 +2012,52 @@ func TestUpdatePlanChecksTableCheckConstraints(t *testing.T) {
 	}
 
 	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "UPDATE")
+}
+
+func TestAppendCheckConstraintPlanFromLastNodeSkipsTablesWithoutChecks(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	builder := NewQueryBuilder(plan.Query_INSERT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	nodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{
+			MakePlan2Int32ConstExprWithType(1),
+		},
+	}, bindCtx)
+
+	got, err := appendCheckConstraintPlanFromLastNode(builder, bindCtx, mock.ctxt.tables["single_idx_t"], nodeID)
+	require.NoError(t, err)
+	require.Equal(t, nodeID, got)
+}
+
+func TestAppendCheckConstraintPlanFromLastNodeErrorsOnMissingVisibleProjection(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	builder := NewQueryBuilder(plan.Query_INSERT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	nodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{
+			MakePlan2Int32ConstExprWithType(1),
+		},
+	}, bindCtx)
+
+	tableDef := &plan.TableDef{
+		Name: "missing_projection_t",
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{
+			"a": 0,
+			"b": 1,
+		},
+		Checks: []*plan.CheckDef{
+			{Name: "chk_a", Check: MakePlan2BoolConstExprWithType(true)},
+		},
+	}
+
+	_, err := appendCheckConstraintPlanFromLastNode(builder, bindCtx, tableDef, nodeID)
+	require.ErrorContains(t, err, "cannot find column missing_projection_t.b for check constraint")
 }
 
 func TestSubstituteColRefsInExprSkipsNilProjection(t *testing.T) {
@@ -2154,6 +2213,34 @@ func addSingleIdxTPositiveCheck(t *testing.T, mock *MockOptimizer) {
 	tableDef.Checks = []*plan.CheckDef{
 		{
 			Name:  "chk_val_positive",
+			Check: checkExpr,
+		},
+	}
+}
+
+func addFakePkTPositiveCheckWithoutUniqueKey(t *testing.T, mock *MockOptimizer) {
+	t.Helper()
+	tableDef := mock.ctxt.tables["fake_pk_t"]
+	tableDef.Indexes = nil
+	aCol := tableDef.Name2ColIndex["a"]
+	checkExpr, err := BindFuncExprImplByPlanExpr(context.TODO(), ">", []*plan.Expr{
+		{
+			Typ: tableDef.Cols[aCol].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					Name:   "a",
+					ColPos: aCol,
+				},
+			},
+		},
+		MakePlan2Int32ConstExprWithType(0),
+	})
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	tableDef.Checks = []*plan.CheckDef{
+		{
+			Name:  "chk_a_positive",
 			Check: checkExpr,
 		},
 	}

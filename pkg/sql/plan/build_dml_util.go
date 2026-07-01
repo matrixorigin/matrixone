@@ -152,6 +152,11 @@ func buildInsertPlans(
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
 
+	lastNodeId, err = appendCheckConstraintPlanFromLastNode(builder, bindCtx, tableDef, lastNodeId)
+	if err != nil {
+		return err
+	}
+
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep := builder.appendStep(lastNodeId)
 
