@@ -55,7 +55,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
@@ -449,16 +448,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			AddAffectedRows: t.DeleteCtx.AddAffectedRows,
 			Ref:             t.DeleteCtx.Ref,
 			PrimaryKeyIdx:   int32(t.DeleteCtx.PrimaryKeyIdx),
-		}
-	case *onduplicatekey.OnDuplicatekey:
-		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
-			Attrs:              t.Attrs,
-			InsertColCount:     t.InsertColCount,
-			UniqueColCheckExpr: t.UniqueColCheckExpr,
-			UniqueCols:         t.UniqueCols,
-			OnDuplicateIdx:     t.OnDuplicateIdx,
-			OnDuplicateExpr:    t.OnDuplicateExpr,
-			IsIgnore:           t.IsIgnore,
 		}
 	case *fuzzyfilter.FuzzyFilter:
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
@@ -906,17 +895,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetPreInsertSecondaryIndex()
 		arg := preinsertsecondaryindex.NewArgument()
 		arg.PreInsertCtx = t.GetPreInsertSkCtx()
-		op = arg
-	case vm.OnDuplicateKey:
-		t := opr.GetOnDuplicateKey()
-		arg := onduplicatekey.NewArgument()
-		arg.Attrs = t.Attrs
-		arg.InsertColCount = t.InsertColCount
-		arg.UniqueColCheckExpr = t.UniqueColCheckExpr
-		arg.UniqueCols = t.UniqueCols
-		arg.OnDuplicateIdx = t.OnDuplicateIdx
-		arg.OnDuplicateExpr = t.OnDuplicateExpr
-		arg.IsIgnore = t.IsIgnore
 		op = arg
 	case vm.FuzzyFilter:
 		t := opr.GetFuzzyFilter()

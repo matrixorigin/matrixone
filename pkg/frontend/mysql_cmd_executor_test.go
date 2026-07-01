@@ -2846,13 +2846,6 @@ func Test_checkModify(t *testing.T) {
 			expected_flag: true,
 			expected_err:  false,
 		},
-		{
-			node: &plan.Node{
-				OnDuplicateKey: &plan0.OnDuplicateKeyCtx{},
-			},
-			expected_flag: true,
-			expected_err:  false,
-		},
 	}
 
 	flag, _ := checkModify(nil, resolveFn)

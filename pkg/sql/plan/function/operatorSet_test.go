@@ -713,6 +713,34 @@ func Test_CaseFn_Decimal256Execution(t *testing.T) {
 	require.True(t, succeed, tc.info, info)
 }
 
+func Test_CaseCheck_TextStringBranchesStayText(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.T_text.ToType(),
+		types.New(types.T_varchar, 255, 0),
+	}
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool, result.finalType[0].Oid)
+	require.Equal(t, types.T_text, result.finalType[1].Oid)
+	require.Equal(t, types.T_text, result.finalType[2].Oid)
+}
+
+func Test_IffCheck_TextStringBranchesStayText(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.T_text.ToType(),
+		types.New(types.T_varchar, 255, 0),
+	}
+	result := iffCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool, result.finalType[0].Oid)
+	require.Equal(t, types.T_text, result.finalType[1].Oid)
+	require.Equal(t, types.T_text, result.finalType[2].Oid)
+}
+
 func Test_IffFn_Decimal256Execution(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	d1, err := types.ParseDecimal256("123456789012345678901234567890123456789", 76, 0)
@@ -764,6 +792,26 @@ func Test_CaseWhen_WithNullAndStringComparison(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, strCaseFn)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, tc.info, info)
+}
+
+func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_varchar}},
+		{args: []types.T{types.T_char}},
+		{args: []types.T{types.T_text}},
+	}
+	inputs := []types.Type{
+		types.T_text.ToType(),
+		types.New(types.T_varchar, 255, 0),
+		types.New(types.T_char, 1, 0),
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 2, result.idx)
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_text, typ.Oid)
+	}
 }
 
 // issue #24565: COALESCE over decimal branches with different scales must align

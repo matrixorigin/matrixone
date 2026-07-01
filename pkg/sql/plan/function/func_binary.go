@@ -910,8 +910,33 @@ func coalesceDecimalResult(overloads []overload, minOid types.T, inputs []types.
 	return types.Type{}, -1, false
 }
 
+func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+	target, aligned, ok := textStringCommonType(inputs)
+	if !ok {
+		return checkResult{}, false
+	}
+	for i, over := range overloads {
+		if len(over.args) != 1 || over.args[0] != target.Oid {
+			continue
+		}
+		if aligned {
+			return newCheckResultWithSuccess(i), true
+		}
+		castType := make([]types.Type, len(inputs))
+		for j := range castType {
+			castType[j] = target
+		}
+		return newCheckResultWithCast(i, castType), true
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong), true
+}
+
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 0 {
+		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
+			return result
+		}
+
 		minIndex := -1
 		minOid := types.T(0)
 		minCost := math.MaxInt

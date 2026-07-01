@@ -603,7 +603,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				return false, nil, nil, err
 			}
 		} else {
-			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			projExpr, err = forceAssignmentCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -782,7 +782,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							return false, nil, nil, err
 						}
 					}
-					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+					defExpr, err = forceAssignmentCastExpr(builder.GetContext(), defExpr, col.Typ)
 					if err != nil {
 						return false, nil, nil, err
 					}
@@ -987,6 +987,8 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 
 var ForceCastExpr = forceCastExpr
 
+var ForceAssignmentCastExpr = forceAssignmentCastExpr
+
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
 	if targetType.Typ.Id == 0 {
 		return expr, nil
@@ -997,14 +999,21 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	// Assigning a value to a real CHAR/VARCHAR(N) column must keep the strict
+	// width check: an over-length value errors instead of being silently
+	// truncated. Generic casts stay lenient (MySQL-compatible truncation).
+	funcName := "cast"
+	if t2.Oid == types.T_char || t2.Oid == types.T_varchar {
+		funcName = "cast_strict"
+	}
+	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: funcName},
 				Args: []*Expr{expr, targetType},
 			},
 		},
@@ -1013,6 +1022,18 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 }
 
 func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	return forceCastExprWithName(ctx, expr, targetType, "cast")
+}
+
+func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	funcName := "cast"
+	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
+		funcName = "cast_strict"
+	}
+	return forceCastExprWithName(ctx, expr, targetType, funcName)
+}
+
+func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
 	}
@@ -1022,7 +1043,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, err
 	}
 
 	targetType.NotNullable = expr.Typ.NotNullable
-	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}
@@ -1035,7 +1056,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, err
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: funcName},
 				Args: []*Expr{expr, t},
 			},
 		},

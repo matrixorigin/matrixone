@@ -75,6 +75,8 @@ message LockTable {
   uint32   Group       = 5;
   Sharding Sharding    = 6;
   uint64   OriginTable = 7;
+  // AllocatorID identifies the allocator process that created this bind.
+  string   AllocatorID = 8;
 }
 
 // Method lock table operations
@@ -266,6 +268,8 @@ message GetBindRequest {
 // GetBindResponse get bind request from allocator response. TN -> CN
 message GetBindResponse {
   LockTable LockTable = 2 [(gogoproto.nullable) = false];
+  uint64 AllocatorVersion = 3;
+  string AllocatorID = 4;
 }
 
 // KeepLockTableBindRequest keep lock table bind request. CN -> TN
@@ -280,6 +284,8 @@ message KeepLockTableBindRequest {
 message KeepLockTableBindResponse {
   bool OK = 1;
   Status Status = 2;
+  uint64 AllocatorVersion = 3;
+  string AllocatorID = 4;
 }
 
 // SetRestartServiceRequest set restart lock service request from allocator request. operator -> TN

@@ -129,6 +129,15 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	return nil
 }
 
+// noPkOnDupUpdateCause is the cause bindInsert raises for ON DUPLICATE KEY
+// UPDATE on a table with neither a primary key nor a unique key: the modern
+// dedup+MULTI_UPDATE has no key to represent the upsert, so this degenerate
+// corner (semantically a plain INSERT) is deferred to the legacy planner. The
+// INSERT entry point matches the full message to allow the fallback for this
+// case only, without re-routing real PK/unique-key ODKU off the modern path.
+const noPkOnDupUpdateCause = "on duplicate key update without primary or unique key"
+const noPkOnDupUpdateMsg = "unsupported DML: " + noPkOnDupUpdateCause
+
 func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
 	if with != nil {
@@ -233,9 +242,6 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table")
 	}
 
-	if util.TableIsClusterTable(tableDef.GetTableType()) && accountId != catalog.System_Account {
-		return moerr.NewInternalErrorf(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
-	}
 	if objRef.PubInfo != nil {
 		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
 	}
