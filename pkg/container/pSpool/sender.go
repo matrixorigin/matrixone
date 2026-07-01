@@ -49,6 +49,12 @@ type PipelineSpool struct {
 	// the data producer should wait all consumers done before its close.
 	csDoneSignal chan struct{}
 
+	// drainedReceivers counts how many receivers have already reached their
+	// End-message (i.e. how many csDoneSignal values have been consumed by the
+	// close/cleanup path). It is only touched from the single owner goroutine
+	// that runs Close / CloseWithTimeout / forceCleanup, never concurrently.
+	drainedReceivers int
+
 	cleanupOnce sync.Once
 }
 
@@ -131,17 +137,16 @@ func (ps *PipelineSpool) CloseWithTimeout(timeout time.Duration) bool {
 	}
 
 	// wait for all receivers done its work first.
-	requireEndingReceiver := len(ps.rs)
-	for requireEndingReceiver > 0 {
-		requireEndingReceiver--
-
+	for ps.drainedReceivers < len(ps.rs) {
 		if timer == nil {
 			<-ps.csDoneSignal
+			ps.drainedReceivers++
 			continue
 		}
 
 		select {
 		case <-ps.csDoneSignal:
+			ps.drainedReceivers++
 		case <-timer.C:
 			return false
 		}
@@ -151,36 +156,44 @@ func (ps *PipelineSpool) CloseWithTimeout(timeout time.Duration) bool {
 	return true
 }
 
-// ForceCleanup releases any spool-owned batch memory without waiting for
-// receivers. It is intended for query teardown after pipeline cleanup has
-// already stopped making progress.
+// ForceCleanup reclaims spool-owned batch memory during query teardown, but
+// only once every receiver is confirmed done.
+//
+// Delivery through the spool is two-staged: SendBatch first stores a batch in a
+// slot, and only then is a GetFromSpool signal enqueued on the receiver channel.
+// A receiver that is merely backlogged during teardown can still hold a pending
+// GetFromSpool signal pointing at a slot with real data. Freeing the backing
+// buffer then (cache.free releases the whole buffer) would make that receiver
+// later read emptied memory -> silent batch loss / early EOS.
+//
+// So we reclaim only after draining one csDoneSignal per receiver (each receiver
+// emits it once it has read its End-message and therefore released every
+// real-data slot it consumed). If some receiver has not finished yet, we leave
+// the spool memory intact - it is bounded and reclaimed when the owning MPool is
+// destroyed - and do NOT consume cleanupOnce, so a later call can still reclaim
+// once the spool has fully drained.
 func (ps *PipelineSpool) ForceCleanup() {
 	if ps == nil {
 		return
 	}
+
+	for ps.drainedReceivers < len(ps.rs) {
+		select {
+		case <-ps.csDoneSignal:
+			ps.drainedReceivers++
+		default:
+			return
+		}
+	}
+
 	ps.cleanupOnce.Do(ps.forceCleanup)
 }
 
 func (ps *PipelineSpool) forceCleanup() {
-	freeSlots := make([]bool, len(ps.shardPool))
-	for i := len(ps.freeShardPool); i > 0; i-- {
-		slot := <-ps.freeShardPool
-		freeSlots[slot] = true
-	}
-
-	for i := range ps.shardPool {
-		if freeSlots[i] {
-			continue
-		}
-
-		msg := &ps.shardPool[i]
-		ps.cache.CacheBatch(msg.useCache, msg.cacheID, msg.dataContent)
-		msg.dataContent = nil
-		msg.errContent = nil
-		msg.useCache = false
-		msg.cacheID = 0
-	}
-
+	// All receivers have reached End. The only remaining non-free slots are the
+	// End markers themselves (nil dataContent, no cached buffer memory); every
+	// real-data slot was already released back to the cache on consumption, so
+	// freeing the whole buffer is now safe.
 	ps.cache.free()
 }
 

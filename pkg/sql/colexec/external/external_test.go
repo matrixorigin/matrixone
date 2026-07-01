@@ -413,6 +413,77 @@ func TestGetColDataParallelLoadNullNumericRemainsNull(t *testing.T) {
 	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
 }
 
+func TestGetColDataLoadDataYear(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_year.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Cols: []*plan.ColDef{{
+				Name: "y",
+				Typ:  plan.Type{Id: int32(types.T_year), Width: 4},
+			}},
+			Extern: &tree.ExternParam{
+				ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+	attr := plan.ExternAttr{ColName: "y", ColIndex: 0, ColFieldIndex: 0}
+
+	require.NoError(t, getColData(
+		bat,
+		[]csvparser.Field{{Val: "2024"}},
+		0,
+		param,
+		proc.Mp(),
+		attr,
+		proc,
+	))
+	require.Equal(t, []types.MoYear{2024}, vector.MustFixedColWithTypeCheck[types.MoYear](bat.Vecs[0]))
+
+	bat.CleanOnlyData()
+	require.NoError(t, getColData(
+		bat,
+		[]csvparser.Field{{Val: "0", HasStringQuote: true}},
+		0,
+		param,
+		proc.Mp(),
+		attr,
+		proc,
+	))
+	require.Equal(t, []types.MoYear{2000}, vector.MustFixedColWithTypeCheck[types.MoYear](bat.Vecs[0]))
+
+	bat.CleanOnlyData()
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: "2156"}},
+		0,
+		param,
+		proc.Mp(),
+		attr,
+		proc,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not Year type")
+}
+
+func TestIsLegalLineLoadDataYear(t *testing.T) {
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.CSV}}
+	cols := []*plan.ColDef{{
+		Name: "y",
+		Typ:  plan.Type{Id: int32(types.T_year), Width: 4},
+	}}
+
+	require.True(t, isLegalLine(param, cols, []csvparser.Field{{Val: "2024"}}))
+	require.False(t, isLegalLine(param, cols, []csvparser.Field{{Val: "2156"}}))
+}
+
 func TestGetOneRowDataParallelLoadMissingNumericRemainsNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

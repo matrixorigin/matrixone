@@ -48,6 +48,27 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
+	if stmt.From != nil && len(stmt.From.Tables) > 0 && tblInfo.needAggFilter {
+		lastNode := builder.qry.Nodes[lastNodeId]
+		lastNodeId, _, _, err = builder.appendRowNumberDedupNode(
+			queryBindCtx,
+			lastNodeId,
+			lastNode,
+			lastNode.BindingTags[0],
+			fallbackUpdateFromDedupPartitionCols(updatePlanCtxs),
+		)
+		if err != nil {
+			return nil, err
+		}
+		// Duplicate source matches are now deduped by the row_number() window
+		// above, so the per-table plan must skip the any_value aggregation. Keep
+		// needAggFilter set, though: it also drives the join-target NULL-row
+		// filter (row_id IS NOT NULL) that must survive for joined-target
+		// UPDATE ... FROM.
+		for _, updatePlanCtx := range updatePlanCtxs {
+			updatePlanCtx.dedupByRowNumber = true
+		}
+	}
 
 	sourceStep := builder.appendStep(lastNodeId)
 	query, err := builder.createQuery()
@@ -150,7 +171,7 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, col.Typ)
+					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), posExpr, col.Typ)
 					if err != nil {
 						return err
 					}
@@ -183,7 +204,7 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
 					if err != nil {
 						return err
 					}
@@ -255,6 +276,24 @@ func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlan
 	}
 
 	return nil
+}
+
+// fallbackUpdateFromDedupPartitionCols returns the projection positions used to
+// dedup duplicate source matches on the fallback (buildTableUpdate) path. The
+// key is each updated target table's row_id, a stable row identity, rather than
+// the whole old target row: partitioning on every old column would crash on
+// GEOMETRY32 (no comparator), miss dedup on float columns holding NaN
+// (NaN != NaN), and wrongly merge distinct rows whose columns happen to match.
+func fallbackUpdateFromDedupPartitionCols(planCtxs []*dmlPlanCtx) []int32 {
+	partitionCols := make([]int32, 0)
+	offset := int32(0)
+	for _, planCtx := range planCtxs {
+		if planCtx.updateColLength > 0 && planCtx.rowIdPos >= 0 {
+			partitionCols = append(partitionCols, offset+int32(planCtx.rowIdPos))
+		}
+		offset += int32(len(planCtx.tableDef.Cols) + planCtx.updateColLength)
+	}
+	return partitionCols
 }
 
 func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo) (int32, []*dmlPlanCtx, error) {

@@ -15,7 +15,6 @@
 package dispatch
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -24,10 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -56,6 +52,65 @@ func TestPrepareRemote(t *testing.T) {
 	require.True(t, b)
 	require.Equal(t, proc, p)
 	require.Equal(t, d.ctr.remoteInfo, c)
+}
+
+func TestRegisterRemoteReceiversBeforePrepare(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	proc := testutil.NewProcess(t)
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	d := Dispatch{
+		FuncId: SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: uid},
+		},
+	}
+
+	require.NoError(t, d.RegisterRemoteReceivers(proc))
+	require.NotNil(t, d.ctr)
+	earlyNotifyCh := d.ctr.remoteInfo
+	require.NotNil(t, earlyNotifyCh)
+
+	require.NoError(t, d.Prepare(proc))
+	require.Equal(t, earlyNotifyCh, d.ctr.remoteInfo)
+
+	p, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+	require.True(t, ok)
+	require.Same(t, proc, p)
+	require.Equal(t, earlyNotifyCh, notifyCh)
+
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+}
+
+func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	proc := testutil.NewProcess(t)
+
+	uid1, err := uuid.NewV7()
+	require.NoError(t, err)
+	uid2, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	colexec.Get().GetProcByUuid(uid2, true)
+	d := Dispatch{
+		FuncId: SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: uid1},
+			{Uuid: uid2},
+		},
+	}
+
+	require.Error(t, d.RegisterRemoteReceivers(proc))
+	require.Nil(t, d.ctr.remoteInfo)
+
+	p, notifyCh, ok := colexec.Get().GetProcByUuid(uid1, false)
+	require.False(t, ok)
+	require.Nil(t, p)
+	require.Nil(t, notifyCh)
 }
 
 func TestDispatchAdoptCleanupState_TransfersOwnership(t *testing.T) {
@@ -148,47 +203,6 @@ func TestDispatchResetSendsHealthyLocalRegWhenEarlierRegIsFull(t *testing.T) {
 	default:
 		t.Fatal("Dispatch.Reset did not notify a healthy local receiver after an earlier receiver channel was full")
 	}
-}
-
-func TestDispatchResetReleasesDeferredSpoolMemoryAfterCleanupBarrier(t *testing.T) {
-	oldSignalSendTimeout := process.PipelineSignalSendTimeout
-	process.PipelineSignalSendTimeout = 10 * time.Millisecond
-	t.Cleanup(func() {
-		process.PipelineSignalSendTimeout = oldSignalSendTimeout
-	})
-
-	proc := testutil.NewProcess(t)
-	dispatch := &Dispatch{
-		FuncId: SendToAllLocalFunc,
-		LocalRegs: []*process.WaitRegister{
-			{Ch2: make(chan process.PipelineSignal, 1)},
-			{Ch2: make(chan process.PipelineSignal, 1)},
-		},
-	}
-	require.NoError(t, dispatch.Prepare(proc))
-
-	srcMP := mpool.MustNewZeroNoFixed()
-	t.Cleanup(func() {
-		mpool.DeleteMPool(srcMP)
-	})
-	src := testutil.NewBatch([]types.Type{types.New(types.T_int64, 0, 0)}, true, 1024, srcMP)
-	t.Cleanup(func() {
-		src.Clean(srcMP)
-	})
-
-	for i := 0; i < 2; i++ {
-		queryDone, err := dispatch.ctr.sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
-		require.NoError(t, err)
-		require.False(t, queryDone)
-	}
-
-	require.Greater(t, proc.Mp().CurrNB(), int64(0))
-
-	dispatch.Reset(proc, true, moerr.NewInternalErrorNoCtx("cleanup"))
-	require.Greater(t, proc.Mp().CurrNB(), int64(0))
-
-	dispatch.CleanupDeferredSpool()
-	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)

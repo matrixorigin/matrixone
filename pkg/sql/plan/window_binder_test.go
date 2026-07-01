@@ -105,7 +105,7 @@ func testRangeWindowExpr() *tree.FuncExpr {
 func TestProjectionAndHavingBinderBindExprOnWindowAlias(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
-	bindCtx.windowTag = builder.genNewBindTag()
+	bindCtx.windowTag = builder.GenNewBindTag()
 
 	windowExpr := testLagWindowExpr()
 	astStr := tree.String(windowExpr, dialect.MYSQL)
@@ -128,7 +128,7 @@ func TestProjectionAndHavingBinderBindExprOnWindowAlias(t *testing.T) {
 func TestProjectionBinderBindWinFuncCachesWindowExpr(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
-	bindCtx.windowTag = builder.genNewBindTag()
+	bindCtx.windowTag = builder.GenNewBindTag()
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -159,7 +159,7 @@ func TestHavingBinderBindWinFuncCoversFrameAndGuard(t *testing.T) {
 	t.Run("inside aggregate rejects window func", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 		bindCtx := NewBindContext(builder, nil)
-		bindCtx.windowTag = builder.genNewBindTag()
+		bindCtx.windowTag = builder.GenNewBindTag()
 
 		havingBinder := NewHavingBinder(builder, bindCtx)
 		havingBinder.insideAgg = true
@@ -171,7 +171,7 @@ func TestHavingBinderBindWinFuncCoversFrameAndGuard(t *testing.T) {
 	t.Run("range frame binds frame constants", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 		bindCtx := NewBindContext(builder, nil)
-		bindCtx.windowTag = builder.genNewBindTag()
+		bindCtx.windowTag = builder.GenNewBindTag()
 
 		havingBinder := NewHavingBinder(builder, bindCtx)
 		expr, err := havingBinder.BindWinFunc("sum", testRangeWindowExpr(), 0, true)

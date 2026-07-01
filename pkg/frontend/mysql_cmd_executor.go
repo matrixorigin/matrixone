@@ -2376,16 +2376,6 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 					return true, err
 				}
 			}
-			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef, &plan.TableDef{
-					Name:    ctx.TableName,
-					TblId:   ctx.TableId,
-					Version: ctx.TableVersion,
-				})
-				if err != nil || flag {
-					return true, err
-				}
-			}
 		}
 	default:
 	}
@@ -3373,6 +3363,13 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
+	// Frontend client SQL — session-bound resolver. Procs constructed
+	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
+	// IsFrontend from opts.IsFrontend() (default false → background);
+	// this proc is built inline here so we set the flag explicitly,
+	// paired with the resolver bind above as the "I have a session"
+	// signal.
+	proc.Base.IsFrontend = true
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.

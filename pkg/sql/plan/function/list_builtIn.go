@@ -3950,6 +3950,31 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// numeric point constructors: st_point(x, y) -> GEOMETRY,
+	// st_point32(x, y) -> GEOMETRY32 (x = X/longitude, y = Y/latitude).
+	{
+		functionId: ST_POINT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_float64, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return StPoint }},
+		},
+	},
+	{
+		functionId: ST_POINT32,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_float64, types.T_float64},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry32.ToType() },
+				newOp:   func() executeLogicOfOverload { return StPoint32 }},
+		},
+	},
+
 	// typed text constructors: st_pointfromtext, st_linefromtext, ...
 	{
 		functionId: ST_POINTFROMTEXT,
@@ -4376,6 +4401,192 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 3, args: []types.T{types.T_geometry32, types.T_float64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type { return geometryResultType(parameters) },
 				newOp:   func() executeLogicOfOverload { return StBufferQS }},
+		},
+	},
+
+	// S2 geometry cell functions. A CellId is BIGINT UNSIGNED (uint64).
+	// See docs/design/s2h3_funcs.md.
+	{
+		functionId: S2_CELLID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:   func() executeLogicOfOverload { return S2CellId }},
+			{overloadId: 1, args: []types.T{types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:   func() executeLogicOfOverload { return S2CellId }},
+		},
+	},
+	{
+		functionId: S2_CELLID_LEVEL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_int32.ToType() },
+				newOp:   func() executeLogicOfOverload { return S2CellIdLevel }},
+		},
+	},
+	{
+		functionId: S2_CELLID_CENTER,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return S2CellIdCenter }},
+		},
+	},
+	{
+		functionId: S2_CELLID_AREA,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:   func() executeLogicOfOverload { return S2CellIdArea }},
+		},
+	},
+	{
+		functionId: S2_CELLID_PARENT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:   func() executeLogicOfOverload { return S2CellIdParent }},
+		},
+	},
+	{
+		functionId: S2_CELLID_EDGENEIGHBORS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_json.ToType() },
+				newOp:   func() executeLogicOfOverload { return S2CellIdEdgeNeighbors }},
+		},
+	},
+	{
+		functionId: S2_CELLID_ALLNEIGHBORS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_json.ToType() },
+				newOp:   func() executeLogicOfOverload { return S2CellIdAllNeighbors }},
+		},
+	},
+	{
+		functionId: S2_CELLID_ARENEIGHBORS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:   func() executeLogicOfOverload { return S2CellIdAreNeighbors }},
+		},
+	},
+
+	// H3 hexagonal index functions. An H3Index is BIGINT UNSIGNED (uint64).
+	// See docs/design/s2h3_funcs.md.
+	{
+		functionId: H3_H3INDEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:   func() executeLogicOfOverload { return H3H3Index }},
+			{overloadId: 1, args: []types.T{types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:   func() executeLogicOfOverload { return H3H3Index }},
+			{overloadId: 2, args: []types.T{types.T_geometry, types.T_int64},
+				retType: func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:   func() executeLogicOfOverload { return H3H3IndexWithRes }},
+			{overloadId: 3, args: []types.T{types.T_geometry32, types.T_int64},
+				retType: func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:   func() executeLogicOfOverload { return H3H3IndexWithRes }},
+		},
+	},
+	{
+		functionId: H3_H3INDEX_RESOLUTION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_int32.ToType() },
+				newOp:   func() executeLogicOfOverload { return H3H3IndexResolution }},
+		},
+	},
+	{
+		functionId: H3_H3INDEX_CENTER,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return H3H3IndexCenter }},
+		},
+	},
+	{
+		functionId: H3_H3INDEX_BOUNDARY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_geometry.ToType() },
+				newOp:   func() executeLogicOfOverload { return H3H3IndexBoundary }},
+		},
+	},
+	{
+		functionId: H3_H3INDEX_PARENT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:   func() executeLogicOfOverload { return H3H3IndexParent }},
+			{overloadId: 1, args: []types.T{types.T_uint64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:   func() executeLogicOfOverload { return H3H3IndexParentAtRes }},
+		},
+	},
+	{
+		functionId: H3_H3INDEX_NEIGHBORS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_json.ToType() },
+				newOp:   func() executeLogicOfOverload { return H3H3IndexNeighbors }},
+		},
+	},
+	{
+		functionId: H3_H3INDEX_ARENEIGHBORS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_uint64, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:   func() executeLogicOfOverload { return H3H3IndexAreNeighbors }},
 		},
 	},
 
@@ -10615,7 +10826,120 @@ var supportedControlBuiltIns = []FuncNew{
 			},
 		},
 	},
+	// function `get_lock`
+	{
+		functionId: GET_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
 
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_float64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return GetLock
+				},
+			},
+		},
+	},
+
+	// function `release_lock`
+	{
+		functionId: RELEASE_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ReleaseLock
+				},
+			},
+		},
+	},
+
+	// function `is_free_lock`
+	{
+		functionId: IS_FREE_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsFreeLock
+				},
+			},
+		},
+	},
+
+	// function `is_used_lock`
+	{
+		functionId: IS_USED_LOCK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return IsUsedLock
+				},
+			},
+		},
+	},
+
+	// function `release_all_locks`
+	{
+		functionId: RELEASE_ALL_LOCKS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ReleaseAllLocks
+				},
+			},
+		},
+	},
 	// function `trigger_fault_point`
 	{
 		functionId: TRIGGER_FAULT_POINT,
@@ -12438,6 +12762,21 @@ var supportedOthersBuiltIns = []FuncNew{
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastGeometryToSubtype
+				},
+			},
+			{
+				// GEOMETRY32 source (e.g. inserting st_point32(...) into a
+				// point32 subtype column). The eval re-encodes float32 WKB via the
+				// "32:" prefix the binder adds to the subtype metadata.
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_geometry32},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CastGeometryToSubtype

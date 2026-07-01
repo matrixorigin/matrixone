@@ -330,8 +330,18 @@ public:
 
         cuvs::neighbors::brute_force::index_params ip;
         ip.metric = matrixone::convert_distance_type(this->metric);
-        index_.reset(new brute_force_index(cuvs::neighbors::brute_force::build(
-            *res, ip, raft::make_const_mdspan(shared_dataset->view()))));
+        {
+            // Serialize index-mutating cuVS calls on the same physical device,
+            // consistent with ivf/cagra (device_build_mutex). brute_force::build
+            // has no device-global kmeans workspace (it's a dataset copy + norm),
+            // so this is for repo-wide policy consistency, not a known race.
+            // Safe to nest under this->mutex_ here: device_build_mutex is the
+            // innermost lock, and ivf/cagra never hold this->mutex_ while holding
+            // device_build_mutex, so no lock-order cycle exists.
+            std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+            index_.reset(new brute_force_index(cuvs::neighbors::brute_force::build(
+                *res, ip, raft::make_const_mdspan(shared_dataset->view()))));
+        }
         
         handle.sync();
     }
