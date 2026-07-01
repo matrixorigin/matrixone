@@ -156,6 +156,16 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	if err != nil {
 		return nil, err
 	}
+
+	// Normalize COUNT(DISTINCT (a, b)) → COUNT(DISTINCT a, b) by expanding
+	// the tuple arg into separate args. This must happen for every aggregate
+	// expression (not just inside optimizeDistinctAgg), otherwise the executor
+	// cannot build a correct multi-column distinct key from a single T_tuple vector.
+	f := expr.GetF()
+	if len(f.Args) == 1 && f.Args[0].Typ.Id == int32(types.T_tuple) {
+		f.Args = f.Args[0].GetList().List
+	}
+
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		if funcName != "max" && funcName != "min" && funcName != "any_value" {
 			expr.GetF().Func.Obj = int64(uint64(expr.GetF().Func.Obj) | function.Distinct)
