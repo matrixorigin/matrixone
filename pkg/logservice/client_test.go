@@ -257,6 +257,93 @@ func TestConnectToLogServiceAddressesReturnsContextError(t *testing.T) {
 	require.Nil(t, c)
 }
 
+func TestShardInfoReplicaAddressesKeepsLeaderFirst(t *testing.T) {
+	addresses := shardInfoReplicaAddresses(ShardInfo{
+		ReplicaID: 2,
+		Replicas: map[uint64]string{
+			1: "replica-1",
+			2: "leader",
+			3: "replica-3",
+		},
+	})
+	require.Len(t, addresses, 3)
+	assert.Equal(t, "leader", addresses[0])
+	assert.ElementsMatch(t, []string{"leader", "replica-1", "replica-3"}, addresses)
+}
+
+func TestConnectToLogServiceAddressesClosesSuccessfulLosers(t *testing.T) {
+	origConnect := connectToLogServiceAddressFn
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectFallbackDelay = time.Millisecond
+	defer func() {
+		connectToLogServiceAddressFn = origConnect
+		logServiceConnectFallbackDelay = origFallbackDelay
+	}()
+
+	called := make(chan string, 2)
+	release := make(chan struct{})
+	closeCount := 0
+	var closeMu sync.Mutex
+	connectToLogServiceAddressFn = func(
+		ctx context.Context,
+		sid string,
+		addr string,
+		cfg ClientConfig,
+	) (*client, error) {
+		called <- addr
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return &client{
+			client: &closeTrackingRPCClient{
+				closeMu:    &closeMu,
+				closeCount: &closeCount,
+			},
+		}, nil
+	}
+
+	done := make(chan *client, 1)
+	errs := make(chan error, 1)
+	go func() {
+		c, err := connectToLogServiceAddresses(
+			context.Background(),
+			"",
+			[]string{"first", "second"},
+			ClientConfig{},
+		)
+		if err != nil {
+			errs <- err
+			return
+		}
+		done <- c
+	}()
+
+	require.Equal(t, "first", readCalledAddress(t, called))
+	require.Equal(t, "second", readCalledAddress(t, called))
+	close(release)
+
+	var c *client
+	select {
+	case c = <-done:
+	case err := <-errs:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for connection result")
+	}
+	require.NotNil(t, c)
+
+	closeMu.Lock()
+	assert.Equal(t, 1, closeCount)
+	closeMu.Unlock()
+
+	require.NoError(t, c.close())
+	closeMu.Lock()
+	assert.Equal(t, 2, closeCount)
+	closeMu.Unlock()
+}
+
 func TestStopConnectFallbackTimer(t *testing.T) {
 	stopConnectFallbackTimer(nil)
 
@@ -266,6 +353,45 @@ func TestStopConnectFallbackTimer(t *testing.T) {
 	expired := time.NewTimer(time.Nanosecond)
 	time.Sleep(time.Millisecond)
 	stopConnectFallbackTimer(expired)
+}
+
+func readCalledAddress(t *testing.T, called <-chan string) string {
+	t.Helper()
+	select {
+	case addr := <-called:
+		return addr
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for connection attempt")
+	}
+	return ""
+}
+
+type closeTrackingRPCClient struct {
+	closeMu    *sync.Mutex
+	closeCount *int
+}
+
+func (c *closeTrackingRPCClient) Send(context.Context, string, morpc.Message) (*morpc.Future, error) {
+	return nil, errors.New("unexpected send")
+}
+
+func (c *closeTrackingRPCClient) NewStream(context.Context, string, bool) (morpc.Stream, error) {
+	return nil, errors.New("unexpected stream")
+}
+
+func (c *closeTrackingRPCClient) Ping(context.Context, string) error {
+	return errors.New("unexpected ping")
+}
+
+func (c *closeTrackingRPCClient) Close() error {
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
+	*c.closeCount++
+	return nil
+}
+
+func (c *closeTrackingRPCClient) CloseBackend() error {
+	return nil
 }
 
 func startHangingTCPServer(t *testing.T) (string, func()) {
