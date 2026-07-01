@@ -60,18 +60,61 @@ func (s *service) GetLockHolder(
 		if err := ctx.Err(); err != nil {
 			return pb.WaitTxn{}, false, err
 		}
-		s.bindChangeMu.RLock()
 		l, err := s.getLockTableWithCreate(options.Group, tableID, [][]byte{row}, options.Sharding)
 		if err != nil {
-			s.bindChangeMu.RUnlock()
+			if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+				continue
+			}
 			return pb.WaitTxn{}, false, err
 		}
-		holder, ok, err := l.getLockHolder(ctx, row)
-		s.bindChangeMu.RUnlock()
-		if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
-			return holder, ok, err
+
+		bind := l.getBind()
+		s.bindChangeMu.RLock()
+		current := s.tableGroups.get(bind.Group, bind.Table)
+		if current == nil || current.getBind().Changed(bind) {
+			s.bindChangeMu.RUnlock()
+			continue
 		}
+		if lockTableGetLockHolderNeedsBindChangeLock(current) {
+			holder, ok, err := current.getLockHolder(ctx, row)
+			s.bindChangeMu.RUnlock()
+			if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+				return holder, ok, err
+			}
+			continue
+		}
+		s.bindChangeMu.RUnlock()
+
+		holder, ok, err := current.getLockHolder(ctx, row)
+		if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			continue
+		}
+		if err != nil {
+			return pb.WaitTxn{}, false, err
+		}
+		if !s.isCurrentLockTable(current) {
+			continue
+		}
+		return holder, ok, nil
 	}
+}
+
+func lockTableGetLockHolderNeedsBindChangeLock(l lockTable) bool {
+	switch l.(type) {
+	case *remoteLockTable, *localLockTableProxy:
+		return false
+	default:
+		return true
+	}
+}
+
+func (s *service) isCurrentLockTable(l lockTable) bool {
+	bind := l.getBind()
+	s.bindChangeMu.RLock()
+	defer s.bindChangeMu.RUnlock()
+
+	current := s.tableGroups.get(bind.Group, bind.Table)
+	return current == l && !current.getBind().Changed(bind)
 }
 
 func (s *service) ForceRefreshLockTableBinds(

@@ -53,12 +53,14 @@ const (
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
-	logger             *log.MOLogger
-	removeLockTimeout  time.Duration
-	serviceID          string
-	bind               pb.LockTable
-	client             Client
-	bindChangedHandler func(pb.LockTable)
+	logger                      *log.MOLogger
+	removeLockTimeout           time.Duration
+	serviceID                   string
+	bind                        pb.LockTable
+	client                      Client
+	bindChangedHandler          func(pb.LockTable)
+	allocatorStateProvider      func() allocatorState
+	allocatorBindChangedHandler func(string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) error
 }
 
 func newRemoteLockTable(
@@ -105,6 +107,12 @@ func (l *remoteLockTable) lock(
 	req.Lock.TxnID = txn.txnID
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
+
+	if err := ctx.Err(); err != nil {
+		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
+		cb(pb.Result{}, err)
+		return
+	}
 
 	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
 	// after rpc completed
@@ -445,7 +453,11 @@ func (l *remoteLockTable) handleError(
 	// Note. Since the cn where the remote lock table is located may
 	// be permanently gone, we need to go to the allocator to check if
 	// the bind is valid.
-	new, err := getLockTableBind(
+	requestAllocator := allocatorState{}
+	if l.allocatorStateProvider != nil {
+		requestAllocator = l.allocatorStateProvider()
+	}
+	new, allocator, err := getLockTableBind(
 		l.client,
 		l.bind.Group,
 		l.bind.Table,
@@ -458,6 +470,14 @@ func (l *remoteLockTable) handleError(
 		return oldError
 	}
 	if new.Changed(l.bind) {
+		if l.allocatorBindChangedHandler != nil {
+			return l.allocatorBindChangedHandler(
+				"remote-bind-refresh",
+				l.bind,
+				new,
+				allocator,
+				requestAllocator)
+		}
 		l.bindChangedHandler(new)
 		return nil
 	}
@@ -522,8 +542,40 @@ func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
 	if resp.NewBind == nil {
 		return nil
 	}
-	newBind := resp.NewBind
-	l.bindChangedHandler(*newBind)
+	newBind := *resp.NewBind
+	if l.allocatorBindChangedHandler != nil &&
+		l.allocatorStateProvider != nil &&
+		l.client != nil &&
+		l.bind.AllocatorID != "" &&
+		newBind.AllocatorID != "" &&
+		l.bind.AllocatorID != newBind.AllocatorID {
+		requestAllocator := l.allocatorStateProvider()
+		refreshedBind, allocator, err := getLockTableBind(
+			l.client,
+			newBind.Group,
+			newBind.Table,
+			newBind.OriginTable,
+			l.serviceID,
+			newBind.Sharding,
+		)
+		if err != nil {
+			logGetRemoteBindFailed(l.logger, newBind.Table, err)
+			return ErrLockTableBindChanged
+		}
+		if !refreshedBind.Changed(l.bind) {
+			return ErrLockTableBindChanged
+		}
+		if err := l.allocatorBindChangedHandler(
+			"remote-new-bind",
+			l.bind,
+			refreshedBind,
+			allocator,
+			requestAllocator); err != nil {
+			return err
+		}
+		return ErrLockTableBindChanged
+	}
+	l.bindChangedHandler(newBind)
 	return ErrLockTableBindChanged
 }
 
