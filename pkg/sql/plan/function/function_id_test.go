@@ -394,19 +394,8 @@ var predefinedFunids = map[int]int{
 	TS_TO_TIME: 343,
 	STRCMP:     344,
 
-	STARLARK:                      345,
-	TRY_STARLARK:                  346,
-	DAYOFWEEK:                     347,
-	ELT:                           348,
-	NULL_SAFE_EQUAL:               349,
-	CURRENT_TIME:                  350,
-	TIMESTAMPADD:                  351,
-	SUBTIME:                       352,
-	GET_FORMAT:                    353,
-	YEARWEEK:                      354,
-	CAST_INDEX_TO_SET_VALUE:       355,
-	CAST_SET_VALUE_TO_INDEX:       356,
-	CAST_SET_INDEX_VALUE_TO_INDEX: 357,
+	STARLARK:     345,
+	TRY_STARLARK: 346,
 
 	LLM_CHAT:      347,
 	LLM_EMBEDDING: 348,
@@ -606,9 +595,10 @@ var predefinedFunids = map[int]int{
 	ST_POINT:                      539,
 	ST_POINT32:                    540,
 	CAST_STRICT:                   541,
+	CAST_ASSIGN:                   542,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 542,
+	FUNCTION_END_NUMBER: 543,
 }
 
 func Test_funids(t *testing.T) {
@@ -627,13 +617,4 @@ func Test_funids(t *testing.T) {
 	for _, fid := range functionIdRegister {
 		check(int(fid))
 	}
-}
-
-func TestTimeCompatibilityFunctionNames(t *testing.T) {
-	require.Equal(t, int32(ADDTIME), functionIdRegister["addtime"])
-	require.Equal(t, int32(CURRENT_TIME), functionIdRegister["current_time"])
-	require.Equal(t, int32(CURRENT_TIME), functionIdRegister["curtime"])
-	require.Equal(t, int32(GET_FORMAT), functionIdRegister["get_format"])
-	require.Equal(t, int32(SUBTIME), functionIdRegister["subtime"])
-	require.Equal(t, int32(TIMESTAMPADD), functionIdRegister["timestampadd"])
 }

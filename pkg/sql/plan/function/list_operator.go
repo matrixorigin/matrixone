@@ -272,25 +272,9 @@ var supportedOperators = []FuncNew{
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 
-			// All-numeric decimal BETWEEN: betweenImpl compares raw decimal
-			// values without rescaling at runtime, so the three operands must
-			// share one identical decimal type. Compute a common type that
-			// preserves the max integral width AND max scale across the three
-			// operands (issue #24565), promoting to decimal256 when decimal128
-			// would overflow, instead of only aligning scale (which could keep
-			// an under-sized width / family and overflow) or rejecting
-			// mixed-scale/mixed-family decimals.
-			anyDecimal := inputs[0].Oid.IsDecimal() || inputs[1].Oid.IsDecimal() || inputs[2].Oid.IsDecimal()
-			allDecimalOrInt := isDecimalOrInteger(inputs[0]) && isDecimalOrInteger(inputs[1]) && isDecimalOrInteger(inputs[2])
-			if anyDecimal && allDecimalOrInt {
-				target := widestDecimalFamily(inputs).ToType()
-				if !setSafeDecimalWidthAndScaleFromSource(&target, inputs) {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-				if !otherCompareOperatorSupports(target, target) {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-				return newCheckResultWithCast(0, []types.Type{target, target, target})
+			if jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[1]}) ||
+				jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[2]}) {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 
 			has0, t01, t1 := fixedTypeCastRule1(inputs[0], inputs[1])
@@ -298,14 +282,24 @@ var supportedOperators = []FuncNew{
 			if t01.Oid != t02.Oid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
-			if !otherCompareOperatorSupports(t01, t1) || !otherCompareOperatorSupports(t01, t2) {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
+
+			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
+				if t01.Scale != t1.Scale || t02.Scale != t2.Scale {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
 			}
 
 			if has0 || has1 {
-				return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
+				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
+					return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
+				}
+			} else {
+				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
+					return newCheckResultWithSuccess(0)
+				}
 			}
-			return newCheckResultWithSuccess(0)
+
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
 
 		Overloads: []overload{
