@@ -3356,11 +3356,11 @@ select count(*) from td;
 count(*)
 20971520
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
-
+[unknown result because it is related to issue#13008]
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
-
+[unknown result because it is related to issue#23427]
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
-
+[unknown result because it is related to issue#23427]
 drop table td;
 drop table if exists `c`;
 create table `c` (
@@ -4759,4 +4759,78 @@ id    k_label    v    cnt
 6    4    11    6
 drop table t_range_null;
 drop database test_range_null_order_key;
+create database if not exists test_range_desc;
+use test_range_desc;
+create table t_desc(id int primary key, k int, v int);
+insert into t_desc values
+(1, 4, 10),
+(2, 2, 5),
+(3, 2, 7),
+(4, 1, 11),
+(5, null, 20),
+(6, null, 30);
+select * from t_desc order by k desc;
+id    k    v
+1    4    10
+2    2    5
+3    2    7
+4    1    11
+5    null    20
+6    null    30
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+count(*) over (order by k desc range between 1 preceding and current row) as cnt_rng,
+sum(v) over (order by k desc range between 1 preceding and current row) as sum_rng
+from t_desc order by k desc, id;
+id    k_label    v    cnt_rng    sum_rng
+1    4    10    1    10
+2    2    5    2    12
+3    2    7    2    12
+4    1    11    3    23
+5    NULL    20    2    50
+6    NULL    30    2    50
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+count(*) over (order by k desc range between current row and 1 following) as cnt_rng,
+sum(v) over (order by k desc range between current row and 1 following) as sum_rng
+from t_desc order by k desc, id;
+id    k_label    v    cnt_rng    sum_rng
+1    4    10    1    10
+2    2    5    3    23
+3    2    7    3    23
+4    1    11    1    11
+5    NULL    20    2    50
+6    NULL    30    2    50
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+count(*) over (order by k desc range between unbounded preceding and current row) as cnt_rng
+from t_desc order by k desc, id;
+id    k_label    v    cnt_rng
+1    4    10    1
+2    2    5    3
+3    2    7    3
+4    1    11    4
+5    NULL    20    6
+6    NULL    30    6
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+count(*) over (order by k desc nulls last range between 1 preceding and current row) as cnt_rng,
+sum(v) over (order by k desc nulls last range between 1 preceding and current row) as sum_rng
+from t_desc order by k desc nulls last, id;
+id    k_label    v    cnt_rng    sum_rng
+1    4    10    1    10
+2    2    5    2    12
+3    2    7    2    12
+4    1    11    3    23
+5    NULL    20    2    50
+6    NULL    30    2    50
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+count(*) over (order by k desc nulls last range between current row and 1 following) as cnt_rng,
+sum(v) over (order by k desc nulls last range between current row and 1 following) as sum_rng
+from t_desc order by k desc nulls last, id;
+id    k_label    v    cnt_rng    sum_rng
+1    4    10    1    10
+2    2    5    3    23
+3    2    7    3    23
+4    1    11    1    11
+5    NULL    20    2    50
+6    NULL    30    2    50
+drop table t_desc;
+drop database test_range_desc;
 drop database test;

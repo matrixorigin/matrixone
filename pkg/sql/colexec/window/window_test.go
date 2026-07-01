@@ -162,7 +162,7 @@ func TestSearchLeftUnsupportedType(t *testing.T) {
 	require.NoError(t, err)
 	defer vec.Free(mp)
 
-	_, err = searchLeft(0, 1, 0, vec, nil, false)
+	_, err = searchLeft(0, 1, 0, vec, nil, false, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported type")
 }
@@ -181,12 +181,12 @@ func TestSearchLeftWithNulls(t *testing.T) {
 
 	// NULL rows should be treated as peers
 	// For rowIdx=0 (NULL), searchLeft should return 0 (start of NULL peer group)
-	left, err := searchLeft(0, 6, 0, vec, nil, false)
+	left, err := searchLeft(0, 6, 0, vec, nil, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 0, left, "NULL row at idx 0: all NULL peers should share the same left boundary")
 
 	// For rowIdx=1 (NULL), searchLeft should also return 0 (peer with row 0)
-	left, err = searchLeft(0, 6, 1, vec, nil, false)
+	left, err = searchLeft(0, 6, 1, vec, nil, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 0, left, "NULL row at idx 1: should return start of NULL peer group, not its own index")
 
@@ -198,7 +198,7 @@ func TestSearchLeftWithNulls(t *testing.T) {
 				Value: &plan.Literal_I64Val{I64Val: 1},
 			},
 		},
-	}, false)
+	}, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 2, left, "k=1 with 1 PRECEDING: should start at first non-NULL (idx 2), not include NULLs")
 }
@@ -217,12 +217,12 @@ func TestSearchRightWithNulls(t *testing.T) {
 
 	// NULL rows should be treated as peers
 	// For rowIdx=0 (NULL), searchRight should return 2 (end of NULL peer group, exclusive)
-	right, err := searchRight(0, 6, 0, vec, nil, false)
+	right, err := searchRight(0, 6, 0, vec, nil, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 2, right, "NULL row at idx 0: should return end of NULL peer group (idx 2)")
 
 	// For rowIdx=1 (NULL), searchRight should also return 2
-	right, err = searchRight(0, 6, 1, vec, nil, false)
+	right, err = searchRight(0, 6, 1, vec, nil, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 2, right, "NULL row at idx 1: should return end of NULL peer group (idx 2)")
 }
@@ -243,11 +243,11 @@ func TestSearchLeftWithNullsDesc(t *testing.T) {
 	defer vec.Free(mp)
 
 	// NULL rows should be treated as peers (DESC NULLS LAST)
-	left, err := searchLeft(0, 5, 3, vec, nil, false)
+	left, err := searchLeft(0, 5, 3, vec, nil, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 3, left, "NULL row at idx 3: all NULL peers share same left boundary (start of NULL group)")
 
-	left, err = searchLeft(0, 5, 4, vec, nil, false)
+	left, err = searchLeft(0, 5, 4, vec, nil, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 3, left, "NULL row at idx 4: should return start of NULL peer group (idx 3)")
 
@@ -274,11 +274,11 @@ func TestSearchRightWithNullsDesc(t *testing.T) {
 	defer vec.Free(mp)
 
 	// NULL rows are peers
-	right, err := searchRight(0, 5, 3, vec, nil, false)
+	right, err := searchRight(0, 5, 3, vec, nil, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 5, right, "NULL row at idx 3: should return end of NULL peer group (idx 5)")
 
-	right, err = searchRight(0, 5, 4, vec, nil, false)
+	right, err = searchRight(0, 5, 4, vec, nil, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 5, right, "NULL row at idx 4: should return end of NULL peer group (idx 5)")
 
@@ -298,11 +298,11 @@ func TestSearchLeftAllNulls(t *testing.T) {
 	defer vec.Free(mp)
 
 	// All rows are NULL peers — every row should return 0 (start of the NULL group)
-	left, err := searchLeft(0, 5, 0, vec, nil, false)
+	left, err := searchLeft(0, 5, 0, vec, nil, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 0, left, "all NULL: row 0 should start at 0")
 
-	left, err = searchLeft(0, 5, 4, vec, nil, false)
+	left, err = searchLeft(0, 5, 4, vec, nil, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 0, left, "all NULL: row 4 should start at 0 (all peers)")
 }
@@ -314,7 +314,77 @@ func TestSearchRightUnsupportedType(t *testing.T) {
 	require.NoError(t, err)
 	defer vec.Free(mp)
 
-	_, err = searchRight(0, 1, 0, vec, nil, false)
+	_, err = searchRight(0, 1, 0, vec, nil, false, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported type")
+}
+
+// TestSearchLeftDescRange verifies searchLeft with desc=true.
+// DESC NULLS LAST ordering: raw values [4, 2, 2, 1, NULL, NULL].
+func TestSearchLeftDescRange(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_int64.ToType())
+	values := []int64{4, 2, 2, 1, 0, 0}
+	nullRows := []bool{false, false, false, false, true, true}
+	for i, v := range values {
+		require.NoError(t, vector.AppendFixed(vec, v, nullRows[i], mp))
+	}
+	defer vec.Free(mp)
+
+	// CURRENT ROW (desc=true): find first equal to 2
+	left, err := searchLeft(0, 4, 1, vec, nil, false, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, left, "DESC CURRENT ROW k=2: should find first peer at idx 1")
+
+	// 1 PRECEDING from k=2 (desc): target = 2+1 = 3, find first <= 3
+	left, err = searchLeft(0, 4, 1, vec, &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}},
+	}, false, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, left, "DESC k=2 1 PRECEDING: should find first <= 3 (idx 1, value 2)")
+
+	// 1 PRECEDING from k=4 (desc): target = 4+1 = 5, find first <= 5
+	left, err = searchLeft(0, 4, 0, vec, &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}},
+	}, false, true)
+	require.NoError(t, err)
+	require.Equal(t, 0, left, "DESC k=4 1 PRECEDING: should find first <= 5 (idx 0, value 4)")
+
+	// 1 FOLLOWING from k=2 (desc): target = 2-1 = 1, find first <= 1
+	left, err = searchLeft(0, 4, 1, vec, &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}},
+	}, true, true)
+	require.NoError(t, err)
+	require.Equal(t, 3, left, "DESC k=2 1 FOLLOWING: should find first <= 1 (idx 3, value 1)")
+}
+
+// TestSearchRightDescRange verifies searchRight with desc=true.
+func TestSearchRightDescRange(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_int64.ToType())
+	values := []int64{4, 2, 2, 1, 0, 0}
+	nullRows := []bool{false, false, false, false, true, true}
+	for i, v := range values {
+		require.NoError(t, vector.AppendFixed(vec, v, nullRows[i], mp))
+	}
+	defer vec.Free(mp)
+
+	// CURRENT ROW (desc=true): find last equal to 2
+	right, err := searchRight(0, 4, 1, vec, nil, false, true)
+	require.NoError(t, err)
+	require.Equal(t, 3, right, "DESC CURRENT ROW k=2: should find exclusive end after last peer (idx 3)")
+
+	// 1 FOLLOWING from k=2 (desc): target = 2-1 = 1, find last >= 1
+	right, err = searchRight(0, 4, 1, vec, &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}},
+	}, false, true)
+	require.NoError(t, err)
+	require.Equal(t, 4, right, "DESC k=2 1 FOLLOWING: should include idx 3 (value 1), exclusive end = 4")
+
+	// 1 PRECEDING from k=1 (desc): target = 1+1 = 2, find last >= 2
+	right, err = searchRight(0, 4, 3, vec, &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}},
+	}, true, true)
+	require.NoError(t, err)
+	require.Equal(t, 3, right, "DESC k=1 1 PRECEDING: should include up to idx 2 (value 2), exclusive end = 3")
 }
