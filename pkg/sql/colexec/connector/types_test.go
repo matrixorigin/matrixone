@@ -146,7 +146,7 @@ func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing
 
 func TestConnectorResetUsesSharedTerminalSendBudget(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
-	process.PipelineSignalSendTimeout = 100 * time.Millisecond
+	process.PipelineSignalSendTimeout = 200 * time.Millisecond
 	t.Cleanup(func() {
 		process.PipelineSignalSendTimeout = oldSignalSendTimeout
 	})
@@ -159,7 +159,7 @@ func TestConnectorResetUsesSharedTerminalSendBudget(t *testing.T) {
 	conn.Reset(nil, false, nil)
 	elapsed := time.Since(start)
 
-	require.Less(t, elapsed, 180*time.Millisecond)
+	require.Less(t, elapsed, 300*time.Millisecond)
 	select {
 	case <-reg.Done():
 	default:

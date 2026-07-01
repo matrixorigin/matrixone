@@ -919,9 +919,7 @@ func TestReceiveMessageFromCnServerIfConnector_ReturnsOnBlockedReceiverCancel(t 
 		Proc:   proc,
 		RootOp: connector.NewArgument(),
 	}
-	s.RootOp.(*connector.Connector).Reg = &process.WaitRegister{
-		Ch2: make(chan process.PipelineSignal, 1),
-	}
+	s.RootOp.(*connector.Connector).Reg = process.NewPipelineEdge(1, 0)
 	s.RootOp.(*connector.Connector).Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
 
 	sender := &messageSenderOnClient{
@@ -952,8 +950,8 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	forwardCh := make(chan process.PipelineSignal, 1)
-	forwardCh <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+	forwardReg := process.NewPipelineEdge(1, 0)
+	forwardReg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
 
 	sender := &messageSenderOnClient{
 		ctx:       ctx,
@@ -964,7 +962,7 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- receiveMsgAndForward(sender, forwardCh)
+		done <- receiveMsgAndForward(sender, forwardReg)
 	}()
 
 	cancel()
@@ -974,8 +972,32 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
 	case <-time.After(time.Second):
-		<-forwardCh
+		<-forwardReg.Ch2
 		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
+	}
+}
+
+func TestReceiveMsgAndForward_ReturnsOnReceiverTerminal(t *testing.T) {
+	forwardReg := process.NewPipelineEdge(1, 0)
+	require.True(t, forwardReg.Abort(moerr.NewInternalErrorNoCtx("receiver terminal")))
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        mpool.MustNewZero(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMsgAndForward(sender, forwardReg)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.Fail(t, "receiveMsgAndForward did not unblock after receiver terminal")
 	}
 }
 
@@ -1014,7 +1036,7 @@ func TestRemoteNotifyCleanupUsesTypedEndForSingleSender(t *testing.T) {
 
 func TestRemoteNotifyCleanupUsesSharedTerminalSendBudget(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
-	process.PipelineSignalSendTimeout = 100 * time.Millisecond
+	process.PipelineSignalSendTimeout = 200 * time.Millisecond
 	t.Cleanup(func() {
 		process.PipelineSignalSendTimeout = oldSignalSendTimeout
 	})
@@ -1026,7 +1048,7 @@ func TestRemoteNotifyCleanupUsesSharedTerminalSendBudget(t *testing.T) {
 	require.False(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
 	elapsed := time.Since(start)
 
-	require.Less(t, elapsed, 180*time.Millisecond)
+	require.Less(t, elapsed, 300*time.Millisecond)
 	select {
 	case <-reg.Done():
 	default:
