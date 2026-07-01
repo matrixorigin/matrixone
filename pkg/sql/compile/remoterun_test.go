@@ -62,7 +62,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
@@ -185,7 +184,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&deletion.Deletion{
 			DeleteCtx: &deletion.DeleteCtx{},
 		},
-		&onduplicatekey.OnDuplicatekey{},
 		&preinsert.PreInsert{},
 		&lockop.LockOp{},
 		&preinsertunique.PreInsertUnique{},
@@ -266,7 +264,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.PreInsert), PreInsert: &pipeline.PreInsert{}},
 		{Op: int32(vm.LockOp), LockOp: &pipeline.LockOp{}},
 		{Op: int32(vm.PreInsertUnique), PreInsertUnique: &pipeline.PreInsertUnique{}},
-		{Op: int32(vm.OnDuplicateKey), OnDuplicateKey: &pipeline.OnDuplicateKey{}},
 		{Op: int32(vm.Shuffle), Shuffle: &pipeline.Shuffle{}},
 		{Op: int32(vm.Dispatch), Dispatch: &pipeline.Dispatch{}},
 		{Op: int32(vm.Group), Agg: &pipeline.Group{}},
@@ -356,22 +353,6 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	}
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
-
-	t.Run("OnDuplicateKey_IsIgnore", func(t *testing.T) {
-		op := &onduplicatekey.OnDuplicatekey{
-			IsIgnore:       true,
-			InsertColCount: 3,
-		}
-		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
-		require.NoError(t, err)
-		require.True(t, pipeInstr.OnDuplicateKey.IsIgnore)
-
-		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
-		require.NoError(t, err)
-		restoredOp := restored.(*onduplicatekey.OnDuplicatekey)
-		require.True(t, restoredOp.IsIgnore)
-		require.Equal(t, int32(3), restoredOp.InsertColCount)
-	})
 
 	t.Run("FuzzyFilter_BuildIdx", func(t *testing.T) {
 		op := &fuzzyfilter.FuzzyFilter{
@@ -1200,49 +1181,6 @@ func TestDeletionCanTruncateSerializationRoundtrip(t *testing.T) {
 	require.Equal(t, 1, restored.DeleteCtx.RowIdIdx)
 	require.Equal(t, 0, restored.DeleteCtx.PrimaryKeyIdx)
 	require.True(t, restored.DeleteCtx.AddAffectedRows)
-}
-
-// TestOnDuplicateKeyIsIgnoreSerializationRoundtrip verifies that IsIgnore is
-// properly serialized and deserialized when OnDuplicateKey operators are sent to remote CN.
-func TestOnDuplicateKeyIsIgnoreSerializationRoundtrip(t *testing.T) {
-	// Create an OnDuplicateKey operator with IsIgnore=true
-	arg := onduplicatekey.NewArgument()
-	arg.Attrs = []string{"col1", "col2"}
-	arg.InsertColCount = 2
-	arg.IsIgnore = true
-
-	// Create minimal context for serialization
-	ctx := &scopeContext{
-		id:       0,
-		plan:     &plan.Plan{},
-		scope:    &Scope{},
-		root:     &scopeContext{},
-		parent:   nil,
-		children: nil,
-		pipe:     nil,
-		regs:     make(map[*process.WaitRegister]int32),
-	}
-	ctx.root = ctx
-
-	// Serialize to pipeline instruction
-	_, in, err := convertToPipelineInstruction(arg, nil, ctx, 0)
-	require.NoError(t, err)
-	require.NotNil(t, in.OnDuplicateKey)
-	require.True(t, in.OnDuplicateKey.IsIgnore, "IsIgnore should be serialized")
-
-	// Deserialize back to operator
-	opr := &pipeline.Instruction{
-		Op:             int32(vm.OnDuplicateKey),
-		OnDuplicateKey: in.OnDuplicateKey,
-	}
-	op, err := convertToVmOperator(opr, ctx, nil)
-	require.NoError(t, err)
-	require.NotNil(t, op)
-
-	restored := op.(*onduplicatekey.OnDuplicatekey)
-	require.True(t, restored.IsIgnore, "IsIgnore should be deserialized")
-	require.Equal(t, []string{"col1", "col2"}, restored.Attrs)
-	require.Equal(t, int32(2), restored.InsertColCount)
 }
 
 // newDispatchSrcScopeForTest builds a cross-CN shuffle dispatch source scope:

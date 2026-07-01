@@ -43,6 +43,7 @@ func init() {
 	initFileServiceMetrics()
 	initLogtailMetrics()
 	initTxnMetrics()
+	initLockServiceMetrics()
 	initTaskMetrics()
 	initRPCMetrics()
 	initMemMetrics()
@@ -262,6 +263,7 @@ func initFrontendMetrics() {
 func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
 	registry.MustRegister(pipelineStreamGauge)
+	registry.MustRegister(PipelineCleanupEventCounter)
 }
 
 func initLogServiceMetrics() {
