@@ -54,8 +54,11 @@ func OfflineKindStrict(local, s3, local2 bool) (string, error) {
 		kind = OfflineKindLocal2
 		n++
 	}
-	if n != 1 {
-		return "", moerr.NewInvalidInputNoCtx("specify exactly one of --local, --s3, --local2")
+	switch {
+	case n == 0:
+		return "", moerr.NewInvalidInputNoCtx("no format specified; use one of --local, --s3, --local2")
+	case n > 1:
+		return "", moerr.NewInvalidInputNoCtx("conflicting formats specified; choose one of --local, --s3, --local2")
 	}
 	return kind, nil
 }

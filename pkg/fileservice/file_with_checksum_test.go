@@ -21,6 +21,7 @@ import (
 	"io"
 	mrand "math/rand"
 	"os"
+	"sync"
 	"testing"
 	"testing/iotest"
 
@@ -491,4 +492,50 @@ func BenchmarkFileWithChecksumReadAt(b *testing.B) {
 			fw.readAtPerBlock(out, 0)
 		}
 	})
+}
+
+// TestFileWithoutChecksumConcurrentWriteAt confirms passthrough mode is safe for
+// concurrent WriteAt at distinct offsets through a single shared wrapper. In
+// passthrough mode WriteAt goes straight to the underlying pwrite and must NOT
+// touch the wrapper's contentOffset (only the sequential Read/Write path uses
+// it), so parallel writers at different offsets cannot corrupt each other.
+func TestFileWithoutChecksumConcurrentWriteAt(t *testing.T) {
+	ctx := context.Background()
+	f, err := os.CreateTemp(t.TempDir(), "*")
+	require.NoError(t, err)
+	t.Cleanup(func() { f.Close() })
+
+	fw := NewFileWithoutChecksum(ctx, f, _BlockContentSize, nil)
+
+	const nRegions = 32
+	const regionSize = 4096
+	want := make([][]byte, nRegions)
+	var wg sync.WaitGroup
+	for i := 0; i < nRegions; i++ {
+		buf := make([]byte, regionSize)
+		_, err := rand.Read(buf)
+		require.NoError(t, err)
+		want[i] = buf
+		wg.Add(1)
+		go func(i int, buf []byte) {
+			defer wg.Done()
+			n, werr := fw.WriteAt(buf, int64(i)*regionSize)
+			assert.NoError(t, werr)
+			assert.Equal(t, regionSize, n)
+		}(i, buf)
+	}
+	wg.Wait()
+
+	// Each region must read back exactly what was written to it.
+	for i := 0; i < nRegions; i++ {
+		got := make([]byte, regionSize)
+		n, rerr := fw.ReadAt(got, int64(i)*regionSize)
+		require.NoError(t, rerr)
+		require.Equal(t, regionSize, n)
+		require.Truef(t, bytes.Equal(want[i], got), "region %d mismatch", i)
+	}
+	// Raw invariant: file size == nRegions*regionSize (no CRC inflation, no gaps).
+	info, err := f.Stat()
+	require.NoError(t, err)
+	require.Equal(t, int64(nRegions*regionSize), info.Size())
 }

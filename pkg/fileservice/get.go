@@ -249,6 +249,10 @@ func LocalBackendOf(fs FileService) string {
 	if lfs, ok := fs.(*LocalFS); ok && !lfs.noChecksum {
 		return diskFileServiceBackend
 	}
+	// Everything else exposes the raw (unframed) on-disk layout — a DISK-V2
+	// LocalFS, S3FS, MemoryFS, ErrorFS, … — so a local copy of their data must
+	// use the DISK-V2 (raw) backend. Only the legacy CRC32-framed LocalFS above
+	// maps to DISK.
 	return diskV2FileServiceBackend
 }
 
