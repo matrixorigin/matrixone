@@ -777,20 +777,20 @@ select * from t8 where price > 9.99 and price < 99.99 order by id;
 4  ¦  49.99
 drop table if exists t9;
 create table t9 (
-    id varchar(64) not null,
-    user_id varchar(64) not null,
-    session_id varchar(64) not null,
-    status varchar(32) not null,
-    due datetime(6) null,
-    attempts int not null,
-    primary key (user_id, session_id, id),
-    index idx_ret(status, due, user_id, session_id, id)
+id varchar(64) not null,
+user_id varchar(64) not null,
+session_id varchar(64) not null,
+status varchar(32) not null,
+due datetime(6) null,
+attempts int not null,
+primary key (user_id, session_id, id),
+index idx_ret(status, due, user_id, session_id, id)
 );
 insert into t9 values
-    ('a1', 'u1', 's1', 'active', '2026-07-02 00:00:00.000001', 10),
-    ('a2', 'u1', 's2', 'expired', '2026-07-03 00:00:00.000002', 20),
-    ('a3', 'u2', 's1', 'expiring', '2026-07-04 00:00:00.000003', 30),
-    ('a4', 'u2', 's2', 'active', NULL, 40);
+('a1', 'u1', 's1', 'active', '2026-07-02 00:00:00.000001', 10),
+('a2', 'u1', 's2', 'expired', '2026-07-03 00:00:00.000002', 20),
+('a3', 'u2', 's1', 'expiring', '2026-07-04 00:00:00.000003', 30),
+('a4', 'u2', 's2', 'active', NULL, 40);
 select mo_ctl('dn', 'flush', 'd1.t9');
 ➤ mo_ctl(dn, flush, d1.t9)[12,-1,0]  𝄀
 {
@@ -865,7 +865,7 @@ select count(*) as count_after_replace_expiring from t9 where status = 'expiring
 ➤ count_after_replace_expiring[-5,64,0]  𝄀
 0
 insert into t9 values ('a3', 'u2', 's1', 'closed', '2026-07-07 00:00:00.000006', 55)
-    on duplicate key update status = values(status), due = values(due), attempts = values(attempts);
+on duplicate key update status = values(status), due = values(due), attempts = values(attempts);
 select count(*) as count_after_odku_active from t9 where status = 'active';
 ➤ count_after_odku_active[-5,64,0]  𝄀
 1

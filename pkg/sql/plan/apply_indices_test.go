@@ -1540,7 +1540,27 @@ func TestReplaceNonEqualConditionUsesSerialFullForNonUniqueCompositeIndexIn(t *t
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_in", expr.GetF().Func.ObjName)
-	assert.Equal(t, "serial_full", wrappedSerialFuncName(t, expr.GetF().Args[1]))
+	assertListItemsWrappedBySerialFunc(t, expr.GetF().Args[1], "serial_full", 2)
+}
+
+func TestReplaceNonEqualConditionWrapsEachPreparedInListItemWithSerialFull(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+
+	expr := builder.replaceNonEqualCondition(idxDef, makeParamInFilterExpr(0, 1, 10), 42, makeTestIndexTableDef())
+
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "prefix_in", expr.GetF().Func.ObjName)
+	assertListItemsWrappedBySerialFunc(t, expr.GetF().Args[1], "serial_full", 10)
+	for i, item := range expr.GetF().Args[1].GetList().List {
+		args := item.GetF().Args
+		require.Len(t, args, 1)
+		require.NotNil(t, args[0].GetP())
+		assert.Equal(t, int32(i), args[0].GetP().Pos)
+	}
 }
 
 func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing.T) {
@@ -1786,6 +1806,55 @@ func wrappedSerialFuncName(t *testing.T, expr *planpb.Expr) string {
 	fn := expr.GetF()
 	require.NotNil(t, fn)
 	return fn.Func.ObjName
+}
+
+func assertListItemsWrappedBySerialFunc(t *testing.T, expr *planpb.Expr, serialFunc string, expectedLen int) {
+	t.Helper()
+	require.NotNil(t, expr)
+	list := expr.GetList()
+	require.NotNil(t, list)
+	require.Len(t, list.List, expectedLen)
+	for _, item := range list.List {
+		assert.Equal(t, serialFunc, wrappedSerialFuncName(t, item))
+	}
+}
+
+func makeParamInFilterExpr(relPos, colPos int32, n int) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int32)}
+	list := make([]*planpb.Expr, 0, n)
+	for i := 0; i < n; i++ {
+		list = append(list, &planpb.Expr{
+			Typ: typ,
+			Expr: &planpb.Expr_P{
+				P: &planpb.ParamRef{Pos: int32(i)},
+			},
+		})
+	}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in"},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_List{
+							List: &planpb.ExprList{List: list},
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 func makeRangeFilterExpr(relPos, colPos int32, op string, val int64) *planpb.Expr {
