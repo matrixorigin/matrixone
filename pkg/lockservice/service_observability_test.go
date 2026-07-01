@@ -97,7 +97,7 @@ func TestForceRefreshLockTableBinds(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, _ *service,
 			table uint64) {
 			l1.ForceRefreshLockTableBinds(nil, nil)
 			l2.ForceRefreshLockTableBinds(nil, nil)
@@ -132,7 +132,7 @@ func TestGetLockTableBind(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, _ *service,
 			table uint64) {
 			bind1, err := l1.GetLockTableBind(0, table)
 			require.NoError(t, err)

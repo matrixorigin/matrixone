@@ -161,7 +161,7 @@ type lockTable interface {
 	// getBind returns lock table binding
 	getBind() pb.LockTable
 	// close close the locktable
-	close()
+	close(...closeReason)
 }
 
 // LockTableAllocator is used to managing the binding relationship between
