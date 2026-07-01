@@ -15,6 +15,7 @@
 package logservicedriver
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -72,4 +73,36 @@ func TestNewClientPoolPanicsWhenFactoryAlwaysFail(t *testing.T) {
 	require.PanicsWithError(t, moerr.NewInternalErrorNoCtx("always fail").Error(), func() {
 		newClientPool(cfg)
 	})
+}
+
+func TestTruncateFromRemoteUsesPooledClient(t *testing.T) {
+	var creations atomic.Int32
+	backend := NewMockBackend()
+
+	cfg := &Config{
+		ClientMaxCount:      1,
+		ClientBufSize:       128,
+		MaxTimeout:          time.Second,
+		ClientRetryTimes:    1,
+		ClientRetryInterval: time.Millisecond,
+		ClientRetryDuration: time.Millisecond,
+		ClientFactory: func() (logservice.Client, error) {
+			creations.Add(1)
+			return newMockBackendClient(backend), nil
+		},
+	}
+	cfg.fillDefaults()
+	cfg.validate()
+
+	driver := &LogServiceDriver{
+		config:     *cfg,
+		clientPool: newClientPool(cfg),
+	}
+	t.Cleanup(driver.clientPool.Close)
+
+	psnTruncated, err := driver.truncateFromRemote(context.Background(), 1, 0)
+
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), psnTruncated)
+	require.Equal(t, int32(1), creations.Load())
 }

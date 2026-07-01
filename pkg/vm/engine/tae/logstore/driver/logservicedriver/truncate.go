@@ -162,7 +162,7 @@ func (d *LogServiceDriver) truncateFromRemote(
 		)
 	}()
 
-	if client, err = d.clientPool.GetOnFly(); err == ErrClientPoolClosed {
+	if client, err = d.clientPool.Get(); err != nil {
 		return
 	}
 	defer client.Putback()
