@@ -1591,15 +1591,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	// deal with some special function
 	switch name {
-	case "serial":
+	case "serial", "serial_full":
 		if len(args) == 1 {
 			if listExpr, ok := args[0].Expr.(*plan.Expr_List); ok {
 				for i, subExpr := range listExpr.List.List {
-					newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, "serial", []*Expr{subExpr})
+					newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{subExpr})
 					if err != nil {
 						return nil, err
 					}
 					listExpr.List.List[i] = newSubExpr
+					if i == 0 {
+						args[0].Typ = newSubExpr.Typ
+					}
 				}
 				return args[0], nil
 			}
