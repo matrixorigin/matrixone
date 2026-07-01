@@ -295,12 +295,20 @@ without re-tokenizing.
    is async".)
 1. **Schema** (`schema.go`): keep `ft_index`+`ft_meta`, **no new table** (delta
    insert segments + delete records both = tag=1 in `ft_index`, compacted main =
-   tag=0); **drop the postings hidden table** (sinker tokenizes CDC rows directly,
-   like HNSW). **No `async` param injection** — async-ness comes from the
-   parser-aware `AlwaysAsync(idx)` (see above).
-2. **Create** (`compile.go HandleCreateIndex`): replace sync `genWandBuildSQL` with
-   CDC registration (`CreateIndexCdcTask`, replay-from-creation builds initial
-   segments) — mirror the HNSW async branch.
+   tag=0). **KEEP the postings hidden table** — unlike HNSW, WAND builds its store
+   *from* postings via SQL aggregation (`source → postings → GROUP BY word,doc_id
+   ORDER BY … → fulltext_wand_create → tag=0`), so `CREATE INDEX` and full-reindex
+   need it; only the incremental CDC delta path (the sinker) is postings-free.
+   **No `async` param injection** — async-ness comes from the parser-aware
+   `AlwaysAsync(idx)` (see above).
+2. **Create** (`compile.go HandleCreateIndex`): flip the async check to
+   `indexplugin.IndexIsAsync` so retrieval registers a CDC task, but **keep the
+   postings-based build** — pass `CreateIndexCdcTask` a non-empty **InitSQL** that
+   builds the WAND store from postings (`genInsertSQL` → postings, then
+   `genWandBuildSQL` → tag=0), replacing the current empty `sql=""`. ISCP runs the
+   InitSQL at task start (beginning of ISCP), so the initial build still goes
+   through the postings table; `genWandBuildSQL` is not dropped, it just moves into
+   the InitSQL. Then CDC deltas maintain tag=1.
 3. **WAND ISCP sinker** (`pkg/iscp` + `pkg/fulltext`): model on `index_consumer.go
    runHnsw` / `hnsw/sync.go sequentialUpdate`. Per batch: tokenize INSERT/UPSERT →
    `Builder.Add` → on flush `FinishSegments` → append the segment frame(s) to the
@@ -376,9 +384,12 @@ is **green**, so the foundation below survived the merge unchanged.
   (`pkid` fold at `Load`) couples identity to ISCP's LSN.
 - **(b) `WandSqlWriter` + `RunWand`** in `pkg/iscp` — mirror `NewFulltextSqlWriter` (`index_sqlwriter.go:251`) + `runHnsw` (`index_consumer.go:240`). Writer accumulates insert `{pk,text}` + delete `{pk}` rows → blob; `RunWand` consumes blobs → tokenize via `tokenizer.SharedJiebaTokenizer(false)` (**same** path as search `parsePatternInNLModeJieba`, so build/query tokens match) → `Builder.Add` → on channel close `FinishSegments` → **append the segment frame(s) and delete frame(s) to the tag=1 `CdcTail` log at `NextChunkIdSql`** + `UpdateWatermark`. (`pkg/iscp` already imports algo pkgs e.g. hnsw, so importing `pkg/fulltext/wand` is consistent — no cycle.)
 - **(c)** Branch the fulltext plugin iscp `Hooks` (`pkg/fulltext/plugin/iscp/iscp.go` `NewSqlWriter`/`Run`) on `parser==retrieval` → Wand writer/run, else the postings writer/`RunIndex`.
-- **(d)** Flip `HandleCreateIndex` (`pkg/fulltext/plugin/compile/compile.go`) from `catalog.IsIndexAsync` → `indexplugin.IndexIsAsync`, and skip `genWandBuildSQL` for retrieval (CDC builds the initial segment via replay-from-creation).
+- **(d)** In `HandleCreateIndex` (`pkg/fulltext/plugin/compile/compile.go`), flip the async check `catalog.IsIndexAsync` → `indexplugin.IndexIsAsync` (retrieval → async). **Do NOT skip the build:** the async branch's `CreateIndexCdcTask` call currently passes an empty `sql=""` — for retrieval pass a non-empty **InitSQL that builds the WAND store from postings** (`genInsertSQL` → postings, `genWandBuildSQL` → tag=0). ISCP runs the InitSQL at task start (the build happens at the beginning of ISCP, not synchronously at CREATE), so the **postings table is still required**; `genWandBuildSQL` is not dropped, it moves into the InitSQL. Then CDC deltas maintain tag=1. (Corrects the earlier "skip genWandBuildSQL / replay-from-creation" wording.)
 - **(e) Multi-frame search adapter** (`wandsearch.go`): `LoadFromStorage` currently loads ONE `index_id`; instead load tag=0 base + the tag=1 `CdcTail` frames **sorted by `chunk_id`** → ordered `segs` + delete map → `ComputeLiveness` (keyed by `chunk_id`) → `SearchSegmentsLive`. Also `SELECT` the metadata needed (`chunk_id` order is intrinsic to the log).
-- **(f)** Drop the postings hidden table for `parser==retrieval` (`schema.go`).
+- **(f) ~~Drop the postings hidden table~~ — DROPPED.** Postings is the
+  CREATE / full-reindex build pipeline (`source → postings → SQL aggregate/sort →
+  fulltext_wand_create → tag=0`), not scratch — it stays. Only the incremental CDC
+  delta path is postings-free.
 - **(g)** idxcron **full-reindex** trigger + gate (B3) — full rebuild from source that wipes the tag=1 `CdcTail`; no incremental merge.
 
 ⚠ **Intermediate-state warning:** the committed parser-aware async change already makes retrieval **skip inline DML** (`AlwaysAsync=true`), but until the sinker (b–d) lands there is **no CDC maintenance** — so a retrieval index won't reflect INSERT/DELETE between CREATE and reindex. This is expected mid-implementation; B2 closes it.
