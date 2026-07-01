@@ -257,7 +257,7 @@ create table t9 (
     id varchar(64) not null,
     user_id varchar(64) not null,
     session_id varchar(64) not null,
-    status varchar(32) not null,
+    status varchar(32) null,
     due datetime(6) null,
     attempts int not null,
     primary key (user_id, session_id, id),
@@ -267,7 +267,8 @@ insert into t9 values
     ('a1', 'u1', 's1', 'active', '2026-07-02 00:00:00.000001', 10),
     ('a2', 'u1', 's2', 'expired', '2026-07-03 00:00:00.000002', 20),
     ('a3', 'u2', 's1', 'expiring', '2026-07-04 00:00:00.000003', 30),
-    ('a4', 'u2', 's2', 'active', NULL, 40);
+    ('a4', 'u2', 's2', 'active', NULL, 40),
+    ('a5', 'u3', 's1', NULL, '2026-07-05 00:00:00.000004', 50);
 select mo_ctl('dn', 'flush', 'd1.t9');
 select Sleep(1);
 
@@ -286,8 +287,18 @@ set @t9_active = 'active';
 set @t9_expired = 'expired';
 set @t9_expiring = 'expiring';
 set @t9_missing = 'missing';
+set @t9_null = NULL;
 execute stmt_t9_status_in using @t9_active,@t9_expired,@t9_expiring,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing,@t9_missing;
 deallocate prepare stmt_t9_status_in;
+prepare stmt_t9_status_eq_null from 'select count(*) as count_prepare_eq_null from t9 where status = ?';
+execute stmt_t9_status_eq_null using @t9_null;
+deallocate prepare stmt_t9_status_eq_null;
+prepare stmt_t9_status_in_null from 'select count(*) as count_prepare_in_null from t9 where status in (?, ?)';
+execute stmt_t9_status_in_null using @t9_null,@t9_missing;
+deallocate prepare stmt_t9_status_in_null;
+prepare stmt_t9_status_between_null from 'select count(*) as count_prepare_between_null from t9 where status between ? and ?';
+execute stmt_t9_status_between_null using @t9_null,@t9_active;
+deallocate prepare stmt_t9_status_between_null;
 
 update t9 set status = 'active', due = '2026-07-05 00:00:00.000004' where id = 'a2';
 select count(*) as count_after_update_into_active from t9 where status = 'active';
