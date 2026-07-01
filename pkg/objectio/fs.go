@@ -117,7 +117,7 @@ func NewOfflineFS(
 		fs, err = fileservice.NewFileService(ctx, cfg, nil)
 		return
 
-	default: // OfflineKindLocal
+	case OfflineKindLocal:
 		cfg := fileservice.Config{
 			Name:    defines.LocalFileServiceName,
 			Backend: "DISK",
@@ -126,5 +126,13 @@ func NewOfflineFS(
 		}
 		fs, err = fileservice.NewFileService(ctx, cfg, nil)
 		return
+
+	default:
+		// DISK and DISK-V2 are mutually incompatible and cannot be
+		// auto-detected, so a typo must fail loudly rather than silently
+		// default to one format and misread the other.
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"unknown offline fs kind %q: expected one of %q, %q, %q",
+			kind, OfflineKindLocal, OfflineKindLocal2, OfflineKindS3)
 	}
 }

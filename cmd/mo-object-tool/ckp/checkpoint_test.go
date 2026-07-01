@@ -52,6 +52,10 @@ func TestCkpRequiresFormatFlag(t *testing.T) {
 // finds zero checkpoint metas, prints the summary and returns nil. It exercises
 // infoCommand/setupLogFile/checkpointtool.Open without launching the TUI.
 func TestCkpInfoEmptyDir(t *testing.T) {
+	// setupLogFile writes $HOME/.mo-tool/ckp.log; point HOME at a writable temp
+	// dir so the test does not depend on (or pollute) the real home directory
+	// and works in a read-only-home sandbox.
+	t.Setenv("HOME", t.TempDir())
 	cmd := PrepareCommand()
 	cmd.SetArgs([]string{"info", "--local", t.TempDir()})
 	require.NoError(t, cmd.Execute())
