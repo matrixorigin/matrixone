@@ -248,5 +248,61 @@ explain select * from t8 where price > 9.99 and price < 99.99;
 -- @sortkey:0
 select * from t8 where price > 9.99 and price < 99.99 order by id;
 
+-- 28. Regression #25341: predicates on a covering non-unique composite
+-- secondary index with an owner-bound composite PK. The DML lifecycle checks
+-- that the hidden index table is maintained after insert, update, delete,
+-- replace, and ON DUPLICATE KEY UPDATE.
+drop table if exists t9;
+create table t9 (
+    id varchar(64) not null,
+    user_id varchar(64) not null,
+    session_id varchar(64) not null,
+    status varchar(32) not null,
+    due datetime(6) null,
+    attempts int not null,
+    primary key (user_id, session_id, id),
+    index idx_ret(status, due, user_id, session_id, id)
+);
+insert into t9 values
+    ('a1', 'u1', 's1', 'active', '2026-07-02 00:00:00.000001', 10),
+    ('a2', 'u1', 's2', 'expired', '2026-07-03 00:00:00.000002', 20),
+    ('a3', 'u2', 's1', 'expiring', '2026-07-04 00:00:00.000003', 30),
+    ('a4', 'u2', 's2', 'active', NULL, 40);
+select mo_ctl('dn', 'flush', 'd1.t9');
+select Sleep(1);
+
+-- @regex("Index Table Scan",true)
+explain select count(*) from t9 where status = 'active';
+-- @regex("prefix_in",true)
+explain select count(*) from t9 where status in ('active', 'expiring');
+select count(*) as count_eq from t9 where status = 'active';
+select count(*) as count_in from t9 where status in ('active', 'expiring');
+select count(*) as count_range from t9 where status >= 'active' and status <= 'expired';
+select count(*) as count_nullsafe from t9 where status <=> 'active';
+-- @sortkey:0
+select id, status, status = 'active' as row_eq, status <=> 'active' as row_nullsafe from t9 order by id;
+
+update t9 set status = 'active', due = '2026-07-05 00:00:00.000004' where id = 'a2';
+select count(*) as count_after_update_into_active from t9 where status = 'active';
+select count(*) as count_after_update_out_of_expired from t9 where status = 'expired';
+
+update t9 set status = 'done' where id = 'a1';
+select count(*) as count_after_update_out_of_active from t9 where status = 'active';
+select count(*) as count_after_update_into_done from t9 where status = 'done';
+
+delete from t9 where id = 'a4';
+select count(*) as count_after_delete_active from t9 where status = 'active';
+
+replace into t9 values ('a3', 'u2', 's1', 'active', '2026-07-06 00:00:00.000005', 44);
+select count(*) as count_after_replace_active from t9 where status = 'active';
+select count(*) as count_after_replace_expiring from t9 where status = 'expiring';
+
+insert into t9 values ('a3', 'u2', 's1', 'closed', '2026-07-07 00:00:00.000006', 55)
+    on duplicate key update status = values(status), due = values(due), attempts = values(attempts);
+select count(*) as count_after_odku_active from t9 where status = 'active';
+select count(*) as count_after_odku_closed from t9 where status = 'closed';
+-- @sortkey:0
+select id, status, attempts from t9 order by id;
+
 -- Cleanup
 drop database d1;
