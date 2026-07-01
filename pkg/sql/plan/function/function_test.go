@@ -77,6 +77,10 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 	}
 }
 
+func TestCastAssignIsVolatile(t *testing.T) {
+	require.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("cast_assign"))
+}
+
 func Test_fixedTypeCastRule2(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool

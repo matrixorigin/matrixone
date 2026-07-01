@@ -2,6 +2,7 @@
 drop database if exists insert_str_width;
 create database insert_str_width;
 use insert_str_width;
+set @old_sql_mode = @@sql_mode;
 
 -- ============================================================
 -- (1) sql_mode gating on INSERT VALUES
@@ -28,6 +29,28 @@ set session sql_mode = 'STRICT_TRANS_TABLES';
 truncate table t;
 insert ignore into t values ('abcd');
 select c, char_length(c) from t;
+
+-- non-literal VALUES expressions follow the same INSERT IGNORE downgrade
+truncate table t;
+insert ignore into t values (repeat('x', 4));
+select c, char_length(c) from t;
+
+-- prepared literal VALUES expressions resolve sql_mode at execution time
+truncate table t;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+prepare stmt_width_lenient from 'insert into t values (''prep'')';
+set session sql_mode = '';
+execute stmt_width_lenient;
+select c, char_length(c) from t;
+deallocate prepare stmt_width_lenient;
+
+truncate table t;
+set session sql_mode = '';
+prepare stmt_width_strict from 'insert into t values (''fail'')';
+set session sql_mode = 'STRICT_TRANS_TABLES';
+execute stmt_width_strict;
+select count(*) from t;
+deallocate prepare stmt_width_strict;
 
 -- ============================================================
 -- (3) INSERT ... SELECT honors sql_mode
@@ -77,5 +100,6 @@ create table d (c varchar(3) default 'abcd');
 set session sql_mode = 'STRICT_TRANS_TABLES';
 create table d (c varchar(3) default 'abcd');
 
-set session sql_mode = 'STRICT_TRANS_TABLES';
 drop database insert_str_width;
+set session sql_mode = @old_sql_mode;
+select @@sql_mode = @old_sql_mode;

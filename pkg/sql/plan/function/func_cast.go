@@ -475,23 +475,6 @@ func NewAssignCast(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return newCast(parameters, result, proc, length, selectList, isStrictSqlMode(proc), true)
 }
 
-// ResolveAssignStringWidth applies MySQL-compatible CHAR/VARCHAR width
-// enforcement for a string value assigned to a destLen-wide column on a DML
-// path where the value is materialized as a plan-time constant (INSERT VALUES
-// rowset). It returns the value to store and whether the value must be rejected
-// (1406). Over-length is rejected only under strict sql_mode; otherwise — or for
-// trailing-space-only overflow, or under INSERT IGNORE — the value is truncated.
-// This mirrors the runtime cast_assign behavior for the constant-folded path.
-func ResolveAssignStringWidth(proc *process.Process, s string, destLen int, isIgnore bool) (stored string, reject bool) {
-	if destLen <= 0 || utf8.RuneCountInString(s) <= destLen {
-		return s, false
-	}
-	if isIgnore || overLenIsAllTrailingSpaces(s, destLen) || !isStrictSqlMode(proc) {
-		return truncateStringByRunes(s, destLen), false
-	}
-	return s, true
-}
-
 // isStrictSqlMode reports whether the session sql_mode contains a strict flag
 // (STRICT_TRANS_TABLES / STRICT_ALL_TABLES). When the resolver is unavailable
 // (e.g. background/internal execution) it defaults to true, preserving the

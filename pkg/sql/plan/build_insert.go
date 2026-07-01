@@ -77,6 +77,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
+	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
 	if stmt.IsRestore {
 		builder.isRestore = true
 		if stmt.IsRestoreByTs {

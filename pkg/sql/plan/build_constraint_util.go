@@ -944,6 +944,16 @@ var ForceCastExpr = forceCastExpr
 var ForceAssignmentCastExpr = forceAssignmentCastExpr
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
+	return forceCastExpr2WithIgnore(ctx, expr, t2, targetType, false)
+}
+
+func forceCastExpr2WithIgnore(
+	ctx context.Context,
+	expr *Expr,
+	t2 types.Type,
+	targetType *plan.Expr,
+	isIgnore bool,
+) (*Expr, error) {
 	if targetType.Typ.Id == 0 {
 		return expr, nil
 	}
@@ -953,13 +963,16 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	// Assigning a value to a real CHAR/VARCHAR(N) column routes through
+	// Assigning a value to a real CHAR/VARCHAR(N) column normally routes through
 	// cast_assign, which honors sql_mode at runtime (strict rejects over-length,
-	// non-strict truncates). Generic casts stay lenient (MySQL-compatible
-	// truncation).
+	// non-strict truncates). INSERT IGNORE and generic casts stay lenient.
 	funcName := "cast"
 	if t2.Oid == types.T_char || t2.Oid == types.T_varchar {
-		funcName = "cast_assign"
+		if isIgnore {
+			funcName = "cast"
+		} else {
+			funcName = "cast_assign"
+		}
 	}
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
@@ -1124,9 +1137,16 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		}
 		planType := MakePlan2TypeValue(colType)
 		return MakePlan2Decimal128ExprWithType(num, &planType), err
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
+	case types.T_char, types.T_varchar:
+		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		expr := MakePlan2StringConstExprWithType(string(num))
+		return forceAssignmentCastExprWithIgnore(proc.Ctx, expr, makePlan2Type(colType), isIgnore)
+	case types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
 		types.T_array_float32, types.T_array_float64:
-		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType, isIgnore)
+		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
 		}
@@ -1289,7 +1309,8 @@ func buildValueScan(
 						return err
 					}
 				}
-				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
+				defExpr, err = forceCastExpr2WithIgnore(
+					builder.GetContext(), defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
 					return err
 				}

@@ -325,6 +325,76 @@ func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width in
 	return false
 }
 
+func planHasCastWithNameAndWidth(p *Plan, funcName string, width int32) bool {
+	p = resolveQueryPlan(p)
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	var visit func(expr *plan.Expr) bool
+	visit = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		if f := expr.GetF(); f != nil {
+			if f.Func.GetObjName() == funcName &&
+				(expr.Typ.Id == int32(types.T_char) || expr.Typ.Id == int32(types.T_varchar)) &&
+				expr.Typ.Width == width {
+				return true
+			}
+			for _, arg := range f.Args {
+				if visit(arg) {
+					return true
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if visit(item) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, node := range p.GetQuery().Nodes {
+		exprs := [][]*plan.Expr{
+			node.ProjectList,
+			node.OnList,
+			node.FilterList,
+			node.GroupBy,
+			node.AggList,
+			node.OnUpdateExprs,
+		}
+		if node.OnDuplicateKey != nil {
+			for _, expr := range node.OnDuplicateKey.OnDuplicateExpr {
+				if visit(expr) {
+					return true
+				}
+			}
+		}
+		if node.DedupJoinCtx != nil {
+			exprs = append(exprs, node.DedupJoinCtx.UpdateColExprList)
+		}
+		for _, list := range exprs {
+			for _, expr := range list {
+				if visit(expr) {
+					return true
+				}
+			}
+		}
+		if node.RowsetData != nil {
+			for _, col := range node.RowsetData.Cols {
+				for _, data := range col.Data {
+					if visit(data.Expr) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 func TestUpdateTextConcatCoalesceKeepsTextAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
@@ -400,6 +470,71 @@ func TestInsertIgnoreVarcharFromTextDowngradesToLenientCast(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, planHasTextToVarcharCastWithNameAndWidth(logicPlan, "cast", 255))
 	assert.False(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
+}
+
+func TestInsertValuesVarcharExpressionUsesRuntimeAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, vc) values (1, repeat('x', 260))")
+	assert.NoError(t, err)
+	assert.True(t, planHasCastWithNameAndWidth(logicPlan, "cast_assign", 255))
+}
+
+func TestInsertValuesVarcharLiteralUsesRuntimeAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, vc) values (1, 'abcdefghijklmnopqrstuvwxyz')")
+	assert.NoError(t, err)
+	assert.True(t, planHasCastWithNameAndWidth(logicPlan, "cast_assign", 255))
+}
+
+func TestPrepareInsertValuesVarcharLiteralUsesRuntimeAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"prepare stmt1 from insert into text_cast_t(id, vc) values (1, 'abcdefghijklmnopqrstuvwxyz')")
+	assert.NoError(t, err)
+	assert.True(t, planHasCastWithNameAndWidth(logicPlan, "cast_assign", 255))
+}
+
+func TestInsertIgnoreValuesUsesLenientCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	for _, sql := range []string{
+		"insert ignore into text_cast_t(id, vc) values (1, 'abcdefghijklmnopqrstuvwxyz')",
+		"insert ignore into text_cast_t(id, vc) values (1, repeat('x', 260))",
+	} {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		assert.NoError(t, err)
+		assert.True(t, planHasCastWithNameAndWidth(logicPlan, "cast", 255), sql)
+		assert.False(t, planHasCastWithNameAndWidth(logicPlan, "cast_assign", 255), sql)
+	}
+}
+
+func TestFallbackInsertIgnoreValuesUsesLenientCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+	mock.ctxt.tables["text_cast_t"].Fkeys = []*plan.ForeignKeyDef{{Name: "fk_force_fallback"}}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"insert ignore into text_cast_t(id, vc) values (1, repeat('x', 260))")
+	assert.NoError(t, err)
+	assert.True(t, planHasCastWithNameAndWidth(logicPlan, "cast", 255))
+	assert.False(t, planHasCastWithNameAndWidth(logicPlan, "cast_assign", 255))
+}
+
+func TestInsertVarbinaryLiteralKeepsStrictWidthCheck(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "", nil })
+	typ := types.New(types.T_varbinary, 3, 0)
+	numVal := tree.NewNumVal("abcd", "abcd", false, tree.P_char)
+
+	_, err := MakeInsertValueConstExpr(proc, numVal, &typ, false)
+	assert.Error(t, err)
 }
 
 //Test Query Node Tree

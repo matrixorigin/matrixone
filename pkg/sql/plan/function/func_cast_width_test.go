@@ -121,44 +121,6 @@ func TestIsStrictSqlMode(t *testing.T) {
 	require.True(t, isStrictSqlMode(proc))
 }
 
-// TestResolveAssignStringWidth covers the constant-folded INSERT VALUES path:
-// strict vs non-strict gating, trailing-space exemption, and INSERT IGNORE.
-func TestResolveAssignStringWidth(t *testing.T) {
-	strict := testutil.NewProcess(t)
-	strict.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "STRICT_TRANS_TABLES", nil })
-	lenient := testutil.NewProcess(t)
-	lenient.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "", nil })
-
-	// fits: returned unchanged, not rejected.
-	got, reject := ResolveAssignStringWidth(strict, "abc", 3, false)
-	require.False(t, reject)
-	require.Equal(t, "abc", got)
-
-	// strict + over-length non-space: rejected.
-	_, reject = ResolveAssignStringWidth(strict, "abcd", 3, false)
-	require.True(t, reject)
-
-	// strict + trailing-space-only overflow: truncated, not rejected.
-	got, reject = ResolveAssignStringWidth(strict, "abc   ", 3, false)
-	require.False(t, reject)
-	require.Equal(t, "abc", got)
-
-	// non-strict: truncated, not rejected.
-	got, reject = ResolveAssignStringWidth(lenient, "abcd", 3, false)
-	require.False(t, reject)
-	require.Equal(t, "abc", got)
-
-	// INSERT IGNORE under strict: truncated, not rejected.
-	got, reject = ResolveAssignStringWidth(strict, "abcd", 3, true)
-	require.False(t, reject)
-	require.Equal(t, "abc", got)
-
-	// destLen <= 0 guard: unchanged.
-	got, reject = ResolveAssignStringWidth(strict, "abcd", 0, false)
-	require.False(t, reject)
-	require.Equal(t, "abcd", got)
-}
-
 func castTextToVarchar3(t *testing.T, proc *process.Process, input string) (string, error) {
 	t.Helper()
 	vc3 := types.New(types.T_varchar, 3, 0)

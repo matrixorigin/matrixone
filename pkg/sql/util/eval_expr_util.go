@@ -533,21 +533,16 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 	return
 }
 
-func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types.Type, isIgnore bool) (canInsert bool, val []byte, err error) {
+func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types.Type) (canInsert bool, val []byte, err error) {
 	canInsert = true
 
 	checkStrLen := func(s string) ([]byte, error) {
 		destLen := int(typ.Width)
-		if typ.Oid != types.T_text && typ.Oid != types.T_datalink && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
+		if typ.Oid != types.T_char && typ.Oid != types.T_varchar && typ.Oid != types.T_text &&
+			typ.Oid != types.T_datalink && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
 			if utf8.RuneCountInString(s) > destLen {
-				// CHAR/VARCHAR width enforcement honors sql_mode at runtime:
-				// strict mode rejects (1406), non-strict mode truncates;
-				// trailing-space-only overflow and INSERT IGNORE truncate too.
-				stored, reject := function.ResolveAssignStringWidth(proc, s, destLen, isIgnore)
-				if reject {
-					return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
-				}
-				s = stored
+				return nil, function.FormatCastErrorForInsertValue(
+					proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 		}
 		if typ.Oid.IsDatalink() {
