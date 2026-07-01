@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -36,6 +37,17 @@ import (
 var (
 	remoteRetryInitialBackoff = 100 * time.Millisecond
 	remoteRetryMaxBackoff     = 5 * time.Second
+)
+
+const (
+	// lockRpcSlack is the extra budget added to the RPC deadline beyond
+	// LockWaitTimeout.  The lock-table owner starts its own wait budget only
+	// after receiving the RPC, so the client-side RPC deadline must outlive the
+	// server-side wait timer for the owner to observe and return ErrLockTimeout.
+	// Without this slack, the client deadline can fire before the owner returns
+	// ErrLockTimeout, causing the client to see a retryable connectivity error
+	// instead of a lock-timeout result.
+	lockRpcSlack = 30 * time.Second
 )
 
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
@@ -105,7 +117,29 @@ func (l *remoteLockTable) lock(
 	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
 	// after rpc completed
 	txn.Unlock()
-	resp, err := l.client.Send(ctx, req)
+
+	// When session-level lock_wait_timeout is set, bound the RPC by that
+	// deadline plus slack so the lock-table owner has enough time to observe
+	// and return ErrLockTimeout before the client-side RPC deadline fires.
+	// Without a session timeout, use the caller context as-is.
+	var rpcCtx context.Context
+	var rpcCancel context.CancelFunc
+	if opts.LockWaitDeadline > 0 {
+		lockRpcDeadline := time.Unix(0, opts.LockWaitDeadline).Add(lockRpcSlack)
+		rpcCtx, rpcCancel = context.WithDeadline(ctx, lockRpcDeadline)
+	} else if d := time.Duration(opts.LockWaitTimeout) * time.Second; d > 0 {
+		lockRpcTimeout := d + lockRpcSlack
+		rpcCtx, rpcCancel = context.WithTimeout(ctx, lockRpcTimeout)
+	} else {
+		rpcCtx = ctx
+	}
+	defer func() {
+		if rpcCancel != nil {
+			rpcCancel()
+		}
+	}()
+	resp, err := l.client.Send(rpcCtx, req)
+
 	txn.Lock()
 
 	// txn closed
@@ -143,10 +177,12 @@ func (l *remoteLockTable) lock(
 		return
 	}
 
-	// The request may have reached the remote owner and acquired locks even if
-	// the response was lost or the client-side context timed out. Keep local
-	// bookkeeping so normal transaction close can send the remote unlock.
-	_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+	// Only record the lock on errors when the request could have been observed
+	// by the remote side. For local context timeouts / cancellations, the
+	// request may never be sent, and recording a phantom lock will leak waiters.
+	if !skipTrackLockOnError(rpcCtx, err) {
+		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+	}
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
@@ -448,18 +484,58 @@ func (l *remoteLockTable) handleError(
 	return oldError
 }
 
+// skipTrackLockOnError returns true when the error indicates the request
+// definitely did not reach the remote lock service (e.g. local context
+// cancellation/timeout). In such cases, recording the lock would create a
+// phantom holder that can never be cleaned up.
+//
+// If the request actually reached the remote side before timeout, the remote
+// lock will be cleaned up by the keepRemoteLock timeout mechanism (bounded by
+// RemoteLockTimeout, default 10m), so skipping the local bookkeeping is safe
+// though it may introduce a bounded extra wait.
+func skipTrackLockOnError(ctx context.Context, err error) bool {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if errors.Is(ctxErr, context.DeadlineExceeded) ||
+			errors.Is(ctxErr, context.Canceled) {
+			return true
+		}
+	}
+	if isTimeoutLikeError(err) ||
+		errors.Is(err, context.Canceled) ||
+		isLockTimeoutError(err) {
+		return true
+	}
+	return false
+}
+
 func retryRemoteLockError(err error) bool {
-	if e, ok := err.(net.Error); ok && e.Timeout() {
+	if isTimeoutLikeError(err) {
 		return true
 	}
 	if errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.Is(err, os.ErrDeadlineExceeded) ||
-		errors.Is(err, context.DeadlineExceeded) ||
 		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF) {
 		return true
 	}
 	return false
+}
+
+func isTimeoutLikeError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, os.ErrDeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrRPCTimeout)
+}
+
+func isLockTimeoutError(err error) bool {
+	if errors.Is(err, ErrLockTimeout) {
+		return true
+	}
+	return moerr.IsMoErrCode(err, moerr.ErrInvalidState) &&
+		strings.Contains(strings.ToLower(err.Error()), "lock timeout")
 }
 
 func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {

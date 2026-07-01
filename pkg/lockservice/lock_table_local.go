@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -163,10 +164,33 @@ func (l *localLockTable) doLock(
 			l.options.beforeWait(c)()
 		}
 
-		v := c.w.wait(c.ctx, l.logger)
+		waitCtx := c.ctx
+		var cancel context.CancelFunc
+		leftTimeout := time.Duration(0)
+		if c.lockWaitTimeoutEnabled() {
+			leftTimeout = c.getLockWaitTimeout()
+			if leftTimeout <= 0 {
+				leftTimeout = time.Nanosecond
+			}
+			waitCtx, cancel = context.WithTimeoutCause(c.ctx, leftTimeout, ErrLockTimeout)
+		}
+		v := c.w.wait(waitCtx, l.logger)
+		lockWaitTimeoutHit := c.lockWaitTimeoutEnabled() &&
+			errors.Is(v.err, context.DeadlineExceeded) &&
+			context.Cause(waitCtx) == ErrLockTimeout
+		if cancel != nil {
+			cancel()
+		}
 
 		if l.options.afterWait != nil {
 			l.options.afterWait(c)()
+		}
+
+		if lockWaitTimeoutHit {
+			// lock_wait_timeout expired: return ErrLockTimeout directly
+			// (not errors.Join) so upper layers can recognize it via
+			// moerr.IsMoErrCode(err, moerr.ErrInvalidState).
+			v.err = ErrLockTimeout
 		}
 
 		c.txn.Lock()
@@ -533,6 +557,9 @@ func (l *localLockTable) handleLockConflictLocked(
 ) error {
 	if c.opts.Policy == pb.WaitPolicy_FastFail {
 		return ErrLockConflict
+	}
+	if c.opts.async && !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
+		return ErrLockTimeout
 	}
 
 	if c.opts.Granularity == pb.Granularity_Range {

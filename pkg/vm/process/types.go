@@ -113,6 +113,7 @@ type SessionInfo struct {
 	Database             string
 	Version              string
 	TimeZone             *time.Location
+	LockWaitTimeout      int64
 	StorageEngine        engine.Engine
 	QueryId              []string
 	ResultColTypes       []types.Type

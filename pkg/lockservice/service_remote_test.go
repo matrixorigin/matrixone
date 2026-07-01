@@ -904,3 +904,250 @@ func checkBind(
 	l := s.tableGroups.get(0, bind.Table)
 	assert.Equal(t, bind, l.getBind())
 }
+
+// TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck verifies that
+// the async lock_wait_timeout fires at the waiter's own deadline, NOT on
+// the coarse defaultLazyCheckDuration tick.  It temporarily sets the
+// global lazy-check interval to 10s, so without the precise AfterFunc
+// timer the test would timeout or take >10s.
+func TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck(t *testing.T) {
+	// Force the lazy-check interval to 10s so any enforcement that relies
+	// only on the periodic check() tick would take ≥10s.
+	orig := defaultLazyCheckDuration.Load().(time.Duration)
+	defaultLazyCheckDuration.Store(10 * time.Second)
+	defer defaultLazyCheckDuration.Store(orig)
+
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			l1 := s[0] // lock-table owner
+			l2 := s[1] // remote CN
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+
+			// txn1 holds the lock.
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			// txn2 on remote CN requests with 1-second timeout.
+			// With the check tick at 10s, a coarse-tick-only approach
+			// would need >10s.  The precise AfterFunc timer must fire at ~1s.
+			start := time.Now()
+			_, err := l2.Lock(
+				ctx, tableID, [][]byte{row1}, txn2,
+				pb.LockOptions{
+					Granularity:     pb.Granularity_Row,
+					Mode:            pb.LockMode_Exclusive,
+					Policy:          pb.WaitPolicy_Wait,
+					LockWaitTimeout: 1,
+				})
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+				"expected lock-timeout, got %v", err)
+			// Must fire well before the 10s coarse tick.
+			require.Less(t, elapsed, 3*time.Second,
+				"precise timer should fire at ~1s, elapsed=%v", elapsed)
+		},
+	)
+}
+
+// TestRemoteLockWaitTimeout_ReturnsLockTimeout ensures that in a multi-CN
+// deployment, when txn2 on a remote CN waits on a lock held by txn1 on the
+// lock-table owner CN, txn2 receives ErrLockTimeout (lock timeout) after
+// LockWaitTimeout elapses, NOT a retryable connectivity/backend error.
+//
+// Before the fix, the client-side RPC deadline was set to exactly
+// LockWaitTimeout. The lock-table owner started its own wait budget only
+// after receiving the RPC, so the client deadline could fire before the
+// owner returned ErrLockTimeout.  When that happened the client saw a
+// retryable error instead of lock-timeout.
+func TestRemoteLockWaitTimeout_ReturnsLockTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			l1 := s[0] // lock-table owner
+			l2 := s[1] // remote CN
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+
+			// txn1 acquires and holds the lock on the owner.
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			// txn2 on the remote CN tries to lock the same row with a 1-second
+			// LockWaitTimeout.
+			opt := pb.LockOptions{
+				Granularity:     pb.Granularity_Row,
+				Mode:            pb.LockMode_Exclusive,
+				Policy:          pb.WaitPolicy_Wait,
+				LockWaitTimeout: 1, // 1 second
+			}
+
+			start := time.Now()
+			_, err := l2.Lock(ctx, tableID, [][]byte{row1}, txn2, opt)
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			// Must receive lock-timeout, not connectivity/backend error.
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+				"expected ErrLockTimeout (InvalidState), got %v", err)
+			require.Contains(t, err.Error(), "lock timeout",
+				"expected lock timeout message, got %v", err)
+			require.GreaterOrEqual(t, elapsed, time.Second,
+				"should have waited at least LockWaitTimeout")
+			// With the lazy check interval at 50ms in tests, the async timeout
+			// should be detected very close to LockWaitTimeout.  Allow a
+			// generous upper bound to absorb scheduling jitter.
+			require.Less(t, elapsed, 5*time.Second,
+				"should not wait beyond LockWaitTimeout + check interval")
+		},
+	)
+}
+
+func TestRemoteLockWaitDeadlineOverridesLongTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			start := time.Now()
+			_, err := l2.Lock(ctx, tableID, [][]byte{row1}, txn2, pb.LockOptions{
+				Granularity:      pb.Granularity_Row,
+				Mode:             pb.LockMode_Exclusive,
+				Policy:           pb.WaitPolicy_Wait,
+				LockWaitDeadline: time.Now().Add(500 * time.Millisecond).UnixNano(),
+				LockWaitTimeout:  60,
+			})
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+				"expected lock timeout, got %v", err)
+			require.Contains(t, err.Error(), "lock timeout")
+			require.Less(t, elapsed, 2*time.Second,
+				"absolute deadline should override long LockWaitTimeout, elapsed=%v", elapsed)
+		},
+	)
+}
+
+func TestRemoteLockWaitTimeoutLongerThanTransportReadTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			start := time.Now()
+			_, err := l2.Lock(ctx, tableID, [][]byte{row1}, txn2, pb.LockOptions{
+				Granularity:     pb.Granularity_Row,
+				Mode:            pb.LockMode_Exclusive,
+				Policy:          pb.WaitPolicy_Wait,
+				LockWaitTimeout: 11,
+			})
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+				"expected lock timeout, got %v", err)
+			require.Contains(t, err.Error(), "lock timeout")
+			require.GreaterOrEqual(t, elapsed, 10*time.Second,
+				"remote lock wait should outlive the fixed transport read timeout window")
+			require.Less(t, elapsed, 20*time.Second,
+				"remote lock wait should finish at LockWaitTimeout, elapsed=%v", elapsed)
+		},
+	)
+}
+
+func TestRemoteLongLockWaitSurvivesConcurrentShortRPCDeadline(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			errC := make(chan error, 1)
+			elapsedC := make(chan time.Duration, 1)
+			go func() {
+				start := time.Now()
+				_, err := l2.Lock(ctx, tableID, [][]byte{row1}, txn2, pb.LockOptions{
+					Granularity:     pb.Granularity_Row,
+					Mode:            pb.LockMode_Exclusive,
+					Policy:          pb.WaitPolicy_Wait,
+					LockWaitTimeout: 11,
+				})
+				elapsedC <- time.Since(start)
+				errC <- err
+			}()
+
+			time.Sleep(100 * time.Millisecond)
+			shortCtx, shortCancel := context.WithTimeout(context.Background(), time.Millisecond)
+			defer shortCancel()
+			_, _ = l2.remote.client.Send(shortCtx, &pb.Request{
+				Method: pb.Method_GetLockHolder,
+				LockTable: pb.LockTable{
+					ServiceID: l1.serviceID,
+					Table:     tableID,
+				},
+				GetLockHolder: pb.GetLockHolderRequest{
+					Row:      row1,
+					Sharding: pb.Sharding_None,
+				},
+			})
+
+			err := <-errC
+			elapsed := <-elapsedC
+
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+				"expected lock timeout, got %v", err)
+			require.Contains(t, err.Error(), "lock timeout")
+			require.GreaterOrEqual(t, elapsed, 10*time.Second,
+				"remote lock wait should survive concurrent short RPC deadline")
+			require.Less(t, elapsed, 20*time.Second,
+				"remote lock wait should finish at LockWaitTimeout, elapsed=%v", elapsed)
+		},
+	)
+}

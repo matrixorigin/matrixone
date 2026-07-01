@@ -109,6 +109,42 @@ func TestRowLock(t *testing.T) {
 	}
 }
 
+func TestLocalLockWaitDeadlineOverridesLongTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			l1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			start := time.Now()
+			_, err := l1.Lock(ctx, tableID, [][]byte{row1}, txn2, pb.LockOptions{
+				Granularity:      pb.Granularity_Row,
+				Mode:             pb.LockMode_Exclusive,
+				Policy:           pb.WaitPolicy_Wait,
+				LockWaitDeadline: time.Now().Add(500 * time.Millisecond).UnixNano(),
+				LockWaitTimeout:  60,
+			})
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+				"expected lock timeout, got %v", err)
+			require.Contains(t, err.Error(), "lock timeout")
+			require.Less(t, elapsed, 2*time.Second,
+				"absolute deadline should override long LockWaitTimeout, elapsed=%v", elapsed)
+		},
+	)
+}
+
 func TestReentrantRowLock(t *testing.T) {
 	for name, runner := range runners {
 		t.Run(name, func(t *testing.T) {
@@ -5264,6 +5300,189 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 				s.handleBindChanged(bind)
 			}
 			wg.Wait()
+		},
+	)
+}
+
+func TestLockWaitTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// Use a long-lived context so it doesn't interfere with LockWaitTimeout.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			// txn1 acquires and holds the lock.
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			// txn2 tries to lock the same row with a 1-second LockWaitTimeout.
+			option2 := option
+			option2.LockWaitTimeout = 1 // 1 second
+
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			elapsed := time.Since(start)
+
+			// Should time out after ~1 second, not immediately and not indefinitely.
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState),
+				"expected lock-timeout error (ErrInvalidState), got %v", err)
+			require.Contains(t, err.Error(), "lock timeout")
+			require.GreaterOrEqual(t, elapsed, time.Second)
+			require.Less(t, elapsed, 3*time.Second)
+		},
+	)
+}
+
+func TestLockWaitTimeoutDefaultNoTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			holderCtx, holderCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer holderCancel()
+			waitCtx, waitCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer waitCancel()
+
+			// txn1 holds the lock.
+			_, err := l.Lock(holderCtx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+			defer func() {
+				_ = l.Unlock(holderCtx, []byte("txn1"), timestamp.Timestamp{})
+			}()
+
+			// txn2 tries to lock the same row WITHOUT LockWaitTimeout.
+			// It should wait for the holder to release instead of using an
+			// internal/default lock wait timeout.
+			option2 := option
+			option2.LockWaitTimeout = 0
+			start := time.Now()
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := l.Lock(waitCtx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+				resultC <- err
+			}()
+
+			select {
+			case err := <-resultC:
+				require.NoError(t, err)
+				require.FailNow(t, "lock waiter completed before holder released")
+			case <-time.After(time.Second):
+			}
+
+			require.NoError(t, l.Unlock(holderCtx, []byte("txn1"), timestamp.Timestamp{}))
+
+			select {
+			case err = <-resultC:
+			case <-time.After(3 * time.Second):
+				require.FailNow(t, "lock waiter did not complete after holder released")
+			}
+			elapsed := time.Since(start)
+
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, elapsed, time.Second)
+		},
+	)
+}
+
+func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			// txn1 holds the lock briefly then releases.
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			option2 := option
+			option2.LockWaitTimeout = 3 // 3 seconds, more than enough
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				time.Sleep(200 * time.Millisecond)
+				require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+			}()
+
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			elapsed := time.Since(start)
+
+			wg.Wait()
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
+			require.Less(t, elapsed, 2*time.Second) // well within LockWaitTimeout
+		},
+	)
+}
+
+func TestLockWaitTimeoutZeroMeansFallbackToContext(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			holderCtx, holderCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer holderCancel()
+			waitCtx, waitCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer waitCancel()
+
+			// txn1 holds the lock.
+			_, err := l.Lock(holderCtx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+			defer func() {
+				_ = l.Unlock(holderCtx, []byte("txn1"), timestamp.Timestamp{})
+			}()
+
+			// txn2 with LockWaitTimeout=0 should wait for context expiry (500ms),
+			// NOT the default 5-minute configLockWaitTimeout.
+			option2 := option
+			option2.LockWaitTimeout = 0
+			start := time.Now()
+			_, err = l.Lock(waitCtx, 0, [][]byte{{1}}, []byte("txn2"), option2)
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			// Should have completed near the context deadline, not after 5 minutes.
+			require.GreaterOrEqual(t, elapsed, 300*time.Millisecond)
+			require.Less(t, elapsed, 2*time.Second)
 		},
 	)
 }

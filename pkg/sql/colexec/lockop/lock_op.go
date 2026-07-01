@@ -558,6 +558,15 @@ func doLock(
 		}
 	}
 
+	// Attach the current statement/session lock_wait_timeout to the lock options.
+	if d := lockWaitTimeout(proc, txnOp); d > 0 {
+		options.LockWaitDeadline = time.Now().Add(d).UnixNano()
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+	}
+
 	start := time.Now()
 	key := txnOp.AddWaitLock(tableID, rows, options)
 	defer txnOp.RemoveWaitLock(key)
@@ -785,7 +794,53 @@ func doLock(
 
 type lockRetryState struct {
 	backendRetryDeadline time.Time
+	lockWaitDeadline     time.Time
 	useMemoryRetrySlot   bool
+}
+
+func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
+	if proc != nil && proc.GetResolveVariableFunc() != nil {
+		if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
+			switch n := v.(type) {
+			case int64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case int:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case uint64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			}
+		}
+	}
+	if proc != nil && proc.GetSessionInfo() != nil {
+		if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	return client.LockWaitTimeoutFromTxn(txnOp)
+}
+
+func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) {
+	if options.LockWaitDeadline <= 0 {
+		return options, nil
+	}
+	remaining := time.Until(time.Unix(0, options.LockWaitDeadline))
+	if remaining <= 0 {
+		return options, lockservice.ErrLockTimeout
+	}
+	return options, nil
+}
+
+func getLockWaitDeadline(options lock.LockOptions) time.Time {
+	if options.LockWaitDeadline <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, options.LockWaitDeadline)
 }
 
 func lockWithRetry(
@@ -803,14 +858,24 @@ func lockWithRetry(
 ) (lock.Result, error) {
 	var result lock.Result
 	var err error
-	retryState := lockRetryState{}
+	retryState := lockRetryState{
+		lockWaitDeadline: getLockWaitDeadline(options),
+	}
 
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return result, err
+	}
 	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
 	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 		return result, getLockRetryExitError(ctx, err)
 	}
 
 	for {
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return result, err
+		}
 		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
 		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 			return result, getLockRetryExitError(ctx, err)
@@ -830,6 +895,11 @@ func LockWithMayUpgrade(
 	opts LockOptions,
 	pkType types.Type,
 ) (lock.Result, error) {
+	var err error
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
 	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
 		return result, err
@@ -848,6 +918,10 @@ func LockWithMayUpgrade(
 		opts.filterCols,
 	)
 	options.Granularity = ng
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	return lockService.Lock(ctx, tableID, nrows, txnID, options)
 }
 
@@ -934,7 +1008,11 @@ func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration,
 
 	now := time.Now()
 	if isBoundedRetryLockError(err) && retryState.backendRetryDeadline.IsZero() {
-		retryState.backendRetryDeadline = now.Add(defaultMaxWaitTimeOnRetryBackendLock)
+		if !retryState.lockWaitDeadline.IsZero() {
+			retryState.backendRetryDeadline = retryState.lockWaitDeadline
+		} else {
+			retryState.backendRetryDeadline = now.Add(defaultMaxWaitTimeOnRetryBackendLock)
+		}
 	}
 	if retryState.backendRetryDeadline.IsZero() {
 		return defaultWaitTimeOnRetryLock, true

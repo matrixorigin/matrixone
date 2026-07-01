@@ -121,6 +121,14 @@ func WithBackendReadTimeout(value time.Duration) BackendOption {
 	}
 }
 
+// WithBackendDynamicReadTimeout makes the read loop use the latest pending
+// request deadline when one exists, and fall back to readTimeout otherwise.
+func WithBackendDynamicReadTimeout() BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.dynamicReadTimeout = true
+	}
+}
+
 // WithBackendMetrics setup backend metrics
 func WithBackendMetrics(metrics *metrics) BackendOption {
 	return func(rb *remoteBackend) {
@@ -176,6 +184,7 @@ type remoteBackend struct {
 		disconnectAfterRead int
 		filter              func(msg Message, backendAddr string) bool
 		readTimeout         time.Duration
+		dynamicReadTimeout  bool
 		freeResponse        func(Message)
 	}
 
@@ -657,7 +666,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			rb.clean()
 			return
 		default:
-			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
+			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.getReadTimeout()})
 			n++
 			if err != nil || rb.options.disconnectAfterRead == n {
 				if err == nil {
@@ -1152,6 +1161,43 @@ func (rb *remoteBackend) getPingTimeout() time.Duration {
 		return rb.options.readTimeout / 5
 	}
 	return time.Duration(math.MaxInt64)
+}
+
+func (rb *remoteBackend) getReadTimeout() time.Duration {
+	if !rb.options.dynamicReadTimeout {
+		return rb.options.readTimeout
+	}
+
+	if timeout, ok := rb.getLatestFutureTimeout(); ok {
+		return timeout
+	}
+	return rb.options.readTimeout
+}
+
+func (rb *remoteBackend) getLatestFutureTimeout() (time.Duration, bool) {
+	now := time.Now()
+	var latest time.Time
+
+	rb.mu.RLock()
+	defer rb.mu.RUnlock()
+	for _, f := range rb.mu.futures {
+		deadline, ok := f.send.Ctx.Deadline()
+		if !ok {
+			continue
+		}
+		if latest.IsZero() || deadline.After(latest) {
+			latest = deadline
+		}
+	}
+
+	if latest.IsZero() {
+		return 0, false
+	}
+	timeout := latest.Sub(now)
+	if timeout <= 0 {
+		return time.Millisecond, true
+	}
+	return timeout, true
 }
 
 func (rb *remoteBackend) notifyWaitWrite() {

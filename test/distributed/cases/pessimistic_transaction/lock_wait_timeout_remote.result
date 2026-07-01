@@ -1,0 +1,21 @@
+drop database if exists lock_wait_timeout_remote_db;
+create database lock_wait_timeout_remote_db;
+use lock_wait_timeout_remote_db;
+create table t(a int primary key, b varchar(64));
+insert into t values (1, 'ONLY_FULL_GROUP_BY'), (2, 'STRICT_TRANS_TABLES'), (3, 'x');
+set @@sql_mode = 'ONLY_FULL_GROUP_BY';
+begin;
+set session lock_wait_timeout = 1;
+use lock_wait_timeout_remote_db;
+set @@sql_mode = 'ONLY_FULL_GROUP_BY';
+begin;
+select a, b from t where b = @@sql_mode for update;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  ONLY_FULL_GROUP_BY
+select a, b from t where b = @@sql_mode for update;
+-- @regex("(?s)(invalid state lock timeout|lock timeout)", true)
+invalid state lock timeout
+rollback;
+rollback;
+set @@sql_mode = default;
+drop database lock_wait_timeout_remote_db;
