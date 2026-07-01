@@ -15,8 +15,41 @@
 package v4_0_1
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-// No cluster-level upgrades for v4.0.1.
-var clusterUpgEntries = []versions.UpgradeEntry{}
+var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_mo_indexes_add_included_columns_for_cluster,
+}
+
+var checkMoIndexesIncludedColumns = func(txn executor.TxnExecutor, accountId uint32) (versions.ColumnInfo, error) {
+	return versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexIncludedColumns)
+}
+
+func newMoIndexesAddIncludedColumnsEntry() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: catalog.MO_INDEXES,
+		UpgType:   versions.ADD_COLUMN,
+		UpgSql: fmt.Sprintf(
+			"alter table %s.%s add column %s text after %s",
+			catalog.MO_CATALOG,
+			catalog.MO_INDEXES,
+			catalog.IndexIncludedColumns,
+			"index_table_name",
+		),
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			info, err := checkMoIndexesIncludedColumns(txn, accountId)
+			if err != nil {
+				return false, err
+			}
+			return info.IsExits, nil
+		},
+	}
+}
+
+var upg_mo_indexes_add_included_columns_for_cluster = newMoIndexesAddIncludedColumnsEntry()

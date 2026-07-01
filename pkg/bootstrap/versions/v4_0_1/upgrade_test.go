@@ -16,6 +16,7 @@ package v4_0_1
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -23,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -47,7 +49,7 @@ func Test_Upgrade(t *testing.T) {
 			t.Logf("version metadata:%v", metadata)
 			assert.Equal(t, "4.0.1", metadata.Version)
 			assert.Equal(t, "4.0.0", metadata.MinUpgradeVersion)
-			assert.Equal(t, versions.No, metadata.UpgradeCluster)
+			assert.Equal(t, versions.Yes, metadata.UpgradeCluster)
 			assert.Equal(t, versions.Yes, metadata.UpgradeTenant)
 
 			if err := Handler.Prepare(context.Background(), executor, true); err != nil {
@@ -67,6 +69,60 @@ func Test_Upgrade(t *testing.T) {
 			}
 		},
 	)
+}
+
+func findUpgradeEntryIndex(entries []versions.UpgradeEntry, target versions.UpgradeEntry) int {
+	for i, entry := range entries {
+		if entry.Schema == target.Schema &&
+			entry.TableName == target.TableName &&
+			entry.UpgType == target.UpgType &&
+			entry.UpgSql == target.UpgSql {
+			return i
+		}
+	}
+	return -1
+}
+
+func Test_upg_mo_indexes_add_included_columns_check(t *testing.T) {
+	stubs := gostub.Stub(&checkMoIndexesIncludedColumns, func(txn executor.TxnExecutor, accountId uint32) (versions.ColumnInfo, error) {
+		return versions.ColumnInfo{IsExits: true}, nil
+	})
+	defer stubs.Reset()
+
+	ok, err := upg_mo_indexes_add_included_columns_for_cluster.CheckFunc(nil, catalog.System_Account)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	ok, err = upg_mo_indexes_add_included_columns_for_tenant.CheckFunc(nil, 100)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+}
+
+func Test_upg_mo_indexes_add_included_columns_check_error(t *testing.T) {
+	stubs := gostub.Stub(&checkMoIndexesIncludedColumns, func(txn executor.TxnExecutor, accountId uint32) (versions.ColumnInfo, error) {
+		return versions.ColumnInfo{}, moerr.NewInternalErrorNoCtx("return error")
+	})
+	defer stubs.Reset()
+
+	ok, err := upg_mo_indexes_add_included_columns_for_cluster.CheckFunc(nil, catalog.System_Account)
+	assert.Error(t, err)
+	assert.False(t, ok)
+}
+
+func Test_upg_mo_indexes_add_included_columns_ordering(t *testing.T) {
+	clusterEntryIdx := findUpgradeEntryIndex(clusterUpgEntries, upg_mo_indexes_add_included_columns_for_cluster)
+	if assert.NotEqual(t, -1, clusterEntryIdx) {
+		assert.Equal(t, 0, clusterEntryIdx)
+	}
+
+	tenantEntryIdx := findUpgradeEntryIndex(tenantUpgEntries, upg_mo_indexes_add_included_columns_for_tenant)
+	statisticsIdx := findUpgradeEntryIndex(tenantUpgEntries, upg_information_schema_statistics)
+	if assert.NotEqual(t, -1, tenantEntryIdx) && assert.NotEqual(t, -1, statisticsIdx) {
+		assert.Less(t, tenantEntryIdx, statisticsIdx)
+	}
+
+	assert.True(t, strings.Contains(upg_mo_indexes_add_included_columns_for_cluster.UpgSql, catalog.IndexIncludedColumns))
+	assert.True(t, strings.Contains(upg_mo_indexes_add_included_columns_for_cluster.UpgSql, "index_table_name"))
 }
 
 func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
