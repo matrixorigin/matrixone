@@ -3094,6 +3094,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
+				rewriteGroupingSetOrderBy(astOrderBy, selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
 				return builder.buildUnion(leftClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
 			}
 		}
@@ -3796,6 +3797,127 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 	return
+}
+
+func rewriteGroupingSetOrderBy(
+	astOrderBy tree.OrderBy,
+	selectList tree.SelectExprs,
+	groupByExprsList []tree.Exprs,
+) {
+	columnResolver := newGroupingSetColumnResolver(groupByExprsList)
+	projectPosByKey := make(map[string]int64, len(selectList))
+	for i, selectExpr := range selectList {
+		key, ok := groupingSetOrderByKey(selectExpr.Expr, columnResolver)
+		if !ok {
+			continue
+		}
+		if _, exists := projectPosByKey[key]; !exists {
+			projectPosByKey[key] = int64(i + 1)
+		}
+	}
+
+	for _, order := range astOrderBy {
+		if _, isOrdinal := order.Expr.(*tree.NumVal); isOrdinal {
+			continue
+		}
+
+		key, ok := groupingSetOrderByKey(order.Expr, columnResolver)
+		if !ok {
+			continue
+		}
+		if projectPos, ok := projectPosByKey[key]; ok {
+			projectPosText := strconv.FormatInt(projectPos, 10)
+			order.Expr = tree.NewNumVal(projectPos, projectPosText, false, tree.P_int64)
+		}
+	}
+}
+
+type groupingSetColumnResolver map[string]map[string]struct{}
+
+func newGroupingSetColumnResolver(groupByExprsList []tree.Exprs) groupingSetColumnResolver {
+	resolver := make(groupingSetColumnResolver)
+	for _, groupByExprs := range groupByExprsList {
+		for _, groupByExpr := range groupByExprs {
+			col, ok := unwrapParenExpr(groupByExpr).(*tree.UnresolvedName)
+			if !ok || col.Star || col.NumParts == 0 {
+				continue
+			}
+
+			columnName := col.CStrParts[0].Compare()
+			if resolver[columnName] == nil {
+				resolver[columnName] = make(map[string]struct{})
+			}
+			resolver[columnName][groupingSetColumnKey(col)] = struct{}{}
+		}
+	}
+	return resolver
+}
+
+func (resolver groupingSetColumnResolver) resolve(col *tree.UnresolvedName) (string, bool) {
+	candidates := resolver[col.CStrParts[0].Compare()]
+	if len(candidates) == 0 {
+		return "", false
+	}
+
+	exactKey := groupingSetColumnKey(col)
+	if col.NumParts > 1 {
+		if _, ok := candidates[exactKey]; ok {
+			return exactKey, true
+		}
+	}
+	if len(candidates) != 1 {
+		return "", false
+	}
+	for candidate := range candidates {
+		return candidate, true
+	}
+	return "", false
+}
+
+func (resolver groupingSetColumnResolver) isAmbiguous(col *tree.UnresolvedName) bool {
+	return len(resolver[col.CStrParts[0].Compare()]) > 1
+}
+
+func groupingSetColumnKey(col *tree.UnresolvedName) string {
+	var key strings.Builder
+	for i := col.NumParts - 1; i >= 0; i-- {
+		if i < col.NumParts-1 {
+			key.WriteByte('.')
+		}
+		key.WriteString(col.CStrParts[i].Compare())
+	}
+	return key.String()
+}
+
+func groupingSetOrderByKey(astExpr tree.Expr, columnResolver groupingSetColumnResolver) (string, bool) {
+	funcExpr, ok := unwrapParenExpr(astExpr).(*tree.FuncExpr)
+	if !ok || funcExpr.FuncName == nil || funcExpr.FuncName.Compare() != "grouping" || funcExpr.WindowSpec != nil {
+		return "", false
+	}
+
+	var key strings.Builder
+	key.WriteString(funcExpr.FuncName.Compare())
+	key.WriteByte(':')
+	key.WriteString(strconv.Itoa(int(funcExpr.Type)))
+
+	for _, arg := range funcExpr.Exprs {
+		col, ok := unwrapParenExpr(arg).(*tree.UnresolvedName)
+		if !ok || col.Star || col.NumParts == 0 {
+			return "", false
+		}
+		columnKey, ok := columnResolver.resolve(col)
+		if !ok {
+			if columnResolver.isAmbiguous(col) {
+				return "", false
+			}
+			columnKey = groupingSetColumnKey(col)
+		}
+
+		key.WriteByte('|')
+		key.WriteString(columnKey)
+	}
+
+	return key.String(), true
 }
 
 func (builder *QueryBuilder) bindOrderBy(
