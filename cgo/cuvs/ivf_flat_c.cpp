@@ -127,13 +127,14 @@ gpu_ivf_flat_c gpu_ivf_flat_new(const void* dataset_data, uint64_t count_vectors
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = ivf_flat_construct(btype, qtype, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_ivf_flat_any_t> holder(new gpu_ivf_flat_any_t(btype, qtype, nullptr));
+        holder->ptr = ivf_flat_construct(btype, qtype, [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             // The dataset-providing constructor takes storage-typed (Q) data.
             return new gpu_ivf_flat_t<B, Q>(static_cast<const Q*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
         });
-        return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(btype, qtype, ptr));
+        return static_cast<gpu_ivf_flat_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_new", e.what());
     } catch (...) {
@@ -150,12 +151,13 @@ gpu_ivf_flat_c gpu_ivf_flat_new_empty(uint64_t total_count, uint32_t dimension, 
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = ivf_flat_construct(btype, qtype, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_ivf_flat_any_t> holder(new gpu_ivf_flat_any_t(btype, qtype, nullptr));
+        holder->ptr = ivf_flat_construct(btype, qtype, [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             return new gpu_ivf_flat_t<B, Q>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
         });
-        return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(btype, qtype, ptr));
+        return static_cast<gpu_ivf_flat_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_new_empty", e.what());
     } catch (...) {
@@ -171,12 +173,13 @@ gpu_ivf_flat_c gpu_ivf_flat_load_file(const char* filename, uint32_t dimension, 
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = ivf_flat_construct(btype, qtype, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_ivf_flat_any_t> holder(new gpu_ivf_flat_any_t(btype, qtype, nullptr));
+        holder->ptr = ivf_flat_construct(btype, qtype, [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             return new gpu_ivf_flat_t<B, Q>(std::string(filename), dimension, metric_c, build_params, devs, nthread, dist_mode);
         });
-        return static_cast<gpu_ivf_flat_c>(new gpu_ivf_flat_any_t(btype, qtype, ptr));
+        return static_cast<gpu_ivf_flat_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_flat_load_file", e.what());
     } catch (...) {

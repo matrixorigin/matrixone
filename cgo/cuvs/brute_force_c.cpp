@@ -94,18 +94,17 @@ gpu_brute_force_any_t::~gpu_brute_force_any_t() {
 extern "C" {
 
 gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t btype, quantization_t qtype, const int64_t* ids, void* errmsg) {
-    void* index_ptr = nullptr;
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         // Construct the right gpu_brute_force_t<B,T>; the native build
         // constructor takes storage-typed (T) data.
-        gpu_brute_force_any_t key(btype, qtype, nullptr);
-        index_ptr = brute_force_dispatch(&key, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_brute_force_any_t> holder(new gpu_brute_force_any_t(btype, qtype, nullptr));
+        holder->ptr = brute_force_dispatch(holder.get(), [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using T = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             return new gpu_brute_force_t<B, T>(static_cast<const T*>(dataset_data), count_vectors, dimension, metric_c, nthread, device_id, ids);
         });
-        return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(btype, qtype, index_ptr));
+        return static_cast<gpu_brute_force_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_new", e.what());
@@ -118,16 +117,15 @@ gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_v
 }
 
 gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric_c, uint32_t nthread, int device_id, quantization_t btype, quantization_t qtype, const int64_t* ids, void* errmsg) {
-    void* index_ptr = nullptr;
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
-        gpu_brute_force_any_t key(btype, qtype, nullptr);
-        index_ptr = brute_force_dispatch(&key, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_brute_force_any_t> holder(new gpu_brute_force_any_t(btype, qtype, nullptr));
+        holder->ptr = brute_force_dispatch(holder.get(), [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using T = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             return new gpu_brute_force_t<B, T>(total_count, dimension, metric_c, nthread, device_id, ids);
         });
-        return static_cast<gpu_brute_force_c>(new gpu_brute_force_any_t(btype, qtype, index_ptr));
+        return static_cast<gpu_brute_force_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg,
  "Error in gpu_brute_force_new_empty", e.what());

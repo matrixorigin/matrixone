@@ -127,7 +127,8 @@ gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, ui
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_ivf_pq_any_t> holder(new gpu_ivf_pq_any_t(btype, qtype, nullptr));
+        holder->ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             // The dataset-providing constructor takes storage-typed (Q) data and
@@ -135,7 +136,7 @@ gpu_ivf_pq_c gpu_ivf_pq_new(const void* dataset_data, uint64_t count_vectors, ui
             // quantization happens via add_chunk_quantize / add_chunk_float).
             return new gpu_ivf_pq_t<B, Q>(static_cast<const Q*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
         });
-        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(btype, qtype, ptr));
+        return static_cast<gpu_ivf_pq_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_new", e.what());
     } catch (...) {
@@ -151,12 +152,13 @@ gpu_ivf_pq_c gpu_ivf_pq_new_from_data_file(const char* data_filename, distance_t
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_ivf_pq_any_t> holder(new gpu_ivf_pq_any_t(btype, qtype, nullptr));
+        holder->ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             return new gpu_ivf_pq_t<B, Q>(std::string(data_filename), metric_c, build_params, devs, nthread, dist_mode);
         });
-        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(btype, qtype, ptr));
+        return static_cast<gpu_ivf_pq_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_new_from_data_file", e.what());
     } catch (...) {
@@ -173,12 +175,13 @@ gpu_ivf_pq_c gpu_ivf_pq_new_empty(uint64_t total_count, uint32_t dimension, dist
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_ivf_pq_any_t> holder(new gpu_ivf_pq_any_t(btype, qtype, nullptr));
+        holder->ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             return new gpu_ivf_pq_t<B, Q>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
         });
-        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(btype, qtype, ptr));
+        return static_cast<gpu_ivf_pq_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_new_empty", e.what());
     } catch (...) {
@@ -194,12 +197,13 @@ gpu_ivf_pq_c gpu_ivf_pq_load_file(const char* filename, uint32_t dimension, dist
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_ivf_pq_any_t> holder(new gpu_ivf_pq_any_t(btype, qtype, nullptr));
+        holder->ptr = ivf_pq_construct(btype, qtype, [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             return new gpu_ivf_pq_t<B, Q>(std::string(filename), dimension, metric_c, build_params, devs, nthread, dist_mode);
         });
-        return static_cast<gpu_ivf_pq_c>(new gpu_ivf_pq_any_t(btype, qtype, ptr));
+        return static_cast<gpu_ivf_pq_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_load_file", e.what());
     } catch (...) {
