@@ -167,7 +167,14 @@ vendor-build:
 .PHONY: config
 config:
 	$(info [Create build config])
-	@go mod tidy
+	@for i in 1 2 3; do \
+		mod_cmd=$${CI:+download}; mod_cmd=$${mod_cmd:-tidy}; \
+		GOPROXY="$(GOPROXY)" go mod $$mod_cmd && exit 0; \
+		echo "go mod $$mod_cmd failed (attempt $$i/3), retrying..."; \
+		sleep $$((i * 5)); \
+	done; \
+	echo "go mod failed after 3 attempts"; \
+	exit 1
 
 .PHONY: generate-pb
 generate-pb:
@@ -335,7 +342,8 @@ endif
 ###############################################################################
 UT_PARALLEL ?= 1
 ENABLE_UT ?= "false"
-GOPROXY ?= "https://proxy.golang.com.cn,direct"
+GOPROXY ?= https://proxy.golang.com.cn,https://goproxy.cn,https://proxy.golang.org
+export GOPROXY
 LAUNCH ?= "launch"
 
 .PHONY: ci
@@ -1068,7 +1076,7 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v2.6.2
+	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 

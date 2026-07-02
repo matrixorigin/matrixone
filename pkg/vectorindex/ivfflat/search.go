@@ -153,27 +153,31 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 }
 
 func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig, vt types.T) error {
-	read := func(key string) (float64, bool, error) {
-		sql := fmt.Sprintf("SELECT CAST(`%s` AS DOUBLE) FROM `%s`.`%s` WHERE `%s` = '%s'",
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, tblcfg.DbName, tblcfg.MetadataTable,
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, key)
-		res, err := runSql(proc, sql)
-		if err != nil {
-			return 0, false, err
-		}
-		defer res.Close()
-		if len(res.Batches) == 0 || res.Batches[0].RowCount() == 0 {
-			return 0, false, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[float64](res.Batches[0].Vecs[0], 0), true, nil
-	}
-	qmin, ok1, err := read(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin)
+	// Fetch both trained bounds in one round-trip; the metadata table is
+	// small and this runs once per index load.
+	sql := fmt.Sprintf("SELECT `%s`, CAST(`%s` AS DOUBLE) FROM `%s`.`%s` WHERE `%s` IN ('%s', '%s')",
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		tblcfg.DbName, tblcfg.MetadataTable, catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin, catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax)
+	res, err := runSql(proc, sql)
 	if err != nil {
 		return err
 	}
-	qmax, ok2, err := read(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax)
-	if err != nil {
-		return err
+	defer res.Close()
+
+	var qmin, qmax float64
+	var ok1, ok2 bool
+	for _, bat := range res.Batches {
+		keyVec, valVec := bat.Vecs[0], bat.Vecs[1]
+		for i := 0; i < bat.RowCount(); i++ {
+			val := vector.GetFixedAtNoTypeCheck[float64](valVec, i)
+			switch keyVec.GetStringAt(i) {
+			case catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin:
+				qmin, ok1 = val, true
+			case catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax:
+				qmax, ok2 = val, true
+			}
+		}
 	}
 	if ok1 && ok2 {
 		if vt == types.T_array_uint8 {

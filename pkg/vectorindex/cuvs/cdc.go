@@ -447,10 +447,11 @@ type ReplayState struct {
 	Deleted  []int64
 	Overflow []OverflowEntry
 
-	// ColMetaJSON is the payload of a CdcOpHeader record observed during
-	// replay, when one was present (small-tail emit path writes it as
-	// the first record of chunk_id=0). Empty otherwise. Callers that
-	// need the INCLUDE-column layout but have no tag=0 sub-index read
+	// ColMetaJSON is the INCLUDE-column metadata carried in the chunk
+	// frame's header section (see FrameCdcChunk / PeekColMetaJSON), not a
+	// record — every chunk embeds it, so it is read from the first chunk
+	// during replay. Empty when the index has no INCLUDE columns. Callers
+	// that need the INCLUDE-column layout but have no tag=0 sub-index read
 	// this back here.
 	ColMetaJSON string
 }
