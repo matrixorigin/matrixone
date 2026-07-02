@@ -1536,6 +1536,15 @@ func initCastTestCase() []tcTemp {
 			},
 			expect: NewFunctionTestResult(types.T_bit.ToType(), true, []uint64{}, []bool{}),
 		},
+		{
+			info: "uint64 to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{12345}, []bool{false}),
+				NewFunctionTestInput(types.New(types.T_char, 3, 0), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_char, 3, 0), false,
+				[]string{"123"}, []bool{false}),
+		},
 	}
 	castFloat32ToOthers := []tcTemp{
 		// test cast float32 to others.
@@ -1761,6 +1770,15 @@ func initCastTestCase() []tcTemp {
 			},
 			expect: NewFunctionTestResult(types.T_char.ToType(), false,
 				[]string{"23.56", "126", "0"}, []bool{false, false, true}),
+		},
+		{
+			info: "float64 to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{12.34}, []bool{false}),
+				NewFunctionTestInput(types.New(types.T_char, 3, 0), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_char, 3, 0), false,
+				[]string{"12."}, []bool{false}),
 		},
 		{
 			info: "float64 to decimal128",
@@ -2007,6 +2025,20 @@ func initCastTestCase() []tcTemp {
 				[]string{"0.01234"}, nil),
 		},
 		{
+			info: "decimal64 to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 10, 5),
+					[]types.Decimal64{types.Decimal64(1234)}, nil),
+				NewFunctionTestInput(
+					types.New(types.T_char, 4, 0),
+					[]string{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_char, 4, 0), false,
+				[]string{"0.01"}, nil),
+		},
+		{
 			info: "decimal128 to str type",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(
@@ -2019,6 +2051,17 @@ func initCastTestCase() []tcTemp {
 			expect: NewFunctionTestResult(
 				types.T_varchar.ToType(), false,
 				[]string{"12.34"}, nil),
+		},
+	}
+	castDateToOthers := []tcTemp{
+		{
+			info: "date to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{s01date}, []bool{false}),
+				NewFunctionTestInput(types.New(types.T_char, 4, 0), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_char, 4, 0), false,
+				[]string{"2004"}, []bool{false}),
 		},
 	}
 	castTimestampToOthers := []tcTemp{
@@ -2034,6 +2077,19 @@ func initCastTestCase() []tcTemp {
 			expect: NewFunctionTestResult(
 				types.T_varchar.ToType(), false,
 				[]string{"2020-08-23 11:52:21"}, nil),
+		},
+		{
+			info: "timestamp to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.T_timestamp.ToType(),
+					[]types.Timestamp{s01ts}, nil),
+				NewFunctionTestInput(
+					types.New(types.T_char, 4, 0), []string{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_char, 4, 0), false,
+				[]string{"2020"}, nil),
 		},
 	}
 
@@ -2158,6 +2214,7 @@ func initCastTestCase() []tcTemp {
 	testCases = append(testCases, castFloat32ToOthers...)
 	testCases = append(testCases, castStrToOthers...)
 	testCases = append(testCases, castDecToOthers...)
+	testCases = append(testCases, castDateToOthers...)
 	testCases = append(testCases, castTimestampToOthers...)
 	testCases = append(testCases, castArrayFloat32ToOthers...)
 	testCases = append(testCases, castArrayFloat64ToOthers...)

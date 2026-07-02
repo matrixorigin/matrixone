@@ -2910,9 +2910,7 @@ func signedToStr[T constraints.Integer](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) && (toType.Oid == types.T_char || toType.Oid == types.T_varchar) {
-				result = result[:toType.Width]
-			}
+			result = truncateCastBytesResult(result, toType)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
@@ -2961,6 +2959,7 @@ func unsignedToStr[T constraints.Unsigned](
 					result = append(result, 0)
 				}
 			}
+			result = truncateCastBytesResult(result, toType)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
@@ -3011,6 +3010,7 @@ func floatToStr[T constraints.Float](
 					result = append(result, 0)
 				}
 			}
+			result = truncateCastBytesResult(result, toType)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
@@ -3696,6 +3696,7 @@ func dateToStr(
 					result = append(result, 0)
 				}
 			}
+			result = truncateCastBytesResult(result, toType)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
@@ -3745,6 +3746,7 @@ func datetimeToStr(
 					result = append(result, 0)
 				}
 			}
+			result = truncateCastBytesResult(result, toType)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
@@ -3795,6 +3797,7 @@ func timestampToStr(
 					result = append(result, 0)
 				}
 			}
+			result = truncateCastBytesResult(result, toType)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
@@ -3844,6 +3847,7 @@ func timeToStr(
 					result = append(result, 0)
 				}
 			}
+			result = truncateCastBytesResult(result, toType)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
@@ -4803,6 +4807,7 @@ func decimal64ToStr(
 					result = append(result, 0)
 				}
 			}
+			result = truncateCastBytesResult(result, toType)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
@@ -4852,6 +4857,7 @@ func decimal128ToStr(
 					result = append(result, 0)
 				}
 			}
+			result = truncateCastBytesResult(result, toType)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
@@ -4920,6 +4926,7 @@ func decimal256ToStr(
 					result = append(result, 0)
 				}
 			}
+			result = truncateCastBytesResult(result, toType)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
@@ -6335,6 +6342,19 @@ func appendNulls[T types.FixedSizeT](result vector.FunctionResultWrapper, length
 func convertByteSliceToString(v []byte) string {
 	return util.UnsafeBytesToString(v)
 	// return string(v)
+}
+
+func truncateCastBytesResult(result []byte, toType types.Type) []byte {
+	if toType.Width <= 0 {
+		return result
+	}
+	if toType.Oid != types.T_char && toType.Oid != types.T_varchar {
+		return result
+	}
+	if len(result) <= int(toType.Width) {
+		return result
+	}
+	return result[:toType.Width]
 }
 
 func truncateStringByRunes(s string, maxRunes int) string {
