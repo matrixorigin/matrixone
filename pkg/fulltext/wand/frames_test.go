@@ -14,7 +14,59 @@
 
 package wand
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+)
+
+// TestWandFrameSplitReassemble covers the fix for oversized tag=1 frames: a frame
+// larger than the store's MaxChunkSize data column is split across several chunk
+// rows and reassembled at load, preserving the frame bytes and the ordering key
+// (the frame's first chunk_id).
+func TestWandFrameSplitReassemble(t *testing.T) {
+	mk := func(seed byte, payloadLen int) []byte {
+		p := make([]byte, payloadLen)
+		for i := range p {
+			p[i] = seed + byte(i)
+		}
+		return cuvscdc.FrameCdcChunk(p, nil, 1, 0, 0)
+	}
+	f1 := mk(1, 2*vectorindex.MaxChunkSize+100) // spans 3 chunk rows
+	f2 := mk(2, 50)                             // fits in 1 chunk row
+
+	var chunks []TailChunk
+	cid := int64(0)
+	for _, f := range [][]byte{f1, f2} {
+		cs := splitFrameChunks(cid, f)
+		chunks = append(chunks, cs...)
+		cid += int64(len(cs))
+	}
+	if len(chunks) != 4 { // f1 -> chunks 0,1,2 ; f2 -> chunk 3
+		t.Fatalf("want 4 chunk rows, got %d", len(chunks))
+	}
+	for _, ch := range chunks {
+		if len(ch.Data) > vectorindex.MaxChunkSize {
+			t.Fatalf("chunk %d exceeds MaxChunkSize (%d)", ch.ChunkId, len(ch.Data))
+		}
+	}
+
+	frames, err := reassembleFrames(chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) != 2 {
+		t.Fatalf("want 2 reassembled frames, got %d", len(frames))
+	}
+	if frames[0].ChunkId != 0 || !bytes.Equal(frames[0].Data, f1) {
+		t.Fatalf("frame 0: chunk_id=%d len=%d/%d bytesEqual=%v", frames[0].ChunkId, len(frames[0].Data), len(f1), bytes.Equal(frames[0].Data, f1))
+	}
+	if frames[1].ChunkId != 3 || !bytes.Equal(frames[1].Data, f2) {
+		t.Fatalf("frame 1: chunk_id=%d (want 3)", frames[1].ChunkId)
+	}
+}
 
 // TestWandTailFrames round-trips insert-segment and delete frames through the
 // tag=1 CdcTail codec (FrameSegment/FrameDeletes -> AssembleFrames) and asserts

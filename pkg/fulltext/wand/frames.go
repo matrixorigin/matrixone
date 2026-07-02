@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 )
 
@@ -100,4 +101,57 @@ func freeSegs(segs []*WandModel) {
 	for _, s := range segs {
 		s.Free()
 	}
+}
+
+// TailChunk is one raw tag=1 CdcTail storage row (one MaxChunkSize-bounded piece
+// of a frame). A frame larger than the store's data column is split across
+// several consecutive chunks; the load path reassembles them.
+type TailChunk struct {
+	ChunkId int64
+	Data    []byte
+}
+
+// splitFrameChunks splits a complete frame into MaxChunkSize-bounded storage
+// chunks at consecutive chunk_ids from startChunkId. A frame <= MaxChunkSize
+// yields a single chunk. (Frames are never empty — a valid frame is >= the
+// 44-byte overhead.)
+func splitFrameChunks(startChunkId int64, framed []byte) []TailChunk {
+	var out []TailChunk
+	cid := startChunkId
+	for off := 0; off < len(framed); off += vectorindex.MaxChunkSize {
+		end := off + vectorindex.MaxChunkSize
+		if end > len(framed) {
+			end = len(framed)
+		}
+		out = append(out, TailChunk{ChunkId: cid, Data: framed[off:end]})
+		cid++
+	}
+	return out
+}
+
+// reassembleFrames groups chunk_id-ordered storage rows back into complete
+// frames using each frame's self-describing header length (cuVS CdcFrameLen): a
+// frame occupies consecutive chunks whose bytes sum to that length, and its
+// ordering key is the first chunk's chunk_id. Chunks MUST be pre-sorted by
+// ChunkId ascending.
+func reassembleFrames(chunks []TailChunk) ([]TailFrame, error) {
+	var frames []TailFrame
+	i := 0
+	for i < len(chunks) {
+		total, err := cuvscdc.CdcFrameLen(chunks[i].Data)
+		if err != nil {
+			return nil, err
+		}
+		firstChunkId := chunks[i].ChunkId
+		buf := make([]byte, 0, total)
+		for len(buf) < total && i < len(chunks) {
+			buf = append(buf, chunks[i].Data...)
+			i++
+		}
+		if len(buf) < total {
+			return nil, moerr.NewInternalErrorNoCtx("wand tail: truncated frame (missing chunk rows)")
+		}
+		frames = append(frames, TailFrame{ChunkId: firstChunkId, Data: buf[:total]})
+	}
+	return frames, nil
 }

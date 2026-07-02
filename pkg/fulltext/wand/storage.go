@@ -197,7 +197,9 @@ func loadTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]TailFrame, 
 	}
 	defer res.Close()
 
-	var frames []TailFrame
+	// Read the raw chunk rows (ORDER BY chunk_id) and reassemble frames: a large
+	// segment frame is split across several MaxChunkSize rows.
+	var chunks []TailChunk
 	for _, bat := range res.Batches {
 		if bat == nil || bat.RowCount() == 0 {
 			continue
@@ -205,10 +207,10 @@ func loadTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]TailFrame, 
 		cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
 		for i, cid := range cids {
 			data := bat.Vecs[1].GetRawBytesAt(i)
-			frames = append(frames, TailFrame{ChunkId: cid, Data: append([]byte(nil), data...)})
+			chunks = append(chunks, TailChunk{ChunkId: cid, Data: append([]byte(nil), data...)})
 		}
 	}
-	return frames, nil
+	return reassembleFrames(chunks)
 }
 
 // streamChunksToFile streams the index's chunk rows from the store and writes

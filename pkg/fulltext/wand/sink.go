@@ -197,7 +197,7 @@ func BuildTailFrames(cdc *WandCdc, capacity int64, startChunkId int64, tokenize 
 			return nil, 0, err
 		}
 		frames = append(frames, TailFrame{ChunkId: chunkId, Data: frame})
-		chunkId++
+		chunkId += frameChunkCount(len(frame))
 	}
 	for _, seg := range b.FinishSegments(capacity) {
 		if seg.N == 0 {
@@ -210,7 +210,7 @@ func BuildTailFrames(cdc *WandCdc, capacity int64, startChunkId int64, tokenize 
 			return nil, 0, err
 		}
 		frames = append(frames, TailFrame{ChunkId: chunkId, Data: frame})
-		chunkId++
+		chunkId += frameChunkCount(len(frame))
 	}
 	return frames, chunkId, nil
 }
@@ -225,12 +225,34 @@ func NextTailChunkIdSql(cfg TableConfig) string {
 		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
 }
 
-// FrameInsertSql renders one tag=1 CdcTail frame as an INSERT into the store
-// (index_id = CdcTailId, tag = Tag_CdcEvents), mirroring ToInsertSqls' row form.
-func FrameInsertSql(cfg TableConfig, chunkId int64, framed []byte) string {
+// frameChunkCount is the number of MaxChunkSize storage rows a frame of this many
+// bytes occupies (>= 1). A large segment frame is split across several rows
+// because the store's data column is capped at MaxChunkSize (64 KB).
+func frameChunkCount(frameLen int) int64 {
+	n := int64((frameLen + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize)
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// FrameInsertSqls renders one tag=1 CdcTail frame as the INSERT(s) into the store
+// (index_id = CdcTailId, tag = Tag_CdcEvents), SPLITTING a frame larger than the
+// data column (MaxChunkSize) across consecutive chunk_ids from startChunkId —
+// reassembled at load via CdcFrameLen. Mirrors ToInsertSqls' row form.
+func FrameInsertSqls(cfg TableConfig, startChunkId int64, framed []byte) []string {
+	chunks := splitFrameChunks(startChunkId, framed)
+	sqls := make([]string, 0, len(chunks))
+	for _, ch := range chunks {
+		sqls = append(sqls, frameChunkInsertSql(cfg, ch.ChunkId, ch.Data))
+	}
+	return sqls
+}
+
+func frameChunkInsertSql(cfg TableConfig, chunkId int64, chunk []byte) string {
 	return fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s) VALUES (%s, %d, unhex('%s'), %d)",
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullTextIndex_TblCol_Storage_Index_Id, catalog.FullTextIndex_TblCol_Storage_Chunk_Id,
 		catalog.FullTextIndex_TblCol_Storage_Data, catalog.FullTextIndex_TblCol_Storage_Tag,
-		sqlquote.String(vectorindex.CdcTailId), chunkId, hex.EncodeToString(framed), int(vectorindex.Tag_CdcEvents))
+		sqlquote.String(vectorindex.CdcTailId), chunkId, hex.EncodeToString(chunk), int(vectorindex.Tag_CdcEvents))
 }

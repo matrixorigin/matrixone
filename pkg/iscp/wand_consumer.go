@@ -89,11 +89,15 @@ func RunWand(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 							return err
 						}
 						for _, f := range frames {
-							res, e := sqlexec.RunSql(sqlproc, wand.FrameInsertSql(w.cfg, f.ChunkId, f.Data))
-							if e != nil {
-								return e
+							// a large segment frame is split across several
+							// MaxChunkSize storage rows (data column cap).
+							for _, s := range wand.FrameInsertSqls(w.cfg, f.ChunkId, f.Data) {
+								res, e := sqlexec.RunSql(sqlproc, s)
+								if e != nil {
+									return e
+								}
+								res.Close()
 							}
-							res.Close()
 						}
 						nframes = len(frames)
 						logutil.Infof("[wand-sink] db=%s index=%s type=%d events=%d frames=%d chunk_id=%d..%d",
