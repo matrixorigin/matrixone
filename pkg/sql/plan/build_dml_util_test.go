@@ -121,6 +121,16 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
 }
 
+func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	colType := types.New(types.T_binary, 4, 0)
+	numVal := tree.NewNumVal("0x4142", "0x4142", false, tree.P_hexnum)
+
+	expr, err := MakeInsertValueConstExpr(proc, numVal, &colType)
+	require.NoError(t, err)
+	require.Equal(t, string([]byte{0x41, 0x42, 0x00, 0x00}), expr.GetLit().GetSval())
+}
+
 func TestAppendIndexPrefixProjection(t *testing.T) {
 	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
 		t.Helper()

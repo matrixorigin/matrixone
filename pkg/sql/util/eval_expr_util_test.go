@@ -40,6 +40,58 @@ func TestHexToInt(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSetInsertValueStringBinaryHexPadding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name        string
+		literal     string
+		typ         types.Type
+		expected    []byte
+		expectError bool
+	}{
+		{
+			name:     "binary pads to declared width",
+			literal:  "0x4142",
+			typ:      types.New(types.T_binary, 4, 0),
+			expected: []byte{0x41, 0x42, 0x00, 0x00},
+		},
+		{
+			name:     "varbinary keeps decoded width",
+			literal:  "0x4142",
+			typ:      types.New(types.T_varbinary, 4, 0),
+			expected: []byte{0x41, 0x42},
+		},
+		{
+			name:        "varbinary rejects decoded value over declared width",
+			literal:     "0x4142",
+			typ:         types.New(types.T_varbinary, 1, 0),
+			expectError: true,
+		},
+		{
+			name:        "invalid hex is rejected",
+			literal:     "0xgg",
+			typ:         types.New(types.T_binary, 4, 0),
+			expectError: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			numVal := tree.NewNumVal(tc.literal, tc.literal, false, tree.P_hexnum)
+			canInsert, got, err := SetInsertValueString(proc, numVal, &tc.typ)
+			if tc.expectError {
+				require.Error(t, err)
+				require.False(t, canInsert)
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, canInsert)
+			require.Equal(t, tc.expected, got)
+		})
+	}
+}
+
 func TestBinaryToInt(t *testing.T) {
 	var val uint64
 	var err error

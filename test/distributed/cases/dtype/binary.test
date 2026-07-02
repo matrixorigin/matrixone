@@ -375,6 +375,13 @@ insert into t set c = 'a';
 select hex(c), c = 'a', c = 'a\0\0' from t;
 drop table t;
 
+drop table if exists binary_hex_padding;
+create table binary_hex_padding (id int primary key, b binary(4), vb varbinary(4));
+insert into binary_hex_padding values (1, 0x4142, 0x4142);
+select id, hex(b) as b_hex, length(b) as b_len, hex(vb) as vb_hex, length(vb) as vb_len
+from binary_hex_padding order by id;
+drop table binary_hex_padding;
+
 -- varbinary test
 -- error test:not defined the type of varbinary length
 drop table if exists binary01;

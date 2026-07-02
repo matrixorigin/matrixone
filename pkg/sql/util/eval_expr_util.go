@@ -631,6 +631,10 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		s := numVal.String()[2:]
 		if val, err = hex.DecodeString(s); err != nil {
 			canInsert = false
+			return
+		}
+		if val, err = checkStrLen(string(val)); err != nil {
+			canInsert = false
 		}
 		return
 
