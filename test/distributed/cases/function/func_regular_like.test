@@ -64,3 +64,9 @@ select regexp_like('CAT','cat','i') r;
 select regexp_like('\n','.','n') r;
 select regexp_like('abc\ndef','^def','m') r;
 select regexp_like('CAT','cat','iiiiiiic') r;
+
+select 'abc' regexp '';
+select 'abc' rlike '';
+select 'abc' not regexp '';
+select 'abc' regexp 'a';
+select 'abc' rlike '^a';

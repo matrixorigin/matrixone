@@ -284,7 +284,7 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 func (op *opBuiltInRegexp) builtInRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryStrStrToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 string) (bool, error) {
-		reg, err := op.regMap.getRegularMatcher(v2)
+		reg, err := op.regMap.getRegularMatcherForMatch(v2)
 		if err != nil {
 			return false, err
 		}
@@ -294,7 +294,7 @@ func (op *opBuiltInRegexp) builtInRegMatch(parameters []*vector.Vector, result v
 
 func (op *opBuiltInRegexp) builtInNotRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryStrStrToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 string) (bool, error) {
-		reg, err := op.regMap.getRegularMatcher(v2)
+		reg, err := op.regMap.getRegularMatcherForMatch(v2)
 		if err != nil {
 			return false, err
 		}
@@ -613,6 +613,13 @@ func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
 		rs.mp[pat] = reg
 	}
 	return reg, nil
+}
+
+func (rs *regexpSet) getRegularMatcherForMatch(pat string) (*regexp.Regexp, error) {
+	if pat == "" {
+		return nil, moerr.NewRegexpIllegalArgumentNoCtx()
+	}
+	return rs.getRegularMatcher(pat)
 }
 
 func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, err error) {

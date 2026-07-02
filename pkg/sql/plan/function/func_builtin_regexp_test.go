@@ -15,8 +15,12 @@
 package function
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_BuiltIn_RegularInstr(t *testing.T) {
@@ -87,6 +91,85 @@ func Test_BuiltIn_RegularLike(t *testing.T) {
 		require.Equal(t, c.expected, match, i)
 	}
 
+}
+
+func Test_BuiltIn_RegMatchRejectsEmptyPattern(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "reg_match", fn: newOpBuiltInRegexp().builtInRegMatch},
+		{name: "not_reg_match", fn: newOpBuiltInRegexp().builtInNotRegMatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc"}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, []bool{false}),
+				tc.fn,
+			)
+
+			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+			_, err := tcc.DebugRun()
+			require.Error(t, err)
+
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, uint16(3685), moErr.MySQLCode())
+			require.Equal(t, "HY000", moErr.SqlState())
+			require.Equal(t, "Illegal argument to a regular expression.", moErr.Error())
+		})
+	}
+}
+
+func Test_BuiltIn_RegMatchPreservesNullPattern(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tcc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc"}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}),
+		newOpBuiltInRegexp().builtInRegMatch,
+	)
+
+	succeed, errInfo := tcc.Run()
+	require.True(t, succeed, errInfo)
+}
+
+func Test_BuiltIn_RegMatchPreservesValidPatterns(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name     string
+		pattern  string
+		expected bool
+		fn       fEvalFn
+	}{
+		{name: "reg_match", pattern: "^a", expected: true, fn: newOpBuiltInRegexp().builtInRegMatch},
+		{name: "not_reg_match", pattern: "^z", expected: true, fn: newOpBuiltInRegexp().builtInNotRegMatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc"}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.pattern}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), false, []bool{tc.expected}, []bool{false}),
+				tc.fn,
+			)
+
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
 }
 
 func Test_BuiltIn_RegularMatchForLikeOp(t *testing.T) {
