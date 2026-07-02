@@ -52,7 +52,7 @@ func newReplaceBinderTestTableDef() *plan.TableDef {
 func TestReplaceValueBinder_BindColRef(t *testing.T) {
 	ctx := context.Background()
 	tableDef := newReplaceBinderTestTableDef()
-	b := NewReplaceValueBinder(ctx, nil, nil, tableDef)
+	b := NewReplaceValueBinder(ctx, nil, nil, plan.Type{}, tableDef)
 
 	// A reference to column "v" resolves to its DEFAULT value (literal 5).
 	expr, err := b.BindColRef(tree.NewUnresolvedColName("v"), 0, true)
@@ -95,7 +95,7 @@ func TestReplaceValueBinder_BindColRef(t *testing.T) {
 func TestReplaceValueBinder_BindExpr(t *testing.T) {
 	ctx := context.Background()
 	tableDef := newReplaceBinderTestTableDef()
-	b := NewReplaceValueBinder(ctx, nil, nil, tableDef)
+	b := NewReplaceValueBinder(ctx, nil, nil, plan.Type{}, tableDef)
 
 	// v + 1 binds to "+"(DEFAULT(v), 1) == "+"(5, 1). The binder does not fold
 	// constants (that happens later in the optimizer), so assert the structure:
@@ -119,7 +119,7 @@ func TestReplaceValueBinder_BindExpr(t *testing.T) {
 func TestReplaceValueBinder_UnsupportedBindings(t *testing.T) {
 	ctx := context.Background()
 	tableDef := newReplaceBinderTestTableDef()
-	b := NewReplaceValueBinder(ctx, nil, nil, tableDef)
+	b := NewReplaceValueBinder(ctx, nil, nil, plan.Type{}, tableDef)
 
 	_, err := b.BindAggFunc("sum", nil, 0, true)
 	require.Error(t, err)
@@ -132,4 +132,39 @@ func TestReplaceValueBinder_UnsupportedBindings(t *testing.T) {
 
 	_, err = b.BindTimeWindowFunc("tumble", nil, 0, true)
 	require.Error(t, err)
+}
+
+func TestReplaceValueBinder_DecimalPrecision(t *testing.T) {
+	ctx := context.Background()
+
+	// Table with a DECIMAL(38,18) column.
+	decTyp := plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 18}
+	tableDef := &plan.TableDef{
+		Name: "t",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}},
+			{Name: "dec_col", Typ: decTyp, Default: &plan.Default{NullAbility: false, Expr: makePlan2Int64ConstExprWithType(0)}},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "dec_col": 1},
+	}
+
+	// Create binder with the destination column type, matching what
+	// buildValueScan does for a DECIMAL column.
+	b := NewReplaceValueBinder(ctx, nil, nil, decTyp, tableDef)
+
+	// A scientific-notation NumVal bound with the DECIMAL column type must
+	// keep its DECIMAL type rather than being degraded to float64.
+	// `-1.234567890123456789e18` is within DECIMAL(38,18) range.
+	numVal := tree.NewNumVal("-1.234567890123456789e18", "-1.234567890123456789e18", false, tree.P_decimal)
+	expr, err := b.BindExpr(numVal, 0, true)
+	require.NoError(t, err)
+	lit := expr.GetLit()
+	require.NotNil(t, lit, "scientific-notation literal should produce a literal, not a float64 cast")
+	require.Equal(t, decTyp.Id, expr.Typ.Id, "literal type should be decimal128, not float64")
+	require.Equal(t, decTyp.Width, expr.Typ.Width)
+	require.Equal(t, decTyp.Scale, expr.Typ.Scale)
+	// With a target column type, bindNumVal parses the decimal and stores it
+	// as a Decimal128Val binary — not a float64.
+	require.False(t, lit.GetIsnull(), "decimal value should not be null")
+	require.NotNil(t, lit.GetDecimal128Val(), "decimal128 value should be populated")
 }

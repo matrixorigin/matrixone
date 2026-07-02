@@ -2939,9 +2939,11 @@ func (builder *QueryBuilder) buildValueScan(
 			if colRefAsDefault {
 				// REPLACE ... SET col = expr: an RHS reference to a target-table
 				// column is evaluated as DEFAULT(col), including inside functions.
-				replaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, nil, tableDef)
+				replaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, nil, col.Typ, tableDef)
 				binder = replaceBinder
-				funcBinder = replaceBinder
+
+				funcReplaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, nil, plan.Type{}, tableDef)
+				funcBinder = funcReplaceBinder
 			} else {
 				defaultBinder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 				defaultBinder.builder = builder

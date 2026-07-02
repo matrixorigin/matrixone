@@ -24,8 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewReplaceValueBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindContext, tableDef *plan.TableDef) *ReplaceValueBinder {
-	b := &ReplaceValueBinder{tableDef: tableDef}
+func NewReplaceValueBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindContext, typ plan.Type, tableDef *plan.TableDef) *ReplaceValueBinder {
+	b := &ReplaceValueBinder{typ: typ, tableDef: tableDef}
 	b.sysCtx = sysCtx
 	b.builder = builder
 	b.ctx = ctx

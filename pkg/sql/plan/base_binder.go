@@ -55,18 +55,10 @@ var kAlwaysFalseExpr = &plan.Expr{
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		if d, ok := b.impl.(*DefaultBinder); ok {
-			expr, err = b.bindNumVal(exprImpl, d.typ)
-		} else {
-			expr, err = b.bindNumVal(exprImpl, plan.Type{})
-		}
+		expr, err = b.bindNumVal(exprImpl, b.defaultValueBindType())
 	case *tree.TimeUnitExpr:
 		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
-		if d, ok := b.impl.(*DefaultBinder); ok {
-			expr, err = b.bindNumVal(numVal, d.typ)
-		} else {
-			expr, err = b.bindNumVal(numVal, plan.Type{})
-		}
+		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 
@@ -3060,4 +3052,17 @@ func isDecimalLiteralCast(arg *plan.Expr) bool {
 		return true
 	}
 	return false
+}
+
+// defaultValueBindType returns the target column type carried by a
+// DefaultBinder or ReplaceValueBinder. For other binder implementations it
+// returns an empty Type so literal binding falls back to the generic path.
+func (b *baseBinder) defaultValueBindType() plan.Type {
+	if d, ok := b.impl.(*DefaultBinder); ok {
+		return d.typ
+	}
+	if r, ok := b.impl.(*ReplaceValueBinder); ok {
+		return r.typ
+	}
+	return plan.Type{}
 }

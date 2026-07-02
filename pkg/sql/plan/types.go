@@ -457,8 +457,14 @@ type DefaultBinder struct {
 // statement. MySQL evaluates an RHS reference to a target-table column as
 // DEFAULT(col), so this binder resolves every column reference to that
 // column's default expression instead of an actual row value.
+//
+// The typ field carries the destination column type so that literal values
+// (especially DECIMAL / scientific-notation) bind with the same precision as
+// DefaultBinder. BindExpr delegates to baseBindExpr which uses this typ to
+// drive type-aware numeric binding.
 type ReplaceValueBinder struct {
 	baseBinder
+	typ      plan.Type
 	tableDef *plan.TableDef
 }
 
