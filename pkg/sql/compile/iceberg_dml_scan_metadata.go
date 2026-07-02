@@ -61,6 +61,7 @@ func (c *Compile) constructIcebergInsert(nodes []*plan.Node, node *plan.Node) (v
 		return nil, err
 	}
 	writer.Request.DMLScan = metadata
+	alignIcebergDMLWriteRequestToInput(nodes, node, &writer.Request)
 	return writer, nil
 }
 
@@ -68,6 +69,112 @@ func icebergWriteNeedsDMLScanMetadata(operation string) bool {
 	return operation == icebergwrite.OperationDelete ||
 		operation == icebergwrite.OperationUpdate ||
 		operation == icebergwrite.OperationMerge
+}
+
+func alignIcebergDMLWriteRequestToInput(nodes []*plan.Node, node *plan.Node, req *icebergwrite.AppendRequest) {
+	if req == nil || node == nil || len(node.Children) != 1 {
+		return
+	}
+	attrs, ok := icebergDMLInputAttrs(nodes, node.Children[0], req.Attrs)
+	if !ok {
+		return
+	}
+	dataFilePathColumnIndex, rowOrdinalColumnIndex, mergeActionColumnIndex := icebergDMLMetadataIndexes(attrs)
+	if dataFilePathColumnIndex < 0 && rowOrdinalColumnIndex < 0 && mergeActionColumnIndex < 0 {
+		return
+	}
+	req.Attrs = attrs
+	if dataFilePathColumnIndex >= 0 {
+		req.DataFilePathColumnIndex = dataFilePathColumnIndex
+	}
+	if rowOrdinalColumnIndex >= 0 {
+		req.RowOrdinalColumnIndex = rowOrdinalColumnIndex
+	}
+	if mergeActionColumnIndex >= 0 {
+		req.MergeActionColumnIndex = mergeActionColumnIndex
+	}
+}
+
+func icebergDMLInputAttrs(nodes []*plan.Node, rootID int32, fallback []string) ([]string, bool) {
+	if rootID < 0 || int(rootID) >= len(nodes) {
+		return nil, false
+	}
+	names := icebergPlanNodeOutputNames(nodes[rootID])
+	if len(names) == 0 {
+		return nil, false
+	}
+	attrs := make([]string, len(names))
+	hasDMLMetadata := false
+	for idx, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" && idx < len(fallback) {
+			name = strings.TrimSpace(fallback[idx])
+		}
+		attrs[idx] = name
+		if isIcebergDMLWriteMetadataName(name) {
+			hasDMLMetadata = true
+		}
+	}
+	if !hasDMLMetadata {
+		return nil, false
+	}
+	return attrs, true
+}
+
+func icebergPlanNodeOutputNames(node *plan.Node) []string {
+	if node == nil {
+		return nil
+	}
+	if len(node.ProjectList) > 0 {
+		names := make([]string, len(node.ProjectList))
+		for idx, expr := range node.ProjectList {
+			names[idx] = icebergExprColumnName(expr)
+		}
+		return names
+	}
+	if node.TableDef == nil || len(node.TableDef.Cols) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(node.TableDef.Cols))
+	for _, col := range node.TableDef.Cols {
+		if col == nil {
+			continue
+		}
+		names = append(names, col.GetOriginCaseName())
+	}
+	return names
+}
+
+func icebergExprColumnName(expr *plan.Expr) string {
+	if expr == nil || expr.GetCol() == nil {
+		return ""
+	}
+	return expr.GetCol().Name
+}
+
+func icebergDMLMetadataIndexes(attrs []string) (dataFilePathColumnIndex, rowOrdinalColumnIndex, mergeActionColumnIndex int32) {
+	dataFilePathColumnIndex = -1
+	rowOrdinalColumnIndex = -1
+	mergeActionColumnIndex = -1
+	for idx, attr := range attrs {
+		name := strings.TrimSpace(attr)
+		switch {
+		case strings.EqualFold(name, icebergapi.DMLDataFilePathColumnName):
+			dataFilePathColumnIndex = int32(idx)
+		case strings.EqualFold(name, icebergapi.DMLRowOrdinalColumnName):
+			rowOrdinalColumnIndex = int32(idx)
+		case strings.EqualFold(name, icebergapi.DMLMergeActionColumnName):
+			mergeActionColumnIndex = int32(idx)
+		}
+	}
+	return dataFilePathColumnIndex, rowOrdinalColumnIndex, mergeActionColumnIndex
+}
+
+func isIcebergDMLWriteMetadataName(name string) bool {
+	name = strings.TrimSpace(name)
+	return strings.EqualFold(name, icebergapi.DMLDataFilePathColumnName) ||
+		strings.EqualFold(name, icebergapi.DMLRowOrdinalColumnName) ||
+		strings.EqualFold(name, icebergapi.DMLMergeActionColumnName)
 }
 
 func (c *Compile) recordIcebergScanPlan(planNodeID int32, scanPlan *icebergapi.IcebergScanPlan) {

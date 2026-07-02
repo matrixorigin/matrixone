@@ -32,6 +32,9 @@ tags
 coverage.txt
 out.txt
 logs/
+test/iceberg/reports/
+**/derby.log
+**/metastore_db/
 prometheus-local-data/
 prometheus-data/
 grafana-local-data/

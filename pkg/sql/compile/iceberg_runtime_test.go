@@ -236,6 +236,7 @@ func TestIcebergScanPlanToRuntimeSkipsDMLMetadataColumns(t *testing.T) {
 	require.Equal(t, int32(1), runtime.columns[0].IcebergFieldId)
 	require.Equal(t, int32(3), runtime.columns[1].MoColIndex)
 	require.Equal(t, int32(2), runtime.columns[1].IcebergFieldId)
+	require.True(t, runtime.needRowOrdinal)
 }
 
 func TestIcebergScanPlanToRuntimeBindsDMLMetadataColumnsInPlace(t *testing.T) {
@@ -261,6 +262,21 @@ func TestIcebergScanPlanToRuntimeBindsDMLMetadataColumnsInPlace(t *testing.T) {
 	require.Equal(t, int32(1), runtime.columns[2].MoColIndex)
 	require.Equal(t, int32(2), runtime.columns[3].MoColIndex)
 	require.Empty(t, runtime.hiddenReadCols)
+	require.True(t, runtime.needRowOrdinal)
+}
+
+func TestIcebergScanPlanToRuntimeKeepsRowOrdinalOffWithoutDMLPositionMetadata(t *testing.T) {
+	ctx := context.Background()
+	runtime, err := icebergScanPlanToRuntimeForTable(ctx, &api.IcebergScanPlan{
+		Snapshot: api.SnapshotPlan{SnapshotID: 22},
+		ColumnMapping: []api.IcebergColumnMapping{
+			{FieldID: 1, ColumnName: "id", MOType: api.MOType{Name: "BIGINT"}, Projected: true, ParquetFieldID: 1},
+		},
+	}, "", &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}})
+	require.NoError(t, err)
+	require.False(t, runtime.needRowOrdinal)
 }
 
 func TestIcebergScanPlanToRuntimeKeepsHiddenDeleteKeysMissingFromProjection(t *testing.T) {

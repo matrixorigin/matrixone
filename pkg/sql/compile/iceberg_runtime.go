@@ -49,6 +49,8 @@ func icebergScanPlanToRuntimeForTable(
 		objectIORef = scanPlan.ObjectIORef
 	}
 	runtimeColumns := columns
+	needRowOrdinal := icebergNeedsRowOrdinal(scanPlan.DeleteTasks) ||
+		icebergProjectsDMLPositionMetadata(tableDef)
 	return icebergExternalScanRuntime{
 		dataTasks:   icebergDataTasksToPipeline(scanPlan.DataTasks),
 		deleteTasks: icebergDeleteTasksToPipeline(scanPlan.DeleteTasks),
@@ -65,7 +67,7 @@ func icebergScanPlanToRuntimeForTable(
 		objectIORef:          objectIORef,
 		hiddenReadCols:       icebergHiddenReadColumns(runtimeColumns),
 		planningStats:        icebergPlanningProfileToParquetStats(scanPlan.Profile),
-		needRowOrdinal:       icebergNeedsRowOrdinal(scanPlan.DeleteTasks),
+		needRowOrdinal:       needRowOrdinal,
 		deleteMaxMemoryBytes: scanPlan.DeleteMaxMemoryBytes,
 		deleteSpillEnabled:   scanPlan.EnableDeleteSpill,
 	}, nil
@@ -180,6 +182,30 @@ func icebergHiddenReadColumns(columns []*pipeline.IcebergColumnMapping) []int32 
 func icebergNeedsRowOrdinal(tasks []api.DeleteFileTask) bool {
 	for _, task := range tasks {
 		if task.DataFile.Content == api.DataFileContentPositionDelete {
+			return true
+		}
+	}
+	return false
+}
+
+func icebergProjectsDMLPositionMetadata(tableDef *plan.TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	hasDataFilePath := false
+	hasRowOrdinal := false
+	for _, col := range tableDef.GetCols() {
+		if col == nil {
+			continue
+		}
+		name := strings.TrimSpace(col.Name)
+		if strings.EqualFold(name, api.DMLDataFilePathColumnName) {
+			hasDataFilePath = true
+		}
+		if strings.EqualFold(name, api.DMLRowOrdinalColumnName) {
+			hasRowOrdinal = true
+		}
+		if hasDataFilePath && hasRowOrdinal {
 			return true
 		}
 	}

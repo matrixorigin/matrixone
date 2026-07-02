@@ -533,9 +533,10 @@ func appendIcebergDMLColumnsOnPath(ctx context.Context, query *plan.Query, nodeI
 	if nodeID == scanID {
 		positions := make([]int32, 0, len(cols))
 		for _, col := range cols {
-			pos := int32(len(node.ProjectList))
-			node.ProjectList = append(node.ProjectList, icebergDMLPassthroughExpr(col, pos))
-			positions = append(positions, pos)
+			outputPos := int32(len(node.ProjectList))
+			inputPos := icebergDMLScanColumnPosition(node.TableDef, col.Name, outputPos)
+			node.ProjectList = append(node.ProjectList, icebergDMLPassthroughExpr(col, inputPos))
+			positions = append(positions, outputPos)
 		}
 		return positions, true, nil
 	}
@@ -569,6 +570,22 @@ func appendIcebergDMLColumnsOnPath(ctx context.Context, query *plan.Query, nodeI
 		positions = append(positions, pos)
 	}
 	return positions, true, nil
+}
+
+func icebergDMLScanColumnPosition(tableDef *plan.TableDef, name string, fallback int32) int32 {
+	if tableDef == nil {
+		return fallback
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fallback
+	}
+	for idx, col := range tableDef.GetCols() {
+		if col != nil && strings.EqualFold(strings.TrimSpace(col.Name), name) {
+			return int32(idx)
+		}
+	}
+	return fallback
 }
 
 func icebergDMLPassthroughExpr(col *plan.ColDef, childPos int32) *plan.Expr {

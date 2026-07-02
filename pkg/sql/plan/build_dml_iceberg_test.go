@@ -76,6 +76,17 @@ func TestIcebergDeleteBuildsDMLWriteIntent(t *testing.T) {
 	if _, ok := scan.GetExternScan().GetTbColToDataCol()[icebergapi.DMLRowOrdinalColumnName]; !ok {
 		t.Fatalf("scan TbColToDataCol missing row-ordinal metadata column: %+v", scan.GetExternScan().GetTbColToDataCol())
 	}
+	pathInputPos := tableDefColIndex(scan.GetTableDef(), icebergapi.DMLDataFilePathColumnName)
+	rowInputPos := tableDefColIndex(scan.GetTableDef(), icebergapi.DMLRowOrdinalColumnName)
+	if pathInputPos < 0 || rowInputPos < 0 {
+		t.Fatalf("scan table def missing metadata input positions: %+v", scan.GetTableDef())
+	}
+	if got := projectColPosByName(scan.GetProjectList(), icebergapi.DMLDataFilePathColumnName); got != pathInputPos {
+		t.Fatalf("data-file metadata projection colpos = %d, want scan input colpos %d", got, pathInputPos)
+	}
+	if got := projectColPosByName(scan.GetProjectList(), icebergapi.DMLRowOrdinalColumnName); got != rowInputPos {
+		t.Fatalf("row-ordinal metadata projection colpos = %d, want scan input colpos %d", got, rowInputPos)
+	}
 }
 
 func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {
@@ -540,6 +551,28 @@ func tableDefHasCol(tableDef *planpb.TableDef, name string) bool {
 		}
 	}
 	return false
+}
+
+func tableDefColIndex(tableDef *planpb.TableDef, name string) int32 {
+	if tableDef == nil {
+		return -1
+	}
+	for idx, col := range tableDef.GetCols() {
+		if col != nil && strings.EqualFold(col.Name, name) {
+			return int32(idx)
+		}
+	}
+	return -1
+}
+
+func projectColPosByName(projectList []*planpb.Expr, name string) int32 {
+	for _, expr := range projectList {
+		if expr.GetCol() == nil || !strings.EqualFold(expr.GetCol().Name, name) {
+			continue
+		}
+		return expr.GetCol().ColPos
+	}
+	return -1
 }
 
 func icebergDMLSinkChildProject(t *testing.T, query *planpb.Query, sink *planpb.Node) *planpb.Node {

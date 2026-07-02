@@ -917,13 +917,21 @@ func constructIcebergInsert(proc *process.Process, node *plan.Node) (vm.Operator
 	rowOrdinalColumnIndex := int32(-1)
 	mergeActionColumnIndex := int32(-1)
 	for _, col := range oldCtx.TableDef.Cols {
+		isIcebergDMLMetadata := false
 		switch col.Name {
 		case icebergapi.DMLDataFilePathColumnName:
 			dataFilePathColumnIndex = int32(len(attrs))
+			isIcebergDMLMetadata = true
 		case icebergapi.DMLRowOrdinalColumnName:
 			rowOrdinalColumnIndex = int32(len(attrs))
+			isIcebergDMLMetadata = true
 		case icebergapi.DMLMergeActionColumnName:
 			mergeActionColumnIndex = int32(len(attrs))
+			isIcebergDMLMetadata = true
+		}
+		if isIcebergDMLMetadata {
+			attrs = append(attrs, col.GetOriginCaseName())
+			continue
 		}
 		if col.Name == catalog.Row_ID || col.Hidden || col.Name == catalog.ExternalFilePath {
 			continue

@@ -26,10 +26,7 @@
   {
     "id": "ICE-TEST-114",
     "name": "time_travel_timestamp_non_utc",
-    "mo_actions": [
-      "${MO_ICEBERG_TIER_A_TIME_TRAVEL_TIMESTAMP_MO_ACTION_SQL}"
-    ],
-    "mo_sql": "${MO_ICEBERG_TIER_A_TIME_TRAVEL_TIMESTAMP_MO_SQL}",
+    "mo_sql": "${MO_ICEBERG_TIER_A_TIME_TRAVEL_TIMESTAMP_MO_ACTION_SQL}; ${MO_ICEBERG_TIER_A_TIME_TRAVEL_TIMESTAMP_MO_SQL}",
     "spark_sql": "${MO_ICEBERG_TIER_A_TIME_TRAVEL_TIMESTAMP_SPARK_SQL}"
   },
   {
