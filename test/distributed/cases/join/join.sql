@@ -305,4 +305,13 @@ drop table if exists item;
 drop table if exists supplier;
 drop table if exists stock;
 drop table if exists nation;
+
+-- subquery in INNER JOIN ON condition
+drop table if exists j_dim;
+create table j_dim (id int, region_id int);
+insert into j_dim values (1, 1), (2, 1), (3, 2), (4, 2), (5, 2);
+select a.id from j_dim a join j_dim b on b.id = (select max(id) from j_dim z where z.region_id = a.region_id) order by a.id;
+-- uncorrelated subquery
+select a.id from j_dim a join j_dim b on b.id = (select max(id) from j_dim) order by a.id;
+drop table j_dim;
 drop table if exists region;
