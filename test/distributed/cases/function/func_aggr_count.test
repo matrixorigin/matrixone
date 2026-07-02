@@ -288,7 +288,7 @@ where g = 1;
 
 # Tuple syntax with multiple aggregates (regression: tuple must be expanded in binder, not just in optimizeDistinctAgg)
 select count(distinct (g, v)), count(*) from t_count_distinct_multi;
-select txt, count(distinct (g, v)), count(*) from t_count_distinct_multi group by txt;
+select txt, count(distinct (g, v)), count(*) from t_count_distinct_multi group by txt order by txt;
 select count(distinct (g, v)), count(distinct g, v) from t_count_distinct_multi;
 
 drop table t_count_distinct_multi;
