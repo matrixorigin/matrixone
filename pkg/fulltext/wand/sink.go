@@ -29,10 +29,12 @@ import (
 
 // The sink side of Phase B: the ISCP consumer's WandSqlWriter accumulates CDC
 // rows into a WandCdc, serializes it through the ISCP channel (Encode), and
-// RunWand decodes it (DecodeWandCdc) and turns it into tag=1 CdcTail frames
-// (BuildTailFrames) appended to the store (FrameInsertSql). The blob is BINARY
-// (typed pk via encodePk) — unlike the HNSW JSON path, because a retrieval pk is
-// `any` (int64 OR varchar) and a JSON round-trip would corrupt a non-int pk.
+// RunWand decodes it (DecodeWandCdc) and STREAMS it through a TailBuilder into
+// capacity-capped tag=1 CdcTail segments appended to the store (FrameInsertSqls).
+// (BuildTailFrames below is the non-streaming equivalent, kept for tests /
+// small in-memory batches.) The blob is BINARY (typed pk via encodePk) — unlike
+// the HNSW JSON path, because a retrieval pk is `any` (int64 OR varchar) and a
+// JSON round-trip would corrupt a non-int pk.
 
 type wandCdcOp byte
 
@@ -59,10 +61,14 @@ type WandCdc struct {
 
 func NewWandCdc(pkType int32) *WandCdc { return &WandCdc{PkType: pkType} }
 
-func (c *WandCdc) Insert(pk any, text string) { c.Events = append(c.Events, CdcEvent{cdcInsert, pk, text}) }
-func (c *WandCdc) Upsert(pk any, text string) { c.Events = append(c.Events, CdcEvent{cdcUpsert, pk, text}) }
-func (c *WandCdc) Delete(pk any)              { c.Events = append(c.Events, CdcEvent{cdcDelete, pk, ""}) }
-func (c *WandCdc) Len() int                   { return len(c.Events) }
+func (c *WandCdc) Insert(pk any, text string) {
+	c.Events = append(c.Events, CdcEvent{cdcInsert, pk, text})
+}
+func (c *WandCdc) Upsert(pk any, text string) {
+	c.Events = append(c.Events, CdcEvent{cdcUpsert, pk, text})
+}
+func (c *WandCdc) Delete(pk any) { c.Events = append(c.Events, CdcEvent{cdcDelete, pk, ""}) }
+func (c *WandCdc) Len() int      { return len(c.Events) }
 
 const wandCdcMagic uint32 = 0x57440200 // 'W' 'D' 02 00
 
@@ -158,11 +164,15 @@ func readLenString(r *bytes.Reader) (string, error) {
 	return string(sb), nil
 }
 
-// BuildTailFrames turns one CDC batch into tag=1 CdcTail frames, starting at
-// startChunkId, and returns them plus the next free chunk_id. INSERT/UPSERT rows
-// are tokenized (via the injected tokenizer — kept out of this package so it
-// stays dependency-light and unit-testable) into one delta segment (split at
-// `capacity` docs); DELETE rows become one delete frame.
+// BuildTailFrames turns one in-memory CDC batch into tag=1 CdcTail frames,
+// starting at startChunkId, and returns them plus the next free chunk_id.
+// INSERT/UPSERT rows are tokenized (via the injected tokenizer — kept out of this
+// package so it stays dependency-light and unit-testable) into `capacity`-capped
+// delta segments; DELETE rows become one delete frame.
+//
+// NON-STREAMING: it builds ALL of cdc's inserts in memory before framing, so the
+// production sinker uses the streaming TailBuilder instead (bounded to one open
+// segment). BuildTailFrames is kept for tests / small batches.
 //
 // Ordering: the delete frame is emitted FIRST (lowest chunk_id) so a same-batch
 // UPDATE (delivered as DELETE old + INSERT new) resolves correctly — the new
@@ -170,9 +180,9 @@ func readLenString(r *bytes.Reader) (string, error) {
 // with chunk_id STRICTLY below the delete, so the fresh copy survives while the
 // base copy (chunk_id below the delete) is dropped.
 //
-// NOTE: `capacity` must keep a serialized segment within vectorindex.MaxChunkSize
-// (one frame = one chunk row; the load path does not reassemble a frame across
-// rows). The sinker sizes it from max_index_capacity.
+// A segment frame larger than MaxChunkSize is split across chunk rows at persist
+// (FrameInsertSqls) and reassembled at load (Bug 1) — capacity no longer needs to
+// keep a segment within one storage row; it sizes from max_index_capacity.
 func BuildTailFrames(cdc *WandCdc, capacity int64, startChunkId int64, tokenize func(string) []string) ([]TailFrame, int64, error) {
 	b := NewBuilder(fmt.Sprintf("cdctail-%d", startChunkId), cdc.PkType)
 	var deletes []DeleteRecord
@@ -224,6 +234,11 @@ func NextTailChunkIdSql(cfg TableConfig) string {
 		catalog.FullTextIndex_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
 		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
 }
+
+// FrameChunkCount is the exported form: how many MaxChunkSize storage rows a frame
+// of frameLen bytes occupies. The streaming sinker uses it to advance chunk_id past
+// each spilled segment without holding the framed bytes.
+func FrameChunkCount(frameLen int) int64 { return frameChunkCount(frameLen) }
 
 // frameChunkCount is the number of MaxChunkSize storage rows a frame of this many
 // bytes occupies (>= 1). A large segment frame is split across several rows

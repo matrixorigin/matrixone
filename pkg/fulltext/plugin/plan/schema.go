@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -149,6 +151,35 @@ func (Hooks) BuildFullTextIndexDefs(
 		}
 		if indexInfo.IndexOption.Comment != "" {
 			indexDef.Comment = indexInfo.IndexOption.Comment
+		}
+	}
+
+	// Capture build-time session vars (fulltext_max_index_capacity) into
+	// algo_params.session_vars — mirrors CreateIndexDef, which the fulltext plan
+	// path does NOT go through. A retrieval index is always-async, so its sinker
+	// runs in an internal ISCP proc with no live resolver; snapshotting the var
+	// here is the only way the create-time value reaches the build. Retrieval-only
+	// (ngram has no capacity). Propagates to the hidden storage/metadata defs,
+	// which take indexDef.IndexAlgoParams below.
+	if ctx != nil && catalog.GetIndexParser(indexDef.IndexAlgoParams) == "retrieval" {
+		if p, ok := indexplugin.Get(catalog.MOIndexFullTextAlgo.ToString()); ok {
+			if names := p.Catalog().BuildSessionVars(); len(names) > 0 {
+				sv, cerr := compileplugin.CaptureVars(ctx.ResolveVariable, names)
+				if cerr != nil {
+					return nil, nil, cerr
+				}
+				if len(sv) > 0 {
+					flat := map[string]string{}
+					if indexDef.IndexAlgoParams != "" {
+						if flat, err = catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams); err != nil {
+							return nil, nil, err
+						}
+					}
+					if indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonStringWithSessionVars(flat, sv); err != nil {
+						return nil, nil, err
+					}
+				}
+			}
 		}
 	}
 

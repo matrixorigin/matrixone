@@ -16,20 +16,24 @@ package iscp
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fulltext/wand"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
-// defaultWandCapacity caps docs-per-segment for a CDC delta flush. It must keep
-// a serialized segment within vectorindex.MaxChunkSize (one frame = one chunk
-// row; the load path does not reassemble a frame across rows). Overridable via
-// the max_index_capacity algo-param.
-const defaultWandCapacity int64 = 10000
+// defaultWandCapacity caps docs-per-segment for the CDC delta build. A segment
+// frame larger than MaxChunkSize is split across chunk rows and reassembled at
+// load (Bug 1), so this is NOT bounded by the storage-row size — it's the
+// segment-count/size tradeoff knob (fewer, larger segments → faster search but
+// more RAM per open segment during the streaming build). Matches HNSW's 1M
+// default. Overridable via the max_index_capacity algo-param (though nothing
+// user-facing sets it on a retrieval index yet — see fulltext_wand.md Phase C).
+const defaultWandCapacity int64 = 1000000
 
 // WandSqlWriter is the ISCP sink adapter for the WAND "retrieval" fulltext index.
 // Unlike the postings FulltextSqlWriter (which emits SQL), it is model-building
@@ -77,14 +81,25 @@ func NewWandSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *pl
 	pkTyp := tabledef.Cols[pkPos].Typ
 	textPos := tabledef.Name2ColIndex[idxdef.Parts[0]]
 
-	capacity := defaultWandCapacity
-	if len(idxdef.IndexAlgoParams) > 0 {
-		var m map[string]any
-		if json.Unmarshal([]byte(idxdef.IndexAlgoParams), &m) == nil {
-			if v, ok := m["max_index_capacity"].(float64); ok && v > 0 {
-				capacity = int64(v)
-			}
+	// capacity precedence (AlgoParamInt): a flat max_index_capacity algo-param
+	// (explicit CREATE INDEX option) > the fulltext_max_index_capacity value
+	// CAPTURED into algo_params.session_vars at CREATE (BuildSessionVars) >
+	// defaultWandCapacity. The sinker runs in an internal ISCP proc with NO live
+	// resolver, so we resolve the captured session_vars blob directly here rather
+	// than through GetResolveVariableFunc (which is nil) — mirroring initSQLResolver.
+	flat := ""
+	if m, e := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams); e == nil {
+		flat = m[catalog.IndexAlgoParamMaxIndexCapacity]
+	}
+	var resolve indexplugin.ResolveVarFunc
+	if sv, e := catalog.IndexParamsSessionVars(idxdef.IndexAlgoParams); e == nil && len(sv) > 0 {
+		if md, e2 := sqlexec.NewMetadataFromJson(string(sv)); e2 == nil && md != nil {
+			resolve = md.ResolveVariableFunc
 		}
+	}
+	capacity, err := indexplugin.AlgoParamInt(flat, resolve, "fulltext_max_index_capacity", defaultWandCapacity)
+	if err != nil {
+		return nil, err
 	}
 
 	return &WandSqlWriter{
@@ -98,9 +113,9 @@ func NewWandSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *pl
 }
 
 func (w *WandSqlWriter) CheckLastOp(op string) bool { return len(w.lastOp) == 0 || w.lastOp == op }
-func (w *WandSqlWriter) Empty() bool                 { return w.cdc.Len() == 0 }
-func (w *WandSqlWriter) Full() bool                  { return w.ndata >= MAX_CDC_DATA_SIZE }
-func (w *WandSqlWriter) ToSql() ([]byte, error)      { return w.cdc.Encode() }
+func (w *WandSqlWriter) Empty() bool                { return w.cdc.Len() == 0 }
+func (w *WandSqlWriter) Full() bool                 { return w.ndata >= MAX_CDC_DATA_SIZE }
+func (w *WandSqlWriter) ToSql() ([]byte, error)     { return w.cdc.Encode() }
 
 func (w *WandSqlWriter) Reset() {
 	w.cdc = wand.NewWandCdc(w.pkType)

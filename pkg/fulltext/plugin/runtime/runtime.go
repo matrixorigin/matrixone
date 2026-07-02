@@ -61,14 +61,14 @@ func (h CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 	return catalogplugin.RestoreBehavior{DeleteBeforeClone: h.HiddenTableTypes()}
 }
 
-// BuildSessionVars — fulltext's tokenizing build reads no algorithm-specific
-// session vars and has no experimental flag; persist only the basic
-// lower_case_table_names (table-name resolution in the rebuild SQL).
-// BuildSessionVars returns nil — fulltext captures no session vars into
-// algo_params, keeping its algo_params byte-compatible with pre-session_vars
-// indexes.
+// BuildSessionVars captures fulltext_max_index_capacity into algo_params at
+// CREATE INDEX. The retrieval (WAND) index is always-async: its build runs in an
+// internal ISCP proc whose live resolver is nil, so the session var can only
+// reach the sinker if it is snapshotted here (the ISCP overlay reads it back from
+// algo_params.session_vars). Harmless for a postings/ngram index (which ignores
+// capacity). Older indexes without the blob fall back to the sinker default.
 func (CatalogHooks) BuildSessionVars() []string {
-	return nil
+	return []string{"fulltext_max_index_capacity"}
 }
 
 // DefaultOptions — fulltext defaults are inferred at build time; no

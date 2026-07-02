@@ -460,7 +460,7 @@ searchable within CDC latency (~15s in the single-node test). The intermediate
 "no CDC maintenance" state is closed. Remaining: (g) idxcron compaction that wipes
 the tag=1 `CdcTail` on a full reindex.
 
-## Phase C — scaling to tens of millions of docs  [DESIGNED 2026-07-02, not yet built]
+## Phase C — scaling to tens of millions of docs  [DESIGNED 2026-07-02; items 1(core)+3 BUILT]
 
 M1 item (g) was "idxcron **full reindex** from source wipes tag=1." That is correct
 but does not scale: it re-tokenizes the **entire** corpus on every compaction, and
@@ -468,6 +468,19 @@ it leaves the tag=0 base as a **single monolithic segment**. Phase C replaces it
 with a Lucene/LSM-style **capped-segment + tiered-merge** model. This section is the
 design of record; it supersedes the "full-reindex only" framing of (g) (rebuild-from-source
 is retained only as a schema-change / corruption-recovery fallback).
+
+**Build status (2026-07-02):**
+- **Item 3 (load-time liveness/stats caching) — DONE** (`7dc802bd1`).
+- **Item 1 core (streaming capacity-capped build + capacity knob) — DONE + e2e-validated.**
+  The sinker no longer buffers all events (`TailBuilder` streams into capped segments,
+  spilling each sealed one to a temp file → bounded RAM; fixes the 88M-row OOM); default
+  capacity is **1M** (`fulltext_max_index_capacity`, captured into `algo_params.session_vars`
+  at CREATE via the `BuildSessionVars` hook so it reaches the always-async sinker). e2e:
+  `cap=1000` → 100k docs → `segs=100`; `cap=1M` → `segs=1`; exact recall.
+  **Remaining item-1 pieces:** cross-*invocation* open-segment top-up (needs the
+  UPSERT-dedup / live-filter primitive shared with item 2) and **tag=0 create-build
+  capping** (`fulltext_wand_create.end()` still `builder.Finish()` — one uncapped base).
+- **Item 2 (delete-only tiered compaction) — NOT STARTED.**
 
 ### Cost model (why this is needed)
 Measured on a live 100k-doc empty-table→CDC run (2026-07-02) and generalized:
@@ -496,16 +509,39 @@ segments collides with rows ISCP reserved mid-flight and breaks ordering. Every
 Phase-C operation preserves monotonic `chunk_id`; reclamation deletes rows but never
 renumbers them.
 
-### Item 1 — open-segment top-up (write path) [HNSW-like, without the base reload]
-Instead of "one new delta per flush" (which makes segment count = **#flushes**), the
-sinker keeps one **open** capped segment: load open → merge this CDC batch's inserts
-→ rewrite, until it reaches `max_index_capacity`, then **seal** it and start a fresh
-one. Segment count becomes `docs/capacity`, independent of flush granularity. The
-sinker loads **only the open segment** (≤ capacity, bounded — a ~150 MB / ~2300-chunk
-segment at 1M docs), never the base — preserving M1's "no full-index download."
-Deletes stay as frames resolved by liveness (frames-only to start; in-place top-up of
-deletes targeting the open segment is a possible later refinement). Sits on Bug 1
-(frame-split) — the open segment is stored/reloaded split across `MaxChunkSize` rows.
+### Item 1 — streaming capacity-capped build + open-segment top-up (write path)
+
+**1a. Streaming build (DONE).** `RunWand` used to buffer every CDC event (`acc.Events`)
+before building — a 88M-row snapshot/sync OOM'd. Now it streams: `wand.TailBuilder`
+(`tailbuild.go`) tokenizes insert rows into the current segment and, when it reaches
+`max_index_capacity` docs, **seals it, frames it, and spills the framed bytes to a temp
+file** (freeing the segment), then starts a fresh one. Deletes accumulate as one record
+batch. On channel close, `RunWand` reads the spilled files back **one at a time** and
+appends them as tag=1 frames in one txn. Peak RAM = one open segment (~150 MB at 1M
+docs), not the whole stream. Mirrors hnsw `HnswSync` (roll+unload-to-file; persist at
+close). Sits on Bug 1 (a sealed 1M-doc segment is ~150 MB → ~2300 `MaxChunkSize` rows).
+
+**Capacity knob (DONE).** Default **1M** (`defaultWandCapacity`), overridable by the
+`fulltext_max_index_capacity` session var. Because a retrieval index is always-async
+(the sinker's internal proc has a nil live resolver — same limitation hnsw notes at
+`sync.go:90`), the var is **captured at CREATE** into `algo_params.session_vars` via the
+`BuildSessionVars` hook (invoked in the fulltext plan path, `schema.go`, since fulltext
+does not go through the generic `CreateIndexDef` capture); the sinker reads it back from
+`IndexAlgoParams` via `indexplugin.AlgoParamInt` (flat `max_index_capacity` option →
+captured session var → default). Live per-flush resolution does **not** work and was
+removed.
+
+**1b. Cross-invocation open-segment top-up (NOT DONE).** Streaming caps segments
+*within one RunWand invocation*; across invocations each starts fresh, so bursty small
+flushes still accrete small segments. True top-up (reopen the last unfilled segment,
+merge the new batch, reseal) needs in-segment pk dedup for UPSERTs (`Merge` only
+concatenates disjoint sets) — the **live-filter primitive shared with item 2**. Deferred
+until item 2's primitive exists; deletes stay frames-only meanwhile.
+
+**tag=0 base capping (NOT DONE).** `fulltext_wand_create.end()` still emits one uncapped
+base via `builder.Finish()`; it must switch to `FinishSegments(capacity)` (resolving
+capacity through the InitSQL overlay resolver, which — unlike the sinker — *can* see the
+captured session var) so the base is capped too.
 
 ### Item 2 — delete-only single-txn compaction (capacity-capped, tiered)
 Compaction merges **already-built** segments (no re-tokenize) via `Merge(id, segs…)`
@@ -537,10 +573,12 @@ ever targeted docs `≤ K`, so they resolve during the merge.
   deferred low-contention background GC. Same invariant (no reset); only the *timing*
   of the physical delete moves out of the hot txn.
 
-### Item 3 — load-time liveness/stats caching (read path) [cheap, orthogonal]
+### Item 3 — load-time liveness/stats caching (read path) [DONE — `7dc802bd1`]
 `ComputeLiveness` + corpus stats (`gN`, `gAvgDocLen`) depend only on the loaded
-segments, not the query, yet are recomputed **per query** inside `searchSegsLive`.
-Move them into `Load`, store on `WandSearch`. Turns the O(total-docs) liveness from
+segments, not the query, yet were recomputed **per query** inside `searchSegsLive`.
+Now precomputed in `Load` and stored on `WandSearch` (`search.go` split out
+`corpusStats` + `searchSegmentsLiveStats`; `Search` ANDs the per-query WHERE filter into
+a fresh slice, never mutating the cached liveness). Turns the O(total-docs) liveness from
 per-query into per-load (amortized across all queries between CDC evictions). No
 format/protocol change; independent of items 1–2.
 
@@ -548,13 +586,12 @@ format/protocol change; independent of items 1–2.
 Even with compaction the sealed base must be **multiple capped segments**, not one:
 capacity bounds (a) load allocation, (b) compaction peak memory (`inputs+output`
 resident), and (c) per-compaction write amplification. Capacity trades *segment size*
-(memory, write-amp) against *segment count* (per-segment search overhead). M1's default
-**10000 is too small for retrieval-at-scale** (→ 8800 segments at 88M); it should rise
-toward HNSW's order (~1M → ~88 units). Two effective sizes are natural: small delta-flush
-frames (cheap CDC) that **top-up/seal** into large capped segments. Code touchpoints:
-the CREATE/REINDEX build (`fulltext_wand_create.end()`) currently emits **one** base
-(`builder.Finish()`) — it must capacity-split like the CDC path (`FinishSegments(capacity)`);
-compaction's `Merge` output must be re-split to respect capacity.
+(memory, write-amp) against *segment count* (per-segment search overhead). **DONE:** the
+default is now **1M** (`fulltext_max_index_capacity`, captured at CREATE — see Item 1),
+matching HNSW's order (~88 units at 88M). **Still TODO:** the CREATE/REINDEX build
+(`fulltext_wand_create.end()`) emits **one** uncapped base (`builder.Finish()`) — it must
+capacity-split like the CDC path (`FinishSegments(capacity)`); compaction's `Merge` output
+must likewise be re-split to respect capacity.
 
 ### Comparison to HNSW's ISCP merge (why not just "merge like HNSW")
 HNSW's `runHnsw` (`index_consumer.go:251`) **loads all models at sinker startup**,
@@ -575,11 +612,12 @@ read side.
 | compaction | full reindex | **tiered merge** of capped segments (delete-only, 1 txn) |
 
 ### Build order: 3 → 1 → 2
-- **3 first** — isolated, zero format change, immediate per-query win; most directly
-  softens "many segments is slow" *today*.
-- **1 next** — caps segment count at the source; needs the CREATE path to capacity-split
-  + a `max_index_capacity` default bump.
-- **2 last** — long-term space/count bound; builds on 1's capped-segment model.
+- **3 — DONE** (`7dc802bd1`): isolated per-query win.
+- **1 core — DONE**: streaming capacity-capped build (OOM fix) + 1M default / captured
+  `fulltext_max_index_capacity`. Remaining: tag=0 create-build capping + cross-invocation
+  top-up (the latter blocked on item 2's live-filter primitive).
+- **2 — next**: delete-only tiered compaction; its live-filter/dedup primitive also
+  unblocks item 1's top-up. Long-term space/count bound.
 
 ## Verification
 - **Unit**: (1) `tokenize → postings → fulltext_wand_create` round-trip builds a loadable WAND index. (2) **Differential**: `fulltext_wand_search` top-K vs a brute-force reference (`Σ tf·idf²` over all docs + full sort) on randomized corpora → assert identical top-K and scores (the WAND-correctness gold test). (3) Parser/mode parse tests in `pkg/sql/parsers/dialect/mysql/mysql_sql_test.go` (`IN RETRIEVAL MODE`, default-on-retrieval-parser).
