@@ -471,7 +471,8 @@ SELECT DISTINCT a, AVG( b) FROM t1 GROUP BY a HAVING AVG( b) > 50;
 ➤ a[4,32,0]  ¦  AVG(b)[8,54,0]  𝄀
 1  ¦  32768.5
 select count(distinct(a, b)) from t1;
-internal error: tuple is not supported as group by column
+➤ count(distinct(a, b))[-5,64,0]  𝄀
+65536
 DROP TABLE t1;
 CREATE TABLE t1 (a INT);
 INSERT INTO t1 SELECT result FROM generate_series(1,100000) g;
@@ -512,3 +513,38 @@ SELECT COUNT(*) FROM t1;
 ➤ COUNT(*)[-5,64,0]  𝄀
 25000
 DROP TABLE t1;
+create table t_count_distinct_multi(g int, v int, txt varchar(8));
+insert into t_count_distinct_multi values
+(null, null, 'n1'),
+(null, 10,   'n2'),
+(1,    null, 'a'),
+(1,    5,    'b'),
+(1,    5,    null),
+(2,    null, null),
+(2,    7,    'c'),
+(3,    null, null);
+select count(distinct g, v) as cnt_g_v,
+count(distinct g, txt) as cnt_g_txt
+from t_count_distinct_multi;
+➤ count(distinct g, v)[-5,64,0]  ¦  count(distinct g, txt)[-5,64,0]  𝄀
+2  ¦  3
+select count(distinct g, v) as cnt_g_v
+from t_count_distinct_multi
+where g = 1;
+➤ count(distinct g, v)[-5,64,0]  𝄀
+1
+select count(distinct (g, v)), count(*) from t_count_distinct_multi;
+➤ count(distinct (g, v))[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+2  ¦  8
+select txt, count(distinct (g, v)), count(*) from t_count_distinct_multi group by txt order by txt;
+➤ txt[12,-1,0]  ¦  count(distinct (g, v))[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  1  ¦  3
+a  ¦  0  ¦  1
+b  ¦  1  ¦  1
+c  ¦  1  ¦  1
+n1  ¦  0  ¦  1
+n2  ¦  0  ¦  1
+select count(distinct (g, v)), count(distinct g, v) from t_count_distinct_multi;
+➤ count(distinct (g, v))[-5,64,0]  ¦  count(distinct g, v)[-5,64,0]  𝄀
+2  ¦  2
+drop table t_count_distinct_multi;

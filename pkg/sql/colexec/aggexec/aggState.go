@@ -238,7 +238,7 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 	}
 
 	for ui := uint32(0); ui < ag.argCnt[i]; ui++ {
-		if info.argTypes[0].IsFixedLen() {
+		if !info.usesOpaqueArgEncoding() && info.argTypes[0].IsFixedLen() {
 			binary.BigEndian.PutUint16(kbuf[:kAggArgPrefixSz], uint16(i))
 			if _, err = io.ReadFull(r, kbuf[kAggArgPrefixSz:]); err != nil {
 				return err
@@ -855,24 +855,62 @@ func (ae *aggExec) Free() {
 }
 
 func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.Vector, distinct bool) error {
-	if len(vectors) != 1 {
-		return moerr.NewInternalErrorNoCtx("batchFillArgs: only one vector is supported")
-	}
-
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
 		}
 
 		idx := uint64(i) + uint64(offset)
-		if vectors[0].IsNull(idx) {
-			continue
-		} else {
+
+		// For single-vector, use the fast path.
+		if len(vectors) == 1 {
+			if vectors[0].IsNull(idx) {
+				continue
+			}
 			x, y := ae.getXY(group - 1)
 			bs := vectors[0].GetRawBytesAt(int(idx))
 			if err := ae.state[x].fillArg(ae.mp, y, bs, distinct); err != nil {
 				return err
 			}
+			continue
+		}
+
+		// For multi-vector (e.g. COUNT(DISTINCT col1, col2)):
+		// - Skip row if ANY column is NULL (MySQL semantics).
+		// - Encode all column values into a combined key:
+		//   [len1:4 bytes][raw1][len2:4 bytes][raw2]...
+		hasNull := false
+		for _, vec := range vectors {
+			if vec.IsNull(idx) {
+				hasNull = true
+				break
+			}
+		}
+		if hasNull {
+			continue
+		}
+
+		// Calculate total encoded size.
+		totalSize := 0
+		rawBytes := make([][]byte, len(vectors))
+		for j, vec := range vectors {
+			rawBytes[j] = vec.GetRawBytesAt(int(idx))
+			totalSize += 4 + len(rawBytes[j])
+		}
+
+		// Encode all columns into a single key.
+		buf := make([]byte, totalSize)
+		off := 0
+		for _, raw := range rawBytes {
+			binary.BigEndian.PutUint32(buf[off:], uint32(len(raw)))
+			off += 4
+			copy(buf[off:], raw)
+			off += len(raw)
+		}
+
+		x, y := ae.getXY(group - 1)
+		if err := ae.state[x].fillArg(ae.mp, y, buf, distinct); err != nil {
+			return err
 		}
 	}
 	return nil
