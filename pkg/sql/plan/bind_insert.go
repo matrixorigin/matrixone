@@ -74,7 +74,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false)
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false)
 	if err != nil {
 		return 0, err
 	}
@@ -2528,7 +2528,7 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	return newCols, nil
 }
 
-func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool) (int32, map[string]int32, []bool, error) {
+func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool, colRefAsDefault bool) (int32, map[string]int32, []bool, error) {
 	var (
 		lastNodeID int32
 		err        error
@@ -2581,7 +2581,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		if isAllDefault && astCols != nil {
 			return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		lastNodeID, err = builder.buildValueScan(isAllDefault, bindCtx, tableDef, selectImpl, insertColumns)
+		lastNodeID, err = builder.buildValueScan(isAllDefault, colRefAsDefault, bindCtx, tableDef, selectImpl, insertColumns)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -2885,6 +2885,7 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 
 func (builder *QueryBuilder) buildValueScan(
 	isAllDefault bool,
+	colRefAsDefault bool,
 	bindCtx *BindContext,
 	tableDef *TableDef,
 	stmt *tree.ValuesClause,
@@ -2934,19 +2935,31 @@ func (builder *QueryBuilder) buildValueScan(
 				}
 			}
 		} else {
-			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-			binder.builder = builder
-			// A function-call value expression must be bound without the
-			// destination column type. The DefaultBinder pushes its type down to
-			// nested literals, so binding st_point(116.3975, 39.9087) against a
-			// GEOMETRY column would type the float arguments as GEOMETRY and break
-			// the function's overload resolution. A function's arguments bind by
-			// their own types, and the result is cast to the column type below
-			// (funcCastFor*Type / forceCastExpr2). Other value expressions (a
-			// negative literal like -1.5, a cast, etc.) still bind against the
-			// column type, which a literal value legitimately adopts.
-			funcBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
-			funcBinder.builder = builder
+			var binder, funcBinder Binder
+			if colRefAsDefault {
+				// REPLACE ... SET col = expr: an RHS reference to a target-table
+				// column is evaluated as DEFAULT(col), including inside functions.
+				replaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, nil, tableDef)
+				binder = replaceBinder
+				funcBinder = replaceBinder
+			} else {
+				defaultBinder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+				defaultBinder.builder = builder
+				binder = defaultBinder
+
+				// A function-call value expression must be bound without the
+				// destination column type. The DefaultBinder pushes its type down to
+				// nested literals, so binding st_point(116.3975, 39.9087) against a
+				// GEOMETRY column would type the float arguments as GEOMETRY and break
+				// the function's overload resolution. A function's arguments bind by
+				// their own types, and the result is cast to the column type below
+				// (funcCastFor*Type / forceCastExpr2). Other value expressions (a
+				// negative literal like -1.5, a cast, etc.) still bind against the
+				// column type, which a literal value legitimately adopts.
+				defaultFuncBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
+				defaultFuncBinder.builder = builder
+				funcBinder = defaultFuncBinder
+			}
 			for _, r := range stmt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)

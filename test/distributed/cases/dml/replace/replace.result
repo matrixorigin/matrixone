@@ -287,6 +287,27 @@ name    email    value
 a    y@a.com    111
 b    z@a.com    222
 drop table t_replace_multi_uk_batch;
+drop table if exists t_set_default;
+create table t_set_default(id int primary key, v int default 5, note varchar(20) default 'd');
+insert into t_set_default values (1, 10, 'old');
+replace into t_set_default set id = 1, v = v + 1;
+select * from t_set_default order by id;
+id    v    note
+1    6    d
+replace into t_set_default set id = 2, v = v * 2;
+select * from t_set_default order by id;
+id    v    note
+1    6    d
+2    10    d
+drop table t_set_default;
+drop table if exists t_set_default2;
+create table t_set_default2(id int primary key, a int default 3, b int default 7);
+insert into t_set_default2 values (1, 100, 200);
+replace into t_set_default2 set id = 1, a = b + 1;
+select * from t_set_default2 order by id;
+id    a    b
+1    8    7
+drop table t_set_default2;
 drop table if exists t_replace_src;
 drop table if exists t_replace_dst;
 create table t_replace_src (id int primary key, v int);
