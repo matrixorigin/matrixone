@@ -2686,6 +2686,71 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 	}
 }
 
+func Test_NewStrictCast_NonStringToCharVarcharRejectsOverWidth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name   string
+		input  func() *vector.Vector
+		toType types.Type
+	}{
+		{
+			name: "signed to varchar",
+			input: func() *vector.Vector {
+				vec := vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixedList(vec, []int64{12345}, nil, proc.Mp()))
+				return vec
+			},
+			toType: types.New(types.T_varchar, 3, 0),
+		},
+		{
+			name: "unsigned to char",
+			input: func() *vector.Vector {
+				vec := vector.NewVec(types.T_uint64.ToType())
+				require.NoError(t, vector.AppendFixedList(vec, []uint64{12345}, nil, proc.Mp()))
+				return vec
+			},
+			toType: types.New(types.T_char, 3, 0),
+		},
+		{
+			name: "decimal to varchar",
+			input: func() *vector.Vector {
+				vec := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+				require.NoError(t, vector.AppendFixedList(vec, []types.Decimal64{types.Decimal64(12345)}, nil, proc.Mp()))
+				return vec
+			},
+			toType: types.New(types.T_varchar, 3, 0),
+		},
+		{
+			name: "date to varchar",
+			input: func() *vector.Vector {
+				vec := vector.NewVec(types.T_date.ToType())
+				require.NoError(t, vector.AppendFixedList(vec, []types.Date{types.DateFromCalendar(2026, 7, 2)}, nil, proc.Mp()))
+				return vec
+			},
+			toType: types.New(types.T_varchar, 5, 0),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputVec := tt.input()
+			defer inputVec.Free(proc.Mp())
+
+			targetType := vector.NewConstNull(tt.toType, 1, proc.Mp())
+			defer targetType.Free(proc.Mp())
+
+			result := vector.NewFunctionResultWrapper(tt.toType, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			err := NewStrictCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "larger than Dest length")
+		})
+	}
+}
+
 func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcess(t)
