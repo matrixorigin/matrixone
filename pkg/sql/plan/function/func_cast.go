@@ -2910,6 +2910,9 @@ func signedToStr[T constraints.Integer](
 					result = append(result, 0)
 				}
 			}
+			if len(result) > int(toType.Width) && (toType.Oid == types.T_char || toType.Oid == types.T_varchar) {
+				result = result[:toType.Width]
+			}
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))

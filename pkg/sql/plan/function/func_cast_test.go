@@ -1076,6 +1076,15 @@ func initCastTestCase() []tcTemp {
 			expect: NewFunctionTestResult(types.T_bit.ToType(), false,
 				[]uint64{125, 126, 0}, []bool{false, false, true}),
 		},
+		{
+			info: "int64 to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{12345}, []bool{false}),
+				NewFunctionTestInput(types.New(types.T_char, 3, 0), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_char, 3, 0), false,
+				[]string{"123"}, []bool{false}),
+		},
 	}
 	castUint8ToOthers := []tcTemp{
 		// test cast uint8 to others.
