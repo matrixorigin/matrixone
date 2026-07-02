@@ -173,7 +173,11 @@ of 100 inserts → **one** appended segment frame at the next `chunk_id`, not 10
 frames, not thousands). **Load = O(K) `Deserialize` over the `chunk_id`-ordered
 tag=1 frames; it never re-tokenizes.** Reclamation is a background idxcron **full
 reindex** only (no incremental merge). Build cost is paid **once at write** (row in
-hand); the read path stays cheap.
+hand); the read path stays cheap. **[Bug 1, 2026-07-02: a segment frame larger than
+`MaxChunkSize` is now split across several consecutive `chunk_id` rows and
+reassembled at load by the frame's header length — a single frame is NO longer
+required to fit one row. Incremental merge-compaction is now Phase C, superseding
+"full reindex only."]**
 
 ### Write path: NO full-index download
 - **INSERT/UPSERT** → build a small new segment from only this CDC batch's rows →
@@ -316,13 +320,15 @@ without re-tokenizing.
    → append an `(op, pk)` frame at the next `chunk_id`. A redelivered batch just
    becomes later frames (higher `chunk_id`), masked at load — see the dedup decision.
    Advance watermark only after commit.
-4. **idxcron reindex** (template `pkg/vectorindex/cuvs/idxcron` + `small_tail.go`):
-   the only op that rebuilds; fires on tag=1 growth (`countTag1Records`). It runs a
-   **full reindex from source** (WAND's M1 build) → fresh tag=0, and **the build txn
-   wipes the tag=1 `CdcTail`** (`small_tail.go:43`). No incremental merge, no
-   base+delta reconciliation. Coordinate the wipe/swap with the sinker like cuVS's
-   lease (bound the wipe to the reindex's source snapshot; post-snapshot frames stay
-   in the fresh tail).
+4. **idxcron compaction** (template `pkg/vectorindex/cuvs/idxcron` + `small_tail.go`):
+   fires on tag=1 growth (`countTag1Records`). **REVISED 2026-07-02 → see `## Phase C`:**
+   the M1 design here was a **full reindex from source** → fresh tag=0 with the build
+   txn **wiping** the tag=1 `CdcTail` (`small_tail.go:43`). Phase C replaces the wipe
+   with capped-segment **tiered merge**-compaction (delete-only single-txn, `chunk_id`
+   never reset — merge already-built segments via `Merge`, no re-tokenize, output
+   re-split at `max_index_capacity`). Full-reindex-from-source stays only as the
+   schema-change / recovery fallback. Either way, coordinate with the sinker via the
+   txn snapshot (the compaction's `K = MAX(chunk_id)` boundary; post-`K` frames stay).
 5. **Search adapter** (`wandsearch.go` + search TVF): load tag=0 base + the tag=1
    `CdcTail` frames sorted by `chunk_id` → ordered `segs` + `pk→deleted-after-chunk_id`
    map; `ComputeLiveness` resolves liveness **by `chunk_id`** into a per-segment
@@ -375,6 +381,34 @@ codec (`frames.go`, `2a0fdc4b8`), and tag-aware multi-segment load/search
 (`a91af0e15`). Only the **write path** (sinker b–d) and idxcron (g) remain; the
 SQL of `loadTailFrames`/`Load` still needs a live e2e run.
 
+**Update 2026-07-02 (later) — two CDC-at-scale bugs found + fixed, validated e2e:**
+- **Bug 1 (`41cadad39`): oversized tag=1 frames split across chunk rows.** A tag=1
+  frame is a whole serialized segment blob and can exceed the `data` column cap
+  (`MaxChunkSize=64 KB`) — a 100k-doc CDC batch produced ~1.5 MB frames, so the
+  single-row INSERT failed (`Src length … > 65536`). Now a frame splits across
+  consecutive `MaxChunkSize` chunk rows (`splitFrameChunks`/`frameChunkCount`) and
+  reassembles at load by the frame's self-describing header length (new
+  `cuvs.CdcFrameLen` + `reassembleFrames`). **This supersedes the earlier "one frame
+  = one chunk row, no reassembly" notes below.** cuVS ivfpq/cagra do **not** share
+  the bug (`CdcAppendEventsSql` packs records ≤ `MaxChunkSize`); the only shared-codec
+  change is the additive `CdcFrameLen` helper.
+- **Bug 2 (`1c05b9b3f`): search tolerates an absent tag=0 base.** An index created on
+  an **empty table** builds no tag=0 (`end()` skips persistence when `NumTerms()==0`),
+  so its corpus is entirely tag=1 CDC deltas; `Load` errored `"metadata not found"`.
+  Now `LoadBaseOptional` returns `nil` when no tag=0 metadata exists, `Load` composes
+  an optional base with the tag=1 deltas, and a `loaded` flag lets `Search` return
+  **zero rows** (not an error) for a genuinely-empty index. Test:
+  `TestWandLiveness/no_base_tail_only`.
+- **DROP cache-evict log** downgraded to Debug (`a2c816563`).
+- **E2E validated (empty table → 100k-doc ISCP CDC):** `tag0=0, metadata=0`, 100k
+  events → 11 frames → **264 tag=1 chunks (all ≤ 64 KB)**; every term retrieves
+  exactly (needle 10000/10000, token5 101/101, corpus 100000/100000, sentinel 1/1);
+  DELETE drops needle 10000→9900. The earlier "factor-of-10" was the known
+  LIMIT-pushed-before-fulltext-filter plan quirk (canonical `WHERE MATCH(...)` shape
+  is exact), unrelated to these fixes.
+- **Scaling design captured** in `## Phase C` (the cost model that motivated it +
+  the compaction/top-up/liveness-caching plan).
+
 **✅ Done + unit-tested (committed in `eb94f4ae8`)** — every piece verifiable without a running server:
 - **Parser-aware async.** `SyncDescriptor.AlwaysAsync` bool → `Hooks.AlwaysAsync(indexAlgoParams string) bool` (`pkg/indexplugin/catalog/hooks.go`); HNSW/CAGRA/IVF-PQ=true, IVF-FLAT=false, **fulltext=`parser=="retrieval"`** via new `catalog.GetIndexParser` + `IndexAlgoParamParser`. Unified `indexplugin.IndexIsAsync(algo, params)` routed through CDC-registration (`iscp_util.go`), ALTER-clone (`alter.go`), and the three fulltext DML early-returns (`build_dml_util.go`). No `async`-param injection. Tests: `TestFullTextAlwaysAsync` + the vector runtime tests.
 - **PK-reconciliation liveness** (`pkg/fulltext/wand`). `ComputeLiveness(segs, deletes) []Membership` (per-segment allow precomputed once at load: owner = winning segment holding pk, dead iff a later delete). `SearchSegmentsLive(...)` ANDs liveness with the WHERE-prefilter; `SearchSegments` = the `nil` fast path. **[2026-07-02 DONE (`2a0fdc4b8`): applied — `WandModel.LSN` renamed `ChunkId` and `ComputeLiveness` orders by it; `AssembleFrames` sets it from each frame's `chunk_id` at load. No `LSN`/`segno`/timestamp anywhere.]** Fixes a latent bug: the old multi-segment path emitted a pk twice if it lived in two segments. Tests: `TestWandLiveness` (dedup_update / delete_then_reinsert / delete_after_insert / pure_delete / mixed). NB: assert the live **pk set**, not exact scores — global `N`/`df`/`avgdl` still include superseded+deleted docs until reindex (accepted drift).
@@ -414,13 +448,138 @@ broadcast is a follow-up). Item detail:
   CREATE / full-reindex build pipeline (`source → postings → SQL aggregate/sort →
   fulltext_wand_create → tag=0`), not scratch — it stays. Only the incremental CDC
   delta path is postings-free.
-- **(g)** idxcron **full-reindex** trigger + gate (B3) — full rebuild from source that wipes the tag=1 `CdcTail`; no incremental merge.
+- **(g)** compaction — **REVISED 2026-07-02, see `## Phase C`.** The M1 "idxcron full
+  reindex wipes tag=1" is superseded by capped-segment tiered **merge**-compaction
+  (delete-only single-txn, `chunk_id` never reset) + open-segment top-up +
+  load-time liveness caching. Full-reindex-from-source is retained only as the
+  schema-change / corruption-recovery fallback. Not yet built.
 
 ✅ **Resolved (2026-07-02):** the sinker (b–d) has landed and is e2e-validated — a
 retrieval index now reflects INSERT/DELETE via CDC (tag=1 frames + cache eviction),
 searchable within CDC latency (~15s in the single-node test). The intermediate
 "no CDC maintenance" state is closed. Remaining: (g) idxcron compaction that wipes
 the tag=1 `CdcTail` on a full reindex.
+
+## Phase C — scaling to tens of millions of docs  [DESIGNED 2026-07-02, not yet built]
+
+M1 item (g) was "idxcron **full reindex** from source wipes tag=1." That is correct
+but does not scale: it re-tokenizes the **entire** corpus on every compaction, and
+it leaves the tag=0 base as a **single monolithic segment**. Phase C replaces it
+with a Lucene/LSM-style **capped-segment + tiered-merge** model. This section is the
+design of record; it supersedes the "full-reindex only" framing of (g) (rebuild-from-source
+is retained only as a schema-change / corruption-recovery fallback).
+
+### Cost model (why this is needed)
+Measured on a live 100k-doc empty-table→CDC run (2026-07-02) and generalized:
+- **Storage/RAM ≈ 9 bytes/posting** — `serialize.go:234` writes `docIDs []int64`
+  **raw (no delta/varint)** + 1-byte `tf`; plus `4·N` docLen, `~8·N` pks, `8·V`
+  term headers, dict strings. `size ≈ 9·P + 12·N + dict`, `P = N × distinct-terms/doc`.
+  Postings dominate. Rough 88M sizing: short docs ~10 GB, wiki-passage (~60 terms/doc)
+  ~45–55 GB, long docs 100+ GB. **The index is resident in RAM when searched** (postings
+  load off-heap into the `veccache` singleton for the TTL), so **size ≈ per-CN RAM**.
+  → biggest single size lever is delta+varint on the ascending `docIDs` (~3–5×); not
+  in Phase C scope but noted.
+- **Per-query cost grows with segment COUNT**, not doc count, in three places:
+  (1) `ComputeLiveness` is **O(total docs)** — builds an `owner` map over every pk in
+  every segment (`search.go:93`), per query; (2) the `gdf` loop + `searchInto` setup
+  run **per segment** (`search.go:261,277`), so a rare term pays N mostly-missing
+  lookups; (3) Block-Max pruning weakens when a posting list is split across many
+  small segments (the shared top-K threshold carries across segments and helps, but
+  you still score more than one contiguous list). At 88M with the M1 default
+  `max_index_capacity=10000` that is **8800 segments** → slow. HNSW keeps this bounded
+  by using a **1M** cap → ~88 capped model files.
+
+### Core invariant: `chunk_id` is append-only and NEVER reset
+The tag=1 `chunk_id` is both ISCP's append position (`wandNextTailChunkId =
+COALESCE(MAX(chunk_id)+1,0)`) and the liveness recency key. Renumbering surviving
+segments collides with rows ISCP reserved mid-flight and breaks ordering. Every
+Phase-C operation preserves monotonic `chunk_id`; reclamation deletes rows but never
+renumbers them.
+
+### Item 1 — open-segment top-up (write path) [HNSW-like, without the base reload]
+Instead of "one new delta per flush" (which makes segment count = **#flushes**), the
+sinker keeps one **open** capped segment: load open → merge this CDC batch's inserts
+→ rewrite, until it reaches `max_index_capacity`, then **seal** it and start a fresh
+one. Segment count becomes `docs/capacity`, independent of flush granularity. The
+sinker loads **only the open segment** (≤ capacity, bounded — a ~150 MB / ~2300-chunk
+segment at 1M docs), never the base — preserving M1's "no full-index download."
+Deletes stay as frames resolved by liveness (frames-only to start; in-place top-up of
+deletes targeting the open segment is a possible later refinement). Sits on Bug 1
+(frame-split) — the open segment is stored/reloaded split across `MaxChunkSize` rows.
+
+### Item 2 — delete-only single-txn compaction (capacity-capped, tiered)
+Compaction merges **already-built** segments (no re-tokenize) via `Merge(id, segs…)`
+(`wand.go:197`, "the compaction primitive"), dropping dead/superseded docs via
+`ComputeLiveness`, output **re-split to stay ≤ `max_index_capacity`** (never one
+monolithic base). Steps, all in **one transaction**:
+```
+1. read segments to merge, K = MAX(chunk_id) at the txn snapshot
+2. live-filter each (drop dead ords, densify) → disjoint live inputs   (Merge requires disjoint pk-sets)
+3. Merge → re-split at capacity → new sealed capped segment(s)
+4. DELETE old inputs (tag=0 rows + tag=1 chunk_id ≤ K)                  (physical delete, NOT renumber)
+commit
+```
+Same-txn is **non-negotiable**: base-write and folded-delete in one txn ⇒ snapshot
+isolation makes it atomic (readers see either `(old, all deltas)` or `(new, deltas>K)`),
+crash rolls back, and the txn snapshot hands you the `K` boundary for free (anything
+ISCP commits after start is `> K`, outside the snapshot — never deleted). Deleting the
+**low** chunk prefix does not move `MAX`, so ISCP's append position is untouched.
+Deletes remain correct across the boundary: a delete at `chunk_id > K` still kills a
+folded (recency `-1`) base doc under `ComputeLiveness`; deletes inside `[0..K]` only
+ever targeted docs `≤ K`, so they resolve during the merge.
+
+- **Tiered, not full.** `Merge` accepts any subset → merge segments of *similar size*
+  (Lucene `TieredMergePolicy`), rewriting only that subset — O(merged subset), not O(N).
+- **Large-scale successor: watermark + lazy GC.** When the single compaction txn gets
+  too big/contended vs. live ISCP (≈ the 50 GB base case), split it: write the new
+  sealed segment(s) under a new version-id, atomically flip `{active set, watermark K}`
+  (manifest swap, crash-safe), skip `chunk_id ≤ K` at load, and delete `[0..K]` in a
+  deferred low-contention background GC. Same invariant (no reset); only the *timing*
+  of the physical delete moves out of the hot txn.
+
+### Item 3 — load-time liveness/stats caching (read path) [cheap, orthogonal]
+`ComputeLiveness` + corpus stats (`gN`, `gAvgDocLen`) depend only on the loaded
+segments, not the query, yet are recomputed **per query** inside `searchSegsLive`.
+Move them into `Load`, store on `WandSearch`. Turns the O(total-docs) liveness from
+per-query into per-load (amortized across all queries between CDC evictions). No
+format/protocol change; independent of items 1–2.
+
+### `max_index_capacity` governs single-segment size (the knob)
+Even with compaction the sealed base must be **multiple capped segments**, not one:
+capacity bounds (a) load allocation, (b) compaction peak memory (`inputs+output`
+resident), and (c) per-compaction write amplification. Capacity trades *segment size*
+(memory, write-amp) against *segment count* (per-segment search overhead). M1's default
+**10000 is too small for retrieval-at-scale** (→ 8800 segments at 88M); it should rise
+toward HNSW's order (~1M → ~88 units). Two effective sizes are natural: small delta-flush
+frames (cheap CDC) that **top-up/seal** into large capped segments. Code touchpoints:
+the CREATE/REINDEX build (`fulltext_wand_create.end()`) currently emits **one** base
+(`builder.Finish()`) — it must capacity-split like the CDC path (`FinishSegments(capacity)`);
+compaction's `Merge` output must be re-split to respect capacity.
+
+### Comparison to HNSW's ISCP merge (why not just "merge like HNSW")
+HNSW's `runHnsw` (`index_consumer.go:251`) **loads all models at sinker startup**,
+mutates in memory, and `Save()` rewrites touched files — affordable because each model
+file is capped (1M) and inserts append to the *newest* file. For WAND, merging a doc
+touches every term it contains, scattered across the postings, so a full HNSW-style
+merge would have to **load the whole ~50 GB base every flush** — the write amplification
+M1 explicitly avoids. Phase C takes HNSW's *good* parts (capped units, top-up into an
+open unit) without the base reload, and keeps WAND's immutable-append + MVCC-by-`chunk_id`
+read side.
+
+| | HNSW (merge-in-sinker) | WAND Phase C |
+|---|---|---|
+| sinker loads | all models | only the **open** capped segment |
+| per-flush write | rewrite touched capped file | rewrite open segment (≤ capacity) |
+| read | one structure per file | N capped segments + liveness |
+| unit count @88M | ~88 (1M cap) | ~88 (raise cap to ~1M) |
+| compaction | full reindex | **tiered merge** of capped segments (delete-only, 1 txn) |
+
+### Build order: 3 → 1 → 2
+- **3 first** — isolated, zero format change, immediate per-query win; most directly
+  softens "many segments is slow" *today*.
+- **1 next** — caps segment count at the source; needs the CREATE path to capacity-split
+  + a `max_index_capacity` default bump.
+- **2 last** — long-term space/count bound; builds on 1's capped-segment model.
 
 ## Verification
 - **Unit**: (1) `tokenize → postings → fulltext_wand_create` round-trip builds a loadable WAND index. (2) **Differential**: `fulltext_wand_search` top-K vs a brute-force reference (`Σ tf·idf²` over all docs + full sort) on randomized corpora → assert identical top-K and scores (the WAND-correctness gold test). (3) Parser/mode parse tests in `pkg/sql/parsers/dialect/mysql/mysql_sql_test.go` (`IN RETRIEVAL MODE`, default-on-retrieval-parser).
