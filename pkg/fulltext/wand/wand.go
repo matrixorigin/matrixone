@@ -90,13 +90,14 @@ type WandModel struct {
 	PkType    int32   // types.T of the source primary key, for output decode + membership
 	AvgDocLen float64 // average doc length (derived from DocLen), for BM25
 
-	// LSN is the segment's monotonic identity — the ISCP batch LSN that built it
-	// (= its storage index_id, parsed numerically). It is the recency key for
-	// CDC delta segments: when the same pk lands in multiple segments (UPDATE /
-	// reinsert), only the highest-LSN copy is live (see ComputeLiveness). 0 for a
-	// single non-segmented index or for disjoint FinishSegments partitions (whose
-	// pks never collide), where dedup is a no-op.
-	LSN int64
+	// ChunkId is the segment's append position in the single tag=1 CdcTail log —
+	// the recency key for CDC delta segments, assigned at load from the frame's
+	// chunk_id (NOT an ISCP LSN; see fulltext_wand.md "single CdcTail log,
+	// chunk_id-ordered"). When the same pk lands in multiple segments (UPDATE /
+	// reinsert), only the highest-ChunkId copy is live (see ComputeLiveness). 0
+	// for the tag=0 base or for disjoint FinishSegments partitions (whose pks
+	// never collide), where dedup is a no-op.
+	ChunkId int64
 
 	pks      []any                   // ord -> original pk value (for output via AppendAny)
 	docLen   []int32                 // ord -> document length (token count), for BM25

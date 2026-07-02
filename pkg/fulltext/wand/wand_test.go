@@ -294,10 +294,11 @@ func TestWandMerge(t *testing.T) {
 	}
 }
 
-// buildSeg builds a one-flush delta segment with the given LSN (its batch-LSN
-// identity). docs maps pk -> the terms occurring in that doc (one tf each).
-func buildSeg(t *testing.T, lsn int64, docs map[int64][]string) *WandModel {
-	b := NewBuilder(fmt.Sprintf("seg%d", lsn), testPkType)
+// buildSeg builds a one-flush delta segment with the given chunk_id (its append
+// position in the tag=1 CdcTail log). docs maps pk -> the terms occurring in
+// that doc (one tf each).
+func buildSeg(t *testing.T, chunkId int64, docs map[int64][]string) *WandModel {
+	b := NewBuilder(fmt.Sprintf("seg%d", chunkId), testPkType)
 	for pk, terms := range docs {
 		for _, term := range terms {
 			if err := b.Add(term, pk); err != nil {
@@ -306,7 +307,7 @@ func buildSeg(t *testing.T, lsn int64, docs map[int64][]string) *WandModel {
 		}
 	}
 	m := b.Finish()
-	m.LSN = lsn
+	m.ChunkId = chunkId
 	return m
 }
 
@@ -320,7 +321,7 @@ func pkCounts(res []SearchResult) map[int64]int {
 	return out
 }
 
-// TestWandLiveness exercises the LSN-as-identity rule (ComputeLiveness +
+// TestWandLiveness exercises the chunk_id-as-identity rule (ComputeLiveness +
 // SearchSegmentsLive) that makes CDC delete-then-reinsert / UPDATE correct over
 // immutable segments. Assertions are on the LIVE pk SET (dedup / delete /
 // reinsert), not exact scores: global N/df/avgdl intentionally still include
@@ -329,7 +330,7 @@ func pkCounts(res []SearchResult) map[int64]int {
 func TestWandLiveness(t *testing.T) {
 	q := []string{"x"}
 
-	// 1. UPDATE = same pk in two segments → newest-LSN wins, exactly one row.
+	// 1. UPDATE = same pk in two segments → newest-chunk_id wins, exactly one row.
 	t.Run("dedup_update", func(t *testing.T) {
 		segs := []*WandModel{
 			buildSeg(t, 1, map[int64][]string{5: {"x"}, 6: {"x"}}),
@@ -348,13 +349,13 @@ func TestWandLiveness(t *testing.T) {
 		}
 	})
 
-	// 2. DELETE then reINSERT at a higher LSN → live again.
+	// 2. DELETE then reINSERT at a higher chunk_id → live again.
 	t.Run("delete_then_reinsert", func(t *testing.T) {
 		segs := []*WandModel{
 			buildSeg(t, 1, map[int64][]string{5: {"x"}}),
-			buildSeg(t, 3, map[int64][]string{5: {"x"}}), // reinsert at LSN 3
+			buildSeg(t, 3, map[int64][]string{5: {"x"}}), // reinsert at chunk_id 3
 		}
-		deletes := map[any]int64{normalizeKey(int64(5)): 2} // delete at LSN 2 < 3
+		deletes := map[any]int64{normalizeKey(int64(5)): 2} // delete at chunk_id 2 < 3
 		got := pkCounts(SearchSegmentsLive(segs, q, 10, nil, ComputeLiveness(segs, deletes)))
 		if got[5] != 1 || len(got) != 1 {
 			t.Fatalf("delete-then-reinsert: want {5:1}, got %v", got)
@@ -367,7 +368,7 @@ func TestWandLiveness(t *testing.T) {
 			buildSeg(t, 1, map[int64][]string{5: {"x"}}),
 			buildSeg(t, 3, map[int64][]string{5: {"x"}}),
 		}
-		deletes := map[any]int64{normalizeKey(int64(5)): 4} // delete at LSN 4 > 3
+		deletes := map[any]int64{normalizeKey(int64(5)): 4} // delete at chunk_id 4 > 3
 		got := pkCounts(SearchSegmentsLive(segs, q, 10, nil, ComputeLiveness(segs, deletes)))
 		if len(got) != 0 {
 			t.Fatalf("delete-after-insert: want empty, got %v", got)
@@ -447,7 +448,7 @@ func TestWandToInsertSqlsTag(t *testing.T) {
 // int64 and varchar PKs, validates CRC, and folds to the max-LSN map.
 func TestWandDeleteLogRoundTrip(t *testing.T) {
 	t.Run("int64", func(t *testing.T) {
-		recs := []DeleteRecord{{Pk: int64(5), LSN: 2}, {Pk: int64(9), LSN: 7}, {Pk: int64(5), LSN: 4}}
+		recs := []DeleteRecord{{Pk: int64(5)}, {Pk: int64(9)}, {Pk: int64(5)}}
 		buf, err := EncodeDeleteLog(int32(types.T_int64), recs)
 		if err != nil {
 			t.Fatal(err)
@@ -460,19 +461,23 @@ func TestWandDeleteLogRoundTrip(t *testing.T) {
 			t.Fatalf("want %d recs, got %d", len(recs), len(got))
 		}
 		for i := range recs {
-			if got[i].Pk.(int64) != recs[i].Pk.(int64) || got[i].LSN != recs[i].LSN {
+			if got[i].Pk.(int64) != recs[i].Pk.(int64) {
 				t.Fatalf("rec %d mismatch: want %v got %v", i, recs[i], got[i])
 			}
 		}
-		// max-LSN fold: pk 5 deleted at 2 then 4 → 4 wins.
-		m := DeleteMap(got)
+		// fold by frame chunk_id: a later frame raises the bound, an earlier
+		// (redelivered) frame is a no-op. pk 5 at chunk_id 4, then redelivered
+		// at 2 → stays 4; pk 9 re-deleted at 7.
+		m := FoldDeleteFrame(nil, got, 4)
+		m = FoldDeleteFrame(m, []DeleteRecord{{Pk: int64(9)}}, 7)
+		m = FoldDeleteFrame(m, []DeleteRecord{{Pk: int64(5)}}, 2)
 		if m[normalizeKey(int64(5))] != 4 || m[normalizeKey(int64(9))] != 7 {
-			t.Fatalf("DeleteMap fold wrong: %v", m)
+			t.Fatalf("FoldDeleteFrame fold wrong: %v", m)
 		}
 	})
 
 	t.Run("varchar", func(t *testing.T) {
-		recs := []DeleteRecord{{Pk: []byte("doc-a"), LSN: 1}, {Pk: []byte("doc-b"), LSN: 3}}
+		recs := []DeleteRecord{{Pk: []byte("doc-a")}, {Pk: []byte("doc-b")}}
 		buf, err := EncodeDeleteLog(int32(types.T_varchar), recs)
 		if err != nil {
 			t.Fatal(err)
@@ -481,14 +486,17 @@ func TestWandDeleteLogRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		m := DeleteMap(got)
-		if m[normalizeKey([]byte("doc-a"))] != 1 || m[normalizeKey([]byte("doc-b"))] != 3 {
-			t.Fatalf("varchar DeleteMap wrong: %v", m)
+		if len(got) != 2 || string(got[0].Pk.([]byte)) != "doc-a" || string(got[1].Pk.([]byte)) != "doc-b" {
+			t.Fatalf("varchar round-trip wrong: %v", got)
+		}
+		m := FoldDeleteFrame(nil, got, 5)
+		if m[normalizeKey([]byte("doc-a"))] != 5 || m[normalizeKey([]byte("doc-b"))] != 5 {
+			t.Fatalf("varchar fold wrong: %v", m)
 		}
 	})
 
 	t.Run("corruption_detected", func(t *testing.T) {
-		buf, err := EncodeDeleteLog(int32(types.T_int64), []DeleteRecord{{Pk: int64(1), LSN: 1}})
+		buf, err := EncodeDeleteLog(int32(types.T_int64), []DeleteRecord{{Pk: int64(1)}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -507,8 +515,8 @@ func TestWandDeleteLogRoundTrip(t *testing.T) {
 		if err != nil || len(got) != 0 {
 			t.Fatalf("empty round-trip: got %v err %v", got, err)
 		}
-		if DeleteMap(got) != nil {
-			t.Fatal("empty DeleteMap should be nil")
+		if FoldDeleteFrame(nil, got, 0) != nil {
+			t.Fatal("empty fold should stay nil")
 		}
 	})
 }

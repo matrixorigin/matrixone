@@ -23,28 +23,31 @@ import (
 )
 
 // The retrieval index's tag=1 "delete log" (see fulltext_wand.md, Phase B). Each
-// CDC DELETE/UPSERT emits one DeleteRecord (pk + the batch LSN at which it was
-// deleted). The log is appended as tag=1 chunks alongside the tag=1 delta
-// segments in the same ft_index store; at search it is decoded into a
-// pk -> maxDeleteLSN map and fed to ComputeLiveness.
+// CDC DELETE/UPSERT emits one DeleteRecord (just the pk). A batch of records is
+// appended as one framed tag=1 chunk alongside the tag=1 delta segments in the
+// same ft_index store; the frame's chunk_id (its append position in the single
+// CdcTail log) is the delete's order — there is NO stored order field. At search
+// the frames are decoded and folded, in chunk_id order, into a
+// pk -> maxDeleteChunkId map fed to ComputeLiveness.
 //
-// This is the structural analog of cuVS's deleted-set, but carrying the LSN so
-// delete-then-reinsert / UPDATE resolve correctly across immutable segments
-// (a delete only kills segments with LSN < its deleteLSN — see ComputeLiveness).
-// The codec is self-contained (no dependency on the GPU-coupled cuVS package),
-// matching serialize.go's binary+crc32 style.
+// This is the structural analog of cuVS's deleted-set: delete-then-reinsert /
+// UPDATE resolve correctly across immutable segments because a delete only kills
+// segments with chunk_id < its frame's chunk_id (see ComputeLiveness). The codec
+// is self-contained (no dependency on the GPU-coupled cuVS package), matching
+// serialize.go's binary+crc32 style.
 
-// DeleteRecord is one tombstone: pk deleted as of batch LSN.
+// DeleteRecord is one tombstone: a pk deleted by a CDC batch. Its order is the
+// containing frame's chunk_id (assigned at load), not a stored field.
 type DeleteRecord struct {
-	Pk  any
-	LSN int64
+	Pk any
 }
 
 const deleteLogMagic uint32 = 0x57440100 // 'W' 'D' 01 00
 
 // EncodeDeleteLog serializes delete records into one self-describing,
-// CRC32-checked chunk: magic | pkType | count | [lsn:int64 pkLen:uint32 pk]* | crc.
-// pkType is the source PK's types.T (records encode pk via encodePk).
+// CRC32-checked chunk: magic | pkType | count | [pkLen:uint32 pk]* | crc.
+// pkType is the source PK's types.T (records encode pk via encodePk). No order
+// field — the frame's chunk_id is the order.
 func EncodeDeleteLog(pkType int32, recs []DeleteRecord) ([]byte, error) {
 	var b bytes.Buffer
 	_ = binary.Write(&b, binary.LittleEndian, deleteLogMagic)
@@ -55,7 +58,6 @@ func EncodeDeleteLog(pkType int32, recs []DeleteRecord) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		_ = binary.Write(&b, binary.LittleEndian, r.LSN)
 		_ = binary.Write(&b, binary.LittleEndian, uint32(len(pkb)))
 		b.Write(pkb)
 	}
@@ -93,10 +95,6 @@ func DecodeDeleteLog(buf []byte) ([]DeleteRecord, error) {
 	}
 	out := make([]DeleteRecord, 0, n)
 	for i := int64(0); i < n; i++ {
-		var lsn int64
-		if err := binary.Read(r, binary.LittleEndian, &lsn); err != nil {
-			return nil, err
-		}
 		var l uint32
 		if err := binary.Read(r, binary.LittleEndian, &l); err != nil {
 			return nil, err
@@ -109,23 +107,29 @@ func DecodeDeleteLog(buf []byte) ([]DeleteRecord, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, DeleteRecord{Pk: pk, LSN: lsn})
+		out = append(out, DeleteRecord{Pk: pk})
 	}
 	return out, nil
 }
 
-// DeleteMap folds decoded delete records into the pk -> maxDeleteLSN map that
-// ComputeLiveness consumes. Keyed by normalizeKey(pk); the max LSN wins so the
-// fold is order-independent and idempotent (a redelivered DELETE is a no-op).
-func DeleteMap(recs []DeleteRecord) map[any]int64 {
+// FoldDeleteFrame folds one decoded delete frame — all records share the frame's
+// chunk_id — into the running pk -> maxDeleteChunkId map ComputeLiveness
+// consumes. Keyed by normalizeKey(pk); the max chunk_id wins, so folding frames
+// in any order is idempotent and a redelivered DELETE (a later frame at a higher
+// chunk_id) only raises the bound. Pass the accumulator across frames (nil to
+// start); returns the same map (allocated on first non-empty frame, nil if no
+// records were ever folded).
+func FoldDeleteFrame(m map[any]int64, recs []DeleteRecord, chunkId int64) map[any]int64 {
 	if len(recs) == 0 {
-		return nil
+		return m
 	}
-	m := make(map[any]int64, len(recs))
+	if m == nil {
+		m = make(map[any]int64, len(recs))
+	}
 	for _, r := range recs {
 		k := normalizeKey(r.Pk)
-		if cur, ok := m[k]; !ok || r.LSN > cur {
-			m[k] = r.LSN
+		if cur, ok := m[k]; !ok || chunkId > cur {
+			m[k] = chunkId
 		}
 	}
 	return m

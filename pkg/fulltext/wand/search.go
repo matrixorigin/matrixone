@@ -33,7 +33,7 @@ type Membership interface {
 const ordEnd = int64(0x7fffffffffffffff)
 
 // ordAllowSet is a dense per-segment allow-set over ords [0, n) used to carry
-// precomputed liveness (owner-by-LSN ∩ not-deleted) into the WAND walk via the
+// precomputed liveness (owner-by-chunk_id ∩ not-deleted) into the WAND walk via the
 // existing Membership interface. allow[ord]==true ⇒ the ord is live.
 type ordAllowSet struct{ allow []bool }
 
@@ -67,19 +67,19 @@ func andAllow(a, b Membership) Membership {
 }
 
 // ComputeLiveness resolves, once when a segment set is assembled (load time),
-// which ord in each segment is the LIVE copy of its pk — the LSN-as-identity
+// which ord in each segment is the LIVE copy of its pk — the chunk_id-as-identity
 // rule that makes CDC delete-then-reinsert / UPDATE correct over immutable
 // segments:
 //
-//   - a pk's live copy is the one in the HIGHEST-LSN segment that holds it
+//   - a pk's live copy is the one in the HIGHEST-ChunkId segment that holds it
 //     (older copies of an UPDATEd pk are superseded — dedup, no duplicate row);
-//   - that copy is dead iff a delete exists with deleteLSN > thatSegmentLSN
+//   - that copy is dead iff a delete exists with deleteChunkId > thatSegmentChunkId
 //     (a delete after the latest insert; a delete before it is superseded).
 //
-// deletes maps normalizeKey(pk) -> max deleteLSN seen for that pk (nil = none).
-// The result is parallel to segs: entry i is a Membership over segment i's ords
-// (nil ⇒ every ord live, the fast path for a single/compacted segment), passed
-// to SearchSegmentsLive. O(total docs), done once per load, not per query.
+// deletes maps normalizeKey(pk) -> max delete-frame chunk_id for that pk (nil =
+// none). The result is parallel to segs: entry i is a Membership over segment i's
+// ords (nil ⇒ every ord live, the fast path for a single/compacted segment),
+// passed to SearchSegmentsLive. O(total docs), done once per load, not per query.
 func ComputeLiveness(segs []*WandModel, deletes map[any]int64) []Membership {
 	if len(segs) == 0 {
 		return nil
@@ -89,13 +89,13 @@ func ComputeLiveness(segs []*WandModel, deletes map[any]int64) []Membership {
 		return []Membership{nil}
 	}
 
-	// owner[pk] = the max segment LSN holding pk (the live copy's segment).
+	// owner[pk] = the max segment chunk_id holding pk (the live copy's segment).
 	owner := make(map[any]int64)
 	for _, s := range segs {
 		for _, pk := range s.pks {
 			k := normalizeKey(pk)
-			if cur, ok := owner[k]; !ok || s.LSN >= cur {
-				owner[k] = s.LSN
+			if cur, ok := owner[k]; !ok || s.ChunkId >= cur {
+				owner[k] = s.ChunkId
 			}
 		}
 	}
@@ -106,9 +106,9 @@ func ComputeLiveness(segs []*WandModel, deletes map[any]int64) []Membership {
 		allow := make([]bool, len(s.pks))
 		for ord, pk := range s.pks {
 			k := normalizeKey(pk)
-			live := owner[k] == s.LSN // this segment owns the live copy
+			live := owner[k] == s.ChunkId // this segment owns the live copy
 			if live && deletes != nil {
-				if dl, ok := deletes[k]; ok && dl > s.LSN {
+				if dl, ok := deletes[k]; ok && dl > s.ChunkId {
 					live = false // deleted after the latest insert
 				}
 			}
