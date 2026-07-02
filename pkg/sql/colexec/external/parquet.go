@@ -1522,6 +1522,50 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processStringToArray[float64](proc.Ctx, mp, page, proc, vec, width)
 		}
+	case types.T_array_bf16:
+		if !isPlainStringLikeType(st) {
+			break
+		}
+		width := int(dt.Width)
+		if width <= 0 {
+			width = types.MaxArrayDimension
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToArray[types.BF16](proc.Ctx, mp, page, proc, vec, width)
+		}
+	case types.T_array_float16:
+		if !isPlainStringLikeType(st) {
+			break
+		}
+		width := int(dt.Width)
+		if width <= 0 {
+			width = types.MaxArrayDimension
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToArray[types.Float16](proc.Ctx, mp, page, proc, vec, width)
+		}
+	case types.T_array_int8:
+		if !isPlainStringLikeType(st) {
+			break
+		}
+		width := int(dt.Width)
+		if width <= 0 {
+			width = types.MaxArrayDimension
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToArray[int8](proc.Ctx, mp, page, proc, vec, width)
+		}
+	case types.T_array_uint8:
+		if !isPlainStringLikeType(st) {
+			break
+		}
+		width := int(dt.Width)
+		if width <= 0 {
+			width = types.MaxArrayDimension
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			return processStringToArray[uint8](proc.Ctx, mp, page, proc, vec, width)
+		}
 	}
 	if mp.mapper != nil {
 		return mp
@@ -1827,7 +1871,7 @@ func processStringToJson(
 	return nil
 }
 
-func processStringToArray[T types.RealNumbers](
+func processStringToArray[T types.ArrayElement](
 	ctx context.Context,
 	mp *columnMapper,
 	page parquet.Page,
@@ -1902,7 +1946,7 @@ func processStringToArray[T types.RealNumbers](
 	return nil
 }
 
-func parseStringArrayValue[T types.RealNumbers](data []byte) ([]T, error) {
+func parseStringArrayValue[T types.ArrayElement](data []byte) ([]T, error) {
 	text := strings.TrimSpace(util.UnsafeBytesToString(data))
 	if isEmptyArrayText(text) {
 		return []T{}, nil
