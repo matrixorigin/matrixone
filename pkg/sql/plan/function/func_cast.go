@@ -5153,7 +5153,7 @@ func strToFloat[T constraints.Float](
 					result = T(v2)
 				}
 			} else {
-				s := convertByteSliceToString(v)
+				s := strings.TrimSpace(convertByteSliceToString(v))
 				r2, tErr = strconv.ParseFloat(s, bitSize)
 				if tErr != nil {
 					// MySQL non-strict mode: invalid string converts to 0 (no error)
