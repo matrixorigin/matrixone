@@ -10,7 +10,7 @@ SELECT coalesce(e2,i1) nullif_c,
 IF(e2 IS NULL,i1,e2) if_c,
 SUM(d1) FROM t
 GROUP BY e2,i1 ORDER BY nullif_c, SUM(d1);
-➤ nullif_c[3,18,2]  ¦  if_c[3,18,2]  ¦  SUM(d1)[8,54,0]  𝄀
+➤ nullif_c[3,12,2]  ¦  if_c[3,12,2]  ¦  SUM(d1)[8,54,0]  𝄀
 2.00  ¦  2.00  ¦  2.0  𝄀
 3.33  ¦  3.33  ¦  null  𝄀
 3.33  ¦  3.33  ¦  6.0  𝄀
@@ -22,7 +22,9 @@ INSERT INTO t1 VALUES (1),(2),(3),(4);
 INSERT INTO t2 VALUES (1),(2);
 SELECT t1.a, t2.a FROM t1 JOIN t2
 ON t1.a+t2.a = (SELECT COUNT(*) FROM t1);
-subquery in JOIN condition is not yet implemented
+➤ a[4,32,0]  ¦  a[4,32,0]  𝄀
+3  ¦  1  𝄀
+2  ¦  2
 SELECT a + (SELECT SUM(a) + (SELECT COUNT(a) FROM t1) FROM t1) AS cnt
 FROM t2;
 ➤ cnt[-5,64,0]  𝄀
@@ -127,7 +129,7 @@ select sum(a), sum(b),sum(c),sum(d),sum(e) from t1;
 invalid argument aggregate function sum, bad value [VARCHAR]
 select sum(a), sum(b),sum(c),sum(d) from t1;
 ➤ sum(a)[-5,64,0]  ¦  sum(b)[8,54,0]  ¦  sum(c)[8,54,0]  ¦  sum(d)[8,54,0]  𝄀
-42949672942  ¦  2.4824980176896E13  ¦  2.48282462498248256E17  ¦  2.484302428248248E40
+42949672942  ¦  2.4824980176896E13  ¦  2.4828246249824826E17  ¦  2.484302428248248E40
 drop table t1;
 create table t1 (num float(5,2),user char(20));
 insert into t1 values (10.3,'nem'),(20.53,'monty'),(30.23,'sinisa');
@@ -148,7 +150,7 @@ select cast(sum( ff) as decimal(5,2)) from t2;
 ➤ cast(sum(ff) as decimal(5, 2))[3,5,2]  𝄀
 2.20
 select cast(sum( ff) as signed) from t2;
-➤ cast(sum(ff) as ff)[-5,64,0]  𝄀
+➤ cast(sum(ff) as signed)[-5,64,0]  𝄀
 2
 select cast(variance(ff) as decimal(10,3)) from t2;
 ➤ cast(variance(ff) as decimal(10, 3))[3,10,3]  𝄀
@@ -160,10 +162,10 @@ create table t1 (df decimal(5,1));
 insert into t1 values(1.1);
 insert into t1 values(2.2);
 select cast(sum( df) as signed) from t1;
-➤ cast(sum(df) as df)[-5,64,0]  𝄀
+➤ cast(sum(df) as signed)[-5,64,0]  𝄀
 3
 select cast(min(df) as signed) from t1;
-➤ cast(min(df) as df)[-5,64,0]  𝄀
+➤ cast(min(df) as signed)[-5,64,0]  𝄀
 1
 select 1e8 * sum( df) from t1;
 ➤ 1e8 * sum(df)[8,54,0]  𝄀
