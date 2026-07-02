@@ -32,6 +32,24 @@ select 10.0+'10';
 select 10E+0+'10';
 ➤ 10e+0 + 10[8,54,0]  𝄀
 20.0
+select convert(12345, char) as r, length(convert(12345, char)) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+12345  ¦  5
+select convert('ABCDE', char) as r, length(convert('ABCDE', char)) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+ABCDE  ¦  5
+select hex(convert('AZ', binary)) as r, length(convert('AZ', binary)) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+415A  ¦  2
+select hex(convert(12345, binary)) as r, length(convert(12345, binary)) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+3132333435  ¦  5
+select hex(convert('AZ', binary(1))) as r, length(convert('AZ', binary(1))) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+41  ¦  1
+select hex(convert(12345, binary(3))) as r, length(convert(12345, binary(3))) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+313233  ¦  3
 select CAST(0xb3 as signed);
 ➤ cast(0xb3 as signed)[-5,64,0]  𝄀
 179
@@ -81,7 +99,7 @@ select cast(NULL as DATE);
 ➤ cast(null as date)[91,64,0]  𝄀
 null
 select date_add(cast('2004-12-30 12:00:00' as date), interval 0 hour);
-➤ date_add(cast(2004-12-30 12:00:00 as date), interval 0 hour)[93,64,0]  𝄀
+➤ date_add(cast(2004-12-30 12:00:00 as date), INTERVAL 0 hour)[93,64,0]  𝄀
 2004-12-30 00:00:00
 select cast(18446744073709551615 as unsigned);
 ➤ cast(18446744073709551615 as unsigned)[-5,64,0]  𝄀
@@ -113,7 +131,7 @@ DROP TABLE t1;
 SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
 invalid argument operator cast, bad value [DATE BIGINT UNSIGNED]
 SELECT CAST(cast('01-01-01' as date) AS SIGNED);
-➤ cast(cast(01-01-01 as date) as as)[-5,64,0]  𝄀
+➤ cast(cast(01-01-01 as date) as signed)[-5,64,0]  𝄀
 -719162
 select cast('1.2' as decimal(3,2));
 ➤ cast(1.2 as decimal(3, 2))[3,3,2]  𝄀
@@ -122,7 +140,7 @@ select 1e18 * cast('1.2' as decimal(3,2));
 ➤ 1e18 * cast(1.2 as decimal(3, 2))[8,54,0]  𝄀
 1.2E18
 select cast(cast('1.2' as decimal(3,2)) as signed);
-➤ cast(cast(1.2 as decimal(3, 2)) as as)[-5,64,0]  𝄀
+➤ cast(cast(1.2 as decimal(3, 2)) as signed)[-5,64,0]  𝄀
 1
 select cast(-1e18 as decimal(22,2));
 ➤ cast(-1e18 as decimal(22, 2))[3,22,2]  𝄀
@@ -246,7 +264,7 @@ select any_value(a)-b as d, (any_value(a)-b >= 0), b from t1 group by b having d
 1  ¦  1  ¦  0  𝄀
 0  ¦  1  ¦  1
 select cast((a - b) as unsigned) from t1 order by 1;
-➤ cast((a - b) as b unsigned)[-5,64,0]  𝄀
+➤ cast((a - b) as unsigned)[-5,64,0]  𝄀
 0  𝄀
 1  𝄀
 4294967294
