@@ -5384,11 +5384,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	}
 	nodeID := builder.appendNode(node, ctx)
 
-	if joinType == plan.Node_INNER {
-		ctx.binder = NewWhereBinder(builder, ctx)
-	} else {
-		ctx.binder = NewTableBinder(builder, ctx)
-	}
+	ctx.binder = NewTableBinder(builder, ctx)
 
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:
