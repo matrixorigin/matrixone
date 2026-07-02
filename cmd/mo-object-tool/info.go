@@ -21,10 +21,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
+	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
 	"github.com/spf13/cobra"
 )
 
-func infoCommand() *cobra.Command {
+func infoCommand(storage *toolfs.StorageOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "info <object-file>",
 		Short: "Show object file information",
@@ -32,19 +33,33 @@ func infoCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
-			return showInfo(path)
+			return showInfo(path, *storage)
 		},
 	}
 
 	return cmd
 }
 
-func showInfo(path string) error {
+func showInfo(path string, storage toolfs.StorageOptions) error {
 	ctx := context.Background()
 
-	reader, err := objecttool.Open(ctx, path)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to open object: %v", err)
+	var reader *objecttool.ObjectReader
+	if storage.IsRemote() {
+		fs, _, err := toolfs.Open(ctx, storage)
+		if err != nil {
+			return err
+		}
+		defer fs.Close(ctx)
+		reader, err = objecttool.OpenWithFS(ctx, fs, path, path)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to open object: %v", err)
+		}
+	} else {
+		var err error
+		reader, err = objecttool.Open(ctx, path)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to open object: %v", err)
+		}
 	}
 	defer reader.Close()
 

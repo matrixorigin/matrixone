@@ -662,14 +662,9 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		}
 	}
 
-	if !sendJob(firstBufPtr, firstBuf, firstN) {
-		close(jobCh)
-		wg.Wait()
-		if firstErr != nil {
-			return firstErr
-		}
-		return ctx.Err()
-	}
+	pendingBufPtr := firstBufPtr
+	pendingBuf := firstBuf
+	pendingN := firstN
 
 	for {
 		nextBufPtr, nextBuf, nextN, readErr := readChunk()
@@ -689,12 +684,45 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 			}
 			break
 		}
-		if !sendJob(nextBufPtr, nextBuf, nextN) {
-			break
-		}
 		if readErr != nil && errors.Is(readErr, io.EOF) {
+			if int64(pendingN)+int64(nextN) <= maxMultipartPartSize {
+				merged := make([]byte, pendingN+nextN)
+				copy(merged, pendingBuf[:pendingN])
+				copy(merged[pendingN:], nextBuf[:nextN])
+				bufPool.Put(pendingBufPtr)
+				bufPool.Put(nextBufPtr)
+				if !sendJob(nil, merged, len(merged)) {
+					break
+				}
+			} else {
+				if !sendJob(pendingBufPtr, pendingBuf, pendingN) {
+					if nextBufPtr != nil {
+						bufPool.Put(nextBufPtr)
+					}
+					break
+				}
+				if !sendJob(nextBufPtr, nextBuf, nextN) {
+					break
+				}
+			}
+			pendingBufPtr = nil
+			pendingBuf = nil
+			pendingN = 0
 			break
 		}
+		if !sendJob(pendingBufPtr, pendingBuf, pendingN) {
+			if nextBufPtr != nil {
+				bufPool.Put(nextBufPtr)
+			}
+			break
+		}
+		pendingBufPtr = nextBufPtr
+		pendingBuf = nextBuf
+		pendingN = nextN
+	}
+
+	if pendingN > 0 {
+		_ = sendJob(pendingBufPtr, pendingBuf, pendingN)
 	}
 
 	close(jobCh)

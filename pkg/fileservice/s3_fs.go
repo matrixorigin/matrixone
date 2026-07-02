@@ -462,13 +462,24 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 	key := s.pathToKey(path.File)
 	enableParallel := false
-	switch s.parallelMode {
+	parallelMode := s.parallelMode
+	if mode, ok := parallelModeFromContext(ctx); ok {
+		parallelMode = mode
+	}
+	switch parallelMode {
 	case ParallelForce:
 		enableParallel = true
 	case ParallelAuto:
 		if size == nil || *size >= minMultipartPartSize {
 			enableParallel = true
 		}
+	}
+	if size == nil {
+		logutil.Info("s3 write unknown-size stream",
+			zap.String("key", key),
+			zap.Uint8("parallel-mode", uint8(parallelMode)),
+			zap.Bool("parallel-enabled", enableParallel),
+		)
 	}
 
 	if pmw, ok := s.storage.(ParallelMultipartWriter); ok && pmw.SupportsParallelMultipart() &&

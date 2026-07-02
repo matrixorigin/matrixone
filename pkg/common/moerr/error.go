@@ -993,6 +993,10 @@ func NewFileNotFound(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrFileNotFound, f)
 }
 
+func NewFileNotFoundErrorf(ctx context.Context, format string, args ...any) *Error {
+	return newError(ctx, ErrFileNotFound, fmt.Sprintf(format, args...))
+}
+
 func NewResultFileNotFound(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrResultFileNotFound, f)
 }

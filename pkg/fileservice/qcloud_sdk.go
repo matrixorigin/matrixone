@@ -441,9 +441,11 @@ func (a *QCloudSDK) WriteMultipartParallel(
 
 	jobCh := make(chan partJob, options.Concurrency*2)
 
-	startWorker := func() error {
+	startWorker := func() {
 		wg.Add(1)
-		return getParallelUploadPool().Submit(func() {
+		// Use per-upload goroutines so concurrent multipart uploads do not starve
+		// each other on the small global parallelUploadPool.
+		go func() {
 			defer wg.Done()
 			for job := range jobCh {
 				if ctx.Err() != nil {
@@ -479,14 +481,11 @@ func (a *QCloudSDK) WriteMultipartParallel(
 				})
 				partsLock.Unlock()
 			}
-		})
+		}()
 	}
 
 	for i := 0; i < options.Concurrency; i++ {
-		if submitErr := startWorker(); submitErr != nil {
-			setErr(submitErr)
-			break
-		}
+		startWorker()
 	}
 
 	sendJob := func(bufPtr *[]byte, buf []byte, n int) bool {
@@ -516,14 +515,9 @@ func (a *QCloudSDK) WriteMultipartParallel(
 		}
 	}
 
-	if !sendJob(firstBufPtr, firstBuf, firstN) {
-		close(jobCh)
-		wg.Wait()
-		if firstErr != nil {
-			return firstErr
-		}
-		return ctx.Err()
-	}
+	pendingBufPtr := firstBufPtr
+	pendingBuf := firstBuf
+	pendingN := firstN
 
 	for {
 		nextBufPtr, nextBuf, nextN, readErr := readChunk()
@@ -543,12 +537,45 @@ func (a *QCloudSDK) WriteMultipartParallel(
 			}
 			break
 		}
-		if !sendJob(nextBufPtr, nextBuf, nextN) {
-			break
-		}
 		if readErr != nil && errors.Is(readErr, io.EOF) {
+			if int64(pendingN)+int64(nextN) <= maxMultipartPartSize {
+				merged := make([]byte, pendingN+nextN)
+				copy(merged, pendingBuf[:pendingN])
+				copy(merged[pendingN:], nextBuf[:nextN])
+				bufPool.Put(pendingBufPtr)
+				bufPool.Put(nextBufPtr)
+				if !sendJob(nil, merged, len(merged)) {
+					break
+				}
+			} else {
+				if !sendJob(pendingBufPtr, pendingBuf, pendingN) {
+					if nextBufPtr != nil {
+						bufPool.Put(nextBufPtr)
+					}
+					break
+				}
+				if !sendJob(nextBufPtr, nextBuf, nextN) {
+					break
+				}
+			}
+			pendingBufPtr = nil
+			pendingBuf = nil
+			pendingN = 0
 			break
 		}
+		if !sendJob(pendingBufPtr, pendingBuf, pendingN) {
+			if nextBufPtr != nil {
+				bufPool.Put(nextBufPtr)
+			}
+			break
+		}
+		pendingBufPtr = nextBufPtr
+		pendingBuf = nextBuf
+		pendingN = nextN
+	}
+
+	if pendingN > 0 {
+		_ = sendJob(pendingBufPtr, pendingBuf, pendingN)
 	}
 
 	close(jobCh)

@@ -47,8 +47,9 @@ type ObjectInfo struct {
 
 // ColInfo contains column information
 type ColInfo struct {
-	Idx  uint16
-	Type types.Type
+	Idx    uint16
+	SeqNum uint16
+	Type   types.Type
 }
 
 // ObjectReader reads object files
@@ -81,8 +82,12 @@ func Open(ctx context.Context, path string) (*ObjectReader, error) {
 		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
 	}
 
-	// 3. Create reader
-	objReader, err := objectio.NewObjectReaderWithStr(filename, fs,
+	return OpenWithFS(ctx, fs, filename, path)
+}
+
+// OpenWithFS opens an object file from an existing file service.
+func OpenWithFS(ctx context.Context, fs fileservice.FileService, fileName string, displayPath string) (*ObjectReader, error) {
+	objReader, err := objectio.NewObjectReaderWithStr(fileName, fs,
 		objectio.WithMetaCachePolicyOption(fileservice.SkipMemoryCache|fileservice.SkipFullFilePreloads))
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "create object reader: %v", err)
@@ -99,7 +104,7 @@ func Open(ctx context.Context, path string) (*ObjectReader, error) {
 	dataMeta := meta.MustDataMeta()
 
 	// 5. Build info
-	info := buildObjectInfo(path, dataMeta)
+	info := buildObjectInfo(displayPath, dataMeta)
 	cols := buildColInfo(dataMeta)
 
 	return &ObjectReader{
@@ -115,9 +120,10 @@ func Open(ctx context.Context, path string) (*ObjectReader, error) {
 
 func buildObjectInfo(path string, meta objectio.ObjectDataMeta) *ObjectInfo {
 	info := &ObjectInfo{
-		Path:       path,
-		BlockCount: meta.BlockCount(),
-		ColCount:   meta.BlockHeader().ColumnCount(),
+		Path:         path,
+		BlockCount:   meta.BlockCount(),
+		ColCount:     meta.BlockHeader().ColumnCount(),
+		IsAppendable: meta.BlockHeader().Appendable(),
 	}
 
 	// Calculate total row count
@@ -131,16 +137,35 @@ func buildObjectInfo(path string, meta objectio.ObjectDataMeta) *ObjectInfo {
 func buildColInfo(meta objectio.ObjectDataMeta) []ColInfo {
 	colCount := meta.BlockHeader().ColumnCount()
 	cols := make([]ColInfo, colCount)
+	filled := make([]bool, colCount)
 
 	// Get column types from first block
 	if meta.BlockCount() > 0 {
 		blockMeta := meta.GetBlockMeta(0)
-		for i := uint16(0); i < colCount; i++ {
-			colMeta := blockMeta.ColumnMeta(i)
-			cols[i] = ColInfo{
-				Idx:  i,
-				Type: types.T(colMeta.DataType()).ToType(),
+		metaColCount := blockMeta.GetMetaColumnCount()
+		for seqNum := uint16(0); seqNum < metaColCount; seqNum++ {
+			colMeta := blockMeta.ColumnMeta(seqNum)
+			idx := colMeta.Idx()
+			if idx >= colCount || colMeta.Location().OriginSize() == 0 {
+				continue
 			}
+			cols[idx] = ColInfo{
+				Idx:    idx,
+				SeqNum: seqNum,
+				Type:   types.T(colMeta.DataType()).ToType(),
+			}
+			filled[idx] = true
+		}
+	}
+
+	for i := uint16(0); i < colCount; i++ {
+		if filled[i] {
+			continue
+		}
+		cols[i] = ColInfo{
+			Idx:    i,
+			SeqNum: i,
+			Type:   types.T_any.ToType(),
 		}
 	}
 
@@ -172,7 +197,7 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 	colIdxs := make([]uint16, len(r.cols))
 	colTypes := make([]types.Type, len(r.cols))
 	for i := range r.cols {
-		colIdxs[i] = uint16(i)
+		colIdxs[i] = r.cols[i].SeqNum
 		colTypes[i] = r.cols[i].Type
 	}
 
@@ -182,7 +207,7 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 		return nil, nil, err
 	}
 
-	release := func() {
+	releaseIOVector := func() {
 		objectio.ReleaseIOVector(&ioVectors)
 	}
 
@@ -191,14 +216,63 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 	for i := range colIdxs {
 		obj, err := objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
 		if err != nil {
-			release()
+			releaseIOVector()
 			return nil, nil, err
 		}
 		bat.Vecs[i] = obj.(*vector.Vector)
 		bat.SetRowCount(bat.Vecs[i].Length())
 	}
 
+	release := func() {
+		bat.Clean(r.mp)
+		releaseIOVector()
+	}
+
 	return bat, release, nil
+}
+
+// ReadBlockCommitTS reads the hidden commit timestamp column for a block.
+// Objects that do not carry commit timestamps return a nil vector.
+func (r *ObjectReader) ReadBlockCommitTS(ctx context.Context, blockIdx uint32) (*vector.Vector, func(), error) {
+	if blockIdx >= r.info.BlockCount {
+		return nil, nil, moerr.NewInternalErrorf(ctx, "block index %d out of range [0, %d)", blockIdx, r.info.BlockCount)
+	}
+
+	ioVectors, err := r.objReader.ReadOneBlock(
+		ctx,
+		[]uint16{objectio.SEQNUM_COMMITTS},
+		[]types.Type{types.T_TS.ToType()},
+		uint16(blockIdx),
+		r.mp,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	releaseIOVector := func() {
+		objectio.ReleaseIOVector(&ioVectors)
+	}
+
+	obj, err := objectio.Decode(ioVectors.Entries[0].CachedData.Bytes())
+	if err != nil {
+		releaseIOVector()
+		return nil, nil, err
+	}
+	vec := obj.(*vector.Vector)
+	if vec.GetType().Oid != types.T_TS {
+		releaseIOVector()
+		return nil, nil, moerr.NewInternalErrorf(ctx, "commit TS column type mismatch: expected TS, got %s", vec.GetType().String())
+	}
+	if vec.GetNulls().GetCardinality() == vec.Length() {
+		vec.Free(r.mp)
+		releaseIOVector()
+		return nil, func() {}, nil
+	}
+	release := func() {
+		vec.Free(r.mp)
+		releaseIOVector()
+	}
+	return vec, release, nil
 }
 
 // BlockCount returns block count

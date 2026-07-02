@@ -14,9 +14,18 @@
 
 package interactive
 
-import "context"
+import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+)
 
 // Run runs the interactive interface
 func Run(path string) error {
 	return RunUnified(context.Background(), path, nil)
+}
+
+// RunWithFS runs the interactive interface using an existing file service.
+func RunWithFS(ctx context.Context, fs fileservice.FileService, path string) error {
+	return RunUnifiedWithFS(ctx, fs, path, nil)
 }

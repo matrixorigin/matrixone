@@ -16,6 +16,7 @@ package checkpointtool
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
@@ -68,9 +69,9 @@ type TableInfo struct {
 
 // ObjectEntryInfo contains detailed object entry information with timestamps
 type ObjectEntryInfo struct {
-	Range      ckputil.TableRange
-	CreateTime types.TS
-	DeleteTime types.TS
+	ObjectStats objectio.ObjectStats
+	CreateTime  types.TS
+	DeleteTime  types.TS
 }
 
 // ComposedView represents logical checkpoint view at a timestamp
@@ -79,4 +80,59 @@ type ComposedView struct {
 	BaseEntry    *EntryInfo
 	Incrementals []*EntryInfo
 	Tables       map[uint64]*TableInfo
+}
+
+// LogicalTableView contains a tombstone-applied table view for a checkpoint table.
+type LogicalTableView struct {
+	Headers      []string
+	Rows         [][]string
+	ColTypes     []types.Type // column types for data columns (after meta cols)
+	ColSeqNums   []uint16     // object seqnums for data columns (after meta cols)
+	PhysicalRows int
+	DeletedRows  int
+	VisibleRows  int
+}
+
+var logicalTableViewMetaHeaders = []string{"object", "block", "row"}
+
+func newLogicalTableView() *LogicalTableView {
+	return &LogicalTableView{
+		Headers: append([]string(nil), logicalTableViewMetaHeaders...),
+		Rows:    make([][]string, 0),
+	}
+}
+
+func (v *LogicalTableView) MetaWidth() int {
+	if v == nil {
+		return len(logicalTableViewMetaHeaders)
+	}
+	limit := len(logicalTableViewMetaHeaders)
+	if len(v.Headers) < limit {
+		limit = len(v.Headers)
+	}
+	for i := 0; i < limit; i++ {
+		if v.Headers[i] != logicalTableViewMetaHeaders[i] {
+			return i
+		}
+	}
+	return limit
+}
+
+func (v *LogicalTableView) DataWidth() int {
+	if v == nil {
+		return 0
+	}
+	width := len(v.Headers) - v.MetaWidth()
+	if width < 0 {
+		return 0
+	}
+	return width
+}
+
+func (v *LogicalTableView) DataRow(fullRow []string) []string {
+	metaWidth := v.MetaWidth()
+	if len(fullRow) < metaWidth {
+		return nil
+	}
+	return fullRow[metaWidth:]
 }

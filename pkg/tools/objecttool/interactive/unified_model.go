@@ -18,6 +18,7 @@ import (
 	"context"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
@@ -199,6 +200,30 @@ func RunUnified(ctx context.Context, path string, opts *ViewOptions) error {
 	}
 	defer reader.Close()
 
+	return runUnifiedWithReader(ctx, reader, opts, func(nestedPath string) error {
+		return RunUnified(ctx, nestedPath, nil)
+	})
+}
+
+// RunUnifiedWithFS runs the object viewer using an existing file service.
+func RunUnifiedWithFS(ctx context.Context, fs fileservice.FileService, path string, opts *ViewOptions) error {
+	reader, err := objecttool.OpenWithFS(ctx, fs, path, path)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	return runUnifiedWithReader(ctx, reader, opts, func(nestedPath string) error {
+		return RunUnifiedWithFS(ctx, fs, nestedPath, nil)
+	})
+}
+
+func runUnifiedWithReader(
+	ctx context.Context,
+	reader *objecttool.ObjectReader,
+	opts *ViewOptions,
+	openNested func(string) error,
+) error {
 	m := NewObjectUnifiedModel(ctx, reader, opts)
 
 	for {
@@ -218,7 +243,7 @@ func RunUnified(ctx context.Context, path string, opts *ViewOptions) error {
 			nestedPath := um.GetObjectToOpen()
 			um.ClearObjectToOpen()
 			// Open nested object with no special options
-			if err := RunUnified(ctx, nestedPath, nil); err != nil {
+			if err := openNested(nestedPath); err != nil {
 				return err
 			}
 			// Continue with current viewer after returning

@@ -55,11 +55,11 @@ fileservice = "SHARED"
 log-backend = "logservice"
 
 [tn.Ckp]
-flush-interval = "60s"
-min-count = 100
-scan-interval = "5s"
-incremental-interval = "180s"
-global-min-count = 60
+flush-interval = "10s"
+min-count = 5
+scan-interval = "2s"
+incremental-interval = "30s"
+global-min-count = 3
 
 [tn.LogtailServer]
 rpc-max-message-size = "16KiB"

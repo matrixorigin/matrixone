@@ -15,11 +15,13 @@
 package object
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/tools/objecttool/interactive"
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
 	"github.com/spf13/cobra"
 )
 
-func viewCommand() *cobra.Command {
+func viewCommand(storage *toolfs.StorageOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "view <object-file>",
 		Short: "Interactive object file viewer",
@@ -27,7 +29,7 @@ func viewCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
-			return interactive.Run(path)
+			return runObjectView(context.Background(), path, *storage)
 		},
 	}
 

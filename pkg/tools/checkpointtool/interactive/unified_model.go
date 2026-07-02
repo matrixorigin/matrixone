@@ -15,18 +15,16 @@
 package interactive
 
 import (
-	"path/filepath"
-
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 )
 
 // Messages for page navigation
 type selectCheckpointMsg struct{ idx int }
 type selectTableMsg struct{ tableID uint64 }
 type openObjectMsg struct{ path string }
+type openLogicalTableMsg struct{}
 type goBackMsg struct{}
 
 // UnifiedModel uses GenericPage for all views
@@ -37,7 +35,6 @@ type UnifiedModel struct {
 
 	// For opening objects
 	objectToOpen string
-	rangeToOpen  *ckputil.TableRange
 	quitting     bool
 }
 
@@ -88,16 +85,37 @@ func (m *UnifiedModel) createTablesListPage() *interactive.GenericPage {
 func (m *UnifiedModel) createTableDetailPage() *interactive.GenericPage {
 	config := interactive.PageConfig{
 		Title:         "═══ Table Detail ═══",
-		Headers:       []string{"Type", "Object", "Range", "Rows", "Size", "Created"},
+		Headers:       []string{"Type", "Object", "Blocks", "Rows", "Size", "Created"},
 		ShowRowNumber: true,
 		EnableCursor:  true,
 		EnableSearch:  true,
 		EnableHScroll: true,
 		EnableBack:    true,
 		MaxColWidth:   50, // Limit column width, use h/l to scroll
+		CustomHints:   "[j/k] Navigate [Enter] Open object [L] Logical table [h/l] Scroll [/] Search [b/ESC] Back [q] Quit",
 	}
 	provider := &TableDetailProvider{state: m.state}
 	handler := &tableDetailHandler{state: m.state}
+	return interactive.NewGenericPage(config, provider, handler)
+}
+
+func (m *UnifiedModel) createLogicalTablePage() *interactive.GenericPage {
+	headers := []string{"object", "block", "row"}
+	if view := m.state.LogicalView(); view != nil && len(view.Headers) > 0 {
+		headers = view.Headers
+	}
+	config := interactive.PageConfig{
+		Title:         "═══ Logical Table View ═══",
+		Headers:       headers,
+		ShowRowNumber: true,
+		EnableCursor:  false,
+		EnableSearch:  true,
+		EnableHScroll: true,
+		EnableBack:    true,
+		MaxColWidth:   40,
+	}
+	provider := &LogicalTableProvider{state: m.state}
+	handler := &logicalTableHandler{}
 	return interactive.NewGenericPage(config, provider, handler)
 }
 
@@ -131,17 +149,18 @@ func (m *UnifiedModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case openObjectMsg:
-		m.objectToOpen = filepath.Join(m.state.reader.Dir(), msg.path)
-		idx := m.currentPage.GetCursor()
-		dataEntries := m.state.DataEntries()
-		tombEntries := m.state.TombEntries()
-		if idx < len(dataEntries) {
-			m.rangeToOpen = &dataEntries[idx].Range
-		} else if idx < len(dataEntries)+len(tombEntries) {
-			m.rangeToOpen = &tombEntries[idx-len(dataEntries)].Range
-		}
+		m.objectToOpen = msg.path
 		m.quitting = true
 		return m, tea.Quit
+
+	case openLogicalTableMsg:
+		if err := m.state.LoadLogicalView(); err != nil {
+			return m, nil
+		}
+		m.pageStack = append(m.pageStack, m.currentPage)
+		m.currentPage = m.createLogicalTablePage()
+		m.currentPage.Refresh()
+		return m, nil
 
 	case goBackMsg:
 		if len(m.pageStack) > 0 {
@@ -176,13 +195,7 @@ func (m *UnifiedModel) GetObjectToOpen() string {
 	return m.objectToOpen
 }
 
-// GetRangeToOpen returns the range to open (if any)
-func (m *UnifiedModel) GetRangeToOpen() *ckputil.TableRange {
-	return m.rangeToOpen
-}
-
 // ClearObjectToOpen clears the object to open flag
 func (m *UnifiedModel) ClearObjectToOpen() {
 	m.objectToOpen = ""
-	m.rangeToOpen = nil
 }

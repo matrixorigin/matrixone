@@ -183,6 +183,13 @@ func TestWrappedNetTimeoutRetryable(t *testing.T) {
 	}
 }
 
+func TestServerClosedIdleConnectionRetryable(t *testing.T) {
+	err := fmt.Errorf(`Put "https://bucket.cos.ap-guangzhou.myqcloud.com/object?partNumber=716&uploadId=id": http: server closed idle connection`)
+	if !IsRetryableError(err) {
+		t.Fatalf("expected server closed idle connection to be retryable")
+	}
+}
+
 type timeoutError struct{}
 
 func (timeoutError) Error() string {

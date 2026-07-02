@@ -17,6 +17,7 @@ package checkpointtool
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,9 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 // CheckpointReader reads checkpoint data from a directory
@@ -37,6 +41,7 @@ type CheckpointReader struct {
 	dir     string
 	entries []*checkpoint.CheckpointEntry
 	mp      *mpool.MPool
+	closeFS bool
 }
 
 // Option configures CheckpointReader
@@ -49,6 +54,13 @@ func WithMPool(mp *mpool.MPool) Option {
 	}
 }
 
+// WithCloseFS closes the file service when the reader is closed.
+func WithCloseFS() Option {
+	return func(r *CheckpointReader) {
+		r.closeFS = true
+	}
+}
+
 // Open opens checkpoint data from a directory
 func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, error) {
 	fs, err := fileservice.NewLocalFS(ctx, "local", dir, fileservice.DisabledCacheConfig, nil)
@@ -56,6 +68,11 @@ func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, e
 		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
 	}
 
+	return OpenWithFS(ctx, fs, dir, append(opts, WithCloseFS())...)
+}
+
+// OpenWithFS opens checkpoint data from an existing file service.
+func OpenWithFS(ctx context.Context, fs fileservice.FileService, dir string, opts ...Option) (*CheckpointReader, error) {
 	r := &CheckpointReader{
 		ctx: ctx,
 		fs:  fs,
@@ -74,26 +91,85 @@ func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, e
 	return r, nil
 }
 
+// FS returns the file service used by this reader.
+func (r *CheckpointReader) FS() fileservice.FileService {
+	return r.fs
+}
+
+// Fork returns a lightweight reader that shares the file service and already
+// loaded checkpoint entries, but uses an independent memory pool and does not
+// own the file service.
+func (r *CheckpointReader) Fork(ctx context.Context) *CheckpointReader {
+	if ctx == nil {
+		ctx = r.ctx
+	}
+	return &CheckpointReader{
+		ctx:     ctx,
+		fs:      r.fs,
+		dir:     r.dir,
+		entries: r.entries,
+		mp:      mpool.MustNewZero(),
+	}
+}
+
 func (r *CheckpointReader) loadEntries() error {
+	ckpDir := ioutil.GetCheckpointDir()
+	logutil.Infof("[loadEntries] reading checkpoint dir: %s (display dir: %s)", ckpDir, r.dir)
+
+	// Diagnostic: list all raw files in the checkpoint directory
+	rawEntries, listErr := fileservice.SortedList(r.fs.List(r.ctx, ckpDir))
+	if listErr != nil {
+		logutil.Infof("[loadEntries] failed to list dir %s: %v", ckpDir, listErr)
+	} else {
+		logutil.Infof("[loadEntries] raw listing: total=%d dirs=%d files=%d",
+			len(rawEntries), countDirs(rawEntries), countFiles(rawEntries))
+		for _, e := range rawEntries {
+			if !e.IsDir {
+				valid := ""
+				if f := ioutil.DecodeTSRangeFile(e.Name); f.IsValid() {
+					valid = " [valid tsrange]"
+					if f.IsMetadataFile() {
+						valid += " [meta]"
+					} else {
+						valid += " [non-meta ext=" + f.GetExt() + "]"
+					}
+				}
+				logutil.Infof("[loadEntries]   file: %s%s", e.Name, valid)
+			}
+		}
+	}
+
 	names, err := ckputil.ListCKPMetaNames(r.ctx, r.fs)
 	if err != nil {
 		return err
 	}
 	if len(names) == 0 {
+		logutil.Infof("[loadEntries] no checkpoint meta files found in dir=%s", r.dir)
 		return nil
 	}
+	logutil.Infof("[loadEntries] found %d meta file(s) to read", len(names))
 
+	totalRead := 0
 	for _, name := range names {
 		entries, err := checkpoint.ReadEntriesFromMeta(
-			r.ctx, "", ioutil.GetCheckpointDir(), name, 0, nil, r.mp, r.fs,
+			r.ctx, "", ckpDir, name, 0, nil, r.mp, r.fs,
 		)
 		if err != nil {
+			logutil.Infof("[loadEntries] failed to read meta file %s: %v", name, err)
 			return err
 		}
+		logutil.Infof("[loadEntries] meta file=%s entries=%d", name, len(entries))
+		for _, e := range entries {
+			logutil.Infof("[loadEntries]   entry: start=%s end=%s type=%s state=%d",
+				e.GetStart().ToString(), e.GetEnd().ToString(), e.GetType().String(), e.GetState())
+		}
 		r.entries = append(r.entries, entries...)
+		totalRead += len(entries)
 	}
+	logutil.Infof("[loadEntries] total raw entries read: %d", totalRead)
 
 	// Deduplicate by (start, end, type, location)
+	removed := 0
 	seen := make(map[string]bool)
 	unique := make([]*checkpoint.CheckpointEntry, 0, len(r.entries))
 	for _, e := range r.entries {
@@ -101,16 +177,40 @@ func (r *CheckpointReader) loadEntries() error {
 		if !seen[key] {
 			seen[key] = true
 			unique = append(unique, e)
+		} else {
+			removed++
 		}
 	}
 	r.entries = unique
+	logutil.Infof("[loadEntries] dedup: removed=%d remaining=%d", removed, len(unique))
 
 	// Sort by end timestamp (newest first)
 	sort.Slice(r.entries, func(i, j int) bool {
 		ei, ej := r.entries[i].GetEnd(), r.entries[j].GetEnd()
 		return ei.GT(&ej)
 	})
+
+	// Log final usable entries
+	for _, e := range r.entries {
+		logutil.Infof("[loadEntries] usable ckp: start=%s end=%s type=%s",
+			e.GetStart().ToString(), e.GetEnd().ToString(), e.GetType().String())
+	}
+
 	return nil
+}
+
+func countDirs(entries []fileservice.DirEntry) int {
+	n := 0
+	for _, e := range entries {
+		if e.IsDir {
+			n++
+		}
+	}
+	return n
+}
+
+func countFiles(entries []fileservice.DirEntry) int {
+	return len(entries) - countDirs(entries)
 }
 
 // Info returns checkpoint summary
@@ -127,11 +227,18 @@ func (r *CheckpointReader) Info() *CheckpointInfo {
 		}
 		start := e.GetStart()
 		end := e.GetEnd()
-		if info.EarliestTS.IsEmpty() || start.LT(&info.EarliestTS) {
-			info.EarliestTS = start
+		if !start.IsEmpty() {
+			if info.EarliestTS.IsEmpty() || start.LT(&info.EarliestTS) {
+				info.EarliestTS = start
+			}
 		}
-		if end.GT(&info.LatestTS) {
-			info.LatestTS = end
+		if !end.IsEmpty() {
+			if info.LatestTS.IsEmpty() || end.GT(&info.LatestTS) {
+				info.LatestTS = end
+			}
+			if info.EarliestTS.IsEmpty() || end.LT(&info.EarliestTS) {
+				info.EarliestTS = end
+			}
 		}
 	}
 	return info
@@ -185,32 +292,19 @@ func (r *CheckpointReader) GetTableRanges(entry *checkpoint.CheckpointEntry) ([]
 		return nil, nil
 	}
 
-	// Check if file exists before trying to read
-	fileName := loc.Name().String()
-	_, err := r.fs.StatFile(r.ctx, fileName)
+	_, err := r.fs.StatFile(r.ctx, loc.Name().String())
 	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, moerr.NewInternalErrorf(r.ctx, "checkpoint data file not found (may have been GC'd): %s", fileName)
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) || os.IsNotExist(err) {
+			return nil, moerr.NewFileNotFoundErrorf(r.ctx, "checkpoint data file not found (may have been GC'd): %s", loc.Name().String())
 		}
 		return nil, err
 	}
 
-	reader, err := ioutil.NewFileReader(r.fs, fileName)
-	if err != nil {
+	reader := logtail.NewCKPReader(entry.GetVersion(), loc, r.mp, r.fs)
+	if err := reader.ReadMeta(r.ctx); err != nil {
 		return nil, err
 	}
-
-	bats, release, err := reader.LoadAllColumns(r.ctx, nil, r.mp)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-
-	var ranges []ckputil.TableRange
-	for _, bat := range bats {
-		ranges = append(ranges, ckputil.ExportToTableRanges(bat)...)
-	}
-	return ranges, nil
+	return reader.GetTableRanges(r.ctx)
 }
 
 // GetAccounts extracts unique accounts from table ranges
@@ -323,25 +417,28 @@ func (r *CheckpointReader) ReadTableData(ctx context.Context, rng ckputil.TableR
 func (r *CheckpointReader) ComposeAt(ts types.TS) (*ComposedView, error) {
 	view := &ComposedView{Timestamp: ts, Tables: make(map[uint64]*TableInfo)}
 
-	// Find latest GCKP <= ts
+	// Find latest GCKP <= ts that still has data on disk.
+	// GC may have cleaned up older GCKP data files; skip those and use the next one.
 	var baseEntry *checkpoint.CheckpointEntry
+	var baseEntryIdx int
 	for i := len(r.entries) - 1; i >= 0; i-- {
 		e := r.entries[i]
 		end := e.GetEnd()
 		if e.IsGlobal() && end.LE(&ts) {
+			tables, err := r.GetTables(e)
+			if err != nil {
+				if isDataFileNotFound(err) {
+					continue // GC'd entry; try the next older GCKP
+				}
+				return nil, err
+			}
 			baseEntry = e
+			baseEntryIdx = i
+			for _, t := range tables {
+				view.Tables[t.TableID] = t
+			}
+			view.BaseEntry = r.EntryInfo(baseEntryIdx, baseEntry)
 			break
-		}
-	}
-
-	if baseEntry != nil {
-		view.BaseEntry = r.EntryInfo(0, baseEntry)
-		tables, err := r.GetTables(baseEntry)
-		if err != nil {
-			return nil, err
-		}
-		for _, t := range tables {
-			view.Tables[t.TableID] = t
 		}
 	}
 
@@ -353,12 +450,15 @@ func (r *CheckpointReader) ComposeAt(ts types.TS) (*ComposedView, error) {
 	for i, e := range r.entries {
 		start := e.GetStart()
 		end := e.GetEnd()
-		if e.IsIncremental() && start.GT(&baseEnd) && end.LE(&ts) {
-			view.Incrementals = append(view.Incrementals, r.EntryInfo(i, e))
+		if e.IsIncremental() && shouldIncludeIncrementalCheckpoint(start, end, baseEnd, ts, baseEntry != nil) {
 			tables, err := r.GetTables(e)
 			if err != nil {
+				if isDataFileNotFound(err) {
+					continue // GC'd entry; skip
+				}
 				return nil, err
 			}
+			view.Incrementals = append(view.Incrementals, r.EntryInfo(i, e))
 			for _, t := range tables {
 				if existing, ok := view.Tables[t.TableID]; ok {
 					existing.DataRanges = append(existing.DataRanges, t.DataRanges...)
@@ -372,89 +472,150 @@ func (r *CheckpointReader) ComposeAt(ts types.TS) (*ComposedView, error) {
 	return view, nil
 }
 
+func shouldIncludeIncrementalCheckpoint(start, end, baseEnd, ts types.TS, hasBase bool) bool {
+	if !end.LE(&ts) {
+		return false
+	}
+	if hasBase {
+		return start.GT(&baseEnd)
+	}
+	return start.GE(&baseEnd)
+}
+
+// ValidateSnapshot checks that ts can compose a catalog-backed checkpoint view.
+func (r *CheckpointReader) ValidateSnapshot(ctx context.Context, ts types.TS) error {
+	view, err := r.ComposeAt(ts)
+	if err != nil {
+		return err
+	}
+	if len(view.Tables) == 0 {
+		return moerr.NewInternalErrorf(ctx, "checkpoint snapshot %s is not usable: no tables are available", ts.ToString())
+	}
+	if _, ok := view.Tables[moTablesID]; !ok {
+		return moerr.NewInternalErrorf(ctx, "checkpoint snapshot %s is not usable: mo_tables catalog is not available; wait for a global checkpoint or choose a later timestamp", ts.ToString())
+	}
+	if _, ok := view.Tables[moColumnsID]; !ok {
+		return moerr.NewInternalErrorf(ctx, "checkpoint snapshot %s is not usable: mo_columns catalog is not available; wait for a global checkpoint or choose a later timestamp", ts.ToString())
+	}
+	return nil
+}
+
+// isDataFileNotFound checks if err indicates a checkpoint data file was GC'd/missing.
+func isDataFileNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound) || os.IsNotExist(err)
+}
+
 // Close releases resources
 func (r *CheckpointReader) Close() error {
 	r.entries = nil
+	if r.closeFS && r.fs != nil {
+		r.fs.Close(r.ctx)
+	}
 	return nil
 }
 
 // GetObjectEntries reads detailed object entries with timestamps for a table
 func (r *CheckpointReader) GetObjectEntries(entry *checkpoint.CheckpointEntry, tableID uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error) {
-	// First get all table ranges
-	allRanges, err := r.GetTableRanges(entry)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Now read the checkpoint file again to get timestamps
 	loc := entry.GetLocation()
 	if loc.IsEmpty() {
 		return nil, nil, nil
 	}
 
-	fileName := loc.Name().String()
-	reader, err := ioutil.NewFileReader(r.fs, fileName)
+	_, err := r.fs.StatFile(r.ctx, loc.Name().String())
 	if err != nil {
+		if isDataFileNotFound(err) {
+			return nil, nil, moerr.NewFileNotFoundErrorf(r.ctx, "checkpoint data file not found (may have been GC'd): %s", loc.Name().String())
+		}
 		return nil, nil, err
 	}
 
-	bats, release, err := reader.LoadAllColumns(r.ctx, nil, r.mp)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer release()
-
-	// Build a map of ranges with their timestamps
 	var dataEntries, tombEntries []*ObjectEntryInfo
-	rangeIdx := 0
 
-	for _, bat := range bats {
-		if bat.RowCount() == 0 {
-			continue
-		}
-
-		// Check if timestamp columns exist
-		var createTSVec, deleteTSVec []types.TS
-		if len(bat.Vecs) > ckputil.TableObjectsAttr_CreateTS_Idx {
-			createTSVec = vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx])
-		}
-		if len(bat.Vecs) > ckputil.TableObjectsAttr_DeleteTS_Idx {
-			deleteTSVec = vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx])
-		}
-
-		for i := 0; i < bat.RowCount(); i++ {
-			if rangeIdx >= len(allRanges) {
-				break
-			}
-
-			rng := allRanges[rangeIdx]
-			rangeIdx++
-
-			if rng.TableID != tableID {
-				continue
-			}
-
-			entry := &ObjectEntryInfo{
-				Range: rng,
-			}
-
-			// Set timestamps if available
-			if createTSVec != nil && i < len(createTSVec) {
-				entry.CreateTime = createTSVec[i]
-			}
-			if deleteTSVec != nil && i < len(deleteTSVec) {
-				entry.DeleteTime = deleteTSVec[i]
-			}
-
-			if rng.ObjectType == ckputil.ObjectType_Data {
-				dataEntries = append(dataEntries, entry)
-			} else if rng.ObjectType == ckputil.ObjectType_Tombstone {
-				tombEntries = append(tombEntries, entry)
-			}
-		}
+	reader := logtail.NewCKPReaderWithTableID_V2(entry.GetVersion(), loc, tableID, r.mp, r.fs)
+	if err := reader.ReadMeta(r.ctx); err != nil {
+		return nil, nil, err
 	}
 
+	err = reader.ConsumeCheckpointWithTableID(r.ctx, func(
+		_ context.Context,
+		_ fileservice.FileService,
+		obj objectio.ObjectEntry,
+		isTombstone bool,
+	) error {
+		info := &ObjectEntryInfo{
+			ObjectStats: obj.ObjectStats,
+			CreateTime:  obj.CreateTime,
+			DeleteTime:  obj.DeleteTime,
+		}
+		if isTombstone {
+			tombEntries = append(tombEntries, info)
+		} else {
+			dataEntries = append(dataEntries, info)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
 	return dataEntries, tombEntries, nil
+}
+
+// GetObjectEntriesForTables reads detailed object entries for multiple tables
+// from one checkpoint entry in a single pass.
+func (r *CheckpointReader) GetObjectEntriesForTables(
+	entry *checkpoint.CheckpointEntry,
+	tableIDs map[uint64]struct{},
+) (map[uint64][]*ObjectEntryInfo, map[uint64][]*ObjectEntryInfo, error) {
+	loc := entry.GetLocation()
+	if loc.IsEmpty() {
+		return nil, nil, nil
+	}
+
+	_, err := r.fs.StatFile(r.ctx, loc.Name().String())
+	if err != nil {
+		if isDataFileNotFound(err) {
+			return nil, nil, moerr.NewFileNotFoundErrorf(r.ctx, "checkpoint data file not found (may have been GC'd): %s", loc.Name().String())
+		}
+		return nil, nil, err
+	}
+
+	dataByTable := make(map[uint64][]*ObjectEntryInfo)
+	tombByTable := make(map[uint64][]*ObjectEntryInfo)
+	reader := logtail.NewCKPReader(entry.GetVersion(), loc, r.mp, r.fs)
+	if err := reader.ReadMeta(r.ctx); err != nil {
+		return nil, nil, err
+	}
+	err = reader.ForEachRow(r.ctx, func(
+		_ uint32,
+		_, tid uint64,
+		objectType int8,
+		objectStats objectio.ObjectStats,
+		create, delete types.TS,
+		_ types.Rowid,
+	) error {
+		if _, ok := tableIDs[tid]; !ok {
+			return nil
+		}
+		info := &ObjectEntryInfo{
+			ObjectStats: objectStats,
+			CreateTime:  create,
+			DeleteTime:  delete,
+		}
+		switch objectType {
+		case ckputil.ObjectType_Data:
+			dataByTable[tid] = append(dataByTable[tid], info)
+		case ckputil.ObjectType_Tombstone:
+			tombByTable[tid] = append(tombByTable[tid], info)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return dataByTable, tombByTable, nil
 }
 
 // ReadRangeData reads actual data from a range and returns column names and row data as strings
@@ -475,16 +636,7 @@ func (r *CheckpointReader) ReadRangeData(entry *checkpoint.CheckpointEntry, rng 
 		return nil, nil, nil
 	}
 
-	// Use checkpoint schema for column names
-	columns := ckputil.TableObjectsAttrs
-	if len(columns) == 0 {
-		// Fallback: generate column names from vector count
-		bat := bats[0]
-		columns = make([]string, len(bat.Vecs))
-		for i := range columns {
-			columns[i] = fmt.Sprintf("col_%d", i)
-		}
-	}
+	columns := checkpointRangeColumns(len(bats[0].Vecs))
 
 	// Extract rows within the range
 	startRow := uint32(rng.Start.GetRowOffset())
@@ -503,12 +655,21 @@ func (r *CheckpointReader) ReadRangeData(entry *checkpoint.CheckpointEntry, rng 
 		}
 	}
 
-	// Trim columns to match actual vector count
-	if len(bats) > 0 && len(columns) > len(bats[0].Vecs) {
-		columns = columns[:len(bats[0].Vecs)]
-	}
-
 	return columns, rows, nil
+}
+
+func checkpointRangeColumns(width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	columns := append([]string(nil), ckputil.TableObjectsAttrs...)
+	if len(columns) > width {
+		return columns[:width]
+	}
+	for len(columns) < width {
+		columns = append(columns, fmt.Sprintf("col_%d", len(columns)))
+	}
+	return columns
 }
 
 // vecValueToString converts a vector value at index to string
@@ -517,63 +678,24 @@ func vecValueToString(vec *vector.Vector, idx int) string {
 		return "NULL"
 	}
 
-	switch vec.GetType().Oid {
-	case types.T_bool:
-		v := vector.MustFixedColWithTypeCheck[bool](vec)
-		return fmt.Sprintf("%v", v[idx])
-	case types.T_int8:
-		v := vector.MustFixedColWithTypeCheck[int8](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_int16:
-		v := vector.MustFixedColWithTypeCheck[int16](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_int32:
-		v := vector.MustFixedColWithTypeCheck[int32](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_int64:
-		v := vector.MustFixedColWithTypeCheck[int64](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_uint8:
-		v := vector.MustFixedColWithTypeCheck[uint8](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_uint16:
-		v := vector.MustFixedColWithTypeCheck[uint16](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_uint32:
-		v := vector.MustFixedColWithTypeCheck[uint32](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_uint64:
-		v := vector.MustFixedColWithTypeCheck[uint64](vec)
-		return fmt.Sprintf("%d", v[idx])
-	case types.T_float32:
-		v := vector.MustFixedColWithTypeCheck[float32](vec)
-		return fmt.Sprintf("%.4f", v[idx])
-	case types.T_float64:
-		v := vector.MustFixedColWithTypeCheck[float64](vec)
-		return fmt.Sprintf("%.4f", v[idx])
-	case types.T_char, types.T_varchar, types.T_text:
-		return vec.GetStringAt(idx)
-	case types.T_TS:
-		v := vector.MustFixedColWithTypeCheck[types.TS](vec)
-		return v[idx].ToString()
-	case types.T_Rowid:
-		v := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
-		return fmt.Sprintf("%d-%d", v[idx].GetBlockOffset(), v[idx].GetRowOffset())
-	case types.T_Blockid:
-		v := vector.MustFixedColWithTypeCheck[types.Blockid](vec)
-		return v[idx].String()
-	case types.T_Objectid:
-		v := vector.MustFixedColWithTypeCheck[types.Objectid](vec)
-		return v[idx].ShortStringEx()
-	default:
-		// For binary/blob types, show hex or truncated
-		if vec.GetType().IsVarlen() {
-			bs := vec.GetBytesAt(idx)
-			if len(bs) > 16 {
-				return fmt.Sprintf("%x...", bs[:16])
-			}
-			return fmt.Sprintf("%x", bs)
+	if vec.GetType().Oid == types.T_time {
+		rowIdx := idx
+		if vec.IsConst() {
+			rowIdx = 0
 		}
-		return fmt.Sprintf("<%s>", vec.GetType().String())
+		values := vector.MustFixedColWithTypeCheck[types.Time](vec)
+		if rowIdx >= 0 && rowIdx < len(values) {
+			return values[rowIdx].String2(vec.GetType().Scale)
+		}
 	}
+	switch vec.GetType().Oid {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_json, types.T_blob, types.T_text, types.T_datalink, types.T_geometry:
+		return string(vec.GetBytesAt(idx))
+	}
+	value := vec.RowToString(idx)
+	if value == "null" {
+		return "NULL"
+	}
+	return value
 }

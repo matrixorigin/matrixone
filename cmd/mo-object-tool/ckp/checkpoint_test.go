@@ -1,0 +1,452 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package ckp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
+	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestPreferRealErrorKeepsNonCanceledRootCause(t *testing.T) {
+	root := errors.New("s3 write failed")
+
+	assert.ErrorIs(t, preferRealError(context.Canceled, root), root)
+	assert.ErrorIs(t, preferRealError(root, context.Canceled), root)
+	assert.ErrorIs(t, preferRealError(context.Canceled, context.Canceled), context.Canceled)
+	assert.NoError(t, preferRealError(nil, nil))
+}
+
+func TestDumpTableErrorDedupesPipeWriteAndCloseError(t *testing.T) {
+	err := errors.New("s3 write failed")
+
+	assert.Equal(t, err, dumpTableError(err, errors.New("s3 write failed")))
+}
+
+func TestIsContextCanceledOnly(t *testing.T) {
+	root := errors.New("s3 write failed")
+
+	assert.True(t, isContextCanceledOnly(context.Canceled))
+	assert.True(t, isContextCanceledOnly(fmt.Errorf("dump table 1: %w", context.Canceled)))
+	assert.True(t, isContextCanceledOnly(errors.Join(context.Canceled, fmt.Errorf("worker: %w", context.Canceled))))
+	assert.False(t, isContextCanceledOnly(root))
+	assert.False(t, isContextCanceledOnly(context.DeadlineExceeded))
+	assert.False(t, isContextCanceledOnly(errors.Join(context.Canceled, root)))
+}
+
+func TestNormalizeCreateTableDDLName(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		DatabaseName: "compat_ckp",
+		TableName:    "employees",
+	}
+
+	tests := []struct {
+		name string
+		ddl  string
+		want string
+	}{
+		{
+			name: "plain table name",
+			ddl:  "CREATE TABLE employees_copy_123 (id INT)",
+			want: "CREATE TABLE `compat_ckp`.`employees` (id INT)",
+		},
+		{
+			name: "qualified table name",
+			ddl:  "CREATE TABLE `compat_ckp`.`employees_copy_123` (id INT)",
+			want: "CREATE TABLE `compat_ckp`.`employees` (id INT)",
+		},
+		{
+			name: "if not exists",
+			ddl:  "CREATE TABLE IF NOT EXISTS old_name (id INT)",
+			want: "CREATE TABLE IF NOT EXISTS `compat_ckp`.`employees` (id INT)",
+		},
+		{
+			name: "external table",
+			ddl:  "CREATE EXTERNAL TABLE old_name (id INT) INFILE {'filepath'='/tmp/data.csv','format'='csv'}",
+			want: "CREATE EXTERNAL TABLE `compat_ckp`.`employees` (id INT) INFILE {'filepath'='/tmp/data.csv','format'='csv'}",
+		},
+		{
+			name: "view",
+			ddl:  "CREATE VIEW old_view AS SELECT id FROM src",
+			want: "CREATE VIEW `compat_ckp`.`employees` AS SELECT id FROM src",
+		},
+		{
+			name: "or replace view",
+			ddl:  "CREATE OR REPLACE VIEW `old_db`.`old_view` AS SELECT id FROM src",
+			want: "CREATE OR REPLACE VIEW `compat_ckp`.`employees` AS SELECT id FROM src",
+		},
+		{
+			name: "escaped target name",
+			ddl:  "CREATE TABLE old_name (id INT)",
+			want: "CREATE TABLE `compat``ckp`.`employees` (id INT)",
+		},
+	}
+
+	tests[len(tests)-1].want = "CREATE TABLE `compat``ckp`.`employees` (id INT)"
+	tests[len(tests)-1].ddl = "CREATE TABLE old_name (id INT)"
+	tests[len(tests)-1].name = "escaped database name"
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.name == "escaped database name" {
+				table.DatabaseName = "compat`ckp"
+			} else {
+				table.DatabaseName = "compat_ckp"
+			}
+			assert.Equal(t, tt.want, normalizeCreateTableDDLName(tt.ddl, table))
+		})
+	}
+}
+
+func TestRestoreCreateTableDDLUsesExternalCreateSQL(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		DatabaseName: "ckp_external",
+		TableName:    "ext_csv_local",
+		RelKind:      "e",
+	}
+	paramJSON, err := json.Marshal(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Option: []string{"filepath", "/tmp/ext.csv", "format", "csv", "compression", "none"},
+			Tail: &tree.TailParameter{
+				Fields: &tree.Fields{
+					Terminated: &tree.Terminated{Value: ","},
+					EnclosedBy: &tree.EnclosedBy{Value: '"'},
+				},
+				Lines: &tree.Lines{
+					TerminatedBy: &tree.Terminated{Value: "\n"},
+				},
+				IgnoredLines: 1,
+			},
+		},
+	})
+	require.NoError(t, err)
+	dumpData := &checkpointtool.TableDumpData{
+		Schema: &checkpointtool.TableSchema{
+			TableName: "stale_name",
+			CreateSQL: string(paramJSON),
+			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+		},
+	}
+
+	ddl, err := restoreCreateTableDDL(context.Background(), nil, table, dumpData, types.TS{})
+	require.NoError(t, err)
+	assert.Equal(t, "CREATE EXTERNAL TABLE `ckp_external`.`ext_csv_local` (\n  `id` INT\n) INFILE {'filepath'='/tmp/ext.csv', 'compression'='none', 'format'='csv'} FIELDS TERMINATED BY ',' ENCLOSED BY '\"' LINES TERMINATED BY '\\\\n' IGNORE 1 LINES", ddl)
+}
+
+func TestRestoreCreateTableDDLExternalRequiresCreateSQL(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		DatabaseName: "ckp_external",
+		TableName:    "ext_csv_local",
+		RelKind:      "e",
+	}
+	dumpData := &checkpointtool.TableDumpData{
+		Schema: &checkpointtool.TableSchema{
+			TableName: "ext_csv_local",
+			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+		},
+	}
+
+	_, err := restoreCreateTableDDL(context.Background(), nil, table, dumpData, types.TS{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing external table parameter JSON")
+}
+
+func TestRestoreCreateTableDDLUsesViewCreateSQL(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		DatabaseName: "ckp_views",
+		TableName:    "v_normal",
+		RelKind:      "v",
+	}
+	dumpData := &checkpointtool.TableDumpData{
+		Schema: &checkpointtool.TableSchema{
+			TableName: "stale_name",
+			CreateSQL: "CREATE VIEW `old_db`.`old_view` AS SELECT id, name FROM `ckp_tables`.`t_normal`",
+			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+		},
+	}
+
+	ddl, err := restoreCreateTableDDL(context.Background(), nil, table, dumpData, types.TS{})
+	require.NoError(t, err)
+	assert.Equal(t, "CREATE VIEW `ckp_views`.`v_normal` AS SELECT id, name FROM `ckp_tables`.`t_normal`", ddl)
+}
+
+func TestRestoreCreateTableDDLViewRequiresCreateViewSQL(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		DatabaseName: "ckp_views",
+		TableName:    "v_normal",
+		RelKind:      "v",
+	}
+	dumpData := &checkpointtool.TableDumpData{
+		Schema: &checkpointtool.TableSchema{
+			TableName: "v_normal",
+			CreateSQL: "CREATE TABLE `v_normal` (`id` INT)",
+			Columns:   []checkpointtool.TableColumn{{Name: "id", SQLType: "INT", Position: 1}},
+		},
+	}
+
+	_, err := restoreCreateTableDDL(context.Background(), nil, table, dumpData, types.TS{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rel_createsql is not CREATE VIEW")
+}
+
+func TestShouldWriteLoadDataSkipsExternalAndViewRelations(t *testing.T) {
+	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "e"}))
+	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "external"}))
+	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "v"}))
+	assert.False(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "view"}))
+	assert.True(t, shouldWriteLoadData(true, checkpointtool.TableCatalogEntry{RelKind: "r"}))
+	assert.False(t, shouldWriteLoadData(false, checkpointtool.TableCatalogEntry{RelKind: "r"}))
+}
+
+func TestPackageExternalTableSourceCopiesAndRewritesFilepath(t *testing.T) {
+	tmpDir := t.TempDir()
+	sourcePath := filepath.Join(tmpDir, "local_ext_people.csv")
+	require.NoError(t, os.WriteFile(sourcePath, []byte("id,name\n1,a\n"), 0o644))
+
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:    0,
+		DatabaseID:   272731,
+		TableID:      272732,
+		DatabaseName: "ckp_external",
+		TableName:    "ext_csv_local",
+		RelKind:      "e",
+	}
+	ddl := "CREATE EXTERNAL TABLE ext_csv_local (id INT, name VARCHAR(50)) INFILE {'filepath'='" + sourcePath + "', 'format'='csv'}"
+
+	got, err := packageExternalTableSource(context.Background(), &dumpOutput{}, filepath.Join(tmpDir, "dump"), table, ddl)
+	require.NoError(t, err)
+	assert.NotContains(t, got, sourcePath)
+
+	copiedPath, _, _, ok := externalTableFilepathValueRange(got)
+	require.True(t, ok)
+	assert.True(t, filepath.IsAbs(copiedPath))
+	assert.Contains(t, copiedPath, filepath.Join("external_sources", "account_0", "db_272731"))
+	data, err := os.ReadFile(copiedPath)
+	require.NoError(t, err)
+	assert.Equal(t, "id,name\n1,a\n", string(data))
+}
+
+func TestExternalTableFilepathValueRange(t *testing.T) {
+	ddl := "CREATE EXTERNAL TABLE t (id INT) INFILE {'format'='csv', 'filepath'='/tmp/a.csv'}"
+	value, start, end, ok := externalTableFilepathValueRange(ddl)
+	require.True(t, ok)
+	assert.Equal(t, "/tmp/a.csv", value)
+	assert.Equal(t, "CREATE EXTERNAL TABLE t (id INT) INFILE {'format'='csv', 'filepath'='/new.csv'}", ddl[:start]+quoteSQLString("/new.csv")+ddl[end:])
+}
+
+func TestFilterExistingIndexDDLs(t *testing.T) {
+	createDDL := "CREATE TABLE `items_gist` (\n" +
+		"  `id` int NOT NULL,\n" +
+		"  `embedding` vecf32(960) DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`),\n" +
+		"  KEY `ivf_2000` USING ivfflat(`embedding`) lists=2000 op_type 'vector_l2_ops'\n" +
+		")"
+	indexDDLs := []string{
+		"ALTER TABLE `items_gist` ADD KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops' ;",
+		"ALTER TABLE `items_gist` ADD KEY `new_idx`(`id`);",
+	}
+
+	assert.Equal(t, []string{"ALTER TABLE `items_gist` ADD KEY `new_idx`(`id`);"}, filterExistingIndexDDLs(createDDL, indexDDLs))
+}
+
+func TestMergeCreateTableIndexDDLs(t *testing.T) {
+	createDDL := "CREATE TABLE `ann`.`items_gist` (\n" +
+		"  `id` int NOT NULL,\n" +
+		"  `embedding` vecf32(960) DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`)\n" +
+		")"
+	indexDDLs := []string{
+		"ALTER TABLE `items_gist` ADD KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops' ;",
+	}
+	want := "CREATE TABLE `ann`.`items_gist` (\n" +
+		"  `id` int NOT NULL,\n" +
+		"  `embedding` vecf32(960) DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`),\n" +
+		"  KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops'\n" +
+		")"
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	assert.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestMergeCreateTableIndexDDLsFullText(t *testing.T) {
+	createDDL := "CREATE TABLE `ckp_constraints`.`t_fulltext` (\n" +
+		"  `id` BIGINT NOT NULL,\n" +
+		"  `doc` TEXT DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`)\n" +
+		")"
+	indexDDLs := []string{
+		"ALTER TABLE `t_fulltext` ADD FULLTEXT KEY `idx_doc`(`doc`);",
+	}
+	want := "CREATE TABLE `ckp_constraints`.`t_fulltext` (\n" +
+		"  `id` BIGINT NOT NULL,\n" +
+		"  `doc` TEXT DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`),\n" +
+		"  FULLTEXT KEY `idx_doc`(`doc`)\n" +
+		")"
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	assert.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestFilterExistingIndexDDLsFullText(t *testing.T) {
+	createDDL := "CREATE TABLE `ckp_constraints`.`t_fulltext` (\n" +
+		"  `id` BIGINT NOT NULL,\n" +
+		"  `doc` TEXT DEFAULT NULL,\n" +
+		"  FULLTEXT KEY `idx_doc`(`doc`)\n" +
+		")"
+	indexDDLs := []string{
+		"ALTER TABLE `t_fulltext` ADD FULLTEXT KEY `idx_doc`(`doc`);",
+	}
+
+	assert.Empty(t, filterExistingIndexDDLs(createDDL, indexDDLs))
+}
+
+func TestMergeCreateTableIndexDDLsSingleLine(t *testing.T) {
+	createDDL := "CREATE TABLE `ann`.`items_sift` (id int primary key, embedding vecf32(128))"
+	indexDDLs := []string{
+		"ALTER TABLE `items_sift` ADD KEY `ivf_500` USING ivfflat(`embedding`) lists = 500  op_type 'vector_l2_ops' ;",
+	}
+	want := "CREATE TABLE `ann`.`items_sift` (id int primary key, embedding vecf32(128), KEY `ivf_500` USING ivfflat(`embedding`) lists = 500  op_type 'vector_l2_ops')"
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	assert.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestMergeCreateTableIndexDDLsSkipsExistingIndex(t *testing.T) {
+	createDDL := "CREATE TABLE `items_gist` (\n" +
+		"  `id` int NOT NULL,\n" +
+		"  `embedding` vecf32(960) DEFAULT NULL,\n" +
+		"  PRIMARY KEY (`id`),\n" +
+		"  KEY `ivf_2000` USING ivfflat(`embedding`) lists=2000 op_type 'vector_l2_ops'\n" +
+		")"
+	indexDDLs := []string{
+		"ALTER TABLE `items_gist` ADD KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops' ;",
+	}
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	assert.NoError(t, err)
+	assert.Equal(t, createDDL, got)
+}
+
+func TestMergeCreateTableIndexDDLsWithConstraintsAndComments(t *testing.T) {
+	createDDL := "CREATE TABLE `ckp_constraints`.`parent` (\n" +
+		"  `id` INT NOT NULL PRIMARY KEY,\n" +
+		"  `code` VARCHAR(20) NOT NULL UNIQUE,\n" +
+		"  `note` VARCHAR(100) DEFAULT 'parent-default' COMMENT 'parent note'\n" +
+		") COMMENT='parent table comment'"
+	indexDDLs := []string{
+		"ALTER TABLE `parent` ADD KEY `idx_parent_note`(`note`);",
+	}
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	require.NoError(t, err)
+	assert.Contains(t, got, "KEY `idx_parent_note`(`note`)")
+	assert.Contains(t, got, ") COMMENT='parent table comment'")
+}
+
+func TestMergeCreateTableIndexDDLsWithAutoIncrementAndClusterTable(t *testing.T) {
+	createDDL := "CREATE CLUSTER TABLE `ckp_constraints`.`t_auto_inc` (\n" +
+		"  `id` BIGINT NOT NULL AUTO_INCREMENT,\n" +
+		"  `note` VARCHAR(64) COMMENT 'note (with parens)',\n" +
+		"  PRIMARY KEY (`id`)\n" +
+		") COMMENT='auto increment table'"
+	indexDDLs := []string{
+		"ALTER TABLE `t_auto_inc` ADD KEY `idx_auto_inc_note`(`note`);",
+	}
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	require.NoError(t, err)
+	assert.Contains(t, got, "KEY `idx_auto_inc_note`(`note`)")
+	assert.Contains(t, got, "COMMENT='auto increment table'")
+}
+
+func TestMergeCreateTableIndexDDLsFallsBackToSeparateAlter(t *testing.T) {
+	createDDL := "CREATE TABLE `parent` LIKE `parent_template`"
+	indexDDLs := []string{
+		"ALTER TABLE `parent` ADD KEY `idx_parent_note`(`note`);",
+	}
+
+	got, err := mergeCreateTableIndexDDLs(createDDL, indexDDLs)
+	require.NoError(t, err)
+	assert.Equal(t, "CREATE TABLE `parent` LIKE `parent_template`;\nALTER TABLE `parent` ADD KEY `idx_parent_note`(`note`)", got)
+}
+
+func TestNormalizeCreateTableDDLNameWithCreateTableModifiers(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		DatabaseName: "ckp_constraints",
+		TableName:    "parent",
+	}
+
+	got := normalizeCreateTableDDLName("CREATE CLUSTER TABLE old_parent (id INT)", table)
+	assert.Equal(t, "CREATE CLUSTER TABLE `ckp_constraints`.`parent` (id INT)", got)
+}
+
+func TestCleanObjectPath(t *testing.T) {
+	assert.Equal(t, "dump/account_1/t.csv", cleanObjectPath("dump/account_1/t.csv"))
+	assert.Equal(t, "tmp/dump/t.csv", cleanObjectPath("/tmp/dump/t.csv"))
+	assert.Equal(t, "dump/t.csv", cleanObjectPath("dump//nested/../t.csv"))
+}
+
+func TestLoadDataPathResolverLocal(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:  0,
+		DatabaseID: 272577,
+		TableID:    272578,
+		TableName:  "bmsql_config",
+	}
+
+	resolver, err := newLoadDataPathResolver(toolfs.StorageOptions{})
+	require.NoError(t, err)
+	loadSource := resolver.loadDataSource("bmsql_config", table)
+	assert.True(t, strings.HasPrefix(loadSource, "LOAD DATA INFILE '"))
+	assert.Contains(t, loadSource, "/bmsql_config/account_0/db_272577/bmsql_config_272578.csv'")
+	assert.True(t, filepath.IsAbs(strings.TrimSuffix(strings.TrimPrefix(loadSource, "LOAD DATA INFILE '"), "'")))
+}
+
+func TestLoadDataPathResolverS3(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:  0,
+		DatabaseID: 272577,
+		TableID:    272578,
+		TableName:  "bmsql_config",
+	}
+
+	resolver, err := newLoadDataPathResolver(toolfs.StorageOptions{
+		S3: "bucket=mo-nightly-gz-1308875761,endpoint=https://cos.ap-guangzhou.myqcloud.com,region=ap-guangzhou," +
+			"key-prefix=/ckp-dump-test/tpcc_100_20260612_174916/bmsql_config/,key-id=xxx,key-secret=yyy",
+		Backend: "S3",
+	})
+	require.NoError(t, err)
+	assert.Equal(t,
+		"LOAD DATA URL s3option{'bucket'='mo-nightly-gz-1308875761', 'filepath'='ckp-dump-test/tpcc_100_20260612_174916/bmsql_config/bmsql_config/account_0/db_272577/bmsql_config_272578.csv', 'endpoint'='https://cos.ap-guangzhou.myqcloud.com', 'region'='ap-guangzhou', 'access_key_id'='xxx', 'secret_access_key'='yyy'}",
+		resolver.loadDataSource("bmsql_config", table),
+	)
+}
