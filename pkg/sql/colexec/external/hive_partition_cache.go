@@ -111,7 +111,8 @@ func listHivePartitionDir(
 	}
 
 	key := options.CacheKeyPrefix + "\x1f" + "prefix=" + normalizeExternalPath(prefix)
-	if entries, ok := globalHivePartitionListCache.get(key); ok {
+	entries, hit, leader, flight := globalHivePartitionListCache.getOrStartInflight(key)
+	if hit {
 		recordHivePartitionCacheHit(result, options)
 		recordHivePartitionDirectPrefixHit(result, options)
 		return entries, nil
@@ -119,7 +120,6 @@ func listHivePartitionDir(
 	recordHivePartitionCacheMiss(result, options)
 	recordHivePartitionDirectPrefixMiss(result, options)
 
-	leader, flight := globalHivePartitionListCache.startInflight(key)
 	if !leader {
 		select {
 		case <-flight.done:
@@ -207,6 +207,10 @@ func (c *hivePartitionListCache) get(key string) ([]fileservice.DirEntry, bool) 
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.getLocked(key, now)
+}
+
+func (c *hivePartitionListCache) getLocked(key string, now time.Time) ([]fileservice.DirEntry, bool) {
 	entry, ok := c.entries[key]
 	if !ok {
 		return nil, false
@@ -245,15 +249,24 @@ func (c *hivePartitionListCache) set(key string, entries []fileservice.DirEntry,
 	c.evictLocked(maxEntries, maxBytes)
 }
 
-func (c *hivePartitionListCache) startInflight(key string) (bool, *hivePartitionInflight) {
+func (c *hivePartitionListCache) getOrStartInflight(key string) (
+	entries []fileservice.DirEntry,
+	hit bool,
+	leader bool,
+	flight *hivePartitionInflight,
+) {
+	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if flight, ok := c.inflight[key]; ok {
-		return false, flight
+	if entries, ok := c.getLocked(key, now); ok {
+		return entries, true, false, nil
 	}
-	flight := &hivePartitionInflight{done: make(chan struct{})}
+	if flight, ok := c.inflight[key]; ok {
+		return nil, false, false, flight
+	}
+	flight = &hivePartitionInflight{done: make(chan struct{})}
 	c.inflight[key] = flight
-	return true, flight
+	return nil, false, true, flight
 }
 
 func (c *hivePartitionListCache) finishInflight(key string, flight *hivePartitionInflight, entries []fileservice.DirEntry, err error) {
