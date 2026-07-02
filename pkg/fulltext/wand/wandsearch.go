@@ -17,6 +17,7 @@ package wand
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -61,11 +62,16 @@ const baseChunkId int64 = -1
 // storage table name.
 type WandSearch struct {
 	cfg TableConfig
-	// segs[0] is the tag=0 compacted-main segment (ChunkId=baseChunkId); segs[1:]
-	// are the tag=1 CdcTail delta segments in chunk_id order (ChunkId = frame
-	// chunk_id). deletes is pk -> max delete-frame chunk_id from the tag=1 log.
+	// segs[0] is the tag=0 compacted-main segment (ChunkId=baseChunkId) WHEN a base
+	// exists; the remaining entries are the tag=1 CdcTail delta segments in
+	// chunk_id order (ChunkId = frame chunk_id). An index created on an empty table
+	// has no tag=0 base, so segs may hold only tail segments (or be empty).
+	// deletes is pk -> max delete-frame chunk_id from the tag=1 log.
 	segs    []*WandModel
 	deletes map[any]int64
+	// loaded distinguishes "never loaded" (Search errors) from "loaded but empty"
+	// (an index with no docs yet → Search returns zero rows, not an error).
+	loaded bool
 }
 
 var _ veccache.VectorIndexSearchIf = (*WandSearch)(nil)
@@ -81,31 +87,48 @@ func NewWandSearch(cfg TableConfig) *WandSearch {
 // CdcTail delta frames (one complete frame per chunk_id, in append order),
 // assembled into the ordered segment set + delete map searched with liveness.
 func (s *WandSearch) Load(sqlproc *sqlexec.SqlProcess) error {
-	base, err := LoadFromStorage(sqlproc, s.cfg, s.cfg.IndexTable)
+	// The tag=0 base is optional: an index created on an empty table has no
+	// compacted-main segment, only tag=1 CDC deltas (or nothing yet).
+	base, err := LoadBaseOptional(sqlproc, s.cfg, s.cfg.IndexTable)
 	if err != nil {
 		return err
 	}
-	base.ChunkId = baseChunkId
+	if base != nil {
+		base.ChunkId = baseChunkId
+	}
 	frames, err := loadTailFrames(sqlproc, s.cfg)
 	if err != nil {
-		base.Free()
+		if base != nil {
+			base.Free()
+		}
 		return err
 	}
 	tail, deletes, err := AssembleFrames(frames)
 	if err != nil {
-		base.Free()
+		if base != nil {
+			base.Free()
+		}
 		return err
 	}
-	s.segs = append([]*WandModel{base}, tail...)
+	var segs []*WandModel
+	if base != nil {
+		segs = append(segs, base)
+	}
+	s.segs = append(segs, tail...)
 	s.deletes = deletes
+	s.loaded = true
 	return nil
 }
 
 // Search runs WAND top-K and returns ([]any doc-ids of the source pk type,
 // []float64 scores).
 func (s *WandSearch) Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	if len(s.segs) == 0 {
+	if !s.loaded {
 		return nil, nil, moerr.NewInternalError(proc.GetContext(), "wand index not loaded")
+	}
+	if len(s.segs) == 0 {
+		// A loaded but empty index (no docs yet) matches nothing.
+		return []any{}, []float64{}, nil
 	}
 	q, ok := query.(WandQuery)
 	if !ok {
@@ -154,7 +177,9 @@ func (s *WandSearch) UpdateConfig(newalgo veccache.VectorIndexSearchIf) error {
 // Destroy frees the off-heap (C-allocated) postings and drops the model. The
 // cache holds the write lock around this, so no search is in flight.
 func (s *WandSearch) Destroy() {
+	logutil.Debugf("[wand] WandSearch.Destroy: freeing %d cached segments for index=%s", len(s.segs), s.cfg.IndexTable)
 	freeSegs(s.segs)
 	s.segs = nil
 	s.deletes = nil
+	s.loaded = false
 }

@@ -403,6 +403,28 @@ func TestWandLiveness(t *testing.T) {
 			}
 		}
 	})
+
+	// 6. No tag=0 base (Bug 2): an index created on an empty table has no
+	// compacted-main segment — its corpus is entirely tag=1 CDC deltas (chunk_id
+	// >= 0, never the baseChunkId -1). Liveness/search must work with tail-only
+	// segments: dedup across deltas and honor a delete, with no base present.
+	t.Run("no_base_tail_only", func(t *testing.T) {
+		segs := []*WandModel{
+			buildSeg(t, 0, map[int64][]string{5: {"x"}, 6: {"x"}}), // first CDC delta
+			buildSeg(t, 1, map[int64][]string{5: {"x"}, 7: {"x"}}), // 5 updated, 7 new
+		}
+		deletes := map[any]int64{normalizeKey(int64(6)): 2} // delete 6 at chunk 2
+		got := pkCounts(SearchSegmentsLive(segs, q, 10, nil, ComputeLiveness(segs, deletes)))
+		want := map[int64]int{5: 1, 7: 1}
+		if len(got) != len(want) {
+			t.Fatalf("no-base: want %v, got %v", want, got)
+		}
+		for pk, n := range want {
+			if got[pk] != n {
+				t.Fatalf("no-base: pk %d want %d, got %d (full %v)", pk, n, got[pk], got)
+			}
+		}
+	})
 }
 
 // TestWandToInsertSqlsTag checks the tag column threads through: tag=0 for the

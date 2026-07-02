@@ -111,26 +111,18 @@ func DeleteSqls(cfg TableConfig, id string) []string {
 	}
 }
 
-// LoadFromStorage reads an index's metadata + chunks back from the WAND store,
-// verifies the checksum, and deserializes it into a model. Chunks are
-// downloaded with STREAMING SQL and written by chunk_id offset into a temp file
-// (so the mpool only ever holds a chunk or two, never the whole index — mirrors
-// HNSW's loadChunk). The model is then deserialized straight from that file,
-// with the large postings going off the Go heap (C allocator). The temp file is
-// removed before returning.
-func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*WandModel, error) {
-	// metadata: checksum + filesize
+// readMetadata fetches an index id's tag=0 metadata (checksum + filesize).
+// found=false means no metadata row exists (a tag=0 base was never built — e.g.
+// an index created on an empty table, whose corpus is entirely tag=1 CDC deltas).
+func readMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (checksum string, filesize int64, found bool, err error) {
 	metaSQL := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s",
 		catalog.FullTextIndex_TblCol_Metadata_Checksum, catalog.FullTextIndex_TblCol_Metadata_Filesize,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
 		catalog.FullTextIndex_TblCol_Metadata_Index_Id, sqlquote.String(id))
 	mres, err := sqlexec.RunSql(sqlproc, metaSQL)
 	if err != nil {
-		return nil, err
+		return "", 0, false, err
 	}
-	var checksum string
-	var filesize int64
-	found := false
 	for _, bat := range mres.Batches {
 		if bat == nil || bat.RowCount() == 0 {
 			continue
@@ -141,6 +133,37 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 		break
 	}
 	mres.Close()
+	return checksum, filesize, found, nil
+}
+
+// LoadBaseOptional loads the tag=0 compacted-main segment if one exists, returning
+// (nil, nil) when no tag=0 base was ever built (empty-table create → CDC-only
+// index). Used by the search load path, which composes the base (if any) with the
+// tag=1 CdcTail delta frames.
+func LoadBaseOptional(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*WandModel, error) {
+	_, _, found, err := readMetadata(sqlproc, cfg, id)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	return LoadFromStorage(sqlproc, cfg, id)
+}
+
+// LoadFromStorage reads an index's metadata + chunks back from the WAND store,
+// verifies the checksum, and deserializes it into a model. Chunks are
+// downloaded with STREAMING SQL and written by chunk_id offset into a temp file
+// (so the mpool only ever holds a chunk or two, never the whole index — mirrors
+// HNSW's loadChunk). The model is then deserialized straight from that file,
+// with the large postings going off the Go heap (C allocator). The temp file is
+// removed before returning. Errors if the tag=0 metadata is absent (callers that
+// tolerate a missing base use LoadBaseOptional).
+func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*WandModel, error) {
+	checksum, filesize, found, err := readMetadata(sqlproc, cfg, id)
+	if err != nil {
+		return nil, err
+	}
 	if !found {
 		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("wand index %s metadata not found", id))
 	}
