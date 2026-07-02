@@ -5098,10 +5098,7 @@ func strToUnsigned[T constraints.Unsigned](
 				if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
 					val, tErr = strconv.ParseUint(s[2:], 16, bitSize)
 				} else {
-					parseStr := s
-					if strings.HasPrefix(parseStr, "+") {
-						parseStr = parseStr[1:]
-					}
+					parseStr := strings.TrimPrefix(s, "+")
 					val, tErr = strconv.ParseUint(parseStr, 10, bitSize)
 				}
 			}
