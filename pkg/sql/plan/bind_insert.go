@@ -1287,6 +1287,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	selectTag := selectNode.BindingTags[0]
 	scanTag := builder.genNewBindTag()
 	updateExprs := make(map[string]*plan.Expr)
+	autoUpdateCols := make(map[string]bool)
 
 	if len(astUpdateExprs) == 0 {
 		onDupAction = plan.Node_FAIL
@@ -1355,6 +1356,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 
 				updateExprs[col.Name] = newDefExpr
+				autoUpdateCols[col.Name] = true
 			}
 		}
 
@@ -2017,6 +2019,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		var allColsEqual *plan.Expr
 		for i, col := range tableDef.Cols {
 			if col.Name == catalog.Row_ID || col.Hidden {
+				continue
+			}
+			if autoUpdateCols[col.Name] {
 				continue
 			}
 			newColPos, ok := colName2Idx[tableDef.Name+"."+col.Name]

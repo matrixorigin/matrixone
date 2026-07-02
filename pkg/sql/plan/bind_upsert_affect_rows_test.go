@@ -103,4 +103,78 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 		require.False(t, hasNoopFilter(p),
 			"plain INSERT must not add a no-op filter")
 	})
+
+	t.Run("ODKU no-op filter excludes ON UPDATE columns", func(t *testing.T) {
+		// t_on_update has: id (PK), val, updated_at (ON UPDATE CURRENT_TIMESTAMP).
+		// ODKU with v=v should skip updated_at in the no-op filter so that the
+		// auto-update expression does not defeat the no-op guard.
+		p, err := runOneStmt(mock, t,
+			"insert into constraint_test.t_on_update(id, val) values (1, 10) on duplicate key update val = val")
+		require.NoError(t, err)
+		require.True(t, mainUpdateCtxCountDelete(t, p),
+			"ODKU main UpdateCtx should set CountDeleteAffectRows")
+		require.True(t, hasNoopFilter(p),
+			"ODKU plan should contain a NOT(<=>) no-op filter")
+		// The no-op filter must not reference the auto-update column.
+		require.False(t, noopFilterReferencesCol(p, "updated_at"),
+			"no-op FILTER must not reference auto-update column updated_at")
+	})
+}
+
+// noopFilterReferencesCol reports whether the ODKU no-op FILTER's AND/<=>
+// predicate chain contains a ColRef whose name equals colName.
+func noopFilterReferencesCol(p *Plan, colName string) bool {
+	q := p.GetQuery()
+	if q == nil {
+		return false
+	}
+	for _, n := range q.Nodes {
+		if n.NodeType != planpb.Node_FILTER {
+			continue
+		}
+		for _, cond := range n.FilterList {
+			exprs := collectNoopColRefs(cond)
+			for _, e := range exprs {
+				if e.GetCol() != nil && e.GetCol().Name == colName {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// collectNoopColRefs collects all ColRef expressions nested inside the
+// NOT(AND(<=>(...))) no-op FILTER pattern. Returns nil if the pattern
+// does not match.
+func collectNoopColRefs(expr *planpb.Expr) []*planpb.Expr {
+	f := expr.GetF()
+	if f == nil || f.Func == nil || f.Func.ObjName != "not" {
+		return nil
+	}
+	if len(f.Args) != 1 {
+		return nil
+	}
+	return collectAndNullSafeColRefs(f.Args[0])
+}
+
+// collectAndNullSafeColRefs recursively collects ColRef expressions from
+// an AND/<=> predicate tree.
+func collectAndNullSafeColRefs(expr *planpb.Expr) []*planpb.Expr {
+	f := expr.GetF()
+	if f == nil || f.Func == nil {
+		return nil
+	}
+	switch f.Func.ObjName {
+	case "and":
+		var res []*planpb.Expr
+		for _, arg := range f.Args {
+			res = append(res, collectAndNullSafeColRefs(arg)...)
+		}
+		return res
+	case "<=>":
+		return f.Args
+	default:
+		return nil
+	}
 }

@@ -167,6 +167,9 @@ type Schema struct {
 	// tableType overrides TableType when non-empty; used to mock index tables
 	// carrying an algo-specific type (e.g. ivfflat "metadata").
 	tableType string
+	// onUpdateCols maps column index → ON UPDATE expression string (e.g. "current_timestamp()").
+	// When non-empty, the ColDef.OnUpdate.Expr will be set to a non-nil expression.
+	onUpdateCols map[int]string
 }
 
 type ViewCfg struct {
@@ -1113,6 +1116,23 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt: 4,
 	}
 
+	// Table with ON UPDATE CURRENT_TIMESTAMP column for testing
+	// no-op FILTER exclusion of implicit auto-update columns.
+	constraintTestSchema["t_on_update"] = &Schema{
+		tblId: 88901,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"val", types.T_int32, true, 32, 0},
+			{"updated_at", types.T_timestamp, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:    []int{0},
+		outcnt: 10,
+		onUpdateCols: map[int]string{
+			2: "current_timestamp()",
+		},
+	}
+
 	cteTestSchema["t1"] = &Schema{
 		cols: []col{
 			{"a", types.T_int64, false, 0, 0},
@@ -1352,7 +1372,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 			for idx, col := range table.cols {
 				isFakePK := col.Name == catalog.FakePrimaryKeyColName
-				colDefs = append(colDefs, &ColDef{
+				colDef := &ColDef{
 					ColId: uint64(idx),
 					Typ: plan.Type{
 						Id:          int32(col.Id),
@@ -1369,7 +1389,20 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					Default: &plan.Default{
 						NullAbility: col.Nullable,
 					},
-				})
+				}
+				if onUpdateExpr, ok := table.onUpdateCols[idx]; ok {
+					colDef.OnUpdate = &plan.OnUpdate{
+						Expr: &plan.Expr{
+							Expr: &plan.Expr_F{
+								F: &plan.Function{
+									Func: &plan.ObjectRef{ObjName: "current_timestamp"},
+								},
+							},
+						},
+						OriginString: onUpdateExpr,
+					}
+				}
+				colDefs = append(colDefs, colDef)
 			}
 
 			objects[tableName] = &ObjectRef{
