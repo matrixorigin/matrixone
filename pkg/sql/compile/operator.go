@@ -806,6 +806,13 @@ func constructMultiUpdate(
 	arg.Engine = eng
 	arg.IsRemote = isRemote
 
+	for _, updateCtx := range node.UpdateCtxList {
+		if updateCtx.CountDeleteAffectRows {
+			arg.CountDeleteAffectRows = true
+			break
+		}
+	}
+
 	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(node.UpdateCtxList))
 	for i, updateCtx := range node.UpdateCtxList {
 		insertCols := make([]int, len(updateCtx.InsertCols))

@@ -617,6 +617,7 @@ message UpdateCtx {
   repeated ColRef partition_cols = 9 [(gogoproto.nullable) = false];
   bool skip_insert_on_null_pk = 10;
   int32 insert_pk_col_idx = 11;
+  bool count_delete_affect_rows = 12;
 }
 
 message InsertCtx {
