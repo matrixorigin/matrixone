@@ -27,6 +27,13 @@ func indexTableStoresSerializedKey(idxDef *planpb.IndexDef) bool {
 	return idxDef != nil && !isSpatialIndexDef(idxDef) && len(idxDef.Parts) > 1
 }
 
+func indexTableLookupSerialFunc(idxDef *planpb.IndexDef) string {
+	if idxDef != nil && !idxDef.Unique && indexTableStoresSerializedKey(idxDef) {
+		return "serial_full"
+	}
+	return "serial"
+}
+
 func indexLookupColumnName(idxDef *planpb.IndexDef) string {
 	if isSpatialIndexDef(idxDef) {
 		return catalog.IndexTablePrimaryColName
