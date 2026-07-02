@@ -82,17 +82,28 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 	if err != nil {
 		return err
 	}
+	// A retrieval (WAND) index is ALWAYS async — its serialized store can't be
+	// row-patched inside a txn — regardless of the async param (mirrors
+	// Hooks.AlwaysAsync(parser=="retrieval")).
+	retrieval := catalog.GetIndexParser(indexDef.IndexAlgoParams) == "retrieval"
 
-	// 3a. async: register a CDC task; data syncs via ISCP.
-	if async {
+	// 3a. async (incl. every retrieval index): register a CDC task; data syncs
+	// via ISCP. For retrieval, the initial tag=0 build runs from postings at CDC
+	// task start via a non-empty InitSQL (CREATE returns before it is populated),
+	// so the postings hidden table is still required.
+	if async || retrieval {
 		logutil.Infof("fulltext index Async is true")
 		sinkerType := ctx.SinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
+		initSQL, err := wandInitSQL(indexDefs, originalTableDef, indexDef, qryDatabase)
+		if err != nil {
+			return err
+		}
 		return ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
-			originalTableDef.TblId, indexDef.IndexName, sinkerType, false, "", originalTableDef)
+			originalTableDef.TblId, indexDef.IndexName, sinkerType, false, initSQL, originalTableDef)
 	}
 
-	// 3b. sync: populate the index table inside the txn via
-	// CROSS APPLY fulltext_index_tokenize.
+	// 3b. sync (non-retrieval, async=false): populate the postings table inside
+	// the txn via CROSS APPLY fulltext_index_tokenize.
 	insertSQLs, err := genInsertSQL(originalTableDef, indexDef, qryDatabase)
 	if err != nil {
 		return err
@@ -102,27 +113,35 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 			return err
 		}
 	}
-
-	// 4. retrieval parser: build the WAND chunk store from the freshly
-	// populated postings (the store + metadata hidden tables created in step 1).
-	// fulltext_wand_create reads postings rows directly and serializes the index
-	// in its end() — mirrors HNSW genBuildSQL.
-	if storeDef, ok := indexDefs[catalog.FullTextIndex_TblType_Storage]; ok {
-		metaDef, ok := indexDefs[catalog.FullTextIndex_TblType_Metadata]
-		if !ok {
-			return moerr.NewInternalErrorNoCtx("fulltext wand metadata index definition not found")
-		}
-		sqls, err := genWandBuildSQL(indexDef, storeDef, metaDef, qryDatabase)
-		if err != nil {
-			return err
-		}
-		for _, sql := range sqls {
-			if err = ctx.RunSql(sql); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
+}
+
+// wandInitSQL builds the ISCP InitSQL — a JSON array of statements run at CDC
+// task start — that populates a retrieval index's postings and then builds the
+// tag=0 WAND store from them (genInsertSQL -> postings, genWandBuildSQL ->
+// tag=0). Returns "" for a non-retrieval index (which has no WAND store).
+func wandInitSQL(indexDefs map[string]*plan.IndexDef, originalTableDef *plan.TableDef, indexDef *plan.IndexDef, qryDatabase string) (string, error) {
+	storeDef, ok := indexDefs[catalog.FullTextIndex_TblType_Storage]
+	if !ok {
+		return "", nil
+	}
+	metaDef, ok := indexDefs[catalog.FullTextIndex_TblType_Metadata]
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtx("fulltext wand metadata index definition not found")
+	}
+	insertSQLs, err := genInsertSQL(originalTableDef, indexDef, qryDatabase)
+	if err != nil {
+		return "", err
+	}
+	buildSQLs, err := genWandBuildSQL(indexDef, storeDef, metaDef, qryDatabase)
+	if err != nil {
+		return "", err
+	}
+	js, err := json.Marshal(append(insertSQLs, buildSQLs...))
+	if err != nil {
+		return "", err
+	}
+	return string(js), nil
 }
 
 // genWandBuildSQL builds the WAND chunk store from a retrieval index's postings

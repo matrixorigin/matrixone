@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -850,10 +851,38 @@ func ProcessInitSQL(
 	}
 	sqlctx := sqlexec.NewSqlContext(ctx, cnUUID, txnOp, accountId, resolver)
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
-	result, err := sqlexec.RunSql(sqlproc, sql)
-	if err != nil {
-		return
+	// InitSQL is a JSON array of statements (the multi-statement form), or a JSON
+	// string / raw single statement (backward-compat). ISCP has no multi-statement
+	// executor, so run each in sequence within this txn.
+	for _, stmt := range splitInitSQL(sql) {
+		if stmt == "" {
+			continue
+		}
+		res, e := sqlexec.RunSql(sqlproc, stmt)
+		if e != nil {
+			err = e
+			return
+		}
+		res.Close()
 	}
-	defer result.Close()
 	return
+}
+
+// splitInitSQL parses a decoded InitSQL payload into individual statements. The
+// canonical form is a JSON array of statements; a JSON string is one statement;
+// anything that isn't valid JSON is treated as a single raw statement so
+// pre-existing InitSQLs (e.g. "SELECT 1", cagra/ivfpq builds) keep working.
+func splitInitSQL(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var arr []string
+	if json.Unmarshal([]byte(s), &arr) == nil {
+		return arr
+	}
+	var one string
+	if json.Unmarshal([]byte(s), &one) == nil {
+		return []string{one}
+	}
+	return []string{s}
 }
