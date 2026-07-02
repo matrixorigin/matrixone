@@ -52,6 +52,57 @@ func initAddFaultPointTestCase() []tcTemp {
 	}
 }
 
+func TestSecToTimeMySQLCompatibility(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(input, []int64{3020399, 3020400, -3020400}, nil, proc.Mp()))
+
+	result := vector.NewFunctionResultWrapper(types.T_time.ToType(), proc.Mp())
+	require.NoError(t, SecToTime([]*vector.Vector{input}, result, proc, 3, nil))
+
+	values := vector.MustFixedCol[types.Time](result.GetResultVector())
+	require.Equal(t, "838:59:59", values[0].String())
+	require.Equal(t, "838:59:59", values[1].String())
+	require.Equal(t, "-838:59:59", values[2].String())
+	require.False(t, result.GetResultVector().GetNulls().Contains(0))
+	require.False(t, result.GetResultVector().GetNulls().Contains(1))
+	require.False(t, result.GetResultVector().GetNulls().Contains(2))
+}
+
+func TestSecToTimeFractionalSeconds(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.T_float64.ToType()
+	typ.Scale = 1
+	input := vector.NewVec(typ)
+	require.NoError(t, vector.AppendFixedList(input, []float64{2378.7}, nil, proc.Mp()))
+
+	result := vector.NewFunctionResultWrapper(types.New(types.T_time, 0, 1), proc.Mp())
+	require.NoError(t, SecToTime([]*vector.Vector{input}, result, proc, 1, nil))
+
+	values := vector.MustFixedCol[types.Time](result.GetResultVector())
+	require.Equal(t, "00:39:38.7", values[0].String2(1))
+}
+
+func TestMakeTimeMySQLCompatibility(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	hours := vector.NewVec(types.T_int64.ToType())
+	minutes := vector.NewVec(types.T_int64.ToType())
+	seconds := vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(hours, []int64{12, 840, 12, 12}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(minutes, []int64{15, 0, 60, 1}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(seconds, []float64{30.9, 0, 0, 60}, nil, proc.Mp()))
+
+	result := vector.NewFunctionResultWrapper(types.New(types.T_time, 0, 1), proc.Mp())
+	require.NoError(t, MakeTime([]*vector.Vector{hours, minutes, seconds}, result, proc, 4, nil))
+
+	values := vector.MustFixedCol[types.Time](result.GetResultVector())
+	nulls := result.GetResultVector().GetNulls()
+	require.Equal(t, "12:15:30.9", values[0].String2(1))
+	require.Equal(t, "838:59:59", values[1].String())
+	require.True(t, nulls.Contains(2))
+	require.True(t, nulls.Contains(3))
+}
+
 func TestAddFaultPoint(t *testing.T) {
 	testCases := initAddFaultPointTestCase()
 

@@ -36,7 +36,7 @@ invalid_second
 null
 SELECT MAKETIME(839, 0, 0) AS invalid_hour_too_large;
 invalid_hour_too_large
-null
+838:59:59
 SELECT MAKETIME(NULL, 15, 30) AS null_hour;
 null_hour
 null
@@ -51,7 +51,7 @@ null_all
 null
 SELECT MAKETIME(12.7, 15.8, 30.9) AS float_values;
 float_values
-12:15:30
+12:15:30.9
 CREATE TABLE t1(h INT, m INT, s INT);
 INSERT INTO t1 VALUES (12, 15, 30), (0, 0, 0), (23, 59, 59);
 SELECT MAKETIME(h, m, s) AS time_value FROM t1;
@@ -73,3 +73,9 @@ float_input
 SELECT MAKETIME(CAST(12 AS UNSIGNED), CAST(15 AS UNSIGNED), CAST(30 AS UNSIGNED)) AS unsigned_input;
 unsigned_input
 12:15:30
+SELECT MAKETIME(12, 15, 30.9) AS fractional_second,
+       MAKETIME(840, 0, 0) AS over_hour,
+       MAKETIME(12, 60, 0) AS bad_minute,
+       MAKETIME(NULL, 1, 1) AS null_hour;
+fractional_second    over_hour    bad_minute    null_hour
+12:15:30.9    838:59:59    null    null

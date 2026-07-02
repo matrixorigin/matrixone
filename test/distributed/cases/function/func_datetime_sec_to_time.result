@@ -34,24 +34,24 @@ one_hour_one_min_one_sec
 SELECT SEC_TO_TIME(30239) AS large_value;  # 08:23:59
 large_value
 08:23:59
-SELECT SEC_TO_TIME(302399) AS very_large;  # 84:00:00 (exceeds 838:59:59, should return NULL)
+SELECT SEC_TO_TIME(302399) AS very_large;  # 83:59:59
 very_large
 83:59:59
 SELECT SEC_TO_TIME(-2378) AS negative_test;  # -00:39:38
 negative_test
-null
+-00:39:38
 SELECT SEC_TO_TIME(-3661) AS negative_large; # -01:01:01
 negative_large
-null
+-01:01:01
 SELECT SEC_TO_TIME(-3600) AS negative_hour;  # -01:00:00
 negative_hour
--1:00:00
+-01:00:00
 SELECT SEC_TO_TIME(2378.7) AS decimal_test;
 decimal_test
-00:39:38
+00:39:38.7
 SELECT SEC_TO_TIME(3661.99) AS decimal_large;
 decimal_large
-01:01:01
+01:01:01.99
 SELECT SEC_TO_TIME(NULL) AS null_test;
 null_test
 null
@@ -83,10 +83,16 @@ max_valid
 838:59:59
 SELECT SEC_TO_TIME(-3020399) AS min_valid;  # -838:59:59
 min_valid
-null
-SELECT SEC_TO_TIME(3020400) AS exceeds_max; # Should return NULL
+-838:59:59
+SELECT SEC_TO_TIME(3020400) AS exceeds_max; # 838:59:59
 exceeds_max
-null
-SELECT SEC_TO_TIME(-3020400) AS exceeds_min; # Should return NULL
+838:59:59
+SELECT SEC_TO_TIME(-3020400) AS exceeds_min; # -838:59:59
 exceeds_min
-null
+-838:59:59
+SELECT SEC_TO_TIME(3020399) AS max_in_range,
+       SEC_TO_TIME(3020400) AS over_range,
+       SEC_TO_TIME(-3020400) AS under_range,
+       SEC_TO_TIME(2378.7) AS fractional_seconds;
+max_in_range    over_range    under_range    fractional_seconds
+838:59:59    838:59:59    -838:59:59    00:39:38.7

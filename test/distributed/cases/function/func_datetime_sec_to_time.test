@@ -18,14 +18,14 @@ SELECT SEC_TO_TIME(3661) AS one_hour_one_min_one_sec;
 
 # Large values
 SELECT SEC_TO_TIME(30239) AS large_value;  # 08:23:59
-SELECT SEC_TO_TIME(302399) AS very_large;  # 84:00:00 (exceeds 838:59:59, should return NULL)
+SELECT SEC_TO_TIME(302399) AS very_large;  # 83:59:59
 
 # Negative values
 SELECT SEC_TO_TIME(-2378) AS negative_test;  # -00:39:38
 SELECT SEC_TO_TIME(-3661) AS negative_large; # -01:01:01
 SELECT SEC_TO_TIME(-3600) AS negative_hour;  # -01:00:00
 
-# Decimal seconds (should truncate)
+# Decimal seconds
 SELECT SEC_TO_TIME(2378.7) AS decimal_test;
 SELECT SEC_TO_TIME(3661.99) AS decimal_large;
 
@@ -51,6 +51,10 @@ SELECT SEC_TO_TIME(CAST(2378 AS UNSIGNED)) AS unsigned_input;
 # Edge cases
 SELECT SEC_TO_TIME(3020399) AS max_valid;   # 838:59:59
 SELECT SEC_TO_TIME(-3020399) AS min_valid;  # -838:59:59
-SELECT SEC_TO_TIME(3020400) AS exceeds_max; # Should return NULL
-SELECT SEC_TO_TIME(-3020400) AS exceeds_min; # Should return NULL
+SELECT SEC_TO_TIME(3020400) AS exceeds_max; # 838:59:59
+SELECT SEC_TO_TIME(-3020400) AS exceeds_min; # -838:59:59
 
+SELECT SEC_TO_TIME(3020399) AS max_in_range,
+       SEC_TO_TIME(3020400) AS over_range,
+       SEC_TO_TIME(-3020400) AS under_range,
+       SEC_TO_TIME(2378.7) AS fractional_seconds;

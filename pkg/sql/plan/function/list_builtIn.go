@@ -75,6 +75,16 @@ func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
 	}
 }
 
+func mysqlTimeFractionScale(t types.Type) int32 {
+	if t.Scale < 0 {
+		return 0
+	}
+	if t.Scale > 6 {
+		return 6
+	}
+	return t.Scale
+}
+
 var supportedStringBuiltIns = []FuncNew{
 	// function `ascii`
 	{
@@ -11092,7 +11102,7 @@ var supportedControlBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_float64, types.T_float64, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.New(types.T_time, 0, mysqlTimeFractionScale(parameters[2]))
 				},
 				newOp: func() executeLogicOfOverload {
 					return MakeTime
@@ -11312,7 +11322,7 @@ var supportedControlBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.New(types.T_time, 0, mysqlTimeFractionScale(parameters[0]))
 				},
 				newOp: func() executeLogicOfOverload {
 					return SecToTime

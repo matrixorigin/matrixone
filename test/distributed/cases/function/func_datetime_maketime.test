@@ -16,7 +16,7 @@ SELECT MAKETIME(12, 15, 0) AS time6;
 SELECT MAKETIME(838, 59, 59) AS time7;
 SELECT MAKETIME(100, 0, 0) AS time8;
 
-# Invalid values (should return NULL)
+# Invalid values
 SELECT MAKETIME(-1, 15, 30) AS invalid_hour;
 SELECT MAKETIME(12, 60, 30) AS invalid_minute;
 SELECT MAKETIME(12, 15, 60) AS invalid_second;
@@ -28,7 +28,7 @@ SELECT MAKETIME(12, NULL, 30) AS null_minute;
 SELECT MAKETIME(12, 15, NULL) AS null_second;
 SELECT MAKETIME(NULL, NULL, NULL) AS null_all;
 
-# Float values (should truncate)
+# Float values
 SELECT MAKETIME(12.7, 15.8, 30.9) AS float_values;
 
 # Table usage
@@ -47,3 +47,7 @@ DROP TABLE t1;
 SELECT MAKETIME(12.0, 15.0, 30.0) AS float_input;
 SELECT MAKETIME(CAST(12 AS UNSIGNED), CAST(15 AS UNSIGNED), CAST(30 AS UNSIGNED)) AS unsigned_input;
 
+SELECT MAKETIME(12, 15, 30.9) AS fractional_second,
+       MAKETIME(840, 0, 0) AS over_hour,
+       MAKETIME(12, 60, 0) AS bad_minute,
+       MAKETIME(NULL, 1, 1) AS null_hour;
