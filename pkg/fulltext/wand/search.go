@@ -238,30 +238,34 @@ func SearchSegmentsLive(segs []*WandModel, terms []string, limit int, allow Memb
 	}
 	gAvgDocLen := totalDocLen / float64(gN)
 
-	// Resolve query terms → word-ids (+ duplicate weights). The overflow dict is
-	// identical across segments of one index, so any segment resolves the same.
-	weights := make(map[int32]float64, len(terms))
+	// Query terms are tokenized words; dedup → weight. Resolution of a word to a
+	// segment's word-id is done PER SEGMENT (here and in searchInto): an
+	// out-of-jieba-dict "overflow" word gets a per-segment id, so a query word can
+	// be absent from one segment (e.g. the compacted base) yet present in a later
+	// CDC-delta segment, and independently-built segments may assign it different
+	// overflow ids. Resolving once against a single segment would drop or mis-map
+	// such a word (in-dict words resolve to a stable global id, unaffected).
+	weights := make(map[string]float64, len(terms))
 	for _, t := range terms {
-		id, ok, err := segs[0].resolveWordID(t)
-		if err != nil || !ok {
-			continue
-		}
-		weights[id]++
+		weights[t]++
 	}
 	if len(weights) == 0 {
 		return nil
 	}
 
-	// Corpus-global df per query word-id (sum across segments).
-	gdf := make(map[int32]int, len(weights))
-	for id := range weights {
+	// Corpus-global df per query word (each segment resolves the word to its own
+	// id, so both in-dict and overflow words are summed correctly).
+	gdf := make(map[string]int, len(weights))
+	for w := range weights {
 		df := 0
 		for _, s := range segs {
-			if tp, ok := s.terms[id]; ok {
-				df += len(tp.docIDs)
+			if id, ok, err := s.resolveWordID(w); err == nil && ok {
+				if tp, ok2 := s.terms[id]; ok2 {
+					df += len(tp.docIDs)
+				}
 			}
 		}
-		gdf[id] = df
+		gdf[w] = df
 	}
 
 	h := newTopK(limit)
@@ -297,14 +301,18 @@ func searchSegsLive(segs []*WandModel, deletes map[any]int64, terms []string, li
 
 // searchInto runs the Block-Max WAND walk over one segment using the supplied
 // global stats, pushing (pk, score) into the shared heap h.
-func (m *WandModel) searchInto(h *topK, weights map[int32]float64, gN int64, gAvgDocLen float64, gdf map[int32]int, allow Membership) {
+func (m *WandModel) searchInto(h *topK, weights map[string]float64, gN int64, gAvgDocLen float64, gdf map[string]int, allow Membership) {
 	cursors := make([]*cursor, 0, len(weights))
-	for id, w := range weights {
+	for word, w := range weights {
+		id, ok, err := m.resolveWordID(word)
+		if err != nil || !ok {
+			continue // word not resolvable in this segment
+		}
 		tp, ok := m.terms[id]
 		if !ok {
 			continue // word absent from this segment
 		}
-		df := gdf[id]
+		df := gdf[word]
 		if df <= 0 {
 			df = len(tp.docIDs)
 		}
