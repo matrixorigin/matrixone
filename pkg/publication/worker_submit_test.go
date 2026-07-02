@@ -16,6 +16,7 @@ package publication
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -160,6 +161,26 @@ func TestWorkerSyncProtection_UpdateTTL(t *testing.T) {
 	w.RegisterSyncProtection("job-1", 2000) // update
 	ttl := w.GetSyncProtectionTTL("job-1")
 	assert.Equal(t, int64(2000), ttl)
+}
+
+func TestWorkerSyncProtection_StopDuringKeepAliveStart(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		w := &worker{
+			taskChan:           make(chan *TaskContext, 10),
+			syncProtectionJobs: make(map[string]*syncProtectionEntry),
+		}
+		w.ctx, w.cancel = context.WithCancel(context.Background())
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.RunSyncProtectionKeepAlive()
+		}()
+
+		w.Stop()
+		wg.Wait()
+	}
 }
 
 // ---- Worker Submit tests ----
