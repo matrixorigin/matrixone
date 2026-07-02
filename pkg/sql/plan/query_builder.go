@@ -3094,7 +3094,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
-				rewriteGroupingSetOrderBy(astOrderBy, selectClause.Exprs)
+				rewriteGroupingSetOrderBy(astOrderBy, selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
 				return builder.buildUnion(leftClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
 			}
 		}
@@ -3799,17 +3799,15 @@ func (builder *QueryBuilder) bindTimeWindow(
 	return
 }
 
-func rewriteGroupingSetOrderBy(astOrderBy tree.OrderBy, selectList tree.SelectExprs) {
-	selectAliases := make(map[string]struct{}, len(selectList))
-	for _, selectExpr := range selectList {
-		if selectExpr.As != nil && !selectExpr.As.Empty() {
-			selectAliases[selectExpr.As.Compare()] = struct{}{}
-		}
-	}
-
+func rewriteGroupingSetOrderBy(
+	astOrderBy tree.OrderBy,
+	selectList tree.SelectExprs,
+	groupByExprsList []tree.Exprs,
+) {
+	columnResolver := newGroupingSetColumnResolver(groupByExprsList)
 	projectPosByKey := make(map[string]int64, len(selectList))
 	for i, selectExpr := range selectList {
-		key, ok := groupingSetOrderByKey(selectExpr.Expr, nil)
+		key, ok := groupingSetOrderByKey(selectExpr.Expr, columnResolver)
 		if !ok {
 			continue
 		}
@@ -3823,7 +3821,7 @@ func rewriteGroupingSetOrderBy(astOrderBy tree.OrderBy, selectList tree.SelectEx
 			continue
 		}
 
-		key, ok := groupingSetOrderByKey(order.Expr, selectAliases)
+		key, ok := groupingSetOrderByKey(order.Expr, columnResolver)
 		if !ok {
 			continue
 		}
@@ -3834,7 +3832,64 @@ func rewriteGroupingSetOrderBy(astOrderBy tree.OrderBy, selectList tree.SelectEx
 	}
 }
 
-func groupingSetOrderByKey(astExpr tree.Expr, blockedAliases map[string]struct{}) (string, bool) {
+type groupingSetColumnResolver map[string]map[string]struct{}
+
+func newGroupingSetColumnResolver(groupByExprsList []tree.Exprs) groupingSetColumnResolver {
+	resolver := make(groupingSetColumnResolver)
+	for _, groupByExprs := range groupByExprsList {
+		for _, groupByExpr := range groupByExprs {
+			col, ok := unwrapParenExpr(groupByExpr).(*tree.UnresolvedName)
+			if !ok || col.Star || col.NumParts == 0 {
+				continue
+			}
+
+			columnName := col.CStrParts[0].Compare()
+			if resolver[columnName] == nil {
+				resolver[columnName] = make(map[string]struct{})
+			}
+			resolver[columnName][groupingSetColumnKey(col)] = struct{}{}
+		}
+	}
+	return resolver
+}
+
+func (resolver groupingSetColumnResolver) resolve(col *tree.UnresolvedName) (string, bool) {
+	candidates := resolver[col.CStrParts[0].Compare()]
+	if len(candidates) == 0 {
+		return "", false
+	}
+
+	exactKey := groupingSetColumnKey(col)
+	if col.NumParts > 1 {
+		if _, ok := candidates[exactKey]; ok {
+			return exactKey, true
+		}
+	}
+	if len(candidates) != 1 {
+		return "", false
+	}
+	for candidate := range candidates {
+		return candidate, true
+	}
+	return "", false
+}
+
+func (resolver groupingSetColumnResolver) isAmbiguous(col *tree.UnresolvedName) bool {
+	return len(resolver[col.CStrParts[0].Compare()]) > 1
+}
+
+func groupingSetColumnKey(col *tree.UnresolvedName) string {
+	var key strings.Builder
+	for i := col.NumParts - 1; i >= 0; i-- {
+		if i < col.NumParts-1 {
+			key.WriteByte('.')
+		}
+		key.WriteString(col.CStrParts[i].Compare())
+	}
+	return key.String()
+}
+
+func groupingSetOrderByKey(astExpr tree.Expr, columnResolver groupingSetColumnResolver) (string, bool) {
 	funcExpr, ok := unwrapParenExpr(astExpr).(*tree.FuncExpr)
 	if !ok || funcExpr.FuncName == nil || funcExpr.FuncName.Compare() != "grouping" || funcExpr.WindowSpec != nil {
 		return "", false
@@ -3850,19 +3905,16 @@ func groupingSetOrderByKey(astExpr tree.Expr, blockedAliases map[string]struct{}
 		if !ok || col.Star || col.NumParts == 0 {
 			return "", false
 		}
-		if col.NumParts == 1 {
-			if _, blocked := blockedAliases[col.ColName()]; blocked {
+		columnKey, ok := columnResolver.resolve(col)
+		if !ok {
+			if columnResolver.isAmbiguous(col) {
 				return "", false
 			}
+			columnKey = groupingSetColumnKey(col)
 		}
 
 		key.WriteByte('|')
-		for i := col.NumParts - 1; i >= 0; i-- {
-			if i < col.NumParts-1 {
-				key.WriteByte('.')
-			}
-			key.WriteString(col.CStrParts[i].Compare())
-		}
+		key.WriteString(columnKey)
 	}
 
 	return key.String(), true
