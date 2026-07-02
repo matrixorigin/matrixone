@@ -5429,9 +5429,6 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		if err != nil {
 			return 0, err
 		}
-		if extBindingsRestore != nil {
-			extBindingsRestore()
-		}
 		node.OnList = joinConds
 
 	case *tree.UsingJoinCond:
@@ -5484,6 +5481,9 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		}
 	}
 
+	if extBindingsRestore != nil {
+		extBindingsRestore()
+	}
 	return nodeID, nil
 }
 
