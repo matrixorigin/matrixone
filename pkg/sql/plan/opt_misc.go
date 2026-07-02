@@ -985,12 +985,26 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 			if len(str) == 0 {
 				continue
 			}
+			escapeChar := byte('\\')
+			if len(fun.Args) == 3 {
+				if fun.Args[2].GetLit() == nil {
+					continue
+				}
+				ec := fun.Args[2].GetLit().GetSval()
+				if len(ec) == 1 {
+					escapeChar = ec[0]
+				} else if len(ec) == 0 {
+					escapeChar = 0
+				} else {
+					continue
+				}
+			}
 			index1 := strings.IndexByte(str, '_')
-			if index1 > 0 && str[index1-1] == '\\' {
+			if index1 > 0 && str[index1-1] == escapeChar {
 				index1--
 			}
 			index2 := strings.IndexByte(str, '%')
-			if index2 > 0 && str[index2-1] == '\\' {
+			if index2 > 0 && str[index2-1] == escapeChar {
 				index2--
 			}
 			if index1 == -1 && index2 == -1 {

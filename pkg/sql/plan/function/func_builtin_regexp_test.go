@@ -106,7 +106,46 @@ func Test_BuiltIn_RegularMatchForLikeOp(t *testing.T) {
 	}
 
 	for i, c := range cs {
-		match, err := op.regMap.regularMatchForLikeOp([]byte(c.pat), []byte(c.str))
+		match, err := op.regMap.regularMatchForLikeOp([]byte(c.pat), []byte(c.str), '\\')
+		require.NoError(t, err, i)
+		require.Equal(t, c.expected, match, i)
+	}
+
+	// custom escape char: #
+	csCustom := []struct {
+		pat      string
+		str      string
+		expected bool
+	}{
+		{pat: "a#_b", str: "a_b", expected: true},
+		{pat: "a#%b", str: "a%b", expected: true},
+		{pat: "a#_b", str: "aXb", expected: false},
+		{pat: "a_b", str: "a_b", expected: true},
+		{pat: "a_b", str: "aXb", expected: true},
+		{pat: "a_b", str: "ab", expected: false},
+	}
+	for i, c := range csCustom {
+		match, err := op.regMap.regularMatchForLikeOp([]byte(c.pat), []byte(c.str), '#')
+		require.NoError(t, err, i)
+		require.Equal(t, c.expected, match, i)
+	}
+
+	// empty escape (0): no escaping at all, _ and % are wildcards
+	csNoEscape := []struct {
+		pat      string
+		str      string
+		expected bool
+	}{
+		{pat: "a_b", str: "a_b", expected: true},
+		{pat: "a_b", str: "aXb", expected: true},
+		{pat: "a_b", str: "a\nb", expected: true},
+		{pat: "a%b", str: "a_b", expected: true},
+		{pat: "a%b", str: "aXb", expected: true},
+		{pat: "a\\_b", str: "a\\_b", expected: true},
+		{pat: "a\\_b", str: "a_b", expected: false},
+	}
+	for i, c := range csNoEscape {
+		match, err := op.regMap.regularMatchForLikeOp([]byte(c.pat), []byte(c.str), 0)
 		require.NoError(t, err, i)
 		require.Equal(t, c.expected, match, i)
 	}
