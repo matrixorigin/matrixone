@@ -127,7 +127,8 @@ gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = cagra_construct(btype, qtype, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_cagra_any_t> holder(new gpu_cagra_any_t(btype, qtype, nullptr));
+        holder->ptr = cagra_construct(btype, qtype, [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             // The dataset-providing constructor takes storage-typed (Q) data and
@@ -135,7 +136,7 @@ gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint
             // quantization happens via add_chunk_quantize / add_chunk_float).
             return new gpu_cagra_t<B, Q>(static_cast<const Q*>(dataset_data), count_vectors, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
         });
-        return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(btype, qtype, ptr));
+        return static_cast<gpu_cagra_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_new", e.what());
     } catch (...) {
@@ -152,12 +153,13 @@ gpu_cagra_c gpu_cagra_new_empty(uint64_t total_count, uint32_t dimension, distan
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = cagra_construct(btype, qtype, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_cagra_any_t> holder(new gpu_cagra_any_t(btype, qtype, nullptr));
+        holder->ptr = cagra_construct(btype, qtype, [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             return new gpu_cagra_t<B, Q>(total_count, dimension, metric_c, build_params, devs, nthread, dist_mode, ids);
         });
-        return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(btype, qtype, ptr));
+        return static_cast<gpu_cagra_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_new_empty", e.what());
     } catch (...) {
@@ -173,12 +175,13 @@ gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distan
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         std::vector<int> devs(devices, devices + device_count);
-        void* ptr = cagra_construct(btype, qtype, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_cagra_any_t> holder(new gpu_cagra_any_t(btype, qtype, nullptr));
+        holder->ptr = cagra_construct(btype, qtype, [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             return new gpu_cagra_t<B, Q>(std::string(filename), dimension, metric_c, build_params, devs, nthread, dist_mode);
         });
-        return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(btype, qtype, ptr));
+        return static_cast<gpu_cagra_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_load_file", e.what());
     } catch (...) {
@@ -593,7 +596,8 @@ gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices_c, int num_indices, uint32_t nt
         if (num_indices <= 0) return nullptr;
         auto* first = static_cast<gpu_cagra_any_t*>(indices_c[0]);
         std::vector<int> devs(devices, devices + device_count);
-        void* merged_ptr = cagra_construct(first->btype, first->qtype, [&](auto* tag) -> void* {
+        std::unique_ptr<gpu_cagra_any_t> holder(new gpu_cagra_any_t(first->btype, first->qtype, nullptr));
+        holder->ptr = cagra_construct(first->btype, first->qtype, [&](auto* tag) -> void* {
             using B = typename std::remove_pointer_t<decltype(tag)>::base_type;
             using Q = typename std::remove_pointer_t<decltype(tag)>::storage_type;
             std::vector<gpu_index_base_t<B, Q, cagra_build_params_t, int64_t>*> base_indices;
@@ -602,7 +606,7 @@ gpu_cagra_c gpu_cagra_merge(gpu_cagra_c* indices_c, int num_indices, uint32_t nt
             }
             return gpu_cagra_t<B, Q>::merge(base_indices, nthread, devs).release();
         });
-        return static_cast<gpu_cagra_c>(new gpu_cagra_any_t(first->btype, first->qtype, merged_ptr));
+        return static_cast<gpu_cagra_c>(holder.release());
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_cagra_merge", e.what());
     } catch (...) {
