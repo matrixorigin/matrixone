@@ -46,7 +46,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	hll "github.com/axiomhq/hyperloglog"
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -6983,6 +6982,11 @@ type userLevelLockKey struct {
 	name  string
 }
 
+type UserLevelLockState struct {
+	Name  string
+	Count uint64
+}
+
 var userLevelLocks = struct {
 	sync.Mutex
 	// userLevelLocks is process-local state for the current CN. It tracks only
@@ -6991,9 +6995,14 @@ var userLevelLocks = struct {
 	counts map[userLevelLockKey]uint64
 	//owner -> lockername
 	byOwner map[string]map[string]struct{}
+	// ownerSessions marks which session currently owns the local refcount state.
+	// It prevents an old migrated session from discarding refcounts already
+	// restored for a new session that intentionally keeps the same owner key.
+	ownerSessions map[string]string
 }{
-	counts:  make(map[userLevelLockKey]uint64),
-	byOwner: make(map[string]map[string]struct{}),
+	counts:        make(map[userLevelLockKey]uint64),
+	byOwner:       make(map[string]map[string]struct{}),
+	ownerSessions: make(map[string]string),
 }
 
 func userLevelLockOwner(proc *process.Process) string {
@@ -7001,13 +7010,13 @@ func userLevelLockOwner(proc *process.Process) string {
 		return ""
 	}
 	si := proc.GetSessionInfo()
-	if si.SessionId != uuid.Nil {
-		return si.SessionId.String()
+	if si.GetConnectionID() != 0 {
+		return fmt.Sprintf("%s:%d", si.Account, si.GetConnectionID())
 	}
 	if proc.GetLockService() != nil {
-		return fmt.Sprintf("%s:%d", proc.GetLockService().GetServiceID(), si.GetConnectionID())
+		return fmt.Sprintf("%s:%s:%s", si.Account, proc.GetLockService().GetServiceID(), si.SessionId.String())
 	}
-	return fmt.Sprintf("%d", si.GetConnectionID())
+	return fmt.Sprintf("%s:%s", si.Account, si.SessionId.String())
 }
 
 func userLevelLockConnectionID(proc *process.Process) uint64 {
@@ -7017,28 +7026,33 @@ func userLevelLockConnectionID(proc *process.Process) uint64 {
 	return proc.GetSessionInfo().GetConnectionID()
 }
 
+func userLevelLockSessionID(proc *process.Process) string {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return ""
+	}
+	return proc.GetSessionInfo().SessionId.String()
+}
+
 // maxUserLevelLockNameLength is the MySQL-compatible maximum length for
 // user-level lock names (GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK).
 const maxUserLevelLockNameLength = 64
 
-// normalizeUserLevelLockName validates and normalizes a MySQL user-level lock name.
-// It returns the normalized (lowercased) name, or an error if the name is empty or
-// exceeds maxUserLevelLockNameLength characters (MySQL enforces 64 characters, not bytes).
-func normalizeUserLevelLockName(name string) (string, error) {
+// validateUserLevelLockName validates a MySQL user-level lock name.
+// It preserves the original lock-name bytes/casing for lock identity.
+func validateUserLevelLockName(name string) (string, error) {
 	if len(name) == 0 {
 		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not be empty")
 	}
 	if strings.IndexByte(name, 0) >= 0 {
 		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not contain NUL bytes")
 	}
-	normalized := strings.ToLower(name)
-	if utf8.RuneCountInString(normalized) > maxUserLevelLockNameLength {
+	if utf8.RuneCountInString(name) > maxUserLevelLockNameLength {
 		return "", moerr.NewInternalErrorNoCtxf(
 			"user-level lock name exceeds maximum length of %d characters",
 			maxUserLevelLockNameLength,
 		)
 	}
-	return normalized, nil
+	return name, nil
 }
 
 func userLevelLockTxnID(owner string, connID uint64, name string) []byte {
@@ -7123,11 +7137,18 @@ func userLevelLockConflictOrTimeout(err error) bool {
 }
 
 func trackUserLevelLock(owner, name string) {
+	trackUserLevelLockForSession(owner, "", name)
+}
+
+func trackUserLevelLockForSession(owner, sessionID, name string) {
 	key := userLevelLockKey{owner: owner, name: name}
 	userLevelLocks.Lock()
 	defer userLevelLocks.Unlock()
 
 	userLevelLocks.counts[key]++
+	if sessionID != "" {
+		userLevelLocks.ownerSessions[owner] = sessionID
+	}
 	if userLevelLocks.byOwner[owner] == nil {
 		userLevelLocks.byOwner[owner] = make(map[string]struct{})
 	}
@@ -7158,6 +7179,7 @@ func untrackUserLevelLock(owner, name string) (uint64, bool) {
 		delete(names, name)
 		if len(names) == 0 {
 			delete(userLevelLocks.byOwner, owner)
+			delete(userLevelLocks.ownerSessions, owner)
 		}
 	}
 	return 0, true
@@ -7177,6 +7199,7 @@ func untrackAllUserLevelLock(owner, name string) (uint64, bool) {
 		delete(names, name)
 		if len(names) == 0 {
 			delete(userLevelLocks.byOwner, owner)
+			delete(userLevelLocks.ownerSessions, owner)
 		}
 	}
 	return count, true
@@ -7198,8 +7221,71 @@ func userLevelLocksForOwner(owner string) []string {
 	return result
 }
 
+func UserLevelLocksForMigration(proc *process.Process) []UserLevelLockState {
+	owner := userLevelLockOwner(proc)
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	names := userLevelLocks.byOwner[owner]
+	if len(names) == 0 {
+		return nil
+	}
+	result := make([]UserLevelLockState, 0, len(names))
+	for name := range names {
+		count := userLevelLocks.counts[userLevelLockKey{owner: owner, name: name}]
+		if count > 0 {
+			result = append(result, UserLevelLockState{Name: name, Count: count})
+		}
+	}
+	return result
+}
+
+func RestoreUserLevelLocksFromMigration(proc *process.Process, states []UserLevelLockState) {
+	owner := userLevelLockOwner(proc)
+	if owner == "" || len(states) == 0 {
+		return
+	}
+	sessionID := userLevelLockSessionID(proc)
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	if sessionID != "" {
+		userLevelLocks.ownerSessions[owner] = sessionID
+	}
+	for _, state := range states {
+		if state.Name == "" || state.Count == 0 {
+			continue
+		}
+		key := userLevelLockKey{owner: owner, name: state.Name}
+		userLevelLocks.counts[key] = state.Count
+		if userLevelLocks.byOwner[owner] == nil {
+			userLevelLocks.byOwner[owner] = make(map[string]struct{})
+		}
+		userLevelLocks.byOwner[owner][state.Name] = struct{}{}
+	}
+}
+
+func DiscardMigratedUserLevelLocks(proc *process.Process) {
+	owner := userLevelLockOwner(proc)
+	if owner == "" {
+		return
+	}
+	sessionID := userLevelLockSessionID(proc)
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	if current := userLevelLocks.ownerSessions[owner]; sessionID != "" && current != "" && current != sessionID {
+		return
+	}
+	for name := range userLevelLocks.byOwner[owner] {
+		delete(userLevelLocks.counts, userLevelLockKey{owner: owner, name: name})
+	}
+	delete(userLevelLocks.byOwner, owner)
+	delete(userLevelLocks.ownerSessions, owner)
+}
+
 func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, err
 	}
@@ -7216,7 +7302,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 	if userLevelLockRefCount(owner, name) > 0 {
 		//count++
 		//owner -> lockname
-		trackUserLevelLock(owner, name)
+		trackUserLevelLockForSession(owner, userLevelLockSessionID(proc), name)
 		return 1, nil
 	}
 
@@ -7235,7 +7321,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 		}
 		return 0, err
 	}
-	trackUserLevelLock(owner, name)
+	trackUserLevelLockForSession(owner, userLevelLockSessionID(proc), name)
 	return 1, nil
 }
 
@@ -7245,7 +7331,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 //   - (0, false, nil): lock exists but is held by another session.
 //   - (0, true, nil):  lock does not exist (MySQL returns NULL).
 func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, false, err
 	}
@@ -7291,7 +7377,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 }
 
 func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, err
 	}
@@ -7320,7 +7406,7 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 }
 
 func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, error) {
-	name, err := normalizeUserLevelLockName(name)
+	name, err := validateUserLevelLockName(name)
 	if err != nil {
 		return 0, false, err
 	}

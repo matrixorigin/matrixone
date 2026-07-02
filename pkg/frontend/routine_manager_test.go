@@ -28,6 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 )
 
@@ -237,4 +238,177 @@ func Test_rm(t *testing.T) {
 	setPu("", nil)
 	time.Sleep(2 * time.Second)
 	rm.cancelCtx()
+}
+
+func TestRoutineManagerRoutineMaps(t *testing.T) {
+	rm := &RoutineManager{
+		ctx:              context.Background(),
+		clients:          make(map[*Conn]*Routine),
+		routinesByConnID: make(map[uint32]*Routine),
+	}
+	rt, _ := newUnitTestRoutine(t, 1001)
+	conn := &Conn{conn: &testConn{}, remoteAddr: "remote"}
+
+	require.Nil(t, rm.getRoutine(conn))
+	require.Nil(t, rm.getRoutineByConnID(1001))
+
+	rm.setRoutine(conn, 1001, rt)
+	require.Same(t, rt, rm.getRoutine(conn))
+	require.Same(t, rt, rm.getRoutineByConnID(1001))
+	require.Equal(t, 1, rm.clientCount())
+
+	require.Same(t, rt, rm.deleteRoutine(conn))
+	require.Nil(t, rm.getRoutine(conn))
+	require.Nil(t, rm.getRoutineByConnID(1001))
+	require.Equal(t, 0, rm.clientCount())
+	require.Nil(t, rm.deleteRoutine(conn))
+}
+
+func TestAccountRoutineManagerRecordDeleteAndCopies(t *testing.T) {
+	ar := &AccountRoutineManager{
+		killIdQueue:       make(map[int64]KillRecord),
+		accountId2Routine: make(map[int64]map[*Routine]uint64),
+	}
+	rt, _ := newUnitTestRoutine(t, 1002)
+
+	ar.recordRoutine(sysAccountID, rt, 1)
+	require.Empty(t, ar.accountId2Routine)
+	ar.recordRoutine(10, nil, 1)
+	require.Empty(t, ar.accountId2Routine)
+
+	ar.recordRoutine(10, rt, 7)
+	require.Equal(t, uint64(7), ar.accountId2Routine[10][rt])
+
+	routineCopy := ar.deepCopyRoutineMap()
+	routineCopy[10][rt] = 8
+	require.Equal(t, uint64(7), ar.accountId2Routine[10][rt])
+
+	ar.EnKillQueue(sysAccountID, 1)
+	require.Empty(t, ar.killIdQueue)
+	ar.EnKillQueue(10, 3)
+	require.Equal(t, uint64(3), ar.killIdQueue[10].version)
+
+	killCopy := ar.deepCopyKillQueue()
+	killCopy[10] = NewKillRecord(time.Now(), 4)
+	require.Equal(t, uint64(3), ar.killIdQueue[10].version)
+
+	ar.AlterRoutineStatue(10, "restricted")
+	require.True(t, rt.isRestricted())
+	ar.AlterRoutineStatue(10, "normal")
+	require.False(t, rt.isRestricted())
+	ar.AlterRoutineStatue(sysAccountID, "restricted")
+	require.False(t, rt.isRestricted())
+
+	ar.deleteRoutine(sysAccountID, rt)
+	require.Contains(t, ar.accountId2Routine, int64(10))
+	ar.deleteRoutine(10, rt)
+	require.NotContains(t, ar.accountId2Routine, int64(10))
+}
+
+func TestRoutineManagerKillAndCleanKillQueue(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 1003)
+	ses := &Session{}
+	rt.setSession(ses)
+	rm := &RoutineManager{
+		ctx:              context.Background(),
+		clients:          make(map[*Conn]*Routine),
+		routinesByConnID: map[uint32]*Routine{1003: rt},
+		accountRoutine: &AccountRoutineManager{
+			killIdQueue:       make(map[int64]KillRecord),
+			accountId2Routine: make(map[int64]map[*Routine]uint64),
+		},
+	}
+
+	require.ErrorContains(t, rm.kill(context.Background(), false, 1, 9999, ""), "Unknown connection id")
+
+	ses.SetQueryInExecute(true)
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	rt.setCancelRequestFunc(cancelReq)
+	require.NoError(t, rm.kill(context.Background(), false, 1, 1003, "stmt"))
+	require.ErrorIs(t, reqCtx.Err(), context.Canceled)
+	require.False(t, ses.GetQueryInExecute())
+
+	rt.setCancelled(false)
+	require.NoError(t, rm.kill(context.Background(), true, 1, 1003, ""))
+	require.True(t, rt.isCancelled())
+
+	pu := getPu("")
+	pu.SV.CleanKillQueueInterval = 1
+	rm.accountRoutine.killIdQueue[1] = NewKillRecord(time.Now().Add(-2*time.Minute), 1)
+	rm.accountRoutine.killIdQueue[2] = NewKillRecord(time.Now(), 1)
+	rm.cleanKillQueue()
+	require.NotContains(t, rm.accountRoutine.killIdQueue, int64(1))
+	require.Contains(t, rm.accountRoutine.killIdQueue, int64(2))
+}
+
+func TestRoutineManagerKillRoutineConnections(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 1004)
+	ar := &AccountRoutineManager{
+		killIdQueue: map[int64]KillRecord{
+			20: NewKillRecord(time.Now(), 5),
+		},
+		accountId2Routine: map[int64]map[*Routine]uint64{
+			20: {rt: 5},
+		},
+	}
+	rm := &RoutineManager{
+		accountRoutine: ar,
+		service:        "",
+	}
+
+	rm.KillRoutineConnections()
+	require.True(t, rt.isCancelled())
+	require.NotContains(t, ar.accountId2Routine, int64(20))
+}
+
+func TestRoutineManagerMigrationAndResetErrorBranches(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 1005)
+	ses := &Session{}
+	rt.setSession(ses)
+	rm := &RoutineManager{
+		ctx:              context.Background(),
+		routinesByConnID: map[uint32]*Routine{1005: rt},
+	}
+
+	require.ErrorContains(t,
+		rm.MigrateConnectionTo(context.Background(), &query.MigrateConnToRequest{ConnID: 404}),
+		"cannot get routine to migrate connection")
+	require.ErrorContains(t,
+		rm.MigrateConnectionFrom(&query.MigrateConnFromRequest{ConnID: 404}, &query.MigrateConnFromResponse{}),
+		"cannot get routine to migrate connection")
+	require.ErrorContains(t,
+		rm.ResetSession(&query.ResetSessionRequest{ConnID: 404}, &query.ResetSessionResponse{}),
+		"cannot get routine to clear session")
+
+	ses.userLevelLocksMigrated = false
+	require.NoError(t, rm.MigrateConnectionFrom(&query.MigrateConnFromRequest{
+		ConnID:                   1005,
+		SkipUserLevelLockRelease: true,
+	}, &query.MigrateConnFromResponse{}))
+	require.True(t, ses.userLevelLocksMigrated)
+
+	ses.userLevelLocksMigrated = true
+	require.NoError(t, rm.MigrateConnectionFrom(&query.MigrateConnFromRequest{
+		ConnID:                     1005,
+		EnableUserLevelLockRelease: true,
+	}, &query.MigrateConnFromResponse{}))
+	require.False(t, ses.userLevelLocksMigrated)
+}
+
+func TestRoutineManagerContextAndConnectionInfoHelpers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	rm := &RoutineManager{ctx: ctx, cancel: cancel}
+	require.Same(t, ctx, rm.getCtx())
+	rm.cancelCtx()
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+
+	var nilRM *RoutineManager
+	nilRM.cancelCtx()
+
+	require.Equal(t, "connection from remote-only", getConnectionInfo(&Conn{remoteAddr: "remote-only"}))
+
+	conn := &testConn{}
+	ioSession := &Conn{conn: conn, remoteAddr: "remote"}
+	require.Contains(t, getConnectionInfo(ioSession), "connection from")
+	require.Contains(t, getConnectionInfo(ioSession), "to")
 }

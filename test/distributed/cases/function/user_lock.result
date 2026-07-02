@@ -92,12 +92,15 @@ select get_lock('User_Lock_Bvt_Case', 0);
 1
 select is_free_lock('user_lock_bvt_case');
 ➤ is_free_lock(user_lock_bvt_case)[-5,64,0]  𝄀
-0
+1
 select release_lock('USER_LOCK_BVT_CASE');
 ➤ release_lock(USER_LOCK_BVT_CASE)[-5,64,0]  𝄀
-1
+null
 select is_free_lock('user_lock_bvt_case');
 ➤ is_free_lock(user_lock_bvt_case)[-5,64,0]  𝄀
+1
+select release_lock('User_Lock_Bvt_Case');
+➤ release_lock(User_Lock_Bvt_Case)[-5,64,0]  𝄀
 1
 drop table user_lock_bvt_holder;
 drop database user_lock_bvt_db;

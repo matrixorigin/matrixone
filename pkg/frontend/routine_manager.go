@@ -456,6 +456,13 @@ func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromReques
 	if routine == nil {
 		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
+	if req.SkipUserLevelLockRelease {
+		return routine.migrateConnectionFrom(nil)
+	}
+	if req.EnableUserLevelLockRelease {
+		routine.getSession().userLevelLocksMigrated = false
+		return nil
+	}
 	return routine.migrateConnectionFrom(resp)
 }
 

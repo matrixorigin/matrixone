@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
@@ -504,12 +505,22 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 
 func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) error {
 	ses := rt.getSession()
+	if resp == nil {
+		ses.userLevelLocksMigrated = true
+		return nil
+	}
 	resp.DB = ses.GetDatabaseName()
 	for _, st := range ses.GetPrepareStmts() {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
 			Name:       st.Name,
 			SQL:        st.Sql,
 			ParamTypes: st.ParamTypes,
+		})
+	}
+	for _, state := range function.UserLevelLocksForMigration(ses.proc) {
+		resp.UserLevelLocks = append(resp.UserLevelLocks, &query.UserLevelLock{
+			Name:  state.Name,
+			Count: state.Count,
 		})
 	}
 	return nil
