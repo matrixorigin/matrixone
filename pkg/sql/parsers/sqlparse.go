@@ -474,9 +474,11 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 	for i, stmt := range stmts {
 		switch stmt.(type) {
 		case *tree.Select, *tree.ParenSelect, *tree.Insert, *tree.Update, *tree.Delete:
-			// SELECT carries the rewrite option for the planner; DML is decoded
-			// only to validate the inline hint (its remapdb is applied at the AST
-			// level, table rewrites on DML read-sources are not yet implemented).
+			// SELECT and INSERT...SELECT carry the rewrite option for the planner
+			// (INSERT propagates it to its inner SELECT read-source, see below).
+			// UPDATE/DELETE are decoded only to validate the inline hint; their
+			// remapdb is applied at the AST level and table rewrites on their
+			// read-sources are not yet implemented.
 		default:
 			continue
 		}
@@ -526,6 +528,18 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 		case *tree.ParenSelect:
 			if s.Select != nil {
 				s.Select.RewriteOption = rewriteOption
+			}
+		case *tree.Insert:
+			// INSERT...SELECT: propagate the rewrite to the inner read-source so
+			// the planner rewrites the source table (issue #25186 / upstream
+			// #25310). RemapDb (if any) is applied separately at the AST level;
+			// the planner only consumes rewriteOption.Rewrites, so carrying the
+			// full option here is safe.
+			if s.Rows != nil {
+				s.Rows.RewriteOption = rewriteOption
+				if ps, ok := s.Rows.Select.(*tree.ParenSelect); ok && ps.Select != nil {
+					ps.Select.RewriteOption = rewriteOption
+				}
 			}
 		}
 	}
