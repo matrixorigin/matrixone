@@ -299,11 +299,20 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 }
 
 func (l *store) checkBootstrap(state *pb.CheckerState) {
+	l.checkBootstrapWithSetter(state, l.setBootstrapState)
+}
+
+func (l *store) checkBootstrapWithSetter(
+	state *pb.CheckerState,
+	setState func(bool) error,
+) {
 	if l.bootstrapCheckCycles == 0 {
-		if err := l.setBootstrapState(false); err != nil {
-			panic(err)
+		if err := setState(false); err != nil {
+			l.logSetBootstrapStateFailure(false, err)
+			return
 		}
 		l.assertHAKeeperState(pb.HAKeeperBootstrapFailed)
+		return
 	}
 
 	if l.bootstrapMgr == nil {
@@ -312,11 +321,23 @@ func (l *store) checkBootstrap(state *pb.CheckerState) {
 	if !l.bootstrapMgr.CheckBootstrap(state.LogState) {
 		l.bootstrapCheckCycles--
 	} else {
-		if err := l.setBootstrapState(true); err != nil {
-			panic(err)
+		if err := setState(true); err != nil {
+			l.logSetBootstrapStateFailure(true, err)
+			return
 		}
 		l.assertHAKeeperState(pb.HAKeeperRunning)
 	}
+}
+
+func (l *store) logSetBootstrapStateFailure(success bool, err error) {
+	if l.runtime == nil {
+		return
+	}
+	l.runtime.Logger().Error(
+		"failed to set bootstrap state",
+		zap.Bool("success", success),
+		zap.Error(err),
+	)
 }
 
 func (l *store) setBootstrapState(success bool) error {

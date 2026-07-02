@@ -25,6 +25,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
+	"math/bits"
 	"sort"
 	"strconv"
 	"strings"
@@ -911,6 +913,27 @@ func coalesceDecimalResult(overloads []overload, minOid types.T, inputs []types.
 	return types.Type{}, -1, false
 }
 
+func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+	target, aligned, ok := textStringCommonType(inputs)
+	if !ok {
+		return checkResult{}, false
+	}
+	for i, over := range overloads {
+		if len(over.args) != 1 || over.args[0] != target.Oid {
+			continue
+		}
+		if aligned {
+			return newCheckResultWithSuccess(i), true
+		}
+		castType := make([]types.Type, len(inputs))
+		for j := range castType {
+			castType[j] = target
+		}
+		return newCheckResultWithCast(i, castType), true
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong), true
+}
+
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 0 {
 		if retType, ok := mixedStringNumericToVarchar(inputs); ok {
@@ -924,6 +947,9 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				}
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
+			return result
 		}
 
 		minIndex := -1
@@ -2557,9 +2583,17 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 		return nil
 	}
 
-	// Validate base ranges (2-36)
-	if fromBase < 2 || fromBase > 36 || toBase < 2 || toBase > 36 {
-		return moerr.NewInvalidInputf(proc.Ctx, "conv base must be between 2 and 36, got from_base=%d, to_base=%d", fromBase, toBase)
+	absFromBase := absInt64(fromBase)
+	absToBase := absInt64(toBase)
+
+	// Invalid bases return NULL.
+	if absFromBase < 2 || absFromBase > 36 || absToBase < 2 || absToBase > 36 {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	// Handle different input types for N
@@ -2606,6 +2640,22 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	}
 }
 
+func absInt64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func formatUnsignedToBase(val uint64, toBase int64) string {
+	base := absInt64(toBase)
+	if toBase < 0 {
+		signedVal := int64(bits.ReverseBytes64(bits.ReverseBytes64(val)))
+		return strings.ToUpper(strconv.FormatInt(signedVal, int(base)))
+	}
+	return strings.ToUpper(strconv.FormatUint(val, int(base)))
+}
+
 func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	nParam := vector.GenerateFunctionStrParameter(nVec)
 
@@ -2624,50 +2674,106 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 			}
 			continue
 		}
-
-		// Parse the number from from_base
-		// strconv.ParseInt can handle bases 2-36
-		val, err := strconv.ParseInt(strings.TrimSpace(string(nStr)), int(fromBase), 64)
-		if err != nil {
-			// If parsing as signed int fails, try unsigned
-			uval, uerr := strconv.ParseUint(strings.TrimSpace(string(nStr)), int(fromBase), 64)
-			if uerr != nil {
-				// Return NULL if parsing fails (MySQL behavior)
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
-			// Convert unsigned to string in to_base
-			result := strconv.FormatUint(uval, int(toBase))
-			if err := rs.AppendBytes([]byte(result), false); err != nil {
+		if len(strings.TrimSpace(string(nStr))) == 0 {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			// Convert signed int to string in to_base
-			// For negative numbers, MySQL returns the unsigned representation
-			if val < 0 {
-				uval := uint64(val)
-				result := strconv.FormatUint(uval, int(toBase))
-				if err := rs.AppendBytes([]byte(result), false); err != nil {
-					return err
-				}
-			} else {
-				result := strconv.FormatInt(val, int(toBase))
-				if err := rs.AppendBytes([]byte(result), false); err != nil {
-					return err
-				}
+			continue
+		}
+
+		signedVal, unsignedVal, signed, err := parseConvStrictString(string(nStr), fromBase)
+		if err != nil {
+			return err
+		}
+		if signed {
+			if err := rs.AppendBytes([]byte(formatSignedToBase(signedVal, toBase)), false); err != nil {
+				return err
 			}
+			continue
+		}
+		if err := rs.AppendBytes([]byte(formatUnsignedToBase(unsignedVal, toBase)), false); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
 func formatSignedToBase(val int64, toBase int64) string {
-	if val < 0 {
-		return strconv.FormatUint(uint64(val), int(toBase))
+	base := absInt64(toBase)
+	if toBase < 0 {
+		return strings.ToUpper(strconv.FormatInt(val, int(base)))
 	}
-	return strconv.FormatInt(val, int(toBase))
+	if val < 0 {
+		return strings.ToUpper(strconv.FormatUint(uint64(val), int(base)))
+	}
+	return strings.ToUpper(strconv.FormatInt(val, int(base)))
+}
+
+func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error) {
+	s := strings.TrimSpace(n)
+	if len(s) == 0 {
+		return 0, 0, false, nil
+	}
+
+	base := int(absInt64(fromBase))
+	signOffset := 0
+	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
+		signOffset = 1
+	}
+	if signOffset == len(s) {
+		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+	}
+	for _, ch := range s[signOffset:] {
+		var digit int
+		switch {
+		case ch >= '0' && ch <= '9':
+			digit = int(ch - '0')
+		case ch >= 'A' && ch <= 'Z':
+			digit = int(ch-'A') + 10
+		case ch >= 'a' && ch <= 'z':
+			digit = int(ch-'a') + 10
+		default:
+			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		}
+		if digit >= base {
+			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		}
+	}
+
+	if fromBase < 0 {
+		val, err := strconv.ParseInt(s, base, 64)
+		if err != nil {
+			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+				if strings.HasPrefix(s, "-") {
+					return math.MinInt64, 0, true, nil
+				}
+				return math.MaxInt64, 0, true, nil
+			}
+			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		}
+		return val, 0, true, nil
+	}
+
+	if strings.HasPrefix(s, "-") {
+		magnitudeStr := s[1:]
+		magnitude, ok := new(big.Int).SetString(magnitudeStr, base)
+		if !ok {
+			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		}
+		reduced := new(big.Int).Mod(magnitude, new(big.Int).Lsh(big.NewInt(1), 64))
+		return 0, uint64(0) - reduced.Uint64(), false, nil
+	}
+
+	s = strings.TrimPrefix(s, "+")
+
+	uval, err := strconv.ParseUint(s, base, 64)
+	if err != nil {
+		if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+			return 0, math.MaxUint64, false, nil
+		}
+		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+	}
+	return 0, uval, false, nil
 }
 
 func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
@@ -2797,7 +2903,7 @@ func convUint8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResul
 			continue
 		}
 
-		result := strconv.FormatUint(uint64(n), int(toBase))
+		result := formatUnsignedToBase(uint64(n), toBase)
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
@@ -2824,7 +2930,7 @@ func convUint16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResu
 			continue
 		}
 
-		result := strconv.FormatUint(uint64(n), int(toBase))
+		result := formatUnsignedToBase(uint64(n), toBase)
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
@@ -2851,7 +2957,7 @@ func convUint32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResu
 			continue
 		}
 
-		result := strconv.FormatUint(uint64(n), int(toBase))
+		result := formatUnsignedToBase(uint64(n), toBase)
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
@@ -2879,7 +2985,7 @@ func convUint64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResu
 		}
 
 		// Convert uint64 to string in to_base
-		result := strconv.FormatUint(n, int(toBase))
+		result := formatUnsignedToBase(n, toBase)
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
