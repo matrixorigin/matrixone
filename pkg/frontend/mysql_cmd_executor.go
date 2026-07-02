@@ -2688,7 +2688,7 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 		_, err = writer.Write(payload)
 		if err != nil {
 			ses.Errorf(execCtx.reqCtx,
-				"Failed to load local file",
+				"Failed to load local file: %v %v %v",
 				zap.String("path", param.Filepath),
 				zap.Uint64("epoch", epoch),
 				zap.Error(err))
