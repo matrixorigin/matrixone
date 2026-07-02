@@ -1432,15 +1432,6 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 			return err
 		}
-	case types.T_year:
-		d, err := types.ParseMoYear(field.Val)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Year type for column %d", field.Val, colIdx)
-		}
-		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
-			return err
-		}
 	case types.T_uuid:
 		d, err := types.ParseUuid(field.Val)
 		if err != nil {

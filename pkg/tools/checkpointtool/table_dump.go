@@ -284,7 +284,7 @@ func ParseCSVRowOrder(s string) (CSVRowOrder, error) {
 	case CSVRowOrderLexical:
 		return CSVRowOrderLexical, nil
 	default:
-		return "", fmt.Errorf("unsupported row order %q (supported: %s, %s)", s, CSVRowOrderStorage, CSVRowOrderLexical)
+		return "", moerr.NewInvalidInputf(context.Background(), "unsupported row order %q (supported: %s, %s)", s, CSVRowOrderStorage, CSVRowOrderLexical)
 	}
 }
 
@@ -4244,7 +4244,7 @@ func (r *CheckpointReader) findCatalogTableIDForAccount(
 ) (uint64, bool, error) {
 	moTablesView, err := r.getTableLogicalView(ctx, moTablesID, snapshotTS)
 	if err != nil {
-		return 0, false, fmt.Errorf("read mo_tables: %w", err)
+		return 0, false, moerr.NewInternalErrorf(ctx, "read mo_tables: %v", err)
 	}
 	var fallback uint64
 	tables := buildCatalogTablesFromMoTablesRows(moTablesView)
