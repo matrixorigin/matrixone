@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext/wand"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -75,13 +77,14 @@ func RunWand(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 		case blob, ok := <-c.sqlBufSendCh:
 			if !ok {
 				// channel closed: build the delta + append tag=1 frames in one txn.
+				nframes := 0
 				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
 					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 						startChunk, err := wandNextTailChunkId(sqlproc, w.cfg)
 						if err != nil {
 							return err
 						}
-						frames, _, err := wand.BuildTailFrames(acc, w.capacity, startChunk, tokenize)
+						frames, nextChunk, err := wand.BuildTailFrames(acc, w.capacity, startChunk, tokenize)
 						if err != nil {
 							return err
 						}
@@ -92,6 +95,9 @@ func RunWand(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 							}
 							res.Close()
 						}
+						nframes = len(frames)
+						logutil.Infof("[wand-sink] db=%s index=%s type=%d events=%d frames=%d chunk_id=%d..%d",
+							w.cfg.DbName, w.cfg.IndexTable, datatype, len(acc.Events), nframes, startChunk, nextChunk)
 						// advance the CDC watermark only on the tail stream.
 						if datatype == ISCPDataType_Tail {
 							sqlctx := sqlproc.SqlCtx
@@ -101,6 +107,14 @@ func RunWand(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 					})
 				if err != nil {
 					errch <- err
+					return
+				}
+				// Evict the cached search index so the next query reloads tag=0 +
+				// the freshly-appended tag=1 frames, instead of serving the warm
+				// (stale) cache until its idle TTL. Local to this CN's cache.
+				if nframes > 0 {
+					veccache.Cache.Remove(w.cfg.IndexTable)
+					logutil.Infof("[wand-sink] evicted search cache for index=%s", w.cfg.IndexTable)
 				}
 				return
 			}

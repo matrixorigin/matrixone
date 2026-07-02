@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/fulltext/wand"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -96,6 +97,10 @@ func (u *fulltextWandCreateState) end(tf *TableFunction, proc *process.Process) 
 		}
 		res.Close()
 	}
+	// A fresh tag=0 was written (CREATE / REINDEX build) — evict any cached
+	// search index so the next query reloads the new base instead of the stale
+	// one held until the idle TTL.
+	veccache.Cache.Remove(u.tblcfg.IndexTable)
 	return nil
 }
 
