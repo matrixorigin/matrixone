@@ -310,6 +310,10 @@ type reader struct {
 
 	source engine.DataSource
 
+	// ivfWideningApplied guards one-time population of orderByLimit's widening
+	// fields from the defines.IvfWidening context value (prototype).
+	ivfWideningApplied bool
+
 	readBlockCnt uint64 // count of blocks this reader has read
 	threshHold   uint64 //if read block cnt > threshold, will skip memcache write for reader
 
@@ -630,6 +634,28 @@ func (r *reader) Read(
 	}()
 
 	r.tryUpdateColumns(cols)
+
+	// Reader-driven IVF widening (UNVERIFIED prototype, branch ivfflat_widening):
+	// populate orderByLimit's widening fields from the IvfWidening side-channel
+	// once, then forward the live top-K heap to the datasource via ctx so the
+	// rank-ordered entries scan can early-stop. Fully gated: no-op unless
+	// ivf_search attached the widening param.
+	if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit {
+		if !r.ivfWideningApplied {
+			if v := ctx.Value(defines.IvfWidening{}); v != nil {
+				if wp, ok := v.(*objectio.IvfWideningParam); ok && wp != nil {
+					r.orderByLimit.RankedCentroids = wp.RankedCentroids
+					r.orderByLimit.Nprobe = wp.Nprobe
+					logutil.Infof("[IVF-WIDEN] reader populated heap: ranked=%d nprobe=%d limit=%d",
+						len(wp.RankedCentroids), wp.Nprobe, r.orderByLimit.Limit)
+				}
+			}
+			r.ivfWideningApplied = true
+		}
+		if r.orderByLimit.WideningEnabled() {
+			ctx = context.WithValue(ctx, defines.IvfTopOp{}, r.orderByLimit)
+		}
+	}
 
 	// source.Next() expects outBatch.Vecs to be aligned with cols/seqnums.
 	// For vector TopN pushdown we may have an extra distVec appended in the previous
