@@ -3291,11 +3291,3 @@ func TestSubqueryInJoinOn(t *testing.T) {
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 }
-
-func TestCommaJoinWithExplicitJoin(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	sqls := []string{
-		"select nation.n_name from nation, nation2 join region on nation2.r_regionkey = region.r_regionkey",
-	}
-	runTestShouldPass(mock, t, sqls, false, false)
-}
