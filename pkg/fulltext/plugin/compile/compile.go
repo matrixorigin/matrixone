@@ -33,6 +33,7 @@ import (
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 )
 
 // insertIntoFullTextIndexTableFormat is the populate-SQL template,
@@ -189,9 +190,15 @@ func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.Reinde
 	return old, nil
 }
 
-// HandleDropIndex — no algorithm-specific cleanup beyond the generic
-// hidden-table deletion the SQL layer already performs.
-func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) error {
+// HandleDropIndex — a retrieval (WAND) index caches a WandSearch keyed by its
+// ft_index storage table (loaded once, held for the idle TTL); evict it here so
+// the C-backed postings buffers aren't leaked until the TTL after DROP. A
+// postings/ngram fulltext index has no WAND store (no Storage def) and needs no
+// cleanup beyond the generic hidden-table deletion the SQL layer performs.
+func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
+	if storeDef, ok := defs[catalog.FullTextIndex_TblType_Storage]; ok {
+		veccache.Cache.Remove(storeDef.IndexTableName)
+	}
 	return nil
 }
 
