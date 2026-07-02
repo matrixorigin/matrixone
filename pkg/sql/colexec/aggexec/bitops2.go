@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -151,6 +152,27 @@ func (exec *bitOpExecFixed[T]) Flush() ([]*vector.Vector, error) {
 		exec.state[i].vecs[0] = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
+
+		// Replace NULL entries with neutral values per MySQL semantics:
+		// BIT_AND: neutral is all bits set (max uint64)
+		// BIT_OR, BIT_XOR: neutral is 0
+		if exec.op == bitAnd {
+			aggs := vector.MustFixedColNoTypeCheck[uint64](vecs[i])
+			for j := 0; j < vecs[i].Length(); j++ {
+				if vecs[i].IsNull(uint64(j)) {
+					vecs[i].UnsetNull(uint64(j))
+					aggs[j] = math.MaxUint64
+				}
+			}
+		} else {
+			aggs := vector.MustFixedColNoTypeCheck[uint64](vecs[i])
+			for j := 0; j < vecs[i].Length(); j++ {
+				if vecs[i].IsNull(uint64(j)) {
+					vecs[i].UnsetNull(uint64(j))
+					aggs[j] = 0
+				}
+			}
+		}
 	}
 	return vecs, nil
 }
@@ -232,11 +254,27 @@ func (exec *bitOpExecBytes) SetExtraInformation(partialResult any, _ int) error 
 func (exec *bitOpExecBytes) Flush() ([]*vector.Vector, error) {
 	// transfer vector to result
 	vecs := make([]*vector.Vector, len(exec.state))
+	neutralBytesForAnd := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 	for i := range vecs {
 		vecs[i] = exec.state[i].vecs[0]
 		exec.state[i].vecs[0] = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
+
+		// Replace NULL entries with neutral values per MySQL semantics:
+		// BIT_AND: neutral is all bits set (8 bytes of 0xFF)
+		// BIT_OR, BIT_XOR: neutral is empty bytes
+		for j := 0; j < vecs[i].Length(); j++ {
+			if vecs[i].IsNull(uint64(j)) {
+				vecs[i].UnsetNull(uint64(j))
+				if exec.op == bitAnd {
+					if err := vector.SetBytesAt(vecs[i], j, neutralBytesForAnd, exec.mp); err != nil {
+						return nil, err
+					}
+				}
+				// For bitOr and bitXor, the default zero bytes (empty) is already the neutral value
+			}
+		}
 	}
 	return vecs, nil
 }

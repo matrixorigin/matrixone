@@ -1,37 +1,37 @@
 SELECT bit_and(null), bit_or(null), bit_xor(null);
 bit_and(null)    bit_or(null)    bit_xor(null)
-null    null    null
+18446744073709551615    0    0
 CREATE TABLE t1 (a int, b int);
 INSERT INTO t1 VALUES (1,null);
 INSERT INTO t1 VALUES (1,null);
 INSERT INTO t1 VALUES (2,null);
 select a, BIT_AND(b), BIT_OR(b), BIT_XOR(b) from t1 group by a;
 a    BIT_AND(b)    BIT_OR(b)    BIT_XOR(b)
-1    null    null    null
-2    null    null    null
+1    18446744073709551615    0    0
+2    18446744073709551615    0    0
 SELECT a, OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1 GROUP BY a;
 a    OCT(BIT_AND(b))    OCT(BIT_OR(b))    OCT(BIT_XOR(b))
-1    null    null    null
-2    null    null    null
+1    1777777777777777777777    0    0
+2    1777777777777777777777    0    0
 SELECT OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1;
 OCT(BIT_AND(b))    OCT(BIT_OR(b))    OCT(BIT_XOR(b))
-null    null    null
+1777777777777777777777    0    0
 INSERT INTO t1 VALUES (3,123);
 SELECT a, OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1 GROUP BY a;
 a    OCT(BIT_AND(b))    OCT(BIT_OR(b))    OCT(BIT_XOR(b))
-1    null    null    null
-2    null    null    null
+1    1777777777777777777777    0    0
+2    1777777777777777777777    0    0
 3    173    173    173
 INSERT INTO t1 VALUES (2,124124), (3, 4951312);
 SELECT a, OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1 GROUP BY a;
 a    OCT(BIT_AND(b))    OCT(BIT_OR(b))    OCT(BIT_XOR(b))
-1    null    null    null
+1    1777777777777777777777    0    0
 2    362334    362334    362334
 3    20    22706573    22706553
 INSERT INTO t1 VALUES (4,-4124124);
 SELECT a, OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1 GROUP BY a;
 a    OCT(BIT_AND(b))    OCT(BIT_OR(b))    OCT(BIT_XOR(b))
-1    null    null    null
+1    1777777777777777777777    0    0
 2    362334    362334    362334
 3    20    22706573    22706553
 4    1777777777777760211044    1777777777777760211044    1777777777777760211044
@@ -162,11 +162,11 @@ invalid argument aggregate function bit_and, bad value [DOUBLE]
 create table t1(a bigint);
 select BIT_AND(a),BIT_OR(a), BIT_XOR(a) from t1;
 BIT_AND(a)    BIT_OR(a)    BIT_XOR(a)
-null    null    null
+18446744073709551615    0    0
 insert into t1 values(null),(null),(null),(null);
 select BIT_AND(a),BIT_OR(a), BIT_XOR(a)  from t1;
 BIT_AND(a)    BIT_OR(a)    BIT_XOR(a)
-null    null    null
+18446744073709551615    0    0
 insert into t1 values(12417249128419),(124124125124151),(5124125151415),(124125152651515);
 select BIT_AND(a),BIT_OR(a), BIT_XOR(a) from t1;
 BIT_AND(a)    BIT_OR(a)    BIT_XOR(a)
@@ -206,18 +206,22 @@ INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) as q from t1 group by Fld1 having q is not null;
 Fld1    BIT_AND(Fld2)    BIT_OR(Fld2)    q
 1    0    30    30
+2    18446744073709551615    0    0
 3    50    50    50
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) from t1 group by Fld1 having BIT_AND(Fld2) is not null;
 Fld1    BIT_AND(Fld2)    BIT_OR(Fld2)    BIT_XOR(Fld2)
 1    0    30    30
+2    18446744073709551615    0    0
 3    50    50    50
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) from t1 group by Fld1 having BIT_OR(Fld2) is not null;
 Fld1    BIT_AND(Fld2)    BIT_OR(Fld2)    BIT_XOR(Fld2)
 1    0    30    30
+2    18446744073709551615    0    0
 3    50    50    50
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) from t1 group by Fld1 having BIT_XOR(Fld2) is not null;
 Fld1    BIT_AND(Fld2)    BIT_OR(Fld2)    BIT_XOR(Fld2)
 1    0    30    30
+2    18446744073709551615    0    0
 3    50    50    50
 drop table t1;
 SELECT BIT_AND(1)<BIT_AND(2), BIT_AND(1)>BIT_OR(3), BIT_AND(3)>BIT_XOR(5);
