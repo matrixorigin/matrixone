@@ -9,8 +9,8 @@ max-size = 512
 
 [[fileservice]]
 name = "SHARED"
-backend = "DISK"
-data-dir = "mo-data/shared"
+backend = "DISK-V2"
+data-dir = "mo-data/shared2"
 
 [fileservice.cache]
 memory-capacity = "512MB"

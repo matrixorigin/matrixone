@@ -29,10 +29,11 @@ import (
 // setupFilesystem returns a FileService for ETL which the reader outside the matrixone
 // can read the content. a FileService for Backup which only the matrixone
 // can read the content.
-func setupFilesystem(ctx context.Context, path string, forETL bool) (res fileservice.FileService, readPath string, err error) {
+func setupFilesystem(ctx context.Context, path string, forETL bool, backend string) (res fileservice.FileService, readPath string, err error) {
 	return setupFileservice(ctx, &pathConfig{
 		isS3:             false,
 		forETL:           forETL,
+		backend:          backend,
 		filesystemConfig: filesystemConfig{path: path},
 	})
 }
@@ -65,7 +66,7 @@ func setupFileservice(ctx context.Context, conf *pathConfig) (res fileservice.Fi
 			}
 		} else {
 			s3path := fileservice.JoinPath(s3opts, conf.filepath)
-			res, err = fileservice.GetForBackup(ctx, s3path)
+			res, err = fileservice.GetForBackup(ctx, s3path, conf.backend)
 			if err != nil {
 				return nil, "", err
 			}
@@ -78,7 +79,7 @@ func setupFileservice(ctx context.Context, conf *pathConfig) (res fileservice.Fi
 				return nil, "", err
 			}
 		} else {
-			res, err = fileservice.GetForBackup(ctx, conf.path)
+			res, err = fileservice.GetForBackup(ctx, conf.path, conf.backend)
 			if err != nil {
 				return nil, "", err
 			}

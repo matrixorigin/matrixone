@@ -32,17 +32,21 @@ func infoCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
-			return showInfo(path)
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			return showInfo(path, kind)
 		},
 	}
 
 	return cmd
 }
 
-func showInfo(path string) error {
+func showInfo(path string, kind string) error {
 	ctx := context.Background()
 
-	reader, err := objecttool.Open(ctx, path)
+	reader, err := objecttool.OpenWithKind(ctx, path, kind)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to open object: %v", err)
 	}

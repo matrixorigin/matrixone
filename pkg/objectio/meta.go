@@ -358,6 +358,14 @@ func (h Header) SchemaVersion(ver uint32) {
 	types.DecodeUint32(h[8+2+ExtentSize : 8+2+ExtentSize+4])
 }
 
+// Magic returns the object magic stored in the first 8 bytes of the header
+// (written by BuildHeader). A value other than Magic means the bytes are not a
+// valid raw objectio header — e.g. a legacy CRC-framed (DISK) file read through
+// the raw DISK-V2 backend, or on-disk corruption.
+func (h Header) Magic() uint64 {
+	return types.DecodeUint64(h[:8])
+}
+
 type Footer struct {
 	dummy      [37]byte
 	checksum   uint32

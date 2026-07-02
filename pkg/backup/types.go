@@ -264,6 +264,10 @@ type filesystemConfig struct {
 type pathConfig struct {
 	isS3   bool
 	forETL bool
+	// backend is the on-disk format of a local (filesystem) backup target,
+	// derived from the cluster's data fileservice so the archive matches it:
+	// "DISK-V2" for raw, "DISK" for legacy CRC.
+	backend string
 	s3Config
 	filesystemConfig
 }

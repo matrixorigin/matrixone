@@ -62,8 +62,16 @@ type ObjectReader struct {
 	mp        *mpool.MPool
 }
 
-// Open opens an object file
+// Open opens an object file in the legacy local DISK (CRC-framed) format.
 func Open(ctx context.Context, path string) (*ObjectReader, error) {
+	return OpenWithKind(ctx, path, objectio.OfflineKindLocal)
+}
+
+// OpenWithKind opens an object file, reading the data dir in the on-disk format
+// selected by kind: "local" (DISK/CRC), "local2" (DISK-V2/raw), or "s3"
+// (S3FS-on-disk/raw). See objectio.OfflineKind* and the --local/--s3/--local2
+// tool flags.
+func OpenWithKind(ctx context.Context, path string, kind string) (*ObjectReader, error) {
 	// 1. Parse path: directory and filename
 	dir := "/"
 	filename := path
@@ -75,8 +83,8 @@ func Open(ctx context.Context, path string) (*ObjectReader, error) {
 		filename = path[idx+1:]
 	}
 
-	// 2. Create local file service
-	fs, err := fileservice.NewLocalFS(ctx, "local", dir, fileservice.DisabledCacheConfig, nil)
+	// 2. Create file service in the requested on-disk format
+	fs, err := objectio.NewOfflineFS(ctx, dir, kind)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
 	}

@@ -32,6 +32,7 @@ import (
 
 func Test_objGetArg(t *testing.T) {
 	get := objGetArg{}
+	get.s3 = true // offline format must be stated explicitly (--local/--s3/--local2)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	err := get.InitReader(ctx, "abc")
