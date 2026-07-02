@@ -34,7 +34,6 @@ create table cg_dst.dst_snapshot clone cg_src.src {snapshot = "sp_cg_src"} copy 
 create table cg_src.dst_if_not_exists(a int primary key, b varchar(20));
 grant select on table cg_src.dst_if_not_exists to cg_r_existing_dst;
 create table if not exists cg_src.dst_if_not_exists clone cg_src.src copy grants;
-table dst_if_not_exists already exists
 select t.reldatabase, t.relname, rp.role_name, rp.privilege_name, rp.privilege_level, rp.with_grant_option
 from mo_catalog.mo_tables t
 join mo_catalog.mo_role_privs rp
