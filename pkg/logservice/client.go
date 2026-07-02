@@ -37,6 +37,13 @@ const (
 	defaultWriteSocketSize = 64 * 1024
 )
 
+var (
+	logServiceConnectAttemptTimeout = 5 * time.Second
+	logServiceConnectFallbackDelay  = 300 * time.Millisecond
+)
+
+var connectToLogServiceAddressFn = connectToLogServiceAddress
+
 // IsTempError returns a boolean value indicating whether the specified error
 // is a temp error that worth to be retried, e.g. timeouts, temp network
 // issues. Non-temp error caused by program logics rather than some external
@@ -468,7 +475,12 @@ func connectToLogServiceByReverseProxy(
 	if !ok {
 		return nil, moerr.NewLogServiceNotReady(ctx)
 	}
-	addresses := make([]string, 0)
+	addresses := shardInfoReplicaAddresses(si)
+	return connectToLogServiceAddresses(ctx, sid, addresses, cfg)
+}
+
+func shardInfoReplicaAddresses(si ShardInfo) []string {
+	addresses := make([]string, 0, len(si.Replicas))
 	leaderAddress, ok := si.Replicas[si.ReplicaID]
 	if ok {
 		addresses = append(addresses, leaderAddress)
@@ -478,7 +490,7 @@ func connectToLogServiceByReverseProxy(
 			addresses = append(addresses, address)
 		}
 	}
-	return connectToLogService(ctx, sid, addresses, cfg)
+	return addresses
 }
 
 func connectToLogService(
@@ -490,7 +502,19 @@ func connectToLogService(
 	if len(targets) == 0 {
 		return nil, nil
 	}
+	addresses := append([]string{}, targets...)
+	rand.Shuffle(len(addresses), func(i, j int) {
+		addresses[i], addresses[j] = addresses[j], addresses[i]
+	})
+	return connectToLogServiceAddresses(ctx, sid, addresses, cfg)
+}
 
+func connectToLogServiceAddress(
+	ctx context.Context,
+	sid string,
+	addr string,
+	cfg ClientConfig,
+) (*client, error) {
 	pool := &sync.Pool{}
 	pool.New = func() interface{} {
 		return &RPCRequest{pool: pool}
@@ -504,51 +528,153 @@ func connectToLogService(
 		pool:     pool,
 		respPool: respPool,
 	}
-	var e error
-	addresses := append([]string{}, targets...)
-	rand.Shuffle(len(cfg.ServiceAddresses), func(i, j int) {
-		addresses[i], addresses[j] = addresses[j], addresses[i]
-	})
-	for _, addr := range addresses {
-		cc, err := getRPCClient(
-			ctx,
-			sid,
-			addr,
-			c.respPool,
-			c.cfg.MaxMessageSize,
-			cfg.EnableCompress,
-			0,
-			cfg.Tag,
-		)
-		if err != nil {
-			e = err
+	cc, err := getRPCClient(
+		ctx,
+		sid,
+		addr,
+		c.respPool,
+		c.cfg.MaxMessageSize,
+		cfg.EnableCompress,
+		0,
+		cfg.Tag,
+	)
+	if err != nil {
+		return nil, err
+	}
+	c.addr = addr
+	c.client = cc
+	if cfg.ReadOnly {
+		if err := c.connectReadOnly(ctx); err != nil {
+			if closeErr := c.close(); closeErr != nil {
+				logutil.Error("failed to close the client", zap.Error(closeErr))
+			}
+			return nil, err
+		}
+		return c, nil
+	}
+	// TODO: add a test to check whether it works when there is no truncated
+	// LSN known to the logservice.
+	if err := c.connectReadWrite(ctx); err != nil {
+		if closeErr := c.close(); closeErr != nil {
+			logutil.Error("failed to close the client", zap.Error(closeErr))
+		}
+		return nil, err
+	}
+	return c, nil
+}
+
+type connectResult struct {
+	client *client
+	err    error
+}
+
+func connectToLogServiceAddresses(
+	ctx context.Context,
+	sid string,
+	addresses []string,
+	cfg ClientConfig,
+) (*client, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan connectResult, len(addresses))
+	var wg sync.WaitGroup
+	launch := func(addr string) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			attemptCtx, attemptCancel := context.WithTimeout(ctx, logServiceConnectAttemptTimeout)
+			c, err := connectToLogServiceAddressFn(attemptCtx, sid, addr, cfg)
+			attemptCancel()
+			if err == nil {
+				select {
+				case results <- connectResult{client: c}:
+				case <-ctx.Done():
+					if closeErr := c.close(); closeErr != nil {
+						logutil.Error("failed to close the client", zap.Error(closeErr))
+					}
+				}
+				return
+			}
+			select {
+			case results <- connectResult{err: err}:
+			case <-ctx.Done():
+			}
+		}()
+	}
+
+	var lastErr error
+	launched, active := 0, 0
+	for active > 0 || launched < len(addresses) {
+		if active == 0 {
+			launch(addresses[launched])
+			launched++
+			active++
 			continue
 		}
-		c.addr = addr
-		c.client = cc
-		if cfg.ReadOnly {
-			if err := c.connectReadOnly(ctx); err == nil {
-				return c, nil
-			} else {
-				if err := c.close(); err != nil {
-					logutil.Error("failed to close the client", zap.Error(err))
-				}
-				e = err
+
+		var fallback <-chan time.Time
+		var timer *time.Timer
+		if launched < len(addresses) {
+			timer = time.NewTimer(logServiceConnectFallbackDelay)
+			fallback = timer.C
+		}
+
+		select {
+		case r := <-results:
+			stopConnectFallbackTimer(timer)
+			active--
+			if r.client != nil {
+				cancel()
+				wg.Wait()
+				closeUnusedConnectResultClients(results)
+				return r.client, nil
 			}
-		} else {
-			// TODO: add a test to check whether it works when there is no truncated
-			// LSN known to the logservice.
-			if err := c.connectReadWrite(ctx); err == nil {
-				return c, nil
-			} else {
-				if err := c.close(); err != nil {
-					logutil.Error("failed to close the client", zap.Error(err))
-				}
-				e = err
+			lastErr = r.err
+		case <-fallback:
+			launch(addresses[launched])
+			launched++
+			active++
+		case <-ctx.Done():
+			stopConnectFallbackTimer(timer)
+			cancel()
+			wg.Wait()
+			closeUnusedConnectResultClients(results)
+			if lastErr != nil {
+				return nil, lastErr
 			}
+			return nil, ctx.Err()
 		}
 	}
-	return nil, e
+	wg.Wait()
+	return nil, lastErr
+}
+
+func closeUnusedConnectResultClients(results <-chan connectResult) {
+	for {
+		select {
+		case r := <-results:
+			if r.client != nil {
+				if closeErr := r.client.close(); closeErr != nil {
+					logutil.Error("failed to close the client", zap.Error(closeErr))
+				}
+			}
+		default:
+			return
+		}
+	}
+}
+
+func stopConnectFallbackTimer(timer *time.Timer) {
+	if timer == nil {
+		return
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
 }
 
 func (c *client) close() error {
