@@ -743,7 +743,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 								return err
 							}
 						}
-						deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, oTableDef.TblId, indexdef.IndexName)
+						// Escape the index name, same as the visibility /
+						// algo_params catalog writes below: it is user-supplied
+						// and the scanner treats backslash as an escape inside
+						// '...', so an unescaped quote or backslash could corrupt
+						// or break out of name = '...'.
+						deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, oTableDef.TblId, sqlquote.EscapeString(indexdef.IndexName))
 						if err = c.runSqlWithOptions(
 							deleteSql, executor.StatementOption{}.WithDisableLog(),
 						); err != nil {
@@ -2550,7 +2555,11 @@ func (s *Scope) DropIndex(c *Compile) error {
 	}
 
 	//5. delete index object from mo_catalog.mo_indexes
-	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
+	// Escape the index name, same as the visibility / algo_params catalog
+	// writes: it is user-supplied and the scanner treats backslash as an
+	// escape inside '...', so an unescaped quote or backslash could corrupt
+	// or break out of name = '...'.
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), sqlquote.EscapeString(qry.IndexName))
 	err = c.runSqlWithOptions(
 		deleteSql, executor.StatementOption{}.WithDisableLog(),
 	)
