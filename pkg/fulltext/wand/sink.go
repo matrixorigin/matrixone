@@ -215,6 +215,16 @@ func BuildTailFrames(cdc *WandCdc, capacity int64, startChunkId int64, tokenize 
 	return frames, chunkId, nil
 }
 
+// NextTailChunkIdSql returns a SELECT for the next free tag=1 CdcTail chunk_id
+// (COALESCE(MAX+1, 0), scoped to index_id=CdcTailId, tag=Tag_CdcEvents) — the
+// monotonic append position the sinker frames at. Mirrors cuVS's NextChunkIdSql.
+func NextTailChunkIdSql(cfg TableConfig) string {
+	return fmt.Sprintf("SELECT COALESCE(MAX(%s)+1, 0) FROM %s WHERE %s = %s AND %s = %d",
+		catalog.FullTextIndex_TblCol_Storage_Chunk_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.FullTextIndex_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+}
+
 // FrameInsertSql renders one tag=1 CdcTail frame as an INSERT into the store
 // (index_id = CdcTailId, tag = Tag_CdcEvents), mirroring ToInsertSqls' row form.
 func FrameInsertSql(cfg TableConfig, chunkId int64, framed []byte) string {
