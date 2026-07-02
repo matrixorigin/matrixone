@@ -168,6 +168,18 @@ create table t2 (a int);
 create table t3 (b int);
 select * from t1,t2 join t3 on a=b;
 
+-- comma join with CTE/subquery and explicit JOIN (issue #24411)
+drop table if exists t_comma_join;
+drop table if exists t_comma_dim;
+create table t_comma_join (id int, val int);
+create table t_comma_dim (id int primary key, typ varchar(16));
+insert into t_comma_join values (1, 100), (2, 200);
+insert into t_comma_dim values (1, 'A'), (2, 'B');
+select r.id, s.typ from t_comma_join r, (select max(val) as v from t_comma_join) ld
+join t_comma_dim s on r.id = s.id where r.val = ld.v;
+drop table t_comma_join;
+drop table t_comma_dim;
+
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int primary key);
