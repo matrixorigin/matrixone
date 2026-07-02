@@ -804,7 +804,17 @@ func ProcessInitSQL(
 		0)
 	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if txnOp != nil {
-		defer txnOp.Commit(ctx)
+		// Commit only when every InitSQL statement succeeded; roll back on any
+		// error so a multi-statement InitSQL (postings-populate + WAND build) is
+		// atomic — a mid-sequence failure must not leave the earlier statements
+		// committed (which an ISCP retry would then re-apply).
+		defer func() {
+			if err != nil {
+				_ = txnOp.Rollback(ctx)
+			} else {
+				err = txnOp.Commit(ctx)
+			}
+		}()
 	}
 	// injection is for ut
 
