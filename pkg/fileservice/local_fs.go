@@ -144,17 +144,20 @@ func newLocalFS(
 		noChecksum:      noChecksum,
 	}
 
-	if err := fs.initCaches(ctx, cacheConfig); err != nil {
-		return nil, err
-	}
-
 	// Fail fast at startup if a raw (DISK-V2) service is pointed at a directory
 	// that already holds legacy DISK (CRC32-framed) data — reading raw over
-	// framed bytes would otherwise silently return wrong bytes.
+	// framed bytes would otherwise silently return wrong bytes. Run this BEFORE
+	// initCaches: the guard only reads a file (no cache needed), and running it
+	// first means a failed guard never leaks the cache eviction goroutines /
+	// disk-cache fd that initCaches would otherwise have started.
 	if noChecksum {
 		if err := fs.checkNotCRCFramed(); err != nil {
 			return nil, err
 		}
+	}
+
+	if err := fs.initCaches(ctx, cacheConfig); err != nil {
+		return nil, err
 	}
 
 	return fs, nil
