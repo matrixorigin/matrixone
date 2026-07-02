@@ -150,6 +150,23 @@ func cloneTableRestoreSQL(stmt *tree.CloneTable, snapshotTS int64) string {
 	)
 }
 
+func cloneTargetTableExists(ctx context.Context, bh BackgroundExec, dbName, tableName string, accountID uint32) (bool, error) {
+	sql, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, accountID, 0)
+	if err != nil {
+		return false, err
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+	return execResultArrayHasData(erArray), nil
+}
+
 func newQualifiedCloneTableName(dbName, tblName string, atTsExpr *tree.AtTimeStamp) tree.TableName {
 	return *tree.NewTableName(
 		tree.Identifier(tblName),
@@ -304,6 +321,7 @@ func handleCloneTable(
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
 
 	var sql string
+	var dstTableExistedBeforeRestore bool
 
 	if snapshot == nil {
 		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
@@ -314,11 +332,23 @@ func handleCloneTable(
 	}
 	sql = cloneTableRestoreSQL(stmt, snapshotTS)
 
+	if stmt.CopyGrants && stmt.CreateTable.IfNotExists {
+		if dstTableExistedBeforeRestore, err = cloneTargetTableExists(
+			ctx,
+			bh,
+			stmt.CreateTable.Table.SchemaName.String(),
+			stmt.CreateTable.Table.ObjectName.String(),
+			toAccountId,
+		); err != nil {
+			return
+		}
+	}
+
 	if err = bh.ExecRestore(ctx, sql, opAccountId, toAccountId); err != nil {
 		return
 	}
 
-	if stmt.CopyGrants {
+	if stmt.CopyGrants && !dstTableExistedBeforeRestore {
 		copyGrantsSnapshotTS := snapshotTS
 		if snapshot != nil && snapshot.TS != nil {
 			copyGrantsSnapshotTS = snapshot.TS.PhysicalTime

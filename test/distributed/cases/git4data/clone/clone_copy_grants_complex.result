@@ -9,7 +9,7 @@ create database cg_src;
 create database cg_dst;
 create table cg_src.src(a int primary key, b varchar(20));
 insert into cg_src.src values(1, 'one'), (2, 'two');
-create role cg_r_select, cg_r_insert, cg_r_delete, cg_r_all, cg_r_parent, cg_r_child;
+create role cg_r_select, cg_r_insert, cg_r_delete, cg_r_all, cg_r_parent, cg_r_child, cg_r_existing_dst;
 grant connect on account * to cg_r_select;
 grant connect on account * to cg_r_insert;
 grant connect on account * to cg_r_delete;
@@ -31,6 +31,21 @@ create table cg_src.dst_copy clone cg_src.src copy grants;
 create table cg_dst.dst_cross clone cg_src.src copy grants;
 create snapshot sp_cg_src for table cg_src src;
 create table cg_dst.dst_snapshot clone cg_src.src {snapshot = "sp_cg_src"} copy grants;
+create table cg_src.dst_if_not_exists(a int primary key, b varchar(20));
+grant select on table cg_src.dst_if_not_exists to cg_r_existing_dst;
+create table if not exists cg_src.dst_if_not_exists clone cg_src.src copy grants;
+table dst_if_not_exists already exists
+select t.reldatabase, t.relname, rp.role_name, rp.privilege_name, rp.privilege_level, rp.with_grant_option
+from mo_catalog.mo_tables t
+join mo_catalog.mo_role_privs rp
+on rp.obj_type = 'table'
+and rp.obj_id = t.rel_logical_id
+where t.reldatabase = 'cg_src'
+and t.relname = 'dst_if_not_exists'
+and rp.role_name like 'cg_r_%'
+order by rp.role_name, rp.privilege_name;
+➤ reldatabase[12,-1,0]  ¦  relname[12,-1,0]  ¦  role_name[12,-1,0]  ¦  privilege_name[12,-1,0]  ¦  privilege_level[12,-1,0]  ¦  with_grant_option[-7,1,0]  𝄀
+cg_src  ¦  dst_if_not_exists  ¦  cg_r_existing_dst  ¦  select  ¦  d.t  ¦  0
 select t.reldatabase, t.relname, count(rp.role_name) as copied_grants
 from mo_catalog.mo_tables t
 left join mo_catalog.mo_role_privs rp
@@ -113,6 +128,8 @@ select * from cg_dst.dst_snapshot order by a;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
 1  ¦  one  𝄀
 2  ¦  two
+select * from cg_src.dst_if_not_exists order by a;
+internal error: do not have privilege to execute the statement
 insert into cg_src.dst_copy values(3, 'copy');
 insert into cg_dst.dst_cross values(4, 'cross');
 insert into cg_dst.dst_snapshot values(5, 'snapshot');
@@ -163,7 +180,7 @@ drop database cg_sys_copy_grants;
 drop snapshot if exists sp_cg_cross_account;
 drop snapshot if exists sp_cg_src;
 drop user cg_u_select, cg_u_insert, cg_u_delete, cg_u_all, cg_u_child;
-drop role cg_r_select, cg_r_insert, cg_r_delete, cg_r_all, cg_r_child, cg_r_parent;
+drop role cg_r_select, cg_r_insert, cg_r_delete, cg_r_all, cg_r_child, cg_r_parent, cg_r_existing_dst;
 drop database cg_src;
 drop database cg_dst;
 create database cg_sys_copy_grants;

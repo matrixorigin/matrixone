@@ -16124,6 +16124,47 @@ func TestCopyTablePrivileges(t *testing.T) {
 	})
 }
 
+func TestCloneTargetTableExists(t *testing.T) {
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(1001))
+
+	t.Run("returns true when target table exists", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkSQL, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, "dst_db", "dst_tbl", 1001, 0)
+		require.NoError(t, err)
+		bh.sql2result[checkSQL] = newMrsForCheckDatabaseTable([][]interface{}{{int64(10002)}})
+
+		exists, err := cloneTargetTableExists(ctx, bh, "dst_db", "dst_tbl", 1001)
+		require.NoError(t, err)
+		require.True(t, exists)
+	})
+
+	t.Run("returns false when target table does not exist", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkSQL, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, "dst_db", "dst_tbl", 1001, 0)
+		require.NoError(t, err)
+		bh.sql2result[checkSQL] = newMrsForCheckDatabaseTable(nil)
+
+		exists, err := cloneTargetTableExists(ctx, bh, "dst_db", "dst_tbl", 1001)
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
+
+	t.Run("returns catalog lookup error", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkSQL, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, "dst_db", "dst_tbl", 1001, 0)
+		require.NoError(t, err)
+		bh.sql2err[checkSQL] = fmt.Errorf("catalog lookup failed")
+
+		exists, err := cloneTargetTableExists(ctx, bh, "dst_db", "dst_tbl", 1001)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "catalog lookup failed")
+		require.False(t, exists)
+	})
+}
+
 func copyTablePrivilegesSelectSQLForTest(srcObjID, snapshotTS int64) string {
 	snapshotSpec := ""
 	if snapshotTS != 0 {

@@ -18,7 +18,8 @@ insert into cg_src.src values(1, 'one'), (2, 'two');
 
 -- Source table grants intentionally cover:
 --   select with grant option, insert+select, delete, table all, and inherited role access.
-create role cg_r_select, cg_r_insert, cg_r_delete, cg_r_all, cg_r_parent, cg_r_child;
+-- cg_r_existing_dst is only granted on the pre-existing IF NOT EXISTS target.
+create role cg_r_select, cg_r_insert, cg_r_delete, cg_r_all, cg_r_parent, cg_r_child, cg_r_existing_dst;
 grant connect on account * to cg_r_select;
 grant connect on account * to cg_r_insert;
 grant connect on account * to cg_r_delete;
@@ -44,6 +45,21 @@ create table cg_src.dst_copy clone cg_src.src copy grants;
 create table cg_dst.dst_cross clone cg_src.src copy grants;
 create snapshot sp_cg_src for table cg_src src;
 create table cg_dst.dst_snapshot clone cg_src.src {snapshot = "sp_cg_src"} copy grants;
+
+-- Regression: IF NOT EXISTS means an existing destination is not created by
+-- this statement, so COPY GRANTS must not mutate its existing grants.
+create table cg_src.dst_if_not_exists(a int primary key, b varchar(20));
+grant select on table cg_src.dst_if_not_exists to cg_r_existing_dst;
+create table if not exists cg_src.dst_if_not_exists clone cg_src.src copy grants;
+select t.reldatabase, t.relname, rp.role_name, rp.privilege_name, rp.privilege_level, rp.with_grant_option
+from mo_catalog.mo_tables t
+join mo_catalog.mo_role_privs rp
+  on rp.obj_type = 'table'
+ and rp.obj_id = t.rel_logical_id
+where t.reldatabase = 'cg_src'
+  and t.relname = 'dst_if_not_exists'
+  and rp.role_name like 'cg_r_%'
+order by rp.role_name, rp.privilege_name;
 
 -- Structural check: plain clone should have no copied grants; every COPY GRANTS
 -- target should get the same number of table-level grants as the source table.
@@ -92,6 +108,7 @@ select * from cg_src.dst_plain order by a;
 select * from cg_src.dst_copy order by a;
 select * from cg_dst.dst_cross order by a;
 select * from cg_dst.dst_snapshot order by a;
+select * from cg_src.dst_if_not_exists order by a;
 -- @session
 
 -- Runtime check: insert requires select too for primary-key conflict checks, so
@@ -146,7 +163,7 @@ drop snapshot if exists sp_cg_cross_account;
 -- @session:id=1&user=acc_clone_copy_grants_complex:root1&password=111
 drop snapshot if exists sp_cg_src;
 drop user cg_u_select, cg_u_insert, cg_u_delete, cg_u_all, cg_u_child;
-drop role cg_r_select, cg_r_insert, cg_r_delete, cg_r_all, cg_r_child, cg_r_parent;
+drop role cg_r_select, cg_r_insert, cg_r_delete, cg_r_all, cg_r_child, cg_r_parent, cg_r_existing_dst;
 drop database cg_src;
 drop database cg_dst;
 -- @session
