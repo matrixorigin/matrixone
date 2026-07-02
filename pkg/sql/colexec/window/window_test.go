@@ -358,6 +358,79 @@ func TestSearchLeftDescRange(t *testing.T) {
 	require.Equal(t, 3, left, "DESC k=2 1 FOLLOWING: should find first <= 1 (idx 3, value 1)")
 }
 
+// TestBuildRangeIntervalEmptyDesc verifies buildRangeInterval does not panic
+// when ctr.desc is empty (RANGE frame without an ORDER BY spec). It must
+// default to ASC (desc=false) and produce correct boundaries.
+func TestBuildRangeIntervalEmptyDesc(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_int64.ToType())
+	values := []int64{1, 2, 2, 4}
+	for _, v := range values {
+		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
+	}
+	defer vec.Free(mp)
+
+	ctr := &container{}
+	ctr.orderVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.orderVecs[0].Vec = []*vector.Vector{vec}
+	// ctr.desc intentionally left empty (no ORDER BY spec).
+
+	// RANGE BETWEEN 1 PRECEDING AND CURRENT ROW
+	frame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}}},
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+
+	// rowIdx=3 (value=4), 1 PRECEDING → target=3, ASC finds first >=3 at idx 3;
+	// CURRENT ROW → end after last value==4, which is idx 4 (exclusive).
+	start, end, err := ctr.buildRangeInterval(3, 0, 4, frame)
+	require.NoError(t, err)
+	require.Equal(t, 3, start, "empty desc: 1 PRECEDING from value 4 starts at idx 3")
+	require.Equal(t, 4, end, "empty desc: CURRENT ROW ends after last value 4")
+
+	// rowIdx=1 (value=2), 1 PRECEDING → target=1, ASC finds first >=1 at idx 0;
+	// CURRENT ROW → end after last value==2, which is idx 3 (exclusive).
+	start, end, err = ctr.buildRangeInterval(1, 0, 4, frame)
+	require.NoError(t, err)
+	require.Equal(t, 0, start, "empty desc: 1 PRECEDING from value 2 reaches idx 0 (value 1)")
+	require.Equal(t, 3, end, "empty desc: CURRENT ROW ends after last value 2")
+}
+
+// TestBuildRangeIntervalEmptyDescUnbounded verifies the UNBOUNDED branches
+// also tolerate an empty ctr.desc.
+func TestBuildRangeIntervalEmptyDescUnbounded(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_int64.ToType())
+	values := []int64{1, 2, 2, 4}
+	for _, v := range values {
+		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
+	}
+	defer vec.Free(mp)
+
+	ctr := &container{}
+	ctr.orderVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.orderVecs[0].Vec = []*vector.Vector{vec}
+	// ctr.desc intentionally left empty.
+
+	// RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+
+	// rowIdx=1 (value=2): UNBOUNDED PRECEDING keeps start=0;
+	// CURRENT ROW ends after last value==2 at idx 3.
+	start, end, err := ctr.buildRangeInterval(1, 0, 4, frame)
+	require.NoError(t, err)
+	require.Equal(t, 0, start, "empty desc: UNBOUNDED PRECEDING keeps start at 0")
+	require.Equal(t, 3, end, "empty desc: CURRENT ROW ends after last value 2")
+}
+
 // TestSearchRightDescRange verifies searchRight with desc=true.
 func TestSearchRightDescRange(t *testing.T) {
 	mp := mpool.MustNewZero()
