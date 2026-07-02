@@ -5,6 +5,9 @@ Data truncation: data out of range: data type uint64, value '-1'
 select CAST('10 ' as unsigned integer);
 ➤ cast(10  as integer unsigned)[-5,64,0]  𝄀
 10
+select cast('+0012' as unsigned) as r;
+➤ r[-5,64,0]  𝄀
+12
 select CAST('10x' as unsigned integer);
 invalid argument cast to uint64, bad value 10x
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
@@ -81,7 +84,7 @@ select cast(NULL as DATE);
 ➤ cast(null as date)[91,64,0]  𝄀
 null
 select date_add(cast('2004-12-30 12:00:00' as date), interval 0 hour);
-➤ date_add(cast(2004-12-30 12:00:00 as date), interval 0 hour)[93,64,0]  𝄀
+➤ date_add(cast(2004-12-30 12:00:00 as date), INTERVAL 0 hour)[93,64,0]  𝄀
 2004-12-30 00:00:00
 select cast(18446744073709551615 as unsigned);
 ➤ cast(18446744073709551615 as unsigned)[-5,64,0]  𝄀
@@ -113,7 +116,7 @@ DROP TABLE t1;
 SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
 invalid argument operator cast, bad value [DATE BIGINT UNSIGNED]
 SELECT CAST(cast('01-01-01' as date) AS SIGNED);
-➤ cast(cast(01-01-01 as date) as as)[-5,64,0]  𝄀
+➤ cast(cast(01-01-01 as date) as signed)[-5,64,0]  𝄀
 -719162
 select cast('1.2' as decimal(3,2));
 ➤ cast(1.2 as decimal(3, 2))[3,3,2]  𝄀
@@ -122,7 +125,7 @@ select 1e18 * cast('1.2' as decimal(3,2));
 ➤ 1e18 * cast(1.2 as decimal(3, 2))[8,54,0]  𝄀
 1.2E18
 select cast(cast('1.2' as decimal(3,2)) as signed);
-➤ cast(cast(1.2 as decimal(3, 2)) as as)[-5,64,0]  𝄀
+➤ cast(cast(1.2 as decimal(3, 2)) as signed)[-5,64,0]  𝄀
 1
 select cast(-1e18 as decimal(22,2));
 ➤ cast(-1e18 as decimal(22, 2))[3,22,2]  𝄀
@@ -246,7 +249,7 @@ select any_value(a)-b as d, (any_value(a)-b >= 0), b from t1 group by b having d
 1  ¦  1  ¦  0  𝄀
 0  ¦  1  ¦  1
 select cast((a - b) as unsigned) from t1 order by 1;
-➤ cast((a - b) as b unsigned)[-5,64,0]  𝄀
+➤ cast((a - b) as unsigned)[-5,64,0]  𝄀
 0  𝄀
 1  𝄀
 4294967294

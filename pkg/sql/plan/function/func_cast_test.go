@@ -1849,11 +1849,11 @@ func initCastTestCase() []tcTemp {
 			info: "str type to uint64",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"1501", "16", ""}, []bool{false, false, true}),
+					[]string{"1501", "+0012", "16", ""}, []bool{false, false, false, true}),
 				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, []bool{}),
 			},
 			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{1501, 16, 0}, []bool{false, false, true}),
+				[]uint64{1501, 12, 16, 0}, []bool{false, false, false, true}),
 		},
 		{
 			info: "str type to float32",
