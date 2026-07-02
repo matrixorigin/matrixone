@@ -180,6 +180,37 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 	return Deserialize(id, fp)
 }
 
+// loadTailFrames reads the tag=1 CdcTail frames (index_id = CdcTailId) — each row
+// one complete FrameCdcChunk (an insert segment or a delete batch) — ordered by
+// chunk_id, the append order that drives liveness. Empty (no CDC yet) → nil.
+// Frame bytes are copied out (the executor reuses the batch memory).
+func loadTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]TailFrame, error) {
+	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d ORDER BY %s ASC",
+		catalog.FullTextIndex_TblCol_Storage_Chunk_Id, catalog.FullTextIndex_TblCol_Storage_Data,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.FullTextIndex_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents),
+		catalog.FullTextIndex_TblCol_Storage_Chunk_Id)
+	res, err := sqlexec.RunSql(sqlproc, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+
+	var frames []TailFrame
+	for _, bat := range res.Batches {
+		if bat == nil || bat.RowCount() == 0 {
+			continue
+		}
+		cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+		for i, cid := range cids {
+			data := bat.Vecs[1].GetRawBytesAt(i)
+			frames = append(frames, TailFrame{ChunkId: cid, Data: append([]byte(nil), data...)})
+		}
+	}
+	return frames, nil
+}
+
 // streamChunksToFile streams the index's chunk rows from the store and writes
 // each at chunk_id*MaxChunkSize into fp, bounding mpool to the stream buffer.
 func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, filesize int64, fp *os.File) error {

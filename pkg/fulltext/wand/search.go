@@ -275,6 +275,26 @@ func SearchSegmentsLive(segs []*WandModel, terms []string, limit int, allow Memb
 	return h.sorted()
 }
 
+// searchSegsLive is the multi-segment search entry point used by the load-path
+// adapter (WandSearch): it computes per-segment liveness (owner-by-chunk_id ∩
+// not-deleted) over segs+deletes, optionally ANDs a per-segment WHERE prefilter
+// built by mkAllow (nil = unfiltered), and runs the corpus-global WAND top-K.
+// mkAllow is called once per segment so a pk-based filter resolves against that
+// segment's own ord→pk dictionary — a single filter over "ords" would be wrong,
+// since ord i denotes a different pk in each segment.
+func searchSegsLive(segs []*WandModel, deletes map[any]int64, terms []string, limit int, mkAllow func(*WandModel) Membership) []SearchResult {
+	live := ComputeLiveness(segs, deletes)
+	if mkAllow != nil {
+		if live == nil {
+			live = make([]Membership, len(segs))
+		}
+		for i, s := range segs {
+			live[i] = andAllow(mkAllow(s), live[i])
+		}
+	}
+	return SearchSegmentsLive(segs, terms, limit, nil, live)
+}
+
 // searchInto runs the Block-Max WAND walk over one segment using the supplied
 // global stats, pushing (pk, score) into the shared heap h.
 func (m *WandModel) searchInto(h *topK, weights map[int32]float64, gN int64, gAvgDocLen float64, gdf map[int32]int, allow Membership) {

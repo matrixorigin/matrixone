@@ -49,13 +49,23 @@ func (d *docFilterMembership) Contains(ord int64) bool {
 	return d.f.Test(raw)
 }
 
-// WandSearch adapts a loaded WandModel to veccache.VectorIndexSearchIf so a
+// baseChunkId is the recency key assigned to the tag=0 compacted-main segment
+// when it is searched alongside tag=1 CdcTail delta segments. It sits below
+// every tail frame's chunk_id (which start at 0), so any pk re-inserted or
+// deleted in the tail supersedes its base copy (see ComputeLiveness).
+const baseChunkId int64 = -1
+
+// WandSearch adapts the loaded WAND segments to veccache.VectorIndexSearchIf so a
 // retrieval index shares the VectorIndexCache (load-once, RW-shared, TTL
 // eviction) with the vector plugins. The index is keyed in the cache by its
-// storage table name (== model Id).
+// storage table name.
 type WandSearch struct {
-	cfg   TableConfig
-	model *WandModel
+	cfg TableConfig
+	// segs[0] is the tag=0 compacted-main segment (ChunkId=baseChunkId); segs[1:]
+	// are the tag=1 CdcTail delta segments in chunk_id order (ChunkId = frame
+	// chunk_id). deletes is pk -> max delete-frame chunk_id from the tag=1 log.
+	segs    []*WandModel
+	deletes map[any]int64
 }
 
 var _ veccache.VectorIndexSearchIf = (*WandSearch)(nil)
@@ -66,20 +76,35 @@ func NewWandSearch(cfg TableConfig) *WandSearch {
 	return &WandSearch{cfg: cfg}
 }
 
-// Load reads + deserializes the index from the WAND chunk store.
+// Load reads the index from the WAND chunk store: the tag=0 compacted-main
+// segment (offset-reassembled blob under its own index_id) plus the tag=1
+// CdcTail delta frames (one complete frame per chunk_id, in append order),
+// assembled into the ordered segment set + delete map searched with liveness.
 func (s *WandSearch) Load(sqlproc *sqlexec.SqlProcess) error {
-	m, err := LoadFromStorage(sqlproc, s.cfg, s.cfg.IndexTable)
+	base, err := LoadFromStorage(sqlproc, s.cfg, s.cfg.IndexTable)
 	if err != nil {
 		return err
 	}
-	s.model = m
+	base.ChunkId = baseChunkId
+	frames, err := loadTailFrames(sqlproc, s.cfg)
+	if err != nil {
+		base.Free()
+		return err
+	}
+	tail, deletes, err := AssembleFrames(frames)
+	if err != nil {
+		base.Free()
+		return err
+	}
+	s.segs = append([]*WandModel{base}, tail...)
+	s.deletes = deletes
 	return nil
 }
 
 // Search runs WAND top-K and returns ([]any doc-ids of the source pk type,
 // []float64 scores).
 func (s *WandSearch) Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	if s.model == nil {
+	if len(s.segs) == 0 {
 		return nil, nil, moerr.NewInternalError(proc.GetContext(), "wand index not loaded")
 	}
 	q, ok := query.(WandQuery)
@@ -90,16 +115,18 @@ func (s *WandSearch) Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.
 	if limit <= 0 {
 		limit = 1
 	}
-	var allow Membership
+	// The WHERE prefilter is pk-based, so it must resolve against each segment's
+	// own ord→pk dictionary — build one membership per segment.
+	var mkAllow func(*WandModel) Membership
 	if len(q.FilterBytes) > 0 {
 		f, ferr := docfilter.New(q.FilterBytes)
 		if ferr != nil {
 			return nil, nil, ferr
 		}
 		defer f.Free()
-		allow = &docFilterMembership{m: s.model, f: f}
+		mkAllow = func(m *WandModel) Membership { return &docFilterMembership{m: m, f: f} }
 	}
-	res := s.model.Search(q.Terms, limit, allow)
+	res := searchSegsLive(s.segs, s.deletes, q.Terms, limit, mkAllow)
 	keysOut := make([]any, len(res))
 	dist := make([]float64, len(res))
 	for i, r := range res {
@@ -127,8 +154,7 @@ func (s *WandSearch) UpdateConfig(newalgo veccache.VectorIndexSearchIf) error {
 // Destroy frees the off-heap (C-allocated) postings and drops the model. The
 // cache holds the write lock around this, so no search is in flight.
 func (s *WandSearch) Destroy() {
-	if s.model != nil {
-		s.model.Free()
-		s.model = nil
-	}
+	freeSegs(s.segs)
+	s.segs = nil
+	s.deletes = nil
 }
