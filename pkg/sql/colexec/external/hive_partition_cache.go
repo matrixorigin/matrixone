@@ -111,14 +111,8 @@ func listHivePartitionDir(
 	}
 
 	key := options.CacheKeyPrefix + "\x1f" + "prefix=" + normalizeExternalPath(prefix)
-	if entries, ok := globalHivePartitionListCache.get(key); ok {
-		recordHivePartitionCacheHit(result, options)
-		recordHivePartitionDirectPrefixHit(result, options)
-		return entries, nil
-	}
-
-	leader, flight, entries, ok := globalHivePartitionListCache.getOrStartInflight(key)
-	if ok {
+	entries, hit, leader, flight := globalHivePartitionListCache.getOrStartInflight(key)
+	if hit {
 		recordHivePartitionCacheHit(result, options)
 		recordHivePartitionDirectPrefixHit(result, options)
 		return entries, nil
@@ -216,6 +210,10 @@ func (c *hivePartitionListCache) get(key string) ([]fileservice.DirEntry, bool) 
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.getLocked(key, now)
+}
+
+func (c *hivePartitionListCache) getLocked(key string, now time.Time) ([]fileservice.DirEntry, bool) {
 	entry, ok := c.entries[key]
 	if !ok {
 		return nil, false
@@ -254,25 +252,24 @@ func (c *hivePartitionListCache) set(key string, entries []fileservice.DirEntry,
 	c.evictLocked(maxEntries, maxBytes)
 }
 
-func (c *hivePartitionListCache) getOrStartInflight(key string) (bool, *hivePartitionInflight, []fileservice.DirEntry, bool) {
+func (c *hivePartitionListCache) getOrStartInflight(key string) (
+	entries []fileservice.DirEntry,
+	hit bool,
+	leader bool,
+	flight *hivePartitionInflight,
+) {
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if entry, ok := c.entries[key]; ok {
-		if now.After(entry.ExpireAt) {
-			c.bytes -= entry.SizeHint
-			delete(c.entries, key)
-		} else {
-			entry.lastUsed = now
-			return false, nil, cloneDirEntries(entry.Entries), true
-		}
+	if entries, ok := c.getLocked(key, now); ok {
+		return entries, true, false, nil
 	}
 	if flight, ok := c.inflight[key]; ok {
-		return false, flight, nil, false
+		return nil, false, false, flight
 	}
-	flight := &hivePartitionInflight{done: make(chan struct{})}
+	flight = &hivePartitionInflight{done: make(chan struct{})}
 	c.inflight[key] = flight
-	return true, flight, nil, false
+	return nil, false, true, flight
 }
 
 func (c *hivePartitionListCache) finishInflight(key string, flight *hivePartitionInflight, entries []fileservice.DirEntry, err error) {
