@@ -359,7 +359,7 @@ without re-tokenizing.
   multi-segment search adapter.
 - **B3**: idxcron `Merge` compaction + `max_index_capacity` rollover.
 
-### Implementation status (branch `fulltext_wand`, HEAD `7c20d9286`, updated 2026-06-25)
+### Implementation status (branch `fulltext_wand`, HEAD `a91af0e15`, updated 2026-07-02)
 
 **Branch state:** the Phase-B foundation (commit `eb94f4ae8`) is committed, then
 **`cuvs_quantize` was merged into `fulltext_wand`** (merge commit `7c20d9286`).
@@ -369,23 +369,39 @@ the cleanly-merged `mysql_sql.y` (0 goyacc conflicts, `RETRIEVAL` preserved), no
 by hand-merging the generated output. Post-merge `go test ./pkg/fulltext/wand/`
 is **green**, so the foundation below survived the merge unchanged.
 
+**Update 2026-07-02:** the **read path (item e) is now built + unit-tested on top**
+— `chunk_id`-ordered liveness (commit `2a0fdc4b8`), the tag=1 `CdcTail` frame
+codec (`frames.go`, `2a0fdc4b8`), and tag-aware multi-segment load/search
+(`a91af0e15`). Only the **write path** (sinker b–d) and idxcron (g) remain; the
+SQL of `loadTailFrames`/`Load` still needs a live e2e run.
+
 **✅ Done + unit-tested (committed in `eb94f4ae8`)** — every piece verifiable without a running server:
 - **Parser-aware async.** `SyncDescriptor.AlwaysAsync` bool → `Hooks.AlwaysAsync(indexAlgoParams string) bool` (`pkg/indexplugin/catalog/hooks.go`); HNSW/CAGRA/IVF-PQ=true, IVF-FLAT=false, **fulltext=`parser=="retrieval"`** via new `catalog.GetIndexParser` + `IndexAlgoParamParser`. Unified `indexplugin.IndexIsAsync(algo, params)` routed through CDC-registration (`iscp_util.go`), ALTER-clone (`alter.go`), and the three fulltext DML early-returns (`build_dml_util.go`). No `async`-param injection. Tests: `TestFullTextAlwaysAsync` + the vector runtime tests.
-- **PK-reconciliation liveness** (`pkg/fulltext/wand`). `ComputeLiveness(segs, deletes) []Membership` (per-segment allow precomputed once at load: owner = winning segment holding pk, dead iff a later delete). `SearchSegmentsLive(...)` ANDs liveness with the WHERE-prefilter; `SearchSegments` = the `nil` fast path. **[2026-07-01 revised: the mechanism is KEPT, but the ordering key becomes the segment's `chunk_id` (append position in the single tag=1 `CdcTail` log), NOT `WandModel.LSN` and NOT a `segno`/timestamp — see the "single CdcTail log, chunk_id-ordered" decision. The committed code still passes an `LSN`-typed key into `ComputeLiveness`; the load path will feed `chunk_id` instead.]** Fixes a latent bug: the old multi-segment path emitted a pk twice if it lived in two segments. Tests: `TestWandLiveness` (dedup_update / delete_then_reinsert / delete_after_insert / pure_delete / mixed). NB: assert the live **pk set**, not exact scores — global `N`/`df`/`avgdl` still include superseded+deleted docs until reindex (accepted drift).
-- **tag=1 delete-log codec** (`deletes.go`): `DeleteRecord{Pk, LSN}`, `EncodeDeleteLog`/`DecodeDeleteLog` (self-contained binary+crc32, **no** GPU-coupled cuVS import), `DeleteMap` fold → feeds `ComputeLiveness`. Tests: `TestWandDeleteLogRoundTrip` (int64/varchar/corruption/empty). **[2026-07-01 revised: the `LSN` field carries no meaning under the chunk_id model — a delete frame's order is its `chunk_id` position in the `CdcTail` log; drop/ignore the stored order field.]**
+- **PK-reconciliation liveness** (`pkg/fulltext/wand`). `ComputeLiveness(segs, deletes) []Membership` (per-segment allow precomputed once at load: owner = winning segment holding pk, dead iff a later delete). `SearchSegmentsLive(...)` ANDs liveness with the WHERE-prefilter; `SearchSegments` = the `nil` fast path. **[2026-07-02 DONE (`2a0fdc4b8`): applied — `WandModel.LSN` renamed `ChunkId` and `ComputeLiveness` orders by it; `AssembleFrames` sets it from each frame's `chunk_id` at load. No `LSN`/`segno`/timestamp anywhere.]** Fixes a latent bug: the old multi-segment path emitted a pk twice if it lived in two segments. Tests: `TestWandLiveness` (dedup_update / delete_then_reinsert / delete_after_insert / pure_delete / mixed). NB: assert the live **pk set**, not exact scores — global `N`/`df`/`avgdl` still include superseded+deleted docs until reindex (accepted drift).
+- **tag=1 delete-log codec** (`deletes.go`): `DeleteRecord{Pk, LSN}`, `EncodeDeleteLog`/`DecodeDeleteLog` (self-contained binary+crc32, **no** GPU-coupled cuVS import), `DeleteMap` fold → feeds `ComputeLiveness`. Tests: `TestWandDeleteLogRoundTrip` (int64/varchar/corruption/empty). **[2026-07-02 DONE (`2a0fdc4b8`): `DeleteRecord` slimmed to `{Pk}` (stored order field dropped); `DeleteMap` → `FoldDeleteFrame(m, recs, chunkId)` folds each delete frame at its `chunk_id`.]**
 - **`ToInsertSqls(cfg, ts, tag)`** — tag=0 compacted main / tag=1 CDC delta segment (`storage.go`; caller `fulltext_wand_create.go` passes 0). Test: `TestWandToInsertSqlsTag`.
 
-**⏳ Remaining = one interdependent unit (needs a live `mo_ctl` + CDC pipeline to validate e2e):**
+**⏳ Remaining = the write path (needs a live `mo_ctl` + CDC pipeline to validate e2e); the read path (e) is now done:**
 - **(a) ~~`DataRetriever.GetLSN()` accessor~~ — DROPPED (2026-07-01).** The dedup
   decision orders frames by `chunk_id` in the single tag=1 `CdcTail` log, not ISCP's
   LSN, so **no `DataRetriever` interface change is needed**. The sinker appends at
   `chunk_id = NextChunkIdSql(CdcTailId, tag=1)` (item (b)). Rationale: the "single
   CdcTail log, chunk_id-ordered" decision — neither HNSW (`Contains(pk)`) nor IVF-PQ
   (`pkid` fold at `Load`) couples identity to ISCP's LSN.
-- **(b) `WandSqlWriter` + `RunWand`** in `pkg/iscp` — mirror `NewFulltextSqlWriter` (`index_sqlwriter.go:251`) + `runHnsw` (`index_consumer.go:240`). Writer accumulates insert `{pk,text}` + delete `{pk}` rows → blob; `RunWand` consumes blobs → tokenize via `tokenizer.SharedJiebaTokenizer(false)` (**same** path as search `parsePatternInNLModeJieba`, so build/query tokens match) → `Builder.Add` → on channel close `FinishSegments` → **append the segment frame(s) and delete frame(s) to the tag=1 `CdcTail` log at `NextChunkIdSql`** + `UpdateWatermark`. (`pkg/iscp` already imports algo pkgs e.g. hnsw, so importing `pkg/fulltext/wand` is consistent — no cycle.)
+- **(b) `WandSqlWriter` + `RunWand`** in `pkg/iscp` — mirror `NewFulltextSqlWriter` (`index_sqlwriter.go:251`) + `runHnsw` (`index_consumer.go:240`). Writer accumulates insert `{pk,text}` + delete `{pk}` rows → blob; `RunWand` consumes blobs → tokenize via `tokenizer.SharedJiebaTokenizer(false)` (**same** path as search `parsePatternInNLModeJieba`, so build/query tokens match) → `Builder.Add` → on channel close `FinishSegments` → **append the segment frame(s) and delete frame(s) to the tag=1 `CdcTail` log at `NextChunkIdSql`** + `UpdateWatermark`. (`pkg/iscp` already imports algo pkgs e.g. hnsw, so importing `pkg/fulltext/wand` is consistent — no cycle.) **Codec ready (2026-07-02, `a91af0e15`):** `FrameSegment` / `FrameDeletes` produce the tag=1 frames and the read side (`AssembleFrames`/`loadTailFrames`) already consumes exactly what the sinker writes — so (b) is now just: accumulate rows → `Builder.Add` → `FinishSegments` → `FrameSegment` → append at `NextChunkIdSql`; deletes → `FrameDeletes`.
 - **(c)** Branch the fulltext plugin iscp `Hooks` (`pkg/fulltext/plugin/iscp/iscp.go` `NewSqlWriter`/`Run`) on `parser==retrieval` → Wand writer/run, else the postings writer/`RunIndex`.
 - **(d)** In `HandleCreateIndex` (`pkg/fulltext/plugin/compile/compile.go`), flip the async check `catalog.IsIndexAsync` → `indexplugin.IndexIsAsync` (retrieval → async). **Do NOT skip the build:** the async branch's `CreateIndexCdcTask` call currently passes an empty `sql=""` — for retrieval pass a non-empty **InitSQL that builds the WAND store from postings** (`genInsertSQL` → postings, `genWandBuildSQL` → tag=0). ISCP runs the InitSQL at task start (the build happens at the beginning of ISCP, not synchronously at CREATE), so the **postings table is still required**; `genWandBuildSQL` is not dropped, it moves into the InitSQL. Then CDC deltas maintain tag=1. (Corrects the earlier "skip genWandBuildSQL / replay-from-creation" wording.)
-- **(e) Multi-frame search adapter** (`wandsearch.go`): `LoadFromStorage` currently loads ONE `index_id`; instead load tag=0 base + the tag=1 `CdcTail` frames **sorted by `chunk_id`** → ordered `segs` + delete map → `ComputeLiveness` (keyed by `chunk_id`) → `SearchSegmentsLive`. Also `SELECT` the metadata needed (`chunk_id` order is intrinsic to the log).
+- **(e) Multi-frame search adapter** — ✅ **DONE (2026-07-02, `a91af0e15`).** New
+  tag=1 frame codec (`frames.go`: `FrameSegment`/`FrameDeletes`/`AssembleFrames`
+  over the reused cuVS `FrameCdcChunk` envelope — confirmed pure-Go, no gpu
+  coupling); `loadTailFrames` (`storage.go`) reads tag=1 `CdcTail` rows (each row
+  one complete frame) `ORDER BY chunk_id`; `WandSearch` now holds `segs` (tag=0
+  base at `ChunkId=-1`, below the tail, + tag=1 tail) + `deletes`, searched via
+  `searchSegsLive` = `ComputeLiveness` + a **per-segment** WHERE prefilter (built
+  once per segment so a pk-filter resolves against that segment's own ord→pk map)
+  + `SearchSegmentsLive`. Unit-tested (`TestWandTailFrames`,
+  `TestWandSearchSegsLive`); the SQL of `loadTailFrames`/`Load` still needs a
+  live e2e run.
 - **(f) ~~Drop the postings hidden table~~ — DROPPED.** Postings is the
   CREATE / full-reindex build pipeline (`source → postings → SQL aggregate/sort →
   fulltext_wand_create → tag=0`), not scratch — it stays. Only the incremental CDC
