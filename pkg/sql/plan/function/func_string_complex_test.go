@@ -496,7 +496,7 @@ func Test_BuiltInChar(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
-	// Test CHAR with NULL (any NULL makes result NULL)
+	// Test CHAR with NULL (MySQL skips NULL arguments)
 	{
 		tc := tcTemp{
 			info: "select char(65, 66, NULL)",
@@ -508,7 +508,28 @@ func Test_BuiltInChar(t *testing.T) {
 					[]int64{66},
 					[]bool{false}),
 				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{67},
+					[]int64{0},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"AB"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with all NULL arguments (MySQL returns NULL)
+	{
+		tc := tcTemp{
+			info: "select char(null, null)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
 					[]bool{true}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,

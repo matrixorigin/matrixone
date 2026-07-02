@@ -991,7 +991,9 @@ func (p intervalParam) decimalScale() int32 {
 }
 
 func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
-	// CHAR accepts one or more integer arguments
+	// CHAR accepts one or more arguments, which MySQL interprets as integers.
+	// We cast all non-varchar arguments to varchar, then parse to int64 in builtInChar.
+	// This avoids runtime cast failures for float-like strings (e.g., "77.3").
 	if len(inputs) < 1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
@@ -999,19 +1001,16 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 	shouldCast := false
 	ret := make([]types.Type, len(inputs))
 	for i, source := range inputs {
-		// Check if it's an integer type
-		if !source.Oid.IsInteger() {
-			// Try to cast to int64
-			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
+		if source.Oid == types.T_varchar {
+			ret[i] = source
+		} else {
+			// Cast all other types (int, float, decimal, etc.) to varchar
+			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_varchar})
 			if c == matchFailed {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
-			if c == matchByCast {
-				shouldCast = true
-				ret[i] = types.T_int64.ToType()
-			}
-		} else {
-			ret[i] = source
+			shouldCast = true
+			ret[i] = types.T_varchar.ToType()
 		}
 	}
 	if shouldCast {
@@ -1023,8 +1022,11 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// Create getter functions for each parameter that handle different integer types
-	getters := make([]func(uint64) (int64, bool), len(parameters))
+	// All parameters are varchar (cast by builtInCharCheck), but we also
+	// handle integer types directly for robustness (e.g., direct calls from tests).
+	// Each getter returns an int64 value and a null flag.
+	type intGetter func(uint64) (int64, bool)
+	getters := make([]intGetter, len(parameters))
 	for i, param := range parameters {
 		paramType := param.GetType().Oid
 		switch paramType {
@@ -1077,11 +1079,25 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				return int64(val), null
 			}
 		default:
-			// For non-integer types, try to cast to int64
-			p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+			// For varchar, float, decimal, etc.: use string getter and parse to int64.
+			// Use ParseFloat to handle decimal strings like "77.3".
+			sp := vector.GenerateFunctionStrParameter(param)
 			getters[i] = func(idx uint64) (int64, bool) {
-				val, null := p.GetValue(idx)
-				return val, null
+				v, null := sp.GetStrValue(idx)
+				if null {
+					return 0, true
+				}
+				s := strings.TrimSpace(string(v))
+				if len(s) == 0 {
+					return 0, false
+				}
+				fv, err := strconv.ParseFloat(s, 64)
+				if err == nil {
+					return int64(fv), false
+				}
+				// On parse error, return 0 (MySQL behavior:
+				// SELECT CHAR('abc') → 0x00)
+				return 0, false
 			}
 		}
 	}
@@ -1095,14 +1111,13 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 
 		var resultBytes []byte
-		hasNull := false
 
-		// Process all integer arguments
+		// Process all arguments
 		for _, getter := range getters {
 			v, null := getter(i)
 			if null {
-				hasNull = true
-				break
+				// MySQL skips NULL arguments instead of returning NULL
+				continue
 			}
 			// Convert integer to byte value (0-255)
 			// MySQL CHAR function interprets integers as byte values in UTF-8 encoding
@@ -1118,12 +1133,12 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			}
 		}
 
-		if hasNull {
+		if len(resultBytes) == 0 {
+			// All arguments were NULL → return NULL (MySQL behavior)
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			// Convert byte slice to string (UTF-8 decoding happens automatically)
 			if err := rs.AppendBytes(resultBytes, false); err != nil {
 				return err
 			}
