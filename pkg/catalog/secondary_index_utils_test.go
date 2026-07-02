@@ -59,7 +59,6 @@ func newPrefixKeyPart(colName string, length int) *tree.KeyPart {
 }
 
 func TestIsIndexAsync(t *testing.T) {
-
 	var (
 		json string
 		err  error
@@ -251,4 +250,49 @@ func TestIndexPrefixLengthsFromParams(t *testing.T) {
 	// invalid params return nil instead of panicking.
 	require.Nil(t, IndexPrefixLengthsFromParams("{bad json"))
 	require.Nil(t, IndexPrefixLengthsFromParams(`{"prefix_lengths":"t:0"}`))
+}
+
+func unresolvedName(name string) *tree.UnresolvedName {
+	return tree.NewUnresolvedName(tree.NewCStr(name, 1))
+}
+
+func TestIndexParamsToJsonString_RejectsPluginIvfFlatPath(t *testing.T) {
+	idx := tree.NewIndex(
+		false,
+		[]*tree.KeyPart{tree.NewKeyPart(unresolvedName("embedding"), -1, tree.DefaultDirection, nil)},
+		"idx1",
+		tree.INDEX_TYPE_IVFFLAT,
+		&tree.IndexOption{
+			AlgoParamList:         10,
+			AlgoParamVectorOpType: "vector_l2_ops",
+			IncludeColumns: []*tree.UnresolvedName{
+				unresolvedName("title"),
+				unresolvedName("category"),
+			},
+		},
+	)
+
+	params, err := IndexParamsToJsonString(idx)
+	require.Error(t, err)
+	require.Empty(t, params)
+	require.Contains(t, err.Error(), "invalid index alogorithm type")
+}
+
+func TestIndexParamsToStringList_DoesNotRenderIncludeColumns(t *testing.T) {
+	paramList, err := IndexParamsToStringList(`{"lists":"10","op_type":"vector_l2_ops","included_columns":"title,category"}`)
+	require.NoError(t, err)
+	require.Contains(t, paramList, "lists = 10")
+	require.Contains(t, paramList, "op_type 'vector_l2_ops'")
+	require.NotContains(t, paramList, "INCLUDE")
+	require.NotContains(t, paramList, "title")
+}
+
+func TestParseIncludeColumnsValue_BackwardCompatible(t *testing.T) {
+	cols, err := ParseIncludeColumnsValue(`["title","category"]`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"title", "category"}, cols)
+
+	cols, err = ParseIncludeColumnsValue("title,category")
+	require.NoError(t, err)
+	require.Equal(t, []string{"title", "category"}, cols)
 }

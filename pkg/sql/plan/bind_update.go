@@ -56,22 +56,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 		}
 
-		// Check if any irregular index (vector/full-text) columns are being updated
-		// Only block UPDATE if the indexed columns are being updated
-		hasIrregularIndex := false
-		irregularIndexCols := make(map[string]bool)
-		for _, idxDef := range tableDef.Indexes {
-			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
-				hasIrregularIndex = true
-				// Collect all columns in this irregular index
-				for _, part := range idxDef.Parts {
-					resolvedColName := catalog.ResolveAlias(part)
-					irregularIndexCols[resolvedColName] = true
-				}
-			}
+		// Check if any irregular index (vector/full-text) columns are being updated.
+		hasIrregularIndex, irregularIndexCols := collectIrregularIndexUpdateCols(tableDef)
+
+		// The MULTI_UPDATE fast path below maintains regular index tables itself.
+		// It cannot rebuild irregular hidden tables when the base-table PK changes
+		// (for example IVF entries store the origin PK), so ask the caller to use
+		// the fallback update planner that runs the delete+insert rebuild path.
+		if hasIrregularIndex && primaryKeyUpdated(tableDef, dmlCtx.updateCol2Expr[i]) {
+			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index")
 		}
 
-		// Only block if irregular index exists AND indexed columns are being updated
+		// Only block if irregular index exists AND indexed columns are being updated.
+		// bindAndOptimizeUpdateQuery catches this UnsupportedDML and falls back to
+		// buildTableUpdate, where irregular indexes are rebuilt by the old path.
 		if hasIrregularIndex {
 			for colName := range dmlCtx.updateCol2Expr[i] {
 				if irregularIndexCols[colName] {
@@ -1043,6 +1041,44 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
+}
+
+func collectIrregularIndexUpdateCols(tableDef *plan.TableDef) (bool, map[string]bool) {
+	irregularIndexCols := make(map[string]bool)
+	if tableDef == nil {
+		return false, irregularIndexCols
+	}
+
+	hasIrregularIndex := false
+	for _, idxDef := range tableDef.Indexes {
+		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			continue
+		}
+		hasIrregularIndex = true
+		for _, part := range idxDef.Parts {
+			irregularIndexCols[catalog.ResolveAlias(part)] = true
+		}
+		for _, colName := range idxDef.IncludedColumns {
+			irregularIndexCols[catalog.ResolveAlias(colName)] = true
+		}
+	}
+	return hasIrregularIndex, irregularIndexCols
+}
+
+func primaryKeyUpdated(tableDef *plan.TableDef, updateCols map[string]tree.Expr) bool {
+	if tableDef == nil || tableDef.Pkey == nil || len(updateCols) == 0 {
+		return false
+	}
+	for _, colName := range tableDef.Pkey.Names {
+		if _, ok := updateCols[catalog.ResolveAlias(colName)]; ok {
+			return true
+		}
+	}
+	if tableDef.Pkey.PkeyColName != "" && tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+		_, ok := updateCols[catalog.ResolveAlias(tableDef.Pkey.PkeyColName)]
+		return ok
+	}
+	return false
 }
 
 func (builder *QueryBuilder) appendUpdateFromDedupNode(

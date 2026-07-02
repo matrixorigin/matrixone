@@ -350,6 +350,8 @@ type fuzzyCheck struct {
 
 type MultiTableIndex struct {
 	IndexAlgo string
+	// Compile DDL/ALTER paths keep physical index defs grouped by table type.
+	// They should not infer logical INCLUDE metadata from one physical def.
 	IndexDefs map[string]*plan.IndexDef
 }
 

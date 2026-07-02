@@ -15,10 +15,12 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -602,7 +604,10 @@ END_FULLTEXT:
 		vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
 	}
 	if vecCtx != nil {
-		multiTableIndexes := builder.collectVectorIndexes(vecCtx.scanNode)
+		multiTableIndexes, err := builder.collectVectorIndexes(vecCtx.scanNode)
+		if err != nil {
+			return nodeID, err
+		}
 		if len(multiTableIndexes) == 0 {
 			return nodeID, nil
 		}
@@ -846,7 +851,10 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 		return nil
 	}
 
-	multiTableIndexes := builder.collectVectorIndexes(vecCtx.scanNode)
+	multiTableIndexes, err := builder.collectVectorIndexes(vecCtx.scanNode)
+	if err != nil {
+		return nil
+	}
 	if len(multiTableIndexes) == 0 {
 		return nil
 	}
@@ -882,10 +890,10 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 	return nil
 }
 
-func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) map[string]*MultiTableIndex {
+func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) (map[string]*MultiTableIndex, error) {
 	multiTableIndexes := make(map[string]*MultiTableIndex)
 	if scanNode == nil || scanNode.TableDef == nil {
-		return multiTableIndexes
+		return multiTableIndexes, nil
 	}
 
 	for _, indexDef := range scanNode.TableDef.Indexes {
@@ -899,7 +907,59 @@ func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) map[strin
 			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 		}
 	}
-	return multiTableIndexes
+
+	for name, multiTableIndex := range multiTableIndexes {
+		if err := validateVectorIndexDefGroup(builder.GetContext(), name, multiTableIndex); err != nil {
+			return nil, err
+		}
+	}
+	return multiTableIndexes, nil
+}
+
+func validateVectorIndexDefGroup(ctx context.Context, indexName string, multiTableIndex *MultiTableIndex) error {
+	if multiTableIndex == nil || len(multiTableIndex.IndexDefs) == 0 {
+		return nil
+	}
+
+	var reference *plan.IndexDef
+	for _, indexDef := range multiTableIndex.IndexDefs {
+		if indexDef == nil {
+			continue
+		}
+		if reference == nil {
+			reference = indexDef
+			continue
+		}
+		if reference.IndexName != indexDef.IndexName ||
+			catalog.ToLower(reference.IndexAlgo) != catalog.ToLower(indexDef.IndexAlgo) ||
+			!slices.Equal(reference.Parts, indexDef.Parts) {
+			return moerr.NewInternalErrorf(ctx, "inconsistent vector index metadata for index %s", indexName)
+		}
+		if catalog.ToLower(reference.IndexAlgo) == catalog.MoIndexIvfFlatAlgo.ToString() &&
+			!slices.Equal(reference.IncludedColumns, indexDef.IncludedColumns) {
+			return moerr.NewInternalErrorf(ctx, "inconsistent IVF-FLAT INCLUDE metadata for index %s", indexName)
+		}
+	}
+	if reference != nil {
+		multiTableIndex.IndexAlgo = catalog.ToLower(reference.IndexAlgo)
+	}
+	return nil
+}
+
+func getVectorIndexIncludedColumns(multiTableIndex *MultiTableIndex) []string {
+	if multiTableIndex == nil || catalog.ToLower(multiTableIndex.IndexAlgo) != catalog.MoIndexIvfFlatAlgo.ToString() {
+		return nil
+	}
+	for _, tableType := range []string{
+		catalog.SystemSI_IVFFLAT_TblType_Entries,
+		catalog.SystemSI_IVFFLAT_TblType_Metadata,
+		catalog.SystemSI_IVFFLAT_TblType_Centroids,
+	} {
+		if indexDef := multiTableIndex.IndexDefs[tableType]; indexDef != nil && len(indexDef.IncludedColumns) > 0 {
+			return slices.Clone(indexDef.IncludedColumns)
+		}
+	}
+	return nil
 }
 
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {

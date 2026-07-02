@@ -23,8 +23,11 @@ import (
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
+	upg_mo_indexes_add_included_columns_for_tenant,
 	upg_information_schema_statistics,
 }
+
+var upg_mo_indexes_add_included_columns_for_tenant = newMoIndexesAddIncludedColumnsEntry()
 
 // Re-apply the STATISTICS view change in a newer tenant upgrade version so
 // tenants already marked as 4.0.0 also execute the optimized definition.

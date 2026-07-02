@@ -455,6 +455,7 @@ var (
 			ordinal_position    int unsigned  not null,
 			options             text,
 			index_table_name    varchar(5000),
+			included_columns    text,
 			primary key(id, column_name)
 		)`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 

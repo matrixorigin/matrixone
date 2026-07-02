@@ -136,8 +136,22 @@ func (CatalogHooks) SupportedVectorTypes() []types.T {
 // primary key may be any type. nil = "no constraint".
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return nil }
 
-// SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
-func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
+// SupportedIncludeColumnTypes: IVF-FLAT stores INCLUDE columns in its entries
+// table, so it accepts ordinary scalar storage types. The plan hook still
+// rejects the indexed vector column, duplicate names, and the primary key.
+func (CatalogHooks) SupportedIncludeColumnTypes() []types.T {
+	return []types.T{
+		types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_int128,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_uint128,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_interval, types.T_year,
+		types.T_char, types.T_varchar, types.T_json, types.T_uuid, types.T_binary, types.T_varbinary,
+		types.T_enum, types.T_geometry, types.T_geometry32,
+		types.T_blob, types.T_text, types.T_datalink,
+	}
+}
 
 func (CatalogHooks) SupportedOpTypes() map[string]string {
 	out := make(map[string]string, len(metric.OpTypeToIvfMetric))

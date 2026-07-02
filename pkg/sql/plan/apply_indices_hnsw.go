@@ -41,6 +41,24 @@ type hnswIndexContext struct {
 	nThread      int64
 }
 
+func buildHnswTableFuncArgs(tblCfgStr string, vecLitArg *plan.Expr) []*plan.Expr {
+	return []*plan.Expr{
+		{
+			Typ: plan.Type{
+				Id: int32(types.T_varchar),
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_Sval{
+						Sval: tblCfgStr,
+					},
+				},
+			},
+		},
+		DeepCopyExpr(vecLitArg),
+	}
+}
+
 func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*hnswIndexContext, error) {
 	if vecCtx == nil || multiTableIndex == nil {
 		return nil, nil
@@ -81,6 +99,9 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		return nil, nil
 	}
 
+	if len(idxDef.Parts) == 0 {
+		return nil, nil
+	}
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
 	var vecLitArg *plan.Expr
@@ -161,23 +182,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			},
 			Cols: DeepCopyColDefList(hnswplan.HNSWSearchColDefs),
 		},
-		BindingTags: []int32{tableFuncTag},
-		Children:    vectorSearchProviderChildren(vecCtx),
-		TblFuncExprList: []*plan.Expr{
-			{
-				Typ: plan.Type{
-					Id: int32(types.T_varchar),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_Sval{
-							Sval: tblCfgStr,
-						},
-					},
-				},
-			},
-			DeepCopyExpr(hnswCtx.vecLitArg),
-		},
+		BindingTags:     []int32{tableFuncTag},
+		Children:        vectorSearchProviderChildren(vecCtx),
+		TblFuncExprList: buildHnswTableFuncArgs(tblCfgStr, hnswCtx.vecLitArg),
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 

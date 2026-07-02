@@ -203,6 +203,61 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildInsertIndexMetaBatchIncludedColumnsLayout(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProc(t)
+	mockEngine := mock_frontend.NewMockEngine(ctrl)
+	mockEngine.EXPECT().AllocateIDByKey(gomock.Any(), gomock.Any()).Return(uint64(272510), nil).Times(1)
+
+	ct := &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.IndexDef{
+				Indexes: []*plan.IndexDef{
+					{
+						IndexName:          "idx_vec",
+						Parts:              []string{"embedding"},
+						IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+						IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+						IndexAlgoParams:    `{"lists":"2","op_type":"vector_l2_ops"}`,
+						IndexTableName:     "__mo_index_entries_idx_vec",
+						TableExist:         true,
+						IncludedColumns:    []string{"title", "category"},
+					},
+				},
+			},
+		},
+	}
+
+	bat, err := buildInsertIndexMetaBatch(272464, 123456, ct, mockEngine, proc)
+	require.NoError(t, err)
+	defer bat.Clean(proc.Mp())
+
+	require.Equal(t, []string{
+		MO_INDEX_ID,
+		MO_INDEX_TABLE_ID,
+		MO_INDEX_DATABASE_ID,
+		MO_INDEX_NAME,
+		MO_INDEX_TYPE,
+		MO_INDEX_ALGORITHM,
+		MO_INDEX_ALGORITHM_TABLE_TYPE,
+		MO_INDEX_ALGORITHM_PARAMS,
+		MO_INDEX_IS_VISIBLE,
+		MO_INDEX_HIDDEN,
+		MO_INDEX_COMMENT,
+		MO_INDEX_COLUMN_NAME,
+		MO_INDEX_ORDINAL_POSITION,
+		MO_INDEX_OPTIONS,
+		MO_INDEX_TABLE_NAME,
+		MO_INDEX_INCLUDED_COLUMNS,
+		MO_INDEX_PRIKEY,
+	}, bat.Attrs)
+	require.Equal(t, 1, bat.RowCount())
+	require.Equal(t, [][]byte{[]byte(`["title","category"]`)}, vector.InefficientMustBytesCol(bat.Vecs[15]))
+	require.NotNil(t, bat.Vecs[16])
+}
+
 // Define an anonymous function to construct the table structure
 func buildMockTableDefs(table_cols []string) []engine.TableDef {
 	exeCols := make([]engine.TableDef, len(table_cols))

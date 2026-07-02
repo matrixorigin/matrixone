@@ -9,9 +9,13 @@ use sv_db1;
 create table t1(a int);
 begin;
 insert into t1 values (1);
-select sleep(10);
 -- @session}
 
+select case when count(*) > 0 then 0 else sleep(2) end as wait_for_mo_locks_ready from mo_locks() l;
+select case when count(*) > 0 then 0 else sleep(2) end as wait_for_mo_locks_ready from mo_locks() l;
+select case when count(*) > 0 then 0 else sleep(2) end as wait_for_mo_locks_ready from mo_locks() l;
+select case when count(*) > 0 then 0 else sleep(2) end as wait_for_mo_locks_ready from mo_locks() l;
+select case when count(*) > 0 then 0 else sleep(2) end as wait_for_mo_locks_ready from mo_locks() l;
 select count(*) > 0 from mo_locks() l;
 select count(*) > 0 from mo_transactions() t join mo_locks() l where t.txn_id = l.txn_id;
 

@@ -94,6 +94,7 @@ func TestFillOutputBatchBySelectedRows(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, 2, outputBat.Vecs[0].Length())
+		require.Equal(t, 2, outputBat.Vecs[1].Length())
 		require.Equal(t, 3, len(outputBat.Vecs))
 		require.Equal(t, 2, outputBat.Vecs[2].Length())
 	})
@@ -156,6 +157,7 @@ func TestFillOutputBatchBySelectedRows(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, 2, outputBat.Vecs[0].Length())
+		require.Equal(t, 2, outputBat.Vecs[1].Length())
 		require.Equal(t, 3, len(outputBat.Vecs))
 		require.Equal(t, 2, outputBat.Vecs[2].Length())
 	})
@@ -186,6 +188,81 @@ func TestFillOutputBatchBySelectedRows(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 3, outputBat.Vecs[0].Length())
 		require.Equal(t, 3, outputBat.Vecs[1].Length())
+	})
+	// Test case 6: Middle phyAddr column and orderByLimit
+	t.Run("complex_mix", func(t *testing.T) {
+		vec0 := vector.NewVec(types.T_int32.ToType())   // col 0 in cache
+		vec1 := vector.NewVec(types.T_float32.ToType()) // col 1 in cache (skipped by orderByLimit)
+		vec2 := vector.NewVec(types.T_varchar.ToType()) // col 2 in cache
+
+		for i := 0; i < 10; i++ {
+			vector.AppendFixed(vec0, int32(i), false, mp)
+			vector.AppendFixed(vec1, float32(i), false, mp)
+			vector.AppendBytes(vec2, []byte("val"), false, mp)
+		}
+
+		cacheVectors := make(containers.Vectors, 3)
+		cacheVectors[0] = *vec0
+		cacheVectors[1] = *vec1
+		cacheVectors[2] = *vec2
+
+		outputBat := batch.NewWithSize(3)
+		outputBat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		outputBat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType()) // phyAddr
+		outputBat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+
+		selectRows := []int64{1, 2}
+		columns := []uint16{0, 1, 2}
+		dists := []float64{0.1, 0.2}
+
+		// orderByLimit at ColPos 1 of cacheVectors (which is vec1)
+		orderByLimit := &objectio.IndexReaderTopOp{ColPos: 1, Limit: 2}
+		info := &objectio.BlockInfo{}
+		info.BlockID = *objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+
+		err := fillOutputBatchBySelectedRows(
+			info, columns, 1, outputBat, cacheVectors, selectRows, orderByLimit, dists, mp,
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, 2, outputBat.Vecs[0].Length())
+		require.Equal(t, 2, outputBat.Vecs[1].Length())
+		require.Equal(t, 2, outputBat.Vecs[2].Length())
+		require.Equal(t, 4, len(outputBat.Vecs)) // Added dist vec
+		require.Equal(t, 2, outputBat.Vecs[3].Length())
+
+		// Verify values for col 0
+		require.Equal(t, int32(1), vector.MustFixedColWithTypeCheck[int32](outputBat.Vecs[0])[0])
+		require.Equal(t, int32(2), vector.MustFixedColWithTypeCheck[int32](outputBat.Vecs[0])[1])
+		require.Equal(t, []byte("val"), outputBat.Vecs[2].GetBytesAt(0))
+		require.Equal(t, []byte("val"), outputBat.Vecs[2].GetBytesAt(1))
+	})
+
+	// Test case 7: Repeated selectRows
+	t.Run("repeated_rows", func(t *testing.T) {
+		vec0 := vector.NewVec(types.T_int32.ToType())
+		vector.AppendFixed(vec0, int32(10), false, mp)
+		vector.AppendFixed(vec0, int32(20), false, mp)
+		cacheVectors := make(containers.Vectors, 1)
+		cacheVectors[0] = *vec0
+
+		outputBat := batch.NewWithSize(1)
+		outputBat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+
+		selectRows := []int64{0, 0, 1, 1}
+		columns := []uint16{0}
+		info := &objectio.BlockInfo{}
+
+		err := fillOutputBatchBySelectedRows(
+			info, columns, -1, outputBat, cacheVectors, selectRows, nil, nil, mp,
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, 4, outputBat.Vecs[0].Length())
+		require.Equal(t, int32(10), vector.MustFixedColWithTypeCheck[int32](outputBat.Vecs[0])[0])
+		require.Equal(t, int32(10), vector.MustFixedColWithTypeCheck[int32](outputBat.Vecs[0])[1])
+		require.Equal(t, int32(20), vector.MustFixedColWithTypeCheck[int32](outputBat.Vecs[0])[2])
+		require.Equal(t, int32(20), vector.MustFixedColWithTypeCheck[int32](outputBat.Vecs[0])[3])
 	})
 }
 
