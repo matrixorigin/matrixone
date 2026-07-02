@@ -43,12 +43,13 @@ func TestCloneTableFormat(t *testing.T) {
 			IfNotExists: true,
 			Table:       makeCloneTableName("dst_db", "dst`tbl", nil),
 		},
+		CopyGrants:   true,
 		ToAccountOpt: &ToAccountOpt{AccountName: Identifier("acc`name")},
 	}
 
 	require.Equal(
 		t,
-		"create temporary table if not exists `dst_db`.`dst``tbl` clone `src_db`.`src``tbl`{snapshot = 'sp1'} to account `acc``name`",
+		"create temporary table if not exists `dst_db`.`dst``tbl` clone `src_db`.`src``tbl`{snapshot = 'sp1'} copy grants to account `acc``name`",
 		StringWithOpts(stmt, dialect.MYSQL, WithQuoteIdentifier(), WithSingleQuoteString()),
 	)
 }
