@@ -197,6 +197,7 @@ func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.Reinde
 // cleanup beyond the generic hidden-table deletion the SQL layer performs.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	if storeDef, ok := defs[catalog.FullTextIndex_TblType_Storage]; ok {
+		logutil.Debugf("[wand] HandleDropIndex: evicting search cache for %s", storeDef.IndexTableName)
 		veccache.Cache.Remove(storeDef.IndexTableName)
 	}
 	return nil
