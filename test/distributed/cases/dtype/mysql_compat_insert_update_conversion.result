@@ -1,6 +1,8 @@
 drop database if exists mysql_compat_insert_update_conversion;
 create database mysql_compat_insert_update_conversion;
 use mysql_compat_insert_update_conversion;
+set @old_time_zone = @@session.time_zone;
+set @old_sql_mode = @@session.sql_mode;
 set time_zone = '+00:00';
 set session sql_mode = '';
 drop table if exists t_conv;
@@ -49,4 +51,6 @@ id    i    u    d    f_value    da    dt_text    tm_text    vc_box    vc_len    
 1    13    13    10.00    -125.0    2024-02-03    2024-02-03 11:22:33.654321    12:34:56.654321    [pqrs]    4    [pqrs]    4
 2    7    7    0.00    -125.0    2024-02-29    2024-02-29 01:02:03.999999    11:22:33.500000    [xy]    2    [xy]    2
 drop table t_conv;
+set session sql_mode = @old_sql_mode;
+set session time_zone = @old_time_zone;
 drop database mysql_compat_insert_update_conversion;

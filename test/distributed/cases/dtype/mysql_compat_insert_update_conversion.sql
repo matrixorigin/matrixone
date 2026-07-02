@@ -7,6 +7,9 @@
 drop database if exists mysql_compat_insert_update_conversion;
 create database mysql_compat_insert_update_conversion;
 use mysql_compat_insert_update_conversion;
+
+set @old_time_zone = @@session.time_zone;
+set @old_sql_mode = @@session.sql_mode;
 set time_zone = '+00:00';
 set session sql_mode = '';
 
@@ -55,4 +58,6 @@ select id, i, u, d, cast(f as decimal(8,1)) as f_value, da,
 from t_conv order by id;
 
 drop table t_conv;
+set session sql_mode = @old_sql_mode;
+set session time_zone = @old_time_zone;
 drop database mysql_compat_insert_update_conversion;
