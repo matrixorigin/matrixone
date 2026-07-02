@@ -240,6 +240,9 @@ DROP TABLE t_datetime_range;
 SELECT STR_TO_DATE('2024-01-15 12:34:56.123456', '%Y-%m-%d %H:%i:%s.%f') AS result,
        EXTRACT(MICROSECOND FROM STR_TO_DATE('2024-01-15 12:34:56.123456', '%Y-%m-%d %H:%i:%s.%f')) AS microseconds;
 
+SELECT STR_TO_DATE('2024-02-29 23:59:59.123456', '%Y-%m-%d %H:%i:%s.%f') AS parsed_dt6,
+       EXTRACT(MICROSECOND FROM STR_TO_DATE('2024-02-29 23:59:59.123456', '%Y-%m-%d %H:%i:%s.%f')) AS parsed_micro;
+
 -- ============================================================================
 -- Test 12: DATETIME arithmetic preserves precision
 -- ============================================================================
@@ -378,4 +381,3 @@ FROM t_dateadd_scale;
 DROP TABLE t_dateadd_scale;
 
 DROP DATABASE test_datetime_precision;
-

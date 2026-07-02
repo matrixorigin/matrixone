@@ -159,7 +159,11 @@ DROP TABLE t_datetime_range;
 SELECT STR_TO_DATE('2024-01-15 12:34:56.123456', '%Y-%m-%d %H:%i:%s.%f') AS result,
 EXTRACT(MICROSECOND FROM STR_TO_DATE('2024-01-15 12:34:56.123456', '%Y-%m-%d %H:%i:%s.%f')) AS microseconds;
 result    microseconds
-2024-01-15 12:34:56    123456
+2024-01-15 12:34:56.123456    123456
+SELECT STR_TO_DATE('2024-02-29 23:59:59.123456', '%Y-%m-%d %H:%i:%s.%f') AS parsed_dt6,
+EXTRACT(MICROSECOND FROM STR_TO_DATE('2024-02-29 23:59:59.123456', '%Y-%m-%d %H:%i:%s.%f')) AS parsed_micro;
+parsed_dt6    parsed_micro
+2024-02-29 23:59:59.123456    123456
 SELECT '2024-01-15 12:34:56.123456' + INTERVAL 1 DAY AS result,
 EXTRACT(MICROSECOND FROM ('2024-01-15 12:34:56.123456' + INTERVAL 1 DAY)) AS microseconds;
 result    microseconds
