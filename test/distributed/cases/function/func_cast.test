@@ -7,6 +7,13 @@ select cast('7e0   ' as double), cast('-7.5e1   ' as float);
 select cast('1e-3   ' as decimal(8,4));
 select cast('+0012' as unsigned) as r;
 select CAST('10x' as unsigned integer);
+select cast('7e0' as double),
+       cast('7e0' as float),
+       cast('  +7e0' as double),
+       cast('  -7.5e1' as float),
+       cast('1e-3' as decimal(8,4));
+select cast('+0012' as unsigned) as r;
+select cast(12345 as char(3)), length(cast(12345 as char(3)));
 
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
 
