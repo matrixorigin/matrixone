@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -170,6 +171,27 @@ func TestShouldUseLCAReaderFallback(t *testing.T) {
 	}
 }
 
+func TestExtractDataBranchSQLRowValueDecimal256(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	typ := types.New(types.T_decimal256, 39, 4)
+	vec := vector.NewVec(typ)
+	defer vec.Free(mp)
+
+	val, err := types.ParseDecimal256("12345678901234567890123456789012345.6789", typ.Width, typ.Scale)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+
+	row := make([]any, 1)
+	require.NoError(t, extractDataBranchSQLRowValue(context.Background(), nil, vec, 0, row, 0))
+	require.Equal(t, val, row[0])
+
+	var buf bytes.Buffer
+	require.NoError(t, formatValIntoString(nil, row[0], typ, &buf))
+	require.Equal(t, "12345678901234567890123456789012345.6789", buf.String())
+}
+
 func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -187,6 +209,53 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	err := appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected byte slice for fixed-width column")
+
+	decimalTyp := types.New(types.T_decimal256, 39, 4)
+	decimalVec := vector.NewVec(decimalTyp)
+	decimalVal, err := types.ParseDecimal256("12345678901234567890123456789012344.1234", decimalTyp.Width, decimalTyp.Scale)
+	require.NoError(t, err)
+	require.NoError(t, appendTupleValueToVector(decimalVec, types.EncodeDecimal256(&decimalVal), mp))
+	require.Equal(t, 1, decimalVec.Length())
+	require.Equal(t, decimalVal, vector.GetFixedAtNoTypeCheck[types.Decimal256](decimalVec, 0))
+
+	yearVec := vector.NewVec(types.T_year.ToType())
+	yearVal := types.MoYear(2024)
+	require.NoError(t, appendTupleValueToVector(yearVec, types.EncodeValue(yearVal, types.T_year), mp))
+	require.Equal(t, 1, yearVec.Length())
+	require.Equal(t, yearVal, vector.GetFixedAtNoTypeCheck[types.MoYear](yearVec, 0))
+}
+
+func TestAppendTupleValueToVector_BranchHashmapYear(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	src := vector.NewVec(types.T_year.ToType())
+	defer src.Free(mp)
+
+	yearVal := types.MoYear(2024)
+	require.NoError(t, vector.AppendFixed(src, yearVal, false, mp))
+
+	bh, err := databranchutils.NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() { require.NoError(t, bh.Close()) }()
+
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{src}, []int{0}))
+	results, err := bh.GetByVectors([]*vector.Vector{src})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.True(t, results[0].Exists)
+	require.Len(t, results[0].Rows, 1)
+
+	tuple, _, err := bh.DecodeRow(results[0].Rows[0])
+	require.NoError(t, err)
+	require.Equal(t, yearVal, tuple[0])
+
+	dst := vector.NewVec(types.T_year.ToType())
+	defer dst.Free(mp)
+
+	require.NoError(t, appendTupleValueToVector(dst, tuple[0], mp))
+	require.Equal(t, 1, dst.Length())
+	require.Equal(t, yearVal, vector.GetFixedAtNoTypeCheck[types.MoYear](dst, 0))
 }
 
 func TestCompareSingleValInVector_AllTypes(t *testing.T) {
@@ -491,6 +560,19 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, err := types.Decimal128FromFloat64(12.34, 38, 4)
 				require.NoError(t, err)
 				rightVal, err := types.Decimal128FromFloat64(23.45, 38, 4)
+				require.NoError(t, err)
+				leftVec := buildFixedVector(t, mp, typ, leftVal)
+				rightVec := buildFixedVector(t, mp, typ, rightVal)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
+			},
+		},
+		{
+			name: "decimal256",
+			build: func(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector, int) {
+				typ := types.New(types.T_decimal256, 39, 4)
+				leftVal, err := types.ParseDecimal256("12345678901234567890123456789012344.1234", typ.Width, typ.Scale)
+				require.NoError(t, err)
+				rightVal, err := types.ParseDecimal256("12345678901234567890123456789012345.1234", typ.Width, typ.Scale)
 				require.NoError(t, err)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)

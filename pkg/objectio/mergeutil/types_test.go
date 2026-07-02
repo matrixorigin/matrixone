@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -61,6 +62,125 @@ func TestSortColumnsByIndex(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestMergeSortBatchesDecimal256(t *testing.T) {
+	mp := mpool.MustNewZero()
+	decimalTyp := types.New(types.T_decimal256, 39, 4)
+	batches := []*batch.Batch{
+		newDecimal256MergeBatch(t, mp, decimalTyp, []string{
+			"-2.0000",
+			"1234567890123456789012345678901234.5678",
+			"9999999999999999999999999999999999.9999",
+		}, []int32{10, 30, 50}),
+		newDecimal256MergeBatch(t, mp, decimalTyp, []string{
+			"0.0001",
+			"1234567890123456789012345678901234.5677",
+		}, []int32{20, 40}),
+	}
+	for _, bat := range batches {
+		defer bat.Clean(mp)
+	}
+
+	newBuffer := func() *batch.Batch {
+		return batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{decimalTyp, types.T_int32.ToType()})
+	}
+	buffer := newBuffer()
+
+	var gotKeys []string
+	var gotPayloads []int32
+	buffer, err := MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
+		keys := vector.MustFixedColNoTypeCheck[types.Decimal256](out.Vecs[0])
+		payloads := vector.MustFixedColNoTypeCheck[int32](out.Vecs[1])
+		for i := 0; i < out.RowCount(); i++ {
+			gotKeys = append(gotKeys, keys[i].Format(decimalTyp.Scale))
+			gotPayloads = append(gotPayloads, payloads[i])
+		}
+		out.Clean(mp)
+		return newBuffer(), nil
+	}, mp, nil)
+	require.NoError(t, err)
+	defer buffer.Clean(mp)
+	require.Equal(t, []string{
+		"-2.0000",
+		"0.0001",
+		"1234567890123456789012345678901234.5677",
+		"1234567890123456789012345678901234.5678",
+		"9999999999999999999999999999999999.9999",
+	}, gotKeys)
+	require.Equal(t, []int32{10, 20, 40, 30, 50}, gotPayloads)
+}
+
+func TestMergeSortBatchesYear(t *testing.T) {
+	mp := mpool.MustNewZero()
+	batches := []*batch.Batch{
+		newYearMergeBatch(t, mp, []types.MoYear{0, 2001, 2024}, []int32{10, 30, 50}),
+		newYearMergeBatch(t, mp, []types.MoYear{1901, 2010}, []int32{20, 40}),
+	}
+	for _, bat := range batches {
+		defer bat.Clean(mp)
+	}
+
+	newBuffer := func() *batch.Batch {
+		return batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{types.T_year.ToType(), types.T_int32.ToType()})
+	}
+	buffer := newBuffer()
+
+	var gotKeys []types.MoYear
+	var gotPayloads []int32
+	buffer, err := MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
+		keys := vector.MustFixedColNoTypeCheck[types.MoYear](out.Vecs[0])
+		payloads := vector.MustFixedColNoTypeCheck[int32](out.Vecs[1])
+		for i := 0; i < out.RowCount(); i++ {
+			gotKeys = append(gotKeys, keys[i])
+			gotPayloads = append(gotPayloads, payloads[i])
+		}
+		out.Clean(mp)
+		return newBuffer(), nil
+	}, mp, nil)
+	require.NoError(t, err)
+	defer buffer.Clean(mp)
+	require.Equal(t, []types.MoYear{0, 1901, 2001, 2010, 2024}, gotKeys)
+	require.Equal(t, []int32{10, 20, 30, 40, 50}, gotPayloads)
+}
+
+func newDecimal256MergeBatch(
+	t *testing.T,
+	mp *mpool.MPool,
+	decimalTyp types.Type,
+	keys []string,
+	payloads []int32,
+) *batch.Batch {
+	t.Helper()
+	require.Len(t, payloads, len(keys))
+
+	bat := batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{decimalTyp, types.T_int32.ToType()})
+	for i, key := range keys {
+		value, err := types.ParseDecimal256(key, decimalTyp.Width, decimalTyp.Scale)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], payloads[i], false, mp))
+	}
+	bat.SetRowCount(len(keys))
+	return bat
+}
+
+func newYearMergeBatch(
+	t *testing.T,
+	mp *mpool.MPool,
+	keys []types.MoYear,
+	payloads []int32,
+) *batch.Batch {
+	t.Helper()
+	require.Len(t, payloads, len(keys))
+
+	bat := batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{types.T_year.ToType(), types.T_int32.ToType()})
+	for i, key := range keys {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], payloads[i], false, mp))
+	}
+	bat.SetRowCount(len(keys))
+	return bat
 }
 
 func TestSortColumnsByIndexWithBuf(t *testing.T) {

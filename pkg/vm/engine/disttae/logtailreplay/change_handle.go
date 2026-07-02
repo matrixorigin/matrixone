@@ -2489,6 +2489,8 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 			val = vector.GetFixedAtNoTypeCheck[types.Decimal64](src, offset)
 		case types.T_decimal128:
 			val = vector.GetFixedAtNoTypeCheck[types.Decimal128](src, offset)
+		case types.T_decimal256:
+			val = vector.GetFixedAtNoTypeCheck[types.Decimal256](src, offset)
 		case types.T_uuid:
 			val = vector.GetFixedAtNoTypeCheck[types.Uuid](src, offset)
 		case types.T_float32:
@@ -2503,6 +2505,8 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 			val = vector.GetFixedAtNoTypeCheck[types.Datetime](src, offset)
 		case types.T_timestamp:
 			val = vector.GetFixedAtNoTypeCheck[types.Timestamp](src, offset)
+		case types.T_year:
+			val = vector.GetFixedAtNoTypeCheck[types.MoYear](src, offset)
 		case types.T_enum:
 			val = vector.GetFixedAtNoTypeCheck[types.Enum](src, offset)
 		case types.T_TS:

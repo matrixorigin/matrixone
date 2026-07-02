@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -120,6 +121,59 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		col1, err := mrs.GetColumn(ctx, 1)
 		require.NoError(t, err)
 		require.Equal(t, "flag", col1.Name())
+	})
+
+	t.Run("default output preserves decimal metadata", func(t *testing.T) {
+		decimalTblStuff := tblStuff
+		decimalTblStuff.def.colNames = []string{"id", "price"}
+		decimalTblStuff.def.colTypes = []types.Type{
+			types.T_int64.ToType(),
+			types.New(types.T_decimal64, 10, 2),
+		}
+		decimalTblStuff.def.visibleIdxes = []int{0, 1}
+
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   nil,
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, decimalTblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		col, err := mrs.GetColumn(ctx, 3)
+		require.NoError(t, err)
+		require.Equal(t, "price", col.Name())
+		require.Equal(t, defines.MYSQL_TYPE_DECIMAL, col.ColumnType())
+		require.Equal(t, uint32(12), col.Length())
+		mysqlCol, ok := col.(*MysqlColumn)
+		require.True(t, ok)
+		require.Equal(t, uint8(2), mysqlCol.Decimal())
+	})
+
+	t.Run("default output preserves year metadata", func(t *testing.T) {
+		yearTblStuff := tblStuff
+		yearTblStuff.def.colNames = []string{"id", "y"}
+		yearTblStuff.def.colTypes = []types.Type{
+			types.T_int64.ToType(),
+			types.T_year.ToType(),
+		}
+		yearTblStuff.def.visibleIdxes = []int{0, 1}
+
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   nil,
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, yearTblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		col, err := mrs.GetColumn(ctx, 3)
+		require.NoError(t, err)
+		require.Equal(t, "y", col.Name())
+		require.Equal(t, defines.MYSQL_TYPE_YEAR, col.ColumnType())
+		require.Equal(t, uint32(types.MaxVarcharLen), col.Length())
 	})
 
 	t.Run("summary output", func(t *testing.T) {
