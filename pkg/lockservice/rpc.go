@@ -16,6 +16,11 @@ package lockservice
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -128,10 +133,12 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 
 	v, err := f.Get()
 	if err != nil {
+		observeLockserviceRemoteRPCError(request.Method, err)
 		return nil, err
 	}
 	resp := v.(*pb.Response)
 	if err := resp.UnwrapError(); err != nil {
+		observeLockserviceRemoteRPCError(request.Method, err)
 		releaseResponse(resp)
 		// uuid and ip changed, async refresh cluster
 		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
@@ -238,7 +245,60 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			zap.String("request", request.DebugString()))
 
 	}
-	return c.client.Send(ctx, address, request)
+	f, err := c.client.Send(ctx, address, request)
+	if err != nil {
+		observeLockserviceRemoteRPCError(request.Method, err)
+	}
+	return f, err
+}
+
+func observeLockserviceRemoteRPCError(method pb.Method, err error) {
+	if errorType := lockserviceRemoteRPCErrorType(err); errorType != "" {
+		v2.NewLockserviceRemoteRPCErrorCounter(method.String(), errorType).Inc()
+	}
+}
+
+func lockserviceRemoteRPCErrorType(err error) string {
+	if err == nil {
+		return ""
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) {
+		return "rpc_timeout"
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+		return "backend_cannot_connect"
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
+		return "backend_closed"
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return "unexpected_eof"
+	}
+	if errors.Is(err, io.EOF) {
+		return "eof"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ""
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	errText := err.Error()
+	switch {
+	case strings.Contains(errText, "i/o timeout"),
+		strings.Contains(errText, "deadline exceeded"),
+		strings.Contains(errText, "timeout"):
+		return "timeout"
+	case strings.Contains(errText, "unexpected EOF"):
+		return "unexpected_eof"
+	case strings.Contains(errText, "EOF"):
+		return "eof"
+	}
+	return ""
 }
 
 func (c *client) Close() error {

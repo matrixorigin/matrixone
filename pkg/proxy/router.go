@@ -385,7 +385,26 @@ func (r *router) connect(
 
 	// Use the handshakeResp, which is auth request from client, to communicate
 	// with CN server.
-	resp, err := sc.HandleHandshake(handshakeResp, r.authTimeout)
+	resp, err := func() (*frontend.Packet, error) {
+		start := time.Now()
+		result := "success"
+		inflight := v2.ProxyBackendHandshakeInflightGauge.WithLabelValues(cn.uuid)
+		inflight.Inc()
+		defer func() {
+			inflight.Dec()
+			v2.ProxyBackendHandshakeDurationHistogram.
+				WithLabelValues(cn.uuid, result).
+				Observe(time.Since(start).Seconds())
+		}()
+		resp, err := sc.HandleHandshake(handshakeResp, r.authTimeout)
+		if err != nil {
+			result = "error"
+			if isTimeoutErr(err) {
+				result = "timeout"
+			}
+		}
+		return resp, err
+	}()
 	if err != nil {
 		_ = sc.Close()
 		// Handshake failed, remove the placeholder that was added in selectOne.
