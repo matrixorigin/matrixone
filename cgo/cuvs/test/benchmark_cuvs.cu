@@ -150,7 +150,7 @@ void run_benchmark(const std::string& index_name, distribution_mode_t mode,
 
 template<typename T>
 void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_config_t& cfg) {
-    auto converted = convert_dataset<T>(dataset, cfg.n_vectors, cfg.dimension);
+    [[maybe_unused]] auto converted = convert_dataset<T>(dataset, cfg.n_vectors, cfg.dimension);
 
     // Prepare recall queries from 4 different shards
     std::vector<float> recall_queries;
@@ -181,10 +181,24 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
             
             if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
             
-            gpu_cagra_t<float, T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
-            index.start();
+            std::unique_ptr<gpu_cagra_t<float, T>> idx;
+            if constexpr (sizeof(T) == 1) {
+                // 1-byte storage: feed the ORIGINAL floats through the base-typed
+                // quantize path so the library trains the scalar quantizer and
+                // quantizes the dataset with the SAME affine map used for the
+                // float32 queries at search time. Pre-quantizing on the host and
+                // using the const T* ctor leaves the quantizer untrained, which
+                // aborts search_quantize() with "Quantizer not trained".
+                idx = std::make_unique<gpu_cagra_t<float, T>>(cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+                idx->start();
+                idx->add_chunk_quantize(dataset.data(), cfg.n_vectors);
+            } else {
+                idx = std::make_unique<gpu_cagra_t<float, T>>(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+                idx->start();
+            }
+            auto& index = *idx;
             index.build();
-            
+
             cagra_search_params_t sp = cagra_search_params_default();
             sp.itopk_size = 128;
             sp.search_width = 1;
@@ -205,8 +219,17 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
 
             if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
 
-            gpu_ivf_flat_t<float, T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
-            index.start();
+            std::unique_ptr<gpu_ivf_flat_t<float, T>> idx;
+            if constexpr (sizeof(T) == 1) {
+                // See CAGRA block: train the quantizer via the base-typed path.
+                idx = std::make_unique<gpu_ivf_flat_t<float, T>>(cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+                idx->start();
+                idx->add_chunk_quantize(dataset.data(), cfg.n_vectors);
+            } else {
+                idx = std::make_unique<gpu_ivf_flat_t<float, T>>(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+                idx->start();
+            }
+            auto& index = *idx;
             index.build();
 
             ivf_flat_search_params_t sp = ivf_flat_search_params_default();
@@ -228,8 +251,17 @@ void benchmark_all_indices(const std::vector<float>& dataset, const benchmark_co
 
             if (mode != DistributionMode_SINGLE_GPU && active_devices.size() < 2) continue;
 
-            gpu_ivf_pq_t<float, T> index(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
-            index.start();
+            std::unique_ptr<gpu_ivf_pq_t<float, T>> idx;
+            if constexpr (sizeof(T) == 1) {
+                // See CAGRA block: train the quantizer via the base-typed path.
+                idx = std::make_unique<gpu_ivf_pq_t<float, T>>(cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+                idx->start();
+                idx->add_chunk_quantize(dataset.data(), cfg.n_vectors);
+            } else {
+                idx = std::make_unique<gpu_ivf_pq_t<float, T>>(converted.data(), cfg.n_vectors, cfg.dimension, DistanceType_L2Expanded, bp, active_devices, cfg.n_threads, mode);
+                idx->start();
+            }
+            auto& index = *idx;
             index.build();
 
             ivf_pq_search_params_t sp = ivf_pq_search_params_default();
