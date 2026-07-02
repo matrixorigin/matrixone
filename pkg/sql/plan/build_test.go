@@ -3275,3 +3275,12 @@ func TestReplaceCaptureDedupJoinDoesNotShuffle(t *testing.T) {
 
 	t.Fatal("expected REPLACE plan to contain a DEDUP JOIN with OldColCaptureList")
 }
+
+func TestSubqueryInJoinOn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"SELECT a.id FROM j_dim a JOIN j_dim b ON b.id = (SELECT MAX(id) FROM j_dim z WHERE z.region_id = a.region_id)",
+		"SELECT a.id FROM j_dim a JOIN j_dim b ON b.id = (SELECT MAX(id) FROM j_dim)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
