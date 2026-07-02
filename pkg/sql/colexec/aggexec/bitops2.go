@@ -283,6 +283,13 @@ func (exec *bitOpExecBytes) Flush() ([]*vector.Vector, error) {
 			if vecs[i].IsNull(uint64(j)) {
 				vecs[i].UnsetNull(uint64(j))
 				if err := vector.SetBytesAt(vecs[i], j, neutral, exec.mp); err != nil {
+					// Ownership of vecs[0..i] has been transferred from
+					// exec.state — free them before returning to avoid leaks.
+					for k := 0; k <= i; k++ {
+						if vecs[k] != nil {
+							vecs[k].Free(exec.mp)
+						}
+					}
 					return nil, err
 				}
 			}
