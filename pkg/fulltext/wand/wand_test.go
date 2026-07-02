@@ -427,6 +427,67 @@ func TestWandLiveness(t *testing.T) {
 	})
 }
 
+// TestWandSearchCachedLivenessStats proves item 3 (load-time liveness/stats
+// caching): precomputing ComputeLiveness + corpusStats once and feeding them to
+// searchSegmentsLiveStats yields results IDENTICAL to recomputing per query
+// (searchSegsLive) — both unfiltered and with a per-query WHERE prefilter — and
+// the per-query filter-combine never mutates the cached liveness slice (a later
+// unfiltered query still matches the recompute oracle).
+func TestWandSearchCachedLivenessStats(t *testing.T) {
+	base := buildSeg(t, baseChunkId, map[int64][]string{1: {"x"}, 2: {"x"}, 3: {"x"}})
+	tail := buildSeg(t, 2, map[int64][]string{2: {"x"}, 4: {"x"}}) // 2 updated, 4 new
+	defer base.Free()
+	defer tail.Free()
+	segs := []*WandModel{base, tail}
+	deletes := map[any]int64{normalizeKey(int64(3)): 3} // delete pk 3 at chunk 3
+
+	// Precompute once, exactly as WandSearch.Load does.
+	cachedLive := ComputeLiveness(segs, deletes)
+	gN, gAvg := corpusStats(segs)
+
+	// The WandSearch.Search combine: a FRESH slice when filtered, never touching cachedLive.
+	cachedSearch := func(mkAllow func(*WandModel) Membership) []SearchResult {
+		live := cachedLive
+		if mkAllow != nil {
+			live = make([]Membership, len(segs))
+			for i, s := range segs {
+				var b Membership
+				if i < len(cachedLive) {
+					b = cachedLive[i]
+				}
+				live[i] = andAllow(mkAllow(s), b)
+			}
+		}
+		return searchSegmentsLiveStats(segs, []string{"x"}, 10, nil, live, gN, gAvg)
+	}
+	eq := func(name string, got, want []SearchResult) {
+		t.Helper()
+		g, w := pkCounts(got), pkCounts(want)
+		if len(g) != len(w) {
+			t.Fatalf("%s: cached %v vs recompute %v", name, g, w)
+		}
+		for pk, n := range w {
+			if g[pk] != n {
+				t.Fatalf("%s: pk %d cached %d vs recompute %d (%v/%v)", name, pk, g[pk], n, g, w)
+			}
+		}
+	}
+
+	// unfiltered: cached == recompute ({1,2,4}; 3 deleted)
+	eq("unfiltered", cachedSearch(nil), searchSegsLive(segs, deletes, []string{"x"}, 10, nil))
+
+	allowA := map[int64]bool{1: true, 4: true}
+	mkA := func(m *WandModel) Membership { return &ordMembership{m: m, allowPk: allowA} }
+	eq("filterA", cachedSearch(mkA), searchSegsLive(segs, deletes, []string{"x"}, 10, mkA))
+
+	allowB := map[int64]bool{2: true}
+	mkB := func(m *WandModel) Membership { return &ordMembership{m: m, allowPk: allowB} }
+	eq("filterB", cachedSearch(mkB), searchSegsLive(segs, deletes, []string{"x"}, 10, mkB))
+
+	// unfiltered again: cachedLive must be intact after the filtered calls.
+	eq("unfiltered-again", cachedSearch(nil), searchSegsLive(segs, deletes, []string{"x"}, 10, nil))
+}
+
 // TestWandToInsertSqlsTag checks the tag column threads through: tag=0 for the
 // compacted main index, tag=1 for a CDC delta segment.
 func TestWandToInsertSqlsTag(t *testing.T) {

@@ -69,6 +69,13 @@ type WandSearch struct {
 	// deletes is pk -> max delete-frame chunk_id from the tag=1 log.
 	segs    []*WandModel
 	deletes map[any]int64
+	// Precomputed at Load (query-independent): per-segment liveness and the corpus
+	// stats. ComputeLiveness is O(total docs); computing it here (once per cache
+	// load) instead of per query is item 3 of the Phase-C scaling plan. live is
+	// parallel to segs (nil ⇒ every ord live).
+	live       []Membership
+	gN         int64
+	gAvgDocLen float64
 	// loaded distinguishes "never loaded" (Search errors) from "loaded but empty"
 	// (an index with no docs yet → Search returns zero rows, not an error).
 	loaded bool
@@ -116,6 +123,10 @@ func (s *WandSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 	}
 	s.segs = append(segs, tail...)
 	s.deletes = deletes
+	// Precompute the query-independent liveness + corpus stats once here, so the
+	// per-query path (Search) skips the O(total-docs) ComputeLiveness scan.
+	s.live = ComputeLiveness(s.segs, s.deletes)
+	s.gN, s.gAvgDocLen = corpusStats(s.segs)
 	s.loaded = true
 	return nil
 }
@@ -149,7 +160,21 @@ func (s *WandSearch) Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.
 		defer f.Free()
 		mkAllow = func(m *WandModel) Membership { return &docFilterMembership{m: m, f: f} }
 	}
-	res := searchSegsLive(s.segs, s.deletes, q.Terms, limit, mkAllow)
+	// Combine the load-cached liveness with the per-query WHERE prefilter. When
+	// there's a filter, build a FRESH slice (never mutate the cached s.live, which
+	// is shared across all queries between reloads).
+	live := s.live
+	if mkAllow != nil {
+		live = make([]Membership, len(s.segs))
+		for i, seg := range s.segs {
+			var base Membership
+			if i < len(s.live) {
+				base = s.live[i]
+			}
+			live[i] = andAllow(mkAllow(seg), base)
+		}
+	}
+	res := searchSegmentsLiveStats(s.segs, q.Terms, limit, nil, live, s.gN, s.gAvgDocLen)
 	keysOut := make([]any, len(res))
 	dist := make([]float64, len(res))
 	for i, r := range res {
@@ -181,5 +206,8 @@ func (s *WandSearch) Destroy() {
 	freeSegs(s.segs)
 	s.segs = nil
 	s.deletes = nil
+	s.live = nil
+	s.gN = 0
+	s.gAvgDocLen = 0
 	s.loaded = false
 }

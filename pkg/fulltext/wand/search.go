@@ -221,22 +221,43 @@ func SearchSegments(segs []*WandModel, terms []string, limit int, allow Membersh
 // prefilter over doc ords. live, if non-nil, is parallel to segs (from
 // ComputeLiveness): live[i] is ANDed with allow for segment i so superseded /
 // deleted ords are skipped. A nil live or a nil live[i] means "all ords live".
-func SearchSegmentsLive(segs []*WandModel, terms []string, limit int, allow Membership, live []Membership) []SearchResult {
-	if limit <= 0 || len(terms) == 0 || len(segs) == 0 {
-		return nil
-	}
-
-	// Corpus-global N + average doc length.
-	var gN int64
+// corpusStats returns the corpus-global doc count and average doc length over the
+// segment set (both include superseded/deleted docs — the accepted stat drift
+// until compaction). Query-INDEPENDENT: it depends only on the loaded segments, so
+// the search adapter (WandSearch) precomputes it once at Load and passes it to
+// searchSegmentsLiveStats, keeping it off the per-query path.
+func corpusStats(segs []*WandModel) (gN int64, gAvgDocLen float64) {
 	var totalDocLen float64
 	for _, s := range segs {
 		gN += s.N
 		totalDocLen += s.AvgDocLen * float64(s.N)
 	}
+	if gN > 0 {
+		gAvgDocLen = totalDocLen / float64(gN)
+	}
+	return gN, gAvgDocLen
+}
+
+// SearchSegmentsLive computes the corpus stats inline and delegates. Callers that
+// already hold precomputed stats (the load-cached WandSearch) call
+// searchSegmentsLiveStats directly.
+func SearchSegmentsLive(segs []*WandModel, terms []string, limit int, allow Membership, live []Membership) []SearchResult {
+	gN, gAvgDocLen := corpusStats(segs)
+	return searchSegmentsLiveStats(segs, terms, limit, allow, live, gN, gAvgDocLen)
+}
+
+// searchSegmentsLiveStats is the WAND top-K core with the corpus stats supplied by
+// the caller. `live` (per-segment liveness, query-independent) is likewise supplied
+// precomputed; only the term-dependent work (weights, per-term df, the walk) runs
+// here — so a load-cached adapter pays the O(total-docs) liveness + stats once per
+// load, not once per query.
+func searchSegmentsLiveStats(segs []*WandModel, terms []string, limit int, allow Membership, live []Membership, gN int64, gAvgDocLen float64) []SearchResult {
+	if limit <= 0 || len(terms) == 0 || len(segs) == 0 {
+		return nil
+	}
 	if gN <= 0 {
 		return nil
 	}
-	gAvgDocLen := totalDocLen / float64(gN)
 
 	// Query terms are tokenized words; dedup → weight. Resolution of a word to a
 	// segment's word-id is done PER SEGMENT (here and in searchInto): an
@@ -279,13 +300,16 @@ func SearchSegmentsLive(segs []*WandModel, terms []string, limit int, allow Memb
 	return h.sorted()
 }
 
-// searchSegsLive is the multi-segment search entry point used by the load-path
-// adapter (WandSearch): it computes per-segment liveness (owner-by-chunk_id ∩
-// not-deleted) over segs+deletes, optionally ANDs a per-segment WHERE prefilter
-// built by mkAllow (nil = unfiltered), and runs the corpus-global WAND top-K.
-// mkAllow is called once per segment so a pk-based filter resolves against that
-// segment's own ord→pk dictionary — a single filter over "ords" would be wrong,
-// since ord i denotes a different pk in each segment.
+// searchSegsLive is a standalone convenience that computes per-segment liveness
+// (owner-by-chunk_id ∩ not-deleted) over segs+deletes, optionally ANDs a
+// per-segment WHERE prefilter built by mkAllow (nil = unfiltered), and runs the
+// corpus-global WAND top-K. mkAllow is called once per segment so a pk-based
+// filter resolves against that segment's own ord→pk dictionary — a single filter
+// over "ords" would be wrong, since ord i denotes a different pk in each segment.
+//
+// NB: this recomputes liveness+stats every call. The production load-path adapter
+// (WandSearch) does NOT use it — it precomputes liveness+stats at Load and calls
+// searchSegmentsLiveStats per query (Phase-C item 3). Kept for tests / one-shot use.
 func searchSegsLive(segs []*WandModel, deletes map[any]int64, terms []string, limit int, mkAllow func(*WandModel) Membership) []SearchResult {
 	live := ComputeLiveness(segs, deletes)
 	if mkAllow != nil {
