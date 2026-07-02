@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"math"
 	"slices"
 
@@ -40,6 +41,11 @@ type bitOpExecFixed[T types.Ints | types.UInts] struct {
 type bitOpExecBytes struct {
 	aggExec
 	op bitOp
+	// width is the byte length of the argument type (BINARY(N)/VARBINARY(N)).
+	// It drives the length of the neutral value produced for empty or
+	// all-NULL groups so the result preserves the argument's byte length,
+	// matching MySQL binary-string aggregate semantics.
+	width int32
 }
 
 func (op bitOp) compute(a, b uint64) uint64 {
@@ -254,25 +260,31 @@ func (exec *bitOpExecBytes) SetExtraInformation(partialResult any, _ int) error 
 func (exec *bitOpExecBytes) Flush() ([]*vector.Vector, error) {
 	// transfer vector to result
 	vecs := make([]*vector.Vector, len(exec.state))
-	neutralBytesForAnd := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
+
+	// Neutral values for empty or all-NULL groups, per MySQL binary-string
+	// aggregate semantics. The neutral value has the same byte length as the
+	// argument type (BINARY(N)/VARBINARY(N)), driven by exec.width:
+	//   BIT_AND:          all bits set  -> width bytes of 0xFF
+	//   BIT_OR / BIT_XOR: all bits clear -> width bytes of 0x00
+	var neutral []byte
+	if exec.op == bitAnd {
+		neutral = bytes.Repeat([]byte{0xFF}, int(exec.width))
+	} else {
+		neutral = bytes.Repeat([]byte{0x00}, int(exec.width))
+	}
+
 	for i := range vecs {
 		vecs[i] = exec.state[i].vecs[0]
 		exec.state[i].vecs[0] = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
 
-		// Replace NULL entries with neutral values per MySQL semantics:
-		// BIT_AND: neutral is all bits set (8 bytes of 0xFF)
-		// BIT_OR, BIT_XOR: neutral is empty bytes
 		for j := 0; j < vecs[i].Length(); j++ {
 			if vecs[i].IsNull(uint64(j)) {
 				vecs[i].UnsetNull(uint64(j))
-				if exec.op == bitAnd {
-					if err := vector.SetBytesAt(vecs[i], j, neutralBytesForAnd, exec.mp); err != nil {
-						return nil, err
-					}
+				if err := vector.SetBytesAt(vecs[i], j, neutral, exec.mp); err != nil {
+					return nil, err
 				}
-				// For bitOr and bitXor, the default zero bytes (empty) is already the neutral value
 			}
 		}
 	}
@@ -299,6 +311,7 @@ func makeBitOpExecBytes(mp *mpool.MPool, id int64, param types.Type, op bitOp) A
 	var bitOp bitOpExecBytes
 	bitOp.mp = mp
 	bitOp.op = op
+	bitOp.width = param.Width
 	bitOp.aggInfo = aggInfo{
 		aggId:      id,
 		isDistinct: false,

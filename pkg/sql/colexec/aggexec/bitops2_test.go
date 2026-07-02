@@ -242,9 +242,8 @@ func TestBitOpsMultipleGroups(t *testing.T) {
 
 func TestBitOpsBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	typ := types.T_varbinary.ToType()
 
-	makeInputVec := func(values [][]byte, nulls []bool) *vector.Vector {
+	makeInputVec := func(typ types.Type, values [][]byte, nulls []bool) *vector.Vector {
 		vec := vector.NewVec(typ)
 		for i, v := range values {
 			isNull := false
@@ -256,9 +255,19 @@ func TestBitOpsBytes(t *testing.T) {
 		return vec
 	}
 
+	// bytesN builds a slice of n bytes filled with b.
+	bytesN := func(b byte, n int) []byte {
+		out := make([]byte, n)
+		for i := range out {
+			out[i] = b
+		}
+		return out
+	}
+
 	t.Run("normal values byte bit_or", func(t *testing.T) {
+		typ := types.New(types.T_binary, 1, 0)
 		// BIT_OR: 0x01 | 0x02 | 0x04 = 0x07
-		vec := makeInputVec([][]byte{{0x01}, {0x02}, {0x04}}, nil)
+		vec := makeInputVec(typ, [][]byte{{0x01}, {0x02}, {0x04}}, nil)
 		defer vec.Free(mp)
 
 		exec := makeBitAggExec(mp, AggIdOfBitOr, typ)
@@ -276,53 +285,118 @@ func TestBitOpsBytes(t *testing.T) {
 		}
 	})
 
-	t.Run("empty group byte bit_or returns empty", func(t *testing.T) {
-		exec := makeBitAggExec(mp, AggIdOfBitOr, typ)
-		require.NoError(t, exec.GroupGrow(1))
+	// Neutral values for empty or all-NULL groups must preserve the argument
+	// byte length: BIT_AND -> width bytes of 0xFF, BIT_OR/BIT_XOR -> width
+	// bytes of 0x00. Cover both BINARY(N) and VARBINARY(N) for several widths.
+	for _, dim := range []struct {
+		name  string
+		oid   types.T
+		width int32
+	}{
+		{"binary(3)", types.T_binary, 3},
+		{"binary(10)", types.T_binary, 10},
+		{"varbinary(4)", types.T_varbinary, 4},
+	} {
+		typ := types.New(dim.oid, dim.width, 0)
+		w := int(dim.width)
 
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		require.False(t, results[0].IsNull(0))
-		require.Equal(t, []byte{}, results[0].GetBytesAt(0))
+		for _, tc := range []struct {
+			name   string
+			aggID  int64
+			expect []byte
+		}{
+			{"bit_and", AggIdOfBitAnd, bytesN(0xFF, w)},
+			{"bit_or", AggIdOfBitOr, bytesN(0x00, w)},
+			{"bit_xor", AggIdOfBitXor, bytesN(0x00, w)},
+		} {
+			t.Run(dim.name+" empty group "+tc.name, func(t *testing.T) {
+				exec := makeBitAggExec(mp, tc.aggID, typ)
+				require.NoError(t, exec.GroupGrow(1))
 
-		exec.Free()
-		for _, r := range results {
-			r.Free(mp)
+				results, err := exec.Flush()
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				require.False(t, results[0].IsNull(0))
+				require.Equal(t, tc.expect, results[0].GetBytesAt(0))
+
+				exec.Free()
+				for _, r := range results {
+					r.Free(mp)
+				}
+			})
+
+			t.Run(dim.name+" all-NULL group "+tc.name, func(t *testing.T) {
+				vec := makeInputVec(typ, [][]byte{{0x01}, {0x02}}, []bool{true, true})
+				defer vec.Free(mp)
+
+				exec := makeBitAggExec(mp, tc.aggID, typ)
+				require.NoError(t, exec.GroupGrow(1))
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+
+				results, err := exec.Flush()
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				require.False(t, results[0].IsNull(0))
+				require.Equal(t, tc.expect, results[0].GetBytesAt(0))
+
+				exec.Free()
+				for _, r := range results {
+					r.Free(mp)
+				}
+			})
 		}
-	})
+	}
 
-	t.Run("empty group byte bit_and returns all-ones", func(t *testing.T) {
-		exec := makeBitAggExec(mp, AggIdOfBitAnd, typ)
-		require.NoError(t, exec.GroupGrow(1))
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		require.False(t, results[0].IsNull(0))
-		require.Equal(t, []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, results[0].GetBytesAt(0))
-
-		exec.Free()
-		for _, r := range results {
-			r.Free(mp)
-		}
-	})
-
-	t.Run("all-NULL byte bit_xor returns empty", func(t *testing.T) {
-		vec := makeInputVec([][]byte{{0x01}, {0x02}}, []bool{true, true})
+	t.Run("multiple groups one empty preserves width", func(t *testing.T) {
+		typ := types.New(types.T_binary, 3, 0)
+		// group 1 has values, group 2 is empty -> neutral, group 3 has values
+		vec := makeInputVec(typ, [][]byte{{0x0F, 0x0F, 0x0F}, {0xF0, 0xF0, 0xF0}}, nil)
 		defer vec.Free(mp)
+		groups := []uint64{1, 3}
 
-		exec := makeBitAggExec(mp, AggIdOfBitXor, typ)
-		require.NoError(t, exec.GroupGrow(1))
-		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+		exec := makeBitAggExec(mp, AggIdOfBitOr, typ)
+		require.NoError(t, exec.GroupGrow(3))
+		require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{vec}))
 
 		results, err := exec.Flush()
 		require.NoError(t, err)
 		require.Len(t, results, 1)
-		require.False(t, results[0].IsNull(0))
-		require.Equal(t, []byte{}, results[0].GetBytesAt(0))
+		require.Equal(t, []byte{0x0F, 0x0F, 0x0F}, results[0].GetBytesAt(0))
+		require.False(t, results[0].IsNull(1))
+		require.Equal(t, bytesN(0x00, 3), results[0].GetBytesAt(1))
+		require.Equal(t, []byte{0xF0, 0xF0, 0xF0}, results[0].GetBytesAt(2))
 
 		exec.Free()
+		for _, r := range results {
+			r.Free(mp)
+		}
+	})
+
+	// Merging an all-NULL group into an empty group and then flushing must
+	// still produce a width-length neutral value (covers the bytes Merge path).
+	t.Run("merge all-NULL groups preserves neutral width", func(t *testing.T) {
+		typ := types.New(types.T_binary, 4, 0)
+
+		exec1 := makeBitAggExec(mp, AggIdOfBitAnd, typ)
+		require.NoError(t, exec1.GroupGrow(1))
+		exec2 := makeBitAggExec(mp, AggIdOfBitAnd, typ)
+		require.NoError(t, exec2.GroupGrow(1))
+		// feed exec2 an all-NULL row so its single group stays NULL
+		nullVec := makeInputVec(typ, [][]byte{{0x01}}, []bool{true})
+		defer nullVec.Free(mp)
+		require.NoError(t, exec2.BulkFill(0, []*vector.Vector{nullVec}))
+
+		// merge exec2's group 0 into exec1's group 0
+		require.NoError(t, exec1.Merge(exec2, 0, 0))
+
+		results, err := exec1.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		require.False(t, results[0].IsNull(0))
+		require.Equal(t, bytesN(0xFF, 4), results[0].GetBytesAt(0))
+
+		exec1.Free()
+		exec2.Free()
 		for _, r := range results {
 			r.Free(mp)
 		}
