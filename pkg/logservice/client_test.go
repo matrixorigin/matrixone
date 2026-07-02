@@ -375,7 +375,7 @@ func (c *closeTrackingRPCClient) Send(context.Context, string, morpc.Message) (*
 	return nil, errors.New("unexpected send")
 }
 
-func (c *closeTrackingRPCClient) NewStream(context.Context, string, bool) (morpc.Stream, error) {
+func (c *closeTrackingRPCClient) NewStream(string, bool) (morpc.Stream, error) {
 	return nil, errors.New("unexpected stream")
 }
 
@@ -386,7 +386,7 @@ func (c *closeTrackingRPCClient) Ping(context.Context, string) error {
 func (c *closeTrackingRPCClient) Close() error {
 	c.closeMu.Lock()
 	defer c.closeMu.Unlock()
-	*c.closeCount++
+	(*c.closeCount)++
 	return nil
 }
 
@@ -429,6 +429,44 @@ func startHangingTCPServer(t *testing.T) (string, func()) {
 		})
 	}
 	return ln.Addr().String(), cleanup
+}
+
+type closeTrackingRPCClient struct {
+	mu     sync.Mutex
+	closed int
+}
+
+func (c *closeTrackingRPCClient) Send(
+	context.Context,
+	string,
+	morpc.Message,
+) (*morpc.Future, error) {
+	return nil, nil
+}
+
+func (c *closeTrackingRPCClient) NewStream(string, bool) (morpc.Stream, error) {
+	return nil, nil
+}
+
+func (c *closeTrackingRPCClient) Ping(context.Context, string) error {
+	return nil
+}
+
+func (c *closeTrackingRPCClient) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed++
+	return nil
+}
+
+func (c *closeTrackingRPCClient) CloseBackend() error {
+	return nil
+}
+
+func (c *closeTrackingRPCClient) closeCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
 }
 
 func TestClientGetTSOTimestamp(t *testing.T) {
