@@ -359,7 +359,7 @@ without re-tokenizing.
   multi-segment search adapter.
 - **B3**: idxcron `Merge` compaction + `max_index_capacity` rollover.
 
-### Implementation status (branch `fulltext_wand`, HEAD `a91af0e15`, updated 2026-07-02)
+### Implementation status (branch `fulltext_wand`, HEAD `18713cb44`, updated 2026-07-02)
 
 **Branch state:** the Phase-B foundation (commit `eb94f4ae8`) is committed, then
 **`cuvs_quantize` was merged into `fulltext_wand`** (merge commit `7c20d9286`).
@@ -381,16 +381,24 @@ SQL of `loadTailFrames`/`Load` still needs a live e2e run.
 - **tag=1 delete-log codec** (`deletes.go`): `DeleteRecord{Pk, LSN}`, `EncodeDeleteLog`/`DecodeDeleteLog` (self-contained binary+crc32, **no** GPU-coupled cuVS import), `DeleteMap` fold → feeds `ComputeLiveness`. Tests: `TestWandDeleteLogRoundTrip` (int64/varchar/corruption/empty). **[2026-07-02 DONE (`2a0fdc4b8`): `DeleteRecord` slimmed to `{Pk}` (stored order field dropped); `DeleteMap` → `FoldDeleteFrame(m, recs, chunkId)` folds each delete frame at its `chunk_id`.]**
 - **`ToInsertSqls(cfg, ts, tag)`** — tag=0 compacted main / tag=1 CDC delta segment (`storage.go`; caller `fulltext_wand_create.go` passes 0). Test: `TestWandToInsertSqlsTag`.
 
-**⏳ Remaining = the write path (needs a live `mo_ctl` + CDC pipeline to validate e2e); the read path (e) is now done:**
+**Status (2026-07-02): read + write path DONE and validated e2e on a live
+single-node instance** — CREATE → async InitSQL build → BM25-ranked top-K; CDC
+INSERT searchable in ~15s; CDC DELETE removes the doc; the search cache is evicted
+after each build. BVT: `fulltext/fulltext_retrieval` +
+`pessimistic_transaction/fulltext/fulltext_retrieval_async`. **Only idxcron
+compaction (g) remains.** Two known gaps: the planner still injects a score Sort
+above `fulltext_wand_search` (perf, not correctness — the "no SORT" goal is unmet;
+the LIMIT does push into the operator), and cache eviction is CN-local (multi-CN
+broadcast is a follow-up). Item detail:
 - **(a) ~~`DataRetriever.GetLSN()` accessor~~ — DROPPED (2026-07-01).** The dedup
   decision orders frames by `chunk_id` in the single tag=1 `CdcTail` log, not ISCP's
   LSN, so **no `DataRetriever` interface change is needed**. The sinker appends at
   `chunk_id = NextChunkIdSql(CdcTailId, tag=1)` (item (b)). Rationale: the "single
   CdcTail log, chunk_id-ordered" decision — neither HNSW (`Contains(pk)`) nor IVF-PQ
   (`pkid` fold at `Load`) couples identity to ISCP's LSN.
-- **(b) `WandSqlWriter` + `RunWand`** in `pkg/iscp` — mirror `NewFulltextSqlWriter` (`index_sqlwriter.go:251`) + `runHnsw` (`index_consumer.go:240`). Writer accumulates insert `{pk,text}` + delete `{pk}` rows → blob; `RunWand` consumes blobs → tokenize via `tokenizer.SharedJiebaTokenizer(false)` (**same** path as search `parsePatternInNLModeJieba`, so build/query tokens match) → `Builder.Add` → on channel close `FinishSegments` → **append the segment frame(s) and delete frame(s) to the tag=1 `CdcTail` log at `NextChunkIdSql`** + `UpdateWatermark`. (`pkg/iscp` already imports algo pkgs e.g. hnsw, so importing `pkg/fulltext/wand` is consistent — no cycle.) **Codec ready (2026-07-02, `a91af0e15`):** `FrameSegment` / `FrameDeletes` produce the tag=1 frames and the read side (`AssembleFrames`/`loadTailFrames`) already consumes exactly what the sinker writes — so (b) is now just: accumulate rows → `Builder.Add` → `FinishSegments` → `FrameSegment` → append at `NextChunkIdSql`; deletes → `FrameDeletes`.
-- **(c)** Branch the fulltext plugin iscp `Hooks` (`pkg/fulltext/plugin/iscp/iscp.go` `NewSqlWriter`/`Run`) on `parser==retrieval` → Wand writer/run, else the postings writer/`RunIndex`.
-- **(d)** In `HandleCreateIndex` (`pkg/fulltext/plugin/compile/compile.go`), flip the async check `catalog.IsIndexAsync` → `indexplugin.IndexIsAsync` (retrieval → async). **Do NOT skip the build:** the async branch's `CreateIndexCdcTask` call currently passes an empty `sql=""` — for retrieval pass a non-empty **InitSQL that builds the WAND store from postings** (`genInsertSQL` → postings, `genWandBuildSQL` → tag=0). ISCP runs the InitSQL at task start (the build happens at the beginning of ISCP, not synchronously at CREATE), so the **postings table is still required**; `genWandBuildSQL` is not dropped, it moves into the InitSQL. Then CDC deltas maintain tag=1. (Corrects the earlier "skip genWandBuildSQL / replay-from-creation" wording.)
+- **(b) `WandSqlWriter` + `RunWand`** — ✅ **DONE (`fd2de4978`; cache-evict `005646426`), e2e-validated** (store showed `tag=1 cdc_tail` frames; cold-cache reload returned the CDC'd doc). The CDC blob is BINARY (`WandCdc`, typed `encodePk`) not JSON, because a retrieval pk is `any` (int64 OR varchar). In `pkg/iscp` — mirror `NewFulltextSqlWriter` (`index_sqlwriter.go:251`) + `runHnsw` (`index_consumer.go:240`). Writer accumulates insert `{pk,text}` + delete `{pk}` rows → blob; `RunWand` consumes blobs → tokenize via `tokenizer.SharedJiebaTokenizer(false)` (**same** path as search `parsePatternInNLModeJieba`, so build/query tokens match) → `Builder.Add` → on channel close `FinishSegments` → **append the segment frame(s) and delete frame(s) to the tag=1 `CdcTail` log at `NextChunkIdSql`** + `UpdateWatermark`. (`pkg/iscp` already imports algo pkgs e.g. hnsw, so importing `pkg/fulltext/wand` is consistent — no cycle.) **Codec ready (2026-07-02, `a91af0e15`):** `FrameSegment` / `FrameDeletes` produce the tag=1 frames and the read side (`AssembleFrames`/`loadTailFrames`) already consumes exactly what the sinker writes — so (b) is now just: accumulate rows → `Builder.Add` → `FinishSegments` → `FrameSegment` → append at `NextChunkIdSql`; deletes → `FrameDeletes`.
+- **(c)** — ✅ **DONE (`fd2de4978`).** Branch the fulltext plugin iscp `Hooks` (`pkg/fulltext/plugin/iscp/iscp.go` `NewSqlWriter`/`Run`) on `parser==retrieval` → Wand writer/run, else the postings writer/`RunIndex`.
+- **(d)** — ✅ **DONE (`4135f9cc2`; InitSQL atomicity `f1b4d5d8d`).** In `HandleCreateIndex` (`pkg/fulltext/plugin/compile/compile.go`), retrieval is forced async (`parser=="retrieval"`, mirroring `Hooks.AlwaysAsync`) → registers a CDC task with a non-empty **InitSQL that builds the WAND store from postings** (`genInsertSQL` → postings, `genWandBuildSQL` → tag=0), run at ISCP task start; the postings table stays required. **ISCP had no multi-statement InitSQL**, so the InitSQL format became a **JSON array of statements** (`splitInitSQL`: array / JSON string / raw single, backward-compat) run in **one atomic txn** (commit-on-success / rollback-on-error). The dead sync-branch WAND build was removed.
 - **(e) Multi-frame search adapter** — ✅ **DONE (2026-07-02, `a91af0e15`).** New
   tag=1 frame codec (`frames.go`: `FrameSegment`/`FrameDeletes`/`AssembleFrames`
   over the reused cuVS `FrameCdcChunk` envelope — confirmed pure-Go, no gpu
@@ -408,7 +416,11 @@ SQL of `loadTailFrames`/`Load` still needs a live e2e run.
   delta path is postings-free.
 - **(g)** idxcron **full-reindex** trigger + gate (B3) — full rebuild from source that wipes the tag=1 `CdcTail`; no incremental merge.
 
-⚠ **Intermediate-state warning:** the committed parser-aware async change already makes retrieval **skip inline DML** (`AlwaysAsync=true`), but until the sinker (b–d) lands there is **no CDC maintenance** — so a retrieval index won't reflect INSERT/DELETE between CREATE and reindex. This is expected mid-implementation; B2 closes it.
+✅ **Resolved (2026-07-02):** the sinker (b–d) has landed and is e2e-validated — a
+retrieval index now reflects INSERT/DELETE via CDC (tag=1 frames + cache eviction),
+searchable within CDC latency (~15s in the single-node test). The intermediate
+"no CDC maintenance" state is closed. Remaining: (g) idxcron compaction that wipes
+the tag=1 `CdcTail` on a full reindex.
 
 ## Verification
 - **Unit**: (1) `tokenize → postings → fulltext_wand_create` round-trip builds a loadable WAND index. (2) **Differential**: `fulltext_wand_search` top-K vs a brute-force reference (`Σ tf·idf²` over all docs + full sort) on randomized corpora → assert identical top-K and scores (the WAND-correctness gold test). (3) Parser/mode parse tests in `pkg/sql/parsers/dialect/mysql/mysql_sql_test.go` (`IN RETRIEVAL MODE`, default-on-retrieval-parser).
