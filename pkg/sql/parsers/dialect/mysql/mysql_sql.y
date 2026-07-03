@@ -11508,18 +11508,25 @@ mysql_cast_type:
                 Locale: &locale,
                 Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
                 DisplayWith: $2,
+                Scale: -1,
             },
         }
     }
 |   CHAR length_option_opt
     {
         locale := ""
+        oid := uint32(defines.MYSQL_TYPE_STRING)
+        familyString := $1
+        if $2 == -1 {
+            oid = uint32(defines.MYSQL_TYPE_VARCHAR)
+            familyString = "varchar"
+        }
         $$ = &tree.T{
             InternalType: tree.InternalType{
                 Family: tree.StringFamily,
-                FamilyString: $1,
+                FamilyString: familyString,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+                Oid:    oid,
                 DisplayWith: $2,
             },
         }
