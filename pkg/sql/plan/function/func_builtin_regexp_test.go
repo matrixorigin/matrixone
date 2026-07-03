@@ -93,6 +93,50 @@ func Test_BuiltIn_RegularLike(t *testing.T) {
 
 }
 
+func Test_BuiltIn_RegexpLikeRejectsEmptyPattern(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+	}{
+		{
+			name: "two_arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{false}),
+			},
+		},
+		{
+			name: "three_arguments",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"i"}, []bool{false}),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				tc.inputs,
+				NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, []bool{false}),
+				newOpBuiltInRegexp().builtInRegexpLike,
+			)
+
+			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+			_, err := tcc.DebugRun()
+			require.Error(t, err)
+
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, uint16(3685), moErr.MySQLCode())
+			require.Equal(t, "HY000", moErr.SqlState())
+			require.Equal(t, "Illegal argument to a regular expression.", moErr.Error())
+		})
+	}
+}
+
 func Test_BuiltIn_RegMatchRejectsEmptyPattern(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

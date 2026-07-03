@@ -787,6 +787,9 @@ func (rs *regexpSet) regularLike(pat string, str string, matchType string) (bool
 	if err != nil {
 		return false, err
 	}
+	if pat == "" {
+		return false, moerr.NewRegexpIllegalArgumentNoCtx()
+	}
 	rule := fmt.Sprintf("(?%s)%s", mt, pat)
 
 	reg, err := rs.getRegularMatcher(rule)
