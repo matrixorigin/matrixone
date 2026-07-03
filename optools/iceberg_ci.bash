@@ -643,8 +643,20 @@ external_coverage_profile_enabled() {
 
 generate_cap_dashboard() {
   local out_dir="${1:-$REPORT_DIR}"
+  local plan_path="$ROOT_DIR/docs/iceberg/matrixone_iceberg_connector_test_plan.md"
   mkdir -p "$out_dir"
-  run python3 - "$ROOT_DIR/docs/iceberg/matrixone_iceberg_connector_test_plan.md" "$out_dir/cap_coverage.md" <<'PY'
+  if [[ ! -f "$plan_path" ]]; then
+    cat >"$out_dir/cap_coverage.md" <<EOF
+# Iceberg CAP Coverage Dashboard
+
+generated_at_utc: \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`
+
+The Iceberg test plan document is not present in this checkout, so CAP coverage generation was skipped.
+EOF
+    log "CAP coverage dashboard skipped because ${plan_path} is not present"
+    return
+  fi
+  run python3 - "$plan_path" "$out_dir/cap_coverage.md" <<'PY'
 import collections
 import datetime as dt
 import re
