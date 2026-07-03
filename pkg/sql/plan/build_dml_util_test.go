@@ -123,12 +123,52 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 
 func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	colType := types.New(types.T_binary, 4, 0)
-	numVal := tree.NewNumVal("0x4142", "0x4142", false, tree.P_hexnum)
 
-	expr, err := MakeInsertValueConstExpr(proc, numVal, &colType)
-	require.NoError(t, err)
-	require.Equal(t, string([]byte{0x41, 0x42, 0x00, 0x00}), expr.GetLit().GetSval())
+	testCases := []struct {
+		name        string
+		literal     string
+		colType     types.Type
+		expected    []byte
+		expectError bool
+	}{
+		{
+			name:     "binary pads to declared width",
+			literal:  "0x4142",
+			colType:  types.New(types.T_binary, 4, 0),
+			expected: []byte{0x41, 0x42, 0x00, 0x00},
+		},
+		{
+			name:        "binary rejects decoded value over declared width",
+			literal:     "0x4142",
+			colType:     types.New(types.T_binary, 1, 0),
+			expectError: true,
+		},
+		{
+			name:        "varbinary counts decoded bytes instead of runes",
+			literal:     "0xC3A9",
+			colType:     types.New(types.T_varbinary, 1, 0),
+			expectError: true,
+		},
+		{
+			name:     "binary accepts odd digit hex literal",
+			literal:  "0x1",
+			colType:  types.New(types.T_binary, 2, 0),
+			expected: []byte{0x01, 0x00},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			numVal := tree.NewNumVal(tc.literal, tc.literal, false, tree.P_hexnum)
+			expr, err := MakeInsertValueConstExpr(proc, numVal, &tc.colType)
+			if tc.expectError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, string(tc.expected), expr.GetLit().GetSval())
+		})
+	}
 }
 
 func TestAppendIndexPrefixProjection(t *testing.T) {

@@ -63,10 +63,28 @@ func TestSetInsertValueStringBinaryHexPadding(t *testing.T) {
 			expected: []byte{0x41, 0x42},
 		},
 		{
+			name:        "binary rejects decoded value over declared width",
+			literal:     "0x4142",
+			typ:         types.New(types.T_binary, 1, 0),
+			expectError: true,
+		},
+		{
 			name:        "varbinary rejects decoded value over declared width",
 			literal:     "0x4142",
 			typ:         types.New(types.T_varbinary, 1, 0),
 			expectError: true,
+		},
+		{
+			name:        "varbinary counts decoded bytes instead of runes",
+			literal:     "0xC3A9",
+			typ:         types.New(types.T_varbinary, 1, 0),
+			expectError: true,
+		},
+		{
+			name:     "binary accepts odd digit hex literal",
+			literal:  "0x1",
+			typ:      types.New(types.T_binary, 2, 0),
+			expected: []byte{0x01, 0x00},
 		},
 		{
 			name:        "invalid hex is rejected",
@@ -90,6 +108,17 @@ func TestSetInsertValueStringBinaryHexPadding(t *testing.T) {
 			require.Equal(t, tc.expected, got)
 		})
 	}
+}
+
+func TestSetInsertValueStringBinaryStringKeepsLegacyWidthBehavior(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_binary, 2, 0)
+	numVal := tree.NewNumVal("时", "时", false, tree.P_char)
+
+	canInsert, got, err := SetInsertValueString(proc, numVal, &typ)
+	require.NoError(t, err)
+	require.True(t, canInsert)
+	require.Equal(t, []byte("时"), got)
 }
 
 func TestBinaryToInt(t *testing.T) {

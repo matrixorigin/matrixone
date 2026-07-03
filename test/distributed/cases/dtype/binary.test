@@ -376,11 +376,19 @@ select hex(c), c = 'a', c = 'a\0\0' from t;
 drop table t;
 
 drop table if exists binary_hex_padding;
-create table binary_hex_padding (id int primary key, b binary(4), vb varbinary(4));
-insert into binary_hex_padding values (1, 0x4142, 0x4142);
-select id, hex(b) as b_hex, length(b) as b_len, hex(vb) as vb_hex, length(vb) as vb_len
+create table binary_hex_padding (id int primary key, b binary(4), vb varbinary(4), odd_b binary(2));
+insert into binary_hex_padding values (1, 0x4142, 0x4142, 0x1);
+select id, hex(b) as b_hex, length(b) as b_len, hex(vb) as vb_hex, length(vb) as vb_len,
+       hex(odd_b) as odd_b_hex, length(odd_b) as odd_b_len
 from binary_hex_padding order by id;
 drop table binary_hex_padding;
+
+drop table if exists binary_hex_width;
+create table binary_hex_width (b binary(1), vb varbinary(1));
+insert into binary_hex_width values (0x4142, 0x41);
+insert into binary_hex_width values (0x41, 0xC3A9);
+select count(*) from binary_hex_width;
+drop table binary_hex_width;
 
 -- varbinary test
 -- error test:not defined the type of varbinary length
