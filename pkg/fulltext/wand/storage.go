@@ -204,24 +204,27 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 }
 
 // loadTailFrames reads the tag=1 CdcTail frames (index_id = CdcTailId) — each row
-// one complete FrameCdcChunk (an insert segment or a delete batch) — ordered by
-// chunk_id, the append order that drives liveness. Empty (no CDC yet) → nil.
-// Frame bytes are copied out (the executor reuses the batch memory).
+// one MaxChunkSize piece of a FrameCdcChunk (an insert segment or a delete batch).
+// Empty (no CDC yet) → nil. Frame bytes are copied out (the executor reuses the
+// batch memory).
+//
+// NO `ORDER BY chunk_id`: a SQL sort would add a Sort operator (full
+// materialization / possible spill) to the load path — the very thing a retrieval
+// index avoids. Instead read the rows in whatever order and order them by POSITION
+// in Go (orderTailChunks: place at chunk_id - min, O(n), no comparison sort), the
+// same way the tag=0 loader (streamChunksToFile) places chunks by byte offset.
 func loadTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]TailFrame, error) {
-	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d ORDER BY %s ASC",
+	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d",
 		catalog.FullTextIndex_TblCol_Storage_Chunk_Id, catalog.FullTextIndex_TblCol_Storage_Data,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullTextIndex_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
-		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents),
-		catalog.FullTextIndex_TblCol_Storage_Chunk_Id)
+		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
 	res, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Close()
 
-	// Read the raw chunk rows (ORDER BY chunk_id) and reassemble frames: a large
-	// segment frame is split across several MaxChunkSize rows.
 	var chunks []TailChunk
 	for _, bat := range res.Batches {
 		if bat == nil || bat.RowCount() == 0 {
@@ -233,7 +236,11 @@ func loadTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]TailFrame, 
 			chunks = append(chunks, TailChunk{ChunkId: cid, Data: append([]byte(nil), data...)})
 		}
 	}
-	return reassembleFrames(chunks)
+	ordered, err := orderTailChunks(chunks)
+	if err != nil {
+		return nil, err
+	}
+	return reassembleFrames(ordered)
 }
 
 // streamChunksToFile streams the index's chunk rows from the store and writes

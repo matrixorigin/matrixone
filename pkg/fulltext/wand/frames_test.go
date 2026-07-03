@@ -68,6 +68,44 @@ func TestWandFrameSplitReassemble(t *testing.T) {
 	}
 }
 
+// TestOrderTailChunks covers the position-not-sort ordering that lets loadTailFrames
+// drop `ORDER BY chunk_id`: a shuffled (and offset, post-compaction-style) set of
+// chunk rows is placed back into ascending order in O(n), and a missing chunk_id is
+// reported instead of silently mis-assembled.
+func TestOrderTailChunks(t *testing.T) {
+	// chunk_ids 5..9 (a post-compaction min>0 run), delivered shuffled.
+	shuffled := []TailChunk{
+		{ChunkId: 7, Data: []byte{7}},
+		{ChunkId: 5, Data: []byte{5}},
+		{ChunkId: 9, Data: []byte{9}},
+		{ChunkId: 6, Data: []byte{6}},
+		{ChunkId: 8, Data: []byte{8}},
+	}
+	ordered, err := orderTailChunks(shuffled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ordered) != 5 {
+		t.Fatalf("want 5, got %d", len(ordered))
+	}
+	for i, c := range ordered {
+		if c.ChunkId != int64(5+i) || c.Data[0] != byte(5+i) {
+			t.Fatalf("position %d: chunk_id=%d data=%v (want %d)", i, c.ChunkId, c.Data, 5+i)
+		}
+	}
+
+	// empty → nil, no error.
+	if got, err := orderTailChunks(nil); err != nil || got != nil {
+		t.Fatalf("empty: got %v, err %v", got, err)
+	}
+
+	// a gap (missing chunk_id 7) → error, not a wrong assembly.
+	gap := []TailChunk{{ChunkId: 5, Data: []byte{5}}, {ChunkId: 6, Data: []byte{6}}, {ChunkId: 8, Data: []byte{8}}}
+	if _, err := orderTailChunks(gap); err == nil {
+		t.Fatal("expected a gap in chunk_ids to be rejected")
+	}
+}
+
 // TestWandTailFrames round-trips insert-segment and delete frames through the
 // tag=1 CdcTail codec (FrameSegment/FrameDeletes -> AssembleFrames) and asserts
 // the assembled segments carry their frame chunk_id and drive correct liveness:

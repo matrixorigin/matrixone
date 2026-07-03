@@ -129,6 +129,42 @@ func splitFrameChunks(startChunkId int64, framed []byte) []TailChunk {
 	return out
 }
 
+// orderTailChunks returns the chunks ordered by chunk_id WITHOUT a comparison
+// sort: it places each at index (chunk_id - min) in a preallocated slice (O(n)) —
+// the same position-not-sort approach the tag=0 loader uses (streamChunksToFile
+// WriteAt by offset). This lets loadTailFrames drop `ORDER BY chunk_id`, which
+// would force a SQL Sort (full materialization / possible spill) on the load path.
+//
+// tag=1 chunk_ids are a GAPLESS run — the writer appends consecutive ids and
+// compaction deletes a whole low prefix (never a hole) — so [min..max] must span
+// exactly len(chunks) ids; a span mismatch means a missing or duplicate chunk
+// (corruption), reported rather than silently mis-assembled.
+func orderTailChunks(chunks []TailChunk) ([]TailChunk, error) {
+	if len(chunks) == 0 {
+		return nil, nil
+	}
+	minC, maxC := chunks[0].ChunkId, chunks[0].ChunkId
+	for _, c := range chunks[1:] {
+		if c.ChunkId < minC {
+			minC = c.ChunkId
+		}
+		if c.ChunkId > maxC {
+			maxC = c.ChunkId
+		}
+	}
+	span := maxC - minC + 1
+	if span != int64(len(chunks)) {
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+			"wand tail: chunk_id range [%d..%d] spans %d but got %d rows (gap or duplicate)",
+			minC, maxC, span, len(chunks)))
+	}
+	ordered := make([]TailChunk, span)
+	for _, c := range chunks {
+		ordered[c.ChunkId-minC] = c
+	}
+	return ordered, nil
+}
+
 // reassembleFrames groups chunk_id-ordered storage rows back into complete
 // frames using each frame's self-describing header length (cuVS CdcFrameLen): a
 // frame occupies consecutive chunks whose bytes sum to that length, and its

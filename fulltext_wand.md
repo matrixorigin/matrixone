@@ -436,8 +436,10 @@ broadcast is a follow-up). Item detail:
 - **(e) Multi-frame search adapter** — ✅ **DONE (2026-07-02, `a91af0e15`).** New
   tag=1 frame codec (`frames.go`: `FrameSegment`/`FrameDeletes`/`AssembleFrames`
   over the reused cuVS `FrameCdcChunk` envelope — confirmed pure-Go, no gpu
-  coupling); `loadTailFrames` (`storage.go`) reads tag=1 `CdcTail` rows (each row
-  one complete frame) `ORDER BY chunk_id`; `WandSearch` now holds `segs` (tag=0
+  coupling); `loadTailFrames` (`storage.go`) reads tag=1 `CdcTail` rows (each row a
+  `MaxChunkSize` slice of a frame — Bug 1) and orders them by POSITION in Go
+  (`orderTailChunks`: place at `chunk_id - min`, no SQL `ORDER BY` → no Sort operator)
+  before `reassembleFrames`; `WandSearch` now holds `segs` (tag=0
   base at `ChunkId=-1`, below the tail, + tag=1 tail) + `deletes`, searched via
   `searchSegsLive` = `ComputeLiveness` + a **per-segment** WHERE prefilter (built
   once per segment so a pk-filter resolves against that segment's own ord→pk map)
