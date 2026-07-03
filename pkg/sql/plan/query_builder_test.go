@@ -500,6 +500,64 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionIgnoresAliasShadowing(t
 	require.Equal(t, int32(1), sortNode.OrderBy[0].Expr.GetCol().ColPos)
 }
 
+func TestQueryBuilderBuildRollupOrderByGroupingBinaryExpression(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select grouping(a) + 0 as ga, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by grouping(a) + 0`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	query := queryPlan.GetQuery()
+	var sortNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.NotNil(t, sortNode.OrderBy[0].Expr.GetCol())
+	require.Equal(t, int32(0), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+}
+
+func TestQueryBuilderBuildRollupOrderByNestedGroupingExpression(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select if(grouping(a), 1, 0) as ga, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by if(grouping(a), 1, 0)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	query := queryPlan.GetQuery()
+	var sortNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.NotNil(t, sortNode.OrderBy[0].Expr.GetCol())
+	require.Equal(t, int32(0), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+}
+
 func TestRewriteGroupingSetOrderBy(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
@@ -595,6 +653,97 @@ func TestRewriteGroupingSetOrderByPreservesRawMatchForGroupAlias(t *testing.T) {
 	pos, ok := rewrittenPos.Int64()
 	require.True(t, ok)
 	require.Equal(t, int64(2), pos)
+}
+
+func TestRewriteGroupingSetOrderByNestedExpressionCanonicalization(t *testing.T) {
+	testCases := []struct {
+		name            string
+		sql             string
+		expectRewritten bool
+	}{
+		{
+			name: "mixed case grouping",
+			sql: `select if(GROUPING(A), 'X', 'x') as grouping_a, count(*)
+			from select_test.bind_select
+			group by a with rollup
+			order by IF(grouping(a), 'X', 'x')`,
+			expectRewritten: true,
+		},
+		{
+			name: "different literal case",
+			sql: `select if(grouping(a), 'X', 'same') as grouping_a, count(*)
+			from select_test.bind_select
+			group by a with rollup
+			order by if(grouping(a), 'x', 'same')`,
+			expectRewritten: false,
+		},
+		{
+			name: "ordinary expression",
+			sql: `select a + 0 as adjusted_a, count(*)
+			from select_test.bind_select
+			group by a with rollup
+			order by a + 0`,
+			expectRewritten: false,
+		},
+		{
+			name: "ambiguous grouping column",
+			sql: `select if(grouping(a), 1, 0) as grouping_a, count(*)
+			from select_test.bind_select as t1, select_test.bind_select as t2
+			group by t1.a, t2.a with rollup
+			order by if(grouping(a), 1, 0)`,
+			expectRewritten: false,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, testCase.sql, 1)
+			require.NoError(t, err)
+
+			selectStmt := stmts[0].(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			selectExprBefore := tree.String(selectClause.Exprs[0].Expr, dialect.MYSQL)
+			orderExprBefore := tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL)
+			rewriteGroupingSetOrderBy(
+				selectStmt.OrderBy,
+				selectClause.Exprs,
+				selectClause.GroupBy.GroupByExprsList,
+			)
+
+			_, rewritten := selectStmt.OrderBy[0].Expr.(*tree.NumVal)
+			require.Equal(t, testCase.expectRewritten, rewritten)
+			require.Equal(t, selectExprBefore, tree.String(selectClause.Exprs[0].Expr, dialect.MYSQL))
+			if !testCase.expectRewritten {
+				require.Equal(t, orderExprBefore, tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL))
+			}
+		})
+	}
+}
+
+func TestRewriteGroupingSetOrderByNestedExpressionMatchesQualifiedGroupingColumn(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select if(grouping(a), 1, 0) as grouping_a, count(*)
+		from select_test.bind_select as t
+		group by a with rollup
+		order by if(grouping(a), 1, 0)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	orderFunc := selectStmt.OrderBy[0].Expr.(*tree.FuncExpr)
+	groupingFunc := orderFunc.Exprs[0].(*tree.FuncExpr)
+	groupingFunc.Exprs[0] = tree.NewUnresolvedName(tree.NewCStr("t", 0), tree.NewCStr("a", 0))
+	rewriteGroupingSetOrderBy(selectStmt.OrderBy, selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
+
+	rewrittenPos, ok := selectStmt.OrderBy[0].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	pos, ok := rewrittenPos.Int64()
+	require.True(t, ok)
+	require.Equal(t, int64(1), pos)
 }
 
 func TestQueryBuilder_bindHaving(t *testing.T) {

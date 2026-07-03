@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -3889,35 +3890,158 @@ func groupingSetColumnKey(col *tree.UnresolvedName) string {
 	return key.String()
 }
 
+type groupingSetCStrRestore struct {
+	target **tree.CStr
+	value  *tree.CStr
+}
+
+type groupingSetFuncArgsRestore struct {
+	function *tree.FuncExpr
+	args     tree.Exprs
+}
+
+type groupingSetOrderByKeyNormalizer struct {
+	columnResolver   groupingSetColumnResolver
+	containsGrouping bool
+	valid            bool
+	cstrRestores     []groupingSetCStrRestore
+	funcArgsRestores []groupingSetFuncArgsRestore
+}
+
 func groupingSetOrderByKey(astExpr tree.Expr, columnResolver groupingSetColumnResolver) (string, bool) {
-	funcExpr, ok := unwrapParenExpr(astExpr).(*tree.FuncExpr)
-	if !ok || funcExpr.FuncName == nil || funcExpr.FuncName.Compare() != "grouping" || funcExpr.WindowSpec != nil {
+	normalizer := &groupingSetOrderByKeyNormalizer{
+		columnResolver: columnResolver,
+		valid:          true,
+	}
+	defer normalizer.restore()
+
+	walkGroupingSetOrderByExpr(unwrapParenExpr(astExpr), normalizer.visit)
+	if !normalizer.valid || !normalizer.containsGrouping {
 		return "", false
 	}
+	return tree.String(unwrapParenExpr(astExpr), dialect.MYSQL), true
+}
 
-	var key strings.Builder
-	key.WriteString(funcExpr.FuncName.Compare())
-	key.WriteByte(':')
-	key.WriteString(strconv.Itoa(int(funcExpr.Type)))
-
-	for _, arg := range funcExpr.Exprs {
-		col, ok := unwrapParenExpr(arg).(*tree.UnresolvedName)
-		if !ok || col.Star || col.NumParts == 0 {
-			return "", false
+func (normalizer *groupingSetOrderByKeyNormalizer) visit(astExpr tree.Expr) bool {
+	switch expr := astExpr.(type) {
+	case *tree.FuncExpr:
+		if expr.FuncName == nil {
+			return true
 		}
-		columnKey, ok := columnResolver.resolve(col)
-		if !ok {
-			if columnResolver.isAmbiguous(col) {
-				return "", false
+		normalizer.normalizeCStr(&expr.FuncName)
+		if expr.FuncName.Compare() != "grouping" {
+			return true
+		}
+
+		normalizer.containsGrouping = true
+		if expr.WindowSpec != nil {
+			normalizer.valid = false
+			return false
+		}
+
+		originalArgs := append(tree.Exprs(nil), expr.Exprs...)
+		canonicalArgs := make(tree.Exprs, len(expr.Exprs))
+		for i, arg := range expr.Exprs {
+			col, ok := unwrapParenExpr(arg).(*tree.UnresolvedName)
+			if !ok || col.Star || col.NumParts == 0 {
+				normalizer.valid = false
+				return false
 			}
-			columnKey = groupingSetColumnKey(col)
+			columnKey, ok := normalizer.columnResolver.resolve(col)
+			if !ok {
+				if normalizer.columnResolver.isAmbiguous(col) {
+					normalizer.valid = false
+					return false
+				}
+				columnKey = groupingSetColumnKey(col)
+			}
+			canonicalArgs[i] = tree.NewUnresolvedColName(columnKey)
+		}
+		normalizer.funcArgsRestores = append(normalizer.funcArgsRestores, groupingSetFuncArgsRestore{
+			function: expr,
+			args:     originalArgs,
+		})
+		expr.Exprs = canonicalArgs
+		return false
+	case *tree.UnresolvedName:
+		for i := 0; i < expr.NumParts; i++ {
+			normalizer.normalizeCStr(&expr.CStrParts[i])
+		}
+	case *tree.Subquery:
+		return false
+	}
+	return true
+}
+
+func (normalizer *groupingSetOrderByKeyNormalizer) normalizeCStr(target **tree.CStr) {
+	if *target == nil {
+		return
+	}
+	normalizer.cstrRestores = append(normalizer.cstrRestores, groupingSetCStrRestore{
+		target: target,
+		value:  *target,
+	})
+	*target = tree.NewCStr((*target).Compare(), 0)
+}
+
+func (normalizer *groupingSetOrderByKeyNormalizer) restore() {
+	for i := len(normalizer.funcArgsRestores) - 1; i >= 0; i-- {
+		restore := normalizer.funcArgsRestores[i]
+		restore.function.Exprs = restore.args
+	}
+	for i := len(normalizer.cstrRestores) - 1; i >= 0; i-- {
+		restore := normalizer.cstrRestores[i]
+		*restore.target = restore.value
+	}
+}
+
+func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
+	visited := make(map[uintptr]struct{})
+	var walk func(reflect.Value)
+	walk = func(value reflect.Value) {
+		if !value.IsValid() {
+			return
+		}
+		if value.Kind() == reflect.Interface {
+			if value.IsNil() {
+				return
+			}
+			walk(value.Elem())
+			return
+		}
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return
+			}
+			pointer := value.Pointer()
+			if _, ok := visited[pointer]; ok {
+				return
+			}
+			visited[pointer] = struct{}{}
+			if value.CanInterface() {
+				if expr, ok := value.Interface().(tree.Expr); ok && !visit(expr) {
+					return
+				}
+			}
+			walk(value.Elem())
+			return
 		}
 
-		key.WriteByte('|')
-		key.WriteString(columnKey)
+		switch value.Kind() {
+		case reflect.Struct:
+			valueType := value.Type()
+			for i := 0; i < value.NumField(); i++ {
+				if valueType.Field(i).PkgPath == "" {
+					walk(value.Field(i))
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < value.Len(); i++ {
+				walk(value.Index(i))
+			}
+		}
 	}
-
-	return key.String(), true
+	walk(reflect.ValueOf(astExpr))
 }
 
 func (builder *QueryBuilder) bindOrderBy(
