@@ -17,6 +17,8 @@ package checkpoint
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type CheckpointCfg struct {
@@ -50,7 +52,7 @@ func (cfg CheckpointCfg) String() string {
 
 func (cfg *CheckpointCfg) FillDefaults() {
 	if cfg.IncrementalInterval <= 0 {
-		cfg.IncrementalInterval = time.Minute
+		cfg.IncrementalInterval = options.DefaultCheckpointIncrementalInterval
 	}
 	if cfg.MinCount <= 0 {
 		cfg.MinCount = 10000
