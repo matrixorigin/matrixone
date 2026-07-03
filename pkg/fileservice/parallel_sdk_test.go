@@ -59,6 +59,28 @@ func (r *failAfterBytesReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+type waitAfterBytesReader struct {
+	r         io.Reader
+	readSoFar int64
+	waitAfter int64
+	waitCh    <-chan struct{}
+	timeout   time.Duration
+}
+
+func (r *waitAfterBytesReader) Read(p []byte) (int, error) {
+	if r.readSoFar >= r.waitAfter && r.waitCh != nil {
+		select {
+		case <-r.waitCh:
+			r.waitCh = nil
+		case <-time.After(r.timeout):
+			return 0, fmt.Errorf("timed out waiting after %d bytes", r.waitAfter)
+		}
+	}
+	n, err := r.r.Read(p)
+	r.readSoFar += int64(n)
+	return n, err
+}
+
 func newMockAWSServer(t *testing.T, failPart int32) (*httptest.Server, *awsServerState) {
 	t.Helper()
 	state := &awsServerState{
@@ -87,6 +109,9 @@ func newMockAWSServer(t *testing.T, failPart int32) (*httptest.Server, *awsServe
 			pn, _ := strconv.Atoi(partStr)
 			body, _ := io.ReadAll(r.Body)
 			if state.failPart > 0 && int32(pn) == state.failPart {
+				if state.failPartSeen != nil {
+					state.failPartOnce.Do(func() { close(state.failPartSeen) })
+				}
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
@@ -144,6 +169,8 @@ type awsServerState struct {
 	parts                    map[int32][]byte
 	completeBody             []byte
 	failPart                 int32
+	failPartSeen             chan struct{}
+	failPartOnce             sync.Once
 	failComplete             bool
 	failCreate               bool
 	uploadID                 string
@@ -304,6 +331,36 @@ func TestAwsMultipartUploadPartError(t *testing.T) {
 		Concurrency: 2,
 	}); err == nil {
 		t.Fatalf("expected upload part error")
+	}
+}
+
+func TestAwsMultipartSendJobFailureAfterPendingChunk(t *testing.T) {
+	server, state := newMockAWSServer(t, 1)
+	defer server.Close()
+	state.uploadID = "uid-pending-fail"
+	state.failPartSeen = make(chan struct{})
+
+	sdk := newTestAWSClient(t, server)
+	data := bytes.Repeat([]byte("q"), int(minMultipartPartSize*3))
+	reader := &waitAfterBytesReader{
+		r:         bytes.NewReader(data),
+		waitAfter: minMultipartPartSize * 2,
+		waitCh:    state.failPartSeen,
+		timeout:   3 * time.Second,
+	}
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(context.Background(), "object", reader, &size, &ParallelMultipartOption{
+		PartSize:    minMultipartPartSize,
+		Concurrency: 1,
+	})
+	if err == nil {
+		t.Fatalf("expected upload part error")
+	}
+	if !state.aborted.Load() {
+		t.Fatalf("expected abort request")
+	}
+	if len(state.completeBody) > 0 {
+		t.Fatalf("expected no complete body")
 	}
 }
 
@@ -532,6 +589,9 @@ func newMockCOSServer(t *testing.T, failPart int) (*httptest.Server, *cosServerS
 			pn, _ := strconv.Atoi(partStr)
 			body, _ := io.ReadAll(r.Body)
 			if state.failPart > 0 && pn == state.failPart {
+				if state.failPartSeen != nil {
+					state.failPartOnce.Do(func() { close(state.failPartSeen) })
+				}
 				w.WriteHeader(state.failPartStatus)
 				return
 			}
@@ -575,6 +635,8 @@ type cosServerState struct {
 	parts              map[int][]byte
 	completeBody       []byte
 	failPart           int
+	failPartSeen       chan struct{}
+	failPartOnce       sync.Once
 	failPartStatus     int
 	failComplete       bool
 	failCompleteStatus int
@@ -717,6 +779,36 @@ func TestCOSMultipartUploadPartError(t *testing.T) {
 		Concurrency: 2,
 	}); err == nil {
 		t.Fatalf("expected upload part error")
+	}
+}
+
+func TestCOSMultipartSendJobFailureAfterPendingChunk(t *testing.T) {
+	server, state := newMockCOSServer(t, 1)
+	defer server.Close()
+	state.uploadID = "cos-uid-pending-fail"
+	state.failPartSeen = make(chan struct{})
+
+	sdk := newTestCOSClient(t, server)
+	data := bytes.Repeat([]byte("s"), int(minMultipartPartSize*3))
+	reader := &waitAfterBytesReader{
+		r:         bytes.NewReader(data),
+		waitAfter: minMultipartPartSize * 2,
+		waitCh:    state.failPartSeen,
+		timeout:   3 * time.Second,
+	}
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(context.Background(), "object", reader, &size, &ParallelMultipartOption{
+		PartSize:    minMultipartPartSize,
+		Concurrency: 1,
+	})
+	if err == nil {
+		t.Fatalf("expected upload part error")
+	}
+	if !state.aborted.Load() {
+		t.Fatalf("expected abort request")
+	}
+	if state.completed.Load() || len(state.completeBody) > 0 {
+		t.Fatalf("expected no complete multipart upload")
 	}
 }
 

@@ -1184,7 +1184,10 @@ func (r *CheckpointReader) getTableEntriesAt(
 		e := r.entries[ref.entry.Index]
 		dataEntries, tombEntries, err := r.GetObjectEntries(e, tableID)
 		if err != nil {
-			continue
+			if isDataFileNotFound(err) {
+				continue
+			}
+			return nil, nil, err
 		}
 		allData = append(allData, dataEntries...)
 		allTomb = append(allTomb, tombEntries...)
@@ -1889,10 +1892,11 @@ func (r *CheckpointReader) streamTableCSV(
 }
 
 type csvPipelineChunk struct {
-	objectIdx int
-	blockIdx  int
-	rows      int
-	data      []byte
+	objectIdx  int
+	blockIdx   int
+	rows       int
+	data       []byte
+	objectDone bool
 }
 
 type csvPipelineObjectJob struct {
@@ -2108,6 +2112,19 @@ func (r *CheckpointReader) processCSVObjectChunks(
 	columnSeqNums []int,
 	job csvPipelineObjectJob,
 ) error {
+	sendChunk := func(chunk csvPipelineChunk) error {
+		select {
+		case chunks <- chunk:
+			return nil
+		case <-ctx.Done():
+			if len(chunk.data) > 0 {
+				counters.queuedBatches.Add(-1)
+				counters.queuedBytes.Add(-int64(len(chunk.data)))
+			}
+			return ctx.Err()
+		}
+	}
+
 	entry := job.entry
 	if err := ctx.Err(); err != nil {
 		return err
@@ -2117,7 +2134,7 @@ func (r *CheckpointReader) processCSVObjectChunks(
 	if err != nil {
 		if isDataFileNotFound(err) {
 			counters.processedObjects.Add(1)
-			return nil
+			return sendChunk(csvPipelineChunk{objectIdx: job.objectIdx, objectDone: true})
 		}
 		return err
 	}
@@ -2179,17 +2196,13 @@ func (r *CheckpointReader) processCSVObjectChunks(
 		}
 		counters.queuedBatches.Add(1)
 		counters.queuedBytes.Add(int64(len(chunk.data)))
-		select {
-		case chunks <- chunk:
-		case <-ctx.Done():
-			counters.queuedBatches.Add(-1)
-			counters.queuedBytes.Add(-int64(len(chunk.data)))
-			return ctx.Err()
+		if err := sendChunk(chunk); err != nil {
+			return err
 		}
 	}
 
 	counters.processedObjects.Add(1)
-	return nil
+	return sendChunk(csvPipelineChunk{objectIdx: job.objectIdx, objectDone: true})
 }
 
 func csvPipelineWorkerCount(objects int) csvPipelineWorkerPlan {
@@ -2380,22 +2393,96 @@ func writeCSVChunks(
 	cancel context.CancelFunc,
 	done chan<- error,
 ) {
-	for chunk := range chunks {
-		if err := ctx.Err(); err != nil {
-			done <- err
-			return
-		}
+	type chunkKey struct {
+		objectIdx int
+		blockIdx  int
+	}
+	pending := make(map[chunkKey]csvPipelineChunk)
+	objectDone := make(map[int]bool)
+	nextObjectIdx := 0
+	nextBlockIdx := 0
+
+	writeChunk := func(chunk csvPipelineChunk) error {
 		start := time.Now()
 		if _, err := w.Write(chunk.data); err != nil {
 			cancel()
-			done <- err
-			return
+			return err
 		}
 		counters.writeNanos.Add(time.Since(start).Nanoseconds())
 		counters.queuedBatches.Add(-1)
 		counters.queuedBytes.Add(-int64(len(chunk.data)))
 		counters.writtenBatches.Add(1)
 		counters.writtenBytes.Add(int64(len(chunk.data)))
+		return nil
+	}
+
+	nextPendingBlock := func(objectIdx, minBlockIdx int) (int, bool) {
+		found := false
+		next := 0
+		for key := range pending {
+			if key.objectIdx != objectIdx || key.blockIdx < minBlockIdx {
+				continue
+			}
+			if !found || key.blockIdx < next {
+				found = true
+				next = key.blockIdx
+			}
+		}
+		return next, found
+	}
+
+	flush := func() error {
+		for {
+			key := chunkKey{objectIdx: nextObjectIdx, blockIdx: nextBlockIdx}
+			chunk, ok := pending[key]
+			if !ok && objectDone[nextObjectIdx] {
+				if blockIdx, found := nextPendingBlock(nextObjectIdx, nextBlockIdx); found {
+					nextBlockIdx = blockIdx
+					key.blockIdx = blockIdx
+					chunk = pending[key]
+					ok = true
+				}
+			}
+			if ok {
+				delete(pending, key)
+				if err := writeChunk(chunk); err != nil {
+					return err
+				}
+				nextBlockIdx++
+				continue
+			}
+			if objectDone[nextObjectIdx] {
+				delete(objectDone, nextObjectIdx)
+				nextObjectIdx++
+				nextBlockIdx = 0
+				continue
+			}
+			return nil
+		}
+	}
+
+	for chunk := range chunks {
+		if err := ctx.Err(); err != nil {
+			done <- err
+			return
+		}
+		if chunk.objectDone {
+			objectDone[chunk.objectIdx] = true
+		} else {
+			pending[chunkKey{objectIdx: chunk.objectIdx, blockIdx: chunk.blockIdx}] = chunk
+		}
+		if err := flush(); err != nil {
+			done <- err
+			return
+		}
+	}
+	if err := flush(); err != nil {
+		done <- err
+		return
+	}
+	if len(pending) > 0 {
+		done <- moerr.NewInternalErrorNoCtxf("csv pipeline finished with %d unordered chunks still pending", len(pending))
+		return
 	}
 	done <- nil
 }

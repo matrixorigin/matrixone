@@ -555,7 +555,11 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("create output file: %w", err)
 				}
-				defer outFile.Close()
+				defer func() {
+					if outFile != nil {
+						_ = outFile.Close()
+					}
+				}()
 				w = outFile
 			}
 
@@ -643,7 +647,7 @@ Examples:
 				return nil
 			}
 
-			if err := reader.DumpTableCSVComposed(
+			dumpErr := reader.DumpTableCSVComposed(
 				ctx,
 				w,
 				tableID,
@@ -651,8 +655,13 @@ Examples:
 				checkpointtool.WithCSVMetaComments(metaComments),
 				checkpointtool.WithCSVHeader(effectiveHeader),
 				checkpointtool.WithCSVRowOrder(parsedRowOrder),
-			); err != nil {
-				return fmt.Errorf("dump table %d: %w", tableID, err)
+			)
+			if outFile != nil {
+				dumpErr = errors.Join(dumpErr, outFile.Close())
+				outFile = nil
+			}
+			if dumpErr != nil {
+				return fmt.Errorf("dump table %d: %w", tableID, dumpErr)
 			}
 
 			if output != "" {

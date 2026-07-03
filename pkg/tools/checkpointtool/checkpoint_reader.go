@@ -42,6 +42,9 @@ type CheckpointReader struct {
 	entries []*checkpoint.CheckpointEntry
 	mp      *mpool.MPool
 	closeFS bool
+
+	getTablesForTest        func(*CheckpointReader, *checkpoint.CheckpointEntry) ([]*TableInfo, error)
+	getObjectEntriesForTest func(*CheckpointReader, *checkpoint.CheckpointEntry, uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error)
 }
 
 // Option configures CheckpointReader
@@ -104,11 +107,13 @@ func (r *CheckpointReader) Fork(ctx context.Context) *CheckpointReader {
 		ctx = r.ctx
 	}
 	return &CheckpointReader{
-		ctx:     ctx,
-		fs:      r.fs,
-		dir:     r.dir,
-		entries: r.entries,
-		mp:      mpool.MustNewZero(),
+		ctx:                     ctx,
+		fs:                      r.fs,
+		dir:                     r.dir,
+		entries:                 r.entries,
+		mp:                      mpool.MustNewZero(),
+		getTablesForTest:        r.getTablesForTest,
+		getObjectEntriesForTest: r.getObjectEntriesForTest,
 	}
 }
 
@@ -343,6 +348,9 @@ func (r *CheckpointReader) GetAccounts(entry *checkpoint.CheckpointEntry) ([]*Ac
 
 // GetTables extracts tables from an entry
 func (r *CheckpointReader) GetTables(entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+	if r.getTablesForTest != nil {
+		return r.getTablesForTest(r, entry)
+	}
 	ranges, err := r.GetTableRanges(entry)
 	if err != nil {
 		return nil, err
@@ -421,8 +429,7 @@ func (r *CheckpointReader) ComposeAt(ts types.TS) (*ComposedView, error) {
 	// GC may have cleaned up older GCKP data files; skip those and use the next one.
 	var baseEntry *checkpoint.CheckpointEntry
 	var baseEntryIdx int
-	for i := len(r.entries) - 1; i >= 0; i-- {
-		e := r.entries[i]
+	for i, e := range r.entries {
 		end := e.GetEnd()
 		if e.IsGlobal() && end.LE(&ts) {
 			tables, err := r.GetTables(e)
@@ -519,6 +526,9 @@ func (r *CheckpointReader) Close() error {
 
 // GetObjectEntries reads detailed object entries with timestamps for a table
 func (r *CheckpointReader) GetObjectEntries(entry *checkpoint.CheckpointEntry, tableID uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error) {
+	if r.getObjectEntriesForTest != nil {
+		return r.getObjectEntriesForTest(r, entry, tableID)
+	}
 	loc := entry.GetLocation()
 	if loc.IsEmpty() {
 		return nil, nil, nil

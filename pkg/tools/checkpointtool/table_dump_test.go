@@ -31,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +44,62 @@ func TestCSVPipelineErrorKeepsNonCanceledRootCause(t *testing.T) {
 	assert.ErrorIs(t, csvPipelineError(root, context.Canceled), root)
 	assert.ErrorIs(t, csvPipelineError(context.Canceled, context.Canceled), context.Canceled)
 	assert.NoError(t, csvPipelineError(nil, nil))
+}
+
+func TestComposeAtUsesLatestUsableGlobalCheckpoint(t *testing.T) {
+	older := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	newer := checkpoint.NewCheckpointEntry("", types.BuildTS(11, 0), types.BuildTS(20, 0), checkpoint.ET_Global)
+	reader := &CheckpointReader{
+		entries: []*checkpoint.CheckpointEntry{newer, older},
+		getTablesForTest: func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: uint64(entry.GetEnd().Physical())}}, nil
+		},
+	}
+
+	view, err := reader.ComposeAt(types.BuildTS(30, 0))
+	require.NoError(t, err)
+	require.NotNil(t, view.BaseEntry)
+	assert.Equal(t, 0, view.BaseEntry.Index)
+	assert.Contains(t, view.Tables, uint64(20))
+	assert.NotContains(t, view.Tables, uint64(10))
+}
+
+func TestGetTableEntriesAtReturnsNonMissingObjectEntryError(t *testing.T) {
+	readErr := errors.New("decode checkpoint entry failed")
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	reader := &CheckpointReader{
+		entries: []*checkpoint.CheckpointEntry{entry},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: 42, DataRanges: []ckputil.TableRange{{TableID: 42}}}}, nil
+		},
+		getObjectEntriesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry, _ uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error) {
+			return nil, nil, readErr
+		},
+	}
+
+	_, _, err := reader.getTableEntriesAt(context.Background(), 42, types.BuildTS(10, 0))
+	require.ErrorIs(t, err, readErr)
+}
+
+func TestWriteCSVChunksPreservesStorageOrder(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	chunks := make(chan csvPipelineChunk, 5)
+	done := make(chan error, 1)
+	counters := &csvPipelineCounters{}
+	var buf bytes.Buffer
+
+	go writeCSVChunks(ctx, &buf, chunks, counters, cancel, done)
+	chunks <- csvPipelineChunk{objectIdx: 1, blockIdx: 0, data: []byte("c\n")}
+	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 1, data: []byte("b\n")}
+	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 0, data: []byte("a\n")}
+	chunks <- csvPipelineChunk{objectIdx: 0, objectDone: true}
+	chunks <- csvPipelineChunk{objectIdx: 1, objectDone: true}
+	close(chunks)
+
+	require.NoError(t, <-done)
+	assert.Equal(t, "a\nb\nc\n", buf.String())
 }
 
 func encodedSQLType(t *testing.T, typ types.Type) string {

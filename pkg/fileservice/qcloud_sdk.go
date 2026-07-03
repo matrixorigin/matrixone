@@ -545,6 +545,9 @@ func (a *QCloudSDK) WriteMultipartParallel(
 				bufPool.Put(pendingBufPtr)
 				bufPool.Put(nextBufPtr)
 				if !sendJob(nil, merged, len(merged)) {
+					pendingBufPtr = nil
+					pendingBuf = nil
+					pendingN = 0
 					break
 				}
 			} else {
@@ -552,8 +555,14 @@ func (a *QCloudSDK) WriteMultipartParallel(
 					if nextBufPtr != nil {
 						bufPool.Put(nextBufPtr)
 					}
+					pendingBufPtr = nil
+					pendingBuf = nil
+					pendingN = 0
 					break
 				}
+				pendingBufPtr = nil
+				pendingBuf = nil
+				pendingN = 0
 				if !sendJob(nextBufPtr, nextBuf, nextN) {
 					break
 				}
@@ -567,6 +576,9 @@ func (a *QCloudSDK) WriteMultipartParallel(
 			if nextBufPtr != nil {
 				bufPool.Put(nextBufPtr)
 			}
+			pendingBufPtr = nil
+			pendingBuf = nil
+			pendingN = 0
 			break
 		}
 		pendingBufPtr = nextBufPtr
