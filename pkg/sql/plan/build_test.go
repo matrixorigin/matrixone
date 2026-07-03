@@ -911,16 +911,47 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"with qn (foo, bar) as (select 1 as col, 2 as coll union select 4, 5) select qn1.bar from qn qn1",
 		"select n_name, n_comment from nation union all select n_name, n_comment from nation2",
 		"select n_name from nation intersect all select n_name from nation2",
+		"(select n_name from nation for update) union all (select n_name from nation2 for update)",
+		"(select n_name from nation for update) union all (select n_name from nation2)",
+		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+
+	forUpdateUnionPlan, err := runOneStmt(mock, t, "(select n_name from nation for update) union all (select n_name from nation2 for update)")
+	require.NoError(t, err)
+	require.Equal(t, 2, countLockOpNodes(forUpdateUnionPlan))
+
+	forUpdateUnionOneBranchPlan, err := runOneStmt(mock, t, "(select n_name from nation for update) union all (select n_name from nation2)")
+	require.NoError(t, err)
+	require.Equal(t, 1, countLockOpNodes(forUpdateUnionOneBranchPlan))
+
+	cteOuterForUpdatePlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update")
+	require.NoError(t, err)
+	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdatePlan))
 
 	// should error
 	sqls = []string{
 		"select 1 union select 2, 'a'",
 		"select n_name as a from nation union select n_comment from nation order by n_name",
 		"select n_name from nation minus all select n_name from nation2", // not support
+		"select n_name from nation union all select n_name from nation2 for update",
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func countLockOpNodes(logicPlan *Plan) int {
+	query := logicPlan.GetQuery()
+	if query == nil {
+		return 0
+	}
+
+	count := 0
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP {
+			count++
+		}
+	}
+	return count
 }
 
 // test CTE plan building
