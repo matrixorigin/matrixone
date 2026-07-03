@@ -2293,6 +2293,54 @@ func Test_strToSigned_Binary(t *testing.T) {
 	}
 }
 
+func TestStrToSignedStringPrefix(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	tests := []struct {
+		name    string
+		input   string
+		bitSize int
+		want    int64
+		wantErr string
+	}{
+		{name: "scientific notation", input: "7e0", bitSize: 64, want: 7},
+		{name: "exponent is not evaluated", input: "7e+2", bitSize: 64, want: 7},
+		{name: "fractional suffix", input: "1.5e0", bitSize: 64, want: 1},
+		{name: "negative prefix", input: "-10a", bitSize: 64, want: -10},
+		{name: "whitespace and positive sign", input: "  +42suffix  ", bitSize: 64, want: 42},
+		{name: "plain integer", input: "42", bitSize: 64, want: 42},
+		{name: "hexadecimal", input: "0x10", bitSize: 64, want: 16},
+		{name: "no leading digits", input: "abc", bitSize: 64, wantErr: "invalid argument cast to int"},
+		{name: "prefix out of range", input: "128suffix", bitSize: 8, wantErr: "out of range"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputVec := testutil.MakeVarlenaVector(
+				[][]byte{[]byte(tt.input)}, nil, types.T_varchar.ToType(), mp)
+			defer inputVec.Free(mp)
+
+			from := vector.GenerateFunctionStrParameter(inputVec)
+			to := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp).(*vector.FunctionResult[int64])
+			defer to.Free()
+			require.NoError(t, to.PreExtendAndReset(1))
+
+			err := strToSigned(ctx, from, to, tt.bitSize, 1, nil)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			got, null := vector.GenerateFunctionFixedTypeParameter[int64](to.GetResultVector()).GetValue(0)
+			require.False(t, null)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func contains(slice []uint64, item uint64) bool {
 	for _, s := range slice {
 		if s == item {

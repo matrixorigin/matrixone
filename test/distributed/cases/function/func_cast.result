@@ -46,8 +46,12 @@ select CAST(0xffffffffffffffff as unsigned);
 18446744073709551615
 select CAST(0xfffffffffffffffe as signed);
 Data truncation: data out of range: data type int, 
+select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed);
+➤ cast(7e0 as signed)[-5,64,0]  ¦  cast(7e+2 as signed)[-5,64,0]  ¦  cast(1.5e0 as signed)[-5,64,0]  𝄀
+7  ¦  7  ¦  1
 select cast('-10a' as signed integer);
-invalid argument cast to int, bad value -10a
+➤ cast(-10a as integer)[-5,64,0]  𝄀
+-10
 select cast('a10' as unsigned integer);
 invalid argument cast to uint64, bad value a10
 select 10+'a';
@@ -68,7 +72,8 @@ invalid argument cast to uint64, bad value -1
 select cast('abc' as signed);
 invalid argument cast to int, bad value abc
 select cast('1a' as signed);
-invalid argument cast to int, bad value 1a
+➤ cast(1a as signed)[-5,64,0]  𝄀
+1
 select cast('' as signed);
 invalid argument cast to int, bad value 
 select cast("2001-1-1" as date) = "2001-01-01";

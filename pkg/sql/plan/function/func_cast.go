@@ -5006,6 +5006,21 @@ func decimal256ToBit(
 	return nil
 }
 
+func leadingSignedInteger(s string) string {
+	end := 0
+	if len(s) > 0 && (s[0] == '+' || s[0] == '-') {
+		end = 1
+	}
+	digitStart := end
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == digitStart {
+		return ""
+	}
+	return s[:end]
+}
+
 func strToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
@@ -5049,7 +5064,11 @@ func strToSigned[T constraints.Signed](
 				if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
 					r, err = strconv.ParseInt(s[2:], 16, bitSize)
 				} else {
-					r, err = strconv.ParseInt(s, 10, bitSize)
+					integer := leadingSignedInteger(s)
+					if integer == "" {
+						return moerr.NewInvalidArg(ctx, "cast to int", s)
+					}
+					r, err = strconv.ParseInt(integer, 10, bitSize)
 				}
 				if err != nil {
 					// XXX I'm not sure if we should return the int8 / int16 / int64 info. or
