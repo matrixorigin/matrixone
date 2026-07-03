@@ -520,7 +520,7 @@ func Test_BuiltInChar(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
-	// Test CHAR with all NULL arguments (MySQL returns NULL)
+	// Test CHAR with all NULL arguments (MySQL returns an empty, non-NULL string)
 	{
 		tc := tcTemp{
 			info: "select char(null, null)",
@@ -534,7 +534,32 @@ func Test_BuiltInChar(t *testing.T) {
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{""},
-				[]bool{true}),
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with varchar arguments (MySQL truncates the numeric prefix)
+	{
+		tc := tcTemp{
+			info: "select char('77.3', '65', 'abc')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"77.3"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"65"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abc"},
+					[]bool{false}),
+			},
+			// '77.3' -> 77 = 'M', '65' -> 65 = 'A', 'abc' -> 0 = '\x00'
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"MA\x00"},
+				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
 		succeed, info := tcc.Run()

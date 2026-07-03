@@ -992,8 +992,14 @@ func (p intervalParam) decimalScale() int32 {
 
 func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 	// CHAR accepts one or more arguments, which MySQL interprets as integers.
-	// We cast all non-varchar arguments to varchar, then parse to int64 in builtInChar.
-	// This avoids runtime cast failures for float-like strings (e.g., "77.3").
+	// MySQL coerces arguments differently depending on their type:
+	//   - integer types  : used as-is
+	//   - numeric types (float/decimal/bool/bit/...) : rounded to nearest integer
+	//   - string types   : the leading numeric prefix is truncated to an integer
+	//     (e.g. '65.9' -> 65, not 66)
+	// To preserve this distinction we keep integers, cast string types to varchar
+	// (parsed & truncated in builtInChar), and cast every other numeric type to
+	// int64 (the numeric->int64 cast rounds, matching MySQL).
 	if len(inputs) < 1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
@@ -1001,16 +1007,23 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 	shouldCast := false
 	ret := make([]types.Type, len(inputs))
 	for i, source := range inputs {
-		if source.Oid == types.T_varchar {
+		switch {
+		case source.Oid.IsInteger():
 			ret[i] = source
-		} else {
-			// Cast all other types (int, float, decimal, etc.) to varchar
-			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_varchar})
+		case source.Oid == types.T_varchar:
+			ret[i] = source
+		case source.Oid.IsMySQLString():
+			// char/text/blob/binary/varbinary -> varchar (truncated in builtInChar)
+			shouldCast = true
+			ret[i] = types.T_varchar.ToType()
+		default:
+			// float/decimal/bool/bit/... -> int64 (rounded by the cast, like MySQL)
+			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
 			if c == matchFailed {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 			shouldCast = true
-			ret[i] = types.T_varchar.ToType()
+			ret[i] = types.T_int64.ToType()
 		}
 	}
 	if shouldCast {
@@ -1022,8 +1035,8 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// All parameters are varchar (cast by builtInCharCheck), but we also
-	// handle integer types directly for robustness (e.g., direct calls from tests).
+	// After builtInCharCheck, parameters are either integer types or varchar.
+	// (numeric types were cast to int64, string types to varchar).
 	// Each getter returns an int64 value and a null flag.
 	type intGetter func(uint64) (int64, bool)
 	getters := make([]intGetter, len(parameters))
@@ -1079,8 +1092,9 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				return int64(val), null
 			}
 		default:
-			// For varchar, float, decimal, etc.: use string getter and parse to int64.
-			// Use ParseFloat to handle decimal strings like "77.3".
+			// varchar: parse the leading numeric prefix and truncate to an integer.
+			// MySQL truncates string arguments (e.g. '65.9' -> 65, not 66),
+			// and ParseFloat handles decimal strings like '77.3' -> 77.
 			sp := vector.GenerateFunctionStrParameter(param)
 			getters[i] = func(idx uint64) (int64, bool) {
 				v, null := sp.GetStrValue(idx)
@@ -1133,15 +1147,10 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			}
 		}
 
-		if len(resultBytes) == 0 {
-			// All arguments were NULL → return NULL (MySQL behavior)
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.AppendBytes(resultBytes, false); err != nil {
-				return err
-			}
+		// resultBytes is empty only when every argument was NULL. MySQL returns
+		// an empty (non-NULL) string in that case, e.g. CHAR(NULL, NULL) -> ''.
+		if err := rs.AppendBytes(resultBytes, false); err != nil {
+			return err
 		}
 	}
 	return nil

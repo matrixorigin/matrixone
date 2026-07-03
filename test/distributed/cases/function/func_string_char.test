@@ -12,10 +12,17 @@ SELECT CHAR(0) AS null_char;
 SELECT CHAR(32) AS space;
 SELECT CHAR(65, 66, 67, 68, 69) AS abcde;
 
-# NULL handling
+# NULL handling (MySQL skips NULL arguments)
 SELECT CHAR(65, 66, NULL) AS with_null;
 SELECT CHAR(NULL, 66, 67) AS null_first;
 SELECT CHAR(65, NULL, 67) AS null_middle;
+SELECT CHAR(NULL, NULL) AS all_null;
+
+# Non-integer arguments (MySQL coerces to integer)
+SELECT HEX(CHAR(77, 77.3, '77.3')) AS char_noninteger;
+SELECT HEX(CHAR(NULL, 65, 66)) AS char_skip_null;
+SELECT CHAR(65.9, 66.1) AS float_arg;
+SELECT CHAR('65', '66') AS string_arg;
 
 # Different integer types (should be cast to int64)
 SELECT CHAR(CAST(65 AS INT), CAST(66 AS INT)) AS int_type;
