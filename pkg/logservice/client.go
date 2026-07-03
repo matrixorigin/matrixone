@@ -577,6 +577,10 @@ func connectToLogServiceAddresses(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	results := make(chan connectResult, len(addresses))
 	var wg sync.WaitGroup
 	launch := func(addr string) {
@@ -607,6 +611,9 @@ func connectToLogServiceAddresses(
 	launched, active := 0, 0
 	for active > 0 || launched < len(addresses) {
 		if active == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			launch(addresses[launched])
 			launched++
 			active++
@@ -632,6 +639,12 @@ func connectToLogServiceAddresses(
 			}
 			lastErr = r.err
 		case <-fallback:
+			if err := ctx.Err(); err != nil {
+				cancel()
+				wg.Wait()
+				closeUnusedConnectResultClients(results)
+				return nil, err
+			}
 			launch(addresses[launched])
 			launched++
 			active++
@@ -640,9 +653,6 @@ func connectToLogServiceAddresses(
 			cancel()
 			wg.Wait()
 			closeUnusedConnectResultClients(results)
-			if lastErr != nil {
-				return nil, lastErr
-			}
 			return nil, ctx.Err()
 		}
 	}

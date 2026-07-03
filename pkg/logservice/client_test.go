@@ -271,6 +271,78 @@ func TestConnectToLogServiceAddressesReturnsContextError(t *testing.T) {
 	require.Nil(t, c)
 }
 
+func TestConnectToLogServiceAddressesReturnsContextErrorAfterPreviousFailure(t *testing.T) {
+	origConnect := connectToLogServiceAddressFn
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectFallbackDelay = time.Millisecond
+	defer func() {
+		connectToLogServiceAddressFn = origConnect
+		logServiceConnectFallbackDelay = origFallbackDelay
+	}()
+
+	firstErr := errors.New("first failed")
+	connectToLogServiceAddressFn = func(
+		ctx context.Context,
+		sid string,
+		addr string,
+		cfg ClientConfig,
+	) (*client, error) {
+		if addr == "first" {
+			return nil, firstErr
+		}
+		<-ctx.Done()
+		time.Sleep(10 * time.Millisecond)
+		return nil, ctx.Err()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	c, err := connectToLogServiceAddresses(
+		ctx,
+		"",
+		[]string{"first", "second"},
+		ClientConfig{},
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, c)
+}
+
+func TestConnectToLogServiceAddressesWithCanceledContextDoesNotDial(t *testing.T) {
+	origConnect := connectToLogServiceAddressFn
+	defer func() {
+		connectToLogServiceAddressFn = origConnect
+	}()
+
+	called := make(chan struct{}, 1)
+	connectToLogServiceAddressFn = func(
+		ctx context.Context,
+		sid string,
+		addr string,
+		cfg ClientConfig,
+	) (*client, error) {
+		called <- struct{}{}
+		return nil, errors.New("unexpected dial")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c, err := connectToLogServiceAddresses(
+		ctx,
+		"",
+		[]string{"first"},
+		ClientConfig{},
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, c)
+	select {
+	case <-called:
+		t.Fatal("unexpected connection attempt")
+	default:
+	}
+}
+
 func TestConnectToLogServiceAddressesClosesSuccessfulLosers(t *testing.T) {
 	origConnect := connectToLogServiceAddressFn
 	origFallbackDelay := logServiceConnectFallbackDelay
