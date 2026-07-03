@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -3577,11 +3578,60 @@ func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.
 	return nil
 }
 
-func builtInConvertFake(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// ignore the second parameter and just set result the same to the first parameter.
-	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
-		return v
-	}, selectList)
+func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, parameters[1])
+	rsNull := rs.GetResultVector().GetNulls()
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(rsNull, 0, uint64(length))
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		valueRow := i
+		if parameters[0].IsConst() {
+			valueRow = 0
+		}
+		charsetRow := i
+		if parameters[1].IsConst() {
+			charsetRow = 0
+		}
+
+		value, valueNull := p1.GetStrValue(valueRow)
+		charset, charsetNull := p2.GetStrValue(charsetRow)
+		if valueNull || charsetNull {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if isUTF8Charset(charset) && !utf8.Valid(value) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendMustBytesValue(value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isUTF8Charset(charset []byte) bool {
+	return strings.EqualFold(string(charset), "utf8") || strings.EqualFold(string(charset), "utf8mb4")
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

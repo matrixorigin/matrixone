@@ -278,6 +278,16 @@ drop table t1;
 # ) AS s LIMIT 1;
 # DROP TABLE t1;
 
+select convert(_binary x'ff' using utf8mb4) is null,
+       hex(convert(_binary x'ff' using utf8mb4)),
+       length(convert(_binary x'ff' using utf8mb4));
+select hex(convert(_binary x'4142' using utf8mb4)),
+       length(convert(_binary x'4142' using utf8mb4));
+select hex(convert(_binary x'e4bda0e5a5bd' using utf8mb4)),
+       length(convert(_binary x'e4bda0e5a5bd' using utf8mb4));
+select hex(convert(_binary x'f09f9880' using utf8mb4)),
+       length(convert(_binary x'f09f9880' using utf8mb4));
+
 # #echo #
 # #echo # Bug #11765023: 57934: DOS POSSIBLE SINCE BINARY CASTING 
 # #echo #   DOESN'T ADHERE TO MAX_ALLOWED_PACKET

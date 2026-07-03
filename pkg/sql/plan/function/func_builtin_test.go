@@ -705,6 +705,27 @@ func Test_MakeIntervalParamAny(t *testing.T) {
 	require.Zero(t, got)
 }
 
+func TestBuiltInConvertUsingUTF8InvalidBytes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "convert using utf8mb4 returns null for invalid utf8 bytes",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"AZ", string([]byte{0xff}), ""},
+				[]bool{false, false, true}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"utf8mb4", "utf8mb4", "utf8mb4"},
+				[]bool{false, false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"AZ", "", ""},
+			[]bool{false, true, true}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInConvertUsingCharset)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+}
+
 func Test_MakeIntervalParamInvalid(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	_, err := makeIntervalParam(newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true}, nil))
