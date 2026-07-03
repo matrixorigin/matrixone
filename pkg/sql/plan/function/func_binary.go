@@ -1148,7 +1148,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			allNull = false
 		}
 		if allNull {
-			if err = rs.AppendBytes(nil, true); err != nil {
+			if err = rs.AppendBytes(nil, false); err != nil {
 				return err
 			}
 			continue
