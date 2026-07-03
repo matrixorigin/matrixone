@@ -3,14 +3,14 @@ create database ft_retrieval;
 use ft_retrieval;
 create table t (id bigint primary key, txt text);
 insert into t values
- (1, '孩子 营养 早餐 视频 文案'),
- (2, '营养 早餐 健康 食谱'),
- (3, '视频 文案 创作 技巧'),
- (4, '孩子 教育 成长');
+(1, '孩子 营养 早餐 视频 文案'),
+(2, '营养 早餐 健康 食谱'),
+(3, '视频 文案 创作 技巧'),
+(4, '孩子 教育 成长');
 create fulltext index ft on t(txt) with parser retrieval;
 show create table t;
-Table	Create Table
-t	CREATE TABLE `t` (\n  `id` bigint NOT NULL,\n  `txt` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ft`(`txt`) WITH PARSER retrieval\n)
+Table    Create Table
+t    CREATE TABLE `t` (\n  `id` bigint NOT NULL,\n  `txt` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ft`(`txt`) WITH PARSER retrieval\n)
 select sleep(20);
 sleep(20)
 0
