@@ -443,14 +443,42 @@ func IfTypeCastSupported(sourceType, targetType types.T) bool {
 }
 
 func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return newCast(parameters, result, proc, length, selectList, false)
+	return newCast(parameters, result, proc, length, selectList, false, false)
 }
 
 func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return newCast(parameters, result, proc, length, selectList, true)
+	return newCast(parameters, result, proc, length, selectList, true, false)
 }
 
-func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, strictStringWidth bool) error {
+// NewAssignCast is used by DML assignment paths (INSERT/UPDATE projection) for
+// CHAR/VARCHAR targets. It honors sql_mode at runtime: strict mode rejects
+// over-length writes (1406), non-strict mode truncates. Over-length values
+// whose excess is only trailing spaces are accepted (truncated) even in strict
+// mode, matching MySQL.
+func NewAssignCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return newCast(parameters, result, proc, length, selectList, isStrictSqlMode(proc), true)
+}
+
+// isStrictSqlMode reports whether the session sql_mode contains a strict flag
+// (STRICT_TRANS_TABLES / STRICT_ALL_TABLES). When the resolver is unavailable
+// (e.g. background/internal execution) it defaults to true, preserving the
+// stricter behavior. This mirrors compile.StrictSqlMode, reimplemented here to
+// avoid importing the compile package (import cycle).
+func isStrictSqlMode(proc *process.Process) bool {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return true
+	}
+	v, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	if err != nil || v == nil {
+		return true
+	}
+	if s, ok := v.(string); ok {
+		return strings.Contains(s, "STRICT_TRANS_TABLES") || strings.Contains(s, "STRICT_ALL_TABLES")
+	}
+	return true
+}
+
+func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, strictStringWidth bool, allowTrailingSpaceTrim bool) error {
 	var err error
 	// Cast Parameter1 as Type Parameter2
 	fromType := parameters[0].GetType()
@@ -524,7 +552,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = yearToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = strTypeToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
+		err = strTypeToOthers(proc, s, *toType, result, length, selectList, strictStringWidth, allowTrailingSpaceTrim)
 	case types.T_array_float32, types.T_array_float64:
 		//NOTE: Don't mix T_array and T_varchar.
 		// T_varchar will have "[1,2,3]" string
@@ -1860,7 +1888,7 @@ func geometryToTextCast(
 
 func strTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth bool) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth bool, allowTrailingSpaceTrim bool) error {
 	ctx := proc.Ctx
 
 	fromType := source.GetType()
@@ -1960,7 +1988,7 @@ func strTypeToOthers(proc *process.Process,
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToStr(ctx, proc, source, rs, length, toType, strictStringWidth)
+		return strToStr(ctx, proc, source, rs, length, toType, strictStringWidth, allowTrailingSpaceTrim)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -5496,7 +5524,7 @@ func strToStr(
 	ctx context.Context,
 	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Varlena], length int, toType types.Type, strictStringWidth bool) error {
+	to *vector.FunctionResult[types.Varlena], length int, toType types.Type, strictStringWidth bool, allowTrailingSpaceTrim bool) error {
 	totype := to.GetType()
 	destLen := int(totype.Width)
 	var i uint64
@@ -5562,8 +5590,19 @@ func strToStr(
 			}
 			// check the length.
 			s := convertByteSliceToString(v)
-			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && !strictStringWidth && utf8.RuneCountInString(s) > destLen {
-				v = []byte(truncateStringByRunes(s, destLen))
+			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && utf8.RuneCountInString(s) > destLen {
+				// CHAR/VARCHAR over-length handling:
+				//   - trailing-space exemption: when the excess runes are all
+				//     trailing spaces, accept by truncating even in strict mode
+				//     (allowTrailingSpaceTrim, MySQL-compatible);
+				//   - non-strict mode: truncate;
+				//   - otherwise (strict, real over-length): reject with 1406.
+				if (allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(s, destLen)) || !strictStringWidth {
+					v = []byte(truncateStringByRunes(s, destLen))
+				} else {
+					return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
+						"Src length %v is larger than Dest length %v", len(s), destLen))
+				}
 			} else if utf8.RuneCountInString(s) > destLen {
 				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
@@ -6331,6 +6370,21 @@ func appendNulls[T types.FixedSizeT](result vector.FunctionResultWrapper, length
 func convertByteSliceToString(v []byte) string {
 	return util.UnsafeBytesToString(v)
 	// return string(v)
+}
+
+// overLenIsAllTrailingSpaces reports whether s is longer than maxRunes runes and
+// every rune beyond the first maxRunes is an ASCII space. Used by the assignment
+// cast so an over-length CHAR/VARCHAR whose excess is only trailing spaces is
+// truncated (MySQL) instead of rejected, even in strict sql_mode.
+func overLenIsAllTrailingSpaces(s string, maxRunes int) bool {
+	n := 0
+	for _, r := range s {
+		if n >= maxRunes && r != ' ' {
+			return false
+		}
+		n++
+	}
+	return n > maxRunes
 }
 
 func truncateStringByRunes(s string, maxRunes int) string {

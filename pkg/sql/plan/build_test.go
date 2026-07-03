@@ -241,8 +241,8 @@ func planHasTextToVarcharCastWithWidth(p *Plan, width int32) bool {
 	return planHasTextToVarcharCastWithNameAndWidth(p, "", width)
 }
 
-func planHasTextToVarcharStrictCastWithWidth(p *Plan, width int32) bool {
-	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_strict", width)
+func planHasTextToVarcharAssignCastWithWidth(p *Plan, width int32) bool {
+	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_assign", width)
 }
 
 func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width int32) bool {
@@ -258,7 +258,8 @@ func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width in
 		if f := expr.GetF(); f != nil {
 			nameMatches := f.Func.GetObjName() == funcName
 			if funcName == "" {
-				nameMatches = f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict"
+				name := f.Func.GetObjName()
+				nameMatches = name == "cast" || name == "cast_strict" || name == "cast_assign"
 			}
 			if nameMatches && len(f.Args) > 0 &&
 				f.Args[0].Typ.Id == int32(types.T_text) &&
@@ -357,22 +358,26 @@ func TestUpdateVarcharFromTextKeepsVarcharWidthCast(t *testing.T) {
 	assert.True(t, planHasTextToVarcharCastWithWidth(logicPlan, 255))
 }
 
-func TestInsertSelectVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+func TestInsertSelectVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
 
+	// INSERT ... SELECT is an assignment path: it routes CHAR/VARCHAR targets
+	// through cast_assign, which enforces width at runtime per sql_mode.
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, vc) select id, txt from text_cast_t")
 	assert.NoError(t, err)
-	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
+	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
 }
 
-func TestOnDuplicateUpdateVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+func TestOnDuplicateUpdateVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
 
+	// ON DUPLICATE KEY UPDATE is an assignment path (not INSERT IGNORE), so it
+	// routes the CHAR/VARCHAR target through the sql_mode-gated cast_assign.
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
 	assert.NoError(t, err)
-	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
+	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
 }
 
 //Test Query Node Tree

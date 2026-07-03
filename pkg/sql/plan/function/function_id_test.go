@@ -595,9 +595,10 @@ var predefinedFunids = map[int]int{
 	ST_POINT:                      539,
 	ST_POINT32:                    540,
 	CAST_STRICT:                   541,
+	CAST_ASSIGN:                   542,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 542,
+	FUNCTION_END_NUMBER: 543,
 }
 
 func Test_funids(t *testing.T) {

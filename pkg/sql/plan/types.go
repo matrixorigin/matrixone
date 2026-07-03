@@ -197,6 +197,7 @@ type QueryBuilder struct {
 	isRestoreByTs         bool
 	isSkipResolveTableDef bool
 	skipStats             bool
+	isInsertIgnore        bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 

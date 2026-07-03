@@ -119,7 +119,7 @@ long_str VARCHAR(1000)
 INSERT INTO t_varchar (short_str) VALUES ('1234567890');
 INSERT INTO t_varchar (short_str) VALUES ('12345');
 INSERT INTO t_varchar (short_str) VALUES ('12345678901');
-internal error: Can't cast '12345678901' to VARCHAR type. Src length 11 is larger than Dest length 10
+internal error: Can't cast '12345678901' from VARCHAR type to VARCHAR type. Src length 11 is larger than Dest length 10
 INSERT INTO t_varchar (short_str) VALUES ('');
 INSERT INTO t_varchar (short_str) VALUES (NULL);
 SELECT id, short_str, LENGTH(short_str) AS len, short_str IS NULL AS is_null

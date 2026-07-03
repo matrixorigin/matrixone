@@ -549,7 +549,12 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 
 	checkStrLen := func(s string) ([]byte, error) {
 		destLen := int(typ.Width)
-		if typ.Oid != types.T_text && typ.Oid != types.T_datalink && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
+		// CHAR/VARCHAR width is enforced at runtime by the assignment cast
+		// (cast_assign), which honors sql_mode, the trailing-space exemption and
+		// the INSERT IGNORE downgrade. Excluding them here avoids a plan-time
+		// hard rejection that would ignore sql_mode.
+		if typ.Oid != types.T_char && typ.Oid != types.T_varchar && typ.Oid != types.T_text &&
+			typ.Oid != types.T_datalink && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
 			if utf8.RuneCountInString(s) > destLen {
 				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}

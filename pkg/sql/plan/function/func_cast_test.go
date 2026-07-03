@@ -2525,7 +2525,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2606,7 +2606,7 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
-			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict)
+			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false)
 			if tt.wantErr {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), "larger than Dest length")
@@ -2640,7 +2640,7 @@ func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	err := to.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false)
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }

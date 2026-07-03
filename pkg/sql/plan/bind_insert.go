@@ -31,6 +31,9 @@ import (
 )
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
+	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
+	// CHAR/VARCHAR writes to truncation instead of rejection.
+	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
 	dmlCtx := NewDMLContext()
 	// Allow FK tables on the modern insert path: bypass the generic FK-table
 	// rejection in ResolveTables via IgnoreForeignKey, then enforce parent
@@ -2649,7 +2652,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 				return 0, nil, nil, err
 			}
 		} else {
-			projExpr, err = forceAssignmentCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			projExpr, err = forceAssignmentCastExprWithIgnore(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, nil, err
 			}
@@ -2923,7 +2926,7 @@ func (builder *QueryBuilder) buildValueScan(
 			if err != nil {
 				return 0, err
 			}
-			defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
+			defExpr, err = forceCastExpr2WithIgnore(builder.GetContext(), defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 			if err != nil {
 				return 0, err
 			}
@@ -2949,7 +2952,7 @@ func (builder *QueryBuilder) buildValueScan(
 			funcBinder.builder = builder
 			for _, r := range stmt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
-					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
+					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return 0, err
 					}
@@ -2995,7 +2998,7 @@ func (builder *QueryBuilder) buildValueScan(
 						}
 					}
 				}
-				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
+				defExpr, err = forceCastExpr2WithIgnore(builder.GetContext(), defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
 					return 0, err
 				}
