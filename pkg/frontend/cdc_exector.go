@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -133,6 +134,9 @@ type CDCTaskExecutor struct {
 	// stateMachine manages executor state transitions
 	stateMachine *ExecutorStateMachine
 	holdCh       chan int
+
+	callbackMu         sync.RWMutex
+	callbackGeneration atomic.Uint64
 
 	// start wrapper, for ut
 	startFunc func(ctx context.Context) error
@@ -280,7 +284,10 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	exec.watermarkUpdater = cdc.GetCDCWatermarkUpdater(exec.cnUUID, exec.ie)
 
 	// register to table scanner
-	if !detector.RegisterIfAbsent(taskId, accountId, dbs, tables, exec.handleNewTables) {
+	callbackGeneration := exec.callbackGeneration.Load()
+	if !detector.RegisterIfAbsent(taskId, accountId, dbs, tables, func(tbls map[uint32]cdc.TblMap) error {
+		return exec.handleNewTablesForGeneration(callbackGeneration, tbls)
+	}) {
 		logutil.Warn(
 			"cdc.frontend.task.duplicate_registration_detected",
 			zap.String("task-id", taskId),
@@ -344,10 +351,14 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 
 // Resume cdc task from last recorded watermark
 func (exec *CDCTaskExecutor) Resume() error {
+	exec.callbackMu.Lock()
+	defer exec.callbackMu.Unlock()
+
 	// Transition to Starting state (via Resume transition)
 	if err := exec.stateMachine.Transition(TransitionResume); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot resume: %v", err)
 	}
+	exec.callbackGeneration.Add(1)
 
 	// Log watermark states before resume
 	exec.logCurrentWatermarks("before_resume")
@@ -409,16 +420,37 @@ func (exec *CDCTaskExecutor) Resume() error {
 
 // Restart cdc task from init watermark
 func (exec *CDCTaskExecutor) Restart() error {
+	exec.callbackMu.Lock()
+	defer exec.callbackMu.Unlock()
+
+	stateBeforeRestart := exec.stateMachine.State()
+	shouldStopOldExecution := stateBeforeRestart == StateRunning || stateBeforeRestart == StateStarting
+	shouldClearTableErrors := stateBeforeRestart == StateFailed || stateBeforeRestart == StatePaused
+
 	// Transition to Restarting state
 	if err := exec.stateMachine.Transition(TransitionRestart); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot restart: %v", err)
 	}
+	exec.recordLeavingFailedMetrics(stateBeforeRestart, StateRestarting)
+	exec.callbackGeneration.Add(1)
 
 	// FIX: Unmark task as paused to allow watermark updates after restart
 	// Without this, if task was paused before restart, it would remain in pausedTasks
 	// and all watermark updates would be blocked, causing CDC to stop working
 	if exec.watermarkUpdater != nil {
 		exec.watermarkUpdater.UnmarkTaskPaused(exec.spec.TaskId)
+	}
+
+	if shouldClearTableErrors {
+		ctx := defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId()))
+		if err := exec.clearAllTableErrors(ctx); err != nil {
+			logutil.Warn(
+				"cdc.frontend.task.restart_clear_errors_failed",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.Error(err),
+			)
+			// Don't fail Restart if clearing errors fails - continue anyway
+		}
 	}
 
 	logutil.Info(
@@ -436,7 +468,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 		)
 	}()
 
-	if exec.stateMachine.IsRunning() {
+	if shouldStopOldExecution {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.CloseCancel()
 		// let Start() go
@@ -587,12 +619,14 @@ func (exec *CDCTaskExecutor) Pause() error {
 // Cancel cdc task
 func (exec *CDCTaskExecutor) Cancel() error {
 	// Check if running before state transition
-	wasRunning := exec.stateMachine.IsRunning()
+	stateBeforeCancel := exec.stateMachine.State()
+	wasRunning := stateBeforeCancel == StateRunning || stateBeforeCancel == StateStarting
 
 	// Transition to Cancelling state
 	if err := exec.stateMachine.Transition(TransitionCancel); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot cancel: %v", err)
 	}
+	exec.recordLeavingFailedMetrics(stateBeforeCancel, StateCancelling)
 
 	// FIX: Unmark task as paused to prevent pausedTasks leakage
 	// If task was paused before cancel, we need to clean up the pause mark
@@ -647,6 +681,37 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		}
 	}
 	return nil
+}
+
+func (exec *CDCTaskExecutor) recordLeavingFailedMetrics(fromState ExecutorState, toState ExecutorState) {
+	if fromState != StateFailed {
+		return
+	}
+	v2.CdcTaskTotalGauge.WithLabelValues("failed").Dec()
+	v2.CdcTaskStateChangeCounter.WithLabelValues("failed", cdcTaskMetricStateLabel(toState)).Inc()
+}
+
+func cdcTaskMetricStateLabel(state ExecutorState) string {
+	switch state {
+	case StateStarting:
+		return "starting"
+	case StateRunning:
+		return "running"
+	case StatePausing:
+		return "pausing"
+	case StatePaused:
+		return "paused"
+	case StateRestarting:
+		return "restarting"
+	case StateCancelling:
+		return "cancelling"
+	case StateCancelled:
+		return "cancelled"
+	case StateFailed:
+		return "failed"
+	default:
+		return "unknown"
+	}
 }
 
 // logCurrentWatermarks logs current watermarks for all tables in this task
@@ -885,9 +950,13 @@ func updateCDCTaskState(
 }
 
 // clearAllTableErrors clears error messages for all tables in this task
-// This is called during Resume to allow retrying tables that had non-retryable errors
+// This is called during Resume/Restart to allow retrying tables that had non-retryable errors
 // after user has fixed the underlying issues
 func (exec *CDCTaskExecutor) clearAllTableErrors(ctx context.Context) error {
+	if exec.ie == nil {
+		return moerr.NewInternalErrorNoCtx("cannot clear CDC table errors: internal executor is not initialized")
+	}
+
 	accountId := uint64(exec.spec.Accounts[0].GetId())
 	taskId := exec.spec.TaskId
 
@@ -908,10 +977,28 @@ func (exec *CDCTaskExecutor) clearAllTableErrors(ctx context.Context) error {
 }
 
 func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMap) error {
+	return exec.handleNewTablesForGeneration(exec.callbackGeneration.Load(), allAccountTbls)
+}
+
+func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
+	callbackGeneration uint64,
+	allAccountTbls map[uint32]cdc.TblMap,
+) error {
+	exec.callbackMu.RLock()
+	defer exec.callbackMu.RUnlock()
+
+	if !exec.isCurrentCallbackGeneration(callbackGeneration) {
+		return nil
+	}
+
 	// lock to avoid create pipelines for the same table
 	// 2025.7, this lock might be needless now
 	exec.Lock()
 	defer exec.Unlock()
+
+	if !exec.isCurrentCallbackGeneration(callbackGeneration) {
+		return nil
+	}
 
 	// if injected, we expect nothing
 	if sleepSeconds, injected := objectio.CDCHandleSlowInjected(); injected {
@@ -1001,7 +1088,11 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 			continue
 		}
 		if hasError {
-			continue
+			if !exec.isCurrentCallbackGeneration(callbackGeneration) {
+				return nil
+			}
+			err = exec.failTaskForPermanentTableError(ctx, newTableInfo)
+			return err
 		}
 
 		logutil.Info(
@@ -1069,6 +1160,79 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 	}
 
 	return nil
+}
+
+func (exec *CDCTaskExecutor) isCurrentCallbackGeneration(callbackGeneration uint64) bool {
+	return exec.callbackGeneration.Load() == callbackGeneration
+}
+
+func (exec *CDCTaskExecutor) failTaskForPermanentTableError(ctx context.Context, tbl *cdc.DbTableInfo) error {
+	taskErr := moerr.NewInternalErrorf(
+		ctx,
+		"CDC task %s has permanent table error on %s.%s; check mo_catalog.mo_cdc_watermark.err_msg for details",
+		exec.spec.TaskName,
+		tbl.SourceDbName,
+		tbl.SourceTblName,
+	)
+
+	stateBeforeFail := StateIdle
+	if exec.stateMachine != nil {
+		stateBeforeFail = exec.stateMachine.State()
+		if err := exec.stateMachine.SetFailed(taskErr.Error()); err != nil {
+			logutil.Warn(
+				"cdc.frontend.task.set_state_failed",
+				zap.String("task-id", exec.spec.TaskId),
+				zap.String("task-name", exec.spec.TaskName),
+				zap.String("db", tbl.SourceDbName),
+				zap.String("table", tbl.SourceTblName),
+				zap.Error(err),
+			)
+			return err
+		}
+	}
+
+	wasRunning := stateBeforeFail == StateRunning || stateBeforeFail == StateStarting
+
+	if err := exec.updateErrMsg(ctx, taskErr.Error()); err != nil {
+		logutil.Warn(
+			"cdc.frontend.task.update_task_error_failed",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+			zap.String("db", tbl.SourceDbName),
+			zap.String("table", tbl.SourceTblName),
+			zap.Error(err),
+		)
+	}
+
+	cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
+	if exec.activeRoutine != nil {
+		exec.activeRoutine.CloseCancel()
+	}
+	exec.stopAllReaders()
+	if exec.holdCh != nil {
+		select {
+		case exec.holdCh <- 1:
+		default:
+		}
+	}
+
+	if wasRunning {
+		v2.CdcTaskTotalGauge.WithLabelValues("running").Dec()
+		v2.CdcTaskStateChangeCounter.WithLabelValues("running", "failed").Inc()
+	}
+	v2.CdcTaskTotalGauge.WithLabelValues("failed").Inc()
+	v2.CdcTaskErrorCounter.WithLabelValues("permanent_table_error", "false").Inc()
+
+	logutil.Error(
+		"cdc.frontend.task.failed_by_permanent_table_error",
+		zap.String("task-id", exec.spec.TaskId),
+		zap.String("task-name", exec.spec.TaskName),
+		zap.String("db", tbl.SourceDbName),
+		zap.String("table", tbl.SourceTblName),
+		zap.Error(taskErr),
+	)
+
+	return taskErr
 }
 
 var GetTableErrMsg = func(
