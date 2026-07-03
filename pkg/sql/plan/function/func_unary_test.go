@@ -3542,6 +3542,76 @@ func TestLoadFileDatalink(t *testing.T) {
 	}
 }
 
+// TestLoadFileDatalinkBatch simulates a batched load_file — the shape an
+// `INSERT INTO t VALUES (load_file(a)), (load_file(b)), ...` produces, where the
+// function is evaluated over a vector of rows in ONE call reusing a single read
+// buffer. It guards three things:
+//   (1) an EMPTY file in the middle must NOT abandon the rows after it (the old code
+//       `return nil`d instead of continuing);
+//   (2) the reused buffer must GROW correctly for a larger file (row 0 -> row 1); and
+//   (3) a smaller file after a larger one must not leave a STALE TAIL from the prior
+//       read (row 1 "worldwide" -> row 3 "hi", not "hirldwide").
+func TestLoadFileDatalinkBatch(t *testing.T) {
+	dir := t.TempDir()
+	proc := testutil.NewProc(t)
+	write := func(name, data string) string {
+		p := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(p, []byte(data), 0o600))
+		return "file://" + p
+	}
+	hello := write("hello", "hello")          // 5 bytes
+	wide := write("wide", "worldwide")        // 9 bytes -> buffer grows
+	empty := write("empty", "")               // 0 bytes -> null, must not abort batch
+	small := write("small", "hi")             // 2 bytes -> reslice, no stale tail
+
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_datalink.ToType(),
+			[]string{
+				hello + "?offset=0&size=5",
+				wide + "?offset=0&size=9",
+				empty,
+				small + "?offset=0&size=2",
+			},
+			[]bool{false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_text.ToType(), false,
+		[]string{"hello", "worldwide", "", "hi"},
+		[]bool{false, false, true, false}) // empty file → null; later rows must survive intact
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, LoadFileDatalink)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+}
+
+// TestLoadFileDatalinkSizePastEOF covers the short-read branch of Datalink.ReadInto:
+// when the datalink's requested size runs PAST end-of-file (?size=N larger than the
+// bytes available from offset), io.ReadFull returns io.ErrUnexpectedEOF (or io.EOF at
+// exactly offset==len) and ReadInto must return only the bytes actually read — the
+// same as the old io.ReadAll path, with no error and no stale/zero-padded tail.
+func TestLoadFileDatalinkSizePastEOF(t *testing.T) {
+	dir := t.TempDir()
+	proc := testutil.NewProc(t)
+	p := filepath.Join(dir, "abcd")
+	require.NoError(t, os.WriteFile(p, []byte("abcd"), 0o600)) // 4 bytes
+
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_datalink.ToType(),
+			[]string{
+				"file://" + p + "?offset=0&size=100", // size ≫ file -> partial read, ErrUnexpectedEOF
+				"file://" + p + "?offset=2&size=100", // offset into file, past EOF -> "cd"
+				"file://" + p + "?offset=4&size=100", // offset AT eof -> 0 bytes read, EOF -> null
+			},
+			[]bool{false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_text.ToType(), false,
+		[]string{"abcd", "cd", ""},
+		[]bool{false, false, true}) // read-past-EOF returns available bytes; at-EOF -> null
+
+	fcTC := NewFunctionTestCase(proc, inputs, expect, LoadFileDatalink)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+}
+
 func TestLoadFileDatalinkTooLarge(t *testing.T) {
 	dir := t.TempDir()
 	proc := testutil.NewProc(t)

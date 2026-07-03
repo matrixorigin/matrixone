@@ -15,8 +15,14 @@
 package datalink
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseDatalink(t *testing.T) {
@@ -115,4 +121,98 @@ func TestParseDatalinkFailed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newLocalDatalink builds a Datalink for a local file:// path with an optional
+// query (?offset=&size=). Fails the test on parse error.
+func newLocalDatalink(t *testing.T, proc *process.Process, path, query string) Datalink {
+	t.Helper()
+	dl, err := NewDatalink("file://"+path+query, proc)
+	require.NoError(t, err)
+	return dl
+}
+
+// TestReadInto exercises Datalink.ReadInto: exact read, buffer reuse (grow +
+// shrink with no stale tail), the read-past-EOF short-read branch (io.ReadFull ->
+// ErrUnexpectedEOF / EOF returning only the bytes read), and the size<=0 no-op.
+func TestReadInto(t *testing.T) {
+	dir := t.TempDir()
+	proc := testutil.NewProcess(t)
+	f := filepath.Join(dir, "f")
+	g := filepath.Join(dir, "g")
+	require.NoError(t, os.WriteFile(f, []byte("worldwide"), 0o600)) // 9 bytes
+	require.NoError(t, os.WriteFile(g, []byte("hi"), 0o600))        // 2 bytes
+
+	var buf []byte
+	var err error
+
+	// exact read -> full content, buffer allocated to size
+	buf, err = newLocalDatalink(t, proc, f, "?offset=0&size=9").ReadInto(proc, buf, 9)
+	require.NoError(t, err)
+	require.Equal(t, "worldwide", string(buf))
+	require.GreaterOrEqual(t, cap(buf), 9)
+	cap0 := cap(buf)
+
+	// reuse for a SMALLER, different file: must overwrite (no stale "rldwide" tail)
+	// and must NOT reallocate (cap unchanged -> the buffer was reused).
+	buf, err = newLocalDatalink(t, proc, g, "?offset=0&size=2").ReadInto(proc, buf, 2)
+	require.NoError(t, err)
+	require.Equal(t, "hi", string(buf))
+	require.Equal(t, cap0, cap(buf), "buffer should be reused, not reallocated")
+
+	// size PAST eof: LimitReader yields the 9 available bytes, io.ReadFull returns
+	// ErrUnexpectedEOF -> ReadInto returns exactly those bytes, no error, no padding.
+	buf, err = newLocalDatalink(t, proc, f, "?offset=0&size=100").ReadInto(proc, buf, 100)
+	require.NoError(t, err)
+	require.Equal(t, "worldwide", string(buf))
+
+	// offset mid-file, size past eof -> partial from offset
+	buf, err = newLocalDatalink(t, proc, f, "?offset=2&size=100").ReadInto(proc, buf, 100)
+	require.NoError(t, err)
+	require.Equal(t, "rldwide", string(buf))
+
+	// offset AT eof -> 0 bytes read, io.EOF handled -> empty, no error
+	buf, err = newLocalDatalink(t, proc, f, "?offset=9&size=100").ReadInto(proc, buf, 100)
+	require.NoError(t, err)
+	require.Len(t, buf, 0)
+
+	// size<=0 -> no read, empty result (caller treats as null)
+	buf, err = newLocalDatalink(t, proc, f, "?offset=0&size=9").ReadInto(proc, buf, 0)
+	require.NoError(t, err)
+	require.Len(t, buf, 0)
+}
+
+// TestGetBytes exercises Datalink.GetBytes for both the sized path (d.Size>0 ->
+// pre-allocated io.ReadFull, incl. the read-past-EOF short read) and the unsized
+// path (d.Size==-1 -> io.ReadAll of the whole file from offset).
+func TestGetBytes(t *testing.T) {
+	dir := t.TempDir()
+	proc := testutil.NewProcess(t)
+	f := filepath.Join(dir, "f")
+	require.NoError(t, os.WriteFile(f, []byte("worldwide"), 0o600)) // 9 bytes
+
+	// sized path: exact
+	b, err := newLocalDatalink(t, proc, f, "?offset=0&size=9").GetBytes(proc)
+	require.NoError(t, err)
+	require.Equal(t, "worldwide", string(b))
+
+	// sized path: past EOF -> available bytes, no error (io.ReadAll semantics)
+	b, err = newLocalDatalink(t, proc, f, "?offset=0&size=100").GetBytes(proc)
+	require.NoError(t, err)
+	require.Equal(t, "worldwide", string(b))
+
+	// sized path: offset + size slice
+	b, err = newLocalDatalink(t, proc, f, "?offset=2&size=3").GetBytes(proc)
+	require.NoError(t, err)
+	require.Equal(t, "rld", string(b))
+
+	// unsized path (no ?size): d.Size==-1 -> io.ReadAll whole file
+	b, err = newLocalDatalink(t, proc, f, "").GetBytes(proc)
+	require.NoError(t, err)
+	require.Equal(t, "worldwide", string(b))
+
+	// unsized path with offset -> from offset to EOF ("worldwide"[4:] == "dwide")
+	b, err = newLocalDatalink(t, proc, f, "?offset=4").GetBytes(proc)
+	require.NoError(t, err)
+	require.Equal(t, "dwide", string(b))
 }

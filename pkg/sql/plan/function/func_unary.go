@@ -4209,6 +4209,13 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
 
+	// One reusable read buffer for the whole batch. AppendBytes copies the bytes into
+	// the result vector, so this buffer is free to be overwritten on the next row.
+	// Reusing it (instead of a fresh per-row full-file allocation) keeps a large
+	// multi-VALUES INSERT — e.g. index stores that emit thousands of load_file tuples
+	// — from piling up one ~chunk-sized heap allocation per row as GC garbage, which
+	// is what previously forced callers to cap the number of values per INSERT.
+	var scratch []byte
 	for i := uint64(0); i < uint64(length); i++ {
 		_filePath, null1 := filePathVec.GetStrValue(i)
 		if null1 {
@@ -4241,19 +4248,19 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		if size > int64(types.MaxBlobLen) {
 			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
 		}
-		fileBytes, err := dl.GetBytes(proc)
+		scratch, err = dl.ReadInto(proc, scratch, size)
 		if err != nil {
 			return err
 		}
 
-		if len(fileBytes) == 0 {
+		if len(scratch) == 0 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			return nil
+			continue // was `return nil` — abandoned the remaining rows of a batched call
 		}
 
-		if err = rs.AppendBytes(fileBytes, false); err != nil {
+		if err = rs.AppendBytes(scratch, false); err != nil {
 			return err
 		}
 	}

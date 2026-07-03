@@ -60,11 +60,62 @@ func (d Datalink) GetBytes(proc *process.Process) ([]byte, error) {
 
 	defer r.Close()
 
+	// When the datalink carries an explicit size (e.g. file://...?size=N, which the
+	// index stores emit for every load_file chunk), read exactly that into a
+	// pre-sized buffer instead of io.ReadAll. io.ReadAll grows-and-copies (several
+	// intermediate allocations + up to 2x over-allocation, all short-lived heap
+	// garbage) — costly when load_file is evaluated per row in a batched INSERT.
+	if d.Size > 0 {
+		buf := make([]byte, d.Size)
+		n, rerr := io.ReadFull(r, buf)
+		if rerr == io.ErrUnexpectedEOF || rerr == io.EOF {
+			return buf[:n], nil // size ran past EOF: return what was read (io.ReadAll semantics)
+		}
+		if rerr != nil {
+			return nil, rerr
+		}
+		return buf, nil
+	}
+
 	fileBytes, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
 	return fileBytes, nil
+}
+
+// ReadInto reads the datalink's `size` bytes into buf, growing buf only when it is
+// too small, and returns the filled prefix (aliasing buf). Unlike GetBytes it does
+// NOT allocate a fresh slice per call: a caller that copies the result out before
+// the next call — e.g. load_file, whose AppendBytes copies into the result vector —
+// can pass the same buf back every row. A large batched INSERT then holds ONE
+// reusable buffer instead of piling up one ~chunk-sized heap allocation per row for
+// the GC to chase (which is what forced the per-INSERT value cap).
+func (d Datalink) ReadInto(proc *process.Process, buf []byte, size int64) ([]byte, error) {
+	r, err := d.NewReadCloser(proc)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	if size <= 0 {
+		return buf[:0], nil
+	}
+	if int64(cap(buf)) < size {
+		buf = make([]byte, size)
+	} else {
+		buf = buf[:size]
+	}
+	// io.ReadFull overwrites buf[0:size] exactly, so a reslice from a larger prior
+	// read leaves no stale tail.
+	n, rerr := io.ReadFull(r, buf)
+	if rerr == io.ErrUnexpectedEOF || rerr == io.EOF {
+		return buf[:n], nil // size ran past EOF: return what was read (io.ReadAll semantics)
+	}
+	if rerr != nil {
+		return nil, rerr
+	}
+	return buf, nil
 }
 
 func (d Datalink) GetPlainText(proc *process.Process) ([]byte, error) {
