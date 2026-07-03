@@ -24,6 +24,11 @@ SELECT HEX(CHAR(NULL, 65, 66)) AS char_skip_null;
 SELECT CHAR(65.9, 66.1) AS float_arg;
 SELECT CHAR('65', '66') AS string_arg;
 
+# String arguments with leading numeric prefix (MySQL parses leading digits)
+SELECT HEX(CHAR('65xyz')) AS char_prefix_num;
+SELECT HEX(CHAR('9007199254740993')) AS char_large_int_str;
+SELECT HEX(CHAR('77abc')) AS char_mixed_str;
+
 # Different integer types (should be cast to int64)
 SELECT CHAR(CAST(65 AS INT), CAST(66 AS INT)) AS int_type;
 SELECT CHAR(CAST(65 AS BIGINT), CAST(66 AS BIGINT)) AS bigint_type;

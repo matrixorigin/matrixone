@@ -566,6 +566,63 @@ func Test_BuiltInChar(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
+	// Test CHAR with leading numeric prefix (MySQL parses leading digits)
+	{
+		tc := tcTemp{
+			info: "select char('65xyz')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"65xyz"},
+					[]bool{false}),
+			},
+			// '65xyz' → 65 = 'A'
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with large integer string (avoids float64 precision loss)
+	{
+		tc := tcTemp{
+			info: "select char('9007199254740993')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"9007199254740993"},
+					[]bool{false}),
+			},
+			// 9007199254740993 & 0xFF = 1
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\x01"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with mixed alphanumeric string (only leading digits parsed)
+	{
+		tc := tcTemp{
+			info: "select char('77abc')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"77abc"},
+					[]bool{false}),
+			},
+			// '77abc' → 77 = 'M'
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"M"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
 	// Test CHAR with digits
 	{
 		tc := tcTemp{

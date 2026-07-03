@@ -186,6 +186,38 @@ func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
+// parseLeadingInteger extracts and parses the longest leading integer prefix
+// from s. Leading whitespace must already be stripped by the caller.
+// Returns (0, false) when s has no leading digits, matching MySQL's
+// CHAR('abc') → 0x00 behavior.
+func parseLeadingInteger(s string) (int64, bool) {
+	if len(s) == 0 {
+		return 0, false
+	}
+	start := 0
+	// optional sign
+	if s[0] == '+' || s[0] == '-' {
+		start = 1
+	}
+	// scan digits
+	end := start
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == start {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(s[:end], 10, 64)
+	if err != nil {
+		// overflow → clamp and let the caller's mod-256 wrap handle it
+		if s[0] == '-' {
+			return -1 << 63, true
+		}
+		return 1<<63 - 1, true
+	}
+	return v, true
+}
+
 const (
 	onUpdateExpr = iota
 	defaultExpr
@@ -1092,9 +1124,11 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				return int64(val), null
 			}
 		default:
-			// varchar: parse the leading numeric prefix and truncate to an integer.
-			// MySQL truncates string arguments (e.g. '65.9' -> 65, not 66),
-			// and ParseFloat handles decimal strings like '77.3' -> 77.
+			// varchar: parse the leading numeric prefix as an integer.
+			// MySQL parses the longest leading integer prefix
+			// (e.g. CHAR('65xyz') → 0x41, CHAR('77.3') → 77).
+			// Direct integer parsing avoids float64 precision loss
+			// for large values (e.g. '9007199254740993').
 			sp := vector.GenerateFunctionStrParameter(param)
 			getters[i] = func(idx uint64) (int64, bool) {
 				v, null := sp.GetStrValue(idx)
@@ -1105,13 +1139,8 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				if len(s) == 0 {
 					return 0, false
 				}
-				fv, err := strconv.ParseFloat(s, 64)
-				if err == nil {
-					return int64(fv), false
-				}
-				// On parse error, return 0 (MySQL behavior:
-				// SELECT CHAR('abc') → 0x00)
-				return 0, false
+				val, _ := parseLeadingInteger(s)
+				return val, false
 			}
 		}
 	}
