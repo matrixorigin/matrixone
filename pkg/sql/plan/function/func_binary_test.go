@@ -8905,6 +8905,26 @@ func initInsertTestCase() []tcTemp {
 				[]bool{false}),
 		},
 		{
+			info: "test insert negative length replaces to end",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Quadratic"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{3},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-1},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"What"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"QuWhat"},
+				[]bool{false}),
+		},
+		{
 			info: "test insert at beginning",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
@@ -9043,7 +9063,7 @@ func initInsertTestCase() []tcTemp {
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"Hello MySQL World"},
+				[]string{"Hello MySQL "},
 				[]bool{false}),
 		},
 		{

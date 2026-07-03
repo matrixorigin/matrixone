@@ -7891,7 +7891,8 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 
 			// MySQL INSERT behavior:
 			// - If pos <= 0 or pos > string length, return original string
-			// - If replaceLen <= 0, insert newstr at position pos without removing anything
+			// - If replaceLen = 0, insert newstr at position pos without removing anything
+			// - If replaceLen < 0, replace from pos to the end of the string
 			// - Otherwise, replace replaceLen characters starting at pos with newstr
 			// - Position is 1-based
 
@@ -7899,7 +7900,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			if pos <= 0 || pos > strLen {
 				// Invalid position, return original string
 				result = str
-			} else if replaceLen <= 0 {
+			} else if replaceLen == 0 {
 				// Insert without removing
 				posIdx := int(pos - 1) // Convert to 0-based index
 				if posIdx >= len(runes) {
@@ -7910,7 +7911,10 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			} else {
 				// Replace replaceLen characters starting at pos
 				posIdx := int(pos - 1) // Convert to 0-based index
-				endIdx := posIdx + int(replaceLen)
+				endIdx := len(runes)
+				if replaceLen > 0 {
+					endIdx = posIdx + int(replaceLen)
+				}
 				if endIdx > len(runes) {
 					endIdx = len(runes)
 				}

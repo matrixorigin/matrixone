@@ -8,6 +8,11 @@ SELECT INSERT('Hello World', 6, 0, 'MySQL ') AS insert_without_remove;
 SELECT INSERT('Hello World', 0, 5, 'MySQL') AS invalid_position;
 SELECT INSERT('Hello', 10, 5, 'MySQL') AS position_exceeds_length;
 SELECT INSERT('Hello', 2, 100, 'MySQL') AS length_exceeds_string;
+SELECT INSERT('Quadratic', 3, -1, 'What') AS negative_length;
+SELECT INSERT('Hello World', 1, -1, 'Hi') AS negative_length_beginning;
+SELECT INSERT('Hello World', 7, -5, 'MySQL') AS negative_length_suffix;
+SELECT INSERT('Hello', 5, -1, '!') AS negative_length_last_char;
+SELECT INSERT('你好世界', 3, -1, 'MatrixOne') AS negative_length_utf8;
 
 # NULL handling
 SELECT INSERT('Hello World', NULL, 5, 'MySQL') AS null_position;
