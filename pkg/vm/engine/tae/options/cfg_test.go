@@ -30,3 +30,8 @@ func TestLogtailServerCfg(t *testing.T) {
 	require.Equal(t, defaults.RPCStreamPoisonTime, validated.RPCStreamPoisonTime)
 	require.Equal(t, defaults.PullWorkerPoolSize, validated.PullWorkerPoolSize)
 }
+
+func TestOptionsFillDefaultsCheckpointIncrementalInterval(t *testing.T) {
+	opts := new(Options).FillDefaults("")
+	require.Equal(t, DefaultCheckpointIncrementalInterval, opts.CheckpointCfg.IncrementalInterval)
+}
