@@ -443,9 +443,10 @@ func TestSessionCloseDiscardsMigratedUserLevelLocks(t *testing.T) {
 	})
 
 	ses := &Session{
-		feSessionImpl:          feSessionImpl{},
-		proc:                   proc,
-		userLevelLocksMigrated: true,
+		feSessionImpl: feSessionImpl{
+			userLevelLocksMigrated: true,
+		},
+		proc: proc,
 	}
 	ses.Close()
 	require.Empty(t, function.UserLevelLocksForMigration(proc))
@@ -457,9 +458,10 @@ func TestSessionCloseReleasesUserLevelLocksWhenNotMigrated(t *testing.T) {
 	proc.GetSessionInfo().ConnectionID = 1009
 
 	ses := &Session{
-		feSessionImpl:          feSessionImpl{},
-		proc:                   proc,
-		userLevelLocksMigrated: false,
+		feSessionImpl: feSessionImpl{
+			userLevelLocksMigrated: false,
+		},
+		proc: proc,
 	}
 	ses.Close()
 	require.Empty(t, function.UserLevelLocksForMigration(proc))
