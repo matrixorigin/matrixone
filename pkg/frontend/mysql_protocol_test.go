@@ -5370,6 +5370,19 @@ func Test_appendResultSetBinaryRow2_TimeMicroseconds(t *testing.T) {
 			convey.So(binary.LittleEndian.Uint32(body[9:13]), convey.ShouldEqual, uint32(123456))
 			convey.So(binary.LittleEndian.Uint64(body[13:21]), convey.ShouldEqual, maxUint64)
 		})
+
+		convey.Convey("negative time with days but zero microseconds", func() {
+			payload := buildRow("-25:20:30")
+			convey.So(payload[0], convey.ShouldEqual, 0x00)
+			body := payload[2:]
+			// length(8) path: sign(1) + days(4) + hms(3)
+			convey.So(int(body[0]), convey.ShouldEqual, 8)
+			convey.So(len(body), convey.ShouldEqual, 1+8+8)
+			convey.So(int(body[1]), convey.ShouldEqual, 1) // negative sign
+			convey.So(binary.LittleEndian.Uint32(body[2:6]), convey.ShouldEqual, uint32(1))
+			convey.So(int(body[6]), convey.ShouldEqual, 1) // 25h -> 1d 1h
+			convey.So(binary.LittleEndian.Uint64(body[9:17]), convey.ShouldEqual, maxUint64)
+		})
 	})
 }
 
@@ -5411,6 +5424,21 @@ func Test_readTime_advancesPastMicroseconds(t *testing.T) {
 
 		convey.Convey("truncated at microsecond boundary", func() {
 			_, _, ok := proto.readTime(data[:9], 0, 12)
+			convey.So(ok, convey.ShouldBeFalse)
+		})
+
+		convey.Convey("empty data", func() {
+			_, _, ok := proto.readTime(nil, 0, 12)
+			convey.So(ok, convey.ShouldBeFalse)
+		})
+
+		convey.Convey("truncated before day", func() {
+			_, _, ok := proto.readTime(data[:2], 0, 8)
+			convey.So(ok, convey.ShouldBeFalse)
+		})
+
+		convey.Convey("truncated at hms boundary", func() {
+			_, _, ok := proto.readTime(data[:5], 0, 8)
 			convey.So(ok, convey.ShouldBeFalse)
 		})
 	})
