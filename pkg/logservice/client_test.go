@@ -309,6 +309,43 @@ func TestConnectToLogServiceAddressesReturnsContextErrorAfterPreviousFailure(t *
 	require.Nil(t, c)
 }
 
+func TestConnectToLogServiceAddressesReturnsAttemptTimeoutCause(t *testing.T) {
+	origConnect := connectToLogServiceAddressFn
+	origAttemptTimeout := logServiceConnectAttemptTimeout
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectAttemptTimeout = 20 * time.Millisecond
+	logServiceConnectFallbackDelay = time.Millisecond
+	defer func() {
+		connectToLogServiceAddressFn = origConnect
+		logServiceConnectAttemptTimeout = origAttemptTimeout
+		logServiceConnectFallbackDelay = origFallbackDelay
+	}()
+
+	connectToLogServiceAddressFn = func(
+		ctx context.Context,
+		sid string,
+		addr string,
+		cfg ClientConfig,
+	) (*client, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	c, err := connectToLogServiceAddresses(
+		ctx,
+		"",
+		[]string{"first", "second"},
+		ClientConfig{},
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, moerr.CauseNewLogServiceClient)
+	require.NoError(t, ctx.Err())
+	require.Nil(t, c)
+}
+
 func TestConnectToLogServiceAddressesWithCanceledContextDoesNotDial(t *testing.T) {
 	origConnect := connectToLogServiceAddressFn
 	defer func() {

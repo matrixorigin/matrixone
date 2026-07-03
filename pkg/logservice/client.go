@@ -587,7 +587,11 @@ func connectToLogServiceAddresses(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			attemptCtx, attemptCancel := context.WithTimeout(ctx, logServiceConnectAttemptTimeout)
+			attemptCtx, attemptCancel := context.WithTimeoutCause(
+				ctx,
+				logServiceConnectAttemptTimeout,
+				moerr.CauseNewLogServiceClient,
+			)
 			c, err := connectToLogServiceAddressFn(attemptCtx, sid, addr, cfg)
 			attemptCancel()
 			if err == nil {
@@ -601,7 +605,7 @@ func connectToLogServiceAddresses(
 				return
 			}
 			select {
-			case results <- connectResult{err: err}:
+			case results <- connectResult{err: moerr.AttachCause(attemptCtx, err)}:
 			case <-ctx.Done():
 			}
 		}()
