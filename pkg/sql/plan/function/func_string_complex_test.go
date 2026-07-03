@@ -15,6 +15,7 @@
 package function
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -669,5 +670,118 @@ func Test_BuiltInChar(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with NULL varchar argument (skipped like NULL integers)
+	{
+		tc := tcTemp{
+			info: "select char('65', NULL::varchar)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"65"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with empty string argument (MySQL: CHAR('') → 0x00)
+	{
+		tc := tcTemp{
+			info: "select char('')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\x00"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+// Test_ParseLeadingInteger tests the helper used by CHAR to parse
+// the leading integer prefix of string arguments
+func Test_ParseLeadingInteger(t *testing.T) {
+	cases := []struct {
+		input  string
+		want   int64
+		wantOk bool
+	}{
+		{"", 0, false},
+		{"abc", 0, false},
+		{"+", 0, false},
+		{"-", 0, false},
+		{"65", 65, true},
+		{"+65", 65, true},
+		{"-65", -65, true},
+		{"65xyz", 65, true},
+		{"77.3", 77, true},
+		{"9007199254740993", 9007199254740993, true},
+		// overflow clamps to the int64 boundary
+		{"99999999999999999999", math.MaxInt64, true},
+		{"-99999999999999999999", math.MinInt64, true},
+	}
+	for _, c := range cases {
+		got, ok := parseLeadingInteger(c.input)
+		require.Equal(t, c.want, got, "parseLeadingInteger(%q)", c.input)
+		require.Equal(t, c.wantOk, ok, "parseLeadingInteger(%q) ok", c.input)
+	}
+}
+
+// Test_BuiltInCharCheck tests CHAR's type-check and cast planning
+func Test_BuiltInCharCheck(t *testing.T) {
+	// no arguments: failure
+	{
+		got := builtInCharCheck(nil, nil)
+		require.Equal(t, failedFunctionParametersWrong, got.status)
+	}
+
+	// all integer arguments: success without cast
+	{
+		got := builtInCharCheck(nil, []types.Type{
+			types.T_int64.ToType(), types.T_int32.ToType(),
+		})
+		require.Equal(t, succeedMatched, got.status)
+	}
+
+	// varchar arguments: success without cast
+	{
+		got := builtInCharCheck(nil, []types.Type{types.T_varchar.ToType()})
+		require.Equal(t, succeedMatched, got.status)
+	}
+
+	// other string types (char/text/blob): cast to varchar
+	{
+		got := builtInCharCheck(nil, []types.Type{
+			types.T_char.ToType(), types.T_text.ToType(), types.T_blob.ToType(),
+		})
+		require.Equal(t, succeedWithCast, got.status)
+		for _, ft := range got.finalType {
+			require.Equal(t, types.T_varchar, ft.Oid)
+		}
+	}
+
+	// numeric types (float/decimal): cast to int64
+	{
+		got := builtInCharCheck(nil, []types.Type{
+			types.T_float64.ToType(), types.T_decimal128.ToType(),
+		})
+		require.Equal(t, succeedWithCast, got.status)
+		for _, ft := range got.finalType {
+			require.Equal(t, types.T_int64, ft.Oid)
+		}
 	}
 }
