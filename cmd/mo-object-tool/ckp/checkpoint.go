@@ -386,10 +386,6 @@ func newFileServiceWriteCloser(ctx context.Context, fs fileservice.FileService, 
 	go func() {
 		var err error
 		defer func() {
-			if recovered := recover(); recovered != nil {
-				err = fmt.Errorf("write object %s panic: %v", filePath, recovered)
-				_ = pr.CloseWithError(err)
-			}
 			w.done <- err
 		}()
 		ctx = fileservice.WithParallelMode(ctx, fileservice.ParallelAuto)

@@ -135,7 +135,7 @@ func openFromConfig(ctx context.Context, path string, fsName string) (fileservic
 		return fs, fmt.Sprintf("%s:%s", path, cfg.DataDir), nil
 	}
 
-	var names []string
+	names := make([]string, 0, len(cfg.FileService))
 	for _, fsCfg := range cfg.FileService {
 		names = append(names, fsCfg.Name)
 	}

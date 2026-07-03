@@ -1090,9 +1090,6 @@ func (r *CheckpointReader) ReadTableSchema(
 	}
 
 	// Try to read mo_columns from the checkpoint (table 3)
-	if schema.TableName == fmt.Sprintf("%d", tableID) {
-		// Couldn't get table name from mo_tables; still try for columns
-	}
 	moColumnsView, err := r.getTableLogicalView(ctx, moColumnsID, snapshotTS)
 	if err == nil && moColumnsView != nil {
 		cols := buildColumnsFromMoColumnsRows(moColumnsView, tableID)
@@ -1174,7 +1171,7 @@ func (r *CheckpointReader) getTableEntriesAt(
 	type entryRef struct {
 		entry *EntryInfo
 	}
-	var entryRefs []entryRef
+	entryRefs := make([]entryRef, 0, 1+len(composed.Incrementals))
 	if composed.BaseEntry != nil {
 		entryRefs = append(entryRefs, entryRef{entry: composed.BaseEntry})
 	}
@@ -1574,7 +1571,7 @@ func (r *CheckpointReader) listDatabasesFromMoTables(
 		return nil, err
 	}
 	seen := make(map[string]struct{})
-	var databases []TableCatalogEntry
+	databases := make([]TableCatalogEntry, 0, len(tables))
 	for _, t := range tables {
 		key := fmt.Sprintf("%d\x00%d\x00%s", t.AccountID, t.DatabaseID, strings.ToLower(t.DatabaseName))
 		if _, ok := seen[key]; ok {
@@ -1812,7 +1809,7 @@ func (r *CheckpointReader) streamTableCSV(
 	}
 
 	needsBuffer := options.IncludeMetadata || options.RowOrder == CSVRowOrderLexical
-	var output io.Writer = w
+	output := w
 	var tmpFile *os.File
 	if needsBuffer {
 		var err error
@@ -2193,132 +2190,6 @@ func (r *CheckpointReader) processCSVObjectChunks(
 
 	counters.processedObjects.Add(1)
 	return nil
-}
-
-func (r *CheckpointReader) readCSVObjectBlocks(
-	ctx context.Context,
-	blocks chan<- csvPipelineBlock,
-	counters *csvPipelineCounters,
-	snapshotTS types.TS,
-	tombstoneStats []objectio.ObjectStats,
-	columnSeqNums []int,
-	job csvPipelineObjectJob,
-) error {
-	entry := job.entry
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	objName := entry.ObjectStats.ObjectName().String()
-	reader, err := objecttool.OpenWithFS(ctx, r.fs, objName, objName)
-	if err != nil {
-		if isDataFileNotFound(err) {
-			counters.processedObjects.Add(1)
-			return nil
-		}
-		return err
-	}
-
-	physicalPositions := dataIndexesForSeqNums(reader.Columns(), columnSeqNums)
-	projectedTypes := buildProjectedTypes(reader.Columns(), physicalPositions)
-	relevantTombstones, err := r.filterTombstonesForObject(ctx, entry.ObjectStats.ObjectName().ObjectId(), tombstoneStats)
-	if err != nil {
-		_ = reader.Close()
-		return err
-	}
-
-	for blockIdx := 0; blockIdx < int(entry.ObjectStats.BlkCnt()); blockIdx++ {
-		if err := ctx.Err(); err != nil {
-			_ = reader.Close()
-			return err
-		}
-		if err := waitForCSVMemory(ctx, counters); err != nil {
-			_ = reader.Close()
-			return err
-		}
-
-		start := time.Now()
-		bat, release, err := reader.ReadBlock(ctx, uint32(blockIdx))
-		if err != nil {
-			_ = reader.Close()
-			return err
-		}
-		commitTSVec, releaseCommitTS, err := reader.ReadBlockCommitTS(ctx, uint32(blockIdx))
-		counters.readNanos.Add(time.Since(start).Nanoseconds())
-		if err != nil {
-			release()
-			_ = reader.Close()
-			return err
-		}
-		if bat.RowCount() == 0 {
-			if releaseCommitTS != nil {
-				releaseCommitTS()
-			}
-			release()
-			continue
-		}
-
-		block := csvPipelineBlock{
-			objectIdx:          job.objectIdx,
-			blockIdx:           blockIdx,
-			entry:              entry,
-			projectedTypes:     projectedTypes,
-			relevantTombstones: relevantTombstones,
-			bat:                bat,
-			release:            release,
-			commitTSVec:        commitTSVec,
-			releaseCommitTS:    releaseCommitTS,
-		}
-		counters.readBatches.Add(1)
-		counters.readRows.Add(int64(bat.RowCount()))
-		counters.readQueuedBlocks.Add(1)
-		counters.readQueuedRows.Add(int64(bat.RowCount()))
-		select {
-		case blocks <- block:
-		case <-ctx.Done():
-			counters.readQueuedBlocks.Add(-1)
-			counters.readQueuedRows.Add(-int64(bat.RowCount()))
-			block.releaseBlock()
-			_ = reader.Close()
-			return ctx.Err()
-		}
-	}
-
-	if err := reader.Close(); err != nil {
-		return err
-	}
-	counters.processedObjects.Add(1)
-	return nil
-}
-
-func (r *CheckpointReader) processCSVBlockChunk(
-	ctx context.Context,
-	chunks chan<- csvPipelineChunk,
-	counters *csvPipelineCounters,
-	snapshotTS types.TS,
-	physicalPositions []int,
-	block csvPipelineBlock,
-) error {
-	if err := ctx.Err(); err != nil {
-		block.releaseBlock()
-		return err
-	}
-	chunk, err := r.buildCSVChunkForBlock(ctx, block, snapshotTS, physicalPositions, counters)
-	if err != nil {
-		return err
-	}
-	if len(chunk.data) == 0 {
-		return nil
-	}
-	counters.queuedBatches.Add(1)
-	counters.queuedBytes.Add(int64(len(chunk.data)))
-	select {
-	case chunks <- chunk:
-		return nil
-	case <-ctx.Done():
-		counters.queuedBatches.Add(-1)
-		counters.queuedBytes.Add(-int64(len(chunk.data)))
-		return ctx.Err()
-	}
 }
 
 func csvPipelineWorkerCount(objects int) csvPipelineWorkerPlan {
@@ -3087,11 +2958,6 @@ func writeCSVMetadata(w io.Writer, schema *TableSchema, stats logicalTableStats)
 // and filters data rows to only include visible (non-hidden) columns by their physical position.
 // Returns a new LogicalTableView with merged headers and filtered data rows.
 func MergeLogicalViewWithSchema(view *LogicalTableView, schema *TableSchema) *LogicalTableView {
-	dataWidth := len(view.Headers) - logicalViewDataOffset(view)
-	if dataWidth < 0 {
-		dataWidth = 0
-	}
-
 	// Without schema columns we cannot safely distinguish visible columns from hidden ones.
 	if len(schema.Columns) == 0 {
 		return &LogicalTableView{
@@ -3714,7 +3580,7 @@ func buildColumnsFromMoColumnsRowsAt(
 	seqNumCol int,
 ) []TableColumn {
 	tableIDStr := fmt.Sprintf("%d", tableID)
-	var cols []TableColumn
+	cols := make([]TableColumn, 0, len(view.Rows))
 	matchedRows := 0
 	typeDecodeFailures := 0
 	notNullCol := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_NullAbility)
@@ -4202,30 +4068,6 @@ func applyCatalogHeadersBySeqNums(view *LogicalTableView, headers []string) {
 		}
 	}
 	view.Headers = fixedHeaders
-}
-
-func (r *CheckpointReader) dumpCatalogTableView(
-	ctx context.Context,
-	tableID uint64,
-	snapshotTS types.TS,
-) (*LogicalTableView, error) {
-	var buf bytes.Buffer
-	if err := r.DumpTableCSVComposed(ctx, &buf, tableID, snapshotTS, WithCSVHeader(true), WithCSVMetaComments(false)); err != nil {
-		return nil, err
-	}
-	reader := csv.NewReader(bytes.NewReader(buf.Bytes()))
-	reader.FieldsPerRecord = -1
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-	if len(records) == 0 {
-		return &LogicalTableView{}, nil
-	}
-	return &LogicalTableView{
-		Headers: records[0],
-		Rows:    records[1:],
-	}, nil
 }
 
 func (r *CheckpointReader) findCatalogTableID(
@@ -4774,12 +4616,6 @@ func decodeUniqueKeysFromMoTablesConstraint(raw string) (keys []TableUniqueKey) 
 	if raw == "" {
 		return nil
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			ckpDebugSchemaf("mo_tables constraint decode panic len=%d hex=%s panic=%v", len(raw), debugHexPrefix(raw, 64), r)
-			keys = nil
-		}
-	}()
 	c := &engine.ConstraintDef{}
 	if err := c.UnmarshalBinary([]byte(raw)); err != nil {
 		ckpDebugSchemaf("mo_tables constraint decode failed len=%d hex=%s err=%v", len(raw), debugHexPrefix(raw, 64), err)
@@ -4828,12 +4664,6 @@ func decodePrimaryKeyFromMoTablesConstraint(raw string) (cols []string) {
 	if raw == "" {
 		return nil
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			ckpDebugSchemaf("mo_tables primary key decode panic len=%d hex=%s panic=%v", len(raw), debugHexPrefix(raw, 64), r)
-			cols = nil
-		}
-	}()
 	c := &engine.ConstraintDef{}
 	if err := c.UnmarshalBinary([]byte(raw)); err != nil {
 		ckpDebugSchemaf("mo_tables primary key decode failed len=%d hex=%s err=%v", len(raw), debugHexPrefix(raw, 64), err)
@@ -4877,12 +4707,6 @@ func decodeForeignKeysFromMoTablesConstraint(
 	if raw == "" {
 		return nil
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			ckpDebugSchemaf("mo_tables foreign key decode panic len=%d hex=%s panic=%v", len(raw), debugHexPrefix(raw, 64), r)
-			keys = nil
-		}
-	}()
 	c := &engine.ConstraintDef{}
 	if err := c.UnmarshalBinary([]byte(raw)); err != nil {
 		ckpDebugSchemaf("mo_tables foreign key decode failed len=%d hex=%s err=%v", len(raw), debugHexPrefix(raw, 64), err)
@@ -4959,14 +4783,6 @@ func quoteDDLString(s string) string {
 
 func isTruthyCatalogValue(s string) bool {
 	return s == "1" || strings.EqualFold(s, "true")
-}
-
-// getTableName tries to get the table name for a tableID from the LogicalTableView's
-// mo_tables data if available, falling back to the table ID as string.
-func getTableName(view *LogicalTableView, tableID uint64) string {
-	// view here is the table's own data view, not mo_tables.
-	// We can't get the name from it, so use table ID
-	return fmt.Sprintf("%d", tableID)
 }
 
 // buildCreateTableFromMoColumns reconstructs a CREATE TABLE DDL from mo_columns data.

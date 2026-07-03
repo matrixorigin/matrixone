@@ -68,11 +68,6 @@ func encodedConstraint(t *testing.T, constraints ...engine.Constraint) string {
 	return string(data)
 }
 
-func encodedIndexConstraint(t *testing.T, indexes ...*plan.IndexDef) string {
-	t.Helper()
-	return encodedConstraint(t, &engine.IndexDef{Indexes: indexes})
-}
-
 func encodedPrimaryKeyConstraint(t *testing.T, names ...string) engine.Constraint {
 	t.Helper()
 	pkeyColName := ""
@@ -1430,25 +1425,6 @@ func TestWriteCSV_LexicalRowOrder(t *testing.T) {
 	}, lines)
 }
 
-// makeColumnRow creates a mock mo_columns row with specific values at given indexes.
-func makeColumnRow(indexValuePairs ...any) []string {
-	// 27 columns in mo_columns
-	row := make([]string, 27)
-	for i := range row {
-		row[i] = ""
-	}
-	for i := 0; i < len(indexValuePairs); i += 2 {
-		idx := indexValuePairs[i].(int)
-		val := indexValuePairs[i+1].(string)
-		row[idx] = val
-	}
-	// set a default att_relname_id if not provided
-	if row[4] == "" {
-		row[4] = "12345"
-	}
-	return row
-}
-
 // TestColumnSchemaRoundTrip tests the full pipeline: rows → columns → schema → CSV header.
 func TestColumnSchemaRoundTrip(t *testing.T) {
 	moColumnsView := &LogicalTableView{
@@ -1580,7 +1556,7 @@ func TestBuiltinTableSchemaForLayout_CurrentVisibleColumnsOnly(t *testing.T) {
 	assert.Equal(t, "mo_catalog", schema.DatabaseName)
 	assert.NotEmpty(t, schema.CreateSQL)
 
-	var names []string
+	names := make([]string, 0, len(schema.Columns))
 	for _, col := range schema.Columns {
 		names = append(names, col.Name)
 		assert.Equal(t, col.Position, col.PhysicalPosition)
@@ -1593,7 +1569,7 @@ func TestBuiltinTableSchemaForLayout_CurrentVisibleColumnsOnly(t *testing.T) {
 func TestBuiltinTableSchemaForLayout_Legacy3Compatibility(t *testing.T) {
 	tablesSchema := builtinTableSchemaForLayout(legacy3CatalogLayout, catalog.MO_TABLES_ID)
 	require.NotNil(t, tablesSchema)
-	var tableNames []string
+	tableNames := make([]string, 0, len(tablesSchema.Columns))
 	for _, col := range tablesSchema.Columns {
 		tableNames = append(tableNames, col.Name)
 	}
@@ -1603,7 +1579,7 @@ func TestBuiltinTableSchemaForLayout_Legacy3Compatibility(t *testing.T) {
 
 	columnsSchema := builtinTableSchemaForLayout(legacy3CatalogLayout, catalog.MO_COLUMNS_ID)
 	require.NotNil(t, columnsSchema)
-	var columnNames []string
+	columnNames := make([]string, 0, len(columnsSchema.Columns))
 	for _, col := range columnsSchema.Columns {
 		columnNames = append(columnNames, col.Name)
 	}
@@ -1621,7 +1597,7 @@ func TestReadTableSchema_BuiltinFallbackForSystemTable(t *testing.T) {
 	assert.Equal(t, "mo_catalog", schema.DatabaseName)
 	require.NotEmpty(t, schema.Columns)
 
-	var names []string
+	names := make([]string, 0, len(schema.Columns))
 	for _, col := range schema.Columns {
 		names = append(names, col.Name)
 	}
