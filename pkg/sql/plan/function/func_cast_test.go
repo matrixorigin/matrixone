@@ -97,6 +97,152 @@ func Test_StringToFloatInvalidConversion(t *testing.T) {
 	}
 }
 
+func TestCastSignedStringNumericSign(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []tcTemp{
+		{
+			info: "signed string cast applies leading sign after parsing numeric body",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"+0x10", "-0x10", "  +0012 "}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{16, -16, 12}, nil),
+		},
+	}
+
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestCastUnsignedStringNumericSign(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []tcTemp{
+		{
+			info: "unsigned string cast allows signed zero and applies plus sign to numeric body",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"-0", "-000", "+000", "  +0012 ", "+0x10", "-0x0"}, nil),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{0, 0, 0, 12, 16, 0}, nil),
+		},
+	}
+
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestCastDecimal64StringNumericSign(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	decimalScale2Type := types.New(types.T_decimal64, 6, 2)
+	decimalScale0Type := types.New(types.T_decimal64, 6, 0)
+
+	testCases := []tcTemp{
+		{
+			info: "decimal64 string cast applies leading sign after parsing decimal body",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"+000", "+0012", "  +0012 "}, nil),
+				NewFunctionTestInput(decimalScale2Type, []types.Decimal64{}, nil),
+			},
+			expect: NewFunctionTestResult(decimalScale2Type, false,
+				[]types.Decimal64{0, 1200, 1200}, nil),
+		},
+		{
+			info: "decimal64 string cast applies leading sign after parsing hex numeric body",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"+0x10", "-0x10"}, nil),
+				NewFunctionTestInput(decimalScale0Type, []types.Decimal64{}, nil),
+			},
+			expect: NewFunctionTestResult(decimalScale0Type, false,
+				[]types.Decimal64{16, types.Decimal64(16).Minus()}, nil),
+		},
+	}
+
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestCastStringNumericRadixPrefixes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	decimalScale2Type := types.New(types.T_decimal64, 6, 2)
+
+	testCases := []tcTemp{
+		{
+			info: "signed string cast parses binary, octal, hex, and decimal prefixes",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"0b1010", "+0B1010", "-0b1010", "0o17", "+0O17", "-0o17", "0x123", "+0X123", "-0x123", "0123"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{10, 10, -10, 15, 15, -15, 291, 291, -291, 123}, nil),
+		},
+		{
+			info: "unsigned string cast allows negative zero but rejects negative nonzero values",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"+0b1010", "-0b0", "+0o17", "-0o0", "+0x123", "-0x0", "0123"}, nil),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{10, 0, 15, 0, 291, 0, 123}, nil),
+		},
+		{
+			info: "decimal string cast parses radix prefixes and applies the final sign",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"+0b1010", "-0b1010", "+0o17", "-0o17", "+0x123", "-0x123", "+0123", "-0123"}, nil),
+				NewFunctionTestInput(decimalScale2Type, []types.Decimal64{}, nil),
+			},
+			expect: NewFunctionTestResult(decimalScale2Type, false,
+				[]types.Decimal64{1000, types.Decimal64(1000).Minus(), 1500, types.Decimal64(1500).Minus(), 29100, types.Decimal64(29100).Minus(), 12300, types.Decimal64(12300).Minus()}, nil),
+		},
+	}
+
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestCastStringNumericSignRejectsInvalidBodies(t *testing.T) {
+	invalidInputs := []string{"+-1", "++1", "--1", "- 1", "+ 1", "+", "-", "0b", "0b102", "0o", "0o18", "0x", "0x12g"}
+
+	for _, input := range invalidInputs {
+		t.Run(input+"_signed", func(t *testing.T) {
+			_, err := parseSignedCastString(input, 64)
+			require.Error(t, err)
+		})
+		t.Run(input+"_unsigned", func(t *testing.T) {
+			_, err := parseUnsignedCastString(input, 64)
+			require.Error(t, err)
+		})
+		t.Run(input+"_decimal64", func(t *testing.T) {
+			_, err := parseDecimal64CastString(input, 6, 2)
+			require.Error(t, err)
+		})
+	}
+}
+
 func Test_BinaryToFloatInvalidConversion(t *testing.T) {
 	// Test binary to float conversion with invalid hex values
 	// Should return 0, not error (MySQL non-strict mode behavior)

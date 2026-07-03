@@ -22,6 +22,169 @@ select cast('+0012' as unsigned) as r;
 12
 select CAST('10x' as unsigned integer);
 invalid argument cast to uint64, bad value 10x
+select cast('+123' as signed);
+➤ cast(+123 as signed)[-5,64,0]  𝄀
+123
+select cast('-123' as signed);
+➤ cast(-123 as signed)[-5,64,0]  𝄀
+-123
+select cast('0123' as signed);
+➤ cast(0123 as signed)[-5,64,0]  𝄀
+123
+select cast('+0123' as signed);
+➤ cast(+0123 as signed)[-5,64,0]  𝄀
+123
+select cast('-0123' as signed);
+➤ cast(-0123 as signed)[-5,64,0]  𝄀
+-123
+select cast('+123' as unsigned);
+➤ cast(+123 as unsigned)[-5,64,0]  𝄀
+123
+select cast('0123' as unsigned);
+➤ cast(0123 as unsigned)[-5,64,0]  𝄀
+123
+select cast('-0' as unsigned);
+➤ cast(-0 as unsigned)[-5,64,0]  𝄀
+0
+select cast('-000' as unsigned);
+➤ cast(-000 as unsigned)[-5,64,0]  𝄀
+0
+select cast('-123' as unsigned);
+invalid argument cast to uint64, bad value -123
+select cast('+000' as decimal(6,2));
+➤ cast(+000 as decimal(6, 2))[3,6,2]  𝄀
+0.00
+select cast('-000' as decimal(6,2));
+➤ cast(-000 as decimal(6, 2))[3,6,2]  𝄀
+0.00
+select cast('+0123' as decimal(6,2));
+➤ cast(+0123 as decimal(6, 2))[3,6,2]  𝄀
+123.00
+select cast('-0123' as decimal(6,2));
+➤ cast(-0123 as decimal(6, 2))[3,6,2]  𝄀
+-123.00
+select cast('0b1010' as signed);
+➤ cast(0b1010 as signed)[-5,64,0]  𝄀
+10
+select cast('+0b1010' as signed);
+➤ cast(+0b1010 as signed)[-5,64,0]  𝄀
+10
+select cast('-0b1010' as signed);
+➤ cast(-0b1010 as signed)[-5,64,0]  𝄀
+-10
+select cast('0B1010' as signed);
+➤ cast(0B1010 as signed)[-5,64,0]  𝄀
+10
+select cast('+0b1010' as unsigned);
+➤ cast(+0b1010 as unsigned)[-5,64,0]  𝄀
+10
+select cast('-0b0' as unsigned);
+➤ cast(-0b0 as unsigned)[-5,64,0]  𝄀
+0
+select cast('-0b1010' as unsigned);
+invalid argument cast to uint64, bad value -0b1010
+select cast('+0b1010' as decimal(6,2));
+➤ cast(+0b1010 as decimal(6, 2))[3,6,2]  𝄀
+10.00
+select cast('-0b1010' as decimal(6,2));
+➤ cast(-0b1010 as decimal(6, 2))[3,6,2]  𝄀
+-10.00
+select cast('0o17' as signed);
+➤ cast(0o17 as signed)[-5,64,0]  𝄀
+15
+select cast('+0o17' as signed);
+➤ cast(+0o17 as signed)[-5,64,0]  𝄀
+15
+select cast('-0o17' as signed);
+➤ cast(-0o17 as signed)[-5,64,0]  𝄀
+-15
+select cast('0O17' as signed);
+➤ cast(0O17 as signed)[-5,64,0]  𝄀
+15
+select cast('+0o17' as unsigned);
+➤ cast(+0o17 as unsigned)[-5,64,0]  𝄀
+15
+select cast('-0o0' as unsigned);
+➤ cast(-0o0 as unsigned)[-5,64,0]  𝄀
+0
+select cast('-0o17' as unsigned);
+invalid argument cast to uint64, bad value -0o17
+select cast('+0o17' as decimal(6,2));
+➤ cast(+0o17 as decimal(6, 2))[3,6,2]  𝄀
+15.00
+select cast('-0o17' as decimal(6,2));
+➤ cast(-0o17 as decimal(6, 2))[3,6,2]  𝄀
+-15.00
+select cast('0x123' as signed);
+➤ cast(0x123 as signed)[-5,64,0]  𝄀
+291
+select cast('+0x123' as signed);
+➤ cast(+0x123 as signed)[-5,64,0]  𝄀
+291
+select cast('-0x123' as signed);
+➤ cast(-0x123 as signed)[-5,64,0]  𝄀
+-291
+select cast('0X123' as signed);
+➤ cast(0X123 as signed)[-5,64,0]  𝄀
+291
+select cast('+0x123' as unsigned);
+➤ cast(+0x123 as unsigned)[-5,64,0]  𝄀
+291
+select cast('-0x0' as unsigned);
+➤ cast(-0x0 as unsigned)[-5,64,0]  𝄀
+0
+select cast('-0x123' as unsigned);
+invalid argument cast to uint64, bad value -0x123
+select cast('+0x123' as decimal(6,2));
+➤ cast(+0x123 as decimal(6, 2))[3,6,2]  𝄀
+291.00
+select cast('-0x123' as decimal(6,2));
+➤ cast(-0x123 as decimal(6, 2))[3,6,2]  𝄀
+-291.00
+select cast('  +123  ' as signed);
+➤ cast(  +123   as signed)[-5,64,0]  𝄀
+123
+select cast('  -0b1010  ' as signed);
+➤ cast(  -0b1010   as signed)[-5,64,0]  𝄀
+-10
+select cast('  +0o17  ' as signed);
+➤ cast(  +0o17   as signed)[-5,64,0]  𝄀
+15
+select cast('  -0x123  ' as signed);
+➤ cast(  -0x123   as signed)[-5,64,0]  𝄀
+-291
+select cast('+-1' as signed);
+invalid argument cast to int, bad value +-1
+select cast('++1' as signed);
+invalid argument cast to int, bad value ++1
+select cast('--1' as signed);
+invalid argument cast to int, bad value --1
+select cast('- 1' as signed);
+invalid argument cast to int, bad value - 1
+select cast('+ 1' as signed);
+invalid argument cast to int, bad value + 1
+select cast('+' as signed);
+invalid argument cast to int, bad value +
+select cast('-' as signed);
+invalid argument cast to int, bad value -
+select cast('0b' as signed);
+invalid argument cast to int, bad value 0b
+select cast('0b102' as signed);
+invalid argument cast to int, bad value 0b102
+select cast('0o' as signed);
+invalid argument cast to int, bad value 0o
+select cast('0o18' as signed);
+invalid argument cast to int, bad value 0o18
+select cast('0x' as signed);
+invalid argument cast to int, bad value 0x
+select cast('0x12g' as signed);
+invalid argument cast to int, bad value 0x12g
+select cast('x123' as signed);
+invalid argument cast to int, bad value x123
+select cast('abc' as signed);
+invalid argument cast to int, bad value abc
+select cast('1a' as signed);
+invalid argument cast to int, bad value 1a
 select cast('7e0' as double),
 cast('7e0' as float),
 cast('  +7e0' as double),
