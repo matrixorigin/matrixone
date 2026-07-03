@@ -1010,9 +1010,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 					val = "0d 00:00:00"
 				case 8, 12:
 					pos, val, ok = mp.readTime(data, pos, length)
-				if !ok {
-					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
-				}
+					if !ok {
+						return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+					}
 				default:
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
