@@ -36,6 +36,12 @@ type ShardInfo struct {
 	Replicas map[uint64]string
 }
 
+const getShardInfoCheckerStateTimeout = 100 * time.Millisecond
+
+var getCheckerStateForShardInfo = func(ctx context.Context, l *store) (*pb.CheckerState, error) {
+	return l.getCheckerStateWithContext(ctx)
+}
+
 // GetShardInfo is to be invoked when querying ShardInfo on a Log Service node.
 // address is usually the reverse proxy that randomly redirect the request to
 // a known Log Service node.
@@ -173,6 +179,7 @@ func queryShardInfoRaw(
 }
 
 func (s *Service) getShardInfo(
+	ctx context.Context,
 	shardID uint64,
 	includeExpiredReplicaAddresses bool,
 ) (pb.ShardInfoQueryResult, bool) {
@@ -191,7 +198,7 @@ func (s *Service) getShardInfo(
 		Term:     shard.Term,
 		Replicas: make(map[uint64]pb.ReplicaInfo),
 	}
-	expiredState := s.getExpiredLogStoreState(includeExpiredReplicaAddresses)
+	expiredState := s.getExpiredLogStoreState(ctx, includeExpiredReplicaAddresses)
 	for nodeID, uuid := range shard.Nodes {
 		replica := pb.ReplicaInfo{UUID: uuid}
 		if data, ok := r.GetMeta(uuid); ok {
@@ -230,11 +237,20 @@ func (s *Service) filterExpiredReplicaAddress(
 	return ""
 }
 
-func (s *Service) getExpiredLogStoreState(includeExpiredReplicaAddresses bool) *pb.CheckerState {
+func (s *Service) getExpiredLogStoreState(
+	ctx context.Context,
+	includeExpiredReplicaAddresses bool,
+) *pb.CheckerState {
 	if includeExpiredReplicaAddresses {
 		return nil
 	}
-	state, err := s.store.getCheckerState()
+	ctx, cancel := context.WithTimeoutCause(
+		ctx,
+		getShardInfoCheckerStateTimeout,
+		moerr.CauseGetCheckerState,
+	)
+	defer cancel()
+	state, err := getCheckerStateForShardInfo(ctx, s.store)
 	if err != nil {
 		return nil
 	}

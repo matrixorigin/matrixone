@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -172,4 +173,33 @@ func TestIsExpiredLogStoreInState(t *testing.T) {
 	assert.False(t, isExpiredLogStoreInState(cfg, state, "live"))
 	assert.False(t, isExpiredLogStoreInState(cfg, state, "unknown"))
 	assert.False(t, isExpiredLogStoreInState(cfg, nil, "expired"))
+}
+
+func TestGetExpiredLogStoreStateFailsOpenBeforeGetShardInfoDeadline(t *testing.T) {
+	orig := getCheckerStateForShardInfo
+	defer func() { getCheckerStateForShardInfo = orig }()
+
+	deadlineC := make(chan time.Duration, 1)
+	getCheckerStateForShardInfo = func(ctx context.Context, l *store) (*pb.CheckerState, error) {
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		deadlineC <- time.Until(deadline)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		time.Second,
+		moerr.CauseGetShardInfo,
+	)
+	defer cancel()
+
+	start := time.Now()
+	state := (&Service{store: &store{}}).getExpiredLogStoreState(ctx, false)
+	elapsed := time.Since(start)
+
+	require.Nil(t, state)
+	assert.Less(t, elapsed, 500*time.Millisecond)
+	assert.LessOrEqual(t, <-deadlineC, getShardInfoCheckerStateTimeout)
 }

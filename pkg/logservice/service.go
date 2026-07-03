@@ -376,6 +376,7 @@ func getResponse(req pb.Request) pb.Response {
 func (s *Service) handleGetShardInfo(ctx context.Context, req pb.Request) pb.Response {
 	resp := getResponse(req)
 	if result, ok := s.getShardInfo(
+		ctx,
 		req.LogRequest.ShardID,
 		req.LogRequest.IncludeExpiredReplicaAddresses,
 	); !ok {

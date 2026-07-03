@@ -613,7 +613,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 			// see whether gossip can finish syncing in 6 seconds time. also added some
 			// logging to get collect more details
 			for i := 0; i < 6000; i++ {
-				si1, ok := service1.getShardInfo(1, false)
+				si1, ok := service1.getShardInfo(context.Background(), 1, false)
 				if !ok || si1.LeaderID != 1 {
 					testLogger.Error("shard 1 info missing on service 1")
 					time.Sleep(time.Millisecond)
@@ -626,7 +626,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 				assert.Equal(t, nhID1, ri.UUID)
 				assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
 
-				si2, ok := service1.getShardInfo(2, false)
+				si2, ok := service1.getShardInfo(context.Background(), 2, false)
 				if !ok || si2.LeaderID != 1 {
 					testLogger.Error("shard 2 info missing on service 1")
 					time.Sleep(time.Millisecond)
@@ -639,7 +639,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 				assert.Equal(t, nhID2, ri.UUID)
 				assert.Equal(t, cfg2.LogServiceServiceAddr(), ri.ServiceAddress)
 
-				si1, ok = service2.getShardInfo(1, false)
+				si1, ok = service2.getShardInfo(context.Background(), 1, false)
 				if !ok || si1.LeaderID != 1 {
 					testLogger.Error("shard 1 info missing on service 2")
 					time.Sleep(time.Millisecond)
@@ -652,7 +652,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 				assert.Equal(t, nhID1, ri.UUID)
 				assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
 
-				si2, ok = service2.getShardInfo(2, false)
+				si2, ok = service2.getShardInfo(context.Background(), 2, false)
 				if !ok || si2.LeaderID != 1 {
 					testLogger.Error("shard 2 info missing on service 2")
 					time.Sleep(time.Millisecond)
@@ -768,7 +768,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				for i := 0; i < nodeCount; i++ {
 					shardID := uint64(i/3 + 1)
 					service := services[i]
-					info, ok := service.getShardInfo(shardID, false)
+					info, ok := service.getShardInfo(context.Background(), shardID, false)
 					if !ok || info.LeaderID == 0 {
 						notReady++
 						wait()
@@ -793,7 +793,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					break
 				} else if err == dragonboat.ErrTimeout || err == dragonboat.ErrSystemBusy ||
 					err == dragonboat.ErrInvalidDeadline || err == dragonboat.ErrTimeoutTooSmall {
-					info, ok := services[0].getShardInfo(1, false)
+					info, ok := services[0].getShardInfo(context.Background(), 1, false)
 					if ok && info.LeaderID != 0 && len(info.Replicas) == 4 {
 						break
 					}
@@ -810,7 +810,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				notReady := 0
 				for i := 0; i < nodeCount; i++ {
 					service := services[i]
-					info, ok := service.getShardInfo(1, false)
+					info, ok := service.getShardInfo(context.Background(), 1, false)
 					if !ok || info.LeaderID == 0 || len(info.Replicas) != 4 {
 						notReady++
 						wait()
@@ -842,7 +842,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				notReady := 0
 				for i := uint64(0); i < uint64(shardCount); i++ {
 					shardID := i + 1
-					info, ok := service.getShardInfo(shardID, false)
+					info, ok := service.getShardInfo(context.Background(), shardID, false)
 					if !ok || info.LeaderID == 0 {
 						notReady++
 						wait()
