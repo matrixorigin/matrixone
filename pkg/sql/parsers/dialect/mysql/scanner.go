@@ -42,6 +42,7 @@ type Scanner struct {
 	LastError           error
 	posVarIndex         int
 	dialectType         dialect.DialectType
+	sqlMode             SQLModeFlags
 	MysqlSpecialComment *Scanner
 
 	CommentFlag bool
@@ -65,6 +66,7 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.Line = 0
 	s.Col = 0
 	s.PrePos = 0
+	s.sqlMode = 0
 
 	if clearLargeOnly {
 		if oversized {
@@ -84,6 +86,10 @@ func (s *Scanner) setSql(sql string) {
 	s.buf = sql
 	// Reset length to 0; this keeps capacity for small cases.
 	s.strBuilder.Reset()
+}
+
+func (s *Scanner) setSQLMode(mode SQLModeFlags) {
+	s.sqlMode = mode
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
@@ -370,7 +376,10 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 	case '|':
 		if s.cur() == '|' {
 			s.inc()
-			return PIPE_CONCAT, ""
+			if s.sqlMode.Has(SQLModePipesAsConcat) {
+				return PIPE_CONCAT, ""
+			}
+			return OR, ""
 		}
 		return int(ch), ""
 	case '?':
@@ -442,7 +451,12 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 			return NE, ""
 		}
 		return int(ch), ""
-	case '\'', '"':
+	case '\'':
+		return s.scanString(ch, STRING)
+	case '"':
+		if s.sqlMode.Has(SQLModeANSIQuotes) {
+			return s.scanLiteralIdentifierWithDelim('"')
+		}
 		return s.scanString(ch, STRING)
 	case '`':
 		return s.scanLiteralIdentifier()
@@ -468,7 +482,7 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 			if s.cur() != delim {
 				return typ, buf.String()
 			}
-		} else if ch == '\\' && delim != '$' {
+		} else if ch == '\\' && delim != '$' && !s.sqlMode.Has(SQLModeNoBackslashEscapes) {
 			ch = handleEscape(s, buf)
 			if ch == eofChar {
 				break
@@ -501,7 +515,7 @@ func (s *Scanner) scanStringAddPlus(delim uint16, typ int) (int, string) {
 			if s.cur() != delim {
 				return typ, buf.String()
 			}
-		} else if ch == '\\' && delim != '$' {
+		} else if ch == '\\' && delim != '$' && !s.sqlMode.Has(SQLModeNoBackslashEscapes) {
 			ch = handleEscape(s, buf)
 			if ch == eofChar {
 				break
@@ -542,11 +556,15 @@ func handleEscape(s *Scanner, buf *bytes.Buffer) uint16 {
 // is a simple literal, it'll be returned as a slice of the input buffer. If the identifier
 // contains escape sequences, this function will fall back to scanLiteralIdentifierSlow
 func (s *Scanner) scanLiteralIdentifier() (int, string) {
+	return s.scanLiteralIdentifierWithDelim('`')
+}
+
+func (s *Scanner) scanLiteralIdentifierWithDelim(delim uint16) (int, string) {
 	start := s.Pos
 	for {
 		switch s.cur() {
-		case '`':
-			if s.peek(1) != '`' {
+		case delim:
+			if s.peek(1) != delim {
 				if s.Pos == start {
 					return LEX_ERROR, ""
 				}
@@ -557,7 +575,7 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 			var buf strings.Builder
 			buf.WriteString(s.buf[start:s.Pos])
 			s.inc()
-			return s.scanLiteralIdentifierSlow(&buf)
+			return s.scanLiteralIdentifierSlow(&buf, delim)
 		case eofChar:
 			// Premature EOF.
 			return LEX_ERROR, s.buf[start:s.Pos]
@@ -572,22 +590,22 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 // scanLiteralIdentifier once the first escape sequence is found in the identifier.
 // The provided `buf` contains the contents of the identifier that have been scanned
 // so far.
-func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder) (int, string) {
-	backTickSeen := true
+func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder, delim uint16) (int, string) {
+	delimSeen := true
 	for {
-		if backTickSeen {
-			if s.cur() != '`' {
+		if delimSeen {
+			if s.cur() != delim {
 				break
 			}
-			backTickSeen = false
-			buf.WriteByte('`')
+			delimSeen = false
+			buf.WriteByte(byte(delim))
 			s.inc()
 			continue
 		}
-		// The previous char was not a backtick.
+		// The previous char was not the identifier delimiter.
 		switch s.cur() {
-		case '`':
-			backTickSeen = true
+		case delim:
+			delimSeen = true
 		case eofChar:
 			// Premature EOF.
 			return LEX_ERROR, buf.String()

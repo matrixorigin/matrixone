@@ -13348,13 +13348,19 @@ decimal_type:
 |   REAL float_length_opt
     {
         locale := ""
+        width := int32(64)
+        oid := uint32(defines.MYSQL_TYPE_DOUBLE)
+        if yylex.(*Lexer).HasSQLMode(SQLModeRealAsFloat) {
+            width = 32
+            oid = uint32(defines.MYSQL_TYPE_FLOAT)
+        }
         $$ = &tree.T{
             InternalType: tree.InternalType{
                 Family: tree.FloatFamily,
                 FamilyString: $1,
-                Width:  64,
+                Width:  width,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+                Oid:    oid,
                 DisplayWith: $2.DisplayWith,
                 Scale: $2.Scale,
             },

@@ -37,6 +37,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+type sqlModeMockCompilerContext struct {
+	*MockCompilerContext
+	sqlMode string
+}
+
+func (c *sqlModeMockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	if varName == "sql_mode" {
+		return c.sqlMode, nil
+	}
+	return c.MockCompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
+}
+
 func BenchmarkInsert(b *testing.B) {
 	typ := types.T_varchar.ToType()
 	typ.Width = 1024
@@ -63,6 +75,16 @@ func BenchmarkInsert(b *testing.B) {
 			break
 		}
 	}
+}
+
+func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
+	ctx := &sqlModeMockCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		sqlMode:             "PIPES_AS_CONCAT",
+	}
+	p, err := buildPrepare(tree.NewPrepareString("stmt_sql_mode", "select 'a'||'b'"), ctx)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
 }
 
 // only use in developing

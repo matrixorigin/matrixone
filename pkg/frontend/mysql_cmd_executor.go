@@ -1312,7 +1312,7 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
-	stmts, err := mysql.Parse(execCtx.reqCtx, st.Sql, v.(int64))
+	stmts, err := mysql.ParseWithSQLMode(execCtx.reqCtx, st.Sql, v.(int64), sessionSQLModeForParser(ses))
 	if err != nil {
 		return nil, err
 	}
@@ -2508,7 +2508,19 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 			lctn = vv
 		}
 	}
-	return p.Parse(execCtx.reqCtx, execCtx.input.getSql(), lctn)
+	return p.ParseWithSQLMode(execCtx.reqCtx, execCtx.input.getSql(), lctn, sessionSQLModeForParser(execCtx.ses))
+}
+
+func sessionSQLModeForParser(ses FeSession) string {
+	v, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return ""
+	}
+	mode, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return mysql.SessionSQLModeForParser(mode)
 }
 
 func incTransactionCounter(tenant string, tenantId uint32) {

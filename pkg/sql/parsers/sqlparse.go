@@ -28,11 +28,15 @@ import (
 )
 
 func Parse(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64) ([]tree.Statement, error) {
+	return ParseWithSQLMode(ctx, dialectType, sql, lower, "")
+}
+
+func ParseWithSQLMode(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64, sqlMode string) ([]tree.Statement, error) {
 	_, task := gotrace.NewTask(context.TODO(), "parser.Parse")
 	defer task.End()
 	switch dialectType {
 	case dialect.MYSQL:
-		return mysql.Parse(ctx, sql, lower)
+		return mysql.ParseWithSQLMode(ctx, sql, lower, sqlMode)
 	case dialect.POSTGRESQL:
 		return postgresql.Parse(ctx, sql)
 	default:
@@ -41,9 +45,13 @@ func Parse(ctx context.Context, dialectType dialect.DialectType, sql string, low
 }
 
 func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64) (tree.Statement, error) {
+	return ParseOneWithSQLMode(ctx, dialectType, sql, lower, "")
+}
+
+func ParseOneWithSQLMode(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64, sqlMode string) (tree.Statement, error) {
 	switch dialectType {
 	case dialect.MYSQL:
-		return mysql.ParseOne(ctx, sql, lower)
+		return mysql.ParseOneWithSQLMode(ctx, sql, lower, sqlMode)
 	case dialect.POSTGRESQL:
 		return postgresql.ParseOne(ctx, sql)
 	default:

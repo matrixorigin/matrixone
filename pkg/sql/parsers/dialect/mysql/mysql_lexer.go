@@ -34,8 +34,13 @@ type MySQLParser struct {
 }
 
 func (p *MySQLParser) Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
+	return p.ParseWithSQLMode(ctx, sql, lower, "")
+}
+
+func (p *MySQLParser) ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]tree.Statement, error) {
 	p.scanner.setSql(sql)
-	p.lexer.setScanner(&p.scanner, lower)
+	p.scanner.setSQLMode(ParseSQLModeFlags(sqlMode))
+	p.lexer.setScanner(&p.scanner, lower, ParseSQLModeFlags(sqlMode))
 
 	/*
 		The following can potentially save some memory allocation, but it exposes too much
@@ -71,7 +76,11 @@ func (p *MySQLParser) Parse(ctx context.Context, sql string, lower int64) ([]tre
 }
 
 func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower)
+	return ParseWithSQLMode(ctx, sql, lower, "")
+}
+
+func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]tree.Statement, error) {
+	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -95,7 +104,11 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 }
 
 func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower)
+	return ParseOneWithSQLMode(ctx, sql, lower, "")
+}
+
+func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (tree.Statement, error) {
+	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -115,6 +128,7 @@ type Lexer struct {
 	paramIndex int
 	lower      int64
 	lastToken  int
+	sqlMode    SQLModeFlags
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -129,19 +143,31 @@ var reservedKeywordsAfterAS = map[int]bool{
 }
 
 func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
+	return NewLexerWithSQLMode(dialectType, sql, lower, 0)
+}
+
+func NewLexerWithSQLMode(dialectType dialect.DialectType, sql string, lower int64, sqlMode SQLModeFlags) *Lexer {
+	scanner := NewScanner(dialectType, sql)
+	scanner.setSQLMode(sqlMode)
 	return &Lexer{
-		scanner:    NewScanner(dialectType, sql),
+		scanner:    scanner,
 		paramIndex: 0,
 		lower:      lower,
+		sqlMode:    sqlMode,
 	}
 }
 
-func (l *Lexer) setScanner(s *Scanner, lower int64) {
+func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.scanner = s
 	l.stmts = nil
 	l.paramIndex = 0
 	l.lower = lower
 	l.lastToken = 0
+	l.sqlMode = sqlMode
+}
+
+func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
+	return l.sqlMode.Has(flag)
 }
 
 func (l *Lexer) GetParamIndex() int {

@@ -210,13 +210,11 @@ func statementCanBeExecutedInUncommittedTransaction(
 		if err != nil {
 			v = int64(1)
 		}
-		preStmt, err := mysql.ParseOne(ctx, st.Sql, v.(int64))
-		defer func() {
-			preStmt.Free()
-		}()
+		preStmt, err := mysql.ParseOneWithSQLMode(ctx, st.Sql, v.(int64), sessionSQLModeForParser(ses))
 		if err != nil {
 			return false, err
 		}
+		defer preStmt.Free()
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt)
 	case *tree.Execute:
 		preName := string(st.Name)
