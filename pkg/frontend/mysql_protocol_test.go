@@ -5249,3 +5249,169 @@ func Test_appendResultSetBinaryRow2_DateTimeHandling(t *testing.T) {
 		})
 	})
 }
+
+// Test_appendResultSetBinaryRow2_TimeMicroseconds asserts the exact wire bytes of a
+// binary-protocol row containing a TIME value followed by another column. The TIME
+// microsecond part must occupy exactly 4 bytes; writing more shifts every later
+// column of the row when the client decodes it.
+func Test_appendResultSetBinaryRow2_TimeMicroseconds(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("binary TIME keeps following columns aligned", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		tc := &testConn{}
+		ioses, err := NewIOSession(tc, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		proc := testutil.NewProcess(t)
+
+		const maxUint64 = uint64(18446744073709551615)
+
+		// buildRow encodes one binary row of (time(6), bigint unsigned) and
+		// returns the packet payload.
+		buildRow := func(timeStr string) []byte {
+			rs := &MysqlResultSet{}
+			timeCol := new(MysqlColumn)
+			timeCol.SetName("tm")
+			timeCol.SetColumnType(defines.MYSQL_TYPE_TIME)
+			timeCol.SetDecimal(6)
+			rs.AddColumn(timeCol)
+			uCol := new(MysqlColumn)
+			uCol.SetName("u")
+			uCol.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+			uCol.SetSigned(false)
+			rs.AddColumn(uCol)
+
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_time, 0, 6))
+			tm, err := types.ParseTime(timeStr, 6)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(vector.AppendFixed(bat.Vecs[0], tm, false, proc.Mp()), convey.ShouldBeNil)
+			bat.Vecs[1] = vector.NewVec(types.New(types.T_uint64, 0, 0))
+			convey.So(vector.AppendFixed(bat.Vecs[1], maxUint64, false, proc.Mp()), convey.ShouldBeNil)
+			bat.SetRowCount(1)
+
+			colSlices := &ColumnSlices{
+				ctx:             ctx,
+				colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+				dataSet:         bat,
+			}
+			defer colSlices.Close()
+			err = convertBatchToSlices(ctx, ses, bat, colSlices)
+			convey.So(err, convey.ShouldBeNil)
+
+			tc.data = tc.data[:0]
+			err = proto.appendResultSetBinaryRow2(rs, colSlices, 0)
+			convey.So(err, convey.ShouldBeNil)
+			err = proto.flush()
+			convey.So(err, convey.ShouldBeNil)
+
+			// strip the 4-byte packet header
+			convey.So(len(tc.data), convey.ShouldBeGreaterThan, 4)
+			payloadLen := int(uint32(tc.data[0]) | uint32(tc.data[1])<<8 | uint32(tc.data[2])<<16)
+			payload := tc.data[4:]
+			convey.So(len(payload), convey.ShouldEqual, payloadLen)
+			return payload
+		}
+
+		convey.Convey("nonzero microseconds", func() {
+			payload := buildRow("10:20:30.123456")
+			// OK header + null bitmap, then the two column values
+			convey.So(payload[0], convey.ShouldEqual, 0x00)
+			body := payload[2:]
+			// TIME: 1-byte length(12) + sign(1) + days(4) + hms(3) + micros(4),
+			// then bigint unsigned as 8 bytes
+			convey.So(int(body[0]), convey.ShouldEqual, 12)
+			convey.So(len(body), convey.ShouldEqual, 1+12+8)
+			convey.So(binary.LittleEndian.Uint32(body[9:13]), convey.ShouldEqual, uint32(123456))
+			convey.So(binary.LittleEndian.Uint64(body[13:21]), convey.ShouldEqual, maxUint64)
+		})
+
+		convey.Convey("zero microseconds", func() {
+			payload := buildRow("10:20:30")
+			convey.So(payload[0], convey.ShouldEqual, 0x00)
+			body := payload[2:]
+			// TIME: 1-byte length(8) + sign(1) + days(4) + hms(3)
+			convey.So(int(body[0]), convey.ShouldEqual, 8)
+			convey.So(len(body), convey.ShouldEqual, 1+8+8)
+			convey.So(binary.LittleEndian.Uint64(body[9:17]), convey.ShouldEqual, maxUint64)
+		})
+
+		convey.Convey("zero time value", func() {
+			payload := buildRow("00:00:00")
+			convey.So(payload[0], convey.ShouldEqual, 0x00)
+			body := payload[2:]
+			// TIME: single zero length byte
+			convey.So(int(body[0]), convey.ShouldEqual, 0)
+			convey.So(len(body), convey.ShouldEqual, 1+8)
+			convey.So(binary.LittleEndian.Uint64(body[1:9]), convey.ShouldEqual, maxUint64)
+		})
+
+		convey.Convey("negative time with days and microseconds", func() {
+			payload := buildRow("-25:20:30.123456")
+			convey.So(payload[0], convey.ShouldEqual, 0x00)
+			body := payload[2:]
+			convey.So(int(body[0]), convey.ShouldEqual, 12)
+			convey.So(len(body), convey.ShouldEqual, 1+12+8)
+			convey.So(int(body[1]), convey.ShouldEqual, 1) // negative sign
+			convey.So(binary.LittleEndian.Uint32(body[2:6]), convey.ShouldEqual, uint32(1))
+			convey.So(int(body[6]), convey.ShouldEqual, 1) // 25h -> 1d 1h
+			convey.So(binary.LittleEndian.Uint32(body[9:13]), convey.ShouldEqual, uint32(123456))
+			convey.So(binary.LittleEndian.Uint64(body[13:21]), convey.ShouldEqual, maxUint64)
+		})
+	})
+}
+
+// Test_readTime_advancesPastMicroseconds asserts that decoding a length-12 binary
+// TIME parameter consumes its 4 microsecond bytes, so following parameters are
+// parsed from the right offset.
+func Test_readTime_advancesPastMicroseconds(t *testing.T) {
+	convey.Convey("readTime consumes the microsecond bytes", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		// sign(1) + days(4) + hms(3) + micros(4), followed by one extra byte that
+		// belongs to the next parameter
+		data := []byte{0, 0, 0, 0, 0, 10, 20, 30, 0x40, 0xE2, 0x01, 0x00, 0x63}
+
+		convey.Convey("length 12", func() {
+			pos, val, ok := proto.readTime(data, 0, 12)
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(val, convey.ShouldEqual, "10:20:30.123456")
+			convey.So(pos, convey.ShouldEqual, 12)
+		})
+
+		convey.Convey("length 8", func() {
+			pos, val, ok := proto.readTime(data, 0, 8)
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(val, convey.ShouldEqual, "10:20:30")
+			convey.So(pos, convey.ShouldEqual, 8)
+		})
+
+		convey.Convey("truncated at microsecond boundary", func() {
+			_, _, ok := proto.readTime(data[:9], 0, 12)
+			convey.So(ok, convey.ShouldBeFalse)
+		})
+	})
+}
