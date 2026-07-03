@@ -218,6 +218,34 @@ func parseLeadingInteger(s string) (int64, bool) {
 	return v, true
 }
 
+// encodeCharBytes converts an int64 argument for MySQL CHAR() into big-endian
+// bytes. MySQL treats CHAR(N) values as unsigned 32-bit integers and expands
+// values > 255 into multiple big-endian bytes:
+//
+//	CHAR(256)   → 0x0100       (two bytes)
+//	CHAR(65536) → 0x010000     (three bytes)
+//	CHAR(-1)    → 0xFFFFFFFF   (four bytes, via two's complement uint32)
+//
+// See MySQL docs: https://dev.mysql.com/doc/refman/8.4/en/string-functions.html#function_char
+func encodeCharBytes(v int64) []byte {
+	uv := uint32(v)
+	if uv == 0 {
+		return []byte{0}
+	}
+	// Encode as big-endian 32-bit, then strip leading zero bytes.
+	var buf [4]byte
+	buf[0] = byte(uv >> 24)
+	buf[1] = byte(uv >> 16)
+	buf[2] = byte(uv >> 8)
+	buf[3] = byte(uv)
+
+	start := 0
+	for start < 3 && buf[start] == 0 {
+		start++
+	}
+	return buf[start:]
+}
+
 const (
 	onUpdateExpr = iota
 	defaultExpr
@@ -1162,18 +1190,11 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				// MySQL skips NULL arguments instead of returning NULL
 				continue
 			}
-			// Convert integer to byte value (0-255)
-			// MySQL CHAR function interprets integers as byte values in UTF-8 encoding
-			// For example: CHAR(228, 184, 173) returns "中" (the UTF-8 bytes for U+4E2D)
-			if v < 0 {
-				// Negative values are treated as 0
-				resultBytes = append(resultBytes, 0)
-			} else if v > 255 {
-				// Values > 255 are treated modulo 256
-				resultBytes = append(resultBytes, byte(v&0xFF))
-			} else {
-				resultBytes = append(resultBytes, byte(v))
-			}
+			// Convert argument to big-endian multi-byte sequence.
+			// MySQL treats CHAR(N) as unsigned 32-bit ints and expands
+			// values > 255 into multiple big-endian bytes (CHAR(256) → 0x0100).
+			// Negative values use two's complement uint32 (CHAR(-1) → 0xFFFFFFFF).
+			resultBytes = append(resultBytes, encodeCharBytes(v)...)
 		}
 
 		// resultBytes is empty only when every argument was NULL. MySQL returns

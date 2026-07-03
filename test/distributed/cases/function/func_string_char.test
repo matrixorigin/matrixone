@@ -24,6 +24,13 @@ SELECT HEX(CHAR(NULL, 65, 66)) AS char_skip_null;
 SELECT CHAR(65.9, 66.1) AS float_arg;
 SELECT CHAR('65', '66') AS string_arg;
 
+# Multi-byte expansion (MySQL: CHAR(256) → 0x0100)
+SELECT HEX(CHAR(256)) AS char_256;
+SELECT HEX(CHAR(65536)) AS char_65536;
+SELECT HEX(CHAR(-1)) AS char_neg1;
+SELECT HEX(CHAR('256')) AS char_str256;
+SELECT CHAR(NULL) AS single_null;
+
 # String arguments with leading numeric prefix (MySQL parses leading digits)
 SELECT HEX(CHAR('65xyz')) AS char_prefix_num;
 SELECT HEX(CHAR('9007199254740993')) AS char_large_int_str;
