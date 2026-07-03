@@ -157,7 +157,14 @@ func (w *leBuf) encodePkLen(pkType int32, v any) error {
 		w.u32(uint32(len(raw)))
 		w.b.Write(raw)
 	default:
-		return moerr.NewInternalErrorNoCtxf("wand: unsupported pk type %d", pkType)
+		// Any other type encodePk handles (e.g. uuid, stored as text) — no integer
+		// fast path, so length-prefix its encodePk bytes.
+		pkb, err := encodePk(pkType, v)
+		if err != nil {
+			return err
+		}
+		w.u32(uint32(len(pkb)))
+		w.b.Write(pkb)
 	}
 	return nil
 }
@@ -353,6 +360,23 @@ func encodePk(pkType int32, v any) ([]byte, error) {
 	case types.T_varchar, types.T_char, types.T_text, types.T_datalink,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
 		return asBytes(v), nil
+	case types.T_uuid:
+		// Stored as the canonical TEXT form (like a varlena string), because that
+		// is how the SQL-based CDC delivers a uuid pk (extractRowFromVector ->
+		// Uuid.String()). The sync build (GetAny) delivers a types.Uuid instead, so
+		// stringify it — Uuid.String() is deterministic and scale-free, so the same
+		// uuid stores identically regardless of which path produced it. The
+		// membership prefilter re-encodes the loaded pk (a types.Uuid) the same way.
+		switch x := v.(type) {
+		case string:
+			return []byte(x), nil
+		case types.Uuid:
+			return []byte(x.String()), nil
+		case []byte:
+			return append([]byte(nil), x...), nil
+		default:
+			return nil, moerr.NewInternalErrorNoCtxf("wand: uuid pk unexpected go type %T", v)
+		}
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("wand: unsupported pk type %d", pkType)
 	}
@@ -392,6 +416,16 @@ func decodePk(pkType int32, b []byte) (any, error) {
 	case types.T_varchar, types.T_char, types.T_text, types.T_datalink,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
 		return append([]byte(nil), b...), nil
+	case types.T_uuid:
+		// Stored as canonical text; parse back to types.Uuid — the search output
+		// doc_id column is uuid-typed and INNER-JOINed to src.id (apply_indices_
+		// fulltext.go), so AppendAny needs a types.Uuid, and a uniform types.Uuid
+		// keeps normalizeKey consistent across segments and delete frames.
+		u, err := types.ParseUuid(string(b))
+		if err != nil {
+			return nil, err
+		}
+		return u, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("wand: unsupported pk type %d", pkType)
 	}

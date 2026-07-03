@@ -1,0 +1,30 @@
+drop database if exists ft_retrieval_uuid;
+create database ft_retrieval_uuid;
+use ft_retrieval_uuid;
+create table t (id uuid primary key, txt text);
+insert into t values
+ ('00000000-0000-0000-0000-000000000001', '孩子 营养 早餐 视频 文案'),
+ ('00000000-0000-0000-0000-000000000002', '营养 早餐 健康 食谱'),
+ ('00000000-0000-0000-0000-000000000003', '视频 文案 创作 技巧'),
+ ('00000000-0000-0000-0000-000000000004', '孩子 教育 成长');
+create fulltext index ft on t(txt) with parser retrieval;
+show create table t;
+Table	Create Table
+t	CREATE TABLE `t` (\n  `id` uuid NOT NULL,\n  `txt` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ft`(`txt`) WITH PARSER retrieval\n)
+select sleep(20);
+sleep(20)
+0
+select id from t where match(txt) against('营养 早餐') order by id;
+id
+00000000-0000-0000-0000-000000000001
+00000000-0000-0000-0000-000000000002
+select id from t where match(txt) against('视频 文案') order by id;
+id
+00000000-0000-0000-0000-000000000001
+00000000-0000-0000-0000-000000000003
+select id from t where match(txt) against('教育') order by id;
+id
+00000000-0000-0000-0000-000000000004
+select id from t where match(txt) against('不存在的词') order by id;
+id
+drop database ft_retrieval_uuid;
