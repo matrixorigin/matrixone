@@ -72,6 +72,14 @@ func TestGetTaskService(t *testing.T) {
 	assert.Nil(t, proc.GetTaskService())
 }
 
+func TestReplaceTopCtxWithNilBase(t *testing.T) {
+	proc := &Process{}
+
+	assert.NotPanics(t, func() {
+		proc.ReplaceTopCtx(context.Background())
+	})
+}
+
 func TestGetSpillFileService(t *testing.T) {
 	localFS, err := fileservice.NewLocalFS(
 		context.Background(),

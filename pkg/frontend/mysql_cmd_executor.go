@@ -3584,13 +3584,17 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
+			var serverStatus uint16
+			if th := ses.GetTxnHandler(); th != nil {
+				serverStatus = th.GetServerStatus()
+			}
 			moe, ok := e.(*moerr.Error)
 			if !ok {
 				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
-				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), err)
+				resp = NewGeneralErrorResponse(COM_QUERY, serverStatus, err)
 			} else {
 				err = errors.Join(err, moe)
-				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), moe)
+				resp = NewGeneralErrorResponse(COM_QUERY, serverStatus, moe)
 			}
 			// log the query's statement and error info.
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
