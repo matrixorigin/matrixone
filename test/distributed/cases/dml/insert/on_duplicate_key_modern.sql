@@ -293,3 +293,40 @@ select cid, a, b from t_odku_mfk_child order by cid;
 drop table if exists t_odku_mfk_child;
 drop table if exists t_odku_mfk_p1;
 drop table if exists t_odku_mfk_p2;
+
+-- ODKU no-op on a table with an implicit ON UPDATE CURRENT_TIMESTAMP column:
+-- the auto-update column must not defeat no-op detection (affected rows = 0),
+-- and it must not advance when nothing else changes.
+drop table if exists t_odku_onupdate;
+create table t_odku_onupdate (
+  id int primary key,
+  v int,
+  updated_at timestamp default current_timestamp on update current_timestamp
+);
+insert into t_odku_onupdate(id, v) values (1, 10);
+set @ts0 = (select updated_at from t_odku_onupdate where id = 1);
+select sleep(2);
+insert into t_odku_onupdate(id, v) values (1, 10) on duplicate key update v = v;
+select updated_at = @ts0 as ts_unchanged from t_odku_onupdate where id = 1;
+-- a real change must count as delete+insert (2) and advance the timestamp
+insert into t_odku_onupdate(id, v) values (1, 99) on duplicate key update v = values(v);
+select v, updated_at > @ts0 as ts_advanced from t_odku_onupdate where id = 1;
+drop table if exists t_odku_onupdate;
+
+-- same, plus a stored generated column derived from the ON UPDATE column:
+-- its recomputed value must not defeat no-op detection either.
+drop table if exists t_odku_onupdate_gen;
+create table t_odku_onupdate_gen (
+  id int primary key,
+  v int,
+  updated_at timestamp default current_timestamp on update current_timestamp,
+  g timestamp as (updated_at) stored
+);
+insert into t_odku_onupdate_gen(id, v) values (1, 10);
+set @g0 = (select g from t_odku_onupdate_gen where id = 1);
+select sleep(2);
+insert into t_odku_onupdate_gen(id, v) values (1, 10) on duplicate key update v = v;
+select updated_at = @g0 as ts_unchanged, g = @g0 as g_unchanged from t_odku_onupdate_gen where id = 1;
+insert into t_odku_onupdate_gen(id, v) values (1, 99) on duplicate key update v = values(v);
+select v, g > @g0 as g_advanced from t_odku_onupdate_gen where id = 1;
+drop table if exists t_odku_onupdate_gen;
