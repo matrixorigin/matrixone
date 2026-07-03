@@ -2775,6 +2775,210 @@ func TestConvertTz(t *testing.T) {
 	}
 }
 
+func TestConvSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	cases := []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "uppercase output",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"255"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FF"}, []bool{false}),
+		},
+		{
+			name: "null base returns null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"10"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		},
+		{
+			name: "invalid base returns null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"10"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		},
+		{
+			name: "negative from_base signed parse",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"-17"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFEF"}, []bool{false}),
+		},
+		{
+			name: "negative to_base signed output",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-17}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-18}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-H"}, []bool{false}),
+		},
+		{
+			name: "unsigned parse with negative to_base",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ffffffffffffffff"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-10}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-1"}, []bool{false}),
+		},
+		{
+			name: "decimal overflow saturates to uint64 max",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"18446744073709551616"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFFF"}, []bool{false}),
+		},
+		{
+			name: "negative decimal overflow wraps modulo uint64",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"-18446744073709551616"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"0"}, []bool{false}),
+		},
+		{
+			name: "hex overflow saturates to uint64 max",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"10000000000000000"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"18446744073709551615"}, []bool{false}),
+		},
+		{
+			name: "plus prefixed unsigned above max int64",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"+9223372036854775808"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"8000000000000000"}, []bool{false}),
+		},
+		{
+			name: "plus prefixed unsigned near uint64 max",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"+18446744073709551614"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFFE"}, []bool{false}),
+		},
+		{
+			name: "plus prefixed unsigned hex max",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"+FFFFFFFFFFFFFFFF"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"18446744073709551615"}, []bool{false}),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Conv)
+			s, info := fcTC.Run()
+			require.True(t, s, info)
+		})
+	}
+}
+
+func TestConvInvalidInputReturnsError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	cases := []struct {
+		name  string
+		value string
+		base  int64
+	}{
+		{name: "invalid character", value: "g", base: 16},
+		{name: "prefix truncation", value: "10xyz", base: 10},
+		{name: "invalid digit for base", value: "2", base: 2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, []bool{false}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{tc.base}, []bool{false}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{false}),
+				Conv,
+			)
+			s, info := fcTC.Run()
+			require.True(t, s, info)
+		})
+	}
+}
+
+func TestConvTypeCheckAcceptsNullBase(t *testing.T) {
+	_, err := GetFunctionByName(context.Background(), "conv", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_any.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(context.Background(), "conv", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+		types.T_any.ToType(),
+	})
+	require.NoError(t, err)
+}
+
+func TestParseConvStrictStringEdgeCases(t *testing.T) {
+	t.Run("empty string returns zero values without error", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseConvStrictString("", 10)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+		require.False(t, signed)
+	})
+
+	t.Run("sign only is invalid", func(t *testing.T) {
+		_, _, _, err := parseConvStrictString("+", 10)
+		require.Error(t, err)
+	})
+
+	t.Run("negative base positive overflow saturates to max int64", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseConvStrictString("9223372036854775808", -10)
+		require.NoError(t, err)
+		require.True(t, signed)
+		require.Equal(t, int64(math.MaxInt64), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+	})
+
+	t.Run("negative base negative overflow saturates to min int64", func(t *testing.T) {
+		signedVal, unsignedVal, signed, err := parseConvStrictString("-9223372036854775809", -10)
+		require.NoError(t, err)
+		require.True(t, signed)
+		require.Equal(t, int64(math.MinInt64), signedVal)
+		require.Equal(t, uint64(0), unsignedVal)
+	})
+}
+
 func initFormatTestCase() []tcTemp {
 	format := `%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %U %u %V %v %a %W %w %X %x %Y %y %%`
 
