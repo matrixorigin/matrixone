@@ -547,4 +547,10 @@ n2  ¦  0  ¦  1
 select count(distinct (g, v)), count(distinct g, v) from t_count_distinct_multi;
 ➤ count(distinct (g, v))[-5,64,0]  ¦  count(distinct g, v)[-5,64,0]  𝄀
 2  ¦  2
+select count((g, v)) from t_count_distinct_multi;
+SQL syntax error: Incorrect arguments to COUNT
+select count(g, v) over () from t_count_distinct_multi;
+SQL syntax error: Incorrect arguments to COUNT
+select count((g, v)) over () from t_count_distinct_multi;
+SQL syntax error: Incorrect arguments to COUNT
 drop table t_count_distinct_multi;

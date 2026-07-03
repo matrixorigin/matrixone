@@ -261,6 +261,51 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
+
+	t.Run("multi-marshal-roundtrip", func(t *testing.T) {
+		curNB := mp.CurrNB()
+
+		colA1 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{1, 2, 3})
+		colA2 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{10, 20, 30})
+		colB1 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{3, 4, 5})
+		colB2 := testutil.NewInt64Vector(3, types.T_int64.ToType(), mp, false, nil, []int64{30, 40, 50})
+		defer colA1.Free(mp)
+		defer colA2.Free(mp)
+		defer colB1.Free(mp)
+		defer colB2.Free(mp)
+
+		execA := newCountColumnExec(mp, AggIdOfCountColumn, true,
+			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+		execA.GetOptResult().modifyChunkSize(1)
+		require.NoError(t, execA.GroupGrow(1))
+		require.NoError(t, execA.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{colA1, colA2}))
+
+		buf := bytes.NewBuffer(make([]byte, 0, common.MiB))
+		require.NoError(t, execA.SaveIntermediateResultOfChunk(0, buf))
+		execA.Free()
+
+		execB := newCountColumnExec(mp, AggIdOfCountColumn, true,
+			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+		execB.GetOptResult().modifyChunkSize(1)
+		require.NoError(t, execB.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+
+		// Deduplication must survive the marshal round trip: (3,30) is a dup
+		// of a pair already recorded before serialization.
+		require.NoError(t, execB.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{colB1, colB2}))
+
+		results, err := execB.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		vals := vector.MustFixedColNoTypeCheck[int64](results[0])
+		// (1,10),(2,20),(3,30) before round trip + (3,30) dup + (4,40),(5,50) = 5 distinct
+		require.Equal(t, int64(5), vals[0])
+
+		execB.Free()
+		for _, result := range results {
+			result.Free(mp)
+		}
+		require.Equal(t, curNB, mp.CurrNB())
+	})
 }
 
 func testAggExec(t *testing.T,
