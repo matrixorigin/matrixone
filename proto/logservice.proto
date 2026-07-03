@@ -273,6 +273,7 @@ message LogRequest {
   uint64 TNID         = 6;
   google.protobuf.Timestamp TS = 7
     [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
+  bool IncludeExpiredReplicaAddresses = 8;
 }
 
 message TsoRequest {
