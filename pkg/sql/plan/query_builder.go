@@ -5031,11 +5031,30 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				schema = builder.compCtx.DefaultDatabase()
 			}
 			key := schema + "." + table
-			if rewrite, ok := ctx.remapOption.Rewrites[key]; ok {
-				// prevent recursion from occurring
+			if chain, ok := ctx.remapOption.Rewrites[key]; ok && len(chain) > 0 {
+				// Apply the rewrite chain as stacked views: build the outermost
+				// (last) layer now. A reference to this same table inside that
+				// layer's body resolves to the next inner layer (the chain minus
+				// its last element); when the chain is exhausted it resolves to
+				// the base table. Peeling one layer per nested reference also
+				// guarantees termination.
+				//
+				// Inside a layer's body, only this table's remaining chain stays
+				// active; every other table's rewrite is disabled (matching the
+				// long-standing behavior where rewrites do not apply within a
+				// rewrite body). Sibling tables in the original query still get
+				// rewritten because ctx.remapOption is restored below before the
+				// caller builds them.
+				top := chain[len(chain)-1]
 				m := ctx.remapOption
-				ctx.remapOption = nil
-				nodeID, err = builder.buildTable(rewrite.Stmt, ctx, preNodeId, leftCtx)
+				if len(chain) == 1 {
+					ctx.remapOption = nil
+				} else {
+					ctx.remapOption = &tree.RewriteOption{
+						Rewrites: map[string][]*tree.Rewrite{key: chain[:len(chain)-1]},
+					}
+				}
+				nodeID, err = builder.buildTable(top.Stmt, ctx, preNodeId, leftCtx)
 				if err != nil {
 					return
 				}
@@ -5513,6 +5532,33 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		joinConds, err := splitAndBindCondition(cond.Expr, NoAlias, ctx)
 		if err != nil {
 			return 0, err
+		}
+
+		// For INNER JOIN, subquery conditions are semantically equivalent to
+		// WHERE. Separate them from join conditions, flatten via
+		// flattenSubqueries (same as bindWhere), and wrap in a FILTER above
+		// the join.
+		if joinType == plan.Node_INNER {
+			var onConds, filterConds []*plan.Expr
+			for _, cond := range joinConds {
+				if hasSubquery(cond) {
+					nodeID, cond, err = builder.flattenSubqueries(nodeID, cond, ctx)
+					if err != nil {
+						return 0, err
+					}
+					filterConds = append(filterConds, cond)
+				} else {
+					onConds = append(onConds, cond)
+				}
+			}
+			joinConds = onConds
+			if len(filterConds) > 0 {
+				nodeID = builder.appendNode(&plan.Node{
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{nodeID},
+					FilterList: filterConds,
+				}, ctx)
+			}
 		}
 		node.OnList = joinConds
 
