@@ -92,7 +92,7 @@ log-backend = "logservice"
 flush-interval = "60s"
 min-count = 100
 scan-interval = "5s"
-incremental-interval = "180s"
+incremental-interval = "300s"
 global-min-count = 60
 
 [tn.LogtailServer]
