@@ -119,6 +119,24 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 		require.False(t, noopFilterReferencesCol(p, "updated_at"),
 			"no-op FILTER must not reference auto-update column updated_at")
 	})
+
+	t.Run("ODKU no-op filter excludes generated column derived from ON UPDATE", func(t *testing.T) {
+		// t_on_update_gen has: id (PK), val, updated_at (ON UPDATE CURRENT_TIMESTAMP),
+		// g (stored, g AS (updated_at)). ODKU with val=val must skip both updated_at
+		// and its dependent generated column g, otherwise g's recomputed value would
+		// defeat the no-op guard.
+		p, err := runOneStmt(mock, t,
+			"insert into constraint_test.t_on_update_gen(id, val) values (1, 10) on duplicate key update val = val")
+		require.NoError(t, err)
+		require.True(t, mainUpdateCtxCountDelete(t, p),
+			"ODKU main UpdateCtx should set CountDeleteAffectRows")
+		require.True(t, hasNoopFilter(p),
+			"ODKU plan should contain a NOT(<=>) no-op filter")
+		require.False(t, noopFilterReferencesCol(p, "updated_at"),
+			"no-op FILTER must not reference auto-update column updated_at")
+		require.False(t, noopFilterReferencesCol(p, "g"),
+			"no-op FILTER must not reference generated column g derived from updated_at")
+	})
 }
 
 // noopFilterReferencesCol reports whether the ODKU no-op FILTER's AND/<=>

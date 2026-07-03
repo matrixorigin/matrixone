@@ -2016,12 +2016,37 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// the new image (selectTag). MySQL returns affected-rows=0 for such rows.
 	// Placed before the final PROJECT so scanTag columns survive column remapping.
 	if onDupAction == plan.Node_UPDATE {
+		// Columns excluded from the no-op equality chain: implicit ON UPDATE
+		// columns (whose new value always advances) plus any generated column
+		// that transitively derives from such a column — otherwise the recomputed
+		// generated value would defeat the no-op guard even when the user's
+		// explicit update changed nothing. A generated column whose source is a
+		// user-updated column is still caught by that source column's own <=>.
+		noopSkipCols := make(map[string]bool, len(autoUpdateCols))
+		for name := range autoUpdateCols {
+			noopSkipCols[name] = true
+		}
+		for changed := true; changed; {
+			changed = false
+			for _, col := range tableDef.Cols {
+				if col.GeneratedCol == nil || noopSkipCols[col.Name] {
+					continue
+				}
+				for _, pos := range collectRefColPos(col.GeneratedCol.Expr) {
+					if int(pos) < len(tableDef.Cols) && noopSkipCols[tableDef.Cols[pos].Name] {
+						noopSkipCols[col.Name] = true
+						changed = true
+						break
+					}
+				}
+			}
+		}
 		var allColsEqual *plan.Expr
 		for i, col := range tableDef.Cols {
 			if col.Name == catalog.Row_ID || col.Hidden {
 				continue
 			}
-			if autoUpdateCols[col.Name] {
+			if noopSkipCols[col.Name] {
 				continue
 			}
 			newColPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
