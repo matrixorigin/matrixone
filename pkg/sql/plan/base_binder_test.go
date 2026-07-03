@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,6 +58,63 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 		require.NotNil(t, f)
 		require.Equal(t, "power", f.Func.GetObjName())
 	})
+}
+
+func TestBindSerialFunctionMapsExprListItems(t *testing.T) {
+	ctx := context.Background()
+
+	for _, name := range []string{function.SerialFunctionName, function.SerialFullFunctionName} {
+		t.Run(name, func(t *testing.T) {
+			arg := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: []*plan.Expr{
+							MakePlan2Int64ConstExprWithType(1),
+							MakePlan2Int64ConstExprWithType(2),
+						},
+					},
+				},
+			}
+
+			result, err := BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{arg})
+			require.NoError(t, err)
+			require.Same(t, arg, result)
+			require.Equal(t, int32(types.T_varchar), result.Typ.Id)
+
+			list := result.GetList()
+			require.NotNil(t, list)
+			require.Len(t, list.List, 2)
+			for i, item := range list.List {
+				f := item.GetF()
+				require.NotNil(t, f)
+				require.Equal(t, name, f.Func.GetObjName())
+				require.Len(t, f.Args, 1)
+				require.Equal(t, int64(i+1), f.Args[0].GetLit().GetI64Val())
+			}
+		})
+	}
+}
+
+func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
+	ctx := context.Background()
+
+	for _, name := range []string{function.SerialFunctionName, function.SerialFullFunctionName} {
+		t.Run(name, func(t *testing.T) {
+			arg := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{},
+				},
+			}
+
+			result, err := BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{arg})
+			require.NoError(t, err)
+			require.Same(t, arg, result)
+			require.NotNil(t, result.GetList())
+			require.Empty(t, result.GetList().List)
+		})
+	}
 }
 
 func TestBindUnaryMinusUint64MinInt64Boundary(t *testing.T) {
