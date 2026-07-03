@@ -2230,6 +2230,18 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 }
 
 func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot bool) (int32, error) {
+	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, -1)
+}
+
+func (builder *QueryBuilder) buildUnionWithResultLen(
+	stmt *tree.UnionClause,
+	astOrderBy tree.OrderBy,
+	astLimit *tree.Limit,
+	astRankOption *tree.RankOption,
+	ctx *BindContext,
+	isRoot bool,
+	visibleResultLen int,
+) (int32, error) {
 	if builder.isForUpdate {
 		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
 	}
@@ -2471,6 +2483,12 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	// Track the original number of columns before ORDER BY binding
 	// ORDER BY may add new expressions to ctx.projects, but these should not be in the final output
 	resultLen := len(ctx.projects)
+	if visibleResultLen >= 0 {
+		if visibleResultLen > resultLen {
+			return 0, moerr.NewInternalError(builder.GetContext(), "visible UNION result length exceeds project length")
+		}
+		resultLen = visibleResultLen
+	}
 
 	// bind orderBy BEFORE creating PROJECT node, so that any new expressions
 	// added to ctx.projects by ORDER BY are included in the PROJECT node
@@ -2595,6 +2613,8 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	} else {
 		ctx.results = ctx.projects[:resultLen]
 	}
+
+	ctx.headings = ctx.headings[:resultLen]
 
 	// set heading
 	if isRoot {
@@ -3064,6 +3084,8 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 			}
 			if len(selectClause.GroupBy.GroupByExprsList) > 1 && !selectClause.GroupBy.Apart {
+				visibleResultLen := len(selectClause.Exprs)
+				branchExprs := appendGroupingSetOrderByProjects(astOrderBy, selectClause.Exprs)
 				groupingCount := len(selectClause.GroupBy.GroupByExprsList)
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
@@ -3073,7 +3095,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 						}
 						selectStmts[i] = &tree.SelectClause{
 							Distinct: selectClause.Distinct,
-							Exprs:    selectClause.Exprs,
+							Exprs:    branchExprs,
 							From:     selectClause.From,
 							Where:    selectClause.Where,
 							GroupBy: &tree.GroupByClause{
@@ -3095,8 +3117,21 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
-				rewriteGroupingSetOrderBy(astOrderBy, selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
-				return builder.buildUnion(leftClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
+				if nodeID, err = builder.buildUnionWithResultLen(
+					leftClause,
+					astOrderBy,
+					astLimit,
+					astRankOption,
+					ctx,
+					false,
+					visibleResultLen,
+				); err != nil {
+					return
+				}
+				if isRoot {
+					builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
+				}
+				return
 			}
 		}
 
@@ -3800,199 +3835,35 @@ func (builder *QueryBuilder) bindTimeWindow(
 	return
 }
 
-func rewriteGroupingSetOrderBy(
-	astOrderBy tree.OrderBy,
-	selectList tree.SelectExprs,
-	groupByExprsList []tree.Exprs,
-) {
-	columnResolver := newGroupingSetColumnResolver(groupByExprsList)
-	projectPosByKey := make(map[string]int64, len(selectList))
-	for i, selectExpr := range selectList {
-		key, ok := groupingSetOrderByKey(selectExpr.Expr, columnResolver)
-		if !ok {
-			continue
-		}
-		if _, exists := projectPosByKey[key]; !exists {
-			projectPosByKey[key] = int64(i + 1)
-		}
-	}
-
+func appendGroupingSetOrderByProjects(astOrderBy tree.OrderBy, selectList tree.SelectExprs) tree.SelectExprs {
+	branchSelectList := append(tree.SelectExprs(nil), selectList...)
 	for _, order := range astOrderBy {
-		if _, isOrdinal := order.Expr.(*tree.NumVal); isOrdinal {
+		if _, isOrdinal := order.Expr.(*tree.NumVal); isOrdinal || !containsGroupingFunction(order.Expr) {
 			continue
 		}
 
-		key, ok := groupingSetOrderByKey(order.Expr, columnResolver)
-		if !ok {
-			continue
-		}
-		if projectPos, ok := projectPosByKey[key]; ok {
-			projectPosText := strconv.FormatInt(projectPos, 10)
-			order.Expr = tree.NewNumVal(projectPos, projectPosText, false, tree.P_int64)
-		}
+		branchSelectList = append(branchSelectList, tree.SelectExpr{Expr: order.Expr})
+		projectPos := int64(len(branchSelectList))
+		order.Expr = tree.NewNumVal(projectPos, strconv.FormatInt(projectPos, 10), false, tree.P_int64)
 	}
+	return branchSelectList
 }
 
-type groupingSetColumnResolver map[string]map[string]struct{}
-
-func newGroupingSetColumnResolver(groupByExprsList []tree.Exprs) groupingSetColumnResolver {
-	resolver := make(groupingSetColumnResolver)
-	for _, groupByExprs := range groupByExprsList {
-		for _, groupByExpr := range groupByExprs {
-			col, ok := unwrapParenExpr(groupByExpr).(*tree.UnresolvedName)
-			if !ok || col.Star || col.NumParts == 0 {
-				continue
-			}
-
-			columnName := col.CStrParts[0].Compare()
-			if resolver[columnName] == nil {
-				resolver[columnName] = make(map[string]struct{})
-			}
-			resolver[columnName][groupingSetColumnKey(col)] = struct{}{}
-		}
-	}
-	return resolver
-}
-
-func (resolver groupingSetColumnResolver) resolve(col *tree.UnresolvedName) (string, bool) {
-	candidates := resolver[col.CStrParts[0].Compare()]
-	if len(candidates) == 0 {
-		return "", false
-	}
-
-	exactKey := groupingSetColumnKey(col)
-	if col.NumParts > 1 {
-		if _, ok := candidates[exactKey]; ok {
-			return exactKey, true
-		}
-	}
-	if len(candidates) != 1 {
-		return "", false
-	}
-	for candidate := range candidates {
-		return candidate, true
-	}
-	return "", false
-}
-
-func (resolver groupingSetColumnResolver) isAmbiguous(col *tree.UnresolvedName) bool {
-	return len(resolver[col.CStrParts[0].Compare()]) > 1
-}
-
-func groupingSetColumnKey(col *tree.UnresolvedName) string {
-	var key strings.Builder
-	for i := col.NumParts - 1; i >= 0; i-- {
-		if i < col.NumParts-1 {
-			key.WriteByte('.')
-		}
-		key.WriteString(col.CStrParts[i].Compare())
-	}
-	return key.String()
-}
-
-type groupingSetCStrRestore struct {
-	target **tree.CStr
-	value  *tree.CStr
-}
-
-type groupingSetFuncArgsRestore struct {
-	function *tree.FuncExpr
-	args     tree.Exprs
-}
-
-type groupingSetOrderByKeyNormalizer struct {
-	columnResolver   groupingSetColumnResolver
-	containsGrouping bool
-	valid            bool
-	cstrRestores     []groupingSetCStrRestore
-	funcArgsRestores []groupingSetFuncArgsRestore
-}
-
-func groupingSetOrderByKey(astExpr tree.Expr, columnResolver groupingSetColumnResolver) (string, bool) {
-	normalizer := &groupingSetOrderByKeyNormalizer{
-		columnResolver: columnResolver,
-		valid:          true,
-	}
-	defer normalizer.restore()
-
-	walkGroupingSetOrderByExpr(unwrapParenExpr(astExpr), normalizer.visit)
-	if !normalizer.valid || !normalizer.containsGrouping {
-		return "", false
-	}
-	return tree.String(unwrapParenExpr(astExpr), dialect.MYSQL), true
-}
-
-func (normalizer *groupingSetOrderByKeyNormalizer) visit(astExpr tree.Expr) bool {
-	switch expr := astExpr.(type) {
-	case *tree.FuncExpr:
-		if expr.FuncName == nil {
-			return true
-		}
-		normalizer.normalizeCStr(&expr.FuncName)
-		if expr.FuncName.Compare() != "grouping" {
-			return true
-		}
-
-		normalizer.containsGrouping = true
-		if expr.WindowSpec != nil {
-			normalizer.valid = false
-			return false
-		}
-
-		originalArgs := append(tree.Exprs(nil), expr.Exprs...)
-		canonicalArgs := make(tree.Exprs, len(expr.Exprs))
-		for i, arg := range expr.Exprs {
-			col, ok := unwrapParenExpr(arg).(*tree.UnresolvedName)
-			if !ok || col.Star || col.NumParts == 0 {
-				normalizer.valid = false
+func containsGroupingFunction(astExpr tree.Expr) bool {
+	found := false
+	walkGroupingSetOrderByExpr(unwrapParenExpr(astExpr), func(expr tree.Expr) bool {
+		switch typedExpr := expr.(type) {
+		case *tree.FuncExpr:
+			if typedExpr.FuncName != nil && typedExpr.FuncName.Compare() == "grouping" {
+				found = true
 				return false
 			}
-			columnKey, ok := normalizer.columnResolver.resolve(col)
-			if !ok {
-				if normalizer.columnResolver.isAmbiguous(col) {
-					normalizer.valid = false
-					return false
-				}
-				columnKey = groupingSetColumnKey(col)
-			}
-			canonicalArgs[i] = tree.NewUnresolvedColName(columnKey)
+		case *tree.Subquery:
+			return false
 		}
-		normalizer.funcArgsRestores = append(normalizer.funcArgsRestores, groupingSetFuncArgsRestore{
-			function: expr,
-			args:     originalArgs,
-		})
-		expr.Exprs = canonicalArgs
-		return false
-	case *tree.UnresolvedName:
-		for i := 0; i < expr.NumParts; i++ {
-			normalizer.normalizeCStr(&expr.CStrParts[i])
-		}
-	case *tree.Subquery:
-		return false
-	}
-	return true
-}
-
-func (normalizer *groupingSetOrderByKeyNormalizer) normalizeCStr(target **tree.CStr) {
-	if *target == nil {
-		return
-	}
-	normalizer.cstrRestores = append(normalizer.cstrRestores, groupingSetCStrRestore{
-		target: target,
-		value:  *target,
+		return !found
 	})
-	*target = tree.NewCStr((*target).Compare(), 0)
-}
-
-func (normalizer *groupingSetOrderByKeyNormalizer) restore() {
-	for i := len(normalizer.funcArgsRestores) - 1; i >= 0; i-- {
-		restore := normalizer.funcArgsRestores[i]
-		restore.function.Exprs = restore.args
-	}
-	for i := len(normalizer.cstrRestores) - 1; i >= 0; i-- {
-		restore := normalizer.cstrRestores[i]
-		*restore.target = restore.value
-	}
+	return found
 }
 
 func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {

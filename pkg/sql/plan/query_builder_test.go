@@ -442,11 +442,12 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpression(t *testing.T) {
 	}
 	require.NotNil(t, sortNode)
 	require.Len(t, sortNode.OrderBy, 2)
-	require.Equal(t, int32(0), sortNode.OrderBy[0].Expr.GetCol().ColPos)
-	require.Equal(t, int32(1), sortNode.OrderBy[1].Expr.GetCol().ColPos)
+	require.Equal(t, int32(3), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Equal(t, int32(4), sortNode.OrderBy[1].Expr.GetCol().ColPos)
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 5)
 }
 
-func TestRewriteGroupingSetOrderByMatchesQualifiedColumn(t *testing.T) {
+func TestQueryBuilderBuildRollupOrderByQualifiedGroupingColumn(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
 		dialect.MYSQL,
@@ -462,13 +463,27 @@ func TestRewriteGroupingSetOrderByMatchesQualifiedColumn(t *testing.T) {
 	selectClause := selectStmt.Select.(*tree.SelectClause)
 	orderFunc := selectStmt.OrderBy[0].Expr.(*tree.FuncExpr)
 	orderFunc.Exprs[0] = tree.NewUnresolvedName(tree.NewCStr("t", 0), tree.NewCStr("a", 0))
-	rewriteGroupingSetOrderBy(selectStmt.OrderBy, selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
 
-	rewrittenPos, ok := selectStmt.OrderBy[0].Expr.(*tree.NumVal)
-	require.True(t, ok)
-	pos, ok := rewrittenPos.Int64()
-	require.True(t, ok)
-	require.Equal(t, int64(1), pos)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	query := queryPlan.GetQuery()
+	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Equal(t, plan.Node_PROJECT, rootNode.NodeType)
+	require.Len(t, rootNode.ProjectList, len(selectClause.Exprs))
+	require.Len(t, query.Headings, len(selectClause.Exprs))
+
+	var sortNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.Equal(t, int32(2), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 3)
 }
 
 func TestQueryBuilderBuildRollupOrderByGroupingExpressionIgnoresAliasShadowing(t *testing.T) {
@@ -497,7 +512,8 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionIgnoresAliasShadowing(t
 	require.NotNil(t, sortNode)
 	require.Len(t, sortNode.OrderBy, 1)
 	require.NotNil(t, sortNode.OrderBy[0].Expr.GetCol())
-	require.Equal(t, int32(1), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Equal(t, int32(3), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 4)
 }
 
 func TestQueryBuilderBuildRollupOrderByGroupingBinaryExpression(t *testing.T) {
@@ -526,7 +542,8 @@ func TestQueryBuilderBuildRollupOrderByGroupingBinaryExpression(t *testing.T) {
 	require.NotNil(t, sortNode)
 	require.Len(t, sortNode.OrderBy, 1)
 	require.NotNil(t, sortNode.OrderBy[0].Expr.GetCol())
-	require.Equal(t, int32(0), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Equal(t, int32(2), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 3)
 }
 
 func TestQueryBuilderBuildRollupOrderByNestedGroupingExpression(t *testing.T) {
@@ -555,10 +572,27 @@ func TestQueryBuilderBuildRollupOrderByNestedGroupingExpression(t *testing.T) {
 	require.NotNil(t, sortNode)
 	require.Len(t, sortNode.OrderBy, 1)
 	require.NotNil(t, sortNode.OrderBy[0].Expr.GetCol())
-	require.Equal(t, int32(0), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Equal(t, int32(2), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 3)
 }
 
-func TestRewriteGroupingSetOrderBy(t *testing.T) {
+func TestQueryBuilderBuildRollupOrderByAmbiguousGroupingColumn(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select count(*)
+		from select_test.bind_select as t1, select_test.bind_select as t2
+		group by t1.a, t2.a with rollup
+		order by grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.Error(t, err)
+}
+
+func TestAppendGroupingSetOrderByProjects(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
 		dialect.MYSQL,
@@ -572,13 +606,15 @@ func TestRewriteGroupingSetOrderBy(t *testing.T) {
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	rewriteGroupingSetOrderBy(selectStmt.OrderBy, selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
+	branchExprs := appendGroupingSetOrderByProjects(selectStmt.OrderBy, selectClause.Exprs)
+	require.Len(t, branchExprs, 4)
+	require.Len(t, selectClause.Exprs, 2)
 
 	rewrittenPos, ok := selectStmt.OrderBy[0].Expr.(*tree.NumVal)
 	require.True(t, ok)
 	pos, ok := rewrittenPos.Int64()
 	require.True(t, ok)
-	require.Equal(t, int64(1), pos)
+	require.Equal(t, int64(3), pos)
 	require.Equal(t, tree.Descending, selectStmt.OrderBy[0].Direction)
 
 	existingPos, ok := selectStmt.OrderBy[1].Expr.(*tree.NumVal)
@@ -587,10 +623,14 @@ func TestRewriteGroupingSetOrderBy(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int64(2), pos)
 
-	require.Equal(t, "grouping(a)", tree.String(selectStmt.OrderBy[2].Expr, dialect.MYSQL))
+	rewrittenPos, ok = selectStmt.OrderBy[2].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	pos, ok = rewrittenPos.Int64()
+	require.True(t, ok)
+	require.Equal(t, int64(4), pos)
 }
 
-func TestRewriteGroupingSetOrderByIgnoresAliasShadowing(t *testing.T) {
+func TestAppendGroupingSetOrderByProjectsIgnoresAliasShadowing(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
 		dialect.MYSQL,
@@ -604,16 +644,17 @@ func TestRewriteGroupingSetOrderByIgnoresAliasShadowing(t *testing.T) {
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	rewriteGroupingSetOrderBy(selectStmt.OrderBy, selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
+	branchExprs := appendGroupingSetOrderByProjects(selectStmt.OrderBy, selectClause.Exprs)
+	require.Len(t, branchExprs, 4)
 
 	rewrittenPos, ok := selectStmt.OrderBy[0].Expr.(*tree.NumVal)
 	require.True(t, ok)
 	pos, ok := rewrittenPos.Int64()
 	require.True(t, ok)
-	require.Equal(t, int64(2), pos)
+	require.Equal(t, int64(4), pos)
 }
 
-func TestRewriteGroupingSetOrderBySkipsAmbiguousColumn(t *testing.T) {
+func TestAppendGroupingSetOrderByProjectsDefersAmbiguousColumnToBinder(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
 		dialect.MYSQL,
@@ -627,12 +668,17 @@ func TestRewriteGroupingSetOrderBySkipsAmbiguousColumn(t *testing.T) {
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	rewriteGroupingSetOrderBy(selectStmt.OrderBy, selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
+	branchExprs := appendGroupingSetOrderByProjects(selectStmt.OrderBy, selectClause.Exprs)
+	require.Len(t, branchExprs, 3)
 
-	require.Equal(t, "grouping(a)", tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL))
+	rewrittenPos, ok := selectStmt.OrderBy[0].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	pos, ok := rewrittenPos.Int64()
+	require.True(t, ok)
+	require.Equal(t, int64(3), pos)
 }
 
-func TestRewriteGroupingSetOrderByPreservesRawMatchForGroupAlias(t *testing.T) {
+func TestAppendGroupingSetOrderByProjectsSupportsGroupAlias(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
 		dialect.MYSQL,
@@ -646,16 +692,17 @@ func TestRewriteGroupingSetOrderByPreservesRawMatchForGroupAlias(t *testing.T) {
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	rewriteGroupingSetOrderBy(selectStmt.OrderBy, selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
+	branchExprs := appendGroupingSetOrderByProjects(selectStmt.OrderBy, selectClause.Exprs)
+	require.Len(t, branchExprs, 4)
 
 	rewrittenPos, ok := selectStmt.OrderBy[0].Expr.(*tree.NumVal)
 	require.True(t, ok)
 	pos, ok := rewrittenPos.Int64()
 	require.True(t, ok)
-	require.Equal(t, int64(2), pos)
+	require.Equal(t, int64(4), pos)
 }
 
-func TestRewriteGroupingSetOrderByNestedExpressionCanonicalization(t *testing.T) {
+func TestAppendGroupingSetOrderByNestedProjects(t *testing.T) {
 	testCases := []struct {
 		name            string
 		sql             string
@@ -675,7 +722,7 @@ func TestRewriteGroupingSetOrderByNestedExpressionCanonicalization(t *testing.T)
 			from select_test.bind_select
 			group by a with rollup
 			order by if(grouping(a), 'x', 'same')`,
-			expectRewritten: false,
+			expectRewritten: true,
 		},
 		{
 			name: "ordinary expression",
@@ -691,7 +738,7 @@ func TestRewriteGroupingSetOrderByNestedExpressionCanonicalization(t *testing.T)
 			from select_test.bind_select as t1, select_test.bind_select as t2
 			group by t1.a, t2.a with rollup
 			order by if(grouping(a), 1, 0)`,
-			expectRewritten: false,
+			expectRewritten: true,
 		},
 	}
 
@@ -704,11 +751,7 @@ func TestRewriteGroupingSetOrderByNestedExpressionCanonicalization(t *testing.T)
 			selectClause := selectStmt.Select.(*tree.SelectClause)
 			selectExprBefore := tree.String(selectClause.Exprs[0].Expr, dialect.MYSQL)
 			orderExprBefore := tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL)
-			rewriteGroupingSetOrderBy(
-				selectStmt.OrderBy,
-				selectClause.Exprs,
-				selectClause.GroupBy.GroupByExprsList,
-			)
+			_ = appendGroupingSetOrderByProjects(selectStmt.OrderBy, selectClause.Exprs)
 
 			_, rewritten := selectStmt.OrderBy[0].Expr.(*tree.NumVal)
 			require.Equal(t, testCase.expectRewritten, rewritten)
@@ -720,7 +763,7 @@ func TestRewriteGroupingSetOrderByNestedExpressionCanonicalization(t *testing.T)
 	}
 }
 
-func TestRewriteGroupingSetOrderByNestedExpressionMatchesQualifiedGroupingColumn(t *testing.T) {
+func TestAppendGroupingSetOrderByNestedQualifiedProject(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
 		dialect.MYSQL,
@@ -737,13 +780,14 @@ func TestRewriteGroupingSetOrderByNestedExpressionMatchesQualifiedGroupingColumn
 	orderFunc := selectStmt.OrderBy[0].Expr.(*tree.FuncExpr)
 	groupingFunc := orderFunc.Exprs[0].(*tree.FuncExpr)
 	groupingFunc.Exprs[0] = tree.NewUnresolvedName(tree.NewCStr("t", 0), tree.NewCStr("a", 0))
-	rewriteGroupingSetOrderBy(selectStmt.OrderBy, selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
+	branchExprs := appendGroupingSetOrderByProjects(selectStmt.OrderBy, selectClause.Exprs)
+	require.Len(t, branchExprs, 3)
 
 	rewrittenPos, ok := selectStmt.OrderBy[0].Expr.(*tree.NumVal)
 	require.True(t, ok)
 	pos, ok := rewrittenPos.Int64()
 	require.True(t, ok)
-	require.Equal(t, int64(1), pos)
+	require.Equal(t, int64(3), pos)
 }
 
 func TestQueryBuilder_bindHaving(t *testing.T) {
