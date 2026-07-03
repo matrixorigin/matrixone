@@ -413,6 +413,17 @@ func TestPrefixInAdvanced(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
 				[]bool{false, false, true}, []bool{true, true, false}),
 		},
+		{
+			info: "& test prefix_in with empty prefix set",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"aa12", "bb22", "cc33"}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, false, false}, []bool{false, false, false}),
+		},
 	}
 
 	proc := testutil.NewProcess(t)
