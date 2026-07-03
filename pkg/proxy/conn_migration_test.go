@@ -159,3 +159,127 @@ func TestQueryServiceSetMigrateFromLockRelease(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func TestMigrateConnQueryAddressAndRPCError(t *testing.T) {
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	ccc.queryClient = &testQueryClient{}
+	ccc.moCluster = &testCluster{}
+
+	resp, err := ccc.migrateConnFrom("missing")
+	assert.Error(t, err)
+	assert.Nil(t, resp)
+
+	err = ccc.setMigrateConnFromLockRelease("missing", false)
+	assert.Error(t, err)
+
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+	ccc.moCluster = cluster
+	c1, _ := net.Pipe()
+	defer c1.Close()
+	err = ccc.migrateConnTo(newMockServerConn(c1), &pb.MigrateConnFromResponse{})
+	assert.Error(t, err)
+}
+
+type migrationQueryClient struct {
+	disableCalls int
+	enableCalls  int
+	migrateToErr bool
+}
+
+func (c *migrationQueryClient) ServiceID() string {
+	return "s1"
+}
+
+func (c *migrationQueryClient) SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error) {
+	switch req.CmdMethod {
+	case pb.CmdMethod_MigrateConnFrom:
+		if req.MigrateConnFromRequest.SkipUserLevelLockRelease {
+			c.disableCalls++
+		}
+		if req.MigrateConnFromRequest.EnableUserLevelLockRelease {
+			c.enableCalls++
+		}
+		return &pb.Response{MigrateConnFromResponse: &pb.MigrateConnFromResponse{
+			DB: "d1",
+			UserLevelLocks: []*pb.UserLevelLock{
+				{Name: "migration_lock", Count: 2},
+			},
+		}}, nil
+	case pb.CmdMethod_MigrateConnTo:
+		if c.migrateToErr {
+			return nil, moerr.NewInternalError(ctx, "migrate to failed")
+		}
+		return &pb.Response{MigrateConnToResponse: &pb.MigrateConnToResponse{Success: true}}, nil
+	default:
+		return nil, moerr.NewInternalError(ctx, "unexpected request")
+	}
+}
+
+func (c *migrationQueryClient) NewRequest(method pb.CmdMethod) *pb.Request {
+	return &pb.Request{CmdMethod: method}
+}
+
+func (c *migrationQueryClient) Release(response *pb.Response) {}
+
+func (c *migrationQueryClient) Close() error {
+	return nil
+}
+
+func TestMigrateConnDisablesLockReleaseOnSuccess(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	qc := &migrationQueryClient{}
+	ccc.queryClient = qc
+	ccc.moCluster = cluster
+
+	c1, _ := net.Pipe()
+	defer c1.Close()
+	err := ccc.migrateConn("pipe", newMockServerConn(c1))
+	assert.NoError(t, err)
+	assert.Equal(t, 1, qc.disableCalls)
+	assert.Equal(t, 0, qc.enableCalls)
+}
+
+func TestMigrateConnReenablesLockReleaseWhenMigrateToFails(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	qc := &migrationQueryClient{migrateToErr: true}
+	ccc.queryClient = qc
+	ccc.moCluster = cluster
+
+	c1, _ := net.Pipe()
+	defer c1.Close()
+	err := ccc.migrateConn("pipe", newMockServerConn(c1))
+	assert.Error(t, err)
+	assert.Equal(t, 1, qc.disableCalls)
+	assert.Equal(t, 1, qc.enableCalls)
+}

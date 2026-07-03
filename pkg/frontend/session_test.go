@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -634,15 +635,24 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(s, &query.MigrateConnToRequest{
-			DB: "d1",
+			ConnID: 88,
+			DB:     "d1",
 			PrepareStmts: []*query.PrepareStmt{
 				{Name: "p1", SQL: `select ?`},
 				{Name: "p2", SQL: `select ?`},
+			},
+			UserLevelLocks: []*query.UserLevelLock{
+				nil,
+				{Name: "restored_lock", Count: 2},
 			},
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, "d1", s.GetDatabaseName())
 		assert.Equal(t, 2, len(s.prepareStmts))
+		assert.Equal(t, []function.UserLevelLockState{
+			{Name: "restored_lock", Count: 2},
+		}, function.UserLevelLocksForMigration(s.proc))
+		function.DiscardMigratedUserLevelLocks(s.proc)
 	})
 
 	t.Run("db dropped", func(t *testing.T) {

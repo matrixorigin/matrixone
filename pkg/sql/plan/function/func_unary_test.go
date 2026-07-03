@@ -7569,6 +7569,38 @@ func TestUserLevelLockMigrationKeepsOwnershipAndRefCount(t *testing.T) {
 	})
 }
 
+func TestUserLevelLockMigrationEdgeCases(t *testing.T) {
+	resetUserLevelLocksForTest(t)
+
+	require.Empty(t, UserLevelLocksForMigration(nil))
+	RestoreUserLevelLocksFromMigration(nil, []UserLevelLockState{{Name: "ignored", Count: 1}})
+	RestoreUserLevelLocksFromMigration(testutil.NewProcess(t), nil)
+	DiscardMigratedUserLevelLocks(nil)
+
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().Account = "acc"
+	proc.GetSessionInfo().ConnectionID = 2026
+	RestoreUserLevelLocksFromMigration(proc, []UserLevelLockState{
+		{Name: "", Count: 1},
+		{Name: "zero_count", Count: 0},
+		{Name: "valid_lock", Count: 3},
+	})
+	require.Equal(t, []UserLevelLockState{{Name: "valid_lock", Count: 3}}, UserLevelLocksForMigration(proc))
+
+	otherSession := testutil.NewProcess(t)
+	otherSession.GetSessionInfo().Account = "acc"
+	otherSession.GetSessionInfo().ConnectionID = 2026
+	otherSession.GetSessionInfo().SessionId = uuid.New()
+	RestoreUserLevelLocksFromMigration(otherSession, []UserLevelLockState{{Name: "valid_lock", Count: 3}})
+
+	proc.GetSessionInfo().SessionId = uuid.New()
+	DiscardMigratedUserLevelLocks(proc)
+	require.Equal(t, []UserLevelLockState{{Name: "valid_lock", Count: 3}}, UserLevelLocksForMigration(otherSession))
+
+	DiscardMigratedUserLevelLocks(otherSession)
+	require.Empty(t, UserLevelLocksForMigration(otherSession))
+}
+
 func TestReleaseUserLevelLocksCleanup(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")

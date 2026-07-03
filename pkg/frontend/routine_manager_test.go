@@ -30,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func Test_Closed(t *testing.T) {
@@ -393,6 +395,74 @@ func TestRoutineManagerMigrationAndResetErrorBranches(t *testing.T) {
 		EnableUserLevelLockRelease: true,
 	}, &query.MigrateConnFromResponse{}))
 	require.False(t, ses.userLevelLocksMigrated)
+}
+
+func TestRoutineMigrateConnectionFromExportsUserLevelLocks(t *testing.T) {
+	rt, proto := newUnitTestRoutine(t, 1006)
+	proc := testutil.NewProc(t)
+	proc.GetSessionInfo().Account = "acc"
+	proc.GetSessionInfo().ConnectionID = 1006
+	function.RestoreUserLevelLocksFromMigration(proc, []function.UserLevelLockState{
+		{Name: "exported_lock", Count: 2},
+	})
+	defer function.DiscardMigratedUserLevelLocks(proc)
+
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr: NewMysqlResp(proto),
+		},
+		proc: proc,
+		prepareStmts: map[string]*PrepareStmt{
+			"p1": {Name: "p1", Sql: "select ?"},
+		},
+	}
+	proto.SetStr(DBNAME, "db1")
+	rt.setSession(ses)
+
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Equal(t, "db1", resp.DB)
+	require.Equal(t, []*query.UserLevelLock{{Name: "exported_lock", Count: 2}}, resp.UserLevelLocks)
+	require.Len(t, resp.PrepareStmts, 1)
+}
+
+func TestRoutineMigrateConnectionToClosedRoutine(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 1008)
+	rt.mc.waitAndClose()
+
+	err := rt.migrateConnectionTo(context.Background(), &query.MigrateConnToRequest{})
+	require.ErrorContains(t, err, "cannot start migrate as routine has been closed")
+}
+
+func TestSessionCloseDiscardsMigratedUserLevelLocks(t *testing.T) {
+	proc := testutil.NewProc(t)
+	proc.GetSessionInfo().Account = "acc"
+	proc.GetSessionInfo().ConnectionID = 1007
+	function.RestoreUserLevelLocksFromMigration(proc, []function.UserLevelLockState{
+		{Name: "discarded_lock", Count: 1},
+	})
+
+	ses := &Session{
+		feSessionImpl:          feSessionImpl{},
+		proc:                   proc,
+		userLevelLocksMigrated: true,
+	}
+	ses.Close()
+	require.Empty(t, function.UserLevelLocksForMigration(proc))
+}
+
+func TestSessionCloseReleasesUserLevelLocksWhenNotMigrated(t *testing.T) {
+	proc := testutil.NewProc(t)
+	proc.GetSessionInfo().Account = "acc"
+	proc.GetSessionInfo().ConnectionID = 1009
+
+	ses := &Session{
+		feSessionImpl:          feSessionImpl{},
+		proc:                   proc,
+		userLevelLocksMigrated: false,
+	}
+	ses.Close()
+	require.Empty(t, function.UserLevelLocksForMigration(proc))
 }
 
 func TestRoutineManagerContextAndConnectionInfoHelpers(t *testing.T) {
