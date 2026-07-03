@@ -204,8 +204,10 @@ func (exec *bitOpExecBytes) BatchFill(offset int, groups []uint64, vectors []*ve
 			x, y := exec.getXY(grp - 1)
 			value := vectors[0].GetBytesAt(int(idx))
 			if exec.state[x].vecs[0].IsNull(uint64(y)) {
+				if err := vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp); err != nil {
+					return err
+				}
 				exec.state[x].vecs[0].UnsetNull(uint64(y))
-				vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp)
 			} else {
 				oldValue := exec.state[x].vecs[0].GetBytesAt(int(y))
 				// computeBytes will update oldValue in place
@@ -237,9 +239,11 @@ func (exec *bitOpExecBytes) BatchMerge(next AggFuncExec, offset int, groups []ui
 			continue
 		}
 		if exec.state[x1].vecs[0].IsNull(uint64(y1)) {
-			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
 			otherValue := other.state[x2].vecs[0].GetBytesAt(int(y2))
-			vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), otherValue, exec.mp)
+			if err := vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), otherValue, exec.mp); err != nil {
+				return err
+			}
+			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
 		} else {
 			oldValue := exec.state[x1].vecs[0].GetBytesAt(int(y1))
 			otherValue := other.state[x2].vecs[0].GetBytesAt(int(y2))

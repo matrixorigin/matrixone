@@ -401,4 +401,92 @@ func TestBitOpsBytes(t *testing.T) {
 			r.Free(mp)
 		}
 	})
+
+	// When SetBytesAt fails during BulkFill (e.g. OOM on varlena allocation),
+	// the state must stay NULL and the error must propagate — never leave a
+	// non-NULL slot with a default/empty payload.
+	t.Run("BulkFill OOM leaves state NULL", func(t *testing.T) {
+		// Set a global cap large enough to create a capped mpool below.
+		mpool.InitCap(100 * 1024 * 1024)                      // 100 MiB
+		capped, err := mpool.NewMPool("test", 2*1024*1024, 0) // 2 MiB
+		require.NoError(t, err)
+
+		// BINARY(64) > VarlenaInlineSize (23): forces non-inline varlena path.
+		typ := types.New(types.T_binary, 64, 0)
+		exec := makeBitAggExec(capped, AggIdOfBitAnd, typ)
+		require.NoError(t, exec.GroupGrow(1))
+
+		// Exhaust the off-heap capacity by repeatedly allocating
+		// until the pool is full. Any subsequent SetBytesAt must
+		// then fail.
+		for {
+			if _, e := capped.Alloc(4096, true); e != nil {
+				break
+			}
+		}
+
+		// Input vector from a normal (unlimited) mpool.
+		inputVec := vector.NewVec(typ)
+		val := make([]byte, 64)
+		for i := range val {
+			val[i] = byte(i)
+		}
+		require.NoError(t, vector.AppendBytes(inputVec, val, false, mp))
+		defer inputVec.Free(mp)
+
+		err = exec.BulkFill(0, []*vector.Vector{inputVec})
+		require.Error(t, err, "BulkFill should fail when SetBytesAt cannot allocate")
+
+		// No Flush — the mpool is exhausted even for neutral replacement.
+		// Verify the state slot is still NULL directly (UnsetNull must
+		// not have been called before SetBytesAt).
+		require.True(t, exec.(*bitOpExecBytes).state[0].vecs[0].IsNull(0),
+			"state slot must remain NULL after failed SetBytesAt")
+
+		exec.Free()
+	})
+
+	// Same contract for Merge: a failed SetBytesAt while copying the first
+	// non-NULL value into an empty target group must leave the target NULL.
+	t.Run("Merge OOM leaves state NULL", func(t *testing.T) {
+		mpool.InitCap(100 * 1024 * 1024)                      // 100 MiB
+		capped, err := mpool.NewMPool("test", 2*1024*1024, 0) // 2 MiB
+		require.NoError(t, err)
+
+		typ := types.New(types.T_binary, 64, 0)
+
+		// exec1: empty target (all-NULL), uses capped mpool.
+		exec1 := makeBitAggExec(capped, AggIdOfBitAnd, typ)
+		require.NoError(t, exec1.GroupGrow(1))
+
+		// exec2: has a real value, uses normal (unlimited) mpool.
+		exec2 := makeBitAggExec(mp, AggIdOfBitAnd, typ)
+		require.NoError(t, exec2.GroupGrow(1))
+		inputVec := vector.NewVec(typ)
+		val := make([]byte, 64)
+		for i := range val {
+			val[i] = byte(i)
+		}
+		require.NoError(t, vector.AppendBytes(inputVec, val, false, mp))
+		defer inputVec.Free(mp)
+		require.NoError(t, exec2.BulkFill(0, []*vector.Vector{inputVec}))
+
+		// Exhaust the off-heap capacity by repeatedly allocating
+		// until the pool is full.
+		for {
+			if _, e := capped.Alloc(4096, true); e != nil {
+				break
+			}
+		}
+
+		err = exec1.Merge(exec2, 0, 0)
+		require.Error(t, err, "Merge should fail when SetBytesAt cannot allocate")
+
+		// Verify the state slot is still NULL directly.
+		require.True(t, exec1.(*bitOpExecBytes).state[0].vecs[0].IsNull(0),
+			"target slot must remain NULL after failed Merge SetBytesAt")
+
+		exec1.Free()
+		exec2.Free()
+	})
 }
