@@ -1,16 +1,13 @@
 ---
 name: mo-self-review
 description: Pre-push self-review gate for MatrixOne changes — a systematic, multi-angle, first-principles review of your OWN diff with complete functional-closure investigation and unhappy-path coverage, calibrated to the merge bar. Run BEFORE pushing / opening / updating a PR so the human or bot PR review finds nothing new — breaking the review→modify loop. Use before declaring a change "done", before push, or when a PR keeps drawing new review rounds. Complements unhappy-path-audit (Q1–Q3 depth) and /code-review.
-compatibility:
-  agents: Codex CLI and compatible agents
-  requires:
-    - git working tree with a diff vs the base branch
-    - unhappy-path-audit skill (for Q1–Q3 depth)
 metadata:
   project: matrixone
   repository: matrixorigin/matrixone
   language: go
 ---
+
+Compatibility: designed for Codex CLI and compatible agents. Requires a git working tree with a diff vs the base branch and the unhappy-path-audit skill (for Q1-Q3 depth).
 
 ## Running this skill IS the review (don't retype the long prompt)
 

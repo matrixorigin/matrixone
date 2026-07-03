@@ -1,7 +1,12 @@
 .idea/
 .kiro/
 .cursor/
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/skills/*/
+!.claude/skills/*/SKILL.md
+!.claude/skills/*/references/
+!.claude/skills/*/references/*.md
 /CLAUDE.md
 *.o
 *.a
