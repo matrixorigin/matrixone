@@ -506,7 +506,7 @@ func connectToLogService(
 	}
 	var e error
 	addresses := append([]string{}, targets...)
-	rand.Shuffle(len(cfg.ServiceAddresses), func(i, j int) {
+	rand.Shuffle(len(addresses), func(i, j int) {
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
