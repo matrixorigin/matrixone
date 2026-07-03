@@ -117,23 +117,67 @@ func writeMember(tw *tar.Writer, name string, data []byte) error {
 	return err
 }
 
+// leBuf appends little-endian scalars to a bytes.Buffer WITHOUT the per-call heap
+// allocation binary.Write incurs: binary.Write's `data any` parameter boxes every
+// scalar to the heap, which in the per-term / per-doc serialize loops is millions
+// of tiny garbage allocations. PutUintXX into the reused tmp array avoids it (the
+// bytes are byte-identical to binary.Write(LittleEndian, ...), so the on-disk
+// format is unchanged). Slice writes still go through binary.Write (one buffer
+// alloc, no per-element boxing).
+type leBuf struct {
+	b   bytes.Buffer
+	tmp [8]byte
+}
+
+func (w *leBuf) u32(v uint32) { binary.LittleEndian.PutUint32(w.tmp[:4], v); w.b.Write(w.tmp[:4]) }
+func (w *leBuf) u64(v uint64) { binary.LittleEndian.PutUint64(w.tmp[:8], v); w.b.Write(w.tmp[:8]) }
+func (w *leBuf) i32(v int32)  { w.u32(uint32(v)) }
+func (w *leBuf) i64(v int64)  { w.u64(uint64(v)) }
+
+// encodePkLen writes a length-prefixed pk directly into the buffer — byte-identical
+// to `binary.Write(len); Write(encodePk(...))` but without encodePk's per-pk small
+// allocation for integer keys. Keep the type switch in sync with encodePk.
+func (w *leBuf) encodePkLen(pkType int32, v any) error {
+	switch types.T(pkType) {
+	case types.T_int64:
+		w.u32(8)
+		w.u64(uint64(v.(int64)))
+	case types.T_uint64:
+		w.u32(8)
+		w.u64(v.(uint64))
+	case types.T_int32:
+		w.u32(4)
+		w.u32(uint32(v.(int32)))
+	case types.T_uint32:
+		w.u32(4)
+		w.u32(v.(uint32))
+	case types.T_varchar, types.T_char, types.T_text, types.T_datalink,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
+		raw := asBytes(v)
+		w.u32(uint32(len(raw)))
+		w.b.Write(raw)
+	default:
+		return moerr.NewInternalErrorNoCtxf("wand: unsupported pk type %d", pkType)
+	}
+	return nil
+}
+
 // ---- docmap: pkType + ord -> pk ----
 
 func (m *WandModel) encodeDocmap() ([]byte, error) {
-	var b bytes.Buffer
-	_ = binary.Write(&b, binary.LittleEndian, m.PkType)
-	_ = binary.Write(&b, binary.LittleEndian, int64(len(m.pks)))
+	var w leBuf
+	w.i32(m.PkType)
+	w.i64(int64(len(m.pks)))
 	for _, pk := range m.pks {
-		raw, err := encodePk(m.PkType, pk)
-		if err != nil {
+		if err := w.encodePkLen(m.PkType, pk); err != nil {
 			return nil, err
 		}
-		_ = binary.Write(&b, binary.LittleEndian, uint32(len(raw)))
-		b.Write(raw)
 	}
-	// per-doc length (ord-aligned with pks), for BM25.
-	_ = binary.Write(&b, binary.LittleEndian, m.docLen)
-	return b.Bytes(), nil
+	// per-doc length (ord-aligned with pks), for BM25. Zero-copy LE bytes (host is
+	// little-endian — decodeWand reads it back the same way with UnsafeSliceCast);
+	// avoids binary.Write's temp buffer + the io.Writer boxing that heap-allocates w.
+	w.b.Write(util.UnsafeSliceToBytes(m.docLen))
+	return w.b.Bytes(), nil
 }
 
 func (m *WandModel) decodeDocmap(data []byte) error {
@@ -171,20 +215,19 @@ func (m *WandModel) decodeDocmap(data []byte) error {
 // ---- termdict: overflow term -> word-id ----
 
 func (m *WandModel) encodeTermDict() []byte {
-	var b bytes.Buffer
-	_ = binary.Write(&b, binary.LittleEndian, int64(len(m.overflow)))
+	var w leBuf
+	w.i64(int64(len(m.overflow)))
 	terms := make([]string, 0, len(m.overflow))
 	for t := range m.overflow {
 		terms = append(terms, t)
 	}
 	sort.Strings(terms) // deterministic output
 	for _, term := range terms {
-		tb := []byte(term)
-		_ = binary.Write(&b, binary.LittleEndian, uint32(len(tb)))
-		b.Write(tb)
-		_ = binary.Write(&b, binary.LittleEndian, m.overflow[term])
+		w.u32(uint32(len(term)))
+		w.b.WriteString(term) // WriteString avoids the []byte(term) copy
+		w.i32(m.overflow[term])
 	}
-	return b.Bytes()
+	return w.b.Bytes()
 }
 
 func (m *WandModel) decodeTermDict(data []byte) error {
@@ -217,24 +260,24 @@ func (m *WandModel) decodeTermDict(data []byte) error {
 // ---- wand: postings keyed by int32 word-id ----
 
 func (m *WandModel) encodeWand() []byte {
-	var b bytes.Buffer
-	_ = binary.Write(&b, binary.LittleEndian, int64(len(m.terms)))
+	var w leBuf
+	w.i64(int64(len(m.terms)))
 	ids := make([]int32, 0, len(m.terms))
 	var totalP int64
 	for id := range m.terms {
 		ids = append(ids, id)
 		totalP += int64(len(m.terms[id].docIDs))
 	}
-	_ = binary.Write(&b, binary.LittleEndian, totalP)               // total postings, for one off-heap alloc on load
+	w.i64(totalP)                                                   // total postings, for one off-heap alloc on load
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] }) // deterministic output
 	for _, id := range ids {
 		tp := m.terms[id]
-		_ = binary.Write(&b, binary.LittleEndian, id)
-		_ = binary.Write(&b, binary.LittleEndian, uint32(len(tp.docIDs)))
-		_ = binary.Write(&b, binary.LittleEndian, tp.docIDs)
-		b.Write(tp.tfs)
+		w.i32(id)
+		w.u32(uint32(len(tp.docIDs)))
+		w.b.Write(util.UnsafeSliceToBytes(tp.docIDs)) // zero-copy LE bytes (see encodeDocmap)
+		w.b.Write(tp.tfs)
 	}
-	return b.Bytes()
+	return w.b.Bytes()
 }
 
 func (m *WandModel) decodeWand(r io.Reader) error {
@@ -312,6 +355,26 @@ func encodePk(pkType int32, v any) ([]byte, error) {
 		return asBytes(v), nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("wand: unsupported pk type %d", pkType)
+	}
+}
+
+// pkFixedWidth returns the fixed byte width encodePk emits for a fixed-width pk
+// type and true, or (-1, false) for a variable-length (varlena — varchar/char/
+// text/blob/…) type, so callers can distinguish "variable length" (needs a per-pk
+// length prefix) from a fixed width. Callers that store many pks (the delete log)
+// use it to drop the length prefix for fixed types.
+//
+// The width comes from types.T.FixedLength() (the canonical source) rather than a
+// second hardcoded copy — but the switch is scoped to exactly the types encodePk
+// encodes: types.T.IsFixedLen()/FixedLength() alone would also report int8/decimal/
+// uuid/… as fixed, yet encodePk only handles the four integer widths + varlena
+// (it errors on anything else), so pkFixedWidth must mirror that set.
+func pkFixedWidth(pkType int32) (int, bool) {
+	switch t := types.T(pkType); t {
+	case types.T_int64, types.T_uint64, types.T_int32, types.T_uint32:
+		return t.FixedLength(), true
+	default:
+		return -1, false // variable-length (varlena): length-prefixed
 	}
 }
 

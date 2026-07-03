@@ -162,7 +162,7 @@ type TailChunk struct {
 // yields a single chunk. (Frames are never empty — a valid frame is >= the
 // 44-byte overhead.)
 func splitFrameChunks(startChunkId int64, framed []byte) []TailChunk {
-	var out []TailChunk
+	out := make([]TailChunk, 0, (len(framed)+vectorindex.MaxChunkSize-1)/vectorindex.MaxChunkSize)
 	cid := startChunkId
 	for off := 0; off < len(framed); off += vectorindex.MaxChunkSize {
 		end := off + vectorindex.MaxChunkSize
