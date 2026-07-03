@@ -46,7 +46,10 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 	// same as IVF/fulltext. HNSW/CAGRA/IVF-PQ are cron-maintained.
 	tableDef := dmlCtx.tableDefs[0]
 
-	irregularIndexes := getIrregularIndexes(tableDef)
+	irregularIndexes, err := getIrregularIndexes(tableDef)
+	if err != nil {
+		return 0, err
+	}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true)
 	if err != nil {

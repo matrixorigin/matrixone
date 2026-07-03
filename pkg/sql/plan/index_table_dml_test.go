@@ -564,8 +564,10 @@ func TestBindReplaceSkipsUniqueIndexForStaticNull(t *testing.T) {
 	require.Len(t, skipUniqueIdx, 1)
 	require.True(t, skipUniqueIdx[0], "unique index should be skipped when a UK part is static NULL")
 
+	irr, err := getIrregularIndexes(tableDef)
+	require.NoError(t, err)
 	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindReplace(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, getIrregularIndexes(tableDef),
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irr,
 	)
 	require.NoError(t, err)
 	require.NotZero(t, rootID)
@@ -626,8 +628,10 @@ func TestBindReplaceSkipsCompositeUniqueIndexForAnyStaticNull(t *testing.T) {
 			require.Len(t, skipUniqueIdx, 1)
 			require.Equal(t, tt.wantSkip, skipUniqueIdx[0])
 
+			irr, err := getIrregularIndexes(tableDef)
+			require.NoError(t, err)
 			rootID, err := builder.appendDedupAndMultiUpdateNodesForBindReplace(
-				bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, getIrregularIndexes(tableDef),
+				bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irr,
 			)
 			require.NoError(t, err)
 			require.NotZero(t, rootID)

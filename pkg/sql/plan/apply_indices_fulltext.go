@@ -274,6 +274,17 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		// projection is unchanged and the limit pushdown below covers it too.
 		var tmpTableFunc *tree.AliasedTableExpr
 		if storeTbl, metaTbl, ok := builder.findWandIndexTables(scanNode, idxdef); ok {
+			// A retrieval-parser index supports only RETRIEVAL mode (explicit
+			// `IN RETRIEVAL MODE`) or DEFAULT (no mode clause, which defaults to
+			// retrieval): it is BM25 top-K over bag-of-words and implements none of the
+			// natural-language, boolean (+/-/~/phrase), or query-expansion operators.
+			// Its CDC maintains only the WAND frames (the classic postings would be
+			// stale), so there is no correct fallback. Reject any other mode rather than
+			// silently ignoring the operators and returning wrong rows.
+			if mode != int64(tree.FULLTEXT_DEFAULT) && mode != int64(tree.FULLTEXT_RETRIEVAL) {
+				return -1, nil, nil, moerr.NewNotSupported(builder.GetContext(),
+					"a retrieval fulltext index only supports RETRIEVAL mode; use AGAINST('...' IN RETRIEVAL MODE)")
+			}
 			cfg := fmt.Sprintf(`{"db":"%s","index":"%s","metadata":"%s"}`,
 				scanNode.ObjRef.SchemaName, storeTbl, metaTbl)
 			wand_func := tree.NewCStr(fulltext_wand_search_func_name, 1)
@@ -759,11 +770,6 @@ func (builder *QueryBuilder) findEqualFullTextMatchFunc(projNode *plan.Node, sca
 	return eqmap
 }
 
-// findWandIndexTables locates the WAND chunk-store + metadata hidden tables for
-// a retrieval fulltext index — siblings of the postings index def (same
-// IndexName, distinguished by IndexAlgoTableType). ok is false for a
-// non-retrieval index (no WAND siblings), so the caller falls back to the
-// classic fulltext_index_scan path.
 // pushLimitToWandSearch sets the top-K limit on a fulltext_wand_search TVF node
 // (no-op for fulltext_index_scan or non-TVF nodes), so the WAND walk returns
 // only K rows instead of its default of 1.
@@ -780,6 +786,11 @@ func (builder *QueryBuilder) pushLimitToWandSearch(nodeID int32, limit *plan.Exp
 	}
 }
 
+// findWandIndexTables locates the WAND chunk-store + metadata hidden tables for
+// a retrieval fulltext index — siblings of the postings index def (same
+// IndexName, distinguished by IndexAlgoTableType). ok is false for a
+// non-retrieval index (no WAND siblings), so the caller falls back to the
+// classic fulltext_index_scan path.
 func (builder *QueryBuilder) findWandIndexTables(scanNode *plan.Node, ftIdxDef *plan.IndexDef) (storeTbl string, metaTbl string, ok bool) {
 	if scanNode == nil || scanNode.TableDef == nil || ftIdxDef == nil {
 		return "", "", false

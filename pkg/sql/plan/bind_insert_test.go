@@ -28,8 +28,12 @@ import (
 // are filtered out.
 func TestGetIrregularIndexes(t *testing.T) {
 	t.Run("nil/empty table", func(t *testing.T) {
-		assert.Nil(t, getIrregularIndexes(nil))
-		assert.Nil(t, getIrregularIndexes(&plan.TableDef{}))
+		gotNil, err := getIrregularIndexes(nil)
+		assert.NoError(t, err)
+		assert.Nil(t, gotNil)
+		gotEmpty, err := getIrregularIndexes(&plan.TableDef{})
+		assert.NoError(t, err)
+		assert.Nil(t, gotEmpty)
 	})
 
 	t.Run("mixed indexes", func(t *testing.T) {
@@ -52,11 +56,14 @@ func TestGetIrregularIndexes(t *testing.T) {
 			},
 		}
 
-		got := getIrregularIndexes(tableDef)
+		got, err := getIrregularIndexes(tableDef)
+		assert.NoError(t, err)
 		names := make([]string, 0, len(got))
 		for _, idx := range got {
 			names = append(names, idx.IndexName)
-			assert.True(t, isModernMaintainedIrregularAlgo(idx.IndexAlgo))
+			ok, err := isModernMaintainedIrregularAlgo(idx.IndexAlgo, idx.IndexAlgoParams)
+			assert.NoError(t, err)
+			assert.True(t, ok)
 			assert.True(t, idx.TableExist)
 		}
 		assert.ElementsMatch(t, []string{"ivf", "ft", "mst"}, names)
@@ -68,6 +75,8 @@ func TestGetIrregularIndexes(t *testing.T) {
 				{IndexName: "uk", IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(), TableExist: true},
 			},
 		}
-		assert.Nil(t, getIrregularIndexes(tableDef))
+		gotReg, err := getIrregularIndexes(tableDef)
+		assert.NoError(t, err)
+		assert.Nil(t, gotReg)
 	})
 }

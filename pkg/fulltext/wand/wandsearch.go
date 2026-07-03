@@ -15,8 +15,12 @@
 package wand
 
 import (
+	"encoding/binary"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -38,14 +42,36 @@ type WandQuery struct {
 // (mo_cbitmap_contain); for other PKs a bloom (false positives removed by the
 // downstream join to the filtered source).
 type docFilterMembership struct {
-	m *WandModel
-	f docfilter.MembershipFilter
+	m       *WandModel
+	f       docfilter.MembershipFilter
+	scratch [8]byte // reused encode buffer for the hot integer-PK path (Test copies out)
 }
 
 func (d *docFilterMembership) Contains(ord int64) bool {
-	raw, err := encodePk(d.m.PkType, d.m.PkAt(ord))
-	if err != nil {
-		return false
+	v := d.m.PkAt(ord)
+	// Contains runs once per candidate on the Block-Max walk hot path. For the common
+	// integer PKs, encode straight into a reused scratch buffer (byte-identical to
+	// packUint*) instead of allocating a fresh slice per call via encodePk. Test reads
+	// the bytes synchronously and does not retain them, so reuse is safe.
+	var raw []byte
+	switch types.T(d.m.PkType) {
+	case types.T_int64:
+		binary.LittleEndian.PutUint64(d.scratch[:], uint64(v.(int64)))
+		raw = d.scratch[:8]
+	case types.T_uint64:
+		binary.LittleEndian.PutUint64(d.scratch[:], v.(uint64))
+		raw = d.scratch[:8]
+	case types.T_int32:
+		binary.LittleEndian.PutUint32(d.scratch[:4], uint32(v.(int32)))
+		raw = d.scratch[:4]
+	case types.T_uint32:
+		binary.LittleEndian.PutUint32(d.scratch[:4], v.(uint32))
+		raw = d.scratch[:4]
+	default:
+		var err error
+		if raw, err = encodePk(d.m.PkType, v); err != nil {
+			return false
+		}
 	}
 	return d.f.Test(raw)
 }
@@ -138,8 +164,13 @@ func (s *WandSearch) Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.
 	if !ok {
 		return nil, nil, moerr.NewInternalError(proc.GetContext(), "wand search: invalid query payload")
 	}
+	// rt.Limit is uint; a value past MaxInt32 (e.g. an absurd pushed LIMIT) would
+	// wrap negative in int(...) and get clamped to 1, silently truncating the
+	// top-K. Clamp such values to "effectively all" instead of wrapping.
 	limit := int(rt.Limit)
-	if limit <= 0 {
+	if rt.Limit > uint(math.MaxInt32) {
+		limit = math.MaxInt32
+	} else if limit <= 0 {
 		limit = 1
 	}
 	// The WHERE prefilter is pk-based, so it must resolve against each segment's

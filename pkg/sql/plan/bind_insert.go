@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -72,7 +73,10 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// maintained and ride the modern path with no inline sub-plan.
 	tableDef := dmlCtx.tableDefs[0]
 
-	irregularIndexes := getIrregularIndexes(tableDef)
+	irregularIndexes, err := getIrregularIndexes(tableDef)
+	if err != nil {
+		return 0, err
+	}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false)
 	if err != nil {
@@ -221,15 +225,40 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 	return
 }
 
-// isModernMaintainedIrregularAlgo reports whether an irregular index algo has full
-// synchronous modern maintenance (both insert and delete sub-plans). IVF, fulltext,
-// and MASTER qualify (the master index table has an independent __mo_index_pri_col
-// origin-pk column, so delete joins on origin pk — same pattern as fulltext joins on
-// doc_id). HNSW/CAGRA/IVF-PQ are maintained asynchronously by cron (idxcron, off the
-// base-table CDC) and need no inline sub-plan.
-func isModernMaintainedIrregularAlgo(algo string) bool {
-	return catalog.IsIvfIndexAlgo(algo) || catalog.IsFullTextIndexAlgo(algo) ||
-		catalog.IsMasterIndexAlgo(algo)
+// isModernMaintainedIrregularAlgo reports whether an index has full synchronous
+// modern maintenance — inline delete + insert sub-plans built from the materialized
+// new-row image. Both halves of the decision are derived from shared, plugin-aware
+// predicates rather than a per-algo whitelist (which a new algorithm would silently
+// fall out of — the seam the plugin registry exists to remove):
+//
+//   - "irregular" == !IsRegularIndexAlgo: not a 1:1-maintained regular index
+//     (btree/rtree/default). This is the same test getValidIndexes uses to strip
+//     these from the main plan. Today: IVF, fulltext, MASTER, HNSW, CAGRA, IVF-PQ.
+//   - "inline (not async)" == !IndexIsAsync: an async index (HNSW/CAGRA/IVF-PQ, and a
+//     retrieval-parser fulltext index — same "fulltext" algo, async only visible via
+//     params) is maintained by cron/ISCP CDC off the base-table changes and gets NO
+//     inline sub-plan. It must never enter the modern maintenance set: on REPLACE/ODKU
+//     appendOnDupIrregularMaintSource would half-wire its maintenance source
+//     (materialized image + delete pk position) with no consuming sub-plan, desyncing
+//     the base-table MULTI_UPDATE delete columns and panicking the row lock (a
+//     __mo_rowid vector read as int64).
+//
+// MASTER is handled explicitly: it is not a registered plugin and is always
+// synchronously inline-maintained (buildPreInsertMasterIndex +
+// buildIrregularMasterDeleteByPk), so short-circuit it rather than route through
+// IndexIsAsync's param-only catalog fallback.
+func isModernMaintainedIrregularAlgo(algo, indexAlgoParams string) (bool, error) {
+	if catalog.IsRegularIndexAlgo(algo) {
+		return false, nil
+	}
+	if catalog.IsMasterIndexAlgo(algo) {
+		return true, nil
+	}
+	async, err := indexplugin.IndexIsAsync(algo, indexAlgoParams)
+	if err != nil {
+		return false, err
+	}
+	return !async, nil
 }
 
 // getIrregularIndexes returns the existing IVF/fulltext/master index definitions of
@@ -237,17 +266,24 @@ func isModernMaintainedIrregularAlgo(algo string) bool {
 // appendNodesForInsertStmt) and instead maintained by dedicated post-createQuery
 // sub-plans built from the materialized new-row image. HNSW/CAGRA/IVF-PQ are excluded
 // because cron maintains them off the base-table CDC.
-func getIrregularIndexes(tableDef *plan.TableDef) []*plan.IndexDef {
+func getIrregularIndexes(tableDef *plan.TableDef) ([]*plan.IndexDef, error) {
 	if tableDef == nil || len(tableDef.Indexes) == 0 {
-		return nil
+		return nil, nil
 	}
 	var irregular []*plan.IndexDef
 	for _, idxDef := range tableDef.Indexes {
-		if idxDef.TableExist && isModernMaintainedIrregularAlgo(idxDef.IndexAlgo) {
+		if !idxDef.TableExist {
+			continue
+		}
+		ok, err := isModernMaintainedIrregularAlgo(idxDef.IndexAlgo, idxDef.IndexAlgoParams)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			irregular = append(irregular, idxDef)
 		}
 	}
-	return irregular
+	return irregular, nil
 }
 
 // appendIrregularMaintSource materializes the modern new-row image (the projList2
@@ -588,7 +624,9 @@ func (builder *QueryBuilder) deletePkColExpr(relPos int32) *plan.Expr {
 // (the join key is the integer PK, never the vector), so it is robust to the
 // materialized layout and never copies the base vector through the hash join.
 func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, multiTableIndex *MultiTableIndex) error {
-	async, err := catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+	// Route through IndexIsAsync (not the param-only catalog.IsIndexAsync) so an
+	// always-async plugin index is recognized even when it sets no `async` param.
+	async, err := indexplugin.IndexIsAsync(multiTableIndex.IndexAlgo, multiTableIndex.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -676,7 +714,12 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 // the IVF delete: join the index table on doc_id == old/final PK and project only
 // the index row_id + fake pk into the output.
 func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindContext, indexdef *plan.IndexDef) error {
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	// A retrieval (WAND) fulltext index is always-async (built/maintained via ISCP
+	// CDC) but sets no `async` param, so the param-only catalog.IsIndexAsync misses
+	// it and would emit inline DELETE DML against CDC-managed WAND sibling tables
+	// that lack the doc_id/fake_pk columns. IndexIsAsync honors the plugin's
+	// AlwaysAsync trait, matching the migrated pre/post-DML build sites.
+	async, err := indexplugin.IndexIsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}

@@ -37,7 +37,10 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 
 	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForInsertStmt
 	// strips them. HNSW/CAGRA/IVF-PQ are cron-maintained and ride the modern path.
-	irregularIndexes := getIrregularIndexes(tableDef)
+	irregularIndexes, err := getIrregularIndexes(tableDef)
+	if err != nil {
+		return -1, err
+	}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr)
 	if err != nil {
