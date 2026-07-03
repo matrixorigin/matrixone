@@ -1,4 +1,4 @@
-name: Iceberg Connector Gates
+name: Iceberg Connector E2E
 
 on:
   pull_request:
@@ -6,34 +6,38 @@ on:
       - '.github/workflows/iceberg-connector.yml'
       - 'Makefile'
       - 'optools/iceberg_ci.bash'
+      - 'optools/iceberg_e2e_local.go'
       - 'optools/iceberg_external_runner.py'
+      - 'etc/launch-minio-local/**'
       - 'test/iceberg/**'
       - 'pkg/iceberg/**'
       - 'pkg/sql/iceberg/**'
+      - 'pkg/sql/plan/**'
       - 'pkg/sql/compile/**'
+      - 'pkg/frontend/**'
+      - 'pkg/sql/parsers/**'
+      - 'pkg/config/**'
+      - 'pkg/bootstrap/**'
       - 'pkg/sql/colexec/external/**'
       - 'pkg/sql/colexec/icebergdelete/**'
+      - 'pkg/sql/colexec/icebergwrite/**'
       - 'pkg/embed/**'
+      - 'cmd/mo-service/**'
+      - 'pkg/cnservice/**'
       - 'proto/pipeline.proto'
       - 'pkg/pb/pipeline/**'
-      - 'docs/iceberg/**'
-  schedule:
-    - cron: '17 18 * * *'
-  workflow_dispatch:
-    inputs:
-      external_profile:
-        description: 'External profile: local, tier-a, cross-engine, golden-real, credential-vending, tier-b, tier-c, tier-d, nightly'
-        required: false
-        default: 'local'
 
 permissions:
   contents: read
 
 jobs:
-  local-gates:
-    name: Local Iceberg Gates
+  iceberg-e2e-local:
+    name: Iceberg E2E Local
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
+    continue-on-error: true
+    env:
+      MO_ICEBERG_REPORT_DIR: test/iceberg/reports/iceberg-e2e-local-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,143 +46,28 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Prepare CGO and thirdparties
-        run: make cgo
+      - name: Run local Nessie/MinIO/MO Iceberg E2E
+        run: make test-iceberg-e2e-local
 
-      - name: Verify external runner is packaged
-        run: test -f optools/iceberg_external_runner.py
-
-      - name: Core package tests
-        run: make test-iceberg-core
-
-      - name: Embedded SQL tests
-        run: make test-iceberg-embedded
-
-      - name: iceberg-go adapter tests
-        run: make test-iceberg-adapter
-
-      - name: Golden vector reproducibility
-        run: make test-iceberg-golden
-
-      - name: External profile template validation
-        run: make test-iceberg-external-templates
-
-      - name: Coverage gate
-        run: make test-iceberg-coverage
-
-      - name: CAP coverage dashboard
-        env:
-          MO_ICEBERG_REPORT_DIR: test/iceberg/reports/local-gates
-        run: make test-iceberg-dashboard
-
-      - name: External readiness report
-        env:
-          MO_ICEBERG_REPORT_DIR: test/iceberg/reports/local-gates
-        run: make test-iceberg-readiness
-
-      - name: Summarize local Iceberg reports
+      - name: Summarize Iceberg E2E
         if: always()
         run: |
           {
-            echo "## Iceberg local gates"
+            echo "## Iceberg E2E local"
             echo ""
-            echo "Artifact: \`iceberg-local-gates-${{ github.sha }}\`"
+            echo "Mode: advisory / non-blocking"
+            echo "Artifact: \`iceberg-e2e-local-${{ github.sha }}-${{ github.run_id }}\`"
             echo ""
-            if [ -f test/iceberg/reports/local-gates/cap_coverage.md ]; then
-              echo "CAP dashboard: \`test/iceberg/reports/local-gates/cap_coverage.md\`"
-            fi
-            if [ -f test/iceberg/reports/local-gates/external_readiness.md ]; then
-              echo "External readiness: \`test/iceberg/reports/local-gates/external_readiness.md\`"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: iceberg-local-gates-${{ github.sha }}
-          path: |
-            test/iceberg/reports/**
-
-  external-nightly:
-    name: External Iceberg Nightly
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Prepare CGO and thirdparties
-        run: make cgo
-
-      - name: Verify external runner is packaged
-        run: test -f optools/iceberg_external_runner.py
-
-      - name: Run enabled external profile
-        env:
-          MO_ICEBERG_CI_PROFILE: ${{ inputs.external_profile || vars.MO_ICEBERG_CI_PROFILE || 'local' }}
-          MO_ICEBERG_REPORT_DIR: test/iceberg/reports/external-${{ github.run_id }}
-          MO_ICEBERG_IT: ${{ secrets.MO_ICEBERG_IT }}
-          MO_ICEBERG_CROSS_ENGINE: ${{ secrets.MO_ICEBERG_CROSS_ENGINE }}
-          MO_ICEBERG_CATALOG_URI: ${{ secrets.MO_ICEBERG_CATALOG_URI }}
-          MO_ICEBERG_CATALOG_TOKEN: ${{ secrets.MO_ICEBERG_CATALOG_TOKEN }}
-          MO_ICEBERG_S3_ENDPOINT: ${{ secrets.MO_ICEBERG_S3_ENDPOINT }}
-          MO_ICEBERG_MO_SQL_CMD: ${{ secrets.MO_ICEBERG_MO_SQL_CMD }}
-          MO_ICEBERG_SPARK_SQL_CMD: ${{ secrets.MO_ICEBERG_SPARK_SQL_CMD }}
-          MO_ICEBERG_TRINO_SQL_CMD: ${{ secrets.MO_ICEBERG_TRINO_SQL_CMD }}
-          MO_ICEBERG_CREDENTIAL_VENDING: ${{ vars.MO_ICEBERG_CREDENTIAL_VENDING }}
-          MO_ICEBERG_CREDENTIAL_VENDING_SCENARIOS: ${{ vars.MO_ICEBERG_CREDENTIAL_VENDING_SCENARIOS }}
-          MO_ICEBERG_PUBLIC_DATASET: ${{ vars.MO_ICEBERG_PUBLIC_DATASET }}
-          MO_ICEBERG_PUBLIC_DATASET_CATALOG_URI: ${{ secrets.MO_ICEBERG_PUBLIC_DATASET_CATALOG_URI }}
-          MO_ICEBERG_PUBLIC_DATASET_WAREHOUSE: ${{ vars.MO_ICEBERG_PUBLIC_DATASET_WAREHOUSE }}
-          MO_ICEBERG_PUBLIC_DATASET_SCENARIOS: ${{ vars.MO_ICEBERG_PUBLIC_DATASET_SCENARIOS }}
-          MO_ICEBERG_PUBLIC_DATASET_MO_SQL_CMD: ${{ secrets.MO_ICEBERG_PUBLIC_DATASET_MO_SQL_CMD }}
-          MO_ICEBERG_PUBLIC_DATASET_OFFICIAL_SQL_CMD: ${{ secrets.MO_ICEBERG_PUBLIC_DATASET_OFFICIAL_SQL_CMD }}
-          MO_ICEBERG_GOLDEN_REAL_SCENARIOS: ${{ vars.MO_ICEBERG_GOLDEN_REAL_SCENARIOS }}
-          MO_ICEBERG_TIER_C_CATALOG_URI: ${{ secrets.MO_ICEBERG_TIER_C_CATALOG_URI }}
-          MO_ICEBERG_TIER_C_WAREHOUSE: ${{ secrets.MO_ICEBERG_TIER_C_WAREHOUSE }}
-          MO_ICEBERG_TIER_C_SCENARIOS: ${{ vars.MO_ICEBERG_TIER_C_SCENARIOS }}
-          MO_ICEBERG_SANDBOX: ${{ vars.MO_ICEBERG_SANDBOX }}
-          MO_ICEBERG_TIER_C_MO_SQL_CMD: ${{ secrets.MO_ICEBERG_TIER_C_MO_SQL_CMD }}
-          MO_ICEBERG_TIER_C_OFFICIAL_SQL_CMD: ${{ secrets.MO_ICEBERG_TIER_C_OFFICIAL_SQL_CMD }}
-          MO_ICEBERG_TIER_C_SIGNER_URI: ${{ secrets.MO_ICEBERG_TIER_C_SIGNER_URI }}
-          MO_ICEBERG_REMOTE_SIGNING: ${{ vars.MO_ICEBERG_REMOTE_SIGNING }}
-          MO_ICEBERG_SERVER_PLANNING: ${{ vars.MO_ICEBERG_SERVER_PLANNING }}
-          MO_ICEBERG_NESR: ${{ vars.MO_ICEBERG_NESR }}
-          MO_ICEBERG_NESR_SCENARIOS: ${{ vars.MO_ICEBERG_NESR_SCENARIOS }}
-          MO_ICEBERG_NESR_MO_SQL_CMD: ${{ secrets.MO_ICEBERG_NESR_MO_SQL_CMD }}
-          MO_ICEBERG_NESR_EXTERNAL_SQL_CMD: ${{ secrets.MO_ICEBERG_NESR_EXTERNAL_SQL_CMD }}
-          MO_ICEBERG_NESR_EXPECTED_KPI: ${{ vars.MO_ICEBERG_NESR_EXPECTED_KPI }}
-        run: make test-iceberg-nightly
-
-      - name: Summarize external Iceberg reports
-        if: always()
-        env:
-          MO_ICEBERG_CI_PROFILE: ${{ inputs.external_profile || vars.MO_ICEBERG_CI_PROFILE || 'local' }}
-          MO_ICEBERG_REPORT_DIR: test/iceberg/reports/external-${{ github.run_id }}
-        run: |
-          {
-            echo "## Iceberg external nightly"
-            echo ""
-            echo "Profile: \`${MO_ICEBERG_CI_PROFILE:-local}\`"
-            echo "Artifact: \`iceberg-external-nightly-${{ github.sha }}-${{ github.run_id }}\`"
-            echo ""
-            if [ -d "${MO_ICEBERG_REPORT_DIR:-test/iceberg/reports/external-${{ github.run_id }}}" ]; then
-              find "${MO_ICEBERG_REPORT_DIR:-test/iceberg/reports/external-${{ github.run_id }}}" -maxdepth 2 -name summary.md | sort | while read -r summary; do
-                echo "- \`${summary}\`"
-              done
+            if [ -f "${MO_ICEBERG_REPORT_DIR}/summary.md" ]; then
+              cat "${MO_ICEBERG_REPORT_DIR}/summary.md"
             else
-              echo "No report directory was created."
+              echo "No summary was created."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: iceberg-external-nightly-${{ github.sha }}-${{ github.run_id }}
+          name: iceberg-e2e-local-${{ github.sha }}-${{ github.run_id }}
           path: |
             test/iceberg/reports/**

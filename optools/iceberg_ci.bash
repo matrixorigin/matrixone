@@ -95,6 +95,88 @@ go_test_golden() {
   run go test ./pkg/iceberg/metadata -run '^TestGoldenVectorProvenanceArtifacts$' -count=1
 }
 
+sanitize_artifact_file() {
+  local src="$1"
+  local dst="$2"
+  if [[ ! -f "$src" ]]; then
+    printf 'log file was not captured: %s\n' "$src" >"$dst"
+    return
+  fi
+  python3 - "$src" "$dst" <<'PY'
+import hashlib
+import re
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+with open(src, "r", encoding="utf-8", errors="replace") as f:
+    text = f.read()
+
+def redact_path(match):
+    value = match.group(0)
+    return "<redacted:path:%s>" % hashlib.sha256(value.encode()).hexdigest()[:8]
+
+text = re.sub(r"\b(?:s3|gs|abfs|abfss)://[^\s,;)`]+", redact_path, text, flags=re.I)
+text = re.sub(r"(AKIA[0-9A-Z]{16}|X-Amz-Signature=[^&\s]+|AWSAccessKeyId=[^&\s]+|raw-token|raw-secret-key)", "<redacted>", text)
+with open(dst, "w", encoding="utf-8") as f:
+    f.write(text)
+PY
+}
+
+ICEBERG_E2E_TMP_DIR=""
+ICEBERG_E2E_MO_PID=""
+
+iceberg_e2e_collect_logs() {
+  [[ -n "$ICEBERG_E2E_TMP_DIR" ]] || return
+  mkdir -p "$REPORT_DIR"
+  sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/mo-service.log" "${REPORT_DIR}/mo-service.log"
+  if command -v docker >/dev/null 2>&1; then
+    (cd "${ROOT_DIR}/etc/launch-minio-local" && docker compose logs --no-color nessie >"${ICEBERG_E2E_TMP_DIR}/nessie.log" 2>&1) || true
+    (cd "${ROOT_DIR}/etc/launch-minio-local" && docker compose logs --no-color minio >"${ICEBERG_E2E_TMP_DIR}/minio.log" 2>&1) || true
+    sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/nessie.log" "${REPORT_DIR}/nessie.log"
+    sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/minio.log" "${REPORT_DIR}/minio.log"
+  fi
+}
+
+iceberg_e2e_cleanup() {
+  local status=$?
+  if [[ -n "$ICEBERG_E2E_MO_PID" ]] && kill -0 "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1; then
+    kill "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1 || true
+    wait "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1 || true
+  fi
+  iceberg_e2e_collect_logs
+  (cd "$ROOT_DIR" && make dev-down-iceberg-tier-a >/dev/null 2>&1) || true
+  return "$status"
+}
+
+iceberg_e2e_local() {
+  require_cmd docker
+  require_cmd curl
+  require_cmd python3
+
+  mkdir -p "$REPORT_DIR"
+  ICEBERG_E2E_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mo-iceberg-e2e-local.XXXXXX")"
+  trap iceberg_e2e_cleanup EXIT
+
+  run make build
+  go_test_adapter
+  go_test_golden
+
+  run make dev-up-iceberg-tier-a
+  log "starting mo-service for Iceberg E2E local"
+  MO_ICEBERG_ALLOW_PLAIN_HTTP=1 "${ROOT_DIR}/mo-service" -launch "${ROOT_DIR}/etc/launch-minio-local/launch.toml" \
+    >"${ICEBERG_E2E_TMP_DIR}/mo-service.log" 2>&1 &
+  ICEBERG_E2E_MO_PID="$!"
+
+  run go run ./optools/iceberg_e2e_local.go \
+    --catalog-uri "${MO_ICEBERG_E2E_CATALOG_URI:-http://127.0.0.1:19120/iceberg}" \
+    --warehouse "${MO_ICEBERG_E2E_WAREHOUSE:-s3://mo-iceberg/warehouse}" \
+    --dsn "${MO_ICEBERG_E2E_DSN:-root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s&multiStatements=false}" \
+    --report-dir "$REPORT_DIR"
+
+  iceberg_e2e_collect_logs
+  verify_report_artifacts "$REPORT_DIR"
+}
+
 coverage_threshold_for() {
   case "$1" in
     ./pkg/iceberg/api) printf '38.0' ;;
@@ -919,6 +1001,7 @@ Profiles:
   external-coverage Verify external reports cover the expected open ICE-TEST ids.
   dashboard  Generate CAP coverage dashboard under MO_ICEBERG_REPORT_DIR.
   readiness  Generate external profile readiness report under MO_ICEBERG_REPORT_DIR.
+  e2e-local  Run local Nessie/MinIO/MO Iceberg E2E smoke without Spark.
   golden-real Run real-file golden vector cross-engine scenarios from MO_ICEBERG_GOLDEN_REAL_SCENARIOS.
   nightly    Run preflight, enabled external tests, artifact check, golden, dashboard.
   local      Run core, embedded, adapter, golden, coverage, dashboard.
@@ -940,6 +1023,7 @@ case "$PROFILE" in
   external-coverage) require_cmd python3; verify_external_coverage "$REPORT_DIR" ;;
   dashboard) generate_cap_dashboard "$REPORT_DIR" ;;
   readiness) generate_external_readiness "$REPORT_DIR" ;;
+  e2e-local) iceberg_e2e_local ;;
   golden-real)
     export MO_ICEBERG_CI_PROFILE="${MO_ICEBERG_CI_PROFILE:-golden-real}"
     preflight

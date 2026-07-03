@@ -115,8 +115,9 @@ help:
 	@echo "  make ut                 - Run unit tests"
 	@echo "  make ci                 - Run CI tests (BVT + optional UT)"
 	@echo "  make compose            - Run docker compose BVT tests"
-	@echo "  make test-iceberg-local - Run local Iceberg CI gates"
-	@echo "  make test-iceberg-nightly - Run enabled Iceberg nightly gates"
+	@echo "  make test-iceberg-e2e-local - Run local Nessie/MinIO/MO Iceberg E2E smoke"
+	@echo "  make test-iceberg-local - Run legacy local Iceberg CI gates"
+	@echo "  make test-iceberg-nightly - Run enabled Iceberg external nightly gates"
 	@echo "  make test-iceberg-golden-real - Run real-file Iceberg golden cross-engine scenarios"
 	@echo "  make test-iceberg-external-templates - Validate external Iceberg scenario templates"
 	@echo "  make test-iceberg-readiness - Generate external Iceberg test readiness report"
@@ -416,6 +417,10 @@ test-iceberg-dashboard:
 .PHONY: test-iceberg-readiness
 test-iceberg-readiness:
 	@optools/iceberg_ci.bash readiness
+
+.PHONY: test-iceberg-e2e-local
+test-iceberg-e2e-local:
+	@optools/iceberg_ci.bash e2e-local
 
 .PHONY: test-iceberg-local
 test-iceberg-local:
