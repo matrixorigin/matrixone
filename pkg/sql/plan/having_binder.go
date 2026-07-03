@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -134,6 +136,36 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 	}
 }
 
+// validateCountArgs validates COUNT function arguments against MySQL semantics.
+//   - COUNT(*), COUNT(expr): always valid
+//   - COUNT(expr1, expr2, ...): only valid with DISTINCT
+//   - COUNT((expr1, expr2, ...)): only valid with DISTINCT
+//
+// Call this from every binder path that constructs a COUNT aggregate or window
+// function (HavingBinder.BindAggFunc, bindWindowFuncExpr) before the call to
+// bindFuncExprImplByAstExpr.
+func validateCountArgs(ctx context.Context, funcName string, astExpr *tree.FuncExpr) error {
+	if funcName != "count" {
+		return nil
+	}
+	if len(astExpr.Exprs) == 0 {
+		// COUNT(*)
+		return nil
+	}
+	// COUNT((a, b, ...)) — tuple-as-single-arg, only valid with DISTINCT.
+	if len(astExpr.Exprs) == 1 {
+		if _, ok := astExpr.Exprs[0].(*tree.Tuple); ok && astExpr.Type != tree.FUNC_TYPE_DISTINCT {
+			return moerr.NewSyntaxErrorf(ctx, "Incorrect arguments to COUNT")
+		}
+		return nil
+	}
+	// COUNT(a, b, ...) — multiple separate args, only valid with DISTINCT.
+	if astExpr.Type != tree.FUNC_TYPE_DISTINCT {
+		return moerr.NewSyntaxErrorf(ctx, "Incorrect arguments to COUNT")
+	}
+	return nil
+}
+
 func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "aggregate function %s calls cannot be nested", funcName)
@@ -146,9 +178,8 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		}
 	}
 
-	// MySQL rejects COUNT with multiple arguments unless DISTINCT is specified.
-	if funcName == "count" && len(astExpr.Exprs) > 1 && astExpr.Type != tree.FUNC_TYPE_DISTINCT {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "Incorrect arguments to COUNT")
+	if err := validateCountArgs(b.GetContext(), funcName, astExpr); err != nil {
+		return nil, err
 	}
 
 	b.insideAgg = true
@@ -162,7 +193,8 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	// expression (not just inside optimizeDistinctAgg), otherwise the executor
 	// cannot build a correct multi-column distinct key from a single T_tuple vector.
 	f := expr.GetF()
-	if len(f.Args) == 1 && f.Args[0].Typ.Id == int32(types.T_tuple) {
+	if funcName == "count" && astExpr.Type == tree.FUNC_TYPE_DISTINCT &&
+		len(f.Args) == 1 && f.Args[0].Typ.Id == int32(types.T_tuple) {
 		f.Args = f.Args[0].GetList().List
 	}
 
