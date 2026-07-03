@@ -200,22 +200,10 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 			continue
 		}
 
-		colMap := make(map[string]bool)
-		for _, part := range idxDef.Parts {
-			colMap[part] = true
-		}
-
-		notCoverPk := false
-		for _, part := range tableDef.Pkey.Names {
-			if !colMap[part] {
-				notCoverPk = true
-				break
-			}
-		}
-
-		if notCoverPk {
-			indexes = append(indexes, idxDef)
-		}
+		// If a regular index table exists, DML must maintain it even when the
+		// index parts include the full primary key. The optimizer can still choose
+		// that hidden table for leading-prefix predicates.
+		indexes = append(indexes, idxDef)
 	}
 
 	return
@@ -1339,7 +1327,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 
-			updateExpr, err = forceCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
+			updateExpr, err = forceAssignmentCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
 			if err != nil {
 				return 0, err
 			}
@@ -2649,7 +2637,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 				return 0, nil, nil, err
 			}
 		} else {
-			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			projExpr, err = forceAssignmentCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return 0, nil, nil, err
 			}
