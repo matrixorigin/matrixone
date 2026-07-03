@@ -85,11 +85,14 @@ func (u *fulltextWandCreateState) end(tf *TableFunction, proc *process.Process) 
 		}
 		res.Close()
 	}
-	// Synchronous CREATE/REINDEX build → the compacted main index (tag=0).
-	sqls, err := model.ToInsertSqls(u.tblcfg, time.Now().UnixMicro(), 0)
+	// Synchronous CREATE/REINDEX build → the compacted main index (tag=0). The
+	// serialized model is spilled to a temp file and read via load_file, so keep it
+	// until the INSERTs (below) have run.
+	sqls, cleanup, err := model.ToInsertSqls(u.tblcfg, time.Now().UnixMicro(), 0)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	for _, s := range sqls {
 		res, err := wand_runSql(sqlproc, s)
 		if err != nil {

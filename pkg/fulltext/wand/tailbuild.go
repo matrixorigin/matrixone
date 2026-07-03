@@ -125,14 +125,28 @@ func (t *TailBuilder) seal() error {
 	return nil
 }
 
-// Finish seals the final open segment and returns the spilled segments (in append
-// order) plus the accumulated deletes. chunk_id is assigned by the caller at
+// Finish seals the final open segment, frames + spills the accumulated delete batch,
+// and returns ALL spilled frame files in chunk_id order: the DELETE frame FIRST (so a
+// same-batch UPSERT's new insert segment — at a higher chunk_id — supersedes the
+// deleted base copy under ComputeLiveness), then the insert segments. Each is a
+// temp file the caller persists via load_file. chunk_id is assigned by the caller at
 // persist. Cleanup must be called afterwards.
-func (t *TailBuilder) Finish() ([]TailSegment, []DeleteRecord, error) {
+func (t *TailBuilder) Finish() ([]TailSegment, error) {
 	if err := t.seal(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return t.segs, t.deletes, nil
+	if len(t.deletes) == 0 {
+		return t.segs, nil
+	}
+	framed, err := FrameDeletes(t.pkType, t.deletes)
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(t.dir, "delete.frame")
+	if err := os.WriteFile(path, framed, 0o600); err != nil {
+		return nil, err
+	}
+	return append([]TailSegment{{Path: path, FrameLen: len(framed)}}, t.segs...), nil
 }
 
 // Cleanup removes the temp dir and all spilled segment files. Idempotent.

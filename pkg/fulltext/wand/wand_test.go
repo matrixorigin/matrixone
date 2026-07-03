@@ -501,10 +501,11 @@ func TestWandToInsertSqlsTag(t *testing.T) {
 	cfg := TableConfig{DbName: "db", IndexTable: "ft_index", MetadataTable: "ft_meta"}
 
 	for _, tag := range []int{0, 1} {
-		sqls, err := m.ToInsertSqls(cfg, 123, tag)
+		sqls, cleanup, err := m.ToInsertSqls(cfg, 123, tag)
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer cleanup()
 		// the chunk INSERT(s) must carry the requested tag, and the wrong tag
 		// must not appear.
 		want := fmt.Sprintf(", %d)", tag)

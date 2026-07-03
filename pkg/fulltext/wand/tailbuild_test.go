@@ -55,15 +55,13 @@ func TestTailBuilderStreamsCappedSegments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	segs, deletes, err := tb.Finish()
+	segs, err := tb.Finish()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(segs) != 3 {
-		t.Fatalf("want 3 capacity-capped segments, got %d", len(segs))
-	}
-	if len(deletes) != 1 || normalizeKey(deletes[0].Pk) != normalizeKey(int64(99)) {
-		t.Fatalf("deletes not collected: %v", deletes)
+	// 3 capacity-capped insert segments + 1 delete frame (spilled FIRST) = 4 files.
+	if len(segs) != 4 {
+		t.Fatalf("want 4 spilled files (1 delete + 3 segments), got %d", len(segs))
 	}
 
 	// Reassemble the spilled files exactly as loadTailFrames does.
@@ -98,6 +96,9 @@ func TestTailBuilderStreamsCappedSegments(t *testing.T) {
 			t.Fatalf("segment %d exceeds capacity: N=%d", i, m.N)
 		}
 	}
+	if _, ok := delMap[normalizeKey(int64(99))]; !ok {
+		t.Fatalf("delete pk 99 not folded from the spilled delete frame: %v", delMap)
+	}
 
 	live := ComputeLiveness(models, delMap)
 	got := pkCounts(SearchSegmentsLive(models, []string{"x"}, 100, nil, live))
@@ -113,8 +114,8 @@ func TestTailBuilderStreamsCappedSegments(t *testing.T) {
 }
 
 // TestTailBuilderEmptyAndCleanup covers the corner cases: an all-delete stream
-// yields no segments (but collects deletes), a segment whose rows have no
-// searchable tokens is dropped (not spilled), and Cleanup removes the temp dir.
+// yields only the spilled delete frame (no insert segments), a segment whose rows
+// have no searchable tokens is dropped (not spilled), and Cleanup removes the dir.
 func TestTailBuilderEmptyAndCleanup(t *testing.T) {
 	tokenize := func(s string) []string { return strings.Fields(s) }
 	tb, err := NewTailBuilder(testPkType, 100, tokenize)
@@ -128,15 +129,13 @@ func TestTailBuilderEmptyAndCleanup(t *testing.T) {
 	if err := tb.AddBatch(c); err != nil {
 		t.Fatal(err)
 	}
-	segs, deletes, err := tb.Finish()
+	segs, err := tb.Finish()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(segs) != 0 {
-		t.Fatalf("empty-token stream should spill no segments, got %d", len(segs))
-	}
-	if len(deletes) != 1 {
-		t.Fatalf("want 1 delete, got %d", len(deletes))
+	// no insert segments; just the spilled delete frame.
+	if len(segs) != 1 {
+		t.Fatalf("all-delete/empty-token stream should spill 1 file (the delete frame), got %d", len(segs))
 	}
 
 	dir := tb.dir

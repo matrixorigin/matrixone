@@ -16,11 +16,9 @@ package wand
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -44,28 +42,39 @@ type TableConfig struct {
 	PKey          string `json:"pkey"`
 }
 
-// insertBatchRows caps how many chunk tuples go into one INSERT statement.
-const insertBatchRows = 256
-
-// ToInsertSqls serializes the model and emits the SQL to persist it: one
-// metadata row (timestamp, md5 checksum, filesize) plus the index bytes split
-// into <= MaxChunkSize chunks stored as (index_id, chunk_id, data, tag) rows.
-// Chunk data is embedded as unhex(...) literals so the create TVF needs no
-// temp files.
+// ToInsertSqls serializes the model, SPILLS it to a temp file, and emits the SQL to
+// persist it: one metadata row (timestamp, md5 checksum, filesize) plus the index
+// bytes split into <= MaxChunkSize (index_id, chunk_id, data, tag) rows read straight
+// from the file via load_file — NO hex/unhex (which doubled the SQL text and had to
+// be re-parsed). Mirrors HNSW's ToSql. The returned cleanup MUST be called after the
+// SQLs run (they read the temp file at execution) — typically deferred by the caller.
 //
 // tag selects the storage tier (Phase B): tag=0 = the compacted main index
 // (the sync CREATE/REINDEX build and idxcron's merged output); tag=1 = an
 // incremental CDC delta segment appended by the ISCP sinker. Both kinds coexist
 // in the same ft_index store and are distinguished only by this column.
-func (m *WandModel) ToInsertSqls(cfg TableConfig, ts int64, tag int) ([]string, error) {
+func (m *WandModel) ToInsertSqls(cfg TableConfig, ts int64, tag int) (sqls []string, cleanup func(), err error) {
 	buf, err := m.Serialize()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	checksum := vectorindex.CheckSumFromBuffer(buf)
 	filesize := int64(len(buf))
 
-	sqls := make([]string, 0, 4)
+	fp, err := os.CreateTemp("", "wandbuild")
+	if err != nil {
+		return nil, nil, err
+	}
+	path := fp.Name()
+	cleanup = func() { fp.Close(); os.Remove(path) }
+	if _, err = fp.Write(buf); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if err = fp.Sync(); err != nil { // durable on disk before load_file reads it
+		cleanup()
+		return nil, nil, err
+	}
 
 	metaTbl := sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)
 	sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s) VALUES (%s, %d, %s, %d)",
@@ -73,31 +82,8 @@ func (m *WandModel) ToInsertSqls(cfg TableConfig, ts int64, tag int) ([]string, 
 		catalog.FullTextIndex_TblCol_Metadata_Index_Id, catalog.FullTextIndex_TblCol_Metadata_Timestamp,
 		catalog.FullTextIndex_TblCol_Metadata_Checksum, catalog.FullTextIndex_TblCol_Metadata_Filesize,
 		sqlquote.String(m.Id), ts, sqlquote.String(checksum), filesize))
-
-	idxTbl := sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable)
-	insertPrefix := fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s) VALUES ", idxTbl,
-		catalog.FullTextIndex_TblCol_Storage_Index_Id, catalog.FullTextIndex_TblCol_Storage_Chunk_Id,
-		catalog.FullTextIndex_TblCol_Storage_Data, catalog.FullTextIndex_TblCol_Storage_Tag)
-
-	values := make([]string, 0, insertBatchRows)
-	chunkID := int64(0)
-	for offset := 0; offset < len(buf); offset += vectorindex.MaxChunkSize {
-		end := offset + vectorindex.MaxChunkSize
-		if end > len(buf) {
-			end = len(buf)
-		}
-		values = append(values, fmt.Sprintf("(%s, %d, unhex('%s'), %d)",
-			sqlquote.String(m.Id), chunkID, hex.EncodeToString(buf[offset:end]), tag))
-		chunkID++
-		if len(values) == insertBatchRows {
-			sqls = append(sqls, insertPrefix+strings.Join(values, ", "))
-			values = values[:0]
-		}
-	}
-	if len(values) > 0 {
-		sqls = append(sqls, insertPrefix+strings.Join(values, ", "))
-	}
-	return sqls, nil
+	sqls = append(sqls, FileChunkInsertSqls(cfg, m.Id, 0, path, int(filesize), tag)...)
+	return sqls, cleanup, nil
 }
 
 // DeleteSqls returns the SQL to remove an index id's chunks + metadata row

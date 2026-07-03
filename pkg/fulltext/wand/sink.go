@@ -17,9 +17,9 @@ package wand
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"hash/crc32"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,7 +30,7 @@ import (
 // The sink side of Phase B: the ISCP consumer's WandSqlWriter accumulates CDC
 // rows into a WandCdc, serializes it through the ISCP channel (Encode), and
 // RunWand decodes it (DecodeWandCdc) and STREAMS it through a TailBuilder into
-// capacity-capped tag=1 CdcTail segments appended to the store (FrameInsertSqls).
+// capacity-capped tag=1 CdcTail segments appended to the store (TailFileInsertSqls).
 // (BuildTailFrames below is the non-streaming equivalent, kept for tests /
 // small in-memory batches.) The blob is BINARY (typed pk via encodePk) — unlike
 // the HNSW JSON path, because a retrieval pk is `any` (int64 OR varchar) and a
@@ -181,8 +181,8 @@ func readLenString(r *bytes.Reader) (string, error) {
 // base copy (chunk_id below the delete) is dropped.
 //
 // A segment frame larger than MaxChunkSize is split across chunk rows at persist
-// (FrameInsertSqls) and reassembled at load (Bug 1) — capacity no longer needs to
-// keep a segment within one storage row; it sizes from max_index_capacity.
+// and reassembled at load (Bug 1) — capacity no longer needs to keep a segment
+// within one storage row; it sizes from max_index_capacity.
 func BuildTailFrames(cdc *WandCdc, capacity int64, startChunkId int64, tokenize func(string) []string) ([]TailFrame, int64, error) {
 	b := NewBuilder(fmt.Sprintf("cdctail-%d", startChunkId), cdc.PkType)
 	var deletes []DeleteRecord
@@ -251,23 +251,48 @@ func frameChunkCount(frameLen int) int64 {
 	return n
 }
 
-// FrameInsertSqls renders one tag=1 CdcTail frame as the INSERT(s) into the store
-// (index_id = CdcTailId, tag = Tag_CdcEvents), SPLITTING a frame larger than the
-// data column (MaxChunkSize) across consecutive chunk_ids from startChunkId —
-// reassembled at load via CdcFrameLen. Mirrors ToInsertSqls' row form.
-func FrameInsertSqls(cfg TableConfig, startChunkId int64, framed []byte) []string {
-	chunks := splitFrameChunks(startChunkId, framed)
-	sqls := make([]string, 0, len(chunks))
-	for _, ch := range chunks {
-		sqls = append(sqls, frameChunkInsertSql(cfg, ch.ChunkId, ch.Data))
+// maxInsertTuples caps VALUES tuples per INSERT (matches HNSW's 2000). Each tuple's
+// load_file reads a MaxChunkSize file chunk into memory at execution, so an unbounded
+// single INSERT would materialize the whole index at once → OOM / GC pressure. This
+// bounds a persist statement to ~maxInsertTuples*MaxChunkSize resident.
+const maxInsertTuples = 2000
+
+// FileChunkInsertSqls renders the storage INSERTs that read a FILE directly via
+// load_file — no hex/unhex, and (for the streaming sinker) no read-back to memory:
+// the frame is ALREADY on disk. It splits [0..dataLen) across MaxChunkSize chunk
+// rows from startChunkId under (index_id=id, tag), batching <= maxInsertTuples tuples
+// per INSERT. Mirrors HNSW's ToSql. The file MUST exist when the INSERT executes, so
+// the caller keeps it until the persist txn commits. A frame larger than MaxChunkSize
+// is thus split across consecutive chunk_ids and reassembled at load via CdcFrameLen.
+func FileChunkInsertSqls(cfg TableConfig, id string, startChunkId int64, path string, dataLen int, tag int) []string {
+	prefix := fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s) VALUES ",
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.FullTextIndex_TblCol_Storage_Index_Id, catalog.FullTextIndex_TblCol_Storage_Chunk_Id,
+		catalog.FullTextIndex_TblCol_Storage_Data, catalog.FullTextIndex_TblCol_Storage_Tag)
+	var sqls, vals []string
+	chunkID := startChunkId
+	for off := 0; off < dataLen; off += vectorindex.MaxChunkSize {
+		sz := vectorindex.MaxChunkSize
+		if off+sz > dataLen {
+			sz = dataLen - off
+		}
+		url := fmt.Sprintf("file://%s?offset=%d&size=%d", path, off, sz)
+		vals = append(vals, fmt.Sprintf("(%s, %d, load_file(cast(%s as datalink)), %d)",
+			sqlquote.String(id), chunkID, sqlquote.String(url), tag))
+		chunkID++
+		if len(vals) == maxInsertTuples {
+			sqls = append(sqls, prefix+strings.Join(vals, ", "))
+			vals = vals[:0]
+		}
+	}
+	if len(vals) > 0 {
+		sqls = append(sqls, prefix+strings.Join(vals, ", "))
 	}
 	return sqls
 }
 
-func frameChunkInsertSql(cfg TableConfig, chunkId int64, chunk []byte) string {
-	return fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s) VALUES (%s, %d, unhex('%s'), %d)",
-		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
-		catalog.FullTextIndex_TblCol_Storage_Index_Id, catalog.FullTextIndex_TblCol_Storage_Chunk_Id,
-		catalog.FullTextIndex_TblCol_Storage_Data, catalog.FullTextIndex_TblCol_Storage_Tag,
-		sqlquote.String(vectorindex.CdcTailId), chunkId, hex.EncodeToString(chunk), int(vectorindex.Tag_CdcEvents))
+// TailFileInsertSqls is FileChunkInsertSqls for the tag=1 CdcTail (index_id =
+// CdcTailId, tag = Tag_CdcEvents) — the streaming sinker's spilled frame files.
+func TailFileInsertSqls(cfg TableConfig, startChunkId int64, path string, frameLen int) []string {
+	return FileChunkInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, path, frameLen, int(vectorindex.Tag_CdcEvents))
 }

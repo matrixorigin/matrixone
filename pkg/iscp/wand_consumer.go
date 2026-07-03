@@ -16,7 +16,6 @@ package iscp
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,7 +43,7 @@ import (
 //
 // NOTE: this consumer is CDC/txn-coupled and is NOT exercised by the package
 // unit tests; it needs a live mo_ctl + CDC pipeline to validate end-to-end. The
-// WAND-specific build/frame logic it calls (TailBuilder, FrameInsertSqls,
+// WAND-specific build/frame logic it calls (TailBuilder, TailFileInsertSqls,
 // NextTailChunkIdSql) is unit-tested in pkg/fulltext/wand.
 func RunWand(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
 	w, ok := c.sqlWriter.(*WandSqlWriter)
@@ -93,9 +92,9 @@ func RunWand(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 			return
 		case blob, ok := <-c.sqlBufSendCh:
 			if !ok {
-				// channel closed: seal the final segment and persist all spilled
-				// segments + the delete batch as tag=1 frames in one txn.
-				segs, deletes, ferr := tb.Finish()
+				// channel closed: seal the final segment + delete frame (all spilled to
+				// files, delete first) and persist them as tag=1 frames in one txn.
+				segs, ferr := tb.Finish()
 				if ferr != nil {
 					errch <- ferr
 					return
@@ -108,34 +107,22 @@ func RunWand(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 							return err
 						}
 						chunkID := startChunk
-						// Delete frame FIRST (lowest chunk_id) so a same-stream UPSERT's
-						// new segment (higher chunk_id) supersedes the deleted base copy
-						// under ComputeLiveness (kills only chunk_id strictly below it).
-						if len(deletes) > 0 {
-							frame, e := wand.FrameDeletes(w.pkType, deletes)
-							if e != nil {
-								return e
-							}
-							if e := runFrameInserts(sqlproc, w.cfg, chunkID, frame); e != nil {
-								return e
-							}
-							chunkID += wand.FrameChunkCount(len(frame))
-						}
 						for _, seg := range segs {
-							// Read the spilled framed bytes back one segment at a time
-							// (bounded memory) and split across MaxChunkSize rows.
-							framed, e := os.ReadFile(seg.Path)
-							if e != nil {
-								return e
+							// The frame is ALREADY on disk (TailBuilder spilled it), so
+							// INSERT it via load_file straight from the file — no read-back
+							// to memory, no hex/unhex — split across MaxChunkSize rows.
+							for _, s := range wand.TailFileInsertSqls(w.cfg, chunkID, seg.Path, seg.FrameLen) {
+								res, e := sqlexec.RunSql(sqlproc, s)
+								if e != nil {
+									return e
+								}
+								res.Close()
 							}
-							if e := runFrameInserts(sqlproc, w.cfg, chunkID, framed); e != nil {
-								return e
-							}
-							chunkID += wand.FrameChunkCount(len(framed))
+							chunkID += wand.FrameChunkCount(seg.FrameLen)
 						}
-						changed = len(segs) > 0 || len(deletes) > 0
-						logutil.Infof("[wand-sink] db=%s index=%s type=%d events=%d segs=%d deletes=%d chunk_id=%d..%d",
-							w.cfg.DbName, w.cfg.IndexTable, datatype, nevents, len(segs), len(deletes), startChunk, chunkID)
+						changed = len(segs) > 0
+						logutil.Infof("[wand-sink] db=%s index=%s type=%d events=%d frames=%d chunk_id=%d..%d",
+							w.cfg.DbName, w.cfg.IndexTable, datatype, nevents, len(segs), startChunk, chunkID)
 						// advance the CDC watermark only on the tail stream.
 						if datatype == ISCPDataType_Tail {
 							sqlctx := sqlproc.SqlCtx
@@ -169,19 +156,6 @@ func RunWand(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 			}
 		}
 	}
-}
-
-// runFrameInserts splits one framed tag=1 blob across MaxChunkSize storage rows
-// from startChunkId and runs the INSERTs.
-func runFrameInserts(sqlproc *sqlexec.SqlProcess, cfg wand.TableConfig, startChunkId int64, framed []byte) error {
-	for _, s := range wand.FrameInsertSqls(cfg, startChunkId, framed) {
-		res, e := sqlexec.RunSql(sqlproc, s)
-		if e != nil {
-			return e
-		}
-		res.Close()
-	}
-	return nil
 }
 
 // wandNextTailChunkId runs the COALESCE(MAX(chunk_id)+1,0) query for the tag=1
