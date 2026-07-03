@@ -57,7 +57,7 @@ func (cfg CheckpointCfg) String() string {
 
 func (cfg *CheckpointCfg) FillDefaults() {
 	if cfg.IncrementalInterval <= 0 {
-		cfg.IncrementalInterval = time.Minute
+		cfg.IncrementalInterval = time.Minute * 5
 	}
 	if cfg.MinCount <= 0 {
 		cfg.MinCount = 10000

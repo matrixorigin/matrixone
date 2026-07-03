@@ -41,7 +41,7 @@ const (
 	DefaultCheckpointFlushInterval      = time.Minute
 	DefaultCheckpointTransferInterval   = time.Second * 5
 	DefaultCheckpointMinCount           = int64(100)
-	DefaultCheckpointIncremetalInterval = time.Minute
+	DefaultCheckpointIncremetalInterval = time.Minute * 5
 	DefaultCheckpointGlobalMinCount     = 10
 	DefaultGlobalVersionInterval        = time.Hour
 	DefaultGCCheckpointInterval         = time.Minute
