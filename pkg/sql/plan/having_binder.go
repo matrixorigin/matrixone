@@ -102,7 +102,10 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			if !b.builder.mysqlCompatible && b.corrColRefTargetsGroup(corr.Corr) {
+				return nil, b.newGroupByColumnError(astExpr)
+			}
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 
@@ -130,8 +133,18 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			},
 		}, nil
 	} else {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
+		if expr, err := b.baseBindColRef(astExpr, depth, isRoot); err == nil {
+			if corr, ok := expr.Expr.(*plan.Expr_Corr); ok &&
+				(b.corrColRefTargetsCurrentGroup(corr.Corr) || b.corrColRefTargetsGroup(corr.Corr)) {
+				return expr, nil
+			}
+		}
+		return nil, b.newGroupByColumnError(astExpr)
 	}
+}
+
+func (b *HavingBinder) newGroupByColumnError(astExpr *tree.UnresolvedName) error {
+	return moerr.NewSyntaxErrorf(b.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
 }
 
 func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
