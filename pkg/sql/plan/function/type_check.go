@@ -97,6 +97,13 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	return false, s1, s2
 }
 
+func comparisonTypeCastRule(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	if (s1.IsNumeric() && s2.Oid.IsMySQLString()) || (s2.IsNumeric() && s1.Oid.IsMySQLString()) {
+		return true, types.T_float64.ToType(), types.T_float64.ToType()
+	}
+	return fixedTypeCastRule1(s1, s2)
+}
+
 // a fixed type cast rule for
 //  1. Div
 //  2. IntegerDiv

@@ -1012,13 +1012,9 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	// Assigning a value to a real CHAR/VARCHAR(N) column must keep the strict
-	// width check: an over-length value errors instead of being silently
-	// truncated. Generic casts stay lenient (MySQL-compatible truncation).
-	funcName := "cast"
-	if t2.Oid == types.T_char || t2.Oid == types.T_varchar {
-		funcName = "cast_strict"
-	}
+	// This helper is used while materializing values for real columns, so it
+	// must retain assignment semantics for every target type.
+	funcName := "cast_strict"
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
@@ -1039,11 +1035,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, err
 }
 
 func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
-	funcName := "cast"
-	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
-		funcName = "cast_strict"
-	}
-	return forceCastExprWithName(ctx, expr, targetType, funcName)
+	return forceCastExprWithName(ctx, expr, targetType, "cast_strict")
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {

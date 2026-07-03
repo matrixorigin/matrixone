@@ -2327,7 +2327,7 @@ func TestStrToSignedStringPrefix(t *testing.T) {
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
-			err := strToSigned(ctx, from, to, tt.bitSize, 1, nil)
+			err := strToSigned(ctx, from, to, tt.bitSize, 1, nil, castExplicit)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -2337,6 +2337,38 @@ func TestStrToSignedStringPrefix(t *testing.T) {
 			got, null := vector.GenerateFunctionFixedTypeParameter[int64](to.GetResultVector()).GetValue(0)
 			require.False(t, null)
 			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestStringToIntegerCastModes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name    string
+		input   string
+		toType  types.Type
+		fn      fEvalFn
+		want    any
+		wantErr bool
+	}{
+		{name: "implicit signed rejects suffix", input: "7e2", toType: types.T_int64.ToType(), fn: NewCast, want: []int64{}, wantErr: true},
+		{name: "explicit signed reads integer prefix", input: "7e2", toType: types.T_int64.ToType(), fn: NewExplicitCast, want: []int64{7}},
+		{name: "explicit unsigned reads integer prefix", input: "7e2", toType: types.T_uint64.ToType(), fn: NewExplicitCast, want: []uint64{7}},
+		{name: "assignment evaluates exponent", input: "7e2", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{700}},
+		{name: "assignment rounds fraction", input: "1.5", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{2}},
+		{name: "assignment rejects suffix", input: "1a", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{}, wantErr: true},
+		{name: "assignment preserves large scientific integer", input: "9.007199254740993e15", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{9007199254740993}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tt.input}, nil),
+				NewFunctionTestInput(tt.toType, tt.want, nil),
+			}
+			tc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(tt.toType, tt.wantErr, tt.want, nil), tt.fn)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
 		})
 	}
 }

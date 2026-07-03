@@ -28,7 +28,7 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
 						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
@@ -79,7 +79,7 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
 						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
@@ -133,7 +133,7 @@ var supportedOperators = []FuncNew{
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
@@ -171,7 +171,7 @@ var supportedOperators = []FuncNew{
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
@@ -209,7 +209,7 @@ var supportedOperators = []FuncNew{
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
@@ -247,7 +247,7 @@ var supportedOperators = []FuncNew{
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
@@ -289,8 +289,8 @@ var supportedOperators = []FuncNew{
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
 
-			has0, t01, t1 := fixedTypeCastRule1(inputs[0], inputs[1])
-			has1, t02, t2 := fixedTypeCastRule1(inputs[0], inputs[2])
+			has0, t01, t1 := comparisonTypeCastRule(inputs[0], inputs[1])
+			has1, t02, t2 := comparisonTypeCastRule(inputs[0], inputs[2])
 			if t01.Oid != t02.Oid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -335,7 +335,7 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
@@ -2704,12 +2704,8 @@ var supportedOperators = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     CAST_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			// cast_strict is an internal operator used only for assignment to a
-			// real CHAR/VARCHAR column, where an over-width value must be
-			// rejected instead of truncated. Restrict the target type to
-			// CHAR/VARCHAR so it can't be misused as a generic strict cast.
-			if len(inputs) == 2 &&
-				(inputs[1].Oid == types.T_char || inputs[1].Oid == types.T_varchar) {
+			// cast_strict is the internal assignment conversion operator.
+			if len(inputs) == 2 {
 				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
 					return newCheckResultWithSuccess(0)
 				}
@@ -2725,6 +2721,30 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return NewStrictCast
+				},
+			},
+		},
+	},
+
+	// operator `cast_explicit`
+	{
+		functionId: CAST_EXPLICIT,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 2 && IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewExplicitCast
 				},
 			},
 		},

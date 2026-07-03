@@ -88,6 +88,10 @@ SELECT * from t_int WHERE id BETWEEN 1.1 AND 1.9;
 SELECT * from t_int WHERE id BETWEEN 1.1e0 AND 1.9e0;
 SELECT * from t_int WHERE id BETWEEN '1.1' AND '1.9';
 SELECT * from t_int WHERE id BETWEEN '1.1e0' AND '1.9e0';
+INSERT INTO t_int VALUES (7), (700);
+SELECT * from t_int WHERE id = '7e2';
+SELECT * from t_int WHERE id = '1.1';
+DELETE FROM t_int WHERE id IN (7, 700);
 
 drop table t1;
 CREATE TABLE t1 (a INT);

@@ -149,7 +149,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
-		expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		expr, err = appendCastBeforeExprWithName(b.GetContext(), expr, typ, "cast_explicit")
 
 	case *tree.BitCastExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
@@ -2540,12 +2540,16 @@ func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 // --- util functions ----
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
+	return appendCastBeforeExprWithName(ctx, expr, toType, "cast", isBin...)
+}
+
+func appendCastBeforeExprWithName(ctx context.Context, expr *Expr, toType Type, funcName string, isBin ...bool) (*Expr, error) {
 	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
 	}
-	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
+	fGet, err := function.GetFunctionByName(ctx, funcName, argsType)
 	if err != nil {
 		return nil, err
 	}
@@ -2557,7 +2561,7 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: getFunctionObjRef(fGet.GetEncodedOverloadID(), "cast"),
+				Func: getFunctionObjRef(fGet.GetEncodedOverloadID(), funcName),
 				Args: []*Expr{
 					expr,
 					{

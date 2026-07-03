@@ -2850,6 +2850,20 @@ func TestBaseBinder_baseBindExpr(t *testing.T) {
 			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
 				require.NoError(t, err)
 				require.NotNil(t, expr)
+				require.Equal(t, "cast_explicit", expr.GetF().GetFunc().GetObjName())
+			},
+		},
+		{
+			name:      "Comparison: integer column and numeric string use numeric common type",
+			sql:       "a = '7e2'",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.Equal(t, "=", expr.GetF().GetFunc().GetObjName())
+				require.Len(t, expr.GetF().GetArgs(), 2)
+				for _, arg := range expr.GetF().GetArgs() {
+					require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+				}
 			},
 		},
 	}

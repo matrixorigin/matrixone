@@ -29,12 +29,21 @@ SELECT CAST(X'11111111111111111111111111' AS SIGNED);
 select CAST(0x8fffffffffffffff as signed);
 select CAST(0xffffffffffffffff as unsigned);
 select CAST(0xfffffffffffffffe as signed);
-select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed);
+select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed), cast('7e2' as unsigned);
 select cast('-10a' as signed integer);
 select cast('a10' as unsigned integer);
 select 10+'a';
 select 10.0+cast('a' as decimal);
 select 10E+0+'a';
+
+drop table if exists issue_25216_assignment;
+create table issue_25216_assignment (id int);
+insert into issue_25216_assignment values ('7e2'), ('1.5');
+select * from issue_25216_assignment order by id;
+update issue_25216_assignment set id = '2.5' where id = 2;
+select * from issue_25216_assignment order by id;
+insert into issue_25216_assignment values ('1a');
+drop table issue_25216_assignment;
 
 # out-of-range cases
 select cast('18446744073709551616' as unsigned);

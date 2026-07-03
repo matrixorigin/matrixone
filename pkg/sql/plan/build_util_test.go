@@ -452,9 +452,9 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
 }
 
-// makePlan2AssignmentCastExpr routes CHAR/VARCHAR targets through cast_strict,
-// while explicit casts via makePlan2CastExpr keep the lenient generic cast.
-func TestMakePlan2AssignmentCastExprUsesStrictForCharVarchar(t *testing.T) {
+// Assignment expressions use cast_strict for every target type, while generic
+// planner casts remain on cast.
+func TestMakePlan2AssignmentCastExprUsesAssignmentOperator(t *testing.T) {
 	ctx := context.Background()
 	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
 
@@ -470,10 +470,27 @@ func TestMakePlan2AssignmentCastExprUsesStrictForCharVarchar(t *testing.T) {
 		require.Equal(t, "cast", genericExpr.GetF().GetFunc().GetObjName())
 	}
 
-	// Non-string targets stay on the generic cast even for assignment.
+	// Numeric targets also use assignment semantics rather than generic implicit
+	// cast semantics.
 	intExpr, err := makePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), plan.Type{Id: int32(types.T_int64)})
 	require.NoError(t, err)
-	require.Equal(t, "cast", intExpr.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast_strict", intExpr.GetF().GetFunc().GetObjName())
+}
+
+func TestForceCastExpr2UsesAssignmentCastForNumericTarget(t *testing.T) {
+	ctx := context.Background()
+	source := makePlan2StringConstExprWithType("7e2")
+	targetType := types.T_int32.ToType()
+	target := &plan.Expr{
+		Typ: makePlan2Type(&targetType),
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{},
+		},
+	}
+
+	expr, err := forceCastExpr2(ctx, source, targetType, target)
+	require.NoError(t, err)
+	require.Equal(t, "cast_strict", expr.GetF().GetFunc().GetObjName())
 }
 
 // A generated CHAR/VARCHAR column is materialized as a real column write, so

@@ -46,9 +46,9 @@ select CAST(0xffffffffffffffff as unsigned);
 18446744073709551615
 select CAST(0xfffffffffffffffe as signed);
 Data truncation: data out of range: data type int, 
-select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed);
-➤ cast(7e0 as signed)[-5,64,0]  ¦  cast(7e+2 as signed)[-5,64,0]  ¦  cast(1.5e0 as signed)[-5,64,0]  𝄀
-7  ¦  7  ¦  1
+select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed), cast('7e2' as unsigned);
+➤ cast(7e0 as signed)[-5,64,0]  ¦  cast(7e+2 as signed)[-5,64,0]  ¦  cast(1.5e0 as signed)[-5,64,0]  ¦  cast(7e2 as unsigned)[-5,64,0]  𝄀
+7  ¦  7  ¦  1  ¦  7
 select cast('-10a' as signed integer);
 ➤ cast(-10a as integer)[-5,64,0]  𝄀
 -10
@@ -61,6 +61,21 @@ invalid input: a beyond the range, can't be converted to Decimal128(38,0).
 select 10E+0+'a';
 ➤ 10e+0 + a[8,54,0]  𝄀
 10.0
+drop table if exists issue_25216_assignment;
+create table issue_25216_assignment (id int);
+insert into issue_25216_assignment values ('7e2'), ('1.5');
+select * from issue_25216_assignment order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+700
+update issue_25216_assignment set id = '2.5' where id = 2;
+select * from issue_25216_assignment order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+700
+insert into issue_25216_assignment values ('1a');
+invalid argument cast to int, bad value 1a
+drop table issue_25216_assignment;
 select cast('18446744073709551616' as unsigned);
 Data truncation: data out of range: data type uint64, value '18446744073709551616'
 select cast('18446744073709551616' as signed);

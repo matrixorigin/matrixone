@@ -442,15 +442,27 @@ func IfTypeCastSupported(sourceType, targetType types.T) bool {
 	return false
 }
 
+type castMode uint8
+
+const (
+	castImplicit castMode = iota
+	castAssignment
+	castExplicit
+)
+
 func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return newCast(parameters, result, proc, length, selectList, false)
+	return newCast(parameters, result, proc, length, selectList, castImplicit)
 }
 
 func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return newCast(parameters, result, proc, length, selectList, true)
+	return newCast(parameters, result, proc, length, selectList, castAssignment)
 }
 
-func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, strictStringWidth bool) error {
+func NewExplicitCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return newCast(parameters, result, proc, length, selectList, castExplicit)
+}
+
+func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, mode castMode) error {
 	var err error
 	// Cast Parameter1 as Type Parameter2
 	fromType := parameters[0].GetType()
@@ -524,7 +536,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = yearToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = strTypeToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
+		err = strTypeToOthers(proc, s, *toType, result, length, selectList, mode)
 	case types.T_array_float32, types.T_array_float64:
 		//NOTE: Don't mix T_array and T_varchar.
 		// T_varchar will have "[1,2,3]" string
@@ -1860,7 +1872,7 @@ func geometryToTextCast(
 
 func strTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth bool) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, mode castMode) error {
 	ctx := proc.Ctx
 
 	fromType := source.GetType()
@@ -1898,28 +1910,28 @@ func strTypeToOthers(proc *process.Process,
 		return strToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return strToSigned(ctx, source, rs, 8, length, selectList)
+		return strToSigned(ctx, source, rs, 8, length, selectList, mode)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return strToSigned(ctx, source, rs, 16, length, selectList)
+		return strToSigned(ctx, source, rs, 16, length, selectList, mode)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return strToSigned(ctx, source, rs, 32, length, selectList)
+		return strToSigned(ctx, source, rs, 32, length, selectList, mode)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return strToSigned(ctx, source, rs, 64, length, selectList)
+		return strToSigned(ctx, source, rs, 64, length, selectList, mode)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return strToUnsigned(ctx, source, rs, 8, length, selectList)
+		return strToUnsigned(ctx, source, rs, 8, length, selectList, mode)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return strToUnsigned(ctx, source, rs, 16, length, selectList)
+		return strToUnsigned(ctx, source, rs, 16, length, selectList, mode)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return strToUnsigned(ctx, source, rs, 32, length, selectList)
+		return strToUnsigned(ctx, source, rs, 32, length, selectList, mode)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return strToUnsigned(ctx, source, rs, 64, length, selectList)
+		return strToUnsigned(ctx, source, rs, 64, length, selectList, mode)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return strToFloat(ctx, source, rs, 32, length, selectList)
@@ -1960,7 +1972,7 @@ func strTypeToOthers(proc *process.Process,
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return strToStr(ctx, proc, source, rs, length, toType, strictStringWidth)
+		return strToStr(ctx, proc, source, rs, length, toType, mode == castAssignment)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -5021,14 +5033,41 @@ func leadingSignedInteger(s string) string {
 	return s[:end]
 }
 
+func integerStringForCast(s string, mode castMode) (string, error) {
+	switch mode {
+	case castExplicit:
+		integer := leadingSignedInteger(s)
+		if integer == "" {
+			return "", moerr.NewInvalidInputNoCtxf("%s is not an integer", s)
+		}
+		return integer, nil
+	case castAssignment:
+		decimal, scale, err := types.Parse128(s)
+		if err != nil {
+			return "", err
+		}
+		integer, err := decimal.Scale(-scale)
+		if err != nil {
+			return "", err
+		}
+		return integer.Format(0), nil
+	default:
+		return s, nil
+	}
+}
+
 func strToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList) error {
+	length int, selectList *FunctionSelectList, modes ...castMode) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
+	mode := castImplicit
+	if len(modes) > 0 {
+		mode = modes[0]
+	}
 
 	var result T
 	for i = 0; i < l; i++ {
@@ -5064,8 +5103,8 @@ func strToSigned[T constraints.Signed](
 				if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
 					r, err = strconv.ParseInt(s[2:], 16, bitSize)
 				} else {
-					integer := leadingSignedInteger(s)
-					if integer == "" {
+					integer, parseErr := integerStringForCast(s, mode)
+					if parseErr != nil {
 						return moerr.NewInvalidArg(ctx, "cast to int", s)
 					}
 					r, err = strconv.ParseInt(integer, 10, bitSize)
@@ -5092,10 +5131,14 @@ func strToUnsigned[T constraints.Unsigned](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList) error {
+	length int, selectList *FunctionSelectList, modes ...castMode) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
+	mode := castImplicit
+	if len(modes) > 0 {
+		mode = modes[0]
+	}
 
 	var val uint64
 	var tErr error
@@ -5117,7 +5160,11 @@ func strToUnsigned[T constraints.Unsigned](
 				if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
 					val, tErr = strconv.ParseUint(s[2:], 16, bitSize)
 				} else {
-					val, tErr = strconv.ParseUint(s, 10, bitSize)
+					integer, parseErr := integerStringForCast(s, mode)
+					if parseErr != nil {
+						return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), s)
+					}
+					val, tErr = strconv.ParseUint(integer, 10, bitSize)
 				}
 			}
 			if tErr != nil {
