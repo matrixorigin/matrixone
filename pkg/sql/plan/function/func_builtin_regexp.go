@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	DefaultEscapeChar = '\\'
+	escapeChar = '\\'
 
 	mapSizeForRegexp = 100
 )
@@ -55,7 +55,7 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 
 	// optimize rule for some special case.
 	if parameters[1].IsConst() {
-		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, func(i []byte) []byte {
+		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, escapeChar, func(i []byte) []byte {
 			return i
 		})
 		if canOptimize {
@@ -64,7 +64,7 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	}
 
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return op.regMap.regularMatchForLikeOp(v2, v1)
+		return op.regMap.regularMatchForLikeOp(v2, v1, escapeChar)
 	}, selectList)
 }
 
@@ -75,7 +75,7 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 
 	// optimize rule for some special case.
 	if parameters[1].IsConst() {
-		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, func(i []byte) []byte {
+		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, escapeChar, func(i []byte) []byte {
 			return bytes.ToLower(i)
 		})
 		if canOptimize {
@@ -84,12 +84,134 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 	}
 
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1))
+		return op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1), escapeChar)
 	}, selectList)
 }
 
+func (op *opBuiltInRegexp) likeFn3Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	p3 := vector.GenerateFunctionStrParameter(parameters[2])
+	rs := vector.MustFunctionResult[bool](result)
+
+	// Both pattern and escape are const: read escape once and use optimized path.
+	if parameters[1].IsConst() && parameters[2].IsConst() {
+		ec, null := p3.GetStrValue(0)
+		if null {
+			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
+			return nil
+		}
+		if len(ec) > 1 {
+			return moerr.NewInvalidInputNoCtxf("Incorrect arguments: escape character must be a single character")
+		}
+		esc := byte(0)
+		if len(ec) == 1 {
+			esc = ec[0]
+		}
+		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, esc, func(i []byte) []byte {
+			return i
+		})
+		if canOptimize {
+			return err
+		}
+		return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(v1, v2 []byte) (bool, error) {
+			return op.regMap.regularMatchForLikeOp(v2, v1, esc)
+		}, selectList)
+	}
+
+	// Pattern or escape varies per row: evaluate per row.
+	// opBinaryBytesBytesToFixedWithErrorCheck only sees args 0,1 so can't
+	// propagate nulls from arg 2 — loop manually.
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetStrValue(i)
+		ec, null3 := p3.GetStrValue(i)
+		if null1 || null2 || null3 {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(ec) > 1 {
+			return moerr.NewInvalidInputNoCtxf("Incorrect arguments: escape character must be a single character")
+		}
+		esc := byte(0)
+		if len(ec) == 1 {
+			esc = ec[0]
+		}
+		match, err := op.regMap.regularMatchForLikeOp(v2, v1, esc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(match, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (op *opBuiltInRegexp) iLikeFn3Args(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	p3 := vector.GenerateFunctionStrParameter(parameters[2])
+	rs := vector.MustFunctionResult[bool](result)
+
+	// Both pattern and escape are const: read escape once and use optimized path.
+	if parameters[1].IsConst() && parameters[2].IsConst() {
+		ec, null := p3.GetStrValue(0)
+		if null {
+			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
+			return nil
+		}
+		if len(ec) > 1 {
+			return moerr.NewInvalidInputNoCtxf("Incorrect arguments: escape character must be a single character")
+		}
+		esc := byte(0)
+		if len(ec) == 1 {
+			esc = ec[0]
+		}
+		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, esc, func(i []byte) []byte {
+			return bytes.ToLower(i)
+		})
+		if canOptimize {
+			return err
+		}
+		return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(v1, v2 []byte) (bool, error) {
+			return op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1), esc)
+		}, selectList)
+	}
+
+	// Pattern or escape varies per row: evaluate per row.
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetStrValue(i)
+		ec, null3 := p3.GetStrValue(i)
+		if null1 || null2 || null3 {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(ec) > 1 {
+			return moerr.NewInvalidInputNoCtxf("Incorrect arguments: escape character must be a single character")
+		}
+		esc := byte(0)
+		if len(ec) == 1 {
+			esc = ec[0]
+		}
+		match, err := op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1), esc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(match, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], length int,
-	specialFnForV func([]byte) []byte) (bool, error) {
+	escapeChar byte, specialFnForV func([]byte) []byte) (bool, error) {
 	pat, null := p2.GetStrValue(0)
 	if null {
 		nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
@@ -147,13 +269,13 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	if n > 1 {
 		c0, c1 := pat[0], pat[n-1]
 		if !bytes.ContainsAny(pat[1:len(pat)-1], "_%") {
-			if n > 2 && pat[n-2] == DefaultEscapeChar {
-				c1 = DefaultEscapeChar
+			if n > 2 && pat[n-2] == escapeChar {
+				c1 = escapeChar
 			}
 			switch {
 			case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
 				// Rule 4.1: no wild card, so it is a simple compare eq.
-				literal := functionUtil.RemoveEscapeChar(pat, DefaultEscapeChar)
+				literal := functionUtil.RemoveEscapeChar(pat, escapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
@@ -165,7 +287,7 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 			case c0 == '_' && !(c1 == '%' || c1 == '_'):
 				// Rule 4.2: _foobarzoo,
-				literal := functionUtil.RemoveEscapeChar(pat[1:], DefaultEscapeChar)
+				literal := functionUtil.RemoveEscapeChar(pat[1:], escapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
@@ -177,7 +299,7 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 			case c0 == '%' && !(c1 == '%' || c1 == '_'):
 				// Rule 4.3, %foobarzoo, it turns into a suffix match.
-				suffix := functionUtil.RemoveEscapeChar(pat[1:], DefaultEscapeChar)
+				suffix := functionUtil.RemoveEscapeChar(pat[1:], escapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
@@ -189,7 +311,7 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 			case c1 == '_' && !(c0 == '%' || c0 == '_'):
 				// Rule 4.4, foobarzoo_, it turns into eq ingoring last char.
-				prefix := functionUtil.RemoveEscapeChar(pat[:n-1], DefaultEscapeChar)
+				prefix := functionUtil.RemoveEscapeChar(pat[:n-1], escapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
@@ -201,7 +323,7 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 			case c1 == '%' && !(c0 == '%' || c0 == '_'):
 				// Rule 4.5 foobarzoo%, prefix match
-				prefix := functionUtil.RemoveEscapeChar(pat[:n-1], DefaultEscapeChar)
+				prefix := functionUtil.RemoveEscapeChar(pat[:n-1], escapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
@@ -213,7 +335,7 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 			case c0 == '%' && c1 == '%':
 				// Rule 4.6 %foobarzoo%, now it is contains
-				substr := functionUtil.RemoveEscapeChar(pat[1:n-1], DefaultEscapeChar)
+				substr := functionUtil.RemoveEscapeChar(pat[1:n-1], escapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
@@ -225,7 +347,7 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 			case c0 == '%' && c1 == '_':
 				// Rule 4.7 %foobarzoo_,
-				suffix := functionUtil.RemoveEscapeChar(pat[1:n-1], DefaultEscapeChar)
+				suffix := functionUtil.RemoveEscapeChar(pat[1:n-1], escapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
@@ -237,7 +359,7 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 			case c0 == '_' && c1 == '%':
 				// Rule 4.8 _foobarzoo%
-				prefix := functionUtil.RemoveEscapeChar(pat[1:n-1], DefaultEscapeChar)
+				prefix := functionUtil.RemoveEscapeChar(pat[1:n-1], escapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
@@ -615,7 +737,7 @@ func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
 	return reg, nil
 }
 
-func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, err error) {
+func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte, escapeChar byte) (match bool, err error) {
 	replace := func(s string) string {
 		isRegexMeta := func(r rune) bool {
 			switch r {
@@ -644,7 +766,7 @@ func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, 
 				continue
 			}
 			switch r {
-			case '\\':
+			case rune(escapeChar):
 				escaped = true
 			case '_':
 				buf.WriteByte('.')
@@ -655,7 +777,7 @@ func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, 
 			}
 		}
 		if escaped {
-			appendLiteral(&buf, '\\')
+			appendLiteral(&buf, rune(escapeChar))
 		}
 		return buf.String()
 	}
