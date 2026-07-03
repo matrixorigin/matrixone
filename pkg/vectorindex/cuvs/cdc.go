@@ -84,6 +84,11 @@ const (
 	cdcFrameOverhead        = cdcHeaderSize + cdcFooterSize // 44 bytes, ex. header section
 )
 
+// CdcHeaderSize is the fixed frame header length — the minimum prefix CdcFrameLen
+// needs. Exported so a streaming reader (e.g. WAND's file-based tail loader) can
+// read exactly the header to learn a frame's total length before reading it.
+const CdcHeaderSize = cdcHeaderSize
+
 // FrameCdcChunk wraps the given record bytes (plus an optional header,
 // typically colMetaJSON) into the on-wire chunk frame described above.
 // nInserts / nDeletes / nUpserts are the per-op record counts contained

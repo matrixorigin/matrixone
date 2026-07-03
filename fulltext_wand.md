@@ -436,10 +436,12 @@ broadcast is a follow-up). Item detail:
 - **(e) Multi-frame search adapter** — ✅ **DONE (2026-07-02, `a91af0e15`).** New
   tag=1 frame codec (`frames.go`: `FrameSegment`/`FrameDeletes`/`AssembleFrames`
   over the reused cuVS `FrameCdcChunk` envelope — confirmed pure-Go, no gpu
-  coupling); `loadTailFrames` (`storage.go`) reads tag=1 `CdcTail` rows (each row a
-  `MaxChunkSize` slice of a frame — Bug 1) and orders them by POSITION in Go
-  (`orderTailChunks`: place at `chunk_id - min`, no SQL `ORDER BY` → no Sort operator)
-  before `reassembleFrames`; `WandSearch` now holds `segs` (tag=0
+  coupling); `loadTailSegments` (`storage.go`) STREAMS tag=1 `CdcTail` rows to a temp
+  file — each `MaxChunkSize` slice (Bug 1) placed at `(chunk_id - min)*MaxChunkSize`,
+  bounded memory, exactly like the tag=0 `streamChunksToFile` — with NO SQL `ORDER BY`
+  (no Sort operator; placement-by-offset orders them) and decodes it frame-by-frame
+  (`assembleFramesAt`, one frame resident at a time) into `segs` + `deletes`;
+  `WandSearch` now holds `segs` (tag=0
   base at `ChunkId=-1`, below the tail, + tag=1 tail) + `deletes`, searched via
   `searchSegsLive` = `ComputeLiveness` + a **per-segment** WHERE prefilter (built
   once per segment so a pk-filter resolves against that segment's own ord→pk map)
@@ -472,6 +474,15 @@ design of record; it supersedes the "full-reindex only" framing of (g) (rebuild-
 is retained only as a schema-change / corruption-recovery fallback).
 
 **Build status (2026-07-02):**
+- **Read-path streaming tail load — DONE + e2e-validated.** `loadTailSegments`
+  streams tag=1 chunks to a temp file (placed at `(chunk_id-min)*MaxChunkSize`, NO SQL
+  `ORDER BY` → no Sort operator) and decodes it frame-by-frame (`assembleFramesAt`, one
+  frame resident), exactly like the tag=0 loader — so the DB→file (I/O) and file→search
+  (decode) phases are cleanly separated by an `io.ReaderAt`. e2e: a 146-chunk single
+  frame + a multi-frame tail (insert+delete) both recall exactly.
+  *Future (append-only tail makes it cheap):* keep the file as an **incremental local
+  cache** — a reload after a small CDC update `WriteAt`s only the new chunks `[K+1..max]`
+  instead of re-pulling the whole tail; compaction (which moves `min`) is the reset point.
 - **Item 3 (load-time liveness/stats caching) — DONE** (`7dc802bd1`).
 - **Item 1 core (streaming capacity-capped build + capacity knob) — DONE + e2e-validated.**
   The sinker no longer buffers all events (`TailBuilder` streams into capped segments,

@@ -103,14 +103,7 @@ func (s *WandSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 	if base != nil {
 		base.ChunkId = baseChunkId
 	}
-	frames, err := loadTailFrames(sqlproc, s.cfg)
-	if err != nil {
-		if base != nil {
-			base.Free()
-		}
-		return err
-	}
-	tail, deletes, err := AssembleFrames(frames)
+	tail, deletes, err := loadTailSegments(sqlproc, s.cfg)
 	if err != nil {
 		if base != nil {
 			base.Free()

@@ -203,54 +203,111 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 	return Deserialize(id, fp)
 }
 
-// loadTailFrames reads the tag=1 CdcTail frames (index_id = CdcTailId) — each row
-// one MaxChunkSize piece of a FrameCdcChunk (an insert segment or a delete batch).
-// Empty (no CDC yet) → nil. Frame bytes are copied out (the executor reuses the
-// batch memory).
+// loadTailSegments streams the tag=1 CdcTail (index_id = CdcTailId) into a temp
+// file — each chunk row placed at (chunk_id - min)*MaxChunkSize, bounded memory,
+// exactly like the tag=0 loader (streamChunksToFile) — and decodes it frame-by-frame
+// (assembleFramesAt) into the ordered segment list + folded delete map. Empty tail
+// (no CDC yet) → (nil, nil).
 //
-// NO `ORDER BY chunk_id`: a SQL sort would add a Sort operator (full
-// materialization / possible spill) to the load path — the very thing a retrieval
-// index avoids. Instead read the rows in whatever order and order them by POSITION
-// in Go (orderTailChunks: place at chunk_id - min, O(n), no comparison sort), the
-// same way the tag=0 loader (streamChunksToFile) places chunks by byte offset.
-func loadTailFrames(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]TailFrame, error) {
+// Two things it deliberately avoids: (1) NO `ORDER BY chunk_id` — a SQL sort would
+// add a Sort operator (full materialization / possible spill); placement-by-offset
+// orders the chunks instead. (2) NO buffering the whole delta — chunks stream to
+// disk one batch at a time and frames are decoded one at a time, so the transient
+// footprint is a single frame, not the tail.
+func loadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandModel, map[any]int64, error) {
+	minC, maxC, empty, err := tailChunkBounds(sqlproc, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if empty {
+		return nil, nil, nil
+	}
+	span := maxC - minC + 1
+	filesize := span * int64(vectorindex.MaxChunkSize)
+
+	fp, err := os.CreateTemp("", "wandtail")
+	if err != nil {
+		return nil, nil, err
+	}
+	path := fp.Name()
+	defer func() {
+		fp.Close()
+		os.Remove(path)
+	}()
+	if err = fp.Truncate(filesize); err != nil {
+		return nil, nil, err
+	}
+
 	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d",
 		catalog.FullTextIndex_TblCol_Storage_Chunk_Id, catalog.FullTextIndex_TblCol_Storage_Data,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullTextIndex_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
 		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+	_, n, err := streamChunkRowsToFile(sqlproc, sql, minC, filesize, fp)
+	if err != nil {
+		return nil, nil, err
+	}
+	// tag=1 chunk_ids are a gapless run, so [min..max] must span exactly the row
+	// count; a mismatch is a missing/duplicate chunk (corruption).
+	if n != span {
+		return nil, nil, moerr.NewInternalError(sqlproc.GetContext(),
+			fmt.Sprintf("wand tail: chunk_id range [%d..%d] spans %d but got %d rows (gap or duplicate)", minC, maxC, span, n))
+	}
+	return assembleFramesAt(fp, minC, span)
+}
+
+// tailChunkBounds returns MIN/MAX chunk_id of the tag=1 CdcTail via aggregates (no
+// sort). empty=true when there are no tag=1 rows yet (MIN/MAX → NULL).
+func tailChunkBounds(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (minC, maxC int64, empty bool, err error) {
+	sql := fmt.Sprintf("SELECT MIN(%s), MAX(%s) FROM %s WHERE %s = %s AND %s = %d",
+		catalog.FullTextIndex_TblCol_Storage_Chunk_Id, catalog.FullTextIndex_TblCol_Storage_Chunk_Id,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.FullTextIndex_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
 	res, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {
-		return nil, err
+		return 0, 0, false, err
 	}
 	defer res.Close()
-
-	var chunks []TailChunk
 	for _, bat := range res.Batches {
 		if bat == nil || bat.RowCount() == 0 {
 			continue
 		}
-		cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
-		for i, cid := range cids {
-			data := bat.Vecs[1].GetRawBytesAt(i)
-			chunks = append(chunks, TailChunk{ChunkId: cid, Data: append([]byte(nil), data...)})
+		if bat.Vecs[0].IsNull(0) { // MIN over no rows → NULL → empty tail
+			return 0, 0, true, nil
 		}
+		minC = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+		maxC = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0)
+		return minC, maxC, false, nil
 	}
-	ordered, err := orderTailChunks(chunks)
-	if err != nil {
-		return nil, err
-	}
-	return reassembleFrames(ordered)
+	return 0, 0, true, nil
 }
 
-// streamChunksToFile streams the index's chunk rows from the store and writes
-// each at chunk_id*MaxChunkSize into fp, bounding mpool to the stream buffer.
+// streamChunksToFile streams a tag=0 index's chunk rows and writes each at
+// chunk_id*MaxChunkSize into fp; the assembled bytes must fill filesize exactly.
 func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, filesize int64, fp *os.File) error {
-	chunkSQL := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s",
+	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s",
 		catalog.FullTextIndex_TblCol_Storage_Chunk_Id, catalog.FullTextIndex_TblCol_Storage_Data,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullTextIndex_TblCol_Storage_Index_Id, sqlquote.String(id))
+	written, _, err := streamChunkRowsToFile(sqlproc, sql, 0, filesize, fp)
+	if err != nil {
+		return err
+	}
+	if written != filesize {
+		return moerr.NewInternalError(sqlproc.GetContext(),
+			fmt.Sprintf("wand index %s incomplete: wrote %d of %d bytes", id, written, filesize))
+	}
+	return nil
+}
 
+// streamChunkRowsToFile streams the (chunk_id, data) rows returned by sql and writes
+// each at (chunk_id - baseChunk)*MaxChunkSize into fp, bounding the mpool to the
+// stream buffer (never the whole index). bound is the file extent for the range
+// check. Returns bytes written and the chunk-row count (callers use whichever fits
+// their completeness check: tag=0 wants written == filesize; tag=1 — which has
+// partial-tail holes — wants count == span).
+func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, bound int64, fp *os.File) (written, nchunks int64, err error) {
 	streamCh := make(chan executor.Result, 2)
 	errorCh := make(chan error, 2)
 	ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
@@ -263,13 +320,12 @@ func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string,
 			close(streamCh)
 			wg.Done()
 		}()
-		if _, e := sqlexec.RunStreamingSql(ctx, sqlproc, chunkSQL, streamCh, errorCh); e != nil {
+		if _, e := sqlexec.RunStreamingSql(ctx, sqlproc, sql, streamCh, errorCh); e != nil {
 			errorCh <- e
 		}
 	}()
 
 	var loopErr error
-	var written int64
 	closed := false
 	for !closed {
 		select {
@@ -285,10 +341,10 @@ func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string,
 				cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
 				for i, cid := range cids {
 					data := bat.Vecs[1].GetRawBytesAt(i)
-					off := cid * int64(vectorindex.MaxChunkSize)
-					if off < 0 || off+int64(len(data)) > filesize {
+					off := (cid - baseChunk) * int64(vectorindex.MaxChunkSize)
+					if off < 0 || off+int64(len(data)) > bound {
 						loopErr = moerr.NewInternalError(sqlproc.GetContext(),
-							fmt.Sprintf("wand index %s chunk %d out of range", id, cid))
+							fmt.Sprintf("wand chunk_id %d out of range [base %d, bound %d]", cid, baseChunk, bound))
 						break
 					}
 					if _, e := fp.WriteAt(data, off); e != nil {
@@ -296,6 +352,7 @@ func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string,
 						break
 					}
 					written += int64(len(data))
+					nchunks++
 				}
 				if loopErr != nil {
 					break
@@ -330,11 +387,7 @@ func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string,
 		}
 	}
 	if loopErr != nil {
-		return loopErr
+		return 0, 0, loopErr
 	}
-	if written != filesize {
-		return moerr.NewInternalError(sqlproc.GetContext(),
-			fmt.Sprintf("wand index %s incomplete: wrote %d of %d bytes", id, written, filesize))
-	}
-	return nil
+	return written, nchunks, nil
 }

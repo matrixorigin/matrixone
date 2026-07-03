@@ -17,6 +17,7 @@ package wand
 import (
 	"bytes"
 	"fmt"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -67,31 +68,76 @@ type TailFrame struct {
 // framing/decode error the partially-built segments are freed before returning.
 func AssembleFrames(frames []TailFrame) (segs []*WandModel, deletes map[any]int64, err error) {
 	for _, f := range frames {
-		records, _, nInserts, nDeletes, _, uerr := cuvscdc.UnframeCdcChunk(f.Data)
-		if uerr != nil {
+		segs, deletes, err = applyTailFrame(f.Data, f.ChunkId, segs, deletes)
+		if err != nil {
 			freeSegs(segs)
-			return nil, nil, uerr
+			return nil, nil, err
 		}
-		switch {
-		case nInserts > 0:
-			m, derr := Deserialize(fmt.Sprintf("tail-%d", f.ChunkId), bytes.NewReader(records))
-			if derr != nil {
-				freeSegs(segs)
-				return nil, nil, derr
-			}
-			m.ChunkId = f.ChunkId
-			segs = append(segs, m)
-		case nDeletes > 0:
-			recs, derr := DecodeDeleteLog(records)
-			if derr != nil {
-				freeSegs(segs)
-				return nil, nil, derr
-			}
-			deletes = FoldDeleteFrame(deletes, recs, f.ChunkId)
-		default:
+	}
+	return segs, deletes, nil
+}
+
+// applyTailFrame decodes one framed tag=1 blob carried at chunkId and folds it into
+// (segs, deletes): an insert frame → a deserialized segment (its ChunkId set to
+// chunkId) appended to segs; a delete frame → folded into the pk→max-delete-chunk_id
+// map. Shared by AssembleFrames (in-memory frames) and assembleFramesAt (streaming
+// file). On error the caller owns freeing the partial segs.
+func applyTailFrame(data []byte, chunkId int64, segs []*WandModel, deletes map[any]int64) ([]*WandModel, map[any]int64, error) {
+	records, _, nInserts, nDeletes, _, uerr := cuvscdc.UnframeCdcChunk(data)
+	if uerr != nil {
+		return segs, deletes, uerr
+	}
+	switch {
+	case nInserts > 0:
+		m, derr := Deserialize(fmt.Sprintf("tail-%d", chunkId), bytes.NewReader(records))
+		if derr != nil {
+			return segs, deletes, derr
+		}
+		m.ChunkId = chunkId
+		segs = append(segs, m)
+	case nDeletes > 0:
+		recs, derr := DecodeDeleteLog(records)
+		if derr != nil {
+			return segs, deletes, derr
+		}
+		deletes = FoldDeleteFrame(deletes, recs, chunkId)
+	default:
+		return segs, deletes, moerr.NewInternalErrorNoCtx("wand tail frame: empty (neither inserts nor deletes)")
+	}
+	return segs, deletes, nil
+}
+
+// assembleFramesAt walks the tag=1 frames from a chunk-placed source (each chunk at
+// slot*MaxChunkSize, slot = chunk_id - minChunk; span slots) and decodes each frame
+// straight into (segs, deletes) — the STREAMING assembler. It reads only one frame
+// at a time (the header to learn the length, then the frame bytes, freed before the
+// next), so the whole tail is never resident: peak transient is one frame, not the
+// delta. r is the streaming loader's temp file (or a bytes.Reader in tests).
+func assembleFramesAt(r io.ReaderAt, minChunk, span int64) (segs []*WandModel, deletes map[any]int64, err error) {
+	hdr := make([]byte, cuvscdc.CdcHeaderSize)
+	for slot := int64(0); slot < span; {
+		off := slot * int64(vectorindex.MaxChunkSize)
+		if _, e := r.ReadAt(hdr, off); e != nil {
 			freeSegs(segs)
-			return nil, nil, moerr.NewInternalErrorNoCtx("wand tail frame: empty (neither inserts nor deletes)")
+			return nil, nil, e
 		}
+		total, e := cuvscdc.CdcFrameLen(hdr)
+		if e != nil {
+			freeSegs(segs)
+			return nil, nil, e
+		}
+		buf := make([]byte, total)
+		if _, e := r.ReadAt(buf, off); e != nil {
+			freeSegs(segs)
+			return nil, nil, e
+		}
+		segs, deletes, e = applyTailFrame(buf, minChunk+slot, segs, deletes)
+		buf = nil // release before the next frame
+		if e != nil {
+			freeSegs(segs)
+			return nil, nil, e
+		}
+		slot += int64((total + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize)
 	}
 	return segs, deletes, nil
 }

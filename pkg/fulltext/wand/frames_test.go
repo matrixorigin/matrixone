@@ -163,6 +163,72 @@ func TestWandTailFrames(t *testing.T) {
 	}
 }
 
+// placeFrames lays complete frames into a chunk-slot byte buffer exactly as the
+// streaming loader's temp file does: frame i starts at slot firstSlot[i] and
+// occupies ceil(len/MaxChunkSize) consecutive slots (each slot MaxChunkSize wide),
+// contiguous within the frame. Returns the buffer, total span, and each frame's
+// first slot (== its chunk_id when minChunk is 0).
+func placeFrames(frames [][]byte) (buf []byte, span int64, firstSlot []int64) {
+	slot := int64(0)
+	for _, f := range frames {
+		firstSlot = append(firstSlot, slot)
+		slot += int64((len(f) + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize)
+	}
+	span = slot
+	buf = make([]byte, span*int64(vectorindex.MaxChunkSize))
+	for i, f := range frames {
+		copy(buf[firstSlot[i]*int64(vectorindex.MaxChunkSize):], f)
+	}
+	return buf, span, firstSlot
+}
+
+// TestAssembleFramesAtStreaming exercises the production streaming assembler
+// (assembleFramesAt): a multi-chunk insert-segment frame (> MaxChunkSize) plus a
+// delete frame, laid out by chunk slot as the temp file would be, decoded
+// frame-by-frame from an io.ReaderAt — asserting the multi-chunk frame is read
+// whole, chunk_id is assigned from the slot, and liveness holds.
+func TestAssembleFramesAtStreaming(t *testing.T) {
+	big := make(map[int64][]string, 6000)
+	for i := int64(0); i < 6000; i++ {
+		big[i] = []string{"x"}
+	}
+	seg := buildSeg(t, 0, big)
+	defer seg.Free()
+	fseg, err := FrameSegment(seg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fseg) <= vectorindex.MaxChunkSize {
+		t.Fatalf("segment frame is not multi-chunk (%d bytes); test needs > MaxChunkSize", len(fseg))
+	}
+	fdel, err := FrameDeletes(testPkType, []DeleteRecord{{Pk: int64(6)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buf, span, firstSlot := placeFrames([][]byte{fseg, fdel})
+	segs, deletes, err := assembleFramesAt(bytes.NewReader(buf), 0, span)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer freeSegs(segs)
+	if len(segs) != 1 {
+		t.Fatalf("want 1 segment, got %d", len(segs))
+	}
+	if segs[0].N != 6000 || segs[0].ChunkId != firstSlot[0] {
+		t.Fatalf("segment: N=%d ChunkId=%d (want 6000, %d)", segs[0].N, segs[0].ChunkId, firstSlot[0])
+	}
+	if deletes[normalizeKey(int64(6))] != firstSlot[1] {
+		t.Fatalf("delete fold: %v (want {6:%d})", deletes, firstSlot[1])
+	}
+	// pk 6 deleted at a higher chunk_id than the segment → gone; the rest live.
+	live := ComputeLiveness(segs, deletes)
+	got := pkCounts(SearchSegmentsLive(segs, []string{"x"}, 10000, nil, live))
+	if got[6] != 0 || len(got) != 5999 {
+		t.Fatalf("want 5999 live docs (pk 6 deleted), got %d (pk6=%d)", len(got), got[6])
+	}
+}
+
 // TestWandTailFramesBadDispatch guards the frame-kind dispatch: a corrupt frame
 // is rejected (not silently mis-decoded as the wrong kind).
 func TestWandTailFramesBadDispatch(t *testing.T) {
