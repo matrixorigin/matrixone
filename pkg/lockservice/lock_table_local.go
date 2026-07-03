@@ -50,6 +50,7 @@ type localLockTable struct {
 		closed           bool
 		store            LockStorage
 		tableCommittedAt timestamp.Timestamp
+		ownerLocalWaits  map[ownerLocalTxnKey][]ownerLocalWaitEdge
 	}
 
 	options struct {
@@ -76,6 +77,7 @@ func newLocalLockTable(
 		logger:    logger,
 	}
 	l.mu.store = newBtreeBasedStorage()
+	l.mu.ownerLocalWaits = make(map[ownerLocalTxnKey][]ownerLocalWaitEdge)
 	l.mu.tableCommittedAt, _ = clock.Now()
 	return l
 }
@@ -231,8 +233,13 @@ func (l *localLockTable) doLock(
 				// by other txn and readd into store. So c.w.conflictWith is
 				// invalid.
 				conflictWith, ok := l.mu.store.Get(ck)
-				if ok && conflictWith.closeWaiter(c.w, l.logger) {
-					l.mu.store.Delete(ck)
+				if ok {
+					l.removeOwnerLocalWaitEdgeLocked(c.w)
+					if conflictWith.closeWaiter(c.w, l.logger) {
+						l.mu.store.Delete(ck)
+					} else {
+						l.removeInactiveOwnerLocalWaitEdgesLocked(conflictWith)
+					}
 				}
 				l.mu.Unlock()
 			}
@@ -352,6 +359,7 @@ func (l *localLockTable) unlock(
 			lockCanRemoved := lock.closeTxn(
 				txn,
 				notifyValue{ts: commitTS})
+			l.removeInactiveOwnerLocalWaitEdgesLocked(lock)
 			logLockUnlocked(l.logger, txn, key, lock)
 
 			if lockCanRemoved {
@@ -424,6 +432,7 @@ func (l *localLockTable) close(reason closeReason) {
 		}
 		return true
 	})
+	clear(l.mu.ownerLocalWaits)
 	l.mu.store.Clear()
 	logLockTableClosed(l.logger, l.bind, false, reason)
 }
@@ -462,6 +471,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 			hold, newHolder := lock.tryHold(l.logger, c)
 			if hold {
 				if c.w != nil {
+					l.removeOwnerLocalWaitEdgeLocked(c.w)
 					c.w = nil
 				}
 				// only new holder can added lock into txn.
@@ -567,7 +577,10 @@ func (l *localLockTable) handleLockConflictLocked(
 		return ErrLockConflict
 	}
 	if c.opts.async && !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
-		return ErrLockTimeout
+		return c.getLockWaitTimeoutErr()
+	}
+	if l.detectOwnerLocalDeadlockLocked(c, conflictWith) {
+		return ErrDeadLockDetected
 	}
 
 	if c.opts.Granularity == pb.Granularity_Range {
@@ -594,6 +607,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	// Set waiter to blocking before adding to events.mu.blockedWaiters so
 	// waiter_events.check() won't remove it (check removes only non-blocking).
 	c.txn.setBlocked(c.w, l.logger)
+	l.addOwnerLocalWaitEdgeLocked(c, conflictWith)
 	l.events.add(c)
 
 	// find conflict, and wait prev txn completed, and a new
@@ -613,6 +627,8 @@ func (l *localLockTable) closeRangeLastWaiterLocked(c *lockContext) {
 	if ok {
 		removed, empty := v.removeWaiter(c.w, l.logger)
 		if removed {
+			l.removeOwnerLocalWaitEdgeLocked(c.w)
+			l.removeInactiveOwnerLocalWaitEdgesLocked(v)
 			if empty {
 				l.mu.store.Delete(c.rangeLastWaitKey)
 			}
@@ -633,6 +649,10 @@ func (l *localLockTable) closeRangeLastWaiterLocked(c *lockContext) {
 	var deleteKeys [][]byte
 	l.mu.store.Iter(func(key []byte, lock Lock) bool {
 		removed, empty := lock.removeWaiter(c.w, l.logger)
+		if removed {
+			l.removeOwnerLocalWaitEdgeLocked(c.w)
+			l.removeInactiveOwnerLocalWaitEdgesLocked(lock)
+		}
 		if removed && empty {
 			deleteKeys = append(deleteKeys, append([]byte(nil), key...))
 		}

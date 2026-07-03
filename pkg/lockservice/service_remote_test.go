@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -830,6 +831,89 @@ func TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck(t *testing.T) {
 			// Must fire well before the 10s coarse tick.
 			require.Less(t, elapsed, 3*time.Second,
 				"precise timer should fire at ~1s, elapsed=%v", elapsed)
+		},
+	)
+}
+
+func TestRemoteOwnerLocalDeadlockFastPathBreaksPartialLockRing(t *testing.T) {
+	txn1 := []byte("txn1")
+	txn2 := []byte("txn2")
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			owner := s[0]
+			origin := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			// Pin the lock table to s1, then use s2 as the remote origin.
+			mustAddTestLock(t, ctx, owner, tableID, []byte("pin"), [][]byte{{0}}, pb.Granularity_Row)
+			require.NoError(t, owner.Unlock(ctx, []byte("pin"), timestamp.Timestamp{}))
+
+			row1 := []byte{1}
+			row2 := []byte{2}
+			opt := newTestRowExclusiveOptions()
+
+			mustAddTestLock(t, ctx, origin, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, origin, tableID, txn2, [][]byte{row2}, pb.Granularity_Row)
+
+			errC := make(chan error, 1)
+			go func() {
+				_, err := origin.Lock(ctx, tableID, [][]byte{row2}, txn1, opt)
+				errC <- err
+			}()
+			require.NoError(t, WaitWaiters(owner, 0, tableID, row2, 1))
+
+			_, err := origin.Lock(ctx, tableID, [][]byte{row1}, txn2, opt)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected), "got %v", err)
+			require.NoError(t, origin.Unlock(ctx, txn2, timestamp.Timestamp{}))
+
+			require.NoError(t, <-errC)
+			require.NoError(t, origin.Unlock(ctx, txn1, timestamp.Timestamp{}))
+		},
+		func(cfg *Config) {
+			cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				fn(txn1)
+				fn(txn2)
+			}
+		},
+	)
+}
+
+func TestRemoteLockOwnerWaitTimeoutReturnsDedicatedError(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			owner := s[0]
+			origin := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+			mustAddTestLock(t, ctx, owner, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			opt := newTestRowExclusiveOptions()
+			opt.LockWaitTimeout = 0
+			start := time.Now()
+			_, err := origin.Lock(ctx, tableID, [][]byte{row1}, txn2, opt)
+			elapsed := time.Since(start)
+
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout), "got %v", err)
+			require.GreaterOrEqual(t, elapsed, 100*time.Millisecond)
+			require.Less(t, elapsed, 2*time.Second)
+			require.NoError(t, origin.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			require.NoError(t, owner.Unlock(ctx, txn1, timestamp.Timestamp{}))
+		},
+		func(cfg *Config) {
+			cfg.RemoteLockOwnerWaitTimeout = &toml.Duration{Duration: 100 * time.Millisecond}
 		},
 	)
 }

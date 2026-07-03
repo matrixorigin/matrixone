@@ -1284,6 +1284,7 @@ var errCodeRollbackWholeTxn = map[uint16]bool{
 	moerr.ErrLockTableNotFound:        false,
 	moerr.ErrDeadlockCheckBusy:        false,
 	moerr.ErrLockConflict:             false,
+	moerr.ErrRemoteLockWaitTimeout:    false,
 	moerr.ErrTxnUnknown:               false,
 	moerr.ErrBackendClosed:            false,
 	moerr.ErrNoAvailableBackend:       false,
@@ -1325,6 +1326,8 @@ func getRandomErrorRollbackWholeTxn() error {
 		return moerr.NewDeadlockCheckBusyNoCtx()
 	case moerr.ErrLockConflict:
 		return moerr.NewLockConflictNoCtx()
+	case moerr.ErrRemoteLockWaitTimeout:
+		return moerr.NewRemoteLockWaitTimeoutNoCtx()
 	case moerr.ErrTxnUnknown:
 		return moerr.NewTxnUnknown(context.Background(), "test")
 	case moerr.ErrBackendClosed:

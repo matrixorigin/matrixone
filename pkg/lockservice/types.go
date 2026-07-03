@@ -44,6 +44,8 @@ var (
 	ErrLockConflict = moerr.NewLockConflictNoCtx()
 	// ErrLockTimeout lock table timeout
 	ErrLockTimeout = moerr.NewInvalidStateNoCtx("lock timeout")
+	// ErrRemoteLockWaitTimeout remote lock owner-side wait timeout
+	ErrRemoteLockWaitTimeout = moerr.NewRemoteLockWaitTimeoutNoCtx()
 )
 
 // Option lockservice option
@@ -247,7 +249,8 @@ type Server interface {
 // LockOptions options for lock
 type LockOptions struct {
 	pb.LockOptions
-	async bool
+	async                      bool
+	remoteLockOwnerWaitTimeout time.Duration
 }
 
 // Lock stores specific lock information. Since there are a large number of lock objects

@@ -102,8 +102,11 @@ type waiter struct {
 	// case waiting relies on the context or other external cancellation.
 	// Set in waiterEvents.add() from the lockContext and checked in
 	// waiterEvents.check() to enforce timeouts on the async (remote) lock path.
-	lockWaitTimeout time.Duration
-	lockWaitTimer   atomic.Pointer[time.Timer]
+	lockWaitTimeout     time.Duration
+	lockWaitTimeoutErr  error
+	lockWaitGranularity pb.Granularity
+	lockWaitMode        pb.LockMode
+	lockWaitTimer       atomic.Pointer[time.Timer]
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -314,6 +317,9 @@ func (w *waiter) reset() {
 	w.lt.Store(nil)
 	w.setStatus(ready)
 	w.lockWaitTimeout = 0
+	w.lockWaitTimeoutErr = nil
+	w.lockWaitGranularity = pb.Granularity_Row
+	w.lockWaitMode = pb.LockMode_Exclusive
 	w.stopLockWaitTimer()
 }
 
