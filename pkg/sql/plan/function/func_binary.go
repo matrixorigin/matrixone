@@ -7912,11 +7912,9 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 				// Replace replaceLen characters starting at pos
 				posIdx := int(pos - 1) // Convert to 0-based index
 				endIdx := len(runes)
-				if replaceLen > 0 {
+				remaining := int64(len(runes) - posIdx)
+				if replaceLen > 0 && replaceLen < remaining {
 					endIdx = posIdx + int(replaceLen)
-				}
-				if endIdx > len(runes) {
-					endIdx = len(runes)
 				}
 				if posIdx >= len(runes) {
 					result = str + newstr

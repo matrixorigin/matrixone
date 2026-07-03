@@ -19,6 +19,12 @@ Hello
 SELECT INSERT('Hello', 2, 100, 'MySQL') AS length_exceeds_string;
 ➤ length_exceeds_string[12,-1,0]  𝄀
 HMySQL
+SELECT INSERT('abc', 2, 9223372036854775807, 'X') AS max_int64_length_exceeds_string;
+➤ max_int64_length_exceeds_string[12,-1,0]  𝄀
+aX
+SELECT INSERT('你好世界', 3, 9223372036854775807, 'MO') AS max_int64_length_exceeds_utf8;
+➤ max_int64_length_exceeds_utf8[12,-1,0]  𝄀
+你好MO
 SELECT INSERT('Quadratic', 3, -1, 'What') AS negative_length;
 ➤ negative_length[12,-1,0]  𝄀
 QuWhat
