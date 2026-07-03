@@ -75,6 +75,45 @@ func TestOpenFromConfigFallsBackToDataDir(t *testing.T) {
 	assert.Contains(t, display, dir)
 }
 
+func TestStorageOptionsIsRemote(t *testing.T) {
+	assert.False(t, (StorageOptions{}).IsRemote())
+	assert.True(t, StorageOptions{FSConfig: "tn.toml"}.IsRemote())
+	assert.True(t, StorageOptions{S3: "bucket=b"}.IsRemote())
+	assert.True(t, StorageOptions{Backend: "minio"}.IsRemote())
+}
+
+func TestOpenRejectsInvalidRemoteOptions(t *testing.T) {
+	ctx := context.Background()
+
+	_, _, err := Open(ctx, StorageOptions{Backend: "disk", S3: "bucket=b"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported backend")
+
+	_, _, err = Open(ctx, StorageOptions{Backend: "s3"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing --s3")
+
+	_, _, err = Open(ctx, StorageOptions{S3: "not-an-argument"})
+	require.Error(t, err)
+}
+
+func TestOpenFromConfigReportsMissingFileService(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := writeConfig(t, `
+[[fileservice]]
+backend = "DISK"
+data-dir = "`+dir+`"
+name = "LOCAL"
+`)
+
+	_, _, err := Open(context.Background(), StorageOptions{
+		FSConfig: cfgPath,
+		FSName:   "MISSING",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "available: LOCAL")
+}
+
 func TestParseS3Arguments(t *testing.T) {
 	args, err := ParseS3Arguments("bucket=b,endpoint=http://minio:9000,prefix=/dump/,key-id=k,key-secret=s", "OUT")
 	require.NoError(t, err)

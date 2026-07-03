@@ -127,6 +127,111 @@ func TestLazyCacheFSEvictsOldEntriesWhenOverLimit(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(root, "ckp/second"))
 }
 
+func TestLazyCacheFSDelegatesMetadataAndInvalidatesCachedWrites(t *testing.T) {
+	ctx := context.Background()
+	remote, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, remote.Write(ctx, fileservice.IOVector{
+		FilePath: "dir/file",
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   3,
+			Data:   []byte("old"),
+		}},
+	}))
+
+	fs, root, err := newLazyCacheFS(ctx, remote)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	require.Equal(t, "SHARED", fs.Name())
+	require.NotNil(t, fs.Cost())
+
+	require.NoError(t, fs.PrefetchFile(ctx, "SHARED:dir/file"))
+	require.FileExists(t, filepath.Join(root, "dir/file"))
+
+	stat, err := fs.StatFile(ctx, "dir/file")
+	require.NoError(t, err)
+	require.Equal(t, int64(3), stat.Size)
+
+	var listed []string
+	for entry, err := range fs.List(ctx, "dir") {
+		require.NoError(t, err)
+		listed = append(listed, entry.Name)
+	}
+	require.Contains(t, listed, "file")
+
+	require.NoError(t, remote.Delete(ctx, "dir/file"))
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: "SHARED:dir/file",
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   3,
+			Data:   []byte("new"),
+		}},
+	}))
+	require.NoFileExists(t, filepath.Join(root, "dir/file"))
+
+	vec := &fileservice.IOVector{
+		FilePath: "dir/file",
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   -1,
+		}},
+	}
+	require.NoError(t, fs.Read(ctx, vec))
+	require.Equal(t, []byte("new"), vec.Entries[0].Data)
+
+	require.NoError(t, fs.Delete(ctx, "SHARED:dir/file"))
+	require.NoFileExists(t, filepath.Join(root, "dir/file"))
+	_, err = fs.StatFile(ctx, "dir/file")
+	require.Error(t, err)
+}
+
+func TestLazyCacheFSReadErrors(t *testing.T) {
+	ctx := context.Background()
+	remote, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, remote.Write(ctx, fileservice.IOVector{
+		FilePath: "file",
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   4,
+			Data:   []byte("data"),
+		}},
+	}))
+
+	fs, _, err := newLazyCacheFS(ctx, remote)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+
+	require.Error(t, fs.PrefetchFile(ctx, "missing"))
+
+	require.Error(t, fs.Read(ctx, &fileservice.IOVector{
+		FilePath: "file",
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 0}},
+	}))
+	require.Error(t, fs.Read(ctx, &fileservice.IOVector{
+		FilePath: "file",
+		Entries:  []fileservice.IOEntry{{Offset: -1, Size: 1}},
+	}))
+	require.Error(t, fs.Read(ctx, &fileservice.IOVector{
+		FilePath: "file",
+		Entries:  []fileservice.IOEntry{{Offset: 10, Size: -1}},
+	}))
+
+	var buf bytes.Buffer
+	require.Error(t, fs.Read(ctx, &fileservice.IOVector{
+		FilePath: "file",
+		Entries: []fileservice.IOEntry{{
+			Offset:        3,
+			Size:          8,
+			WriterForRead: &buf,
+		}},
+	}))
+}
+
 func TestParseLazyCacheSize(t *testing.T) {
 	tests := []struct {
 		value string

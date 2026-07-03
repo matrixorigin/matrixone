@@ -33,6 +33,10 @@ type ObjectUnifiedModel struct {
 	cmdInput string
 }
 
+var newObjectProgram = func(m tea.Model) *tea.Program {
+	return tea.NewProgram(m, tea.WithAltScreen())
+}
+
 // NewObjectUnifiedModel creates a new unified model for object viewing
 func NewObjectUnifiedModel(ctx context.Context, reader *objecttool.ObjectReader, opts *ViewOptions) *ObjectUnifiedModel {
 	state := NewState(ctx, reader)
@@ -227,7 +231,7 @@ func runUnifiedWithReader(
 	m := NewObjectUnifiedModel(ctx, reader, opts)
 
 	for {
-		p := tea.NewProgram(m, tea.WithAltScreen())
+		p := newObjectProgram(m)
 		finalModel, err := p.Run()
 		if err != nil {
 			return err
