@@ -306,6 +306,41 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
+
+	t.Run("multi-large-key-arena-grow", func(t *testing.T) {
+		// A multi-column distinct key concatenates all column values, so it can
+		// exceed the arena's fixed 512 KiB growth step. Two ~700 KiB strings make
+		// a combined key of ~1.4 MiB; the arena must grow by enough to fit it
+		// instead of a single fixed step, otherwise fillArg returns ErrArenaFull.
+		curNB := mp.CurrNB()
+
+		big1 := strings.Repeat("x", 700*1024)
+		big2 := strings.Repeat("y", 700*1024)
+		big3 := strings.Repeat("z", 700*1024)
+		textTyp := types.T_text.ToType()
+		// row0: (big1,big2), row1: (big1,big2) dup, row2: (big1,big3) new → 2 distinct
+		lc1 := testutil.NewStringVector(3, textTyp, mp, false, nil, []string{big1, big1, big1})
+		lc2 := testutil.NewStringVector(3, textTyp, mp, false, nil, []string{big2, big2, big3})
+		defer lc1.Free(mp)
+		defer lc2.Free(mp)
+
+		exec := newCountColumnExec(mp, AggIdOfCountColumn, true,
+			[]types.Type{textTyp, textTyp})
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{lc1, lc2}))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		vals := vector.MustFixedColNoTypeCheck[int64](results[0])
+		require.Equal(t, int64(2), vals[0])
+
+		exec.Free()
+		for _, result := range results {
+			result.Free(mp)
+		}
+		require.Equal(t, curNB, mp.CurrNB())
+	})
 }
 
 func testAggExec(t *testing.T,

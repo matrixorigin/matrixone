@@ -487,8 +487,15 @@ func (ag *aggState) insertArg(mp *mpool.MPool, kbuf []byte) error {
 		return err
 	}
 
-	// arena is full, we need to grow the arena.
-	argBuf, err := mp.Alloc(len(ag.argbuf)+kAggArgArenaSize, true)
+	// arena is full, we need to grow the arena. Grow by at least kAggArgArenaSize,
+	// but if a single key (plus its skiplist node overhead) needs more than that —
+	// e.g. a multi-column distinct key concatenating several large string args —
+	// grow by enough to fit it, otherwise the retry below would still ErrArenaFull.
+	grow := int64(kAggArgArenaSize)
+	if need := int64(arenaskl.MaxNodeSize(uint32(len(kbuf)), 0)); need > grow {
+		grow = need
+	}
+	argBuf, err := mp.Alloc(len(ag.argbuf)+int(grow), true)
 	if err != nil {
 		return err
 	}

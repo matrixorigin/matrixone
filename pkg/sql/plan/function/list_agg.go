@@ -31,8 +31,22 @@ var supportedAggInNewFramework = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) >= 1 {
-				if inputs[0].Oid == types.T_any {
-					return newCheckResultWithCast(0, []types.Type{types.T_int64.ToType()})
+				// Build a cast list matching the number of arguments; a T_any
+				// argument (e.g. a NULL literal in COUNT(DISTINCT NULL, col))
+				// casts to int64. Returning a shorter cast list than the number
+				// of args would fail with "cast types length not match args length".
+				kk := make([]types.Type, len(inputs))
+				needCast := false
+				for i, in := range inputs {
+					if in.Oid == types.T_any {
+						needCast = true
+						kk[i] = types.T_int64.ToType()
+						continue
+					}
+					kk[i] = in
+				}
+				if needCast {
+					return newCheckResultWithCast(0, kk)
 				}
 				return newCheckResultWithSuccess(0)
 			}

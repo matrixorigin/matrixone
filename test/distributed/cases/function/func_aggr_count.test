@@ -291,6 +291,9 @@ select count(distinct (g, v)), count(*) from t_count_distinct_multi;
 select txt, count(distinct (g, v)), count(*) from t_count_distinct_multi group by txt order by txt;
 select count(distinct (g, v)), count(distinct g, v) from t_count_distinct_multi;
 
+# NULL literal argument: a row with any NULL column is skipped, so all count to 0
+select count(distinct null, 1) as c1, count(distinct 1, null) as c2, count(distinct null, null) as c3;
+
 # Multi-arg / tuple COUNT is only valid with DISTINCT; these must fail
 select count((g, v)) from t_count_distinct_multi;
 select count(g, v) over () from t_count_distinct_multi;
