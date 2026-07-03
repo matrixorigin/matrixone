@@ -1,0 +1,119 @@
+drop database if exists rerr;
+create database rerr;
+use rerr;
+create table t(id int, v int);
+insert into t values (1,10),(2,20),(3,30);
+create table u(id int, v int);
+insert into u values (1,100),(2,200),(3,300);
+set enable_remap_hint = 1;
+set global remap_rewrites = '{}';
+internal error: the system variable is session
+set remap_rewrites = '{not json}';
+invalid input: invalid remap_rewrites value "{not json}": invalid character 'n' looking for beginning of object key string
+set remap_rewrites = '[1,2,3]';
+invalid input: invalid remap_rewrites value "[1,2,3]": json: cannot unmarshal array into Go value of type map[string]json.RawMessage
+set remap_rewrites = '123';
+invalid input: invalid remap_rewrites value "123": json: cannot unmarshal number into Go value of type map[string]json.RawMessage
+set remap_rewrites = '{"rerr.t": "delete from t"}';
+invalid input: invalid rewrite rule SQL "delete from t": only accept SELECT-like statements as rewrites
+set remap_rewrites = '{"rerr.t": "update t set v = 0"}';
+invalid input: invalid rewrite rule SQL "update t set v = 0": only accept SELECT-like statements as rewrites
+set remap_rewrites = '{"rerr.t": "select from"}';
+invalid input: invalid rewrite rule SQL "select from": You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " from";
+set remap_rewrites = '{"   ": "select 1"}';
+invalid input: remap_rewrites: table key must not be empty
+set remap_rewrites = '{"t": "select * from t where i < 10"}';
+invalid input: remap_rewrites: rewrite table "t" must be qualified as database.table
+set remap_rewrites = '{"a.b.c": "select 1"}';
+invalid input: remap_rewrites: rewrite table "a.b.c" must be qualified as database.table
+set remap_rewrites = '{".t": "select 1"}';
+invalid input: remap_rewrites: rewrite table ".t" must be qualified as database.table
+set remap_rewrites = '{"rewrites": {"rerr.t": ["select * from t", "select * from t where id <= 1"]}}';
+invalid input: invalid remap_rewrites value "{\"rewrites\": {\"rerr.t\": [\"select * from t\", \"select * from t where id <= 1\"]}}": rewrite for "rerr.t" must be a single SQL string, not an array or object
+set remap_rewrites = '{"rewrites": {"rerr.t": {"x": "y"}}}';
+invalid input: invalid remap_rewrites value "{\"rewrites\": {\"rerr.t\": {\"x\": \"y\"}}}": rewrite for "rerr.t" must be a single SQL string, not an array or object
+set remap_rewrites = '{"remapdb": {"a.b": "c"}}';
+invalid input: remapdb names must be valid identifiers, got "a.b" -> "c"
+set remap_rewrites = '{"remapdb": {"x": "y z"}}';
+invalid input: remapdb names must be valid identifiers, got "x" -> "y z"
+set remap_rewrites = '{"remapdb": {"x": "y", "y": "z"}}';
+invalid input: remapdb: database "y" must not be both a source and a destination (chaining is not allowed)
+set remap_rewrites = '{"remapdb": {"x": "x"}}';
+invalid input: remapdb: database "x" must not be both a source and a destination (chaining is not allowed)
+set remap_rewrites = '{"remapdb": {"mysql": "x"}}';
+invalid input: remapdb must not remap a system database, got "mysql" -> "x"
+set remap_rewrites = '{"remapdb": {"information_schema": "x"}}';
+invalid input: remapdb must not remap a system database, got "information_schema" -> "x"
+set remap_rewrites = '{"remapdb": {"system_metrics": "x"}}';
+invalid input: remapdb must not remap a system database, got "system_metrics" -> "x"
+set remap_rewrites = '{"remapdb": {"mo_catalog": "x"}}';
+invalid input: remapdb must not remap a system database, got "mo_catalog" -> "x"
+set remap_rewrites = '{"remapdb": {"x": "mo_secret"}}';
+invalid input: remapdb must not remap a system database, got "x" -> "mo_secret"
+set remap_rewrites = '{"remapdb": {"x": "mysql"}}';
+invalid input: remapdb must not remap a system database, got "x" -> "mysql"
+select @@remap_rewrites as cur;
+➤ cur[12,0,0]  𝄀
+
+select * from t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+/*+ {not json} */ select * from t order by id;
+SQL parser error: invalid character 'n' looking for beginning of object key string
+/*+ {"rewrites": {"rerr.t": "delete from t"}} */ select * from t order by id;
+SQL parser error: only accept SELECT-like statements as rewrites
+/*+ {"rewrites": {"t": "select * from t"}} */ select * from t order by id;
+SQL parser error: the mapping name needs to include database name
+/*+ {"rewrites": {"rerr.": "select 1"}} */ select * from t order by id;
+SQL parser error: empty table or database
+/*+ {"remapdb": {"a.b": "c"}} */ select * from t order by id;
+SQL parser error: remapdb names must be valid identifiers, got "a.b" -> "c"
+/*+ {"remapdb": {"x": "y", "y": "z"}} */ select * from t order by id;
+SQL parser error: remapdb: database "y" must not be both a source and a destination (chaining is not allowed)
+/*+ {"remapdb": {"mo_catalog": "x"}} */ select * from t order by id;
+SQL parser error: remapdb must not remap a system database, got "mo_catalog" -> "x"
+select * from t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+set remap_rewrites = '{"remapdb": {"q": "r"}}';
+/*+ {not json} */ select * from t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+set remap_rewrites = '';
+set remap_rewrites = '{"remapdb": {"rdb_a": "rdb_b"}}';
+/*+ {"remapdb": {"rdb_b": "rdb_c"}} */ select 1;
+SQL parser error: remapdb: database "rdb_b" must not be both a source and a destination (chaining is not allowed)
+set remap_rewrites = '';
+set remap_rewrites = '{"rerr.t": "select * from no_such_table"}';
+select * from t order by id;
+SQL parser error: table "no_such_table" does not exist
+set remap_rewrites = '';
+set remap_rewrites = '{"remapdb": {"ghost": "no_such_db"}}';
+select * from ghost.t order by id;
+Unknown database no_such_db
+set remap_rewrites = '';
+set remap_rewrites = '{"rewrites": {"rerr.t": "select * from t where id <= 1"}}';
+set enable_remap_hint = 0;
+select * from t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+/*+ {"rewrites": {"rerr.t": "select * from t where id <= 1"}} */ select * from t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+set enable_remap_hint = 1;
+select * from t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+set remap_rewrites = '';
+set enable_remap_hint = 0;
+drop database if exists rerr;
