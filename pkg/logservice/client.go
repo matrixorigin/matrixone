@@ -653,11 +653,18 @@ func connectToLogServiceAddresses(
 			cancel()
 			wg.Wait()
 			closeUnusedConnectResultClients(results)
-			return nil, ctx.Err()
+			return nil, connectContextError(ctx.Err(), lastErr)
 		}
 	}
 	wg.Wait()
 	return nil, lastErr
+}
+
+func connectContextError(ctxErr error, lastErr error) error {
+	if ctxErr == nil || lastErr == nil {
+		return ctxErr
+	}
+	return errors.Wrapf(ctxErr, "last logservice connect error: %v", lastErr)
 }
 
 func closeUnusedConnectResultClients(results <-chan connectResult) {

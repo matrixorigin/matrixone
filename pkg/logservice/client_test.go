@@ -305,6 +305,7 @@ func TestConnectToLogServiceAddressesReturnsContextErrorAfterPreviousFailure(t *
 	)
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorContains(t, err, firstErr.Error())
 	require.Nil(t, c)
 }
 
