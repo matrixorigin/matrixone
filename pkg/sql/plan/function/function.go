@@ -167,10 +167,14 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 
 	case failedFunctionParametersWrong:
+		displayName := name
+		if name == "cast_strict" || name == "cast_explicit" {
+			displayName = "cast"
+		}
 		if f.isFunction() {
-			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("function %s", name), args)
+			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("function %s", displayName), args)
 		} else {
-			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("operator %s", name), args)
+			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("operator %s", displayName), args)
 		}
 
 	case failedAggParametersWrong:

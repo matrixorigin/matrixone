@@ -1,7 +1,23 @@
 select CAST(1-2 AS UNSIGNED);
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
 select CAST('10 ' as unsigned integer);
+select cast('-10 ' as signed integer);
+select cast('+0012   ' as unsigned) as r;
+select cast('7e0   ' as double), cast('-7.5e1   ' as float);
+select cast('1e-3   ' as decimal(8,4));
+select cast('+0012' as unsigned) as r;
 select CAST('10x' as unsigned integer);
+select cast('7e0' as double),
+       cast('7e0' as float),
+       cast('  +7e0' as double),
+       cast('  -7.5e1' as float),
+       cast('1e-3' as decimal(8,4));
+select cast(12345 as char(3)), length(cast(12345 as char(3)));
+select cast(cast(12345 as unsigned) as char(3)), length(cast(cast(12345 as unsigned) as char(3)));
+select cast(12.34 as char(3)), length(cast(12.34 as char(3)));
+select cast(cast('123.45' as decimal(6,2)) as char(4)), length(cast(cast('123.45' as decimal(6,2)) as char(4)));
+select cast(date '2026-07-02' as char(4)), length(cast(date '2026-07-02' as char(4)));
+select cast(timestamp '2020-08-23 11:52:21' as char(4)), length(cast(timestamp '2020-08-23 11:52:21' as char(4)));
 
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
 
@@ -9,6 +25,9 @@ select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
 select cast(5 as unsigned) -6.0;
 select cast(NULL as signed);
 select cast(1/2 as signed);
+select cast(12 as char(3)), length(cast(12 as char(3)));
+select cast('12   ' as char(4)), length(cast('12   ' as char(4)));
+select cast('123   ' as char(5)), length(cast('123   ' as char(5)));
 #select cast("A" as binary) = "a", cast(BINARY "a" as CHAR) = "A";
 select cast("2001-1-1" as DATE), cast("2001-1-1" as DATETIME);
 #select cast("1:2:3" as TIME);
@@ -23,6 +42,12 @@ select 10E+0+'10';
 #SELECT CONVERT(TIMESTAMP "2004-01-22 21:45:33", CHAR(4));
 #SELECT CONVERT(TIMESTAMP "2004-01-22 21:45:33", BINARY(4));
 #select CAST(TIMESTAMP "2004-01-22 21:45:33" AS BINARY(4));
+select convert(12345, char) as r, length(convert(12345, char)) as l;
+select convert('ABCDE', char) as r, length(convert('ABCDE', char)) as l;
+select hex(convert('AZ', binary)) as r, length(convert('AZ', binary)) as l;
+select hex(convert(12345, binary)) as r, length(convert(12345, binary)) as l;
+select hex(convert('AZ', binary(1))) as r, length(convert('AZ', binary(1))) as l;
+select hex(convert(12345, binary(3))) as r, length(convert(12345, binary(3))) as l;
 select CAST(0xb3 as signed);
 SELECT CAST(X'' AS SIGNED);
 SELECT CAST(X'11111111111111111111111111' AS SIGNED);
@@ -43,6 +68,8 @@ select * from issue_25216_assignment order by id;
 update issue_25216_assignment set id = '2.5' where id = 2;
 select * from issue_25216_assignment order by id;
 insert into issue_25216_assignment values ('1a');
+insert into issue_25216_assignment values ('1 2');
+insert into issue_25216_assignment values ('1+2');
 drop table issue_25216_assignment;
 
 # out-of-range cases

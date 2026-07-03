@@ -99,6 +99,69 @@ func TestRewriteCountNotNullColToStarcount(t *testing.T) {
 	assert.Equal(t, wantObj, agg.Func.Obj, "Obj must be CountStar overload so runtime uses countStarExec")
 }
 
+func TestConvertCharBinaryTypeResolution(t *testing.T) {
+	cases := []struct {
+		sql   string
+		oid   types.T
+		width int32
+		scale int32
+	}{
+		{
+			sql:   "select convert(12345, char)",
+			oid:   types.T_varchar,
+			width: types.MaxVarcharLen,
+		},
+		{
+			sql:   "select convert('ABCDE', char)",
+			oid:   types.T_varchar,
+			width: types.MaxVarcharLen,
+		},
+		{
+			sql:   "select convert(12345, char(3))",
+			oid:   types.T_char,
+			width: 3,
+		},
+		{
+			sql:   "select convert('AZ', binary)",
+			oid:   types.T_binary,
+			width: -1,
+			scale: -1,
+		},
+		{
+			sql:   "select convert('AZ', binary(1))",
+			oid:   types.T_binary,
+			width: 1,
+			scale: -1,
+		},
+		{
+			sql:   "select convert(12345, binary(3))",
+			oid:   types.T_binary,
+			width: 3,
+			scale: -1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			require.NoError(t, err)
+			require.NotNil(t, logicPlan.GetQuery())
+
+			var expr *plan.Expr
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_PROJECT && len(node.ProjectList) > 0 {
+					expr = node.ProjectList[0]
+					break
+				}
+			}
+			require.NotNil(t, expr)
+			require.Equal(t, int32(tc.oid), expr.Typ.Id)
+			require.Equal(t, tc.width, expr.Typ.Width)
+			require.Equal(t, tc.scale, expr.Typ.Scale)
+		})
+	}
+}
+
 func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "create table t (g point)", 1)
 	require.NoError(t, err)
