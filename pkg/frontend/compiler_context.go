@@ -179,8 +179,20 @@ func (tcc *TxnCompilerContext) GetDatabase() string {
 
 func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	return tcc.dbName
+	db := tcc.dbName
+	execCtx := tcc.execCtx
+	tcc.mu.Unlock()
+	// remapdb: when the current database is a remap source, unqualified names
+	// (tables, views, ...) resolve against the destination. USE is deliberately
+	// NOT remapped, so the session's actual current database (database()) stays
+	// the source; only name resolution is redirected. Qualified references are
+	// remapped separately at the AST level by applyRemapDb.
+	if execCtx != nil && len(execCtx.remapDb) > 0 {
+		if dst, ok := execCtx.remapDb[db]; ok {
+			return dst
+		}
+	}
+	return db
 }
 
 func (tcc *TxnCompilerContext) GetRootSql() string {

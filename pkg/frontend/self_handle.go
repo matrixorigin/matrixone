@@ -47,6 +47,9 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.Use:
 		ses.EnterFPrint(FPUse)
 		defer ses.ExitFPrint(FPUse)
+		// USE is deliberately NOT affected by remapdb: it switches to the named
+		// database as written. remapdb instead redirects unqualified name
+		// resolution for whatever the current database is (see DefaultDatabase).
 		dbName := st.Name.Compare()
 		//use database
 		err = handleChangeDB(ses, execCtx, dbName)
