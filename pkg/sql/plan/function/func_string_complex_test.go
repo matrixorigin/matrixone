@@ -227,7 +227,7 @@ func Test_ConcatWs(t *testing.T) {
 					[]string{""}, []bool{true}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""}, []bool{true}),
+				[]string{""}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, ConcatWs)
 		succeed, info := tcc.Run()
