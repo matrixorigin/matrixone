@@ -96,7 +96,6 @@ func TestIcebergTierAReadTimeTravelSchemaEvolutionDeleteApply(t *testing.T) {
 	defer cancel()
 
 	for _, scenario := range scenarios {
-		scenario := scenario
 		t.Run(scenario.ID+"_"+scenario.Name, func(t *testing.T) {
 			moSQL := expandTierAEnv(t, scenario.MOSQL)
 			moActions := expandTierAActions(t, scenario.MOActions)

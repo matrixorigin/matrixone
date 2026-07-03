@@ -302,6 +302,11 @@ func parquetNodeForField(ctx context.Context, field api.SchemaField) (parquet.No
 		node = parquet.Leaf(parquet.FloatType)
 	case api.TypeDouble:
 		node = parquet.Leaf(parquet.DoubleType)
+	case api.TypeDecimal:
+		if field.Type.Precision <= 0 || field.Type.Precision > 18 {
+			return nil, api.NewError(api.ErrUnsupportedFeature, "Iceberg writer decimal precision is unsupported", map[string]string{"field": field.Name, "type": field.Type.String()})
+		}
+		node = parquet.Decimal(field.Type.Scale, field.Type.Precision, parquet.Int64Type)
 	case api.TypeString:
 		node = icebergStringNode()
 	case api.TypeDate:
@@ -350,6 +355,8 @@ func vectorValue(ctx context.Context, vec *vector.Vector, row int, typ api.Icebe
 			return nil, false, typeMismatch(ctx, typ, vec)
 		}
 		return vector.GetFixedAtNoTypeCheck[float64](vec, row), false, nil
+	case api.TypeDecimal:
+		return decimalValue(ctx, vec, row, typ)
 	case api.TypeString:
 		switch vec.GetType().Oid {
 		case types.T_char, types.T_varchar, types.T_text:
@@ -363,10 +370,14 @@ func vectorValue(ctx context.Context, vec *vector.Vector, row int, typ api.Icebe
 		}
 		return int32(vector.GetFixedAtNoTypeCheck[types.Date](vec, row) - types.DateFromCalendar(1970, 1, 1)), false, nil
 	case api.TypeTimestamp:
-		if vec.GetType().Oid != types.T_datetime {
+		switch vec.GetType().Oid {
+		case types.T_datetime:
+			return int64(vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) - types.DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0)), false, nil
+		case types.T_timestamp:
+			return int64(vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row).ToDatetime(loc) - types.DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0)), false, nil
+		default:
 			return nil, false, typeMismatch(ctx, typ, vec)
 		}
-		return int64(vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) - types.DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0)), false, nil
 	case api.TypeTimestampTZ:
 		if vec.GetType().Oid != types.T_timestamp {
 			return nil, false, typeMismatch(ctx, typ, vec)
@@ -375,6 +386,53 @@ func vectorValue(ctx context.Context, vec *vector.Vector, row int, typ api.Icebe
 	default:
 		return nil, false, api.NewError(api.ErrUnsupportedFeature, "Iceberg writer type is unsupported", map[string]string{"type": typ.String()})
 	}
+}
+
+func decimalValue(ctx context.Context, vec *vector.Vector, row int, typ api.IcebergType) (any, bool, error) {
+	if typ.Precision <= 0 || typ.Precision > 18 {
+		return nil, false, api.NewError(api.ErrUnsupportedFeature, "Iceberg writer decimal precision is unsupported", map[string]string{"type": typ.String()})
+	}
+	scaleDelta := int32(typ.Scale) - vec.GetType().Scale
+	switch vec.GetType().Oid {
+	case types.T_decimal64:
+		value := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, row)
+		if scaleDelta != 0 {
+			var err error
+			value, err = value.Scale(scaleDelta)
+			if err != nil {
+				return nil, false, err
+			}
+		}
+		return int64(value), false, nil
+	case types.T_decimal128:
+		value := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, row)
+		if scaleDelta != 0 {
+			var err error
+			value, err = value.Scale(scaleDelta)
+			if err != nil {
+				return nil, false, err
+			}
+		}
+		out, err := decimal128ToInt64(ctx, value, typ)
+		if err != nil {
+			return nil, false, err
+		}
+		return out, false, nil
+	default:
+		return nil, false, typeMismatch(ctx, typ, vec)
+	}
+}
+
+func decimal128ToInt64(ctx context.Context, value types.Decimal128, typ api.IcebergType) (int64, error) {
+	lo := value.B0_63
+	hi := value.B64_127
+	if hi == 0 && lo <= uint64(1)<<63-1 {
+		return int64(lo), nil
+	}
+	if hi == ^uint64(0) && lo >= uint64(1)<<63 {
+		return int64(lo), nil
+	}
+	return 0, moerr.NewInvalidInputf(ctx, "Iceberg writer decimal value overflows int64 storage for %s", typ.String())
 }
 
 func intValue(ctx context.Context, vec *vector.Vector, row int, typ api.IcebergType) (any, bool, error) {
@@ -466,6 +524,9 @@ func encodeBound(ctx context.Context, typ api.IcebergType, value any) ([]byte, a
 		out := make([]byte, 8)
 		binary.LittleEndian.PutUint64(out, uint64(v))
 		return out, v, nil
+	case api.TypeDecimal:
+		v := value.(int64)
+		return decimalInt64BoundBytes(v), v, nil
 	case api.TypeFloat:
 		v := value.(float32)
 		out := make([]byte, 4)
@@ -484,6 +545,22 @@ func encodeBound(ctx context.Context, typ api.IcebergType, value any) ([]byte, a
 	}
 }
 
+func decimalInt64BoundBytes(value int64) []byte {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(value))
+	start := 0
+	if value >= 0 {
+		for start < len(buf)-1 && buf[start] == 0x00 && buf[start+1]&0x80 == 0 {
+			start++
+		}
+	} else {
+		for start < len(buf)-1 && buf[start] == 0xff && buf[start+1]&0x80 != 0 {
+			start++
+		}
+	}
+	return append([]byte(nil), buf[start:]...)
+}
+
 func decodeMetricValue(typ api.IcebergType, data []byte) any {
 	switch typ.Kind {
 	case api.TypeBoolean:
@@ -492,6 +569,8 @@ func decodeMetricValue(typ api.IcebergType, data []byte) any {
 		return int64(int32(binary.LittleEndian.Uint32(data)))
 	case api.TypeLong, api.TypeTimestamp, api.TypeTimestampTZ:
 		return int64(binary.LittleEndian.Uint64(data))
+	case api.TypeDecimal:
+		return decimalInt64FromBoundBytes(data)
 	case api.TypeFloat:
 		return float64(math.Float32frombits(binary.LittleEndian.Uint32(data)))
 	case api.TypeDouble:
@@ -501,6 +580,23 @@ func decodeMetricValue(typ api.IcebergType, data []byte) any {
 	default:
 		return nil
 	}
+}
+
+func decimalInt64FromBoundBytes(data []byte) int64 {
+	if len(data) == 0 {
+		return 0
+	}
+	var buf [8]byte
+	if data[0]&0x80 != 0 {
+		for idx := range buf {
+			buf[idx] = 0xff
+		}
+	}
+	if len(data) > len(buf) {
+		data = data[len(data)-len(buf):]
+	}
+	copy(buf[len(buf)-len(data):], data)
+	return int64(binary.BigEndian.Uint64(buf[:]))
 }
 
 func compareMetricValue(left, right any) int {

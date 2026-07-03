@@ -137,7 +137,6 @@ func TestIcebergDMLCrossEngineDiff(t *testing.T) {
 	scenarios := loadCrossEngineScenarios(t)
 	timeout := crossEngineTimeout()
 	for _, scenario := range scenarios {
-		scenario := scenario
 		t.Run(crossEngineScenarioCaseID(scenario)+"_"+scenario.Name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, api.CauseForCode(api.ErrPlanningTimeout))
 			defer cancel()
@@ -676,13 +675,6 @@ func crossEngineTimeout() time.Duration {
 		}
 	}
 	return 20 * time.Minute
-}
-
-func runCrossEngineActions(t *testing.T, ctx context.Context, engine, command string, sqls []string) {
-	t.Helper()
-	for _, sql := range sqls {
-		_ = runCrossEngineSQL(t, ctx, engine, command, sql)
-	}
 }
 
 func runCrossEngineSQL(t *testing.T, ctx context.Context, engine, command, sql string) []string {

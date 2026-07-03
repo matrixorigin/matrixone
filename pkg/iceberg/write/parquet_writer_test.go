@@ -265,6 +265,56 @@ func TestParquetDataWriterWritesTimestampBounds(t *testing.T) {
 	require.Equal(t, int64(ts2)-int64(epoch), int64(binary.LittleEndian.Uint64(dataFile.UpperBounds[11])))
 }
 
+func TestParquetDataWriterWritesDecimalAndMOTimestamp(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"fare_amount", "pickup_time"})
+	fareVec := vector.NewVec(types.New(types.T_decimal64, 12, 2))
+	lowFare, err := types.ParseDecimal64("-5.67", 12, 2)
+	require.NoError(t, err)
+	highFare, err := types.ParseDecimal64("12.34", 12, 2)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed[types.Decimal64](fareVec, highFare, false, mp))
+	require.NoError(t, vector.AppendFixed[types.Decimal64](fareVec, lowFare, false, mp))
+	bat.Vecs[0] = fareVec
+	pickupVec := vector.NewVec(types.T_timestamp.ToType())
+	ts1, err := types.ParseTimestamp(time.UTC, "2024-01-15 00:00:00.123456", 6)
+	require.NoError(t, err)
+	ts2, err := types.ParseTimestamp(time.UTC, "2024-01-15 01:02:03.654321", 6)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed[types.Timestamp](pickupVec, ts2, false, mp))
+	require.NoError(t, vector.AppendFixed[types.Timestamp](pickupVec, ts1, false, mp))
+	bat.Vecs[1] = pickupVec
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	var buf bytes.Buffer
+	writer, err := NewParquetDataWriter(ctx, DataWriterConfig{
+		Schema: api.Schema{SchemaID: 3, Fields: []api.SchemaField{
+			{ID: 20, Name: "fare_amount", Type: api.IcebergType{Kind: api.TypeDecimal, Precision: 12, Scale: 2}},
+			{ID: 21, Name: "pickup_time", Type: api.IcebergType{Kind: api.TypeTimestamp}},
+		}},
+		PartitionSpec: api.PartitionSpec{SpecID: 7},
+		FilePath:      "s3://warehouse/tlc/export/data/part-1.parquet",
+		TimeZone:      time.UTC,
+	}, &buf)
+	require.NoError(t, err)
+	require.NoError(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	dataFile, err := writer.Close(ctx)
+	require.NoError(t, err)
+
+	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	require.Equal(t, 20, file.Root().Column("fare_amount").ID())
+	require.Equal(t, 21, file.Root().Column("pickup_time").ID())
+	require.Equal(t, int64(2), dataFile.RecordCount)
+	require.Equal(t, decimalInt64BoundBytes(-567), dataFile.LowerBounds[20])
+	require.Equal(t, decimalInt64BoundBytes(1234), dataFile.UpperBounds[20])
+	epoch := types.DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0)
+	require.Equal(t, int64(ts1.ToDatetime(time.UTC)-epoch), int64(binary.LittleEndian.Uint64(dataFile.LowerBounds[21])))
+	require.Equal(t, int64(ts2.ToDatetime(time.UTC)-epoch), int64(binary.LittleEndian.Uint64(dataFile.UpperBounds[21])))
+}
+
 func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()

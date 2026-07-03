@@ -281,15 +281,6 @@ func (c *DMLOverwriteCoordinator) commitBase() dml.CommitBase {
 	return base
 }
 
-func (c *DMLOverwriteCoordinator) cleanReplacementBatches() {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cleanReplacementBatchesLocked()
-}
-
 func (c *DMLOverwriteCoordinator) cleanReplacementBatchesLocked() {
 	for _, bat := range c.replacementBats {
 		if bat != nil {

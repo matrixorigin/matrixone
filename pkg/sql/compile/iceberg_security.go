@@ -43,11 +43,6 @@ type icebergScanAccessContext struct {
 	residencyPolicies []model.ResidencyPolicy
 }
 
-func (c *Compile) precheckIcebergScanAccess(node *plan.Node) error {
-	_, err := c.checkIcebergScanAccess(node)
-	return err
-}
-
 func (c *Compile) checkIcebergScanAccess(node *plan.Node) (icebergScanAccessContext, error) {
 	ctx := c.icebergSecurityContext()
 	if node == nil || node.TableDef == nil {

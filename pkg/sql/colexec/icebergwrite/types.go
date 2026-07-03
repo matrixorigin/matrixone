@@ -41,6 +41,8 @@ type AppendRequest struct {
 	AccountID       uint32
 	StatementID     string
 	IdempotencyKey  string
+	ParallelID      int32
+	MaxParallel     int32
 	CatalogName     string
 	Namespace       string
 	Table           string

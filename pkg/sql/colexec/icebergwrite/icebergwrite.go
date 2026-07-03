@@ -39,6 +39,8 @@ func (w *IcebergWrite) Prepare(proc *process.Process) error {
 		w.OpAnalyzer.Reset()
 	}
 	if w.Coordinator == nil {
+		w.Request.ParallelID = w.GetParalleID()
+		w.Request.MaxParallel = w.GetMaxParallel()
 		if w.Factory != nil {
 			coordinator, err := w.Factory.NewCoordinator(proc.Ctx, w.Request)
 			if err != nil {
@@ -73,24 +75,27 @@ func (w *IcebergWrite) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		return result, nil
 	}
-	if result.Batch.Last() {
-		if !result.Batch.IsEmpty() {
-			if err := w.appendBatch(proc, result.Batch); err != nil {
-				return result, err
-			}
+	terminal := result.Status == vm.ExecStop || result.Batch.Last()
+	if !result.Batch.IsEmpty() {
+		if err := w.appendBatch(proc, result.Batch); err != nil {
+			return result, err
 		}
+	}
+	if terminal {
 		if w.ctr.opened && !w.ctr.finished {
 			if err := w.Coordinator.Commit(proc.Ctx); err != nil {
 				return result, err
 			}
 			w.ctr.finished = true
 		}
-		return result, nil
+		return vm.CancelResult, nil
 	}
 	if result.Batch.IsEmpty() {
 		return result, nil
 	}
-	return result, w.appendBatch(proc, result.Batch)
+	result.Batch = batch.EmptyBatch
+	result.Status = vm.ExecNext
+	return result, nil
 }
 
 func (w *IcebergWrite) appendBatch(proc *process.Process, bat *batch.Batch) error {

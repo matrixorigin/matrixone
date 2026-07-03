@@ -324,23 +324,20 @@ func equalityDeleteColumns(ctx context.Context, file *parquet.File, task *pipeli
 			}))
 		}
 		var idx int
-		var ok bool
 		if foundIdx, found := parquetColumnIndexByFieldID(file, fieldID); found {
 			// Use Iceberg field-id metadata when present.
 			idx = foundIdx
-			ok = true
 		} else if foundIdx, found = parquetColumnIndexByFieldName(file, fieldID, mappings); found {
 			// Legacy files without field ids fall back to snapshot/current names.
 			idx = foundIdx
-			ok = true
 		} else {
 			return nil, icebergapi.ToMOErr(ctx, icebergapi.NewError(icebergapi.ErrMetadataInvalid, "Iceberg equality delete file is missing equality field", map[string]string{
 				"delete_file": icebergapi.RedactPath(task.DeleteFilePath),
 				"field_id":    int32String(fieldID),
 			}))
 		}
-		parquetType, ok := parquetColumnTypeByIndex(file, idx)
-		if !ok {
+		parquetType, typeOK := parquetColumnTypeByIndex(file, idx)
+		if !typeOK {
 			return nil, icebergapi.ToMOErr(ctx, icebergapi.NewError(icebergapi.ErrMetadataInvalid, "Iceberg equality delete file column index is invalid", map[string]string{
 				"delete_file": icebergapi.RedactPath(task.DeleteFilePath),
 				"field_id":    int32String(fieldID),

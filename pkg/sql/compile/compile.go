@@ -4636,6 +4636,9 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		return nil, err
 	} else if ok {
 		currentFirstFlag := c.anal.isFirst
+		if icebergInsertNeedsSingleWriterMerge(ss, c.addr) {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
 		for i := range ss {
 			insertArg, err := c.constructIcebergInsert(nodes, node)
 			if err != nil {
@@ -4643,6 +4646,7 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			}
 			insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			ss[i].setRootOperator(insertArg)
+			ss[i].NodeInfo.Mcpu = 1
 		}
 		c.anal.isFirst = false
 		return ss, nil
@@ -4819,6 +4823,16 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 	rs.setRootOperator(mergeInsertArg)
 	ss = []*Scope{rs}
 	return ss, nil
+}
+
+func icebergInsertNeedsSingleWriterMerge(ss []*Scope, currentCN string) bool {
+	if len(ss) != 1 {
+		return len(ss) > 1
+	}
+	if ss[0] == nil {
+		return false
+	}
+	return ss[0].NodeInfo.Mcpu > 1 || !isSameCN(ss[0].NodeInfo.Addr, currentCN)
 }
 
 func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, error) {

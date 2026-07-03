@@ -135,6 +135,8 @@ help:
 	@echo "  make dev-status-iceberg-tier-a-brew - Show local brew Iceberg Tier A service status"
 	@echo "  make dev-seed-iceberg-tier-a - Seed deterministic Iceberg Tier A tables"
 	@echo "  make dev-test-iceberg-tier-a - Run Iceberg Tier A integration tests"
+	@echo "  make dev-seed-iceberg-tier-b-nyc-tlc - Seed NYC TLC public dataset into local Iceberg"
+	@echo "  make dev-test-iceberg-tier-b-nyc-tlc - Run NYC TLC Tier B public dataset checks"
 	@echo "  make launch-minio           - Build and start MO with MinIO storage"
 	@echo "  make launch-minio-debug     - Build (debug) and start MO with MinIO"
 	@echo ""
@@ -1122,6 +1124,19 @@ dev-test-iceberg-tier-a:
 		MO_ICEBERG_ALLOW_PLAIN_HTTP=1 \
 		MO_ICEBERG_REPORT_DIR=$${MO_ICEBERG_REPORT_DIR:-test/iceberg/reports/run_$$(date -u +%Y%m%dT%H%M%SZ)} \
 		go test ./pkg/sql/iceberg -run TestIcebergTierA -count=1
+
+.PHONY: dev-seed-iceberg-tier-b-nyc-tlc
+dev-seed-iceberg-tier-b-nyc-tlc: dev-up-iceberg-tier-a
+	@$(MINIO_DIR)/tier-b/seed-nyc-tlc-iceberg.sh
+
+.PHONY: dev-test-iceberg-tier-b-nyc-tlc
+dev-test-iceberg-tier-b-nyc-tlc:
+	@test -f $(MINIO_DIR)/tier-b/tier_b_nyc_tlc.generated.env || (echo "Missing $(MINIO_DIR)/tier-b/tier_b_nyc_tlc.generated.env. Run make dev-seed-iceberg-tier-b-nyc-tlc first."; exit 1)
+	@. $(MINIO_DIR)/tier-b/tier_b_nyc_tlc.generated.env && \
+		MO_ICEBERG_ALLOW_PLAIN_HTTP=1 \
+		MO_ICEBERG_CI_PROFILE=tier-b \
+		MO_ICEBERG_REPORT_DIR=$${MO_ICEBERG_REPORT_DIR:-test/iceberg/reports/nyc_tlc_$$(date -u +%Y%m%dT%H%M%SZ)} \
+		$(MAKE) test-iceberg-nightly
 
 .PHONY: dev-clean-minio-local
 dev-clean-minio-local:

@@ -253,6 +253,61 @@ func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
 	require.Same(t, regionVec, visible.Vecs[1])
 }
 
+func TestAppendRuntimeSharedCoordinatorCommitsOncePerStatement(t *testing.T) {
+	ctx := context.Background()
+	inner := &countingAppendCoordinator{}
+	cache := &appendRuntimeCoordinatorCache{entries: make(map[string]*appendRuntimeSharedCoordinator)}
+	req := icebergwrite.AppendRequest{
+		AccountID:      42,
+		Operation:      icebergwrite.OperationAppend,
+		CatalogName:    "tlc",
+		Namespace:      "public_nyc_tlc",
+		Table:          "yellow_tripdata_export",
+		DefaultRef:     model.DefaultRefMain,
+		StatementID:    "stmt-export-1",
+		IdempotencyKey: "stmt-export-1",
+		ParallelID:     0,
+		MaxParallel:    2,
+	}
+	key := appendRuntimeCoordinatorCacheKey(req)
+	require.NotEmpty(t, key)
+
+	builds := 0
+	coord1, err := cache.getOrCreate(ctx, key, req, func() (icebergwrite.Coordinator, error) {
+		builds++
+		return inner, nil
+	})
+	require.NoError(t, err)
+	req2 := req
+	req2.ParallelID = 1
+	coord2, err := cache.getOrCreate(ctx, key, req2, func() (icebergwrite.Coordinator, error) {
+		builds++
+		return &countingAppendCoordinator{}, nil
+	})
+	require.NoError(t, err)
+	require.NotSame(t, coord1, coord2)
+	require.Equal(t, 1, builds)
+
+	require.NoError(t, coord1.Begin(ctx, req))
+	require.NoError(t, coord2.Begin(ctx, req2))
+	require.NoError(t, coord1.Append(ctx, batch.EmptyBatch))
+	require.NoError(t, coord2.Append(ctx, batch.EmptyBatch))
+	require.NoError(t, coord1.Commit(ctx))
+	require.Equal(t, 0, inner.commitCalls)
+	require.NoError(t, coord2.Commit(ctx))
+	require.Equal(t, 1, inner.beginCalls)
+	require.Equal(t, 2, inner.appendCalls)
+	require.Equal(t, 1, inner.commitCalls)
+
+	coord3, err := cache.getOrCreate(ctx, key, req, func() (icebergwrite.Coordinator, error) {
+		builds++
+		return &countingAppendCoordinator{}, nil
+	})
+	require.NoError(t, err)
+	require.NotSame(t, coord1, coord3)
+	require.Equal(t, 2, builds)
+}
+
 func appendGoldKPIBatch(t *testing.T) (*batch.Batch, *mpool.MPool) {
 	t.Helper()
 	mp := mpool.MustNewZero()
@@ -354,3 +409,30 @@ func (fakeWriteRuntimeCoordinator) Begin(context.Context, icebergwrite.AppendReq
 func (fakeWriteRuntimeCoordinator) Append(context.Context, *batch.Batch) error { return nil }
 func (fakeWriteRuntimeCoordinator) Commit(context.Context) error               { return nil }
 func (fakeWriteRuntimeCoordinator) Abort(context.Context, error) error         { return nil }
+
+type countingAppendCoordinator struct {
+	beginCalls  int
+	appendCalls int
+	commitCalls int
+	abortCalls  int
+}
+
+func (c *countingAppendCoordinator) Begin(context.Context, icebergwrite.AppendRequest) error {
+	c.beginCalls++
+	return nil
+}
+
+func (c *countingAppendCoordinator) Append(context.Context, *batch.Batch) error {
+	c.appendCalls++
+	return nil
+}
+
+func (c *countingAppendCoordinator) Commit(context.Context) error {
+	c.commitCalls++
+	return nil
+}
+
+func (c *countingAppendCoordinator) Abort(context.Context, error) error {
+	c.abortCalls++
+	return nil
+}

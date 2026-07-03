@@ -110,9 +110,43 @@ def normalize_rows(raw):
         if not text:
             continue
         lower = text.lower()
+        if re.match(r"^\d{2}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}\s+", text):
+            continue
         if lower.startswith(("warning:", "time taken:", "query id", "mysql: [warning]")):
             continue
         if lower.startswith(("spark context", "using spark")):
+            continue
+        if lower.startswith(("-- query", "-- sql:")):
+            continue
+        if lower.startswith((
+            "::",
+            "ivy default cache",
+            "the jars for",
+            "org.apache.",
+            "org.reactivestreams",
+            "org.slf4j",
+            "org.wildfly",
+            "software.amazon.",
+            "com.amazonaws",
+            "found ",
+            "confs:",
+            "setting default log level",
+            "to adjust logging level",
+            "spark web ui",
+            "spark master:",
+            "welcome to",
+            "using scala version",
+            "branch ",
+            "compiled by user",
+            "revision ",
+            "url https://github.com/apache/spark",
+            "type --help",
+            "unknown resolver",
+        )):
+            continue
+        if text.startswith("|") or set(text) <= {"-", "\t", " "}:
+            continue
+        if "artifacts copied" in lower or "already retrieved" in lower:
             continue
         if "fetched " in lower and " row" in lower:
             continue

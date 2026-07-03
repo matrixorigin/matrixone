@@ -93,7 +93,7 @@ func buildIcebergUpdatePlan(stmt *tree.Update, ctx CompilerContext, isPrepareStm
 	if root.InsertCtx != nil {
 		root.InsertCtx.TableDef = dmlTableDef
 	}
-	if err := rewriteIcebergUpdateProjection(ctx.GetContext(), query, query.Steps[len(query.Steps)-1]); err != nil {
+	if err := rewriteIcebergUpdateProjection(ctx.GetContext(), query, query.Steps[len(query.Steps)-1], builder, bindCtx, target, stmt); err != nil {
 		return nil, err
 	}
 	query.StmtType = plan.Query_UPDATE
@@ -214,31 +214,10 @@ func resolveIcebergUpdateTarget(ctx CompilerContext, stmt *tree.Update) (iceberg
 }
 
 func icebergUpdateSelectExprs(ctx context.Context, target icebergDeleteTarget, stmt *tree.Update, bindCtx *BindContext) ([]tree.SelectExpr, error) {
-	updates, err := icebergUpdateExprMap(ctx, target, stmt)
-	if err != nil {
+	if _, err := icebergUpdateExprMap(ctx, target, stmt); err != nil {
 		return nil, err
 	}
-	qualifier := target.alias
-	if qualifier == "" {
-		qualifier = target.tableName
-	}
-	out := make([]tree.SelectExpr, 0, len(target.tableDef.Cols))
-	for _, col := range target.tableDef.Cols {
-		if col == nil || col.Hidden || col.Name == catalog.Row_ID || col.Name == catalog.ExternalFilePath {
-			continue
-		}
-		if expr, ok := updates[strings.ToLower(col.Name)]; ok {
-			out = append(out, tree.SelectExpr{Expr: expr})
-			continue
-		}
-		out = append(out, tree.SelectExpr{
-			Expr: tree.NewUnresolvedName(
-				tree.NewCStr(qualifier, bindCtx.lower),
-				tree.NewCStr(col.Name, 1),
-			),
-		})
-	}
-	return out, nil
+	return icebergDeleteSelectExprs(target, bindCtx), nil
 }
 
 func icebergUpdateExprMap(ctx context.Context, target icebergDeleteTarget, stmt *tree.Update) (map[string]tree.Expr, error) {
@@ -397,8 +376,13 @@ func appendIcebergDMLMetadataProjection(ctx context.Context, query *plan.Query, 
 		}
 		scan.ExternScan.TbColToDataCol[col.Name] = int32(len(scan.ExternScan.TbColToDataCol))
 	}
+	rewriteIcebergDMLScanFilterColumnRefs(scan)
 
-	if _, found, err := appendIcebergDMLColumnsOnPath(ctx, query, rootID, scanID, projection.Cols, allowJoinRight); err != nil {
+	colsOnPath := projection.Cols
+	if preserveTableColumns {
+		colsOnPath = append([]*plan.ColDef(nil), scan.TableDef.GetCols()...)
+	}
+	if _, found, err := appendIcebergDMLColumnsOnPath(ctx, query, rootID, scanID, colsOnPath, allowJoinRight); err != nil {
 		return nil, err
 	} else if !found {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg DELETE scan is not reachable from plan root")
@@ -460,6 +444,36 @@ func ensureIcebergDMLScanProjectsTableColumns(scan *plan.Node, targetTableDef *p
 	}
 	for name, pos := range tbColToDataCol {
 		scan.ExternScan.TbColToDataCol[name] = pos
+	}
+}
+
+func rewriteIcebergDMLScanFilterColumnRefs(scan *plan.Node) {
+	if scan == nil || scan.TableDef == nil {
+		return
+	}
+	for _, expr := range scan.FilterList {
+		rewriteIcebergDMLExprColumnRefs(expr, scan.TableDef)
+	}
+	for _, expr := range scan.BlockFilterList {
+		rewriteIcebergDMLExprColumnRefs(expr, scan.TableDef)
+	}
+}
+
+func rewriteIcebergDMLExprColumnRefs(expr *plan.Expr, tableDef *plan.TableDef) {
+	if expr == nil || tableDef == nil {
+		return
+	}
+	if col := expr.GetCol(); col != nil {
+		name := icebergDMLUnqualifiedColumnName(col.GetName())
+		if pos := icebergDMLScanColumnPosition(tableDef, name, -1); pos >= 0 {
+			col.ColPos = pos
+		}
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.GetArgs() {
+			rewriteIcebergDMLExprColumnRefs(arg, tableDef)
+		}
 	}
 }
 
@@ -533,6 +547,10 @@ func appendIcebergDMLColumnsOnPath(ctx context.Context, query *plan.Query, nodeI
 	if nodeID == scanID {
 		positions := make([]int32, 0, len(cols))
 		for _, col := range cols {
+			if pos, ok := icebergDMLProjectOutputPosition(node.ProjectList, col.Name); ok {
+				positions = append(positions, pos)
+				continue
+			}
 			outputPos := int32(len(node.ProjectList))
 			inputPos := icebergDMLScanColumnPosition(node.TableDef, col.Name, outputPos)
 			node.ProjectList = append(node.ProjectList, icebergDMLPassthroughExpr(col, inputPos))
@@ -565,11 +583,38 @@ func appendIcebergDMLColumnsOnPath(ctx context.Context, query *plan.Query, nodeI
 	}
 	positions := make([]int32, 0, len(cols))
 	for i, col := range cols {
+		if pos, ok := icebergDMLProjectOutputPosition(node.ProjectList, col.Name); ok {
+			positions = append(positions, pos)
+			continue
+		}
 		pos := int32(len(node.ProjectList))
 		node.ProjectList = append(node.ProjectList, icebergDMLPassthroughExprWithRel(col, childRelPos, childPositions[i]))
 		positions = append(positions, pos)
 	}
 	return positions, true, nil
+}
+
+func icebergDMLProjectOutputPosition(exprs []*plan.Expr, name string) (int32, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return 0, false
+	}
+	for idx, expr := range exprs {
+		exprName := icebergDMLExprColumnName(expr)
+		if strings.EqualFold(exprName, name) ||
+			strings.EqualFold(icebergDMLUnqualifiedColumnName(exprName), name) {
+			return int32(idx), true
+		}
+	}
+	return 0, false
+}
+
+func icebergDMLUnqualifiedColumnName(name string) string {
+	name = strings.TrimSpace(name)
+	if dot := strings.LastIndex(name, "."); dot >= 0 && dot+1 < len(name) {
+		return strings.TrimSpace(name[dot+1:])
+	}
+	return name
 }
 
 func icebergDMLScanColumnPosition(tableDef *plan.TableDef, name string, fallback int32) int32 {
@@ -605,7 +650,7 @@ func icebergDMLPassthroughExprWithRel(col *plan.ColDef, relPos, childPos int32) 
 	}
 }
 
-func rewriteIcebergUpdateProjection(ctx context.Context, query *plan.Query, rootID int32) error {
+func rewriteIcebergUpdateProjection(ctx context.Context, query *plan.Query, rootID int32, builder *QueryBuilder, bindCtx *BindContext, target icebergDeleteTarget, stmt *tree.Update) error {
 	if query == nil || rootID < 0 || int(rootID) >= len(query.Nodes) {
 		return moerr.NewInvalidInput(ctx, "Iceberg UPDATE plan requires a valid query root")
 	}
@@ -617,43 +662,126 @@ func rewriteIcebergUpdateProjection(ctx context.Context, query *plan.Query, root
 	if metadataCount == 0 {
 		return nil
 	}
-	if len(root.ProjectList) < metadataCount {
-		return moerr.NewInvalidInputf(ctx, "Iceberg UPDATE projection is missing DML metadata columns: projects=%d metadata=%d", len(root.ProjectList), metadataCount)
+	if len(root.Children) != 1 {
+		return moerr.NewInvalidInputf(ctx, "Iceberg UPDATE projection requires one input, got %d", len(root.Children))
 	}
-	replacementCount := len(root.ProjectList) - metadataCount
-	if len(root.Children) == 1 {
-		childID := root.Children[0]
-		if childID >= 0 && int(childID) < len(query.Nodes) {
-			if projectNode := query.Nodes[childID]; projectNode != nil && projectNode.NodeType == plan.Node_PROJECT {
-				if len(projectNode.ProjectList) < metadataCount {
-					return moerr.NewInvalidInputf(ctx, "Iceberg UPDATE child projection is missing DML metadata columns: projects=%d metadata=%d", len(projectNode.ProjectList), metadataCount)
-				}
-				finalProjects := make([]*plan.Expr, 0, len(root.ProjectList))
-				for _, expr := range root.ProjectList[:replacementCount] {
-					finalProjects = append(finalProjects, DeepCopyExpr(expr))
-				}
-				for _, expr := range projectNode.ProjectList[len(projectNode.ProjectList)-metadataCount:] {
-					finalProjects = append(finalProjects, DeepCopyExpr(expr))
-				}
-				projectNode.ProjectList = finalProjects
-				if projectNode.Stats == nil {
-					projectNode.Stats = DefaultStats()
-				}
-				root.ProjectList = finalProjects
-				return nil
-			}
-		}
+	childID := root.Children[0]
+	if childID < 0 || int(childID) >= len(query.Nodes) {
+		return moerr.NewInvalidInputf(ctx, "Iceberg UPDATE projection references invalid child %d", childID)
+	}
+	finalProjects, err := buildIcebergUpdateReplacementProjects(ctx, query, childID, builder, bindCtx, target, stmt, root.TableDef)
+	if err != nil {
+		return err
 	}
 	projectNode := &plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    append([]int32(nil), root.Children...),
-		ProjectList: clonePlanExprs(root.ProjectList),
+		ProjectList: finalProjects,
 		Stats:       DefaultStats(),
 	}
 	projectID := int32(len(query.Nodes))
 	query.Nodes = append(query.Nodes, projectNode)
 	root.Children = []int32{projectID}
+	root.ProjectList = icebergProjectOutputRefs(finalProjects)
 	return nil
+}
+
+func buildIcebergUpdateReplacementProjects(ctx context.Context, query *plan.Query, inputID int32, builder *QueryBuilder, bindCtx *BindContext, target icebergDeleteTarget, stmt *tree.Update, tableDef *plan.TableDef) ([]*plan.Expr, error) {
+	updates, err := icebergUpdateExprMap(ctx, target, stmt)
+	if err != nil {
+		return nil, err
+	}
+	cols := icebergDMLWriteColumns(tableDef)
+	if len(cols) == 0 {
+		return nil, moerr.NewInvalidInput(ctx, "Iceberg UPDATE has no writable target columns")
+	}
+	binder := NewUpdateBinder(ctx, builder, bindCtx, cols)
+	finalProjects := make([]*plan.Expr, 0, len(cols)+icebergDMLMetadataColumnCount(tableDef))
+	for idx, col := range cols {
+		if col == nil {
+			continue
+		}
+		if astExpr, ok := updates[strings.ToLower(col.Name)]; ok {
+			var expr *plan.Expr
+			if _, isDefault := astExpr.(*tree.DefaultVal); isDefault {
+				expr, err = getDefaultExpr(ctx, col)
+			} else {
+				expr, err = binder.BindExpr(astExpr, 0, true)
+			}
+			if err != nil {
+				return nil, err
+			}
+			expr, err = forceAssignmentCastExpr(ctx, expr, col.Typ)
+			if err != nil {
+				return nil, err
+			}
+			finalProjects = append(finalProjects, expr)
+			continue
+		}
+		finalProjects = append(finalProjects, icebergDMLPassthroughExpr(col, icebergPlanOutputColumnPosition(query, inputID, col.Name, int32(idx))))
+	}
+	for _, col := range tableDef.GetCols() {
+		if col == nil || !isIcebergDMLWriteMetadataColumn(col.Name) {
+			continue
+		}
+		finalProjects = append(finalProjects, icebergDMLPassthroughExpr(col, icebergPlanOutputColumnPosition(query, inputID, col.Name, int32(len(finalProjects)))))
+	}
+	return finalProjects, nil
+}
+
+func icebergDMLWriteColumns(tableDef *plan.TableDef) []*plan.ColDef {
+	if tableDef == nil {
+		return nil
+	}
+	out := make([]*plan.ColDef, 0, len(tableDef.GetCols()))
+	for _, col := range tableDef.GetCols() {
+		if col == nil || col.Hidden || col.Name == catalog.Row_ID || col.Name == catalog.ExternalFilePath || isIcebergDMLWriteMetadataColumn(col.Name) {
+			continue
+		}
+		out = append(out, col)
+	}
+	return out
+}
+
+func isIcebergDMLWriteMetadataColumn(name string) bool {
+	return strings.EqualFold(name, icebergapi.DMLDataFilePathColumnName) ||
+		strings.EqualFold(name, icebergapi.DMLRowOrdinalColumnName) ||
+		strings.EqualFold(name, icebergapi.DMLMergeActionColumnName)
+}
+
+func icebergPlanOutputColumnPosition(query *plan.Query, nodeID int32, name string, fallback int32) int32 {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.GetNodes()) {
+		return fallback
+	}
+	node := query.GetNodes()[nodeID]
+	if node == nil {
+		return fallback
+	}
+	if len(node.GetProjectList()) > 0 {
+		for idx, expr := range node.GetProjectList() {
+			if strings.EqualFold(icebergDMLExprColumnName(expr), name) {
+				return int32(idx)
+			}
+		}
+	}
+	if node.GetTableDef() != nil {
+		for idx, col := range node.GetTableDef().GetCols() {
+			if col != nil && strings.EqualFold(col.Name, name) {
+				return int32(idx)
+			}
+		}
+	}
+	if len(node.GetChildren()) == 1 {
+		return icebergPlanOutputColumnPosition(query, node.GetChildren()[0], name, fallback)
+	}
+	return fallback
+}
+
+func icebergDMLExprColumnName(expr *plan.Expr) string {
+	if expr == nil || expr.GetCol() == nil {
+		return ""
+	}
+	return strings.TrimSpace(expr.GetCol().GetName())
 }
 
 func icebergDMLMetadataColumnCount(tableDef *plan.TableDef) int {

@@ -212,10 +212,6 @@ func icebergProjectsDMLPositionMetadata(tableDef *plan.TableDef) bool {
 	return false
 }
 
-func icebergColumnMappingsToPipeline(ctx context.Context, mappings []api.IcebergColumnMapping) ([]*pipeline.IcebergColumnMapping, error) {
-	return icebergColumnMappingsToPipelineForTable(ctx, mappings, nil)
-}
-
 func icebergColumnMappingsToPipelineForTable(
 	ctx context.Context,
 	mappings []api.IcebergColumnMapping,

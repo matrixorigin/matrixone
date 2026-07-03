@@ -1,6 +1,6 @@
 module github.com/matrixorigin/matrixone/pkg/iceberg/adapter/iceberggo
 
-go 1.25.4
+go 1.26.4
 
 require (
 	github.com/apache/iceberg-go v0.5.0
@@ -45,8 +45,8 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
-	github.com/bytedance/sonic v1.15.0 // indirect
-	github.com/bytedance/sonic/loader v0.5.0 // indirect
+	github.com/bytedance/sonic v1.15.2 // indirect
+	github.com/bytedance/sonic/loader v0.5.1 // indirect
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cilium/ebpf v0.9.1 // indirect

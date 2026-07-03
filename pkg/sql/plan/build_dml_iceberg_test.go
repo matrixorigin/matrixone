@@ -104,7 +104,7 @@ func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {
 		},
 	)
 
-	stmt, err := mysql.ParseOne(context.Background(), "update gold_orders set balance = balance + 1 where id = 1", 1)
+	stmt, err := mysql.ParseOne(context.Background(), "update gold_orders set balance = balance + 1, region = 'ksa' where balance = 10", 1)
 	if err != nil {
 		t.Fatalf("parse update: %v", err)
 	}
@@ -140,6 +140,39 @@ func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {
 	if len(updateProject.GetProjectList()) != len(dmlSink.GetTableDef().GetCols()) {
 		t.Fatalf("UPDATE child project/table shape mismatch: projects=%d cols=%d", len(updateProject.GetProjectList()), len(dmlSink.GetTableDef().GetCols()))
 	}
+	if len(updateProject.GetChildren()) != 1 || updateProject.GetChildren()[0] < 0 || int(updateProject.GetChildren()[0]) >= len(query.GetNodes()) {
+		t.Fatalf("UPDATE replacement project should have one valid input child: %+v", updateProject.GetChildren())
+	}
+	inputProject := query.GetNodes()[updateProject.GetChildren()[0]]
+	if inputProject == nil || inputProject.GetNodeType() != planpb.Node_PROJECT {
+		t.Fatalf("UPDATE replacement input should be the old-row project, got %+v", inputProject)
+	}
+	if len(inputProject.GetProjectList()) != len(dmlSink.GetTableDef().GetCols()) {
+		t.Fatalf("UPDATE old-row input project must preserve every replacement column plus metadata: projects=%d cols=%d output=%v",
+			len(inputProject.GetProjectList()), len(dmlSink.GetTableDef().GetCols()), inputProject.GetProjectList())
+	}
+	balanceIdx := tableDefColIndex(dmlSink.GetTableDef(), "balance")
+	if balanceIdx < 0 {
+		t.Fatalf("UPDATE DML sink table def is missing assigned column balance: %+v", dmlSink.GetTableDef())
+	}
+	if got := inputProject.GetProjectList()[balanceIdx]; got.GetCol() == nil || got.GetF() != nil {
+		t.Fatalf("UPDATE old-row input project must keep assigned column balance as a passthrough for filter/binder stability, got %+v", got)
+	}
+	if got := updateProject.GetProjectList()[balanceIdx]; got.GetF() == nil {
+		t.Fatalf("assigned balance column should retain its bound expression, got %+v", got)
+	} else if !icebergDMLExprContainsColumn(got, "balance") {
+		t.Fatalf("assigned balance expression should reference the input balance column, got %+v", got)
+	}
+	regionIdx := tableDefColIndex(dmlSink.GetTableDef(), "region")
+	if regionIdx < 0 {
+		t.Fatalf("UPDATE DML sink table def is missing assigned column region: %+v", dmlSink.GetTableDef())
+	}
+	if got := inputProject.GetProjectList()[regionIdx]; got.GetCol() == nil || got.GetLit() != nil {
+		t.Fatalf("UPDATE old-row input project must keep assigned column region as a passthrough, got %+v", got)
+	}
+	if got := updateProject.GetProjectList()[regionIdx]; !icebergDMLExprContainsStringLiteral(got, "ksa") {
+		t.Fatalf("assigned region column should retain literal replacement value, got %+v", got)
+	}
 	if scan == nil {
 		t.Fatalf("expected Iceberg external scan")
 	}
@@ -157,6 +190,64 @@ func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {
 	}
 	if len(scan.GetProjectList()) < 5 {
 		t.Fatalf("UPDATE scan project list must include target columns and metadata, got %d projects", len(scan.GetProjectList()))
+	}
+	balanceFilterPos := filterColPosByName(scan.GetFilterList(), "balance")
+	if balanceFilterPos != balanceIdx {
+		t.Fatalf("UPDATE non-leading filter column balance uses colpos %d, want %d; filters=%+v scan cols=%+v",
+			balanceFilterPos, balanceIdx, scan.GetFilterList(), scan.GetTableDef().GetCols())
+	}
+}
+
+func TestIcebergUpdateRewritesDMLScanFilterColumnPositions(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols = []*planpb.ColDef{
+		{Name: "vendor_id", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "tpep_pickup_datetime", Typ: planpb.Type{Id: int32(types.T_timestamp), Width: 6, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "tpep_dropoff_datetime", Typ: planpb.Type{Id: int32(types.T_timestamp), Width: 6, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "passenger_count", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "trip_distance", Typ: planpb.Type{Id: int32(types.T_float64), Width: 64, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "rate_code_id", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "store_and_fwd_flag", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxVarcharLen, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "pu_location_id", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "do_location_id", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "payment_type", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "fare_amount", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "extra", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "mta_tax", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "tip_amount", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "tolls_amount", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "improvement_surcharge", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "total_amount", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "congestion_surcharge", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "airport_fee", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+	}
+
+	stmt, err := mysql.ParseOne(context.Background(), "update gold_orders set store_and_fwd_flag = 'R' where payment_type = 3", 1)
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+	p, err := BuildPlan(ctx, stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg update plan: %v", err)
+	}
+	query := p.GetQuery()
+	var scan *planpb.Node
+	for _, node := range query.GetNodes() {
+		if node.GetExternScan() != nil && node.GetExternScan().GetType() == int32(planpb.ExternType_ICEBERG_TB) {
+			scan = node
+			break
+		}
+	}
+	if scan == nil {
+		t.Fatalf("expected Iceberg external scan")
+	}
+	paymentTypeIdx := tableDefColIndex(scan.GetTableDef(), "payment_type")
+	if paymentTypeIdx < 0 {
+		t.Fatalf("scan table def missing payment_type: %+v", scan.GetTableDef())
+	}
+	if got := filterColPosByName(scan.GetFilterList(), "payment_type"); got != paymentTypeIdx {
+		t.Fatalf("payment_type filter colpos = %d, want %d; filters=%+v scan cols=%+v",
+			got, paymentTypeIdx, scan.GetFilterList(), scan.GetTableDef().GetCols())
 	}
 }
 
@@ -575,6 +666,15 @@ func projectColPosByName(projectList []*planpb.Expr, name string) int32 {
 	return -1
 }
 
+func filterColPosByName(filters []*planpb.Expr, name string) int32 {
+	for _, filter := range filters {
+		for _, pos := range colRefPositionsByName(filter, name) {
+			return pos
+		}
+	}
+	return -1
+}
+
 func icebergDMLSinkChildProject(t *testing.T, query *planpb.Query, sink *planpb.Node) *planpb.Node {
 	t.Helper()
 	if query == nil || sink == nil || len(sink.GetChildren()) != 1 {
@@ -644,6 +744,26 @@ func colRefPositions(expr *planpb.Expr) []int32 {
 	return out
 }
 
+func colRefPositionsByName(expr *planpb.Expr, name string) []int32 {
+	if expr == nil {
+		return nil
+	}
+	if col := expr.GetCol(); col != nil {
+		if strings.EqualFold(col.GetName(), name) ||
+			strings.EqualFold(icebergDMLUnqualifiedColumnName(col.GetName()), name) {
+			return []int32{col.GetColPos()}
+		}
+		return nil
+	}
+	var out []int32
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.GetArgs() {
+			out = append(out, colRefPositionsByName(arg, name)...)
+		}
+	}
+	return out
+}
+
 func icebergDMLExprContainsStringLiteral(expr *planpb.Expr, value string) bool {
 	if expr == nil {
 		return false
@@ -654,6 +774,23 @@ func icebergDMLExprContainsStringLiteral(expr *planpb.Expr, value string) bool {
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
 			if icebergDMLExprContainsStringLiteral(arg, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func icebergDMLExprContainsColumn(expr *planpb.Expr, name string) bool {
+	if expr == nil {
+		return false
+	}
+	if col := expr.GetCol(); col != nil && strings.EqualFold(col.GetName(), name) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if icebergDMLExprContainsColumn(arg, name) {
 				return true
 			}
 		}

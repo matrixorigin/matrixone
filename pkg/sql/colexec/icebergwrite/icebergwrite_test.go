@@ -15,6 +15,7 @@
 package icebergwrite
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -88,16 +90,23 @@ func TestIcebergWriteAppendsMultipleBatchesAndCommitsOnLast(t *testing.T) {
 	require.NoError(t, op.Prepare(proc))
 	result, err := op.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, 2, result.Batch.RowCount())
-	result, err = op.Call(proc)
-	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
 	require.True(t, result.Batch.IsEmpty())
+	require.Equal(t, vm.ExecNext, result.Status)
 	result, err = op.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, 3, result.Batch.RowCount())
+	require.NotNil(t, result.Batch)
+	require.True(t, result.Batch.IsEmpty())
+	require.Equal(t, vm.ExecNext, result.Status)
 	result, err = op.Call(proc)
 	require.NoError(t, err)
-	require.True(t, result.Batch.Last())
+	require.NotNil(t, result.Batch)
+	require.True(t, result.Batch.IsEmpty())
+	require.Equal(t, vm.ExecNext, result.Status)
+	result, err = op.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.ExecStop, result.Status)
 
 	require.Equal(t, 1, coord.beginCalls)
 	require.Equal(t, 2, coord.appendCalls)
@@ -124,7 +133,8 @@ func TestIcebergWriteCommitsOnNilInputEOF(t *testing.T) {
 	require.NoError(t, op.Prepare(proc))
 	result, err := op.Call(proc)
 	require.NoError(t, err)
-	require.Equal(t, 2, result.Batch.RowCount())
+	require.NotNil(t, result.Batch)
+	require.True(t, result.Batch.IsEmpty())
 	result, err = op.Call(proc)
 	require.NoError(t, err)
 	require.Nil(t, result.Batch)
@@ -153,11 +163,39 @@ func TestIcebergWriteAppendsNonEmptyLastBatchBeforeCommit(t *testing.T) {
 	require.NoError(t, op.Prepare(proc))
 	result, err := op.Call(proc)
 	require.NoError(t, err)
-	require.True(t, result.Batch.Last())
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.ExecStop, result.Status)
 
 	require.Equal(t, 1, coord.beginCalls)
 	require.Equal(t, 1, coord.appendWithProcessCalls)
 	require.Equal(t, []int{1}, coord.appendRows)
+	require.Equal(t, 1, coord.commitCalls)
+	op.Free(proc, false, nil)
+	require.Zero(t, coord.abortCalls)
+}
+
+func TestIcebergWriteCommitsWhenChildStopsWithDataBatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	coord := &testCoordinator{}
+	op := NewArgument(AppendRequest{
+		Ref:         &plan.ObjectRef{ObjName: "gold_orders"},
+		TableDef:    &plan.TableDef{Name: "gold_orders"},
+		Attrs:       []string{"id"},
+		Operation:   OperationAppend,
+		StatementID: "stmt-stop-with-data",
+	}).WithCoordinator(coord)
+	child := &stopWithDataOperator{bat: testBatchWithRows(proc, 10)}
+	child.OpAnalyzer = process.NewAnalyzer(0, false, false, "stop-with-data")
+	op.AppendChild(child)
+
+	require.NoError(t, op.Prepare(proc))
+	result, err := op.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	require.Equal(t, 1, coord.beginCalls)
+	require.Equal(t, []int{10}, coord.appendRows)
 	require.Equal(t, 1, coord.commitCalls)
 	op.Free(proc, false, nil)
 	require.Zero(t, coord.abortCalls)
@@ -308,3 +346,48 @@ func lastBatch() *batch.Batch {
 	bat.SetLast()
 	return bat
 }
+
+type stopWithDataOperator struct {
+	bat  *batch.Batch
+	done bool
+	vm.OperatorBase
+}
+
+func (op *stopWithDataOperator) String(buf *bytes.Buffer) {
+	buf.WriteString("stop-with-data")
+}
+
+func (op *stopWithDataOperator) OpType() vm.OpType {
+	return vm.Mock
+}
+
+func (op *stopWithDataOperator) GetOperatorBase() *vm.OperatorBase {
+	return &op.OperatorBase
+}
+
+func (op *stopWithDataOperator) Prepare(proc *process.Process) error {
+	if op.OpAnalyzer == nil {
+		op.OpAnalyzer = process.NewAnalyzer(0, false, false, "stop-with-data")
+	} else {
+		op.OpAnalyzer.Reset()
+	}
+	return nil
+}
+
+func (op *stopWithDataOperator) Call(proc *process.Process) (vm.CallResult, error) {
+	if op.done {
+		return vm.CancelResult, nil
+	}
+	op.done = true
+	return vm.CallResult{Status: vm.ExecStop, Batch: op.bat}, nil
+}
+
+func (op *stopWithDataOperator) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
+func (op *stopWithDataOperator) Reset(proc *process.Process, pipelineFailed bool, err error) {}
+
+func (op *stopWithDataOperator) Free(proc *process.Process, pipelineFailed bool, err error) {}
+
+func (op *stopWithDataOperator) Release() {}

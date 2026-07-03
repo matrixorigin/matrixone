@@ -19,6 +19,7 @@
 !pkg/iceberg/metadata/testdata/generate_golden_vectors.py
 !optools/iceberg_external_runner.py
 *.sh
+!etc/launch-minio-local/tier-b/seed-nyc-tlc-iceberg.sh
 bin/
 y.go
 *.output

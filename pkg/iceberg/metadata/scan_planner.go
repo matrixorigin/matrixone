@@ -445,11 +445,6 @@ func normalizeSnapshotSelector(req api.ScanPlanRequest) api.SnapshotSelector {
 	return selector
 }
 
-func selectP0DataManifests(ctx context.Context, manifests []api.ManifestFile, pruner scanPruner) ([]api.ManifestFile, int, error) {
-	selected, _, pruned, err := selectScanManifests(ctx, manifests, pruner, false)
-	return selected, pruned, err
-}
-
 func selectScanManifests(ctx context.Context, manifests []api.ManifestFile, pruner scanPruner, enableDeleteApply bool) ([]api.ManifestFile, []api.ManifestFile, int, error) {
 	selectedData := make([]api.ManifestFile, 0, len(manifests))
 	selectedDeletes := make([]api.ManifestFile, 0)

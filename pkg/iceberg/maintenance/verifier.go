@@ -60,10 +60,7 @@ func (v CatalogCommitVerifier) VerifyCommittedMaintenance(ctx context.Context, r
 	if result.SnapshotID <= 0 {
 		return result, false, nil
 	}
-	meta, err := (CatalogMetadataLoader{
-		Client:  v.Client,
-		Catalog: v.Catalog,
-	}).LoadMaintenanceTableMetadata(ctx, req)
+	meta, err := (CatalogMetadataLoader(v)).LoadMaintenanceTableMetadata(ctx, req)
 	if err != nil {
 		return result, false, err
 	}

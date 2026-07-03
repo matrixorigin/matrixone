@@ -666,7 +666,7 @@ func icebergMergeActionForClause(clause *tree.MergeClause) string {
 	if clause == nil {
 		return icebergapi.DMLMergeActionNoop
 	}
-	if clause != nil && clause.Action == tree.MergeActionDelete {
+	if clause.Action == tree.MergeActionDelete {
 		return icebergapi.DMLMergeActionDelete
 	}
 	return icebergapi.DMLMergeActionUpdate

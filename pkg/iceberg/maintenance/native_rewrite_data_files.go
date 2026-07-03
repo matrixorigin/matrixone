@@ -297,13 +297,6 @@ func rewriteDataFilesID(req Request, snapshot api.Snapshot) string {
 	return "rw-" + api.PathHash(raw)
 }
 
-func rewriteDataFilesSequenceNumber(snapshot api.Snapshot) int64 {
-	if snapshot.SequenceNumber > 0 {
-		return snapshot.SequenceNumber + 1
-	}
-	return snapshot.SnapshotID
-}
-
 func rewriteDataFilesSourcePaths(rewrites []RewriteDataFileRewrite) []string {
 	paths := make([]string, 0)
 	for _, rewrite := range rewrites {

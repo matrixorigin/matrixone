@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -31,6 +32,7 @@ import (
 	icebergwritecore "github.com/matrixorigin/matrixone/pkg/iceberg/write"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite"
 	internalexecutor "github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TableMappingGetter interface {
@@ -68,7 +70,8 @@ type AppendRuntimeCoordinatorFactoryOptions struct {
 }
 
 type AppendRuntimeCoordinatorFactory struct {
-	opts AppendRuntimeCoordinatorFactoryOptions
+	opts   AppendRuntimeCoordinatorFactoryOptions
+	shared *appendRuntimeCoordinatorCache
 }
 
 type appendObjectIOContext struct {
@@ -78,7 +81,12 @@ type appendObjectIOContext struct {
 }
 
 func NewAppendRuntimeCoordinatorFactory(opts AppendRuntimeCoordinatorFactoryOptions) AppendRuntimeCoordinatorFactory {
-	return AppendRuntimeCoordinatorFactory{opts: opts}
+	return AppendRuntimeCoordinatorFactory{
+		opts: opts,
+		shared: &appendRuntimeCoordinatorCache{
+			entries: make(map[string]*appendRuntimeSharedCoordinator),
+		},
+	}
 }
 
 func NewAppendRuntimeCoordinatorFactoryFromInternalSQLExecutor(
@@ -95,6 +103,17 @@ func (f AppendRuntimeCoordinatorFactory) NewCoordinator(ctx context.Context, req
 	if req.Operation != "" && req.Operation != icebergwrite.OperationAppend {
 		return nil, nil
 	}
+	if f.shared != nil {
+		if key := appendRuntimeCoordinatorCacheKey(req); key != "" {
+			return f.shared.getOrCreate(ctx, key, req, func() (icebergwrite.Coordinator, error) {
+				return f.newCoordinator(ctx, req)
+			})
+		}
+	}
+	return f.newCoordinator(ctx, req)
+}
+
+func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
 	if err := f.validateRuntimeRequest(ctx, req); err != nil {
 		return nil, err
 	}
@@ -250,6 +269,259 @@ func (f AppendRuntimeCoordinatorFactory) NewCoordinator(ctx context.Context, req
 		objectRef:  "",
 		releaseRef: nil,
 	}, nil
+}
+
+type appendRuntimeCoordinatorCache struct {
+	mu      sync.Mutex
+	entries map[string]*appendRuntimeSharedCoordinator
+}
+
+func (c *appendRuntimeCoordinatorCache) getOrCreate(ctx context.Context, key string, req icebergwrite.AppendRequest, build func() (icebergwrite.Coordinator, error)) (icebergwrite.Coordinator, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if shared := c.entries[key]; shared != nil {
+		return &appendRuntimeSharedCoordinatorScope{shared: shared, scopeID: appendRuntimeParallelScopeID(req)}, nil
+	}
+	coord, err := build()
+	if err != nil {
+		return nil, err
+	}
+	shared := newAppendRuntimeSharedCoordinator(coord, req)
+	shared.release = func() {
+		c.release(key, shared)
+	}
+	c.entries[key] = shared
+	return &appendRuntimeSharedCoordinatorScope{shared: shared, scopeID: appendRuntimeParallelScopeID(req)}, nil
+}
+
+func (c *appendRuntimeCoordinatorCache) release(key string, coord *appendRuntimeSharedCoordinator) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries[key] == coord {
+		delete(c.entries, key)
+	}
+}
+
+type appendRuntimeSharedCoordinatorScope struct {
+	shared  *appendRuntimeSharedCoordinator
+	scopeID int32
+}
+
+func (s *appendRuntimeSharedCoordinatorScope) Begin(ctx context.Context, req icebergwrite.AppendRequest) error {
+	if s == nil || s.shared == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator scope is not initialized", nil))
+	}
+	return s.shared.Begin(ctx, req)
+}
+
+func (s *appendRuntimeSharedCoordinatorScope) Append(ctx context.Context, bat *batch.Batch) error {
+	if s == nil || s.shared == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator scope is not initialized", nil))
+	}
+	return s.shared.Append(ctx, bat)
+}
+
+func (s *appendRuntimeSharedCoordinatorScope) AppendWithProcess(proc *process.Process, bat *batch.Batch) error {
+	ctx := context.Background()
+	if proc != nil {
+		ctx = proc.Ctx
+	}
+	if s == nil || s.shared == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator scope is not initialized", nil))
+	}
+	return s.shared.AppendWithProcess(proc, bat)
+}
+
+func (s *appendRuntimeSharedCoordinatorScope) Commit(ctx context.Context) error {
+	if s == nil || s.shared == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator scope is not initialized", nil))
+	}
+	return s.shared.CommitScope(ctx, s.scopeID)
+}
+
+func (s *appendRuntimeSharedCoordinatorScope) Abort(ctx context.Context, cause error) error {
+	if s == nil || s.shared == nil {
+		return nil
+	}
+	return s.shared.Abort(ctx, cause)
+}
+
+type appendRuntimeSharedCoordinator struct {
+	mu              sync.Mutex
+	inner           icebergwrite.Coordinator
+	release         func()
+	done            sync.Once
+	opened          bool
+	expectedScopes  int
+	begunScopes     map[int32]struct{}
+	finishedScopes  map[int32]struct{}
+	commitAttempted bool
+	commitErr       error
+	aborted         bool
+	abortErr        error
+}
+
+func newAppendRuntimeSharedCoordinator(inner icebergwrite.Coordinator, req icebergwrite.AppendRequest) *appendRuntimeSharedCoordinator {
+	expected := int(req.MaxParallel)
+	if expected <= 0 {
+		expected = 1
+	}
+	return &appendRuntimeSharedCoordinator{
+		inner:          inner,
+		expectedScopes: expected,
+		begunScopes:    make(map[int32]struct{}, expected),
+		finishedScopes: make(map[int32]struct{}, expected),
+	}
+}
+
+func (c *appendRuntimeSharedCoordinator) Begin(ctx context.Context, req icebergwrite.AppendRequest) error {
+	if c == nil || c.inner == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator is not initialized", nil))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.aborted {
+		return c.abortErr
+	}
+	if c.commitAttempted {
+		if c.commitErr != nil {
+			return c.commitErr
+		}
+		return api.ToMOErr(ctx, api.NewError(api.ErrCommitUnknown, "Iceberg append coordinator already committed before this parallel scope started", nil))
+	}
+	if !c.opened {
+		if err := c.inner.Begin(ctx, req); err != nil {
+			return err
+		}
+		c.opened = true
+	}
+	c.begunScopes[appendRuntimeParallelScopeID(req)] = struct{}{}
+	return nil
+}
+
+func (c *appendRuntimeSharedCoordinator) Append(ctx context.Context, bat *batch.Batch) error {
+	if c == nil || c.inner == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator is not initialized", nil))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.appendStateErrorLocked(ctx); err != nil {
+		return err
+	}
+	return c.inner.Append(ctx, bat)
+}
+
+func (c *appendRuntimeSharedCoordinator) AppendWithProcess(proc *process.Process, bat *batch.Batch) error {
+	ctx := context.Background()
+	if proc != nil {
+		ctx = proc.Ctx
+	}
+	if c == nil || c.inner == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator is not initialized", nil))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.appendStateErrorLocked(ctx); err != nil {
+		return err
+	}
+	if processAware, ok := c.inner.(icebergwrite.ProcessAwareCoordinator); ok {
+		return processAware.AppendWithProcess(proc, bat)
+	}
+	return c.inner.Append(ctx, bat)
+}
+
+func (c *appendRuntimeSharedCoordinator) Commit(ctx context.Context) error {
+	return c.CommitScope(ctx, 0)
+}
+
+func (c *appendRuntimeSharedCoordinator) CommitScope(ctx context.Context, scopeID int32) error {
+	if c == nil || c.inner == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator is not initialized", nil))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.opened {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator was not opened", nil))
+	}
+	if c.aborted {
+		return c.abortErr
+	}
+	if c.commitAttempted {
+		return c.commitErr
+	}
+	c.finishedScopes[scopeID] = struct{}{}
+	if len(c.finishedScopes) < c.expectedScopes {
+		return nil
+	}
+	err := c.inner.Commit(ctx)
+	c.commitAttempted = true
+	c.commitErr = err
+	c.releaseOnce()
+	return err
+}
+
+func appendRuntimeParallelScopeID(req icebergwrite.AppendRequest) int32 {
+	if req.MaxParallel <= 1 {
+		return 0
+	}
+	if req.ParallelID < 0 || req.ParallelID >= req.MaxParallel {
+		return 0
+	}
+	return req.ParallelID
+}
+
+func (c *appendRuntimeSharedCoordinator) Abort(ctx context.Context, cause error) error {
+	if c == nil || c.inner == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.commitAttempted || c.aborted {
+		return nil
+	}
+	err := c.inner.Abort(ctx, cause)
+	c.aborted = true
+	c.abortErr = err
+	c.releaseOnce()
+	return err
+}
+
+func (c *appendRuntimeSharedCoordinator) appendStateErrorLocked(ctx context.Context) error {
+	if !c.opened {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator was not opened", nil))
+	}
+	if c.aborted {
+		return c.abortErr
+	}
+	if c.commitAttempted {
+		return api.ToMOErr(ctx, api.NewError(api.ErrCommitUnknown, "Iceberg append coordinator already committed before all rows were appended", nil))
+	}
+	return nil
+}
+
+func (c *appendRuntimeSharedCoordinator) releaseOnce() {
+	c.done.Do(func() {
+		if c.release != nil {
+			c.release()
+		}
+	})
+}
+
+func appendRuntimeCoordinatorCacheKey(req icebergwrite.AppendRequest) string {
+	statementKey := strings.TrimSpace(firstNonEmpty(req.IdempotencyKey, req.StatementID))
+	if statementKey == "" {
+		return ""
+	}
+	ref := strings.TrimSpace(firstNonEmpty(req.DefaultRef, model.DefaultRefMain))
+	return strings.Join([]string{
+		strconv.FormatUint(uint64(req.AccountID), 10),
+		icebergwrite.OperationAppend,
+		strings.TrimSpace(req.CatalogName),
+		strings.TrimSpace(req.Namespace),
+		strings.TrimSpace(req.Table),
+		ref,
+		statementKey,
+	}, "\x1f")
 }
 
 func (f AppendRuntimeCoordinatorFactory) validateRuntimeRequest(ctx context.Context, req icebergwrite.AppendRequest) error {

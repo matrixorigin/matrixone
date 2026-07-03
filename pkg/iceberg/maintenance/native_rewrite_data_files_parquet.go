@@ -48,10 +48,6 @@ type rewriteDataFilesEqualityDeleteFilter struct {
 	Keys        map[string]struct{}
 }
 
-func (f rewriteDataFilesFileDeleteFilter) empty() bool {
-	return len(f.Equality) == 0 && len(f.Positions) == 0
-}
-
 func (c ParquetConcatRewriteDataFilesCompactor) SupportsDeleteManifests() bool {
 	return true
 }

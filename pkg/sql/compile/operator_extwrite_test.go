@@ -128,6 +128,36 @@ func TestIcebergAppendInsertDispatchesBeforeExternalWrite(t *testing.T) {
 	require.NotNil(t, writer.Factory)
 }
 
+func TestCompileIcebergInsertMergesParallelInputToSingleWriter(t *testing.T) {
+	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, icebergwrite.CoordinatorFactoryFunc(func(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+		return nil, nil
+	}))
+	proc := process.NewTopProcess(defines.AttachAccountId(context.Background(), 42), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	c := NewCompile("127.0.0.1:6001", "db", "insert into gold_orders select * from src", "tenant", "uid", nil, proc, nil, false, nil, time.Unix(1, 0).UTC())
+	c.anal = &AnalyzeModule{isFirst: true}
+	node := &plan.Node{InsertCtx: &plan.InsertCtx{
+		TableDef: &plan.TableDef{
+			Name:      "gold_orders",
+			TableType: catalog.SystemExternalRel,
+			Createsql: icebergInsertCreatesql(),
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+			},
+		},
+	}}
+	input := []*Scope{
+		{Magic: Normal, NodeInfo: engine.Node{Addr: "127.0.0.1:6001", Mcpu: 10}, Proc: proc.NewNoContextChildProc(1)},
+	}
+
+	out, err := c.compileInsert(nil, node, input)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Len(t, out[0].PreScopes, 1)
+	require.IsType(t, &icebergwrite.IcebergWrite{}, out[0].RootOp)
+	require.Equal(t, vm.IcebergWrite, out[0].RootOp.OpType())
+	require.Equal(t, vm.Merge, out[0].RootOp.GetOperatorBase().GetChildren(0).OpType())
+}
+
 func TestIcebergDeleteIntentBuildsDeleteWriteRequest(t *testing.T) {
 	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, icebergwrite.CoordinatorFactoryFunc(func(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
 		return nil, nil
