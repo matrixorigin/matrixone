@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 var (
@@ -50,7 +51,6 @@ var (
 
 	defaultFlushInterval         = time.Second * 60
 	defaultScanInterval          = time.Second * 5
-	defaultIncrementalInterval   = time.Minute * 5
 	defaultGlobalMinCount        = int64(40)
 	defaultMinCount              = int64(100)
 	defaultReservedWALEntryCount = uint64(5000)
@@ -264,7 +264,7 @@ func (c *Config) Validate() error {
 		c.Ckp.MinCount = defaultMinCount
 	}
 	if c.Ckp.IncrementalInterval.Duration == 0 {
-		c.Ckp.IncrementalInterval.Duration = defaultIncrementalInterval
+		c.Ckp.IncrementalInterval.Duration = options.DefaultCheckpointIncrementalInterval
 	}
 	if c.Ckp.GlobalMinCount == 0 {
 		c.Ckp.GlobalMinCount = defaultGlobalMinCount
@@ -380,7 +380,7 @@ func (c *Config) SetDefaultValue() {
 		c.Ckp.MinCount = defaultMinCount
 	}
 	if c.Ckp.IncrementalInterval.Duration == 0 {
-		c.Ckp.IncrementalInterval.Duration = defaultIncrementalInterval
+		c.Ckp.IncrementalInterval.Duration = options.DefaultCheckpointIncrementalInterval
 	}
 	if c.Ckp.GlobalMinCount == 0 {
 		c.Ckp.GlobalMinCount = defaultGlobalMinCount
