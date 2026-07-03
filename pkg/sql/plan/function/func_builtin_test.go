@@ -726,6 +726,105 @@ func TestBuiltInConvertUsingUTF8InvalidBytes(t *testing.T) {
 	require.True(t, s, info)
 }
 
+func TestBuiltInConvertUsingCharsetBranches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	invalidUTF8 := string([]byte{0xff})
+
+	tc := tcTemp{
+		info: "convert using charset validates only utf8 charset names",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{invalidUTF8, invalidUTF8, "AZ", "你好", "charset null"},
+				[]bool{false, false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"utf8", "latin1", "UTF8MB4", "utf8", ""},
+				[]bool{false, false, false, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"", invalidUTF8, "AZ", "你好", ""},
+			[]bool{true, false, false, false, true}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInConvertUsingCharset)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+}
+
+func TestBuiltInConvertUsingCharsetConstArgs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "convert using charset handles const value and charset arguments",
+		inputs: []FunctionTestInput{
+			NewFunctionTestConstInput(types.T_varchar.ToType(),
+				[]string{"AZ"},
+				[]bool{false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(),
+				[]string{"utf8mb4"},
+				[]bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"AZ"},
+			[]bool{false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInConvertUsingCharset)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+}
+
+func TestBuiltInConvertUsingCharsetSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	invalidUTF8 := string([]byte{0xff})
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"ok", invalidUTF8, invalidUTF8},
+				[]bool{false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"utf8mb4", "utf8mb4", "utf8mb4"},
+				[]bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
+		builtInConvertUsingCharset)
+	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+
+	selectList := &FunctionSelectList{
+		AnyNull:    true,
+		SelectList: []bool{true, false, true},
+	}
+	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, selectList))
+
+	resultVec := fcTC.result.GetResultVector()
+	strParam := vector.GenerateFunctionStrParameter(resultVec)
+	value, isNull := strParam.GetStrValue(0)
+	require.False(t, isNull)
+	require.Equal(t, "ok", string(value))
+	require.True(t, resultVec.GetNulls().Contains(1))
+	require.True(t, resultVec.GetNulls().Contains(2))
+}
+
+func TestBuiltInConvertUsingCharsetIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"a", "b", "c"},
+				[]bool{false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"utf8mb4", "utf8mb4", "utf8mb4"},
+				[]bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
+		builtInConvertUsingCharset)
+	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+
+	selectList := &FunctionSelectList{AllNull: true}
+	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, selectList))
+
+	resultVec := fcTC.result.GetResultVector()
+	require.True(t, resultVec.GetNulls().Contains(0))
+	require.True(t, resultVec.GetNulls().Contains(1))
+	require.True(t, resultVec.GetNulls().Contains(2))
+}
+
 func Test_MakeIntervalParamInvalid(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	_, err := makeIntervalParam(newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true}, nil))
