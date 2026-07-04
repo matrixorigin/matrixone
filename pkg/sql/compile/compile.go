@@ -5136,6 +5136,10 @@ func shouldScanOnCurrentCN(c *Compile, node *plan.Node, forceSingle bool) bool {
 		return true
 	}
 
+	if plan2.IsIvfSearchEntriesInternalScan(node) {
+		return false
+	}
+
 	if !plan2.GetForceScanOnMultiCN() &&
 		node.Stats.BlockNum <= int32(plan2.BlockThresholdForOneCN) {
 		return true

@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -2056,6 +2057,9 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	// the equi-join condition is a function expression (not a plain column ref), it's expr-based.
 	hasExprBasedShuffle := false
 	for _, node := range qry.GetNodes() {
+		if node == nil {
+			continue
+		}
 		if node.Stats == nil || node.Stats.HashmapStats == nil {
 			continue
 		}
@@ -2081,8 +2085,13 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			break
 		}
 	}
+	hasIvfSearchWithLimit := queryHasIvfSearchWithLimit(qry)
+	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
+		if node == nil {
+			continue
+		}
 		switch node.NodeType {
 		case plan.Node_RECURSIVE_CTE, plan.Node_RECURSIVE_SCAN:
 			ret = ExecTypeAP_ONECN
@@ -2106,14 +2115,27 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				ret = ExecTypeAP_ONECN
 			}
 		}
-		if node.NodeType == plan.Node_TABLE_SCAN &&
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
+			if isIvfSearchEntriesScan(node, hasIvfSearchWithLimit) {
+				execType := ExecTypeAP_MULTICN
+				if !canUseMultiCN {
+					execType = ExecTypeAP_ONECN
+				}
+				if execType > ret {
+					ret = execType
+				}
+			}
 			// due to the inaccuracy of stats.Rowsize, currently only vector index tables are supported
-			(node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
-			stats.Rowsize > RowSizeThreshold &&
-			stats.BlockNum > LargeBlockThresholdForOneCN {
-			ret = ExecTypeAP_ONECN
-			if stats.BlockNum > LargeBlockThresholdForMultiCN {
-				ret = ExecTypeAP_MULTICN
+			if (node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
+				stats.Rowsize > RowSizeThreshold &&
+				stats.BlockNum > LargeBlockThresholdForOneCN {
+				execType := ExecTypeAP_ONECN
+				if stats.BlockNum > LargeBlockThresholdForMultiCN && canUseMultiCN {
+					execType = ExecTypeAP_MULTICN
+				}
+				if execType > ret {
+					ret = execType
+				}
 			}
 		}
 		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
@@ -2121,6 +2143,51 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 	}
 	return ret
+}
+
+func queryHasIvfSearchWithLimit(qry *plan.Query) bool {
+	for _, node := range qry.GetNodes() {
+		if isIvfSearchWithLimitNode(node) {
+			return true
+		}
+	}
+	return false
+}
+
+func isIvfSearchWithLimitNode(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN {
+		return false
+	}
+	if node.GetIndexReaderParam().GetLimit() == nil {
+		return false
+	}
+	return node.GetTableDef().GetTblFunc().GetName() == ivfflatplan.IVFFLATSearchFuncName
+}
+
+func isIvfSearchEntriesScan(node *plan.Node, queryHasIvfSearchWithLimit bool) bool {
+	if !isIvfSearchEntriesTableScan(node) {
+		return false
+	}
+	return queryHasIvfSearchWithLimit || isIvfEntriesIndexReaderScan(node)
+}
+
+func isIvfSearchEntriesTableScan(node *plan.Node) bool {
+	return node != nil &&
+		node.NodeType == plan.Node_TABLE_SCAN &&
+		node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries
+}
+
+// IsIvfSearchEntriesInternalScan reports the internal entries table scan issued by ivf_search.
+func IsIvfSearchEntriesInternalScan(node *plan.Node) bool {
+	return isIvfSearchEntriesTableScan(node) && isIvfEntriesIndexReaderScan(node)
+}
+
+func isIvfEntriesIndexReaderScan(node *plan.Node) bool {
+	param := node.GetIndexReaderParam()
+	if param.GetLimit() == nil {
+		return false
+	}
+	return param.GetOrigFuncName() != "" || len(param.GetOrderBy()) > 0
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
