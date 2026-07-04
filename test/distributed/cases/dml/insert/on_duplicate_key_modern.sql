@@ -330,3 +330,21 @@ select updated_at = @g0 as ts_unchanged, g = @g0 as g_unchanged from t_odku_onup
 insert into t_odku_onupdate_gen(id, v) values (1, 99) on duplicate key update v = values(v);
 select v, g > @g0 as g_advanced from t_odku_onupdate_gen where id = 1;
 drop table if exists t_odku_onupdate_gen;
+
+-- ODKU into a nullable UNIQUE key: an all-NULL row never conflicts, so it must
+-- be inserted (not silently dropped by the no-op guard comparing NULL images).
+drop table if exists t_odku_null_unique;
+create table t_odku_null_unique (a int unique key, b int);
+insert into t_odku_null_unique values (null, null) on duplicate key update b = values(b);
+select count(*) as after_first from t_odku_null_unique;
+insert into t_odku_null_unique values (null, null) on duplicate key update b = values(b);
+select count(*) as after_second from t_odku_null_unique;
+select a, b from t_odku_null_unique;
+-- non-NULL keys on the same table still follow normal ODKU semantics
+insert into t_odku_null_unique values (1, 10) on duplicate key update b = values(b);
+insert into t_odku_null_unique values (1, 20) on duplicate key update b = values(b);
+select a, b from t_odku_null_unique where a = 1;
+-- a no-op update on the conflicting key must leave the row untouched
+insert into t_odku_null_unique values (1, 20) on duplicate key update b = values(b);
+select a, b from t_odku_null_unique where a = 1;
+drop table if exists t_odku_null_unique;
