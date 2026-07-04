@@ -3300,6 +3300,7 @@ prepareable_stmt:
     create_stmt
 |   alter_stmt
 |   insert_stmt
+|   replace_stmt
 |   delete_stmt
 |   drop_stmt
 |   show_stmt

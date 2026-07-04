@@ -2053,6 +2053,10 @@ var (
 		}, {
 			input: "prepare stmt_name1 from select * from t1 where a > ? or abs(b) < ?",
 		}, {
+			input: "prepare stmt_name1 from replace into t1 values (?, ?)",
+		}, {
+			input: "prepare stmt_name1 from replace into t1 (a, b) select a, b from t2 where a > ?",
+		}, {
 			input:  "create account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
 			output: "create account if not exists nihao admin_name 'admin' identified by '******' open comment 'new account'",
 		}, {
