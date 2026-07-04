@@ -118,16 +118,14 @@ func trackConnActive(conn net.Conn) {
 }
 
 // cleanupStaleConnections periodically cleans up connections that have been
-// inactive for a long time (likely returned to idle pool or closed)
-// This ensures the active connection count stays accurate
-// staleThreshold should be aligned with the cleanup interval to catch connections
-// that were closed by CloseIdleConnections() but still in activeConnMap
+// inactive for a long time (likely returned to the idle pool or closed).
+// This keeps the active connection metric bounded without forcing the
+// transport to close idle connections while long uploads are in flight.
 func cleanupStaleConnections() {
 	now := time.Now()
-	// Use a threshold slightly longer than the cleanup interval (5s) to catch
-	// connections that were closed by CloseIdleConnections() but still tracked
-	// This ensures metrics stay accurate after CloseIdleConnections() is called
-	staleThreshold := 8 * time.Second // Slightly longer than cleanup interval (5s)
+	// Use a threshold slightly longer than IdleConnTimeout. http.Transport owns
+	// the real connection lifecycle; this only evicts stale metric entries.
+	staleThreshold := idleConnTimeout + 2*time.Second
 
 	activeConnMap.Range(func(key, value interface{}) bool {
 		lastActive, ok := value.(time.Time)
@@ -138,7 +136,7 @@ func cleanupStaleConnections() {
 
 		// Check if connection is stale (inactive for too long)
 		// Connections that have been inactive longer than the threshold are likely:
-		// 1. Returned to idle pool and may have been closed by CloseIdleConnections()
+		// 1. Returned to the idle pool
 		// 2. Actually closed by the transport's IdleConnTimeout
 		// We can't directly check if a connection is closed, so we use inactivity time as a proxy
 		if now.Sub(lastActive) > staleThreshold {
@@ -166,36 +164,13 @@ var httpTransport = &http.Transport{
 }
 
 func init() {
-	// Note: Even though IdleConnTimeout, MaxIdleConnsPerHost, and MaxConnsPerHost
-	// are configured, we still need to periodically close idle connections because:
-	//
-	// 1. IdleConnTimeout (10s) only checks and closes connections when they are
-	//    retrieved from the idle pool, not proactively. If connections are never
-	//    retrieved, they may remain open indefinitely.
-	//
-	// 2. MaxIdleConns and MaxIdleConnsPerHost are limits, not active cleanup mechanisms.
-	//    They prevent new idle connections when limits are reached, but don't actively
-	//    close existing connections that exceed the limits.
-	//
-	// 3. MaxConnsPerHost limits total connections but doesn't actively close idle ones.
-	//
-	// 4. We need to sync metrics: CloseIdleConnections() closes connections at the
-	//    transport level, and cleanupStaleConnections() removes them from metrics tracking.
-	//    This ensures S3ConnActiveGauge stays accurate after connections are closed.
-	//
-	// By calling CloseIdleConnections() every 5s (more frequent than IdleConnTimeout's 10s),
-	// we proactively close idle connections and keep metrics in sync with actual state.
 	go func() {
-		// Use a reasonable interval (5s) that's less aggressive than IdleConnTimeout (10s)
-		// but frequent enough to control connection count proactively
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			// Close idle connections to control connection count proactively
-			// This may close connections that are still in activeConnMap
-			httpTransport.CloseIdleConnections()
-			// Immediately cleanup stale connections to sync metrics with actual state
-			// This ensures S3ConnActiveGauge stays accurate after CloseIdleConnections()
+			// Do not call CloseIdleConnections here. The transport's own idle
+			// policy should manage connections; this loop only keeps metrics from
+			// retaining stale entries.
 			cleanupStaleConnections()
 		}
 	}()
