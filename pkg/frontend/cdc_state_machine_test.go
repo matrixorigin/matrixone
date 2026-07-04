@@ -224,6 +224,12 @@ func TestExecutorStateMachine_SetFailed(t *testing.T) {
 	require.NoError(t, sm.Transition(TransitionRestartBegin))
 	assert.Equal(t, StateStarting, sm.State())
 	assert.Equal(t, "", sm.GetErrorMessage())
+
+	require.NoError(t, sm.Transition(TransitionStartSuccess))
+	err = sm.SetFailed("runtime failed")
+	assert.NoError(t, err)
+	assert.Equal(t, StateFailed, sm.State())
+	assert.Equal(t, "runtime failed", sm.GetErrorMessage())
 }
 
 func TestExecutorStateMachine_Concurrency(t *testing.T) {

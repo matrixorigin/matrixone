@@ -72,6 +72,7 @@ const (
 	ErrInvalidArg                  uint16 = 20203
 	ErrTruncatedWrongValueForField uint16 = 20204
 	ErrTooBigPrecision             uint16 = 20205
+	ErrRegexpIllegalArgument       uint16 = 20206
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -88,6 +89,7 @@ const (
 	ErrUpgrateError         uint16 = 20311
 	ErrInvalidTz            uint16 = 20312
 	ErrUnsupportedDML       uint16 = 20313
+	ErrOperandColumns       uint16 = 20314
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -372,6 +374,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidArg:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid argument %s, bad value %s"},
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
+	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -387,6 +390,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
 	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
+	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -910,6 +914,10 @@ func NewDivByZero(ctx context.Context) *Error {
 	return newError(ctx, ErrDivByZero)
 }
 
+func NewRegexpIllegalArgument(ctx context.Context) *Error {
+	return newError(ctx, ErrRegexpIllegalArgument)
+}
+
 func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrOutOfRange, typ, msg)
@@ -1400,6 +1408,10 @@ func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 
 func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 	return newError(ctx, ErrWrongValueCountOnRow, row)
+}
+
+func NewOperandColumns(ctx context.Context, columns int) *Error {
+	return newError(ctx, ErrOperandColumns, columns)
 }
 
 func NewBadFieldError(ctx context.Context, column, table string) *Error {

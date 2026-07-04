@@ -101,13 +101,18 @@ func (s *service) end() {
 		switch txnMeta.Status {
 		case txn.TxnStatus_Prepared:
 			if err := s.startAsyncCheckCommitTask(txnCtx); err != nil {
-				panic(err)
+				s.logger.Error("start check commit task failed during recovery",
+					zap.Error(err),
+					util.TxnField(txnMeta))
 			}
 		case txn.TxnStatus_Committing:
-			s.removeTxn(txnMeta.ID)
 			if err := s.startAsyncCommitTask(txnCtx); err != nil {
-				panic(err)
+				s.logger.Error("start commit task failed during recovery",
+					zap.Error(err),
+					util.TxnField(txnMeta))
+				return true
 			}
+			s.removeTxn(txnMeta.ID)
 		}
 		return true
 	})

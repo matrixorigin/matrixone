@@ -18,6 +18,12 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/binary"
+	"errors"
+	"io"
+	"net"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +34,175 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type fakeMySQLServer struct {
+	listener net.Listener
+	queries  chan string
+	errs     chan error
+	wg       sync.WaitGroup
+}
+
+func startFakeMySQLServer(t *testing.T) *fakeMySQLServer {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := &fakeMySQLServer{
+		listener: listener,
+		queries:  make(chan string, 4),
+		errs:     make(chan error, 1),
+	}
+	server.wg.Add(1)
+	go server.serve()
+
+	t.Cleanup(func() {
+		_ = listener.Close()
+		server.wg.Wait()
+	})
+
+	return server
+}
+
+func (s *fakeMySQLServer) addr(t *testing.T) (string, int) {
+	t.Helper()
+
+	host, portStr, err := net.SplitHostPort(s.listener.Addr().String())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+	return host, port
+}
+
+func (s *fakeMySQLServer) serve() {
+	defer s.wg.Done()
+
+	conn, err := s.listener.Accept()
+	if err != nil {
+		if !errorsIsNetClosed(err) {
+			s.reportErr(err)
+		}
+		return
+	}
+	defer conn.Close()
+
+	if err := writeMySQLPacket(conn, 0, mysqlHandshakePayload()); err != nil {
+		s.reportErr(err)
+		return
+	}
+	if _, _, err := readMySQLPacket(conn); err != nil {
+		s.reportErr(err)
+		return
+	}
+	if err := writeMySQLOK(conn, 2); err != nil {
+		s.reportErr(err)
+		return
+	}
+
+	for {
+		_, payload, err := readMySQLPacket(conn)
+		if err != nil {
+			if err != io.EOF && !errorsIsNetClosed(err) {
+				s.reportErr(err)
+			}
+			return
+		}
+		if len(payload) == 0 {
+			continue
+		}
+
+		switch payload[0] {
+		case 0x01: // COM_QUIT
+			return
+		case 0x03: // COM_QUERY
+			s.queries <- string(payload[1:])
+			if err := writeMySQLOK(conn, 1); err != nil {
+				s.reportErr(err)
+				return
+			}
+		case 0x0e: // COM_PING
+			if err := writeMySQLOK(conn, 1); err != nil {
+				s.reportErr(err)
+				return
+			}
+		default:
+			s.reportErr(io.ErrUnexpectedEOF)
+			return
+		}
+	}
+}
+
+func (s *fakeMySQLServer) reportErr(err error) {
+	select {
+	case s.errs <- err:
+	default:
+	}
+}
+
+func errorsIsNetClosed(err error) bool {
+	return errors.Is(err, net.ErrClosed) || err.Error() == "use of closed network connection"
+}
+
+func mysqlHandshakePayload() []byte {
+	const (
+		clientLongPassword    uint32 = 1 << 0
+		clientLongFlag        uint32 = 1 << 2
+		clientProtocol41      uint32 = 1 << 9
+		clientTransactions    uint32 = 1 << 13
+		clientSecureConn      uint32 = 1 << 15
+		clientMultiStatements uint32 = 1 << 16
+		clientPluginAuth      uint32 = 1 << 19
+	)
+
+	caps := clientLongPassword | clientLongFlag | clientProtocol41 |
+		clientTransactions | clientSecureConn | clientMultiStatements | clientPluginAuth
+	authData := []byte("12345678abcdefghijklmnop")
+
+	payload := []byte{0x0a}
+	payload = append(payload, []byte("5.7.0-cdc-test")...)
+	payload = append(payload, 0x00)
+	payload = binary.LittleEndian.AppendUint32(payload, 1)
+	payload = append(payload, authData[:8]...)
+	payload = append(payload, 0x00)
+	payload = binary.LittleEndian.AppendUint16(payload, uint16(caps))
+	payload = append(payload, 0x21)
+	payload = binary.LittleEndian.AppendUint16(payload, 0x0002)
+	payload = binary.LittleEndian.AppendUint16(payload, uint16(caps>>16))
+	payload = append(payload, 21)
+	payload = append(payload, make([]byte, 10)...)
+	payload = append(payload, authData[8:21]...)
+	payload = append(payload, 0x00)
+	payload = append(payload, []byte("mysql_native_password")...)
+	payload = append(payload, 0x00)
+	return payload
+}
+
+func readMySQLPacket(conn net.Conn) (byte, []byte, error) {
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return 0, nil, err
+	}
+
+	length := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(conn, payload); err != nil {
+		return 0, nil, err
+	}
+	return header[3], payload, nil
+}
+
+func writeMySQLPacket(conn net.Conn, sequence byte, payload []byte) error {
+	header := []byte{byte(len(payload)), byte(len(payload) >> 8), byte(len(payload) >> 16), sequence}
+	if _, err := conn.Write(header); err != nil {
+		return err
+	}
+	_, err := conn.Write(payload)
+	return err
+}
+
+func writeMySQLOK(conn net.Conn, sequence byte) error {
+	return writeMySQLPacket(conn, sequence, []byte{0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00})
+}
 
 func TestExecutor_BeginTx(t *testing.T) {
 	t.Run("SuccessfulBegin", func(t *testing.T) {
@@ -459,6 +634,36 @@ func TestExecutor_ExecSQL(t *testing.T) {
 
 		_ = executor.Close()
 	})
+}
+
+func TestExecutor_ExecSQLAfterTryConnUsesReuseQueryBuf(t *testing.T) {
+	server := startFakeMySQLServer(t)
+	host, port := server.addr(t)
+
+	cfg, err := makeMysqlConfig("user", "password", host, port, "5s")
+	require.NoError(t, err)
+	cfg.MaxAllowedPacket = 64 << 20
+
+	db, err := tryConn(cfg)
+	require.NoError(t, err)
+
+	executor := &Executor{conn: db}
+	defer func() {
+		require.NoError(t, executor.Close())
+	}()
+
+	sqlBuf := append(make([]byte, v2SQLBufReserved), []byte("CREATE DATABASE cdc_regression")...)
+	err = executor.ExecSQL(context.Background(), nil, sqlBuf, false)
+	require.NoError(t, err)
+
+	select {
+	case query := <-server.queries:
+		require.Equal(t, "CREATE DATABASE cdc_regression", query)
+	case err := <-server.errs:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for COM_QUERY")
+	}
 }
 
 func TestExecutor_Close(t *testing.T) {
