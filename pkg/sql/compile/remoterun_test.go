@@ -400,6 +400,31 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, []int{3, 4}, restoredOp.MultiUpdateCtx[0].DeleteCols)
 		require.Equal(t, 1, restoredOp.MultiUpdateCtx[0].InsertPkColIdx)
 		require.True(t, restoredOp.IsRemote)
+		require.False(t, restoredOp.CountDeleteAffectRows,
+			"CountDeleteAffectRows must stay false when the source op did not set it")
+	})
+
+	t.Run("MultiUpdate_CountDeleteAffectRows", func(t *testing.T) {
+		op := &multi_update.MultiUpdate{
+			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
+				{
+					ObjRef:   &plan.ObjectRef{ObjName: "t1"},
+					TableDef: &plan.TableDef{Name: "t1"},
+				},
+			},
+			Action:                multi_update.UpdateWriteTable,
+			CountDeleteAffectRows: true,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.MultiUpdate.UpdateCtxList[0].CountDeleteAffectRows,
+			"serialized UpdateCtx must carry CountDeleteAffectRows")
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*multi_update.MultiUpdate)
+		require.True(t, restoredOp.CountDeleteAffectRows,
+			"CountDeleteAffectRows must survive the remote pipeline round-trip")
 	})
 
 	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
