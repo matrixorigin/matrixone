@@ -250,7 +250,11 @@ func (s *service) handleRemoteLock(
 		ctx,
 		txn,
 		req.Lock.Rows,
-		LockOptions{LockOptions: req.Lock.Options, async: true},
+		LockOptions{
+			LockOptions:                req.Lock.Options,
+			async:                      true,
+			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
+		},
 		func(result pb.Result, err error) {
 			if err == nil {
 				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
@@ -334,7 +338,11 @@ func (s *service) handleForwardLock(
 		ctx,
 		txn,
 		req.Lock.Rows,
-		LockOptions{LockOptions: req.Lock.Options, async: true},
+		LockOptions{
+			LockOptions:                req.Lock.Options,
+			async:                      true,
+			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
+		},
 		func(result pb.Result, err error) {
 			if err == nil {
 				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
