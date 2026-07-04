@@ -257,6 +257,105 @@ func TestGetLockHolderHoldsBindChangeLockAcrossLocalLookup(t *testing.T) {
 	)
 }
 
+func TestGetLockHolderRemoteDoesNotBlockAllocatorEpochPurge(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			l := services[0]
+			oldAllocator := allocatorState{id: "old-holder-allocator", version: 100}
+			newAllocator := allocatorState{id: "new-holder-allocator", version: 200}
+			table := uint64(13)
+			row := []byte{1}
+			bind := pb.LockTable{
+				Group:       0,
+				Table:       table,
+				OriginTable: table,
+				ServiceID:   "remote-service",
+				Version:     oldAllocator.version,
+				Valid:       true,
+				AllocatorID: oldAllocator.id,
+			}
+			started := make(chan struct{})
+			release := make(chan struct{})
+			client := &getLockHolderBlockingClient{
+				t:       t,
+				started: started,
+				release: release,
+			}
+			remote := newRemoteLockTable(
+				l.serviceID,
+				time.Second,
+				bind,
+				client,
+				l.handleBindChanged,
+				l.logger,
+			)
+			remote.allocatorStateProvider = l.allocatorStateSnapshot
+			remote.allocatorBindChangedHandler = l.handleBindChangedFromAllocator
+
+			l.allocatorVersionMu.Lock()
+			l.lastAllocatorID = oldAllocator.id
+			l.lastAllocatorVersion = oldAllocator.version
+			l.allocatorVersionMu.Unlock()
+			l.tableGroups.set(bind.Group, bind.Table, remote)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, _, err := l.GetLockHolder(ctx, table, row, pb.LockOptions{
+					Group:       bind.Group,
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				})
+				done <- err
+			}()
+
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				require.Fail(t, "GetLockHolder did not start remote holder lookup")
+			}
+
+			observed := make(chan struct {
+				removed  int
+				accepted bool
+			}, 1)
+			go func() {
+				removed, accepted := l.observeAllocatorStateWithHoldersFromSnapshot(
+					"get-holder-deadlock-test",
+					newAllocator,
+					oldAllocator,
+					true,
+					l.tableGroups)
+				observed <- struct {
+					removed  int
+					accepted bool
+				}{removed: removed, accepted: accepted}
+			}()
+
+			select {
+			case v := <-observed:
+				require.True(t, v.accepted)
+				require.Equal(t, 1, v.removed)
+			case <-time.After(time.Second):
+				require.Fail(t, "allocator epoch purge blocked behind remote GetLockHolder")
+			}
+
+			cancel()
+			close(release)
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				require.Fail(t, "GetLockHolder did not finish after releasing remote lookup")
+			}
+		},
+	)
+}
+
 type getLockHolderBindChangedClient struct {
 	t        *testing.T
 	wantBind pb.LockTable
@@ -282,6 +381,38 @@ func (c *getLockHolderBindChangedClient) AsyncSend(
 }
 
 func (c *getLockHolderBindChangedClient) Close() error {
+	return nil
+}
+
+type getLockHolderBlockingClient struct {
+	t       *testing.T
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (c *getLockHolderBlockingClient) Send(
+	ctx context.Context,
+	req *pb.Request) (*pb.Response, error) {
+	require.Equal(c.t, pb.Method_GetLockHolder, req.Method)
+	c.once.Do(func() {
+		close(c.started)
+	})
+	select {
+	case <-c.release:
+		return nil, context.Canceled
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *getLockHolderBlockingClient) AsyncSend(
+	ctx context.Context,
+	req *pb.Request) (*morpc.Future, error) {
+	panic("unexpected async send")
+}
+
+func (c *getLockHolderBlockingClient) Close() error {
 	return nil
 }
 
@@ -340,7 +471,7 @@ func TestForceRefreshLockTableBinds(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, _ *service,
 			table uint64) {
 			l1.ForceRefreshLockTableBinds(nil, nil)
 			l2.ForceRefreshLockTableBinds(nil, nil)
@@ -375,7 +506,7 @@ func TestGetLockTableBind(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, _ *service,
 			table uint64) {
 			bind1, err := l1.GetLockTableBind(0, table)
 			require.NoError(t, err)
