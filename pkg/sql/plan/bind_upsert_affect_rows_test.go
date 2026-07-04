@@ -141,12 +141,12 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 	})
 
 	t.Run("ODKU no-op filter keeps non-conflicting rows via rowid guard", func(t *testing.T) {
-		// t_multi_unique dedups on a nullable unique key: an all-NULL insert row
-		// never conflicts, so its old image is all-NULL and every <=> in the
-		// no-op chain evaluates to true. The isnull(old rowid) OR-branch must be
-		// present so such rows are inserted instead of silently dropped.
-		// hasNoopFilter only matches the or(isnull(rowid), not(...)) shape, so a
-		// true result asserts the guard exists.
+		// An all-NULL insert row into a nullable unique key never conflicts, so
+		// its old image is all-NULL and every <=> in the no-op chain evaluates
+		// to true. The isnull(old rowid) OR-branch must be present so such rows
+		// are inserted instead of silently dropped. hasNoopFilter only matches
+		// the or(isnull(rowid), not(...)) shape, so a true result asserts the
+		// guard exists.
 		p, err := runOneStmt(mock, t,
 			"insert into constraint_test.dept(deptno, dname, loc) values (1, 'A', 'B') on duplicate key update loc = loc")
 		require.NoError(t, err)
