@@ -1158,10 +1158,26 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			// Direct integer parsing avoids float64 precision loss
 			// for large values (e.g. '9007199254740993').
 			sp := vector.GenerateFunctionStrParameter(param)
+			isBin := param.GetIsBin()
 			getters[i] = func(idx uint64) (int64, bool) {
 				v, null := sp.GetStrValue(idx)
 				if null {
 					return 0, true
+				}
+				if isBin {
+					// hex/bit literals (e.g. 0x41, b'01000001') arrive as raw
+					// bytes with IsBin set; interpret them as a big-endian
+					// integer, mirroring the varchar->int64 cast path
+					// (strToSigned) that CHAR used before.
+					if len(v) > 8 {
+						// MySQL: truncated incorrect BINARY value -> 0
+						return 0, false
+					}
+					var num uint64
+					for _, b := range v {
+						num = num<<8 | uint64(b)
+					}
+					return int64(num), false
 				}
 				s := strings.TrimSpace(string(v))
 				if len(s) == 0 {

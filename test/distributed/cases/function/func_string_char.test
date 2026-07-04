@@ -36,6 +36,11 @@ SELECT HEX(CHAR('65xyz')) AS char_prefix_num;
 SELECT HEX(CHAR('9007199254740993')) AS char_large_int_str;
 SELECT HEX(CHAR('77abc')) AS char_mixed_str;
 
+# Binary hex/bit literals (MySQL interprets raw bytes as big-endian integer)
+SELECT HEX(CHAR(0x41)) AS char_hex_lit;
+SELECT HEX(CHAR(0x0100)) AS char_hex_multi;
+SELECT HEX(CHAR(b'01000001')) AS char_bit_lit;
+
 # Different integer types (should be cast to int64)
 SELECT CHAR(CAST(65 AS INT), CAST(66 AS INT)) AS int_type;
 SELECT CHAR(CAST(65 AS BIGINT), CAST(66 AS BIGINT)) AS bigint_type;
@@ -51,4 +56,10 @@ CREATE TABLE t1(a INT, b INT, c INT);
 INSERT INTO t1 VALUES (65, 66, 67), (72, 101, 108), (48, 49, 50);
 SELECT * FROM t1 WHERE CHAR(a, b, c) = 'ABC';
 DROP TABLE t1;
+
+# Nullable column NULL path (MySQL skips NULL per row)
+CREATE TABLE t2(a INT, b INT);
+INSERT INTO t2 VALUES (65, 66), (NULL, 67), (68, NULL), (NULL, NULL);
+SELECT a, b, CHAR(a, b) AS char_nullable FROM t2;
+DROP TABLE t2;
 

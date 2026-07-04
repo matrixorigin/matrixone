@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -914,4 +915,91 @@ func Test_BuiltInCharCheck(t *testing.T) {
 			require.Equal(t, types.T_int64, ft.Oid)
 		}
 	}
+}
+
+// Test_BuiltInCharIsBin tests CHAR with hex/bit literals (e.g. 0x41,
+// b'01000001'). They are bound as varchar constants carrying raw bytes with
+// IsBin set, and must be interpreted as big-endian integers, not parsed as
+// decimal text (MySQL: CHAR(0x41) = 'A', CHAR(0x0100) = 0x0100).
+func Test_BuiltInCharIsBin(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	cases := []struct {
+		info  string
+		input []byte
+		want  string
+	}{
+		{"char(0x41)", []byte{0x41}, "A"},
+		{"char(0x0100)", []byte{0x01, 0x00}, "\x01\x00"},
+		{"char(b'01000001')", []byte{0x41}, "A"},
+		// 8 bytes: uint64 truncated to uint32 (MySQL: 0x4141414141414141 -> 41414141)
+		{"char(0x4141414141414141)", []byte{0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41}, "AAAA"},
+		// 8 bytes all 0xFF: uint64 max -> uint32 0xFFFFFFFF
+		{"char(0xFFFFFFFFFFFFFFFF)", []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, "\xff\xff\xff\xff"},
+		// >8 bytes: MySQL truncates incorrect BINARY value -> 0 -> 0x00
+		{"char(0x414141414141414141)", []byte{0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41}, "\x00"},
+		// empty binary: value 0 -> 0x00 (MySQL: HEX(CHAR(x'')) = 00)
+		{"char(x'')", []byte{}, "\x00"},
+	}
+
+	for _, c := range cases {
+		input := testutil.MakeVarlenaVector([][]byte{c.input}, nil, types.T_varchar.ToType(), mp)
+		input.SetIsBin(true)
+
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+		require.NoError(t, result.PreExtendAndReset(1))
+
+		err := builtInChar([]*vector.Vector{input}, result, proc, 1, nil)
+		require.NoError(t, err, c.info)
+		got := vector.InefficientMustStrCol(result.GetResultVector())
+		require.Equal(t, []string{c.want}, got, c.info)
+
+		result.Free()
+		input.Free(mp)
+	}
+}
+
+// Test_BuiltInCharNotBin verifies that plain varchar (IsBin unset, i.e. real
+// string data such as column values) still goes through leading-integer
+// parsing even if the content happens to look like raw bytes.
+func Test_BuiltInCharNotBin(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	// "A" without IsBin: parseLeadingInteger fails -> 0 -> 0x00
+	input := testutil.MakeVarlenaVector([][]byte{[]byte("A")}, nil, types.T_varchar.ToType(), mp)
+	defer input.Free(mp)
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	require.NoError(t, builtInChar([]*vector.Vector{input}, result, proc, 1, nil))
+	got := vector.InefficientMustStrCol(result.GetResultVector())
+	require.Equal(t, []string{"\x00"}, got)
+}
+
+// Test_BuiltInCharIntTypes exercises every integer-type getter in builtInChar
+// (int8/int16/int32/uint8/uint16/uint32), which arrive as-is without cast.
+func Test_BuiltInCharIntTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tc := tcTemp{
+		info: "select char(int8, int16, int32, uint8, uint16, uint32)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int8.ToType(), []int8{65}, []bool{false}),
+			NewFunctionTestInput(types.T_int16.ToType(), []int16{66}, []bool{false}),
+			NewFunctionTestInput(types.T_int32.ToType(), []int32{67}, []bool{false}),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{68}, []bool{false}),
+			NewFunctionTestInput(types.T_uint16.ToType(), []uint16{69}, []bool{false}),
+			NewFunctionTestInput(types.T_uint32.ToType(), []uint32{70}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"ABCDEF"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
 }
