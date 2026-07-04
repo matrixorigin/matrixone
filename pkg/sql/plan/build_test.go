@@ -3278,12 +3278,20 @@ func TestReplaceCaptureDedupJoinDoesNotShuffle(t *testing.T) {
 
 // A multi-column row subquery as a COUNT(DISTINCT ...) argument binds to an
 // Expr_Sub whose Typ.Id is T_tuple. The tuple-expansion guard in BindAggFunc
-// must not mistake it for a genuine Expr_List, otherwise GetList() returns nil
-// and .List panics during plan building. This asserts BuildPlan does not panic.
-func TestCountDistinctRowSubqueryNoPanic(t *testing.T) {
+// must not mistake it for a genuine Expr_List (GetList() returns nil there, so
+// the earlier code nil-deref panicked). It must instead reject the query with a
+// clear error rather than silently collapsing to the subquery's first column.
+func TestCountDistinctRowSubqueryRejected(t *testing.T) {
 	mock := NewMockOptimizer(false)
+	var (
+		plan *Plan
+		err  error
+	)
 	require.NotPanics(t, func() {
-		_, _ = runOneStmt(mock, t,
+		plan, err = runOneStmt(mock, t,
 			"select count(distinct (select n_nationkey, n_regionkey from nation)) from nation")
 	})
+	require.Error(t, err)
+	require.Nil(t, plan)
+	require.Contains(t, err.Error(), "multi-column subquery")
 }

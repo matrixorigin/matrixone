@@ -193,15 +193,20 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	// expression (not just inside optimizeDistinctAgg), otherwise the executor
 	// cannot build a correct multi-column distinct key from a single T_tuple vector.
 	//
-	// Only expand a genuine AST tuple, which binds to Expr_List. A multi-column
-	// row subquery also carries Typ.Id == T_tuple but is an Expr_Sub, so relying
-	// on Typ.Id would call GetList() on a nil list and panic — hence the
-	// GetList() != nil guard instead.
+	// Only an AST tuple binds to Expr_List and can be expanded. A multi-column
+	// row subquery — e.g. COUNT(DISTINCT (SELECT a, b ...)) — also carries
+	// Typ.Id == T_tuple but is an Expr_Sub: GetList() is nil there, and leaving
+	// it unexpanded would let downstream either nil-deref, error as NYI, or
+	// silently collapse to the subquery's first column. Reject it explicitly.
 	f := expr.GetF()
-	if funcName == "count" && astExpr.Type == tree.FUNC_TYPE_DISTINCT && len(f.Args) == 1 {
-		if list := f.Args[0].GetList(); list != nil {
-			f.Args = list.List
+	if funcName == "count" && astExpr.Type == tree.FUNC_TYPE_DISTINCT &&
+		len(f.Args) == 1 && f.Args[0].Typ.Id == int32(types.T_tuple) {
+		list := f.Args[0].GetList()
+		if list == nil {
+			return nil, moerr.NewNotSupported(b.GetContext(),
+				"COUNT(DISTINCT ...) with a multi-column subquery argument")
 		}
+		f.Args = list.List
 	}
 
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {

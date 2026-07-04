@@ -299,4 +299,7 @@ select count((g, v)) from t_count_distinct_multi;
 select count(g, v) over () from t_count_distinct_multi;
 select count((g, v)) over () from t_count_distinct_multi;
 
+# A multi-column row subquery is not a valid distinct key; reject, do not silently drop columns
+select count(distinct (select g, v from t_count_distinct_multi limit 1)) from t_count_distinct_multi;
+
 drop table t_count_distinct_multi;

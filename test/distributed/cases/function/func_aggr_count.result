@@ -556,4 +556,6 @@ select count(g, v) over () from t_count_distinct_multi;
 SQL syntax error: Incorrect arguments to COUNT
 select count((g, v)) over () from t_count_distinct_multi;
 SQL syntax error: Incorrect arguments to COUNT
+select count(distinct (select g, v from t_count_distinct_multi limit 1)) from t_count_distinct_multi;
+not supported: COUNT(DISTINCT ...) with a multi-column subquery argument
 drop table t_count_distinct_multi;
