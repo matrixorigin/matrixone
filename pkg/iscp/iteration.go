@@ -670,7 +670,13 @@ var GetJobSpecs = func(
 	return
 }
 
-var errPermanent = errors.New("permanent error")
+type permanentError struct{}
+
+func (permanentError) Error() string {
+	return "permanent error"
+}
+
+var errPermanent error = permanentError{}
 
 func FlushPermanentErrorMessage(
 	ctx context.Context,
@@ -716,7 +722,8 @@ func FlushPermanentErrorMessage(
 }
 
 func isPermanentError(err error) bool {
-	return err != nil && (errors.Is(err, errPermanent) || err.Error() == errPermanent.Error())
+	var target permanentError
+	return errors.As(err, &target)
 }
 
 func (status *JobStatus) SetError(err error) {
