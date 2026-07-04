@@ -1,6 +1,6 @@
 ---
 name: unhappy-path-audit
-description: Full-codebase unhappy-path audit (hung, leak, OOM) using the Q1-Q3 three-proposition framework to produce structured risk reports.
+description: Full-codebase MatrixOne unhappy-path audit for leak, hung, and OOM risks using the Q1-Q3 three-proposition framework. Use when asked to audit resource lifecycle, waits, goroutines, lock/connection cleanup, unbounded growth, or to produce structured risk reports / bug candidates for MatrixOne code.
 ---
 
 # Unhappy Path Audit Skill
@@ -294,7 +294,3 @@ Common false positive: variable is reset in a function you haven't read yet (e.g
 | See append/push without bound in current scope → report OOM | Grep variable + `= nil` — cleanup function in sibling file may reset it | G3 |
 | See function call that "might" panic → report fd leak on panic path | Open function body — nil-check+assign or simple arithmetic cannot panic | G2 |
 | See `SendMessage` return error → assume upstream state machine doesn't clean up | Re-read the exact line where state is set — it may be unconditional | G4 |
-
-## Recent user feedback
-<!-- auto-recorded at t=1782710864 -->
-- User directive: 不要管。继续下一个task
