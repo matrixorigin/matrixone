@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -2085,7 +2084,6 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			break
 		}
 	}
-	hasIvfSearchWithLimit := queryHasIvfSearchWithLimit(qry)
 	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
@@ -2116,7 +2114,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			}
 		}
 		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
-			if isIvfSearchEntriesScan(node, hasIvfSearchWithLimit) {
+			if IsIvfSearchEntriesInternalScan(node) {
 				execType := ExecTypeAP_MULTICN
 				if !canUseMultiCN {
 					execType = ExecTypeAP_ONECN
@@ -2143,32 +2141,6 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 	}
 	return ret
-}
-
-func queryHasIvfSearchWithLimit(qry *plan.Query) bool {
-	for _, node := range qry.GetNodes() {
-		if isIvfSearchWithLimitNode(node) {
-			return true
-		}
-	}
-	return false
-}
-
-func isIvfSearchWithLimitNode(node *plan.Node) bool {
-	if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN {
-		return false
-	}
-	if node.GetIndexReaderParam().GetLimit() == nil {
-		return false
-	}
-	return node.GetTableDef().GetTblFunc().GetName() == ivfflatplan.IVFFLATSearchFuncName
-}
-
-func isIvfSearchEntriesScan(node *plan.Node, queryHasIvfSearchWithLimit bool) bool {
-	if !isIvfSearchEntriesTableScan(node) {
-		return false
-	}
-	return queryHasIvfSearchWithLimit || isIvfEntriesIndexReaderScan(node)
 }
 
 func isIvfSearchEntriesTableScan(node *plan.Node) bool {
