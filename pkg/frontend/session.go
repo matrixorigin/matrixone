@@ -1193,6 +1193,20 @@ func (ses *Session) RemovePrepareStmt(name string) {
 	delete(ses.prepareStmts, name)
 }
 
+// RemoveAllPrepareStmts closes and drops every cached prepared statement. It is
+// used when a session variable that changes how statements are rewritten (e.g.
+// remap_rewrites / enable_remap_hint) is set: a prepared statement bakes in the
+// rewrite state captured at PREPARE time, so it must be invalidated when that
+// state changes, otherwise a later EXECUTE would run with a stale rewrite.
+func (ses *Session) RemoveAllPrepareStmts() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, stmt := range ses.prepareStmts {
+		stmt.Close()
+	}
+	ses.prepareStmts = make(map[string]*PrepareStmt)
+}
+
 // GetUserDefinedVar gets value of the config
 func (ses *Session) GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error) {
 	// if val, ok := ses.configs[dbName+"-"+varName]; ok {
