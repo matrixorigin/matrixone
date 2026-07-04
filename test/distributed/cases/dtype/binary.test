@@ -163,6 +163,11 @@ select id, bit_and(b) from bit01 group by id;
 select id, bit_or(b) from bit01 group by id;
 select id, bit_xor(b) from bit01 group by id;
 
+-- hex/length for binary aggregate neutral values
+select id, hex(bit_and(b)), length(bit_and(b)) from bit01 group by id;
+select id, hex(bit_or(b)), length(bit_or(b)) from bit01 group by id;
+select id, hex(bit_xor(b)), length(bit_xor(b)) from bit01 group by id;
+
 -- order by
 select * from bit01 order by b desc;
 select * from bit01 order by b;
