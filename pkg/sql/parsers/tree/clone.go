@@ -82,6 +82,7 @@ type CloneTable struct {
 
 	SrcTable    TableName
 	CreateTable CreateTable
+	CopyGrants  bool
 
 	IsRestore     bool
 	IsRestoreByTS bool
@@ -117,6 +118,9 @@ func (node *CloneTable) Format(ctx *FmtCtx) {
 	node.CreateTable.Table.Format(ctx)
 	ctx.WriteString(" clone ")
 	node.SrcTable.Format(ctx)
+	if node.CopyGrants {
+		ctx.WriteString(" copy grants")
+	}
 	if node.ToAccountOpt != nil {
 		ctx.WriteByte(' ')
 		node.ToAccountOpt.Format(ctx)
