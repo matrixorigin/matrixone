@@ -3295,3 +3295,11 @@ func TestCountDistinctRowSubqueryRejected(t *testing.T) {
 	require.Nil(t, plan)
 	require.Contains(t, err.Error(), "multi-column subquery")
 }
+
+func TestSubqueryInJoinOn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"SELECT n_name FROM nation JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}

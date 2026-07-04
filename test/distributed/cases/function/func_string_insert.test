@@ -8,6 +8,13 @@ SELECT INSERT('Hello World', 6, 0, 'MySQL ') AS insert_without_remove;
 SELECT INSERT('Hello World', 0, 5, 'MySQL') AS invalid_position;
 SELECT INSERT('Hello', 10, 5, 'MySQL') AS position_exceeds_length;
 SELECT INSERT('Hello', 2, 100, 'MySQL') AS length_exceeds_string;
+SELECT INSERT('abc', 2, 9223372036854775807, 'X') AS max_int64_length_exceeds_string;
+SELECT INSERT('你好世界', 3, 9223372036854775807, 'MO') AS max_int64_length_exceeds_utf8;
+SELECT INSERT('Quadratic', 3, -1, 'What') AS negative_length;
+SELECT INSERT('Hello World', 1, -1, 'Hi') AS negative_length_beginning;
+SELECT INSERT('Hello World', 7, -5, 'MySQL') AS negative_length_suffix;
+SELECT INSERT('Hello', 5, -1, '!') AS negative_length_last_char;
+SELECT INSERT('你好世界', 3, -1, 'MatrixOne') AS negative_length_utf8;
 
 # NULL handling
 SELECT INSERT('Hello World', NULL, 5, 'MySQL') AS null_position;
@@ -31,4 +38,3 @@ CREATE TABLE t1(str VARCHAR(50), pos INT, len INT, newstr VARCHAR(50));
 INSERT INTO t1 VALUES ('Hello World', 7, 5, 'MySQL'), ('MatrixOne', 1, 6, 'MySQL'), ('Test', 5, 0, ' Result');
 SELECT * FROM t1 WHERE INSERT(str, pos, len, newstr) = 'Hello MySQL';
 DROP TABLE t1;
-
