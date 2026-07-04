@@ -43,6 +43,7 @@ func init() {
 	initFileServiceMetrics()
 	initLogtailMetrics()
 	initTxnMetrics()
+	initLockServiceMetrics()
 	initTaskMetrics()
 	initRPCMetrics()
 	initMemMetrics()

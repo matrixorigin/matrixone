@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -50,8 +51,11 @@ type lockTableAllocator struct {
 	inactiveService sync.Map // lock service id -> inactive time
 	ctl             sync.Map // lock service id -> *commitCtl
 	ctlMu           sync.RWMutex
-	version         uint64
-	mu              struct {
+	allocatorID     string
+	// version is the allocator process epoch. It is set once when the
+	// allocator is constructed; production code must not mutate it at runtime.
+	version uint64
+	mu      struct {
 		sync.RWMutex
 		services   map[string]*serviceBinds
 		lockTables map[uint32]map[uint64]pb.LockTable
@@ -98,6 +102,7 @@ func NewLockTableAllocator(
 		keepBindTimeout: keepBindTimeout,
 		clock:           rt.Clock(),
 		client:          rpcClient,
+		allocatorID:     uuid.New().String(),
 		version:         uint64(time.Now().UnixNano()),
 	}
 	la.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
@@ -503,6 +508,9 @@ func (l *lockTableAllocator) tryRebindLocked(
 
 	// If not a newer version of the same service, create new binding
 	old.ServiceID = binds.serviceID
+	if old.AllocatorID == "" {
+		old.AllocatorID = l.allocatorID
+	}
 	old.Version++
 	old.Valid = true
 	l.getLockTablesLocked(group)[tableID] = old
@@ -541,6 +549,7 @@ func (l *lockTableAllocator) createBindLocked(
 		Valid:       true,
 		Sharding:    sharding,
 		Group:       group,
+		AllocatorID: l.allocatorID,
 	}
 	l.getLockTablesLocked(group)[tableID] = b
 	l.logger.Info("bind created",
@@ -894,6 +903,8 @@ func (l *lockTableAllocator) handleGetBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	resp.GetBind.AllocatorID = l.allocatorID
+	resp.GetBind.AllocatorVersion = l.version
 	if !l.canGetBind(req.GetBind.ServiceID) {
 		writeResponse(l.logger, cancel, resp, moerr.NewNewTxnInCNRollingRestart(), cs)
 		return
@@ -913,6 +924,8 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	resp.KeepLockTableBind.AllocatorID = l.allocatorID
+	resp.KeepLockTableBind.AllocatorVersion = l.version
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
 	if !resp.KeepLockTableBind.OK {
 		// resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
