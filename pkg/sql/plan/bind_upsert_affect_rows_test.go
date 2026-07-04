@@ -40,7 +40,9 @@ func mainUpdateCtxCountDelete(t *testing.T, p *Plan) bool {
 }
 
 // hasNoopFilter reports whether the plan contains a FILTER node whose predicate
-// is the ODKU no-op guard: NOT( col <=> col [AND ...] ).
+// is the ODKU no-op guard: isnull(old rowid) OR NOT( col <=> col [AND ...] ).
+// The isnull(rowid) branch keeps non-conflicting rows (all-NULL old image)
+// flowing to the INSERT side instead of being dropped by the equality chain.
 func hasNoopFilter(p *Plan) bool {
 	q := p.GetQuery()
 	if q == nil {
@@ -51,19 +53,37 @@ func hasNoopFilter(p *Plan) bool {
 			continue
 		}
 		for _, cond := range n.FilterList {
-			f := cond.GetF()
-			if f == nil || f.Func == nil || f.Func.ObjName != "not" {
-				continue
-			}
-			if inner := f.Args[0].GetF(); inner != nil && inner.Func != nil {
-				switch inner.Func.ObjName {
-				case "<=>", "and":
-					return true
+			if notExpr := noopFilterNotBranch(cond); notExpr != nil {
+				if inner := notExpr.Args[0].GetF(); inner != nil && inner.Func != nil {
+					switch inner.Func.ObjName {
+					case "<=>", "and":
+						return true
+					}
 				}
 			}
 		}
 	}
 	return false
+}
+
+// noopFilterNotBranch matches the no-op guard shape
+// or(isnull(old rowid), not(...)) and returns the not(...) function,
+// or nil if expr does not match.
+func noopFilterNotBranch(expr *planpb.Expr) *planpb.Function {
+	f := expr.GetF()
+	if f == nil || f.Func == nil || f.Func.ObjName != "or" || len(f.Args) != 2 {
+		return nil
+	}
+	isNull := f.Args[0].GetF()
+	if isNull == nil || isNull.Func == nil || isNull.Func.ObjName != "isnull" ||
+		len(isNull.Args) != 1 || isNull.Args[0].GetCol() == nil {
+		return nil
+	}
+	notExpr := f.Args[1].GetF()
+	if notExpr == nil || notExpr.Func == nil || notExpr.Func.ObjName != "not" || len(notExpr.Args) != 1 {
+		return nil
+	}
+	return notExpr
 }
 
 // TestUpsertAffectRowsPlan verifies the plan-level wiring of the MySQL-compatible
@@ -120,6 +140,38 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 			"no-op FILTER must not reference auto-update column updated_at")
 	})
 
+	t.Run("ODKU no-op filter keeps non-conflicting rows via rowid guard", func(t *testing.T) {
+		// t_multi_unique dedups on a nullable unique key: an all-NULL insert row
+		// never conflicts, so its old image is all-NULL and every <=> in the
+		// no-op chain evaluates to true. The isnull(old rowid) OR-branch must be
+		// present so such rows are inserted instead of silently dropped.
+		// hasNoopFilter only matches the or(isnull(rowid), not(...)) shape, so a
+		// true result asserts the guard exists.
+		p, err := runOneStmt(mock, t,
+			"insert into constraint_test.dept(deptno, dname, loc) values (1, 'A', 'B') on duplicate key update loc = loc")
+		require.NoError(t, err)
+		require.True(t, hasNoopFilter(p),
+			"ODKU no-op filter must carry the isnull(old rowid) guard for non-conflicting rows")
+	})
+
+	t.Run("DeepCopyNode preserves CountDeleteAffectRows on MULTI_UPDATE", func(t *testing.T) {
+		p, err := runOneStmt(mock, t,
+			"insert into constraint_test.dept(deptno, dname, loc) values (1, 'A', 'B') on duplicate key update loc = loc")
+		require.NoError(t, err)
+		var mu *planpb.Node
+		for _, n := range p.GetQuery().Nodes {
+			if n.NodeType == planpb.Node_MULTI_UPDATE {
+				mu = n
+				break
+			}
+		}
+		require.NotNil(t, mu)
+		require.True(t, mu.UpdateCtxList[0].CountDeleteAffectRows)
+		copied := DeepCopyNode(mu)
+		require.True(t, copied.UpdateCtxList[0].CountDeleteAffectRows,
+			"DeepCopyUpdateCtxList must preserve CountDeleteAffectRows")
+	})
+
 	t.Run("ODKU no-op filter excludes generated column derived from ON UPDATE", func(t *testing.T) {
 		// t_on_update_gen has: id (PK), val, updated_at (ON UPDATE CURRENT_TIMESTAMP),
 		// g (stored, g AS (updated_at)). ODKU with val=val must skip both updated_at
@@ -163,17 +215,15 @@ func noopFilterReferencesCol(p *Plan, colName string) bool {
 }
 
 // collectNoopColRefs collects all ColRef expressions nested inside the
-// NOT(AND(<=>(...))) no-op FILTER pattern. Returns nil if the pattern
-// does not match.
+// OR(isnull(rowid), NOT(AND(<=>(...)))) no-op FILTER pattern. Returns nil
+// if the pattern does not match. Only the equality chain's ColRefs are
+// returned; the rowid guard is not part of the compared columns.
 func collectNoopColRefs(expr *planpb.Expr) []*planpb.Expr {
-	f := expr.GetF()
-	if f == nil || f.Func == nil || f.Func.ObjName != "not" {
+	notExpr := noopFilterNotBranch(expr)
+	if notExpr == nil {
 		return nil
 	}
-	if len(f.Args) != 1 {
-		return nil
-	}
-	return collectAndNullSafeColRefs(f.Args[0])
+	return collectAndNullSafeColRefs(notExpr.Args[0])
 }
 
 // collectAndNullSafeColRefs recursively collects ColRef expressions from

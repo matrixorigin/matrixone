@@ -2079,7 +2079,26 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 		}
 		if allColsEqual != nil {
-			keepExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allColsEqual})
+			// The dedup-join output also carries non-conflicting rows, whose old
+			// image is all-NULL. Such a row must always be inserted, yet every
+			// NULL <=> NULL comparison above yields true (e.g. an all-NULL row
+			// into a nullable UNIQUE key never conflicts but would match the
+			// equality chain). Gate the no-op check on the old row actually
+			// existing: keep the row when old __mo_rowid IS NULL (fresh insert)
+			// or when any compared column differs (real update).
+			rowIDIdx := tableDef.Name2ColIndex[catalog.Row_ID]
+			oldRowIDExpr := &plan.Expr{
+				Typ: tableDef.Cols[rowIDIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanTag,
+						ColPos: rowIDIdx,
+					},
+				},
+			}
+			noOldRowExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{oldRowIDExpr})
+			notEqualExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allColsEqual})
+			keepExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{noOldRowExpr, notEqualExpr})
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType:   plan.Node_FILTER,
 				Children:   []int32{lastNodeID},
