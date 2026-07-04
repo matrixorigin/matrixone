@@ -845,7 +845,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
-	if scan.NodeType != plan.Node_TABLE_SCAN {
+	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil || scan.TableDef.Pkey == nil {
 		return
 	}
 	groupCol := make([]int32, 0)

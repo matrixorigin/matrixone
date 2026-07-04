@@ -2230,7 +2230,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 }
 
 func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot bool) (int32, error) {
-	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, -1)
+	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, 0)
 }
 
 func (builder *QueryBuilder) buildUnionWithResultLen(
@@ -2240,7 +2240,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	astRankOption *tree.RankOption,
 	ctx *BindContext,
 	isRoot bool,
-	visibleResultLen int,
+	hiddenResultLen int,
 ) (int32, error) {
 	if builder.isForUpdate {
 		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
@@ -2483,12 +2483,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// Track the original number of columns before ORDER BY binding
 	// ORDER BY may add new expressions to ctx.projects, but these should not be in the final output
 	resultLen := len(ctx.projects)
-	if visibleResultLen >= 0 {
-		if visibleResultLen > resultLen {
-			return 0, moerr.NewInternalError(builder.GetContext(), "visible UNION result length exceeds project length")
-		}
-		resultLen = visibleResultLen
+	if hiddenResultLen > resultLen {
+		return 0, moerr.NewInternalError(builder.GetContext(), "hidden UNION result length exceeds project length")
 	}
+	resultLen -= hiddenResultLen
 
 	// bind orderBy BEFORE creating PROJECT node, so that any new expressions
 	// added to ctx.projects by ORDER BY are included in the PROJECT node
@@ -3056,11 +3054,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		if selectClause.GroupBy != nil {
+			groupByExprsList := selectClause.GroupBy.GroupByExprsList
 			if selectClause.GroupBy.Rollup {
-				for i := len(selectClause.GroupBy.GroupByExprsList[0]) - 1; i > 0; i-- {
-					selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, selectClause.GroupBy.GroupByExprsList[0][0:i])
+				groupByExprsList = append([]tree.Exprs(nil), groupByExprsList...)
+				for i := len(groupByExprsList[0]) - 1; i > 0; i-- {
+					groupByExprsList = append(groupByExprsList, groupByExprsList[0][0:i])
 				}
-				selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, nil)
+				groupByExprsList = append(groupByExprsList, nil)
 			}
 			if selectClause.GroupBy.Cube {
 				subsets := func(Exprs []tree.Expr) [][]tree.Expr {
@@ -3077,19 +3077,24 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					backtrack(0, []tree.Expr{})
 					return result
 				}
-				Exprs := selectClause.GroupBy.GroupByExprsList[0]
-				selectClause.GroupBy.GroupByExprsList = nil
+				Exprs := groupByExprsList[0]
+				groupByExprsList = nil
 				for _, subset := range subsets(Exprs) {
-					selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, subset)
+					groupByExprsList = append(groupByExprsList, subset)
 				}
 			}
-			if len(selectClause.GroupBy.GroupByExprsList) > 1 && !selectClause.GroupBy.Apart {
-				visibleResultLen := len(selectClause.Exprs)
-				branchExprs := appendGroupingSetOrderByProjects(astOrderBy, selectClause.Exprs)
-				groupingCount := len(selectClause.GroupBy.GroupByExprsList)
+			if len(groupByExprsList) > 1 && !selectClause.GroupBy.Apart {
+				var branchExprs tree.SelectExprs
+				var unionOrderBy tree.OrderBy
+				branchExprs, unionOrderBy, err = prepareGroupingSetOrderByProjects(builder, astOrderBy, selectClause.Exprs)
+				if err != nil {
+					return 0, err
+				}
+				hiddenResultLen := len(branchExprs) - len(selectClause.Exprs)
+				groupingCount := len(groupByExprsList)
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
-					for i, list := range selectClause.GroupBy.GroupByExprsList {
+					for i, list := range groupByExprsList {
 						if selectClause.Having != nil {
 							selectClause.Having.RollupHaving = true
 						}
@@ -3099,7 +3104,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 							From:     selectClause.From,
 							Where:    selectClause.Where,
 							GroupBy: &tree.GroupByClause{
-								GroupByExprsList: selectClause.GroupBy.GroupByExprsList,
+								GroupByExprsList: groupByExprsList,
 								GroupingSet:      list,
 								Apart:            true,
 								Cube:             false,
@@ -3119,12 +3124,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 				if nodeID, err = builder.buildUnionWithResultLen(
 					leftClause,
-					astOrderBy,
+					unionOrderBy,
 					astLimit,
 					astRankOption,
 					ctx,
 					false,
-					visibleResultLen,
+					hiddenResultLen,
 				); err != nil {
 					return
 				}
@@ -3835,18 +3840,152 @@ func (builder *QueryBuilder) bindTimeWindow(
 	return
 }
 
-func appendGroupingSetOrderByProjects(astOrderBy tree.OrderBy, selectList tree.SelectExprs) tree.SelectExprs {
+func prepareGroupingSetOrderByProjects(
+	builder *QueryBuilder,
+	astOrderBy tree.OrderBy,
+	selectList tree.SelectExprs,
+) (tree.SelectExprs, tree.OrderBy, error) {
 	branchSelectList := append(tree.SelectExprs(nil), selectList...)
-	for _, order := range astOrderBy {
+	unionOrderBy := make(tree.OrderBy, len(astOrderBy))
+	for i, order := range astOrderBy {
+		orderCopy := *order
+		orderCopy.Expr = cloneTreeExpr(order.Expr)
+		unionOrderBy[i] = &orderCopy
+
 		if _, isOrdinal := order.Expr.(*tree.NumVal); isOrdinal || !containsGroupingFunction(order.Expr) {
 			continue
 		}
 
-		branchSelectList = append(branchSelectList, tree.SelectExpr{Expr: order.Expr})
+		hiddenExpr := cloneTreeExpr(order.Expr)
+		protectedNames := protectGroupingFunctionArguments(hiddenExpr)
+		aliasCtx := NewBindContext(builder, nil)
+		for selectIdx := range selectList {
+			selectExpr := selectList[selectIdx]
+			if selectExpr.As == nil || selectExpr.As.Empty() {
+				continue
+			}
+			alias := selectExpr.As.Compare()
+			aliasCtx.aliasMap[alias] = &aliasItem{
+				idx:     int32(selectIdx),
+				astExpr: cloneTreeExpr(selectExpr.Expr),
+			}
+		}
+		var err error
+		hiddenExpr, err = aliasCtx.qualifyColumnNames(hiddenExpr, AliasBeforeColumn)
+		restoreProtectedGroupingFunctionArguments(protectedNames)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		branchSelectList = append(branchSelectList, tree.SelectExpr{Expr: hiddenExpr})
 		projectPos := int64(len(branchSelectList))
-		order.Expr = tree.NewNumVal(projectPos, strconv.FormatInt(projectPos, 10), false, tree.P_int64)
+		orderCopy.Expr = tree.NewNumVal(projectPos, strconv.FormatInt(projectPos, 10), false, tree.P_int64)
 	}
-	return branchSelectList
+	return branchSelectList, unionOrderBy, nil
+}
+
+func cloneTreeExpr(astExpr tree.Expr) tree.Expr {
+	if astExpr == nil {
+		return nil
+	}
+	cloned := cloneTreeValue(reflect.ValueOf(astExpr), make(map[treeClonePointer]reflect.Value))
+	return cloned.Interface().(tree.Expr)
+}
+
+type treeClonePointer struct {
+	typ reflect.Type
+	ptr uintptr
+}
+
+func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := cloneTreeValue(value.Elem(), visited)
+		result := reflect.New(value.Type()).Elem()
+		result.Set(cloned)
+		return result
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		key := treeClonePointer{typ: value.Type(), ptr: value.Pointer()}
+		if cloned, ok := visited[key]; ok {
+			return cloned
+		}
+		result := reflect.New(value.Type().Elem())
+		visited[key] = result
+		result.Elem().Set(value.Elem())
+		cloneTreeStructFields(result.Elem(), value.Elem(), visited)
+		return result
+	case reflect.Struct:
+		result := reflect.New(value.Type()).Elem()
+		result.Set(value)
+		cloneTreeStructFields(result, value, visited)
+		return result
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			result.Index(i).Set(cloneTreeValue(value.Index(i), visited))
+		}
+		return result
+	case reflect.Array:
+		result := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			result.Index(i).Set(cloneTreeValue(value.Index(i), visited))
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func cloneTreeStructFields(dst, src reflect.Value, visited map[treeClonePointer]reflect.Value) {
+	for i := 0; i < src.NumField(); i++ {
+		if src.Type().Field(i).PkgPath != "" {
+			continue
+		}
+		dst.Field(i).Set(cloneTreeValue(src.Field(i), visited))
+	}
+}
+
+func protectGroupingFunctionArguments(astExpr tree.Expr) []*tree.UnresolvedName {
+	var protectedNames []*tree.UnresolvedName
+	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+		function, ok := expr.(*tree.FuncExpr)
+		if !ok || function.FuncName == nil || function.FuncName.Compare() != "grouping" {
+			return true
+		}
+		for _, arg := range function.Exprs {
+			walkGroupingSetOrderByExpr(arg, func(argExpr tree.Expr) bool {
+				name, ok := argExpr.(*tree.UnresolvedName)
+				if ok && !name.Star && name.NumParts == 1 {
+					name.NumParts = 2
+					name.CStrParts[1] = tree.NewCStr("__mo_grouping_argument__", 0)
+					protectedNames = append(protectedNames, name)
+				}
+				return true
+			})
+		}
+		return false
+	})
+	return protectedNames
+}
+
+func restoreProtectedGroupingFunctionArguments(protectedNames []*tree.UnresolvedName) {
+	for _, name := range protectedNames {
+		name.NumParts = 1
+		name.CStrParts[1] = nil
+	}
 }
 
 func containsGroupingFunction(astExpr tree.Expr) bool {
