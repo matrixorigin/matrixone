@@ -711,114 +711,114 @@ func Test_BuiltInChar(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
-		// Test CHAR with multi-byte expansion: 256 → 0x0100
-		{
-			tc := tcTemp{
-				info: "select char(256)",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_int64.ToType(),
-						[]int64{256},
-						[]bool{false}),
-				},
-				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{"\x01\x00"},
+	// Test CHAR with multi-byte expansion: 256 → 0x0100
+	{
+		tc := tcTemp{
+			info: "select char(256)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{256},
 					[]bool{false}),
-			}
-			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
-			succeed, info := tcc.Run()
-			require.True(t, succeed, tc.info, info)
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\x01\x00"},
+				[]bool{false}),
 		}
-
-		// Test CHAR with larger multi-byte: 65536 → 0x010000
-		{
-			tc := tcTemp{
-				info: "select char(65536)",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_int64.ToType(),
-						[]int64{65536},
-						[]bool{false}),
-				},
-				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{"\x01\x00\x00"},
-					[]bool{false}),
-			}
-			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
-			succeed, info := tcc.Run()
-			require.True(t, succeed, tc.info, info)
-		}
-
-		// Test CHAR with negative integer: -1 → 0xFFFFFFFF
-		{
-			tc := tcTemp{
-				info: "select char(-1)",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_int64.ToType(),
-						[]int64{-1},
-						[]bool{false}),
-				},
-				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{"\xff\xff\xff\xff"},
-					[]bool{false}),
-			}
-			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
-			succeed, info := tcc.Run()
-			require.True(t, succeed, tc.info, info)
-		}
-
-		// Test CHAR with negative string: '-65' → 0xFFFFFFBF
-		{
-			tc := tcTemp{
-				info: "select char('-65')",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(),
-						[]string{"-65"},
-						[]bool{false}),
-				},
-				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{"\xff\xff\xff\xbf"},
-					[]bool{false}),
-			}
-			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
-			succeed, info := tcc.Run()
-			require.True(t, succeed, tc.info, info)
-		}
-
-		// Test CHAR with string '256' → 0x0100 (multi-byte from string arg)
-		{
-			tc := tcTemp{
-				info: "select char('256')",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(),
-						[]string{"256"},
-						[]bool{false}),
-				},
-				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{"\x01\x00"},
-					[]bool{false}),
-			}
-			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
-			succeed, info := tcc.Run()
-			require.True(t, succeed, tc.info, info)
-		}
-
-		// Test CHAR with single NULL (MySQL returns empty, non-NULL string)
-		{
-			tc := tcTemp{
-				info: "select char(null)",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_int64.ToType(),
-						[]int64{0},
-						[]bool{true}),
-				},
-				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{""},
-					[]bool{false}),
-			}
-			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
-			succeed, info := tcc.Run()
-			require.True(t, succeed, tc.info, info)
-		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
 	}
+
+	// Test CHAR with larger multi-byte: 65536 → 0x010000
+	{
+		tc := tcTemp{
+			info: "select char(65536)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{65536},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\x01\x00\x00"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with negative integer: -1 → 0xFFFFFFFF
+	{
+		tc := tcTemp{
+			info: "select char(-1)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\xff\xff\xff\xff"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with negative string: '-65' → 0xFFFFFFBF
+	{
+		tc := tcTemp{
+			info: "select char('-65')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"-65"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\xff\xff\xff\xbf"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with string '256' → 0x0100 (multi-byte from string arg)
+	{
+		tc := tcTemp{
+			info: "select char('256')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"256"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\x01\x00"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with single NULL (MySQL returns empty, non-NULL string)
+	{
+		tc := tcTemp{
+			info: "select char(null)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
 
 // Test_EncodeCharBytes tests the helper used by CHAR to convert integer
 // values to MySQL's big-endian multi-byte encoding
