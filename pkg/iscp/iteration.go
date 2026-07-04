@@ -102,6 +102,9 @@ func ExecuteIteration(
 		iterCtx.jobIDs,
 	)
 	if err != nil {
+		if isPermanentError(err) {
+			return nil
+		}
 		return
 	}
 	preLSN := make([]uint64, len(iterCtx.jobNames))
@@ -476,7 +479,7 @@ var FlushJobStatusOnIterationState = func(
 	state int8,
 	prevLSN []uint64,
 ) (err error) {
-
+	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
@@ -502,7 +505,6 @@ var FlushJobStatusOnIterationState = func(
 		}
 	}()
 	for i := range jobNames {
-		jobStatuses[i].LSN = lsns[i]
 		err = FlushStatus(
 			ctx,
 			cnUUID,
@@ -558,6 +560,21 @@ func FlushStatus(
 	return
 }
 
+func normalizeJobStatuses(jobStatuses []*JobStatus, lsns []uint64) []*JobStatus {
+	if len(jobStatuses) != len(lsns) {
+		normalized := make([]*JobStatus, len(lsns))
+		copy(normalized, jobStatuses)
+		jobStatuses = normalized
+	}
+	for i := range lsns {
+		if jobStatuses[i] == nil {
+			jobStatuses[i] = &JobStatus{}
+		}
+		jobStatuses[i].LSN = lsns[i]
+	}
+	return jobStatuses
+}
+
 var GetJobSpecs = func(
 	ctx context.Context,
 	cnUUID string,
@@ -573,7 +590,7 @@ var GetJobSpecs = func(
 	jobIDs []uint64,
 ) (jobSpec []*JobSpec, prevStatus []*JobStatus, err error) {
 	var buf bytes.Buffer
-	buf.WriteString("SELECT job_spec, job_status FROM mo_catalog.mo_iscp_log WHERE")
+	buf.WriteString("SELECT job_name, job_id, job_spec, job_status FROM mo_catalog.mo_iscp_log WHERE")
 	for i, jobName := range jobName {
 		if i > 0 {
 			buf.WriteString(" OR")
@@ -591,41 +608,69 @@ var GetJobSpecs = func(
 		prevLSNs[i] = lsns[i] - 1
 	}
 	defer execResult.Close()
+	expectedJobs := make(map[JobKey]int, len(jobName))
+	for i := range jobName {
+		expectedJobs[JobKey{JobName: jobName[i], JobID: jobIDs[i]}] = i
+	}
 	jobSpec = make([]*JobSpec, len(jobName))
 	prevStatus = make([]*JobStatus, len(jobName))
+	var foundRows int
+	var permanentErrMsg string
 	execResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows != len(jobName) {
-			errMsg := fmt.Sprintf("invalid rows %d, expected %d", rows, len(jobName))
-			FlushPermanentErrorMessage(
-				ctx,
-				cnUUID,
-				cnEngine,
-				cnTxnClient,
-				tenantId,
-				tableID,
-				jobName,
-				jobIDs,
-				lsns,
-				jobStatuses,
-				types.MaxTs(),
-				errMsg,
-				prevLSNs,
-			)
-		}
+		currentJobNames := executor.GetStringRows(cols[0])
+		currentJobIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 		for i := 0; i < rows; i++ {
-			jobSpec[i], err = UnmarshalJobSpec([]byte(cols[0].GetStringAt(i)))
-			if err != nil {
+			jobIdx, ok := expectedJobs[JobKey{JobName: currentJobNames[i], JobID: currentJobIDs[i]}]
+			if !ok {
+				permanentErrMsg = fmt.Sprintf("unexpected job %s/%d", currentJobNames[i], currentJobIDs[i])
 				return false
 			}
-			prevStatus[i], err = UnmarshalJobStatus([]byte(cols[1].GetStringAt(i)))
-			if err != nil {
+			if jobSpec[jobIdx] != nil || prevStatus[jobIdx] != nil {
+				permanentErrMsg = fmt.Sprintf("duplicate job %s/%d", currentJobNames[i], currentJobIDs[i])
 				return false
 			}
+			jobSpec[jobIdx], err = UnmarshalJobSpec([]byte(cols[2].GetStringAt(i)))
+			if err != nil {
+				permanentErrMsg = err.Error()
+				return false
+			}
+			prevStatus[jobIdx], err = UnmarshalJobStatus([]byte(cols[3].GetStringAt(i)))
+			if err != nil {
+				permanentErrMsg = err.Error()
+				return false
+			}
+			foundRows++
 		}
 		return true
 	})
+	if permanentErrMsg == "" && foundRows != len(jobName) {
+		permanentErrMsg = fmt.Sprintf("invalid rows %d, expected %d", foundRows, len(jobName))
+	}
+	if permanentErrMsg != "" {
+		err = FlushPermanentErrorMessage(
+			ctx,
+			cnUUID,
+			cnEngine,
+			cnTxnClient,
+			tenantId,
+			tableID,
+			jobName,
+			jobIDs,
+			lsns,
+			jobStatuses,
+			types.MaxTs(),
+			permanentErrMsg,
+			prevLSNs,
+		)
+		if err == nil {
+			err = errPermanent
+		}
+		return nil, nil, err
+	}
 	return
 }
+
+var errPermanent = errors.New("permanent error")
 
 func FlushPermanentErrorMessage(
 	ctx context.Context,
@@ -652,6 +697,7 @@ func FlushPermanentErrorMessage(
 	)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
+	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
 	return FlushJobStatusOnIterationState(
 		ctx,
 		cnUUID,
@@ -669,9 +715,8 @@ func FlushPermanentErrorMessage(
 	)
 }
 
-// TODO
 func isPermanentError(err error) bool {
-	return err.Error() == "permanent error"
+	return err != nil && (errors.Is(err, errPermanent) || err.Error() == errPermanent.Error())
 }
 
 func (status *JobStatus) SetError(err error) {
