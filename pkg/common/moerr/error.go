@@ -72,6 +72,7 @@ const (
 	ErrInvalidArg                  uint16 = 20203
 	ErrTruncatedWrongValueForField uint16 = 20204
 	ErrTooBigPrecision             uint16 = 20205
+	ErrRegexpIllegalArgument       uint16 = 20206
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -373,6 +374,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidArg:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid argument %s, bad value %s"},
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
+	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -910,6 +912,10 @@ func NewQueryInterrupted(ctx context.Context) *Error {
 
 func NewDivByZero(ctx context.Context) *Error {
 	return newError(ctx, ErrDivByZero)
+}
+
+func NewRegexpIllegalArgument(ctx context.Context) *Error {
+	return newError(ctx, ErrRegexpIllegalArgument)
 }
 
 func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any) *Error {

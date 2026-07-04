@@ -97,7 +97,7 @@ func TestPositionFunctionSyntax(t *testing.T) {
 func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	stmt, err := ParseOne(
 		context.TODO(),
-		"create temporary table if not exists dst clone src to account acc",
+		"create temporary table if not exists dst clone src copy grants to account acc",
 		1,
 	)
 	require.NoError(t, err)
@@ -108,14 +108,30 @@ func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	require.True(t, cloneStmt.CreateTable.IfNotExists)
 	require.Equal(t, tree.Identifier("dst"), cloneStmt.CreateTable.Table.ObjectName)
 	require.Equal(t, tree.Identifier("src"), cloneStmt.SrcTable.ObjectName)
+	require.True(t, cloneStmt.CopyGrants)
 	require.NotNil(t, cloneStmt.ToAccountOpt)
 	require.Equal(t, tree.Identifier("acc"), cloneStmt.ToAccountOpt.AccountName)
 
 	require.Equal(
 		t,
-		"create temporary table if not exists `dst` clone `src` to account `acc`",
+		"create temporary table if not exists `dst` clone `src` copy grants to account `acc`",
 		tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()),
 	)
+}
+
+func TestCloneTableParseCopyGrantsWithoutToAccount(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create table dst clone src copy grants",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.True(t, cloneStmt.CopyGrants)
+	require.Nil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, "create table `dst` clone `src` copy grants", tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()))
 }
 
 func TestCloneTableParseFormattedMoTimestamp(t *testing.T) {
@@ -912,6 +928,27 @@ var (
 		}, {
 			input:  "replace into t1 values (date_add(NULL, INTERVAL 1 DAY));",
 			output: "replace into t1 values (date_add(null, INTERVAL 1 day))",
+		}, {
+			input:  "replace into t_table_dst table t_table_src;",
+			output: "replace into t_table_dst select * from t_table_src",
+		}, {
+			input:  "replace into t_table_dst (id, v) table t_table_src;",
+			output: "replace into t_table_dst (id, v) select * from t_table_src",
+		}, {
+			input:  "replace into t_table_dst table t_table_src order by id desc limit 1;",
+			output: "replace into t_table_dst select * from t_table_src order by id desc limit 1",
+		}, {
+			input:  "replace into t_table_dst (id, v) table t_table_src order by id limit 1 offset 1;",
+			output: "replace into t_table_dst (id, v) select * from t_table_src order by id limit 1 offset 1",
+		}, {
+			input:  "replace low_priority into t_mod values(1, 20);",
+			output: "replace into t_mod values (1, 20)",
+		}, {
+			input:  "replace delayed into t_mod values(1, 30);",
+			output: "replace into t_mod values (1, 30)",
+		}, {
+			input:  "replace low_priority into t_table_dst table t_table_src;",
+			output: "replace into t_table_dst select * from t_table_src",
 		}, {
 			input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
 			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL 1 second) as 1 second later",
@@ -3990,6 +4027,10 @@ var (
 		},
 		{
 			input: "ALTER TABLE t1 ADD PARTITION (PARTITION p5 VALUES IN (15, 17)",
+		},
+		{
+			// MySQL REPLACE does not allow HIGH_PRIORITY (only LOW_PRIORITY | DELAYED).
+			input: "replace high_priority into t_mod values (1, 40)",
 		},
 	}
 )

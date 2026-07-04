@@ -138,6 +138,7 @@ func newMoTimestampHint(snapshotTS int64) *tree.AtTimeStamp {
 func cloneTableRestoreSQL(stmt *tree.CloneTable, snapshotTS int64) string {
 	restoreStmt := *stmt
 	restoreStmt.ToAccountOpt = nil
+	restoreStmt.CopyGrants = false
 	if snapshotTS != 0 {
 		restoreStmt.SrcTable.AtTsExpr = newMoTimestampHint(snapshotTS)
 	}
@@ -147,6 +148,23 @@ func cloneTableRestoreSQL(stmt *tree.CloneTable, snapshotTS int64) string {
 		tree.WithQuoteIdentifier(),
 		tree.WithSingleQuoteString(),
 	)
+}
+
+func cloneTargetTableExists(ctx context.Context, bh BackgroundExec, dbName, tableName string, accountID uint32) (bool, error) {
+	sql, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, accountID, 0)
+	if err != nil {
+		return false, err
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+	return execResultArrayHasData(erArray), nil
 }
 
 func newQualifiedCloneTableName(dbName, tblName string, atTsExpr *tree.AtTimeStamp) tree.TableName {
@@ -238,6 +256,11 @@ func handleCloneTable(
 		return
 	}
 
+	if stmt.CopyGrants && stmt.ToAccountOpt != nil {
+		err = moerr.NewInvalidInputNoCtx("COPY GRANTS cannot be used with TO ACCOUNT")
+		return
+	}
+
 	if snapshot == nil && opAccountId != toAccountId {
 		err = moerr.NewInternalErrorNoCtxf("clone table between different accounts need a snapshot")
 		return
@@ -246,6 +269,10 @@ func handleCloneTable(
 	fromAccountId = opAccountId
 	if snapshot != nil && snapshot.Tenant != nil {
 		fromAccountId = snapshot.Tenant.TenantID
+	}
+	if stmt.CopyGrants && fromAccountId != toAccountId {
+		err = moerr.NewInvalidInputNoCtx("COPY GRANTS cannot be used when cloning across accounts")
+		return
 	}
 
 	if stmt.SrcTable.SchemaName == "" {
@@ -294,6 +321,7 @@ func handleCloneTable(
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
 
 	var sql string
+	var dstTableExistedBeforeRestore bool
 
 	if snapshot == nil {
 		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
@@ -304,8 +332,34 @@ func handleCloneTable(
 	}
 	sql = cloneTableRestoreSQL(stmt, snapshotTS)
 
+	if stmt.CopyGrants && stmt.CreateTable.IfNotExists {
+		if dstTableExistedBeforeRestore, err = cloneTargetTableExists(
+			ctx,
+			bh,
+			stmt.CreateTable.Table.SchemaName.String(),
+			stmt.CreateTable.Table.ObjectName.String(),
+			toAccountId,
+		); err != nil {
+			return
+		}
+	}
+
 	if err = bh.ExecRestore(ctx, sql, opAccountId, toAccountId); err != nil {
 		return
+	}
+
+	if stmt.CopyGrants && !dstTableExistedBeforeRestore {
+		copyGrantsSnapshotTS := snapshotTS
+		if snapshot != nil && snapshot.TS != nil {
+			copyGrantsSnapshotTS = snapshot.TS.PhysicalTime
+		}
+		if err = copyTablePrivileges(ctx, ses, bh,
+			stmt.SrcTable.SchemaName.String(), stmt.SrcTable.ObjectName.String(),
+			stmt.CreateTable.Table.SchemaName.String(), stmt.CreateTable.Table.ObjectName.String(),
+			fromAccountId, toAccountId, copyGrantsSnapshotTS,
+		); err != nil {
+			return
+		}
 	}
 
 	receipt.srcDb = stmt.SrcTable.SchemaName.String()

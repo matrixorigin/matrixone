@@ -1076,6 +1076,15 @@ func initCastTestCase() []tcTemp {
 			expect: NewFunctionTestResult(types.T_bit.ToType(), false,
 				[]uint64{125, 126, 0}, []bool{false, false, true}),
 		},
+		{
+			info: "int64 to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{12345}, []bool{false}),
+				NewFunctionTestInput(types.New(types.T_char, 3, 0), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_char, 3, 0), false,
+				[]string{"123"}, []bool{false}),
+		},
 	}
 	castUint8ToOthers := []tcTemp{
 		// test cast uint8 to others.
@@ -1527,6 +1536,15 @@ func initCastTestCase() []tcTemp {
 			},
 			expect: NewFunctionTestResult(types.T_bit.ToType(), true, []uint64{}, []bool{}),
 		},
+		{
+			info: "uint64 to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{12345}, []bool{false}),
+				NewFunctionTestInput(types.New(types.T_char, 3, 0), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_char, 3, 0), false,
+				[]string{"123"}, []bool{false}),
+		},
 	}
 	castFloat32ToOthers := []tcTemp{
 		// test cast float32 to others.
@@ -1754,6 +1772,15 @@ func initCastTestCase() []tcTemp {
 				[]string{"23.56", "126", "0"}, []bool{false, false, true}),
 		},
 		{
+			info: "float64 to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{12.34}, []bool{false}),
+				NewFunctionTestInput(types.New(types.T_char, 3, 0), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_char, 3, 0), false,
+				[]string{"12."}, []bool{false}),
+		},
+		{
 			info: "float64 to decimal128",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
@@ -1849,31 +1876,31 @@ func initCastTestCase() []tcTemp {
 			info: "str type to uint64",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"1501", "16", ""}, []bool{false, false, true}),
+					[]string{"1501", "+0012", "16", ""}, []bool{false, false, false, true}),
 				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, []bool{}),
 			},
 			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{1501, 16, 0}, []bool{false, false, true}),
+				[]uint64{1501, 12, 16, 0}, []bool{false, false, false, true}),
 		},
 		{
 			info: "str type to float32",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"15", "16"}, nil),
+					[]string{"15", "  -7.5e1", "16"}, nil),
 				NewFunctionTestInput(types.T_float32.ToType(), []float32{}, []bool{}),
 			},
 			expect: NewFunctionTestResult(types.T_float32.ToType(), false,
-				[]float32{15, 16}, []bool{false, false}),
+				[]float32{15, -75, 16}, []bool{false, false, false}),
 		},
 		{
 			info: "str type to float64",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"1501.12", "16", ""}, []bool{false, false, true}),
+					[]string{"1501.12", "  +7e0", "16", ""}, []bool{false, false, false, true}),
 				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{1501.12, 16, 0}, []bool{false, false, true}),
+				[]float64{1501.12, 7, 16, 0}, []bool{false, false, false, true}),
 		},
 		{
 			info: "str type to str type",
@@ -1998,6 +2025,20 @@ func initCastTestCase() []tcTemp {
 				[]string{"0.01234"}, nil),
 		},
 		{
+			info: "decimal64 to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.New(types.T_decimal64, 10, 5),
+					[]types.Decimal64{types.Decimal64(1234)}, nil),
+				NewFunctionTestInput(
+					types.New(types.T_char, 4, 0),
+					[]string{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_char, 4, 0), false,
+				[]string{"0.01"}, nil),
+		},
+		{
 			info: "decimal128 to str type",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(
@@ -2010,6 +2051,17 @@ func initCastTestCase() []tcTemp {
 			expect: NewFunctionTestResult(
 				types.T_varchar.ToType(), false,
 				[]string{"12.34"}, nil),
+		},
+	}
+	castDateToOthers := []tcTemp{
+		{
+			info: "date to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{s01date}, []bool{false}),
+				NewFunctionTestInput(types.New(types.T_char, 4, 0), []string{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_char, 4, 0), false,
+				[]string{"2004"}, []bool{false}),
 		},
 	}
 	castTimestampToOthers := []tcTemp{
@@ -2025,6 +2077,19 @@ func initCastTestCase() []tcTemp {
 			expect: NewFunctionTestResult(
 				types.T_varchar.ToType(), false,
 				[]string{"2020-08-23 11:52:21"}, nil),
+		},
+		{
+			info: "timestamp to char truncates to width",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(
+					types.T_timestamp.ToType(),
+					[]types.Timestamp{s01ts}, nil),
+				NewFunctionTestInput(
+					types.New(types.T_char, 4, 0), []string{}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.New(types.T_char, 4, 0), false,
+				[]string{"2020"}, nil),
 		},
 	}
 
@@ -2149,6 +2214,7 @@ func initCastTestCase() []tcTemp {
 	testCases = append(testCases, castFloat32ToOthers...)
 	testCases = append(testCases, castStrToOthers...)
 	testCases = append(testCases, castDecToOthers...)
+	testCases = append(testCases, castDateToOthers...)
 	testCases = append(testCases, castTimestampToOthers...)
 	testCases = append(testCases, castArrayFloat32ToOthers...)
 	testCases = append(testCases, castArrayFloat64ToOthers...)
@@ -2616,6 +2682,71 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			get, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
 			require.False(t, null)
 			require.Equal(t, tt.want, string(get))
+		})
+	}
+}
+
+func Test_NewStrictCast_NonStringToCharVarcharRejectsOverWidth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name   string
+		input  func() *vector.Vector
+		toType types.Type
+	}{
+		{
+			name: "signed to varchar",
+			input: func() *vector.Vector {
+				vec := vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixedList(vec, []int64{12345}, nil, proc.Mp()))
+				return vec
+			},
+			toType: types.New(types.T_varchar, 3, 0),
+		},
+		{
+			name: "unsigned to char",
+			input: func() *vector.Vector {
+				vec := vector.NewVec(types.T_uint64.ToType())
+				require.NoError(t, vector.AppendFixedList(vec, []uint64{12345}, nil, proc.Mp()))
+				return vec
+			},
+			toType: types.New(types.T_char, 3, 0),
+		},
+		{
+			name: "decimal to varchar",
+			input: func() *vector.Vector {
+				vec := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+				require.NoError(t, vector.AppendFixedList(vec, []types.Decimal64{types.Decimal64(12345)}, nil, proc.Mp()))
+				return vec
+			},
+			toType: types.New(types.T_varchar, 3, 0),
+		},
+		{
+			name: "date to varchar",
+			input: func() *vector.Vector {
+				vec := vector.NewVec(types.T_date.ToType())
+				require.NoError(t, vector.AppendFixedList(vec, []types.Date{types.DateFromCalendar(2026, 7, 2)}, nil, proc.Mp()))
+				return vec
+			},
+			toType: types.New(types.T_varchar, 5, 0),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputVec := tt.input()
+			defer inputVec.Free(proc.Mp())
+
+			targetType := vector.NewConstNull(tt.toType, 1, proc.Mp())
+			defer targetType.Free(proc.Mp())
+
+			result := vector.NewFunctionResultWrapper(tt.toType, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			err := NewStrictCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "larger than Dest length")
 		})
 	}
 }

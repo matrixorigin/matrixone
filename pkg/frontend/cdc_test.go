@@ -32,6 +32,8 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
@@ -51,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -2821,6 +2824,49 @@ func Test_initAesKey(t *testing.T) {
 
 var _ ie.InternalExecutor = &mockIe{}
 
+type captureCDCExecutor struct {
+	mu                 sync.Mutex
+	execSQLs           []string
+	tableErrorsCleared bool
+}
+
+func (e *captureCDCExecutor) Exec(ctx context.Context, s string, options ie.SessionOverrideOptions) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.execSQLs = append(e.execSQLs, s)
+	if regexp.MustCompile("UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg = ''").MatchString(s) {
+		e.tableErrorsCleared = true
+	}
+	return nil
+}
+
+func (*captureCDCExecutor) Query(ctx context.Context, s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	return &mockIeResult{}
+}
+
+func (*captureCDCExecutor) ApplySessionOverride(options ie.SessionOverrideOptions) {}
+
+func (e *captureCDCExecutor) tableErrorsAreCleared() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.tableErrorsCleared
+}
+
+func (e *captureCDCExecutor) capturedExecSQLs() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	sqls := make([]string, len(e.execSQLs))
+	copy(sqls, e.execSQLs)
+	return sqls
+}
+
+func readFrontendGaugeValue(t *testing.T, gauge prometheus.Gauge) float64 {
+	t.Helper()
+	var metric dto.Metric
+	require.NoError(t, gauge.Write(&metric))
+	return metric.GetGauge().GetValue()
+}
+
 type mockIe struct {
 	cnt int
 }
@@ -3064,6 +3110,495 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, false, mp[0]["db1.tb2"].IdChanged)
 	fault.Disable()
+}
+
+func TestCdcTask_handleNewTables_PermanentTableErrorFailsTask(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	stub3 := gostub.Stub(&GetTableErrMsg, func(context.Context, uint32, ie.InternalExecutor, string, *cdc.DbTableInfo) (bool, error) {
+		return true, nil
+	})
+	defer stub3.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	executor := &captureCDCExecutor{}
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		ie:             executor,
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+		stateMachine:   NewExecutorStateMachine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		holdCh:         make(chan int, 1),
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+
+	mp := map[uint32]cdc.TblMap{
+		0: {
+			"db1.tb1": &cdc.DbTableInfo{
+				SourceDbName:  "db1",
+				SourceTblName: "tb1",
+			},
+		},
+	}
+	err := cdcTask.handleNewTables(mp)
+	require.Error(t, err)
+	require.Equal(t, StateFailed, cdcTask.stateMachine.State())
+	require.Len(t, executor.execSQLs, 1)
+	require.Contains(t, executor.execSQLs[0], "SET state = 'failed'")
+	require.Contains(t, executor.execSQLs[0], "task-1")
+}
+
+func TestCdcTask_RestartRunningTaskUnregistersOldDetector(t *testing.T) {
+	detector := createMockTableDetectorForTest()("test-cn")
+	require.True(t, detector.RegisterIfAbsent("task-1", 0, []string{"db1"}, []string{"tb1"}, func(map[uint32]cdc.TblMap) error {
+		return nil
+	}))
+	require.True(t, detector.IsTaskRegistered("task-1"))
+
+	stubDetector := gostub.Stub(&cdc.GetTableDetector, func(string) *cdc.TableDetector {
+		return detector
+	})
+	defer stubDetector.Reset()
+
+	started := make(chan struct{}, 1)
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+		},
+		stateMachine:  NewExecutorStateMachine(),
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		holdCh:        make(chan int, 1),
+		startFunc: func(context.Context) error {
+			started <- struct{}{}
+			return nil
+		},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+
+	require.NoError(t, cdcTask.Restart())
+	<-started
+
+	require.False(t, detector.IsTaskRegistered("task-1"))
+}
+
+func TestCdcTask_PermanentTableErrorDoesNotFailWhilePausing(t *testing.T) {
+	executor := &captureCDCExecutor{}
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		ie:             executor,
+		stateMachine:   NewExecutorStateMachine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		holdCh:         make(chan int, 1),
+		runningReaders: &sync.Map{},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionPause))
+
+	err := cdcTask.failTaskForPermanentTableError(context.Background(), &cdc.DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "tb1",
+	})
+	require.Error(t, err)
+	require.Equal(t, StatePausing, cdcTask.stateMachine.State())
+	require.Empty(t, executor.capturedExecSQLs())
+	select {
+	case <-cdcTask.holdCh:
+		t.Fatal("permanent error should not release Start while pause owns the state transition")
+	default:
+	}
+}
+
+func TestCdcTask_StaleCallbackDoesNotFailRestartGeneration(t *testing.T) {
+	stubGetTxnOp := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stubGetTxnOp.Reset()
+
+	stubFinishTxnOp := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stubFinishTxnOp.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	executor := &captureCDCExecutor{}
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		ie:             executor,
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+		stateMachine:   NewExecutorStateMachine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		holdCh:         make(chan int, 1),
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+
+	staleGeneration := cdcTask.callbackGeneration.Load()
+	stubGetTableErrMsg := gostub.Stub(&GetTableErrMsg, func(context.Context, uint32, ie.InternalExecutor, string, *cdc.DbTableInfo) (bool, error) {
+		cdcTask.callbackGeneration.Add(1)
+		return true, nil
+	})
+	defer stubGetTableErrMsg.Reset()
+
+	err := cdcTask.handleNewTablesForGeneration(staleGeneration, map[uint32]cdc.TblMap{
+		0: {
+			"db1.tb1": &cdc.DbTableInfo{
+				SourceDbName:  "db1",
+				SourceTblName: "tb1",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, cdcTask.stateMachine.State())
+	require.Empty(t, executor.capturedExecSQLs())
+}
+
+func TestCdcTask_RestartDrainsInflightHandleNewTablesCallback(t *testing.T) {
+	stubGetTxnOp := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stubGetTxnOp.Reset()
+
+	stubFinishTxnOp := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stubFinishTxnOp.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	callbackEntered := make(chan struct{}, 1)
+	releaseCallback := make(chan struct{})
+	stubGetTableErrMsg := gostub.Stub(&GetTableErrMsg, func(context.Context, uint32, ie.InternalExecutor, string, *cdc.DbTableInfo) (bool, error) {
+		callbackEntered <- struct{}{}
+		<-releaseCallback
+		return false, moerr.NewInternalErrorNoCtx("stale callback stopped")
+	})
+	defer stubGetTableErrMsg.Reset()
+
+	started := make(chan struct{}, 1)
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+		stateMachine:   NewExecutorStateMachine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		holdCh:         make(chan int, 1),
+		startFunc: func(context.Context) error {
+			started <- struct{}{}
+			return nil
+		},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- cdcTask.handleNewTablesForGeneration(cdcTask.callbackGeneration.Load(), map[uint32]cdc.TblMap{
+			0: {
+				"db1.tb1": &cdc.DbTableInfo{
+					SourceDbName:  "db1",
+					SourceTblName: "tb1",
+				},
+			},
+		})
+	}()
+	<-callbackEntered
+
+	restartDone := make(chan error, 1)
+	go func() {
+		restartDone <- cdcTask.Restart()
+	}()
+
+	select {
+	case <-started:
+		t.Fatal("restart should wait for in-flight handleNewTables callback before starting a new generation")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseCallback)
+	require.Error(t, <-callbackDone)
+	require.NoError(t, <-restartDone)
+	<-started
+}
+
+func TestCdcTask_RestartFromPausedClearsPermanentTableErrors(t *testing.T) {
+	executor := &captureCDCExecutor{}
+	started := make(chan struct{}, 1)
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		ie:             executor,
+		stateMachine:   NewExecutorStateMachine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		holdCh:         make(chan int, 1),
+		runningReaders: &sync.Map{},
+		startFunc: func(context.Context) error {
+			started <- struct{}{}
+			return nil
+		},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionPause))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionPauseComplete))
+
+	require.NoError(t, cdcTask.Restart())
+	<-started
+
+	require.True(t, executor.tableErrorsAreCleared())
+	sqls := executor.capturedExecSQLs()
+	require.Len(t, sqls, 1)
+	require.Contains(t, sqls[0], "UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg = ''")
+	require.Contains(t, sqls[0], "task-1")
+}
+
+func TestCdcTask_RestartFromFailedUpdatesFailedMetrics(t *testing.T) {
+	failedGauge := v2.CdcTaskTotalGauge.WithLabelValues("failed")
+	failedBefore := readFrontendGaugeValue(t, failedGauge)
+
+	executor := &captureCDCExecutor{}
+	started := make(chan struct{}, 1)
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		ie:             executor,
+		stateMachine:   NewExecutorStateMachine(),
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		holdCh:         make(chan int, 1),
+		runningReaders: &sync.Map{},
+		startFunc: func(context.Context) error {
+			started <- struct{}{}
+			return nil
+		},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+
+	err := cdcTask.failTaskForPermanentTableError(context.Background(), &cdc.DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "tb1",
+	})
+	require.Error(t, err)
+	require.Equal(t, failedBefore+1, readFrontendGaugeValue(t, failedGauge))
+
+	require.NoError(t, cdcTask.Restart())
+	<-started
+	require.Equal(t, failedBefore, readFrontendGaugeValue(t, failedGauge))
+}
+
+func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+
+	stubGetTxnOp := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return txnOperator, nil
+	})
+	defer stubGetTxnOp.Reset()
+
+	stubFinishTxnOp := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stubFinishTxnOp.Reset()
+
+	executor := &captureCDCExecutor{}
+	stubGetTableErrMsg := gostub.Stub(&GetTableErrMsg, func(context.Context, uint32, ie.InternalExecutor, string, *cdc.DbTableInfo) (bool, error) {
+		return !executor.tableErrorsAreCleared(), nil
+	})
+	defer stubGetTableErrMsg.Reset()
+
+	cdcStubs := setupCDCTestStubs(t)
+	defer func() {
+		for _, s := range cdcStubs {
+			s.Reset()
+		}
+	}()
+
+	stubSinker := gostub.Stub(
+		&cdc.NewSinker,
+		func(
+			cdc.UriInfo,
+			uint64,
+			string,
+			*cdc.DbTableInfo,
+			*cdc.CDCWatermarkUpdater,
+			*plan.TableDef,
+			int,
+			time.Duration,
+			*cdc.ActiveRoutine,
+			uint64,
+			string,
+		) (cdc.Sinker, error) {
+			return &mockSinker{}, nil
+		})
+	defer stubSinker.Reset()
+
+	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
+
+	tableMap := map[uint32]cdc.TblMap{
+		0: {
+			"db1.tb1": &cdc.DbTableInfo{
+				SourceDbName:  "db1",
+				SourceTblName: "tb1",
+				SourceTblId:   1,
+			},
+		},
+	}
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-1",
+			TaskName: "task-name",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		ie:               executor,
+		cnEngine:         eng,
+		runningReaders:   &sync.Map{},
+		stateMachine:     NewExecutorStateMachine(),
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		holdCh:           make(chan int, 1),
+		watermarkUpdater: u,
+		noFull:           true,
+		additionalConfig: map[string]interface{}{
+			cdc.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc.CDCDefaultTaskExtra_MaxSQLLen),
+			cdc.CDCTaskExtraOptions_SendSqlTimeout:       cdc.CDCDefaultSendSqlTimeout,
+			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn: cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
+			cdc.CDCTaskExtraOptions_Frequency:            "",
+		},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+
+	err := cdcTask.handleNewTables(tableMap)
+	require.Error(t, err)
+	require.Equal(t, StateFailed, cdcTask.stateMachine.State())
+	require.False(t, executor.tableErrorsAreCleared())
+
+	restartDone := make(chan error, 1)
+	cdcTask.startFunc = func(context.Context) error {
+		err := cdcTask.handleNewTables(tableMap)
+		restartDone <- err
+		return err
+	}
+
+	require.NoError(t, cdcTask.Restart())
+	require.NoError(t, <-restartDone)
+	require.True(t, executor.tableErrorsAreCleared())
+
+	sqls := executor.capturedExecSQLs()
+	require.Len(t, sqls, 2)
+	require.Contains(t, sqls[0], "SET state = 'failed'")
+	require.Contains(t, sqls[1], "UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg = ''")
+	require.Contains(t, sqls[1], "task-1")
+
+	cdcTask.activeRoutine.CloseCancel()
+	if val, ok := cdcTask.runningReaders.Load("db1.tb1"); ok {
+		if reader, ok := val.(cdc.ChangeReader); ok {
+			reader.Wait()
+		}
+	}
 }
 
 func TestCdcTask_handleNewTables_GetTxnOpErr(t *testing.T) {
@@ -3718,7 +4253,7 @@ func TestTransformIntoHours(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			if got := transformIntoHours(tt.input); got != tt.want {
-				t.Errorf("transformIntoHours(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("transformIntoHours(%q) = %d, want %d", tt.input, got, tt.want)
 			}
 		})
 	}
