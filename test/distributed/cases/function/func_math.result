@@ -22,16 +22,17 @@ select acos(d),acos(fl)from t1;
 null  ¦  null  𝄀
 null  ¦  null  𝄀
 1.5707963267948966  ¦  1.5707963267948966
-select cot(d),cot(fl) from t1;
+select cot(d),cot(fl) from t1 where d is null or (d <> 0 and fl <> 0);
 ➤ cot(d)[8,54,0]  ¦  cot(fl)[8,54,0]  𝄀
 0.6420926159343306  ¦  1.8340266997618755  𝄀
 -0.4576575543602858  ¦  0.6124124816462909  𝄀
-null  ¦  null  𝄀
 null  ¦  null
 select cot(d),cot(fl) from t1 where d <> 0;
 ➤ cot(d)[8,54,0]  ¦  cot(fl)[8,54,0]  𝄀
 0.6420926159343306  ¦  1.8340266997618755  𝄀
 -0.4576575543602858  ¦  0.6124124816462909
+select cot(0);
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'cot(0)'
 select tan(d),tan(fl) from t1;
 ➤ tan(d)[8,54,0]  ¦  tan(fl)[8,54,0]  𝄀
 1.557407724654902  ¦  0.5452483326059671  𝄀
