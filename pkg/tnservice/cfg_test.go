@@ -17,6 +17,7 @@ package tnservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,10 +34,12 @@ func TestValidate(t *testing.T) {
 	assert.Equal(t, defaultHeatbeatInterval, c.HAKeeper.HeatbeatInterval.Duration)
 	assert.Equal(t, defaultHeatbeatTimeout, c.HAKeeper.HeatbeatTimeout.Duration)
 	assert.Equal(t, defaultConnectTimeout, c.LogService.ConnectTimeout.Duration)
+	assert.Equal(t, options.DefaultCheckpointIncrementalInterval, c.Ckp.IncrementalInterval.Duration)
 	assert.Equal(t, "true", c.Txn.IncrementalDedup)
 }
 
 func TestDefaulValue(t *testing.T) {
 	c := Config{}
 	c.SetDefaultValue()
+	assert.Equal(t, options.DefaultCheckpointIncrementalInterval, c.Ckp.IncrementalInterval.Duration)
 }
