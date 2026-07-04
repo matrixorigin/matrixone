@@ -221,37 +221,42 @@ a
 180
 30
 0
+drop table if exists t1_cot_safe;
+drop table if exists t1_cot_nested_safe;
 drop table if exists t1;
 create table t1(a int,b float);
 insert into t1 values(0,0),(-15,-20),(-22,-12.5);
 insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
-select cot(a*pi()/180) as cota,cot(b*pi()/180) cotb from t1;
+create table t1_cot_safe(a int,b float);
+insert into t1_cot_safe select * from t1 where a <> 0 and b <> 0;
+create table t1_cot_nested_safe(a int,b float);
+insert into t1_cot_nested_safe select * from t1_cot_safe where a <> 90;
+select cot(a*pi()/180) as cota,cot(b*pi()/180) cotb from t1_cot_safe;
 cota    cotb
-null    null
 -3.732050807568879    -2.7474774194546225
 -2.4750868534162955    -4.510708503662059
-null    -5.443746451065131E15
 1.7320508075688774    1.7320508075688807
 0.0    2.449293598294703E-16
 -1.6331239353195392E16    1.2246467991473515E-16
 -1.6331239353195392E16    -1.6331239353195392E16
-select cot(a*pi()/180)*cot(b*pi()/180) as cotab,cot(cot(a*pi()/180)) as c from t1;
+select cot(a*pi()/180)*cot(b*pi()/180) as cotab,cot(cot(a*pi()/180)) as c from t1_cot_nested_safe;
 cotab    c
-null    null
 10.253725322052883    -1.492048732224759
 11.164395317007052    1.2713225260580656
-null    null
 3.000000000000006    -0.1626668736751883
-0.0    null
 -2.0    0.1507701967970538
 2.6670937881135786E32    0.1507701967970538
-select b from t1 where cot(a*pi()/180)<=cot(b*pi()/180) order by a;
+select b from t1_cot_safe where cot(a*pi()/180)<=cot(b*pi()/180) order by a;
 b
 -20.0
 390.0
 450.0
 270.0
 180.0
+select cot(0);
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'cot(0)'
+drop table if exists t1_cot_nested_safe;
+drop table if exists t1_cot_safe;
 drop table if exists t1;
 create table t1(a date, b datetime,c varchar(30));
 insert into t1 values('20220101','2022-01-01 01:01:01','2022-13-13 01:01:01');
