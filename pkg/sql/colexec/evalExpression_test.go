@@ -242,6 +242,34 @@ func TestVarExpressionExecutor(t *testing.T) {
 	// require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+// TestParamExpressionExecutorAnyType guards issue #25423: a prepared-statement
+// parameter is planned as T_any (e.g. for "? + ?"), but its value is always
+// stored as text bytes. The executor must materialize such a param as a real
+// T_text const instead of a zero-width T_any vector, which used to panic in
+// vector.NewConstBytes / SetConstBytes at COM_STMT_EXECUTE time.
+func TestParamExpressionExecutorAnyType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Params are stored by the frontend in a T_text vector.
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("42"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	paramExpr := &plan.Expr{
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		Typ:  plan.Type{Id: int32(types.T_any)},
+	}
+
+	executor, err := NewExpressionExecutor(proc, paramExpr)
+	require.NoError(t, err)
+
+	vec, err := executor.Eval(proc, []*batch.Batch{nil}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_text, vec.GetType().Oid)
+	require.Equal(t, "42", string(vec.GetBytesAt(0)))
+	executor.Free()
+}
+
 func TestVarExpressionExecutorWithoutResolveVariableFunc(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	varExpr := &plan.Expr{

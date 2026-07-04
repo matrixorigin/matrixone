@@ -330,6 +330,102 @@ func TestPrepareUpdateTextConcatCoalesceKeepsTextAssignmentCast(t *testing.T) {
 	assert.False(t, planHasTextToCharOrVarcharCast(logicPlan))
 }
 
+// collectParamRefs walks an expression subtree and returns every parameter
+// reference leaf it contains.
+func collectParamRefs(expr *plan.Expr) []*plan.Expr {
+	var refs []*plan.Expr
+	var visit func(e *plan.Expr)
+	visit = func(e *plan.Expr) {
+		if e == nil {
+			return
+		}
+		if _, ok := e.Expr.(*plan.Expr_P); ok {
+			refs = append(refs, e)
+			return
+		}
+		if f := e.GetF(); f != nil {
+			for _, arg := range f.Args {
+				visit(arg)
+			}
+		}
+		if list := e.GetList(); list != nil {
+			for _, item := range list.List {
+				visit(item)
+			}
+		}
+	}
+	visit(expr)
+	return refs
+}
+
+// findParamAddFunc returns the "+" function each of whose two arguments contains
+// exactly one prepared-statement parameter reference (possibly wrapped in an
+// implicit cast), or nil if the plan has none.
+func findParamAddFunc(p *Plan) *plan.Function {
+	p = resolveQueryPlan(p)
+	if p == nil || p.GetQuery() == nil {
+		return nil
+	}
+	var found *plan.Function
+	var visit func(expr *plan.Expr)
+	visit = func(expr *plan.Expr) {
+		if expr == nil || found != nil {
+			return
+		}
+		if f := expr.GetF(); f != nil {
+			if f.Func.GetObjName() == "+" && len(f.Args) == 2 &&
+				len(collectParamRefs(f.Args[0])) == 1 && len(collectParamRefs(f.Args[1])) == 1 {
+				found = f
+				return
+			}
+			for _, arg := range f.Args {
+				visit(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				visit(item)
+			}
+		}
+	}
+	for _, node := range p.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			visit(expr)
+		}
+	}
+	return found
+}
+
+// TestPrepareArithmeticParams reproduces issue #25423: preparing "select ? + ?"
+// must succeed. Before the fix, params were bound as T_text, so the "+" function
+// resolver rejected [TEXT TEXT] during COM_STMT_PREPARE. Binding params as T_any
+// lets the existing function type deduction wrap both unknown params in an
+// implicit cast to a numeric type.
+func TestPrepareArithmeticParams(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "prepare stmt1 from select ? + ?")
+	assert.NoError(t, err)
+
+	addFunc := findParamAddFunc(logicPlan)
+	assert.NotNil(t, addFunc, "plan should contain a '+' over two parameter references")
+	if addFunc != nil {
+		// The two params are the only two parameters in the statement and keep
+		// their unresolved T_any type until COM_STMT_EXECUTE supplies real values.
+		var refs []*plan.Expr
+		refs = append(refs, collectParamRefs(addFunc.Args[0])...)
+		refs = append(refs, collectParamRefs(addFunc.Args[1])...)
+		assert.Len(t, refs, 2)
+		positions := []int32{}
+		for _, ref := range refs {
+			assert.Equalf(t, int32(types.T_any), ref.Typ.Id,
+				"param ref should keep T_any type before execute supplies real values")
+			positions = append(positions, ref.GetP().Pos)
+		}
+		assert.ElementsMatch(t, []int32{0, 1}, positions, "param positions should be 0 and 1")
+	}
+}
+
 func TestUpdateTextCaseKeepsTextAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)

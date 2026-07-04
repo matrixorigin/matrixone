@@ -137,6 +137,17 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 	case *plan.Expr_P:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		// A prepared-statement parameter is materialized from its stored value,
+		// which the frontend always keeps as text bytes (see MysqlProtocolImpl.
+		// ParseExecuteData). When the parameter type is still unresolved (T_any,
+		// e.g. for "? + ?", where the planner leaves it to the surrounding
+		// function's implicit cast), build the const as T_text: T_any has element
+		// size 0, so NewConstBytes / SetConstBytes would panic. The cast that the
+		// planner inserted reads the real vector type at runtime and converts the
+		// text bytes to the wanted type.
+		if typ.Oid == types.T_any {
+			typ = types.T_text.ToType()
+		}
 		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ), nil
 
 	case *plan.Expr_V:

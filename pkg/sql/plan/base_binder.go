@@ -286,7 +286,12 @@ func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 }
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
-	typ := types.T_text.ToType()
+	// A prepared-statement parameter has no concrete type at PREPARE time; its
+	// real type only arrives with COM_STMT_EXECUTE. Bind it as T_any so that the
+	// function type deduction picks an implicit conversion from the surrounding
+	// context (e.g. "? + ?" promotes both to a numeric type) instead of forcing
+	// TEXT, which made arithmetic prepares fail with "bad value [TEXT TEXT]".
+	typ := types.T_any.ToType()
 	return &Expr{
 		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_P{
