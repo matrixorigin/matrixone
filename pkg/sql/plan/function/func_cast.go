@@ -1935,10 +1935,10 @@ func strTypeToOthers(proc *process.Process,
 		return strToUnsigned(ctx, source, rs, 64, length, selectList, mode)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return strToFloat(ctx, source, rs, 32, length, selectList)
+		return strToFloat(ctx, source, rs, 32, length, selectList, mode)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return strToFloat(ctx, source, rs, 64, length, selectList)
+		return strToFloat(ctx, source, rs, 64, length, selectList, mode)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return strToDecimal64(source, rs, length, selectList)
@@ -5044,6 +5044,48 @@ func leadingSignedInteger(s string) string {
 	return s[:end]
 }
 
+func leadingNumericString(s string) string {
+	if s == "" {
+		return ""
+	}
+	i := 0
+	if s[i] == '+' || s[i] == '-' {
+		i++
+	}
+	integerStart := i
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	hasDigits := i > integerStart
+	if i < len(s) && s[i] == '.' {
+		i++
+		fractionStart := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		hasDigits = hasDigits || i > fractionStart
+	}
+	if !hasDigits {
+		return ""
+	}
+
+	end := i
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		i++
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		exponentStart := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i > exponentStart {
+			end = i
+		}
+	}
+	return s[:end]
+}
+
 func isStrictNumericString(s string) bool {
 	if s == "" {
 		return false
@@ -5091,7 +5133,7 @@ func isStrictNumericString(s string) bool {
 
 func integerStringForCast(s string, mode castMode) (string, error) {
 	switch mode {
-	case castExplicit:
+	case castImplicit, castExplicit:
 		integer := leadingSignedInteger(s)
 		if integer == "" {
 			return "", moerr.NewInvalidInputNoCtxf("%s is not an integer", s)
@@ -5245,7 +5287,7 @@ func strToFloat[T constraints.Float](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList) error {
+	length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -5279,13 +5321,26 @@ func strToFloat[T constraints.Float](
 				}
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
-				r2, tErr = strconv.ParseFloat(s, bitSize)
+				numeric := s
+				if mode == castAssignment {
+					if !isStrictNumericString(s) {
+						return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to float%d", bitSize), s)
+					}
+				} else {
+					numeric = leadingNumericString(s)
+				}
+				if numeric == "" {
+					r2 = 0
+					tErr = nil
+				} else {
+					r2, tErr = strconv.ParseFloat(numeric, bitSize)
+				}
 				if tErr != nil {
 					// MySQL non-strict mode: invalid string converts to 0 (no error)
 					// This matches MySQL's default behavior for implicit conversions
 					r2 = 0
 				} else if bitSize == 32 {
-					r2, _ = strconv.ParseFloat(s, 64)
+					r2, _ = strconv.ParseFloat(numeric, 64)
 				}
 				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 					result = T(r2)

@@ -140,5 +140,5 @@ or (code is not null and code not in (5001010000, 5001020000, 6401010000)));
 TP QUERY PLAN
 Project
   ->  Table Scan on d_indomain.t3
-        Filter Cond: (((prefix_in(t3.__mo_cpkey_col) or prefix_eq(t3.__mo_cpkey_col)) and (t3.bveh = 'TFUA1000')) or (prefix_eq(t3.__mo_cpkey_col) and (t3.code IS NOT NULL))), prefix_in(t3.__mo_cpkey_col)
+        Filter Cond: ((((cast(t3.code AS DOUBLE) = 5001010000) or (cast(t3.code AS DOUBLE) = 5001020000) or (cast(t3.code AS DOUBLE) = 6401010000)) and (t3.bveh = 'TFUA1000')) or ((t3.code IS NOT NULL) and (cast(t3.code AS DOUBLE) != 5001010000) and (cast(t3.code AS DOUBLE) != 5001020000) and (cast(t3.code AS DOUBLE) != 6401010000))), prefix_in(t3.__mo_cpkey_col)\n              -- HINT: Cast expression may prevent index usage
 drop database if exists d_indomain;

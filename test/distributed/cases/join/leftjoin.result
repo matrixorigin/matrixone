@@ -215,7 +215,7 @@ Project  𝄀
         Join Cond: (o.id = t_mapping.id)  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (o.id = cast(d.id AS INT)), (o.id = d.id)  𝄀
+              Join Cond: (o.id = cast_explicit(d.id AS INT)), (o.id = d.id)  𝄀
               ->  Table Scan on d1.t_order  𝄀
               ->  Table Scan on d1.t_summary  𝄀
         ->  Aggregate  𝄀

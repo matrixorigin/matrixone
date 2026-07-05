@@ -281,9 +281,7 @@ id    INT(32)    NO    PRI    null
 order_number    VARCHAR(20)    YES        null        
 status    ENUM('Pending','Processing','Completed','Cancelled')    YES        null        
 delete from insert01 where status=3;
-invalid argument cast to int, bad value Pending
 update insert01 set status='Pending' where status=2;
-invalid argument cast to int, bad value Pending
 select * from insert01;
 id    order_number    status
 1    111    Pending
@@ -291,9 +289,10 @@ id    order_number    status
 3    333    Completed
 4    444    Cancelled
 select * from insert01 where status=4;
-invalid argument cast to int, bad value Pending
+id    order_number    status
 select * from insert01 where status in ('Pending',4);
-invalid argument cast to int, bad value Pending
+id    order_number    status
+1    111    Pending
 drop table insert01;
 drop table if exists default01;
 create table default01 (`col1` enum('T', 'E') not null default 'T');

@@ -483,7 +483,8 @@ insert into t10 values (10, 'aabsdfsb', 'aabdsfsfsdb');
 insert into t10 values (10, 'aa,bb', 'aa,bb');
 insert into t10 values (10, 'aa%bb', 'aa%bb');
 select * from t10 where c=1;
-invalid argument cast to int, bad value 
+a    b    c
+1    1    1
 update t10 set c=10000 where a=10;
 update t10 set c=true where a=10;
 update t10 set c='true' where a=10;

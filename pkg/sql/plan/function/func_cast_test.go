@@ -67,24 +67,24 @@ func Test_StringToFloatInvalidConversion(t *testing.T) {
 				[]float64{0}, []bool{false}),
 		},
 		{
-			info: "cast date string '2020-01-01' to float64 should return 0",
+			info: "cast date string '2020-01-01' to float64 should return numeric prefix",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"2020-01-01"}, []bool{false}),
 				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
+				[]float64{2020}, []bool{false}),
 		},
 		{
-			info: "cast datetime string '2020-01-01 12:34:56' to float64 should return 0",
+			info: "cast datetime string '2020-01-01 12:34:56' to float64 should return numeric prefix",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"2020-01-01 12:34:56"}, []bool{false}),
 				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
+				[]float64{2020}, []bool{false}),
 		},
 	}
 
@@ -161,7 +161,7 @@ func Test_BinaryToFloatInvalidConversion(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToFloat(ctx, from, to, 64, len(tt.inputs), nil)
+			err = strToFloat(ctx, from, to, 64, len(tt.inputs), nil, castImplicit)
 			require.NoError(t, err, "should not return error for invalid binary")
 
 			resultVec := to.GetResultVector()
@@ -2417,7 +2417,7 @@ func TestStringToIntegerCastModes(t *testing.T) {
 		want    any
 		wantErr bool
 	}{
-		{name: "implicit signed rejects suffix", input: "7e2", toType: types.T_int64.ToType(), fn: NewCast, want: []int64{}, wantErr: true},
+		{name: "implicit signed reads integer prefix", input: "7e2", toType: types.T_int64.ToType(), fn: NewCast, want: []int64{7}},
 		{name: "explicit signed reads integer prefix", input: "7e2", toType: types.T_int64.ToType(), fn: NewExplicitCast, want: []int64{7}},
 		{name: "explicit unsigned reads integer prefix", input: "7e2", toType: types.T_uint64.ToType(), fn: NewExplicitCast, want: []uint64{7}},
 		{name: "assignment evaluates exponent", input: "7e2", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{700}},
@@ -2439,6 +2439,56 @@ func TestStringToIntegerCastModes(t *testing.T) {
 				NewFunctionTestInput(tt.toType, tt.want, nil),
 			}
 			tc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(tt.toType, tt.wantErr, tt.want, nil), tt.fn)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringToFloatUsesLeadingNumericPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"47,832.43", "-38,902,093.43", "3ru82q", "abc", "7e2x",
+		}, nil),
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+	}
+	want := []float64{47, -38, 3, 0, 700}
+	tc := NewFunctionTestCase(
+		proc,
+		inputs,
+		NewFunctionTestResult(types.T_float64.ToType(), false, want, nil),
+		NewCast,
+	)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStringToFloatAssignmentRequiresStrictNumericString(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name    string
+		input   string
+		want    []float64
+		wantErr bool
+	}{
+		{name: "evaluates exponent", input: "7e2", want: []float64{700}},
+		{name: "rejects internal space", input: "1 2", wantErr: true},
+		{name: "rejects internal plus", input: "1+2", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tt.input}, nil),
+				NewFunctionTestInput(types.T_float64.ToType(), tt.want, nil),
+			}
+			tc := NewFunctionTestCase(
+				proc,
+				inputs,
+				NewFunctionTestResult(types.T_float64.ToType(), tt.wantErr, tt.want, nil),
+				NewStrictCast,
+			)
 			succeed, info := tc.Run()
 			require.True(t, succeed, info)
 		})
