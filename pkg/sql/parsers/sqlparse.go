@@ -203,12 +203,40 @@ func SplitSqlBySemicolon(sql string) []string {
 	return ret
 }
 
+// fragmentHasStatement reports whether a semicolon-separated fragment carries an
+// actual statement rather than being blank or comment-only. The scanner skips
+// every comment form (-- , #, //, /* */, /*+ */) so the first token of a
+// comment-only or empty fragment is EOF. It is used to align the leading-hint
+// list with the parser's statement list: a trailing "stmt; -- comment" splits
+// into two fragments but parses into one statement, and the comment-only tail
+// must not be counted as a statement (otherwise the hint/statement counts
+// mismatch and AddRewriteHints rejects an otherwise valid query).
+func fragmentHasStatement(fragment string) bool {
+	if strings.TrimSpace(fragment) == "" {
+		return false
+	}
+	scanner := mysql.NewScanner(dialect.MYSQL, fragment)
+	defer mysql.PutScanner(scanner)
+	typ, _ := scanner.Scan()
+	return typ != 0 && typ != mysql.EofChar()
+}
+
+// extractLeadingHints returns, for each parsed statement (in order), the content
+// of the leading /*+ ... */ (or /*! ... */) hint on that statement, or "" if it
+// has none. Blank/comment-only fragments carry no statement and are skipped so
+// the returned slice lines up positionally with the parser's statement list.
 func extractLeadingHints(sql string) []string {
 	if len(sql) == 0 {
 		return []string{""}
 	}
 
-	stmts := SplitSqlBySemicolon(sql)
+	fragments := SplitSqlBySemicolon(sql)
+	stmts := make([]string, 0, len(fragments))
+	for _, f := range fragments {
+		if fragmentHasStatement(f) {
+			stmts = append(stmts, f)
+		}
+	}
 	results := make([]string, len(stmts))
 
 	isSpace := func(b byte) bool {
@@ -275,88 +303,242 @@ func extractLeadingHints(sql string) []string {
 }
 
 type RewriteMap struct {
-	// RawRewrites carries the raw SQL strings from JSON input.
-	RawRewrites map[string]string `json:"rewrites"`
+	// RawRewrites carries the raw JSON value for each table key. Each value is
+	// either a single SQL string or an ordered array of SQL strings (a stacked
+	// rewrite chain: innermost first, outermost last).
+	RawRewrites map[string]json.RawMessage `json:"rewrites"`
+	// RemapDb maps a source database name to a target database name, applied
+	// before the table rewrites.
+	RemapDb map[string]string `json:"remapdb"`
+}
+
+// isValidDbIdentifier reports whether s is a usable (unquoted) database name:
+// non-empty and composed only of letters, digits, underscore or '$'.
+func isValidDbIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r == '_' || r == '$' ||
+			(r >= '0' && r <= '9') ||
+			(r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// decodeRewriteChain decodes a rewrite value that is either a JSON string or a
+// JSON array of strings into an ordered list of SQL strings.
+func decodeRewriteChain(ctx context.Context, raw json.RawMessage) ([]string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var arr []string
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return nil, moerr.NewParseError(ctx, err.Error())
+		}
+		return arr, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, moerr.NewParseError(ctx, err.Error())
+	}
+	return []string{s}, nil
 }
 
 // AddRewriteHints The position of the hint at the beginning is different from that in MySQL.
 // Placing it in the parser for parsing will lead to syntax conflicts,
 // so it can only be parsed separately
+// SplitRewriteKey splits a rewrite-rule key into its database and table parts.
+// A valid key is exactly "db.table" with both parts non-empty after trimming.
+// It is the single source of truth for rewrite-key qualification, shared by the
+// parser (AddRewriteHints) and the frontend SET-time validation.
+func SplitRewriteKey(key string) (db, table string, ok bool) {
+	parts := strings.Split(strings.TrimSpace(key), ".")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	db = strings.TrimSpace(parts[0])
+	table = strings.TrimSpace(parts[1])
+	if db == "" || table == "" {
+		return "", "", false
+	}
+	return db, table, true
+}
+
+// ValidateRemapDb validates a remapdb map: every source/destination must be a
+// valid (unquoted) database identifier, and the source and destination sets must
+// be disjoint (forbidding chaining such as {"x":"y","y":"z"} and self-maps). It
+// is shared by the parser and the frontend so all remapdb entries — for SELECT,
+// DML and USE, from a session variable or an inline hint — get the same checks.
+// IsSystemDatabase reports whether name is a reserved system database that
+// remapdb may not use as a source or destination: information_schema, mysql,
+// system, system_metrics, or any database whose name starts with "mo_". The
+// comparison is case-insensitive.
+func IsSystemDatabase(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if strings.HasPrefix(name, "mo_") {
+		return true
+	}
+	switch name {
+	case "information_schema", "mysql", "system", "system_metrics":
+		return true
+	}
+	return false
+}
+
+func ValidateRemapDb(ctx context.Context, remapDb map[string]string) error {
+	if len(remapDb) == 0 {
+		return nil
+	}
+	for src, dst := range remapDb {
+		if !isValidDbIdentifier(strings.TrimSpace(src)) || !isValidDbIdentifier(strings.TrimSpace(dst)) {
+			return moerr.NewParseErrorf(ctx, "remapdb names must be valid identifiers, got %q -> %q", src, dst)
+		}
+		if IsSystemDatabase(src) || IsSystemDatabase(dst) {
+			return moerr.NewParseErrorf(ctx, "remapdb must not remap a system database, got %q -> %q", src, dst)
+		}
+	}
+	for _, dst := range remapDb {
+		if _, ok := remapDb[strings.TrimSpace(dst)]; ok {
+			return moerr.NewParseErrorf(ctx, "remapdb: database %q must not be both a source and a destination (chaining is not allowed)", strings.TrimSpace(dst))
+		}
+	}
+	return nil
+}
+
+// DecodeRewriteHint decodes a leading-hint JSON object into per-table rewrite
+// chains (each an ordered list of SQL strings, innermost first) and the remapdb
+// map, applying the structural validation shared with AddRewriteHints:
+// db-qualified rewrite keys and valid, non-chaining remapdb. It does NOT parse
+// the rewrite SQL — that is done where the chains are consumed. The frontend
+// uses this to merge inline hints exactly the way the parser reads them, so the
+// inline array-form (chain) syntax stays usable when hints are merged.
+func DecodeRewriteHint(ctx context.Context, content string) (rewrites map[string][]string, remapDb map[string]string, err error) {
+	content = strings.TrimSpace(content)
+	if content == "" || content[0] != '{' {
+		return nil, nil, nil
+	}
+	var rm RewriteMap
+	if err := json.Unmarshal([]byte(content), &rm); err != nil {
+		return nil, nil, moerr.NewParseError(ctx, err.Error())
+	}
+	if len(rm.RemapDb) > 0 {
+		remapDb = make(map[string]string, len(rm.RemapDb))
+		for src, dst := range rm.RemapDb {
+			remapDb[strings.TrimSpace(src)] = strings.TrimSpace(dst)
+		}
+		if err := ValidateRemapDb(ctx, remapDb); err != nil {
+			return nil, nil, err
+		}
+	}
+	if len(rm.RawRewrites) > 0 {
+		rewrites = make(map[string][]string, len(rm.RawRewrites))
+		for k, raw := range rm.RawRewrites {
+			if strings.TrimSpace(k) == "" {
+				return nil, nil, moerr.NewParseError(ctx, "empty table and database")
+			}
+			db, table, ok := SplitRewriteKey(k)
+			if !ok {
+				// Distinguish "no/too-many dots" from "empty db or table part".
+				if len(strings.Split(strings.TrimSpace(k), ".")) != 2 {
+					return nil, nil, moerr.NewParseError(ctx, "the mapping name needs to include database name")
+				}
+				return nil, nil, moerr.NewParseError(ctx, "empty table or database")
+			}
+			sqls, derr := decodeRewriteChain(ctx, raw)
+			if derr != nil {
+				return nil, nil, derr
+			}
+			rewrites[db+"."+table] = sqls
+		}
+	}
+	return rewrites, remapDb, nil
+}
+
 func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) error {
 	hints := extractLeadingHints(sql)
 	if len(hints) != len(stmts) {
+		// A SQL that is entirely blank/comments carries no statement-bearing
+		// fragment, so hints is empty while the parser returns a single
+		// EmptyStmt. There is nothing to rewrite, so accept it.
+		if len(hints) == 0 && len(stmts) == 1 {
+			if _, ok := stmts[0].(*tree.EmptyStmt); ok {
+				return nil
+			}
+		}
 		return moerr.NewParseError(ctx, "parse hints bug")
 	}
 	for i, stmt := range stmts {
 		switch stmt.(type) {
-		case *tree.Select, *tree.ParenSelect, *tree.Insert:
-			// ok
+		case *tree.Select, *tree.ParenSelect, *tree.Insert, *tree.Update, *tree.Delete:
+			// SELECT and INSERT...SELECT carry the rewrite option for the planner
+			// (INSERT propagates it to its inner SELECT read-source, see below).
+			// UPDATE/DELETE are decoded only to validate the inline hint; their
+			// remapdb is applied at the AST level and table rewrites on their
+			// read-sources are not yet implemented.
 		default:
 			continue
 		}
 		hint := strings.TrimSpace(hints[i])
-		if hint == "" || (len(hint) > 0 && hint[0] != '{') {
+		if hint == "" || hint[0] != '{' {
 			continue
 		}
 
-		var rewriteMap RewriteMap
-		if err := json.Unmarshal([]byte(hint), &rewriteMap); err != nil {
-			return moerr.NewParseError(ctx, err.Error())
+		rawChains, remapDb, err := DecodeRewriteHint(ctx, hint)
+		if err != nil {
+			return err
 		}
-		if len(rewriteMap.RawRewrites) == 0 {
+		if len(rawChains) == 0 && len(remapDb) == 0 {
 			continue
 		}
-		rewriteOption := &tree.RewriteOption{Rewrites: make(map[string]*tree.Rewrite)}
-		for k, v := range rewriteMap.RawRewrites {
-			key := strings.TrimSpace(k)
-			if key == "" {
-				return moerr.NewParseError(ctx, "empty table and database")
-			}
-			// key can be "table" or "db.table"
-			parts := strings.Split(key, ".")
-			db, table := "", ""
-			if len(parts) == 2 {
-				db = strings.TrimSpace(parts[0])
-				table = strings.TrimSpace(parts[1])
-			} else {
-				return moerr.NewParseError(ctx, "the mapping name needs to include database name")
-			}
-			if table == "" || db == "" {
-				return moerr.NewParseError(ctx, "empty table or database")
-			}
-			if v == "" {
+		rewriteOption := &tree.RewriteOption{Rewrites: make(map[string][]*tree.Rewrite)}
+		if len(remapDb) > 0 {
+			rewriteOption.RemapDb = remapDb
+		}
+		for key, sqls := range rawChains {
+			db, table, _ := SplitRewriteKey(key)
+			if len(sqls) == 0 {
 				return moerr.NewParseError(ctx, "statement")
 			}
-			st, err := ParseOne(ctx, dialect.MYSQL, v, 1)
-			if err != nil {
-				return moerr.NewParseError(ctx, err.Error())
-			}
-
-			switch st.(type) {
-			case *tree.Select, *tree.ParenSelect:
-				// ok
-			default:
-				return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
-			}
-			if _, ok := rewriteOption.Rewrites[key]; ok {
-				return moerr.NewParseError(ctx, "duplicate mapping names")
-			}
-			rewriteOption.Rewrites[key] = &tree.Rewrite{TableName: table, DbName: db, Stmt: st}
-		}
-		if len(rewriteOption.Rewrites) > 0 {
-			switch s := stmt.(type) {
-			case *tree.Select:
-				s.RewriteOption = rewriteOption
-			case *tree.ParenSelect:
-				if s.Select != nil {
-					s.Select.RewriteOption = rewriteOption
+			chain := make([]*tree.Rewrite, 0, len(sqls))
+			for _, v := range sqls {
+				if v == "" {
+					return moerr.NewParseError(ctx, "statement")
 				}
-			case *tree.Insert:
-				if s.Rows != nil {
-					s.Rows.RewriteOption = rewriteOption
-					if ps, ok := s.Rows.Select.(*tree.ParenSelect); ok && ps.Select != nil {
-						ps.Select.RewriteOption = rewriteOption
-					}
+				st, err := ParseOne(ctx, dialect.MYSQL, v, 1)
+				if err != nil {
+					return moerr.NewParseError(ctx, err.Error())
+				}
+				switch st.(type) {
+				case *tree.Select, *tree.ParenSelect:
+					// ok
+				default:
+					return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
+				}
+				chain = append(chain, &tree.Rewrite{TableName: table, DbName: db, Stmt: st})
+			}
+			rewriteOption.Rewrites[key] = chain
+		}
+		switch s := stmt.(type) {
+		case *tree.Select:
+			s.RewriteOption = rewriteOption
+		case *tree.ParenSelect:
+			if s.Select != nil {
+				s.Select.RewriteOption = rewriteOption
+			}
+		case *tree.Insert:
+			// INSERT...SELECT: propagate the rewrite to the inner read-source so
+			// the planner rewrites the source table (issue #25186 / upstream
+			// #25310). RemapDb (if any) is applied separately at the AST level;
+			// the planner only consumes rewriteOption.Rewrites, so carrying the
+			// full option here is safe.
+			if s.Rows != nil {
+				s.Rows.RewriteOption = rewriteOption
+				if ps, ok := s.Rows.Select.(*tree.ParenSelect); ok && ps.Select != nil {
+					ps.Select.RewriteOption = rewriteOption
 				}
 			}
 		}
