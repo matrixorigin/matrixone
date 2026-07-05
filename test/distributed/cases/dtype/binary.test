@@ -164,9 +164,9 @@ select id, bit_or(b) from bit01 group by id;
 select id, bit_xor(b) from bit01 group by id;
 
 -- hex/length for binary aggregate neutral values
-select id, hex(bit_and(b)), length(bit_and(b)) from bit01 group by id;
-select id, hex(bit_or(b)), length(bit_or(b)) from bit01 group by id;
-select id, hex(bit_xor(b)), length(bit_xor(b)) from bit01 group by id;
+select id, hex(bit_and(b)), length(bit_and(b)) from bit01 group by id order by id;
+select id, hex(bit_or(b)), length(bit_or(b)) from bit01 group by id order by id;
+select id, hex(bit_xor(b)), length(bit_xor(b)) from bit01 group by id order by id;
 
 -- empty table without group by: zero-row aggregate returns neutral values
 drop table if exists bit02;
@@ -182,9 +182,9 @@ insert into bit02 values('a', '110');
 insert into bit02 values('b', null);
 insert into bit02 values('b', '001');
 insert into bit02 values('c', null);
-select id, hex(bit_and(b)), length(bit_and(b)) from bit02 group by id;
-select id, hex(bit_or(b)), length(bit_or(b)) from bit02 group by id;
-select id, hex(bit_xor(b)), length(bit_xor(b)) from bit02 group by id;
+select id, hex(bit_and(b)), length(bit_and(b)) from bit02 group by id order by id;
+select id, hex(bit_or(b)), length(bit_or(b)) from bit02 group by id order by id;
+select id, hex(bit_xor(b)), length(bit_xor(b)) from bit02 group by id order by id;
 drop table bit02;
 
 -- order by
