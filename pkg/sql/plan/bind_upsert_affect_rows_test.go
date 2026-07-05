@@ -154,6 +154,24 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 			"ODKU no-op filter must carry the isnull(old rowid) guard for non-conflicting rows")
 	})
 
+	t.Run("ODKU no-op filter compares only written columns on secondary-unique conflict", func(t *testing.T) {
+		// dept has PK deptno and a secondary UNIQUE key on dname. An ODKU whose
+		// conflict is resolved through dname can carry an incoming deptno that
+		// differs from the existing row's deptno. The update (loc = loc) writes
+		// only loc, so the row is a genuine no-op and MySQL returns
+		// affected-rows = 0. The no-op guard must therefore compare the final
+		// written value of loc only — not the immutable PK deptno nor the
+		// conflict-key dname against the raw incoming image, which would
+		// spuriously turn the no-op into a counted update.
+		p, err := runOneStmt(mock, t,
+			"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') on duplicate key update loc = loc")
+		require.NoError(t, err)
+		require.True(t, hasNoopFilter(p),
+			"ODKU plan should contain a no-op filter")
+		require.Equal(t, 1, countNoopEqComparisons(p),
+			"no-op FILTER must compare only the single written column (loc), not immutable deptno/dname")
+	})
+
 	t.Run("DeepCopyNode preserves CountDeleteAffectRows on MULTI_UPDATE", func(t *testing.T) {
 		p, err := runOneStmt(mock, t,
 			"insert into constraint_test.dept(deptno, dname, loc) values (1, 'A', 'B') on duplicate key update loc = loc")
@@ -212,6 +230,47 @@ func noopFilterReferencesCol(p *Plan, colName string) bool {
 		}
 	}
 	return false
+}
+
+// countNoopEqComparisons returns the number of null-safe-equal (<=>)
+// comparisons in the ODKU no-op FILTER's equality chain, or -1 if no such
+// filter exists. It counts exactly the columns the update actually writes.
+func countNoopEqComparisons(p *Plan) int {
+	q := p.GetQuery()
+	if q == nil {
+		return -1
+	}
+	for _, n := range q.Nodes {
+		if n.NodeType != planpb.Node_FILTER {
+			continue
+		}
+		for _, cond := range n.FilterList {
+			if notExpr := noopFilterNotBranch(cond); notExpr != nil {
+				return countNullSafeEq(notExpr.Args[0])
+			}
+		}
+	}
+	return -1
+}
+
+// countNullSafeEq counts <=> nodes in an AND/<=> predicate tree.
+func countNullSafeEq(expr *planpb.Expr) int {
+	f := expr.GetF()
+	if f == nil || f.Func == nil {
+		return 0
+	}
+	switch f.Func.ObjName {
+	case "and":
+		total := 0
+		for _, arg := range f.Args {
+			total += countNullSafeEq(arg)
+		}
+		return total
+	case "<=>":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // collectNoopColRefs collects all ColRef expressions nested inside the

@@ -348,3 +348,24 @@ select a, b from t_odku_null_unique where a = 1;
 insert into t_odku_null_unique values (1, 20) on duplicate key update b = values(b);
 select a, b from t_odku_null_unique where a = 1;
 drop table if exists t_odku_null_unique;
+
+-- ODKU whose conflict is resolved through a SECONDARY unique key while the
+-- incoming PK differs from the existing row's PK. v = v writes no new value, so
+-- it is a no-op: the ON UPDATE timestamp must NOT advance. The no-op guard must
+-- compare only the written column (v), not the immutable PK's incoming value,
+-- which would otherwise fire the ON UPDATE column and count a spurious update.
+drop table if exists t_odku_sec_uk;
+create table t_odku_sec_uk (
+  id int primary key,
+  u int unique,
+  v int,
+  updated_at timestamp default current_timestamp on update current_timestamp
+);
+insert into t_odku_sec_uk(id, u, v) values (1, 10, 5);
+set @ts_sec = (select updated_at from t_odku_sec_uk where u = 10);
+select sleep(2);
+insert into t_odku_sec_uk(id, u, v) values (2, 10, 5) on duplicate key update v = v;
+select id, u, v, updated_at = @ts_sec as ts_unchanged from t_odku_sec_uk order by id;
+insert into t_odku_sec_uk(id, u, v) values (3, 10, 5) on duplicate key update v = v + 1;
+select id, u, v, updated_at > @ts_sec as ts_advanced from t_odku_sec_uk order by id;
+drop table if exists t_odku_sec_uk;

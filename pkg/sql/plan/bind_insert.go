@@ -1999,9 +1999,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
-	// ODKU no-op guard: drop rows where every non-hidden, non-row_id column of
-	// the old image (scanTag) is NULL-safe-equal to the corresponding column of
-	// the new image (selectTag). MySQL returns affected-rows=0 for such rows.
+	// ODKU no-op guard: drop rows where every column the update would actually
+	// write (its final value in updateExprs) is NULL-safe-equal to the old image
+	// (scanTag). MySQL returns affected-rows=0 for such rows.
 	// Placed before the final PROJECT so scanTag columns survive column remapping.
 	if onDupAction == plan.Node_UPDATE {
 		// Columns excluded from the no-op equality chain: implicit ON UPDATE
@@ -2037,7 +2037,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if noopSkipCols[col.Name] {
 				continue
 			}
-			newColPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+			// Compare against the final written value, not the raw incoming row
+			// image. A column absent from updateExprs is not written by ODKU, so it
+			// keeps its old value and is trivially unchanged — it must be excluded.
+			// Otherwise an immutable key column resolved through a secondary UNIQUE
+			// conflict (where the incoming PK differs from the existing row's PK)
+			// would spuriously fail the equality chain and turn a no-op update into
+			// a counted one.
+			newColExpr, ok := updateExprs[col.Name]
 			if !ok {
 				continue
 			}
@@ -2050,16 +2057,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					},
 				},
 			}
-			newColExpr := &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectTag,
-						ColPos: newColPos,
-					},
-				},
-			}
-			eqExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldColExpr, newColExpr})
+			eqExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldColExpr, DeepCopyExpr(newColExpr)})
 			if allColsEqual == nil {
 				allColsEqual = eqExpr
 			} else {
