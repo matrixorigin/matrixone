@@ -92,6 +92,30 @@ var (
 	TxnLocalLockTotalCounter  = txnLockCounter.WithLabelValues("local")
 	TxnRemoteLockTotalCounter = txnLockCounter.WithLabelValues("remote")
 
+	TxnDeadlockDetectorEnqueueCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "deadlock_detector_enqueue_total",
+			Help:      "Total number of lockservice deadlock detector enqueue attempts.",
+		}, []string{"result"})
+
+	TxnDeadlockOwnerLocalCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "deadlock_owner_local_total",
+			Help:      "Total number of owner-local deadlock fast path results.",
+		}, []string{"result"})
+
+	TxnRemoteLockOwnerTimeoutCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "remote_lock_owner_timeout_total",
+			Help:      "Total number of remote lock owner-side wait timeouts.",
+		}, []string{"granularity", "mode"})
+
 	txnPKChangeCheckCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -129,6 +153,14 @@ var (
 	TxnWaitActiveQueueSizeGauge = txnQueueSizeGauge.WithLabelValues("wait-active")
 	TxnActiveQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("active")
 	TxnLockRPCQueueSizeGauge    = txnQueueSizeGauge.WithLabelValues("lock-rpc")
+
+	TxnDeadlockDetectorQueueDepthGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "deadlock_detector_queue_depth",
+			Help:      "Current depth of the lockservice deadlock detector queue.",
+		})
 
 	txnCNCommittedLocationQuantityGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
