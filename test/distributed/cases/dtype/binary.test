@@ -168,6 +168,25 @@ select id, hex(bit_and(b)), length(bit_and(b)) from bit01 group by id;
 select id, hex(bit_or(b)), length(bit_or(b)) from bit01 group by id;
 select id, hex(bit_xor(b)), length(bit_xor(b)) from bit01 group by id;
 
+-- empty table without group by: zero-row aggregate returns neutral values
+drop table if exists bit02;
+create table bit02(id char(1), b binary(10));
+select hex(bit_and(b)), length(bit_and(b)) from bit02;
+select hex(bit_or(b)), length(bit_or(b)) from bit02;
+select hex(bit_xor(b)), length(bit_xor(b)) from bit02;
+
+-- mixed NULL and non-NULL rows in the same group: NULLs are ignored
+insert into bit02 values('a', '111');
+insert into bit02 values('a', null);
+insert into bit02 values('a', '110');
+insert into bit02 values('b', null);
+insert into bit02 values('b', '001');
+insert into bit02 values('c', null);
+select id, hex(bit_and(b)), length(bit_and(b)) from bit02 group by id;
+select id, hex(bit_or(b)), length(bit_or(b)) from bit02 group by id;
+select id, hex(bit_xor(b)), length(bit_xor(b)) from bit02 group by id;
+drop table bit02;
+
 -- order by
 select * from bit01 order by b desc;
 select * from bit01 order by b;

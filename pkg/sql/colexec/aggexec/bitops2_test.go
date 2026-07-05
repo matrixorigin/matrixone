@@ -417,17 +417,25 @@ func TestBitOpsBytes(t *testing.T) {
 			t.Run(dim.name, func(t *testing.T) {
 				origCap := mpool.GlobalCap()
 				mpool.InitCap(100 * 1024 * 1024) // 100 MiB
-				defer mpool.InitCap(origCap)
+				t.Cleanup(func() { mpool.InitCap(origCap) })
 				capped, err := mpool.NewMPool("test", 2*1024*1024, 0) // 2 MiB
 				require.NoError(t, err)
+				t.Cleanup(func() { mpool.DeleteMPool(capped) })
 
 				typ := types.New(dim.oid, dim.width, 0)
 				exec := makeBitAggExec(capped, AggIdOfBitAnd, typ)
+				t.Cleanup(exec.Free)
 				require.NoError(t, exec.GroupGrow(1))
 
 				// Exhaust the off-heap capacity. Track allocations so
-				// they can be freed after the test.
+				// they can be freed after the test (t.Cleanup runs LIFO,
+				// so they are released before exec.Free and DeleteMPool).
 				var exhaust [][]byte
+				t.Cleanup(func() {
+					for _, b := range exhaust {
+						capped.Free(b)
+					}
+				})
 				for {
 					b, e := capped.Alloc(4096, true)
 					if e != nil {
@@ -438,12 +446,12 @@ func TestBitOpsBytes(t *testing.T) {
 
 				// Input vector from a normal (unlimited) mpool.
 				inputVec := vector.NewVec(typ)
+				t.Cleanup(func() { inputVec.Free(mp) })
 				val := make([]byte, 64)
 				for i := range val {
 					val[i] = byte(i)
 				}
 				require.NoError(t, vector.AppendBytes(inputVec, val, false, mp))
-				defer inputVec.Free(mp)
 
 				err = exec.BulkFill(0, []*vector.Vector{inputVec})
 				require.Error(t, err, "BulkFill should fail when SetBytesAt cannot allocate")
@@ -451,12 +459,6 @@ func TestBitOpsBytes(t *testing.T) {
 				// Verify the state slot is still NULL directly.
 				require.True(t, exec.(*bitOpExecBytes).state[0].vecs[0].IsNull(0),
 					"state slot must remain NULL after failed SetBytesAt")
-
-				// Clean up exhausted allocations before freeing the exec.
-				for _, b := range exhaust {
-					capped.Free(b)
-				}
-				exec.Free()
 			})
 		}
 	})
@@ -475,30 +477,39 @@ func TestBitOpsBytes(t *testing.T) {
 			t.Run(dim.name, func(t *testing.T) {
 				origCap := mpool.GlobalCap()
 				mpool.InitCap(100 * 1024 * 1024) // 100 MiB
-				defer mpool.InitCap(origCap)
+				t.Cleanup(func() { mpool.InitCap(origCap) })
 				capped, err := mpool.NewMPool("test", 2*1024*1024, 0) // 2 MiB
 				require.NoError(t, err)
+				t.Cleanup(func() { mpool.DeleteMPool(capped) })
 
 				typ := types.New(dim.oid, dim.width, 0)
 
 				// exec1: empty target (all-NULL), uses capped mpool.
 				exec1 := makeBitAggExec(capped, AggIdOfBitAnd, typ)
+				t.Cleanup(exec1.Free)
 				require.NoError(t, exec1.GroupGrow(1))
 
 				// exec2: has a real value, uses normal (unlimited) mpool.
 				exec2 := makeBitAggExec(mp, AggIdOfBitAnd, typ)
+				t.Cleanup(exec2.Free)
 				require.NoError(t, exec2.GroupGrow(1))
 				inputVec := vector.NewVec(typ)
+				t.Cleanup(func() { inputVec.Free(mp) })
 				val := make([]byte, 64)
 				for i := range val {
 					val[i] = byte(i)
 				}
 				require.NoError(t, vector.AppendBytes(inputVec, val, false, mp))
-				defer inputVec.Free(mp)
 				require.NoError(t, exec2.BulkFill(0, []*vector.Vector{inputVec}))
 
-				// Exhaust the off-heap capacity.
+				// Exhaust the off-heap capacity. Freed via t.Cleanup (LIFO)
+				// before the execs and the capped pool are torn down.
 				var exhaust [][]byte
+				t.Cleanup(func() {
+					for _, b := range exhaust {
+						capped.Free(b)
+					}
+				})
 				for {
 					b, e := capped.Alloc(4096, true)
 					if e != nil {
@@ -513,13 +524,6 @@ func TestBitOpsBytes(t *testing.T) {
 				// Verify the state slot is still NULL directly.
 				require.True(t, exec1.(*bitOpExecBytes).state[0].vecs[0].IsNull(0),
 					"target slot must remain NULL after failed Merge SetBytesAt")
-
-				// Clean up exhausted allocations.
-				for _, b := range exhaust {
-					capped.Free(b)
-				}
-				exec1.Free()
-				exec2.Free()
 			})
 		}
 	})
