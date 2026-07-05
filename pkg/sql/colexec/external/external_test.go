@@ -578,6 +578,178 @@ func TestGetColDataLoadDataStrictRejectsInvalidInteger(t *testing.T) {
 	require.Contains(t, err.Error(), "not int32 type")
 }
 
+func TestGetColDataLoadDataAdjustmentsOnlyLocalCSVNonStrict(t *testing.T) {
+	cases := []struct {
+		name          string
+		local         bool
+		strictSQLMode bool
+		format        string
+		wantErr       bool
+	}{
+		{name: "local csv non-strict adjusts", local: true, strictSQLMode: false, format: tree.CSV},
+		{name: "local csv strict rejects", local: true, strictSQLMode: true, format: tree.CSV, wantErr: true},
+		{name: "non-local csv non-strict rejects", local: false, strictSQLMode: false, format: tree.CSV, wantErr: true},
+		{name: "local jsonline non-strict rejects", local: true, strictSQLMode: false, format: tree.JSONLINE, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			defer bat.Clean(proc.Mp())
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Ctx:           context.Background(),
+					StrictSqlMode: tc.strictSQLMode,
+					Cols: []*plan.ColDef{{
+						Name: "i",
+						Typ:  plan.Type{Id: int32(types.T_int32)},
+					}},
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tc.format},
+						ExParam: tree.ExParam{
+							ExternType: int32(plan.ExternType_LOAD),
+							Local:      tc.local,
+						},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			err := getColData(
+				bat,
+				[]csvparser.Field{{Val: "abc"}},
+				0,
+				param,
+				proc.Mp(),
+				plan.ExternAttr{ColName: "i", ColIndex: 0, ColFieldIndex: 0},
+				proc,
+			)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "not int32 type")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, []int32{0}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0]))
+		})
+	}
+}
+
+func TestGetColDataLoadDataNonStrictAdjustmentRejectsQuotedInvalidNumeric(t *testing.T) {
+	cases := []struct {
+		name        string
+		colName     string
+		vecType     types.Type
+		colType     plan.Type
+		fieldVal    string
+		wantErrText string
+	}{
+		{
+			name:        "quoted invalid int is not adjusted",
+			colName:     "i",
+			vecType:     types.T_int32.ToType(),
+			colType:     plan.Type{Id: int32(types.T_int32)},
+			fieldVal:    "abc",
+			wantErrText: "not int32 type",
+		},
+		{
+			name:        "quoted invalid decimal is not adjusted",
+			colName:     "d",
+			vecType:     types.New(types.T_decimal64, 5, 2),
+			colType:     plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2},
+			fieldVal:    "10x",
+			wantErrText: "invalid Decimal64 type",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(tc.vecType)
+			defer bat.Clean(proc.Mp())
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Ctx:           context.Background(),
+					StrictSqlMode: false,
+					Cols: []*plan.ColDef{{
+						Name: tc.colName,
+						Typ:  tc.colType,
+					}},
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tree.CSV},
+						ExParam: tree.ExParam{
+							ExternType: int32(plan.ExternType_LOAD),
+							Local:      true,
+						},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			err := getColData(
+				bat,
+				[]csvparser.Field{{Val: tc.fieldVal, HasStringQuote: true}},
+				0,
+				param,
+				proc.Mp(),
+				plan.ExternAttr{ColName: tc.colName, ColIndex: 0, ColFieldIndex: 0},
+				proc,
+			)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErrText)
+		})
+	}
+}
+
+func TestGetColDataLoadDataNonStrictAdjustmentLeavesEmptyBoolNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:           context.Background(),
+			StrictSqlMode: false,
+			Cols: []*plan.ColDef{{
+				Name: "b",
+				Typ:  plan.Type{Id: int32(types.T_bool)},
+			}},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Format: tree.CSV},
+				ExParam: tree.ExParam{
+					ExternType: int32(plan.ExternType_LOAD),
+					Local:      true,
+				},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: ""}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "b", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.NoError(t, err)
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+}
+
 func TestIsLegalLineLoadDataYear(t *testing.T) {
 	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.CSV}}
 	cols := []*plan.ColDef{{

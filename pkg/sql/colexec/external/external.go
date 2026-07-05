@@ -894,13 +894,18 @@ func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
 		(!param.ParallelLoad && !param.LoadEmptyNumericAsZero && !shouldApplyLoadDataNonStrictAdjustments(param)) {
 		return false
 	}
+	if !param.ParallelLoad && !param.LoadEmptyNumericAsZero {
+		return isLoadNumericAdjustedValueType(id)
+	}
 	return isLoadNumericZeroFillType(id)
 }
 
 func shouldApplyLoadDataNonStrictAdjustments(param *ExternalParam) bool {
 	return param != nil && param.Extern != nil &&
 		param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
-		!checkLineStrict(param)
+		param.Extern.Local &&
+		param.Extern.Format == tree.CSV &&
+		!param.StrictSqlMode
 }
 
 func isLoadNumericZeroFillType(id types.T) bool {
@@ -1097,7 +1102,9 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	if loadDataNonStrictAdjustments {
 		switch {
 		case isLoadNumericAdjustedValueType(id):
-			field.Val = loadDataNonStrictNumericPrefix(field.Val)
+			if !field.HasStringQuote {
+				field.Val = loadDataNonStrictNumericPrefix(field.Val)
+			}
 		case id == types.T_date:
 			if _, err := types.ParseDateCast(field.Val); err != nil {
 				zeroDateAdjusted = true
