@@ -81,6 +81,24 @@ select 10.0+'10';
 select 10E+0+'10';
 ➤ 10e+0 + 10[8,54,0]  𝄀
 20.0
+select convert(12345, char) as r, length(convert(12345, char)) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+12345  ¦  5
+select convert('ABCDE', char) as r, length(convert('ABCDE', char)) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+ABCDE  ¦  5
+select hex(convert('AZ', binary)) as r, length(convert('AZ', binary)) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+415A  ¦  2
+select hex(convert(12345, binary)) as r, length(convert(12345, binary)) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+3132333435  ¦  5
+select hex(convert('AZ', binary(1))) as r, length(convert('AZ', binary(1))) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+41  ¦  1
+select hex(convert(12345, binary(3))) as r, length(convert(12345, binary(3))) as l;
+➤ r[12,-1,0]  ¦  l[-5,64,0]  𝄀
+313233  ¦  3
 select CAST(0xb3 as signed);
 ➤ cast(0xb3 as signed)[-5,64,0]  𝄀
 179

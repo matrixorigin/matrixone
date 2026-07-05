@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1130,7 +1131,8 @@ func EvaluateFilterByZoneMap(
 
 	zm := GetExprZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs)
 	if !zm.IsInited() || zm.GetType() != types.T_bool {
-		selected = false
+		// Unknown zonemap results are not proof that the block cannot match.
+		selected = true
 	} else {
 		selected = types.DecodeBool(zm.GetMaxBuf())
 	}
@@ -1197,6 +1199,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 			case "in":
+				if list := args[1].GetList(); list != nil {
+					return foldNativeInListZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId, false)
+				}
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
@@ -1222,6 +1227,13 @@ func GetExprZoneMap(
 				}
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.AnyIn(vecs[rid]))
+				return zms[expr.AuxId]
+
+			case "not_in":
+				if list := args[1].GetList(); list != nil {
+					return foldNativeInListZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId, true)
+				}
+				zms[expr.AuxId].Reset()
 				return zms[expr.AuxId]
 
 			case "prefix_eq":
@@ -1305,6 +1317,10 @@ func GetExprZoneMap(
 			var res, ok bool
 			switch t.F.Func.ObjName {
 			case ">":
+				if hasConstNullArg(args) {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
+					return zms[expr.AuxId]
+				}
 				if f() {
 					return zms[expr.AuxId]
 				}
@@ -1315,6 +1331,10 @@ func GetExprZoneMap(
 				}
 
 			case "<":
+				if hasConstNullArg(args) {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
+					return zms[expr.AuxId]
+				}
 				if f() {
 					return zms[expr.AuxId]
 				}
@@ -1325,6 +1345,10 @@ func GetExprZoneMap(
 				}
 
 			case ">=":
+				if hasConstNullArg(args) {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
+					return zms[expr.AuxId]
+				}
 				if f() {
 					return zms[expr.AuxId]
 				}
@@ -1335,6 +1359,10 @@ func GetExprZoneMap(
 				}
 
 			case "<=":
+				if hasConstNullArg(args) {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
+					return zms[expr.AuxId]
+				}
 				if f() {
 					return zms[expr.AuxId]
 				}
@@ -1345,6 +1373,10 @@ func GetExprZoneMap(
 				}
 
 			case "=":
+				if hasConstNullArg(args) {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
+					return zms[expr.AuxId]
+				}
 				if f() {
 					return zms[expr.AuxId]
 				}
@@ -1354,7 +1386,25 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
+			case "!=", "<>":
+				if hasConstNullArg(args) {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
+					return zms[expr.AuxId]
+				}
+				if f() {
+					return zms[expr.AuxId]
+				}
+				if res, ok = anyNotEqualZoneMap(zms[args[0].AuxId], zms[args[1].AuxId]); !ok {
+					zms[expr.AuxId].Reset()
+				} else {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
+				}
+
 			case "between":
+				if hasConstNullArg(args) {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
+					return zms[expr.AuxId]
+				}
 				if f() {
 					return zms[expr.AuxId]
 				}
@@ -1365,34 +1415,14 @@ func GetExprZoneMap(
 				}
 
 			case "and":
-				if f() {
+				if hasResult := foldAndZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId); hasResult {
 					return zms[expr.AuxId]
 				}
-				zmRes := zms[args[0].AuxId]
-				for i := 1; i < len(args); i++ {
-					if res, ok = zmRes.And(zms[args[i].AuxId]); !ok {
-						zmRes.Reset()
-						break
-					} else {
-						zmRes = index.SetBool(zmRes, res)
-					}
-				}
-				zms[expr.AuxId] = zmRes
 
 			case "or":
-				if f() {
+				if hasResult := foldOrZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId); hasResult {
 					return zms[expr.AuxId]
 				}
-				zmRes := zms[args[0].AuxId]
-				for i := 1; i < len(args); i++ {
-					if res, ok = zmRes.Or(zms[args[i].AuxId]); !ok {
-						zmRes.Reset()
-						break
-					} else {
-						zmRes = index.SetBool(zmRes, res)
-					}
-				}
-				zms[expr.AuxId] = zmRes
 
 			case "+":
 				if f() {
@@ -1489,6 +1519,195 @@ func GetExprZoneMap(
 	}
 
 	return zms[expr.AuxId]
+}
+
+func hasConstNullArg(args []*plan.Expr) bool {
+	for _, arg := range args {
+		if isConstNullExpr(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func isConstNullExpr(expr *plan.Expr) bool {
+	if lit := expr.GetLit(); lit != nil {
+		return lit.GetIsnull()
+	}
+	if f := expr.GetF(); f != nil && f.Func.GetObjName() == "cast" && len(f.Args) >= 1 {
+		return isConstNullExpr(f.Args[0])
+	}
+	return false
+}
+
+func foldNativeInListZoneMap(
+	ctx context.Context,
+	proc *process.Process,
+	meta objectio.ColumnMetaFetcher,
+	columnMap map[int]int,
+	zms []objectio.ZoneMap,
+	vecs []*vector.Vector,
+	args []*plan.Expr,
+	auxID int32,
+	notIn bool,
+) objectio.ZoneMap {
+	list := args[1].GetList()
+	if list == nil {
+		zms[auxID].Reset()
+		return zms[auxID]
+	}
+
+	for _, item := range list.List {
+		if isConstNullExpr(item) {
+			if notIn {
+				zms[auxID] = index.SetBool(zms[auxID], false)
+				return zms[auxID]
+			}
+			continue
+		}
+	}
+	if notIn {
+		zms[auxID].Reset()
+		return zms[auxID]
+	}
+
+	lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+	if !lhs.IsInited() {
+		zms[auxID].Reset()
+		return zms[auxID]
+	}
+
+	hasUnknown := false
+	for _, item := range list.List {
+		rhs, isNull, ok := getConstExprZoneMap(proc, item)
+		if isNull {
+			continue
+		}
+		if !ok {
+			hasUnknown = true
+			continue
+		}
+		if res, ok := lhs.Intersect(rhs); !ok {
+			hasUnknown = true
+		} else if res {
+			zms[auxID] = index.SetBool(zms[auxID], true)
+			return zms[auxID]
+		}
+	}
+
+	if hasUnknown {
+		zms[auxID].Reset()
+		return zms[auxID]
+	}
+	zms[auxID] = index.SetBool(zms[auxID], false)
+	return zms[auxID]
+}
+
+func getConstExprZoneMap(proc *process.Process, expr *plan.Expr) (zm objectio.ZoneMap, isNull bool, ok bool) {
+	vec, free, err := GetReadonlyResultFromNoColumnExpression(proc, expr)
+	if err != nil {
+		return nil, false, false
+	}
+	defer free()
+
+	if vec.IsConstNull() || vec.GetNulls().Contains(0) {
+		return objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale), true, true
+	}
+
+	zm = objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale)
+	if err := index.BatchUpdateZM(zm, vec); err != nil || !zm.IsInited() {
+		return nil, false, false
+	}
+	return zm, false, true
+}
+
+func anyNotEqualZoneMap(lhs, rhs objectio.ZoneMap) (bool, bool) {
+	intersects, ok := lhs.Intersect(rhs)
+	if !ok {
+		return false, false
+	}
+	if !intersects {
+		return true, true
+	}
+	if isSingleValueZoneMap(lhs) && isSingleValueZoneMap(rhs) && lhs.CompareMin(rhs) == 0 {
+		return false, true
+	}
+	return true, true
+}
+
+func isSingleValueZoneMap(zm objectio.ZoneMap) bool {
+	if !zm.IsInited() {
+		return false
+	}
+	return compute.Compare(zm.GetMinBuf(), zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) == 0
+}
+
+func foldAndZoneMap(
+	ctx context.Context,
+	proc *process.Process,
+	meta objectio.ColumnMetaFetcher,
+	columnMap map[int]int,
+	zms []objectio.ZoneMap,
+	vecs []*vector.Vector,
+	args []*plan.Expr,
+	auxID int32,
+) bool {
+	hasKnown := false
+	hasUnknown := false
+
+	for _, arg := range args {
+		zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
+		if !zms[arg.AuxId].IsInited() || zms[arg.AuxId].GetType() != types.T_bool {
+			hasUnknown = true
+			continue
+		}
+		hasKnown = true
+		if !types.DecodeBool(zms[arg.AuxId].GetMaxBuf()) {
+			zms[auxID] = index.SetBool(zms[auxID], false)
+			return true
+		}
+	}
+
+	if hasUnknown || !hasKnown {
+		zms[auxID].Reset()
+		return false
+	}
+	zms[auxID] = index.SetBool(zms[auxID], true)
+	return true
+}
+
+func foldOrZoneMap(
+	ctx context.Context,
+	proc *process.Process,
+	meta objectio.ColumnMetaFetcher,
+	columnMap map[int]int,
+	zms []objectio.ZoneMap,
+	vecs []*vector.Vector,
+	args []*plan.Expr,
+	auxID int32,
+) bool {
+	hasKnown := false
+	hasUnknown := false
+
+	for _, arg := range args {
+		zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
+		if !zms[arg.AuxId].IsInited() || zms[arg.AuxId].GetType() != types.T_bool {
+			hasUnknown = true
+			continue
+		}
+		hasKnown = true
+		if types.DecodeBool(zms[arg.AuxId].GetMaxBuf()) {
+			zms[auxID] = index.SetBool(zms[auxID], true)
+			return true
+		}
+	}
+
+	if hasUnknown || !hasKnown {
+		zms[auxID].Reset()
+		return false
+	}
+	zms[auxID] = index.SetBool(zms[auxID], false)
+	return true
 }
 
 // RewriteFilterExprList will convert an expression list to be an AndExpr
