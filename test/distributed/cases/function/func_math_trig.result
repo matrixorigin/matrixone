@@ -34,6 +34,17 @@ SELECT ATAN(-2);
 SELECT ATAN(-2,2);
 ➤ ATAN(-2, 2)[8,54,0]  𝄀
 -0.7853981633974483
+select sqrt(-1), log(-1), log(0), asin(2), acos(2);
+➤ sqrt(-1)[8,54,0]  ¦  log(-1)[8,54,0]  ¦  log(0)[8,54,0]  ¦  asin(2)[8,54,0]  ¦  acos(2)[8,54,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null
+select sqrt(-1), log(-1), log(0), asin(2), acos(2), cot(0);
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'cot(0)'
+select PI();
+➤ PI()[8,54,0]  𝄀
+3.141592653589793
+SELECT COT(2.5),COT(0.2),COT(-0.5),COT(-0.2),COT(PI()),COT(NULL);
+➤ COT(2.5)[8,54,0]  ¦  COT(0.2)[8,54,0]  ¦  COT(-0.5)[8,54,0]  ¦  COT(-0.2)[8,54,0]  ¦  COT(PI())[8,54,0]  ¦  COT(null)[8,54,0]  𝄀
+-1.3386481283041514  ¦  4.933154875586893  ¦  -1.830487721712452  ¦  -4.9331548755868955  ¦  -1.6331239353195392E16  ¦  null
 SELECT SIN(13413);
 ➤ SIN(13413)[8,54,0]  𝄀
 -0.9995549842668945
@@ -125,8 +136,7 @@ SELECT COT(-0.001);
 ➤ COT(-0.001)[8,54,0]  𝄀
 -999.9996666668156
 select cot(0);
-➤ cot(0)[8,54,0]  𝄀
-null
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'cot(0)'
 SELECT ATAN(13413);
 ➤ ATAN(13413)[8,54,0]  𝄀
 1.570721772258391
@@ -271,7 +281,7 @@ select distinct acos(a) from t1 order by 1;
 null  𝄀
 0.5707963786279666  𝄀
 0.667457180719794  𝄀
-0.873571492828528  𝄀
+0.8735714928285279  𝄀
 1.0000000347686513  𝄀
 1.5707963267948966
 select distinct atan(a) from t1;

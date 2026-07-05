@@ -1,7 +1,12 @@
 .idea/
 .kiro/
 .cursor/
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/skills/*/
+!.claude/skills/*/SKILL.md
+!.claude/skills/*/references/
+!.claude/skills/*/references/*.md
 /CLAUDE.md
 *.o
 *.a
@@ -82,4 +87,9 @@ etc/docker-multi-cn-local-disk/*.toml
 # python
 **/__pycache__/
 *.pyc
-.agents/
+.agents/*
+!.agents/skills/
+!.agents/skills/*/
+!.agents/skills/*/SKILL.md
+!.agents/skills/*/references/
+!.agents/skills/*/references/*.md
