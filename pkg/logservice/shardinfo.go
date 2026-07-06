@@ -60,7 +60,10 @@ func GetShardInfo(
 	shardID uint64,
 	onlyLiveReplicaAddresses ...bool,
 ) (ShardInfo, bool, error) {
-	onlyLive := len(onlyLiveReplicaAddresses) > 0 && onlyLiveReplicaAddresses[0]
+	onlyLive := true
+	if len(onlyLiveReplicaAddresses) > 0 {
+		onlyLive = onlyLiveReplicaAddresses[0]
+	}
 	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID, false, onlyLive)
 	if err != nil || !ok {
 		return ShardInfo{}, false, err

@@ -77,7 +77,7 @@ func TestGetShardInfo_LeaderAddressEmptyReturnsNotReady(t *testing.T) {
 		onlyLiveReplicaAddresses bool,
 	) (pb.ShardInfoQueryResult, bool, error) {
 		assert.False(t, includeExpiredReplicaAddresses)
-		assert.False(t, onlyLiveReplicaAddresses)
+		assert.True(t, onlyLiveReplicaAddresses)
 		return pb.ShardInfoQueryResult{
 			ShardID:  shardID,
 			LeaderID: 1,
@@ -109,7 +109,7 @@ func TestGetShardInfo_OmitsUnreachableFollowers(t *testing.T) {
 		onlyLiveReplicaAddresses bool,
 	) (pb.ShardInfoQueryResult, bool, error) {
 		assert.False(t, includeExpiredReplicaAddresses)
-		assert.False(t, onlyLiveReplicaAddresses)
+		assert.True(t, onlyLiveReplicaAddresses)
 		return pb.ShardInfoQueryResult{
 			ShardID:  shardID,
 			LeaderID: 1,
@@ -131,7 +131,7 @@ func TestGetShardInfo_OmitsUnreachableFollowers(t *testing.T) {
 		"follower entry without a resolved address must be omitted from Replicas")
 }
 
-func TestGetShardInfoRequestsOnlyLiveReplicaAddresses(t *testing.T) {
+func TestGetShardInfoRequestsOnlyLiveReplicaAddressesByDefault(t *testing.T) {
 	orig := queryShardInfoRawFn
 	defer func() { queryShardInfoRawFn = orig }()
 	queryShardInfoRawFn = func(
@@ -153,7 +153,35 @@ func TestGetShardInfoRequestsOnlyLiveReplicaAddresses(t *testing.T) {
 		}, true, nil
 	}
 
-	info, ok, err := GetShardInfo("", "doesnt-matter", 3, true)
+	info, ok, err := GetShardInfo("", "doesnt-matter", 3)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "10.0.0.1:1", info.Replicas[1])
+}
+
+func TestGetShardInfoCanDisableOnlyLiveReplicaAddresses(t *testing.T) {
+	orig := queryShardInfoRawFn
+	defer func() { queryShardInfoRawFn = orig }()
+	queryShardInfoRawFn = func(
+		ctx context.Context,
+		sid string,
+		address string,
+		shardID uint64,
+		includeExpiredReplicaAddresses bool,
+		onlyLiveReplicaAddresses bool,
+	) (pb.ShardInfoQueryResult, bool, error) {
+		assert.False(t, includeExpiredReplicaAddresses)
+		assert.False(t, onlyLiveReplicaAddresses)
+		return pb.ShardInfoQueryResult{
+			ShardID:  shardID,
+			LeaderID: 1,
+			Replicas: map[uint64]pb.ReplicaInfo{
+				1: {UUID: "uuid-1", ServiceAddress: "10.0.0.1:1"},
+			},
+		}, true, nil
+	}
+
+	info, ok, err := GetShardInfo("", "doesnt-matter", 3, false)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "10.0.0.1:1", info.Replicas[1])
