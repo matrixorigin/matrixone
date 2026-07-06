@@ -38,7 +38,8 @@ const (
 )
 
 var (
-	logServiceConnectFallbackDelay = 300 * time.Millisecond
+	logServiceConnectAttemptTimeout = 5 * time.Second
+	logServiceConnectFallbackDelay  = 300 * time.Millisecond
 )
 
 var connectToLogServiceAddressFn = connectToLogServiceAddress
@@ -586,8 +587,17 @@ func connectToLogServiceAddresses(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c, err := connectToLogServiceAddressFn(ctx, sid, addr, cfg)
+			attemptCtx, attemptCancel := connectAttemptContext(ctx)
+			defer attemptCancel()
+
+			c, err := connectToLogServiceAddressFn(attemptCtx, sid, addr, cfg)
 			if err == nil {
+				if err := ctx.Err(); err != nil {
+					if closeErr := c.close(); closeErr != nil {
+						logutil.Error("failed to close the client", zap.Error(closeErr))
+					}
+					return
+				}
 				select {
 				case results <- connectResult{client: c}:
 				case <-ctx.Done():
@@ -598,7 +608,7 @@ func connectToLogServiceAddresses(
 				return
 			}
 			select {
-			case results <- connectResult{err: moerr.AttachCause(ctx, err)}:
+			case results <- connectResult{err: moerr.AttachCause(attemptCtx, err)}:
 			case <-ctx.Done():
 			}
 		}()
@@ -629,17 +639,13 @@ func connectToLogServiceAddresses(
 			stopConnectFallbackTimer(timer)
 			active--
 			if r.client != nil {
-				cancel()
-				wg.Wait()
-				closeUnusedConnectResultClients(results)
+				cleanupConnectAttempts(cancel, &wg, results)
 				return r.client, nil
 			}
 			lastErr = r.err
 		case <-fallback:
 			if err := ctx.Err(); err != nil {
-				cancel()
-				wg.Wait()
-				closeUnusedConnectResultClients(results)
+				cleanupConnectAttempts(cancel, &wg, results)
 				return nil, err
 			}
 			launch(addresses[launched])
@@ -647,14 +653,35 @@ func connectToLogServiceAddresses(
 			active++
 		case <-ctx.Done():
 			stopConnectFallbackTimer(timer)
-			cancel()
-			wg.Wait()
-			closeUnusedConnectResultClients(results)
+			cleanupConnectAttempts(cancel, &wg, results)
 			return nil, connectContextError(ctx.Err(), lastErr)
 		}
 	}
 	wg.Wait()
 	return nil, lastErr
+}
+
+func connectAttemptContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeoutCause(
+		ctx,
+		logServiceConnectAttemptTimeout,
+		moerr.CauseNewLogServiceClient,
+	)
+}
+
+func cleanupConnectAttempts(
+	cancel context.CancelFunc,
+	wg *sync.WaitGroup,
+	results <-chan connectResult,
+) {
+	cancel()
+	go func() {
+		wg.Wait()
+		closeUnusedConnectResultClients(results)
+	}()
 }
 
 func connectContextError(ctxErr error, lastErr error) error {
