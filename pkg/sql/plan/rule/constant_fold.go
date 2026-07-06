@@ -154,7 +154,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			}
 			defer vec.Free(proc.Mp())
 
-			vec.InplaceSortAndCompact()
+			// Nullable IN-lists must keep their null bitmap aligned with values.
+			if !vec.IsConstNull() && !vec.GetNulls().Any() {
+				vec.InplaceSortAndCompact()
+			}
 
 			data, err := vec.MarshalBinary()
 			if err != nil {
