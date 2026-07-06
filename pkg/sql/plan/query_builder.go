@@ -3086,7 +3086,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			if len(groupByExprsList) > 1 && !selectClause.GroupBy.Apart {
 				var branchExprs tree.SelectExprs
 				var unionOrderBy tree.OrderBy
-				branchExprs, unionOrderBy, err = prepareGroupingSetOrderByProjects(builder, astOrderBy, selectClause.Exprs)
+				branchExprs, unionOrderBy, err = prepareGroupingSetOrderByProjects(builder, astOrderBy, selectClause.Exprs, selectClause.Distinct)
 				if err != nil {
 					return 0, err
 				}
@@ -3844,9 +3844,30 @@ func prepareGroupingSetOrderByProjects(
 	builder *QueryBuilder,
 	astOrderBy tree.OrderBy,
 	selectList tree.SelectExprs,
+	distinct bool,
 ) (tree.SelectExprs, tree.OrderBy, error) {
 	branchSelectList := append(tree.SelectExprs(nil), selectList...)
 	unionOrderBy := make(tree.OrderBy, len(astOrderBy))
+
+	// For SELECT DISTINCT we must not inject hidden order keys: they would
+	// participate in the branch-level DISTINCT and then be trimmed from the
+	// output, changing the visible result. Instead, an ORDER BY expression is
+	// only allowed when it already matches a visible select-list expression,
+	// in which case it is rewritten to that visible ordinal. Otherwise we
+	// reject it exactly like the ordinary ORDER BY path does.
+	visibleOrdinals := make(map[string]int)
+	if distinct {
+		for selectIdx := range selectList {
+			key, err := groupingOrderExprKey(builder, selectList, selectList[selectIdx].Expr)
+			if err != nil {
+				return nil, nil, err
+			}
+			if _, exists := visibleOrdinals[key]; !exists {
+				visibleOrdinals[key] = selectIdx + 1
+			}
+		}
+	}
+
 	for i, order := range astOrderBy {
 		orderCopy := *order
 		orderCopy.Expr = cloneTreeExpr(order.Expr)
@@ -3856,23 +3877,19 @@ func prepareGroupingSetOrderByProjects(
 			continue
 		}
 
-		hiddenExpr := cloneTreeExpr(order.Expr)
-		protectedNames := protectGroupingFunctionArguments(hiddenExpr)
-		aliasCtx := NewBindContext(builder, nil)
-		for selectIdx := range selectList {
-			selectExpr := selectList[selectIdx]
-			if selectExpr.As == nil || selectExpr.As.Empty() {
+		if distinct {
+			key, err := groupingOrderExprKey(builder, selectList, order.Expr)
+			if err != nil {
+				return nil, nil, err
+			}
+			if projectPos, ok := visibleOrdinals[key]; ok {
+				orderCopy.Expr = tree.NewNumVal(int64(projectPos), strconv.FormatInt(int64(projectPos), 10), false, tree.P_int64)
 				continue
 			}
-			alias := selectExpr.As.Compare()
-			aliasCtx.aliasMap[alias] = &aliasItem{
-				idx:     int32(selectIdx),
-				astExpr: cloneTreeExpr(selectExpr.Expr),
-			}
+			return nil, nil, moerr.NewSyntaxError(builder.GetContext(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 		}
-		var err error
-		hiddenExpr, err = aliasCtx.qualifyColumnNames(hiddenExpr, AliasBeforeColumn)
-		restoreProtectedGroupingFunctionArguments(protectedNames)
+
+		hiddenExpr, err := qualifyGroupingOrderExpr(builder, selectList, order.Expr)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -3882,6 +3899,53 @@ func prepareGroupingSetOrderByProjects(
 		orderCopy.Expr = tree.NewNumVal(projectPos, strconv.FormatInt(projectPos, 10), false, tree.P_int64)
 	}
 	return branchSelectList, unionOrderBy, nil
+}
+
+// qualifyGroupingOrderExpr clones astExpr and canonicalizes it the same way a
+// grouping-set order key is materialized: GROUPING() arguments are protected
+// from alias rewriting, then select-list aliases are resolved via
+// AliasBeforeColumn. The returned expression is safe to append as a hidden
+// branch projection.
+func qualifyGroupingOrderExpr(
+	builder *QueryBuilder,
+	selectList tree.SelectExprs,
+	astExpr tree.Expr,
+) (tree.Expr, error) {
+	qualified := cloneTreeExpr(astExpr)
+	protectedNames := protectGroupingFunctionArguments(qualified)
+	aliasCtx := NewBindContext(builder, nil)
+	for selectIdx := range selectList {
+		selectExpr := selectList[selectIdx]
+		if selectExpr.As == nil || selectExpr.As.Empty() {
+			continue
+		}
+		alias := selectExpr.As.Compare()
+		aliasCtx.aliasMap[alias] = &aliasItem{
+			idx:     int32(selectIdx),
+			astExpr: cloneTreeExpr(selectExpr.Expr),
+		}
+	}
+	qualified, err := aliasCtx.qualifyColumnNames(qualified, AliasBeforeColumn)
+	restoreProtectedGroupingFunctionArguments(protectedNames)
+	if err != nil {
+		return nil, err
+	}
+	return qualified, nil
+}
+
+// groupingOrderExprKey returns a canonical string key for astExpr so that an
+// ORDER BY expression can be matched against a visible select-list expression
+// regardless of alias-vs-column spelling.
+func groupingOrderExprKey(
+	builder *QueryBuilder,
+	selectList tree.SelectExprs,
+	astExpr tree.Expr,
+) (string, error) {
+	qualified, err := qualifyGroupingOrderExpr(builder, selectList, astExpr)
+	if err != nil {
+		return "", err
+	}
+	return tree.String(qualified, dialect.MYSQL), nil
 }
 
 func cloneTreeExpr(astExpr tree.Expr) tree.Expr {

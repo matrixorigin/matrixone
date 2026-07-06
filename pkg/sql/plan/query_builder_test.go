@@ -724,7 +724,7 @@ func TestAppendGroupingSetOrderByProjects(t *testing.T) {
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs)
+	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	require.Len(t, branchExprs, 4)
 	require.Len(t, selectClause.Exprs, 2)
@@ -763,7 +763,7 @@ func TestAppendGroupingSetOrderByProjectsIgnoresAliasShadowing(t *testing.T) {
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs)
+	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	require.Len(t, branchExprs, 4)
 
@@ -788,7 +788,7 @@ func TestAppendGroupingSetOrderByProjectsDefersAmbiguousColumnToBinder(t *testin
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs)
+	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	require.Len(t, branchExprs, 3)
 
@@ -813,7 +813,7 @@ func TestAppendGroupingSetOrderByProjectsSupportsGroupAlias(t *testing.T) {
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs)
+	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	require.Len(t, branchExprs, 4)
 
@@ -822,6 +822,76 @@ func TestAppendGroupingSetOrderByProjectsSupportsGroupAlias(t *testing.T) {
 	pos, ok := rewrittenPos.Int64()
 	require.True(t, ok)
 	require.Equal(t, int64(4), pos)
+}
+
+// For SELECT DISTINCT, an ORDER BY expression that is already a visible
+// select-list expression must be rewritten to that visible ordinal instead of
+// being injected as a hidden order key, so DISTINCT semantics are preserved.
+func TestAppendGroupingSetOrderByProjectsDistinctReusesVisibleProjection(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select distinct grouping(a), count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, true)
+	require.NoError(t, err)
+	// No hidden order key appended: the branch list stays equal to the select list.
+	require.Len(t, branchExprs, len(selectClause.Exprs))
+
+	rewrittenPos, ok := rewrittenOrderBy[0].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	pos, ok := rewrittenPos.Int64()
+	require.True(t, ok)
+	require.Equal(t, int64(1), pos)
+}
+
+// For SELECT DISTINCT, an ORDER BY expression that is not a visible select-list
+// expression must be rejected with the same error as the ordinary ORDER BY path
+// rather than silently injecting a hidden order key.
+func TestAppendGroupingSetOrderByProjectsDistinctRejectsHiddenKey(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select distinct grouping(a)
+		from select_test.bind_select
+		group by a with rollup
+		order by grouping(a) + a`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	_, _, err = prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+}
+
+// End-to-end guard: the DISTINCT rejection must also fire through the full plan
+// builder, confirming selectClause.Distinct is propagated into the rewrite.
+func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctRejectsHiddenKey(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select distinct grouping(a)
+		from select_test.bind_select
+		group by a with rollup
+		order by grouping(a) + a`,
+		1,
+	)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 }
 
 func TestAppendGroupingSetOrderByNestedProjects(t *testing.T) {
@@ -873,7 +943,7 @@ func TestAppendGroupingSetOrderByNestedProjects(t *testing.T) {
 			selectClause := selectStmt.Select.(*tree.SelectClause)
 			selectExprBefore := tree.String(selectClause.Exprs[0].Expr, dialect.MYSQL)
 			orderExprBefore := tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL)
-			_, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs)
+			_, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 			require.NoError(t, err)
 
 			_, rewritten := rewrittenOrderBy[0].Expr.(*tree.NumVal)
@@ -901,7 +971,7 @@ func TestAppendGroupingSetOrderByNestedQualifiedProject(t *testing.T) {
 	orderFunc := selectStmt.OrderBy[0].Expr.(*tree.FuncExpr)
 	groupingFunc := orderFunc.Exprs[0].(*tree.FuncExpr)
 	groupingFunc.Exprs[0] = tree.NewUnresolvedName(tree.NewCStr("t", 0), tree.NewCStr("a", 0))
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs)
+	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	require.Len(t, branchExprs, 3)
 
