@@ -286,12 +286,7 @@ func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 }
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
-	// A prepared-statement parameter has no concrete type at PREPARE time; its
-	// real type only arrives with COM_STMT_EXECUTE. Bind it as T_any so that the
-	// function type deduction picks an implicit conversion from the surrounding
-	// context (e.g. "? + ?" promotes both to a numeric type) instead of forcing
-	// TEXT, which made arithmetic prepares fail with "bad value [TEXT TEXT]".
-	typ := types.T_any.ToType()
+	typ := types.T_text.ToType()
 	return &Expr{
 		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_P{
@@ -1764,6 +1759,17 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "concat"
+		} else if args[0].Typ.Id == int32(types.T_text) && args[1].Typ.Id == int32(types.T_text) &&
+			args[0].GetP() != nil && args[1].GetP() != nil {
+			// Both operands are prepared-statement parameters of unknown type.
+			// Promote to float64 so that numeric addition succeeds (issue #25423).
+			// Real TEXT columns/constants are NOT rewritten; TEXT + TEXT stays an error.
+			float64Type := plan.Type{Id: int32(types.T_float64), NotNullable: true}
+			args[0], err = appendCastBeforeExpr(ctx, args[0], float64Type)
+			if err != nil {
+				return nil, err
+			}
+			args[1], err = appendCastBeforeExpr(ctx, args[1], float64Type)
 		}
 		if err != nil {
 			return nil, err
@@ -1797,6 +1803,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_int64) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_text) && args[1].Typ.Id == int32(types.T_text) &&
+			args[0].GetP() != nil && args[1].GetP() != nil {
+			// Both operands are prepared-statement parameters; promote to float64.
+			float64Type := plan.Type{Id: int32(types.T_float64), NotNullable: true}
+			args[0], err = appendCastBeforeExpr(ctx, args[0], float64Type)
+			if err != nil {
+				return nil, err
+			}
+			args[1], err = appendCastBeforeExpr(ctx, args[1], float64Type)
 		}
 		if err != nil {
 			return nil, err
@@ -1810,6 +1825,16 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		if isNullExpr(args[1]) {
 			return args[1], nil
+		}
+		if args[0].Typ.Id == int32(types.T_text) && args[1].Typ.Id == int32(types.T_text) &&
+			args[0].GetP() != nil && args[1].GetP() != nil {
+			// Both operands are prepared-statement parameters; promote to float64.
+			float64Type := plan.Type{Id: int32(types.T_float64), NotNullable: true}
+			args[0], err = appendCastBeforeExpr(ctx, args[0], float64Type)
+			if err != nil {
+				return nil, err
+			}
+			args[1], err = appendCastBeforeExpr(ctx, args[1], float64Type)
 		}
 	case "unary_minus":
 		if len(args) == 0 {

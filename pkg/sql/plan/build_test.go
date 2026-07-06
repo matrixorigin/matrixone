@@ -397,10 +397,11 @@ func findParamAddFunc(p *Plan) *plan.Function {
 }
 
 // TestPrepareArithmeticParams reproduces issue #25423: preparing "select ? + ?"
-// must succeed. Before the fix, params were bound as T_text, so the "+" function
-// resolver rejected [TEXT TEXT] during COM_STMT_PREPARE. Binding params as T_any
-// lets the existing function type deduction wrap both unknown params in an
-// implicit cast to a numeric type.
+// must succeed. Before the fix, both params were bound as T_text, and the "+"
+// function resolver rejected [TEXT TEXT] during COM_STMT_PREPARE. The binder now
+// detects two T_text ParamRef arguments to an arithmetic operator and promotes
+// each to float64 via an implicit cast, so the plan contains
+// cast(?, float64) + cast(?, float64).
 func TestPrepareArithmeticParams(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
@@ -410,16 +411,15 @@ func TestPrepareArithmeticParams(t *testing.T) {
 	addFunc := findParamAddFunc(logicPlan)
 	assert.NotNil(t, addFunc, "plan should contain a '+' over two parameter references")
 	if addFunc != nil {
-		// The two params are the only two parameters in the statement and keep
-		// their unresolved T_any type until COM_STMT_EXECUTE supplies real values.
-		var refs []*plan.Expr
-		refs = append(refs, collectParamRefs(addFunc.Args[0])...)
+		refs := collectParamRefs(addFunc.Args[0])
 		refs = append(refs, collectParamRefs(addFunc.Args[1])...)
 		assert.Len(t, refs, 2)
 		positions := []int32{}
 		for _, ref := range refs {
-			assert.Equalf(t, int32(types.T_any), ref.Typ.Id,
-				"param ref should keep T_any type before execute supplies real values")
+			// ParamRefs remain T_text; the binder inserts cast(T_text→float64)
+			// before the function type check rather than changing the param type.
+			assert.Equalf(t, int32(types.T_text), ref.Typ.Id,
+				"param ref should keep T_text type before execute supplies real values")
 			positions = append(positions, ref.GetP().Pos)
 		}
 		assert.ElementsMatch(t, []int32{0, 1}, positions, "param positions should be 0 and 1")

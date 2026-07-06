@@ -53,7 +53,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_year,
 		types.T_array_float32, types.T_array_float64,
 		types.T_datalink, types.T_geometry, types.T_geometry32,
-		types.T_uuid,
 	},
 
 	types.T_bool: {
