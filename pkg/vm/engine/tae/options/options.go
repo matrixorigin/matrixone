@@ -179,7 +179,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.CheckpointCfg.TransferInterval = DefaultCheckpointTransferInterval
 	}
 	if o.CheckpointCfg.IncrementalInterval <= 0 {
-		o.CheckpointCfg.IncrementalInterval = DefaultCheckpointIncremetalInterval
+		o.CheckpointCfg.IncrementalInterval = DefaultCheckpointIncrementalInterval
 	}
 	if o.CheckpointCfg.GlobalMinCount <= 0 {
 		o.CheckpointCfg.GlobalMinCount = DefaultCheckpointMinCount

@@ -59,6 +59,53 @@ func TestForwardLock(t *testing.T) {
 	)
 }
 
+func TestForwardLockWaiterCanResumeAfterConflict(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			_, err := l2.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			holderTxn := []byte("holder")
+			waiterTxn := []byte("waiter")
+			row := []byte{1}
+
+			mustAddTestLock(t, ctx, l2, tableID, holderTxn, [][]byte{row}, pb.Granularity_Row)
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := l1.Lock(ctx, tableID, [][]byte{row}, waiterTxn, pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+					ForwardTo:   "s2",
+				})
+				done <- err
+			}()
+
+			waitWaiters(t, l2, tableID, row, 1)
+			require.NoError(t, l2.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(time.Second * 3):
+				t.Fatal("forward lock waiter did not resume after holder unlock")
+			}
+
+			require.NoError(t, l1.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+		},
+	)
+}
+
 func TestDeadLockWithForward(t *testing.T) {
 	runLockServiceTests(
 		t,
