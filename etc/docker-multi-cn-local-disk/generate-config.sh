@@ -288,6 +288,31 @@ cat > log.toml << EOF
 service-type = "LOG"
 data-dir = "/mo-data"
 
+# The log node hosts the single HAKeeper replica for this cluster and must
+# bootstrap it: nothing else in this stack does, and the other nodes point their
+# [hakeeper-client] at mo-log:32001. Without this the log store panics with
+# "shard not bootstrapped" on first start. Addresses advertise the mo-log
+# hostname (reachable on the compose network) while listening on all interfaces,
+# mirroring the cn/tn service-address vs listen-address split.
+[logservice]
+uuid = "ee1dccb4-4d3c-41f8-b482-5251dc7a41ba"
+deployment-id = 1
+logservice-address = "mo-log:32001"
+logservice-listen-address = "0.0.0.0:32001"
+raft-address = "mo-log:32000"
+raft-listen-address = "0.0.0.0:32000"
+gossip-address = "mo-log:32002"
+gossip-listen-address = "0.0.0.0:32002"
+gossip-seed-addresses = ["mo-log:32002"]
+gossip-allow-self-as-seed = true
+
+[logservice.BootstrapConfig]
+bootstrap-cluster = true
+num-of-log-shards = 1
+num-of-tn-shards = 1
+num-of-log-shard-replicas = 1
+init-hakeeper-members = ["131072:ee1dccb4-4d3c-41f8-b482-5251dc7a41ba"]
+
 [log]
 level = "$LOG_LOG_LEVEL"
 format = "$LOG_LOG_FORMAT"

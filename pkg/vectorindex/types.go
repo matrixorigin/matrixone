@@ -47,6 +47,26 @@ const (
 	CDC_DELETE = "D"
 )
 
+type ChunkTag int64
+
+const (
+	Tag_ModelChunk ChunkTag = 0
+	// Tag_CdcEvents stores an ordered event log of CDC mutations. Each chunk
+	// is a sequence of op-tagged records; replay in chunk_id order produces
+	// the (deleted, overflow) state used by the load path. Replaces the
+	// earlier two-stream design (separate deleted-pkid list + insert
+	// overflow), which lost temporal ordering between DELETE/INSERT events
+	// for the same pkid. See cuvs_cdc.md for the full record format.
+	Tag_CdcEvents ChunkTag = 1
+)
+
+// CdcTailId is the literal index_id under which CDC writes tag=1 event-log
+// rows in the storage table for cagra/ivfpq indexes. CDC is single-threaded
+// and re-index quiesces it, so this fixed sentinel removes the per-sub-index
+// "active id" coordination problem entirely — search reads it once at Load
+// time alongside the real sub-index models.
+const CdcTailId = "cdc_tail"
+
 type DistributionMode uint16
 
 const (
@@ -86,53 +106,60 @@ type IndexTableConfig struct {
 	OrigFuncName  string `json:"orig_func_name"`
 	ThreadsBuild  int64  `json:"threads_build"`
 	ThreadsSearch int64  `json:"threads_search"`
-	IndexCapacity int64  `json:"index_capacity"`
 
 	// IVF related
-	EntriesTable       string  `json:"entries"`
-	DataSize           int64   `json:"datasize"`
-	Nprobe             uint    `json:"nprobe"`
-	PKeyType           int32   `json:"pktype"`
-	KeyPartType        int32   `json:"parttype"`
-	KmeansTrainPercent float64 `json:"kmeans_train_percent"`
-	KmeansMaxIteration int64   `json:"kmeans_max_iteration"`
-	Limit              uint64  `json:"limit"`
-	LowerBoundType     int8    `json:"lower_bound_type"`
-	LowerBound         float64 `json:"lower_bound"`
-	UpperBoundType     int8    `json:"upper_bound_type"`
-	UpperBound         float64 `json:"upper_bound"`
+	EntriesTable   string  `json:"entries"`
+	DataSize       int64   `json:"datasize"`
+	Nprobe         uint    `json:"nprobe"`
+	PKeyType       int32   `json:"pktype"`
+	KeyPartType    int32   `json:"parttype"`
+	Limit          uint64  `json:"limit"`
+	LowerBoundType int8    `json:"lower_bound_type"`
+	LowerBound     float64 `json:"lower_bound"`
+	UpperBoundType int8    `json:"upper_bound_type"`
+	UpperBound     float64 `json:"upper_bound"`
 
 	// GPU related
 	BatchWindow int64 `json:"batch_window"`
+	// GpuMultiSimulation is a test-only knob: when >= 2, the device list is
+	// replaced with physical device 0 repeated N times so SHARDED / REPLICATED
+	// distribution modes can be exercised on a single-GPU host. 0/1 = real devices.
+	GpuMultiSimulation int64 `json:"gpu_multi_simulation"`
 }
 
 // HNSW specified parameters
 type HnswParam struct {
-	M              string `json:"m"`
-	EfConstruction string `json:"ef_construction"`
-	OpType         string `json:"op_type"`
-	EfSearch       string `json:"ef_search"`
-	Async          string `json:"async"`
+	M                string `json:"m"`
+	EfConstruction   string `json:"ef_construction"`
+	OpType           string `json:"op_type"`
+	EfSearch         string `json:"ef_search"`
+	Async            string `json:"async"`
+	MaxIndexCapacity string `json:"max_index_capacity"`
 }
 
 // IVF specified parameters
 type IvfParam struct {
-	Lists        string `json:"lists"`
-	OpType       string `json:"op_type"`
-	Async        string `json:"async"`
-	Quantization string `json:"quantization"`
-	Distribution string `json:"distribution_mode"`
+	Lists              string `json:"lists"`
+	OpType             string `json:"op_type"`
+	Async              string `json:"async"`
+	Quantization       string `json:"quantization"`
+	Distribution       string `json:"distribution_mode"`
+	KmeansTrainPercent string `json:"kmeans_train_percent"`
+	KmeansMaxIteration string `json:"kmeans_max_iteration"`
 }
 
 // IVF-PQ specified parameters
 type IvfpqParam struct {
-	Lists           string `json:"lists"`
-	M               string `json:"m"`
-	BitsPerCode     string `json:"bits_per_code"`
-	OpType          string `json:"op_type"`
-	Quantization    string `json:"quantization"`
-	Distribution    string `json:"distribution_mode"`
-	IncludedColumns string `json:"included_columns"`
+	Lists              string `json:"lists"`
+	M                  string `json:"m"`
+	BitsPerCode        string `json:"bits_per_code"`
+	OpType             string `json:"op_type"`
+	Quantization       string `json:"quantization"`
+	Distribution       string `json:"distribution_mode"`
+	IncludedColumns    string `json:"included_columns"`
+	KmeansTrainPercent string `json:"kmeans_train_percent"`
+	KmeansMaxIteration string `json:"kmeans_max_iteration"`
+	MaxIndexCapacity   string `json:"max_index_capacity"`
 }
 
 // CAGRA specified parameters
@@ -148,16 +175,19 @@ type CagraParam struct {
 	GraphDegee             string `json:"graph_degree"`
 	ITopkSize              string `json:"itopk_size"`
 	IncludedColumns        string `json:"included_columns"`
+	MaxIndexCapacity       string `json:"max_index_capacity"`
 }
 
 type IvfflatIndexConfig struct {
-	Lists      uint
-	Metric     uint16
-	InitType   uint16
-	Dimensions uint
-	Spherical  bool
-	Version    int64
-	VectorType int32
+	Lists              uint
+	Metric             uint16
+	InitType           uint16
+	Dimensions         uint
+	Spherical          bool
+	Version            int64
+	VectorType         int32
+	KmeansTrainPercent float64
+	KmeansMaxIteration int64
 }
 
 type CuvsIvfIndexConfig struct {
@@ -200,13 +230,14 @@ type CuvsIvfpqIndexConfig struct {
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
 type IndexConfig struct {
-	Type      string
-	OpType    string
-	Usearch   usearch.IndexConfig
-	Ivfflat   IvfflatIndexConfig
-	CuvsIvf   CuvsIvfIndexConfig
-	CuvsCagra CuvsCagraIndexConfig
-	CuvsIvfpq CuvsIvfpqIndexConfig
+	Type          string
+	OpType        string
+	IndexCapacity int64
+	Usearch       usearch.IndexConfig
+	Ivfflat       IvfflatIndexConfig
+	CuvsIvf       CuvsIvfIndexConfig
+	CuvsCagra     CuvsCagraIndexConfig
+	CuvsIvfpq     CuvsIvfpqIndexConfig
 }
 
 type RuntimeConfig struct {
@@ -247,21 +278,28 @@ func (h *VectorIndexCdc[T]) Full() bool {
 	return len(h.Data) >= cap(h.Data)
 }
 
-func (h *VectorIndexCdc[T]) Insert(key int64, v []T) {
+// Insert appends a CDC INSERT event. includeBytes carries the row's INCLUDE
+// column values for cuvs CAGRA / IVF-PQ in row-major + trailing null-mask
+// layout (see EncodeEventRecord in cuvs_cdc.go for the format). Pass nil for
+// HNSW or for indexes without INCLUDE columns.
+func (h *VectorIndexCdc[T]) Insert(key int64, v []T, includeBytes []byte) {
 	e := VectorIndexCdcEntry[T]{
-		Type: CDC_INSERT,
-		PKey: key,
-		Vec:  v,
+		Type:         CDC_INSERT,
+		PKey:         key,
+		Vec:          v,
+		IncludeBytes: includeBytes,
 	}
 
 	h.Data = append(h.Data, e)
 }
 
-func (h *VectorIndexCdc[T]) Upsert(key int64, v []T) {
+// Upsert appends a CDC UPSERT event. See Insert for includeBytes semantics.
+func (h *VectorIndexCdc[T]) Upsert(key int64, v []T, includeBytes []byte) {
 	e := VectorIndexCdcEntry[T]{
-		Type: CDC_UPSERT,
-		PKey: key,
-		Vec:  v,
+		Type:         CDC_UPSERT,
+		PKey:         key,
+		Vec:          v,
+		IncludeBytes: includeBytes,
 	}
 
 	h.Data = append(h.Data, e)
@@ -289,6 +327,10 @@ type VectorIndexCdcEntry[T types.RealNumbers] struct {
 	Type string `json:"t"` // I - INSERT, D - DELETE, U - UPSERT
 	PKey int64  `json:"pk"`
 	Vec  []T    `json:"v,omitempty"`
+	// IncludeBytes carries this row's INCLUDE column values (row-major
+	// in column-meta order + trailing null mask). Empty/omitted for HNSW
+	// and for cuvs indexes with no INCLUDE columns.
+	IncludeBytes []byte `json:"i,omitempty"`
 }
 
 type HnswCdcParam struct {
@@ -318,14 +360,16 @@ func GetConcurrencyForBuild(nthread int64) int64 {
 	return int64(runtime.NumCPU())
 }
 
-// GetConcurrencyForSingleThreadBuild returns the build concurrency for the HNSW
-// write paths (CDC/sync). While MatrixOne #24849 / USearch #735 (open) is
-// unresolved, concurrent USearch add() can orphan graph nodes — the vector is
-// stored (contains() is true) but never linked into the HNSW graph, so search()
-// can never reach it, producing flaky recall@1. So every HNSW build/sync path
-// must add from a single thread (the model is likewise pinned to
-// ChangeThreadsAdd(1) in NewHnswModelForBuild). When usearch fixes the race,
-// this is a one-line revert: `return GetConcurrencyForBuild(nthread)`.
-func GetConcurrencyForSingleThreadBuild(nthread int64) int64 {
-	return 1
+// SimulateDevices is a test-only seam for exercising SHARDED / REPLICATED
+// distribution modes on a single-GPU host. When n >= 2 it returns a device list
+// of physical device 0 repeated n times ([0,0,...]), so the cuVS worker pool
+// spins up n logical ranks (each with its own stream/handle) all on device 0.
+// When n < 2 the real device list is returned unchanged.
+func SimulateDevices(devices []int, n int64) []int {
+	if n < 2 {
+		return devices
+	}
+	sim := make([]int, n)
+	// all zeros -> every logical rank maps to physical device 0
+	return sim
 }

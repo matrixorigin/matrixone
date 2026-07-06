@@ -491,4 +491,185 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 		require.Equal(t, int64(30), left)
 		require.Equal(t, int64(60), throttler.reserved.Load())
 	})
+
+	t.Run("hard ceiling caps a single large ask below the pool limit", func(t *testing.T) {
+		// reserved starts under the reject rate (60/90 = 0.66 < 0.80) so the
+		// soft entry gate passes, and the ask fits the pool (75 <= 90). Without
+		// a hard ceiling the grant would push reserved to 75 (pinnedRate 0.83),
+		// overshooting the 0.80 ceiling the RSS-gate removal relies on.
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.reserved.Store(60)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 15)
+		require.False(t, ok)
+		require.Equal(t, int64(12), left) // hardCap(72) - reserved(60)
+		require.Equal(t, int64(60), throttler.reserved.Load())
+	})
+
+	t.Run("hard ceiling holds under concurrency", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+
+		const (
+			workers = 32
+			perAsk  = int64(5)
+		)
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for i := 0; i < workers; i++ {
+			go func() {
+				defer wg.Done()
+				for j := 0; j < 16; j++ {
+					AcquirePolicyForCNFlushS3(throttler, perAsk)
+				}
+			}()
+		}
+		wg.Wait()
+
+		// pinnedRate must never exceed the hard ceiling, regardless of how many
+		// acquirers raced through the soft entry gate.
+		hardCap := int64(float64(throttler.limit.Load()) * cnFlushS3PinnedRejectRate)
+		require.LessOrEqual(t, throttler.reserved.Load(), hardCap)
+	})
+
+	t.Run("deny large ask once pinned more than half", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+		throttler.actualTotalMemory.Store(200 * mpool.MB)
+		throttler.limit.Store(100 * mpool.MB)
+		throttler.rss.Store(55 * mpool.MB)
+		throttler.rssReservedBase.Store(55 * mpool.MB)
+		throttler.rssMpoolLiveBase.Store(currentLive)
+		throttler.reserved.Store(55 * mpool.MB)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 20*mpool.MB)
+		require.False(t, ok)
+		require.Equal(t, int64(0), left)
+		require.Equal(t, int64(55*mpool.MB), throttler.reserved.Load())
+	})
+
+	t.Run("deny when high non-s3 rss leaves no physical headroom", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(95)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 6)
+		require.False(t, ok)
+		require.Equal(t, int64(5), left)
+		require.Equal(t, int64(0), throttler.reserved.Load())
+	})
+
+	t.Run("allow reacquire after flush while rss snapshot still includes prior s3 bytes", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(95)
+		// The latest RSS sample was taken before the flush, when 60 bytes of S3
+		// buffers were still resident. After release, reserved dropped to zero
+		// immediately but RSS has not fallen yet; reacquiring a small amount
+		// should still succeed because it reuses bytes already present in RSS.
+		throttler.rssReservedBase.Store(60)
+		throttler.rssMpoolLiveBase.Store(currentLive + 60)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 5)
+		require.True(t, ok)
+		require.Equal(t, int64(85), left)
+		require.Equal(t, int64(5), throttler.reserved.Load())
+	})
+
+	t.Run("allow growth that stays within the rss-covered base delta", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(95)
+		throttler.rssReservedBase.Store(60)
+		throttler.rssMpoolLiveBase.Store(currentLive + 3)
+		throttler.reserved.Store(57)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 7)
+		require.True(t, ok)
+		require.Equal(t, int64(26), left)
+		require.Equal(t, int64(64), throttler.reserved.Load())
+	})
+}
+
+func TestCurrentCNFlushS3RSSCovered(t *testing.T) {
+	t.Run("covers live reserved plus unreused stale pool", func(t *testing.T) {
+		covered := currentCNFlushS3RSSCovered(60, 80, 57, 77)
+		require.Equal(t, int64(60), covered)
+	})
+
+	t.Run("shrinks as pooled bytes are reused", func(t *testing.T) {
+		covered := currentCNFlushS3RSSCovered(60, 80, 0, 50)
+		require.Equal(t, int64(30), covered)
+	})
+}
+
+func TestNextCNFlushS3RSSState(t *testing.T) {
+	t.Run("keeps pre-release coverage while rss is unchanged", func(t *testing.T) {
+		base, liveBase := nextCNFlushS3RSSState(95, 60, 80, 95, 20, 0)
+		require.Equal(t, int64(60), base)
+		require.Equal(t, int64(80), liveBase)
+	})
+
+	t.Run("decays only by observed rss drop and live reuse", func(t *testing.T) {
+		base, liveBase := nextCNFlushS3RSSState(95, 60, 80, 80, 20, 0)
+		require.Equal(t, int64(45), base)
+		require.Equal(t, int64(65), liveBase)
+	})
+
+	t.Run("grows to cover current reserved when larger", func(t *testing.T) {
+		base, liveBase := nextCNFlushS3RSSState(80, 20, 20, 90, 40, 40)
+		require.Equal(t, int64(40), base)
+		require.Equal(t, int64(40), liveBase)
+	})
+
+	t.Run("shrinks carried coverage when live bytes rise back", func(t *testing.T) {
+		base, liveBase := nextCNFlushS3RSSState(95, 60, 80, 95, 50, 0)
+		require.Equal(t, int64(30), base)
+		require.Equal(t, int64(80), liveBase)
+	})
+}
+
+func TestMemThrottlerReleaseClampsOverRelease(t *testing.T) {
+	throttler := &memThrottler{}
+	throttler.actualTotalMemory.Store(100)
+	throttler.limit.Store(90)
+	throttler.reserved.Store(5)
+
+	left := throttler.Release(10)
+	require.Equal(t, int64(0), throttler.reserved.Load())
+	require.Equal(t, int64(90), left)
+}
+
+func TestMemThrottlerShouldRefreshBeforeRelease(t *testing.T) {
+	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+
+	t.Run("refreshes when current reserved is not yet covered", func(t *testing.T) {
+		throttler := &memThrottler{}
+		throttler.reserved.Store(20)
+		require.True(t, throttler.ShouldRefreshBeforeRelease())
+	})
+
+	t.Run("skips refresh when existing coverage already covers current reserved", func(t *testing.T) {
+		throttler := &memThrottler{}
+		throttler.reserved.Store(20)
+		throttler.rssReservedBase.Store(60)
+		throttler.rssMpoolLiveBase.Store(currentLive)
+		require.False(t, throttler.ShouldRefreshBeforeRelease())
+	})
+
+	t.Run("refreshes when live reuse shrinks covered bytes below current reserved", func(t *testing.T) {
+		throttler := &memThrottler{}
+		throttler.reserved.Store(40)
+		throttler.rssReservedBase.Store(20)
+		throttler.rssMpoolLiveBase.Store(currentLive)
+		require.True(t, throttler.ShouldRefreshBeforeRelease())
+	})
 }

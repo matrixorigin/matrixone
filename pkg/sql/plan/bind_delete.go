@@ -73,7 +73,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	//FIXME: optimize truncate table?
-	if stmt.Where == nil && stmt.Limit == nil {
+	if stmt.Where == nil && stmt.Limit == nil && len(stmt.TableRefs) == 0 {
 		var cantrucate bool
 		cantrucate, err = canDeleteRewriteToTruncate(ctx, dmlCtx)
 		if err != nil {
@@ -140,8 +140,30 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	selectNode := builder.qry.Nodes[lastNodeID]
-	if selectNode.NodeType != plan.Node_PROJECT {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "malformed select node")
+	selectNodeTag := selectNode.BindingTags[0]
+
+	// When DELETE has joins, duplicate target rows may be produced if the
+	// right side has multiple matches. A DISTINCT node above the select
+	// eliminates them — the select projects only target-table columns
+	// including the unique Row_ID, so exact-duplicate rows are guaranteed
+	// to be the same physical row.
+	if len(stmt.TableRefs) > 0 {
+		lastNodeID = builder.appendDistinctNode(selectCtx, lastNodeID)
+	}
+
+	makeDeleteIndexPartExpr := func(colPos int32, partName string, prefixLengths map[string]int) (*plan.Expr, error) {
+		partName = catalog.ResolveAlias(partName)
+		inputExpr := &plan.Expr{
+			Typ: selectNode.ProjectList[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: colPos,
+					Name:   partName,
+				},
+			},
+		}
+		return builder.makeIndexPartExprFromInputExpr(inputExpr, partName, prefixLengths)
 	}
 
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
@@ -202,38 +224,42 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
-							RelPos: selectNode.BindingTags[0],
+							RelPos: selectNodeTag,
 							ColPos: int32(pkPos),
 						},
 					},
 				}
 			} else if !indexTableStoresSerializedKey(idxDef) {
-				leftExpr = &plan.Expr{
-					Typ: pkTyp,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: selectNode.BindingTags[0],
-							ColPos: int32(colName2Idx[i][indexPrimaryPartName(idxDef)]),
-						},
-					},
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return 0, err
+				}
+				partName := indexPrimaryPartName(idxDef)
+				colPos, ok := colName2Idx[i][partName]
+				if !ok {
+					return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind delete err, can not find colName = %s", partName)
+				}
+				leftExpr, err = makeDeleteIndexPartExpr(colPos, partName, prefixLengths)
+				if err != nil {
+					return 0, err
 				}
 			} else {
 				args := make([]*plan.Expr, argsLen)
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return 0, err
+				}
 				var colPos int32
 				var ok bool
 				for k, colName := range idxDef.Parts {
-					if colPos, ok = colName2Idx[i][catalog.ResolveAlias(colName)]; !ok {
+					colName = catalog.ResolveAlias(colName)
+					if colPos, ok = colName2Idx[i][colName]; !ok {
 						errMsg := fmt.Sprintf("bind delete err, can not find colName = %s", colName)
 						return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
 					}
-					args[k] = &plan.Expr{
-						Typ: selectNode.ProjectList[colPos].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: selectNode.BindingTags[0],
-								ColPos: colPos,
-							},
-						},
+					args[k], err = makeDeleteIndexPartExpr(colPos, colName, prefixLengths)
+					if err != nil {
+						return 0, err
 					}
 				}
 
@@ -267,7 +293,6 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		NodeType:    plan.Node_MULTI_UPDATE,
 		BindingTags: []int32{builder.genNewBindTag()},
 	}
-	selectNodeTag := selectNode.BindingTags[0]
 	var lockTargets []*plan.LockTarget
 
 	for i, tableDef := range dmlCtx.tableDefs {

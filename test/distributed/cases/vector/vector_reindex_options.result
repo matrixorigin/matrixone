@@ -1,0 +1,36 @@
+SET experimental_ivf_index = 1;
+SET experimental_hnsw_index = 1;
+drop database if exists test_reindex_options;
+create database test_reindex_options;
+use test_reindex_options;
+create table ivf_t(a int primary key, b vecf32(4));
+insert into ivf_t values(1,"[1,2,3,4]"),(2,"[5,6,7,8]"),(3,"[9,10,11,12]"),(4,"[2,1,4,3]"),(5,"[8,7,6,5]"),(6,"[12,11,10,9]"),(7,"[1,1,1,1]"),(8,"[9,9,9,9]");
+create index idx using ivfflat on ivf_t(b) lists=2 op_type "vector_l2_ops";
+show create table ivf_t;
+Table    Create Table
+ivf_t    CREATE TABLE `ivf_t` (\n  `a` int NOT NULL,\n  `b` vecf32(4) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
+alter table ivf_t alter reindex idx ivfflat lists=4 kmeans_train_percent=80 kmeans_max_iteration=50;
+show create table ivf_t;
+Table    Create Table
+ivf_t    CREATE TABLE `ivf_t` (\n  `a` int NOT NULL,\n  `b` vecf32(4) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx` USING ivfflat (`b`) lists = 4  op_type 'vector_l2_ops'  kmeans_train_percent = 80  kmeans_max_iteration = 50 \n)
+alter table ivf_t alter reindex idx ivfflat m=16;
+not supported: ALTER REINDEX option "m" on a ivfflat index
+alter table ivf_t alter reindex idx ivfflat ef_construction=200;
+not supported: ALTER REINDEX option "ef_construction" on a ivfflat index
+alter table ivf_t alter reindex idx ivfflat graph_degree=64;
+not supported: ALTER REINDEX option "graph_degree" on a ivfflat index
+create table hnsw_t(a bigint primary key, b vecf32(4));
+insert into hnsw_t values(1,"[1,2,3,4]"),(2,"[5,6,7,8]"),(3,"[9,10,11,12]"),(4,"[2,1,4,3]");
+create index hidx using hnsw on hnsw_t(b) op_type "vector_l2_ops" m=48 ef_construction=64 ef_search=64;
+show create table hnsw_t;
+Table    Create Table
+hnsw_t    CREATE TABLE `hnsw_t` (\n  `a` bigint NOT NULL,\n  `b` vecf32(4) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `hidx` USING hnsw (`b`) m = 48  ef_construction = 64  ef_search = 64  op_type 'vector_l2_ops' \n)
+alter table hnsw_t alter reindex hidx hnsw m=32 ef_construction=128 ef_search=100 max_index_capacity=100000;
+show create table hnsw_t;
+Table    Create Table
+hnsw_t    CREATE TABLE `hnsw_t` (\n  `a` bigint NOT NULL,\n  `b` vecf32(4) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `hidx` USING hnsw (`b`) m = 32  ef_construction = 128  ef_search = 100  op_type 'vector_l2_ops'  max_index_capacity = 100000 \n)
+alter table hnsw_t alter reindex hidx hnsw lists=4;
+not supported: ALTER REINDEX option "lists" on a hnsw index
+alter table hnsw_t alter reindex hidx hnsw kmeans_train_percent=5;
+not supported: ALTER REINDEX option "kmeans_train_percent" on a hnsw index
+drop database test_reindex_options;

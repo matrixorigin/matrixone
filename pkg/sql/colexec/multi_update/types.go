@@ -74,8 +74,7 @@ type MultiUpdate struct {
 	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
 	IsRemote               bool
-
-	Engine engine.Engine
+	Engine                 engine.Engine
 
 	getS3WriterFunc          func(sid string, id uint64) (*s3WriterDelegate, error)
 	getFlushableS3WriterFunc func() *s3WriterDelegate

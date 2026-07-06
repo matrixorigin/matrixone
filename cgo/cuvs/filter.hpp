@@ -881,7 +881,13 @@ eval_filter_bitmap_cpu(const FilterStore& fs,
     // Per-predicate (type, op) dispatch happens once per word outside the row
     // loop, so the inner 32-row loop is tight and auto-vectorizable.
     uint64_t full_words = num_rows / 32;
-    #pragma omp parallel for schedule(static)
+    // OpenMP intentionally disabled. This eval runs off the worker thread, on
+    // the caller's goroutine, so the QPS benchmark (100 concurrent query
+    // threads) already saturates every core. Fanning out an `omp parallel for`
+    // team per query oversubscribes ~100x and the context-switching cost cut
+    // filtered throughput from 440 down to 330 QPS. The parallelism that
+    // matters here is across queries, not within one query's mask.
+    // #pragma omp parallel for schedule(static)
     for (int64_t w = 0; w < static_cast<int64_t>(full_words); ++w) {
         uint64_t base = static_cast<uint64_t>(w) * 32;
         uint32_t bits = 0xFFFFFFFFu;
@@ -967,7 +973,11 @@ eval_filter_bitmap_cpu_fused(const FilterStore& fs,
 
     const uint64_t full_words = num_rows / 32;
     uint64_t total_pc = 0;
-    #pragma omp parallel for schedule(static) reduction(+:total_pc)
+    // OpenMP intentionally disabled — see eval_filter_bitmap_cpu above. Under
+    // the 100-thread QPS test each query runs this off-worker on its own
+    // goroutine, so a per-query `omp parallel for` team oversubscribes the
+    // cores and context-switching dropped filtered throughput 440 -> 330 QPS.
+    // #pragma omp parallel for schedule(static) reduction(+:total_pc)
     for (int64_t w = 0; w < static_cast<int64_t>(full_words); ++w) {
         uint64_t base = static_cast<uint64_t>(w) * 32;
         uint32_t bits = 0xFFFFFFFFu;

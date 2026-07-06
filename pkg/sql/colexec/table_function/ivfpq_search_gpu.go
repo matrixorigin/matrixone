@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -57,6 +58,9 @@ var newIvfpqAlgo = newIvfpqAlgoFn
 
 func newIvfpqAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
 	devices, _ := cuvs.GetGpuDeviceList()
+	// test-only: mirror the build-side device simulation so search loads the same
+	// SHARDED / REPLICATED topology. No-op when gpu_multi_simulation < 2.
+	devices = vectorindex.SimulateDevices(devices, tblcfg.GpuMultiSimulation)
 	switch metric.QuantizationType(idxcfg.CuvsIvfpq.Quantization) {
 	case metric.Quantization_F16:
 		return ivfpqPkg.NewIvfpqSearch[cuvs.Float16](idxcfg, tblcfg, devices)
@@ -208,7 +212,7 @@ func (u *ivfpqSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 
 		// ---- vector argument ----
-		if len(tf.Args) < 2 || tf.Args[1].Typ.Id != int32(types.T_array_float32) {
+		if len(tf.Args) < 2 || !catalogplugin.SupportsVectorType(ivfpqCatalogHooks, types.T(tf.Args[1].Typ.Id)) {
 			return moerr.NewInvalidInput(proc.Ctx, "second argument (query vector) must be a float32 array")
 		}
 		faVec := tf.ctr.argVecs[1]

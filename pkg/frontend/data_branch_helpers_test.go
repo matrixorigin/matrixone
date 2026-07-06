@@ -81,7 +81,9 @@ func TestNewEmitter(t *testing.T) {
 func TestContainsDataBranchTempTableName(t *testing.T) {
 	require.True(t, containsDataBranchTempTableName("delete from test.__mo_diff_del_merge_1"))
 	require.True(t, containsDataBranchTempTableName("insert into __mo_diff_ins_merge_1 values (1)"))
+	require.True(t, containsDataBranchTempTableName("drop table if exists `db1`.`__mo_diff_del_x`"))
 	require.False(t, containsDataBranchTempTableName("select '__mo_diff_del_merge_1'"))
+	require.False(t, containsDataBranchTempTableName("select 1 -- from __mo_diff_del_merge_1"))
 }
 
 func TestDataBranchTempSQLNeedsBackExec(t *testing.T) {
@@ -111,14 +113,24 @@ func TestDataBranchTempSQLNeedsBackExec(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "quoted drop temp table",
+			sql:  "drop table if exists `db1`.`__mo_diff_del_x`",
+			want: true,
+		},
+		{
+			name: "quoted insert into temp table",
+			sql:  "insert into `db1`.`__mo_diff_del_x` values (1)",
+			want: true,
+		},
+		{
 			name: "main table delete reads temp table",
-			sql:  "delete from test.orders where id in (select id from test.__mo_diff_del_merge_1)",
-			want: false,
+			sql:  "delete from `db1`.`base` where `id` in (select `branch_apply_key_0` from `db1`.`__mo_diff_del_x`)",
+			want: true,
 		},
 		{
 			name: "main table insert reads temp table",
-			sql:  "insert into test.orders (id, name) select id, name from test.__mo_diff_ins_merge_1",
-			want: false,
+			sql:  "insert into `db1`.`base` (`id`, `name`) select `id`, `name` from `db1`.`__mo_diff_ins_x`",
+			want: true,
 		},
 		{
 			name: "unknown temp table statement stays conservative",
@@ -175,51 +187,55 @@ func TestRunSQL_BackgroundExecPaths(t *testing.T) {
 }
 
 func TestRunSQL_DataBranchTempTablesUseBackgroundExec(t *testing.T) {
-	ses := newValidateSession(t)
-	spyExec := &pickStreamingExecutor{err: moerr.NewTxnNeedRetryWithDefChangedNoCtx()}
-	_ = newPickStreamingBackExecForTest(t, ses, spyExec)
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	bh := mock_frontend.NewMockBackgroundExec(ctrl)
-	stmt := "delete from test.__mo_diff_ins_merge_1"
-	bh.EXPECT().Exec(gomock.Any(), stmt).Return(nil).Times(1)
-	bh.EXPECT().GetExecResultSet().Return(nil).Times(1)
-	bh.EXPECT().ClearExecResultSet().Times(1)
-
-	_, err := runSql(context.Background(), ses, bh, stmt, nil, nil)
-	require.NoError(t, err)
-	require.Empty(t, spyExec.sql)
-}
-
-func TestRunSQL_DataBranchMainTableDMLUsesInternalExec(t *testing.T) {
 	tests := []struct {
 		name string
 		sql  string
 	}{
 		{
+			name: "delete temp table target",
+			sql:  "delete from test.__mo_diff_ins_merge_1",
+		},
+		{
 			name: "delete main table using diff delete table",
-			sql:  "delete from test.orders where id in (select id from test.__mo_diff_del_merge_1)",
+			sql:  "delete from `db1`.`base` where `id` in (select `branch_apply_key_0` from `db1`.`__mo_diff_del_x`)",
 		},
 		{
 			name: "insert main table using diff insert table",
-			sql:  "insert into test.orders (id, name) select id, name from test.__mo_diff_ins_merge_1",
+			sql:  "insert into `db1`.`base` (`id`, `name`) select `id`, `name` from `db1`.`__mo_diff_ins_x`",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ses := newValidateSession(t)
-			spyExec := &pickStreamingExecutor{}
-			bh := newPickStreamingBackExecForTest(t, ses, spyExec)
+			spyExec := &pickStreamingExecutor{err: moerr.NewTxnNeedRetryWithDefChangedNoCtx()}
+			_ = newPickStreamingBackExecForTest(t, ses, spyExec)
 
-			ret, err := runSql(context.Background(), ses, bh, tt.sql, nil, nil)
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().Exec(gomock.Any(), tt.sql).Return(nil).Times(1)
+			bh.EXPECT().GetExecResultSet().Return(nil).Times(1)
+			bh.EXPECT().ClearExecResultSet().Times(1)
+
+			_, err := runSql(context.Background(), ses, bh, tt.sql, nil, nil)
 			require.NoError(t, err)
-			ret.Close()
-			require.Equal(t, tt.sql, spyExec.sql)
+			require.Empty(t, spyExec.sql)
 		})
 	}
+}
+
+func TestRunSQL_DataBranchOrdinaryMainTableDMLUsesInternalExec(t *testing.T) {
+	ses := newValidateSession(t)
+	spyExec := &pickStreamingExecutor{}
+	bh := newPickStreamingBackExecForTest(t, ses, spyExec)
+
+	stmt := "delete from test.orders where id = 1"
+	ret, err := runSql(context.Background(), ses, bh, stmt, nil, nil)
+	require.NoError(t, err)
+	ret.Close()
+	require.Equal(t, stmt, spyExec.sql)
 }
 
 func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {

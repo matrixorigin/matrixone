@@ -106,6 +106,7 @@ func handleUpdateCDCTaskRequest(
 		taskName  string
 		accountId = ses.GetTenantInfo().GetTenantID()
 		conds     = make([]taskservice.Condition, 0)
+		ifExists  bool
 	)
 
 	var (
@@ -119,6 +120,7 @@ func handleUpdateCDCTaskRequest(
 		}
 		targetTaskStatus = task.TaskStatus_CancelRequested
 		operation = "drop"
+		ifExists = updateReq.IfExists
 		conds = append(
 			conds,
 			taskservice.WithAccountID(taskservice.EQ, accountId),
@@ -203,6 +205,7 @@ func handleUpdateCDCTaskRequest(
 		targetTaskStatus,
 		uint64(accountId),
 		taskName,
+		ifExists,
 		ses.GetService(),
 		conds...,
 	)
@@ -213,6 +216,7 @@ func doUpdateCDCTask(
 	targetTaskStatus task.TaskStatus,
 	accountId uint64,
 	taskName string,
+	ifExists bool,
 	service string,
 	conds ...taskservice.Condition,
 ) (err error) {
@@ -258,6 +262,7 @@ func doUpdateCDCTask(
 				tx,
 				accountId,
 				taskName,
+				ifExists,
 			)
 		},
 		conds...,
@@ -287,6 +292,7 @@ func onPreUpdateCDCTasks(
 	tx taskservice.SqlExecutor,
 	accountId uint64,
 	taskName string,
+	ifExists bool,
 ) (affectedCdcRow int, err error) {
 	logutil.Info("cdc.on_pre_update.start",
 		zap.String("target-status", targetTaskStatus.String()),
@@ -310,6 +316,7 @@ func onPreUpdateCDCTasks(
 		accountId,
 		taskName,
 		keys,
+		ifExists,
 	); err != nil {
 		logutil.Error("cdc.on_pre_update.get_task_keys.failed",
 			zap.String("task-name", taskName),

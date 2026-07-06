@@ -22,10 +22,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -39,21 +41,23 @@ func init() {
 }
 
 type lockContext struct {
-	ctx              context.Context
-	txn              *activeTxn
-	waitTxn          pb.WaitTxn
-	rows             [][]byte
-	opts             LockOptions
-	offset           int
-	idx              int
-	lockedTS         timestamp.Timestamp
-	result           pb.Result
-	cb               func(pb.Result, error)
-	lockFunc         func(*lockContext, bool)
-	w                *waiter
-	createAt         time.Time
-	closed           bool
-	rangeLastWaitKey []byte
+	ctx                context.Context
+	txn                *activeTxn
+	waitTxn            pb.WaitTxn
+	rows               [][]byte
+	opts               LockOptions
+	offset             int
+	idx                int
+	lockedTS           timestamp.Timestamp
+	result             pb.Result
+	cb                 func(pb.Result, error)
+	lockFunc           func(*lockContext, bool)
+	w                  *waiter
+	createAt           time.Time
+	closed             bool
+	rangeLastWaitKey   []byte
+	lockWaitDeadline   time.Time
+	lockWaitTimeoutErr error
 }
 
 func (l *localLockTable) newLockContext(
@@ -72,6 +76,9 @@ func (l *localLockTable) newLockContext(
 	c.cb = cb
 	c.result = pb.Result{LockedOn: bind}
 	c.createAt = time.Now()
+	if opts.async {
+		c.lockWaitDeadline, c.lockWaitTimeoutErr = getAsyncLockWaitDeadline(c.createAt, opts)
+	}
 	return c
 }
 
@@ -93,6 +100,39 @@ func (c *lockContext) doLock() {
 		panic("missing lock")
 	}
 	c.lockFunc(c, true)
+}
+
+func (c *lockContext) getLockWaitTimeout() time.Duration {
+	if c.lockWaitDeadline.IsZero() {
+		return time.Duration(c.opts.LockWaitTimeout) * time.Second
+	}
+	return time.Until(c.lockWaitDeadline)
+}
+
+func (c *lockContext) getLockWaitTimeoutErr() error {
+	if c.lockWaitTimeoutErr != nil {
+		return c.lockWaitTimeoutErr
+	}
+	return ErrLockTimeout
+}
+
+func getAsyncLockWaitDeadline(createAt time.Time, opts LockOptions) (time.Time, error) {
+	var (
+		deadline time.Time
+		err      error
+	)
+	if opts.LockWaitTimeout > 0 {
+		deadline = createAt.Add(time.Duration(opts.LockWaitTimeout) * time.Second)
+		err = ErrLockTimeout
+	}
+	if opts.remoteLockOwnerWaitTimeout > 0 {
+		remoteDeadline := createAt.Add(opts.remoteLockOwnerWaitTimeout)
+		if deadline.IsZero() || remoteDeadline.Before(deadline) {
+			deadline = remoteDeadline
+			err = ErrRemoteLockWaitTimeout
+		}
+	}
+	return deadline, err
 }
 
 type event struct {
@@ -119,6 +159,13 @@ type waiterEvents struct {
 	unlock            func(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation) error
 	stopper           *stopper.Stopper
 
+	// checkC wakes the handle loop to run check() at a waiter's
+	// lockWaitTimeout boundary. checkPending coalesces concurrent timer
+	// callbacks so at least one prompt check runs without queueing one
+	// signal per waiter.
+	checkC       chan struct{}
+	checkPending atomic.Bool
+
 	mu struct {
 		sync.RWMutex
 		blockedWaiters []*waiter
@@ -142,6 +189,7 @@ func newWaiterEvents(
 		unlock:            unlock,
 		eventC:            make(chan *lockContext, 10000),
 		checkOrphanC:      make(chan checkOrphan, 64),
+		checkC:            make(chan struct{}, 1),
 		stopper:           stopper.NewStopper("waiter-events", stopper.WithLogger(logger.RawLogger())),
 	}
 }
@@ -171,8 +219,30 @@ func (mw *waiterEvents) add(c *lockContext) {
 			c:      c,
 		}
 	}
+	// The sync path enforces LockWaitTimeout via context.WithTimeoutCause in
+	// doLock. waiterEvents owns timeout notifications only for async waits.
+	c.w.lockWaitTimeout = 0
+	if c.opts.async {
+		// Propagate the remaining async wait budget to the waiter so the check
+		// loop enforces one budget across re-queue cycles.
+		c.w.lockWaitTimeout = c.getLockWaitTimeout()
+		c.w.lockWaitTimeoutErr = c.getLockWaitTimeoutErr()
+		c.w.lockWaitGranularity = c.opts.Granularity
+		c.w.lockWaitMode = c.opts.Mode
+		if c.w.lockWaitTimeout <= 0 && !c.lockWaitDeadline.IsZero() {
+			c.w.lockWaitTimeout = time.Nanosecond
+		}
+	}
 	c.w.startWait()
 	mw.addToLazyCheckDeadlockC(c.w)
+
+	// Schedule a precise timer for every positive timeout so async lock waits
+	// do not overshoot the configured deadline by a lazy-check interval.
+	c.w.stopLockWaitTimer()
+	if c.w.lockWaitTimeout > 0 {
+		d := c.w.lockWaitTimeout
+		c.w.lockWaitTimer.Store(time.AfterFunc(d, mw.wakeCheck))
+	}
 }
 
 func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
@@ -180,6 +250,18 @@ func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 	mw.mu.blockedWaiters = append(mw.mu.blockedWaiters, w)
+}
+
+func (mw *waiterEvents) wakeCheck() {
+	if !mw.checkPending.CompareAndSwap(false, true) {
+		return
+	}
+	select {
+	case mw.checkC <- struct{}{}:
+	default:
+		// A wake-up is already queued; keep checkPending set so later timers
+		// coalesce until the handle loop consumes the signal and runs check().
+	}
 }
 
 func (mw *waiterEvents) handle(ctx context.Context) {
@@ -198,6 +280,12 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 			txn.Unlock()
 		case v := <-mw.checkOrphanC:
 			mw.checkOrphan(v)
+		case <-mw.checkC:
+			mw.checkPending.Store(false)
+			// Precise timer fired for at least one waiter's lockWaitTimeout.
+			// Run check() immediately instead of waiting for the
+			// next coarse lazy-check tick.
+			mw.check(timeout)
 		case <-timer.C:
 			mw.check(timeout)
 			timer.Reset(timeout)
@@ -224,6 +312,38 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 
 		wait := now.Sub(w.waitAt.Load().(time.Time))
 		mw.addToOrphanCheck(w, wait)
+
+		// Enforce async lock wait timeout. The sync path enforces the
+		// session-level timeout via context.WithTimeoutCause in doLock.
+		if w.lockWaitTimeout > 0 && wait >= w.lockWaitTimeout {
+			err := w.lockWaitTimeoutErr
+			if err == nil {
+				err = ErrLockTimeout
+			}
+			if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
+				v2.TxnRemoteLockOwnerTimeoutCounter.WithLabelValues(
+					w.lockWaitGranularity.String(),
+					w.lockWaitMode.String(),
+				).Inc()
+				mw.logger.Warn("remote_lock_owner_timeout",
+					zap.String("txn", hex.EncodeToString(w.txn.TxnID)),
+					zap.String("created-on", w.txn.CreatedOn),
+					zap.Duration("wait", wait),
+					zap.Duration("timeout", w.lockWaitTimeout),
+					zap.String("granularity", w.lockWaitGranularity.String()),
+					zap.String("mode", w.lockWaitMode.String()))
+			} else {
+				mw.logger.Debug("lock wait timeout elapsed, notifying waiter",
+					zap.String("txn", w.String()),
+					zap.Duration("wait", wait),
+					zap.Duration("timeout", w.lockWaitTimeout))
+			}
+			w.notify(notifyValue{err: err}, mw.logger)
+			w.close("waiterEvents check timeout", mw.logger)
+			mw.mu.blockedWaiters[i] = nil
+			continue
+		}
+
 		if wait >= timeout {
 			mw.addToDeadlockCheck(w)
 		}

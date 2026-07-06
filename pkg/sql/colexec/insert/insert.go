@@ -300,7 +300,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 	}()
 	defer func() {
 		if err != nil {
-			insert.releaseS3MemGrant()
+			insert.refreshAndReleaseS3MemGrant()
 		}
 	}()
 
@@ -352,7 +352,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 			insert.ctr.state = vm.End
 			return result, err
 		}
-		insert.releaseS3MemGrant()
+		insert.refreshAndReleaseS3MemGrant()
 		insert.ctr.state = vm.End
 		return result, nil
 	}
@@ -443,7 +443,7 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 	}
 	defer func() {
 		if err != nil {
-			insert.releaseS3MemGrant()
+			insert.refreshAndReleaseS3MemGrant()
 		}
 	}()
 
@@ -473,11 +473,7 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 		insert.ctr.s3Writer.ResetBlockInfoBat()
 	}
 
-	insert.releaseS3MemGrant()
-
-	// After flushing, release throttle grant and force-refresh so subsequent
-	// acquires by this or other workers see the freed capacity immediately.
-	forcedRefresh(insert.ctr.s3MemThrottler)
+	insert.refreshAndReleaseS3MemGrant()
 	return nil
 }
 

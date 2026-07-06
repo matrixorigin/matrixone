@@ -169,23 +169,15 @@ func pickMergeDiffs(
 		skipSet = make(map[string]struct{})
 	}
 
-	appender := sqlValuesAppender{
-		ctx:             ctx,
-		ses:             ses,
-		bh:              bh,
-		tblStuff:        tblStuff,
-		deleteByFullRow: tblStuff.def.pkKind == fakeKind,
-		pkInfo:          newPKBatchInfo(ctx, ses, tblStuff),
-		deleteCnt:       &deleteCnt,
-		deleteBuf:       deleteFromVals,
-		insertCnt:       &insertCnt,
-		insertBuf:       insertIntoVals,
-	}
-	if err = initPKTables(ctx, ses, bh, appender.pkInfo, appender.writeFile); err != nil {
+	appender := newSQLValuesAppender(
+		ctx, ses, bh, tblStuff, dataBranchApplyModeOnlinePKOnly,
+		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
+	)
+	if err = initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
 		return err
 	}
 	defer func() {
-		if err2 := dropPKTables(ctx, ses, bh, appender.pkInfo, appender.writeFile); err2 != nil && err == nil {
+		if err2 := dropApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err2 != nil && err == nil {
 			err = err2
 		}
 	}()
@@ -306,59 +298,15 @@ func appendPickedBatchRows(
 			}
 		}
 
-		// Row is in KEYS set and passed conflict checks — extract all visible column values.
-		for _, colIdx := range tblStuff.def.visibleIdxes {
-			vec := wrapped.batch.Vecs[colIdx]
-			if rowIdx >= vec.Length() {
-				return moerr.NewInternalErrorNoCtxf(
-					"data branch pick batch shape mismatch: row=%d batchRows=%d col=%d vecLen=%d",
-					rowIdx, wrapped.batch.RowCount(), colIdx, vec.Length(),
-				)
-			}
-			if vec.GetNulls().Contains(uint64(rowIdx)) {
-				row[colIdx] = nil
-				continue
-			}
-
-			switch vec.GetType().Oid {
-			case types.T_datetime, types.T_timestamp, types.T_decimal64,
-				types.T_decimal128, types.T_time:
-				row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
-			default:
-				if err = extractRowFromVector(
-					ctx, ses, vec, colIdx, row, rowIdx, false,
-				); err != nil {
-					return
-				}
-			}
+		if err = extractDataBranchApplyRow(
+			ctx, ses, tblStuff, wrapped.batch, rowIdx, appender.extraColIdxesForRow(wrapped.kind), row,
+			"data branch pick batch shape mismatch",
+		); err != nil {
+			return
 		}
-
-		tmpValsBuffer.Reset()
-		if wrapped.kind == diffDelete {
-			if appender.deleteByFullRow {
-				if err = writeDeleteRowSQLFull(ctx, ses, tblStuff, row, tmpValsBuffer); err != nil {
-					return
-				}
-			} else if appender.pkInfo != nil {
-				if err = writeDeleteRowValuesAsTuple(ses, tblStuff, row, tmpValsBuffer); err != nil {
-					return
-				}
-			} else {
-				if err = writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
-					return
-				}
-			}
-		} else {
-			if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
-				return
-			}
-		}
-
-		if tmpValsBuffer.Len() == 0 {
-			continue
-		}
-
-		if err = appender.appendRow(wrapped.kind, tmpValsBuffer.Bytes()); err != nil {
+		if err = appendDataBranchApplyRowAsSQLValues(
+			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
+		); err != nil {
 			return
 		}
 	}

@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -89,14 +90,15 @@ func (proc *Process) BuildProcessInfo(
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
-			User:         proc.Base.SessionInfo.GetUser(),
-			Host:         proc.Base.SessionInfo.GetHost(),
-			Role:         proc.Base.SessionInfo.GetRole(),
-			ConnectionId: proc.Base.SessionInfo.GetConnectionID(),
-			Database:     proc.Base.SessionInfo.GetDatabase(),
-			Version:      proc.Base.SessionInfo.GetVersion(),
-			TimeZone:     timeBytes,
-			QueryId:      proc.Base.SessionInfo.QueryId,
+			User:            proc.Base.SessionInfo.GetUser(),
+			Host:            proc.Base.SessionInfo.GetHost(),
+			Role:            proc.Base.SessionInfo.GetRole(),
+			ConnectionId:    proc.Base.SessionInfo.GetConnectionID(),
+			Database:        proc.Base.SessionInfo.GetDatabase(),
+			Version:         proc.Base.SessionInfo.GetVersion(),
+			TimeZone:        timeBytes,
+			QueryId:         proc.Base.SessionInfo.QueryId,
+			LockWaitTimeout: resolveLockWaitTimeoutSeconds(proc),
 		}
 	}
 	{ // log info
@@ -294,14 +296,15 @@ func ConvertToProcessSessionInfo(
 	sei pipeline.SessionInfo,
 ) (SessionInfo, error) {
 	sessionInfo := SessionInfo{
-		User:         sei.User,
-		Host:         sei.Host,
-		Role:         sei.Role,
-		ConnectionID: sei.ConnectionId,
-		Database:     sei.Database,
-		Version:      sei.Version,
-		Account:      sei.Account,
-		QueryId:      sei.QueryId,
+		User:            sei.User,
+		Host:            sei.Host,
+		Role:            sei.Role,
+		ConnectionID:    sei.ConnectionId,
+		Database:        sei.Database,
+		Version:         sei.Version,
+		Account:         sei.Account,
+		QueryId:         sei.QueryId,
+		LockWaitTimeout: sei.LockWaitTimeout,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
@@ -310,4 +313,41 @@ func ConvertToProcessSessionInfo(
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
+}
+
+func resolveLockWaitTimeoutSeconds(proc *Process) int64 {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return procSessionLockWaitTimeout(proc)
+	}
+	if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
+		if seconds := lockWaitTimeoutSeconds(v); seconds > 0 {
+			return seconds
+		}
+	}
+	return procSessionLockWaitTimeout(proc)
+}
+
+func procSessionLockWaitTimeout(proc *Process) int64 {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return 0
+	}
+	return proc.GetSessionInfo().LockWaitTimeout
+}
+
+func lockWaitTimeoutSeconds(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		if n > 0 {
+			return n
+		}
+	case int:
+		if n > 0 {
+			return int64(n)
+		}
+	case uint64:
+		if n > 0 && n <= math.MaxInt64 {
+			return int64(n)
+		}
+	}
+	return 0
 }
