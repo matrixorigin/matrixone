@@ -222,6 +222,38 @@ func TestShouldWriteLoadDataSkipsExternalAndViewRelations(t *testing.T) {
 	assert.False(t, shouldWriteLoadData(false, checkpointtool.TableCatalogEntry{RelKind: "r"}))
 }
 
+func TestFilterAccountRestoreScriptTablesSkipsSystemDatabases(t *testing.T) {
+	tables := []checkpointtool.TableCatalogEntry{
+		{DatabaseName: "mo_catalog", TableName: "mo_user"},
+		{DatabaseName: "mysql", TableName: "user"},
+		{DatabaseName: "system", TableName: "statement_info"},
+		{DatabaseName: "system_metrics", TableName: "metric"},
+		{DatabaseName: "coverage", TableName: "t1"},
+		{DatabaseName: "Coverage_Extra", TableName: "t2"},
+	}
+
+	filtered, skipped := filterAccountRestoreScriptTables(tables, true)
+
+	require.Len(t, filtered, 2)
+	assert.Equal(t, 4, skipped)
+	assert.Equal(t, "coverage", filtered[0].DatabaseName)
+	assert.Equal(t, "t1", filtered[0].TableName)
+	assert.Equal(t, "Coverage_Extra", filtered[1].DatabaseName)
+	assert.Equal(t, "t2", filtered[1].TableName)
+}
+
+func TestFilterAccountRestoreScriptTablesLeavesNonAccountDumpUnchanged(t *testing.T) {
+	tables := []checkpointtool.TableCatalogEntry{
+		{DatabaseName: "mo_catalog", TableName: "mo_user"},
+		{DatabaseName: "coverage", TableName: "t1"},
+	}
+
+	filtered, skipped := filterAccountRestoreScriptTables(tables, false)
+
+	assert.Equal(t, tables, filtered)
+	assert.Zero(t, skipped)
+}
+
 func TestPackageExternalTableSourceCopiesAndRewritesFilepath(t *testing.T) {
 	tmpDir := t.TempDir()
 	sourcePath := filepath.Join(tmpDir, "local_ext_people.csv")

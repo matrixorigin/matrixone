@@ -34,6 +34,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -612,9 +613,13 @@ Examples:
 					fmt.Fprintf(cmd.OutOrStdout(), "Dumped %d tables to %s\n", len(tables), outputDir)
 				}
 				if loadScript {
-					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, tables, dumpDataByTableID(dumpPlans), snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
+					scriptTables, skippedSystemTables := filterAccountRestoreScriptTables(tables, accountIDSet)
+					scriptPath, err := writeRestoreScript(ctx, reader, dumpOut, scriptTables, dumpDataByTableID(dumpPlans), snapshotTS, output, outputDir, loadPathResolver, !noLoad, effectiveHeader)
 					if err != nil {
 						return err
+					}
+					if skippedSystemTables > 0 {
+						fmt.Fprintf(cmd.OutOrStdout(), "Restore script skipped %d system tables that are not restorable by tenant admin; CSV files were still dumped.\n", skippedSystemTables)
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "Restore script written to %s\n", scriptPath)
 				}
@@ -899,6 +904,34 @@ func writeRestoreScript(
 		return "", fmt.Errorf("write restore script: %w", writeErr)
 	}
 	return scriptPath, nil
+}
+
+func filterAccountRestoreScriptTables(
+	tables []checkpointtool.TableCatalogEntry,
+	accountDump bool,
+) ([]checkpointtool.TableCatalogEntry, int) {
+	if !accountDump {
+		return tables, 0
+	}
+	filtered := make([]checkpointtool.TableCatalogEntry, 0, len(tables))
+	skipped := 0
+	for _, table := range tables {
+		if isSystemDatabase(table.DatabaseName) {
+			skipped++
+			continue
+		}
+		filtered = append(filtered, table)
+	}
+	return filtered, skipped
+}
+
+func isSystemDatabase(databaseName string) bool {
+	for _, systemDatabase := range catalog.SystemDatabases {
+		if strings.EqualFold(databaseName, systemDatabase) {
+			return true
+		}
+	}
+	return false
 }
 
 func orderTablesForRestore(
