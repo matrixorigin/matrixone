@@ -173,10 +173,12 @@ func (l *remoteLockTable) lock(
 		return
 	}
 
-	// The request may have reached the remote owner and acquired locks even if
-	// the response was lost or the client-side context timed out. Keep local
-	// bookkeeping so normal transaction close can send the remote unlock.
-	_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+	if shouldTrackRemoteLockOnSendError(err) {
+		// The request may have reached the remote owner and acquired locks even if
+		// the response was lost or the client-side context timed out. Keep local
+		// bookkeeping so normal transaction close can send the remote unlock.
+		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+	}
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
 		cb(pb.Result{}, err)
@@ -423,6 +425,14 @@ func retryRemoteLockError(err error) bool {
 		return true
 	}
 	return false
+}
+
+func shouldTrackRemoteLockOnSendError(err error) bool {
+	var notSent *lockRequestNotSentError
+	if errors.As(err, &notSent) {
+		return false
+	}
+	return !moerr.IsMoErrCode(err, moerr.ErrRPCTimeout)
 }
 
 func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {

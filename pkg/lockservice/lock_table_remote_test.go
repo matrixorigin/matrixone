@@ -253,6 +253,97 @@ func TestLockRemoteWithCanceledContextBeforeSendSkipsRemoteTracking(t *testing.T
 	)
 }
 
+func TestLockRemoteWithNotSentErrorSkipsRemoteTracking(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "async send canceled before queue",
+			err:  wrapLockRequestNotSentError(context.Canceled),
+		},
+		{
+			name: "connect timeout before write",
+			err:  moerr.NewRPCTimeoutNoCtx(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bind := pb.LockTable{
+				Group:       1,
+				Table:       2,
+				OriginTable: 2,
+				ServiceID:   "s1",
+				Valid:       true,
+			}
+			unlockCalled := false
+			client := lockTableTestClient{
+				send: func(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+					switch req.Method {
+					case pb.Method_Lock:
+						return nil, tt.err
+					case pb.Method_GetBind:
+						resp := acquireResponse()
+						resp.Method = req.Method
+						resp.GetBind.LockTable = bind
+						return resp, nil
+					case pb.Method_Unlock:
+						unlockCalled = true
+						resp := acquireResponse()
+						resp.Method = req.Method
+						return resp, nil
+					default:
+						return nil, moerr.NewInternalErrorNoCtx("unexpected request")
+					}
+				},
+			}
+			l := newRemoteLockTable(
+				"",
+				time.Second,
+				bind,
+				client,
+				func(pb.LockTable) {},
+				getLogger(""),
+			)
+			defer l.close()
+
+			txnID := []byte("txn-not-sent")
+			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+			closed := false
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			txn.Lock()
+			defer func() {
+				txn.Unlock()
+				if !closed {
+					reuse.Free(txn, nil)
+				}
+			}()
+
+			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
+				require.Error(t, err)
+			})
+			holder := txn.getHoldLocksLocked(l.bind.Group)
+			require.NotContains(t, holder.tableKeys, l.bind.Table)
+			require.NotContains(t, holder.tableBinds, l.bind.Table)
+
+			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+				return l, nil
+			}, l.logger))
+			closed = true
+			require.False(t, unlockCalled)
+		})
+	}
+}
+
+func TestShouldTrackRemoteLockOnSendError(t *testing.T) {
+	require.False(t, shouldTrackRemoteLockOnSendError(wrapLockRequestNotSentError(context.Canceled)))
+	require.False(t, shouldTrackRemoteLockOnSendError(moerr.NewRPCTimeoutNoCtx()))
+	require.True(t, shouldTrackRemoteLockOnSendError(context.DeadlineExceeded))
+}
+
 func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
 	runRPCTests(
 		t,
@@ -735,6 +826,22 @@ func TestRetryRemoteLockError(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+type lockTableTestClient struct {
+	send func(context.Context, *pb.Request) (*pb.Response, error)
+}
+
+func (c lockTableTestClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	return c.send(ctx, req)
+}
+
+func (c lockTableTestClient) AsyncSend(context.Context, *pb.Request) (*morpc.Future, error) {
+	panic("unexpected AsyncSend")
+}
+
+func (c lockTableTestClient) Close() error {
+	return nil
 }
 
 func runRemoteLockTableTests(

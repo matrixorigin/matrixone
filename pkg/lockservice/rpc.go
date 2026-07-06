@@ -63,6 +63,25 @@ type client struct {
 	client  morpc.RPCClient
 }
 
+type lockRequestNotSentError struct {
+	err error
+}
+
+func (e *lockRequestNotSentError) Error() string {
+	return e.err.Error()
+}
+
+func (e *lockRequestNotSentError) Unwrap() error {
+	return e.err
+}
+
+func wrapLockRequestNotSentError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &lockRequestNotSentError{err: err}
+}
+
 type ClientOption func(c *client)
 
 func WithMOCluster(cluster clusterservice.MOCluster) ClientOption {
@@ -111,7 +130,7 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 	}
 	f, err := c.AsyncSend(ctx, request)
 	if err != nil {
-		return nil, err
+		return nil, wrapLockRequestNotSentError(err)
 	}
 	defer f.Close()
 
