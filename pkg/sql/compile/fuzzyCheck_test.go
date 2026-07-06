@@ -16,12 +16,12 @@ package compile
 
 import (
 	"context"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -791,7 +791,7 @@ func TestFillEndToEndConditionGeneration(t *testing.T) {
 	})
 }
 
-func TestFillCompoundConditionQuotesSQLLiterals(t *testing.T) {
+func TestFillCompoundConditionUsesSingleQuotedSQLLiterals(t *testing.T) {
 	mp, err := mpool.NewMPool("test_compound_condition_quotes", 0, mpool.NoFixed)
 	require.NoError(t, err)
 	defer mpool.DeleteMPool(mp)
@@ -804,7 +804,8 @@ func TestFillCompoundConditionQuotesSQLLiterals(t *testing.T) {
 	decVal, err := types.ParseDecimal64("12.34", 10, 2)
 	require.NoError(t, err)
 
-	packer.EncodeStringType([]byte("O'Reilly"))
+	nameVal := `O'Reilly\docs`
+	packer.EncodeStringType([]byte(nameVal))
 	packer.EncodeDate(dateVal)
 	packer.EncodeMoYear(yearVal)
 	packer.EncodeDecimal64(decVal)
@@ -832,10 +833,11 @@ func TestFillCompoundConditionQuotesSQLLiterals(t *testing.T) {
 	}
 
 	require.NoError(t, f.fill(context.Background(), bat))
-	require.Contains(t, f.condition, "name = "+strconv.Quote("O'Reilly"))
-	require.Contains(t, f.condition, "d = "+strconv.Quote(dateVal.String()))
-	require.Contains(t, f.condition, "y = "+strconv.Quote(yearVal.String()))
+	require.Contains(t, f.condition, "name = "+sqlquote.String(nameVal))
+	require.Contains(t, f.condition, "d = "+sqlquote.String(dateVal.String()))
+	require.Contains(t, f.condition, "y = "+sqlquote.String(yearVal.String()))
 	require.Contains(t, f.condition, "amount = "+decVal.Format(2))
+	require.NotContains(t, f.condition, `"`, "fuzzyCheck SQL literals must stay valid under ANSI_QUOTES")
 }
 
 // TestConcurrentFirstlyCheck verifies that firstlyCheck is safe to call

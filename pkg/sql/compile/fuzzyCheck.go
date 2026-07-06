@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -343,7 +344,7 @@ func (f *fuzzyCheck) formatCompoundCollisionKey(t types.Tuple) ([]string, error)
 	values := t.SQLStrings(scales)
 	for i, c := range f.compoundCols {
 		if fuzzyCheckSQLValueNeedsQuote(types.T(c.Typ.Id)) {
-			values[i] = strconv.Quote(values[i])
+			values[i] = sqlquote.String(values[i])
 		}
 	}
 	return values, nil
@@ -468,14 +469,14 @@ func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 	// date and time
 	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year:
 		for i, str := range ss {
-			ss[i] = strconv.Quote(str)
+			ss[i] = sqlquote.String(str)
 		}
 		return ss, nil
 
 	// string family but not include binary
 	case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid, types.T_binary, types.T_datalink:
 		for i, str := range ss {
-			ss[i] = strconv.Quote(str)
+			ss[i] = sqlquote.String(str)
 		}
 		return ss, nil
 	default:
