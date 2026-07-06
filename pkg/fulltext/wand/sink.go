@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -145,8 +146,14 @@ func readLenBytes(r *bytes.Reader, pkType int32) (any, error) {
 	if err := binary.Read(r, binary.LittleEndian, &l); err != nil {
 		return nil, err
 	}
+	// Bounds-check the length against the bytes actually remaining, then read fully:
+	// a bare r.Read can short-read (n<l, err==nil) and silently zero-fill a truncated
+	// pk. Mirrors DecodeDeleteLog's "truncated" guard (#6).
+	if int64(l) > int64(r.Len()) {
+		return nil, moerr.NewInternalErrorNoCtx("wand cdc: truncated pk")
+	}
 	pkb := make([]byte, l)
-	if _, err := r.Read(pkb); err != nil && l > 0 {
+	if _, err := io.ReadFull(r, pkb); err != nil {
 		return nil, err
 	}
 	return decodePk(pkType, pkb)
@@ -157,8 +164,11 @@ func readLenString(r *bytes.Reader) (string, error) {
 	if err := binary.Read(r, binary.LittleEndian, &l); err != nil {
 		return "", err
 	}
+	if int64(l) > int64(r.Len()) {
+		return "", moerr.NewInternalErrorNoCtx("wand cdc: truncated text")
+	}
 	sb := make([]byte, l)
-	if _, err := r.Read(sb); err != nil && l > 0 {
+	if _, err := io.ReadFull(r, sb); err != nil {
 		return "", err
 	}
 	return string(sb), nil

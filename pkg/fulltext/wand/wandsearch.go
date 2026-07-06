@@ -67,6 +67,13 @@ func (d *docFilterMembership) Contains(ord int64) bool {
 	case types.T_uint32:
 		binary.LittleEndian.PutUint32(d.scratch[:4], v.(uint32))
 		raw = d.scratch[:4]
+	case types.T_uuid:
+		// The membership filter (docfilter.buildBloomBytes -> CBloomFilter.addFixedVector)
+		// hashes each source uuid as its RAW 16 bytes (typeSize=16). Probe with the same
+		// raw bytes — NOT encodePk(uuid), which is the 36-char canonical string and would
+		// never hit the same bloom cell, rejecting every candidate (B1).
+		u := v.(types.Uuid)
+		raw = u[:]
 	default:
 		var err error
 		if raw, err = encodePk(d.m.PkType, v); err != nil {

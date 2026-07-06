@@ -14,6 +14,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -273,7 +274,18 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		// (doc_id, score) shape, so the downstream INNER-JOIN-to-source + score
 		// projection is unchanged and the limit pushdown below covers it too.
 		var tmpTableFunc *tree.AliasedTableExpr
-		if storeTbl, metaTbl, ok := builder.findWandIndexTables(scanNode, idxdef); ok {
+		storeTbl, metaTbl, wandOK := builder.findWandIndexTables(scanNode, idxdef)
+		// A retrieval-parser index is maintained ONLY as WAND frames — its classic
+		// postings table is populated once at build and goes stale — so there is no
+		// correct classic fallback. If its WAND store/metadata siblings can't be
+		// resolved (e.g. a partially-materialized / restored catalog), fail fast
+		// rather than silently serving stale postings via fulltext_index_scan (#5).
+		if !wandOK && catalog.GetIndexParser(idxdef.IndexAlgoParams) == "retrieval" {
+			return -1, nil, nil, moerr.NewInternalErrorf(builder.GetContext(),
+				"retrieval fulltext index %q: WAND store/metadata tables not found (index may be partially materialized); reindex required",
+				idxdef.IndexName)
+		}
+		if wandOK {
 			// A retrieval-parser index supports only RETRIEVAL mode (explicit
 			// `IN RETRIEVAL MODE`) or DEFAULT (no mode clause, which defaults to
 			// retrieval): it is BM25 top-K over bag-of-words and implements none of the
@@ -285,8 +297,18 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				return -1, nil, nil, moerr.NewNotSupported(builder.GetContext(),
 					"a retrieval fulltext index only supports RETRIEVAL mode; use AGAINST('...' IN RETRIEVAL MODE)")
 			}
-			cfg := fmt.Sprintf(`{"db":"%s","index":"%s","metadata":"%s"}`,
-				scanNode.ObjRef.SchemaName, storeTbl, metaTbl)
+			// Build the cfg JSON with json.Marshal so a schema name containing a
+			// double-quote or backslash is escaped — a raw fmt.Sprintf produced
+			// malformed JSON that the search side's sonic.Unmarshal rejected (#4).
+			cfgBytes, cfgErr := json.Marshal(map[string]string{
+				"db":       scanNode.ObjRef.SchemaName,
+				"index":    storeTbl,
+				"metadata": metaTbl,
+			})
+			if cfgErr != nil {
+				return -1, nil, nil, cfgErr
+			}
+			cfg := string(cfgBytes)
 			wand_func := tree.NewCStr(fulltext_wand_search_func_name, 1)
 			var wexprs tree.Exprs
 			wexprs = append(wexprs, tree.NewNumVal[string]("", "", false, tree.P_char))
