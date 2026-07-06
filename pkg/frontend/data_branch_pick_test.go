@@ -1102,6 +1102,16 @@ func TestMaterializeSubqueryUnified_RejectsNilSelect(t *testing.T) {
 	require.Nil(t, pkFilter)
 }
 
+func newPickSubqueryPlanForTest(cols ...string) *plan2.Plan {
+	return &plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan2.Query{
+				Headings: cols,
+			},
+		},
+	}
+}
+
 func TestMaterializeSubqueryUnified_SinglePKSuccessBuildsFilterAndHashmap(t *testing.T) {
 	ses := newValidateSession(t)
 	stmtNode, err := parsers.ParseOne(
@@ -1125,7 +1135,7 @@ func TestMaterializeSubqueryUnified_SinglePKSuccessBuildsFilterAndHashmap(t *tes
 		ctx plan2.CompilerContext,
 		stmt tree.Statement,
 	) (*plan2.Plan, error) {
-		return nil, nil
+		return newPickSubqueryPlanForTest("k"), nil
 	}
 
 	tblStuff := tableStuff{}
@@ -1202,7 +1212,7 @@ func TestMaterializeSubqueryUnified_PreservesStringLiteralQuotes(t *testing.T) {
 		ctx plan2.CompilerContext,
 		stmt tree.Statement,
 	) (*plan2.Plan, error) {
-		return nil, nil
+		return newPickSubqueryPlanForTest("order_id"), nil
 	}
 
 	tblStuff := tableStuff{}
@@ -1267,7 +1277,7 @@ func TestMaterializeSubqueryUnified_CompositePKOrdersAllColumns(t *testing.T) {
 		ctx plan2.CompilerContext,
 		stmt tree.Statement,
 	) (*plan2.Plan, error) {
-		return nil, nil
+		return newPickSubqueryPlanForTest("k1", "k2"), nil
 	}
 
 	tblStuff := tableStuff{}
@@ -1332,7 +1342,7 @@ func TestMaterializeSubqueryUnified_PropagatesStreamingError(t *testing.T) {
 		ctx plan2.CompilerContext,
 		stmt tree.Statement,
 	) (*plan2.Plan, error) {
-		return nil, nil
+		return newPickSubqueryPlanForTest("k"), nil
 	}
 	wantErr := moerr.NewInternalErrorNoCtx("subquery failed")
 	bh := newPickStreamingBackExecForTest(t, ses, &pickStreamingExecutor{err: wantErr})
@@ -1378,7 +1388,12 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 	dec128Type := types.New(types.T_decimal128, 20, 3)
 	dec128Val, err := types.ParseDecimal128("200.125", dec128Type.Width, dec128Type.Scale)
 	require.NoError(t, err)
+	dec256Type := types.New(types.T_decimal256, 65, 30)
+	dec256Val, err := types.ParseDecimal256("300.125000000000000000000000000000", dec256Type.Width, dec256Type.Scale)
+	require.NoError(t, err)
 	dateVal, err := types.ParseDateCast("2025-01-03")
+	require.NoError(t, err)
+	yearVal, err := types.ParseMoYear("2025")
 	require.NoError(t, err)
 	datetimeType := types.New(types.T_datetime, 0, 0)
 	datetimeVal, err := types.ParseDatetime("2025-01-03 12:30:45", datetimeType.Scale)
@@ -1527,12 +1542,28 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 			want: dec128Val.Format(dec128Type.Scale),
 		},
 		{
+			name: "decimal256",
+			typ:  dec256Type,
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, dec256Val, false, mp))
+			},
+			want: dec256Val.Format(dec256Type.Scale),
+		},
+		{
 			name: "date",
 			typ:  types.T_date.ToType(),
 			append: func(vec *vector.Vector) {
 				require.NoError(t, vector.AppendFixed(vec, dateVal, false, mp))
 			},
 			want: dateVal.String(),
+		},
+		{
+			name: "year",
+			typ:  types.T_year.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, yearVal, false, mp))
+			},
+			want: yearVal.String(),
 		},
 		{
 			name: "datetime",
@@ -1602,6 +1633,45 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 	}
 }
 
+func TestPickKeyDecimal256AndYearPaths(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	ses := newValidateSession(t)
+	decType := types.New(types.T_decimal256, 65, 30)
+	decVal, err := types.ParseDecimal256("42.000000000000000000000000000000", decType.Width, decType.Scale)
+	require.NoError(t, err)
+	yearVal, err := types.ParseMoYear("2025")
+	require.NoError(t, err)
+
+	decVec := vector.NewVec(decType)
+	defer decVec.Free(mp)
+	require.NoError(t, appendNumericStringToVec(decVec, decVal.Format(decType.Scale), decType, time.UTC, mp))
+	require.Equal(t, decVal, extractPKVal(decVec, 0))
+	decString, err := formatPickKeyVectorValueAsString(ses, decVec, 0)
+	require.NoError(t, err)
+	require.Equal(t, decVal.Format(decType.Scale), decString)
+
+	decStrVec := vector.NewVec(decType)
+	defer decStrVec.Free(mp)
+	require.NoError(t, appendStrValToVec(decStrVec, decVal.Format(decType.Scale), decType, time.UTC, mp))
+	require.Equal(t, decVal, extractPKVal(decStrVec, 0))
+
+	yearVec := vector.NewVec(types.T_year.ToType())
+	defer yearVec.Free(mp)
+	require.NoError(t, appendNumericStringToVec(yearVec, yearVal.String(), types.T_year.ToType(), time.UTC, mp))
+	require.Equal(t, yearVal, extractPKVal(yearVec, 0))
+	yearString, err := formatPickKeyVectorValueAsString(ses, yearVec, 0)
+	require.NoError(t, err)
+	require.Equal(t, yearVal.String(), yearString)
+
+	yearStrVec := vector.NewVec(types.T_year.ToType())
+	defer yearStrVec.Free(mp)
+	require.NoError(t, appendStrValToVec(yearStrVec, "2025", types.T_year.ToType(), time.UTC, mp))
+	require.Equal(t, yearVal, extractPKVal(yearStrVec, 0))
+}
+
 type pickStreamingExecutor struct {
 	result executor.Result
 	err    error
@@ -1663,6 +1733,10 @@ func buildPickStreamingBatch(t *testing.T, mp *mpool.MPool, colTypes []types.Typ
 		for colIdx, val := range row {
 			switch typed := val.(type) {
 			case int64:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[colIdx], typed, false, mp))
+			case types.Decimal256:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[colIdx], typed, false, mp))
+			case types.MoYear:
 				require.NoError(t, vector.AppendFixed(bat.Vecs[colIdx], typed, false, mp))
 			case string:
 				require.NoError(t, vector.AppendBytes(bat.Vecs[colIdx], []byte(typed), false, mp))

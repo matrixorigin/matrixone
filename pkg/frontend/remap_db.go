@@ -195,12 +195,21 @@ func remapDbInTableExpr(te tree.TableExpr, remap map[string]string) {
 		if on, ok := t.Cond.(*tree.OnJoinCond); ok {
 			remapDbInExpr(on.Expr, remap)
 		}
+	case *tree.ApplyTableExpr:
+		remapDbInTableExpr(t.Left, remap)
+		remapDbInTableExpr(t.Right, remap)
 	case *tree.ParenTableExpr:
 		remapDbInTableExpr(t.Expr, remap)
 	case *tree.Select:
 		remapDbInSelect(t, remap)
 	case *tree.ParenSelect:
 		remapDbInSelect(t.Select, remap)
+	case *tree.Subquery:
+		remapDbInSelectStatement(t.Select, remap)
+	case *tree.StatementSource:
+		if t.Statement != nil {
+			remapDbInStmt(t.Statement, remap)
+		}
 	}
 }
 
@@ -213,17 +222,35 @@ func remapDbInExprs(exprs tree.Exprs, remap map[string]string) {
 // remapDbInExpr walks an expression looking for nested sub-selects (a
 // *tree.Subquery, e.g. WHERE id IN (SELECT ... FROM dbx.t) or EXISTS (...)) and
 // remaps the qualified table references inside them. It recurses through the
-// common boolean/comparison/function expression containers; expression kinds
-// that cannot contain a sub-select are no-ops.
+// expression containers that can wrap another expression. Keep this aligned
+// with pkg/sql/parsers/tree/expr.go when adding new expression wrappers.
 func remapDbInExpr(expr tree.Expr, remap map[string]string) {
 	switch e := expr.(type) {
 	case nil:
 		return
 	case *tree.Subquery:
 		remapDbInSelectStatement(e.Select, remap)
+	case *tree.ExprList:
+		remapDbInExprs(e.Exprs, remap)
 	case *tree.ParenExpr:
 		remapDbInExpr(e.Expr, remap)
 	case *tree.NotExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.IsNullExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.IsNotNullExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.IsUnknownExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.IsNotUnknownExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.IsTrueExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.IsNotTrueExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.IsFalseExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.IsNotFalseExpr:
 		remapDbInExpr(e.Expr, remap)
 	case *tree.AndExpr:
 		remapDbInExpr(e.Left, remap)
@@ -249,10 +276,31 @@ func remapDbInExpr(expr tree.Expr, remap map[string]string) {
 		remapDbInExpr(e.Right, remap)
 	case *tree.CastExpr:
 		remapDbInExpr(e.Expr, remap)
+	case *tree.BitCastExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.SerialExtractExpr:
+		remapDbInExpr(e.SerialExpr, remap)
+		remapDbInExpr(e.IndexExpr, remap)
+	case *tree.IntervalExpr:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.DefaultVal:
+		remapDbInExpr(e.Expr, remap)
+	case *tree.VarExpr:
+		remapDbInExpr(e.Expr, remap)
 	case *tree.FuncExpr:
 		remapDbInExprs(e.Exprs, remap)
 	case *tree.Tuple:
 		remapDbInExprs(e.Exprs, remap)
+	case *tree.CaseExpr:
+		remapDbInExpr(e.Expr, remap)
+		for _, when := range e.Whens {
+			if when == nil {
+				continue
+			}
+			remapDbInExpr(when.Cond, remap)
+			remapDbInExpr(when.Val, remap)
+		}
+		remapDbInExpr(e.Else, remap)
 	}
 }
 

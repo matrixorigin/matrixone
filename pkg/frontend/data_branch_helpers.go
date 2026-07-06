@@ -462,8 +462,7 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	}
 
 	switch t.Oid {
-	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
-		T_varbinary, types.T_binary:
+	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.T_datalink, types.T_geometry, types.T_geometry32:
 		if t.Oid == types.T_json {
 			var strVal string
 			switch x := val.(type) {
@@ -496,6 +495,19 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		default:
 			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
 		}
+	case types.T_varbinary, types.T_binary, types.T_blob:
+		var bytesVal []byte
+		switch x := val.(type) {
+		case []byte:
+			bytesVal = x
+		case string:
+			bytesVal = []byte(x)
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected binary type %T", val)
+		}
+		buf.WriteString("x'")
+		buf.WriteString(hex.EncodeToString(bytesVal))
+		buf.WriteByte('\'')
 	case types.T_timestamp:
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Timestamp).String2(ses.timeZone, t.Scale))
@@ -511,6 +523,17 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	case types.T_date:
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Date).String())
+		buf.WriteString("'")
+	case types.T_uuid:
+		buf.WriteString("'")
+		switch x := val.(type) {
+		case types.Uuid:
+			buf.WriteString(x.String())
+		case string:
+			buf.WriteString(x)
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected uuid type %T", val)
+		}
 		buf.WriteString("'")
 	case types.T_year:
 		buf.WriteString(val.(types.MoYear).String())
@@ -530,6 +553,10 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		writeUint(uint64(val.(uint32)))
 	case types.T_uint64:
 		writeUint(val.(uint64))
+	case types.T_bit:
+		writeUint(val.(uint64))
+	case types.T_enum:
+		writeUint(uint64(val.(types.Enum)))
 	case types.T_int8:
 		writeInt(int64(val.(int8)))
 	case types.T_int16:

@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -61,15 +62,91 @@ func TestCombinedTxnTable_BuildShardingReaders(t *testing.T) {
 func TestCombinedTxnTable_CollectChanges(t *testing.T) {
 	table := newMockCombinedTxnTable()
 
-	assert.PanicsWithValue(t, "not implemented", func() {
-		table.CollectChanges(
-			context.Background(),
-			types.TS{},
-			types.TS{},
-			false,
-			&mpool.MPool{},
-		)
-	})
+	handle, err := table.CollectChanges(
+		context.Background(),
+		types.TS{},
+		types.TS{},
+		false,
+		&mpool.MPool{},
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, handle)
+
+	data, tombstone, hint, err := handle.Next(context.Background(), &mpool.MPool{})
+	assert.NoError(t, err)
+	assert.Nil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	assert.NoError(t, handle.Close())
+}
+
+func TestCombinedTxnTable_CollectChangesIteratesPartitions(t *testing.T) {
+	first := batch.NewWithSize(0)
+	second := batch.NewWithSize(0)
+	table := newMockCombinedTxnTable()
+	table.tablesFunc = func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
+				return &mockChangesHandle{data: []*batch.Batch{first}}, nil
+			}},
+			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
+				return &mockChangesHandle{data: []*batch.Batch{second}}, nil
+			}},
+		}, nil
+	}
+
+	handle, err := table.CollectChanges(context.Background(), types.TS{}, types.TS{}, false, &mpool.MPool{})
+	assert.NoError(t, err)
+
+	data, tombstone, _, err := handle.Next(context.Background(), &mpool.MPool{})
+	assert.NoError(t, err)
+	assert.Same(t, first, data)
+	assert.Nil(t, tombstone)
+
+	data, tombstone, _, err = handle.Next(context.Background(), &mpool.MPool{})
+	assert.NoError(t, err)
+	assert.Same(t, second, data)
+	assert.Nil(t, tombstone)
+
+	data, tombstone, hint, err := handle.Next(context.Background(), &mpool.MPool{})
+	assert.NoError(t, err)
+	assert.Nil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
+}
+
+func TestCombinedChangesHandle_CloseClosesAllHandlesOnError(t *testing.T) {
+	errFirst := errors.New("first close failed")
+	errSecond := errors.New("second close failed")
+	first := &mockChangesHandle{closeErr: errFirst}
+	second := &mockChangesHandle{closeErr: errSecond}
+	third := &mockChangesHandle{}
+	handle := &combinedChangesHandle{handles: []engine.ChangesHandle{first, second, third}}
+
+	err := handle.Close()
+	assert.ErrorIs(t, err, errFirst)
+	assert.Equal(t, 1, first.closeCount)
+	assert.Equal(t, 1, second.closeCount)
+	assert.Equal(t, 1, third.closeCount)
+	assert.True(t, first.closed)
+	assert.True(t, second.closed)
+	assert.True(t, third.closed)
+}
+
+func TestCombinedChangesHandle_NextCloseErrorClosesRemainingHandles(t *testing.T) {
+	errFirst := errors.New("first close failed")
+	first := &mockChangesHandle{closeErr: errFirst}
+	second := &mockChangesHandle{}
+	handle := &combinedChangesHandle{handles: []engine.ChangesHandle{first, second}}
+
+	data, tombstone, _, err := handle.Next(context.Background(), &mpool.MPool{})
+	assert.ErrorIs(t, err, errFirst)
+	assert.Nil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, 1, first.closeCount)
+	assert.Equal(t, 1, second.closeCount)
+	assert.True(t, first.closed)
+	assert.True(t, second.closed)
 }
 
 func TestCombinedTxnTable_MergeObjects(t *testing.T) {
@@ -1239,6 +1316,29 @@ type mockTombstoner struct {
 	mergeFunc                   func(other engine.Tombstoner) error
 }
 
+type mockChangesHandle struct {
+	data       []*batch.Batch
+	idx        int
+	closed     bool
+	closeErr   error
+	closeCount int
+}
+
+func (m *mockChangesHandle) Next(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	if m.idx >= len(m.data) {
+		return nil, nil, engine.ChangesHandle_Tail_done, nil
+	}
+	bat := m.data[m.idx]
+	m.idx++
+	return bat, nil, engine.ChangesHandle_Tail_wip, nil
+}
+
+func (m *mockChangesHandle) Close() error {
+	m.closed = true
+	m.closeCount++
+	return m.closeErr
+}
+
 func (m *mockTombstoner) Type() engine.TombstoneType {
 	return engine.TombstoneData
 }
@@ -1328,6 +1428,7 @@ type mockRelation struct {
 	rowsFunc                            func(ctx context.Context) (uint64, error)
 	starCountFunc                       func(ctx context.Context) (uint64, error)
 	estimateCommittedTombstoneCountFunc func(ctx context.Context) (int, error)
+	collectChangesFunc                  func(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (engine.ChangesHandle, error)
 	buildReadersFunc                    func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error)
 }
 
@@ -1386,7 +1487,10 @@ func (m *mockRelation) EstimateCommittedTombstoneCount(ctx context.Context) (int
 	return 0, nil
 }
 
-func (m *mockRelation) CollectChanges(ctx context.Context, from, to types.TS, _ bool, mp *mpool.MPool) (engine.ChangesHandle, error) {
+func (m *mockRelation) CollectChanges(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (engine.ChangesHandle, error) {
+	if m.collectChangesFunc != nil {
+		return m.collectChangesFunc(ctx, from, to, skipDeletes, mp)
+	}
 	return nil, nil
 }
 

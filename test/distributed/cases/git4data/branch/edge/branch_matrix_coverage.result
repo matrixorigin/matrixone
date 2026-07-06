@@ -43,7 +43,7 @@ vbin = x'090a0b0c',
 e = 'green',
 bl = 'blob-updated',
 dl = 'file:///tmp/mo_branch_type_updated.csv',
-g = 'POINT(2 2)',
+g = st_geomfromtext('POINT(2 2)'),
 vf = '[7.7,8.8,9.9]'
 where id = 1;
 insert into wide_branch values
@@ -52,14 +52,33 @@ cast('7.000000000000000000000000000000' as decimal(65,30)),
 2000, '3ddf7b28-2dba-11ed-940f-000c29847904', 'gh', x'0d0e0f10',
 'red', 'blob-new', 'file:///tmp/mo_branch_type_new.csv', 'POINT(3 3)', '[0.1,0.2,0.3]');
 delete from wide_branch where id = 2;
+data branch diff wide_branch against wide_base output summary;
+➤ metric[12,0,0]  ¦  wide_branch[-5,0,0]  ¦  wide_base[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  0  𝄀
+DELETED  ¦  1  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
 data branch merge wide_branch into wide_base;
 select count(*) as wide_rows from wide_base;
-wide_rows
+➤ wide_rows[-5,64,0]  𝄀
 2
 select id, cast(b as int) as bit_i, u8, u16, u32, u64, y, e from wide_base order by id;
-id    bit_i    u8    u16    u32    u64    y    e
-1    7    251    65001    4000000001    9000000000000000001    2025    green
-3    1    2    3    4    5    2000    red
+➤ id[4,32,0]  ¦  bit_i[4,32,0]  ¦  u8[-6,8,0]  ¦  u16[5,16,0]  ¦  u32[4,32,0]  ¦  u64[-5,64,0]  ¦  y[91,2147483647,0]  ¦  e[12,-1,0]  𝄀
+1  ¦  7  ¦  251  ¦  65001  ¦  4000000001  ¦  9000000000000000001  ¦  2025-01-01  ¦  green  𝄀
+3  ¦  1  ¦  2  ¦  3  ¦  4  ¦  5  ¦  2000-01-01  ¦  red
+select id, d256, st_astext(g) as g from wide_base order by id;
+➤ id[4,32,0]  ¦  d256[3,65,30]  ¦  g[12,-1,0]  𝄀
+1  ¦  42.000000000000000000000000000000  ¦  POINT(2 2)  𝄀
+3  ¦  7.000000000000000000000000000000  ¦  POINT(3 3)
+create table pick_year_base(y year primary key, v int);
+insert into pick_year_base values (2024, 1), (2025, 2);
+data branch create table pick_year_dst from pick_year_base;
+data branch create table pick_year_src from pick_year_base;
+update pick_year_src set v = 20250 where y = 2025;
+data branch pick pick_year_src into pick_year_dst keys('2025') when conflict accept;
+select y, v from pick_year_dst order by y;
+➤ y[91,2147483647,0]  ¦  v[4,32,0]  𝄀
+2024-01-01  ¦  1  𝄀
+2025-01-01  ¦  20250
 drop database br_matrix_types;
 drop database if exists br_matrix_constraints;
 create database br_matrix_constraints;
@@ -84,16 +103,16 @@ insert into child_branch(parent_id, code, qty) values (1, null, 1.00);
 constraint violation: Column 'code' cannot be null
 insert into child_branch(parent_id, code, qty) values (1, 'base-a', 1.00);
 -- @regex("Duplicate entry 'base-a'", true)
-Duplicate entry 'base-a' for key 'uq_code'
+Duplicate entry 'base-a' for key 'code'
 insert into child_branch(parent_id, code, qty) values (99, 'bad-fk', 1.00);
 -- @regex("foreign key constraint fails", true)
 internal error: Cannot add or update a child row: a foreign key constraint fails
 data branch merge child_branch into child;
 select count(*) as child_rows from child;
-child_rows
+➤ child_rows[-5,64,0]  𝄀
 3
 select code from child where parent_id = 2 and qty = 77.75;
-code
+➤ code[12,-1,0]  𝄀
 seed
 create table clustered_base(
 tenant int not null comment 'cluster tenant',
@@ -107,13 +126,13 @@ insert into clustered_branch(tenant, payload) values (3, 'default-seq');
 delete from clustered_branch where tenant = 2;
 data branch merge clustered_branch into clustered_base;
 select count(*) as clustered_rows from clustered_base;
-clustered_rows
+➤ clustered_rows[-5,64,0]  𝄀
 3
 select tenant, seq, payload from clustered_base order by tenant, seq;
-tenant    seq    payload
-1    1    base
-1    2    new
-3    0    default-seq
+➤ tenant[4,32,0]  ¦  seq[4,32,0]  ¦  payload[12,-1,0]  𝄀
+1  ¦  1  ¦  base  𝄀
+1  ¦  2  ¦  new  𝄀
+3  ¦  0  ¦  default-seq
 drop database br_matrix_constraints;
 drop database if exists br_matrix_tables_copy;
 drop database if exists br_matrix_tables;
@@ -134,22 +153,28 @@ insert into part_branch values (2, 20, 'new-p0'), (21, 210, 'new-p1');
 delete from part_branch where id = 12;
 data branch merge part_branch into part_base;
 select id, val, note from part_base order by id;
-id    val    note
-1    10    p0
-2    20    new-p0
-11    111    p1
-21    210    new-p1
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  note[12,-1,0]  𝄀
+1  ¦  10  ¦  p0  𝄀
+2  ¦  20  ¦  new-p0  𝄀
+11  ¦  111  ¦  p1  𝄀
+21  ¦  210  ¦  new-p1
 create table view_base(id int primary key, val int);
 insert into view_base values (1, 10), (2, 20), (3, 30);
 create view v_active as select id, val from view_base where val >= 20;
+create table view_identifier_base(br_matrix_tables int primary key, marker int);
+insert into view_identifier_base values (10, 100);
+create view v_identifier as select br_matrix_tables as br_matrix_tables from view_identifier_base;
 data branch create database br_matrix_tables_copy from br_matrix_tables;
 insert into view_base values (4, 40);
 select count(*) as copied_view_rows from br_matrix_tables_copy.v_active;
-copied_view_rows
+➤ copied_view_rows[-5,64,0]  𝄀
 2
+select br_matrix_tables from br_matrix_tables_copy.v_identifier;
+➤ br_matrix_tables[4,32,0]  𝄀
+10
 insert into br_matrix_tables_copy.view_base values (5, 50);
 select count(*) as copied_view_rows_after_insert from br_matrix_tables_copy.v_active;
-copied_view_rows_after_insert
+➤ copied_view_rows_after_insert[-5,64,0]  𝄀
 3
 create external table ext_branch_base(id int) infile{"filepath"='$resources/external_table_file/extable.csv'} fields terminated by ',' lines terminated by '\n';
 data branch create table ext_branch_copy from ext_branch_base;
@@ -162,7 +187,7 @@ insert into br_cluster_branch_base values (1, 0), (2, 0);
 use br_matrix_tables;
 data branch create table cluster_branch_copy from mo_catalog.br_cluster_branch_base;
 select count(*) as cluster_rows from cluster_branch_copy;
-cluster_rows
+➤ cluster_rows[-5,64,0]  𝄀
 2
 drop table mo_catalog.br_cluster_branch_base;
 drop database br_matrix_tables_copy;
@@ -174,13 +199,16 @@ create table `base table`(a int primary key, b varchar(20));
 insert into `base table` values (1, 'space-name'), (2, 'space-name');
 data branch create table `branch table` from `base table`;
 select count(*) as quoted_space_rows from `branch table`;
-quoted_space_rows
+➤ quoted_space_rows[-5,64,0]  𝄀
 2
 create table `quote'src`(a int primary key, b varchar(20));
 insert into `quote'src` values (1, 'single-quote');
 data branch create table `quote'dst` from `quote'src`;
-select count(*) as quoted_apostrophe_rows from `quote'dst`;
-quoted_apostrophe_rows
+set @quote_sql = 'select count(*) as quoted_apostrophe_rows from `quote''dst`';
+prepare quote_stmt from @quote_sql;
+execute quote_stmt;
+➤ quoted_apostrophe_rows[-5,64,0]  𝄀
 1
+deallocate prepare quote_stmt;
 use mo_catalog;
 drop database if exists br_matrix_quoted;

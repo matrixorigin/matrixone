@@ -57,6 +57,13 @@ func Test_runSql(t *testing.T) {
 	require.Error(t, err, "internal error: no account id in context")
 }
 
+func TestGetSqlForFkReferredToEscapesStringLiterals(t *testing.T) {
+	sql := GetSqlForFkReferredTo("db\\name", "quote'src")
+	require.Contains(t, sql, "refer_db_name = 'db\\\\name'")
+	require.Contains(t, sql, "refer_table_name = 'quote''src'")
+	require.Contains(t, sql, "table_name != 'quote''src'")
+}
+
 func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
 	{
 		//invalid json

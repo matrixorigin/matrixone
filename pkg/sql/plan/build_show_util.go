@@ -23,6 +23,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
@@ -50,9 +51,9 @@ func ConstructCreateTableSQL(
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
-	dbTblName := fmt.Sprintf("`%s`", formatStr(tblName))
+	dbTblName := sqlquote.Ident(tblName)
 	if useDbName {
-		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
+		dbTblName = sqlquote.QualifiedIdent(schemaName, tblName)
 	}
 
 	if tableDef.TableType == catalog.SystemExternalRel {
@@ -111,7 +112,7 @@ func ConstructCreateTableSQL(
 		} else {
 			typeStr = strings.ToLower(typeStr)
 		}
-		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
+		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -170,9 +171,9 @@ func ConstructCreateTableSQL(
 		for i, def := range pkDefs {
 			def = colNameToOriginName[def]
 			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`)", formatStr(def))
+				pkStr += fmt.Sprintf("%s)", sqlquote.Ident(def))
 			} else {
-				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
+				pkStr += fmt.Sprintf("%s,", sqlquote.Ident(def))
 			}
 		}
 		if rowCount != 0 {
@@ -202,7 +203,7 @@ func ConstructCreateTableSQL(
 				indexStr += " FULLTEXT "
 
 				if len(indexdef.IndexName) > 0 {
-					indexStr += fmt.Sprintf("`%s`", formatStr(indexdef.IndexName))
+					indexStr += sqlquote.Ident(indexdef.IndexName)
 				}
 				indexStr += "("
 				i := 0
@@ -215,7 +216,7 @@ func ConstructCreateTableSQL(
 					}
 
 					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					indexStr += sqlquote.Ident(part)
 					i++
 				}
 
@@ -264,8 +265,8 @@ func ConstructCreateTableSQL(
 					indexStr = "  KEY "
 					rewriteIndexStr = "  KEY "
 				}
-				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-				rewriteIndexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				indexStr += fmt.Sprintf("%s ", sqlquote.Ident(indexdef.IndexName))
+				rewriteIndexStr += fmt.Sprintf("%s ", sqlquote.Ident(indexdef.IndexName))
 				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) && !catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
 					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 				}
@@ -289,8 +290,8 @@ func ConstructCreateTableSQL(
 					}
 
 					originPart := colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(originPart))
-					rewriteIndexStr += fmt.Sprintf("`%s`", formatStr(originPart))
+					indexStr += sqlquote.Ident(originPart)
+					rewriteIndexStr += sqlquote.Ident(originPart)
 					if length, ok := prefixLengths[part]; ok {
 						prefixLength := fmt.Sprintf("(%d)", length)
 						indexStr += prefixLength
@@ -455,12 +456,12 @@ func ConstructCreateTableSQL(
 			createStr += ",\n"
 		}
 
-		fkRefDbTblName := fmt.Sprintf("`%s`", formatStr(fkTableDef.Name))
+		fkRefDbTblName := sqlquote.Ident(fkTableDef.Name)
 		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
-			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkTableDef.DbName), formatStr(fkTableDef.Name))
+			fkRefDbTblName = sqlquote.QualifiedIdent(fkTableDef.DbName, fkTableDef.Name)
 		}
-		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
-			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
+		createStr += fmt.Sprintf("  CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s) ON DELETE %s ON UPDATE %s",
+			sqlquote.Ident(fk.Name), joinQuotedIdentifiers(colOriginNames), fkRefDbTblName, joinQuotedIdentifiers(fkColOriginNames), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
 	for _, checkDef := range checkDefs {
@@ -563,14 +564,14 @@ func ConstructCreateTableSQL(
 			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			for i, cbName := range cbNames {
 				if i != 0 {
-					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
+					clusterby += fmt.Sprintf(", %s", sqlquote.Ident(cbName))
 				} else {
-					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
+					clusterby += sqlquote.Ident(cbName)
 				}
 			}
 		} else {
 			//single column cluster by
-			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
+			clusterby += sqlquote.Ident(tableDef.ClusterBy.Name)
 		}
 		clusterby += ")"
 		createStr += clusterby
@@ -683,6 +684,14 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 		}
 	}
 	return checks
+}
+
+func joinQuotedIdentifiers(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = sqlquote.Ident(name)
+	}
+	return strings.Join(quoted, ",")
 }
 
 func extractCreateTableDefsSection(createSQL string) (string, bool) {

@@ -485,6 +485,13 @@ func decodeTupleTo(b []byte, t Tuple, schema []T) (Tuple, int, []T, error) {
 		el, off := decodeFn(code, b[i+1:])
 		return el, off + 1, nil
 	}
+	decodeEnumWithOffset := func(i int) (any, int, error) {
+		if err := checkBytes(i, 3); err != nil { // enum code + uint16 code + at least 1 byte data
+			return nil, 0, err
+		}
+		el, off := decodeUint(uint16Code, b[i+2:])
+		return Enum(el.(uint16)), off + 2, nil
+	}
 
 	i := 0
 	for i < len(b) {
@@ -599,7 +606,7 @@ func decodeTupleTo(b []byte, t Tuple, schema []T) (Tuple, int, []T, error) {
 
 		case enumCode:
 			schema = append(schema, T_enum)
-			el, off, err = decodeWithOffset(i, decodeUint, uint16Code)
+			el, off, err = decodeEnumWithOffset(i)
 
 		case uuidCode:
 			if err = checkBytes(i, 17); err != nil {
@@ -663,6 +670,13 @@ func UnpackNthElement(b []byte, n int) (any, T, error) {
 		}
 		el, off := decodeFn(code, b[i+1:])
 		return el, off + 1, nil
+	}
+	decodeEnumWithOffset := func(i int) (any, int, error) {
+		if err := checkBytes(i, 3); err != nil {
+			return nil, 0, err
+		}
+		el, off := decodeUint(uint16Code, b[i+2:])
+		return Enum(el.(uint16)), off + 2, nil
 	}
 
 	idx := 0
@@ -755,7 +769,7 @@ func UnpackNthElement(b []byte, n int) (any, T, error) {
 			el, off, err = decodeWithOffset(i, decodeUint, uint64Code)
 		case enumCode:
 			schema = T_enum
-			el, off, err = decodeWithOffset(i, decodeUint, uint16Code)
+			el, off, err = decodeEnumWithOffset(i)
 		case uuidCode:
 			if err = checkBytes(i, 17); err != nil {
 				return nil, 0, err

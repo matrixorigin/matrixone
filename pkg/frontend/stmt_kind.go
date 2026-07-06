@@ -248,7 +248,9 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.DataBranchCreateTable,
 		*tree.DataBranchCreateDatabase,
 		*tree.DataBranchDeleteTable,
-		*tree.DataBranchDeleteDatabase:
+		*tree.DataBranchDeleteDatabase,
+		*tree.DataBranchDiff,
+		*tree.DataBranchMerge:
 		return true, nil
 	case *tree.DataBranchPick:
 		return false, nil

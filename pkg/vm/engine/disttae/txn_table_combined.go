@@ -280,10 +280,72 @@ func (t *combinedTxnTable) EstimateCommittedTombstoneCount(ctx context.Context) 
 func (t *combinedTxnTable) CollectChanges(
 	ctx context.Context,
 	from, to types.TS,
-	_ bool,
+	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
-	panic("not implemented")
+	tables, err := t.tablesFunc()
+	if err != nil {
+		return nil, err
+	}
+
+	handle := &combinedChangesHandle{}
+	for _, rel := range tables {
+		partitionHandle, err := rel.CollectChanges(ctx, from, to, skipDeletes, mp)
+		if err != nil {
+			_ = handle.Close()
+			return nil, err
+		}
+		if partitionHandle != nil {
+			handle.handles = append(handle.handles, partitionHandle)
+		}
+	}
+	return handle, nil
+}
+
+type combinedChangesHandle struct {
+	handles []engine.ChangesHandle
+	idx     int
+	closed  bool
+}
+
+func (h *combinedChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	for h.idx < len(h.handles) {
+		data, tombstone, hint, err = h.handles[h.idx].Next(ctx, mp)
+		if err != nil {
+			return nil, nil, hint, err
+		}
+		if data != nil || tombstone != nil {
+			return data, tombstone, hint, nil
+		}
+		if err = h.handles[h.idx].Close(); err != nil {
+			h.idx++
+			_ = h.closeRemaining()
+			return nil, nil, hint, err
+		}
+		h.idx++
+	}
+	return nil, nil, engine.ChangesHandle_Tail_done, nil
+}
+
+func (h *combinedChangesHandle) Close() error {
+	if h.closed {
+		return nil
+	}
+	return h.closeRemaining()
+}
+
+func (h *combinedChangesHandle) closeRemaining() error {
+	h.closed = true
+	var firstErr error
+	for ; h.idx < len(h.handles); h.idx++ {
+		if err := h.handles[h.idx].Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (t *combinedTxnTable) CollectObjectList(

@@ -1140,6 +1140,7 @@ func TestUnpackNthElement(t *testing.T) {
 		{"time", func(pk *Packer) { pk.EncodeTime(Time(400)); pk.EncodeNull() }, 0, T_time, Time(400)},
 		{"year", func(pk *Packer) { pk.EncodeMoYear(MoYear(2024)); pk.EncodeNull() }, 0, T_year, MoYear(2024)},
 		{"bit", func(pk *Packer) { pk.EncodeBit(0xBEEF); pk.EncodeNull() }, 0, T_bit, uint64(0xBEEF)},
+		{"enum", func(pk *Packer) { pk.EncodeEnum(Enum(2)); pk.EncodeNull() }, 0, T_enum, Enum(2)},
 		{"objectid", func(pk *Packer) { pk.EncodeObjectid(&oid); pk.EncodeNull() }, 0, T_Objectid, oid},
 	}
 	for _, c := range cases {
@@ -1160,4 +1161,24 @@ func TestUnpackNthElement(t *testing.T) {
 	// Empty input
 	_, _, err = UnpackNthElement([]byte{}, 0)
 	require.Error(t, err)
+}
+
+func TestEncodeEnumKeepsStablePackedFormat(t *testing.T) {
+	enumPacked := NewPacker()
+	enumPacked.EncodeEnum(Enum(2))
+
+	legacyPacked := NewPacker()
+	legacyPacked.putByte(enumCode)
+	legacyPacked.EncodeUint16(uint16(2))
+	require.Equal(t, legacyPacked.GetBuf(), enumPacked.GetBuf())
+
+	tuple, schema, err := UnpackWithSchema(enumPacked.GetBuf())
+	require.NoError(t, err)
+	require.Equal(t, []T{T_enum}, schema)
+	require.Equal(t, Tuple{Enum(2)}, tuple)
+
+	el, typ, err := UnpackNthElement(enumPacked.GetBuf(), 0)
+	require.NoError(t, err)
+	require.Equal(t, T_enum, typ)
+	require.Equal(t, Enum(2), el)
 }

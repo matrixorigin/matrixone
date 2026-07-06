@@ -73,7 +73,7 @@ func TestFormatValIntoString_ByteEscaping(t *testing.T) {
 
 	val := []byte{'x', 0x00, '\\', 0x07, '\''}
 	require.NoError(t, formatValIntoString(ses, val, types.New(types.T_varbinary, 0, 0), &buf))
-	require.Equal(t, `'x\0\\\x07\''`, buf.String())
+	require.Equal(t, "x'78005c0727'", buf.String())
 }
 
 func TestFormatValIntoString_Time(t *testing.T) {
@@ -85,6 +85,31 @@ func TestFormatValIntoString_Time(t *testing.T) {
 
 	require.NoError(t, formatValIntoString(ses, val, types.New(types.T_time, 0, 6), &buf))
 	require.Equal(t, `'12:34:56.123456'`, buf.String())
+}
+
+func TestFormatValIntoString_Bit(t *testing.T) {
+	var buf bytes.Buffer
+	ses := &Session{}
+
+	require.NoError(t, formatValIntoString(ses, uint64(7), types.New(types.T_bit, 0, 0), &buf))
+	require.Equal(t, "7", buf.String())
+}
+
+func TestFormatValIntoString_UUID(t *testing.T) {
+	var buf bytes.Buffer
+	ses := &Session{}
+	uuidValue := types.Uuid{0x1b, 0x50, 0xc1, 0x37, 0x2d, 0xba, 0x11, 0xed, 0x94, 0x0f, 0x00, 0x0c, 0x29, 0x84, 0x79, 0x04}
+
+	require.NoError(t, formatValIntoString(ses, uuidValue, types.New(types.T_uuid, 0, 0), &buf))
+	require.Equal(t, "'1b50c137-2dba-11ed-940f-000c29847904'", buf.String())
+}
+
+func TestFormatValIntoString_GeometryText(t *testing.T) {
+	var buf bytes.Buffer
+	ses := &Session{}
+
+	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry, 0, 0), &buf))
+	require.Equal(t, "'POINT(2 2)'", buf.String())
 }
 
 func TestFormatValIntoString_JSONEscaping(t *testing.T) {
@@ -183,8 +208,14 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	require.Equal(t, 2, varcharVec.Length())
 	require.True(t, varcharVec.GetNulls().Contains(1))
 
+	decimalVec := vector.NewVec(types.New(types.T_decimal256, 65, 30))
+	decimalValue, err := types.ParseDecimal256("42.000000000000000000000000000000", 65, 30)
+	require.NoError(t, err)
+	require.NoError(t, appendTupleValueToVector(decimalVec, types.EncodeDecimal256(&decimalValue), mp))
+	require.Equal(t, decimalValue, vector.GetFixedAtNoTypeCheck[types.Decimal256](decimalVec, 0))
+
 	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 6))
-	err := appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
+	err = appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected byte slice for fixed-width column")
 }

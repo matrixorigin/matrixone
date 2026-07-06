@@ -138,7 +138,6 @@ insert into txn_merge_src values (3, 'three');
 delete from txn_merge_src where a = 1;
 
 -- Regression for #24924: DIFF/MERGE should honor explicit transaction boundaries.
--- @bvt:issue#24924
 begin;
 data branch diff txn_merge_src against txn_merge_dst output count;
 rollback;
@@ -150,7 +149,6 @@ begin;
 data branch merge txn_merge_src into txn_merge_dst when conflict accept;
 commit;
 select a, b from txn_merge_dst order by a;
--- @bvt:issue
 
 data branch create database br_txn_dst from br_txn_src;
 select count(*) as dst_tables

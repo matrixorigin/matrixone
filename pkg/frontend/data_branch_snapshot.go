@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -220,23 +221,21 @@ func createBranchProtectSnapshot(
 	// existing insertIntoMoSnapshots format does not carry the kind column
 	// (it relies on the 'user' default), so this path uses its own insert.
 	//
-	// Values are interpolated via fmt.Sprintf because every user-
-	// controllable string here (account name, db/table name) has already
-	// passed through the MO parser/catalog path, so it is a legal MySQL
-	// identifier and never carries a quote that could break the literal.
+	// Identifiers can contain apostrophes when quoted with backticks, so every
+	// value interpolated as a SQL string literal must be escaped explicitly.
 	insertSQL := fmt.Sprintf(
 		`insert into %s.%s(snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id, kind) `+
 			`values ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d, '%s')`,
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
-		newUUID.String(),
-		sname,
+		sqlquote.EscapeString(newUUID.String()),
+		sqlquote.EscapeString(sname),
 		receipt.snapshotTS,
-		dataBranchLevel_Table,
-		parentAccountName,
-		receipt.srcDb,
-		receipt.srcTbl,
+		sqlquote.EscapeString(dataBranchLevel_Table),
+		sqlquote.EscapeString(parentAccountName),
+		sqlquote.EscapeString(receipt.srcDb),
+		sqlquote.EscapeString(receipt.srcTbl),
 		receipt.srcTableID,
-		branchSnapshotKind,
+		sqlquote.EscapeString(branchSnapshotKind),
 	)
 
 	// Execute as sys so the row can be written into the parent's account
