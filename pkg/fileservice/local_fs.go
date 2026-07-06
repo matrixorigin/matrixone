@@ -800,10 +800,13 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry,
 			if strings.HasPrefix(name, ".") {
 				continue
 			}
-			info, err := entry.Info()
+			info, ok, err := localDirEntryInfo(entry)
 			if err != nil {
 				yield(nil, err)
 				return
+			}
+			if !ok {
+				continue
 			}
 			fileSize := info.Size()
 			nBlock := ceilingDiv(fileSize, _BlockSize)
@@ -1253,6 +1256,17 @@ func (l *LocalFS) Cost() *CostAttr {
 	return &CostAttr{
 		List: CostLow,
 	}
+}
+
+func localDirEntryInfo(entry os.DirEntry) (fs.FileInfo, bool, error) {
+	info, err := entry.Info()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return info, true, nil
 }
 
 func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
