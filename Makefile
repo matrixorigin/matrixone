@@ -1085,7 +1085,18 @@ dev-logs-minio-local:
 
 .PHONY: dev-up-iceberg-tier-a
 dev-up-iceberg-tier-a: dev-up-minio-local
-	@curl -fsS http://127.0.0.1:19120/iceberg/v1/config >/dev/null
+	@echo "Waiting for Nessie Iceberg REST catalog..."
+	@for i in $$(seq 1 60); do \
+		if curl -fsS --max-time 5 http://127.0.0.1:19120/iceberg/v1/config >/dev/null 2>&1; then \
+			break; \
+		fi; \
+		if [ "$$i" -eq 60 ]; then \
+			echo "Timed out waiting for Nessie Iceberg REST catalog" >&2; \
+			cd $(MINIO_DIR) && docker compose logs --tail=80 nessie >&2 || true; \
+			exit 1; \
+		fi; \
+		sleep 1; \
+	done
 	@echo "✅ Iceberg Tier A services started"
 	@echo "  - REST catalog: http://127.0.0.1:19120/iceberg"
 	@echo "  - Warehouse: s3://mo-iceberg/warehouse"
