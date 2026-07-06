@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lni/dragonboat/v4"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -57,8 +58,10 @@ func GetShardInfo(
 	sid string,
 	address string,
 	shardID uint64,
+	onlyLiveReplicaAddresses ...bool,
 ) (ShardInfo, bool, error) {
-	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID, false)
+	onlyLive := len(onlyLiveReplicaAddresses) > 0 && onlyLiveReplicaAddresses[0]
+	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID, false, onlyLive)
 	if err != nil || !ok {
 		return ShardInfo{}, false, err
 	}
@@ -95,7 +98,7 @@ func getShardMembership(
 	address string,
 	shardID uint64,
 ) (map[uint64]string, bool, error) {
-	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID, true)
+	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID, true, false)
 	if err != nil || !ok {
 		return nil, false, err
 	}
@@ -115,6 +118,7 @@ func queryShardInfoRaw(
 	address string,
 	shardID uint64,
 	includeExpiredReplicaAddresses bool,
+	onlyLiveReplicaAddresses bool,
 ) (pb.ShardInfoQueryResult, bool, error) {
 	respPool := &sync.Pool{}
 	respPool.New = func() interface{} {
@@ -147,6 +151,7 @@ func queryShardInfoRaw(
 		LogRequest: pb.LogRequest{
 			ShardID:                        shardID,
 			IncludeExpiredReplicaAddresses: includeExpiredReplicaAddresses,
+			OnlyLiveReplicaAddresses:       onlyLiveReplicaAddresses,
 		},
 	}
 	rpcReq := &RPCRequest{
@@ -182,6 +187,7 @@ func (s *Service) getShardInfo(
 	ctx context.Context,
 	shardID uint64,
 	includeExpiredReplicaAddresses bool,
+	onlyLiveReplicaAddresses bool,
 ) (pb.ShardInfoQueryResult, bool) {
 	r, ok := s.store.nh.GetNodeHostRegistry()
 	if !ok {
@@ -200,6 +206,9 @@ func (s *Service) getShardInfo(
 	}
 	expiredState := s.getExpiredLogStoreState(ctx, includeExpiredReplicaAddresses)
 	for nodeID, uuid := range shard.Nodes {
+		if onlyLiveReplicaAddresses && !isLiveReplica(r, uuid) {
+			continue
+		}
 		replica := pb.ReplicaInfo{UUID: uuid}
 		if data, ok := r.GetMeta(uuid); ok {
 			var md storeMeta
@@ -222,6 +231,11 @@ func (s *Service) getShardInfo(
 		result.Replicas[nodeID] = replica
 	}
 	return result, true
+}
+
+func isLiveReplica(r dragonboat.INodeHostRegistry, uuid string) bool {
+	state, _, ok := r.GetNodeHostState(uuid)
+	return ok && state == dragonboat.NodeHostStateAlive
 }
 
 func (s *Service) filterExpiredReplicaAddress(
