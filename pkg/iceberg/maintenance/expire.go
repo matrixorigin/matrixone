@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/metadata"
 )
 
 const (
@@ -256,7 +257,7 @@ func sortSnapshotsNewestFirst(snapshots []api.Snapshot) {
 }
 
 func currentSnapshotID(meta *api.TableMetadata) (int64, error) {
-	if meta == nil || meta.CurrentSnapshotID == nil || *meta.CurrentSnapshotID == 0 {
+	if !metadata.HasCurrentSnapshot(meta) {
 		return 0, api.NewError(api.ErrMetadataInvalid, "Iceberg maintenance requires a current snapshot", nil)
 	}
 	return *meta.CurrentSnapshotID, nil

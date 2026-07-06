@@ -68,12 +68,22 @@ func validateTableMetadataShape(meta *api.TableMetadata) error {
 			return api.NewError(api.ErrMetadataInvalid, "Iceberg metadata default partition spec id was not found", map[string]string{"spec_id": strconv.Itoa(meta.DefaultSpecID)})
 		}
 	}
-	if meta.CurrentSnapshotID != nil {
+	if HasCurrentSnapshot(meta) {
 		if _, ok := FindSnapshot(meta, *meta.CurrentSnapshotID); !ok {
 			return api.NewError(api.ErrMetadataInvalid, "Iceberg metadata current snapshot id was not found", map[string]string{"snapshot_id": strconv.FormatInt(*meta.CurrentSnapshotID, 10)})
 		}
 	}
 	return nil
+}
+
+const NoCurrentSnapshotID int64 = -1
+
+func HasCurrentSnapshot(meta *api.TableMetadata) bool {
+	return meta != nil && meta.CurrentSnapshotID != nil && !isNoCurrentSnapshotID(*meta.CurrentSnapshotID)
+}
+
+func isNoCurrentSnapshotID(snapshotID int64) bool {
+	return snapshotID == NoCurrentSnapshotID
 }
 
 func FindSnapshot(meta *api.TableMetadata, snapshotID int64) (api.Snapshot, bool) {
@@ -101,8 +111,8 @@ func ResolveSnapshot(meta *api.TableMetadata, selector SnapshotSelector) (api.Sn
 	if strings.TrimSpace(selector.RefName) != "" {
 		return resolveSnapshotRef(meta, strings.TrimSpace(selector.RefName), selector.AllowMainFallback)
 	}
-	if meta.CurrentSnapshotID == nil {
-		return api.Snapshot{}, api.NewError(api.ErrTableNotFound, "Iceberg table has no current snapshot", nil)
+	if !HasCurrentSnapshot(meta) {
+		return api.Snapshot{}, noCurrentSnapshotError()
 	}
 	return resolveSnapshotID(meta, *meta.CurrentSnapshotID)
 }
@@ -116,12 +126,19 @@ func resolveSnapshotID(meta *api.TableMetadata, snapshotID int64) (api.Snapshot,
 
 func resolveSnapshotRef(meta *api.TableMetadata, refName string, allowMainFallback bool) (api.Snapshot, error) {
 	if ref, ok := meta.Refs[refName]; ok {
+		if isNoCurrentSnapshotID(ref.SnapshotID) {
+			return api.Snapshot{}, noCurrentSnapshotError()
+		}
 		return resolveSnapshotID(meta, ref.SnapshotID)
 	}
-	if refName == model.DefaultRefMain && allowMainFallback && meta.CurrentSnapshotID != nil {
+	if refName == model.DefaultRefMain && allowMainFallback && HasCurrentSnapshot(meta) {
 		return resolveSnapshotID(meta, *meta.CurrentSnapshotID)
 	}
 	return api.Snapshot{}, api.NewError(api.ErrTableNotFound, "Iceberg snapshot ref was not found", map[string]string{"ref": refName})
+}
+
+func noCurrentSnapshotError() error {
+	return api.NewError(api.ErrTableNotFound, "Iceberg table has no current snapshot", nil)
 }
 
 func resolveSnapshotAtTimestamp(meta *api.TableMetadata, timestampMS int64) (api.Snapshot, error) {

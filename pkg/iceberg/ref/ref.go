@@ -104,7 +104,7 @@ func CommitRequirement(spec Spec, baseSnapshotID int64) api.CommitRequirement {
 		refName = model.DefaultRefMain
 	}
 	if baseSnapshotID == 0 {
-		return api.CommitRequirement{Type: "assert-ref-not-exists", Ref: refName}
+		return api.CommitRequirement{Type: "assert-ref-snapshot-id", Ref: refName}
 	}
 	return api.CommitRequirement{Type: "assert-ref-snapshot-id", Ref: refName, SnapshotID: baseSnapshotID}
 }

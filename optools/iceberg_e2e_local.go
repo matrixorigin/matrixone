@@ -490,7 +490,7 @@ func currentSnapshotID(ctx context.Context, cfg localE2EConfig, table string) (i
 	if err := json.Unmarshal(resp.MetadataJSON, &metadata); err != nil {
 		return 0, fmt.Errorf("decode table metadata for %s: %w", table, err)
 	}
-	if metadata.CurrentSnapshotID == 0 {
+	if metadata.CurrentSnapshotID <= 0 {
 		return 0, fmt.Errorf("table %s does not have a current snapshot", table)
 	}
 	return metadata.CurrentSnapshotID, nil

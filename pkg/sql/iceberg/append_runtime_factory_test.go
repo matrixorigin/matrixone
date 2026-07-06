@@ -37,6 +37,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite"
 )
 
+func TestAppendBaseSnapshotTreatsIcebergEmptyTableSentinelAsNoBase(t *testing.T) {
+	rawMeta := []byte(`{
+		"format-version": 2,
+		"table-uuid": "empty-uuid",
+		"location": "s3://warehouse/writer/empty_orders",
+		"current-schema-id": 0,
+		"schemas": [
+			{"schema-id": 0, "fields": [
+				{"id": 1, "name": "id", "required": false, "type": "long"}
+			]}
+		],
+		"default-spec-id": 0,
+		"partition-specs": [{"spec-id": 0, "fields": []}],
+		"current-snapshot-id": -1,
+		"snapshots": [],
+		"snapshot-log": [],
+		"refs": {}
+	}`)
+	meta, err := metadata.ParseTableMetadata(rawMeta, "s3://warehouse/writer/empty_orders/metadata/v1.json")
+	require.NoError(t, err)
+
+	snapshot, snapshotID, err := appendBaseSnapshot(context.Background(), meta, model.DefaultRefMain)
+	require.NoError(t, err)
+	require.Zero(t, snapshotID)
+	require.Empty(t, snapshot.ManifestList)
+}
+
 func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 	ctx := context.Background()
 	tableLocation := "s3://warehouse/writer/gold_kpi"

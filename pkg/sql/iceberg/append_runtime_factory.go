@@ -910,7 +910,7 @@ func appendDefaultSpec(ctx context.Context, meta *api.TableMetadata, table strin
 }
 
 func appendBaseSnapshot(ctx context.Context, meta *api.TableMetadata, ref string) (api.Snapshot, int64, error) {
-	if meta == nil || meta.CurrentSnapshotID == nil {
+	if !metadata.HasCurrentSnapshot(meta) {
 		return api.Snapshot{}, 0, nil
 	}
 	snapshot, err := metadata.ResolveSnapshot(meta, metadata.SnapshotSelector{

@@ -100,7 +100,7 @@ func dmlTargetSnapshot(meta *api.TableMetadata, targetRef string) (api.Snapshot,
 			return dmlSnapshotByID(meta, snapshotRef.SnapshotID)
 		}
 	}
-	if ref == "main" && meta.CurrentSnapshotID != nil && *meta.CurrentSnapshotID != 0 {
+	if ref == "main" && metadata.HasCurrentSnapshot(meta) {
 		return dmlSnapshotByID(meta, *meta.CurrentSnapshotID)
 	}
 	return api.Snapshot{}, api.NewError(api.ErrMetadataInvalid, "Iceberg DML commit verifier target ref is not present in table metadata", map[string]string{

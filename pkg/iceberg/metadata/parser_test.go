@@ -69,6 +69,33 @@ const sampleMetadataJSON = `{
   }
 }`
 
+const emptySnapshotMetadataJSON = `{
+  "format-version": 2,
+  "table-uuid": "1b4f2a11-3ef8-4e66-93cc-3d43d44f7b11",
+  "location": "s3://warehouse/sales/empty_orders",
+  "last-sequence-number": 0,
+  "last-updated-ms": 1710000200000,
+  "current-schema-id": 0,
+  "schemas": [
+    {
+      "schema-id": 0,
+      "fields": [
+        {"id": 1, "name": "id", "required": true, "type": "long"}
+      ],
+      "identifier-field-ids": []
+    }
+  ],
+  "default-spec-id": 0,
+  "partition-specs": [
+    {"spec-id": 0, "fields": []}
+  ],
+  "current-snapshot-id": -1,
+  "snapshots": [],
+  "snapshot-log": [],
+  "refs": {},
+  "properties": {}
+}`
+
 func TestParseTableMetadataAndResolveSnapshot(t *testing.T) {
 	meta, err := ParseTableMetadata([]byte(sampleMetadataJSON), "s3://warehouse/sales/orders/metadata/v2.metadata.json")
 	if err != nil {
@@ -114,6 +141,20 @@ func TestParseTableMetadataAndResolveSnapshot(t *testing.T) {
 	want := []string{"BIGINT", "TEXT", "DECIMAL(12,2)", "TIMESTAMP(6)"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("mapped types mismatch got=%v want=%v", got, want)
+	}
+}
+
+func TestParseTableMetadataAllowsEmptySnapshotSentinel(t *testing.T) {
+	meta, err := ParseTableMetadata([]byte(emptySnapshotMetadataJSON), "s3://warehouse/sales/empty_orders/metadata/v1.metadata.json")
+	if err != nil {
+		t.Fatalf("parse empty snapshot metadata: %v", err)
+	}
+	if HasCurrentSnapshot(meta) {
+		t.Fatalf("empty Iceberg table must not report a current snapshot: %+v", meta.CurrentSnapshotID)
+	}
+	_, err = ResolveSnapshot(meta, SnapshotSelector{})
+	if err == nil || !strings.Contains(err.Error(), "has no current snapshot") {
+		t.Fatalf("expected no current snapshot error, got %v", err)
 	}
 }
 

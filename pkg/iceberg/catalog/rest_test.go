@@ -534,6 +534,54 @@ func TestRESTClientCommitTable(t *testing.T) {
 	}
 }
 
+func TestRESTClientCommitTableSerializesEmptyRefRequirement(t *testing.T) {
+	var gotBody commitTableRequestWire
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read commit body: %v", err)
+		}
+		bodyText := string(body)
+		if strings.Contains(bodyText, "assert-ref-not-exists") {
+			t.Fatalf("commit body used non-Iceberg empty ref requirement: %s", bodyText)
+		}
+		if strings.Contains(bodyText, `"snapshot-id"`) {
+			t.Fatalf("empty ref requirements must omit snapshot-id: %s", bodyText)
+		}
+		if err := json.Unmarshal(body, &gotBody); err != nil {
+			t.Fatalf("decode commit body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"metadata-location":"s3://warehouse/sales/orders/metadata/v2.json","snapshot-id":200}`))
+	}))
+	defer server.Close()
+
+	client := NewRESTClient(WithHTTPClient(server.Client()), WithAllowPlainHTTP(true))
+	_, err := client.CommitTable(context.Background(), api.CommitRequest{
+		CatalogRequest: api.CatalogRequest{Catalog: testCatalog(server.URL), Prefix: "warehouse_a"},
+		Namespace:      api.Namespace{"sales"},
+		Table:          "orders",
+		IdempotencyKey: "idem-empty-ref",
+		Requirements: []api.CommitRequirement{{
+			Type: "assert-ref-snapshot-id",
+			Ref:  "main",
+		}, {
+			Type: "assert-ref-not-exists",
+			Ref:  "audit",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("commit table: %v", err)
+	}
+	if len(gotBody.Requirements) != 2 {
+		t.Fatalf("unexpected requirements: %+v", gotBody.Requirements)
+	}
+	for _, requirement := range gotBody.Requirements {
+		if requirement.Type != "assert-ref-snapshot-id" || requirement.SnapshotID != 0 {
+			t.Fatalf("unexpected empty ref requirement: %+v", requirement)
+		}
+	}
+}
+
 func TestRESTClientCommitTableSerializesSnapshotUpdates(t *testing.T) {
 	var gotBody commitTableRequestWire
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

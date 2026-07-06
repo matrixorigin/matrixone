@@ -391,7 +391,7 @@ func (w AppendWorkflow) recordOrphans(ctx context.Context, req api.AppendRequest
 
 func refSnapshotRequirement(ref string, snapshotID int64) api.CommitRequirement {
 	if snapshotID == 0 {
-		return api.CommitRequirement{Type: "assert-ref-not-exists", Ref: ref}
+		return api.CommitRequirement{Type: "assert-ref-snapshot-id", Ref: ref}
 	}
 	return api.CommitRequirement{
 		Type:       "assert-ref-snapshot-id",

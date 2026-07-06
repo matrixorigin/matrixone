@@ -62,7 +62,7 @@ func TestAppendBuilderUsesRefNotExistsForEmptyTable(t *testing.T) {
 	req.BaseSnapshotID = 0
 	attempt, err := (AppendBuilder{}).BuildAppend(context.Background(), req)
 	require.NoError(t, err)
-	require.Equal(t, "assert-ref-not-exists", attempt.Requirements[0].Type)
+	require.Equal(t, "assert-ref-snapshot-id", attempt.Requirements[0].Type)
 	require.Zero(t, attempt.Requirements[0].SnapshotID)
 }
 

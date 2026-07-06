@@ -529,7 +529,7 @@ func refSnapshotRequirement(ref string, snapshotID int64) api.CommitRequirement 
 		ref = "main"
 	}
 	if snapshotID == 0 {
-		return api.CommitRequirement{Type: "assert-ref-not-exists", Ref: ref}
+		return api.CommitRequirement{Type: "assert-ref-snapshot-id", Ref: ref}
 	}
 	return api.CommitRequirement{Type: "assert-ref-snapshot-id", Ref: ref, SnapshotID: snapshotID}
 }

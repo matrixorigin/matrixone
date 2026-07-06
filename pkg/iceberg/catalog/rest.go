@@ -1186,6 +1186,9 @@ func commitRequirementWires(in []api.CommitRequirement) []commitRequirementWire 
 			TableUUID:  req.TableUUID,
 		}
 		switch req.Type {
+		case "assert-ref-not-exists":
+			wire.Type = "assert-ref-snapshot-id"
+			wire.SnapshotID = 0
 		case "assert-current-schema-id":
 			wire.CurrentSchemaID = intPtr(req.SchemaID)
 		case "assert-default-spec-id":
