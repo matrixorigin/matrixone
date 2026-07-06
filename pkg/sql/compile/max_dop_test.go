@@ -173,8 +173,8 @@ func TestGenerateNodesKeepsSmallNonIvfScanOnCurrentCN(t *testing.T) {
 	c.addr = "cn-local:6001"
 	c.e = newStubEngineForGenerateNodes("testdb", "t")
 	c.cnList = engine.Nodes{
-		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4},
-		{Id: "cn2", Addr: "cn-local:6001", Mcpu: 4},
+		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 8},
+		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 12},
 	}
 
 	node := &plan.Node{
@@ -183,17 +183,56 @@ func TestGenerateNodesKeepsSmallNonIvfScanOnCurrentCN(t *testing.T) {
 			SchemaName: "testdb",
 			ObjName:    "t",
 		},
-		TableDef: &plan.TableDef{Name: "t"},
+		TableDef: &plan.TableDef{
+			Name: "t",
+		},
 		Stats: &plan.Stats{
-			BlockNum: 1,
-			Dop:      1,
+			BlockNum: int32(plan2.BlockThresholdForOneCN),
+			Dop:      4,
 		},
 	}
 
 	nodes, err := c.generateNodes(node)
 	require.NoError(t, err)
-	require.Len(t, nodes, 1)
-	require.Equal(t, int32(1), nodes[0].CNCNT)
+	require.Equal(t, engine.Nodes{{
+		Addr:  "cn-local:6001",
+		Mcpu:  4,
+		CNCNT: 1,
+	}}, nodes)
+}
+
+func TestGenerateNodesKeepsForceOneCNOnCurrentCN(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.e = newStubEngineForGenerateNodes("testdb", "t")
+	c.cnList = engine.Nodes{
+		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 8},
+		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 12},
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "t",
+		},
+		TableDef: &plan.TableDef{
+			Name: "t",
+		},
+		Stats: &plan.Stats{
+			BlockNum:   int32(plan2.BlockThresholdForOneCN + 1),
+			Dop:        6,
+			ForceOneCN: true,
+		},
+	}
+
+	nodes, err := c.generateNodes(node)
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{{
+		Addr:  "cn-local:6001",
+		Mcpu:  6,
+		CNCNT: 1,
+	}}, nodes)
 }
 
 func newStubEngineForGenerateNodes(dbName, tblName string) *stubEngine {
