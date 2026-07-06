@@ -5146,6 +5146,17 @@ func TestPower(t *testing.T) {
 	}
 }
 
+// TestPowFunctionId validates that "pow" is registered in the functionIdRegister
+// and getFunctionIdByName resolves it to the POW function ID (149).
+// This ensures the fix for issue #24439 is effective: adding "pow": POW
+// to the functionIdRegister map in function_id.go.
+func TestPowFunctionId(t *testing.T) {
+	ctx := context.Background()
+	fnId, err := getFunctionIdByName(ctx, "pow")
+	require.NoError(t, err)
+	require.Equal(t, int32(POW), fnId)
+}
+
 // TRUNCATE
 func initTruncateTestCase() []tcTemp {
 	cases := []struct {

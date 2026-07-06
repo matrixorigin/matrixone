@@ -8,6 +8,11 @@ SELECT power(2,100);
 SELECT power(10,100);
 SELECT power(1,100);
 
+#POW alias (issue 24439)
+SELECT POW(2, 10);
+SELECT pow(2, 10);
+SELECT POW(1.5, 3);
+
 #EXTREME VALUE, 科学计数法
 select power(2,-1);
 select power(-2,1);
