@@ -5283,6 +5283,27 @@ func strToUnsigned[T constraints.Unsigned](
 	return nil
 }
 
+// saturateOutOfRangeFloat clamps an out-of-range ParseFloat result to MySQL's
+// behavior: overflow (ParseFloat returns ±Inf) saturates to ±MaxFloat of the
+// target bit width, while underflow (a finite value rounded toward zero) is
+// kept as-is.
+func saturateOutOfRangeFloat(v float64, bitSize int) float64 {
+	switch {
+	case math.IsInf(v, 1):
+		if bitSize == 32 {
+			return math.MaxFloat32
+		}
+		return math.MaxFloat64
+	case math.IsInf(v, -1):
+		if bitSize == 32 {
+			return -math.MaxFloat32
+		}
+		return -math.MaxFloat64
+	default:
+		return v
+	}
+}
+
 func strToFloat[T constraints.Float](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
@@ -5336,9 +5357,18 @@ func strToFloat[T constraints.Float](
 					r2, tErr = strconv.ParseFloat(numeric, bitSize)
 				}
 				if tErr != nil {
-					// MySQL non-strict mode: invalid string converts to 0 (no error)
-					// This matches MySQL's default behavior for implicit conversions
-					r2 = 0
+					if strings.Contains(tErr.Error(), "value out of range") {
+						// MySQL saturates out-of-range magnitudes to the extreme
+						// representable value (with warning 1292) instead of failing.
+						// ParseFloat returns ±Inf on overflow and ~0 on underflow, so
+						// overflow is clamped to ±MaxFloat and underflow keeps its value.
+						r2 = saturateOutOfRangeFloat(r2, bitSize)
+					} else {
+						// MySQL non-strict mode: a syntactically invalid string converts
+						// to 0 (no error). This matches MySQL's default behavior for
+						// implicit conversions.
+						r2 = 0
+					}
 				} else if bitSize == 32 {
 					r2, _ = strconv.ParseFloat(numeric, 64)
 				}

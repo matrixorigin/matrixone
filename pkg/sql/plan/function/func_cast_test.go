@@ -2464,6 +2464,50 @@ func TestStringToFloatUsesLeadingNumericPrefix(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestStringToFloatSaturatesOnOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// float64 target: overflow saturates to ±MaxFloat64, underflow to 0, a
+	// syntactically invalid string still converts to 0.
+	t.Run("float64", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{
+				"1e309x", "-1e309", "1e-400", "abc",
+			}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+		}
+		want := []float64{math.MaxFloat64, -math.MaxFloat64, 0, 0}
+		tc := NewFunctionTestCase(
+			proc,
+			inputs,
+			NewFunctionTestResult(types.T_float64.ToType(), false, want, nil),
+			NewCast,
+		)
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+
+	// float32 target: a value within float64 range but beyond float32 range
+	// (e.g. 1e40) still saturates to ±MaxFloat32.
+	t.Run("float32", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{
+				"1e40", "-1e40",
+			}, nil),
+			NewFunctionTestInput(types.T_float32.ToType(), []float32{}, nil),
+		}
+		want := []float32{math.MaxFloat32, -math.MaxFloat32}
+		tc := NewFunctionTestCase(
+			proc,
+			inputs,
+			NewFunctionTestResult(types.T_float32.ToType(), false, want, nil),
+			NewCast,
+		)
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+}
+
 func TestStringToFloatAssignmentRequiresStrictNumericString(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {
