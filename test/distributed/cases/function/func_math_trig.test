@@ -16,6 +16,11 @@ SELECT ATAN(-2);
 SELECT ATAN(-2,2);
 #SELECT ATAN2(PI(),0);
 
+# MySQL compatibility: invalid-domain math functions return NULL, but cot(0) raises out-of-range.
+select sqrt(-1), log(-1), log(0), asin(2), acos(2);
+select sqrt(-1), log(-1), log(0), asin(2), acos(2), cot(0);
+select PI();
+SELECT COT(2.5),COT(0.2),COT(-0.5),COT(-0.2),COT(PI()),COT(NULL);
 
 #EXTREME VALUES
 SELECT SIN(13413);
@@ -198,5 +203,4 @@ SELECT cot(0.7e5);
 SELECT acos(1.1e5);
 SELECT atan(1.1e5);
 #SELECT atan2(1.1e5,0.5e4);
-
 
