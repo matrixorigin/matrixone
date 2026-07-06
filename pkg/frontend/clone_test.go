@@ -57,7 +57,7 @@ func Test_rewriteCloneViewInfos(t *testing.T) {
 			dbName:    "pub_db",
 			tblName:   "v1",
 			typ:       view,
-			createSql: "create view `pub_db`.`v1` as select * from `pub_db`.`t1`",
+			createSql: "create view `pub_db`.`v1` as select 'pub_db' as marker, a from `pub_db`.`t1`",
 		},
 		fallbackKey: {
 			dbName:    "pub_db",
@@ -72,7 +72,8 @@ func Test_rewriteCloneViewInfos(t *testing.T) {
 		genKey("pub_db", "v1"),
 	}
 
-	rewrittenViewMap, rewrittenViews := rewriteCloneViewInfos(viewMap, sortedViews, "pub_db", "clone_db")
+	rewrittenViewMap, rewrittenViews, err := rewriteCloneViewInfos(viewMap, sortedViews, "pub_db", "clone_db")
+	require.NoError(t, err)
 	require.Equal(t, []string{
 		genKey("other_db", "dep_v"),
 		"clone_db#",
@@ -82,15 +83,80 @@ func Test_rewriteCloneViewInfos(t *testing.T) {
 	info, ok := rewrittenViewMap[genKey("clone_db", "v1")]
 	require.True(t, ok)
 	require.Equal(t, "clone_db", info.dbName)
-	require.Equal(t, "create view `clone_db`.`v1` as select * from `clone_db`.`t1`", info.createSql)
+	require.Equal(t, "create view clone_db.v1 as select 'pub_db' as marker, a from clone_db.t1;", info.createSql)
 
 	fallbackInfo, ok := rewrittenViewMap["clone_db#"]
 	require.True(t, ok)
 	require.Equal(t, "clone_db", fallbackInfo.dbName)
-	require.Equal(t, "create view `clone_db`.`legacy_v` as select 1", fallbackInfo.createSql)
+	require.Equal(t, "create view clone_db.legacy_v as select 1;", fallbackInfo.createSql)
 
 	require.Equal(t, "pub_db", viewMap[genKey("pub_db", "v1")].dbName)
-	require.Equal(t, "create view `pub_db`.`v1` as select * from `pub_db`.`t1`", viewMap[genKey("pub_db", "v1")].createSql)
+	require.Equal(t, "create view `pub_db`.`v1` as select 'pub_db' as marker, a from `pub_db`.`t1`", viewMap[genKey("pub_db", "v1")].createSql)
 	require.Equal(t, "pub_db", viewMap[fallbackKey].dbName)
 	require.Equal(t, "create view `pub_db`.`legacy_v` as select 1", viewMap[fallbackKey].createSql)
+}
+
+func Test_rewriteCloneCreateSQL_RewritesOnlyTableNames(t *testing.T) {
+	got, err := rewriteCloneCreateSQL(
+		`create view pub_db.v as
+			with c as (select * from pub_db.cte_t)
+			select pub_db as pub_db,
+			       (select max(id) from pub_db.proj_t) as m,
+			       case when exists (select 1 from pub_db.case_t) then 1 else 0 end as c,
+			       ((select max(id) from pub_db.null_t) is null) as n
+			  from c
+			  join pub_db.join_t as j on j.id in (select id from pub_db.on_t)
+			 where exists (select 1 from pub_db.where_t)
+			 group by pub_db
+			having count(*) > (select count(*) from pub_db.having_t)`,
+		"pub_db",
+		"clone_db",
+		false,
+	)
+	require.NoError(t, err)
+	require.Contains(t, got, "create view clone_db.v")
+	require.Contains(t, got, "from clone_db.cte_t")
+	require.Contains(t, got, "from clone_db.proj_t")
+	require.Contains(t, got, "from clone_db.case_t")
+	require.Contains(t, got, "from clone_db.null_t")
+	require.Contains(t, got, "join clone_db.join_t")
+	require.Contains(t, got, "from clone_db.on_t")
+	require.Contains(t, got, "from clone_db.where_t")
+	require.Contains(t, got, "from clone_db.having_t")
+	require.NotContains(t, got, "pub_db.cte_t")
+	require.NotContains(t, got, "pub_db.proj_t")
+	require.NotContains(t, got, "pub_db.case_t")
+	require.NotContains(t, got, "pub_db.null_t")
+	require.NotContains(t, got, "pub_db.join_t")
+	require.NotContains(t, got, "pub_db.on_t")
+	require.NotContains(t, got, "pub_db.where_t")
+	require.NotContains(t, got, "pub_db.having_t")
+	require.NotContains(t, got, "select clone_db as")
+	require.Contains(t, got, "as pub_db")
+}
+
+func Test_rewriteCloneCreateSQL_PreservesUnqualifiedViewFormat(t *testing.T) {
+	got, err := rewriteCloneCreateSQL(
+		"create view v1 as select * from t1;",
+		"pub_db",
+		"clone_db",
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "create view v1 as select * from t1;", got)
+}
+
+func Test_rewriteCloneCreateSQL_QuotesSystemViewIdentifiers(t *testing.T) {
+	got, err := rewriteCloneCreateSQL(
+		"create view information_schema.v as select mt.`constraint` from mo_catalog.mo_tables as mt",
+		"information_schema",
+		"information_schema_new",
+		true,
+	)
+	require.NoError(t, err)
+	require.Contains(t, got, "`mt`.`constraint`")
+	require.NotContains(t, got, "mt.constraint")
+
+	_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", true)
+	require.NoError(t, err)
 }

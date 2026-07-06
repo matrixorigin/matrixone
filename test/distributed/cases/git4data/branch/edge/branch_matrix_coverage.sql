@@ -35,7 +35,6 @@ insert into wide_base values
    'blue', 'blob-two', 'file:///tmp/mo_branch_type_two.csv', 'LINESTRING(0 0,1 1)', '[4.4,5.5,6.6]');
 
 data branch create table wide_branch from wide_base;
--- @bvt:issue#24924
 update wide_branch set
   b = b'111',
   u8 = 251,
@@ -50,7 +49,7 @@ update wide_branch set
   e = 'green',
   bl = 'blob-updated',
   dl = 'file:///tmp/mo_branch_type_updated.csv',
-  g = 'POINT(2 2)',
+g = st_geomfromtext('POINT(2 2)'),
   vf = '[7.7,8.8,9.9]'
 where id = 1;
 insert into wide_branch values
@@ -59,10 +58,19 @@ insert into wide_branch values
    2000, '3ddf7b28-2dba-11ed-940f-000c29847904', 'gh', x'0d0e0f10',
    'red', 'blob-new', 'file:///tmp/mo_branch_type_new.csv', 'POINT(3 3)', '[0.1,0.2,0.3]');
 delete from wide_branch where id = 2;
+data branch diff wide_branch against wide_base output summary;
 data branch merge wide_branch into wide_base;
 select count(*) as wide_rows from wide_base;
 select id, cast(b as int) as bit_i, u8, u16, u32, u64, y, e from wide_base order by id;
--- @bvt:issue
+select id, d256, st_astext(g) as g from wide_base order by id;
+
+create table pick_year_base(y year primary key, v int);
+insert into pick_year_base values (2024, 1), (2025, 2);
+data branch create table pick_year_dst from pick_year_base;
+data branch create table pick_year_src from pick_year_base;
+update pick_year_src set v = 20250 where y = 2025;
+data branch pick pick_year_src into pick_year_dst keys('2025') when conflict accept;
+select y, v from pick_year_dst order by y;
 drop database br_matrix_types;
 
 -- Case 2: core column constraints remain effective on a branch.
@@ -106,11 +114,9 @@ data branch create table clustered_branch from clustered_base;
 update clustered_branch set payload = 'new' where tenant = 1 and seq = 2;
 insert into clustered_branch(tenant, payload) values (3, 'default-seq');
 delete from clustered_branch where tenant = 2;
--- @bvt:issue#24924
 data branch merge clustered_branch into clustered_base;
 select count(*) as clustered_rows from clustered_base;
 select tenant, seq, payload from clustered_base order by tenant, seq;
--- @bvt:issue
 drop database br_matrix_constraints;
 
 -- Case 3: representative table types.
@@ -132,17 +138,19 @@ data branch create table part_branch from part_base;
 update part_branch set val = val + 1 where id = 11;
 insert into part_branch values (2, 20, 'new-p0'), (21, 210, 'new-p1');
 delete from part_branch where id = 12;
--- @bvt:issue#24924
 data branch merge part_branch into part_base;
 select id, val, note from part_base order by id;
--- @bvt:issue
 
 create table view_base(id int primary key, val int);
 insert into view_base values (1, 10), (2, 20), (3, 30);
 create view v_active as select id, val from view_base where val >= 20;
+create table view_identifier_base(br_matrix_tables int primary key, marker int);
+insert into view_identifier_base values (10, 100);
+create view v_identifier as select br_matrix_tables as br_matrix_tables from view_identifier_base;
 data branch create database br_matrix_tables_copy from br_matrix_tables;
 insert into view_base values (4, 40);
 select count(*) as copied_view_rows from br_matrix_tables_copy.v_active;
+select br_matrix_tables from br_matrix_tables_copy.v_identifier;
 insert into br_matrix_tables_copy.view_base values (5, 50);
 select count(*) as copied_view_rows_after_insert from br_matrix_tables_copy.v_active;
 
@@ -164,7 +172,6 @@ drop database br_matrix_tables;
 
 -- Case 4: quoted identifiers must not break data branch bookkeeping.
 drop database if exists br_matrix_quoted;
--- @bvt:issue#24924
 create database br_matrix_quoted;
 use br_matrix_quoted;
 
@@ -178,8 +185,10 @@ select count(*) as quoted_space_rows from `branch table`;
 create table `quote'src`(a int primary key, b varchar(20));
 insert into `quote'src` values (1, 'single-quote');
 data branch create table `quote'dst` from `quote'src`;
-select count(*) as quoted_apostrophe_rows from `quote'dst`;
+set @quote_sql = 'select count(*) as quoted_apostrophe_rows from `quote''dst`';
+prepare quote_stmt from @quote_sql;
+execute quote_stmt;
+deallocate prepare quote_stmt;
 
 use mo_catalog;
 drop database if exists br_matrix_quoted;
--- @bvt:issue

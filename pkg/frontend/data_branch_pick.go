@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -56,10 +57,16 @@ func resolveBetweenSnapshots(ses *Session, fromName, toName string) (from, to *t
 
 	fromSnap, err := resolveSnapshot(ses, fromAtTs)
 	if err != nil {
+		if plan2.IsSnapshotNotFound(err) {
+			return nil, nil, moerr.NewInvalidInputNoCtxf("snapshot '%s' not found", fromName)
+		}
 		return nil, nil, moerr.NewInvalidInputNoCtxf("cannot resolve snapshot '%s': %v", fromName, err)
 	}
 	toSnap, err := resolveSnapshot(ses, toAtTs)
 	if err != nil {
+		if plan2.IsSnapshotNotFound(err) {
+			return nil, nil, moerr.NewInvalidInputNoCtxf("snapshot '%s' not found", toName)
+		}
 		return nil, nil, moerr.NewInvalidInputNoCtxf("cannot resolve snapshot '%s': %v", toName, err)
 	}
 	if fromSnap == nil || fromSnap.TS == nil {
@@ -346,7 +353,7 @@ func extractPKAsString(
 func extractPKVal(vec *vector.Vector, rowIdx int) any {
 	switch vec.GetType().Oid {
 	case types.T_datetime, types.T_timestamp, types.T_decimal64,
-		types.T_decimal128, types.T_time:
+		types.T_decimal128, types.T_decimal256, types.T_time:
 		return types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
 	case types.T_bool:
 		return vector.GetFixedAtNoTypeCheck[bool](vec, rowIdx)
@@ -374,6 +381,8 @@ func extractPKVal(vec *vector.Vector, rowIdx int) any {
 		return vector.GetFixedAtNoTypeCheck[float64](vec, rowIdx)
 	case types.T_date:
 		return vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx)
+	case types.T_year:
+		return vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIdx)
 	case types.T_uuid:
 		return vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIdx)
 	case types.T_enum:
@@ -613,8 +622,12 @@ func formatPickKeyVectorValueAsString(ses *Session, vec *vector.Vector, rowIdx i
 		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIdx).Format(vec.GetType().Scale), nil
 	case types.T_decimal128:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIdx).Format(vec.GetType().Scale), nil
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, rowIdx).Format(vec.GetType().Scale), nil
 	case types.T_date:
 		return vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx).String(), nil
+	case types.T_year:
+		return vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIdx).String(), nil
 	case types.T_datetime:
 		return vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIdx).String(), nil
 	case types.T_timestamp:
@@ -694,13 +707,29 @@ func materializeSubqueryUnified(
 	if stmt.Keys.Select == nil {
 		return nil, moerr.NewInvalidInputNoCtx("KEYS subquery is nil")
 	}
-	if _, err = buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select); err != nil {
+	subqueryPlan, err := buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select)
+	if err != nil {
 		return nil, err
 	}
 
 	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
 	isComposite := tblStuff.def.pkKind == compositeKind
 	nPKCols := len(tblStuff.def.pkColIdxes)
+	subqueryCols := 0
+	if subqueryPlan != nil && subqueryPlan.GetQuery() != nil {
+		subqueryCols = len(subqueryPlan.GetQuery().GetHeadings())
+	}
+	if isComposite {
+		if subqueryCols != nPKCols {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"KEYS subquery returns %d columns but composite primary key has %d columns",
+				subqueryCols, nPKCols)
+		}
+	} else if subqueryCols != 1 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"KEYS subquery returns %d columns but table has a single-column primary key",
+			subqueryCols)
+	}
 
 	// Compose the subquery SQL: wrap the user's SELECT with ORDER BY for
 	// streaming sorted results.  For composite PKs we ORDER BY all component
@@ -1269,8 +1298,20 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, t
 			return err
 		}
 		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_decimal256:
+		v, err := types.ParseDecimal256(s, pkType.Width, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_date:
 		v, err := types.ParseDateCast(s)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_year:
+		v, err := types.ParseMoYear(s)
 		if err != nil {
 			return err
 		}
@@ -1312,46 +1353,8 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, t
 }
 
 // appendStrValToVec handles string literal values for typed PK columns.
-// For varlen types (varchar, char, text, blob) it appends raw bytes directly.
-// For fixed-width types (date, datetime, timestamp, time, uuid) it parses the
-// string into the correct typed value before appending.
 func appendStrValToVec(vec *vector.Vector, s string, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
-	switch pkType.Oid {
-	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
-		return vector.AppendBytes(vec, []byte(s), false, mp)
-	case types.T_date:
-		v, err := types.ParseDateCast(s)
-		if err != nil {
-			return err
-		}
-		return vector.AppendFixed(vec, v, false, mp)
-	case types.T_datetime:
-		v, err := types.ParseDatetime(s, pkType.Scale)
-		if err != nil {
-			return err
-		}
-		return vector.AppendFixed(vec, v, false, mp)
-	case types.T_timestamp:
-		v, err := types.ParseTimestamp(normalizePickTimeZone(tz), s, pkType.Scale)
-		if err != nil {
-			return err
-		}
-		return vector.AppendFixed(vec, v, false, mp)
-	case types.T_time:
-		v, err := types.ParseTime(s, pkType.Scale)
-		if err != nil {
-			return err
-		}
-		return vector.AppendFixed(vec, v, false, mp)
-	case types.T_uuid:
-		v, err := types.ParseUuid(s)
-		if err != nil {
-			return err
-		}
-		return vector.AppendFixed(vec, v, false, mp)
-	default:
-		return moerr.NewInvalidInputNoCtxf("unsupported PK type for string literal: %s", pkType.Oid.String())
-	}
+	return appendNumericStringToVec(vec, s, pkType, tz, mp)
 }
 
 // freePKFilter is a no-op retained for call-site compatibility.

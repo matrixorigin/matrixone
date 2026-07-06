@@ -146,6 +146,16 @@ func TestDataBranchCreateTableParsesWithLeadingComment(t *testing.T) {
 	require.Equal(t, tree.Identifier("src"), branchStmt.SrcTable.ObjectName)
 }
 
+func TestDataBranchCreateTablePreservesQuotedApostropheIdentifier(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "data branch create table `quote'dst` from `quote'src`", 1)
+	require.NoError(t, err)
+
+	branchStmt, ok := stmt.(*tree.DataBranchCreateTable)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("quote'dst"), branchStmt.CreateTable.Table.ObjectName)
+	require.Equal(t, tree.Identifier("quote'src"), branchStmt.SrcTable.ObjectName)
+}
+
 func TestDataBranchDiffOutputModes(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
 	require.NoError(t, err)

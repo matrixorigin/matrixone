@@ -811,6 +811,24 @@ func Test_getSqlForCheckPitrDup(t *testing.T) {
 	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false)), "table_name = 'tb'")
 }
 
+func TestPitrInternalSQLEscapesStringLiterals(t *testing.T) {
+	assert.Contains(
+		t,
+		getSqlForCheckPitrExists("pi'tr\\name", 7),
+		"pitr_name = 'pi''tr\\\\name'",
+	)
+
+	p := &plan2.CreatePitr{
+		Level:            int32(tree.PITRLEVELTABLE),
+		CurrentAccountId: 1,
+		DatabaseName:     "db'name",
+		TableName:        "tb\\name",
+	}
+	sql := getSqlForCheckPitrDup(p)
+	assert.Contains(t, sql, "database_name = 'db''name'")
+	assert.Contains(t, sql, "table_name = 'tb\\\\name'")
+}
+
 func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	mp := mpool.MustNewZero()
 	ctx := context.Background()

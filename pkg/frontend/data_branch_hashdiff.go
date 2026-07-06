@@ -1584,10 +1584,13 @@ func appendTupleValueToVector(vec *vector.Vector, val any, mp *mpool.MPool) erro
 	}
 	if raw, ok := val.([]byte); ok {
 		if !vec.GetType().IsVarlen() {
-			return moerr.NewInternalErrorNoCtxf(
-				"unexpected byte slice for fixed-width column type %s",
-				vec.GetType().String(),
-			)
+			if len(raw) != vec.GetType().Oid.FixedLength() {
+				return moerr.NewInternalErrorNoCtxf(
+					"unexpected byte slice for fixed-width column type %s",
+					vec.GetType().String(),
+				)
+			}
+			return vector.AppendAny(vec, types.DecodeValue(raw, vec.GetType().Oid), false, mp)
 		}
 		return vector.AppendBytes(vec, raw, false, mp)
 	}

@@ -462,8 +462,8 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	}
 
 	switch t.Oid {
-	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
-		T_varbinary, types.T_binary, types.T_blob:
+	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.T_datalink, types.T_geometry, types.T_geometry32,
+		types.T_varbinary, types.T_binary, types.T_blob:
 		if t.Oid == types.T_json {
 			var strVal string
 			switch x := val.(type) {
@@ -516,6 +516,17 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Date).String())
 		buf.WriteString("'")
+	case types.T_uuid:
+		buf.WriteString("'")
+		switch x := val.(type) {
+		case types.Uuid:
+			buf.WriteString(x.String())
+		case string:
+			buf.WriteString(x)
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected uuid type %T", val)
+		}
+		buf.WriteString("'")
 	case types.T_year:
 		buf.WriteString(val.(types.MoYear).String())
 	case types.T_decimal64:
@@ -534,6 +545,10 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		writeUint(uint64(val.(uint32)))
 	case types.T_uint64:
 		writeUint(val.(uint64))
+	case types.T_bit:
+		writeUint(val.(uint64))
+	case types.T_enum:
+		writeUint(uint64(val.(types.Enum)))
 	case types.T_int8:
 		writeInt(int64(val.(int8)))
 	case types.T_int16:
