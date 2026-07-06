@@ -681,6 +681,67 @@ func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
 	colexec.Get().DeleteUuids([]uuid.UUID{uid})
 }
 
+func TestGetProcByUuidCancelPendingRegistrationCancelsConsumedDispatchProc(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.Nil(t, err)
+
+	procCtx, procCancel := context.WithCancelCause(context.Background())
+	dispatchProc := &process.Process{
+		Ctx:    procCtx,
+		Cancel: procCancel,
+	}
+	notifyCh := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
+	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
+
+	receiver := &messageReceiverOnServer{messageCtx: context.Background()}
+	cancelCause := moerr.NewInternalErrorNoCtx("registration abandoned")
+	receiver.cancelPendingDispatchRegistration(uid, cancelCause)
+
+	require.ErrorIs(t, context.Cause(procCtx), cancelCause)
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+}
+
+func TestGetProcByUuidReturnsWhenMessageContextCanceledBeforeRegistration(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.Nil(t, err)
+
+	messageCtx, cancelMessage := context.WithCancel(context.Background())
+	receiver := &messageReceiverOnServer{
+		connectionCtx: context.Background(),
+		messageCtx:    messageCtx,
+	}
+
+	type result struct {
+		proc *process.Process
+		ch   process.RemotePipelineInformationChannel
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, c, e := receiver.GetProcByUuid(uid)
+		done <- result{proc: p, ch: c, err: e}
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancelMessage()
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.Nil(t, r.proc)
+		require.Nil(t, r.ch)
+	case <-time.After(time.Second):
+		t.Fatal("GetProcByUuid did not return after message context cancellation")
+	}
+
+	err = colexec.Get().PutProcIntoUuidMap(uid, &process.Process{}, make(chan *process.WrapCs))
+	require.Error(t, err)
+}
+
 var _ morpc.Stream = &fakeStreamSender{}
 
 // fakeStreamSender implement the morpc.Stream interface.

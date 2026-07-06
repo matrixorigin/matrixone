@@ -239,6 +239,39 @@ func TestEngineNodesUsesClusterServiceWorkingState(t *testing.T) {
 			"unknown-pipeline",
 		}, nodeAddresses(nodes))
 	})
+
+	t.Run("super tenant label route", func(t *testing.T) {
+		accountLabel := map[string]metadata.LabelList{
+			"account": {Labels: []string{"sys"}},
+		}
+		cases := []struct {
+			name       string
+			isInternal bool
+			tenant     string
+		}{
+			{name: "internal query", isInternal: true, tenant: "app"},
+			{name: "sys tenant", tenant: "sys"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+					CNStores: []logpb.CNStore{
+						newEngineNodesCNStore("working-cn", "working-pipeline", accountLabel, metadata.WorkState_Working, version.CommitID),
+						newEngineNodesCNStore("draining-cn", "draining-pipeline", accountLabel, metadata.WorkState_Draining, version.CommitID),
+						newEngineNodesCNStore("unknown-cn", "unknown-pipeline", accountLabel, metadata.WorkState_Unknown, version.CommitID),
+						newEngineNodesCNStore("old-binary-cn", "old-binary-pipeline", accountLabel, metadata.WorkState_Working, "different-commit"),
+					},
+				})
+
+				nodes, err := e.Nodes(tc.isInternal, tc.tenant, "root", map[string]string{"account": "sys"})
+				require.NoError(t, err)
+				require.ElementsMatch(t, []string{
+					"working-pipeline",
+					"unknown-pipeline",
+				}, nodeAddresses(nodes))
+			})
+		}
+	})
 }
 
 func newEngineWithClusterDetails(t *testing.T, details logpb.ClusterDetails) *Engine {

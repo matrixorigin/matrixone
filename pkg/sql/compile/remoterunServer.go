@@ -570,6 +570,8 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 	deadline := time.NewTimer(waitRegistrationTimeout)
 	defer deadline.Stop()
 
+	connectionDone := contextDone(receiver.connectionCtx)
+	messageDone := contextDone(receiver.messageCtx)
 	for {
 		dispatchProc, notifyChannel, ok, changed := colexec.Get().GetProcByUuidOrWait(uid)
 		if ok {
@@ -577,14 +579,41 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 		}
 
 		select {
-		case <-receiver.connectionCtx.Done():
-			colexec.Get().GetProcByUuid(uid, true)
+		case <-connectionDone:
+			receiver.cancelPendingDispatchRegistration(uid,
+				moerr.NewInternalError(receiver.getMessageContext(), "remote receiver connection closed before dispatch registration"))
+			return nil, nil, nil
+		case <-messageDone:
+			receiver.cancelPendingDispatchRegistration(uid, receiver.getMessageContext().Err())
 			return nil, nil, nil
 		case <-deadline.C:
-			colexec.Get().GetProcByUuid(uid, true)
-			return nil, nil, moerr.NewInternalErrorf(receiver.messageCtx,
+			err := moerr.NewInternalErrorf(receiver.getMessageContext(),
 				"dispatch process not registered within %s, remote CN may have failed", waitRegistrationTimeout)
+			receiver.cancelPendingDispatchRegistration(uid, err)
+			return nil, nil, err
 		case <-changed:
 		}
 	}
+}
+
+func contextDone(ctx context.Context) <-chan struct{} {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Done()
+}
+
+func (receiver *messageReceiverOnServer) getMessageContext() context.Context {
+	if receiver.messageCtx != nil {
+		return receiver.messageCtx
+	}
+	return context.Background()
+}
+
+func (receiver *messageReceiverOnServer) cancelPendingDispatchRegistration(uid uuid.UUID, err error) {
+	dispatchProc, _, ok := colexec.Get().GetProcByUuid(uid, true)
+	if !ok || dispatchProc == nil || dispatchProc.Cancel == nil {
+		return
+	}
+	dispatchProc.Cancel(err)
 }
