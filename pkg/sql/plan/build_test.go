@@ -936,6 +936,7 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"(select n_name from nation for update) union all (select n_name from nation2 for update)",
 		"(select n_name from nation for update) union all (select n_name from nation2)",
 		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update",
+		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -950,6 +951,10 @@ func TestUnionSqlBuilder(t *testing.T) {
 	cteOuterForUpdatePlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update")
 	require.NoError(t, err)
 	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdatePlan))
+
+	cteOuterForUpdateLimitPlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update")
+	require.NoError(t, err)
+	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdateLimitPlan))
 
 	// should error
 	sqls = []string{
@@ -3327,6 +3332,26 @@ func TestReplaceCaptureDedupJoinDoesNotShuffle(t *testing.T) {
 	}
 
 	t.Fatal("expected REPLACE plan to contain a DEDUP JOIN with OldColCaptureList")
+}
+
+// A multi-column row subquery as a COUNT(DISTINCT ...) argument binds to an
+// Expr_Sub whose Typ.Id is T_tuple. The tuple-expansion guard in BindAggFunc
+// must not mistake it for a genuine Expr_List (GetList() returns nil there, so
+// the earlier code nil-deref panicked). It must instead reject the query with a
+// clear error rather than silently collapsing to the subquery's first column.
+func TestCountDistinctRowSubqueryRejected(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	var (
+		plan *Plan
+		err  error
+	)
+	require.NotPanics(t, func() {
+		plan, err = runOneStmt(mock, t,
+			"select count(distinct (select n_nationkey, n_regionkey from nation)) from nation")
+	})
+	require.Error(t, err)
+	require.Nil(t, plan)
+	require.Contains(t, err.Error(), "multi-column subquery")
 }
 
 func TestSubqueryInJoinOn(t *testing.T) {
