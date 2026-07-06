@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,6 +42,46 @@ func TestEvaluateFilterByZoneMapNullableInListIsConservative(t *testing.T) {
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
+}
+
+func TestEvaluateFilterByZoneMapNullableInVecIsConservative(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := proc.Ctx
+
+	expr := makeVarcharInVecExpr(t, ctx, proc, "keep", true)
+	meta := makeVarcharBlockMeta("key", "keep")
+	zms, vecs := makeZoneMapEvalScratch(expr)
+
+	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
+	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
+}
+
+func TestFoldedNullableInExprKeepsMatchAndNullsMiss(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := proc.Ctx
+
+	expr := makeVarcharInExpr(t, ctx, "keep", true)
+	folded, err := plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(expr), proc, true, true)
+	require.NoError(t, err)
+
+	result := evalVarcharPredicate(t, proc, folded, "keep", "key", "")
+	requireBoolValue(t, result, 0, true, false)
+	requireBoolValue(t, result, 1, false, true)
+	requireBoolValue(t, result, 2, false, true)
+}
+
+func TestFoldedNullableNotInExprNullsMiss(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := proc.Ctx
+
+	expr := makeVarcharNotInExpr(t, ctx, "keep", true)
+	folded, err := plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(expr), proc, true, true)
+	require.NoError(t, err)
+
+	result := evalVarcharPredicate(t, proc, folded, "keep", "key", "")
+	requireBoolValue(t, result, 0, false, false)
+	requireBoolValue(t, result, 1, false, true)
+	requireBoolValue(t, result, 2, false, true)
 }
 
 func TestEvaluateFilterByZoneMapStillPrunesFalseEquality(t *testing.T) {
@@ -286,6 +328,32 @@ func makeVarcharInExpr(t *testing.T, ctx context.Context, value string, withNull
 	return expr
 }
 
+func makeVarcharInVecExpr(t *testing.T, ctx context.Context, proc *process.Process, value string, withNull bool) *plan.Expr {
+	t.Helper()
+
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte(value), false, proc.Mp()))
+	if withNull {
+		require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
+	}
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	vec.Free(proc.Mp())
+
+	vecLen := int32(1)
+	if withNull {
+		vecLen = 2
+	}
+	vecExpr := &plan.Expr{
+		Typ:  makeVarcharColExpr().Typ,
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: vecLen, Data: data}},
+	}
+	return makeNativeVarcharInExpr(t, ctx, []*plan.Expr{
+		makeVarcharColExpr(),
+		vecExpr,
+	})
+}
+
 func makeNativeVarcharInExpr(t *testing.T, ctx context.Context, args []*plan.Expr) *plan.Expr {
 	t.Helper()
 
@@ -333,6 +401,43 @@ func makeVarcharNotInExpr(t *testing.T, ctx context.Context, value string, withN
 	})
 	require.NoError(t, err)
 	return expr
+}
+
+func evalVarcharPredicate(t *testing.T, proc *process.Process, expr *plan.Expr, values ...string) *vector.Vector {
+	t.Helper()
+
+	input := batch.NewWithSize(1)
+	defer input.Clean(proc.Mp())
+	vec := vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[0] = vec
+	for _, value := range values {
+		require.NoError(t, vector.AppendBytes(vec, []byte(value), value == "", proc.Mp()))
+	}
+	input.SetRowCount(len(values))
+
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	dup, err := result.Dup(proc.Mp())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		dup.Free(proc.Mp())
+	})
+	return dup
+}
+
+func requireBoolValue(t *testing.T, vec *vector.Vector, row uint64, expected bool, expectedNull bool) {
+	t.Helper()
+
+	param := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+	actual, isNull := param.GetValue(row)
+	require.Equal(t, expectedNull, isNull)
+	if !expectedNull {
+		require.Equal(t, expected, actual)
+	}
 }
 
 func makeVarcharColExpr() *plan.Expr {
