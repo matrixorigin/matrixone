@@ -50,7 +50,8 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - timeout 5s bash -c 'exec 3<>/dev/tcp/127.0.0.1/19120; printf "GET /iceberg/v1/config HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; grep -q "200 OK" <&3' || exit 1
+        - >-
+          timeout 5s bash -c 'exec 3<>/dev/tcp/127.0.0.1/19120; printf "GET /iceberg/v1/config HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; grep -q "200 OK" <&3' || exit 1
       interval: 1s
       timeout: 5s
       retries: 30
