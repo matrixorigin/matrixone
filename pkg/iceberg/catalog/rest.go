@@ -1341,7 +1341,7 @@ type createTableRequestWire struct {
 	PartitionSpec partitionSpecWire `json:"partition-spec,omitempty"`
 	Location      string            `json:"location,omitempty"`
 	Properties    map[string]string `json:"properties,omitempty"`
-	StageCreate   bool              `json:"stage-create,omitempty"`
+	StageCreate   bool              `json:"stage-create"`
 }
 
 type schemaWire struct {

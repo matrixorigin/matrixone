@@ -408,8 +408,8 @@ func TestRESTClientCreateTable(t *testing.T) {
 		if strings.Contains(bodyText, `"Kind"`) || !strings.Contains(bodyText, `"type":"long"`) {
 			t.Fatalf("create table body used non-Iceberg schema encoding: %s", bodyText)
 		}
-		if !strings.Contains(bodyText, `"schema-id":0`) || !strings.Contains(bodyText, `"spec-id":0`) {
-			t.Fatalf("create table body omitted required zero ids: %s", bodyText)
+		if !strings.Contains(bodyText, `"schema-id":0`) || !strings.Contains(bodyText, `"spec-id":0`) || !strings.Contains(bodyText, `"stage-create":false`) {
+			t.Fatalf("create table body omitted required zero/false fields: %s", bodyText)
 		}
 		if err := json.Unmarshal(body, &gotBody); err != nil {
 			t.Fatalf("decode create table body: %v", err)
