@@ -208,6 +208,58 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 		require.Zero(t, cmp)
 	})
 
+	t.Run("decimal256 accepts raw DecodeRow bytes", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		decimalTyp := types.New(types.T_decimal256, 40, 4)
+		amount, err := types.ParseDecimal256("12345678901234567890123456789012345.1234", decimalTyp.Width, decimalTyp.Scale)
+		require.NoError(t, err)
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.def.colNames = []string{"id", "amount"}
+		tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), decimalTyp}
+		tblStuff.def.visibleIdxes = []int{0, 1}
+		tblStuff.def.pkColIdx = 0
+		tblStuff.def.pkColIdxes = []int{0}
+
+		hm := buildTestBranchHashmap(
+			t,
+			mp,
+			tblStuff.def.colTypes,
+			[][]any{{int64(1), amount}},
+		)
+		defer func() {
+			require.NoError(t, hm.Close())
+		}()
+
+		probe := buildFixedVector(t, mp, types.T_int64.ToType(), int64(1))
+		defer probe.Free(mp)
+
+		results, err := hm.GetByVectors([]*vector.Vector{probe})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		require.True(t, results[0].Exists)
+		require.Len(t, results[0].Rows, 1)
+
+		tuple, _, err := hm.DecodeRow(results[0].Rows[0])
+		require.NoError(t, err)
+		require.Len(t, tuple, 2)
+		rawAmount, ok := tuple[1].([]byte)
+		require.True(t, ok)
+		require.Equal(t, types.EncodeFixed(amount), rawAmount)
+
+		bat := batch.NewWithSize(2)
+		defer bat.Clean(mp)
+		bat.Vecs[0] = buildFixedVector(t, mp, types.T_int64.ToType(), int64(1))
+		bat.Vecs[1] = buildFixedVector(t, mp, decimalTyp, amount)
+		bat.SetRowCount(1)
+
+		cmp, err := compareTupleWithBatchRow(tblStuff, tuple, bat, 0, false)
+		require.NoError(t, err)
+		require.Zero(t, cmp)
+	})
+
 	t.Run("enum accepts uint16", func(t *testing.T) {
 		vec := vector.NewVec(types.T_enum.ToType())
 		defer vec.Free(mp)

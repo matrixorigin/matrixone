@@ -799,6 +799,8 @@ func normalizeCompareValue(typ types.Type, val any) (any, error) {
 		case []byte:
 			return types.BytesToArray[float64](v), nil
 		}
+	case types.T_decimal256:
+		return normalizeFixedCompareValue[types.Decimal256](typ, val)
 	case types.T_Rowid:
 		return normalizeFixedCompareValue[types.Rowid](typ, val)
 	case types.T_Blockid:
