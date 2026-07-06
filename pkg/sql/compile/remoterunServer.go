@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -314,6 +313,8 @@ type messageReceiverOnServer struct {
 
 	needNotReply bool
 
+	waitRegistrationTimeout time.Duration
+
 	// result.
 	phyPlan *models.PhyPlan
 }
@@ -564,16 +565,14 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 // to register itself via PutProcIntoUuidMap across notify retries. Under normal
 // operation this happens within seconds; the timeout prevents a broken remote
 // CN from keeping the query alive indefinitely.
-var waitRegistrationTimeout = 30 * time.Second
-
-const remoteDispatchNotRegisteredYet = "remote dispatch receiver not registered yet"
+const waitRegistrationTimeout = 30 * time.Second
 
 func newRemoteDispatchNotRegisteredYetError(ctx context.Context, uid uuid.UUID) error {
-	return moerr.NewInternalErrorf(ctx, "%s: %s", remoteDispatchNotRegisteredYet, uid.String())
+	return moerr.NewRemoteDispatchNotRegistered(ctx, uid.String())
 }
 
 func isRemoteDispatchNotRegisteredYetError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), remoteDispatchNotRegisteredYet)
+	return moerr.IsMoErrCode(err, moerr.ErrRemoteDispatchNotRegistered)
 }
 
 func (receiver *messageReceiverOnServer) TryGetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
@@ -591,7 +590,8 @@ func (receiver *messageReceiverOnServer) TryGetProcByUuid(uid uuid.UUID) (*proce
 }
 
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
-	deadline := time.NewTimer(waitRegistrationTimeout)
+	waitTimeout := receiver.getWaitRegistrationTimeout()
+	deadline := time.NewTimer(waitTimeout)
 	defer deadline.Stop()
 
 	for {
@@ -606,8 +606,15 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 			return nil, nil, nil
 		case <-deadline.C:
 			return nil, nil, moerr.NewInternalErrorf(receiver.messageCtx,
-				"dispatch process not registered within %s, remote CN may have failed", waitRegistrationTimeout)
+				"dispatch process not registered within %s, remote CN may have failed", waitTimeout)
 		case <-changed:
 		}
 	}
+}
+
+func (receiver *messageReceiverOnServer) getWaitRegistrationTimeout() time.Duration {
+	if receiver.waitRegistrationTimeout > 0 {
+		return receiver.waitRegistrationTimeout
+	}
+	return waitRegistrationTimeout
 }

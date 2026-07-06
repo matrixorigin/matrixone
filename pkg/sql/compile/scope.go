@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -803,6 +804,14 @@ type notifyMessageResult struct {
 
 const notifyMessageRetryInterval = 200 * time.Millisecond
 
+type notifyMessageSenderFactory func(
+	ctx context.Context,
+	sid string,
+	toAddr string,
+	mp *mpool.MPool,
+	analyzeModule *AnalyzeModule,
+) (*messageSenderOnClient, error)
+
 // clean do final work for a notifyMessageResult.
 func (r *notifyMessageResult) clean(proc *process.Process) {
 	if r.sender != nil {
@@ -816,6 +825,14 @@ func (r *notifyMessageResult) clean(proc *process.Process) {
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
 // and keep receiving the data until the query was done or data is ended.
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
+	s.sendNotifyMessageWithFactory(wg, resultChan, newMessageSenderOnClient)
+}
+
+func (s *Scope) sendNotifyMessageWithFactory(
+	wg *sync.WaitGroup,
+	resultChan chan notifyMessageResult,
+	newSender notifyMessageSenderFactory,
+) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
@@ -843,7 +860,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 				defer deadline.Stop()
 
 				for {
-					sender, err := newMessageSenderOnClient(
+					sender, err := newSender(
 						s.Proc.Ctx,
 						s.Proc.GetService(),
 						fromAddr,

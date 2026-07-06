@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -684,18 +685,13 @@ func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
 func Test_GetProcByUuid_TimeoutDoesNotPoisonLaterRegistration(t *testing.T) {
 	_ = colexec.NewServer(nil)
 
-	originTimeout := waitRegistrationTimeout
-	waitRegistrationTimeout = 10 * time.Millisecond
-	defer func() {
-		waitRegistrationTimeout = originTimeout
-	}()
-
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)
 
 	receiver := &messageReceiverOnServer{
-		connectionCtx: context.TODO(),
-		messageCtx:    context.TODO(),
+		connectionCtx:           context.TODO(),
+		messageCtx:              context.TODO(),
+		waitRegistrationTimeout: 10 * time.Millisecond,
 	}
 
 	p, ch, err := receiver.GetProcByUuid(uid)
@@ -734,6 +730,78 @@ func Test_TryGetProcByUuid_NotRegisteredYetDoesNotPoisonLaterRegistration(t *tes
 
 	colexec.Get().DeleteUuids([]uuid.UUID{uid})
 	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+}
+
+func TestSendNotifyMessageRetriesUntilRemoteDispatchRegistered(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	scopeProc := proc.NewContextChildProc(1)
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	s := &Scope{
+		Proc: scopeProc,
+		RemoteReceivRegInfos: []RemoteReceivRegInfo{
+			{
+				Idx:      0,
+				Uuid:     uid,
+				FromAddr: "remote-cn",
+			},
+		},
+	}
+
+	var attempts int
+	factory := func(
+		ctx context.Context,
+		sid string,
+		toAddr string,
+		mp *mpool.MPool,
+		analyzeModule *AnalyzeModule,
+	) (*messageSenderOnClient, error) {
+		attempts++
+		receiveCh := make(chan morpc.Message, 2)
+		if attempts == 1 {
+			msg := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+			msg.SetMoError(ctx, moerr.NewRemoteDispatchNotRegistered(ctx, uid.String()))
+			receiveCh <- msg
+		} else {
+			receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+			receiveCh <- &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+		}
+		return &messageSenderOnClient{
+			ctx:          ctx,
+			mp:           mp,
+			streamSender: &fakeStreamSender{},
+			receiveCh:    receiveCh,
+			safeToClose:  true,
+		}, nil
+	}
+
+	var wg sync.WaitGroup
+	resultCh := make(chan notifyMessageResult, 1)
+	s.sendNotifyMessageWithFactory(&wg, resultCh, factory)
+
+	select {
+	case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
+		bat, err := signal.Action()
+		require.NoError(t, err)
+		require.NotNil(t, bat)
+		bat.Clean(scopeProc.Mp())
+	case <-time.After(time.Second):
+		t.Fatal("notify retry did not forward the remote batch")
+	}
+
+	select {
+	case result := <-resultCh:
+		result.clean(scopeProc)
+		require.NoError(t, result.err)
+	case <-time.After(time.Second):
+		t.Fatal("notify retry did not finish")
+	}
+
+	wg.Wait()
+	require.Equal(t, 2, attempts)
 }
 
 var _ morpc.Stream = &fakeStreamSender{}
