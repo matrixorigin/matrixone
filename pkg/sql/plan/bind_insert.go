@@ -88,22 +88,11 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 			continue
 		}
 
-		colMap := make(map[string]bool)
-		for _, part := range idxDef.Parts {
-			colMap[part] = true
-		}
-
-		notCoverPk := false
-		for _, part := range tableDef.Pkey.Names {
-			if !colMap[part] {
-				notCoverPk = true
-				break
-			}
-		}
-
-		if notCoverPk {
-			indexes = append(indexes, idxDef)
-		}
+		// If a regular index table exists, DML must maintain it even when the
+		// index parts include the full primary key. The optimizer can still choose
+		// that hidden table for leading-prefix predicates, and stale index data
+		// would cause incorrect query results (e.g. #25460).
+		indexes = append(indexes, idxDef)
 	}
 
 	return
