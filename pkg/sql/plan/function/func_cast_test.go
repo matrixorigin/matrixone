@@ -2557,6 +2557,40 @@ func TestStrictCastFloatOverflowRejected(t *testing.T) {
 		succeed, info := tc.Run()
 		require.True(t, succeed, info)
 	})
+
+	// Underflow is NOT an out-of-range error in MySQL strict mode:
+	// values like 1e-400 parse to ~0 and should succeed silently.
+	t.Run("double underflow ok", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e-400"}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+		}
+		want := []float64{0}
+		tc := NewFunctionTestCase(
+			proc,
+			inputs,
+			NewFunctionTestResult(types.T_float64.ToType(), false, want, nil),
+			NewStrictCast,
+		)
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("float underflow ok", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e-50"}, nil),
+			NewFunctionTestInput(types.T_float32.ToType(), []float32{}, nil),
+		}
+		want := []float32{0}
+		tc := NewFunctionTestCase(
+			proc,
+			inputs,
+			NewFunctionTestResult(types.T_float32.ToType(), false, want, nil),
+			NewStrictCast,
+		)
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
 }
 
 func TestStringToFloatAssignmentRequiresStrictNumericString(t *testing.T) {
