@@ -4,17 +4,17 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1;
-a    b    c
-Congress    Lane    1
-Juniper    Way    2
-Nightingale    Lane    3
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1  𝄀
+Juniper  ¦  Way  ¦  2  𝄀
+Nightingale  ¦  Lane  ¦  3
 create index idx1 using master on t1(a,b);
 insert into t1 values("Changing","Expanse", "4");
 update t1 set a = "Altering" where c = "4";
 delete from t1 where c = "2";
 select * from t1 where a = "Congress" and b="Lane";
-a    b    c
-Congress    Lane    1
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1
 create table t2(a varchar(30), b bigint, c varchar(30) primary key);
 insert into t2 values("Congress",1, "1");
 insert into t2 values("Juniper",2, "2");
@@ -29,66 +29,72 @@ insert into t1 values("Nightingale","Lane", "3");
 create index idx1 using master on t1(a,b);
 insert into t1 values("Alberta","Blvd", "4");
 select * from t1 where a = "Alberta" and b="Blvd";
-a    b    c
-Alberta    Blvd    4
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Alberta  ¦  Blvd  ¦  4
 insert into t1 values("Nightingale","Lane", "5");
 select * from t1 where a = "Nightingale" and b="Lane";
-a    b    c
-Nightingale    Lane    3
-Nightingale    Lane    5
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Nightingale  ¦  Lane  ¦  3  𝄀
+Nightingale  ¦  Lane  ¦  5
 insert into t1 values(NULL,"Lane", "6");
 select * from t1 where b="Lane";
-a    b    c
-Congress    Lane    1
-Nightingale    Lane    3
-Nightingale    Lane    5
-null    Lane    6
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1  𝄀
+Nightingale  ¦  Lane  ¦  3  𝄀
+Nightingale  ¦  Lane  ¦  5  𝄀
+null  ¦  Lane  ¦  6
 drop table if exists t2;
 create table t2(a varchar(30), b varchar(30), c varchar(30));
 insert into t2 values("arjun", "sk", "7");
 insert into t2 values("albin", "john", "8");
 insert into t1 select * from t2;
 select * from t1 where b="Lane";
-a    b    c
-Congress    Lane    1
-Nightingale    Lane    3
-Nightingale    Lane    5
-null    Lane    6
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1  𝄀
+Nightingale  ¦  Lane  ¦  3  𝄀
+Nightingale  ¦  Lane  ¦  5  𝄀
+null  ¦  Lane  ¦  6
 update t1 set a="albin" ,b="john" where c="7";
 select * from t1 where a="albin";
-a    b    c
-albin    john    7
-albin    john    8
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+albin  ¦  john  ¦  7  𝄀
+albin  ¦  john  ¦  8
 update t1 set a=NULL ,b="john" where c="7";
 select * from t1 where b="john";
-a    b    c
-null    john    7
-albin    john    8
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+null  ¦  john  ¦  7  𝄀
+albin  ¦  john  ¦  8
 delete from t1 where c="7";
 select * from t1 where a="john";
-a    b    c
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]
 truncate table t1;
 select * from t1;
-a    b    c
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    PRIMARY    1    c    A    0    NULL    NULL                        YES    c
-t1    1    idx1    1    a    A    0    NULL    NULL    YES    master                YES    a
-t1    1    idx1    2    b    A    0    NULL    NULL    YES    master                YES    b
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  1  ¦  idx1  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  master  ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  1  ¦  idx1  ¦  2  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  master  ¦    ¦    ¦    ¦  YES  ¦  b  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  c  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  c
 show create table t1;
-Table    Create Table
-t1    CREATE TABLE `t1` (\n  `a` varchar(30) DEFAULT NULL,\n  `b` varchar(30) DEFAULT NULL,\n  `c` varchar(30) NOT NULL,\n  PRIMARY KEY (`c`),\n  KEY `idx1` USING master (`a`,`b`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t1  ¦  CREATE TABLE `t1` (
+  `a` varchar(30) DEFAULT NULL,
+  `b` varchar(30) DEFAULT NULL,
+  `c` varchar(30) NOT NULL,
+  PRIMARY KEY (`c`),
+  KEY `idx1` USING master (`a`,`b`)
+)
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx1";
-name    type    column_name
-idx1    MULTIPLE    a
-idx1    MULTIPLE    b
+➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
+idx1  ¦  MULTIPLE  ¦  a  𝄀
+idx1  ¦  MULTIPLE  ¦  b
 drop table t1;
 show index from t1;
 no such table secondary_index_master.t1
 show create table t1;
 no such table secondary_index_master.t1
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx1";
-name    type    column_name
+➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 insert into t1 values("Congress","Lane", "1");
@@ -97,8 +103,8 @@ insert into t1 values("Nightingale","Lane", "3");
 create index idx1 using master on t1(a);
 insert into t1 values("Abi","Ma", "4");
 select * from t1 where a = "Abi";
-a    b    c
-Abi    Ma    4
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Abi  ¦  Ma  ¦  4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 insert into t1 values("Congress","Lane", "1");
@@ -108,8 +114,8 @@ create index idx1 using master on t1(a,b,c);
 insert into t1 values("Abel","John", "4");
 insert into t1 values("Amy","Brian", "5");
 select * from t1 where a = "Congress" and b="Lane" and c="1";
-a    b    c
-Congress    Lane    1
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a,b);
@@ -117,16 +123,16 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a = "Congress" and b="Lane";
-a    b    c
-Congress    Lane    1
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key, index idx1 using master (a,b));
 insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a = "Congress" and b="Lane";
-a    b    c
-Congress    Lane    1
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 insert into t1 values("Congress","Lane", "1");
@@ -135,9 +141,9 @@ insert into t1 values("Nightingale","Lane", "3");
 alter table t1 add index idx1 using master(a,b);
 insert into t1 values("Congress","Lane", "4");
 select * from t1 where a = "Congress" and b="Lane";
-a    b    c
-Congress    Lane    1
-Congress    Lane    4
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1  𝄀
+Congress  ¦  Lane  ¦  4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30));
 create index idx1 using master on t1(a,b);
@@ -145,8 +151,8 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a="Congress" and b="Lane";
-a    b    c
-Congress    Lane    1
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30), primary key(a,b));
 create index idx1 using master on t1(a,b);
@@ -154,8 +160,8 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a="Congress" and b="Lane";
-a    b    c
-Congress    Lane    1
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a,b);
@@ -165,9 +171,9 @@ insert into t1 values("Nightingale","Lane", "3");
 alter table t1 drop column b;
 insert into t1 values("Congress", "4");
 select * from t1 where a="Congress";
-a    c
-Congress    1
-Congress    4
+➤ a[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  1  𝄀
+Congress  ¦  4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a);
@@ -177,9 +183,9 @@ insert into t1 values("Nightingale","Lane", "3");
 alter table t1 rename column a to a1;
 insert into t1 values("Congress","Lane", "4");
 select * from t1 where a1="Congress";
-a1    b    c
-Congress    Lane    1
-Congress    Lane    4
+➤ a1[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1  𝄀
+Congress  ¦  Lane  ¦  4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a);
@@ -189,9 +195,9 @@ insert into t1 values("Nightingale","Lane", "3");
 alter table t1 modify column c int;
 insert into t1 values("Congress","Lane", 4);
 select * from t1 where a="Congress";
-a    b    c
-Congress    Lane    1
-Congress    Lane    4
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[4,32,0]  𝄀
+Congress  ¦  Lane  ¦  1  𝄀
+Congress  ¦  Lane  ¦  4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a);
@@ -202,9 +208,9 @@ alter table t1 drop primary key;
 alter table t1 add primary key (a,b);
 insert into t1 values("Congress","Lane2", "4");
 select * from t1 where a="Congress";
-a    b    c
-Congress    Lane    1
-Congress    Lane2    4
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1  𝄀
+Congress  ¦  Lane2  ¦  4
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a);
@@ -214,9 +220,9 @@ insert into t1 values("Nightingale","Lane", "6");
 alter table t1 drop primary key;
 insert into t1 values("Congress","Lane", "7");
 select * from t1 where a="Congress";
-a    b    c
-Congress    Lane    4
-Congress    Lane    7
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  4  𝄀
+Congress  ¦  Lane  ¦  7
 drop table if exists t1;
 create table t1(a varchar(30), b bigint, c varchar(30) primary key);
 create index idx1 using master on t1(a,b);
@@ -228,8 +234,8 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a="Congress" and b="Lane";
-a    b    c
-Congress    Lane    1
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a,b);
@@ -237,8 +243,8 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a="Nightingale" and b="Lane";
-a    b    c
-Nightingale    Lane    3
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Nightingale  ¦  Lane  ¦  3
 drop table if exists t1;
 create table t1(a varchar(30), b0 varchar(30), b1 varchar(30), c varchar(30), d varchar(30), primary key( c, d));
 create index idx1 using master on t1(a,b0);
@@ -246,8 +252,8 @@ insert into t1 values("Congress","Lane", "ALane","1","0");
 insert into t1 values("Juniper","Way","AWay", "2","0");
 insert into t1 values("Nightingale","Lane","ALane", "3","0");
 select * from t1 where a="Nightingale" and b0="Lane";
-a    b0    b1    c    d
-Nightingale    Lane    ALane    3    0
+➤ a[12,-1,0]  ¦  b0[12,-1,0]  ¦  b1[12,-1,0]  ¦  c[12,-1,0]  ¦  d[12,-1,0]  𝄀
+Nightingale  ¦  Lane  ¦  ALane  ¦  3  ¦  0
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
 create index idx1 using master on t1(a,b);
@@ -255,12 +261,12 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where b="Lane";
-a    b    c
-Congress    Lane    1
-Nightingale    Lane    3
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1  𝄀
+Nightingale  ¦  Lane  ¦  3
 select * from t1 where a="Juniper" and b="Way";
-a    b    c
-Juniper    Way    2
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Juniper  ¦  Way  ¦  2
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30));
 create index idx1 using master on t1(a,b,c);
@@ -268,11 +274,11 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a="Congress" and b="Lane" and c="1";
-a    b    c
-Congress    Lane    1
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1
 select * from t1 where a="Nightingale" and c between "2" and "3";
-a    b    c
-Nightingale    Lane    3
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Nightingale  ¦  Lane  ¦  3
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30));
 create index idx1 using master on t1(a,b,c);
@@ -280,9 +286,9 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
-a    b    c
-Congress    Lane    1
-Nightingale    Lane    3
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1  𝄀
+Nightingale  ¦  Lane  ¦  3
 drop table if exists t1;
 create table t1(a varchar(30), b varchar(30), c varchar(30));
 create index idx1 using master on t1(a,b,c);
@@ -290,9 +296,54 @@ insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3";
-a    b    c
-Congress    Lane    1
-Nightingale    Lane    3
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1  𝄀
+Nightingale  ¦  Lane  ¦  3
 select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3" limit 1;
-a    b    c
-Congress    Lane    1
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+Congress  ¦  Lane  ¦  1
+drop table if exists mst_dml;
+create table mst_dml(a varchar(30), b varchar(30), c varchar(30) primary key);
+create index idx_m using master on mst_dml(a,b);
+insert into mst_dml values("alpha","one","1"),("beta","two","2");
+select * from mst_dml where a="alpha" and b="one";
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+alpha  ¦  one  ¦  1
+insert into mst_dml values("alpha","x","1") on duplicate key update b="changed";
+select * from mst_dml order by c;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+alpha  ¦  changed  ¦  1  𝄀
+beta  ¦  two  ¦  2
+select * from mst_dml where a="alpha" and b="changed";
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+alpha  ¦  changed  ¦  1
+select * from mst_dml where a="alpha" and b="one";
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]
+insert into mst_dml values("gamma","three","3") on duplicate key update b="z";
+select * from mst_dml order by c;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+alpha  ¦  changed  ¦  1  𝄀
+beta  ¦  two  ¦  2  𝄀
+gamma  ¦  three  ¦  3
+replace into mst_dml values("alpha","replaced","1");
+select * from mst_dml order by c;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+alpha  ¦  replaced  ¦  1  𝄀
+beta  ¦  two  ¦  2  𝄀
+gamma  ¦  three  ¦  3
+select * from mst_dml where a="alpha" and b="replaced";
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]  𝄀
+alpha  ¦  replaced  ¦  1
+select * from mst_dml where a="alpha" and b="changed";
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  c[12,-1,0]
+drop table if exists mst_dml;
+drop table if exists mst_nopk;
+create table mst_nopk(a varchar(30), b varchar(30));
+create index idx_m2 using master on mst_nopk(a,b);
+insert into mst_nopk values("p","q") on duplicate key update b="r";
+replace into mst_nopk values("s","t");
+select * from mst_nopk order by a;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  𝄀
+p  ¦  q  𝄀
+s  ¦  t
+drop table if exists mst_nopk;

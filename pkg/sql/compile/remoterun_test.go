@@ -62,7 +62,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
@@ -78,6 +77,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -187,7 +187,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&deletion.Deletion{
 			DeleteCtx: &deletion.DeleteCtx{},
 		},
-		&onduplicatekey.OnDuplicatekey{},
 		&preinsert.PreInsert{},
 		&lockop.LockOp{},
 		&preinsertunique.PreInsertUnique{},
@@ -268,7 +267,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.PreInsert), PreInsert: &pipeline.PreInsert{}},
 		{Op: int32(vm.LockOp), LockOp: &pipeline.LockOp{}},
 		{Op: int32(vm.PreInsertUnique), PreInsertUnique: &pipeline.PreInsertUnique{}},
-		{Op: int32(vm.OnDuplicateKey), OnDuplicateKey: &pipeline.OnDuplicateKey{}},
 		{Op: int32(vm.Shuffle), Shuffle: &pipeline.Shuffle{}},
 		{Op: int32(vm.Dispatch), Dispatch: &pipeline.Dispatch{}},
 		{Op: int32(vm.Group), Agg: &pipeline.Group{}},
@@ -358,22 +356,6 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	}
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
-
-	t.Run("OnDuplicateKey_IsIgnore", func(t *testing.T) {
-		op := &onduplicatekey.OnDuplicatekey{
-			IsIgnore:       true,
-			InsertColCount: 3,
-		}
-		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
-		require.NoError(t, err)
-		require.True(t, pipeInstr.OnDuplicateKey.IsIgnore)
-
-		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
-		require.NoError(t, err)
-		restoredOp := restored.(*onduplicatekey.OnDuplicatekey)
-		require.True(t, restoredOp.IsIgnore)
-		require.Equal(t, int32(3), restoredOp.InsertColCount)
-	})
 
 	t.Run("FuzzyFilter_BuildIdx", func(t *testing.T) {
 		op := &fuzzyfilter.FuzzyFilter{
@@ -937,9 +919,7 @@ func TestReceiveMessageFromCnServerIfConnector_ReturnsOnBlockedReceiverCancel(t 
 		Proc:   proc,
 		RootOp: connector.NewArgument(),
 	}
-	s.RootOp.(*connector.Connector).Reg = &process.WaitRegister{
-		Ch2: make(chan process.PipelineSignal, 1),
-	}
+	s.RootOp.(*connector.Connector).Reg = process.NewPipelineEdge(1, 0)
 	s.RootOp.(*connector.Connector).Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
 
 	sender := &messageSenderOnClient{
@@ -970,8 +950,8 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	forwardCh := make(chan process.PipelineSignal, 1)
-	forwardCh <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+	forwardReg := process.NewPipelineEdge(1, 0)
+	forwardReg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
 
 	sender := &messageSenderOnClient{
 		ctx:       ctx,
@@ -982,7 +962,7 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- receiveMsgAndForward(sender, forwardCh)
+		done <- receiveMsgAndForward(sender, forwardReg)
 	}()
 
 	cancel()
@@ -992,9 +972,133 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
 	case <-time.After(time.Second):
-		<-forwardCh
+		<-forwardReg.Ch2
 		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
 	}
+}
+
+func TestReceiveMsgAndForward_ReturnsOnReceiverTerminal(t *testing.T) {
+	forwardReg := process.NewPipelineEdge(1, 0)
+	require.True(t, forwardReg.Abort(moerr.NewInternalErrorNoCtx("receiver terminal")))
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        mpool.MustNewZero(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMsgAndForward(sender, forwardReg)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.Fail(t, "receiveMsgAndForward did not unblock after receiver terminal")
+	}
+}
+
+func TestReceiveMessageFromCnServerIfConnector_ReturnsOnReceiverTerminal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+
+	reg := process.NewPipelineEdge(1, 0)
+	require.True(t, reg.Abort(moerr.NewInternalErrorNoCtx("receiver terminal")))
+	s := &Scope{
+		Proc:   proc,
+		RootOp: connector.NewArgument().WithReg(reg),
+	}
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        proc.Mp(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMessageFromCnServerIfConnector(s, sender)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after receiver terminal")
+	}
+}
+
+func TestReceiveMsgAndForward_NilReceiverReturnsError(t *testing.T) {
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        mpool.MustNewZero(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	err := receiveMsgAndForward(sender, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "remote batch forward target is nil")
+}
+
+func TestRemoteNotifyCleanupUsesTypedErrorForSharedReceiver(t *testing.T) {
+	reg := process.NewPipelineEdge(3, 3)
+	testErr := moerr.NewInternalErrorNoCtx("remote notify failed")
+
+	require.True(t, sendRemoteNotifyCleanupTerminal(nil, reg, testErr))
+
+	receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+	bat, err := receiver.GetNextBatch(nil)
+	require.Nil(t, bat)
+	require.ErrorIs(t, err, testErr)
+
+	require.Equal(t, 2, len(reg.Ch2))
+	for len(reg.Ch2) > 0 {
+		signal := <-reg.Ch2
+		require.Equal(t, process.EventError, signal.EventType)
+		require.ErrorIs(t, signal.TerminalErr(), testErr)
+	}
+}
+
+func TestRemoteNotifyCleanupUsesTypedEndForSingleSender(t *testing.T) {
+	reg := process.NewPipelineEdge(1, 2)
+
+	require.True(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
+
+	signal := <-reg.Ch2
+	require.Equal(t, process.EventEnd, signal.EventType)
+	select {
+	case <-reg.Done():
+		require.Fail(t, "single remote End should not close a shared receiver edge")
+	default:
+	}
+}
+
+func TestRemoteNotifyCleanupUsesSharedTerminalSendBudget(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 200 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+
+	start := time.Now()
+	require.False(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 300*time.Millisecond)
+	select {
+	case <-reg.Done():
+	default:
+		t.Fatal("fallback abort should mark the remote notify edge terminal")
+	}
+	require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
 }
 
 func TestReceiveMessageFromCnServerIfDispatch_PreservesCleanupOnOriginalRoot(t *testing.T) {
@@ -1208,45 +1312,110 @@ func TestDeletionCanTruncateSerializationRoundtrip(t *testing.T) {
 	require.True(t, restored.DeleteCtx.AddAffectedRows)
 }
 
-// TestOnDuplicateKeyIsIgnoreSerializationRoundtrip verifies that IsIgnore is
-// properly serialized and deserialized when OnDuplicateKey operators are sent to remote CN.
-func TestOnDuplicateKeyIsIgnoreSerializationRoundtrip(t *testing.T) {
-	// Create an OnDuplicateKey operator with IsIgnore=true
-	arg := onduplicatekey.NewArgument()
-	arg.Attrs = []string{"col1", "col2"}
-	arg.InsertColCount = 2
-	arg.IsIgnore = true
-
-	// Create minimal context for serialization
-	ctx := &scopeContext{
-		id:       0,
-		plan:     &plan.Plan{},
-		scope:    &Scope{},
-		root:     &scopeContext{},
-		parent:   nil,
-		children: nil,
-		pipe:     nil,
-		regs:     make(map[*process.WaitRegister]int32),
+// newDispatchSrcScopeForTest builds a cross-CN shuffle dispatch source scope:
+// its dispatch sends to localBuckets via LocalRegs (same CN) and to remoteBuckets
+// via RemoteRegs (other CN), exactly like constructDispatchLocalAndRemote does.
+func newDispatchSrcScopeForTest(proc *process.Process, addr string, localBuckets, remoteBuckets []*Scope) *Scope {
+	src := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: addr, Mcpu: 1},
+		Proc:     proc.NewContextChildProc(0),
 	}
-	ctx.root = ctx
-
-	// Serialize to pipeline instruction
-	_, in, err := convertToPipelineInstruction(arg, nil, ctx, 0)
-	require.NoError(t, err)
-	require.NotNil(t, in.OnDuplicateKey)
-	require.True(t, in.OnDuplicateKey.IsIgnore, "IsIgnore should be serialized")
-
-	// Deserialize back to operator
-	opr := &pipeline.Instruction{
-		Op:             int32(vm.OnDuplicateKey),
-		OnDuplicateKey: in.OnDuplicateKey,
+	d := dispatch.NewArgument()
+	d.FuncId = dispatch.ShuffleToAllFunc
+	for _, b := range localBuckets {
+		d.LocalRegs = append(d.LocalRegs, b.Proc.Reg.MergeReceivers[0])
 	}
-	op, err := convertToVmOperator(opr, ctx, nil)
-	require.NoError(t, err)
-	require.NotNil(t, op)
+	for _, b := range remoteBuckets {
+		uid, _ := uuid.NewV7()
+		d.RemoteRegs = append(d.RemoteRegs, colexec.ReceiveInfo{Uuid: uid, NodeAddr: b.NodeInfo.Addr})
+	}
+	src.setRootOperator(d)
+	src.IsEnd = true
+	return src
+}
 
-	restored := op.(*onduplicatekey.OnDuplicatekey)
-	require.True(t, restored.IsIgnore, "IsIgnore should be deserialized")
-	require.Equal(t, []string{"col1", "col2"}, restored.Attrs)
-	require.Equal(t, int32(2), restored.InsertColCount)
+// TestGroupShuffleBucketsByCNIfNeeded reproduces the issue #24919 root cause and
+// verifies the per-CN regrouping fix:
+//
+//	before regrouping, the bucket that carries a cross-CN shuffle dispatch is wrongly
+//	judged non-standalone-executable (its dispatch LocalRegs point to a sibling bucket
+//	that lives in a separate send tree) -> RemoteRun converts it to local -> the dispatch
+//	lands on the coordinator, mispaired with the compile-time cross-CN receiver FromAddr
+//	-> hang.
+//
+//	after regrouping, the dop same-CN buckets (and the nested dispatch) become one per-CN
+//	send unit, so checkPipelineStandaloneExecutableAtRemote returns true and the whole
+//	group is really executed at the remote CN.
+func TestGroupShuffleBucketsByCNIfNeeded(t *testing.T) {
+	c := NewMockCompile(t)
+	c.cnList = engine.Nodes{
+		engine.Node{Addr: "cn1:6001", Mcpu: 2},
+		engine.Node{Addr: "cn2:6001", Mcpu: 2},
+	}
+	c.addr = "cn1:6001"
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+	c.proc.Base.TxnOperator = fakeTxnOperator{}
+	proc := c.proc
+
+	// dop=2, 2 CN -> bucketNum=4. buckets[0,1] on cn1, buckets[2,3] on cn2.
+	addrs := []string{"cn1:6001", "cn1:6001", "cn2:6001", "cn2:6001"}
+	buckets := make([]*Scope, 4)
+	for i := range buckets {
+		buckets[i] = &Scope{
+			Magic:    Remote,
+			NodeInfo: engine.Node{Addr: addrs[i], Mcpu: 1},
+			Proc:     proc.NewContextChildProc(1),
+		}
+		buckets[i].setRootOperator(merge.NewArgument())
+	}
+
+	// each CN's dispatch source is attached to that CN's first bucket (like compile.go:4500).
+	srcCN1 := newDispatchSrcScopeForTest(proc, "cn1:6001",
+		[]*Scope{buckets[0], buckets[1]}, []*Scope{buckets[2], buckets[3]})
+	buckets[0].PreScopes = append(buckets[0].PreScopes, srcCN1)
+	srcCN2 := newDispatchSrcScopeForTest(proc, "cn2:6001",
+		[]*Scope{buckets[2], buckets[3]}, []*Scope{buckets[0], buckets[1]})
+	buckets[2].PreScopes = append(buckets[2].PreScopes, srcCN2)
+
+	// before regrouping: the dispatch-carrying buckets are wrongly judged not standalone.
+	require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[0]))
+	require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[2]))
+
+	// after regrouping: one per-CN container each, all standalone-executable at remote.
+	grouped := c.groupShuffleBucketsByCNIfNeeded(buckets)
+	require.Equal(t, 2, len(grouped))
+	for _, container := range grouped {
+		require.Equal(t, Remote, container.Magic)
+		require.True(t, checkPipelineStandaloneExecutableAtRemote(container))
+	}
+}
+
+// TestGroupShuffleBucketsByCNIfNeeded_Gating verifies the regrouping is a no-op when
+// there is no cross-CN shuffle dispatch (single CN, or no dispatch), so non-shuffle /
+// single-CN inserts are completely unaffected.
+func TestGroupShuffleBucketsByCNIfNeeded_Gating(t *testing.T) {
+	c := NewMockCompile(t)
+	c.cnList = engine.Nodes{
+		engine.Node{Addr: "cn1:6001", Mcpu: 2},
+		engine.Node{Addr: "cn2:6001", Mcpu: 2},
+	}
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+	proc := c.proc
+
+	// scopes without any cross-CN dispatch -> returned unchanged.
+	ss := make([]*Scope, 4)
+	for i := range ss {
+		ss[i] = &Scope{
+			Magic:    Remote,
+			NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+			Proc:     proc.NewContextChildProc(0),
+		}
+		ss[i].setRootOperator(merge.NewArgument())
+	}
+	require.Equal(t, 4, len(c.groupShuffleBucketsByCNIfNeeded(ss)))
+
+	// single CN -> returned unchanged even if a cross-CN dispatch is present.
+	c.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 2}}
+	require.Equal(t, 4, len(c.groupShuffleBucketsByCNIfNeeded(ss)))
 }

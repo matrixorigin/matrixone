@@ -97,7 +97,7 @@ func TestPositionFunctionSyntax(t *testing.T) {
 func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	stmt, err := ParseOne(
 		context.TODO(),
-		"create temporary table if not exists dst clone src to account acc",
+		"create temporary table if not exists dst clone src copy grants to account acc",
 		1,
 	)
 	require.NoError(t, err)
@@ -108,14 +108,30 @@ func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	require.True(t, cloneStmt.CreateTable.IfNotExists)
 	require.Equal(t, tree.Identifier("dst"), cloneStmt.CreateTable.Table.ObjectName)
 	require.Equal(t, tree.Identifier("src"), cloneStmt.SrcTable.ObjectName)
+	require.True(t, cloneStmt.CopyGrants)
 	require.NotNil(t, cloneStmt.ToAccountOpt)
 	require.Equal(t, tree.Identifier("acc"), cloneStmt.ToAccountOpt.AccountName)
 
 	require.Equal(
 		t,
-		"create temporary table if not exists `dst` clone `src` to account `acc`",
+		"create temporary table if not exists `dst` clone `src` copy grants to account `acc`",
 		tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()),
 	)
+}
+
+func TestCloneTableParseCopyGrantsWithoutToAccount(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create table dst clone src copy grants",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.True(t, cloneStmt.CopyGrants)
+	require.Nil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, "create table `dst` clone `src` copy grants", tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()))
 }
 
 func TestCloneTableParseFormattedMoTimestamp(t *testing.T) {
@@ -487,6 +503,14 @@ var (
 		input:  "CREATE TABLE new_t1 LIKE test.t1",
 		output: "create table new_t1 like test.t1",
 	}, {
+		// issue #25119: the IF NOT EXISTS clause must be preserved for the
+		// CREATE TABLE ... LIKE form (it was previously dropped by the parser).
+		input:  "CREATE TABLE IF NOT EXISTS new_t1 LIKE t1",
+		output: "create table if not exists new_t1 like t1",
+	}, {
+		input:  "CREATE TEMPORARY TABLE IF NOT EXISTS new_t1 LIKE t1",
+		output: "create temporary table if not exists new_t1 like t1",
+	}, {
 		input: "show privileges",
 	}, {
 		input: "show events from db1",
@@ -694,6 +718,16 @@ var (
 			input:  "select CAST('10 ' as unsigned integer);",
 			output: "select cast(10  as integer unsigned)",
 		}, {
+			// issue #25131: `cast(<col> as unsigned)` must render a stable
+			// target type. A preceding column reference must not leak into the
+			// cast's target type (previously rendered "as <col> unsigned"),
+			// otherwise GROUP BY / ORDER BY fail to match the same expression.
+			input:  "select cast(vgpos as unsigned) from t group by cast(vgpos as unsigned) order by cast(vgpos as unsigned)",
+			output: "select cast(vgpos as unsigned) from t group by cast(vgpos as unsigned) order by cast(vgpos as unsigned)",
+		}, {
+			input:  "select cast(vgpos as signed) from t group by cast(vgpos as signed)",
+			output: "select cast(vgpos as signed) from t group by cast(vgpos as signed)",
+		}, {
 			input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
 			output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
 		}, {
@@ -894,6 +928,27 @@ var (
 		}, {
 			input:  "replace into t1 values (date_add(NULL, INTERVAL 1 DAY));",
 			output: "replace into t1 values (date_add(null, INTERVAL 1 day))",
+		}, {
+			input:  "replace into t_table_dst table t_table_src;",
+			output: "replace into t_table_dst select * from t_table_src",
+		}, {
+			input:  "replace into t_table_dst (id, v) table t_table_src;",
+			output: "replace into t_table_dst (id, v) select * from t_table_src",
+		}, {
+			input:  "replace into t_table_dst table t_table_src order by id desc limit 1;",
+			output: "replace into t_table_dst select * from t_table_src order by id desc limit 1",
+		}, {
+			input:  "replace into t_table_dst (id, v) table t_table_src order by id limit 1 offset 1;",
+			output: "replace into t_table_dst (id, v) select * from t_table_src order by id limit 1 offset 1",
+		}, {
+			input:  "replace low_priority into t_mod values(1, 20);",
+			output: "replace into t_mod values (1, 20)",
+		}, {
+			input:  "replace delayed into t_mod values(1, 30);",
+			output: "replace into t_mod values (1, 30)",
+		}, {
+			input:  "replace low_priority into t_table_dst table t_table_src;",
+			output: "replace into t_table_dst select * from t_table_src",
 		}, {
 			input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
 			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL 1 second) as 1 second later",
@@ -3972,6 +4027,10 @@ var (
 		},
 		{
 			input: "ALTER TABLE t1 ADD PARTITION (PARTITION p5 VALUES IN (15, 17)",
+		},
+		{
+			// MySQL REPLACE does not allow HIGH_PRIORITY (only LOW_PRIORITY | DELAYED).
+			input: "replace high_priority into t_mod values (1, 40)",
 		},
 	}
 )

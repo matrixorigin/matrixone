@@ -82,7 +82,6 @@ const (
 	MergeBlock
 	// MergeDelete is used to recieve S3 Blcok Delete Info from remote Cn
 	MergeDelete
-	OnDuplicateKey
 	FuzzyFilter
 	PreInsert
 	PreInsertUnique
@@ -156,7 +155,6 @@ func init() {
 		ValueScan:               "ValueScan",
 		MergeBlock:              "MergeBlock",
 		MergeDelete:             "MergeDelete",
-		OnDuplicateKey:          "OnDuplicateKey",
 		FuzzyFilter:             "FuzzyFilter",
 		PreInsert:               "PreInsert",
 		PreInsertUnique:         "PreInsertUnique",

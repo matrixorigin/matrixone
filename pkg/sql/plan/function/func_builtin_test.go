@@ -1626,7 +1626,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 
 	{
 		tc := tcTemp{
-			info: "test cot with err",
+			info: "test cot(0) returns out-of-range error",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{
@@ -1634,12 +1634,16 @@ func Test_BuiltIn_Math(t *testing.T) {
 					},
 					nil),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{true}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), true,
+				[]float64{0}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInCot)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
+
+		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+		_, err := tcc.DebugRun()
+		require.ErrorContains(t, err, "DOUBLE value is out of range in 'cot(0)'")
 	}
 
 	{
