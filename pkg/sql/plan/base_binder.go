@@ -1770,6 +1770,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return nil, err
 			}
 			args[1], err = appendCastBeforeExpr(ctx, args[1], float64Type)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if err != nil {
 			return nil, err
@@ -1812,6 +1815,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return nil, err
 			}
 			args[1], err = appendCastBeforeExpr(ctx, args[1], float64Type)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if err != nil {
 			return nil, err
@@ -1835,6 +1841,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return nil, err
 			}
 			args[1], err = appendCastBeforeExpr(ctx, args[1], float64Type)
+			if err != nil {
+				return nil, err
+			}
 		}
 	case "unary_minus":
 		if len(args) == 0 {
