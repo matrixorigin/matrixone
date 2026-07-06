@@ -894,6 +894,106 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctRejectsHiddenKe
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 }
 
+// normalizeGroupingArgsForComparison strips table qualifiers from GROUPING()
+// arguments so that GROUPING(t.a) normalizes to GROUPING(a) for comparison.
+func TestNormalizeGroupingArgsForComparisonStripsTableQualifier(t *testing.T) {
+	groupingExpr := &tree.FuncExpr{
+		FuncName: tree.NewCStr("grouping", 0),
+		Exprs: tree.Exprs{
+			&tree.UnresolvedName{
+				NumParts: 2,
+				CStrParts: [4]*tree.CStr{
+					tree.NewCStr("a", 0),
+					tree.NewCStr("t", 0),
+				},
+			},
+		},
+	}
+	normalizeGroupingArgsForComparison(groupingExpr)
+	arg, ok := groupingExpr.Exprs[0].(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, 1, arg.NumParts)
+	require.Equal(t, "a", arg.CStrParts[0].Compare())
+}
+
+// normalizeGroupingArgsForComparison unwraps redundant parentheses from
+// GROUPING() arguments so that GROUPING((a)) normalizes to GROUPING(a).
+func TestNormalizeGroupingArgsForComparisonUnwrapsParenExpr(t *testing.T) {
+	groupingExpr := &tree.FuncExpr{
+		FuncName: tree.NewCStr("grouping", 0),
+		Exprs: tree.Exprs{
+			&tree.ParenExpr{
+				Expr: &tree.UnresolvedName{
+					NumParts: 1,
+					CStrParts: [4]*tree.CStr{
+						tree.NewCStr("a", 0),
+					},
+				},
+			},
+		},
+	}
+	normalizeGroupingArgsForComparison(groupingExpr)
+	arg, ok := groupingExpr.Exprs[0].(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, 1, arg.NumParts)
+	require.Equal(t, "a", arg.CStrParts[0].Compare())
+}
+
+// groupingOrderExprKey must return the same key for GROUPING(a) and
+// GROUPING(t.a) so that the DISTINCT guard matches them as the same expression.
+func TestGroupingOrderExprKeyNormalizesQualifiedColumn(t *testing.T) {
+	// Parse a query to obtain a well-formed GROUPING(a) FuncExpr.
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select grouping(a) from select_test.bind_select group by a with rollup`,
+		1,
+	)
+	require.NoError(t, err)
+	selectList := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs
+	unqualifiedGrouping := selectList[0].Expr
+
+	// Clone it and replace the argument with a qualified t.a reference.
+	qualifiedGrouping := cloneTreeExpr(unqualifiedGrouping)
+	qualifiedGrouping.(*tree.FuncExpr).Exprs[0] = &tree.UnresolvedName{
+		NumParts: 2,
+		CStrParts: [4]*tree.CStr{tree.NewCStr("a", 0), tree.NewCStr("t", 0)},
+	}
+
+	key1, err := groupingOrderExprKey(nil, nil, unqualifiedGrouping)
+	require.NoError(t, err)
+	key2, err := groupingOrderExprKey(nil, nil, qualifiedGrouping)
+	require.NoError(t, err)
+	require.Equal(t, key1, key2)
+}
+
+// groupingOrderExprKey must return the same key for GROUPING((a)) and
+// GROUPING(a) so that the DISTINCT guard matches them as the same expression.
+func TestGroupingOrderExprKeyNormalizesParenExpr(t *testing.T) {
+	// Parse a query to obtain a well-formed GROUPING(a) FuncExpr.
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select grouping(a) from select_test.bind_select group by a with rollup`,
+		1,
+	)
+	require.NoError(t, err)
+	selectList := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs
+	unwrappedGrouping := selectList[0].Expr
+
+	// Clone it and wrap the argument in a redundant ParenExpr.
+	wrappedGrouping := cloneTreeExpr(unwrappedGrouping)
+	wrappedGrouping.(*tree.FuncExpr).Exprs[0] = &tree.ParenExpr{
+		Expr: wrappedGrouping.(*tree.FuncExpr).Exprs[0],
+	}
+
+	key1, err := groupingOrderExprKey(nil, nil, unwrappedGrouping)
+	require.NoError(t, err)
+	key2, err := groupingOrderExprKey(nil, nil, wrappedGrouping)
+	require.NoError(t, err)
+	require.Equal(t, key1, key2)
+}
+
 func TestAppendGroupingSetOrderByNestedProjects(t *testing.T) {
 	testCases := []struct {
 		name            string

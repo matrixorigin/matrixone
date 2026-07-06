@@ -3935,7 +3935,8 @@ func qualifyGroupingOrderExpr(
 
 // groupingOrderExprKey returns a canonical string key for astExpr so that an
 // ORDER BY expression can be matched against a visible select-list expression
-// regardless of alias-vs-column spelling.
+// regardless of alias-vs-column spelling, table qualifiers, or redundant
+// parentheses.
 func groupingOrderExprKey(
 	builder *QueryBuilder,
 	selectList tree.SelectExprs,
@@ -3945,7 +3946,68 @@ func groupingOrderExprKey(
 	if err != nil {
 		return "", err
 	}
+	normalizeGroupingArgsForComparison(qualified)
 	return tree.String(qualified, dialect.MYSQL), nil
+}
+
+// normalizeGroupingArgsForComparison strips table qualifiers and unwraps
+// redundant parentheses from GROUPING() arguments so that, for example,
+// GROUPING(t.a), GROUPING(a), and GROUPING((a)) all canonicalize to the
+// same comparison key used by the DISTINCT guard.
+func normalizeGroupingArgsForComparison(astExpr tree.Expr) {
+	visited := make(map[uintptr]struct{})
+	var walk func(reflect.Value)
+	walk = func(value reflect.Value) {
+		if !value.IsValid() {
+			return
+		}
+		if value.Kind() == reflect.Interface {
+			if value.IsNil() {
+				return
+			}
+			walk(value.Elem())
+			return
+		}
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return
+			}
+			pointer := value.Pointer()
+			if _, ok := visited[pointer]; ok {
+				return
+			}
+			visited[pointer] = struct{}{}
+
+			if funcExpr, ok := value.Interface().(*tree.FuncExpr); ok &&
+				funcExpr.FuncName != nil &&
+				funcExpr.FuncName.Compare() == "grouping" {
+				for i := range funcExpr.Exprs {
+					funcExpr.Exprs[i] = unwrapParenExpr(funcExpr.Exprs[i])
+					if name, ok := funcExpr.Exprs[i].(*tree.UnresolvedName); ok &&
+						name.NumParts > 1 && !name.Star {
+						name.NumParts = 1
+					}
+				}
+				return
+			}
+			walk(value.Elem())
+			return
+		}
+		switch value.Kind() {
+		case reflect.Struct:
+			valueType := value.Type()
+			for i := 0; i < value.NumField(); i++ {
+				if valueType.Field(i).PkgPath == "" {
+					walk(value.Field(i))
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < value.Len(); i++ {
+				walk(value.Index(i))
+			}
+		}
+	}
+	walk(reflect.ValueOf(astExpr))
 }
 
 func cloneTreeExpr(astExpr tree.Expr) tree.Expr {
