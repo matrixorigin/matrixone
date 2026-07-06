@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 )
 
 var (
@@ -94,6 +96,8 @@ func (d *detector) check(
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.mu.closed {
+		v2.TxnDeadlockDetectorEnqueueCounter.WithLabelValues("closed").Inc()
+		v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
 		return ErrDeadlockDetectorClosed
 	}
 
@@ -105,19 +109,30 @@ func (d *detector) check(
 
 	key := util.UnsafeBytesToString(txn.TxnID)
 	if _, ok := d.mu.activeCheckTxn[key]; ok {
+		v2.TxnDeadlockDetectorEnqueueCounter.WithLabelValues("dedup_skipped").Inc()
+		v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
 		return nil
 	}
-	d.mu.activeCheckTxn[key] = struct{}{}
 
 	select {
 	case d.c <- deadlockTxn{
 		holdTxnID: holdTxnID,
 		waitTxn:   txn,
 	}:
+		d.mu.activeCheckTxn[key] = struct{}{}
+		v2.TxnDeadlockDetectorEnqueueCounter.WithLabelValues("queued").Inc()
 	default:
 		// too many txns waiting for deadlock check, just return error
+		v2.TxnDeadlockDetectorEnqueueCounter.WithLabelValues("busy").Inc()
+		v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
+		d.logger.Warn("deadlock_detector_enqueue_busy",
+			zap.Int("queue-depth", len(d.c)),
+			zap.Int("queue-capacity", cap(d.c)),
+			zap.String("wait-txn", hex.EncodeToString(txn.TxnID)),
+			zap.String("hold-txn", hex.EncodeToString(holdTxnID)))
 		return ErrDeadlockCheckBusy
 	}
+	v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
 	return nil
 }
 
@@ -130,6 +145,7 @@ func (d *detector) doCheck(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case txn := <-d.c:
+			v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
 			w.reset(txn)
 			hasDeadlock, deadlockTxn, err := d.checkDeadlock(w)
 			if hasDeadlock {
