@@ -910,3 +910,22 @@ SELECT COUNT(*) FROM float_precision_test WHERE f32_col = 16777217;
 SELECT * FROM float_precision_test WHERE f64_col = 1000000;
 
 DROP TABLE float_precision_test;
+
+-- Test 33-39: DECIMAL minus integer literal should allow negative results.
+-- This covers Decimal128 diff-scale subtraction where the scaled operand may
+-- alias the result buffer.
+SELECT CAST(8000.00 AS DECIMAL(12,2)) - 1299 AS dec_minus_int_positive;
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 300 AS dec_minus_int_zero;
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 301 AS dec_minus_int_negative_one;
+SELECT CAST(100.00 AS DECIMAL(12,2)) - 200 AS dec_minus_int_negative_hundred;
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999 AS dec_minus_int_large_negative;
+
+-- Decimal literal right operand keeps the same-scale Decimal64 path.
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999.00 AS dec_minus_decimal_large_negative;
+
+-- Column path reproduces vector/scalar execution instead of constant-only execution.
+DROP TABLE IF EXISTS decimal_minus_int_regression;
+CREATE TABLE decimal_minus_int_regression(bal DECIMAL(12,2));
+INSERT INTO decimal_minus_int_regression VALUES (300.00);
+SELECT bal - 3999 AS bal_minus_int FROM decimal_minus_int_regression;
+DROP TABLE decimal_minus_int_regression;

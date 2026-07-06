@@ -1674,3 +1674,28 @@ SELECT * FROM float_precision_test WHERE f64_col = 1000000;
 ➤ id[4,32,0]  ¦  f32_col[7,24,0]  ¦  f64_col[8,54,0]  𝄀
 1  ¦  1000000.0  ¦  1000000.0
 DROP TABLE float_precision_test;
+SELECT CAST(8000.00 AS DECIMAL(12,2)) - 1299 AS dec_minus_int_positive;
+➤ dec_minus_int_positive[3,38,2]  𝄀
+6701.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 300 AS dec_minus_int_zero;
+➤ dec_minus_int_zero[3,38,2]  𝄀
+0.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 301 AS dec_minus_int_negative_one;
+➤ dec_minus_int_negative_one[3,38,2]  𝄀
+-1.00
+SELECT CAST(100.00 AS DECIMAL(12,2)) - 200 AS dec_minus_int_negative_hundred;
+➤ dec_minus_int_negative_hundred[3,38,2]  𝄀
+-100.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999 AS dec_minus_int_large_negative;
+➤ dec_minus_int_large_negative[3,38,2]  𝄀
+-3699.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999.00 AS dec_minus_decimal_large_negative;
+➤ dec_minus_decimal_large_negative[3,18,2]  𝄀
+-3699.00
+DROP TABLE IF EXISTS decimal_minus_int_regression;
+CREATE TABLE decimal_minus_int_regression(bal DECIMAL(12,2));
+INSERT INTO decimal_minus_int_regression VALUES (300.00);
+SELECT bal - 3999 AS bal_minus_int FROM decimal_minus_int_regression;
+➤ bal_minus_int[3,38,2]  𝄀
+-3699.00
+DROP TABLE decimal_minus_int_regression;
