@@ -3711,3 +3711,17 @@ func TestDecimal64ToDecimal128FastPaths(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func TestCastNumericTokenInvalidInputErrors(t *testing.T) {
+	_, err := parseDecimal128CastString("", 38, 0)
+	require.ErrorContains(t, err, "invalid input:")
+	require.ErrorContains(t, err, "invalid numeric string")
+
+	_, err = parseCastNumericToken("++1")
+	require.ErrorContains(t, err, "invalid input:")
+	require.ErrorContains(t, err, "invalid numeric string")
+
+	_, err = prefixedDigitsToDecimalString("2", 2)
+	require.ErrorContains(t, err, "invalid input:")
+	require.ErrorContains(t, err, "invalid numeric string")
+}

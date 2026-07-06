@@ -5099,15 +5099,15 @@ type castNumericToken struct {
 }
 
 func parseCastNumericToken(s string) (castNumericToken, error) {
-	_, body, negative, _ := splitCastNumericSign(s)
+	trimmed, body, negative, _ := splitCastNumericSign(s)
 	if body == "" {
-		return castNumericToken{}, strconv.ErrSyntax
+		return castNumericToken{}, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
 	}
 	if body[0] == '+' || body[0] == '-' {
-		return castNumericToken{}, strconv.ErrSyntax
+		return castNumericToken{}, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
 	}
 	if strings.IndexFunc(body, unicode.IsSpace) >= 0 {
-		return castNumericToken{}, strconv.ErrSyntax
+		return castNumericToken{}, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
 	}
 
 	token := castNumericToken{
@@ -5128,7 +5128,7 @@ func parseCastNumericToken(s string) (castNumericToken, error) {
 			token.digits = body[2:]
 		}
 		if token.digits == "" {
-			return castNumericToken{}, strconv.ErrSyntax
+			return castNumericToken{}, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
 		}
 	}
 	return token, nil
@@ -5140,7 +5140,7 @@ func prefixedDigitsToDecimalString(digits string, base int) (string, error) {
 	}
 	var value big.Int
 	if _, ok := value.SetString(digits, base); !ok {
-		return "", strconv.ErrSyntax
+		return "", moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", digits)
 	}
 	return value.String(), nil
 }
