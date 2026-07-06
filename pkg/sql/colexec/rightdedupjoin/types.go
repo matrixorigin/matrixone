@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -33,6 +34,7 @@ var _ vm.Operator = new(RightDedupJoin)
 const (
 	Build = iota
 	Probe
+	Finalize
 	End
 )
 
@@ -58,6 +60,8 @@ type container struct {
 
 	groupCount      uint64
 	buildGroupCount uint64
+
+	spillEngine *spillutil.SpillEngine
 }
 
 type RightDedupJoin struct {
@@ -74,6 +78,7 @@ type RightDedupJoin struct {
 
 	OnDuplicateAction plan.Node_OnDuplicateAction
 	DedupColName      string
+	SpillThreshold    int64
 	DedupColTypes     []plan.Type
 	DelColIdx         int32
 	UpdateColIdxList  []int32
@@ -125,6 +130,10 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 	ctr.cleanHashMap()
 	ctr.resetExprExecutor()
 	ctr.resetEvalVectors()
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
+	}
 	ctr.state = Build
 }
 
@@ -132,6 +141,10 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 	ctr := &rightDedupJoin.ctr
 	ctr.cleanBitmap(proc)
 	ctr.cleanHashMap()
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
+	}
 	ctr.cleanExprExecutor()
 	ctr.cleanEvalVectors()
 }

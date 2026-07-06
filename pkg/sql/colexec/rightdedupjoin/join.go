@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -77,7 +78,6 @@ func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error)
 
 func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := rightDedupJoin.OpAnalyzer
-
 	ctr := &rightDedupJoin.ctr
 	input := vm.NewCallResult()
 	result := vm.NewCallResult()
@@ -89,35 +89,71 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 			if err != nil {
 				return result, err
 			}
-
-			ctr.state = Probe
-
-		case Probe:
-			input, err = vm.ChildrenCall(rightDedupJoin.GetChildren(0), proc, analyzer)
-			if err != nil {
-				return result, err
-			}
-
-			bat := input.Batch
-			if bat == nil {
+			if ctr.mp == nil && ctr.spillEngine == nil {
 				ctr.state = End
-				continue
+			} else {
+				ctr.state = Probe
 			}
-			if bat.IsEmpty() {
+		case Probe:
+			var bat *batch.Batch
+			// Spill-read mode: read probe batches from engine.
+			if ctr.spillEngine != nil && ctr.spillEngine.IsProbing() {
+				var readErr error
+				bat, readErr = ctr.spillEngine.NextProbeBatch(proc)
+				if readErr != nil {
+					return result, readErr
+				}
+				if bat == nil {
+					ctr.spillEngine.FinishBucket()
+					ctr.state = Finalize
+					continue
+				}
+			} else if ctr.spillEngine != nil {
+				ctr.state = Finalize
 				continue
+			} else {
+				input, err = vm.ChildrenCall(rightDedupJoin.GetChildren(0), proc, analyzer)
+				if err != nil {
+					return result, err
+				}
+				bat = input.Batch
+				if bat == nil {
+					ctr.state = Finalize
+					continue
+				}
+				if bat.IsEmpty() {
+					continue
+				}
 			}
-
 			if err := ctr.probe(bat, rightDedupJoin, proc, analyzer, &result); err != nil {
 				return result, err
 			}
-
 			return result, nil
-
+		case Finalize:
+			if ctr.spillEngine != nil {
+				ok, bktErr := ctr.spillEngine.AdvanceToNextBucket(proc, analyzer,
+					func(jm *message.JoinMap, res spillutil.BucketResult) {
+						if res == spillutil.BucketReady {
+							ctr.mp = jm
+							ctr.groupCount = jm.GetGroupCount()
+							ctr.matched = &bitmap.Bitmap{}
+							ctr.matched.InitWithSize(int64(ctr.groupCount))
+						}
+					})
+				if bktErr != nil {
+					return result, bktErr
+				}
+				if ok {
+					ctr.state = Probe
+					continue
+				}
+			}
+			ctr.state = End
+			continue
 		default:
 			if ctr.mp != nil {
 				ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 			}
-
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -164,6 +200,31 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 		ctr.mp = message.NewJoinMap(message.GroupSels{}, intHashMap, strHashMap, nil, nil, proc.Mp())
 		ctr.mp.IncRef(1)
 	} else {
+		// Handle spilled build side.
+		if ctr.mp.IsSpilled() {
+			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+				BuildKeyExprs:           rightDedupJoin.Conditions[0],
+				SpillThreshold:          rightDedupJoin.SpillThreshold,
+				NeedsProbeForEmptyBuild: true,
+			})
+			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			if err := engine.ScatterProbeTable(proc,
+				func() (*batch.Batch, error) {
+					input, err := vm.ChildrenCall(rightDedupJoin.GetChildren(0), proc, analyzer)
+					return input.Batch, err
+				},
+				analyzer,
+				func(bat *batch.Batch) ([]*vector.Vector, error) {
+					ctr.evalJoinCondition(bat, proc)
+					return ctr.vecs, nil
+				},
+			); err != nil {
+				return err
+			}
+			ctr.spillEngine = engine
+			ctr.mp = nil
+			return
+		}
 		ctr.groupCount = ctr.mp.GetGroupCount()
 		ctr.buildGroupCount = ctr.groupCount
 		if !proc.GetTxnOperator().Txn().IsPessimistic() {

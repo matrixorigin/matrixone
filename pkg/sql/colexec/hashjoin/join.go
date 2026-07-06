@@ -16,10 +16,8 @@ package hashjoin
 
 import (
 	"bytes"
-	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -115,7 +114,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if ctr.mp == nil && len(ctr.spillQueue) == 0 && !hashJoin.EmitUnmatchedProbe() {
+			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() {
 				// TODO: early terminate the probe side for shuffle join
 				if !hashJoin.IsShuffle {
 					ctr.state = End
@@ -238,11 +237,11 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.state = End
 
 				// For spilled join, clean up current bucket and move to next
-				if len(ctr.spillQueue) > 0 || ctr.probeBucketActive {
+				if (ctr.spillEngine != nil) && (ctr.spillEngine.HasMoreBuckets() || ctr.spillEngine.IsProbing()) {
 					ctr.rightRowsMatched = nil
 					ctr.cleanHashMap()
 
-					if len(ctr.spillQueue) > 0 || ctr.probeBucketActive {
+					if (ctr.spillEngine != nil) && (ctr.spillEngine.HasMoreBuckets() || ctr.spillEngine.IsProbing()) {
 						ctr.state = Probe
 					}
 				}
@@ -274,82 +273,28 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
-			spilledBuildFds := ctr.mp.TakeSpillBuildFds()
-
-			// Register build fds in spillQueue immediately so cleanupSpillFiles
-			// can close them even if we return early (e.g. context cancelled).
-			// Generate unique baseNames for sub-bucket naming during re-spill.
-			uid, err := uuid.NewV7()
-			if err != nil {
+			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+				BuildKeyExprs:           hashJoin.EqConds[1],
+				SpillThreshold:          ctr.spillThreshold,
+				NeedsProbeForEmptyBuild: hashJoin.EmitUnmatchedProbe(),
+				NeedsBuildForEmptyProbe: hashJoin.EmitUnmatchedBuild(),
+				HashOnPK:                hashJoin.HashOnPK,
+			})
+			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			if err := engine.ScatterProbeTable(proc,
+				func() (*batch.Batch, error) {
+					input, err := vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
+					return input.Batch, err
+				},
+				analyzer,
+				func(bat *batch.Batch) ([]*vector.Vector, error) {
+					ctr.evalJoinCondition(bat, proc)
+					return ctr.eqCondVecs, nil
+				},
+			); err != nil {
 				return err
 			}
-			uidStr := uid.String()
-			ctr.spillQueue = make([]spillBucket, len(spilledBuildFds))
-			for i, fd := range spilledBuildFds {
-				ctr.spillQueue[i] = spillBucket{
-					buildFd:  fd,
-					baseName: fmt.Sprintf("%s_%d", uidStr, i),
-					depth:    1,
-				}
-			}
-
-			// Create writers for probe side (files created lazily on first write).
-			// Disable writers for empty-build buckets so scatter discards those
-			// probe rows immediately, matching the re-spill validBuckets pattern.
-			spillWriters, err := createRootProbeSpillBucketFiles()
-			if err != nil {
-				return err
-			}
-			needsProbeForEmpty := hashJoin.EmitUnmatchedProbe()
-			if !needsProbeForEmpty {
-				for i := range spilledBuildFds {
-					if spilledBuildFds[i] == nil {
-						spillWriters[i].name = ""
-					}
-				}
-			}
-			spillBuffers := make([]*batch.Batch, spillNumBuckets)
-
-			defer func() {
-				for i := range spillWriters {
-					spillWriters[i].close()
-				}
-				for _, buf := range spillBuffers {
-					if buf != nil {
-						buf.Clean(proc.Mp())
-					}
-				}
-			}()
-
-			// Spill each probe batch as it arrives
-			for {
-				input, err := vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
-				if err != nil {
-					return err
-				}
-				if input.Batch == nil {
-					break
-				}
-				if !input.Batch.IsEmpty() {
-					if err := ctr.appendProbeBatchToSpillFiles(proc, input.Batch, spillWriters, spillBuffers, analyzer, 0); err != nil {
-						return err
-					}
-				}
-			}
-
-			// Flush remaining buffered data
-			for i, buf := range spillBuffers {
-				if _, err := ctr.flushBucketBuffer(proc, buf, &spillWriters[i], analyzer); err != nil {
-					return err
-				}
-			}
-
-			// Transfer probe fd ownership into spillQueue.
-			// handOffFd seeks fd to 0; returns nil if probe bucket was empty.
-			for i := range ctr.spillQueue {
-				ctr.spillQueue[i].probeFd = spillWriters[i].handOffFd()
-			}
-
+			ctr.spillEngine = engine
 			ctr.mp = nil
 			return err
 		}
@@ -369,15 +314,65 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 }
 
 func (hashJoin *HashJoin) getInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
-	// For unspilled join, simply call children.
-	// In spill mode, spillQueue can become empty while we are still reading the
-	// currently loaded bucket via probeBucketReader.
-	if len(hashJoin.ctr.spillQueue) == 0 && !hashJoin.ctr.probeBucketActive {
+	if hashJoin.ctr.spillEngine == nil {
 		return vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
 	}
-
-	// For spilled join, load bucket and return probe batches
 	return hashJoin.getSpilledInputBatch(proc, analyzer)
+}
+
+func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	var result vm.CallResult
+	ctr := &hashJoin.ctr
+	engine := ctr.spillEngine
+
+	for {
+		// Read next probe batch from current bucket.
+		if ctr.probeBucketActive {
+			bat, err := engine.NextProbeBatch(proc)
+			if err != nil {
+				return result, err
+			}
+			if bat != nil {
+				result.Batch = bat
+							return result, nil
+			}
+			// EOF on probe file.
+			engine.FinishBucket()
+			ctr.probeBucketActive = false
+			if ctr.rightRowsMatched != nil {
+				return result, nil // trigger Finalize for unmatched right rows
+			}
+			ctr.cleanHashMap()
+		}
+
+		// Load next bucket via engine convenience method.
+		if ctr.mp == nil {
+			ok, err := engine.AdvanceToNextBucket(proc, analyzer,
+				func(jm *message.JoinMap, res spillutil.BucketResult) {
+					if res == spillutil.BucketReady {
+						ctr.mp = jm
+						ctr.rightBats = jm.GetBatches()
+						ctr.rightRowCnt = jm.GetRowCount()
+						if hashJoin.IsRightJoin && ctr.rightRowCnt > 0 {
+							ctr.rightRowsMatched = &bitmap.Bitmap{}
+							ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
+							ctr.rightMatchedIter = nil
+						}
+					}
+				})
+			if err != nil {
+				return result, err
+			}
+			if !ok {
+				return result, nil
+			}
+			ctr.itr = nil
+			ctr.probeState = psNextBatch
+			ctr.lastIdx = 0
+			ctr.vsIdx = 0
+			ctr.probeBucketActive = true
+		}
+	}
 }
 
 func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {

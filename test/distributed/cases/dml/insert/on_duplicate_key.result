@@ -16,9 +16,10 @@ select * from t1;
 delete from t1;
 insert into t1 values (1,1);
 insert into t1 values (1,11), (2,22), (3,33) on duplicate key update a=a+1,b=100;
-[unknown result because it is related to issue#4423]
+unsupported DML: update primary key on duplicate
 select * from t1;
-[unknown result because it is related to issue#4423]
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1
 delete from t1;
 insert into t1 values (1,1);
 insert into t1 values (1,2), (1,22) on duplicate key update b=b+10;
@@ -102,7 +103,8 @@ insert into t1 values (1,1);
 insert into t1 values (1,11), (2,22), (3,33) on duplicate key update a=a+1,b=100;
 unsupported DML: update unique key on duplicate
 select * from t1;
-[unknown result because it is related to issue#4423]
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1
 delete from t1;
 insert into t1 values (1,1);
 insert into t1 values (1,2), (1,22) on duplicate key update b=b+10;
@@ -144,7 +146,10 @@ select * from indup_00 order by id;
 insert into indup_00 values (6,'shanghai','002',21,'1999-09-23'),(7,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
 unsupported DML: update unique key on duplicate
 select * from indup_00 order by id;
-[unknown result because it is related to issue#4423]
+➤ id[4,32,0]  ¦  act_name[12,-1,0]  ¦  spu_id[12,-1,0]  ¦  uv[-5,64,0]  ¦  update_time[91,64,0]  𝄀
+1  ¦  beijing  ¦  001  ¦  1  ¦  2021-01-03  𝄀
+2  ¦  shanghai  ¦  002  ¦  2  ¦  2022-09-23  𝄀
+3  ¦  guangzhou  ¦  003  ¦  3  ¦  2022-09-23
 drop table indup_00;
 CREATE TABLE IF NOT EXISTS indup(
 col1 INT primary key,
@@ -155,18 +160,20 @@ col4 BIGINT default 30
 insert into indup values(22,'11','33',1), (23,'22','55',2),(24,'66','77',1),(25,'99','88',1),(22,'11','33',1) on duplicate key update col1=col1+col2;
 unsupported DML: update primary key on duplicate
 select * from indup;
-[unknown result because it is related to issue#4423]
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[12,-1,0]  ¦  col4[-5,64,0]
 insert into indup values(24,'1','1',100) on duplicate key update col1=2147483649;
-[unknown result because it is related to issue#4423]
+unsupported DML: update primary key on duplicate
 select * from indup;
-[unknown result because it is related to issue#4423]
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[12,-1,0]  ¦  col4[-5,64,0]
 drop table indup;
 create table t1(a int primary key, b int, c int);
 insert into t1 values (1,1,1),(2,2,2);
 insert into t1 values (1,9,1),(11,8,2) on duplicate key update a=a+10, c=10;
 unsupported DML: update primary key on duplicate
 select * from t1 order by a;
-[unknown result because it is related to issue#4423]
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 drop table if exists t1;
 create table t1(a int primary key, b int unique key);
 insert into t1 values (1,1),(2,2),(3,3);
@@ -231,3 +238,11 @@ select * from t_null_dup order by id;
 1  ¦  null  ¦  null  𝄀
 3  ¦  null  ¦  30
 drop table if exists t_null_dup;
+drop table if exists t_dup_large;
+create table t_dup_large (id int primary key, val int);
+insert into t_dup_large select result, result * 10 from generate_series(1, 2000) g;
+insert into t_dup_large select result, 0 from generate_series(1, 100) g
+on duplicate key update val = val + 1;
+select count(*) from t_dup_large;
+➤ count(*)[-5,64,0]  𝄀
+2000

@@ -15,9 +15,6 @@
 package hashjoin
 
 import (
-	"bytes"
-	"os"
-
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -29,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -43,13 +41,6 @@ const (
 	Finalize
 	End
 )
-
-type spillBucket struct {
-	buildFd  *os.File // fd-based build file; nil = empty build
-	probeFd  *os.File // fd-based probe file; nil = empty probe
-	baseName string   // base name for deriving sub-bucket file paths on re-spill
-	depth    int
-}
 
 type probeState int
 
@@ -100,28 +91,9 @@ type container struct {
 	maxAllocSize int64
 
 	// spill support
-	spillQueue     []spillBucket // multi-level spill work queue
-	spillThreshold int64
-
-	// state for processing current bucket
-	probeBucketReader *spillBucketReader             // reused across buckets; buffer allocated once
-	probeBucketActive bool                           // true while reading a probe file
-	spillBuildReader  *spillBucketReader             // reused for build file (and probe in reSpillBucket)
-	spillFS           fileservice.MutableFileService // cached once; avoids repeated registry lookups
-
-	// reusable buffers for spill operations
-	spillHashValues      []uint64
-	spillBucketRowIds    [][]int32
-	spillNonEmptyBuckets []int
-	spillKeyVecs         []*vector.Vector
-	spillWriteBuf        bytes.Buffer
-	spillBuildReadBatch  *batch.Batch
-	spillProbeReadBatch  *batch.Batch
-	spillBuildSubBufs    []*batch.Batch
-	spillProbeSubBufs    []*batch.Batch
-
-	// cached expression executors for re-spill (reused across batches)
-	spillBuildExprExecs []colexec.ExpressionExecutor
+	spillEngine       *spillutil.SpillEngine
+	spillThreshold    int64
+	probeBucketActive bool // true while reading probe batches from a bucket
 }
 
 type HashJoin struct {
@@ -222,28 +194,14 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanEqCondExecutors()
 	ctr.cleanupSpillFiles(proc)
-	ctr.freeSpillBuildExprExecs()
-	ctr.spillBucketRowIds = nil
-	ctr.spillNonEmptyBuckets = nil
 }
 
 func (ctr *container) cleanupSpillFiles(proc *process.Process) {
-	if ctr.probeBucketActive && ctr.probeBucketReader != nil {
-		ctr.probeBucketReader.close()
-		ctr.probeBucketActive = false
+	ctr.probeBucketActive = false
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
 	}
-	if len(ctr.spillQueue) == 0 {
-		return
-	}
-	for _, sb := range ctr.spillQueue {
-		if sb.buildFd != nil {
-			sb.buildFd.Close()
-		}
-		if sb.probeFd != nil {
-			sb.probeFd.Close()
-		}
-	}
-	ctr.spillQueue = nil
 }
 
 func (ctr *container) resetNonEqCondExecutor() {
@@ -277,20 +235,11 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 }
 
 func (ctr *container) cleanBucketBatches(proc *process.Process) {
-	if ctr.probeBucketReader != nil {
-		ctr.probeBucketReader.close()
-		ctr.probeBucketReader = nil
-		ctr.probeBucketActive = false
+	ctr.probeBucketActive = false
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
 	}
-	if ctr.spillBuildReadBatch != nil {
-		ctr.spillBuildReadBatch.Clean(proc.Mp())
-		ctr.spillBuildReadBatch = nil
-	}
-	if ctr.spillProbeReadBatch != nil {
-		ctr.spillProbeReadBatch.Clean(proc.Mp())
-		ctr.spillProbeReadBatch = nil
-	}
-	ctr.cleanSpillBufferPool(proc)
 }
 
 func (ctr *container) cleanHashMap() {

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -107,6 +108,9 @@ type container struct {
 	maxAllocSize int64
 	rbat         *batch.Batch
 	buf          []*batch.Batch
+
+	// Spill support for large build sides.
+	spillEngine *spillutil.SpillEngine
 }
 
 type DedupJoin struct {
@@ -128,6 +132,7 @@ type DedupJoin struct {
 	OnDuplicateAction         plan.Node_OnDuplicateAction
 	DedupBuildKeepLast        bool
 	DedupColName              string
+	SpillThreshold            int64
 	DedupColTypes             []plan.Type
 	DelColIdx                 int32
 	DedupDeleteMarkerColIdx   int32
@@ -193,6 +198,10 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.cleanHashMap()
 	ctr.resetExprExecutor()
 	ctr.resetEvalVectors()
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
+	}
 	ctr.handledLast = false
 	ctr.state = Build
 	ctr.lastPos = 0
@@ -206,6 +215,10 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()
 	ctr.cleanEvalVectors()
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
+	}
 }
 
 func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
