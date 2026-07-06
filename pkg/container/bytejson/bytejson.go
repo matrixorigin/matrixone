@@ -453,6 +453,11 @@ func (bj ByteJson) querySimple(path *Path) ByteJson {
 	return val
 }
 
+// QuerySimpleExist returns the value at a simple path and whether the path exists.
+func (bj ByteJson) QuerySimpleExist(path *Path) (ByteJson, bool) {
+	return bj.querySimpleExist(path)
+}
+
 func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
 	cur := bj
 	// don't go through th step(), recursive call route.  We know

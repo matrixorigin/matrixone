@@ -938,6 +938,172 @@ func TestJsonSetCheckFn(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestJsonContainsCheckFn(t *testing.T) {
+	ctx := context.Background()
+
+	_, err := GetFunctionByName(ctx, "json_contains", []types.Type{
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains", []types.Type{
+		types.T_json.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains", []types.Type{
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+	})
+	require.Error(t, err)
+}
+
+func TestJsonContains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("with path", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains with path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`{"tags":["x","y"]}`,
+						`{"a":1,"b":2,"c":{"d":4}}`,
+						`{"a":1,"b":2,"c":{"d":4}}`,
+						`{"a":1,"b":2,"c":{"d":4}}`,
+						`{"a":1,"b":2,"c":{"d":4}}`,
+						`{"a":1}`,
+						`{"a":null}`,
+						`{"a":1}`,
+					},
+					[]bool{false, false, false, false, false, false, false, true}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`"x"`, `1`, `1`, `{"d":4}`, `{"d":4}`, `1`, `null`, `1`},
+					[]bool{false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.tags`, `$.a`, `$.b`, `$.c`, `$.a`, `$.missing`, `$.a`, `$.a`},
+					[]bool{false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 1, 0, 1, 0, 0, 1, 0},
+				[]bool{false, false, false, false, false, true, false, true}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("without path", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains without path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`[1,2,3]`, `{"a":1,"b":{"c":2}}`, `["a","b"]`, `[{"a":1},{"b":2}]`, `true`},
+					[]bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`[1,3]`, `{"b":{"c":2}}`, `"c"`, `{"b":2}`, `true`},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 1, 0, 1, 1},
+				[]bool{false, false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
+func TestJsonContainsErrors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("invalid candidate json", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains invalid candidate",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":"x"}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`x`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("wildcard path", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains wildcard path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`[1,2]`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$[*]`}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
+func TestJsonContainsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("ignore all rows", func(t *testing.T) {
+		selectList := &FunctionSelectList{AllNull: true}
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `still not json`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `still not json`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`bad path`, `$[*]`},
+					[]bool{false, false}),
+			},
+			types.T_int64.ToType(), newOpBuiltInJsonContains().jsonContains, selectList)
+
+		require.Equal(t, 2, vec.Length())
+		require.True(t, vec.IsNull(0))
+		require.True(t, vec.IsNull(1))
+	})
+
+	t.Run("skip selected rows", func(t *testing.T) {
+		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `{"tags":["x","y"]}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `"x"`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`bad path`, `$.tags`},
+					[]bool{false, false}),
+			},
+			types.T_int64.ToType(), newOpBuiltInJsonContains().jsonContains, selectList)
+
+		require.True(t, vec.IsNull(0))
+		v, null := vector.GenerateFunctionFixedTypeParameter[int64](vec).GetValue(1)
+		require.False(t, null)
+		require.Equal(t, int64(1), v)
+	})
+}
+
 func TestJsonSetValueTypes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
