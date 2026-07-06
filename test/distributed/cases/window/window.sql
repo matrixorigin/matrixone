@@ -1664,4 +1664,88 @@ select avg(score) over (order by name range between unbounded preceding and curr
 
 drop table t_win_varchar;
 
+-- Test RANGE frame with NULL ORDER BY key: NULL rows should be treated as peers,
+-- and NULL-keyed rows should not be included in numeric range frames for non-NULL keys.
+-- See issue #25288
+create database if not exists test_range_null_order_key;
+use test_range_null_order_key;
+
+create table t_range_null(id int primary key, k int, v int);
+insert into t_range_null values
+  (1, null, 10),
+  (2, null, null),
+  (3, 1, 5),
+  (4, 2, null),
+  (5, 2, 7),
+  (6, 4, 11);
+
+-- verify NULL peers: both NULL rows should be in the same frame
+select id, if(k is null, 'NULL', cast(k as char)) as k_label, v,
+       count(*) over (order by k range between 1 preceding and current row) as cnt_all_rng,
+       count(v) over (order by k range between 1 preceding and current row) as cnt_v_rng,
+       sum(v) over (order by k range between 1 preceding and current row) as sum_v_rng,
+       min(v) over (order by k range between 1 preceding and current row) as min_v_rng,
+       max(v) over (order by k range between 1 preceding and current row) as max_v_rng
+from t_range_null
+order by k is not null, k, id;
+
+-- verify with UNBOUNDED PRECEDING range
+select id, if(k is null, 'NULL', cast(k as char)) as k_label, v,
+       count(*) over (order by k range between unbounded preceding and current row) as cnt
+from t_range_null
+order by k is not null, k, id;
+
+drop table t_range_null;
+drop database test_range_null_order_key;
+
+-- Test DESC RANGE frame with NULL ORDER BY key.
+-- DESC NULLS FIRST (default for DESC): NULLs at start, then [4, 2, 1].
+-- DESC NULLS LAST: [4, 2, 1] then NULLs at end.
+create database if not exists test_range_desc;
+use test_range_desc;
+
+create table t_desc(id int primary key, k int, v int);
+insert into t_desc values
+  (1, 4, 10),
+  (2, 2, 5),
+  (3, 2, 7),
+  (4, 1, 11),
+  (5, null, 20),
+  (6, null, 30);
+
+-- DESC default (NULLS FIRST): NULLs first, then 4,2,2,1
+select * from t_desc order by k desc;
+
+-- DESC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW (NULLS FIRST)
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+       count(*) over (order by k desc range between 1 preceding and current row) as cnt_rng,
+       sum(v) over (order by k desc range between 1 preceding and current row) as sum_rng
+from t_desc order by k desc, id;
+
+-- DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING (NULLS FIRST)
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+       count(*) over (order by k desc range between current row and 1 following) as cnt_rng,
+       sum(v) over (order by k desc range between current row and 1 following) as sum_rng
+from t_desc order by k desc, id;
+
+-- DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW (NULLS FIRST)
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+       count(*) over (order by k desc range between unbounded preceding and current row) as cnt_rng
+from t_desc order by k desc, id;
+
+-- DESC NULLS LAST
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+       count(*) over (order by k desc nulls last range between 1 preceding and current row) as cnt_rng,
+       sum(v) over (order by k desc nulls last range between 1 preceding and current row) as sum_rng
+from t_desc order by k desc nulls last, id;
+
+-- DESC NULLS LAST RANGE CURRENT ROW TO 1 FOLLOWING
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+       count(*) over (order by k desc nulls last range between current row and 1 following) as cnt_rng,
+       sum(v) over (order by k desc nulls last range between current row and 1 following) as sum_rng
+from t_desc order by k desc nulls last, id;
+
+drop table t_desc;
+drop database test_range_desc;
+
 drop database test;

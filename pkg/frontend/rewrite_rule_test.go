@@ -603,6 +603,283 @@ func TestHandleAlterRoleAddRuleRejectsInvalidRuleSQLBeforeWriting(t *testing.T) 
 	}
 }
 
+// TestParseSessionRewrites covers the remap_rewrites value parser: the bare map
+// form, the wrapped {"rewrites": {...}} form, empty/blank input, and malformed
+// JSON.
+func TestParseSessionRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, "")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("blank", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, "   ")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("bare map", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, `{"db1.t1": "select a, b from db2.t1"}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db1.t1": "select a, b from db2.t1"}, rules)
+		require.Len(t, remap, 0)
+	})
+	t.Run("wrapped rewrites form", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, `{"rewrites": {"db1.t1": "select a from db2.t1"}}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db1.t1": "select a from db2.t1"}, rules)
+		require.Len(t, remap, 0)
+	})
+	t.Run("remapdb only", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, `{"remapdb": {"dbxxx": "dbyyy"}}`)
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
+	})
+	t.Run("rewrites and remapdb", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx,
+			`{"rewrites": {"db.t1": "select * from db.t1"}, "remapdb": {"dbxxx": "dbyyy"}}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db.t1": "select * from db.t1"}, rules)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
+	})
+	t.Run("two keys", func(t *testing.T) {
+		rules, _, err := parseSessionRewrites(ctx, `{"db.t1": "select * from t1", "db.t2": "select * from t2"}`)
+		require.NoError(t, err)
+		require.Len(t, rules, 2)
+	})
+	t.Run("malformed json", func(t *testing.T) {
+		_, _, err := parseSessionRewrites(ctx, `{not json}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid remap_rewrites value")
+	})
+	t.Run("array (chain) rewrite value is rejected", func(t *testing.T) {
+		// A table must map to a single SQL string, not a list.
+		_, _, err := parseSessionRewrites(ctx,
+			`{"rewrites": {"db.t": ["select * from db.t", "select * from db.t where x > 0"]}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a single SQL string")
+	})
+	t.Run("rewrite value of wrong type is rejected", func(t *testing.T) {
+		_, _, err := parseSessionRewrites(ctx, `{"rewrites": {"db.t": 123}}`)
+		require.Error(t, err)
+	})
+}
+
+// TestExtractInlineRemapDb covers reading back remapdb from the merged hint,
+// which must stay correct even when rewrites are present in array (chain) form.
+func TestExtractInlineRemapDb(t *testing.T) {
+	t.Run("remapdb alongside chained rewrites", func(t *testing.T) {
+		remap := extractInlineRemapDb(
+			`/*+ {"rewrites": {"db.t": ["s1", "s2"]}, "remapdb": {"dbx": "dby"}} */ select * from dbx.t`)
+		require.Equal(t, "dby", remap["dbx"])
+	})
+	t.Run("no remapdb", func(t *testing.T) {
+		require.Nil(t, extractInlineRemapDb(`/*+ {"rewrites": {"db.t": "s1"}} */ select 1`))
+	})
+	t.Run("no hint", func(t *testing.T) {
+		require.Nil(t, extractInlineRemapDb(`select 1`))
+	})
+}
+
+// TestValidateRemapRewrites covers the SET-time validation of the
+// remap_rewrites session variable.
+func TestValidateRemapRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty is valid", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, ""))
+	})
+	t.Run("valid bare map", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"db.t1": "select a from db2.t1"}`))
+	})
+	t.Run("valid wrapped form", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"rewrites": {"db.t1": "select a from db2.t1"}}`))
+	})
+	t.Run("non-string rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, int64(1))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a string")
+	})
+	t.Run("malformed json rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{not json}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid remap_rewrites value")
+	})
+	t.Run("non-select rule rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"db.t1": "delete from t1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "only accept SELECT-like statements")
+	})
+	t.Run("empty key rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"  ": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "table key must not be empty")
+	})
+	t.Run("unqualified key rejected (issue #25188)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"t": "select * from t where i < 10"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
+	t.Run("over-qualified key rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"a.b.c": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
+	t.Run("empty db part rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{".t": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
+	t.Run("valid remapdb multi", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"remapdb": {"a": "b", "x": "y"}}`))
+	})
+	t.Run("remapdb invalid identifier rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"a.b": "c"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "valid identifiers")
+	})
+	t.Run("remapdb chaining rejected (x->y, y->z)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "y", "y": "z"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not be both a source and a destination")
+	})
+	t.Run("remapdb self-map rejected (x->x)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "x"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not be both a source and a destination")
+	})
+	t.Run("remapdb system database source rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"mysql": "y"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not remap a system database")
+	})
+	t.Run("remapdb mo_ prefix destination rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "mo_secret"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not remap a system database")
+	})
+	t.Run("remapdb multiple sources to one dest allowed", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"remapdb": {"a": "z", "b": "z"}}`))
+	})
+}
+
+// TestLeadingHintContent covers extraction of the inner content of a leading
+// /*+ ... */ hint.
+func TestLeadingHintContent(t *testing.T) {
+	cases := []struct {
+		name   string
+		sql    string
+		want   string
+		wantOk bool
+	}{
+		{"plus hint", `/*+ {"rewrites": {}} */ select 1`, ` {"rewrites": {}} `, true},
+		{"bang plus hint", `/*!+ {"a":1} */ select 1`, ` {"a":1} `, true},
+		{"leading spaces", "  \n/*+ {} */ select 1", " {} ", true},
+		{"no hint", "select 1", "", false},
+		{"plain comment not a hint", "/* normal */ select 1", "", false},
+		{"unterminated", "/*+ {oops select 1", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := leadingHintContent(c.sql)
+			require.Equal(t, c.wantOk, ok)
+			if c.wantOk {
+				require.Equal(t, c.want, got)
+			}
+		})
+	}
+}
+
+// TestExtractInlineRewrites covers pulling rewrite rules out of an inline hint.
+func TestExtractInlineRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no hint", func(t *testing.T) {
+		rules, remap, err := extractInlineRewrites(ctx, "select * from t")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("non-json hint ignored", func(t *testing.T) {
+		rules, remap, err := extractInlineRewrites(ctx, "/*+ NO_INDEX(t) */ select * from t")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("rewrites hint (single string value)", func(t *testing.T) {
+		rules, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": "select a from db.t1"}} */ select * from db.t1`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db.t1": "select a from db.t1"}, rules)
+	})
+	t.Run("array (chain) value rejected: user input must be a string", func(t *testing.T) {
+		_, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": ["select a from db.t1", "select a from db.t1 where a > 0"]}} */ select * from db.t1`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a single SQL string")
+	})
+	t.Run("object value rejected", func(t *testing.T) {
+		_, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": {"x": "y"}}} */ select * from db.t1`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a single SQL string")
+	})
+	t.Run("remapdb hint", func(t *testing.T) {
+		_, remap, err := extractInlineRewrites(ctx, `/*+ {"remapdb": {"dbxxx": "dbyyy"}} */ select * from dbxxx.t`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
+	})
+	t.Run("malformed json hint is deferred to the parser (no error here)", func(t *testing.T) {
+		// extractInlineRewrites only rejects array/object values; other parse
+		// problems are left to AddRewriteHints so the error is reported there.
+		rules, remap, err := extractInlineRewrites(ctx, `/*+ {not json} */ select 1`)
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+}
+
+// TestFormatRewriteHintChains verifies that a single-layer chain is emitted as
+// a plain string (backward compatible) and a multi-layer chain is emitted as an
+// ordered JSON array (innermost first, outermost last).
+func TestFormatRewriteHintChains(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("single layer is a string", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"select * from db.t1 where a > 1"},
+		}, nil)
+		require.NoError(t, err)
+		require.Contains(t, hint, `"db.t1":"select * from db.t1 where a > 1"`)
+		require.NotContains(t, hint, "[")
+	})
+
+	t.Run("multi layer is an ordered array", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"role_sql", "session_sql", "inline_sql"},
+		}, nil)
+		require.NoError(t, err)
+		require.Contains(t, hint, `"db.t1":["role_sql","session_sql","inline_sql"]`)
+	})
+
+	t.Run("remapdb included", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"select * from db.t1"},
+		}, map[string]string{"dbxxx": "dbyyy"})
+		require.NoError(t, err)
+		require.Contains(t, hint, `"remapdb":{"dbxxx":"dbyyy"}`)
+	})
+
+	t.Run("empty chain skipped", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {},
+		}, nil)
+		require.NoError(t, err)
+		require.Contains(t, hint, `"rewrites":{}`)
+	})
+}
+
 func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
