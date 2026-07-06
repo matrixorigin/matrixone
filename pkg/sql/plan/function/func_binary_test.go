@@ -5033,6 +5033,39 @@ func TestPower(t *testing.T) {
 	}
 }
 
+func TestPowerOutOfRange(t *testing.T) {
+	testCases := []struct {
+		name      string
+		bases     []float64
+		exponents []float64
+	}{
+		{name: "negative base with fractional exponent", bases: []float64{-2}, exponents: []float64{0.5}},
+		{name: "zero base with negative exponent", bases: []float64{0}, exponents: []float64{-1}},
+		{name: "invalid value after valid value", bases: []float64{2, -2}, exponents: []float64{3, 0.5}},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_float64.ToType(), tc.bases, nil),
+					NewFunctionTestInput(types.T_float64.ToType(), tc.exponents, nil),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil),
+				Power,
+			)
+
+			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+			_, err := tcc.DebugRun()
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+			require.ErrorContains(t, err, "DOUBLE value is out of range")
+		})
+	}
+}
+
 // TRUNCATE
 func initTruncateTestCase() []tcTemp {
 	cases := []struct {
