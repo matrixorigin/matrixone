@@ -72,6 +72,13 @@ func TestEscapeString(t *testing.T) {
 	require.Equal(t, "''''", EscapeString("''"))  // two quotes -> four
 	// a JSON params blob with a quote inside a value
 	require.Equal(t, `{"included_columns":"col''s"}`, EscapeString(`{"included_columns":"col's"}`))
+	// backslash must be doubled: the MySQL scanner treats it as an escape
+	require.Equal(t, `a\\b`, EscapeString(`a\b`))
+	require.Equal(t, `\\`, EscapeString(`\`))                               // lone backslash -> two
+	require.Equal(t, `C:\\Program Files`, EscapeString(`C:\Program Files`)) // Windows path
+	require.Equal(t, `x\\`, EscapeString(`x\`))                             // trailing backslash
+	require.Equal(t, `a\\''b`, EscapeString(`a\'b`))                        // backslash AND quote both doubled
+	require.Equal(t, `\\n`, EscapeString(`\n`))                             // literal backslash-n, not a newline escape
 }
 
 func TestString(t *testing.T) {
@@ -79,6 +86,8 @@ func TestString(t *testing.T) {
 	require.Equal(t, "''", String(""))
 	require.Equal(t, "'a''b'", String("a'b"))
 	require.Equal(t, `'{"k":"v''s"}'`, String(`{"k":"v's"}`))
+	require.Equal(t, `'a\\b'`, String(`a\b`))
+	require.Equal(t, `'C:\\x'`, String(`C:\x`))
 }
 
 // TestIdentNoOpForOrdinaryNames is the safety proof behind the bulk migration of
@@ -101,9 +110,9 @@ func TestIdentNoOpForOrdinaryNames(t *testing.T) {
 }
 
 // TestStringNoOpForOrdinaryLiterals is the same proof for String(): any literal
-// WITHOUT a single quote wraps to exactly '<literal>', identical to the old '%s'.
-// JSON params / config blobs and generated index_ids contain no single quote, so
-// those sites are byte-identical to before.
+// WITHOUT a single quote or backslash wraps to exactly '<literal>', identical to
+// the old '%s'. JSON params / config blobs and generated index_ids contain
+// neither, so those sites are byte-identical to before.
 func TestStringNoOpForOrdinaryLiterals(t *testing.T) {
 	for _, s := range []string{
 		"", "cdc_tail", "cdc:1:0:1717000000", "vector_l2_ops",

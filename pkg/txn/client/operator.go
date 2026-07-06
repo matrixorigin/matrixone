@@ -139,6 +139,14 @@ func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	}
 }
 
+// WithTxnLockWaitTimeout sets the session-level lock wait timeout on the txn.
+// If set, the lock service will use this value instead of the global config.
+func WithTxnLockWaitTimeout(timeout time.Duration) TxnOption {
+	return func(tc *txnOperator) {
+		tc.opts.options.LockWaitTimeout = int64(timeout)
+	}
+}
+
 // WithTxnCreateBy set txn create by.
 func WithTxnCreateBy(
 	accountID uint32,
@@ -648,6 +656,15 @@ func (tc *txnOperator) GetWaitActiveCost() time.Duration {
 	return tc.reset.waitActiveCost
 }
 
+// LockWaitTimeoutFromTxn returns the lock wait timeout from a txn operator, or 0.
+// The timeout is stored in TxnOptions as a time.Duration in nanoseconds.
+func LockWaitTimeoutFromTxn(op TxnOperator) time.Duration {
+	if op == nil {
+		return 0
+	}
+	return time.Duration(op.TxnOptions().LockWaitTimeout)
+}
+
 func (tc *txnOperator) notifyActive() {
 	if tc.reset.waiter == nil {
 		panic("BUG: notify active on non-waiter txn operator")
@@ -1099,7 +1116,11 @@ func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*r
 	return tc.trimResponses(tc.handleError(ctx, result, err))
 }
 
-func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, commit bool) (*rpc.SendResult, error) {
+func (tc *txnOperator) doWrite(
+	ctx context.Context,
+	requests []txn.TxnRequest,
+	commit bool,
+) (resp *rpc.SendResult, err error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Write
 	}
@@ -1108,16 +1129,40 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		tc.logger.Fatal("can not write on ready only transaction")
 	}
 	var payload []txn.TxnRequest
+	workspacePrepared := false
 	if commit {
 		if tc.reset.workspace != nil {
-			reqs, err := tc.reset.workspace.Commit(ctx)
+			var reqs []txn.TxnRequest
+			reqs, err = tc.reset.workspace.Commit(ctx)
 			if err != nil {
 				return nil, errors.Join(err, tc.Rollback(ctx))
 			}
 			payload = reqs
+			workspacePrepared = true
+			defer func() {
+				if !workspacePrepared {
+					return
+				}
+				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+						tc.reset.workspace.FinalizeCommitWithUnknownResult(ctx)
+						return
+					}
+					if e := tc.reset.workspace.Rollback(ctx); e != nil {
+						tc.logger.Error("rollback prepared workspace failed",
+							util.TxnIDField(tc.getTxnMeta(false)), zap.Error(e))
+						err = errors.Join(err, e)
+					}
+					return
+				}
+				tc.reset.workspace.FinalizeCommit(ctx)
+			}()
 		}
 		tc.mu.Lock()
 		defer func() {
+			if err != nil && tc.reset.commitErr == nil {
+				tc.reset.commitErr = err
+			}
 			tc.closeLocked(ctx)
 			tc.mu.Unlock()
 		}()
@@ -1173,8 +1218,9 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		return nil, tc.reset.commitErr
 	}
 
-	result, err := tc.doSend(ctx, requests, commit)
-	resp, err := tc.trimResponses(tc.handleError(ctx, result, err))
+	var result *rpc.SendResult
+	result, err = tc.doSend(ctx, requests, commit)
+	resp, err = tc.trimResponses(tc.handleError(ctx, result, err))
 	if err != nil && commit {
 		tc.reset.commitErr = err
 	}
