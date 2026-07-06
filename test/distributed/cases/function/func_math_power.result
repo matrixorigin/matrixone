@@ -16,6 +16,15 @@ power(10, 100)
 SELECT power(1,100);
 power(1, 100)
 1.0
+SELECT POW(2, 10);
+pow(2, 10)
+1024.0
+SELECT pow(2, 10);
+pow(2, 10)
+1024.0
+SELECT POW(1.5, 3);
+pow(1.5, 3)
+3.375
 select power(2,-1);
 power(2, -1)
 0.5
