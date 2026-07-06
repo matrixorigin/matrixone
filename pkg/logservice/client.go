@@ -38,8 +38,7 @@ const (
 )
 
 var (
-	logServiceConnectAttemptTimeout = 5 * time.Second
-	logServiceConnectFallbackDelay  = 300 * time.Millisecond
+	logServiceConnectFallbackDelay = 300 * time.Millisecond
 )
 
 var connectToLogServiceAddressFn = connectToLogServiceAddress
@@ -587,13 +586,7 @@ func connectToLogServiceAddresses(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			attemptCtx, attemptCancel := context.WithTimeoutCause(
-				ctx,
-				logServiceConnectAttemptTimeout,
-				moerr.CauseNewLogServiceClient,
-			)
-			c, err := connectToLogServiceAddressFn(attemptCtx, sid, addr, cfg)
-			attemptCancel()
+			c, err := connectToLogServiceAddressFn(ctx, sid, addr, cfg)
 			if err == nil {
 				select {
 				case results <- connectResult{client: c}:
@@ -605,7 +598,7 @@ func connectToLogServiceAddresses(
 				return
 			}
 			select {
-			case results <- connectResult{err: moerr.AttachCause(attemptCtx, err)}:
+			case results <- connectResult{err: moerr.AttachCause(ctx, err)}:
 			case <-ctx.Done():
 			}
 		}()
