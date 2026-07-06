@@ -892,16 +892,6 @@ func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T)
 		FROM nation
 		GROUP BY n_name
 		HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) > 0`, "nation.n_comment"},
-		{`
-		SELECT n_regionkey
-		FROM nation
-		GROUP BY n_regionkey
-		HAVING EXISTS (
-			SELECT n_name
-			FROM nation2
-			GROUP BY n_name
-			HAVING SUM(nation.n_regionkey) > 0
-		)`, "nation.n_regionkey"},
 	}
 
 	for _, tt := range sqls {
@@ -922,6 +912,21 @@ func TestOnlyFullGroupByPreservesCorrelatedAggregateNYI(t *testing.T) {
 		SELECT n_name
 		FROM nation
 		WHERE (SELECT AVG(nation.n_regionkey) FROM nation2) = 1`,
+		`
+		SELECT n_name,
+		       (SELECT COUNT(nation.n_name) FROM nation2) AS c
+		FROM nation
+		GROUP BY n_name`,
+		`
+		SELECT n_regionkey
+		FROM nation
+		GROUP BY n_regionkey
+		HAVING EXISTS (
+			SELECT n_name
+			FROM nation2
+			GROUP BY n_name
+			HAVING SUM(nation.n_regionkey) > 0
+		)`,
 	}
 
 	for _, sql := range sqls {

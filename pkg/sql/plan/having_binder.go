@@ -102,10 +102,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
-			if !b.builder.mysqlCompatible && b.corrColRefTargetsGroup(corr.Corr) {
-				return nil, b.newGroupByColumnError(astExpr)
-			}
+		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 
