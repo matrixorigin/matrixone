@@ -914,6 +914,7 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"(select n_name from nation for update) union all (select n_name from nation2 for update)",
 		"(select n_name from nation for update) union all (select n_name from nation2)",
 		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update",
+		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -928,6 +929,10 @@ func TestUnionSqlBuilder(t *testing.T) {
 	cteOuterForUpdatePlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update")
 	require.NoError(t, err)
 	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdatePlan))
+
+	cteOuterForUpdateLimitPlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update")
+	require.NoError(t, err)
+	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdateLimitPlan))
 
 	// should error
 	sqls = []string{
