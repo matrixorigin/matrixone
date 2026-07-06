@@ -1,3 +1,17 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // Package spillutil provides shared spill-to-disk primitives for join operators.
 package spillutil
 
@@ -5,7 +19,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"os"
 
@@ -564,11 +577,9 @@ func builderMemSize(builder *hashbuild.HashmapBuilder) int64 {
 // RebuildHashmap rebuilds the hashmap for the next bucket in the queue.
 func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Analyzer) (*message.JoinMap, BucketResult, error) {
 	if len(e.buckets) == 0 {
-		fmt.Fprintf(os.Stderr, "REBUILD: queue empty\n")
 		return nil, BucketQueueEmpty, nil
 	}
 	bucket := e.buckets[0]
-	fmt.Fprintf(os.Stderr, "REBUILD: depth=%d buildFd=%v probeFd=%v\n", bucket.Depth, bucket.BuildFd != nil, bucket.ProbeFd != nil)
 
 	if bucket.BuildFd == nil {
 		// Empty build bucket.
@@ -649,8 +660,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	jm.SetRowCount(int64(builder.InputBatchRowCount))
 	jm.IncRef(1)
 	builder.FreeExecutors()
-	fmt.Fprintf(os.Stderr, "REBUILD: rows=%d depth=%d probeFd=%v groupCount=%d\n",
-		builder.InputBatchRowCount, bucket.Depth, bucket.ProbeFd != nil, jm.GetGroupCount())
 
 	// Pop the head bucket and open probe reader.
 	e.buckets = e.buckets[1:]
@@ -832,9 +841,6 @@ func (e *SpillEngine) AdvanceToNextBucket(
 // Uses probeKeyEval — NOT keyExecs — to get correct column subscripts
 // when probe and build batches have different column layouts.
 func scatterProbe(proc *process.Process, e *SpillEngine, bat *batch.Batch, writers []BucketWriter, buffers []*batch.Batch, seed uint64) error {
-	if e.probeKeyEval == nil {
-		return fmt.Errorf("probeKeyEval not set")
-	}
 	keyVecs, err := e.probeKeyEval(bat)
 	if err != nil {
 		return err
