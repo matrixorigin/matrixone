@@ -4755,6 +4755,7 @@ type SessionInfo struct {
 	Account              string   `protobuf:"bytes,8,opt,name=account,proto3" json:"account,omitempty"`
 	QueryId              []string `protobuf:"bytes,9,rep,name=query_id,json=queryId,proto3" json:"query_id,omitempty"`
 	LockWaitTimeout      int64    `protobuf:"varint,10,opt,name=lock_wait_timeout,json=lockWaitTimeout,proto3" json:"lock_wait_timeout,omitempty"`
+	SqlMode              string   `protobuf:"bytes,11,opt,name=sql_mode,json=sqlMode,proto3" json:"sql_mode,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -4861,6 +4862,13 @@ func (m *SessionInfo) GetLockWaitTimeout() int64 {
 		return m.LockWaitTimeout
 	}
 	return 0
+}
+
+func (m *SessionInfo) GetSqlMode() string {
+	if m != nil {
+		return m.SqlMode
+	}
+	return ""
 }
 
 type SessionLoggerInfo struct {
@@ -10528,6 +10536,13 @@ func (m *SessionInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x50
 	}
+	if len(m.SqlMode) > 0 {
+		i -= len(m.SqlMode)
+		copy(dAtA[i:], m.SqlMode)
+		i = encodeVarintPipeline(dAtA, i, uint64(len(m.SqlMode)))
+		i--
+		dAtA[i] = 0x5a
+	}
 	if len(m.QueryId) > 0 {
 		for iNdEx := len(m.QueryId) - 1; iNdEx >= 0; iNdEx-- {
 			i -= len(m.QueryId[iNdEx])
@@ -13029,6 +13044,10 @@ func (m *SessionInfo) ProtoSize() (n int) {
 	}
 	if m.LockWaitTimeout != 0 {
 		n += 1 + sovPipeline(uint64(m.LockWaitTimeout))
+	}
+	l = len(m.SqlMode)
+	if l > 0 {
+		n += 1 + l + sovPipeline(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -26849,6 +26868,38 @@ func (m *SessionInfo) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 11:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SqlMode", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPipeline
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.SqlMode = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPipeline(dAtA[iNdEx:])

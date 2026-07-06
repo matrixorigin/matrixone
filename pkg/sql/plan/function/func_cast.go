@@ -465,16 +465,20 @@ func NewAssignCast(parameters []*vector.Vector, result vector.FunctionResultWrap
 // stricter behavior. This mirrors compile.StrictSqlMode, reimplemented here to
 // avoid importing the compile package (import cycle).
 func isStrictSqlMode(proc *process.Process) bool {
-	if proc == nil || proc.GetResolveVariableFunc() == nil {
-		return true
+	// Prefer the session resolver (handles prepared-statement runtime resolution).
+	if proc != nil && proc.GetResolveVariableFunc() != nil {
+		if v, err := proc.GetResolveVariableFunc()("sql_mode", true, false); err == nil && v != nil {
+			if s, ok := v.(string); ok {
+				return strings.Contains(s, "STRICT_TRANS_TABLES") || strings.Contains(s, "STRICT_ALL_TABLES")
+			}
+		}
 	}
-	v, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
-	if err != nil || v == nil {
-		return true
+	// Fall back to the captured SessionInfo.SqlMode (survives serialization to remote CNs).
+	if proc != nil && proc.Base.SessionInfo.SqlMode != "" {
+		return strings.Contains(proc.Base.SessionInfo.SqlMode, "STRICT_TRANS_TABLES") ||
+			strings.Contains(proc.Base.SessionInfo.SqlMode, "STRICT_ALL_TABLES")
 	}
-	if s, ok := v.(string); ok {
-		return strings.Contains(s, "STRICT_TRANS_TABLES") || strings.Contains(s, "STRICT_ALL_TABLES")
-	}
+	// Default to strict when sql_mode is unavailable (background/internal execution).
 	return true
 }
 
@@ -492,10 +496,10 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = scalarNullToOthers(proc.Ctx, *toType, result, length, selectList)
 	case types.T_bool:
 		s := vector.GenerateFunctionFixedTypeParameter[bool](from)
-		err = boolToOthers(proc.Ctx, s, *toType, result, length, selectList)
+		err = boolToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_bit:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
-		err = bitToOthers(proc.Ctx, s, *toType, result, length, selectList)
+		err = bitToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_int8:
 		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
 		err = int8ToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
@@ -698,7 +702,7 @@ func scalarNullToOthers(ctx context.Context,
 
 func boolToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[bool],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -710,7 +714,7 @@ func boolToOthers(ctx context.Context,
 		types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return boolToStr(source, rs, length, toType)
+		return boolToStr(source, rs, length, toType, strictStringWidth...)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return boolToInteger(source, rs, length, selectList)
@@ -744,7 +748,7 @@ func boolToOthers(ctx context.Context,
 
 func bitToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[uint64],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -794,7 +798,7 @@ func bitToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return bitToStr(ctx, source, rs, length, toType)
+		return bitToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return integerToTime(ctx, source, rs, length, selectList)
@@ -2479,7 +2483,7 @@ func numericToBool[T constraints.Integer | constraints.Float](
 
 func boolToStr(
 	from vector.FunctionParameterWrapper[bool],
-	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+	to *vector.FunctionResult[types.Varlena], length int, toType types.Type, strictStringWidth ...bool) error {
 	var i uint64
 	l := uint64(length)
 	// Here cast using cast(data_type as binary[(n)]).
@@ -2509,6 +2513,7 @@ func boolToStr(
 			if v {
 				result = []byte("1")
 			}
+			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if toType.Oid == types.T_binary {
 				for len(result) < int(toType.Width) {
 					result = append(result, 0)
@@ -2582,7 +2587,7 @@ func boolToYear(
 func bitToStr(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[uint64],
-	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+	to *vector.FunctionResult[types.Varlena], length int, toType types.Type, strictStringWidth ...bool) error {
 
 	uint64ToBytes := func(v uint64) []byte {
 		b := types.EncodeUint64(&v)
@@ -2622,13 +2627,14 @@ func bitToStr(
 		}
 
 		slices.Reverse(b)
+		b = truncateCastBytesResult(b, toType, strictStringWidth...)
 		if toType.Oid == types.T_binary {
 			for len(b) < int(toType.Width) {
 				b = append(b, byte(0))
 			}
 		}
 		if len(b) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-			return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+			return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 				"%v is larger than Dest length %v", v, toType.Width))
 		}
 		if err := to.AppendBytes(b, false); err != nil {
@@ -2940,7 +2946,7 @@ func signedToStr[T constraints.Integer](
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
@@ -2989,7 +2995,7 @@ func unsignedToStr[T constraints.Unsigned](
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
@@ -3040,7 +3046,7 @@ func floatToStr[T constraints.Float](
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
@@ -3726,7 +3732,7 @@ func dateToStr(
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
@@ -3776,7 +3782,7 @@ func datetimeToStr(
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
@@ -3827,7 +3833,7 @@ func timestampToStr(
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
@@ -3877,7 +3883,7 @@ func timeToStr(
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
@@ -4837,7 +4843,7 @@ func decimal64ToStr(
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
@@ -4887,7 +4893,7 @@ func decimal128ToStr(
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
@@ -4956,7 +4962,7 @@ func decimal256ToStr(
 			}
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
@@ -5611,11 +5617,11 @@ func strToStr(
 				if (allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(s, destLen)) || !strictStringWidth {
 					v = []byte(truncateStringByRunes(s, destLen))
 				} else {
-					return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
+					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 						"Src length %v is larger than Dest length %v", len(s), destLen))
 				}
 			} else if utf8.RuneCountInString(s) > destLen {
-				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 			if toType.Oid == types.T_binary && len(v) < int(toType.Width) {
@@ -5826,7 +5832,7 @@ func uuidToStr(
 				}
 			}
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
@@ -5943,7 +5949,7 @@ func jsonToStr(
 			}
 			val := []byte(str)
 			if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", val, toType.Width))
 			}
 			if err := to.AppendBytes(val, false); err != nil {
@@ -5988,7 +5994,7 @@ func enumToStr(
 		} else {
 			result := strconv.FormatUint(uint64(v), 10)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
 			if err := to.AppendBytes([]byte(result), false); err != nil {
@@ -6459,6 +6465,22 @@ func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, ex
 		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.GetType(), typ)
 	}
 	return moerr.NewInternalError(ctx, errStr+" "+extraInfo)
+}
+
+// formatDataTruncationError reports a data-too-long error (1406 / SQLSTATE 22001)
+// for cast width violations, preserving the same diagnostic context as formatCastError
+// but with the correct MySQL error code (ER_DATA_TOO_LONG) instead of a generic internal
+// error (HY000).
+func formatDataTruncationError(ctx context.Context, vec *vector.Vector, typ types.Type, extraInfo string) error {
+	var errStr string
+	if vec.IsConst() && !vec.IsConstNull() {
+		valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec), "["), "]")
+		shortenValueStr := shortenValueString(valueStr)
+		errStr = fmt.Sprintf("'%s' from %v type to %v type", shortenValueStr, vec.GetType(), typ)
+	} else {
+		errStr = fmt.Sprintf("from %v type to %v type", vec.GetType(), typ)
+	}
+	return moerr.NewDataTruncatedf(ctx, "String", "%s. %s", errStr, extraInfo)
 }
 
 func explicitCastToBinary(toType types.Type, v []byte, null bool, to *vector.FunctionResult[types.Varlena]) error {

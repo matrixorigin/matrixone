@@ -112,6 +112,7 @@ type SessionInfo struct {
 	Version              string
 	TimeZone             *time.Location
 	LockWaitTimeout      int64
+	SqlMode              string // captured from session at encode time; used as fallback when resolveVariableFunc is nil
 	StorageEngine        engine.Engine
 	QueryId              []string
 	ResultColTypes       []types.Type

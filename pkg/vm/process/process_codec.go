@@ -99,6 +99,7 @@ func (proc *Process) BuildProcessInfo(
 			TimeZone:        timeBytes,
 			QueryId:         proc.Base.SessionInfo.QueryId,
 			LockWaitTimeout: resolveLockWaitTimeoutSeconds(proc),
+			SqlMode:         resolveSqlMode(proc),
 		}
 	}
 	{ // log info
@@ -305,6 +306,7 @@ func ConvertToProcessSessionInfo(
 		Account:         sei.Account,
 		QueryId:         sei.QueryId,
 		LockWaitTimeout: sei.LockWaitTimeout,
+		SqlMode:         sei.SqlMode,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
@@ -313,6 +315,18 @@ func ConvertToProcessSessionInfo(
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
+}
+
+func resolveSqlMode(proc *Process) string {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return ""
+	}
+	if v, err := proc.GetResolveVariableFunc()("sql_mode", true, false); err == nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 func resolveLockWaitTimeoutSeconds(proc *Process) int64 {
