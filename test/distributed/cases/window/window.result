@@ -2,7 +2,7 @@ drop table if exists t1;
 create table t1 (a int, b datetime);
 insert into t1 values(1, '2020-11-11'), (2, '2020-11-12'), (3, '2020-11-13');
 select sum(a) over(partition by a order by b range between interval 1 day preceding and interval 2 day following) from t1;
-sum(a) over (partition by a order by b range between interval 1 day preceding and interval 2 day following)
+sum(a) over (partition by a order by b range between INTERVAL 1 day preceding and INTERVAL 2 day following)
 1
 2
 3
@@ -11,7 +11,7 @@ drop table if exists t1;
 create table t1 (a int, b date);
 insert into t1 values(1, '2020-11-11'), (2, '2020-11-12'), (3, '2020-11-13'), (1, '2020-11-11'), (2, '2020-11-12'), (3, '2020-11-13'), (1, '2020-11-11'), (2, '2020-11-12'), (3, '2020-11-13');
 select max(a) over(order by b range between interval 1 day preceding and interval 2 day following) from t1;
-max(a) over (order by b range between interval 1 day preceding and interval 2 day following)
+max(a) over (order by b range between INTERVAL 1 day preceding and INTERVAL 2 day following)
 3
 3
 3
@@ -26,7 +26,7 @@ drop table if exists t1;
 create table t1 (a int, b time);
 insert into t1 values(1, 112233), (2, 122233), (3, 132233), (1, 112233), (2, 122233), (3, 132233), (1, 112233), (2, 122233), (3, 132233);
 select min(a) over(order by b range between interval 1 hour preceding and current row) from t1;
-min(a) over (order by b range between interval 1 hour preceding and current row)
+min(a) over (order by b range between INTERVAL 1 hour preceding and current row)
 1
 1
 1
@@ -1454,7 +1454,7 @@ null    1.2434321E10
 null    1.2434321E10
 select col2, min(col1) over (partition by col2 order by col2) from float01;
 col2    min(col1) over (partition by col2 order by col2)
-null    null
+null    1.2434321E10
 null    1.2434321E10
 null    1.2434321E10
 1000-10-10    -1.2434321E10
@@ -1620,7 +1620,7 @@ id    max(id) over (order by id rows 2 preceding)
 2015-08-01    2015-08-01
 2015-08-01    2015-08-01
 select min(id) over (partition by id order by id range interval 2 day preceding) from date01;
-min(id) over (partition by id order by id range interval 2 day preceding)
+min(id) over (partition by id order by id range INTERVAL 2 day preceding)
 2002-06-09
 2002-06-09
 2002-06-09
@@ -1638,7 +1638,7 @@ id    count(id) over (order by id rows between 2 preceding and 1 following)
 2015-08-01    4
 2015-08-01    3
 select id, count(id) over (order by date_add(id,interval 3 day) rows between 2 preceding and 1 following) from date01;
-id    count(id) over (order by date_add(id, interval 3 day) rows between 2 preceding and 1 following)
+id    count(id) over (order by date_add(id, INTERVAL 3 day) rows between 2 preceding and 1 following)
 2002-06-09    2
 2002-06-09    3
 2002-06-09    4
@@ -2078,7 +2078,7 @@ null
 1997-01-13 00:00:00
 1997-01-13 00:00:00
 select rank() over (order by col1 range interval 2 day preceding) from date02;
-rank() over (order by col1 range interval 2 day preceding)
+rank() over (order by col1 range INTERVAL 2 day preceding)
 1
 1
 1
@@ -2087,7 +2087,7 @@ rank() over (order by col1 range interval 2 day preceding)
 6
 6
 select max(col3) over (order by date_add(col2,interval 2 minute) rows  between 2 preceding and 1 following) from date02;
-max(col3) over (order by date_add(col2, interval 2 minute) rows between 2 preceding and 1 following)
+max(col3) over (order by date_add(col2, INTERVAL 2 minute) rows between 2 preceding and 1 following)
 01:01:01
 01:01:01
 12:00:59
@@ -2096,7 +2096,7 @@ max(col3) over (order by date_add(col2, interval 2 minute) rows between 2 preced
 12:00:59
 12:00:59
 select min(col3) over (partition by col4 order by date_sub(col2,interval 2 minute) rows  between 2 preceding and 1 following) from date02;
-min(col3) over (partition by col4 order by date_sub(col2, interval 2 minute) rows between 2 preceding and 1 following)
+min(col3) over (partition by col4 order by date_sub(col2, INTERVAL 2 minute) rows between 2 preceding and 1 following)
 01:01:01
 01:01:01
 12:00:59
@@ -3356,11 +3356,11 @@ select count(*) from td;
 count(*)
 20971520
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
-
+[unknown result because it is related to issue#13008]
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
-
+[unknown result because it is related to issue#23427]
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
-
+[unknown result because it is related to issue#23427]
 drop table td;
 drop table if exists `c`;
 create table `c` (
@@ -4721,4 +4721,116 @@ SQL parser error: Window '<unnamed window>' with RANGE frame requires ORDER BY e
 select avg(score) over (order by name range between unbounded preceding and current row) from t_win_varchar;
 SQL parser error: Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type
 drop table t_win_varchar;
+create database if not exists test_range_null_order_key;
+use test_range_null_order_key;
+create table t_range_null(id int primary key, k int, v int);
+insert into t_range_null values
+(1, null, 10),
+(2, null, null),
+(3, 1, 5),
+(4, 2, null),
+(5, 2, 7),
+(6, 4, 11);
+select id, if(k is null, 'NULL', cast(k as char)) as k_label, v,
+count(*) over (order by k range between 1 preceding and current row) as cnt_all_rng,
+count(v) over (order by k range between 1 preceding and current row) as cnt_v_rng,
+sum(v) over (order by k range between 1 preceding and current row) as sum_v_rng,
+min(v) over (order by k range between 1 preceding and current row) as min_v_rng,
+max(v) over (order by k range between 1 preceding and current row) as max_v_rng
+from t_range_null
+order by k is not null, k, id;
+id    k_label    v    cnt_all_rng    cnt_v_rng    sum_v_rng    min_v_rng    max_v_rng
+1    NULL    10    2    1    10    10    10
+2    NULL    null    2    1    10    10    10
+3    1    5    1    1    5    5    5
+4    2    null    3    2    12    5    7
+5    2    7    3    2    12    5    7
+6    4    11    1    1    11    11    11
+select id, if(k is null, 'NULL', cast(k as char)) as k_label, v,
+count(*) over (order by k range between unbounded preceding and current row) as cnt
+from t_range_null
+order by k is not null, k, id;
+id    k_label    v    cnt
+1    NULL    10    2
+2    NULL    null    2
+3    1    5    3
+4    2    null    5
+5    2    7    5
+6    4    11    6
+drop table t_range_null;
+drop database test_range_null_order_key;
+create database if not exists test_range_desc;
+use test_range_desc;
+create table t_desc(id int primary key, k int, v int);
+insert into t_desc values
+(1, 4, 10),
+(2, 2, 5),
+(3, 2, 7),
+(4, 1, 11),
+(5, null, 20),
+(6, null, 30);
+select * from t_desc order by k desc;
+id    k    v
+1    4    10
+2    2    5
+3    2    7
+4    1    11
+5    null    20
+6    null    30
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+count(*) over (order by k desc range between 1 preceding and current row) as cnt_rng,
+sum(v) over (order by k desc range between 1 preceding and current row) as sum_rng
+from t_desc order by k desc, id;
+id    k_label    v    cnt_rng    sum_rng
+1    4    10    1    10
+2    2    5    2    12
+3    2    7    2    12
+4    1    11    3    23
+5    NULL    20    2    50
+6    NULL    30    2    50
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+count(*) over (order by k desc range between current row and 1 following) as cnt_rng,
+sum(v) over (order by k desc range between current row and 1 following) as sum_rng
+from t_desc order by k desc, id;
+id    k_label    v    cnt_rng    sum_rng
+1    4    10    1    10
+2    2    5    3    23
+3    2    7    3    23
+4    1    11    1    11
+5    NULL    20    2    50
+6    NULL    30    2    50
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+count(*) over (order by k desc range between unbounded preceding and current row) as cnt_rng
+from t_desc order by k desc, id;
+id    k_label    v    cnt_rng
+1    4    10    1
+2    2    5    3
+3    2    7    3
+4    1    11    4
+5    NULL    20    6
+6    NULL    30    6
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+count(*) over (order by k desc nulls last range between 1 preceding and current row) as cnt_rng,
+sum(v) over (order by k desc nulls last range between 1 preceding and current row) as sum_rng
+from t_desc order by k desc nulls last, id;
+id    k_label    v    cnt_rng    sum_rng
+1    4    10    1    10
+2    2    5    2    12
+3    2    7    2    12
+4    1    11    3    23
+5    NULL    20    2    50
+6    NULL    30    2    50
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+count(*) over (order by k desc nulls last range between current row and 1 following) as cnt_rng,
+sum(v) over (order by k desc nulls last range between current row and 1 following) as sum_rng
+from t_desc order by k desc nulls last, id;
+id    k_label    v    cnt_rng    sum_rng
+1    4    10    1    10
+2    2    5    3    23
+3    2    7    3    23
+4    1    11    1    11
+5    NULL    20    2    50
+6    NULL    30    2    50
+drop table t_desc;
+drop database test_range_desc;
 drop database test;
