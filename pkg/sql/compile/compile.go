@@ -5311,6 +5311,11 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 
 	// scan on multi CN
 	scanWorkers := scanPlacement.Workers
+	remoteTombstones := remoteScanTombstoneAttacher{
+		c:    c,
+		node: node,
+		rel:  rel,
+	}
 	for i := range scanWorkers {
 		mcpu := max(scanWorkers[i].Mcpu, 1)
 		if stats != nil && stats.Dop > 0 {
@@ -5324,16 +5329,35 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 			CNIDX: int32(i),
 		}
 		if engNode.Addr != c.addr {
-			uncommittedTombs, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones)
-			if err != nil {
+			if err := remoteTombstones.attach(&engNode); err != nil {
 				return nil, err
 			}
-			engNode.Data = readutil.BuildEmptyRelData()
-			engNode.Data.AttachTombstones(uncommittedTombs)
 		}
 		engNodes = append(engNodes, engNode)
 	}
 	return engNodes, nil
+}
+
+type remoteScanTombstoneAttacher struct {
+	c          *Compile
+	node       *plan.Node
+	rel        engine.Relation
+	collected  bool
+	tombstones engine.Tombstoner
+}
+
+func (a *remoteScanTombstoneAttacher) attach(node *engine.Node) error {
+	if !a.collected {
+		tombstones, err := collectTombstones(a.c, a.node, a.rel, engine.Policy_CollectAllTombstones)
+		if err != nil {
+			return err
+		}
+		a.tombstones = tombstones
+		a.collected = true
+	}
+	node.Data = readutil.BuildEmptyRelData()
+	_ = node.Data.AttachTombstones(a.tombstones)
+	return nil
 }
 
 func toScheduleScanStats(node *plan.Node) *schedule.ScanStats {

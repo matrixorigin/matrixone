@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -233,6 +234,49 @@ func TestGenerateNodesKeepsForceOneCNOnCurrentCN(t *testing.T) {
 		Mcpu:  6,
 		CNCNT: 1,
 	}}, nodes)
+}
+
+func TestGenerateNodesCollectsRemoteTombstonesOnce(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	tombstones := readutil.NewEmptyTombstoneData()
+	rel := newStubRelation("t")
+	rel.tombstones = tombstones
+	db := newStubDatabase("testdb")
+	db.rels["t"] = rel
+	e := newStubEngine()
+	e.dbs["testdb"] = db
+	c.e = e
+	c.cnList = engine.Nodes{
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 4},
+		{Id: "cn-remote-1", Addr: "cn-remote-1:6001", Mcpu: 4},
+		{Id: "cn-remote-2", Addr: "cn-remote-2:6001", Mcpu: 4},
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "t",
+		},
+		TableDef: &plan.TableDef{
+			Name: "t",
+		},
+		Stats: &plan.Stats{
+			BlockNum: int32(plan2.BlockThresholdForOneCN + 1),
+			Dop:      2,
+		},
+	}
+
+	nodes, err := c.generateNodes(node)
+	require.NoError(t, err)
+	require.Len(t, nodes, 3)
+	require.Nil(t, nodes[0].Data)
+	for i := 1; i < len(nodes); i++ {
+		require.NotNil(t, nodes[i].Data)
+		require.Same(t, tombstones, nodes[i].Data.GetTombstones())
+	}
+	require.Equal(t, 1, rel.collectTombstonesCall)
 }
 
 func newStubEngineForGenerateNodes(dbName, tblName string) *stubEngine {
