@@ -26,15 +26,15 @@ sum(increase(mo_task_merge_oom_pause_total{namespace=~"$namespace", pod=~"$pod"}
 Proxy CN health and all-busy:
 
 ```promql
-sum(rate(mo_proxy_cn_health_total{namespace=~"$namespace", pod=~"$pod"}[$interval])) by (event, cn_uuid)
+sum(rate(mo_proxy_cn_health_total{namespace=~"$namespace", pod=~"$pod"}[$interval])) by (event)
 sum(rate(mo_proxy_connect_counter{namespace=~"$namespace", pod=~"$pod", type="cn-all-busy"}[$interval])) by (pod)
 ```
 
 Proxy backend handshake:
 
 ```promql
-histogram_quantile(0.95, sum(rate(mo_proxy_backend_handshake_duration_seconds_bucket{namespace=~"$namespace", pod=~"$pod"}[$interval])) by (le, cn_uuid, result))
-sum(mo_proxy_backend_handshake_inflight{namespace=~"$namespace", pod=~"$pod"}) by (cn_uuid)
+histogram_quantile(0.95, sum(rate(mo_proxy_backend_handshake_duration_seconds_bucket{namespace=~"$namespace", pod=~"$pod"}[$interval])) by (le, result))
+sum(mo_proxy_backend_handshake_inflight{namespace=~"$namespace", pod=~"$pod"})
 ```
 
 MORPC and lockservice errors:

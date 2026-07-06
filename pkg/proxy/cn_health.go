@@ -252,7 +252,7 @@ func (h *cnHealthChecker) reportSuccess(uuid, addr string) {
 		// Healthy is represented by the absence of a breaker entry.
 		delete(h.breakers, uuid)
 		if wasOpen {
-			v2.ProxyCNHealthCounter.WithLabelValues("recover", uuid).Inc()
+			v2.ProxyCNHealthCounter.WithLabelValues("recover").Inc()
 			logutil.Info("proxy CN health recovered",
 				zap.String("cn", uuid),
 				zap.String("address", addr))
@@ -289,7 +289,7 @@ func (h *cnHealthChecker) reportFailure(uuid, addr string) {
 		case !wasOpen:
 			// closed -> open: the CN just became unhealthy.
 			v2.ProxyConnectCNHealthTripCounter.Inc()
-			v2.ProxyCNHealthCounter.WithLabelValues("trip", uuid).Inc()
+			v2.ProxyCNHealthCounter.WithLabelValues("trip").Inc()
 			logutil.Warn("proxy CN health tripped",
 				zap.String("cn", uuid),
 				zap.String("address", addr),
@@ -304,7 +304,7 @@ func (h *cnHealthChecker) reportFailure(uuid, addr string) {
 			// The probe rate is bounded (one per CN per cooldown), so this
 			// cannot storm.
 			v2.ProxyConnectCNHealthRetripCounter.Inc()
-			v2.ProxyCNHealthCounter.WithLabelValues("retrip", uuid).Inc()
+			v2.ProxyCNHealthCounter.WithLabelValues("retrip").Inc()
 			logutil.Warn("proxy CN health probe failed, re-tripping",
 				zap.String("cn", uuid),
 				zap.String("address", addr),
@@ -406,7 +406,7 @@ func (h *cnHealthChecker) pick(cns []*CNServer) (candidates []*CNServer, allBusy
 		probeBreaker.probeInFlight = true
 		probeBreaker.probeDeadline = now.Add(h.probeWindow)
 		v2.ProxyConnectCNHealthProbeCounter.Inc()
-		v2.ProxyCNHealthCounter.WithLabelValues("probe", probe.uuid).Inc()
+		v2.ProxyCNHealthCounter.WithLabelValues("probe").Inc()
 		// Bounded to one probe per CN per cooldown window, so this is safe to
 		// log; it makes recovery attempts visible. Debug level keeps it quiet
 		// for normal operation.

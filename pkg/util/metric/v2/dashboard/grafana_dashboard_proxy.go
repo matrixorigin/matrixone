@@ -106,8 +106,8 @@ func (c *DashboardCreator) initProxyHealthRow() dashboard.Option {
 		c.withGraph(
 			"CN Health Events",
 			6,
-			`sum(rate(`+c.getMetricWithFilter("mo_proxy_cn_health_total", "")+`[$interval])) by (event, cn_uuid)`,
-			"{{ event }} {{ cn_uuid }}",
+			`sum(rate(`+c.getMetricWithFilter("mo_proxy_cn_health_total", "")+`[$interval])) by (event)`,
+			"{{ event }}",
 			axis.Min(0)),
 		c.withGraph(
 			"All CN Busy",
@@ -124,15 +124,15 @@ func (c *DashboardCreator) initProxyHandshakeRow() dashboard.Option {
 		c.withGraph(
 			"P95 Handshake Duration",
 			6,
-			`histogram_quantile(0.95, sum(rate(`+c.getMetricWithFilter("mo_proxy_backend_handshake_duration_seconds_bucket", "")+`[$interval])) by (le, cn_uuid, result))`,
-			"{{ cn_uuid }} {{ result }}",
+			`histogram_quantile(0.95, sum(rate(`+c.getMetricWithFilter("mo_proxy_backend_handshake_duration_seconds_bucket", "")+`[$interval])) by (le, result))`,
+			"{{ result }}",
 			axis.Unit("s"),
 			axis.Min(0)),
 		c.withGraph(
 			"In-flight Handshakes",
 			6,
-			`sum(`+c.getMetricWithFilter("mo_proxy_backend_handshake_inflight", "")+`) by (cn_uuid)`,
-			"{{ cn_uuid }}",
+			`sum(`+c.getMetricWithFilter("mo_proxy_backend_handshake_inflight", "")+`)`,
+			"in-flight",
 			axis.Min(0)),
 	)
 }

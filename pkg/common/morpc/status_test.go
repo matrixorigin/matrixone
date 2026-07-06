@@ -136,6 +136,7 @@ func TestRPCMetricErrorType(t *testing.T) {
 		{"nil", nil, "none"},
 		{"rpc timeout", moerr.NewRPCTimeoutNoCtx(), "rpc_timeout"},
 		{"backend cannot connect", moerr.NewBackendCannotConnectNoCtx(), "backend_cannot_connect"},
+		{"backend cannot connect wraps net error", moerr.NewBackendCannotConnectNoCtx(&mockNetError{}), "backend_cannot_connect"},
 		{"backend closed", moerr.NewBackendClosedNoCtx(), "backend_closed"},
 		{"moerr unexpected eof", moerr.NewUnexpectedEOFNoCtx("test"), "unexpected_eof"},
 		{"unexpected eof", io.ErrUnexpectedEOF, "unexpected_eof"},

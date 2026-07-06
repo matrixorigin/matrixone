@@ -388,12 +388,11 @@ func (r *router) connect(
 	resp, err := func() (*frontend.Packet, error) {
 		start := time.Now()
 		result := "success"
-		inflight := v2.ProxyBackendHandshakeInflightGauge.WithLabelValues(cn.uuid)
-		inflight.Inc()
+		v2.ProxyBackendHandshakeInflightGauge.Inc()
 		defer func() {
-			inflight.Dec()
+			v2.ProxyBackendHandshakeInflightGauge.Dec()
 			v2.ProxyBackendHandshakeDurationHistogram.
-				WithLabelValues(cn.uuid, result).
+				WithLabelValues(result).
 				Observe(time.Since(start).Seconds())
 		}()
 		resp, err := sc.HandleHandshake(handshakeResp, r.authTimeout)

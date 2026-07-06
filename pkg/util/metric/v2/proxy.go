@@ -121,7 +121,7 @@ var (
 			Subsystem: "proxy",
 			Name:      "cn_health_total",
 			Help:      "Total number of proxy CN health checker events.",
-		}, []string{"event", "cn_uuid"})
+		}, []string{"event"})
 
 	ProxyBackendHandshakeDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -130,13 +130,13 @@ var (
 			Name:      "backend_handshake_duration_seconds",
 			Help:      "Bucketed histogram of proxy backend CN handshake duration.",
 			Buckets:   getDurationBuckets(),
-		}, []string{"cn_uuid", "result"})
+		}, []string{"result"})
 
-	ProxyBackendHandshakeInflightGauge = prometheus.NewGaugeVec(
+	ProxyBackendHandshakeInflightGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "proxy",
 			Name:      "backend_handshake_inflight",
 			Help:      "Current number of proxy backend CN handshakes in flight.",
-		}, []string{"cn_uuid"})
+		})
 )

@@ -997,19 +997,21 @@ func (rb *remoteBackend) resetConn() error {
 		}
 
 		rb.metrics.connectFailedCounter.Inc()
-		rb.metrics.observeBackendError(rb.remote, "connect", err)
 
 		// only retry on temp net error
 		canRetry := false
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
 			canRetry = true
+			rb.metrics.observeBackendError(rb.remote, "connect", err)
 		}
 		rb.rateLimitLogger.Error("connect-retry",
 			"init remote connection failed, retry later",
 			append(rb.logFields(), zap.Bool("can-retry", canRetry), zap.Error(err))...)
 
 		if !canRetry {
-			return moerr.NewBackendCannotConnectNoCtx(err)
+			err = moerr.NewBackendCannotConnectNoCtx(err)
+			rb.metrics.observeBackendError(rb.remote, "connect", err)
+			return err
 		}
 		duration := time.Duration(0)
 		for {
