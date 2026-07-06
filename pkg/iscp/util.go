@@ -42,6 +42,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+// ValueRepr selects how extractRowFromVector renders the types whose native Go
+// value and SQL-display string differ (temporal / decimal / uuid). A consumer that
+// builds SQL text needs the display string; a consumer that binary-encodes the value
+// (the WAND retrieval index) needs the native value so it can serialize it exactly.
+type ValueRepr int
+
+const (
+	// ReprSQLString is the historical behavior: datetime/time/timestamp/decimal/uuid
+	// come out as their SQL-display string (feeds convertColIntoSql). Default.
+	ReprSQLString ValueRepr = iota
+	// ReprNative returns those types as their native Go value (types.Datetime,
+	// types.Decimal128, types.Uuid, ...) so a binary encoder round-trips them exactly.
+	ReprNative
+)
+
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
 // bat columns layout:
 // 1. data: user defined cols | cpk (if needed) | commit-ts
@@ -52,6 +67,7 @@ func extractRowFromEveryVector(
 	dataSet *batch.Batch,
 	rowIndex int,
 	row []any,
+	repr ValueRepr,
 ) error {
 	for i := 0; i < len(row); i++ {
 		vec := dataSet.Vecs[i]
@@ -64,7 +80,7 @@ func extractRowFromEveryVector(
 			rowIndex = 0
 		}
 
-		if err := extractRowFromVector(ctx, vec, i, row, rowIndex); err != nil {
+		if err := extractRowFromVector(ctx, vec, i, row, rowIndex, repr); err != nil {
 			return err
 		}
 		rowIndex = rowIndexBackup
@@ -73,7 +89,7 @@ func extractRowFromEveryVector(
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int) error {
+func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int, repr ValueRepr) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
 		row[i] = nil
 		return nil
@@ -131,25 +147,49 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 	case types.T_date:
 		row[i] = vector.GetFixedAtWithTypeCheck[types.Date](vec, rowIndex)
 	case types.T_datetime:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex).String2(scale)
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Datetime](vec, rowIndex).String2(scale)
+		}
 	case types.T_time:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Time](vec, rowIndex).String2(scale)
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Time](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Time](vec, rowIndex).String2(scale)
+		}
 	case types.T_timestamp:
-		scale := vec.GetType().Scale
-		//TODO:get the right timezone
-		//timeZone := ses.GetTimeZone()
-		timeZone := time.UTC
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			//TODO:get the right timezone
+			//timeZone := ses.GetTimeZone()
+			timeZone := time.UTC
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
+		}
 	case types.T_decimal64:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, rowIndex).Format(scale)
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, rowIndex).Format(scale)
+		}
 	case types.T_decimal128:
-		scale := vec.GetType().Scale
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
+		}
 	case types.T_uuid:
-		row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex).String()
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex)
+		} else {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex).String()
+		}
 	case types.T_Rowid:
 		row[i] = vector.GetFixedAtWithTypeCheck[types.Rowid](vec, rowIndex)
 	case types.T_Blockid:

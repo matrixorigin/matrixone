@@ -377,6 +377,26 @@ func encodePk(pkType int32, v any) ([]byte, error) {
 		default:
 			return nil, moerr.NewInternalErrorNoCtxf("wand: uuid pk unexpected go type %T", v)
 		}
+	// Native fixed-width temporal / decimal pks. Delivered natively by the ISCP
+	// extractor's ReprNative mode (extractRowFromVector) — NOT as a SQL-display
+	// string — so they encode as their exact raw bytes (deterministic, reversible)
+	// rather than a lossy round-trip through Datetime.String2()/Decimal.Format().
+	case types.T_date:
+		return packUint32(uint32(int32(v.(types.Date)))), nil
+	case types.T_datetime:
+		return packUint64(uint64(int64(v.(types.Datetime)))), nil
+	case types.T_time:
+		return packUint64(uint64(int64(v.(types.Time)))), nil
+	case types.T_timestamp:
+		return packUint64(uint64(int64(v.(types.Timestamp)))), nil
+	case types.T_decimal64:
+		return packUint64(uint64(v.(types.Decimal64))), nil
+	case types.T_decimal128:
+		d := v.(types.Decimal128)
+		b := make([]byte, 16)
+		binary.LittleEndian.PutUint64(b[0:8], d.B0_63)
+		binary.LittleEndian.PutUint64(b[8:16], d.B64_127)
+		return b, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("wand: unsupported pk type %d", pkType)
 	}
@@ -426,6 +446,25 @@ func decodePk(pkType int32, b []byte) (any, error) {
 			return nil, err
 		}
 		return u, nil
+	// Native fixed-width temporal / decimal pks (see encodePk). Reproduce the exact
+	// native Go value AppendAny / the membership prefilter expect (the doc_id output
+	// column is the same source type, so a uniform native value keeps normalizeKey
+	// consistent across segments and delete frames).
+	case types.T_date:
+		return types.Date(int32(binary.LittleEndian.Uint32(b))), nil
+	case types.T_datetime:
+		return types.Datetime(int64(binary.LittleEndian.Uint64(b))), nil
+	case types.T_time:
+		return types.Time(int64(binary.LittleEndian.Uint64(b))), nil
+	case types.T_timestamp:
+		return types.Timestamp(int64(binary.LittleEndian.Uint64(b))), nil
+	case types.T_decimal64:
+		return types.Decimal64(binary.LittleEndian.Uint64(b)), nil
+	case types.T_decimal128:
+		return types.Decimal128{
+			B0_63:   binary.LittleEndian.Uint64(b[0:8]),
+			B64_127: binary.LittleEndian.Uint64(b[8:16]),
+		}, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("wand: unsupported pk type %d", pkType)
 	}
