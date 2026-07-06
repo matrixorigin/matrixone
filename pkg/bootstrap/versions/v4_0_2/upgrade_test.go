@@ -15,6 +15,7 @@
 package v4_0_2
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -36,5 +37,22 @@ func TestIcebergTenantUpgradeEntries(t *testing.T) {
 		if strings.Contains(strings.ToLower(entry.UpgSql), "drop ") {
 			t.Fatalf("%s upgrade SQL must not drop objects: %s", entry.TableName, entry.UpgSql)
 		}
+	}
+}
+
+func TestIcebergVersionHandleMetadataAndClusterNoop(t *testing.T) {
+	meta := Handler.Metadata()
+	if meta.Version != "4.0.2" || meta.MinUpgradeVersion != "4.0.1" || meta.UpgradeTenant != versions.Yes {
+		t.Fatalf("unexpected metadata: %+v", meta)
+	}
+	if meta.VersionOffset != uint32(len(tenantUpgEntries)+len(clusterUpgEntries)) {
+		t.Fatalf("unexpected version offset: %+v", meta)
+	}
+	if err := Handler.HandleClusterUpgrade(context.Background(), nil); err != nil {
+		t.Fatalf("empty cluster upgrade should be a no-op: %v", err)
+	}
+	err := Handler.HandleCreateFrameworkDeps(nil)
+	if err == nil || !strings.Contains(err.Error(), "Only v1.2.0") {
+		t.Fatalf("unexpected framework deps error: %v", err)
 	}
 }

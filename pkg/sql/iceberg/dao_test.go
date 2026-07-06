@@ -29,6 +29,7 @@ import (
 
 type fakeExec struct {
 	sqls []string
+	row  RowScanner
 	rows RowsScanner
 }
 
@@ -39,6 +40,9 @@ func (f *fakeExec) Exec(ctx context.Context, sql string) error {
 
 func (f *fakeExec) QueryRow(ctx context.Context, sql string) RowScanner {
 	f.sqls = append(f.sqls, sql)
+	if f.row != nil {
+		return f.row
+	}
 	return fakeRow{}
 }
 
@@ -53,6 +57,17 @@ func (f *fakeExec) Query(ctx context.Context, sql string) (RowsScanner, error) {
 type fakeRow struct{}
 
 func (fakeRow) Scan(dest ...any) error {
+	return nil
+}
+
+type staticRow struct {
+	values []any
+}
+
+func (r staticRow) Scan(dest ...any) error {
+	for i := range dest {
+		assignScanValue(dest[i], r.values[i])
+	}
 	return nil
 }
 
@@ -513,6 +528,224 @@ func TestOrphanFileCleanupSQL(t *testing.T) {
 		if !strings.Contains(updateSQL, want) {
 			t.Fatalf("orphan cleanup update SQL missing %q: %s", want, updateSQL)
 		}
+	}
+}
+
+func TestDAOReadMethodsScanRows(t *testing.T) {
+	now := time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC)
+	t.Run("catalog by name", func(t *testing.T) {
+		exec := &fakeExec{row: staticRow{values: []any{
+			uint32(1), uint64(7), "cat", "rest", "https://catalog.example", "s3://warehouse", model.AuthModeNone, "secret://cat/token", `{"commit":true}`, uint64(3),
+		}}}
+		got, err := NewDAO(exec).GetCatalogByName(context.Background(), 1, "cat")
+		if err != nil {
+			t.Fatalf("GetCatalogByName failed: %v", err)
+		}
+		if got.CatalogID != 7 || got.TokenSecretRef != "secret://cat/token" || !strings.Contains(exec.sqls[0], "name = 'cat'") {
+			t.Fatalf("unexpected catalog lookup: %+v sql=%s", got, exec.sqls[0])
+		}
+	})
+	t.Run("catalog by id", func(t *testing.T) {
+		exec := &fakeExec{row: staticRow{values: []any{
+			uint32(1), uint64(8), "cat2", "rest", "https://catalog2.example", "", model.AuthModeCredential, "", "", uint64(4),
+		}}}
+		got, err := NewDAO(exec).GetCatalogByID(context.Background(), 1, 8)
+		if err != nil {
+			t.Fatalf("GetCatalogByID failed: %v", err)
+		}
+		if got.Name != "cat2" || !strings.Contains(exec.sqls[0], "catalog_id = 8") {
+			t.Fatalf("unexpected catalog by id: %+v sql=%s", got, exec.sqls[0])
+		}
+	})
+	t.Run("table mapping", func(t *testing.T) {
+		exec := &fakeExec{row: staticRow{values: []any{
+			uint32(1), uint64(2), uint64(3), uint64(7), "gold", "orders", "main", model.ReadModeAppendOnly, model.WriteModeMergeOnRead, uint32(1), `{"delete":true}`, "101", "hash", uint64(5),
+		}}}
+		got, err := NewDAO(exec).GetTableMapping(context.Background(), 1, 2, 3)
+		if err != nil {
+			t.Fatalf("GetTableMapping failed: %v", err)
+		}
+		if got.WriteMode != model.WriteModeMergeOnRead || got.WriterOwnerAccountID != 1 || !strings.Contains(exec.sqls[0], "db_id = 2") {
+			t.Fatalf("unexpected table mapping: %+v sql=%s", got, exec.sqls[0])
+		}
+	})
+	t.Run("ref cache", func(t *testing.T) {
+		exec := &fakeExec{row: staticRow{values: []any{
+			uint32(1), uint64(7), "gold", "orders", "main", "branch", "101", now, "catalog", uint64(2),
+		}}}
+		got, err := NewDAO(exec).GetRefCache(context.Background(), 1, 7, "gold", "orders", "main")
+		if err != nil {
+			t.Fatalf("GetRefCache failed: %v", err)
+		}
+		if got.RefName != "main" || got.LastSeenAt != now || !strings.Contains(exec.sqls[0], "ref_name = 'main'") {
+			t.Fatalf("unexpected ref cache: %+v sql=%s", got, exec.sqls[0])
+		}
+	})
+}
+
+func TestDAOListMethodsScanRows(t *testing.T) {
+	now := time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC)
+	t.Run("principal maps", func(t *testing.T) {
+		exec := &fakeExec{rows: &staticRows{rows: [][]any{
+			{uint32(1), uint64(7), uint64(11), uint64(0), "role-principal", `{"scope":"role"}`, uint64(1)},
+			{uint32(1), uint64(7), uint64(0), uint64(22), "user-principal", "", uint64(2)},
+		}}}
+		got, err := NewDAO(exec).ListPrincipalMaps(context.Background(), 1, 7)
+		if err != nil {
+			t.Fatalf("ListPrincipalMaps failed: %v", err)
+		}
+		if len(got) != 2 || got[0].ExternalPrincipal != "role-principal" || got[1].MOUserID != 22 {
+			t.Fatalf("unexpected principal maps: %+v", got)
+		}
+	})
+	t.Run("residency policies", func(t *testing.T) {
+		exec := &fakeExec{rows: &staticRows{rows: [][]any{
+			{model.ResidencyScopeCluster, uint32(0), uint64(7), "http://catalog", "s3.local", "us-east-1", "*", model.ResidencyPolicyEnabled, uint64(1)},
+			{model.ResidencyScopeAccount, uint32(1), uint64(7), "http://catalog", "s3.local", "us-east-1", "warehouse", model.ResidencyPolicyAudit, uint64(2)},
+		}}}
+		got, err := NewDAO(exec).ListResidencyPolicies(context.Background(), 1, 7)
+		if err != nil {
+			t.Fatalf("ListResidencyPolicies failed: %v", err)
+		}
+		if len(got) != 2 || got[0].AccountID != 0 || got[1].PolicyState != model.ResidencyPolicyAudit {
+			t.Fatalf("unexpected residency policies: %+v", got)
+		}
+	})
+	t.Run("orphan candidates", func(t *testing.T) {
+		exec := &fakeExec{rows: &staticRows{rows: [][]any{
+			{uint32(1), "job-1", uint64(7), "gold", "orders", "table-hash", "s3://warehouse/data.parquet", "file-hash", "<redacted:path:file-hash>", "pending", uint64(3)},
+		}}}
+		got, err := NewDAO(exec).ListOrphanCleanupCandidates(context.Background(), 1, 25)
+		if err != nil {
+			t.Fatalf("ListOrphanCleanupCandidates failed: %v", err)
+		}
+		if len(got) != 1 || got[0].FilePathHash != "file-hash" || !strings.Contains(exec.sqls[0], "limit 25") {
+			t.Fatalf("unexpected orphan candidates: %+v sql=%s", got, exec.sqls[0])
+		}
+	})
+	_ = now
+}
+
+func TestDAOWriteMethodsValidateAndExecute(t *testing.T) {
+	ctx := context.Background()
+	catalog := model.Catalog{AccountID: 1, CatalogID: 7, Name: "cat", Type: "rest", URI: "https://catalog.example", Version: 2}
+	mapping := model.TableMapping{AccountID: 1, DatabaseID: 2, TableID: 3, CatalogID: 7, Namespace: "gold", TableName: "orders", Version: 1}
+	principal := model.PrincipalMap{AccountID: 1, CatalogID: 7, MORoleID: 11, ExternalPrincipal: "role-principal"}
+	policy := model.ResidencyPolicy{ScopeType: model.ResidencyScopeCluster, AccountID: 0, CatalogID: 7, AllowedCatalogURI: "http://catalog", AllowedEndpoint: "s3.local", AllowedRegion: "us-east-1", AllowedBucket: "*", PolicyState: model.ResidencyPolicyEnabled}
+
+	tests := []struct {
+		name string
+		run  func(*DAO) error
+		want string
+	}{
+		{name: "update catalog", run: func(d *DAO) error { return d.UpdateCatalog(ctx, catalog) }, want: "update mo_catalog.mo_iceberg_catalogs"},
+		{name: "delete catalog", run: func(d *DAO) error { return d.DeleteCatalog(ctx, 1, 7) }, want: "delete from mo_catalog.mo_iceberg_catalogs"},
+		{name: "insert principal", run: func(d *DAO) error { return d.InsertPrincipalMap(ctx, principal) }, want: "insert into mo_catalog.mo_iceberg_principal_map"},
+		{name: "insert residency", run: func(d *DAO) error { return d.InsertResidencyPolicy(ctx, policy) }, want: "insert into mo_catalog.mo_iceberg_residency_policy"},
+		{name: "insert residency with privilege", run: func(d *DAO) error { return d.InsertResidencyPolicyWithPrivilege(ctx, 0, true, policy) }, want: "insert into mo_catalog.mo_iceberg_residency_policy"},
+		{name: "insert table mapping", run: func(d *DAO) error { return d.InsertTableMapping(ctx, mapping) }, want: "insert into mo_catalog.mo_iceberg_tables"},
+		{name: "update table mapping", run: func(d *DAO) error { return d.UpdateTableMappingOptimistic(ctx, mapping, 1) }, want: "update mo_catalog.mo_iceberg_tables"},
+		{name: "update publish job", run: func(d *DAO) error { return d.UpdatePublishJobStatus(ctx, 1, "job", "committed", "", 1) }, want: "update mo_catalog.mo_iceberg_publish_jobs"},
+		{name: "update orphan", run: func(d *DAO) error { return d.UpdateOrphanFileCleanupStatus(ctx, 1, "job", "hash", "deleted", 1) }, want: "update mo_catalog.mo_iceberg_orphan_files"},
+		{name: "update maintenance", run: func(d *DAO) error {
+			return d.UpdateMaintenanceJobStatus(ctx, 1, "job", "committed", "", "101", 2, 1, 1)
+		}, want: "update mo_catalog.mo_iceberg_maintenance_jobs"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExec{}
+			if err := tt.run(NewDAO(exec)); err != nil {
+				t.Fatalf("method failed: %v", err)
+			}
+			if len(exec.sqls) != 1 || !strings.Contains(exec.sqls[0], tt.want) {
+				t.Fatalf("unexpected SQL for %s: %#v", tt.name, exec.sqls)
+			}
+		})
+	}
+
+	invalids := []func(*DAO) error{
+		func(d *DAO) error { return d.DeleteCatalog(ctx, 0, 7) },
+		func(d *DAO) error { _, err := d.GetCatalogByName(ctx, 1, ""); return err },
+		func(d *DAO) error { _, err := d.GetCatalogByID(ctx, 1, 0); return err },
+		func(d *DAO) error { _, err := d.GetTableMapping(ctx, 1, 0, 3); return err },
+		func(d *DAO) error { _, err := d.GetRefCache(ctx, 1, 7, "", "orders", "main"); return err },
+		func(d *DAO) error { _, err := d.ListPrincipalMaps(ctx, 0, 7); return err },
+		func(d *DAO) error { _, err := d.ListResidencyPolicies(ctx, 1, 0); return err },
+		func(d *DAO) error { return d.UpdatePublishJobStatus(ctx, 1, "", "committed", "", 1) },
+		func(d *DAO) error { return d.UpdateOrphanFileCleanupStatus(ctx, 1, "job", "", "deleted", 1) },
+		func(d *DAO) error { return d.UpdateMaintenanceJobStatus(ctx, 1, "job", "", "", "", 0, 0, 1) },
+	}
+	for i, fn := range invalids {
+		exec := &fakeExec{}
+		if err := fn(NewDAO(exec)); err == nil {
+			t.Fatalf("invalid case %d unexpectedly succeeded", i)
+		}
+		if len(exec.sqls) != 0 {
+			t.Fatalf("invalid case %d should not execute SQL: %#v", i, exec.sqls)
+		}
+	}
+}
+
+func TestDAOAdditionalSQLBuilders(t *testing.T) {
+	checks := []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{
+			name: "update catalog",
+			sql:  UpdateCatalogSQL(model.Catalog{AccountID: 1, CatalogID: 7, Name: "cat", Type: "rest", URI: "https://catalog", Version: 3}),
+			want: []string{"update mo_catalog.mo_iceberg_catalogs", "version = version + 1", "version = 3"},
+		},
+		{
+			name: "principal map insert",
+			sql:  InsertPrincipalMapSQL(model.PrincipalMap{AccountID: 1, CatalogID: 7, MOUserID: 9, ExternalPrincipal: "user", Version: 2}),
+			want: []string{"insert into mo_catalog.mo_iceberg_principal_map", "'user'", ",2)"},
+		},
+		{
+			name: "principal map list",
+			sql:  ListPrincipalMapsSQL(1, 7),
+			want: []string{"select account_id,catalog_id,mo_role_id,mo_user_id", "catalog_id = 7"},
+		},
+		{
+			name: "residency insert",
+			sql:  InsertResidencyPolicySQL(model.ResidencyPolicy{ScopeType: model.ResidencyScopeAccount, AccountID: 1, CatalogID: 7, AllowedCatalogURI: "http://catalog", AllowedEndpoint: "s3.local", AllowedRegion: "*", AllowedBucket: "*"}),
+			want: []string{"insert into mo_catalog.mo_iceberg_residency_policy", "'enabled'"},
+		},
+		{
+			name: "table mapping insert",
+			sql:  InsertTableMappingSQL(model.TableMapping{AccountID: 1, DatabaseID: 2, TableID: 3, CatalogID: 7, Namespace: "gold", TableName: "orders"}),
+			want: []string{"insert into mo_catalog.mo_iceberg_tables", "'main'", "'append_only'", "'read_only'"},
+		},
+		{
+			name: "catalog by name",
+			sql:  GetCatalogByNameSQL(1, "cat"),
+			want: []string{"from mo_catalog.mo_iceberg_catalogs", "name = 'cat'"},
+		},
+		{
+			name: "catalog by id",
+			sql:  GetCatalogByIDSQL(1, 7),
+			want: []string{"from mo_catalog.mo_iceberg_catalogs", "catalog_id = 7"},
+		},
+		{
+			name: "table mapping get",
+			sql:  GetTableMappingSQL(1, 2, 3),
+			want: []string{"from mo_catalog.mo_iceberg_tables", "db_id = 2", "table_id = 3"},
+		},
+		{
+			name: "table mapping delete",
+			sql:  DeleteTableMappingSQL(1, 2, 3),
+			want: []string{"delete from mo_catalog.mo_iceberg_tables", "db_id = 2", "table_id = 3"},
+		},
+	}
+	for _, tt := range checks {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, want := range tt.want {
+				if !strings.Contains(tt.sql, want) {
+					t.Fatalf("%s SQL missing %q: %s", tt.name, want, tt.sql)
+				}
+			}
+		})
 	}
 }
 

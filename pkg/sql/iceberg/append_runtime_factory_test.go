@@ -16,6 +16,7 @@ package iceberg
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -278,6 +279,14 @@ func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
 	require.Len(t, visible.Vecs, 2)
 	require.Same(t, idVec, visible.Vecs[0])
 	require.Same(t, regionVec, visible.Vecs[1])
+
+	fallback := batch.New([]string{"missing", "also_missing", "region"})
+	fallback.Vecs = bat.Vecs
+	fallback.SetRowCount(1)
+	visible = appendRuntimeVisibleBatch([]string{"id", "region"}, fallback)
+	require.Len(t, visible.Vecs, 2)
+	require.Same(t, idVec, visible.Vecs[0])
+	require.Same(t, hiddenVec, visible.Vecs[1])
 }
 
 func TestAppendRuntimeSharedCoordinatorCommitsOncePerStatement(t *testing.T) {
@@ -318,12 +327,13 @@ func TestAppendRuntimeSharedCoordinatorCommitsOncePerStatement(t *testing.T) {
 	require.NoError(t, coord1.Begin(ctx, req))
 	require.NoError(t, coord2.Begin(ctx, req2))
 	require.NoError(t, coord1.Append(ctx, batch.EmptyBatch))
+	require.NoError(t, coord1.(icebergwrite.ProcessAwareCoordinator).AppendWithProcess(nil, batch.EmptyBatch))
 	require.NoError(t, coord2.Append(ctx, batch.EmptyBatch))
 	require.NoError(t, coord1.Commit(ctx))
 	require.Equal(t, 0, inner.commitCalls)
 	require.NoError(t, coord2.Commit(ctx))
 	require.Equal(t, 1, inner.beginCalls)
-	require.Equal(t, 2, inner.appendCalls)
+	require.Equal(t, 3, inner.appendCalls)
 	require.Equal(t, 1, inner.commitCalls)
 
 	coord3, err := cache.getOrCreate(ctx, key, req, func() (icebergwrite.Coordinator, error) {
@@ -333,6 +343,202 @@ func TestAppendRuntimeSharedCoordinatorCommitsOncePerStatement(t *testing.T) {
 	require.NoError(t, err)
 	require.NotSame(t, coord1, coord3)
 	require.Equal(t, 2, builds)
+}
+
+func TestAppendRuntimeFactoryValidationAndHelpers(t *testing.T) {
+	ctx := context.Background()
+	cfg := api.DefaultConfig()
+	cfg.Enable = true
+	cfg.Write.EnableWrite = true
+	validReq := icebergwrite.AppendRequest{
+		AccountID:      42,
+		StatementID:    "stmt-1",
+		IdempotencyKey: "stmt-1",
+		CatalogName:    "tier_a",
+		Namespace:      "sales",
+		Table:          "orders",
+		Operation:      icebergwrite.OperationAppend,
+		TableDef:       &plan.TableDef{DbId: 1, TblId: 2},
+	}
+	validFactory := NewAppendRuntimeCoordinatorFactory(AppendRuntimeCoordinatorFactoryOptions{
+		Store:          &fakeAppendRuntimeStore{mapping: model.TableMapping{CatalogID: 7, WriteMode: model.WriteModeAppendOnly}},
+		CatalogFactory: staticCatalogFactory{client: &icebergcatalog.MockClient{}},
+		Config:         cfg,
+	})
+	fromInternal := NewAppendRuntimeCoordinatorFactoryFromInternalSQLExecutor(nil, AppendRuntimeCoordinatorFactoryOptions{})
+	require.NotNil(t, fromInternal.opts.Store)
+	require.NoError(t, validFactory.validateRuntimeRequest(ctx, validReq))
+	require.True(t, validFactory.requireResidencyPolicy())
+	objectIOFactory := validFactory
+	objectIOFactory.opts.ObjectIOProvider = icebergio.ScopedProvider{}
+	require.False(t, objectIOFactory.requireResidencyPolicy())
+
+	for name, mutate := range map[string]func(*AppendRuntimeCoordinatorFactory, *icebergwrite.AppendRequest){
+		"missing store": func(f *AppendRuntimeCoordinatorFactory, req *icebergwrite.AppendRequest) {
+			f.opts.Store = nil
+		},
+		"missing catalog factory": func(f *AppendRuntimeCoordinatorFactory, req *icebergwrite.AppendRequest) {
+			f.opts.CatalogFactory = nil
+		},
+		"write disabled": func(f *AppendRuntimeCoordinatorFactory, req *icebergwrite.AppendRequest) {
+			f.opts.Config.Write.EnableWrite = false
+		},
+		"missing names": func(f *AppendRuntimeCoordinatorFactory, req *icebergwrite.AppendRequest) {
+			req.Namespace = " "
+		},
+		"missing key": func(f *AppendRuntimeCoordinatorFactory, req *icebergwrite.AppendRequest) {
+			req.StatementID = ""
+			req.IdempotencyKey = ""
+		},
+		"missing object ids": func(f *AppendRuntimeCoordinatorFactory, req *icebergwrite.AppendRequest) {
+			req.TableDef = &plan.TableDef{DbId: 1}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			factory := validFactory
+			req := validReq
+			mutate(&factory, &req)
+			require.Error(t, factory.validateRuntimeRequest(ctx, req))
+		})
+	}
+
+	mapping, err := validFactory.tableMapping(ctx, validReq, model.Catalog{CatalogID: 7})
+	require.NoError(t, err)
+	require.Equal(t, model.WriteModeAppendOnly, mapping.WriteMode)
+	_, err = validFactory.tableMapping(ctx, validReq, model.Catalog{CatalogID: 99})
+	require.Error(t, err)
+	readOnlyFactory := validFactory
+	readOnlyFactory.opts.Store = &fakeAppendRuntimeStore{mapping: model.TableMapping{CatalogID: 7, WriteMode: "readonly"}}
+	_, err = readOnlyFactory.tableMapping(ctx, validReq, model.Catalog{CatalogID: 7})
+	require.Error(t, err)
+
+	require.Empty(t, appendRuntimeCoordinatorCacheKey(icebergwrite.AppendRequest{}))
+	require.Equal(t, int32(0), appendRuntimeParallelScopeID(icebergwrite.AppendRequest{MaxParallel: 3, ParallelID: -1}))
+	require.Equal(t, int32(2), appendRuntimeParallelScopeID(icebergwrite.AppendRequest{MaxParallel: 3, ParallelID: 2}))
+	require.Contains(t, appendDataDir("stmt-1", 91), "snap-91")
+	paths, err := buildAppendManifestPaths(ctx, "s3://warehouse/t", "stmt-1", 91)
+	require.NoError(t, err)
+	require.Contains(t, paths.ManifestPath, "data-manifest-snap-91.avro")
+	_, err = buildAppendManifestPaths(ctx, "", "stmt-1", 91)
+	require.Error(t, err)
+	_, err = buildAppendManifestPaths(ctx, "s3://warehouse/t", "", 91)
+	require.Error(t, err)
+
+	creds := filterS3AccessCredentials([]api.StorageCredential{
+		{Config: map[string]string{"s3.access-key-id": "AK", "s3.secret-access-key": "SK"}},
+		{Config: map[string]string{"s3.access-key-id": "AK"}},
+		{Config: map[string]string{"aws.access-key-id": "AK2", "aws.secret-access-key": "SK2"}},
+	})
+	require.Len(t, creds, 2)
+	require.Nil(t, filterS3AccessCredentials(nil))
+}
+
+func TestAppendRuntimeSharedCoordinatorErrorStates(t *testing.T) {
+	ctx := context.Background()
+	require.Error(t, (*appendRuntimeSharedCoordinator)(nil).Begin(ctx, icebergwrite.AppendRequest{}))
+	require.Error(t, (*appendRuntimeSharedCoordinatorScope)(nil).Append(ctx, batch.EmptyBatch))
+	require.NoError(t, (*appendRuntimeSharedCoordinatorScope)(nil).Abort(ctx, nil))
+
+	inner := &countingAppendCoordinator{}
+	shared := newAppendRuntimeSharedCoordinator(inner, icebergwrite.AppendRequest{MaxParallel: 1})
+	require.Error(t, shared.Append(ctx, batch.EmptyBatch))
+	require.Error(t, shared.Commit(ctx))
+	require.NoError(t, shared.Begin(ctx, icebergwrite.AppendRequest{}))
+	require.NoError(t, shared.Commit(ctx))
+	require.Equal(t, 1, inner.commitCalls)
+	require.Error(t, shared.Append(ctx, batch.EmptyBatch))
+	require.Error(t, shared.Begin(ctx, icebergwrite.AppendRequest{}))
+	require.NoError(t, shared.Abort(ctx, nil))
+
+	inner = &countingAppendCoordinator{}
+	inner.abortErr = errors.New("abort")
+	shared = newAppendRuntimeSharedCoordinator(inner, icebergwrite.AppendRequest{MaxParallel: 1})
+	require.NoError(t, shared.Begin(ctx, icebergwrite.AppendRequest{}))
+	require.EqualError(t, shared.Abort(ctx, errors.New("ignored cause")), "abort")
+	require.Error(t, shared.Append(ctx, batch.EmptyBatch))
+	require.Equal(t, 1, inner.abortCalls)
+}
+
+func TestAppendRuntimeObjectIOContextBranches(t *testing.T) {
+	ctx := context.Background()
+	catalog := model.Catalog{AccountID: 42, CatalogID: 7, Name: "tier_a", URI: "https://catalog.example.com/rest"}
+	baseReq := api.CatalogRequest{Catalog: catalog}
+	namespace := api.Namespace{"sales"}
+	scopeForLocation := func(string) icebergio.ObjectScope {
+		return icebergio.ObjectScope{AccountID: 42, CatalogID: 7, Bucket: "warehouse"}
+	}
+
+	fs, scope := appendRuntimeMemoryObjectIO(t, ctx)
+	factory := NewAppendRuntimeCoordinatorFactory(AppendRuntimeCoordinatorFactoryOptions{
+		Store:            &fakeAppendRuntimeStore{},
+		ObjectIOProvider: icebergio.ScopedProvider{FileService: fs},
+		ScopeForLocation: scope,
+	})
+	got, err := factory.objectIOContext(ctx, &icebergcatalog.MockClient{}, baseReq, &api.LoadTableResponse{}, namespace, "orders", catalog)
+	require.NoError(t, err)
+	require.NotNil(t, got.WriterProvider)
+	require.NotNil(t, got.ReaderProvider)
+
+	factory = NewAppendRuntimeCoordinatorFactory(AppendRuntimeCoordinatorFactoryOptions{
+		Store:            &fakeAppendRuntimeStore{},
+		ScopeForLocation: scopeForLocation,
+	})
+	got, err = factory.objectIOContext(ctx, &icebergcatalog.MockClient{}, baseReq, &api.LoadTableResponse{
+		StorageCredentials: []api.StorageCredential{{
+			Config: map[string]string{
+				"s3.access-key-id":     "AK",
+				"s3.secret-access-key": "SK",
+			},
+		}},
+	}, namespace, "orders", catalog)
+	require.NoError(t, err)
+	require.NotNil(t, got.WriterProvider)
+
+	_, err = factory.objectIOContext(ctx, &icebergcatalog.MockClient{
+		LoadCredentialsFunc: func(context.Context, api.LoadCredentialsRequest) (*api.LoadCredentialsResponse, error) {
+			return nil, api.NewError(api.ErrCatalogUnavailable, "down", nil)
+		},
+	}, baseReq, &api.LoadTableResponse{}, namespace, "orders", catalog)
+	require.Error(t, err)
+
+	_, err = factory.objectIOContext(ctx, &icebergcatalog.MockClient{}, baseReq, &api.LoadTableResponse{
+		Capabilities: api.CatalogCapabilities{RemoteSigning: true},
+	}, namespace, "orders", catalog)
+	require.Error(t, err)
+
+	_, err = factory.objectIOContext(ctx, &nilRemoteSignerClient{}, baseReq, &api.LoadTableResponse{
+		Capabilities: api.CatalogCapabilities{RemoteSigning: true},
+	}, namespace, "orders", catalog)
+	require.Error(t, err)
+
+	_, err = factory.objectIOContext(ctx, &icebergcatalog.MockClient{}, baseReq, &api.LoadTableResponse{}, namespace, "orders", catalog)
+	require.Error(t, err)
+}
+
+func TestAppendRuntimeSchemaSpecAndReporterHelpers(t *testing.T) {
+	ctx := context.Background()
+	_, err := appendCurrentSchema(ctx, nil, "orders")
+	require.Error(t, err)
+	_, err = appendDefaultSpec(ctx, nil, "orders")
+	require.Error(t, err)
+	meta := &api.TableMetadata{}
+	_, err = appendCurrentSchema(ctx, meta, "orders")
+	require.Error(t, err)
+	_, err = appendDefaultSpec(ctx, meta, "orders")
+	require.Error(t, err)
+
+	configured := &fakeMetricsReporter{}
+	require.Same(t, configured, appendMetricsReporter(configured, &icebergcatalog.MockClient{}))
+	reportingClient := &metricsCatalogClient{}
+	require.Same(t, reportingClient, appendMetricsReporter(nil, reportingClient))
+	require.Nil(t, appendMetricsReporter(nil, &icebergcatalog.MockClient{}))
+	now := time.Unix(123, 0)
+	factory := NewAppendRuntimeCoordinatorFactory(AppendRuntimeCoordinatorFactoryOptions{
+		Now:        func() time.Time { return now },
+		SnapshotID: func(time.Time, *api.TableMetadata) int64 { return 777 },
+	})
+	require.Equal(t, now, factory.now())
+	require.Equal(t, int64(777), factory.nextSnapshotID(now, meta))
 }
 
 func appendGoldKPIBatch(t *testing.T) (*batch.Batch, *mpool.MPool) {
@@ -442,6 +648,7 @@ type countingAppendCoordinator struct {
 	appendCalls int
 	commitCalls int
 	abortCalls  int
+	abortErr    error
 }
 
 func (c *countingAppendCoordinator) Begin(context.Context, icebergwrite.AppendRequest) error {
@@ -461,5 +668,27 @@ func (c *countingAppendCoordinator) Commit(context.Context) error {
 
 func (c *countingAppendCoordinator) Abort(context.Context, error) error {
 	c.abortCalls++
+	return c.abortErr
+}
+
+type nilRemoteSignerClient struct {
+	icebergcatalog.MockClient
+}
+
+func (nilRemoteSignerClient) NewRemoteSigner(api.CatalogRequest, map[string]string) icebergio.RemoteSigner {
+	return nil
+}
+
+type fakeMetricsReporter struct{}
+
+func (fakeMetricsReporter) ReportMetrics(context.Context, api.MetricsReportRequest) error {
+	return nil
+}
+
+type metricsCatalogClient struct {
+	icebergcatalog.MockClient
+}
+
+func (m *metricsCatalogClient) ReportMetrics(context.Context, api.MetricsReportRequest) error {
 	return nil
 }

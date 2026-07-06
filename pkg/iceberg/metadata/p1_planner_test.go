@@ -125,6 +125,90 @@ func TestPairDeleteTasksPositionAndEquality(t *testing.T) {
 	}
 }
 
+func TestValidateP1DeleteFileRejectsInvalidDeleteMetadata(t *testing.T) {
+	valid := api.DataFile{
+		Content:          api.DataFileContentEqualityDelete,
+		FilePath:         "s3://warehouse/t/delete/eq.parquet",
+		FilePathRedacted: "<redacted:path>",
+		FileFormat:       "parquet",
+		RecordCount:      1,
+		FileSizeInBytes:  10,
+		EqualityIDs:      []int{1},
+	}
+	for name, mutate := range map[string]func(*api.DataFile){
+		"negative records": func(file *api.DataFile) { file.RecordCount = -1 },
+		"negative size":    func(file *api.DataFile) { file.FileSizeInBytes = -1 },
+		"bad format":       func(file *api.DataFile) { file.FileFormat = "orc" },
+		"missing equality": func(file *api.DataFile) { file.EqualityIDs = nil },
+		"bad content":      func(file *api.DataFile) { file.Content = api.DataFileContent(99) },
+		"encrypted key":    func(file *api.DataFile) { file.KeyMetadata = []byte("key") },
+		"delete vector":    func(file *api.DataFile) { file.DeletionVectorPath = "s3://warehouse/t/delete/dv.bin" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			file := valid
+			mutate(&file)
+			if err := ValidateP1DeleteFile(file); err == nil {
+				t.Fatalf("expected invalid delete metadata error")
+			}
+		})
+	}
+	position := valid
+	position.Content = api.DataFileContentPositionDelete
+	position.EqualityIDs = nil
+	if err := ValidateP1DeleteFile(position); err != nil {
+		t.Fatalf("position delete with optional referenced file should be valid: %v", err)
+	}
+}
+
+func TestDeletePlannerHiddenMappingsAndPartitionTokens(t *testing.T) {
+	mappings := []api.IcebergColumnMapping{
+		{FieldID: 1, ColumnName: "id", Projected: true},
+		{FieldID: 2, ColumnName: "region"},
+	}
+	schema := api.Schema{Fields: []api.SchemaField{
+		{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}},
+		{ID: 2, Name: "region", Type: api.IcebergType{Kind: api.TypeString}},
+		{ID: 3, Name: "amount", Type: api.IcebergType{Kind: api.TypeInt}},
+	}}
+	out, err := addHiddenDeleteColumnMappings(mappings, schema, []api.DeleteFileTask{{
+		DataFile: api.DataFile{Content: api.DataFileContentEqualityDelete, EqualityIDs: []int{2, 3}},
+	}})
+	if err != nil {
+		t.Fatalf("add hidden delete columns: %v", err)
+	}
+	if len(out) != 3 || !out[1].Projected || !out[1].Hidden || out[2].FieldID != 3 || !out[2].Hidden {
+		t.Fatalf("unexpected hidden mappings: %+v", out)
+	}
+	_, err = addHiddenDeleteColumnMappings(mappings, schema, []api.DeleteFileTask{{
+		DataFile: api.DataFile{Content: api.DataFileContentEqualityDelete, EqualityIDs: []int{99}},
+	}})
+	if err == nil {
+		t.Fatalf("expected unknown equality field id error")
+	}
+	unchanged, err := addHiddenDeleteColumnMappings(mappings, schema, nil)
+	if err != nil || len(unchanged) != len(mappings) {
+		t.Fatalf("unexpected no-op hidden mapping result: %+v err=%v", unchanged, err)
+	}
+
+	if !samePartitionScope(map[string]any{"day": int32(10), "bucket": uint8(2)}, map[string]any{"day": int64(10), "bucket": int16(2)}) {
+		t.Fatalf("integer partition tokens should match across widths")
+	}
+	if samePartitionScope(map[string]any{"day": int32(10)}, map[string]any{"day": int32(11)}) {
+		t.Fatalf("different partition values must not match")
+	}
+	if samePartitionScope(map[string]any{"day": int32(10)}, map[string]any{}) {
+		t.Fatalf("missing partition key must not match")
+	}
+	for _, value := range []any{nil, true, int8(1), uint64(1) << 63, float32(1.5), float64(2.5), "ksa", []byte("bytes"), struct{ A int }{A: 7}} {
+		if partitionValueToken(value) == "" {
+			t.Fatalf("empty partition token for %#v", value)
+		}
+	}
+	if firstNonZeroInt(0, 0, 7) != 7 || firstNonZeroInt64(0, 9) != 9 {
+		t.Fatalf("first non-zero helpers returned unexpected values")
+	}
+}
+
 func TestLocalScanPlannerMergeOnReadReadsDeleteManifest(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPlannerFixture(t, 1)

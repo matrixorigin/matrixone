@@ -16,6 +16,7 @@ package iceberg
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,126 @@ func TestInternalSQLExecutorAdapterExec(t *testing.T) {
 	}
 	if !exec.options[0].StatementOption().DisableLog() {
 		t.Fatalf("adapter should disable SQL logging")
+	}
+}
+
+func TestInternalSQLExecutorAdapterErrorBranches(t *testing.T) {
+	ctx := context.Background()
+	if err := (InternalSQLExecutorAdapter{}).Exec(ctx, "select 1"); err == nil {
+		t.Fatalf("expected nil executor exec error")
+	}
+	if _, err := (InternalSQLExecutorAdapter{}).Query(ctx, "select 1"); err == nil {
+		t.Fatalf("expected nil executor query error")
+	}
+	if err := (&internalSQLRow{}).Scan(new(string)); err == nil {
+		t.Fatalf("expected no rows error")
+	}
+
+	rows := &internalSQLRows{}
+	if rows.Next() {
+		t.Fatalf("empty rows should not advance")
+	}
+	if err := rows.Scan(new(string)); err == nil {
+		t.Fatalf("expected scan before next error")
+	}
+	if err := scanVectorValue(new(string), nil, 0); err == nil {
+		t.Fatalf("expected nil vector error")
+	}
+	vec := vector.NewVec(types.T_varchar.ToType())
+	mp := mpool.MustNewZero()
+	defer vec.Free(mp)
+	requireNoErr(t, vector.AppendBytes(vec, []byte("x"), false, mp))
+	var unsupported struct{}
+	if err := scanVectorValue(&unsupported, vec, 0); err == nil {
+		t.Fatalf("expected unsupported destination error")
+	}
+}
+
+func TestInternalSQLExecutorAdapterScanVectorTypeBranches(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	uint8Vec := vector.NewVec(types.T_uint8.ToType())
+	defer uint8Vec.Free(mp)
+	requireNoErr(t, vector.AppendFixed[uint8](uint8Vec, 8, false, mp))
+	uint16Vec := vector.NewVec(types.T_uint16.ToType())
+	defer uint16Vec.Free(mp)
+	requireNoErr(t, vector.AppendFixed[uint16](uint16Vec, 16, false, mp))
+	uint64Vec := vector.NewVec(types.T_uint64.ToType())
+	defer uint64Vec.Free(mp)
+	requireNoErr(t, vector.AppendFixed[uint64](uint64Vec, 64, false, mp))
+	int8Vec := vector.NewVec(types.T_int8.ToType())
+	defer int8Vec.Free(mp)
+	requireNoErr(t, vector.AppendFixed[int8](int8Vec, 8, false, mp))
+	int16Vec := vector.NewVec(types.T_int16.ToType())
+	defer int16Vec.Free(mp)
+	requireNoErr(t, vector.AppendFixed[int16](int16Vec, 16, false, mp))
+	int32Vec := vector.NewVec(types.T_int32.ToType())
+	defer int32Vec.Free(mp)
+	requireNoErr(t, vector.AppendFixed[int32](int32Vec, 32, false, mp))
+	int64Vec := vector.NewVec(types.T_int64.ToType())
+	defer int64Vec.Free(mp)
+	requireNoErr(t, vector.AppendFixed[int64](int64Vec, 64, false, mp))
+	for _, tc := range []struct {
+		vec  *vector.Vector
+		want uint64
+	}{
+		{uint8Vec, 8}, {uint16Vec, 16}, {uint64Vec, 64},
+		{int8Vec, 8}, {int16Vec, 16}, {int32Vec, 32}, {int64Vec, 64},
+	} {
+		got, err := scanVectorUint64(tc.vec, 0)
+		requireNoErr(t, err)
+		if got != tc.want {
+			t.Fatalf("unexpected integer scan value got=%d want=%d", got, tc.want)
+		}
+	}
+
+	negVec := vector.NewVec(types.T_int64.ToType())
+	defer negVec.Free(mp)
+	requireNoErr(t, vector.AppendFixed[int64](negVec, -1, false, mp))
+	if _, err := scanVectorUint64(negVec, 0); err == nil {
+		t.Fatalf("expected negative integer error")
+	}
+	overflowVec := vector.NewVec(types.T_uint64.ToType())
+	defer overflowVec.Free(mp)
+	requireNoErr(t, vector.AppendFixed[uint64](overflowVec, math.MaxUint32+1, false, mp))
+	var small uint32
+	if err := scanVectorValue(&small, overflowVec, 0); err == nil {
+		t.Fatalf("expected uint32 overflow")
+	}
+	if _, err := scanVectorString(int64Vec, 0); err == nil {
+		t.Fatalf("expected string type error")
+	}
+	if _, err := scanVectorUint64(vector.NewVec(types.T_varchar.ToType()), 0); err == nil {
+		t.Fatalf("expected integer type error")
+	}
+}
+
+func TestInternalSQLExecutorAdapterScanVectorTimeBranches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	tsVec := vector.NewVec(types.T_timestamp.ToType())
+	defer tsVec.Free(mp)
+	requireNoErr(t, vector.AppendFixed[types.Timestamp](tsVec, types.UnixMicroToTimestamp(1767225600000000), false, mp))
+	ts, err := scanVectorTime(tsVec, 0)
+	requireNoErr(t, err)
+	if ts.Year() != 2026 {
+		t.Fatalf("unexpected timestamp: %s", ts)
+	}
+
+	for _, raw := range []string{"2026-01-01T00:00:00Z", "2026-01-01 00:00:00.123456", "2026-01-01 00:00:00", "2026-01-01", "1767225600000"} {
+		vec := vector.NewVec(types.T_varchar.ToType())
+		requireNoErr(t, vector.AppendBytes(vec, []byte(raw), false, mp))
+		_, err := scanVectorTime(vec, 0)
+		vec.Free(mp)
+		requireNoErr(t, err)
+	}
+	bad := vector.NewVec(types.T_varchar.ToType())
+	defer bad.Free(mp)
+	requireNoErr(t, vector.AppendBytes(bad, []byte("not-a-time"), false, mp))
+	if _, err := scanVectorTime(bad, 0); err == nil {
+		t.Fatalf("expected invalid timestamp string")
+	}
+	if _, err := scanVectorTime(vector.NewVec(types.T_bool.ToType()), 0); err == nil {
+		t.Fatalf("expected unsupported time vector")
 	}
 }
 

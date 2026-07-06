@@ -40,3 +40,17 @@ func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestIcebergOrphanCleanupVersionHandleMetadataAndClusterNoop(t *testing.T) {
+	meta := Handler.Metadata()
+	if meta.Version != "4.0.5" || meta.MinUpgradeVersion != "4.0.4" || meta.UpgradeTenant != versions.Yes {
+		t.Fatalf("unexpected metadata: %+v", meta)
+	}
+	if meta.VersionOffset != uint32(len(tenantUpgEntries)+len(clusterUpgEntries)) {
+		t.Fatalf("unexpected version offset: %+v", meta)
+	}
+	err := Handler.HandleCreateFrameworkDeps(nil)
+	if err == nil || !strings.Contains(err.Error(), "Only v1.2.0") {
+		t.Fatalf("unexpected framework deps error: %v", err)
+	}
+}

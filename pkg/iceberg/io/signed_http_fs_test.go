@@ -15,10 +15,12 @@
 package icebergio
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,5 +155,185 @@ func TestSignedHTTPFileServiceWritesWithSignedHeaders(t *testing.T) {
 	}
 	if string(received) != "payload" {
 		t.Fatalf("unexpected body: %q", received)
+	}
+}
+
+func TestSignedHTTPFileServiceInterfaceMethodsAndReadWriters(t *testing.T) {
+	payload := []byte("0123456789")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			switch r.Header.Get("Range") {
+			case "bytes=2-5":
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = w.Write(payload[2:6])
+			case "":
+				_, _ = w.Write(payload)
+			default:
+				t.Fatalf("unexpected range header: %q", r.Header.Get("Range"))
+			}
+		case http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
+			if string(body) != "reader-payload" {
+				t.Fatalf("unexpected write body: %q", body)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	fs, path, err := SignedHTTPFileServiceBuilder{HTTPClient: server.Client()}.Build(context.Background(), ObjectScope{StorageLocation: "s3://warehouse/data.bin"}, SignedRequest{
+		URL:     server.URL + "/data.bin",
+		Headers: map[string]string{"X-Test": "signed"},
+	})
+	if err != nil {
+		t.Fatalf("build signed http fs: %v", err)
+	}
+	if fs.Name() == "" || !strings.HasPrefix(fs.Name(), "iceberg-signed-http-") {
+		t.Fatalf("unexpected fs name %q", fs.Name())
+	}
+	if err := fs.ReadCache(context.Background(), &fileservice.IOVector{}); err != nil {
+		t.Fatalf("ReadCache should be a no-op: %v", err)
+	}
+	if err := fs.PrefetchFile(context.Background(), path); err != nil {
+		t.Fatalf("PrefetchFile should be a no-op: %v", err)
+	}
+	if fs.Cost() == nil {
+		t.Fatalf("Cost returned nil")
+	}
+	fs.ETLCompatible()
+	fs.Close(context.Background())
+
+	var written bytes.Buffer
+	var closer io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: path,
+		Entries: []fileservice.IOEntry{{
+			Offset:            2,
+			Size:              4,
+			WriterForRead:     &written,
+			ReadCloserForRead: &closer,
+		}},
+	}
+	if err := fs.Read(context.Background(), &vec); err != nil {
+		t.Fatalf("read with writers failed: %v", err)
+	}
+	if string(vec.Entries[0].Data) != "2345" || written.String() != "2345" {
+		t.Fatalf("unexpected read data data=%q written=%q", vec.Entries[0].Data, written.String())
+	}
+	closerData, _ := io.ReadAll(closer)
+	if string(closerData) != "2345" {
+		t.Fatalf("unexpected read closer payload %q", closerData)
+	}
+
+	write := fileservice.IOVector{
+		FilePath: path,
+		Entries: []fileservice.IOEntry{{
+			Offset:         0,
+			Size:           int64(len("reader-payload")),
+			ReaderForWrite: strings.NewReader("reader-payload"),
+		}},
+	}
+	if err := fs.Write(context.Background(), write); err != nil {
+		t.Fatalf("write with reader failed: %v", err)
+	}
+}
+
+func TestSignedHTTPFileServiceUnsupportedAndErrorPaths(t *testing.T) {
+	fs := &signedHTTPFileService{name: "test", client: http.DefaultClient}
+	if err := fs.Read(context.Background(), nil); err == nil {
+		t.Fatalf("expected empty read vector error")
+	}
+	if err := fs.Write(context.Background(), fileservice.IOVector{}); err == nil {
+		t.Fatalf("expected empty write URL error")
+	}
+	if err := fs.Write(context.Background(), fileservice.IOVector{FilePath: "http://example.invalid", Entries: []fileservice.IOEntry{{}, {}}}); err == nil {
+		t.Fatalf("expected multi-entry write error")
+	}
+	if err := fs.Write(context.Background(), fileservice.IOVector{FilePath: "http://example.invalid", Entries: []fileservice.IOEntry{{Offset: 1}}}); err == nil {
+		t.Fatalf("expected non-zero write offset error")
+	}
+	if _, err := fs.StatFile(context.Background(), ""); err == nil {
+		t.Fatalf("expected empty stat URL error")
+	}
+	if err := fs.Delete(context.Background(), "x"); err == nil {
+		t.Fatalf("expected delete unsupported error")
+	}
+	var listErr error
+	for _, err := range fs.List(context.Background(), "dir") {
+		listErr = err
+	}
+	if listErr == nil {
+		t.Fatalf("expected list unsupported error")
+	}
+}
+
+func TestSignedHTTPFileServiceStatFallbacksAndHelpers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ok":
+			w.Header().Set("Content-Length", "12")
+			_, _ = w.Write([]byte("hello world!"))
+		case "/empty":
+			w.Header().Set("Content-Range", "bytes */0")
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+		default:
+			w.WriteHeader(http.StatusTeapot)
+			_, _ = w.Write([]byte("nope"))
+		}
+	}))
+	defer server.Close()
+
+	fs, _, err := SignedHTTPFileServiceBuilder{HTTPClient: server.Client()}.Build(context.Background(), ObjectScope{StorageLocation: "s3://warehouse/data.bin"}, SignedRequest{})
+	if err != nil {
+		t.Fatalf("build signed http fs: %v", err)
+	}
+	stat, err := fs.StatFile(context.Background(), server.URL+"/ok")
+	if err != nil {
+		t.Fatalf("stat OK fallback failed: %v", err)
+	}
+	if stat.Size != 12 || stat.Name != "ok" {
+		t.Fatalf("unexpected OK stat: %+v", stat)
+	}
+	stat, err = fs.StatFile(context.Background(), server.URL+"/empty")
+	if err != nil {
+		t.Fatalf("stat empty range failed: %v", err)
+	}
+	if stat.Size != 0 || stat.Name != "empty" {
+		t.Fatalf("unexpected empty stat: %+v", stat)
+	}
+	if _, err := fs.StatFile(context.Background(), server.URL+"/bad"); err == nil {
+		t.Fatalf("expected unusable stat response error")
+	}
+
+	ranges := map[[2]int64]string{
+		{0, -1}: "",
+		{3, -1}: "bytes=3-",
+		{3, 5}:  "bytes=3-7",
+		{-1, 5}: "",
+		{0, 0}:  "",
+	}
+	for input, want := range ranges {
+		if got := httpRangeHeader(input[0], input[1]); got != want {
+			t.Fatalf("range %#v got %q want %q", input, got, want)
+		}
+	}
+	for value, wantOK := range map[string]bool{
+		"bytes 0-0/12": true,
+		"bytes */0":    true,
+		"bytes */*":    false,
+		"bad":          false,
+	} {
+		_, ok := contentRangeSize(value)
+		if ok != wantOK {
+			t.Fatalf("contentRangeSize(%q) ok=%v want %v", value, ok, wantOK)
+		}
+	}
+	clone := cloneStringMap(map[string]string{"a": "b"})
+	clone["a"] = "c"
+	if cloneStringMap(nil) != nil || clone["a"] != "c" {
+		t.Fatalf("cloneStringMap returned unexpected result")
 	}
 }
