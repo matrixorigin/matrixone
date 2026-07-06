@@ -55,3 +55,88 @@ func TestOperatorNotInNullableListUsesThreeValuedLogic(t *testing.T) {
 	ok, errInfo := tc.Run()
 	require.True(t, ok, errInfo)
 }
+
+func TestOperatorFixedInConstListUsesThreeValuedLogic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int32.ToType(), []int32{1, 2, 0}, []bool{false, false, true}),
+			NewFunctionTestConstInput(types.T_int32.ToType(), []int32{1}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false}, []bool{false, false, true}),
+		newOpOperatorFixedIn[int32]().operatorIn,
+	)
+
+	ok, errInfo := tc.Run()
+	require.True(t, ok, errInfo)
+}
+
+func TestOperatorFixedInConstNullListUsesThreeValuedLogic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int32.ToType(), []int32{1, 2}, []bool{false, false}),
+			NewFunctionTestConstInput(types.T_int32.ToType(), []int32{0}, []bool{true}),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false}, []bool{true, true}),
+		newOpOperatorFixedIn[int32]().operatorIn,
+	)
+
+	ok, errInfo := tc.Run()
+	require.True(t, ok, errInfo)
+}
+
+func TestOperatorFixedNotInNullableListUsesThreeValuedLogic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int32.ToType(), []int32{1, 2, 0}, []bool{false, false, true}),
+			NewFunctionTestInput(types.T_int32.ToType(), []int32{1, 0}, []bool{false, true}),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false}, []bool{false, true, true}),
+		newOpOperatorFixedIn[int32]().operatorNotIn,
+	)
+
+	ok, errInfo := tc.Run()
+	require.True(t, ok, errInfo)
+}
+
+func TestOperatorStrInConstListUsesThreeValuedLogic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"keep", "key", ""}, []bool{false, false, true}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"keep"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false, false}, []bool{false, false, true}),
+		newOpOperatorStrIn().operatorIn,
+	)
+
+	ok, errInfo := tc.Run()
+	require.True(t, ok, errInfo)
+}
+
+func TestOperatorStrInConstNullListUsesThreeValuedLogic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"keep", "key"}, []bool{false, false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false}, []bool{true, true}),
+		newOpOperatorStrIn().operatorIn,
+	)
+
+	ok, errInfo := tc.Run()
+	require.True(t, ok, errInfo)
+}

@@ -372,6 +372,20 @@ func TestZoneMapAnyInAllNulls(t *testing.T) {
 	require.False(t, zm.AnyIn(vec))
 }
 
+func TestZoneMapAnyInConstNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewConstNull(types.T_varchar.ToType(), 1, mp)
+	defer vec.Free(mp)
+
+	zm := NewZM(types.T_varchar, 0)
+	UpdateZM(zm, []byte("key"))
+
+	require.False(t, zm.AnyIn(vec))
+	lower, upper := zm.SubVecIn(vec)
+	require.Equal(t, 0, lower)
+	require.Equal(t, 0, upper)
+}
+
 func TestZMArray(t *testing.T) {
 	zm := NewZM(types.T_array_float32, 0)
 	zm.Update(types.ArrayToBytes[float32]([]float32{1, 1, 1}))
