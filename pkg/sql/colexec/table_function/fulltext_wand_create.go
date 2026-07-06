@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -72,37 +73,77 @@ func (u *fulltextWandCreateState) end(tf *TableFunction, proc *process.Process) 
 	if !u.inited || u.builder == nil {
 		return nil
 	}
-	model := u.builder.Finish()
-	if model.NumTerms() == 0 {
-		return nil // empty corpus — nothing to persist
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	// max_index_capacity was snapshotted into algo_params.session_vars at CREATE and
+	// re-applied by the ISCP overlay, so read it back through the resolver (mirrors
+	// HNSW's hnsw_max_index_capacity). Unresolved / 0 => a single unbounded base.
+	capacity := int64(0)
+	if rf := sqlproc.GetResolveVariableFunc(); rf != nil {
+		if v, verr := rf("fulltext_max_index_capacity", true, false); verr == nil {
+			if c, ok := v.(int64); ok {
+				capacity = c
+			}
+		}
 	}
 
-	sqlproc := sqlexec.NewSqlProcess(proc)
-	for _, s := range wand.DeleteSqls(u.tblcfg, model.Id) {
+	// Split the compacted base into capacity-bounded sub-indexes (a single model when
+	// the corpus fits within capacity), each stored under its own index_id so a large
+	// corpus builds several tag=0 bases instead of one monolith.
+	models := u.builder.FinishSegments(capacity)
+
+	// Drop empty sub-models (a segment whose rows carried no searchable tokens). If the
+	// whole corpus is empty, persist nothing — matching the single-index build.
+	nonEmpty := models[:0]
+	for _, m := range models {
+		if m.NumTerms() == 0 {
+			m.Free()
+			continue
+		}
+		nonEmpty = append(nonEmpty, m)
+	}
+	if len(nonEmpty) == 0 {
+		return nil
+	}
+	// Clear any previous tag=0 bases so the build is idempotent (the tag=1 CdcTail is
+	// untouched — CREATE has no tail yet anyway).
+	for _, s := range wand.DeleteAllBasesSqls(u.tblcfg) {
 		res, err := wand_runSql(sqlproc, s)
 		if err != nil {
 			return err
 		}
 		res.Close()
 	}
-	// Synchronous CREATE/REINDEX build → the compacted main index (tag=0). The
-	// serialized model is spilled to a temp file and read via load_file, so keep it
-	// until the INSERTs (below) have run.
-	sqls, cleanup, err := model.ToInsertSqls(u.tblcfg, time.Now().UnixMicro(), 0)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	for _, s := range sqls {
-		res, err := wand_runSql(sqlproc, s)
+
+	// Synchronous CREATE build → the compacted main index (tag=0). Each sub-model is
+	// spilled to a temp file and read via load_file, so keep the temps until the INSERTs
+	// have run. A per-build-unique id prefix (index table + build ts) keeps concurrent /
+	// repeated builds from writing colliding sub-index ids (mirrors HNSW's uid:n).
+	ts := time.Now().UnixMicro()
+	uid := fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, ts)
+	var cleanups []func()
+	defer func() {
+		for _, c := range cleanups {
+			c()
+		}
+	}()
+	for i, m := range nonEmpty {
+		m.Id = wand.SubIndexId(uid, i)
+		sqls, cleanup, err := m.ToInsertSqls(u.tblcfg, ts, 0)
 		if err != nil {
 			return err
 		}
-		res.Close()
+		cleanups = append(cleanups, cleanup)
+		for _, s := range sqls {
+			res, err := wand_runSql(sqlproc, s)
+			if err != nil {
+				return err
+			}
+			res.Close()
+		}
 	}
-	// A fresh tag=0 was written (CREATE / REINDEX build) — evict any cached
-	// search index so the next query reloads the new base instead of the stale
-	// one held until the idle TTL.
+	// A fresh tag=0 was written (CREATE build) — evict any cached search index so the
+	// next query reloads the new base(s) instead of the stale one held until the TTL.
 	veccache.Cache.Remove(u.tblcfg.IndexTable)
 	return nil
 }

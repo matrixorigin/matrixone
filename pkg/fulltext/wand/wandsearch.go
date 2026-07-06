@@ -127,27 +127,23 @@ func NewWandSearch(cfg TableConfig) *WandSearch {
 // CdcTail delta frames (one complete frame per chunk_id, in append order),
 // assembled into the ordered segment set + delete map searched with liveness.
 func (s *WandSearch) Load(sqlproc *sqlexec.SqlProcess) error {
-	// The tag=0 base is optional: an index created on an empty table has no
-	// compacted-main segment, only tag=1 CDC deltas (or nothing yet).
-	base, err := LoadBaseOptional(sqlproc, s.cfg, s.cfg.IndexTable)
+	// The tag=0 base may be several capacity-bounded sub-indexes, one, or none (an
+	// index created on an empty table has only tag=1 CDC deltas). Load them all.
+	bases, err := LoadAllBases(sqlproc, s.cfg)
 	if err != nil {
 		return err
 	}
-	if base != nil {
-		base.ChunkId = baseChunkId
+	// Sub-indexes are pk-disjoint, so they all sit at the same recency key below the
+	// tail; a tail delete still supersedes whichever base holds the pk.
+	for _, b := range bases {
+		b.ChunkId = baseChunkId
 	}
 	tail, deletes, err := loadTailSegments(sqlproc, s.cfg)
 	if err != nil {
-		if base != nil {
-			base.Free()
-		}
+		freeSegs(bases)
 		return err
 	}
-	var segs []*WandModel
-	if base != nil {
-		segs = append(segs, base)
-	}
-	s.segs = append(segs, tail...)
+	s.segs = append(bases, tail...)
 	s.deletes = deletes
 	// Precompute the query-independent liveness + corpus stats once here, so the
 	// per-query path (Search) skips the O(total-docs) ComputeLiveness scan.

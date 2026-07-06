@@ -52,6 +52,13 @@ type Hooks struct{}
 // the empty string (see plan/schema.go), so the map has exactly one
 // entry under the "" key.
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	return handleCreate(ctx, indexDefs, false)
+}
+
+// handleCreate is the shared body of HandleCreateIndex and HandleReindex. forceSync=true
+// (ALTER REINDEX) routes a retrieval index to the synchronous inline build regardless of
+// its async param — mirrors HNSW's handleCreate.
+func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
 	// The postings def is keyed by the empty IndexAlgoTableType. A retrieval
 	// index additionally carries WAND chunk-store + metadata defs (keyed by
 	// their table types) — all hidden tables of the same index.
@@ -79,22 +86,71 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		return nil
 	}
 
+	// The `async` PARAM gates only the initial BUILD (sync vs async), NOT DML: a
+	// retrieval index's DML is always async (CatalogHooks.AlwaysAsync=true → CDC), but
+	// its initial build is synchronous by default — exactly like HNSW. IsIndexAsync
+	// reads the plain param (default false); GetIndexParser detects the WAND parser.
 	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
-	// A retrieval (WAND) index is ALWAYS async — its serialized store can't be
-	// row-patched inside a txn — regardless of the async param (mirrors
-	// Hooks.AlwaysAsync(parser=="retrieval")).
 	retrieval := catalog.GetIndexParser(indexDef.IndexAlgoParams) == "retrieval"
+	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
 
-	// 3a. async (incl. every retrieval index): register a CDC task; data syncs
-	// via ISCP. For retrieval, the initial tag=0 build runs from postings at CDC
-	// task start via a non-empty InitSQL (CREATE returns before it is populated),
-	// so the postings hidden table is still required.
+	// 3a. retrieval SYNC build (the default, or ALTER REINDEX forceSync). Build the
+	// postings + the tag=0 WAND base INLINE in this txn so genWandBuildSQL's
+	// fulltext_wand_create reads fulltext_max_index_capacity straight from the live
+	// resolver (no session_vars overlay). Then register a CDC task that maintains the
+	// index from now on (startFromNow=true). Mirrors HNSW's !async branch; retrieval DML
+	// stays async (AlwaysAsync) — only the initial build is synchronous.
+	if retrieval && (!async || forceSync) {
+		storeDef, ok := indexDefs[catalog.FullTextIndex_TblType_Storage]
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("fulltext wand storage index definition not found")
+		}
+		metaDef, ok := indexDefs[catalog.FullTextIndex_TblType_Metadata]
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("fulltext wand metadata index definition not found")
+		}
+		// Drop any prior CDC task first — on REINDEX re-entry it would otherwise survive at
+		// its old watermark and replay history over the freshly built state.
+		if err = ctx.DropIndexCdcTask(originalTableDef, qryDatabase, originalTableDef.Name, indexDef.IndexName); err != nil {
+			return err
+		}
+		// REINDEX idempotency (no-ops on a fresh CREATE): discard the old postings + tag=1
+		// tail; the tag=0 bases + metadata are cleared by the create TVF.
+		cfg := wand.TableConfig{DbName: qryDatabase, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
+		clearSQLs := append([]string{
+			fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, indexDef.IndexTableName)),
+		}, wand.DeleteTailSqls(cfg)...)
+		for _, sql := range clearSQLs {
+			if err = ctx.RunSql(sql); err != nil {
+				return err
+			}
+		}
+		// Build postings, then split the tag=0 base per max_index_capacity.
+		insertSQLs, err := genInsertSQL(originalTableDef, indexDef, qryDatabase)
+		if err != nil {
+			return err
+		}
+		buildSQLs, err := genWandBuildSQL(indexDef, storeDef, metaDef, qryDatabase)
+		if err != nil {
+			return err
+		}
+		for _, sql := range append(insertSQLs, buildSQLs...) {
+			if err = ctx.RunSql(sql); err != nil {
+				return err
+			}
+		}
+		return ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
+			originalTableDef.TblId, indexDef.IndexName, sinkerType, true, "", originalTableDef)
+	}
+
+	// 3b. async (a retrieval index created with async=true, or a non-retrieval async
+	// index): register a CDC task; data syncs via ISCP. A retrieval index's non-empty
+	// InitSQL builds tag=0 from postings at task start (capacity via the session_vars
+	// overlay). Only reached on CREATE — REINDEX forces the sync path above.
 	if async || retrieval {
-		logutil.Infof("fulltext index Async is true")
-		sinkerType := ctx.SinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
 		initSQL, err := wandInitSQL(indexDefs, originalTableDef, indexDef, qryDatabase)
 		if err != nil {
 			return err
@@ -103,8 +159,7 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 			originalTableDef.TblId, indexDef.IndexName, sinkerType, false, initSQL, originalTableDef)
 	}
 
-	// 3b. sync (non-retrieval, async=false): populate the postings table inside
-	// the txn via CROSS APPLY fulltext_index_tokenize.
+	// 3c. sync (non-retrieval, async=false): populate the postings table inline.
 	insertSQLs, err := genInsertSQL(originalTableDef, indexDef, qryDatabase)
 	if err != nil {
 		return err
@@ -170,9 +225,20 @@ func genWandBuildSQL(postingsDef, storeDef, metaDef *plan.IndexDef, qryDatabase 
 	return []string{sql}, nil
 }
 
-// HandleReindex — fulltext does not support ALTER … REINDEX.
-func (Hooks) HandleReindex(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef, _ bool) error {
-	return moerr.NewNotSupportedNoCtx("ALTER ... REINDEX is not supported for fulltext indexes")
+// HandleReindex rebuilds a retrieval index synchronously: it reuses handleCreate with
+// forceSync=true, which drops the CDC task, clears the old postings + tag=0 + tag=1, and
+// rebuilds the tag=0 base inline (max_index_capacity from the live resolver), then
+// re-registers CDC from now. Only the retrieval (WAND) parser has a rebuildable store; a
+// postings/ngram index has nothing to reindex.
+func (Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _ bool) error {
+	indexDef, ok := indexDefs[""]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("fulltext postings index definition not found")
+	}
+	if catalog.GetIndexParser(indexDef.IndexAlgoParams) != "retrieval" {
+		return moerr.NewNotSupportedNoCtx("ALTER ... REINDEX is only supported for retrieval fulltext indexes")
+	}
+	return handleCreate(ctx, indexDefs, true)
 }
 
 // RestoreInitSQL — fulltext has no compact model to rebuild; the clone copies

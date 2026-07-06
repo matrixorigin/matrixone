@@ -42,6 +42,16 @@ type TableConfig struct {
 	PKey          string `json:"pkey"`
 }
 
+// SubIndexId is the index_id for the i-th tag=0 base sub-index of a build identified by
+// uid. All of an index's sub-indexes share the one storage + metadata table and are told
+// apart by this id (mirrors HNSW's "<uid>:<n>"). uid MUST carry a per-build-unique
+// component (e.g. the build timestamp) — NOT a deterministic table-derived name — so two
+// builds (concurrent across CNs, or a rebuild) never write colliding ids. Load
+// enumerates the ids from the metadata table, so the exact form only needs uniqueness.
+func SubIndexId(uid string, i int) string {
+	return fmt.Sprintf("%s:%d", uid, i)
+}
+
 // ToInsertSqls serializes the model, SPILLS it to a temp file, and emits the SQL to
 // persist it: one metadata row (timestamp, md5 checksum, filesize) plus the index
 // bytes split into <= MaxChunkSize (index_id, chunk_id, data, tag) rows read straight
@@ -122,19 +132,62 @@ func readMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (chec
 	return checksum, filesize, found, nil
 }
 
-// LoadBaseOptional loads the tag=0 compacted-main segment if one exists, returning
-// (nil, nil) when no tag=0 base was ever built (empty-table create → CDC-only
-// index). Used by the search load path, which composes the base (if any) with the
-// tag=1 CdcTail delta frames.
-func LoadBaseOptional(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*WandModel, error) {
-	_, _, found, err := readMetadata(sqlproc, cfg, id)
+// DeleteAllBasesSqls removes every tag=0 base sub-index — all tag=0 chunk rows (of all
+// sub-index ids) from the storage table plus all metadata rows — so the CREATE build is
+// idempotent when several sub-indexes exist. The tag=1 CdcTail is untouched.
+func DeleteAllBasesSqls(cfg TableConfig) []string {
+	return []string{
+		fmt.Sprintf("DELETE FROM %s WHERE %s = %d", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+			catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_ModelChunk)),
+		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)),
+	}
+}
+
+// DeleteTailSqls removes the entire tag=1 CdcTail (every cdc_tail chunk). Used by a
+// REINDEX rebuild, which discards the accumulated delta log and rebuilds tag=0 from
+// scratch; the fresh CDC task then starts from the reindex point (startFromNow). The
+// tag=0 bases are cleared separately (DeleteAllBasesSqls / the create TVF).
+func DeleteTailSqls(cfg TableConfig) []string {
+	return []string{
+		fmt.Sprintf("DELETE FROM %s WHERE %s = %d", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+			catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents)),
+	}
+}
+
+// LoadAllBases loads every tag=0 base sub-index listed in the metadata table. The
+// metadata table is per-fulltext-index, so every row names one of this index's bases
+// (mirrors HNSW's LoadMetadata). Returns nil when no base was built (empty-table create
+// → CDC-only index). Bases are pk-disjoint, so the caller assigns them one shared
+// baseChunkId. On any error the partially-loaded bases are freed.
+func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandModel, error) {
+	idSQL := fmt.Sprintf("SELECT %s FROM %s",
+		catalog.FullTextIndex_TblCol_Metadata_Index_Id,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	res, err := sqlexec.RunSql(sqlproc, idSQL)
 	if err != nil {
 		return nil, err
 	}
-	if !found {
-		return nil, nil
+	var ids []string
+	for _, bat := range res.Batches {
+		if bat == nil {
+			continue
+		}
+		for i := 0; i < bat.RowCount(); i++ {
+			ids = append(ids, bat.Vecs[0].GetStringAt(i))
+		}
 	}
-	return LoadFromStorage(sqlproc, cfg, id)
+	res.Close()
+
+	var bases []*WandModel
+	for _, id := range ids {
+		m, lerr := LoadFromStorage(sqlproc, cfg, id)
+		if lerr != nil {
+			freeSegs(bases)
+			return nil, lerr
+		}
+		bases = append(bases, m)
+	}
+	return bases, nil
 }
 
 // LoadFromStorage reads an index's metadata + chunks back from the WAND store,
