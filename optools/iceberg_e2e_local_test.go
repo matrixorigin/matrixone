@@ -72,3 +72,64 @@ func TestCreateNamespaceURLUsesNegotiatedPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotRetainedInMetadata(t *testing.T) {
+	tests := []struct {
+		name       string
+		metadata   string
+		snapshotID int64
+		want       bool
+		wantErr    bool
+	}{
+		{
+			name: "retained",
+			metadata: `{
+				"snapshots": [
+					{"snapshot-id": 101},
+					{"snapshot-id": 102}
+				]
+			}`,
+			snapshotID: 101,
+			want:       true,
+		},
+		{
+			name: "not retained",
+			metadata: `{
+				"snapshots": [
+					{"snapshot-id": 102}
+				]
+			}`,
+			snapshotID: 101,
+			want:       false,
+		},
+		{
+			name:       "empty metadata",
+			snapshotID: 101,
+			wantErr:    true,
+		},
+		{
+			name:       "invalid metadata",
+			metadata:   `{`,
+			snapshotID: 101,
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := snapshotRetainedInMetadata([]byte(tt.metadata), tt.snapshotID)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("unexpected retained result: got %v want %v", got, tt.want)
+			}
+		})
+	}
+}

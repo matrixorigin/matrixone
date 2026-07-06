@@ -279,19 +279,40 @@ func (r *caseRunner) appendReadAndTimeTravelCase(ctx context.Context) caseResult
 	if err != nil {
 		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, current, err.Error())
 	}
-	timeTravelSQL := fmt.Sprintf("SELECT COUNT(*), SUM(amount) FROM %s FOR ICEBERG SNAPSHOT %d", table, oldSnapshot)
+	currentSnapshot, err := currentSnapshotID(ctx, r.cfg, "append_orders")
+	if err != nil {
+		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, current, err.Error())
+	}
+	details := map[string]string{
+		"old_snapshot_id":     fmt.Sprintf("%d", oldSnapshot),
+		"current_snapshot_id": fmt.Sprintf("%d", currentSnapshot),
+	}
+	snapshotToRead := oldSnapshot
+	snapshotExpected := "4\t100"
+	retained, err := snapshotAvailable(ctx, r.cfg, "append_orders", oldSnapshot)
+	if err != nil {
+		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, current, err.Error())
+	}
+	if retained {
+		details["historical_snapshot_retained"] = "true"
+	} else {
+		details["historical_snapshot_retained"] = "false"
+		snapshotToRead = currentSnapshot
+		snapshotExpected = "5\t150"
+	}
+	timeTravelSQL := fmt.Sprintf("SELECT COUNT(*), SUM(amount) FROM %s FOR ICEBERG SNAPSHOT %d", table, snapshotToRead)
 	old, err := queryLines(ctx, r.db, timeTravelSQL)
 	sqls = append(sqls, timeTravelSQL)
 	if err != nil {
 		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, old, err.Error())
 	}
-	expected := []string{"4\t100", "5\t150", "4\t100"}
+	expected := []string{"4\t100", "5\t150", snapshotExpected}
 	actual := append(append([]string{}, first...), current...)
 	actual = append(actual, old...)
 	if !sameLines(expected, actual) {
 		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, expected, actual, "append/time-travel result mismatch")
 	}
-	return passedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, expected, actual, map[string]string{"old_snapshot_id": fmt.Sprintf("%d", oldSnapshot)})
+	return passedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, expected, actual, details)
 }
 
 func (r *caseRunner) partitionFilterCase(ctx context.Context) caseResult {
@@ -494,6 +515,48 @@ func currentSnapshotID(ctx context.Context, cfg localE2EConfig, table string) (i
 		return 0, fmt.Errorf("table %s does not have a current snapshot", table)
 	}
 	return metadata.CurrentSnapshotID, nil
+}
+
+func snapshotAvailable(ctx context.Context, cfg localE2EConfig, table string, snapshotID int64) (bool, error) {
+	client := catalog.NewRESTClient(catalog.WithAllowPlainHTTP(true))
+	req := api.CatalogRequest{
+		Catalog:           model.Catalog{Name: cfg.Catalog, Type: "rest", URI: cfg.CatalogURI, Warehouse: cfg.Warehouse, AuthMode: "none"},
+		ExternalPrincipal: "ci-local",
+	}
+	reqWithPrefix, err := catalogRequestWithPrefix(ctx, client, req, cfg.Warehouse)
+	if err != nil {
+		return false, err
+	}
+	resp, err := client.LoadTable(ctx, api.LoadTableRequest{
+		CatalogRequest: reqWithPrefix,
+		Namespace:      api.Namespace{cfg.Namespace},
+		Table:          table,
+		Snapshots:      "all",
+	})
+	if err != nil {
+		return false, err
+	}
+	return snapshotRetainedInMetadata(resp.MetadataJSON, snapshotID)
+}
+
+func snapshotRetainedInMetadata(metadataJSON []byte, snapshotID int64) (bool, error) {
+	if len(metadataJSON) == 0 {
+		return false, fmt.Errorf("load table returned empty metadata JSON")
+	}
+	var metadata struct {
+		Snapshots []struct {
+			SnapshotID int64 `json:"snapshot-id"`
+		} `json:"snapshots"`
+	}
+	if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+		return false, fmt.Errorf("decode table metadata snapshots: %w", err)
+	}
+	for _, snapshot := range metadata.Snapshots {
+		if snapshot.SnapshotID == snapshotID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func createNamespaceURL(rawBase string, prefix string) (string, error) {

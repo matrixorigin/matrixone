@@ -126,6 +126,65 @@ func TestLocalScanPlannerUsesCacheOnSecondPlanning(t *testing.T) {
 	}
 }
 
+func TestLocalScanPlannerLoadsAllSnapshotsForTimeTravel(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name string
+		req  api.ScanPlanRequest
+		want string
+	}{
+		{
+			name: "current ref",
+			req: api.ScanPlanRequest{
+				CatalogRequest: cacheLoadTableRequest().CatalogRequest,
+				Namespace:      api.Namespace{"sales"},
+				Table:          "orders",
+				Ref:            "main",
+			},
+			want: "main",
+		},
+		{
+			name: "snapshot id",
+			req: api.ScanPlanRequest{
+				CatalogRequest: cacheLoadTableRequest().CatalogRequest,
+				Namespace:      api.Namespace{"sales"},
+				Table:          "orders",
+				Ref:            "main",
+				Snapshot:       api.SnapshotSelector{SnapshotID: 22, HasSnapshotID: true, RefName: "main"},
+			},
+			want: "all",
+		},
+		{
+			name: "timestamp",
+			req: api.ScanPlanRequest{
+				CatalogRequest: cacheLoadTableRequest().CatalogRequest,
+				Namespace:      api.Namespace{"sales"},
+				Table:          "orders",
+				Ref:            "main",
+				Snapshot:       api.SnapshotSelector{TimestampMS: 1710000200000, HasTimestampMS: true, RefName: "main"},
+			},
+			want: "all",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newPlannerFixture(t, 1)
+			originalLoad := fixture.client.LoadTableFunc
+			got := ""
+			fixture.client.LoadTableFunc = func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+				got = req.Snapshots
+				return originalLoad(ctx, req)
+			}
+			if _, err := fixture.planner().PlanScan(ctx, tt.req); err != nil {
+				t.Fatalf("plan scan: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("unexpected REST snapshots selector got=%q want=%q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLocalScanPlannerRefreshesRefCacheAfterMetadataLoad(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPlannerFixture(t, 1)

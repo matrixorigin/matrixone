@@ -72,7 +72,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		CatalogRequest: req.CatalogRequest,
 		Namespace:      req.Namespace,
 		Table:          req.Table,
-		Snapshots:      selector.RefName,
+		Snapshots:      loadTableSnapshots(selector),
 	}
 	loaded, err := CachedTableMetadataLoader{
 		Catalog:          p.Catalog,
@@ -443,6 +443,13 @@ func normalizeSnapshotSelector(req api.ScanPlanRequest) api.SnapshotSelector {
 		}
 	}
 	return selector
+}
+
+func loadTableSnapshots(selector api.SnapshotSelector) string {
+	if selector.HasSnapshotID || selector.HasTimestampMS {
+		return "all"
+	}
+	return selector.RefName
 }
 
 func selectScanManifests(ctx context.Context, manifests []api.ManifestFile, pruner scanPruner, enableDeleteApply bool) ([]api.ManifestFile, []api.ManifestFile, int, error) {
