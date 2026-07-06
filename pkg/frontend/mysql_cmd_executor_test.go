@@ -1308,6 +1308,56 @@ func requirePreparedSelectConcat(t *testing.T, preStmt *PrepareStmt) {
 	require.Equal(t, "concat", name.ColName())
 }
 
+func Test_ParseSqlUsesSQLModeSetEarlierInSamePacket(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+
+	t.Run("ansi quotes", func(t *testing.T) {
+		stmts := parseSQLModePacket(t, ctx, ses, `set sql_mode=ANSI_QUOTES; select "c"`)
+		defer freeStatements(stmts)
+		require.Len(t, stmts, 2)
+
+		selectStmt, ok := stmts[1].(*tree.Select)
+		require.True(t, ok)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, selectClause.Exprs, 1)
+		name, ok := selectClause.Exprs[0].Expr.(*tree.UnresolvedName)
+		require.True(t, ok)
+		require.Equal(t, "c", name.ColName())
+	})
+
+	t.Run("real as float", func(t *testing.T) {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+		stmts := parseSQLModePacket(t, ctx, ses, "set sql_mode=REAL_AS_FLOAT; create table t(r real)")
+		defer freeStatements(stmts)
+		require.Len(t, stmts, 2)
+
+		createStmt, ok := stmts[1].(*tree.CreateTable)
+		require.True(t, ok)
+		require.Len(t, createStmt.Defs, 1)
+		col, ok := createStmt.Defs[0].(*tree.ColumnTableDef)
+		require.True(t, ok)
+		require.Equal(t, uint32(defines.MYSQL_TYPE_FLOAT), col.Type.(*tree.T).InternalType.Oid)
+	})
+}
+
+func parseSQLModePacket(t *testing.T, ctx context.Context, ses *Session, sql string) []tree.Statement {
+	t.Helper()
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+	execCtx := &ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		input: &UserInput{
+			sql: sql,
+		},
+	}
+	stmts, err := parseSql(execCtx, ses.GetMySQLParser())
+	require.NoError(t, err)
+	return stmts
+}
+
 func Test_HandleDeallocate(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1", 1)
