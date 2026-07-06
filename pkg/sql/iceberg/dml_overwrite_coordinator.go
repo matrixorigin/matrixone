@@ -229,6 +229,7 @@ func (c *DMLOverwriteCoordinator) commitRequestLocked() DMLOverwriteActionStream
 		Base:               c.commitBase(),
 		Scope:              overwriteScopeOrDefault(c.spec.Scope),
 		Partition:          cloneDMLAnyMap(c.spec.Partition),
+		PartitionSpec:      c.spec.PartitionSpec,
 		ObjectWriter:       c.spec.ObjectWriter,
 		AffectedDataFiles:  append([]api.DataFile(nil), c.spec.AffectedDataFiles...),
 		ReplacementBatches: replacements,

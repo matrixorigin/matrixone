@@ -522,29 +522,27 @@ func parquetTimestampEqualityValue(ctx context.Context, proc *process.Process, s
 		return nil, unsupportedIcebergEqualityType(ctx, st, types.T_timestamp)
 	}
 	ts := lt.Timestamp
-	offsetMicros := icebergEqualityTimestampOffsetMicros(proc, ts.IsAdjustedToUTC)
+	loc := icebergTimestampLocation(proc)
 	switch {
 	case ts.Unit.Nanos != nil:
+		offsetMicros := icebergEqualityTimestampOffsetMicros(loc, value.Int64()/1000, ts.IsAdjustedToUTC)
 		return int64(types.UnixNanoToTimestamp(value.Int64() - offsetMicros*1000)), nil
 	case ts.Unit.Micros != nil:
+		offsetMicros := icebergEqualityTimestampOffsetMicros(loc, value.Int64(), ts.IsAdjustedToUTC)
 		return int64(types.UnixMicroToTimestamp(value.Int64() - offsetMicros)), nil
 	case ts.Unit.Millis != nil:
+		offsetMicros := icebergEqualityTimestampOffsetMicros(loc, value.Int64()*1000, ts.IsAdjustedToUTC)
 		return int64(types.UnixMicroToTimestamp((value.Int64() - offsetMicros/1000) * 1000)), nil
 	default:
 		return nil, unsupportedIcebergEqualityType(ctx, st, types.T_timestamp)
 	}
 }
 
-func icebergEqualityTimestampOffsetMicros(proc *process.Process, isAdjustedToUTC bool) int64 {
+func icebergEqualityTimestampOffsetMicros(loc *time.Location, localMicros int64, isAdjustedToUTC bool) int64 {
 	if isAdjustedToUTC {
 		return 0
 	}
-	loc := time.Local
-	if proc != nil && proc.Base != nil && proc.Base.SessionInfo.TimeZone != nil {
-		loc = proc.Base.SessionInfo.TimeZone
-	}
-	_, offset := time.Now().In(loc).Zone()
-	return int64(offset) * 1000000
+	return icebergLocalTimestampOffsetMicros(loc, localMicros)
 }
 
 func unsupportedIcebergEqualityType(ctx context.Context, st parquet.Type, moType types.T) error {

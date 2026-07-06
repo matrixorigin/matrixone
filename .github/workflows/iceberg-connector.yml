@@ -6,7 +6,6 @@ on:
       - '.github/workflows/iceberg-connector.yml'
       - 'Makefile'
       - 'optools/iceberg_ci.bash'
-      - 'optools/iceberg_e2e_local.go'
       - 'optools/iceberg_external_runner.py'
       - 'etc/launch-minio-local/**'
       - 'test/iceberg/**'

@@ -6382,9 +6382,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		dbName = string(st.Name)
 		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
-		typs = append(typs, PrivilegeTypeAccountAll)
-		objType = objectTypeDatabase
-		kind = privilegeKindNone
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
@@ -6628,9 +6628,14 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.ShowRules, *tree.CheckTableStmt, *tree.ShowProfileStmt,
-		*tree.AnalyzeStmt, *tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
+		*tree.AnalyzeStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+		canExecInRestricted = true
+	case *tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 		canExecInRestricted = true
 	case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
 		objType = objectTypeNone
@@ -9862,6 +9867,10 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			// SQL tasks execute later as a stored definer, so V1 task management is admin only.
 			return tenant.IsAdminRole(), nil
 		}
+		checkIcebergCatalogPrivilege := func() (bool, error) {
+			// Iceberg catalog definitions and metadata views are account-wide control-plane state.
+			return tenant.IsAdminRole(), nil
+		}
 
 		switch gp := stmt.(type) {
 		case *tree.Grant:
@@ -9911,6 +9920,10 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return yes, stats, err
 		case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
 			yes, err := checkSQLTaskPrivilege()
+			return yes, stats, err
+		case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog,
+			*tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
+			yes, err := checkIcebergCatalogPrivilege()
 			return yes, stats, err
 		}
 	}

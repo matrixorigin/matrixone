@@ -108,6 +108,10 @@ func CheckResidency(ctx context.Context, policies []model.ResidencyPolicy, req R
 		if err := ValidateResidencyPolicy(ctx, policy); err != nil {
 			return err
 		}
+		catalogScopeMatches, err := residencyPolicyCatalogScopeMatches(ctx, policy, normalized.CatalogID, normalized.CatalogURI)
+		if err != nil {
+			return err
+		}
 		applies, err := residencyPolicyMatches(ctx, policy, normalized)
 		if err != nil {
 			return err
@@ -115,13 +119,12 @@ func CheckResidency(ctx context.Context, policies []model.ResidencyPolicy, req R
 		if policy.ScopeType == model.ResidencyScopeCluster && applies {
 			clusterAllowed = true
 		}
-		if policy.ScopeType == model.ResidencyScopeCluster &&
-			(policy.CatalogID == 0 || policy.CatalogID == normalized.CatalogID) {
+		if policy.ScopeType == model.ResidencyScopeCluster && catalogScopeMatches {
 			clusterPolicySeen = true
 		}
 		if policy.ScopeType == model.ResidencyScopeAccount &&
 			policy.AccountID == normalized.AccountID &&
-			(policy.CatalogID == 0 || policy.CatalogID == normalized.CatalogID) {
+			catalogScopeMatches {
 			accountPolicySeen = true
 			if applies {
 				accountAllowed = true
@@ -156,25 +159,20 @@ func CheckCatalogResidency(ctx context.Context, policies []model.ResidencyPolicy
 		if err := ValidateResidencyPolicy(ctx, policy); err != nil {
 			return err
 		}
-		if policy.CatalogID != 0 && policy.CatalogID != normalized.CatalogID {
-			continue
-		}
-		catalogURI, err := NormalizeCatalogURI(ctx, policy.AllowedCatalogURI)
+		applies, err := residencyPolicyCatalogScopeMatches(ctx, policy, normalized.CatalogID, normalized.CatalogURI)
 		if err != nil {
 			return err
 		}
-		applies := catalogURI == normalized.CatalogURI
+		if !applies {
+			continue
+		}
 		if policy.ScopeType == model.ResidencyScopeCluster {
 			clusterPolicySeen = true
-			if applies {
-				clusterAllowed = true
-			}
+			clusterAllowed = true
 		}
 		if policy.ScopeType == model.ResidencyScopeAccount && policy.AccountID == normalized.AccountID {
 			accountPolicySeen = true
-			if applies {
-				accountAllowed = true
-			}
+			accountAllowed = true
 		}
 	}
 	if !clusterPolicySeen {
@@ -320,6 +318,17 @@ func NormalizeCatalogURI(ctx context.Context, catalogURI string) (string, error)
 	}
 	u.Fragment = ""
 	return u.String(), nil
+}
+
+func residencyPolicyCatalogScopeMatches(ctx context.Context, policy model.ResidencyPolicy, catalogID uint64, catalogURI string) (bool, error) {
+	if policy.CatalogID != 0 && policy.CatalogID != catalogID {
+		return false, nil
+	}
+	allowedCatalogURI, err := NormalizeCatalogURI(ctx, policy.AllowedCatalogURI)
+	if err != nil {
+		return false, err
+	}
+	return allowedCatalogURI == catalogURI, nil
 }
 
 func residencyPolicyMatches(ctx context.Context, policy model.ResidencyPolicy, req ResidencyRequest) (bool, error) {

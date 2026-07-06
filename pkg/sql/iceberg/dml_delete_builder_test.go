@@ -488,6 +488,9 @@ func TestBuildDMLOverwriteActionStreamFiltersAffectedScanPlanByPartition(t *test
 		},
 		Scope:     dml.OverwritePartition,
 		Partition: map[string]any{"region": "ksa"},
+		PartitionSpec: api.PartitionSpec{SpecID: 7, Fields: []api.PartitionField{{
+			Name: "region",
+		}}},
 		AffectedScanPlan: &api.IcebergScanPlan{
 			DataTasks: []api.DataFileTask{
 				{DataFile: api.DataFile{FilePath: "s3://warehouse/gold/orders/data/ksa-a.parquet", Partition: map[string]any{"region": "ksa"}, SpecID: 7}},
@@ -519,12 +522,38 @@ func TestBuildDMLOverwriteActionStreamRejectsPartitionScopeWithoutTuple(t *testi
 			BaseSnapshotID: 10,
 		},
 		Scope: dml.OverwritePartition,
+		PartitionSpec: api.PartitionSpec{SpecID: 7, Fields: []api.PartitionField{{
+			Name: "region",
+		}}},
 		AffectedScanPlan: &api.IcebergScanPlan{
 			DataTasks: []api.DataFileTask{{DataFile: api.DataFile{FilePath: "s3://warehouse/gold/orders/data/ksa-a.parquet", Partition: map[string]any{"region": "ksa"}}}},
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "explicit partition tuple") {
 		t.Fatalf("expected missing partition tuple error, got %v", err)
+	}
+}
+
+func TestBuildDMLOverwriteActionStreamRejectsUnknownPartitionField(t *testing.T) {
+	_, err := BuildDMLOverwriteActionStream(context.Background(), DMLOverwriteActionStreamRequest{
+		Base: dml.CommitBase{
+			Namespace:      api.Namespace{"sales"},
+			Table:          "orders",
+			StatementID:    "overwrite-partition",
+			IdempotencyKey: "idem-overwrite-partition",
+			BaseSnapshotID: 10,
+		},
+		Scope:     dml.OverwritePartition,
+		Partition: map[string]any{"regoin": "ksa"},
+		PartitionSpec: api.PartitionSpec{SpecID: 7, Fields: []api.PartitionField{{
+			Name: "region",
+		}}},
+		AffectedScanPlan: &api.IcebergScanPlan{
+			DataTasks: []api.DataFileTask{{DataFile: api.DataFile{FilePath: "s3://warehouse/gold/orders/data/ksa-a.parquet", Partition: map[string]any{"region": "ksa"}}}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not present in the target partition spec") {
+		t.Fatalf("expected unknown partition field error, got %v", err)
 	}
 }
 

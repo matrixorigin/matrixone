@@ -132,6 +132,51 @@ func TestCatalogResidencyAllowsSystemAccount(t *testing.T) {
 	}
 }
 
+func TestCatalogResidencyDoesNotShareAccountLocalCatalogIDAcrossURIs(t *testing.T) {
+	ctx := context.Background()
+	policies := []model.ResidencyPolicy{{
+		ScopeType:         model.ResidencyScopeCluster,
+		CatalogID:         1,
+		AllowedCatalogURI: "https://catalog-a.example.com/rest",
+		AllowedEndpoint:   "catalog-a.example.com",
+		AllowedRegion:     model.ResidencyWildcard,
+		AllowedBucket:     model.ResidencyWildcard,
+		PolicyState:       model.ResidencyPolicyEnabled,
+	}}
+	err := CheckCatalogResidency(ctx, policies, CatalogResidencyRequest{
+		AccountID:  22,
+		CatalogID:  1,
+		CatalogURI: "https://catalog-b.example.com/rest",
+	})
+	if err == nil || !strings.Contains(err.Error(), "no cluster residency policy configured") {
+		t.Fatalf("cluster policy for another catalog URI must not match account-local catalog id collision, got %v", err)
+	}
+}
+
+func TestObjectResidencyDoesNotShareAccountLocalCatalogIDAcrossURIs(t *testing.T) {
+	ctx := context.Background()
+	policies := []model.ResidencyPolicy{{
+		ScopeType:         model.ResidencyScopeCluster,
+		CatalogID:         1,
+		AllowedCatalogURI: "https://catalog-a.example.com/rest",
+		AllowedEndpoint:   "s3.me-central-1.amazonaws.com",
+		AllowedRegion:     "me-central-1",
+		AllowedBucket:     "gold",
+		PolicyState:       model.ResidencyPolicyEnabled,
+	}}
+	err := CheckResidency(ctx, policies, ResidencyRequest{
+		AccountID:  22,
+		CatalogID:  1,
+		CatalogURI: "https://catalog-b.example.com/rest",
+		Endpoint:   "s3.me-central-1.amazonaws.com",
+		Region:     "me-central-1",
+		Bucket:     "gold",
+	})
+	if err == nil || !strings.Contains(err.Error(), "no cluster residency policy configured") {
+		t.Fatalf("object policy for another catalog URI must not match account-local catalog id collision, got %v", err)
+	}
+}
+
 func TestResidencyDefaultDenyAndEndpointNormalization(t *testing.T) {
 	ctx := context.Background()
 	_, err := NormalizeEndpoint(ctx, "s3.me-central-1.amazonaws.com:443")

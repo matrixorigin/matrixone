@@ -105,6 +105,78 @@ func TestObjectIORegistryResolveAndRelease(t *testing.T) {
 	}
 }
 
+func TestObjectIORegistryRetainedRefSurvivesSweep(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("iceberg-registry-retained", fileservice.DisabledCacheConfig, nil)
+	if err != nil {
+		t.Fatalf("new memory fs: %v", err)
+	}
+	scopeForLocation := func(location string) ObjectScope {
+		return ObjectScope{
+			AccountID:       42,
+			CatalogID:       7,
+			StorageLocation: location,
+			Endpoint:        "s3.me-central-1.amazonaws.com",
+			Region:          "me-central-1",
+			Bucket:          "warehouse",
+			Principal:       "ksa-analytics",
+		}
+	}
+	unretained, err := RegisterObjectIOProvider(ctx, ScopedProvider{FileService: fs}, scopeForLocation, time.Nanosecond)
+	if err != nil {
+		t.Fatalf("register unretained object io provider: %v", err)
+	}
+	retained, err := RegisterObjectIOProvider(ctx, ScopedProvider{FileService: fs}, scopeForLocation, time.Minute)
+	if err != nil {
+		t.Fatalf("register retained object io provider: %v", err)
+	}
+	if !RetainObjectIORef(retained) {
+		t.Fatalf("expected retain to succeed for registered ref")
+	}
+	defer ReleaseObjectIORef(retained)
+
+	SweepExpiredObjectIORefs(time.Now().Add(time.Minute))
+	if _, _, err := ResolveObjectIORef(ctx, unretained, "s3://warehouse/orders.parquet"); err == nil {
+		t.Fatalf("expected expired object io ref to be removed")
+	}
+	if resolvedFS, _, err := ResolveObjectIORef(ctx, retained, "s3://warehouse/orders.parquet"); err != nil || resolvedFS != fs {
+		t.Fatalf("retained object io ref should survive sweep, fs=%v err=%v", resolvedFS, err)
+	}
+}
+
+func TestObjectIORegistryRetainReleaseRefCounts(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("iceberg-registry-refcount", fileservice.DisabledCacheConfig, nil)
+	if err != nil {
+		t.Fatalf("new memory fs: %v", err)
+	}
+	scopeForLocation := func(location string) ObjectScope {
+		return ObjectScope{
+			CatalogID:       7,
+			StorageLocation: location,
+			Endpoint:        "s3.me-central-1.amazonaws.com",
+			Region:          "me-central-1",
+			Bucket:          "warehouse",
+			Principal:       "ksa-analytics",
+		}
+	}
+	ref, err := RegisterObjectIOProvider(ctx, ScopedProvider{FileService: fs}, scopeForLocation, time.Minute)
+	if err != nil {
+		t.Fatalf("register object io provider: %v", err)
+	}
+	if !RetainObjectIORef(ref) || !RetainObjectIORef(ref) {
+		t.Fatalf("expected retain to succeed for registered ref")
+	}
+	ReleaseObjectIORef(ref)
+	if resolvedFS, _, err := ResolveObjectIORef(ctx, ref, "s3://warehouse/orders.parquet"); err != nil || resolvedFS != fs {
+		t.Fatalf("ref should remain registered after one of two releases, fs=%v err=%v", resolvedFS, err)
+	}
+	ReleaseObjectIORef(ref)
+	if _, _, err := ResolveObjectIORef(ctx, ref, "s3://warehouse/orders.parquet"); err == nil {
+		t.Fatalf("ref should be removed after final release")
+	}
+}
+
 func TestScopedProviderCredentialExpiration(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)

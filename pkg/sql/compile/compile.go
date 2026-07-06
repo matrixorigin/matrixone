@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -2595,6 +2596,7 @@ func attachIcebergRuntimeToExternal(
 	op.Es.IcebergColumns = runtime.columns
 	op.Es.IcebergSnapshot = runtime.snapshot
 	op.Es.IcebergObjectIORef = runtime.objectIORef
+	icebergio.RetainObjectIORef(runtime.objectIORef)
 	op.Es.IcebergHiddenReadCols = runtime.hiddenReadCols
 	op.Es.IcebergPlanningStats = runtime.planningStats
 	op.Es.NeedRowOrdinal = runtime.needRowOrdinal

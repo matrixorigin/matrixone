@@ -219,6 +219,9 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 		scope := overwriteScopeOrDefault(dml.OverwriteScope(req.DMLScan.OverwriteScope))
 		affectedFiles := append([]api.DataFile(nil), req.DMLScan.DataFiles...)
 		if scope == dml.OverwritePartition {
+			if err := validateOverwritePartitionKeys(ctx, req.DMLScan.OverwritePartition, partitionSpec, req.Table); err != nil {
+				return nil, err
+			}
 			var filterErr error
 			affectedFiles, filterErr = filterOverwritePartitionDataFiles(ctx, affectedFiles, req.DMLScan.OverwritePartition, req.Table)
 			if filterErr != nil {

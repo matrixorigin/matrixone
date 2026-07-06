@@ -159,6 +159,29 @@ func TestIcebergDeleteApplyEqualityTemporalValuesUseMORepresentation(t *testing.
 	require.Contains(t, err.Error(), "ICEBERG_UNSUPPORTED_FEATURE")
 }
 
+func TestIcebergDeleteApplyEqualityTimestampUsesValueOffset(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProc(t)
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.Base.SessionInfo.TimeZone = loc
+
+	column := equalityDeleteColumn{
+		mapping:     &pipeline.IcebergColumnMapping{MoType: &plan.Type{Id: int32(types.T_timestamp)}},
+		parquetType: parquet.TimestampAdjusted(parquet.Microsecond, false).Type(),
+	}
+	winterLocalMicros := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC).UnixMicro()
+	summerLocalMicros := time.Date(2024, 7, 15, 12, 0, 0, 0, time.UTC).UnixMicro()
+
+	winterValue, err := parquetValueEqualityValue(ctx, proc, column, parquet.Int64Value(winterLocalMicros))
+	require.NoError(t, err)
+	summerValue, err := parquetValueEqualityValue(ctx, proc, column, parquet.Int64Value(summerLocalMicros))
+	require.NoError(t, err)
+
+	require.Equal(t, int64(types.UnixMicroToTimestamp(winterLocalMicros+5*int64(time.Hour/time.Microsecond))), winterValue)
+	require.Equal(t, int64(types.UnixMicroToTimestamp(summerLocalMicros+4*int64(time.Hour/time.Microsecond))), summerValue)
+}
+
 func TestIcebergDeleteApplyDateEqualityMatchesScanVector(t *testing.T) {
 	ctx := context.Background()
 	deleteFS := &icebergDeleteTestFS{files: map[string][]byte{

@@ -32,6 +32,7 @@ type objectIORegistryEntry struct {
 	provider         ObjectIOProvider
 	scopeForLocation ObjectScopeForLocation
 	expiresAt        time.Time
+	refCount         int
 }
 
 var objectIORegistry = struct {
@@ -50,18 +51,23 @@ func RegisterObjectIOProvider(
 	if provider == nil {
 		return "", api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg object IO registry requires provider", nil))
 	}
-	if ttl <= 0 {
+	if ttl == 0 {
 		ttl = defaultObjectIORefTTL
 	}
 	ref, err := newObjectIORef(ctx)
 	if err != nil {
 		return "", err
 	}
+	var expiresAt time.Time
+	if ttl > 0 {
+		expiresAt = time.Now().Add(ttl)
+	}
 	objectIORegistry.Lock()
+	sweepExpiredObjectIORefsLocked(time.Now())
 	objectIORegistry.entries[ref] = objectIORegistryEntry{
 		provider:         provider,
 		scopeForLocation: scopeForLocation,
-		expiresAt:        time.Now().Add(ttl),
+		expiresAt:        expiresAt,
 	}
 	objectIORegistry.Unlock()
 	return ref, nil
@@ -77,11 +83,8 @@ func ResolveObjectIORef(
 		return nil, "", api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg object IO ref is required", nil))
 	}
 	objectIORegistry.Lock()
+	sweepExpiredObjectIORefsLocked(time.Now())
 	entry, ok := objectIORegistry.entries[ref]
-	if ok && !entry.expiresAt.IsZero() && !time.Now().Before(entry.expiresAt) {
-		delete(objectIORegistry.entries, ref)
-		ok = false
-	}
 	objectIORegistry.Unlock()
 	if !ok {
 		return nil, "", api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg object IO ref is not registered or expired", map[string]string{
@@ -99,14 +102,56 @@ func ResolveObjectIORef(
 	return entry.provider.Resolve(ctx, scope)
 }
 
+func RetainObjectIORef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return false
+	}
+	objectIORegistry.Lock()
+	defer objectIORegistry.Unlock()
+	sweepExpiredObjectIORefsLocked(time.Now())
+	entry, ok := objectIORegistry.entries[ref]
+	if !ok {
+		return false
+	}
+	entry.refCount++
+	objectIORegistry.entries[ref] = entry
+	return true
+}
+
 func ReleaseObjectIORef(ref string) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return
 	}
 	objectIORegistry.Lock()
-	delete(objectIORegistry.entries, ref)
+	if entry, ok := objectIORegistry.entries[ref]; ok && entry.refCount > 1 {
+		entry.refCount--
+		objectIORegistry.entries[ref] = entry
+	} else {
+		delete(objectIORegistry.entries, ref)
+	}
 	objectIORegistry.Unlock()
+}
+
+func SweepExpiredObjectIORefs(now time.Time) int {
+	objectIORegistry.Lock()
+	defer objectIORegistry.Unlock()
+	return sweepExpiredObjectIORefsLocked(now)
+}
+
+func sweepExpiredObjectIORefsLocked(now time.Time) int {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	removed := 0
+	for ref, entry := range objectIORegistry.entries {
+		if entry.refCount == 0 && !entry.expiresAt.IsZero() && !now.Before(entry.expiresAt) {
+			delete(objectIORegistry.entries, ref)
+			removed++
+		}
+	}
+	return removed
 }
 
 func newObjectIORef(ctx context.Context) (string, error) {

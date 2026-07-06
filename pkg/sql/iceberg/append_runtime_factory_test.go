@@ -16,13 +16,13 @@ package iceberg
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -451,10 +451,10 @@ func TestAppendRuntimeSharedCoordinatorErrorStates(t *testing.T) {
 	require.NoError(t, shared.Abort(ctx, nil))
 
 	inner = &countingAppendCoordinator{}
-	inner.abortErr = errors.New("abort")
+	inner.abortErr = moerr.NewInternalErrorNoCtx("abort")
 	shared = newAppendRuntimeSharedCoordinator(inner, icebergwrite.AppendRequest{MaxParallel: 1})
 	require.NoError(t, shared.Begin(ctx, icebergwrite.AppendRequest{}))
-	require.EqualError(t, shared.Abort(ctx, errors.New("ignored cause")), "abort")
+	require.EqualError(t, shared.Abort(ctx, moerr.NewInternalErrorNoCtx("ignored cause")), "internal error: abort")
 	require.Error(t, shared.Append(ctx, batch.EmptyBatch))
 	require.Equal(t, 1, inner.abortCalls)
 }
@@ -675,7 +675,7 @@ type nilRemoteSignerClient struct {
 	icebergcatalog.MockClient
 }
 
-func (nilRemoteSignerClient) NewRemoteSigner(api.CatalogRequest, map[string]string) icebergio.RemoteSigner {
+func (*nilRemoteSignerClient) NewRemoteSigner(api.CatalogRequest, map[string]string) icebergio.RemoteSigner {
 	return nil
 }
 

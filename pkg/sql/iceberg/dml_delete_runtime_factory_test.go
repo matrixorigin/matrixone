@@ -317,6 +317,7 @@ func TestDMLDeleteRuntimeFactoryLoadsTableAndBuildsOverwriteCoordinator(t *testi
 			{"schema-id": 9, "fields": [{"id": 1, "name": "id", "required": false, "type": "long"}]}
 		],
 		"default-spec-id": 0,
+		"partition-specs": [{"spec-id": 0, "fields": [{"source-id": 1, "field-id": 1000, "name": "region", "transform": "identity"}]}],
 		"current-snapshot-id": 30,
 		"snapshots": [{"snapshot-id": 30, "sequence-number": 44, "timestamp-ms": 1000, "schema-id": 9}],
 		"refs": {"main": {"snapshot-id": 30, "type": "branch"}}
@@ -414,6 +415,7 @@ func TestDMLDeleteRuntimeFactoryAllowsSystemAccountZero(t *testing.T) {
 			{"schema-id": 9, "fields": [{"id": 1, "name": "id", "required": false, "type": "long"}]}
 		],
 		"default-spec-id": 0,
+		"partition-specs": [{"spec-id": 0, "fields": [{"source-id": 1, "field-id": 1000, "name": "region", "transform": "identity"}]}],
 		"current-snapshot-id": 30,
 		"snapshots": [{"snapshot-id": 30, "sequence-number": 44, "timestamp-ms": 1000, "schema-id": 9}],
 		"refs": {"main": {"snapshot-id": 30, "type": "branch"}}
@@ -702,6 +704,7 @@ func TestDMLDeleteRuntimeFactorySharesOverwriteCoordinatorByStatement(t *testing
 			{"schema-id": 9, "fields": [{"id": 1, "name": "id", "required": false, "type": "long"}]}
 		],
 		"default-spec-id": 0,
+		"partition-specs": [{"spec-id": 0, "fields": [{"source-id": 1, "field-id": 1000, "name": "region", "transform": "identity"}]}],
 		"current-snapshot-id": 30,
 		"snapshots": [{"snapshot-id": 30, "sequence-number": 44, "timestamp-ms": 1000, "schema-id": 9}],
 		"refs": {"main": {"snapshot-id": 30, "type": "branch"}}

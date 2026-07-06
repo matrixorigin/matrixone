@@ -167,7 +167,7 @@ iceberg_e2e_local() {
     >"${ICEBERG_E2E_TMP_DIR}/mo-service.log" 2>&1 &
   ICEBERG_E2E_MO_PID="$!"
 
-  run go run ./optools/iceberg_e2e_local.go \
+  run go run ./test/iceberg/iceberg_e2e_local.go \
     --catalog-uri "${MO_ICEBERG_E2E_CATALOG_URI:-http://127.0.0.1:19120/iceberg}" \
     --warehouse "${MO_ICEBERG_E2E_WAREHOUSE:-s3://mo-iceberg/warehouse}" \
     --dsn "${MO_ICEBERG_E2E_DSN:-root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s&multiStatements=false}" \

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/dml"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 )
 
 func TestDMLActionExecutorCommitDeleteWritesDeleteObjectAndCommits(t *testing.T) {
@@ -322,6 +323,67 @@ func TestDMLActionExecutorCommitUpdateMaterializesReplacementBatch(t *testing.T)
 	}
 	if result.Profile["operation"] != "update" || result.Profile["added_data_files"] != "1" || result.Profile["added_delete_files"] != "1" {
 		t.Fatalf("unexpected update profile: %#v", result.Profile)
+	}
+}
+
+func TestDMLActionExecutorRecordsMaterializedObjectsWhenActionBuildFails(t *testing.T) {
+	deleteWriter := &recordingDMLDeleteObjectWriter{}
+	orphanRecorder := &recordingSQLOrphanRecorder{}
+	executor := DMLActionExecutor{
+		Workflow: dml.CommitWorkflow{
+			ManifestWriter: &fakeSQLManifestWriter{},
+			Committer:      &fakeDMLWorkflowCommitter{},
+			OrphanRecorder: orphanRecorder,
+		},
+		Catalog: api.CatalogRequest{Catalog: model.Catalog{
+			AccountID: 9,
+			CatalogID: 8,
+		}},
+		TableLocation:  "s3://warehouse/gold/orders",
+		SnapshotID:     36,
+		SequenceNumber: 10,
+	}
+	bat, cleanup := newReplacementExecutorBatch(t)
+	defer cleanup()
+
+	_, err := executor.CommitUpdate(context.Background(), DMLUpdateActionStreamRequest{
+		DMLDeleteActionStreamRequest: DMLDeleteActionStreamRequest{
+			Schema: api.Schema{SchemaID: 9, Fields: []api.SchemaField{
+				{ID: 1, Name: "id", Required: true, Type: api.IcebergType{Kind: api.TypeInt}},
+				{ID: 2, Name: "name", Type: api.IcebergType{Kind: api.TypeString}},
+			}},
+			Base: dml.CommitBase{
+				Namespace:      api.Namespace{"gold"},
+				Table:          "orders",
+				TargetRef:      "main",
+				BaseSnapshotID: 35,
+				IdempotencyKey: "idem-update-build-fail",
+				StatementID:    "stmt-update-build-fail",
+			},
+			DeleteSchemaID: 9,
+			ObjectWriter:   deleteWriter,
+			Targets: []DMLMatchedDeleteTarget{{
+				DataFile: api.DataFile{FilePath: "s3://warehouse/gold/orders/data/update-target-batch.parquet", SpecID: 1},
+			}},
+		},
+		ReplacementBatch: DMLReplacementDataBatch{
+			Batch:               bat,
+			TargetFileSizeBytes: 1,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot be materialized") {
+		t.Fatalf("expected action build failure after replacement write, got %v", err)
+	}
+	if len(deleteWriter.objects) != 1 {
+		t.Fatalf("expected replacement object write before build failure, got %#v", deleteWriter.objects)
+	}
+	if len(orphanRecorder.candidates) != 1 {
+		t.Fatalf("expected materialized replacement to be recorded as orphan, got %#v", orphanRecorder.candidates)
+	}
+	if !strings.Contains(orphanRecorder.candidates[0].FilePath, "/replacement/") ||
+		orphanRecorder.candidates[0].AccountID != 9 ||
+		orphanRecorder.candidates[0].CatalogID != 8 {
+		t.Fatalf("unexpected orphan candidate: %+v", orphanRecorder.candidates[0])
 	}
 }
 

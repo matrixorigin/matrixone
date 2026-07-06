@@ -16,10 +16,13 @@ package iceberg
 
 import (
 	"context"
+	"io"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/dml"
+	icebergwrite "github.com/matrixorigin/matrixone/pkg/iceberg/write"
 )
 
 type DMLActionExecutor struct {
@@ -41,8 +44,11 @@ func (e DMLActionExecutor) CommitDelete(ctx context.Context, req DMLDeleteAction
 	if err := e.validateCommitPrerequisites(ctx, req.TableLocation, req.SnapshotID); err != nil {
 		return DMLCommitActionStreamResult{}, err
 	}
+	tracker := newDMLMaterializedObjectTracker()
+	wrapDMLDeleteRequestWriters(&req, tracker)
 	stream, err := BuildDMLDeleteActionStream(ctx, req)
 	if err != nil {
+		_ = e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths())
 		return DMLCommitActionStreamResult{}, err
 	}
 	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
@@ -56,8 +62,11 @@ func (e DMLActionExecutor) CommitUpdate(ctx context.Context, req DMLUpdateAction
 	if err := e.validateCommitPrerequisites(ctx, req.TableLocation, req.SnapshotID); err != nil {
 		return DMLCommitActionStreamResult{}, err
 	}
+	tracker := newDMLMaterializedObjectTracker()
+	wrapDMLUpdateRequestWriters(&req, tracker)
 	stream, err := BuildDMLUpdateActionStream(ctx, req)
 	if err != nil {
+		_ = e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths())
 		return DMLCommitActionStreamResult{}, err
 	}
 	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
@@ -71,8 +80,11 @@ func (e DMLActionExecutor) CommitMerge(ctx context.Context, req DMLMergeActionSt
 	if err := e.validateCommitPrerequisites(ctx, req.TableLocation, req.SnapshotID); err != nil {
 		return DMLCommitActionStreamResult{}, err
 	}
+	tracker := newDMLMaterializedObjectTracker()
+	wrapDMLMergeRequestWriters(&req, tracker)
 	stream, err := BuildDMLMergeActionStream(ctx, req)
 	if err != nil {
+		_ = e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths())
 		return DMLCommitActionStreamResult{}, err
 	}
 	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
@@ -86,8 +98,11 @@ func (e DMLActionExecutor) CommitOverwrite(ctx context.Context, req DMLOverwrite
 	if err := e.validateCommitPrerequisites(ctx, req.TableLocation, req.SnapshotID); err != nil {
 		return DMLCommitActionStreamResult{}, err
 	}
+	tracker := newDMLMaterializedObjectTracker()
+	wrapDMLOverwriteRequestWriters(&req, tracker)
 	stream, err := BuildDMLOverwriteActionStream(ctx, req)
 	if err != nil {
+		_ = e.recordMaterializedOrphans(ctx, req.TableLocation, req.Base, tracker.paths())
 		return DMLCommitActionStreamResult{}, err
 	}
 	return e.commit(ctx, req.TableLocation, req.SnapshotID, stream)
@@ -126,4 +141,190 @@ func (e DMLActionExecutor) validateCommitPrerequisites(ctx context.Context, tabl
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML action executor requires positive snapshot and sequence numbers before materializing data or delete files", nil))
 	}
 	return nil
+}
+
+func (e DMLActionExecutor) recordMaterializedOrphans(ctx context.Context, tableLocation string, base dml.CommitBase, paths []string) error {
+	if e.Workflow.OrphanRecorder == nil || len(paths) == 0 {
+		return nil
+	}
+	now := time.Now()
+	if e.Workflow.Now != nil {
+		now = e.Workflow.Now()
+	}
+	ttl := e.Workflow.OrphanTTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	candidates := make([]icebergwrite.OrphanCandidate, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		candidates = append(candidates, icebergwrite.OrphanCandidate{
+			AccountID:         e.Catalog.Catalog.AccountID,
+			CatalogID:         e.Catalog.Catalog.CatalogID,
+			JobID:             firstNonEmpty(base.StatementID, base.IdempotencyKey),
+			Namespace:         strings.Join(base.Namespace, "."),
+			TableName:         base.Table,
+			TableLocationHash: api.PathHash(firstNonEmpty(tableLocation, base.Table)),
+			FilePath:          path,
+			FilePathHash:      api.PathHash(path),
+			FilePathRedacted:  api.RedactPath(path),
+			WrittenAt:         now,
+			ExpireAt:          now.Add(ttl),
+			CleanupStatus:     "pending",
+		})
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	return e.Workflow.OrphanRecorder.RecordOrphans(ctx, candidates)
+}
+
+type dmlMaterializedObjectTracker struct {
+	seen  map[string]struct{}
+	items []string
+}
+
+func newDMLMaterializedObjectTracker() *dmlMaterializedObjectTracker {
+	return &dmlMaterializedObjectTracker{seen: make(map[string]struct{})}
+}
+
+func (t *dmlMaterializedObjectTracker) track(path string) {
+	if t == nil {
+		return
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	if _, ok := t.seen[path]; ok {
+		return
+	}
+	t.seen[path] = struct{}{}
+	t.items = append(t.items, path)
+}
+
+func (t *dmlMaterializedObjectTracker) pathsCopy() []string {
+	if t == nil || len(t.items) == 0 {
+		return nil
+	}
+	return append([]string(nil), t.items...)
+}
+
+func (t *dmlMaterializedObjectTracker) paths() []string {
+	return t.pathsCopy()
+}
+
+type trackingDMLDeleteObjectWriter struct {
+	inner   dml.DeleteObjectWriter
+	tracker *dmlMaterializedObjectTracker
+}
+
+func (w trackingDMLDeleteObjectWriter) WriteObject(ctx context.Context, location string, payload []byte) error {
+	if w.inner == nil {
+		return api.NewError(api.ErrConfigInvalid, "Iceberg DML object tracker requires object writer", nil)
+	}
+	if err := w.inner.WriteObject(ctx, location, payload); err != nil {
+		return err
+	}
+	w.tracker.track(location)
+	return nil
+}
+
+type trackingDMLDataFileOutputFactory struct {
+	inner   icebergwrite.DataFileOutputFactory
+	tracker *dmlMaterializedObjectTracker
+}
+
+func (f trackingDMLDataFileOutputFactory) CreateDataFile(ctx context.Context, location string) (io.WriteCloser, error) {
+	if f.inner == nil {
+		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg DML object tracker requires output factory", nil)
+	}
+	wc, err := f.inner.CreateDataFile(ctx, location)
+	if err != nil {
+		return nil, err
+	}
+	return trackingDMLDataFile{WriteCloser: wc, location: location, tracker: f.tracker}, nil
+}
+
+type trackingDMLDataFile struct {
+	io.WriteCloser
+	location string
+	tracker  *dmlMaterializedObjectTracker
+}
+
+func (w trackingDMLDataFile) Close() error {
+	if err := w.WriteCloser.Close(); err != nil {
+		return err
+	}
+	w.tracker.track(w.location)
+	return nil
+}
+
+func wrapDMLDeleteObjectWriter(writer dml.DeleteObjectWriter, tracker *dmlMaterializedObjectTracker) dml.DeleteObjectWriter {
+	if writer == nil {
+		return nil
+	}
+	return trackingDMLDeleteObjectWriter{inner: writer, tracker: tracker}
+}
+
+func wrapDMLDataFileOutputFactory(factory icebergwrite.DataFileOutputFactory, tracker *dmlMaterializedObjectTracker) icebergwrite.DataFileOutputFactory {
+	if factory == nil {
+		return nil
+	}
+	return trackingDMLDataFileOutputFactory{inner: factory, tracker: tracker}
+}
+
+func wrapDMLReplacementBatchWriters(batch *DMLReplacementDataBatch, tracker *dmlMaterializedObjectTracker) {
+	if batch == nil {
+		return
+	}
+	batch.ObjectWriter = wrapDMLDeleteObjectWriter(batch.ObjectWriter, tracker)
+	batch.OutputFactory = wrapDMLDataFileOutputFactory(batch.OutputFactory, tracker)
+}
+
+func wrapDMLDeleteRequestWriters(req *DMLDeleteActionStreamRequest, tracker *dmlMaterializedObjectTracker) {
+	if req == nil {
+		return
+	}
+	req.ObjectWriter = wrapDMLDeleteObjectWriter(req.ObjectWriter, tracker)
+}
+
+func wrapDMLUpdateRequestWriters(req *DMLUpdateActionStreamRequest, tracker *dmlMaterializedObjectTracker) {
+	if req == nil {
+		return
+	}
+	wrapDMLDeleteRequestWriters(&req.DMLDeleteActionStreamRequest, tracker)
+	wrapDMLReplacementBatchWriters(&req.ReplacementBatch, tracker)
+	for idx := range req.ReplacementBatches {
+		wrapDMLReplacementBatchWriters(&req.ReplacementBatches[idx], tracker)
+	}
+}
+
+func wrapDMLMergeRequestWriters(req *DMLMergeActionStreamRequest, tracker *dmlMaterializedObjectTracker) {
+	if req == nil {
+		return
+	}
+	req.ObjectWriter = wrapDMLDeleteObjectWriter(req.ObjectWriter, tracker)
+	wrapDMLReplacementBatchWriters(&req.MatchedUpdateReplacementBatch, tracker)
+	for idx := range req.MatchedUpdateReplacementBatches {
+		wrapDMLReplacementBatchWriters(&req.MatchedUpdateReplacementBatches[idx], tracker)
+	}
+	wrapDMLReplacementBatchWriters(&req.UnmatchedAppendBatch, tracker)
+	for idx := range req.UnmatchedAppendBatches {
+		wrapDMLReplacementBatchWriters(&req.UnmatchedAppendBatches[idx], tracker)
+	}
+}
+
+func wrapDMLOverwriteRequestWriters(req *DMLOverwriteActionStreamRequest, tracker *dmlMaterializedObjectTracker) {
+	if req == nil {
+		return
+	}
+	req.ObjectWriter = wrapDMLDeleteObjectWriter(req.ObjectWriter, tracker)
+	wrapDMLReplacementBatchWriters(&req.ReplacementBatch, tracker)
+	for idx := range req.ReplacementBatches {
+		wrapDMLReplacementBatchWriters(&req.ReplacementBatches[idx], tracker)
+	}
 }

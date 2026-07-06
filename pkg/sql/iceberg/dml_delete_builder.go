@@ -93,6 +93,7 @@ type DMLOverwriteActionStreamRequest struct {
 	Base               dml.CommitBase
 	Scope              dml.OverwriteScope
 	Partition          map[string]any
+	PartitionSpec      api.PartitionSpec
 	ObjectWriter       dml.DeleteObjectWriter
 	AffectedDataFiles  []api.DataFile
 	AffectedScanPlan   *api.IcebergScanPlan
@@ -284,6 +285,11 @@ func BuildDMLOverwriteActionStream(ctx context.Context, req DMLOverwriteActionSt
 		return nil, err
 	}
 	req.Base = base
+	if req.Scope == dml.OverwritePartition {
+		if err := validateOverwritePartitionKeys(ctx, req.Partition, req.PartitionSpec, req.Base.Table); err != nil {
+			return nil, err
+		}
+	}
 	affectedDataFiles := append([]api.DataFile(nil), req.AffectedDataFiles...)
 	if len(affectedDataFiles) == 0 && req.AffectedScanPlan != nil {
 		files, err := dmlAffectedDataFilesFromScanPlan(ctx, req.AffectedScanPlan, req.Base.Table, req.Scope, req.Partition)
@@ -569,6 +575,36 @@ func filterOverwritePartitionDataFiles(ctx context.Context, files []api.DataFile
 		}
 	}
 	return out, nil
+}
+
+func validateOverwritePartitionKeys(ctx context.Context, partition map[string]any, spec api.PartitionSpec, table string) error {
+	if len(partition) == 0 {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg partition overwrite requires an explicit partition tuple", map[string]string{
+			"table": table,
+		}))
+	}
+	allowed := make(map[string]struct{}, len(spec.Fields))
+	for _, field := range spec.Fields {
+		name := strings.ToLower(strings.TrimSpace(field.Name))
+		if name != "" {
+			allowed[name] = struct{}{}
+		}
+	}
+	if len(allowed) == 0 {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg partition overwrite requires a partitioned Iceberg table", map[string]string{
+			"table": table,
+		}))
+	}
+	for key := range partition {
+		normalized := strings.ToLower(strings.TrimSpace(key))
+		if _, ok := allowed[normalized]; !ok {
+			return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg partition overwrite field is not present in the target partition spec", map[string]string{
+				"table":           table,
+				"partition_field": key,
+			}))
+		}
+	}
+	return nil
 }
 
 func dmlPartitionContains(filePartition, target map[string]any) bool {

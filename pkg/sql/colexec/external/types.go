@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -287,11 +288,26 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 		external.reader = nil
 		external.fileOpened = false
 	}
+	if external.Es != nil {
+		external.Es.releaseIcebergObjectIORef()
+	}
 	if external.ctr.buf != nil {
 		external.ctr.buf.Clean(proc.Mp())
 		external.ctr.buf = nil
 	}
 	external.FreeProjection(proc)
+}
+
+func (param *ExternalParam) releaseIcebergObjectIORef() {
+	if param == nil {
+		return
+	}
+	ref := strings.TrimSpace(param.IcebergObjectIORef)
+	if ref == "" {
+		return
+	}
+	icebergio.ReleaseObjectIORef(ref)
+	param.IcebergObjectIORef = ""
 }
 
 func (external *External) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
