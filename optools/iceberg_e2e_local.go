@@ -182,7 +182,7 @@ func (r *caseRunner) setup(ctx context.Context) error {
 			ident(r.cfg.Catalog), sqlString(r.cfg.CatalogURI), sqlString(r.cfg.Warehouse)),
 		fmt.Sprintf("CALL iceberg_register_access(%s, %s)",
 			sqlString(r.cfg.Catalog),
-			sqlString("scope=cluster,account_id=0,external_principal=ci-local,endpoint=127.0.0.1,region=us-east-1,bucket=mo-iceberg")),
+			sqlString("scope=cluster,account_id=0,external_principal=ci-local,endpoint=localhost,region=us-east-1,bucket=mo-iceberg")),
 		fmt.Sprintf(`CREATE EXTERNAL TABLE %s.%s (
   order_id BIGINT,
   bucket INT,
