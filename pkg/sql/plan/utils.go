@@ -986,6 +986,10 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 		for _, arg := range exprImpl.F.Args {
 			increaseRefCnt(arg, inc, colRefCnt)
 		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			increaseRefCnt(arg, inc, colRefCnt)
+		}
 	case *plan.Expr_W:
 		increaseRefCnt(exprImpl.W.WindowFunc, inc, colRefCnt)
 		//for _, arg := range exprImpl.W.PartitionBy {
