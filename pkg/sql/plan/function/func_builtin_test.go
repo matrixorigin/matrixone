@@ -820,6 +820,7 @@ func TestBuiltInConvertUsingCharsetIgnoreAllRows(t *testing.T) {
 	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, selectList))
 
 	resultVec := fcTC.result.GetResultVector()
+	require.Equal(t, fcTC.fnLength, resultVec.Length())
 	require.True(t, resultVec.GetNulls().Contains(0))
 	require.True(t, resultVec.GetNulls().Contains(1))
 	require.True(t, resultVec.GetNulls().Contains(2))

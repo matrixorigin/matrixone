@@ -3583,10 +3583,9 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
 	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, parameters[1])
-	rsNull := rs.GetResultVector().GetNulls()
 
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rs.SetNullResult(uint64(length))
 		return nil
 	}
 
