@@ -710,6 +710,25 @@ func (s *fakeStreamSender) Close(_ bool) error {
 	return nil
 }
 
+var _ morpc.Stream = &blockingSendStream{}
+
+type blockingSendStream struct {
+	sendStarted chan struct{}
+}
+
+func (s *blockingSendStream) ID() uint64 { return 0 }
+func (s *blockingSendStream) Send(ctx context.Context, request morpc.Message) error {
+	close(s.sendStarted)
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (s *blockingSendStream) Receive() (chan morpc.Message, error) {
+	return make(chan morpc.Message), nil
+}
+func (s *blockingSendStream) Close(_ bool) error {
+	return nil
+}
+
 type fakeTxnOperator struct {
 	client.TxnOperator
 }
@@ -837,6 +856,34 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 
 		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
 		require.NotNil(t, err)
+	}
+}
+
+func TestMessageSenderSendPipelineReturnsWhenSendObservesContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &blockingSendStream{sendStarted: make(chan struct{})}
+	sender := messageSenderOnClient{
+		ctx:          ctx,
+		streamSender: stream,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- sender.sendPipeline(make([]byte, 10), nil, true, 100, "")
+	}()
+
+	select {
+	case <-stream.sendStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "sendPipeline did not call Stream.Send")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		require.Fail(t, "sendPipeline did not return after sender context cancellation")
 	}
 }
 
