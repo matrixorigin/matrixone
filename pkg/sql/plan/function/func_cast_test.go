@@ -2508,6 +2508,57 @@ func TestStringToFloatSaturatesOnOverflow(t *testing.T) {
 	})
 }
 
+func TestStrictCastFloatOverflowRejected(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("double overflow", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e309"}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+		}
+		tc := NewFunctionTestCase(
+			proc,
+			inputs,
+			NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+			NewStrictCast,
+		)
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("float overflow", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e40"}, nil),
+			NewFunctionTestInput(types.T_float32.ToType(), []float32{}, nil),
+		}
+		tc := NewFunctionTestCase(
+			proc,
+			inputs,
+			NewFunctionTestResult(types.T_float32.ToType(), true, nil, nil),
+			NewStrictCast,
+		)
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+
+	// Regression: implicit cast still saturates, doesn't error.
+	t.Run("implicit still saturates", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e309"}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+		}
+		want := []float64{math.MaxFloat64}
+		tc := NewFunctionTestCase(
+			proc,
+			inputs,
+			NewFunctionTestResult(types.T_float64.ToType(), false, want, nil),
+			NewCast,
+		)
+		succeed, info := tc.Run()
+		require.True(t, succeed, info)
+	})
+}
+
 func TestStringToFloatAssignmentRequiresStrictNumericString(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {

@@ -5358,10 +5358,17 @@ func strToFloat[T constraints.Float](
 				}
 				if tErr != nil {
 					if strings.Contains(tErr.Error(), "value out of range") {
-						// MySQL saturates out-of-range magnitudes to the extreme
-						// representable value (with warning 1292) instead of failing.
-						// ParseFloat returns ±Inf on overflow and ~0 on underflow, so
-						// overflow is clamped to ±MaxFloat and underflow keeps its value.
+						// MySQL STRICT_TRANS_TABLES (assignment) returns 1264
+						// Out of range value instead of saturating.
+						if mode == castAssignment {
+							return moerr.NewOutOfRangef(ctx,
+								fmt.Sprintf("float%d", bitSize), "value '%s'", s)
+						}
+						// Implicit/explicit (non-strict): saturate to extreme
+						// representable value (with warning 1292).
+						// ParseFloat returns ±Inf on overflow and ~0 on
+						// underflow, so overflow is clamped to ±MaxFloat and
+						// underflow keeps its value.
 						r2 = saturateOutOfRangeFloat(r2, bitSize)
 					} else {
 						// MySQL non-strict mode: a syntactically invalid string converts
