@@ -801,6 +801,8 @@ type notifyMessageResult struct {
 	err    error
 }
 
+const notifyMessageRetryInterval = 200 * time.Millisecond
+
 // clean do final work for a notifyMessageResult.
 func (r *notifyMessageResult) clean(proc *process.Process) {
 	if r.sender != nil {
@@ -837,34 +839,54 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 
 		errSubmit := ants.Submit(
 			func() {
+				deadline := time.NewTimer(waitRegistrationTimeout)
+				defer deadline.Stop()
 
-				sender, err := newMessageSenderOnClient(
-					s.Proc.Ctx,
-					s.Proc.GetService(),
-					fromAddr,
-					s.Proc.Mp(),
-					nil,
-				)
-				if err != nil {
-					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
-					return
+				for {
+					sender, err := newMessageSenderOnClient(
+						s.Proc.Ctx,
+						s.Proc.GetService(),
+						fromAddr,
+						s.Proc.Mp(),
+						nil,
+					)
+					if err != nil {
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						return
+					}
+
+					message := cnclient.AcquireMessage()
+					message.SetID(sender.streamSender.ID())
+					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
+					message.NeedNotReply = false
+					message.Uuid = uuid
+
+					if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
+						closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+						return
+					}
+					sender.safeToClose = false
+					sender.alreadyClose = false
+
+					err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
+					if !isRemoteDispatchNotRegisteredYetError(err) {
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+						return
+					}
+					sender.close()
+
+					select {
+					case <-s.Proc.Ctx.Done():
+						closeWithError(s.Proc.Ctx.Err(), s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						return
+					case <-deadline.C:
+						err = moerr.NewInternalErrorf(s.Proc.Ctx,
+							"dispatch process not registered within %s, remote CN may have failed", waitRegistrationTimeout)
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						return
+					case <-time.After(notifyMessageRetryInterval):
+					}
 				}
-
-				message := cnclient.AcquireMessage()
-				message.SetID(sender.streamSender.ID())
-				message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
-				message.NeedNotReply = false
-				message.Uuid = uuid
-
-				if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
-					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
-					return
-				}
-				sender.safeToClose = false
-				sender.alreadyClose = false
-
-				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
-				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
 

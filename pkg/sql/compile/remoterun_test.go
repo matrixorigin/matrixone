@@ -681,6 +681,61 @@ func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
 	colexec.Get().DeleteUuids([]uuid.UUID{uid})
 }
 
+func Test_GetProcByUuid_TimeoutDoesNotPoisonLaterRegistration(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	originTimeout := waitRegistrationTimeout
+	waitRegistrationTimeout = 10 * time.Millisecond
+	defer func() {
+		waitRegistrationTimeout = originTimeout
+	}()
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	receiver := &messageReceiverOnServer{
+		connectionCtx: context.TODO(),
+		messageCtx:    context.TODO(),
+	}
+
+	p, ch, err := receiver.GetProcByUuid(uid)
+	require.Error(t, err)
+	require.Nil(t, p)
+	require.Nil(t, ch)
+
+	p0 := &process.Process{}
+	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
+	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+}
+
+func Test_TryGetProcByUuid_NotRegisteredYetDoesNotPoisonLaterRegistration(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	receiver := &messageReceiverOnServer{
+		connectionCtx: context.TODO(),
+		messageCtx:    context.TODO(),
+	}
+
+	p, ch, err := receiver.TryGetProcByUuid(uid)
+	require.Error(t, err)
+	require.True(t, isRemoteDispatchNotRegisteredYetError(err))
+	require.Nil(t, p)
+	require.Nil(t, ch)
+
+	p0 := &process.Process{}
+	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
+	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+}
+
 var _ morpc.Stream = &fakeStreamSender{}
 
 // fakeStreamSender implement the morpc.Stream interface.
