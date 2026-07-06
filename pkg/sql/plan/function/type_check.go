@@ -33,12 +33,10 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 		if s1.Oid == types.T_any && s2.Oid == types.T_any {
 			return true, t1, t2
 		}
-		if s1.Oid == types.T_any {
-			return true, s2, s2
-		}
-		if s2.Oid == types.T_any {
-			return true, s1, s1
-		}
+		// When only one side is T_any, fall through to the initFixed1 rules instead of
+		// short-circuiting with the non-any type. The rule table may specify a more
+		// appropriate target (e.g. {int64, any} -> {float64, float64} for DIV), and
+		// the individual operator's support check will still validate the result.
 
 		// too bad.
 		// but how to make sure we can let `time = varchar` always right if we want to convert varchar to be time.
@@ -109,12 +107,10 @@ func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
 		if s1.Oid == types.T_any && s2.Oid == types.T_any {
 			return true, t1, t2
 		}
-		if s1.Oid == types.T_any {
-			return true, s2, s2
-		}
-		if s2.Oid == types.T_any {
-			return true, s1, s1
-		}
+		// When only one side is T_any, fall through to the initFixed2 rules instead of
+		// short-circuiting with the non-any type. The rule table may specify a more
+		// appropriate target (e.g. {int64, any} -> {float64, float64} for DIV), and
+		// the individual operator's support check will still validate the result.
 
 		if t1.Oid.IsDateRelate() {
 			if t1.Oid == t2.Oid {
@@ -546,9 +542,9 @@ func initFixed1() {
 		{types.T_any, types.T_uint64, types.T_uint64, types.T_uint64},
 		{types.T_any, types.T_float32, types.T_float32, types.T_float32},
 		{types.T_any, types.T_float64, types.T_float64, types.T_float64},
-		{types.T_any, types.T_decimal64, types.T_decimal64, types.T_decimal64},
-		{types.T_any, types.T_decimal128, types.T_decimal128, types.T_decimal128},
-		{types.T_any, types.T_decimal256, types.T_decimal256, types.T_decimal256},
+		{types.T_any, types.T_decimal64, types.T_float64, types.T_float64},
+		{types.T_any, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_any, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_any, types.T_date, types.T_date, types.T_date},
 		{types.T_any, types.T_time, types.T_time, types.T_time},
 		{types.T_any, types.T_datetime, types.T_datetime, types.T_datetime},
@@ -801,7 +797,7 @@ func initFixed1() {
 		{types.T_float64, types.T_varbinary, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_blob, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_text, types.T_float64, types.T_float64},
-		{types.T_decimal64, types.T_any, types.T_decimal64, types.T_decimal64},
+		{types.T_decimal64, types.T_any, types.T_float64, types.T_float64},
 		{types.T_decimal64, types.T_int8, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal64, types.T_int16, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal64, types.T_int32, types.T_decimal128, types.T_decimal128},
@@ -826,7 +822,7 @@ func initFixed1() {
 		{types.T_decimal64, types.T_varbinary, types.T_float64, types.T_float64},
 		{types.T_decimal64, types.T_blob, types.T_float64, types.T_float64},
 		{types.T_decimal64, types.T_text, types.T_float64, types.T_float64},
-		{types.T_decimal128, types.T_any, types.T_decimal128, types.T_decimal128},
+		{types.T_decimal128, types.T_any, types.T_float64, types.T_float64},
 		{types.T_decimal128, types.T_int8, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_int16, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_int32, types.T_decimal128, types.T_decimal128},
@@ -851,7 +847,7 @@ func initFixed1() {
 		{types.T_decimal128, types.T_varbinary, types.T_float64, types.T_float64},
 		{types.T_decimal128, types.T_blob, types.T_float64, types.T_float64},
 		{types.T_decimal128, types.T_text, types.T_float64, types.T_float64},
-		{types.T_decimal256, types.T_any, types.T_decimal256, types.T_decimal256},
+		{types.T_decimal256, types.T_any, types.T_float64, types.T_float64},
 		{types.T_decimal256, types.T_int8, types.T_decimal256, types.T_decimal256},
 		{types.T_decimal256, types.T_int16, types.T_decimal256, types.T_decimal256},
 		{types.T_decimal256, types.T_int32, types.T_decimal256, types.T_decimal256},
