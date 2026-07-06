@@ -408,6 +408,9 @@ func TestRESTClientCreateTable(t *testing.T) {
 		if strings.Contains(bodyText, `"Kind"`) || !strings.Contains(bodyText, `"type":"long"`) {
 			t.Fatalf("create table body used non-Iceberg schema encoding: %s", bodyText)
 		}
+		if !strings.Contains(bodyText, `"schema-id":0`) || !strings.Contains(bodyText, `"spec-id":0`) {
+			t.Fatalf("create table body omitted required zero ids: %s", bodyText)
+		}
 		if err := json.Unmarshal(body, &gotBody); err != nil {
 			t.Fatalf("decode create table body: %v", err)
 		}
@@ -422,7 +425,7 @@ func TestRESTClientCreateTable(t *testing.T) {
 		Namespace:      api.Namespace{"sales"},
 		Table:          "orders",
 		Location:       "s3://warehouse/sales/orders",
-		Schema: api.Schema{SchemaID: 1, Fields: []api.SchemaField{{
+		Schema: api.Schema{SchemaID: 0, Fields: []api.SchemaField{{
 			ID: 1, Name: "id", Required: true, Type: api.IcebergType{Kind: api.TypeLong},
 		}}},
 		PartitionSpec: api.PartitionSpec{SpecID: 0},

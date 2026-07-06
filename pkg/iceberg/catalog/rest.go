@@ -1345,7 +1345,7 @@ type createTableRequestWire struct {
 }
 
 type schemaWire struct {
-	SchemaID           int               `json:"schema-id,omitempty"`
+	SchemaID           int               `json:"schema-id"`
 	Fields             []schemaFieldWire `json:"fields"`
 	IdentifierFieldIDs []int             `json:"identifier-field-ids,omitempty"`
 }
@@ -1359,7 +1359,7 @@ type schemaFieldWire struct {
 }
 
 type partitionSpecWire struct {
-	SpecID int                  `json:"spec-id,omitempty"`
+	SpecID int                  `json:"spec-id"`
 	Fields []partitionFieldWire `json:"fields,omitempty"`
 }
 
