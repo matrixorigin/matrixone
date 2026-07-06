@@ -818,11 +818,28 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 	//	return nil
 }
 
-func gcFiles(txn *Transaction, names ...string) error {
+type cloneGCScope int
+
+const (
+	// Intermediate GC happens while the clone transaction is still alive, for
+	// example when replacing an earlier ALTER workspace with a later one. It
+	// must keep txn-local objects that a later clone/ALTER now references.
+	cloneGCIntermediate cloneGCScope = iota
+	// Transaction rollback is the final cleanup of the clone transaction. Only
+	// source files owned by committed state are protected; txn-local files must
+	// be removed because no committed table can reference them after rollback.
+	cloneGCTxnRollback
+)
+
+func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 	if txn.isCloneTxn {
 		names = readutil.RemoveIf(names, func(name string) bool {
-			ok := txn.engine.cloneTxnCache.IsSharedFile(txn.op.Txn().ID, name)
-			return ok
+			txnID := txn.op.Txn().ID
+			if txn.engine.cloneTxnCache.IsSharedFile(txnID, name) {
+				return true
+			}
+			return scope == cloneGCIntermediate &&
+				txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, name)
 		})
 	}
 
@@ -906,11 +923,15 @@ func (txn *Transaction) GCObjsByStats(sl ...objectio.ObjectStats) (err error) {
 		names = append(names, stats.ObjectName().String())
 	}
 
-	return gcFiles(txn, names...)
+	return gcFiles(txn, cloneGCIntermediate, names...)
 }
 
 // [start, end]
 func (txn *Transaction) GCObjsByIdxRange(start, end int) (err error) {
+	return txn.gcObjsByIdxRange(start, end, cloneGCIntermediate)
+}
+
+func (txn *Transaction) gcObjsByIdxRange(start, end int, scope cloneGCScope) (err error) {
 	var objsName []string
 
 	defer func() {
@@ -951,7 +972,7 @@ func (txn *Transaction) GCObjsByIdxRange(start, end int) (err error) {
 		}
 	}
 
-	return gcFiles(txn, objsName...)
+	return gcFiles(txn, scope, objsName...)
 }
 
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
@@ -1248,6 +1269,16 @@ func (ctc CloneTxnCache) IsSharedFile(txnId []byte, name string) bool {
 	return exist
 }
 
+func (ctc CloneTxnCache) IsTxnLocalSharedFile(txnId []byte, name string) bool {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return false
+	}
+
+	_, exist = item.txnLocalSharedFiles.Get(name)
+	return exist
+}
+
 func (ctc CloneTxnCache) DeleteTxn(txnId []byte) {
 	ctc.items.Delete(cloneTxnItem{txnID: txnId})
 }
@@ -1262,6 +1293,26 @@ func (ctc CloneTxnCache) AddSharedFile(txnId []byte, name string) {
 	ctc.items.Set(item)
 }
 
+func (ctc CloneTxnCache) AddTxnLocalSharedFile(txnId []byte, name string) {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return
+	}
+
+	item.txnLocalSharedFiles.Set(name)
+	ctc.items.Set(item)
+}
+
+func (ctc CloneTxnCache) RemoveTxnLocalSharedFile(txnId []byte, name string) {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return
+	}
+
+	item.txnLocalSharedFiles.Delete(name)
+	ctc.items.Set(item)
+}
+
 func (ctc CloneTxnCache) AddTxn(txnId []byte, snapshot int64) {
 	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
 	if exist {
@@ -1273,18 +1324,25 @@ func (ctc CloneTxnCache) AddTxn(txnId []byte, snapshot int64) {
 	}
 
 	item = cloneTxnItem{
-		txnID:       txnId,
-		snapTS:      snapshot,
-		sharedFiles: btree.NewBTreeG(func(a, b string) bool { return a < b }),
+		txnID:               txnId,
+		snapTS:              snapshot,
+		sharedFiles:         btree.NewBTreeG(func(a, b string) bool { return a < b }),
+		txnLocalSharedFiles: btree.NewBTreeG(func(a, b string) bool { return a < b }),
 	}
 
 	ctc.items.Set(item)
 }
 
 type cloneTxnItem struct {
-	txnID       []byte
-	snapTS      int64
+	txnID  []byte
+	snapTS int64
+	// sharedFiles are cloned from committed pState and are owned outside this
+	// transaction, so clone GC must never delete them.
 	sharedFiles *btree.BTreeG[string]
+	// txnLocalSharedFiles are produced by this transaction and later reused by
+	// another clone/ALTER step in the same transaction. They are protected from
+	// intermediate cleanup, but rollback must still delete them.
+	txnLocalSharedFiles *btree.BTreeG[string]
 }
 
 func (cti cloneTxnItem) Less(other cloneTxnItem) bool {

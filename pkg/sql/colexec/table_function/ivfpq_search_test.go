@@ -28,8 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -149,8 +149,8 @@ func TestIvfpqSearchParamFail(t *testing.T) {
 	newIvfpqAlgo = newIvfpqMockAlgoFn
 
 	failedParams := []string{
-		`{`,                                // invalid JSON
-		`{"op_type":"vector_cos_ops"}`,     // unsupported op_type
+		`{`,                            // invalid JSON
+		`{"op_type":"vector_cos_ops"}`, // unsupported op_type
 		`{"op_type":"vector_l2_ops","lists":"notnumber"}`,
 		`{"op_type":"vector_l2_ops","m":"notnumber"}`,
 		`{"op_type":"vector_l2_ops","bits_per_code":"x"}`,

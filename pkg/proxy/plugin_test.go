@@ -20,9 +20,11 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plugin"
@@ -65,12 +67,96 @@ func (r *mockRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tun
 	return nil, nil, nil
 }
 
+func (r *mockRouter) ConnectRouteSelected(c *CNServer, handshakeResp *frontend.Packet, t *tunnel) (ServerConn, []byte, error) {
+	return r.Connect(c, handshakeResp, t)
+}
+
 func (r *mockRouter) AllServers(sid string) ([]*CNServer, error) {
 	return nil, nil
 }
 
 func (r *mockRouter) Refresh(sync bool) {
 	r.refreshCount++
+}
+
+func TestPluginRouter_SelectHonorsBreaker(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{}
+	hc.updateCN("cn0", "8.8.8.8:6001", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	mc.ForceRefresh(true)
+	re := testRebalancer(t, st, logger, mc)
+
+	base := newRouter(mc, re, newMockSQLWorker(), true, withCNHealthCheckFailThreshold(1)).(*router)
+	// Trip the plugin-selected CN and leave it in active cooldown. Since this
+	// is the only CN in the cluster, pluginRouter must surface allBusy.
+	base.health.reportFailure("cn0", "8.8.8.8:6001")
+
+	p := &mockPlugin{mockRecommendCNFn: func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
+		return &plugin.Recommendation{
+			Action: plugin.Select,
+			CN: &metadata.CNService{
+				ServiceID:  "cn0",
+				SQLAddress: "8.8.8.8:6001",
+			},
+		}, nil
+	}}
+	pr := newPluginRouter("", base, p)
+
+	cn, err := pr.Route(context.TODO(), "", clientInfo{labelInfo: labelInfo{Tenant: "t1"}}, nil)
+	require.Error(t, err)
+	require.Nil(t, cn)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrAllCNServersBusy),
+		"expected plugin-selected tripped CN to respect all-busy semantics, got: %v", err)
+}
+
+func TestPluginRouter_SelectBypassesBreakerOnTransfer(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{}
+	hc.updateCN("cn0", "8.8.8.8:6001", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	mc.ForceRefresh(true)
+	re := testRebalancer(t, st, logger, mc)
+
+	base := newRouter(mc, re, newMockSQLWorker(), true, withCNHealthCheckFailThreshold(1)).(*router)
+	base.health.reportFailure("cn0", "8.8.8.8:6001")
+
+	p := &mockPlugin{mockRecommendCNFn: func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
+		return &plugin.Recommendation{
+			Action: plugin.Select,
+			CN: &metadata.CNService{
+				ServiceID:  "cn0",
+				SQLAddress: "8.8.8.8:6001",
+			},
+		}, nil
+	}}
+	pr := newPluginRouter("", base, p)
+	tr, ok := any(pr).(transferRouter)
+	require.True(t, ok)
+	cn, err := tr.RouteForTransfer(context.TODO(), "", clientInfo{labelInfo: labelInfo{Tenant: "t1"}}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	require.Equal(t, "cn0", cn.uuid)
 }
 
 func TestPluginRouter_Route(t *testing.T) {
@@ -192,6 +278,48 @@ func TestPluginRouter_Route(t *testing.T) {
 			require.Equal(t, r.refreshCount, tt.expectRefresh)
 		})
 	}
+}
+
+func TestPluginRouter_SelectCooldownFallsBackToDelegatedRoute(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	logger := rt.Logger()
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{}
+	// Two CNs for the same tenant.
+	hc.updateCN("cn0", "8.8.8.8:6001", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	hc.updateCN("cn1", "8.8.8.8:6002", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	mc := clusterservice.NewMOCluster("", hc, 3*time.Second)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	mc.ForceRefresh(true)
+	re := testRebalancer(t, st, logger, mc)
+
+	base := newRouter(mc, re, newMockSQLWorker(), true, withCNHealthCheckFailThreshold(1)).(*router)
+	// Trip the plugin-selected CN so pluginRouter must not return it.
+	base.health.reportFailure("cn0", "8.8.8.8:6001")
+
+	p := &mockPlugin{mockRecommendCNFn: func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
+		return &plugin.Recommendation{
+			Action: plugin.Select,
+			CN: &metadata.CNService{
+				ServiceID:  "cn0",
+				SQLAddress: "8.8.8.8:6001",
+			},
+		}, nil
+	}}
+	pr := newPluginRouter("", base, p)
+	cn, err := pr.Route(context.TODO(), "", clientInfo{labelInfo: labelInfo{Tenant: "t1"}}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	require.Equal(t, "cn1", cn.uuid)
 }
 
 func TestRPCPlugin(t *testing.T) {

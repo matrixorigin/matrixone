@@ -132,6 +132,16 @@ message Insert {
   int32 partition_idx = 8;
   bool is_end = 9;
   plan.TableDef table_def = 10;
+  // Writable external table: this insert writes stage files instead of an
+  // engine relation. The writer config is rebuilt on the receiving CN from
+  // table_def's stored ExternParam; the statement-start timestamp (used to
+  // expand WRITE_FILE_PATTERN time directives consistently) and the session
+  // time zone (name + offset-at-statement-time fallback; the generic session
+  // codec round-trips zones lossily) travel here.
+  bool to_external = 11;
+  int64 external_stmt_unix_nano = 12;
+  string external_tz_name = 13;
+  int32 external_tz_offset_sec = 14;
 }
 
 message MultiUpdate {
@@ -219,16 +229,7 @@ message PreInsertSecondaryIndex {
   plan.PreInsertUkCtx pre_insert_sk_ctx = 1;
 }
 
-message OnDuplicateKey {
-  // letter case: origin
-  repeated string attrs = 1;
-  int32 insert_col_count = 2;
-  repeated plan.Expr unique_col_check_expr = 3;
-  repeated string unique_cols = 4;
-  repeated int32 on_duplicate_idx = 5;
-  map<string, plan.Expr> on_duplicate_expr = 6;
-  bool is_ignore = 7;
-}
+// OnDuplicateKey removed: legacy ON DUPLICATE KEY operator path eliminated.
 
 message FuzzyFilter {
   float N = 1;
@@ -353,6 +354,14 @@ message file_offset {
   repeated int64 offset = 1;
 }
 
+message parquet_row_group_shard {
+  int32 file_index = 1;
+  int32 row_group_start = 2;
+  int32 row_group_end = 3;
+  int64 num_rows = 4;
+  int64 bytes = 5;
+}
+
 message ExternalScan {
   repeated plan.ExternAttr attrs = 1 [(gogoproto.nullable) = false];
   repeated int64 file_size = 2;
@@ -366,6 +375,7 @@ message ExternalScan {
   int32 column_list_len = 10;
   bool parallel_load = 11;
   bool load_empty_numeric_as_zero = 12;
+  repeated parquet_row_group_shard parquet_row_group_shards = 13;
 }
 
 message StreamScan {
@@ -441,7 +451,8 @@ message Instruction {
   TableFunction table_function = 14;
   ExternalScan external_scan = 15;
   Insert insert = 16;
-  OnDuplicateKey on_duplicate_key = 17;
+  // OnDuplicateKey on_duplicate_key = 17; // removed: legacy ON DUPLICATE KEY operator path eliminated
+  reserved 17;
   PreInsert pre_insert = 18;
   PreInsertUnique pre_insert_unique = 19;
   repeated plan.OrderBySpec order_by = 20;
@@ -499,7 +510,7 @@ message Source {
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
   bool is_const = 12;
   repeated plan.msgHeader recv_msg_list = 13 [(gogoproto.nullable) = false];
-  bytes bloom_filter = 14;
+  bytes membership_filter = 14;
 }
 
 message NodeInfo {
@@ -548,6 +559,7 @@ message SessionInfo {
   bytes time_zone = 7;
   string account = 8;
   repeated string query_id = 9;
+  int64 lock_wait_timeout = 10;
 }
 
 message SessionLoggerInfo {

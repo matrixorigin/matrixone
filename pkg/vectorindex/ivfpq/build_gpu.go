@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -68,7 +69,7 @@ func (b *IvfpqBuild[T]) createKey(n int) string {
 }
 
 func (b *IvfpqBuild[T]) getOrCreateCurrent() (*IvfpqModel[T], error) {
-	capacity := b.tblcfg.IndexCapacity
+	capacity := b.idxcfg.IndexCapacity
 
 	if b.current != nil && b.count >= capacity {
 		if err := b.current.Build(); err != nil {
@@ -153,8 +154,8 @@ func (b *IvfpqBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, idx.Checksum, ts, idx.FileSize))
 	}
 
-	metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s",
-		b.tblcfg.DbName, b.tblcfg.MetadataTable, strings.Join(metas, ", "))
+	metasql := fmt.Sprintf("INSERT INTO %s VALUES %s",
+		sqlquote.QualifiedIdent(b.tblcfg.DbName, b.tblcfg.MetadataTable), strings.Join(metas, ", "))
 	sqls = append(sqls, metasql)
 	return sqls, nil
 }

@@ -65,10 +65,16 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
-	var withoutOutput bool
-	scopeEncodeData, withoutOutput, processEncodeData, err = prepareRemoteRunSendingData(c.sql, s)
+	var withoutOutput, folded bool
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(c.sql, s, c.proc)
 	if err != nil {
 		return nil, err
+	}
+	if folded {
+		getLogger(s.Proc.GetService()).
+			Debug("fold variable expressions before remote run",
+				zap.String("local-address", c.addr),
+				zap.String("remote-address", s.NodeInfo.Addr))
 	}
 
 	// generate a new sender to do send work.
@@ -173,20 +179,24 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 	return true
 }
 
-func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, withoutOutput bool, processData []byte, err error) {
+func prepareRemoteRunSendingData(sqlStr string, s *Scope, proc *process.Process) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
+	encodedScope, folded, err = foldVarExprsInRemoteRunScope(encodedScope, proc)
+	if err != nil {
+		return nil, false, nil, false, err
+	}
 
 	// Encode the ScopeList which need to be sent.
 	if scopeData, err = encodeScope(encodedScope); err != nil {
-		return nil, false, nil, err
+		return nil, false, nil, false, err
 	}
 
 	// Encode the Process related information.
 	if processData, err = encodeProcessInfo(s.Proc, sqlStr); err != nil {
-		return nil, false, nil, err
+		return nil, false, nil, false, err
 	}
 
-	return scopeData, withoutOutput, processData, nil
+	return scopeData, withoutOutput, processData, folded, nil
 }
 
 func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSenderOnClient) error {
@@ -241,7 +251,7 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		connectorOperator.GetIdx(), connectorOperator.IsFirst, connectorOperator.IsLast, "connector")
 
 	mp := s.Proc.Mp()
-	nextChannel := s.RootOp.(*connector.Connector).Reg.Ch2
+	nextReg := s.RootOp.(*connector.Connector).Reg
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
@@ -249,7 +259,8 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		}
 		connectorAnalyze.Network(bat)
 
-		if err = forwardRemoteBatchWithContext(sender, nextChannel, bat, mp); err != nil {
+		var receiverDone bool
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil || receiverDone {
 			return err
 		}
 	}
@@ -534,23 +545,32 @@ func (sender *messageSenderOnClient) contextDoneError() error {
 
 func forwardRemoteBatchWithContext(
 	sender *messageSenderOnClient,
-	nextChannel chan process.PipelineSignal,
+	nextReg *process.WaitRegister,
 	bat *batch.Batch,
 	mp *mpool.MPool,
-) error {
-	signal := process.NewPipelineSignalToDirectly(bat, nil, mp)
-	if sender == nil || sender.ctx == nil {
-		nextChannel <- signal
-		return nil
+) (receiverDone bool, err error) {
+	if nextReg == nil || nextReg.Ch2 == nil {
+		bat.Clean(mp)
+		return true, moerr.NewInternalErrorNoCtx("remote batch forward target is nil")
 	}
 
-	select {
-	case nextChannel <- signal:
-		return nil
-	case <-sender.ctx.Done():
+	ctx := context.TODO()
+	if sender == nil || sender.ctx == nil {
+		if nextReg.SendDataDirect(ctx, bat, mp) {
+			return false, nil
+		}
 		bat.Clean(mp)
-		return sender.contextDoneError()
+		return true, nil
 	}
+
+	if nextReg.SendDataDirect(sender.ctx, bat, mp) {
+		return false, nil
+	}
+	bat.Clean(mp)
+	if err := sender.contextDoneError(); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // no matter how we stop the remote-run, we should get the final remote cost here.

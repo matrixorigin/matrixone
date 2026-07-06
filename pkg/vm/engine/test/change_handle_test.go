@@ -5643,7 +5643,7 @@ func TestIterationError(t *testing.T) {
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	encoded := base64.StdEncoding.EncodeToString([]byte("invalid sql"))
-	err = iscp.ProcessInitSQL(ctx, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(), encoded)
+	err = iscp.ProcessInitSQL(ctx, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(), encoded, "", "", "")
 	require.Error(t, err)
 }
 

@@ -493,12 +493,18 @@ func (h *Handle) HandleGetChangedTableList(
 	}()
 
 	if len(req.TableIds) == 0 && len(req.TS) == 0 {
-		to = types.BuildTS(time.Now().UnixNano(), 0)
+		// Use the engine's HLC clock, not wall-clock. HLC can be ahead of
+		// wall clock (e.g. on startup after replaying logtail entries with
+		// future-dated timestamps); wall-clock-derived `to` would produce
+		// an inverted (from, to] window and the dirty-tree query returns
+		// nothing. Same issue HandleForceCheckpoint already avoids by using
+		// h.db.TxnMgr.Now(). See pkg/iscp post-REINDEX CDC stall.
+		to = h.db.TxnMgr.Now()
 		return nil, nil
 	}
 
 	if req.Type == cmd_util.CheckChanged {
-		to = types.BuildTS(time.Now().UnixNano(), 0)
+		to = h.db.TxnMgr.Now()
 		minFrom := slices.MinFunc(req.TS, func(a, b *timestamp.Timestamp) int {
 			return a.Compare(*b)
 		})
@@ -678,9 +684,15 @@ func (h *Handle) HandleBackup(
 	resp *api.SyncLogTailResp,
 ) (cb func(), err error) {
 	var (
-		timeout    = req.FlushDuration
+		timeout = req.FlushDuration
+		// Use the engine's HLC clock for the checkpoint TS, not wall-clock.
+		// HLC can be ahead of wall clock (e.g. after replaying logtail entries
+		// with future-dated timestamps); a wall-clock currTs could fall behind
+		// the latest committed data and back up a stale snapshot. This matches
+		// HandleForceCheckpoint, which uses h.db.TxnMgr.Now(). backupTime stays
+		// wall-clock only for the human-readable location label.
 		backupTime = time.Now().UTC()
-		currTs     = types.BuildTS(backupTime.UnixNano(), 0)
+		currTs     = h.db.TxnMgr.Now()
 		locations  string
 		location   string
 	)
@@ -708,6 +720,22 @@ func (h *Handle) HandleBackup(
 	}
 	resp.CkpLocation = locations
 	return
+}
+
+// ttlChecker returns a disk-cleaner checker that protects checkpoints whose
+// endTS is within ttl of the engine's HLC clock and marks older ones
+// consumable. endTS is an HLC timestamp, so the cutoff is derived from the HLC
+// clock (h.db.TxnMgr.Now()), not wall-clock — HLC can be ahead of wall clock,
+// and a wall-clock cutoff would skew the comparison and keep checkpoints that
+// are actually older than the TTL. Now() is read per call so the cutoff slides
+// with current time.
+func (h *Handle) ttlChecker(ttl time.Duration) func(item any) bool {
+	return func(item any) bool {
+		ckp := item.(*checkpoint.CheckpointEntry)
+		ts := types.BuildTS(h.db.TxnMgr.Now().Physical()-int64(ttl), 0)
+		endTS := ckp.GetEnd()
+		return !endTS.GE(&ts)
+	}
 }
 
 func (h *Handle) HandleDiskCleaner(
@@ -885,12 +913,7 @@ func (h *Handle) HandleDiskCleaner(
 			return nil, moerr.NewInvalidArgNoCtx(key, value)
 		}
 		h.db.DiskCleaner.GetCleaner().AddChecker(
-			func(item any) bool {
-				checkpoint := item.(*checkpoint.CheckpointEntry)
-				ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(ttl), 0)
-				endTS := checkpoint.GetEnd()
-				return !endTS.GE(&ts)
-			}, cmd_util.CheckerKeyTTL)
+			h.ttlChecker(ttl), cmd_util.CheckerKeyTTL)
 		return
 	case cmd_util.CheckerKeyMinTS:
 		// Set a minTS, checkpoints whose endTS is less than this minTS can be consumed

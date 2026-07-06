@@ -525,15 +525,21 @@ public:
             raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
             raft::resource::sync_stream(*res);
 
-            auto local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device)));
+            // Serialize concurrent builds on the same physical device (see
+            // device_build_mutex). No-op across distinct real GPUs.
+            std::unique_ptr<cagra_index> local_idx;
+            {
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
+                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+            }
 
             handle.set_index_ptr(static_cast<const cagra_index*>(local_idx.get()));
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<cagra_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_device_id()] = std::move(dataset_storage);
+                this->replicated_indices_[handle.get_rank()] = std::shared_ptr<cagra_index>(std::move(local_idx));
+                this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
             }
             handle.sync();
         } else if (this->dist_mode == DistributionMode_SHARDED) {
@@ -570,15 +576,21 @@ public:
                        raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data() + (start_row * this->dimension), num_rows, this->dimension));
             raft::resource::sync_stream(*res);
 
-            auto local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device)));
+            // Serialize concurrent builds on the same physical device (see
+            // device_build_mutex). No-op across distinct real GPUs.
+            std::unique_ptr<cagra_index> local_idx;
+            {
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
+                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+            }
 
             handle.set_index_ptr(static_cast<const cagra_index*>(local_idx.get()));
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<cagra_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_device_id()] = std::move(dataset_storage);
+                this->replicated_indices_[handle.get_rank()] = std::shared_ptr<cagra_index>(std::move(local_idx));
+                this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
             }
             handle.sync();
         } else {
@@ -595,8 +607,12 @@ public:
             raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
             raft::resource::sync_stream(*res);
 
-            auto new_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                *res, index_params, raft::make_const_mdspan(dataset_device)));
+            std::unique_ptr<cagra_index> new_idx;
+            {
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                new_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
+                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+            }
             handle.sync();
 
             // Assign results under lock
@@ -632,13 +648,17 @@ public:
                 cagra_index* idx;
                 {
                     std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                    idx = static_cast<cagra_index*>(this->replicated_indices_.at(handle.get_device_id()).get());
+                    idx = static_cast<cagra_index*>(this->replicated_indices_.at(handle.get_rank()).get());
                 }
-                cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device), *idx);
+                {
+                    // Serialize index-mutating cuVS calls on the same physical device.
+                    std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device), *idx);
+                }
                 handle.sync();
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                    this->replicated_datasets_.erase(handle.get_device_id());
+                    this->replicated_datasets_.erase(handle.get_rank());
                 }
             } else {
                 // index_ is mutated in place without holding mutex_ during the
@@ -650,7 +670,11 @@ public:
                 // worker runs main-thread extend tasks and device-thread search
                 // tasks on the same GPU concurrently, so within one process they
                 // would NOT be serialized.
-                cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device), *index_);
+                {
+                    // Serialize index-mutating cuVS calls on the same physical device.
+                    std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    cuvs::neighbors::cagra::extend(*res, params, raft::make_const_mdspan(additional_dataset_device), *index_);
+                }
                 handle.sync();
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
@@ -864,7 +888,7 @@ public:
             // Tiered fallback: Replicated -> Single (lock covers both the map read and index_ read)
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it != this->replicated_indices_.end()) {
                     auto shared_idx = std::static_pointer_cast<cagra_index>(it->second);
                     local_index = shared_idx.get();
@@ -1177,7 +1201,7 @@ public:
             // Tiered fallback: Replicated -> Single (lock covers both the map read and index_ read)
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it != this->replicated_indices_.end()) {
                     auto shared_idx = std::static_pointer_cast<cagra_index>(it->second);
                     local_index = shared_idx.get();
@@ -1340,7 +1364,7 @@ public:
                 if (this->dist_mode == DistributionMode_SINGLE_GPU) {
                     index_ = std::move(local_idx);
                 } else {
-                    this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<cagra_index>(std::move(local_idx));
+                    this->replicated_indices_[handle.get_rank()] = std::shared_ptr<cagra_index>(std::move(local_idx));
                 }
             }
             return std::any();
@@ -1399,8 +1423,8 @@ public:
             // All replicas are identical — serialize just one (main device's replica)
             uint64_t job_id = this->worker->submit_main(
                 [&](raft_handle_wrapper_t& handle) -> std::any {
-                    int dev_id = handle.get_device_id();
-                    auto it = this->replicated_indices_.find(dev_id);
+                    int key = handle.get_rank();
+                    auto it = this->replicated_indices_.find(key);
                     if (it == this->replicated_indices_.end())
                         it = this->replicated_indices_.begin();
                     if (it == this->replicated_indices_.end())
@@ -1420,7 +1444,7 @@ public:
                 [&](raft_handle_wrapper_t& handle) -> std::any {
                     int rank = handle.get_rank();
                     std::string shard_file = dir + "/shard_" + std::to_string(rank) + ".bin";
-                    auto it = this->replicated_indices_.find(handle.get_device_id());
+                    auto it = this->replicated_indices_.find(handle.get_rank());
                     if (it != this->replicated_indices_.end()) {
                         cuvs::neighbors::cagra::serialize(
                             *(handle.get_raft_resources()), shard_file,
@@ -1510,7 +1534,7 @@ public:
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                    this->replicated_indices_[handle.get_device_id()] =
+                    this->replicated_indices_[handle.get_rank()] =
                         std::shared_ptr<cagra_index>(std::move(local_idx));
                     return std::any();
                 }
@@ -1529,7 +1553,7 @@ public:
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                    this->replicated_indices_[handle.get_device_id()] =
+                    this->replicated_indices_[handle.get_rank()] =
                         std::shared_ptr<cagra_index>(std::move(local_idx));
                     return std::any();
                 }
@@ -1551,13 +1575,18 @@ public:
         // Drop dynamic_batching wrappers *before* worker->stop() — they hold CUDA
         // streams/buffers tied to the worker threads' resources (see ivf_pq.hpp).
         this->dynb_cache_.clear();
+        // ALL GPU-memory holders must also be freed *before* worker->stop() — they
+        // free device memory back into the per-device RMM pool, which must happen
+        // while the worker's CUDA streams are still alive (see ivf_pq.hpp::destroy).
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            index_.reset();
+            this->replicated_indices_.clear();
+            this->replicated_datasets_.clear();
+            this->quantizer_.reset();
+            this->dataset_device_ptr_.reset();
+        }
         if (this->worker) this->worker->stop();
-        std::unique_lock<std::shared_mutex> lock(this->mutex_);
-        index_.reset();
-        this->replicated_indices_.clear();
-        this->replicated_datasets_.clear();
-        this->quantizer_.reset();
-        this->dataset_device_ptr_.reset();
     }
 
     uint32_t get_dim() const { return this->dimension; }

@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -162,6 +163,20 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 
 		err := s.DropIndex(newCompileWithStubEngine(t, eng, "drop index t2_idx on t2"))
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("DropIndexIfExistsNoop", func(t *testing.T) {
+		s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_DropIndex{
+				DropIndex: &plan2.DropIndex{
+					Database: "db1",
+					Table:    "t2",
+				},
+			},
+		}}}}
+
+		err := s.DropIndex(newCompileWithStubEngine(t, newStubEngine(), "drop index if exists t2_idx on t2"))
+		require.NoError(t, err)
 	})
 
 	t.Run("DropTableSingle", func(t *testing.T) {
@@ -870,7 +885,7 @@ func TestPitrDupError(t *testing.T) {
 func TestIsExperimentalEnabled(t *testing.T) {
 	s := newScope(TableClone)
 
-	enabled, err := s.isExperimentalEnabled(nil, hnswIndexFlag)
+	enabled, err := s.isExperimentalEnabled(nil, hnswruntime.HnswIndexFlag)
 	assert.NoError(t, err)
 	assert.True(t, enabled)
 }

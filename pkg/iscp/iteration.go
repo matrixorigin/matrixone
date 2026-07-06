@@ -34,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -134,7 +136,13 @@ func ExecuteIteration(
 	}
 	if needInit {
 		ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
-		err = ProcessInitSQL(ctxWithAccount, cnUUID, cnEngine, cnTxnClient, jobSpecs[0].ConsumerInfo.InitSQL)
+		err = ProcessInitSQL(
+			ctxWithAccount, cnUUID, cnEngine, cnTxnClient,
+			jobSpecs[0].ConsumerInfo.InitSQL,
+			jobSpecs[0].ConsumerInfo.SrcTable.DBName,
+			jobSpecs[0].ConsumerInfo.SrcTable.TableName,
+			jobSpecs[0].ConsumerInfo.IndexName,
+		)
 		if err != nil {
 			return
 		}
@@ -694,12 +702,93 @@ func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jo
 	}
 }
 
+// initSQLSessionVars loads the source table's def and returns the target
+// index's captured session_vars blob (algo_params.session_vars, JSON text), or
+// nil if absent. Load failures (Database/Relation) and the IndexParamsSessionVars
+// parse error are returned so the caller can fail the InitSQL rather than
+// silently rebuild with defaults; an absent blob (no index match, or no
+// session_vars key) is (nil, nil) — legitimate, skip the overlay.
+func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, dbName, tableName, indexName string) ([]byte, error) {
+	if dbName == "" || tableName == "" || indexName == "" {
+		return nil, nil
+	}
+	db, err := cnEngine.Database(ctx, dbName, txnOp)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := db.Relation(ctx, tableName, nil)
+	if err != nil {
+		return nil, err
+	}
+	tableDef := rel.CopyTableDef(ctx)
+	if tableDef == nil {
+		return nil, nil
+	}
+	for _, idx := range tableDef.Indexes {
+		if idx.IndexName != indexName {
+			continue
+		}
+		sv, serr := catalog.IndexParamsSessionVars(idx.IndexAlgoParams)
+		if serr != nil {
+			return nil, serr
+		}
+		return sv, nil
+	}
+	return nil, nil
+}
+
+// initSQLResolver builds the system-variable resolver for an InitSQL build.
+// When sessionVars (the index's captured algo_params.session_vars) is present,
+// its typed values overlay the process defaults so the background build
+// (cagra_create/ivfpq_create/...) reproduces the create-time config (e.g.
+// kmeans_train_percent); every other var falls through to
+// executor.DefaultResolveVariable. With no sessionVars it IS
+// DefaultResolveVariable (may be nil — caller guards), preserving prior
+// behaviour. Note md.ResolveVariableFunc errors on a var it doesn't hold, so
+// the wrapper falls back on error rather than propagating it.
+func initSQLResolver(sessionVars []byte) (func(string, bool, bool) (interface{}, error), error) {
+	def := executor.DefaultResolveVariable
+	if len(sessionVars) == 0 {
+		// No captured session_vars (old index / non-vector / no build vars):
+		// skip the overlay and resolve through the process default. Not an error.
+		return def, nil
+	}
+	// session_vars is JSON *text* (from algo_params), so parse it with the text
+	// parser (NewMetadataFromJson → bytejson.ParseFromString). NewMetadata uses
+	// bj.Unmarshal, which expects the binary bytejson encoding and would silently
+	// mis-parse the text → md.bj garbage → every lookup falls back.
+	md, err := sqlexec.NewMetadataFromJson(string(sessionVars))
+	if err != nil {
+		// session_vars is present but unparseable — surface the error rather than
+		// silently rebuilding with defaults (which would corrupt the index).
+		return nil, err
+	}
+	if md == nil {
+		return def, nil
+	}
+	return func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		// Captured vars resolve from the overlay; everything else (timezone,
+		// sql_mode, …) falls through to the process default — that per-variable
+		// fallback is expected, unlike the parse-failure case above.
+		if v, verr := md.ResolveVariableFunc(name, isSystemVar, isGlobalVar); verr == nil && v != nil {
+			return v, nil
+		}
+		if def != nil {
+			return def(name, isSystemVar, isGlobalVar)
+		}
+		return nil, nil
+	}, nil
+}
+
 func ProcessInitSQL(
 	ctx context.Context,
 	cnUUID string,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	sql string,
+	dbName string,
+	tableName string,
+	indexName string,
 ) (err error) {
 	decoded, err := base64.StdEncoding.DecodeString(sql)
 	if err != nil {
@@ -728,7 +817,40 @@ func ProcessInitSQL(
 	if err != nil {
 		return
 	}
-	result, err := ExecWithResult(ctx, sql, cnUUID, txnOp)
+
+	// Fetch the target index's captured build-time session vars from
+	// algo_params.session_vars (recorded at CREATE INDEX). The InitSQL build
+	// (cagra_create/ivfpq_create/...) resolves vars like kmeans_train_percent
+	// through this process's resolver; overlaying the captured values lets the
+	// background rebuild reproduce the create-time config instead of process
+	// defaults. A load/parse failure is surfaced; an absent blob yields nil.
+	sessionVars, svErr := initSQLSessionVars(ctx, cnEngine, txnOp, dbName, tableName, indexName)
+	if svErr != nil {
+		err = svErr
+		return
+	}
+
+	// Run the InitSQL through sqlexec's background SqlContext rather than the
+	// frontend back-exec. sqlexec.RunSql (SqlContext path) runs IsFrontend=false
+	// and passes the SqlContext's ResolveVariableFunc straight into the executor
+	// opts, so the overlay built from algo_params.session_vars
+	// (kmeans_train_percent etc.) actually reaches the cuvs build. The frontend
+	// back-exec instead resets the proc resolver to the back session's default
+	// (back_exec.go), silently dropping the overlay. initSQLResolver overlays the
+	// captured session_vars on top of executor.DefaultResolveVariable.
+	accountId, aerr := defines.GetAccountId(ctx)
+	if aerr != nil {
+		err = aerr
+		return
+	}
+	resolver, rerr := initSQLResolver(sessionVars)
+	if rerr != nil {
+		err = rerr
+		return
+	}
+	sqlctx := sqlexec.NewSqlContext(ctx, cnUUID, txnOp, accountId, resolver)
+	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
+	result, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {
 		return
 	}

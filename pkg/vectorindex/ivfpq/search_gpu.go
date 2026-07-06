@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -31,6 +32,7 @@ type IvfpqSearch[T cuvs.VectorType] struct {
 	Tblcfg        vectorindex.IndexTableConfig
 	Indexes       []*IvfpqModel[T]
 	MultiIndex    *cuvs.MultiGpuIvfPq[T]
+	Overflow      *cuvs.GpuBruteForce[T] // CDC insert overflow; nil when no overflow records exist
 	Devices       []int
 	ThreadsSearch int64
 }
@@ -122,7 +124,7 @@ func (s *IvfpqSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt v
 }
 
 // Load implements cache.VectorIndexSearchIf.
-func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
+func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	indexes, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
@@ -134,15 +136,220 @@ func (s *IvfpqSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 	s.Indexes = indexes
-	s.MultiIndex = s.buildMultiIndex()
+	// From here the GPU sub-indexes are owned by s. If a later step fails, the
+	// cache drops the entry WITHOUT calling Destroy (see VectorIndexCache.Search),
+	// and there is no finalizer, so release them here to avoid orphaning GPU
+	// memory on every failed load. Destroy is idempotent and safe on partial state.
+	defer func() {
+		if err != nil {
+			s.Destroy()
+		}
+	}()
+	if err = s.loadCdcTail(sqlproc); err != nil {
+		return err
+	}
+	if err = s.buildOverflow(); err != nil {
+		return err
+	}
+	s.MultiIndex, err = s.buildMultiIndex()
+	return err
+}
+
+// loadCdcTail mirrors cagra.CagraSearch.loadCdcTail — see that for the
+// architectural commentary. Differs only in the IndexConfig type slot and
+// the GpuIvfPq element type.
+func (s *IvfpqSearch[T]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
+	var (
+		includeBytesPerRow int
+		colMetaJSON        string
+	)
+	// Prefer a loaded sub-index's IncludeBytesPerRow + colMetaJSON.
+	// Falls back to the colMetaJSON embedded in the first tag=1
+	// chunk's frame header section when no sub-index exists for this
+	// index slice.
+	for _, m := range s.Indexes {
+		if m.Index != nil {
+			includeBytesPerRow = m.IncludeBytesPerRow
+			colMetaJSON = m.Index.GetFilterColMetaJSON()
+			break
+		}
+	}
+
+	stub := &IvfpqModel[T]{Id: vectorindex.CdcTailId}
+	chunks, err := stub.loadCdcEventsFromDB(sqlproc, s.Tblcfg)
+	if err != nil {
+		return err
+	}
+	if len(chunks) == 0 {
+		return nil
+	}
+	cuvscdc.SortChunks(chunks)
+
+	if colMetaJSON == "" {
+		colMetaJSON, err = cuvscdc.PeekColMetaJSON(chunks)
+		if err != nil {
+			return err
+		}
+		if colMetaJSON != "" {
+			includeBytesPerRow, err = cuvscdc.CdcIncludeBytesPerRow(colMetaJSON)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	dim := int(s.Idxcfg.CuvsIvfpq.Dimensions)
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks(chunks, dim, includeBytesPerRow)
+	if err != nil {
+		return err
+	}
+	if len(delPkids) == 0 && len(ovPkids) == 0 {
+		return nil
+	}
+
+	for _, m := range s.Indexes {
+		if m.Index != nil {
+			if err = m.Index.DeleteIds(delPkids); err != nil {
+				return err
+			}
+		}
+	}
+
+	s.Indexes = append(s.Indexes, &IvfpqModel[T]{
+		Id:                   vectorindex.CdcTailId,
+		DeletedPkids:         delPkids,
+		OverflowPkids:        ovPkids,
+		OverflowVecs:         ovVecs,
+		OverflowIncludeBytes: ovInc,
+		IncludeBytesPerRow:   includeBytesPerRow,
+		OverflowColMetaJSON:  colMetaJSON,
+	})
+	return nil
+}
+
+// addOverflowFilterChunks — see cagra/search_gpu.go for docs.
+func addOverflowFilterChunks[T cuvs.VectorType](
+	bf *cuvs.GpuBruteForce[T],
+	colMetaJSON string,
+	includeBytes []byte,
+	nrows uint64,
+	includeBytesPerRow int,
+) error {
+	colData, colNulls, err := cuvscdc.SplitIncludeBytes(colMetaJSON, includeBytes, nrows, includeBytesPerRow)
+	if err != nil {
+		return err
+	}
+	for i := range colData {
+		if err = bf.AddFilterChunk(uint32(i), colData[i], colNulls[i], nrows); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildOverflow assembles a single GpuBruteForce index from the union of every
+// loaded model's CDC insert overflow. When the underlying index has INCLUDE
+// columns, the brute-force is set up with the matching FilterStore so a
+// filtered query can prefilter overflow rows.
+func (s *IvfpqSearch[T]) buildOverflow() error {
+	total := uint64(0)
+	for _, m := range s.Indexes {
+		total += uint64(len(m.OverflowPkids))
+	}
+	if total == 0 {
+		s.Overflow = nil
+		return nil
+	}
+
+	cuvsMetric, ok := metric.MetricTypeToCuvsMetric[metric.MetricType(s.Idxcfg.CuvsIvfpq.Metric)]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("IvfpqSearch: unsupported metric type for overflow")
+	}
+	dim := uint32(s.Idxcfg.CuvsIvfpq.Dimensions)
+
+	device := 0
+	if len(s.Devices) > 0 {
+		device = s.Devices[0]
+	}
+
+	bf, err := cuvs.NewGpuBruteForceEmpty[T](
+		total, dim, cuvsMetric, uint32(s.ThreadsSearch), device)
+	if err != nil {
+		return err
+	}
+	if err = bf.Start(); err != nil {
+		bf.Destroy()
+		return err
+	}
+
+	// INCLUDE-column wiring — pull the col-meta JSON from the first loaded
+	// model (every shard agrees by construction). For small-data-only
+	// indexes (no tag=0 sub-index ever built) the synthetic CDC-tail model
+	// carries the colMetaJSON recovered from the CdcOpHeader record.
+	var (
+		colMetaJSON        string
+		includeBytesPerRow int
+	)
+	for _, m := range s.Indexes {
+		if m.Index != nil {
+			colMetaJSON = m.Index.GetFilterColMetaJSON()
+			includeBytesPerRow = m.IncludeBytesPerRow
+			break
+		}
+	}
+	if colMetaJSON == "" {
+		for _, m := range s.Indexes {
+			if m.OverflowColMetaJSON != "" {
+				colMetaJSON = m.OverflowColMetaJSON
+				includeBytesPerRow = m.IncludeBytesPerRow
+				break
+			}
+		}
+	}
+	if colMetaJSON != "" && includeBytesPerRow > 0 {
+		if err = bf.SetFilterColumns(colMetaJSON, total); err != nil {
+			bf.Destroy()
+			return err
+		}
+	}
+
+	for _, m := range s.Indexes {
+		if len(m.OverflowPkids) == 0 {
+			continue
+		}
+		count := uint64(len(m.OverflowPkids))
+		if err = bf.AddChunkFloat(m.OverflowVecs, count, m.OverflowPkids); err != nil {
+			bf.Destroy()
+			return err
+		}
+		if colMetaJSON != "" && includeBytesPerRow > 0 {
+			if err = addOverflowFilterChunks(bf, colMetaJSON, m.OverflowIncludeBytes, count, includeBytesPerRow); err != nil {
+				bf.Destroy()
+				return err
+			}
+		}
+	}
+	if err = bf.Build(); err != nil {
+		bf.Destroy()
+		return err
+	}
+	s.Overflow = bf
 	return nil
 }
 
 // buildMultiIndex assembles a MultiGpuIvfPq from the loaded indexes.
-func (s *IvfpqSearch[T]) buildMultiIndex() *cuvs.MultiGpuIvfPq[T] {
+// Returns nil when there is nothing to search — either no sub-indexes
+// loaded AND no brute-force overflow built. The empty-MultiIndex case
+// feeds into Search, which returns []int64{}, []float64{} on
+// s.MultiIndex == nil — that's the load-bearing path for "no main
+// index + no brute-force → empty result". Any future regression here
+// will fail TestIvfpqSearchEmpty.
+func (s *IvfpqSearch[T]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[T], error) {
 	cuvsMetric, ok := metric.MetricTypeToCuvsMetric[metric.MetricType(s.Idxcfg.CuvsIvfpq.Metric)]
 	if !ok {
-		return nil
+		// Unsupported metric is a real error — surface it rather than returning a
+		// nil index, which Search would treat as an (empty) success.
+		return nil, moerr.NewInternalErrorNoCtxf("IvfpqSearch: unsupported metric type %v", s.Idxcfg.CuvsIvfpq.Metric)
 	}
 	gpuIndices := make([]*cuvs.GpuIvfPq[T], 0, len(s.Indexes))
 	for _, model := range s.Indexes {
@@ -150,11 +357,13 @@ func (s *IvfpqSearch[T]) buildMultiIndex() *cuvs.MultiGpuIvfPq[T] {
 			gpuIndices = append(gpuIndices, model.Index)
 		}
 	}
-	if len(gpuIndices) == 0 {
-		return nil
+	if len(gpuIndices) == 0 && s.Overflow == nil {
+		// Empty index: no sub-indexes AND no brute-force overflow. Not an error —
+		// Search returns an empty result via its nil-MultiIndex guard.
+		return nil, nil
 	}
 	dim := uint32(s.Idxcfg.CuvsIvfpq.Dimensions)
-	return cuvs.NewMultiGpuIvfPq(gpuIndices, nil, dim, cuvsMetric)
+	return cuvs.NewMultiGpuIvfPq(gpuIndices, s.Overflow, dim, cuvsMetric), nil
 }
 
 // loadIndexes loads each model's index data from the database.
@@ -174,6 +383,10 @@ func (s *IvfpqSearch[T]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*Ivf
 // Destroy implements cache.VectorIndexSearchIf.
 func (s *IvfpqSearch[T]) Destroy() {
 	s.MultiIndex = nil
+	if s.Overflow != nil {
+		s.Overflow.Destroy()
+		s.Overflow = nil
+	}
 	for _, idx := range s.Indexes {
 		idx.Destroy()
 	}

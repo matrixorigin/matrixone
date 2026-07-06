@@ -25,6 +25,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
+	"math/bits"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	fj "github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
@@ -891,6 +894,46 @@ type NormalType interface {
 		constraints.Integer
 }
 
+// coalesceDecimalResult derives the common decimal result type for a coalesce
+// over decimal/integer branches, preserving the maximum integral width and
+// scale and promoting to a wider decimal family (decimal256) when the combined
+// precision overflows decimal128. It then resolves the matching overload index.
+// Returns ok=false when the required precision overflows decimal256 or no
+// overload matches the resulting decimal family.
+func coalesceDecimalResult(overloads []overload, minOid types.T, inputs []types.Type) (types.Type, int, bool) {
+	target := minOid.ToType()
+	if !setSafeDecimalWidthAndScaleFromSource(&target, inputs) {
+		return types.Type{}, -1, false
+	}
+	for i, over := range overloads {
+		if len(over.args) == 1 && over.args[0] == target.Oid {
+			return target, i, true
+		}
+	}
+	return types.Type{}, -1, false
+}
+
+func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+	target, aligned, ok := textStringCommonType(inputs)
+	if !ok {
+		return checkResult{}, false
+	}
+	for i, over := range overloads {
+		if len(over.args) != 1 || over.args[0] != target.Oid {
+			continue
+		}
+		if aligned {
+			return newCheckResultWithSuccess(i), true
+		}
+		castType := make([]types.Type, len(inputs))
+		for j := range castType {
+			castType[j] = target
+		}
+		return newCheckResultWithCast(i, castType), true
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong), true
+}
+
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 0 {
 		if retType, ok := mixedStringNumericToVarchar(inputs); ok {
@@ -904,6 +947,9 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				}
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
+			return result
 		}
 
 		minIndex := -1
@@ -920,6 +966,19 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 			if sta == matchFailed {
 				continue
 			} else if sta == matchDirectly {
+				// Decimals that match directly still need scale/width alignment
+				// across branches: without it the result inherits the first
+				// branch's scale while carrying another branch's raw value,
+				// magnifying the result (issue #24565). Keep them as a candidate
+				// and resolve the aligned type below instead of short-circuiting.
+				if requireOid.IsDecimal() {
+					if cos < minCost {
+						minIndex = i
+						minCost = cos
+						minOid = requireOid
+					}
+					continue
+				}
 				return newCheckResultWithSuccess(i)
 			} else {
 				if cos < minCost {
@@ -932,6 +991,32 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 		if minIndex == -1 {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
+
+		// Decimal branches: choose a common type that keeps the maximum integral
+		// width and scale (promoting to decimal256 when needed), so the result
+		// neither loses integer capacity nor inherits a single branch's scale.
+		if minOid.IsDecimal() {
+			target, overloadIndex, ok := coalesceDecimalResult(overloads, minOid, inputs)
+			if !ok {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			aligned := true
+			for i := range inputs {
+				if inputs[i].Oid != target.Oid || inputs[i].Scale != target.Scale || inputs[i].Width != target.Width {
+					aligned = false
+					break
+				}
+			}
+			if aligned {
+				return newCheckResultWithSuccess(overloadIndex)
+			}
+			castType := make([]types.Type, len(inputs))
+			for i := range castType {
+				castType[i] = target
+			}
+			return newCheckResultWithCast(overloadIndex, castType)
+		}
+
 		castType := make([]types.Type, len(inputs))
 		for i := range castType {
 			if minOid == inputs[i].Oid {
@@ -942,7 +1027,7 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 		}
 
-		if minOid.IsDecimal() || minOid.IsDateRelate() {
+		if minOid.IsDateRelate() {
 			setMaxScaleForAll(castType)
 		}
 		return newCheckResultWithCast(minIndex, castType)
@@ -1063,7 +1148,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			allNull = false
 		}
 		if allNull {
-			if err = rs.AppendBytes(nil, true); err != nil {
+			if err = rs.AppendBytes(nil, false); err != nil {
 				return err
 			}
 			continue
@@ -2498,9 +2583,17 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 		return nil
 	}
 
-	// Validate base ranges (2-36)
-	if fromBase < 2 || fromBase > 36 || toBase < 2 || toBase > 36 {
-		return moerr.NewInvalidInputf(proc.Ctx, "conv base must be between 2 and 36, got from_base=%d, to_base=%d", fromBase, toBase)
+	absFromBase := absInt64(fromBase)
+	absToBase := absInt64(toBase)
+
+	// Invalid bases return NULL.
+	if absFromBase < 2 || absFromBase > 36 || absToBase < 2 || absToBase > 36 {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	// Handle different input types for N
@@ -2547,6 +2640,22 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	}
 }
 
+func absInt64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func formatUnsignedToBase(val uint64, toBase int64) string {
+	base := absInt64(toBase)
+	if toBase < 0 {
+		signedVal := int64(bits.ReverseBytes64(bits.ReverseBytes64(val)))
+		return strings.ToUpper(strconv.FormatInt(signedVal, int(base)))
+	}
+	return strings.ToUpper(strconv.FormatUint(val, int(base)))
+}
+
 func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	nParam := vector.GenerateFunctionStrParameter(nVec)
 
@@ -2565,50 +2674,106 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 			}
 			continue
 		}
-
-		// Parse the number from from_base
-		// strconv.ParseInt can handle bases 2-36
-		val, err := strconv.ParseInt(strings.TrimSpace(string(nStr)), int(fromBase), 64)
-		if err != nil {
-			// If parsing as signed int fails, try unsigned
-			uval, uerr := strconv.ParseUint(strings.TrimSpace(string(nStr)), int(fromBase), 64)
-			if uerr != nil {
-				// Return NULL if parsing fails (MySQL behavior)
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
-			// Convert unsigned to string in to_base
-			result := strconv.FormatUint(uval, int(toBase))
-			if err := rs.AppendBytes([]byte(result), false); err != nil {
+		if len(strings.TrimSpace(string(nStr))) == 0 {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			// Convert signed int to string in to_base
-			// For negative numbers, MySQL returns the unsigned representation
-			if val < 0 {
-				uval := uint64(val)
-				result := strconv.FormatUint(uval, int(toBase))
-				if err := rs.AppendBytes([]byte(result), false); err != nil {
-					return err
-				}
-			} else {
-				result := strconv.FormatInt(val, int(toBase))
-				if err := rs.AppendBytes([]byte(result), false); err != nil {
-					return err
-				}
+			continue
+		}
+
+		signedVal, unsignedVal, signed, err := parseConvStrictString(string(nStr), fromBase)
+		if err != nil {
+			return err
+		}
+		if signed {
+			if err := rs.AppendBytes([]byte(formatSignedToBase(signedVal, toBase)), false); err != nil {
+				return err
 			}
+			continue
+		}
+		if err := rs.AppendBytes([]byte(formatUnsignedToBase(unsignedVal, toBase)), false); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
 func formatSignedToBase(val int64, toBase int64) string {
-	if val < 0 {
-		return strconv.FormatUint(uint64(val), int(toBase))
+	base := absInt64(toBase)
+	if toBase < 0 {
+		return strings.ToUpper(strconv.FormatInt(val, int(base)))
 	}
-	return strconv.FormatInt(val, int(toBase))
+	if val < 0 {
+		return strings.ToUpper(strconv.FormatUint(uint64(val), int(base)))
+	}
+	return strings.ToUpper(strconv.FormatInt(val, int(base)))
+}
+
+func parseConvStrictString(n string, fromBase int64) (int64, uint64, bool, error) {
+	s := strings.TrimSpace(n)
+	if len(s) == 0 {
+		return 0, 0, false, nil
+	}
+
+	base := int(absInt64(fromBase))
+	signOffset := 0
+	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
+		signOffset = 1
+	}
+	if signOffset == len(s) {
+		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+	}
+	for _, ch := range s[signOffset:] {
+		var digit int
+		switch {
+		case ch >= '0' && ch <= '9':
+			digit = int(ch - '0')
+		case ch >= 'A' && ch <= 'Z':
+			digit = int(ch-'A') + 10
+		case ch >= 'a' && ch <= 'z':
+			digit = int(ch-'a') + 10
+		default:
+			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		}
+		if digit >= base {
+			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		}
+	}
+
+	if fromBase < 0 {
+		val, err := strconv.ParseInt(s, base, 64)
+		if err != nil {
+			if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+				if strings.HasPrefix(s, "-") {
+					return math.MinInt64, 0, true, nil
+				}
+				return math.MaxInt64, 0, true, nil
+			}
+			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		}
+		return val, 0, true, nil
+	}
+
+	if strings.HasPrefix(s, "-") {
+		magnitudeStr := s[1:]
+		magnitude, ok := new(big.Int).SetString(magnitudeStr, base)
+		if !ok {
+			return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+		}
+		reduced := new(big.Int).Mod(magnitude, new(big.Int).Lsh(big.NewInt(1), 64))
+		return 0, uint64(0) - reduced.Uint64(), false, nil
+	}
+
+	s = strings.TrimPrefix(s, "+")
+
+	uval, err := strconv.ParseUint(s, base, 64)
+	if err != nil {
+		if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+			return 0, math.MaxUint64, false, nil
+		}
+		return 0, 0, false, moerr.NewInvalidInputNoCtxf("invalid conv input %q for base %d", n, base)
+	}
+	return 0, uval, false, nil
 }
 
 func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
@@ -2738,7 +2903,7 @@ func convUint8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResul
 			continue
 		}
 
-		result := strconv.FormatUint(uint64(n), int(toBase))
+		result := formatUnsignedToBase(uint64(n), toBase)
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
@@ -2765,7 +2930,7 @@ func convUint16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResu
 			continue
 		}
 
-		result := strconv.FormatUint(uint64(n), int(toBase))
+		result := formatUnsignedToBase(uint64(n), toBase)
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
@@ -2792,7 +2957,7 @@ func convUint32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResu
 			continue
 		}
 
-		result := strconv.FormatUint(uint64(n), int(toBase))
+		result := formatUnsignedToBase(uint64(n), toBase)
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
@@ -2820,7 +2985,7 @@ func convUint64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResu
 		}
 
 		// Convert uint64 to string in to_base
-		result := strconv.FormatUint(n, int(toBase))
+		result := formatUnsignedToBase(n, toBase)
 		if err := rs.AppendBytes([]byte(result), false); err != nil {
 			return err
 		}
@@ -7726,7 +7891,8 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 
 			// MySQL INSERT behavior:
 			// - If pos <= 0 or pos > string length, return original string
-			// - If replaceLen <= 0, insert newstr at position pos without removing anything
+			// - If replaceLen = 0, insert newstr at position pos without removing anything
+			// - If replaceLen < 0, replace from pos to the end of the string
 			// - Otherwise, replace replaceLen characters starting at pos with newstr
 			// - Position is 1-based
 
@@ -7734,7 +7900,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			if pos <= 0 || pos > strLen {
 				// Invalid position, return original string
 				result = str
-			} else if replaceLen <= 0 {
+			} else if replaceLen == 0 {
 				// Insert without removing
 				posIdx := int(pos - 1) // Convert to 0-based index
 				if posIdx >= len(runes) {
@@ -7745,9 +7911,10 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			} else {
 				// Replace replaceLen characters starting at pos
 				posIdx := int(pos - 1) // Convert to 0-based index
-				endIdx := posIdx + int(replaceLen)
-				if endIdx > len(runes) {
-					endIdx = len(runes)
+				endIdx := len(runes)
+				remaining := int64(len(runes) - posIdx)
+				if replaceLen > 0 && replaceLen < remaining {
+					endIdx = posIdx + int(replaceLen)
 				}
 				if posIdx >= len(runes) {
 					result = str + newstr
@@ -7994,67 +8161,753 @@ func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 	}, selectList)
 }
 
-func StDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
-		return geometryDistance(v1, v2)
+// StGeoHashFromPoint is ST_GeoHash(point, max_length): the geohash of a point.
+func StGeoHashFromPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxLen int64) (string, error) {
+		x, y, err := parsePointXYFromPayload(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		return geo.EncodeGeoHash(x, y, int(maxLen)), nil
 	}, selectList)
 }
 
+// StGeoHashFromLonLat is ST_GeoHash(longitude, latitude, max_length).
+func StGeoHashFromLonLat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	lons := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+	lats := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		lon, n1 := lons.GetValue(i)
+		lat, n2 := lats.GetValue(i)
+		l, n3 := lens.GetValue(i)
+		if n1 || n2 || n3 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(geo.EncodeGeoHash(lon, lat, int(l))), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// StPointFromGeoHash is ST_PointFromGeoHash(geohash, srid): the center point of
+// a geohash cell. The SRID lands in the result type via the binder.
+func StPointFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	hashes := vector.GenerateFunctionStrParameter(ivecs[0])
+	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		h, n1 := hashes.GetStrValue(i)
+		_, n2 := srids.GetValue(i)
+		if n1 || n2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		lon, lat, err := geo.DecodeGeoHash(functionUtil.QuickBytesToStr(h))
+		if err != nil {
+			return moerr.NewInvalidInputNoCtx("invalid geohash")
+		}
+		if err := rs.AppendBytes(geo.WriteWKB(geo.Point{X: lon, Y: lat}), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// StBuffer returns the buffer polygon of a geometry at the given distance
+// (default 8 segments per quarter circle).
+func StBuffer(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
+	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, dist float64) (string, error) {
+		g, err := decodeGeoGeometry(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		b, berr := geo.Buffer(g, dist, 8)
+		if berr != nil {
+			return "", berr
+		}
+		return functionUtil.QuickBytesToStr(geoEncodeWKB(b, f32)), nil
+	}, selectList)
+}
+
+// StBufferQS is ST_Buffer with an explicit segments-per-quarter-circle count.
+func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	dists := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+	quads := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := source.GetStrValue(i)
+		dist, null2 := dists.GetValue(i)
+		qs, null3 := quads.GetValue(i)
+		if null1 || null2 || null3 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		g, err := decodeGeoGeometry(v)
+		if err != nil {
+			return err
+		}
+		b, berr := geo.Buffer(g, dist, int(qs))
+		if berr != nil {
+			return berr
+		}
+		if err := rs.AppendBytes(geoEncodeWKB(b, f32), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// overlayBinary builds an eval function for a polygon Boolean operation.
+func overlayBinary(op geo.BoolOp) fEvalFn {
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		// float32 output only when both operands are GEOMETRY32.
+		f32 := geometryArgIsFloat32(ivecs, 0) && geometryArgIsFloat32(ivecs, 1)
+		return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
+			a, err := decodeGeoGeometry(v1)
+			if err != nil {
+				return nil, err
+			}
+			b, err := decodeGeoGeometry(v2)
+			if err != nil {
+				return nil, err
+			}
+			g, oerr := geo.Overlay(a, b, op)
+			if oerr != nil {
+				return nil, oerr
+			}
+			return geoEncodeWKB(g, f32), nil
+		}, selectList)
+	}
+}
+
+// StUnion returns the polygon union of two areal geometries.
+func StUnion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return overlayBinary(geo.OpUnion)(ivecs, result, proc, length, selectList)
+}
+
+// StIntersection returns the polygon intersection of two areal geometries.
+func StIntersection(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return overlayBinary(geo.OpIntersection)(ivecs, result, proc, length, selectList)
+}
+
+// StDifference returns the polygon difference (g1 minus g2).
+func StDifference(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return overlayBinary(geo.OpDifference)(ivecs, result, proc, length, selectList)
+}
+
+// StSymDifference returns the polygon symmetric difference of two geometries.
+func StSymDifference(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return overlayBinary(geo.OpXOR)(ivecs, result, proc, length, selectList)
+}
+
+// StFrechetDistance returns the discrete Fréchet distance (planar) between two
+// geometries' vertex sequences.
+func StFrechetDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistance[float64](ivecs, result, proc, length, selectList)
+}
+
+// StFrechetDistance32 is the GEOMETRY32 overload of ST_FrechetDistance.
+func StFrechetDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistance[float32](ivecs, result, proc, length, selectList)
+}
+
+func stFrechetDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
+		a, err := decodeGeoGeometry(v1)
+		if err != nil {
+			return 0, err
+		}
+		b, err := decodeGeoGeometry(v2)
+		if err != nil {
+			return 0, err
+		}
+		d, ok := geo.FrechetDistance(a, b)
+		if !ok {
+			return 0, moerr.NewInvalidInputNoCtx("ST_FrechetDistance: empty geometry")
+		}
+		return T(d), nil
+	}, selectList)
+}
+
+// StHausdorffDistance returns the discrete Hausdorff distance (planar) between
+// two geometries' vertex sets.
+func StHausdorffDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistance[float64](ivecs, result, proc, length, selectList)
+}
+
+// StHausdorffDistance32 is the GEOMETRY32 overload of ST_HausdorffDistance.
+func StHausdorffDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistance[float32](ivecs, result, proc, length, selectList)
+}
+
+func stHausdorffDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
+		a, err := decodeGeoGeometry(v1)
+		if err != nil {
+			return 0, err
+		}
+		b, err := decodeGeoGeometry(v2)
+		if err != nil {
+			return 0, err
+		}
+		d, ok := geo.HausdorffDistance(a, b)
+		if !ok {
+			return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
+		}
+		return T(d), nil
+	}, selectList)
+}
+
+// requireLineString decodes a geometry payload and asserts it is a LINESTRING.
+func requireLineString(v []byte) (geo.LineString, error) {
+	g, err := decodeGeoGeometry(v)
+	if err != nil {
+		return geo.LineString{}, err
+	}
+	l, ok := g.(geo.LineString)
+	if !ok {
+		return geo.LineString{}, moerr.NewInvalidInputNoCtx("geometry is not a LINESTRING")
+	}
+	return l, nil
+}
+
+// StLineInterpolatePoint returns the point at a fraction of a line's length.
+func StLineInterpolatePoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
+	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, f float64) (string, error) {
+		l, err := requireLineString(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		p, err := geo.InterpolatePoint(l, f)
+		if err != nil {
+			return "", err
+		}
+		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
+	}, selectList)
+}
+
+// StLineInterpolatePoints returns points at every fraction interval along a line.
+func StLineInterpolatePoints(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
+	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, f float64) (string, error) {
+		l, err := requireLineString(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		g, err := geo.InterpolatePoints(l, f)
+		if err != nil {
+			return "", err
+		}
+		return functionUtil.QuickBytesToStr(geoEncodeWKB(g, f32)), nil
+	}, selectList)
+}
+
+// StPointAtDistance returns the point at a distance along a line.
+func StPointAtDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
+	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, d float64) (string, error) {
+		l, err := requireLineString(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		p, err := geo.PointAtDistance(l, d)
+		if err != nil {
+			return "", err
+		}
+		return functionUtil.QuickBytesToStr(geoEncodeWKB(p, f32)), nil
+	}, selectList)
+}
+
+// StSimplify reduces a geometry's vertices with Douglas-Peucker at the given
+// planar tolerance.
+func StSimplify(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0)
+	return opBinaryStrFixedToStrWithErrorCheck[float64](ivecs, result, proc, length, func(v string, tol float64) (string, error) {
+		g, err := decodeGeoGeometry(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		return functionUtil.QuickBytesToStr(geoEncodeWKB(geo.Simplify(g, tol), f32)), nil
+	}, selectList)
+}
+
+// StCollect bundles two geometries into the most specific aggregate (multi or
+// collection).
+func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	f32 := geometryArgIsFloat32(ivecs, 0) && geometryArgIsFloat32(ivecs, 1)
+	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
+		a, err := decodeGeoGeometry(v1)
+		if err != nil {
+			return nil, err
+		}
+		b, err := decodeGeoGeometry(v2)
+		if err != nil {
+			return nil, err
+		}
+		return geoEncodeWKB(geo.Collect(a, b), f32), nil
+	}, selectList)
+}
+
+// StAsGeoJSONPrec renders a geometry as GeoJSON, rounding each coordinate to at
+// most maxdecimaldigits decimal places.
+func StAsGeoJSONPrec(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxDec int64) (string, error) {
+		g, err := decodeGeoGeometry(functionUtil.QuickStrToBytes(v))
+		if err != nil {
+			return "", err
+		}
+		md := int(maxDec)
+		if md < 0 {
+			md = -1
+		}
+		return geo.WriteGeoJSON(g, md), nil
+	}, selectList)
+}
+
+// StGeomFromGeoJSONWithSRID builds a geometry from a GeoJSON object with an
+// explicit SRID (recorded in the result type's Width by the binder).
+func StGeomFromGeoJSONWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	maxPoints := maxPointsInGeometryLimit(proc)
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null1 := source.GetStrValue(i)
+		srid, null2 := srids.GetValue(i)
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if srid < 0 || srid > int64(geo.MaxSRID) {
+			return moerr.NewInvalidInputNoCtxf("SRID should be between 0 and %d", geo.MaxSRID)
+		}
+		g, err := geo.ParseGeoJSON(v)
+		if err != nil {
+			return err
+		}
+		if err := validateGeometryTextForStorage(geo.WriteWKT(g), maxPoints); err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(geo.WriteWKB(g), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// --- MBR (minimum bounding rectangle) predicates ---------------------------
+
+// mbrPredicate evaluates a bounding-box predicate on the envelopes of two
+// geometries.
+func mbrPredicate(left, right []byte, pred func(a, b geo.BBox) bool) (bool, error) {
+	lg, err := decodeGeoGeometry(left)
+	if err != nil {
+		return false, err
+	}
+	rg, err := decodeGeoGeometry(right)
+	if err != nil {
+		return false, err
+	}
+	a, ok1 := geo.Envelope(lg)
+	b, ok2 := geo.Envelope(rg)
+	if !ok1 || !ok2 {
+		return false, nil
+	}
+	return pred(a, b), nil
+}
+
+func bboxContains(a, b geo.BBox) bool {
+	return a.MinX <= b.MinX && a.MinY <= b.MinY && a.MaxX >= b.MaxX && a.MaxY >= b.MaxY
+}
+
+func bboxDisjoint(a, b geo.BBox) bool {
+	return a.MaxX < b.MinX || a.MinX > b.MaxX || a.MaxY < b.MinY || a.MinY > b.MaxY
+}
+
+func bboxTouches(a, b geo.BBox) bool {
+	ix1, iy1 := math.Max(a.MinX, b.MinX), math.Max(a.MinY, b.MinY)
+	ix2, iy2 := math.Min(a.MaxX, b.MaxX), math.Min(a.MaxY, b.MaxY)
+	if ix1 > ix2 || iy1 > iy2 {
+		return false
+	}
+	// Intersect, but only along an edge or at a point (zero-area intersection).
+	return ix1 == ix2 || iy1 == iy2
+}
+
+func bboxOverlaps(a, b geo.BBox) bool {
+	ix1, iy1 := math.Max(a.MinX, b.MinX), math.Max(a.MinY, b.MinY)
+	ix2, iy2 := math.Min(a.MaxX, b.MaxX), math.Min(a.MaxY, b.MaxY)
+	if ix1 >= ix2 || iy1 >= iy2 {
+		return false // disjoint or touching only
+	}
+	return !bboxContains(a, b) && !bboxContains(b, a)
+}
+
+func mbrBinary(name string, pred func(a, b geo.BBox) bool) fEvalFn {
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
+			return mbrPredicate(v1, v2, pred)
+		}, selectList)
+	}
+}
+
+func MBRContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRContains", bboxContains)(ivecs, result, proc, length, selectList)
+}
+
+func MBRCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRCovers", bboxContains)(ivecs, result, proc, length, selectList)
+}
+
+func MBRWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRWithin", func(a, b geo.BBox) bool { return bboxContains(b, a) })(ivecs, result, proc, length, selectList)
+}
+
+func MBRCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRCoveredBy", func(a, b geo.BBox) bool { return bboxContains(b, a) })(ivecs, result, proc, length, selectList)
+}
+
+func MBRDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRDisjoint", bboxDisjoint)(ivecs, result, proc, length, selectList)
+}
+
+func MBRIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRIntersects", func(a, b geo.BBox) bool { return !bboxDisjoint(a, b) })(ivecs, result, proc, length, selectList)
+}
+
+func MBREquals(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBREquals", func(a, b geo.BBox) bool { return a == b })(ivecs, result, proc, length, selectList)
+}
+
+func MBROverlaps(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBROverlaps", bboxOverlaps)(ivecs, result, proc, length, selectList)
+}
+
+func MBRTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return mbrBinary("MBRTouches", bboxTouches)(ivecs, result, proc, length, selectList)
+}
+
+// StMakeEnvelope builds the axis-aligned rectangle polygon spanning two corner
+// points (ST_MakeEnvelope).
+func StMakeEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
+		x1, y1, err := parsePointXYFromPayload(v1)
+		if err != nil {
+			return nil, err
+		}
+		x2, y2, err := parsePointXYFromPayload(v2)
+		if err != nil {
+			return nil, err
+		}
+		minX, maxX := math.Min(x1, x2), math.Max(x1, x2)
+		minY, maxY := math.Min(y1, y2), math.Max(y1, y2)
+		ring := []geo.Coord{{X: minX, Y: minY}, {X: maxX, Y: minY}, {X: maxX, Y: maxY}, {X: minX, Y: maxY}, {X: minX, Y: minY}}
+		return geo.WriteWKB(geo.Polygon{Rings: [][]geo.Coord{ring}}), nil
+	}, selectList)
+}
+
+// StDistanceSphere returns the great-circle distance in meters between two
+// geometries on a sphere of EarthRadiusMeters (ST_Distance_Sphere).
+func StDistanceSphere(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDistanceSphere[float64](ivecs, result, proc, length, selectList)
+}
+
+// StDistanceSphere32 is the GEOMETRY32 overload of ST_Distance_Sphere.
+func StDistanceSphere32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDistanceSphere[float32](ivecs, result, proc, length, selectList)
+}
+
+func stDistanceSphere[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// ST_Distance_Sphere has stricter constraints than ST_Distance: the two
+	// operands must share an SRID, must be POINT/MULTIPOINT, and their ordinates
+	// must be valid longitude/latitude (the sphere kernel interprets X/Y as
+	// degrees regardless of SRID). Mirror MySQL rather than silently feeding any
+	// geometry, mixed SRID, or out-of-range coordinate to the geodetic kernel.
+	if err := checkBinaryGeometryTypeSRID("ST_DISTANCE_SPHERE", ivecs); err != nil {
+		return err
+	}
+	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
+		lg, err := decodeGeoGeometry(v1)
+		if err != nil {
+			return 0, err
+		}
+		if err := validateDistanceSphereGeometry(lg); err != nil {
+			return 0, err
+		}
+		rg, err := decodeGeoGeometry(v2)
+		if err != nil {
+			return 0, err
+		}
+		if err := validateDistanceSphereGeometry(rg); err != nil {
+			return 0, err
+		}
+		d, ok := geo.DistanceMeters(lg, rg)
+		if !ok {
+			return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		return T(d), nil
+	}, selectList)
+}
+
+// validateDistanceSphereGeometry enforces the ST_Distance_Sphere input contract:
+// only POINT and MULTIPOINT geometries are accepted, and every coordinate must
+// lie within longitude [-180, 180] and latitude [-90, 90].
+func validateDistanceSphereGeometry(g geo.Geometry) error {
+	checkCoord := func(x, y float64) error {
+		if x < -180 || x > 180 {
+			return moerr.NewInvalidInputNoCtxf("ST_DISTANCE_SPHERE longitude %v is out of range [-180, 180]", x)
+		}
+		if y < -90 || y > 90 {
+			return moerr.NewInvalidInputNoCtxf("ST_DISTANCE_SPHERE latitude %v is out of range [-90, 90]", y)
+		}
+		return nil
+	}
+	switch v := g.(type) {
+	case geo.Point:
+		if v.IsEmpty {
+			return nil
+		}
+		return checkCoord(v.X, v.Y)
+	case geo.MultiPoint:
+		for _, p := range v.Points {
+			if p.IsEmpty {
+				continue
+			}
+			if err := checkCoord(p.X, p.Y); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return moerr.NewInvalidInputNoCtx("ST_DISTANCE_SPHERE only supports POINT and MULTIPOINT inputs")
+	}
+}
+
+// geometryDistanceBySRID computes the distance between two geometries in the
+// coordinate system selected by srid: geodesic meters for SRID 4326, Cartesian
+// otherwise.
+func geometryDistanceBySRID(left, right []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
+	if srid == geo.SRIDWGS84 {
+		return geodeticDistance(left, right)
+	}
+	return geometryDistance(left, right)
+}
+
+func StDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDistance[float64](ivecs, result, proc, length, selectList)
+}
+
+// StDistance32 is the GEOMETRY32 overload of ST_Distance (returns float32).
+func StDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDistance[float32](ivecs, result, proc, length, selectList)
+}
+
+func stDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_DISTANCE", ivecs); err != nil {
+		return err
+	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
+	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
+		d, err := geometryDistanceBySRID(v1, v2, srid)
+		return T(d), err
+	}, selectList)
+}
+
+// StDistanceWithSRID is the ST_Distance(geom, geom, srid) overload: the explicit
+// SRID overrides the operand type SRIDs for the computation.
+func StDistanceWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDistanceWithSRID[float64](ivecs, result, proc, length, selectList)
+}
+
+// StDistanceWithSRID32 is the GEOMETRY32 overload of ST_Distance(geom, geom, srid).
+func StDistanceWithSRID32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDistanceWithSRID[float32](ivecs, result, proc, length, selectList)
+}
+
+func stDistanceWithSRID[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	left := vector.GenerateFunctionStrParameter(ivecs[0])
+	right := vector.GenerateFunctionStrParameter(ivecs[1])
+	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+	rs := vector.MustFunctionResult[T](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v1, n1 := left.GetStrValue(i)
+		v2, n2 := right.GetStrValue(i)
+		s, n3 := srids.GetValue(i)
+		if n1 || n2 || n3 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		su, err := sridFromInt64Arg(s)
+		if err != nil {
+			return err
+		}
+		d, err := geometryDistanceBySRID(v1, v2, su)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(T(d), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// geodeticDistance returns the WGS 84 geodesic distance in meters between two
+// geometries.
+func geodeticDistance(left, right []byte) (float64, error) {
+	leftType, err := geometryTypeNameFromPayload(left)
+	if err != nil {
+		return 0, err
+	}
+	rightType, err := geometryTypeNameFromPayload(right)
+	if err != nil {
+		return 0, err
+	}
+	if !isDistanceSupportedGeometryType(leftType) || !isDistanceSupportedGeometryType(rightType) {
+		return 0, moerr.NewInvalidInputNoCtx("ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	}
+	lg, err := decodeGeoGeometry(left)
+	if err != nil {
+		return 0, err
+	}
+	rg, err := decodeGeoGeometry(right)
+	if err != nil {
+		return 0, err
+	}
+	d, ok := geo.DistanceMeters(lg, rg)
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	return d, nil
+}
+
 func StContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_CONTAINS", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryContains(v1, v2)
 	}, selectList)
 }
 
 func StWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_WITHIN", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryWithin(v1, v2)
 	}, selectList)
 }
 
 func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_INTERSECTS", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryIntersects(v1, v2)
 	}, selectList)
 }
 
 func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_DISJOINT", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryDisjoint(v1, v2)
 	}, selectList)
 }
 
 func StTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_TOUCHES", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryTouches(v1, v2)
 	}, selectList)
 }
 
 func StCrosses(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_CROSSES", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryCrosses(v1, v2)
 	}, selectList)
 }
 
 func StOverlaps(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_OVERLAPS", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryOverlaps(v1, v2)
 	}, selectList)
 }
 
 func StEquals(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_EQUALS", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryEquals(v1, v2)
 	}, selectList)
 }
 
 func StCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_COVERS", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryCovers(v1, v2)
 	}, selectList)
 }
 
 func StCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if err := checkBinaryGeometryTypeSRID("ST_COVEREDBY", ivecs); err != nil {
+		return err
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryCoveredBy(v1, v2)
 	}, selectList)
@@ -8123,6 +8976,22 @@ func ensureMatchingGeometrySRID(functionName string, left, right []byte) error {
 	}
 	if leftSRID != rightSRID {
 		return moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, leftSRID, rightSRID)
+	}
+	return nil
+}
+
+// checkBinaryGeometryTypeSRID rejects a binary spatial function whose two
+// operands carry different SRIDs. SRID lives in the column/expression type
+// (Width), not in the bare-WKB payload, so the two input vectors' types are
+// compared.
+func checkBinaryGeometryTypeSRID(functionName string, ivecs []*vector.Vector) error {
+	if len(ivecs) < 2 {
+		return nil
+	}
+	left := sridFromTypeWidth(ivecs[0].GetType().Width)
+	right := sridFromTypeWidth(ivecs[1].GetType().Width)
+	if left != right {
+		return moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, left, right)
 	}
 	return nil
 }
@@ -11074,5 +11943,55 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		}
 	}
 
+	return nil
+}
+
+// StPoint builds a POINT geometry from numeric (x, y) coordinates, where x is
+// the X/longitude and y is the Y/latitude (matching WKT POINT(x y) order). It
+// is the numeric counterpart of ST_PointFromText('POINT(x y)') and returns a
+// plain GEOMETRY (SRID 0). The float32-coordinate variant is StPoint32.
+func StPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointImpl(ivecs, result, length, selectList, false)
+}
+
+// StPoint32 is the GEOMETRY32 (float32-coordinate) variant of ST_Point.
+func StPoint32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stPointImpl(ivecs, result, length, selectList, true)
+}
+
+func stPointImpl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, f32 bool) error {
+	xs := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+	ys := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		x, n1 := xs.GetValue(i)
+		y, n2 := ys.GetValue(i)
+		if n1 || n2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if math.IsNaN(x) || math.IsNaN(y) || math.IsInf(x, 0) || math.IsInf(y, 0) {
+			return moerr.NewInvalidInputNoCtxf("ST_Point coordinates must be finite: (%v, %v)", x, y)
+		}
+		pt := geo.Point{X: x, Y: y}
+		var wkb []byte
+		if f32 {
+			wkb = geo.WriteWKBFloat32(pt)
+		} else {
+			wkb = geo.WriteWKB(pt)
+		}
+		if err := rs.AppendBytes(wkb, false); err != nil {
+			return err
+		}
+	}
 	return nil
 }

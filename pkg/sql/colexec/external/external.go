@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -185,20 +186,36 @@ func (external *External) Prepare(proc *process.Process) error {
 	return nil
 }
 
+func (external *External) checkLoadLockTableBinds(proc *process.Process) error {
+	param := external.Es
+	if param == nil ||
+		param.Extern == nil ||
+		param.Extern.ExternType != int32(plan.ExternType_LOAD) {
+		return nil
+	}
+
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	return txnOp.CheckLockTableBinds(proc.Ctx)
+}
+
 func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	t1 := time.Now()
 
 	analyzer := external.OpAnalyzer
+	param := external.Es
 	defer func() {
 		analyzer.AddScanTime(t1)
+		param.flushParquetProfile(analyzer)
 		span.End()
 		v2.TxnStatementExternalScanDurationHistogram.Observe(time.Since(t).Seconds())
 	}()
 
 	result := vm.NewCallResult()
-	param := external.Es
 	if param.Fileparam.End {
 		result.Status = vm.ExecStop
 		return result, nil
@@ -240,6 +257,10 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
+	if err := external.checkLoadLockTableBinds(proc); err != nil {
+		return result, err
+	}
+
 	if external.ctr.buf != nil {
 		external.ctr.buf.CleanOnlyData()
 	}
@@ -262,6 +283,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	result.Batch = external.ctr.buf
 	if external.ctr.buf != nil {
 		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, external.ctr.buf.Size())
+		param.addParquetProfile(process.ParquetProfileStats{PeakBatchBytes: int64(external.ctr.buf.Size())})
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 
@@ -545,8 +567,11 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 	for idx, col := range cols {
 		field := fields[idx]
 		id := types.T(col.Typ.Id)
+		// T_bit carries raw bytes (parsed byte-by-byte, not as text), so
+		// whitespace bytes are data and must not be trimmed.
 		if id != types.T_char && id != types.T_varchar && id != types.T_json &&
-			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink {
+			id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
+			id != types.T_bit {
 			field.Val = strings.TrimSpace(field.Val)
 		}
 		isNullOrEmpty := field.IsNull || (getNullFlag(param.NullMap, col.Name, field.Val))
@@ -736,6 +761,10 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 		case types.T_datetime:
 			_, err := types.ParseDatetime(field.Val, col.Typ.Scale)
 			if err != nil {
+				return false
+			}
+		case types.T_year:
+			if _, err := parseLoadDataYear(field); err != nil {
 				return false
 			}
 		case types.T_enum:
@@ -967,8 +996,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	field := getFieldFromLine(line, colName, param, fieldIdx)
 	id := types.T(col.Typ.Id)
 	trimSpace := false
+	// T_bit carries raw bytes (parsed byte-by-byte, not as text), so whitespace
+	// bytes are data and must not be trimmed (a whitespace-only bit value would
+	// otherwise even be converted to NULL below).
 	if id != types.T_char && id != types.T_varchar && id != types.T_json &&
-		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink {
+		id != types.T_binary && id != types.T_varbinary && id != types.T_blob && id != types.T_text && id != types.T_datalink &&
+		id != types.T_bit {
 		field.Val = strings.TrimSpace(field.Val)
 		trimSpace = true
 	}
@@ -984,6 +1017,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	if isNullOrEmpty {
 		vector.AppendBytes(vec, nil, true, mp)
 		return nil
+	}
+
+	// In strict SQL mode (non-LOCAL load), an over-width CHAR/VARCHAR value is
+	// rejected instead of silently truncated, matching strict assignment casts
+	// (cast_strict) and MySQL's "Data too long" behavior. Uses rune count, like
+	// strToStr. LOCAL / non-strict loads keep the lenient (truncate) behavior.
+	if checkLineStrict(param) && (id == types.T_char || id == types.T_varchar) &&
+		col.Typ.Width > 0 && utf8.RuneCountInString(field.Val) > int(col.Typ.Width) {
+		return moerr.NewInternalErrorf(param.Ctx, "Data too long for column '%s' at row %d", colName, rowIdx+1)
 	}
 
 	if param.ParallelLoad {
@@ -1312,6 +1354,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 			return err
 		}
+	case types.T_year:
+		d, err := parseLoadDataYear(field)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Year type for column %d", field.Val, colIdx)
+		}
+		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
+			return err
+		}
 	case types.T_enum:
 		d, err := strconv.ParseUint(field.Val, 10, 16)
 		if err == nil {
@@ -1394,6 +1445,17 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return moerr.NewInternalErrorf(param.Ctx, "the value type %d is not support now", param.Cols[rowIdx].Typ.Id)
 	}
 	return nil
+}
+
+func parseLoadDataYear(field csvparser.Field) (types.MoYear, error) {
+	if field.HasStringQuote {
+		return types.ParseMoYear(field.Val)
+	}
+	d, err := strconv.ParseInt(field.Val, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return types.ParseMoYearFromInt(d)
 }
 
 func loadFormatIsValid(param *tree.ExternParam) bool {

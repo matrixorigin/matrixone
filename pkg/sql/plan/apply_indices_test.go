@@ -17,12 +17,14 @@ package plan
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -238,6 +240,507 @@ func TestWithSuspendedScanProtection_RestoresAfterPanic(t *testing.T) {
 
 	assert.True(t, recovered)
 	assert.Equal(t, 2, builder.protectedScans[scanID])
+}
+
+func TestFullTextJoinRewriteLeftChild(t *testing.T) {
+	builder, joinID, leftScanID, rightScanID := buildFullTextJoinRewriteTestPlan(t, true, false, false)
+
+	newID, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+
+	joinNode := builder.qry.Nodes[joinID]
+	require.NotEqual(t, leftScanID, joinNode.Children[0])
+	require.Equal(t, rightScanID, joinNode.Children[1])
+	require.Equal(t, planpb.Node_JOIN, builder.qry.Nodes[joinNode.Children[0]].NodeType)
+	require.Equal(t, 1, countFullTextFunctionScans(builder, joinNode.Children[0]))
+	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[leftScanID]))
+	require.Len(t, joinNode.OnList, 1)
+}
+
+func TestFullTextJoinRewriteRightChild(t *testing.T) {
+	builder, joinID, leftScanID, rightScanID := buildFullTextJoinRewriteTestPlan(t, false, true, false)
+
+	newID, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+
+	joinNode := builder.qry.Nodes[joinID]
+	require.Equal(t, leftScanID, joinNode.Children[0])
+	require.NotEqual(t, rightScanID, joinNode.Children[1])
+	require.Equal(t, planpb.Node_JOIN, builder.qry.Nodes[joinNode.Children[1]].NodeType)
+	require.Equal(t, 1, countFullTextFunctionScans(builder, joinNode.Children[1]))
+	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[rightScanID]))
+	require.Len(t, joinNode.OnList, 1)
+}
+
+func TestFullTextJoinRewriteFallsBackToScanContextWhenJoinContextIsNil(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
+	builder.ctxByNode[joinID] = nil
+
+	newID, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.NotEqual(t, leftScanID, builder.qry.Nodes[joinID].Children[0])
+	require.Equal(t, 1, countFullTextFunctionScans(builder, builder.qry.Nodes[joinID].Children[0]))
+	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[leftScanID]))
+}
+
+func TestFullTextJoinRewriteBothChildren(t *testing.T) {
+	builder, joinID, leftScanID, rightScanID := buildFullTextJoinRewriteTestPlan(t, true, true, false)
+
+	newID, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+
+	joinNode := builder.qry.Nodes[joinID]
+	require.NotEqual(t, leftScanID, joinNode.Children[0])
+	require.NotEqual(t, rightScanID, joinNode.Children[1])
+	require.Equal(t, 1, countFullTextFunctionScans(builder, joinNode.Children[0]))
+	require.Equal(t, 1, countFullTextFunctionScans(builder, joinNode.Children[1]))
+	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[leftScanID]))
+	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[rightScanID]))
+}
+
+func TestFullTextJoinRewriteSkipsOuterJoins(t *testing.T) {
+	tests := []struct {
+		name          string
+		joinType      planpb.Node_JoinType
+		leftFullText  bool
+		rightFullText bool
+	}{
+		{
+			name:         "left join preserved left child",
+			joinType:     planpb.Node_LEFT,
+			leftFullText: true,
+		},
+		{
+			name:          "right join preserved right child",
+			joinType:      planpb.Node_RIGHT,
+			rightFullText: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, joinID, leftScanID, rightScanID := buildFullTextJoinRewriteTestPlan(t, tt.leftFullText, tt.rightFullText, false)
+			joinNode := builder.qry.Nodes[joinID]
+			joinNode.JoinType = tt.joinType
+
+			newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
+			require.Equal(t, joinID, newID)
+			require.Equal(t, leftScanID, joinNode.Children[0])
+			require.Equal(t, rightScanID, joinNode.Children[1])
+			require.Equal(t, 0, countFullTextFunctionScans(builder, joinID))
+
+			if tt.leftFullText {
+				require.True(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[leftScanID]))
+			}
+			if tt.rightFullText {
+				require.True(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[rightScanID]))
+			}
+		})
+	}
+}
+
+func TestFullTextJoinRewritePreservesNonFullTextFilter(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, true)
+
+	newID, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+
+	leftScan := builder.qry.Nodes[leftScanID]
+	require.Len(t, leftScan.FilterList, 1)
+	require.Equal(t, "=", leftScan.FilterList[0].GetF().Func.ObjName)
+	require.False(t, nodeHasFullTextMatchFilter(leftScan))
+	require.Equal(t, 1, countFullTextFunctionScans(builder, builder.qry.Nodes[joinID].Children[0]))
+}
+
+func TestFullTextScanProtectionSkipsRegularIndexRule(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, true)
+	leftScan := builder.qry.Nodes[leftScanID]
+	leftScan.TableDef.Indexes = append(leftScan.TableDef.Indexes, &planpb.IndexDef{
+		IndexName:      "idx_base_id",
+		IndexTableName: "__mo_idx_base_id",
+		Parts:          []string{"base_id", "id"},
+		TableExist:     true,
+	})
+	registerFullTextJoinRegularIndexTable(builder, "__mo_idx_base_id")
+
+	got := builder.applyIndicesForFilters(leftScanID, leftScan, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.Equal(t, leftScanID, got)
+	require.True(t, builder.scanHasMatchedFullTextFilter(leftScan))
+
+	newID, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.False(t, nodeHasFullTextMatchFilter(leftScan))
+	require.Len(t, leftScan.FilterList, 1)
+}
+
+func TestRegularIndexRuleSkipsIrregularIndexes(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindTag := builder.genNewBindTag()
+	nodeID := int32(12)
+	node := &planpb.Node{
+		NodeId:      nodeID,
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			Name: "t",
+			Name2ColIndex: map[string]int32{
+				"id":     0,
+				"status": 1,
+			},
+			Cols: []*planpb.ColDef{
+				{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+			},
+			Pkey: &planpb.PrimaryKeyDef{
+				Names:       []string{"id"},
+				PkeyColName: "id",
+			},
+			Indexes: []*planpb.IndexDef{
+				{
+					IndexName:      "idx_master_status",
+					IndexAlgo:      catalog.MOIndexMasterAlgo.ToString(),
+					IndexTableName: "__mo_index_master_status",
+					Parts:          []string{"status", "id"},
+					TableExist:     true,
+				},
+				{
+					IndexName:      "idx_ivf_status",
+					IndexAlgo:      catalog.MoIndexIvfFlatAlgo.ToString(),
+					IndexTableName: "__mo_index_ivf_status",
+					Parts:          []string{"status", "id"},
+					TableExist:     true,
+				},
+			},
+		},
+		Stats: &planpb.Stats{TableCnt: 10, Outcnt: 1, Selectivity: 0.1},
+		FilterList: []*planpb.Expr{
+			makeStringEqFilterExpr(bindTag, 1, "active"),
+		},
+	}
+
+	got := builder.applyIndicesForFiltersRegularIndex(nodeID, node, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+
+	require.Equal(t, nodeID, got)
+	require.Empty(t, builder.qry.Nodes)
+}
+
+func TestApplyIndicesForJoinsSkipsIrregularIndexes(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	leftTag := builder.genNewBindTag()
+	rightTag := builder.genNewBindTag()
+
+	leftDef := &planpb.TableDef{
+		Name: "left_t",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "status", Typ: planpb.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{
+			"id":     0,
+			"status": 1,
+		},
+		Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		Indexes: []*planpb.IndexDef{
+			{
+				IndexName:      "idx_master_status",
+				IndexAlgo:      catalog.MOIndexMasterAlgo.ToString(),
+				IndexTableName: "__mo_master_status",
+				Parts:          []string{"status", "id"},
+				TableExist:     true,
+			},
+			{
+				IndexName:      "idx_fulltext_status",
+				IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+				IndexTableName: "__mo_fulltext_status",
+				Parts:          []string{"status", "id"},
+				TableExist:     true,
+			},
+			{
+				IndexName:      "idx_vector_status",
+				IndexAlgo:      catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexTableName: "__mo_vector_status",
+				Parts:          []string{"status", "id"},
+				TableExist:     true,
+			},
+			{
+				IndexName:      "idx_spatial_status",
+				IndexAlgo:      catalog.MoIndexRTreeAlgo.ToString(),
+				IndexTableName: "__mo_spatial_status",
+				Parts:          []string{"status", "id"},
+				TableExist:     true,
+			},
+		},
+	}
+	rightDef := &planpb.TableDef{
+		Name: "right_t",
+		Cols: []*planpb.ColDef{
+			{Name: "status", Typ: planpb.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{"status": 0},
+	}
+
+	leftScanID := builder.appendNode(makeJoinIndexTestScan(leftDef, leftTag), ctx)
+	rightScanID := builder.appendNode(makeJoinIndexTestScan(rightDef, rightTag), ctx)
+	joinCond := ftjMakeEqExpr(t, ftjColExpr(leftDef, leftTag, 1), ftjColExpr(rightDef, rightTag, 0))
+	joinID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_JOIN,
+		Children: []int32{leftScanID, rightScanID},
+		JoinType: planpb.Node_INNER,
+		OnList:   []*planpb.Expr{joinCond},
+	}, ctx)
+
+	newID, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+
+	joinNode := builder.qry.Nodes[joinID]
+	require.Equal(t, leftScanID, joinNode.Children[0])
+	require.Equal(t, rightScanID, joinNode.Children[1])
+	require.Empty(t, joinNode.RuntimeFilterBuildList)
+	require.Len(t, builder.qry.Nodes, 3)
+}
+
+func TestFindMatchFullTextIndexRequiresScanBindingAndLiteralPattern(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ftDef := makeFullTextJoinTestTableDef("ft", true)
+	ftTag := builder.genNewBindTag()
+	baseTag := builder.genNewBindTag()
+	scan := makeFullTextJoinTestScan(ftDef, ftTag, nil)
+
+	matched := builder.findMatchFullTextIndex(makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2, 3}).GetF(), scan)
+	require.NotNil(t, matched)
+
+	crossTableExpr := makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2})
+	crossTableExpr.GetF().Args = append(crossTableExpr.GetF().Args, &planpb.Expr{
+		Typ: ftDef.Cols[3].Typ,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: baseTag,
+			ColPos: 3,
+			Name:   "body",
+		}},
+	})
+	require.Nil(t, builder.findMatchFullTextIndex(crossTableExpr.GetF(), scan))
+
+	dynamicPatternExpr := makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2, 3})
+	textTyp := types.T_text.ToType()
+	dynamicPatternExpr.GetF().Args[0] = &planpb.Expr{
+		Typ:  makePlan2Type(&textTyp),
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	require.Nil(t, builder.findMatchFullTextIndex(dynamicPatternExpr.GetF(), scan))
+}
+
+func buildFullTextJoinRewriteTestPlan(t *testing.T, leftFullText, rightFullText, leftExtraFilter bool) (*QueryBuilder, int32, int32, int32) {
+	t.Helper()
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	leftTag := builder.genNewBindTag()
+	rightTag := builder.genNewBindTag()
+	leftDef := makeFullTextJoinTestTableDef("ft_left", leftFullText)
+	rightDef := makeFullTextJoinTestTableDef("ft_right", rightFullText)
+
+	var leftFilters []*planpb.Expr
+	if leftFullText {
+		leftFilters = append(leftFilters, makeFullTextMatchExpr("hello", 0, leftDef, leftTag, []int32{2, 3}))
+	}
+	if leftExtraFilter {
+		leftFilters = append(leftFilters, ftjMakeEqExpr(t, ftjColExpr(leftDef, leftTag, 1), makePlan2StringConstExprWithType("b1", false)))
+	}
+
+	var rightFilters []*planpb.Expr
+	if rightFullText {
+		rightFilters = append(rightFilters, makeFullTextMatchExpr("hello", 0, rightDef, rightTag, []int32{2, 3}))
+	}
+
+	leftScanID := builder.appendNode(makeFullTextJoinTestScan(leftDef, leftTag, leftFilters), ctx)
+	rightScanID := builder.appendNode(makeFullTextJoinTestScan(rightDef, rightTag, rightFilters), ctx)
+	joinCond := ftjMakeEqExpr(t, ftjColExpr(leftDef, leftTag, 1), ftjColExpr(rightDef, rightTag, 0))
+	joinID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_JOIN,
+		Children: []int32{leftScanID, rightScanID},
+		JoinType: planpb.Node_INNER,
+		OnList:   []*planpb.Expr{joinCond},
+	}, ctx)
+
+	return builder, joinID, leftScanID, rightScanID
+}
+
+type fullTextJoinMockCompilerContext struct {
+	*MockCompilerContext
+}
+
+func newFullTextJoinMockCompilerContext() *fullTextJoinMockCompilerContext {
+	return &fullTextJoinMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+}
+
+func (m *fullTextJoinMockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	if varName == "ft_relevancy_algorithm" {
+		return "", nil
+	}
+	return m.MockCompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
+}
+
+func (m *fullTextJoinMockCompilerContext) GetProcess() *process.Process {
+	proc := m.MockCompilerContext.GetProcess()
+	proc.SetResolveVariableFunc(m.ResolveVariable)
+	return proc
+}
+
+func registerFullTextJoinRegularIndexTable(builder *QueryBuilder, indexTableName string) {
+	mockCtx := builder.compCtx.(*fullTextJoinMockCompilerContext)
+	key := strings.ToLower(indexTableName)
+	mockCtx.objects[key] = &planpb.ObjectRef{
+		SchemaName: "test",
+		ObjName:    indexTableName,
+	}
+	mockCtx.tables[key] = &planpb.TableDef{
+		Name: indexTableName,
+		Cols: []*planpb.ColDef{
+			{Name: catalog.IndexTableIndexColName, Typ: planpb.Type{Id: int32(types.T_varchar), Width: 191}},
+			{Name: catalog.IndexTablePrimaryColName, Typ: planpb.Type{Id: int32(types.T_varchar), Width: 191}},
+		},
+		Name2ColIndex: map[string]int32{
+			catalog.IndexTableIndexColName:   0,
+			catalog.IndexTablePrimaryColName: 1,
+		},
+	}
+}
+
+func makeFullTextJoinTestTableDef(name string, withFullTextIndex bool) *planpb.TableDef {
+	tableDef := &planpb.TableDef{
+		Name: name,
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 191}},
+			{Name: "base_id", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 191}},
+			{Name: "title", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 512}},
+			{Name: "body", Typ: planpb.Type{Id: int32(types.T_text)}},
+		},
+		Name2ColIndex: map[string]int32{
+			"id":      0,
+			"base_id": 1,
+			"title":   2,
+			"body":    3,
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+	}
+	if withFullTextIndex {
+		tableDef.Indexes = append(tableDef.Indexes, &planpb.IndexDef{
+			IndexName:      "ft_idx_" + name,
+			IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+			IndexTableName: "__mo_fts_idx_" + name,
+			Parts:          []string{"title", "body"},
+			TableExist:     true,
+		})
+	}
+	return tableDef
+}
+
+func makeFullTextJoinTestScan(tableDef *planpb.TableDef, tag int32, filters []*planpb.Expr) *planpb.Node {
+	return &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		TableDef:    tableDef,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: tableDef.Name},
+		BindingTags: []int32{tag},
+		FilterList:  filters,
+		Stats: &planpb.Stats{
+			TableCnt:    1000,
+			Outcnt:      100,
+			Selectivity: 0.1,
+			Cost:        1000,
+		},
+	}
+}
+
+func makeJoinIndexTestScan(tableDef *planpb.TableDef, tag int32) *planpb.Node {
+	return &planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		TableDef:    tableDef,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: tableDef.Name},
+		BindingTags: []int32{tag},
+		Stats: &planpb.Stats{
+			TableCnt:    1000,
+			Outcnt:      100,
+			Selectivity: 0.1,
+			Cost:        1000,
+		},
+	}
+}
+
+func makeFullTextMatchExpr(pattern string, mode int64, tableDef *planpb.TableDef, tag int32, colPositions []int32) *planpb.Expr {
+	args := []*planpb.Expr{
+		makePlan2StringConstExprWithType(pattern, false),
+		makePlan2Int64ConstExprWithType(mode),
+	}
+	for _, pos := range colPositions {
+		args = append(args, ftjColExpr(tableDef, tag, pos))
+	}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "fulltext_match"},
+			Args: args,
+		}},
+	}
+}
+
+func ftjColExpr(tableDef *planpb.TableDef, tag, pos int32) *planpb.Expr {
+	return &planpb.Expr{
+		Typ: tableDef.Cols[pos].Typ,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: tag,
+			ColPos: pos,
+			Name:   tableDef.Cols[pos].Name,
+		}},
+	}
+}
+
+func ftjMakeEqExpr(t *testing.T, left, right *planpb.Expr) *planpb.Expr {
+	t.Helper()
+
+	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{left, right})
+	require.NoError(t, err)
+	return expr
+}
+
+func countFullTextFunctionScans(builder *QueryBuilder, nodeID int32) int {
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return 0
+	}
+
+	count := 0
+	if node.NodeType == planpb.Node_FUNCTION_SCAN &&
+		node.TableDef != nil &&
+		node.TableDef.TblFunc != nil &&
+		node.TableDef.TblFunc.Name == fulltext_index_scan_func_name {
+		count++
+	}
+	for _, childID := range node.Children {
+		count += countFullTextFunctionScans(builder, childID)
+	}
+	return count
+}
+
+func nodeHasFullTextMatchFilter(node *planpb.Node) bool {
+	for _, expr := range node.FilterList {
+		fn := expr.GetF()
+		if fn != nil && fn.Func.ObjName == "fulltext_match" {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCalculatePostFilterOverFetchFactor(t *testing.T) {
@@ -483,6 +986,10 @@ func TestCalculateFilteredPostModeOverFetchFactor_ActualValues(t *testing.T) {
 }
 
 func makeTestRegularIndexPrefixEq(t *testing.T, numArgs int) *planpb.Expr {
+	return makeTestRegularIndexPrefixEqWithSerialFunc(t, numArgs, "serial_full")
+}
+
+func makeTestRegularIndexPrefixEqWithSerialFunc(t *testing.T, numArgs int, serialFunc string) *planpb.Expr {
 	t.Helper()
 	args := make([]*planpb.Expr, 0, numArgs)
 	for i := 0; i < numArgs; i++ {
@@ -495,7 +1002,7 @@ func makeTestRegularIndexPrefixEq(t *testing.T, numArgs int) *planpb.Expr {
 			},
 		})
 	}
-	serialExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "serial", args)
+	serialExpr, err := BindFuncExprImplByPlanExpr(context.Background(), serialFunc, args)
 	require.NoError(t, err)
 	prefixExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "prefix_eq", []*planpb.Expr{
 		GetColExpr(planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, 100, 0),
@@ -785,6 +1292,11 @@ func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T
 	assert.Equal(t, catalog.IndexTablePrimaryColName, scanOrderCol.Name)
 }
 
+func TestRegularIndexFullPrefixEqualityRequiresSerialFull(t *testing.T) {
+	assert.True(t, isRegularIndexFullPrefixEquality(makeTestRegularIndexPrefixEq(t, 2), 2))
+	assert.False(t, isRegularIndexFullPrefixEquality(makeTestRegularIndexPrefixEqWithSerialFunc(t, 2, "serial"), 2))
+}
+
 func TestApplyIndicesForProjectSkipsRegularIndexPKOrderWithoutFullPrefixEquality(t *testing.T) {
 	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
 		t,
@@ -1059,9 +1571,270 @@ func TestGetIndexForNonEquiCond_SkipsLargePairedRangeByStats(t *testing.T) {
 	require.Nil(t, filterIdx)
 }
 
+func TestIndexTableLookupSerialFunc(t *testing.T) {
+	assert.Equal(t, "serial_full", indexTableLookupSerialFunc(&planpb.IndexDef{
+		Parts:  []string{"status", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}))
+	assert.Equal(t, "serial", indexTableLookupSerialFunc(&planpb.IndexDef{
+		Parts:  []string{"status", "due"},
+		Unique: true,
+	}))
+	assert.Equal(t, "serial", indexTableLookupSerialFunc(&planpb.IndexDef{
+		Parts:  []string{"status"},
+		Unique: false,
+	}))
+}
+
+func TestReplaceEqualConditionUsesSerialFullForNonUniqueCompositeIndex(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"status", "due", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	filters := []*planpb.Expr{makeStringEqFilterExpr(0, 3, "active")}
+
+	expr := builder.replaceEqualCondition(idxDef, filters, []int32{0}, 42, idxTableDef)
+
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "prefix_eq", expr.GetF().Func.ObjName)
+	assert.Equal(t, "serial_full", wrappedSerialFuncName(t, expr.GetF().Args[1]))
+}
+
+func TestReplaceEqualConditionKeepsSerialForUniqueCompositeIndex(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"status", "due"},
+		Unique: true,
+	}
+	idxTableDef := makeTestIndexTableDef()
+	filters := []*planpb.Expr{
+		makeStringEqFilterExpr(0, 3, "active"),
+		makeStringEqFilterExpr(0, 4, "2026-07-02 00:00:00"),
+	}
+
+	expr := builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "=", expr.GetF().Func.ObjName)
+	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[1]))
+}
+
+func TestReplaceNonEqualConditionUsesSerialFullForNonUniqueCompositeIndexIn(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"status", "due", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+
+	expr := builder.replaceNonEqualCondition(idxDef, makeStringInFilterExpr(0, 3, "active", "expiring"), 42, makeTestIndexTableDef())
+
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "prefix_in", expr.GetF().Func.ObjName)
+	assertListItemsWrappedBySerialFunc(t, expr.GetF().Args[1], "serial_full", 2)
+}
+
+func TestReplaceNonEqualConditionWrapsEachPreparedInListItemWithSerialFull(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
+
+	expr := builder.replaceNonEqualCondition(idxDef, makeParamInFilterExpr(0, 1, 10), 42, makeTestIndexTableDef())
+
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "prefix_in", expr.GetF().Func.ObjName)
+	assertListItemsWrappedBySerialFunc(t, expr.GetF().Args[1], "serial_full", 10)
+	for i, item := range expr.GetF().Args[1].GetList().List {
+		args := item.GetF().Args
+		require.Len(t, args, 1)
+		require.NotNil(t, args[0].GetP())
+		assert.Equal(t, int32(i), args[0].GetP().Pos)
+	}
+}
+
+func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testing.T) {
+	tests := []struct {
+		name         string
+		makeFilter   func(relPos int32) *planpb.Expr
+		lookupFunc   string
+		residualFunc string
+	}{
+		{
+			name: "prepared equality",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeParamEqFilterExpr(relPos, 1, 0)
+			},
+			lookupFunc:   "prefix_eq",
+			residualFunc: "=",
+		},
+		{
+			name: "prepared in list",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeParamInFilterExpr(relPos, 1, 2)
+			},
+			lookupFunc:   "prefix_in",
+			residualFunc: "in",
+		},
+		{
+			name: "literal null equality",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeNullEqFilterExpr(relPos, 1)
+			},
+			lookupFunc:   "prefix_eq",
+			residualFunc: "=",
+		},
+		{
+			name: "literal null in list",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeIntInFilterExprWithNull(relPos, 1)
+			},
+			lookupFunc:   "prefix_in",
+			residualFunc: "in",
+		},
+		{
+			name: "prepared between",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeParamBetweenFilterExpr(relPos, 1, 0, 1)
+			},
+			lookupFunc:   "prefix_between",
+			residualFunc: "between",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			ctx := NewBindContext(builder, nil)
+			bindTag := builder.genNewBindTag()
+			idxDef := &planpb.IndexDef{
+				IndexName:      "idx_status_id",
+				IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+				IndexTableName: "__mo_idx_status_id",
+				Parts:          []string{"status", "id"},
+				Unique:         false,
+				TableExist:     true,
+			}
+			registerMockIndexTable(t, builder, idxDef.IndexTableName)
+			node := &planpb.Node{
+				NodeType:    planpb.Node_TABLE_SCAN,
+				ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+				BindingTags: []int32{bindTag},
+				TableDef: &planpb.TableDef{
+					Name: "t",
+					Cols: []*planpb.ColDef{
+						{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+						{Name: "status", Typ: planpb.Type{Id: int32(types.T_int32)}},
+					},
+					Name2ColIndex: map[string]int32{
+						"id":     0,
+						"status": 1,
+					},
+					Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				},
+				Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
+				FilterList: []*planpb.Expr{tt.makeFilter(bindTag)},
+			}
+			scanID := builder.appendNode(node, ctx)
+
+			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			require.NotEqual(t, int32(-1), idxNodeID)
+
+			idxNode := builder.qry.Nodes[idxNodeID]
+			require.Len(t, idxNode.FilterList, 2)
+			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
+
+			residual := idxNode.FilterList[1].GetF()
+			require.NotNil(t, residual)
+			require.Equal(t, tt.residualFunc, residual.Func.ObjName)
+			require.Equal(t, "serial_extract", wrappedSerialFuncName(t, residual.Args[0]))
+		})
+	}
+}
+
+func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *testing.T) {
+	tests := []struct {
+		name       string
+		makeFilter func(relPos int32) *planpb.Expr
+		lookupFunc string
+	}{
+		{
+			name: "literal equality",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringEqFilterExpr(relPos, 1, "active")
+			},
+			lookupFunc: "prefix_eq",
+		},
+		{
+			name: "literal in list",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringInFilterExpr(relPos, 1, "active", "expired")
+			},
+			lookupFunc: "prefix_in",
+		},
+		{
+			name: "literal between",
+			makeFilter: func(relPos int32) *planpb.Expr {
+				return makeStringBetweenFilterExpr(relPos, 1, "active", "expired")
+			},
+			lookupFunc: "prefix_between",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			ctx := NewBindContext(builder, nil)
+			bindTag := builder.genNewBindTag()
+			idxDef := &planpb.IndexDef{
+				IndexName:      "idx_status_id",
+				IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+				IndexTableName: "__mo_idx_status_id",
+				Parts:          []string{"status", "id"},
+				Unique:         false,
+				TableExist:     true,
+			}
+			registerMockIndexTable(t, builder, idxDef.IndexTableName)
+			node := &planpb.Node{
+				NodeType:    planpb.Node_TABLE_SCAN,
+				ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+				BindingTags: []int32{bindTag},
+				TableDef: &planpb.TableDef{
+					Name: "t",
+					Cols: []*planpb.ColDef{
+						{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+						{Name: "status", Typ: planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+					},
+					Name2ColIndex: map[string]int32{
+						"id":     0,
+						"status": 1,
+					},
+					Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				},
+				Stats:      &planpb.Stats{TableCnt: 100, Outcnt: 1, Selectivity: 0.01, Cost: 100},
+				FilterList: []*planpb.Expr{tt.makeFilter(bindTag)},
+			}
+			scanID := builder.appendNode(node, ctx)
+
+			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			require.NotEqual(t, int32(-1), idxNodeID)
+
+			idxNode := builder.qry.Nodes[idxNodeID]
+			require.Len(t, idxNode.FilterList, 1)
+			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
+		})
+	}
+}
+
 func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindTag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		Parts:  []string{"price", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		Unique: false,
+	}
 	filters := []*planpb.Expr{
 		makeRangeFilterExpr(bindTag, 1, ">=", 99),
 		makeRangeFilterExpr(bindTag, 1, "<=", 299),
@@ -1082,9 +1855,11 @@ func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing
 		},
 	}
 
-	expr := builder.replaceRangePairCondition(filters, []int32{0, 1}, 42, idxTableDef, 2)
+	expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_between", expr.GetF().Func.ObjName)
+	assert.Equal(t, "serial_full", wrappedSerialFuncName(t, expr.GetF().Args[1]))
+	assert.Equal(t, "serial_full", wrappedSerialFuncName(t, expr.GetF().Args[2]))
 	require.InDelta(t, 0.12, expr.Selectivity, 1e-9)
 }
 
@@ -1196,6 +1971,350 @@ func makeEqFilterExpr(colPos int32) *planpb.Expr {
 							Lit: &planpb.Literal{
 								Value: &planpb.Literal_I64Val{I64Val: 1},
 							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeTestIndexTableDef() *planpb.TableDef {
+	return &planpb.TableDef{
+		Name: "__mo_index_table",
+		Cols: []*planpb.ColDef{
+			{
+				Name: catalog.IndexTableIndexColName,
+				Typ:  planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+			},
+			{
+				Name: catalog.IndexTablePrimaryColName,
+				Typ:  planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+			},
+		},
+		Name2ColIndex: map[string]int32{
+			catalog.IndexTableIndexColName:   0,
+			catalog.IndexTablePrimaryColName: 1,
+		},
+	}
+}
+
+func registerMockIndexTable(t *testing.T, builder *QueryBuilder, indexTableName string) {
+	t.Helper()
+
+	key := strings.ToLower(indexTableName)
+	objRef := &planpb.ObjectRef{SchemaName: "test", ObjName: indexTableName}
+	tableDef := makeTestIndexTableDef()
+	tableDef.Name = indexTableName
+
+	switch mockCtx := builder.compCtx.(type) {
+	case *MockCompilerContext:
+		mockCtx.objects[key] = objRef
+		mockCtx.tables[key] = tableDef
+	case *fullTextJoinMockCompilerContext:
+		mockCtx.objects[key] = objRef
+		mockCtx.tables[key] = tableDef
+	default:
+		t.Fatalf("unexpected compiler context %T", builder.compCtx)
+	}
+}
+
+func makeStringEqFilterExpr(relPos, colPos int32, val string) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "="},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_Sval{Sval: val},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeParamEqFilterExpr(relPos, colPos, paramPos int32) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int32)}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "="},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_P{
+							P: &planpb.ParamRef{Pos: paramPos},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeNullEqFilterExpr(relPos, colPos int32) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int32)}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "="},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{Isnull: true},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeStringInFilterExpr(relPos, colPos int32, vals ...string) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	list := make([]*planpb.Expr, 0, len(vals))
+	for _, val := range vals {
+		list = append(list, &planpb.Expr{
+			Typ: typ,
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{
+					Value: &planpb.Literal_Sval{Sval: val},
+				},
+			},
+		})
+	}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in"},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_List{
+							List: &planpb.ExprList{List: list},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeIntInFilterExprWithNull(relPos, colPos int32) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int32)}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in"},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_List{
+							List: &planpb.ExprList{List: []*planpb.Expr{
+								{
+									Typ: typ,
+									Expr: &planpb.Expr_Lit{
+										Lit: &planpb.Literal{
+											Value: &planpb.Literal_I32Val{I32Val: 1},
+										},
+									},
+								},
+								{
+									Typ: typ,
+									Expr: &planpb.Expr_Lit{
+										Lit: &planpb.Literal{Isnull: true},
+									},
+								},
+							}},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeStringBetweenFilterExpr(relPos, colPos int32, lower, upper string) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "between"},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_Sval{Sval: lower},
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Lit{
+							Lit: &planpb.Literal{
+								Value: &planpb.Literal_Sval{Sval: upper},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func wrappedSerialFuncName(t *testing.T, expr *planpb.Expr) string {
+	t.Helper()
+	require.NotNil(t, expr)
+	fn := expr.GetF()
+	require.NotNil(t, fn)
+	return fn.Func.ObjName
+}
+
+func assertListItemsWrappedBySerialFunc(t *testing.T, expr *planpb.Expr, serialFunc string, expectedLen int) {
+	t.Helper()
+	require.NotNil(t, expr)
+	list := expr.GetList()
+	require.NotNil(t, list)
+	require.Len(t, list.List, expectedLen)
+	for _, item := range list.List {
+		assert.Equal(t, serialFunc, wrappedSerialFuncName(t, item))
+	}
+}
+
+func makeParamInFilterExpr(relPos, colPos int32, n int) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int32)}
+	list := make([]*planpb.Expr, 0, n)
+	for i := 0; i < n; i++ {
+		list = append(list, &planpb.Expr{
+			Typ: typ,
+			Expr: &planpb.Expr_P{
+				P: &planpb.ParamRef{Pos: int32(i)},
+			},
+		})
+	}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in"},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_List{
+							List: &planpb.ExprList{List: list},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeParamBetweenFilterExpr(relPos, colPos, lowerParamPos, upperParamPos int32) *planpb.Expr {
+	typ := planpb.Type{Id: int32(types.T_int32)}
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{
+			F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "between"},
+				Args: []*planpb.Expr{
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_Col{
+							Col: &planpb.ColRef{
+								RelPos: relPos,
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_P{
+							P: &planpb.ParamRef{Pos: lowerParamPos},
+						},
+					},
+					{
+						Typ: typ,
+						Expr: &planpb.Expr_P{
+							P: &planpb.ParamRef{Pos: upperParamPos},
 						},
 					},
 				},

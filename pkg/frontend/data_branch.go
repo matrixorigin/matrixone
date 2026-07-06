@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -44,11 +43,39 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
+
+const dataBranchMetadataIDBatchSize = 512
+
+func isDataBranchUserVisibleColumn(col *plan.ColDef) bool {
+	if col == nil {
+		return false
+	}
+	if col.Hidden {
+		return false
+	}
+	switch col.Name {
+	case catalog.Row_ID, catalog.FakePrimaryKeyColName, catalog.CPrimaryKeyColName:
+		return false
+	default:
+		return true
+	}
+}
+
+func dataBranchFakePKColIdxes(tblDef *plan.TableDef) []int {
+	idxes := make([]int, 0, len(tblDef.Cols))
+	for i, col := range tblDef.Cols {
+		if isDataBranchUserVisibleColumn(col) {
+			idxes = append(idxes, i)
+		}
+	}
+	return idxes
+}
 
 func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
 	throttler := rscthrottler.NewMemThrottler(
@@ -269,25 +296,27 @@ func handleDataBranch(
 	execCtx *ExecCtx,
 	ses *Session,
 	stmt tree.Statement,
-) error {
+) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
 
 	switch st := stmt.(type) {
 	case *tree.DataBranchCreateTable:
-		return dataBranchCreateTable(execCtx, ses, st)
+		return stats, dataBranchCreateTable(execCtx, ses, st)
 	case *tree.DataBranchCreateDatabase:
 		return dataBranchCreateDatabase(execCtx, ses, st)
 	case *tree.DataBranchDeleteTable:
-		return dataBranchDeleteTable(execCtx, ses, st)
+		return stats, dataBranchDeleteTable(execCtx, ses, st)
 	case *tree.DataBranchDeleteDatabase:
-		return dataBranchDeleteDatabase(execCtx, ses, st)
+		return stats, dataBranchDeleteDatabase(execCtx, ses, st)
 	case *tree.DataBranchDiff:
-		return handleBranchDiff(execCtx, ses, st)
+		return stats, handleBranchDiff(execCtx, ses, st)
 	case *tree.DataBranchMerge:
-		return handleBranchMerge(execCtx, ses, st)
+		return stats, handleBranchMerge(execCtx, ses, st)
 	case *tree.DataBranchPick:
-		return handleBranchPick(execCtx, ses, st)
+		return stats, handleBranchPick(execCtx, ses, st)
 	default:
-		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
+		return stats, moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
 }
 
@@ -297,11 +326,10 @@ func dataBranchCreateTable(
 	stmt *tree.DataBranchCreateTable,
 ) (err error) {
 	var (
-		bh          BackgroundExec
-		deferred    func(error) error
-		receipt     cloneReceipt
-		cloneStmt   *tree.CloneTable
-		tempExecCtx *ExecCtx
+		bh        BackgroundExec
+		deferred  func(error) error
+		receipt   cloneReceipt
+		cloneStmt *tree.CloneTable
 	)
 
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
@@ -329,23 +357,9 @@ func dataBranchCreateTable(
 		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
 	}()
 
-	//data branch create table xxx from yyy snap_opt to_account_op;
-	re := regexp.MustCompile(`(?i)^DATA\s+BRANCH\s+CREATE\s+TABLE\s+(\S+)\s+FROM\s+(.+?);?$`)
-	srcAndDst := re.FindStringSubmatch(execCtx.input.sql)
-	if srcAndDst == nil {
-		return moerr.NewInternalErrorNoCtxf("cannot find src and dst table: %s", execCtx.input.sql)
-	}
-
-	sql := fmt.Sprintf("CREATE TABLE %s CLONE %s", srcAndDst[1], srcAndDst[2])
-
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
 
-	tempExecCtx = &ExecCtx{
-		reqCtx: execCtx.reqCtx,
-		input:  &UserInput{sql: sql},
-	}
-
-	if receipt, err = handleCloneTable(tempExecCtx, ses, cloneStmt, bh); err != nil {
+	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh); err != nil {
 		return
 	}
 
@@ -364,12 +378,15 @@ func dataBranchCreateDatabase(
 	execCtx *ExecCtx,
 	ses *Session,
 	stmt *tree.DataBranchCreateDatabase,
-) (err error) {
+) (stats statistic.StatsArray, err error) {
 	var (
-		bh       BackgroundExec
-		deferred func(error) error
-		receipts []cloneReceipt
+		bh        BackgroundExec
+		deferred  func(error) error
+		receipts  []cloneReceipt
+		source    cloneDatabaseSource
+		authStats statistic.StatsArray
 	)
+	stats.Reset()
 
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
 		return
@@ -385,12 +402,30 @@ func dataBranchCreateDatabase(
 		execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase,
 	)
 
-	if receipts, err = handleCloneDatabase(execCtx, ses, bh, &stmt.CloneDatabase); err != nil {
+	if !skipDataBranchPrivilegeCheck(ses) {
+		if authStats, err = authenticateDataBranchCreateDatabase(execCtx.reqCtx, ses, stmt); err != nil {
+			stats.Add(&authStats)
+			return
+		}
+		stats.Add(&authStats)
+	}
+
+	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase); err != nil {
+		return
+	}
+
+	if authStats, err = authenticateDataBranchCreateDatabaseSourceTables(execCtx.reqCtx, ses, stmt, source); err != nil {
+		stats.Add(&authStats)
+		return
+	}
+	stats.Add(&authStats)
+
+	if receipts, err = handleCloneDatabaseWithSource(execCtx, ses, bh, &stmt.CloneDatabase, &source); err != nil {
 		return
 	}
 
 	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, int64(len(receipts))); err != nil {
-		return err
+		return
 	}
 
 	for i := range receipts {
@@ -402,7 +437,7 @@ func dataBranchCreateDatabase(
 		}
 	}
 
-	return nil
+	return
 }
 
 func markBranchTablesDeleted(
@@ -417,9 +452,8 @@ func markBranchTablesDeleted(
 		updateCtx = defines.AttachAccountId(updateCtx, sysAccountID)
 	}
 
-	const batchSize = 512
-	for start := 0; start < len(tableIDs); start += batchSize {
-		end := start + batchSize
+	for start := 0; start < len(tableIDs); start += dataBranchMetadataIDBatchSize {
+		end := start + dataBranchMetadataIDBatchSize
 		if end > len(tableIDs) {
 			end = len(tableIDs)
 		}
@@ -471,40 +505,23 @@ func dataBranchDeleteTable(
 	}()
 
 	var (
-		dbName  = stmt.TableName.SchemaName
-		tblName = stmt.TableName.ObjectName
+		dbName  string
+		tblName string
 		accId   uint32
-		sqlRet  executor.Result
 		tblID   uint64
-		found   bool
 	)
 
-	if len(dbName) == 0 {
-		dbName = tree.Identifier(ses.GetTxnCompileCtx().DefaultDatabase())
+	if dbName, tblName, err = branchTableName(execCtx.reqCtx, ses, stmt.TableName); err != nil {
+		return
 	}
 
 	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
 		return
 	}
 
-	if sqlRet, err = runSql(
-		execCtx.reqCtx, ses, bh, fmt.Sprintf(
-			"select rel_id from %s.%s where account_id = %d and reldatabase = '%s' and relname = '%s'",
-			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName, tblName,
-		), nil, nil,
-	); err != nil {
+	if tblID, err = validateDataBranchDeleteTableTarget(execCtx.reqCtx, ses, bh, dbName, tblName); err != nil {
 		return
 	}
-
-	sqlRet.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows == 0 {
-			return false
-		}
-		tblID = vector.GetFixedAtWithTypeCheck[uint64](cols[0], 0)
-		found = true
-		return false
-	})
-	sqlRet.Close()
 
 	{
 		var dropRet executor.Result
@@ -512,14 +529,14 @@ func dataBranchDeleteTable(
 			dropRet.Close()
 		}()
 
-		dropSQL := fmt.Sprintf("drop table if exists `%s`.`%s`", dbName, tblName)
+		dropSQL := fmt.Sprintf(
+			"drop table %s.%s",
+			quoteIdentifierForSQL(dbName),
+			quoteIdentifierForSQL(tblName),
+		)
 		if dropRet, err = runSql(execCtx.reqCtx, ses, bh, dropSQL, nil, nil); err != nil {
 			return
 		}
-	}
-
-	if !found {
-		return nil
 	}
 
 	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, []uint64{tblID}); err != nil {
@@ -556,7 +573,6 @@ func dataBranchDeleteDatabase(
 	var (
 		dbName   = stmt.DatabaseName
 		accId    uint32
-		sqlRet   executor.Result
 		tableIDs []uint64
 	)
 
@@ -564,23 +580,9 @@ func dataBranchDeleteDatabase(
 		return
 	}
 
-	if sqlRet, err = runSql(
-		execCtx.reqCtx, ses, bh, fmt.Sprintf(
-			"select rel_id from %s.%s where account_id = %d and reldatabase = '%s'",
-			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName,
-		), nil, nil,
-	); err != nil {
+	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
 		return
 	}
-
-	sqlRet.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows == 0 {
-			return true
-		}
-		tableIDs = append(tableIDs, executor.GetFixedRows[uint64](cols[0])...)
-		return true
-	})
-	sqlRet.Close()
 
 	{
 		var dropRet executor.Result
@@ -588,7 +590,7 @@ func dataBranchDeleteDatabase(
 			dropRet.Close()
 		}()
 
-		dropSQL := fmt.Sprintf("drop database if exists `%s`", dbName)
+		dropSQL := fmt.Sprintf("drop database %s", quoteIdentifierForSQL(dbName.String()))
 		if dropRet, err = runSql(execCtx.reqCtx, ses, bh, dropSQL, nil, nil); err != nil {
 			return
 		}
@@ -893,6 +895,10 @@ func validate(
 		return nil
 	}
 
+	if diffStmt.OutputOpt != nil && diffStmt.OutputOpt.As.ObjectName != "" {
+		return moerr.NewNotSupportedNoCtx("DATA BRANCH DIFF OUTPUT AS")
+	}
+
 	if diffStmt.OutputOpt != nil && len(diffStmt.OutputOpt.DirPath) > 0 {
 		if err := validateOutputDirPath(ctx, ses, diffStmt.OutputOpt.DirPath); err != nil {
 			return err
@@ -937,11 +943,6 @@ func getTableStuff(
 
 	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		tblStuff.def.pkKind = fakeKind
-		for i, col := range baseTblDef.Cols {
-			if col.Name != catalog.FakePrimaryKeyColName && col.Name != catalog.Row_ID {
-				tblStuff.def.pkColIdxes = append(tblStuff.def.pkColIdxes, i)
-			}
-		}
 	} else if baseTblDef.Pkey.CompPkeyCol != nil {
 		// case 2: composite pk, combined all pks columns as the PK
 		tblStuff.def.pkKind = compositeKind
@@ -971,12 +972,12 @@ func getTableStuff(
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
 
-		if col.Name == catalog.FakePrimaryKeyColName ||
-			col.Name == catalog.CPrimaryKeyColName {
-			continue
+		if isDataBranchUserVisibleColumn(col) {
+			tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
 		}
-
-		tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
+	}
+	if tblStuff.def.pkKind == fakeKind {
+		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(baseTblDef)
 	}
 
 	tblStuff.retPool = &retBatchList{}

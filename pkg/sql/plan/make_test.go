@@ -77,7 +77,7 @@ func Test_isSameColumnType(t *testing.T) {
 	))
 
 	require.False(t, isSameColumnType(
-		plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=4326"},
-		plan.Type{Id: int32(types.T_geometry), Enumvalues: "POINT;SRID=0"},
+		*geometryPlanType(types.T_geometry, "POINT", 4326, true),
+		*geometryPlanType(types.T_geometry, "POINT", 0, true),
 	))
 }

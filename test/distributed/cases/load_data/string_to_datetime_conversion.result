@@ -72,6 +72,18 @@ id    date_val    time_val    timestamp_val
 2    null    null    null
 3    2024-12-31    23:59:59    2024-12-31 23:59:59
 4    null    12:30:45    null
+create table test_string_to_datetime_optional(
+id int not null,
+datetime_val datetime
+);
+load data infile {'filepath'='$resources/load_data/string_to_datetime_optional.parq', 'format'='parquet'}
+into table test_string_to_datetime_optional parallel 'true';
+select * from test_string_to_datetime_optional order by id;
+id    datetime_val
+1    2024-01-01 12:30:45
+2    null
+3    2024-12-31 23:59:59
+4    2000-06-15 10:20:30
 create table test_datetime_special(
 date_val date not null,
 time_val time not null,

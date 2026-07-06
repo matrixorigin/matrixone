@@ -918,6 +918,100 @@ func Test_handleShowVariables(t *testing.T) {
 	})
 }
 
+func TestShowGlobalVariablesRefreshesGlobalSysVarCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newSes(nil, ctrl)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	ses.gSysVars.Set("long_query_time", float64(10))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "interactive_timeout", int64(30100)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_remap_hint", "on"))
+	require.True(t, ses.rewriteEnabled.Load())
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	sql := getSqlForGetSystemVariablesWithAccount(sysAccountID)
+	bh.sql2result[sql] = newMrsForGlobalSystemVariables([][]interface{}{
+		{"long_query_time", "1.1"},
+	})
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "show global variables like 'long_query_time'", 1)
+	require.NoError(t, err)
+	showVars, ok := stmt.(*tree.ShowVariables)
+	require.True(t, ok)
+
+	ec := newTestExecCtx(ctx, ctrl)
+	require.NoError(t, doShowVariables(ses, ec, showVars))
+
+	mrs := ses.GetMysqlResultSet()
+	require.Equal(t, uint64(1), mrs.GetRowCount())
+	row, err := mrs.GetRow(ctx, 0)
+	require.NoError(t, err)
+	require.Equal(t, "long_query_time", row[0])
+	require.Equal(t, float64(1.1), row[1])
+	require.Contains(t, bh.executedSQLs, sql)
+
+	sessionTimeout, err := ses.GetSessionSysVar("interactive_timeout")
+	require.NoError(t, err)
+	require.Equal(t, int64(30100), sessionTimeout)
+	enableRemapHint, err := ses.GetSessionSysVar("enable_remap_hint")
+	require.NoError(t, err)
+	require.Equal(t, int8(1), enableRemapHint)
+	require.True(t, ses.rewriteEnabled.Load())
+}
+
+func TestShowGlobalVariablesReturnsRefreshError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newSes(nil, ctrl)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	sql := getSqlForGetSystemVariablesWithAccount(sysAccountID)
+	bh.sql2err[sql] = moerr.NewInternalErrorNoCtx("refresh global sysvars failed")
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "show global variables like 'long_query_time'", 1)
+	require.NoError(t, err)
+	showVars, ok := stmt.(*tree.ShowVariables)
+	require.True(t, ok)
+
+	err = doShowVariables(ses, newTestExecCtx(ctx, ctrl), showVars)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "refresh global sysvars failed")
+	require.Contains(t, bh.executedSQLs, sql)
+}
+
+func newMrsForGlobalSystemVariables(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("variable_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col1)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("variable_value")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func Test_GetColumns(t *testing.T) {
 	convey.Convey("GetColumns succ", t, func() {
 		//cw := &ComputationWrapperImpl{exec: &compile.Exec{}}
@@ -1608,6 +1702,110 @@ func TestProcessLoadLocal(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
+	})
+}
+
+func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
+	convey.Convey("processLoadLocal returns lock table bind check error before first read", t, func() {
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
+		proc := testutil.NewProc(t)
+		var writer *io.PipeWriter
+		proc.Base.LoadLocalReader, writer = io.Pipe()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		tConn := &testConn{}
+		writeExceptResult(tConn, []*Packet{{Length: 5, Payload: []byte("hello"), SequenceID: 1}})
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		convey.So(err, convey.ShouldBeNil)
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		ioses, err := NewIOSession(tConn, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				respr: NewMysqlResp(&testMysqlWriter{ioses: ioses}),
+			},
+		}
+		ctx := context.Background()
+		ec := newTestExecCtx(ctx, ctrl)
+		op := newTestTxnOp()
+		expected := moerr.NewLockTableBindChangedNoCtx()
+		op.checkLockTableBinds = func(context.Context) error {
+			return expected
+		}
+		proc.Base.TxnOperator = op
+		proc.Ctx = ctx
+		ec.proc = proc
+
+		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		convey.So(err, convey.ShouldEqual, expected)
+		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 1)
+	})
+}
+
+func TestProcessLoadLocalCheckLockTableBindsErrorInLoop(t *testing.T) {
+	convey.Convey("processLoadLocal returns lock table bind check error after one packet", t, func() {
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: "test.csv",
+			},
+		}
+		proc := testutil.NewProc(t)
+		var writer *io.PipeWriter
+		proc.Base.LoadLocalReader, writer = io.Pipe()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		tConn := &testConn{}
+		pkts := []*Packet{{Length: 5, Payload: []byte("hello"), SequenceID: 1},
+			{Length: 5, Payload: []byte("world"), SequenceID: 2},
+			{Length: 0, Payload: []byte(""), SequenceID: 3}}
+		writeExceptResult(tConn, pkts)
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		convey.So(err, convey.ShouldBeNil)
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		ioses, err := NewIOSession(tConn, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				respr: NewMysqlResp(&testMysqlWriter{ioses: ioses}),
+			},
+		}
+		buffer := make([]byte, 4096)
+		go func(buf []byte) {
+			tmp := buf
+			for {
+				n, err := proc.Base.LoadLocalReader.Read(tmp)
+				if err != nil {
+					break
+				}
+				tmp = tmp[n:]
+			}
+		}(buffer)
+		ctx := context.Background()
+		ec := newTestExecCtx(ctx, ctrl)
+		op := newTestTxnOp()
+		expected := moerr.NewLockTableBindChangedNoCtx()
+		op.checkLockTableBinds = func(context.Context) error {
+			if op.checkLockTableChecks == 2 {
+				return expected
+			}
+			return nil
+		}
+		proc.Base.TxnOperator = op
+		proc.Ctx = ctx
+		ec.proc = proc
+
+		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		convey.So(err, convey.ShouldEqual, expected)
+		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 2)
+		convey.So(buffer[:5], convey.ShouldResemble, []byte("hello"))
 	})
 }
 
@@ -2870,13 +3068,6 @@ func Test_checkModify(t *testing.T) {
 		{
 			node: &plan.Node{
 				PreInsertCtx: &plan0.PreInsertCtx{},
-			},
-			expected_flag: true,
-			expected_err:  false,
-		},
-		{
-			node: &plan.Node{
-				OnDuplicateKey: &plan0.OnDuplicateKeyCtx{},
 			},
 			expected_flag: true,
 			expected_err:  false,

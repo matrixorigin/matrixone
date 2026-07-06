@@ -416,7 +416,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	if !checkPipelineStandaloneExecutableAtRemote(s) {
 		return s.MergeRun(c)
 	}
-
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
@@ -818,7 +817,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
-		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, s.Proc.Mp())
+		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
 		wg.Done()
 	}
@@ -864,7 +863,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 				sender.safeToClose = false
 				sender.alreadyClose = false
 
-				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch2)
+				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
 				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
@@ -873,6 +872,61 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 			closeWithError(errSubmit, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 		}
 	}
+}
+
+func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitRegister, err error) bool {
+	terminalSignal := process.BuildCleanupSignal(false, err)
+	signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
+	defer signalCancel()
+
+	if process.SendPipelineSignalWithContext(signalCtx, reg, terminalSignal) {
+		return true
+	}
+	logRemoteNotifyCleanupSendFailure(
+		proc,
+		reg,
+		terminalSignal,
+		"remote_notify_cleanup_send_terminal_signal",
+		"remote notify cleanup timed out sending terminal %s signal: timeout=%s channel_len=%d channel_cap=%d err=%v",
+		err)
+
+	if terminalSignal.EventType != process.EventEnd {
+		return false
+	}
+
+	fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
+	fallbackSignal := process.NewAbortSignal(fallbackErr)
+	if process.SendPipelineSignalWithContext(signalCtx, reg, fallbackSignal) {
+		return false
+	}
+	logRemoteNotifyCleanupSendFailure(
+		proc,
+		reg,
+		fallbackSignal,
+		"remote_notify_cleanup_send_fallback_abort_signal",
+		"remote notify cleanup timed out sending fallback %s signal after end delivery failure: timeout=%s channel_len=%d channel_cap=%d err=%v",
+		fallbackErr)
+	return false
+}
+
+func logRemoteNotifyCleanupSendFailure(
+	proc *process.Process,
+	reg *process.WaitRegister,
+	signal process.PipelineSignal,
+	key string,
+	format string,
+	err error,
+) {
+	chLen, chCap := process.WaitRegisterChannelState(reg)
+	process.WarnPipelineCleanupf(
+		proc,
+		key,
+		format,
+		signal.EventType.String(),
+		process.PipelineSignalSendTimeout,
+		chLen,
+		chCap,
+		err)
 }
 
 func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
@@ -885,14 +939,15 @@ func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
 	return err
 }
 
-func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.PipelineSignal) error {
+func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.WaitRegister) error {
 	for {
 		bat, end, err := sender.receiveBatch()
 		if err != nil || end || bat == nil {
 			return err
 		}
 
-		if err = forwardRemoteBatchWithContext(sender, forwardCh, bat, sender.mp); err != nil {
+		var receiverDone bool
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil || receiverDone {
 			return err
 		}
 	}
@@ -1098,23 +1153,23 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
 		hint := engine.FilterHint{}
-		// Pass runtime BloomFilter to reader via FilterHint (only for ivf entries table).
+		// Pass runtime membership filter bytes to reader via FilterHint (only for ivf entries table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.BloomFilter) > 0 {
-				hint.BloomFilter = s.DataSource.BloomFilter
-			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if len(s.DataSource.MembershipFilterBytes) > 0 {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}
-		// Pass runtime BloomFilter to reader via FilterHint (for fulltext index table).
+		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}
@@ -1185,20 +1240,20 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		hint := engine.FilterHint{}
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.BloomFilter) > 0 {
-				hint.BloomFilter = s.DataSource.BloomFilter
-			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if len(s.DataSource.MembershipFilterBytes) > 0 {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}
-		// Pass runtime BloomFilter to reader via FilterHint (for fulltext index table).
+		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextBloomFilter{}); bfVal != nil {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.BloomFilter = bf
+					hint.MembershipFilterBytes = bf
 				}
 			}
 		}

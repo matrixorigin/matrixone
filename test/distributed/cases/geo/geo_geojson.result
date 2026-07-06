@@ -1,0 +1,48 @@
+select st_asgeojson(st_geomfromtext('POINT(1 2)')) as pt;
+pt
+{"type":"Point","coordinates":[1,2]}
+select st_asgeojson(st_geomfromtext('LINESTRING(0 0, 1 1, 2 2)')) as ls;
+ls
+{"type":"LineString","coordinates":[[0,0],[1,1],[2,2]]}
+select st_asgeojson(st_geomfromtext('POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))')) as poly;
+poly
+{"type":"Polygon","coordinates":[[[0,0],[4,0],[4,4],[0,4],[0,0]]]}
+select st_asgeojson(st_geomfromtext('MULTIPOINT(0 0, 1 1)')) as mpt;
+mpt
+{"type":"MultiPoint","coordinates":[[0,0],[1,1]]}
+select st_asgeojson(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 1), LINESTRING(0 0, 1 1))')) as gc;
+gc
+{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,1]},{"type":"LineString","coordinates":[[0,0],[1,1]]}]}
+select st_asgeojson(st_geomfromtext('POINT(1.23456 2.34567)')) as full_prec;
+full_prec
+{"type":"Point","coordinates":[1.23456,2.34567]}
+select st_asgeojson(st_geomfromtext('POINT(1.23456 2.34567)'), 2) as two_digits;
+two_digits
+{"type":"Point","coordinates":[1.23,2.35]}
+select st_astext(st_geomfromgeojson('{"type":"Point","coordinates":[3,4]}')) as pt;
+pt
+POINT(3 4)
+select st_astext(st_geomfromgeojson('{"type":"LineString","coordinates":[[0,0],[1,1],[2,2]]}')) as ls;
+ls
+LINESTRING(0 0,1 1,2 2)
+select st_astext(st_geomfromgeojson('{"type":"Polygon","coordinates":[[[0,0],[4,0],[4,4],[0,4],[0,0]]]}')) as poly;
+poly
+POLYGON((0 0,4 0,4 4,0 4,0 0))
+select st_srid(st_geomfromgeojson('{"type":"Point","coordinates":[3,4]}')) as default_srid;
+default_srid
+4326
+select st_srid(st_geomfromgeojson('{"type":"Point","coordinates":[3,4]}', 0)) as srid0;
+srid0
+0
+select st_astext(st_geomfromgeojson(st_asgeojson(st_geomfromtext('POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))')))) as rt;
+rt
+POLYGON((0 0,4 0,4 4,0 4,0 0))
+select st_geomfromgeojson('{"type":"Point"}');
+invalid input: invalid GeoJSON Point: unexpected end of JSON input
+drop table if exists gj_t;
+create table gj_t(id int, g geometry);
+insert into gj_t values (1, st_geomfromgeojson('{"type":"Point","coordinates":[10,20]}'));
+select id, st_astext(g) from gj_t;
+id    st_astext(g)
+1    POINT(10 20)
+drop table gj_t;

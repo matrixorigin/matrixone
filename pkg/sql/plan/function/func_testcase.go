@@ -16,14 +16,43 @@ package function
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// geometryComparisonWKT normalizes a geometry payload (WKB or legacy WKT/EWKT
+// text) to canonical WKT so geometry test expectations written as WKT compare
+// equal to WKB-encoded results.
+func geometryComparisonWKT(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	var (
+		g   geo.Geometry
+		err error
+	)
+	if payloadIsWKB(b) {
+		g, err = geo.ReadWKB(b)
+		if err != nil {
+			// float32-coordinate WKB (GEOMETRY32)
+			g, err = geo.ReadWKBFloat32(b)
+		}
+	} else {
+		s, _, _ := stripEWKTSRID(strings.TrimSpace(string(b)))
+		g, err = geo.ParseWKT(s)
+	}
+	if err != nil {
+		return string(b)
+	}
+	return geo.WriteWKT(g)
+}
 
 type fEvalFn func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error
 
@@ -597,8 +626,32 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, want, get)
 			}
 		}
+	case types.T_geometry, types.T_geometry32:
+		// Geometry values are stored as WKB; expectations are written as WKT.
+		// Canonicalize both sides to WKT before comparing.
+		r := vector.GenerateFunctionStrParameter(v)
+		s := vector.GenerateFunctionStrParameter(vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetStrValue(i)
+			get, null2 := r.GetStrValue(i)
+			if null1 {
+				if null2 {
+					continue
+				}
+				return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, geometryComparisonWKT(want))
+			}
+			wantWKT := geometryComparisonWKT(want)
+			getWKT := geometryComparisonWKT(get)
+			if wantWKT != getWKT {
+				return false, fmt.Sprintf("the %dth row expected %s, but get %s", i+1, wantWKT, getWKT)
+			}
+		}
+
 	case types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		r := vector.GenerateFunctionStrParameter(v)
 		s := vector.GenerateFunctionStrParameter(vExpected)
 		for i = 0; i < uint64(fc.fnLength); i++ {
@@ -855,7 +908,7 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_timestamp:
 		values := val.([]types.Timestamp)
 		vector.AppendFixedList(vec, values, nil, mp)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		values := val.([]string)
 		vector.AppendStringList(vec, values, nil, mp)
 	case types.T_array_float32:

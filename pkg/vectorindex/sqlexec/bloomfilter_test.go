@@ -61,33 +61,33 @@ func (m mockMessage) DebugString() string {
 func (m mockMessage) Destroy() {
 }
 
-func TestWaitBloomFilterForTableFunction(t *testing.T) {
+func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 	t.Run("return nil when RuntimeFilterSpecs is empty", func(t *testing.T) {
 		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 		sqlproc := NewSqlProcess(proc)
 		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-		result, err := WaitBloomFilter(sqlproc)
+		result, err := WaitUniqueJoinKeys(sqlproc)
 		require.NoError(t, err)
 		require.Nil(t, result)
 	})
 
 	t.Run("return nil when Proc is nil", func(t *testing.T) {
 		sqlproc := &SqlProcess{}
-		result, err := WaitBloomFilter(sqlproc)
+		result, err := WaitUniqueJoinKeys(sqlproc)
 		require.NoError(t, err)
 		require.Nil(t, result)
 	})
 
-	t.Run("return nil when UseBloomFilter is false", func(t *testing.T) {
+	t.Run("return nil when UseMembershipFilter is false", func(t *testing.T) {
 		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 		sqlproc := NewSqlProcess(proc)
 		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 			{
-				Tag:            1,
-				UseBloomFilter: false,
+				Tag:                 1,
+				UseMembershipFilter: false,
 			},
 		}
-		result, err := WaitBloomFilter(sqlproc)
+		result, err := WaitUniqueJoinKeys(sqlproc)
 		require.NoError(t, err)
 		require.Nil(t, result)
 	})
@@ -103,15 +103,15 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
-			Typ:  message.RuntimeFilter_BLOOMFILTER,
+			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
 			Data: expectedData,
 		}
 		message.SendMessage(rtMsg, mb)
 
 		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 			{
-				Tag:            tag,
-				UseBloomFilter: true,
+				Tag:                 tag,
+				UseMembershipFilter: true,
 			},
 		}
 
@@ -119,7 +119,7 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 		var result []byte
 		var err error
 		go func() {
-			result, err = WaitBloomFilter(sqlproc)
+			result, err = WaitUniqueJoinKeys(sqlproc)
 			done <- true
 		}()
 
@@ -140,15 +140,15 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 		// Send a message with different tag
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag + 1, // different tag
-			Typ:  message.RuntimeFilter_BLOOMFILTER,
+			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
 			Data: []byte{1, 2, 3},
 		}
 		message.SendMessage(rtMsg, mb)
 
 		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 			{
-				Tag:            tag,
-				UseBloomFilter: true,
+				Tag:                 tag,
+				UseMembershipFilter: true,
 			},
 		}
 
@@ -164,7 +164,7 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 		var result []byte
 		var err error
 		go func() {
-			result, err = WaitBloomFilter(sqlproc)
+			result, err = WaitUniqueJoinKeys(sqlproc)
 			done <- true
 		}()
 
@@ -191,15 +191,15 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 		// Also send a valid BLOOMFILTER message
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
-			Typ:  message.RuntimeFilter_BLOOMFILTER,
+			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
 			Data: expectedData,
 		}
 		message.SendMessage(rtMsg, mb)
 
 		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 			{
-				Tag:            tag,
-				UseBloomFilter: true,
+				Tag:                 tag,
+				UseMembershipFilter: true,
 			},
 		}
 
@@ -207,7 +207,7 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 		var result []byte
 		var err error
 		go func() {
-			result, err = WaitBloomFilter(sqlproc)
+			result, err = WaitUniqueJoinKeys(sqlproc)
 			done <- true
 		}()
 
@@ -237,15 +237,15 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 		// Then send a valid BLOOMFILTER message
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
-			Typ:  message.RuntimeFilter_BLOOMFILTER,
+			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
 			Data: expectedData,
 		}
 		message.SendMessage(rtMsg, mb)
 
 		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 			{
-				Tag:            tag,
-				UseBloomFilter: true,
+				Tag:                 tag,
+				UseMembershipFilter: true,
 			},
 		}
 
@@ -253,7 +253,7 @@ func TestWaitBloomFilterForTableFunction(t *testing.T) {
 		var result []byte
 		var err error
 		go func() {
-			result, err = WaitBloomFilter(sqlproc)
+			result, err = WaitUniqueJoinKeys(sqlproc)
 			done <- true
 		}()
 
@@ -379,8 +379,9 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 		buf, err := AppendVectorSQLLiteral(ctx, vec, 0, nil)
 		require.NoError(t, err)
 		// 10 bits is 2 bytes. 0x3FF -> [0x03, 0xFF] (big endian encoded)
-		// EncodeUint64 gives [0xFF, 0x03, 0x00...] so slice to 2 bytes is [0xFF, 0x03], reversed is [0x03, 0xFF]
-		require.Equal(t, "'\x03\xff'", string(buf))
+		// EncodeUint64 gives [0xFF, 0x03, 0x00...] so slice to 2 bytes is [0xFF, 0x03], reversed is [0x03, 0xFF].
+		// Emitted as a safe hex literal x'..' (not raw bytes inside quotes).
+		require.Equal(t, "x'03ff'", string(buf))
 	})
 
 	t.Run("ints", func(t *testing.T) {

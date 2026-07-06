@@ -1179,6 +1179,71 @@ func TestMaterializeSubqueryUnified_SinglePKSuccessBuildsFilterAndHashmap(t *tes
 	}
 }
 
+func TestMaterializeSubqueryUnified_PreservesStringLiteralQuotes(t *testing.T) {
+	ses := newValidateSession(t)
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick orders_fix into orders keys(select order_id from orders_fix where customer = 'Grace') when conflict accept",
+		1,
+	)
+	require.NoError(t, err)
+
+	stmt, ok := stmtNode.(*tree.DataBranchPick)
+	require.True(t, ok)
+
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		reqCtx context.Context,
+		ses FeSession,
+		ctx plan2.CompilerContext,
+		stmt tree.Statement,
+	) (*plan2.Plan, error) {
+		return nil, nil
+	}
+
+	tblStuff := tableStuff{}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+
+	hm, err := databranchutils.NewBranchHashmap(databranchutils.WithBranchHashmapShardCount(1))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, hm.Close())
+	}()
+
+	exec := &pickStreamingExecutor{
+		result: executor.Result{
+			Batches: []*batch.Batch{buildPickStreamingBatch(
+				t,
+				ses.proc.Mp(),
+				[]types.Type{types.T_int64.ToType()},
+				nil,
+			)},
+			Mp: ses.proc.Mp(),
+		},
+	}
+	bh := newPickStreamingBackExecForTest(t, ses, exec)
+
+	pkFilter, err := materializeSubqueryUnified(
+		context.Background(),
+		ses,
+		bh,
+		stmt,
+		tblStuff,
+		false,
+		hm,
+	)
+	require.NoError(t, err)
+	require.Nil(t, pkFilter)
+	require.Contains(t, exec.sql, "customer = 'Grace'")
+	require.NotContains(t, exec.sql, "customer = Grace")
+}
+
 func TestMaterializeSubqueryUnified_CompositePKOrdersAllColumns(t *testing.T) {
 	ses := newValidateSession(t)
 	stmtNode, err := parsers.ParseOne(

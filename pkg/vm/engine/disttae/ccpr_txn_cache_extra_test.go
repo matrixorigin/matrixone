@@ -22,6 +22,8 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 // TestCCPRTxnCache_WriteObject_DuplicateTxnID tests that calling WriteObject
@@ -87,6 +89,82 @@ func TestCCPRTxnCache_OnTxnRollback_NonExistent(t *testing.T) {
 	cache := NewCCPRTxnCache(gcPool, fs)
 	// Should not panic
 	cache.OnTxnRollback([]byte("nonexistent-txn"))
+}
+
+func TestCCPRTxnCache_OnTxnUnknownResultRemovesTrackingWithoutGC(t *testing.T) {
+	ctx := context.Background()
+	fs := newCleanFS(t)
+	gcPool, err := ants.NewPool(2)
+	require.NoError(t, err)
+	defer gcPool.Release()
+
+	cache := NewCCPRTxnCache(gcPool, fs)
+	txnID := []byte("txn-unknown")
+	otherTxnID := []byte("txn-other")
+	objectName := "obj_unknown"
+
+	isNew, err := cache.WriteObject(ctx, objectName, txnID)
+	require.NoError(t, err)
+	require.True(t, isNew)
+	require.NoError(t, writeObjectToFS(ctx, fs, objectName))
+	cache.OnFileWritten(objectName)
+
+	isNew, err = cache.WriteObject(ctx, objectName, otherTxnID)
+	require.NoError(t, err)
+	require.False(t, isNew)
+
+	cache.OnTxnUnknownResult(txnID)
+
+	cache.mu.Lock()
+	_, hasObject := cache.items.Get(ItemEntry{objectName: objectName})
+	_, hasUnknownTxn := cache.txnIndex.Get(TxnIndexEntry{txnID: txnID})
+	_, hasOtherTxn := cache.txnIndex.Get(TxnIndexEntry{txnID: otherTxnID})
+	cache.mu.Unlock()
+
+	assert.False(t, hasObject)
+	assert.False(t, hasUnknownTxn)
+	assert.False(t, hasOtherTxn)
+	assert.True(t, objectExistsInFS(ctx, fs, objectName))
+
+	cache.OnTxnRollback(otherTxnID)
+	time.Sleep(50 * time.Millisecond)
+	assert.True(t, objectExistsInFS(ctx, fs, objectName))
+}
+
+func TestTransactionFinalizeCommitUnknownCleansCCPRCache(t *testing.T) {
+	ctx := context.Background()
+	fs := newCleanFS(t)
+	gcPool, err := ants.NewPool(2)
+	require.NoError(t, err)
+	defer gcPool.Release()
+
+	cache := NewCCPRTxnCache(gcPool, fs)
+	txnOp, closeFn := client.NewTestTxnOperator(ctx)
+	defer closeFn()
+
+	objectName := "obj_unknown_finalize"
+	txnID := txnOp.Txn().ID
+	isNew, err := cache.WriteObject(ctx, objectName, txnID)
+	require.NoError(t, err)
+	require.True(t, isNew)
+	require.NoError(t, writeObjectToFS(ctx, fs, objectName))
+	cache.OnFileWritten(objectName)
+
+	txn := &Transaction{
+		engine:    &Engine{ccprTxnCache: cache},
+		op:        txnOp,
+		isCCPRTxn: true,
+	}
+	txn.FinalizeCommitWithUnknownResult(ctx)
+
+	cache.mu.Lock()
+	_, hasObject := cache.items.Get(ItemEntry{objectName: objectName})
+	_, hasTxn := cache.txnIndex.Get(TxnIndexEntry{txnID: txnID})
+	cache.mu.Unlock()
+
+	assert.False(t, hasObject)
+	assert.False(t, hasTxn)
+	assert.True(t, objectExistsInFS(ctx, fs, objectName))
 }
 
 // TestCCPRTxnCache_WriteObject_NilFS tests WriteObject with nil fileservice

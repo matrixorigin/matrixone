@@ -1,0 +1,99 @@
+select name_const('myname', 14);
+➤ myname[-5,64,0]  𝄀
+14
+select name_const('neg_int_name', -1);
+➤ neg_int_name[-5,64,0]  𝄀
+-1
+select name_const('pos_int_name', +1);
+➤ pos_int_name[-5,64,0]  𝄀
+1
+select name_const('uint64_name', 18446744073709551615);
+➤ uint64_name[-5,64,0]  𝄀
+18446744073709551615
+select name_const('str_name', 'abc');
+➤ str_name[12,-1,0]  𝄀
+abc
+select name_const('charset_str_name', _utf8mb4'test');
+➤ charset_str_name[12,-1,0]  𝄀
+test
+select name_const('collate_str_name', _utf8mb4'test' collate utf8mb4_unicode_ci);
+➤ collate_str_name[12,-1,0]  𝄀
+test
+select name_const('null_name', null);
+➤ null_name[12,-1,0]  𝄀
+null
+select name_const('decimal_name', 12.34);
+➤ decimal_name[3,18,2]  𝄀
+12.34
+select name_const('neg_decimal_name', -12.34);
+➤ neg_decimal_name[3,18,2]  𝄀
+-12.34
+select name_const('pos_decimal_name', +12.34);
+➤ pos_decimal_name[3,18,2]  𝄀
+12.34
+select name_const('sci_float_name', 1.5e0);
+➤ sci_float_name[8,54,0]  𝄀
+1.5
+select name_const('neg_sci_float_name', -1.5e0);
+➤ neg_sci_float_name[8,54,0]  𝄀
+-1.5
+select name_const('pos_sci_float_name', +1.5e0);
+➤ pos_sci_float_name[8,54,0]  𝄀
+1.5
+select name_const(123, -456);
+➤ 123[-5,64,0]  𝄀
+-456
+select name_const(('paren_name'), (14));
+➤ paren_name[-5,64,0]  𝄀
+14
+select name_const(((123)), ((-456)));
+➤ 123[-5,64,0]  𝄀
+-456
+select name_const('myname', 14) as alias_name;
+➤ alias_name[-5,64,0]  𝄀
+14
+select name_const(('paren_alias_name'), (14)) as paren_alias;
+➤ paren_alias[-5,64,0]  𝄀
+14
+select t.myname from (select name_const('myname', 42)) t;
+➤ myname[-5,64,0]  𝄀
+42
+select * from (select name_const('v', 'hello'), name_const('n', 99)) sub;
+➤ v[12,-1,0]  ¦  n[-5,64,0]  𝄀
+hello  ¦  99
+select sub.collate_str_name from (select name_const('collate_str_name', _utf8mb4'test' collate utf8mb4_unicode_ci)) sub;
+➤ collate_str_name[12,-1,0]  𝄀
+test
+select name_const('expr_name', 14) + 1;
+➤ name_const(expr_name, 14) + 1[-5,64,0]  𝄀
+15
+select name_const('bad_folded_expr', abs(-1));
+invalid argument NAME_CONST, bad value 
+select name_const('bad_expr', now());
+invalid argument NAME_CONST, bad value 
+select name_const('bad_cast_expr', cast(14 as signed));
+invalid argument NAME_CONST, bad value 
+select name_const(null, 1);
+invalid argument NAME_CONST, bad value 
+select name_const((null), 1);
+invalid argument NAME_CONST, bad value 
+select name_const(-123, -456);
+invalid argument NAME_CONST, bad value 
+select name_const((-123), -456);
+invalid argument NAME_CONST, bad value 
+select name_const('bad_args');
+invalid argument NAME_CONST, bad value 
+select name_const('xxx_name', -18446744073709551616);
+➤ xxx_name[3,39,0]  𝄀
+-18446744073709551616
+drop table if exists name_const_t;
+create table name_const_t(a int, b varchar(10));
+insert into name_const_t values (1, 'x'), (2, 'y'), (null, null);
+select name_const('col_a', a) from name_const_t order by a;
+invalid argument NAME_CONST, bad value 
+select name_const(b, 1) from name_const_t order by a;
+invalid argument NAME_CONST, bad value 
+drop table name_const_t;
+drop table if exists name_const_generated_t;
+create table name_const_generated_t(a int, b int generated always as (name_const('x', a)) stored);
+invalid argument NAME_CONST, bad value 

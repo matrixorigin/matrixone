@@ -215,6 +215,40 @@ func TestDiffDataHelper_Basic(t *testing.T) {
 	}, got["INSERT-2"])
 }
 
+func TestDiffDataHelperClosesMigratedHashmaps(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkKind = fakeKind
+
+	baseMigratedHashmap := &closeTrackingBranchHashmap{}
+	tarMigratedHashmap := &closeTrackingBranchHashmap{}
+	baseHashmap := &closeTrackingBranchHashmap{migrated: baseMigratedHashmap}
+	tarHashmap := &closeTrackingBranchHashmap{migrated: tarMigratedHashmap}
+
+	err := diffDataHelper(
+		context.Background(),
+		nil,
+		compositeOption{},
+		tblStuff,
+		func(batchWithKind) (bool, error) {
+			return false, nil
+		},
+		tarHashmap,
+		baseHashmap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, baseHashmap.migrateCalls)
+	require.Equal(t, 1, tarHashmap.migrateCalls)
+	require.Equal(t, []int{1, 2}, baseHashmap.migrateKeyCols)
+	require.Equal(t, []int{1, 2}, tarHashmap.migrateKeyCols)
+	require.Equal(t, 1, baseHashmap.closeCalls)
+	require.Equal(t, 1, tarHashmap.closeCalls)
+	require.Equal(t, 1, baseMigratedHashmap.closeCalls)
+	require.Equal(t, 1, tarMigratedHashmap.closeCalls)
+}
+
 func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()
@@ -266,6 +300,82 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, [][]any{{int64(7), "after", "target"}}, got["INSERT-1"])
 	require.Equal(t, [][]any{{int64(7), "before", "base"}}, got["DELETE-2"])
+}
+
+type closeTrackingBranchHashmap struct {
+	migrated           databranchutils.BranchHashmap
+	migrateCalls       int
+	migrateKeyCols     []int
+	migrateParallelism int
+	closeCalls         int
+}
+
+func (h *closeTrackingBranchHashmap) PutByVectors(_ []*vector.Vector, _ []int) error {
+	return nil
+}
+
+func (h *closeTrackingBranchHashmap) GetByVectors(_ []*vector.Vector) ([]databranchutils.GetResult, error) {
+	return nil, nil
+}
+
+func (h *closeTrackingBranchHashmap) GetByEncodedKey(_ []byte) (databranchutils.GetResult, error) {
+	return databranchutils.GetResult{}, nil
+}
+
+func (h *closeTrackingBranchHashmap) PopByVectors(_ []*vector.Vector, _ bool) ([]databranchutils.GetResult, error) {
+	return nil, nil
+}
+
+func (h *closeTrackingBranchHashmap) PopByVectorsStream(_ []*vector.Vector, _ bool, _ func(idx int, key []byte, row []byte) error) (int, error) {
+	return 0, nil
+}
+
+func (h *closeTrackingBranchHashmap) PopByEncodedKey(_ []byte, _ bool) (databranchutils.GetResult, error) {
+	return databranchutils.GetResult{}, nil
+}
+
+func (h *closeTrackingBranchHashmap) PopByEncodedKeyValue(_ []byte, _ []byte, _ bool) (int, error) {
+	return 0, nil
+}
+
+func (h *closeTrackingBranchHashmap) PopByEncodedFullValue(_ []byte, _ bool) (databranchutils.GetResult, error) {
+	return databranchutils.GetResult{}, nil
+}
+
+func (h *closeTrackingBranchHashmap) PopByEncodedFullValueExact(_ []byte, _ bool) (int, error) {
+	return 0, nil
+}
+
+func (h *closeTrackingBranchHashmap) ForEachShardParallel(_ func(databranchutils.ShardCursor) error, _ int) error {
+	return nil
+}
+
+func (h *closeTrackingBranchHashmap) Project(_ []int, _ int) (databranchutils.BranchHashmap, error) {
+	return h.migrated, nil
+}
+
+func (h *closeTrackingBranchHashmap) Migrate(keyCols []int, parallelism int) (databranchutils.BranchHashmap, error) {
+	h.migrateCalls++
+	h.migrateKeyCols = append([]int(nil), keyCols...)
+	h.migrateParallelism = parallelism
+	return h.migrated, nil
+}
+
+func (h *closeTrackingBranchHashmap) ItemCount() int64 {
+	return 0
+}
+
+func (h *closeTrackingBranchHashmap) ShardCount() int {
+	return 0
+}
+
+func (h *closeTrackingBranchHashmap) DecodeRow(_ []byte) (types.Tuple, []types.Type, error) {
+	return nil, nil, nil
+}
+
+func (h *closeTrackingBranchHashmap) Close() error {
+	h.closeCalls++
+	return nil
 }
 
 type capturedBatch struct {

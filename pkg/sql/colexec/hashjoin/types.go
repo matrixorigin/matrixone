@@ -222,6 +222,9 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanEqCondExecutors()
 	ctr.cleanupSpillFiles(proc)
+	ctr.freeSpillBuildExprExecs()
+	ctr.spillBucketRowIds = nil
+	ctr.spillNonEmptyBuckets = nil
 }
 
 func (ctr *container) cleanupSpillFiles(proc *process.Process) {

@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -168,7 +169,7 @@ func (s *HnswSearch[T]) Destroy() {
 // load metadata from database
 func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*HnswModel[T], error) {
 
-	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY timestamp ASC", dbname, metatbl)
+	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return nil, err

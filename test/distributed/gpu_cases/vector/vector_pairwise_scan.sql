@@ -1,0 +1,50 @@
+-- =====================================================================
+-- vector_pairwise_scan.sql — GPU pairwise distance on a NON-INDEX table scan
+--
+-- GPU REQUIRED. Exercises the GPU pairwise-distance offload behind the common
+-- "ORDER BY <distance>(col, query) LIMIT k" pattern on a vecf32 column that has
+-- NO vector index. The scalar distance builtins (l2_distance, l2_distance_sq,
+-- cosine_distance) route a 1xN batch through metric.PairwiseDistanceLaunch when
+-- one operand is a constant query vector and the float32 work size exceeds
+-- GPUThresholdSQL (= GPUThresholdSync/4 = 1,048,576 = rows*dim). With 128-dim
+-- SIFT data a full 8192-row scan batch is 8192*128 = 1,048,576, so the per-batch
+-- distance is computed on the GPU (the trailing partial batch falls back to CPU
+-- — both produce identical results). See pkg/sql/plan/function/func_binary.go
+-- batchArrayDistanceSync.
+--
+-- Determinism: GPU pairwise distance is EXACT (not approximate), so the result
+-- is fully deterministic — no recall caveats like the CAGRA/IVF-PQ index cases.
+-- Each probe is a loaded SIFT row, so its zero-distance self-match is the unique
+-- top-1 regardless of GPU vs CPU dispatch.
+-- =====================================================================
+
+drop database if exists gpu_pairwise;
+create database gpu_pairwise;
+use gpu_pairwise;
+
+create table t(a bigint primary key, b vecf32(128));
+
+-- 10000 rows x 128 dim. No index on b: ORDER BY computes brute-force pairwise
+-- distance over each scan batch; full 8192-row batches reach GPUThresholdSQL.
+load data infile {'filepath'='$resources/vector/sift128_base_10k.csv.gz', 'compression'='gzip'} into table t fields terminated by ':' parallel 'true';
+select count(*) from t;
+
+-- Confirm there is no secondary (vector) index — this is a pure table scan path.
+select count(*) from mo_catalog.mo_indexes
+    where table_id = (select rel_id from mo_catalog.mo_tables
+                      where relname='t' and reldatabase='gpu_pairwise')
+      and type='MULTIPLE';
+
+-- l2_distance: probe is a loaded row -> zero distance -> deterministic top-1.
+select a from t order by l2_distance(b, "[14, 2, 0, 0, 0, 2, 42, 55, 9, 1, 0, 0, 18, 100, 77, 32, 89, 1, 0, 0, 19, 85, 15, 68, 52, 4, 0, 0, 0, 0, 2, 28, 34, 13, 5, 12, 49, 40, 39, 37, 24, 2, 0, 0, 34, 83, 88, 28, 119, 20, 0, 0, 41, 39, 13, 62, 119, 16, 2, 0, 0, 0, 10, 42, 9, 46, 82, 79, 64, 19, 2, 5, 10, 35, 26, 53, 84, 32, 34, 9, 119, 119, 21, 3, 3, 11, 17, 14, 119, 25, 8, 5, 0, 0, 11, 22, 23, 17, 42, 49, 17, 12, 5, 5, 12, 78, 119, 90, 27, 0, 4, 2, 48, 92, 112, 85, 15, 0, 2, 7, 50, 36, 15, 11, 1, 0, 0, 7]") ASC LIMIT 1;
+
+-- l2_distance_sq: squared-L2 metric, same exact zero-distance top-1.
+select a from t order by l2_distance_sq(b, "[14, 2, 0, 0, 0, 2, 42, 55, 9, 1, 0, 0, 18, 100, 77, 32, 89, 1, 0, 0, 19, 85, 15, 68, 52, 4, 0, 0, 0, 0, 2, 28, 34, 13, 5, 12, 49, 40, 39, 37, 24, 2, 0, 0, 34, 83, 88, 28, 119, 20, 0, 0, 41, 39, 13, 62, 119, 16, 2, 0, 0, 0, 10, 42, 9, 46, 82, 79, 64, 19, 2, 5, 10, 35, 26, 53, 84, 32, 34, 9, 119, 119, 21, 3, 3, 11, 17, 14, 119, 25, 8, 5, 0, 0, 11, 22, 23, 17, 42, 49, 17, 12, 5, 5, 12, 78, 119, 90, 27, 0, 4, 2, 48, 92, 112, 85, 15, 0, 2, 7, 50, 36, 15, 11, 1, 0, 0, 7]") ASC LIMIT 1;
+
+-- cosine_distance: the identical vector has cosine distance 0 -> same top-1.
+select a from t order by cosine_distance(b, "[14, 2, 0, 0, 0, 2, 42, 55, 9, 1, 0, 0, 18, 100, 77, 32, 89, 1, 0, 0, 19, 85, 15, 68, 52, 4, 0, 0, 0, 0, 2, 28, 34, 13, 5, 12, 49, 40, 39, 37, 24, 2, 0, 0, 34, 83, 88, 28, 119, 20, 0, 0, 41, 39, 13, 62, 119, 16, 2, 0, 0, 0, 10, 42, 9, 46, 82, 79, 64, 19, 2, 5, 10, 35, 26, 53, 84, 32, 34, 9, 119, 119, 21, 3, 3, 11, 17, 14, 119, 25, 8, 5, 0, 0, 11, 22, 23, 17, 42, 49, 17, 12, 5, 5, 12, 78, 119, 90, 27, 0, 4, 2, 48, 92, 112, 85, 15, 0, 2, 7, 50, 36, 15, 11, 1, 0, 0, 7]") ASC LIMIT 1;
+
+-- A different loaded row -> a different deterministic top-1.
+select a from t order by l2_distance(b, "[0, 16, 35, 5, 32, 31, 14, 10, 11, 78, 55, 10, 45, 83, 11, 6, 14, 57, 102, 75, 20, 8, 3, 5, 67, 17, 19, 26, 5, 0, 1, 22, 60, 26, 7, 1, 18, 22, 84, 53, 85, 119, 119, 4, 24, 18, 7, 7, 1, 81, 106, 102, 72, 30, 6, 0, 9, 1, 9, 119, 72, 1, 4, 33, 119, 29, 6, 1, 0, 1, 14, 52, 119, 30, 3, 0, 0, 55, 92, 111, 2, 5, 4, 9, 22, 89, 96, 14, 1, 0, 1, 82, 59, 16, 20, 5, 25, 14, 11, 4, 0, 0, 1, 26, 47, 23, 4, 0, 0, 4, 38, 83, 30, 14, 9, 4, 9, 17, 23, 41, 0, 0, 2, 8, 19, 25, 23, 1]") ASC LIMIT 1;
+
+drop database gpu_pairwise;

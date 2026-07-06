@@ -79,13 +79,25 @@ func handleBranchPick(
 	ses *Session,
 	stmt *tree.DataBranchPick,
 ) (err error) {
-	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
-		return moerr.NewInternalError(execCtx.reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+	if err = validateDataBranchPickOptions(execCtx.reqCtx, ses, stmt); err != nil {
+		return err
 	}
 	if stmt.ConflictOpt == nil {
 		stmt.ConflictOpt = &tree.ConflictOpt{
 			Opt: tree.CONFLICT_FAIL,
 		}
+	}
+
+	return diffMergeAgency(ses, execCtx, stmt)
+}
+
+func validateDataBranchPickOptions(
+	ctx context.Context,
+	ses *Session,
+	stmt *tree.DataBranchPick,
+) error {
+	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+		return moerr.NewInternalError(ctx, "DATA BRANCH PICK is not supported in explicit transactions")
 	}
 
 	hasBetween := stmt.BetweenFrom != "" && stmt.BetweenTo != ""
@@ -101,78 +113,7 @@ func handleBranchPick(
 		return moerr.NewInvalidInputNoCtx(
 			"destination snapshot option is not supported for DATA BRANCH PICK")
 	}
-	if err = authenticatePickTablePrivileges(execCtx.reqCtx, ses, stmt); err != nil {
-		return err
-	}
 
-	return diffMergeAgency(ses, execCtx, stmt)
-}
-
-func authenticatePickTablePrivileges(ctx context.Context, ses *Session, stmt *tree.DataBranchPick) error {
-	if stmt == nil || getPu(ses.GetService()).SV.SkipCheckPrivilege || ses.skipAuthForSpecialUser() || ses.GetTenantInfo() == nil {
-		return nil
-	}
-
-	srcDB, srcTbl, err := resolvePickPrivilegeTableName(ses, stmt.SrcTable)
-	if err != nil {
-		return err
-	}
-	dstDB, dstTbl, err := resolvePickPrivilegeTableName(ses, stmt.DstTable)
-	if err != nil {
-		return err
-	}
-
-	if err = requirePickTablePrivilege(ctx, ses, srcDB, srcTbl, clusterTableSelect); err != nil {
-		return err
-	}
-	return requirePickTablePrivilege(ctx, ses, dstDB, dstTbl, clusterTableModify)
-}
-
-func resolvePickPrivilegeTableName(ses *Session, name tree.TableName) (string, string, error) {
-	dbName := name.SchemaName.String()
-	if dbName == "" {
-		dbName = ses.GetDatabaseName()
-	}
-	tableName := name.ObjectName.String()
-	if dbName == "" || tableName == "" {
-		return "", "", moerr.NewInternalErrorNoCtx("the base or target database cannot be empty")
-	}
-	return dbName, tableName, nil
-}
-
-func requirePickTablePrivilege(
-	ctx context.Context,
-	ses *Session,
-	dbName string,
-	tableName string,
-	clusterOp clusterTableOperationType,
-) error {
-	buildEntry := func(typ PrivilegeType) privilegeEntry {
-		entry := privilegeEntriesMap[typ]
-		entry.databaseName = dbName
-		entry.tableName = tableName
-		return entry
-	}
-
-	priv := &privilege{
-		kind:    privilegeKindGeneral,
-		objType: objectTypeTable,
-		entries: []privilegeEntry{
-			buildEntry(PrivilegeTypeTableAll),
-			buildEntry(PrivilegeTypeTableOwnership),
-		},
-		writeDatabaseAndTableDirectly: true,
-		isClusterTable:                isClusterTable(dbName, tableName),
-		clusterTableOperation:         clusterOp,
-	}
-
-	ok, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
-	}
 	return nil
 }
 
@@ -228,23 +169,15 @@ func pickMergeDiffs(
 		skipSet = make(map[string]struct{})
 	}
 
-	appender := sqlValuesAppender{
-		ctx:             ctx,
-		ses:             ses,
-		bh:              bh,
-		tblStuff:        tblStuff,
-		deleteByFullRow: tblStuff.def.pkKind == fakeKind,
-		pkInfo:          newPKBatchInfo(ctx, ses, tblStuff),
-		deleteCnt:       &deleteCnt,
-		deleteBuf:       deleteFromVals,
-		insertCnt:       &insertCnt,
-		insertBuf:       insertIntoVals,
-	}
-	if err = initPKTables(ctx, ses, bh, appender.pkInfo, appender.writeFile); err != nil {
+	appender := newSQLValuesAppender(
+		ctx, ses, bh, tblStuff, dataBranchApplyModeOnlinePKOnly,
+		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
+	)
+	if err = initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
 		return err
 	}
 	defer func() {
-		if err2 := dropPKTables(ctx, ses, bh, appender.pkInfo, appender.writeFile); err2 != nil && err == nil {
+		if err2 := dropApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err2 != nil && err == nil {
 			err = err2
 		}
 	}()
@@ -365,59 +298,15 @@ func appendPickedBatchRows(
 			}
 		}
 
-		// Row is in KEYS set and passed conflict checks — extract all visible column values.
-		for _, colIdx := range tblStuff.def.visibleIdxes {
-			vec := wrapped.batch.Vecs[colIdx]
-			if rowIdx >= vec.Length() {
-				return moerr.NewInternalErrorNoCtxf(
-					"data branch pick batch shape mismatch: row=%d batchRows=%d col=%d vecLen=%d",
-					rowIdx, wrapped.batch.RowCount(), colIdx, vec.Length(),
-				)
-			}
-			if vec.GetNulls().Contains(uint64(rowIdx)) {
-				row[colIdx] = nil
-				continue
-			}
-
-			switch vec.GetType().Oid {
-			case types.T_datetime, types.T_timestamp, types.T_decimal64,
-				types.T_decimal128, types.T_time:
-				row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
-			default:
-				if err = extractRowFromVector(
-					ctx, ses, vec, colIdx, row, rowIdx, false,
-				); err != nil {
-					return
-				}
-			}
+		if err = extractDataBranchApplyRow(
+			ctx, ses, tblStuff, wrapped.batch, rowIdx, appender.extraColIdxesForRow(wrapped.kind), row,
+			"data branch pick batch shape mismatch",
+		); err != nil {
+			return
 		}
-
-		tmpValsBuffer.Reset()
-		if wrapped.kind == diffDelete {
-			if appender.deleteByFullRow {
-				if err = writeDeleteRowSQLFull(ctx, ses, tblStuff, row, tmpValsBuffer); err != nil {
-					return
-				}
-			} else if appender.pkInfo != nil {
-				if err = writeDeleteRowValuesAsTuple(ses, tblStuff, row, tmpValsBuffer); err != nil {
-					return
-				}
-			} else {
-				if err = writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
-					return
-				}
-			}
-		} else {
-			if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
-				return
-			}
-		}
-
-		if tmpValsBuffer.Len() == 0 {
-			continue
-		}
-
-		if err = appender.appendRow(wrapped.kind, tmpValsBuffer.Bytes()); err != nil {
+		if err = appendDataBranchApplyRowAsSQLValues(
+			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
+		); err != nil {
 			return
 		}
 	}
@@ -816,7 +705,7 @@ func materializeSubqueryUnified(
 	// Compose the subquery SQL: wrap the user's SELECT with ORDER BY for
 	// streaming sorted results.  For composite PKs we ORDER BY all component
 	// columns so that serial()-encoded keys arrive in ascending byte order.
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
 	stmt.Keys.Select.Format(fmtCtx)
 	subquerySQL := fmtCtx.String()
 

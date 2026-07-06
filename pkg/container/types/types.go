@@ -77,6 +77,9 @@ const (
 	T_varbinary T = 65
 	T_enum      T = 66
 	T_geometry  T = 67
+	// T_geometry32 stores geometry as float32-coordinate WKB (the GEOMETRY32
+	// type); T_geometry uses float64. Both are varlena, binary-charset types.
+	T_geometry32 T = 68
 
 	// blobs
 	T_blob     T = 70
@@ -409,12 +412,13 @@ var Types = map[string]T{
 
 	"enum": T_enum,
 
-	"json":     T_json,
-	"geometry": T_geometry,
-	"text":     T_text,
-	"datalink": T_datalink,
-	"blob":     T_blob,
-	"uuid":     T_uuid,
+	"json":       T_json,
+	"geometry":   T_geometry,
+	"geometry32": T_geometry32,
+	"text":       T_text,
+	"datalink":   T_datalink,
+	"blob":       T_blob,
+	"uuid":       T_uuid,
 
 	"transaction timestamp": T_TS,
 	"rowid":                 T_Rowid,
@@ -436,7 +440,7 @@ func New(oid T, width, scale int32) Type {
 
 func CharsetType(oid T) uint8 {
 	switch oid {
-	case T_blob, T_varbinary, T_binary, T_geometry:
+	case T_blob, T_varbinary, T_binary, T_geometry, T_geometry32:
 		// binary charset
 		return 1
 	default:
@@ -639,7 +643,7 @@ func (t T) ToType() Type {
 		typ.Size = RowidSize
 	case T_Blockid:
 		typ.Size = BlockidSize
-	case T_json, T_blob, T_text, T_datalink, T_geometry:
+	case T_json, T_blob, T_text, T_datalink, T_geometry, T_geometry32:
 		typ.Size = VarlenaSize
 	case T_char:
 		typ.Size = VarlenaSize
@@ -721,6 +725,8 @@ func (t T) String() string {
 		return "JSON"
 	case T_geometry:
 		return "GEOMETRY"
+	case T_geometry32:
+		return "GEOMETRY32"
 	case T_tuple:
 		return "TUPLE"
 	case T_decimal64:
@@ -768,6 +774,8 @@ func (t T) OidString() string {
 		return "T_json"
 	case T_geometry:
 		return "T_geometry"
+	case T_geometry32:
+		return "T_geometry32"
 	case T_bool:
 		return "T_bool"
 	case T_bit:
@@ -869,7 +877,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink, T_geometry:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink, T_geometry, T_geometry32:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -924,7 +932,7 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink, T_geometry:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink, T_geometry, T_geometry32:
 		return -24
 	case T_enum:
 		return 2

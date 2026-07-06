@@ -39,6 +39,7 @@ func TestInteractiveTimeoutScopeLeak(t *testing.T) {
 			service: "",
 		},
 	}
+	ses.SetTenantInfo(getDefaultAccount())
 
 	// Initialize system variables
 	// We need to mock GSysVarsMgr behavior or just manually init for test
@@ -75,12 +76,18 @@ func TestInteractiveTimeoutScopeLeak(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(86400), val, "Global variable should not change after session set")
 
-	// 2. Set Global Variable (should fail)
-	err = ses.SetGlobalSysVar(ctx, "interactive_timeout", int64(30100))
-	require.Error(t, err) // Should fail with read-only
+	stubGlobalSysVarPersistence(t, sysVarSet{"interactive_timeout", int64(30200)})
 
-	// Verify Global UNCHANGED
+	// 2. Set Global Variable
+	err = ses.SetGlobalSysVar(ctx, "interactive_timeout", int64(30200))
+	require.NoError(t, err)
+
+	// Verify Global updated and existing session unchanged
 	val, err = ses.GetGlobalSysVar("interactive_timeout")
 	require.NoError(t, err)
-	require.Equal(t, int64(86400), val, "Global variable should not change after failed global set")
+	require.Equal(t, int64(30200), val, "Global variable should change after global set")
+
+	val, err = ses.GetSessionSysVar("interactive_timeout")
+	require.NoError(t, err)
+	require.Equal(t, int64(30100), val, "Session variable should not change after global set")
 }

@@ -33,11 +33,11 @@ import (
 
 // GpuIvfFlat represents the C++ gpu_ivf_flat_t object.
 type GpuIvfFlat[T VectorType] struct {
-	cIvfFlat      C.gpu_ivf_flat_c
-	dimension     uint32
-	nthread       uint32
-	distMode      DistributionMode
-	batchWindowUs int64
+	cIvfFlat                 C.gpu_ivf_flat_c
+	dimension                uint32
+	nthread                  uint32
+	distMode                 DistributionMode
+	batchWindowUs            int64
 	dynbConservativeDispatch bool
 }
 

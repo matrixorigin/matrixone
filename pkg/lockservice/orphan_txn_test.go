@@ -804,6 +804,20 @@ func TestValidTxnWithInvalidRemoteTxn(t *testing.T) {
 	require.False(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
 }
 
+func TestValidTxnWithInactiveRemoteTxnAndNotifyFoundCommitting(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) ([][]byte, error) { return [][]byte{{1}}, nil },
+		func(txn pb.WaitTxn) (bool, error) {
+			return false, nil
+		},
+	).(*mapBasedTxnHolder)
+	require.True(t, hold.isValidRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"}))
+}
+
 func TestValidTxnWithInvalidRemoteTxnAndNotifyOK(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",

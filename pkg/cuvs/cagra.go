@@ -33,11 +33,11 @@ import (
 
 // GpuCagra represents the C++ gpu_cagra_t object.
 type GpuCagra[T VectorType] struct {
-	cCagra        C.gpu_cagra_c
-	dimension     uint32
-	nthread       uint32
-	distMode      DistributionMode
-	batchWindowUs int64
+	cCagra                   C.gpu_cagra_c
+	dimension                uint32
+	nthread                  uint32
+	distMode                 DistributionMode
+	batchWindowUs            int64
 	dynbConservativeDispatch bool
 }
 
