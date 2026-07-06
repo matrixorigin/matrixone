@@ -184,6 +184,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		defer func() {
+			runCompile.clear()
+			runCompile.Release()
+		}()
 
 		// decode and running the pipeline.
 		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -208,10 +212,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
-		defer func() {
-			runCompile.clear()
-			runCompile.Release()
-		}()
 
 		if err := registerRemoteDispatchReceivers(s, runCompile.proc); err != nil {
 			return err
@@ -561,9 +561,9 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 
 // waitRegistrationTimeout bounds how long we wait for the dispatch operator
 // to register itself via PutProcIntoUuidMap. Under normal operation this
-// happens within seconds. A 5-minute timeout detects a fundamentally broken
-// remote CN (crash, network partition) without the false positives of a short
-// timeout, while avoiding the 24h hang of the unbounded RPC stream lifetime.
+// happens within seconds. The 30-second timeout matches dispatch's remote
+// receiver wait and detects a fundamentally broken remote CN (crash, network
+// partition) while avoiding the 24h hang of the unbounded RPC stream lifetime.
 const waitRegistrationTimeout = 30 * time.Second
 
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
