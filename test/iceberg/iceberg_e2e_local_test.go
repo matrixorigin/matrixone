@@ -204,6 +204,22 @@ func TestLocalE2EQueryLinesAndSQLValueString(t *testing.T) {
 	}
 }
 
+func TestLocalE2EWaitForDBUsesPing(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	if err != nil {
+		t.Fatalf("new sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectPing()
+	if err := waitForDB(context.Background(), db); err != nil {
+		t.Fatalf("waitForDB failed: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestLocalE2ECaseReportsRedactAndSummarize(t *testing.T) {
 	dir := t.TempDir()
 	result := failedCase(
@@ -253,6 +269,39 @@ func TestLocalE2ECaseReportsRedactAndSummarize(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "ICE-CI-E2E-001") || !strings.Contains(string(data), "failed") {
 		t.Fatalf("summary missing case rows:\n%s", string(data))
+	}
+}
+
+func TestLocalE2EReportErrorBranches(t *testing.T) {
+	dir := t.TempDir()
+	blockingFile := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blockingFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write blocking file: %v", err)
+	}
+	if err := writeCaseReport(blockingFile, passedCase("ICE-CI-E2E-999", "blocked", nil, nil, nil, nil)); err == nil {
+		t.Fatalf("expected writeCaseReport to fail when report root is a file")
+	}
+	if err := writeRunSummary(blockingFile, runSummary{Namespace: "ns", Database: "db", Catalog: "cat"}); err == nil {
+		t.Fatalf("expected writeRunSummary to fail when report root is a file")
+	}
+
+	if mismatch := sampleMismatch(passedCase("ok", "ok", nil, nil, nil, nil)); mismatch != nil {
+		t.Fatalf("passed case should not have mismatch: %v", mismatch)
+	}
+	failed := failedCase("bad", "bad", nil, nil, nil, "")
+	if mismatch := sampleMismatch(failed); len(mismatch) != 1 || !strings.Contains(mismatch[0], "did not match") {
+		t.Fatalf("unexpected generic mismatch: %v", mismatch)
+	}
+	if redacted := redactMap(map[string]string{"scope": "s3://bucket/path/file.parquet"}); !strings.Contains(redacted["scope"], "<redacted:path:") {
+		t.Fatalf("map value was not redacted: %v", redacted)
+	}
+	if redactMap(nil) != nil {
+		t.Fatalf("nil map should stay nil")
+	}
+	left := checksumLines([]string{"raw-token", "s3://bucket/path/file.parquet"})
+	right := checksumLines([]string{"raw-token", "s3://bucket/path/file.parquet"})
+	if left != right {
+		t.Fatalf("checksumLines should be deterministic: %s != %s", left, right)
 	}
 }
 
@@ -323,6 +372,80 @@ func TestLocalE2ECatalogAndMappingCaseFailures(t *testing.T) {
 	}
 }
 
+func TestLocalE2ECatalogAndMappingCaseFailureBranches(t *testing.T) {
+	cfg := localE2ETestConfig()
+	tests := []struct {
+		name   string
+		mock   func(sqlmock.Sqlmock)
+		errSub string
+	}{
+		{
+			name: "inline secret unexpected error",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("CREATE ICEBERG CATALOG bad_").WillReturnError(errors.New("syntax error"))
+			},
+			errSub: "unexpected error",
+		},
+		{
+			name: "namespaces query fails",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("CREATE ICEBERG CATALOG bad_").WillReturnError(errors.New("secret:// required"))
+				mock.ExpectQuery("SHOW ICEBERG NAMESPACES").WillReturnError(errors.New("catalog offline"))
+			},
+			errSub: "catalog offline",
+		},
+		{
+			name: "namespace missing",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("CREATE ICEBERG CATALOG bad_").WillReturnError(errors.New("secret:// required"))
+				mock.ExpectQuery("SHOW ICEBERG NAMESPACES").
+					WillReturnRows(sqlmock.NewRows([]string{"namespace"}).AddRow("other_ns"))
+			},
+			errSub: "seed namespace not listed",
+		},
+		{
+			name: "table missing",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("CREATE ICEBERG CATALOG bad_").WillReturnError(errors.New("secret:// required"))
+				mock.ExpectQuery("SHOW ICEBERG NAMESPACES").
+					WillReturnRows(sqlmock.NewRows([]string{"namespace"}).AddRow(cfg.Namespace))
+				mock.ExpectQuery("SHOW ICEBERG TABLES").
+					WillReturnRows(sqlmock.NewRows([]string{"table"}).AddRow("append_orders"))
+			},
+			errSub: "seed table not listed",
+		},
+		{
+			name: "show create fails",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("CREATE ICEBERG CATALOG bad_").WillReturnError(errors.New("secret:// required"))
+				mock.ExpectQuery("SHOW ICEBERG NAMESPACES").
+					WillReturnRows(sqlmock.NewRows([]string{"namespace"}).AddRow(cfg.Namespace))
+				mock.ExpectQuery("SHOW ICEBERG TABLES").
+					WillReturnRows(sqlmock.NewRows([]string{"table"}).
+						AddRow("append_orders").
+						AddRow("partition_orders").
+						AddRow("mor_accounts"))
+				mock.ExpectQuery("SHOW CREATE TABLE").WillReturnError(errors.New("show create failed"))
+			},
+			errSub: "show create failed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			defer db.Close()
+			tt.mock(mock)
+			result := (&caseRunner{cfg: cfg, db: db}).catalogAndMappingCase(context.Background())
+			if result.Status != "failed" || !strings.Contains(result.Error, tt.errSub) {
+				t.Fatalf("expected failure containing %q, got %+v", tt.errSub, result)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
 func TestLocalE2EAppendReadAndTimeTravelCase(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
@@ -361,6 +484,52 @@ func TestLocalE2ESnapshotHelpersAgainstREST(t *testing.T) {
 	ok, err := snapshotAvailable(ctx, cfg, "append_orders", 100)
 	if err != nil || !ok {
 		t.Fatalf("snapshotAvailable got=%v err=%v", ok, err)
+	}
+}
+
+func TestLocalE2ESnapshotHelperFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		errSub string
+	}{
+		{
+			name:   "empty metadata",
+			body:   `{"metadata-location":"s3://warehouse/t/metadata/v1.json"}`,
+			errSub: "empty metadata JSON",
+		},
+		{
+			name:   "invalid metadata",
+			body:   `{"metadata-location":"s3://warehouse/t/metadata/v1.json","metadata":"not-json"}`,
+			errSub: "decode table metadata",
+		},
+		{
+			name:   "no current snapshot",
+			body:   `{"metadata-location":"s3://warehouse/t/metadata/v1.json","metadata":{"format-version":2,"table-uuid":"u"}}`,
+			errSub: "does not have a current snapshot",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/v1/config"):
+					_, _ = w.Write([]byte(`{"defaults":{"prefix":"main"}}`))
+				case strings.Contains(r.URL.Path, "/namespaces/ci_ns/tables/append_orders"):
+					_, _ = w.Write([]byte(tt.body))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(server.Close)
+			cfg := localE2ETestConfig()
+			cfg.CatalogURI = server.URL + "/iceberg"
+			_, err := currentSnapshotID(context.Background(), cfg, "append_orders")
+			if err == nil || !strings.Contains(err.Error(), tt.errSub) {
+				t.Fatalf("expected %q error, got %v", tt.errSub, err)
+			}
+		})
 	}
 }
 
@@ -430,6 +599,76 @@ func TestLocalE2EMergeOnReadDeleteCase(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestLocalE2EMergeOnReadDeleteCaseFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		mock   func(sqlmock.Sqlmock)
+		errSub string
+	}{
+		{
+			name: "insert fails",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("INSERT INTO").WillReturnError(errors.New("insert failed"))
+			},
+			errSub: "insert failed",
+		},
+		{
+			name: "delete fails",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 4))
+				mock.ExpectExec("DELETE FROM").WillReturnError(errors.New("delete failed"))
+			},
+			errSub: "delete failed",
+		},
+		{
+			name: "aggregate query fails",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 4))
+				mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("SUM\\(balance\\)").WillReturnError(errors.New("agg failed"))
+			},
+			errSub: "agg failed",
+		},
+		{
+			name: "deleted row query fails",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 4))
+				mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("SUM\\(balance\\)").
+					WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(int64(3), int64(700)))
+				mock.ExpectQuery("account_id = 2").WillReturnError(errors.New("deleted query failed"))
+			},
+			errSub: "deleted query failed",
+		},
+		{
+			name: "result mismatch",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 4))
+				mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("SUM\\(balance\\)").
+					WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(int64(4), int64(900)))
+				mock.ExpectQuery("account_id = 2").
+					WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+			},
+			errSub: "delete apply result mismatch",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			defer db.Close()
+			tt.mock(mock)
+			result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).mergeOnReadDeleteCase(context.Background())
+			if result.Status != "failed" || !strings.Contains(result.Error, tt.errSub) {
+				t.Fatalf("expected failure containing %q, got %+v", tt.errSub, result)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
 	}
 }
 

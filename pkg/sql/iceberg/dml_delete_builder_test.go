@@ -577,6 +577,39 @@ func TestBuildDMLOverwriteActionStreamRejectsDeleteTasksInAffectedScanPlan(t *te
 	}
 }
 
+func TestDMLPartitionValueTokenNormalizesPrimitiveTypes(t *testing.T) {
+	tests := []struct {
+		left  any
+		right any
+		equal bool
+	}{
+		{left: "ksa", right: "ksa", equal: true},
+		{left: true, right: true, equal: true},
+		{left: false, right: true, equal: false},
+		{left: int8(7), right: int64(7), equal: true},
+		{left: int16(7), right: int32(7), equal: true},
+		{left: uint8(7), right: uint64(7), equal: true},
+		{left: uint16(7), right: uint32(7), equal: true},
+		{left: float32(1.5), right: float64(1.5), equal: true},
+		{left: nil, right: nil, equal: true},
+		{left: nil, right: "ksa", equal: false},
+	}
+	for _, tt := range tests {
+		if got := dmlPartitionValueEqual(tt.left, tt.right); got != tt.equal {
+			t.Fatalf("dmlPartitionValueEqual(%T(%v), %T(%v))=%v want %v", tt.left, tt.left, tt.right, tt.right, got, tt.equal)
+		}
+	}
+	if token := dmlPartitionValueToken(struct{ Region string }{Region: "ksa"}); token != "struct { Region string }:{ksa}" {
+		t.Fatalf("unexpected fallback token: %q", token)
+	}
+	if !dmlPartitionContains(map[string]any{"region": "ksa", "bucket": int32(7)}, map[string]any{"bucket": int64(7)}) {
+		t.Fatalf("partition contains should compare compatible integer widths")
+	}
+	if dmlPartitionContains(map[string]any{"region": "ksa"}, map[string]any{"missing": "ksa"}) {
+		t.Fatalf("partition contains should reject missing target keys")
+	}
+}
+
 func TestBuildDMLDeleteActionStreamRejectsUnmaterializableTarget(t *testing.T) {
 	_, err := BuildDMLDeleteActionStream(context.Background(), DMLDeleteActionStreamRequest{
 		TableLocation:  "s3://warehouse/gold/orders",

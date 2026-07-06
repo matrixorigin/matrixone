@@ -15,7 +15,9 @@
 package iceberg
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -387,6 +389,43 @@ func TestDMLActionExecutorRecordsMaterializedObjectsWhenActionBuildFails(t *test
 	}
 }
 
+func TestDMLMaterializedObjectTrackerWrapsDataFileOutputFactory(t *testing.T) {
+	tracker := newDMLMaterializedObjectTracker()
+	if wrapDMLDataFileOutputFactory(nil, tracker) != nil {
+		t.Fatalf("nil output factory should stay nil")
+	}
+	outputFactory := &recordingDMLDataFileOutputFactory{}
+	wrapped := wrapDMLDataFileOutputFactory(outputFactory, tracker)
+	wc, err := wrapped.CreateDataFile(context.Background(), "s3://warehouse/gold/orders/data/replacement.parquet")
+	if err != nil {
+		t.Fatalf("create data file: %v", err)
+	}
+	if _, err := wc.Write([]byte("payload")); err != nil {
+		t.Fatalf("write data file: %v", err)
+	}
+	if paths := tracker.paths(); len(paths) != 0 {
+		t.Fatalf("path should be tracked only after close, got %#v", paths)
+	}
+	if err := wc.Close(); err != nil {
+		t.Fatalf("close data file: %v", err)
+	}
+	if paths := tracker.paths(); len(paths) != 1 || paths[0] != "s3://warehouse/gold/orders/data/replacement.parquet" {
+		t.Fatalf("unexpected tracked paths: %#v", paths)
+	}
+	if got := outputFactory.writes["s3://warehouse/gold/orders/data/replacement.parquet"]; string(got) != "payload" {
+		t.Fatalf("unexpected data file payload: %q", got)
+	}
+
+	_, err = (trackingDMLDataFileOutputFactory{}).CreateDataFile(context.Background(), "s3://warehouse/gold/orders/data/missing.parquet")
+	if err == nil || !strings.Contains(err.Error(), "requires output factory") {
+		t.Fatalf("expected missing output factory error, got %v", err)
+	}
+	err = (trackingDMLDeleteObjectWriter{}).WriteObject(context.Background(), "s3://warehouse/gold/orders/delete/pos.parquet", []byte("x"))
+	if err == nil || !strings.Contains(err.Error(), "requires object writer") {
+		t.Fatalf("expected missing object writer error, got %v", err)
+	}
+}
+
 func TestDMLActionExecutorCommitMergeCombinesMatchedAndUnmatchedActions(t *testing.T) {
 	deleteWriter := &recordingDMLDeleteObjectWriter{}
 	manifestWriter := &fakeSQLManifestWriter{}
@@ -482,6 +521,32 @@ func newReplacementExecutorBatch(t *testing.T) (*batch.Batch, func()) {
 	bat.Vecs[1] = nameVec
 	bat.SetRowCount(1)
 	return bat, func() { bat.Clean(mp) }
+}
+
+type recordingDMLDataFileOutputFactory struct {
+	writes map[string][]byte
+}
+
+func (f *recordingDMLDataFileOutputFactory) CreateDataFile(ctx context.Context, location string) (io.WriteCloser, error) {
+	if f.writes == nil {
+		f.writes = make(map[string][]byte)
+	}
+	return &recordingDMLDataFile{location: location, onClose: func(location string, payload []byte) {
+		f.writes[location] = append([]byte(nil), payload...)
+	}}, nil
+}
+
+type recordingDMLDataFile struct {
+	bytes.Buffer
+	location string
+	onClose  func(string, []byte)
+}
+
+func (w *recordingDMLDataFile) Close() error {
+	if w.onClose != nil {
+		w.onClose(w.location, w.Bytes())
+	}
+	return nil
 }
 
 func TestDMLActionExecutorCommitOverwriteBuildsDataManifestCommit(t *testing.T) {

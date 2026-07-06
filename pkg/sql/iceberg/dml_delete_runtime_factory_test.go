@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/metadata"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func TestDMLDeleteRuntimeFactoryLoadsTableAndBuildsCoordinator(t *testing.T) {
@@ -747,6 +749,80 @@ func TestDMLDeleteRuntimeFactoryFallsBackForAppendAndValidatesDeleteConfig(t *te
 	_, err = factory.NewCoordinator(context.Background(), icebergwrite.AppendRequest{Operation: icebergwrite.OperationDelete})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires a store")
+
+	fromInternal := NewDMLDeleteRuntimeCoordinatorFactoryFromInternalSQLExecutor(nil, DMLDeleteRuntimeCoordinatorFactoryOptions{})
+	require.NotNil(t, fromInternal.opts.Store)
+	require.True(t, factory.requireResidencyPolicy())
+	objectIOFactory := NewDMLDeleteRuntimeCoordinatorFactory(DMLDeleteRuntimeCoordinatorFactoryOptions{
+		ObjectIOProvider: icebergio.ScopedProvider{},
+	})
+	require.False(t, objectIOFactory.requireResidencyPolicy())
+}
+
+func TestDMLRuntimeCoordinatorCacheLifecycle(t *testing.T) {
+	ctx := context.Background()
+	cache := &dmlRuntimeCoordinatorCache{entries: make(map[string]icebergwrite.Coordinator)}
+	inner := &countingDMLRuntimeCoordinator{}
+	first, err := cache.getOrCreate(ctx, "stmt", func() (icebergwrite.Coordinator, error) {
+		return inner, nil
+	})
+	require.NoError(t, err)
+	second, err := cache.getOrCreate(ctx, "stmt", func() (icebergwrite.Coordinator, error) {
+		t.Fatal("cache should reuse the existing coordinator")
+		return nil, nil
+	})
+	require.NoError(t, err)
+	require.Same(t, first, second)
+	require.Len(t, cache.entries, 1)
+
+	require.NoError(t, first.Begin(ctx, icebergwrite.AppendRequest{StatementID: "stmt"}))
+	require.NoError(t, first.Append(ctx, nil))
+	require.NoError(t, first.(*dmlRuntimeSharedCoordinator).AppendWithProcess(nil, nil))
+	require.Equal(t, 2, inner.appendCalls)
+	require.NoError(t, first.Commit(ctx))
+	require.Len(t, cache.entries, 0)
+
+	third, err := cache.getOrCreate(ctx, "stmt", func() (icebergwrite.Coordinator, error) {
+		return &countingDMLRuntimeCoordinator{}, nil
+	})
+	require.NoError(t, err)
+	require.Len(t, cache.entries, 1)
+	require.NoError(t, third.Abort(ctx, context.Canceled))
+	require.Len(t, cache.entries, 0)
+}
+
+func TestDMLRuntimeSharedCoordinatorProcessAwareAppend(t *testing.T) {
+	inner := &processAwareDMLRuntimeCoordinator{}
+	shared := &dmlRuntimeSharedCoordinator{inner: inner}
+	require.NoError(t, shared.AppendWithProcess(nil, nil))
+	require.True(t, inner.processAwareCalled)
+}
+
+func TestObjectIORefDMLObjectWriterWritesAndReads(t *testing.T) {
+	ctx := context.Background()
+	fs, ref := registerDMLRuntimeMemoryObjectIO(t, ctx)
+	writer := objectIORefDMLObjectWriter{ObjectIORef: ref}
+	location := "s3://warehouse/gold/orders/delete/pos.parquet"
+
+	require.Error(t, writer.WriteObject(ctx, "", []byte("payload")))
+	require.Error(t, writer.WriteObject(ctx, location, nil))
+	require.NoError(t, writer.WriteObject(ctx, location, []byte("payload")))
+	read, err := writer.ReadManifestObject(ctx, location)
+	require.NoError(t, err)
+	require.Equal(t, []byte("payload"), read)
+
+	manifestLocation := "s3://warehouse/gold/orders/metadata/delete-manifest.avro"
+	require.NoError(t, writer.WriteManifestObject(ctx, manifestLocation, []byte("manifest")))
+	manifest, err := writer.ReadManifestObject(ctx, manifestLocation)
+	require.NoError(t, err)
+	require.Equal(t, []byte("manifest"), manifest)
+
+	vec := fileservice.IOVector{
+		FilePath: dmlRuntimeMemoryPath(location),
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: -1}},
+	}
+	require.NoError(t, fs.Read(ctx, &vec))
+	require.Equal(t, []byte("payload"), vec.Entries[0].Data)
 }
 
 func requireDMLOverwriteCoordinator(t *testing.T, coord icebergwrite.Coordinator) *DMLOverwriteCoordinator {
@@ -852,4 +928,41 @@ func writeDMLRuntimeMemoryFile(t *testing.T, ctx context.Context, fs fileservice
 
 func dmlRuntimeMemoryPath(location string) string {
 	return strings.TrimPrefix(location, "s3://")
+}
+
+type countingDMLRuntimeCoordinator struct {
+	appendCalls int
+	committed   bool
+}
+
+func (c *countingDMLRuntimeCoordinator) Begin(context.Context, icebergwrite.AppendRequest) error {
+	return nil
+}
+
+func (c *countingDMLRuntimeCoordinator) Append(context.Context, *batch.Batch) error {
+	c.appendCalls++
+	return nil
+}
+
+func (c *countingDMLRuntimeCoordinator) Commit(context.Context) error {
+	c.committed = true
+	return nil
+}
+
+func (c *countingDMLRuntimeCoordinator) Abort(context.Context, error) error {
+	return nil
+}
+
+func (c *countingDMLRuntimeCoordinator) CommitAttempted() bool {
+	return c.committed
+}
+
+type processAwareDMLRuntimeCoordinator struct {
+	countingDMLRuntimeCoordinator
+	processAwareCalled bool
+}
+
+func (c *processAwareDMLRuntimeCoordinator) AppendWithProcess(*process.Process, *batch.Batch) error {
+	c.processAwareCalled = true
+	return nil
 }

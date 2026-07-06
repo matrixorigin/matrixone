@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -313,6 +314,153 @@ func TestParquetDataWriterWritesDecimalAndMOTimestamp(t *testing.T) {
 	epoch := types.DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0)
 	require.Equal(t, int64(ts1.ToDatetime(time.UTC)-epoch), int64(binary.LittleEndian.Uint64(dataFile.LowerBounds[21])))
 	require.Equal(t, int64(ts2.ToDatetime(time.UTC)-epoch), int64(binary.LittleEndian.Uint64(dataFile.UpperBounds[21])))
+}
+
+func TestParquetWriterPrimitiveConversionsAndBounds(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	loc := time.FixedZone("KSA", 3*3600)
+
+	boolVec := vector.NewVec(types.T_bool.ToType())
+	defer boolVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(boolVec, true, false, mp))
+	got, isNull, err := vectorValue(ctx, boolVec, 0, api.IcebergType{Kind: api.TypeBoolean}, loc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.Equal(t, true, got)
+
+	int8Vec := vector.NewVec(types.T_int8.ToType())
+	defer int8Vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(int8Vec, int8(-8), false, mp))
+	got, _, err = vectorValue(ctx, int8Vec, 0, api.IcebergType{Kind: api.TypeInt}, loc)
+	require.NoError(t, err)
+	require.Equal(t, int32(-8), got)
+	got, _, err = vectorValue(ctx, int8Vec, 0, api.IcebergType{Kind: api.TypeLong}, loc)
+	require.NoError(t, err)
+	require.Equal(t, int64(-8), got)
+
+	int16Vec := vector.NewVec(types.T_int16.ToType())
+	defer int16Vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(int16Vec, int16(-16), false, mp))
+	got, _, err = vectorValue(ctx, int16Vec, 0, api.IcebergType{Kind: api.TypeInt}, loc)
+	require.NoError(t, err)
+	require.Equal(t, int32(-16), got)
+	got, _, err = vectorValue(ctx, int16Vec, 0, api.IcebergType{Kind: api.TypeLong}, loc)
+	require.NoError(t, err)
+	require.Equal(t, int64(-16), got)
+
+	int32Vec := vector.NewVec(types.T_int32.ToType())
+	defer int32Vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(int32Vec, int32(32), false, mp))
+	got, _, err = vectorValue(ctx, int32Vec, 0, api.IcebergType{Kind: api.TypeLong}, loc)
+	require.NoError(t, err)
+	require.Equal(t, int64(32), got)
+
+	floatVec := vector.NewVec(types.T_float32.ToType())
+	defer floatVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(floatVec, float32(1.25), false, mp))
+	got, _, err = vectorValue(ctx, floatVec, 0, api.IcebergType{Kind: api.TypeFloat}, loc)
+	require.NoError(t, err)
+	require.Equal(t, float32(1.25), got)
+
+	doubleVec := vector.NewVec(types.T_float64.ToType())
+	defer doubleVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(doubleVec, float64(2.5), false, mp))
+	got, _, err = vectorValue(ctx, doubleVec, 0, api.IcebergType{Kind: api.TypeDouble}, loc)
+	require.NoError(t, err)
+	require.Equal(t, float64(2.5), got)
+
+	textVec := vector.NewVec(types.T_text.ToType())
+	defer textVec.Free(mp)
+	require.NoError(t, vector.AppendBytes(textVec, []byte("ksa"), false, mp))
+	got, _, err = vectorValue(ctx, textVec, 0, api.IcebergType{Kind: api.TypeString}, loc)
+	require.NoError(t, err)
+	require.Equal(t, "ksa", got)
+
+	nullVec := vector.NewVec(types.T_int32.ToType())
+	defer nullVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(nullVec, int32(0), true, mp))
+	got, isNull, err = vectorValue(ctx, nullVec, 0, api.IcebergType{Kind: api.TypeInt}, loc)
+	require.NoError(t, err)
+	require.True(t, isNull)
+	require.Nil(t, got)
+
+	_, _, err = vectorValue(ctx, boolVec, 0, api.IcebergType{Kind: api.TypeInt}, loc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "type mismatch")
+	_, _, err = vectorValue(ctx, nil, 0, api.IcebergType{Kind: api.TypeInt}, loc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil vector")
+
+	boolBound, cmp, err := encodeBound(ctx, api.IcebergType{Kind: api.TypeBoolean}, true)
+	require.NoError(t, err)
+	require.Equal(t, []byte{1}, boolBound)
+	require.Equal(t, true, cmp)
+	floatBound, cmp, err := encodeBound(ctx, api.IcebergType{Kind: api.TypeFloat}, float32(1.5))
+	require.NoError(t, err)
+	require.Equal(t, float64(1.5), cmp)
+	require.Equal(t, float32(1.5), math.Float32frombits(binary.LittleEndian.Uint32(floatBound)))
+	_, _, err = encodeBound(ctx, api.IcebergType{Kind: api.TypeBinary}, []byte("x"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ICEBERG_UNSUPPORTED_FEATURE")
+
+	require.Equal(t, true, decodeMetricValue(api.IcebergType{Kind: api.TypeBoolean}, []byte{1}))
+	require.Equal(t, int64(-7), decodeMetricValue(api.IcebergType{Kind: api.TypeDecimal}, decimalInt64BoundBytes(-7)))
+	require.Equal(t, float64(1.5), decodeMetricValue(api.IcebergType{Kind: api.TypeFloat}, floatBound))
+	require.Equal(t, "abc", decodeMetricValue(api.IcebergType{Kind: api.TypeString}, []byte("abc")))
+	require.Nil(t, decodeMetricValue(api.IcebergType{Kind: api.TypeBinary}, []byte{1}))
+	require.Equal(t, -1, compareMetricValue(false, true))
+	require.Equal(t, 1, compareMetricValue(int64(2), int64(1)))
+	require.Equal(t, -1, compareMetricValue(float64(1), float64(2)))
+	require.Equal(t, 1, compareMetricValue("b", "a"))
+	require.Equal(t, 0, compareMetricValue(struct{}{}, struct{}{}))
+
+	require.True(t, isNaN(float32(math.NaN())))
+	require.True(t, isNaN(math.NaN()))
+	require.False(t, isNaN("nan"))
+	require.Equal(t, int64(1), estimatedValueSize(nil))
+	require.Equal(t, int64(4), estimatedValueSize(int32(1)))
+	require.Equal(t, int64(8), estimatedValueSize(int64(1)))
+	require.Equal(t, int64(3), estimatedValueSize("ksa"))
+	require.Equal(t, int64(3), estimatedValueSize(struct{ A int }{A: 7}))
+}
+
+func TestParquetWriterPartitionTransformsAndFormatting(t *testing.T) {
+	ctx := context.Background()
+	dateValue := int32(types.DateFromCalendar(2026, 7, 6) - types.DateFromCalendar(1970, 1, 1))
+	year, err := transformPartitionValue(ctx, api.IcebergType{Kind: api.TypeDate}, "year", dateValue)
+	require.NoError(t, err)
+	require.Equal(t, int32(56), year)
+	month, err := transformPartitionValue(ctx, api.IcebergType{Kind: api.TypeDate}, "month", dateValue)
+	require.NoError(t, err)
+	require.Equal(t, int32(678), month)
+	day, err := transformPartitionValue(ctx, api.IcebergType{Kind: api.TypeDate}, "day", dateValue)
+	require.NoError(t, err)
+	require.Equal(t, dateValue, day)
+	hour, err := transformPartitionValue(ctx, api.IcebergType{Kind: api.TypeTimestamp}, "hour", time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC).UnixMicro())
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC).Unix()/3600, hour)
+	identity, err := transformPartitionValue(ctx, api.IcebergType{Kind: api.TypeString}, "identity", "ksa")
+	require.NoError(t, err)
+	require.Equal(t, "ksa", identity)
+	nilValue, err := transformPartitionValue(ctx, api.IcebergType{Kind: api.TypeString}, "identity", nil)
+	require.NoError(t, err)
+	require.Nil(t, nilValue)
+	_, err = transformPartitionValue(ctx, api.IcebergType{Kind: api.TypeString}, "bucket", "ksa")
+	require.Error(t, err)
+	_, err = transformTemporal(ctx, "bucket", time.Unix(0, 0))
+	require.Error(t, err)
+
+	require.Equal(t, "null", partitionValueString(nil))
+	require.Equal(t, "7", partitionValueString(int(7)))
+	require.Equal(t, "true", partitionValueString(true))
+	require.Equal(t, "ksa", partitionValueString("ksa"))
+	require.Equal(t, "{7}", partitionValueString(struct{ N int }{N: 7}))
+	require.Equal(t, "region=ksa/bucket=7", partitionKey(map[string]any{"region": "ksa", "bucket": int32(7)}, api.PartitionSpec{Fields: []api.PartitionField{
+		{Name: "region"},
+		{Name: "bucket"},
+	}}))
+	require.Equal(t, "", partitionKey(nil, api.PartitionSpec{}))
 }
 
 func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {

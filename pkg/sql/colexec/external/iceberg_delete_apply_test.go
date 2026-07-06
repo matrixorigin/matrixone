@@ -182,6 +182,120 @@ func TestIcebergDeleteApplyEqualityTimestampUsesValueOffset(t *testing.T) {
 	require.Equal(t, int64(types.UnixMicroToTimestamp(summerLocalMicros+4*int64(time.Hour/time.Microsecond))), summerValue)
 }
 
+func TestIcebergDeleteApplyVectorEqualityValueSupportedTypes(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	tests := []struct {
+		name string
+		typ  types.Type
+		add  func(*vector.Vector)
+		want any
+	}{
+		{name: "bool", typ: types.T_bool.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, true, false, proc.Mp()))
+		}, want: true},
+		{name: "int8", typ: types.T_int8.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, int8(-8), false, proc.Mp()))
+		}, want: int8(-8)},
+		{name: "int16", typ: types.T_int16.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, int16(-16), false, proc.Mp()))
+		}, want: int16(-16)},
+		{name: "int32", typ: types.T_int32.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, int32(-32), false, proc.Mp()))
+		}, want: int32(-32)},
+		{name: "int64", typ: types.T_int64.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, int64(-64), false, proc.Mp()))
+		}, want: int64(-64)},
+		{name: "uint8", typ: types.T_uint8.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, uint8(8), false, proc.Mp()))
+		}, want: uint8(8)},
+		{name: "uint16", typ: types.T_uint16.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, uint16(16), false, proc.Mp()))
+		}, want: uint16(16)},
+		{name: "uint32", typ: types.T_uint32.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, uint32(32), false, proc.Mp()))
+		}, want: uint32(32)},
+		{name: "uint64", typ: types.T_uint64.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, uint64(64), false, proc.Mp()))
+		}, want: uint64(64)},
+		{name: "float32", typ: types.T_float32.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, float32(1.25), false, proc.Mp()))
+		}, want: float32(1.25)},
+		{name: "float64", typ: types.T_float64.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, float64(2.5), false, proc.Mp()))
+		}, want: float64(2.5)},
+		{name: "date", typ: types.T_date.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, types.DaysFromUnixEpochToDate(3), false, proc.Mp()))
+		}, want: int32(types.DaysFromUnixEpochToDate(3))},
+		{name: "datetime", typ: types.T_datetime.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, types.DaysFromUnixEpochToDate(4).ToDatetime(), false, proc.Mp()))
+		}, want: int64(types.DaysFromUnixEpochToDate(4).ToDatetime())},
+		{name: "timestamp", typ: types.T_timestamp.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendFixed(v, types.UnixMicroToTimestamp(5), false, proc.Mp()))
+		}, want: int64(types.UnixMicroToTimestamp(5))},
+		{name: "varchar", typ: types.T_varchar.ToType(), add: func(v *vector.Vector) {
+			require.NoError(t, vector.AppendBytes(v, []byte("ksa"), false, proc.Mp()))
+		}, want: "ksa"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vec := vector.NewVec(tt.typ)
+			defer vec.Free(proc.Mp())
+			tt.add(vec)
+			got, err := vectorEqualityValue(ctx, vec, 0)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+
+	nilValue, err := vectorEqualityValue(ctx, nil, 0)
+	require.NoError(t, err)
+	require.Nil(t, nilValue)
+	nullVec := vector.NewVec(types.T_int64.ToType())
+	defer nullVec.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(nullVec, int64(0), true, proc.Mp()))
+	nullValue, err := vectorEqualityValue(ctx, nullVec, 0)
+	require.NoError(t, err)
+	require.Nil(t, nullValue)
+
+	unsupported := vector.NewVec(types.T_uuid.ToType())
+	defer unsupported.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(unsupported, types.Uuid{}, false, proc.Mp()))
+	_, err = vectorEqualityValue(ctx, unsupported, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ICEBERG_UNSUPPORTED_FEATURE")
+}
+
+func TestIcebergDeleteApplyParquetNameFallbackAndFormatting(t *testing.T) {
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("delete", parquet.Group{
+		"legacy_id": parquet.Leaf(parquet.Int64Type),
+	})
+	writer := parquet.NewWriter(&buf, schema)
+	_, err := writer.WriteRows([]parquet.Row{{parquet.Int64Value(7).Level(0, 0, 0)}})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+
+	idx, ok := parquetColumnIndexByFieldName(file, 77, []*pipeline.IcebergColumnMapping{{
+		IcebergFieldId:    77,
+		SnapshotFieldName: "legacy_id",
+		CurrentFieldName:  "current_id",
+	}})
+	require.True(t, ok)
+	require.Equal(t, 0, idx)
+	_, ok = parquetColumnIndexByFieldName(file, 88, []*pipeline.IcebergColumnMapping{{
+		IcebergFieldId:    88,
+		SnapshotFieldName: "missing",
+		CurrentFieldName:  "also_missing",
+	}})
+	require.False(t, ok)
+	require.Equal(t, "77", int32String(77))
+}
+
 func TestIcebergDeleteApplyDateEqualityMatchesScanVector(t *testing.T) {
 	ctx := context.Background()
 	deleteFS := &icebergDeleteTestFS{files: map[string][]byte{
