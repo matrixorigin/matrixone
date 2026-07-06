@@ -202,6 +202,35 @@ func TestGenerateNodesKeepsSmallNonIvfScanOnCurrentCN(t *testing.T) {
 	}}, nodes)
 }
 
+func TestGenerateNodesKeepsLargeScanOnCurrentCNWhenNoWorkers(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.e = newStubEngineForGenerateNodes("testdb", "t")
+
+	node := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "t",
+		},
+		TableDef: &plan.TableDef{
+			Name: "t",
+		},
+		Stats: &plan.Stats{
+			BlockNum: int32(plan2.BlockThresholdForOneCN + 1),
+			Dop:      4,
+		},
+	}
+
+	nodes, err := c.generateNodes(node)
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{{
+		Addr:  "cn-local:6001",
+		Mcpu:  4,
+		CNCNT: 1,
+	}}, nodes)
+}
+
 func TestGenerateNodesKeepsForceOneCNOnCurrentCN(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
