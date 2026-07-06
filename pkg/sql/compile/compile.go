@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,9 +28,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -828,45 +825,6 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 // 	return attachedScope, nil
 // }
 
-func isAvailable(client morpc.RPCClient, addr string) bool {
-	_, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
-		return false
-	}
-	logutil.Debugf("ping %s start", addr)
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 500*time.Millisecond, moerr.CauseIsAvailable)
-	defer cancel()
-	err = client.Ping(ctx, addr)
-	if err != nil {
-		err = moerr.AttachCause(ctx, err)
-		// ping failed
-		logutil.Debugf("ping %s err %+v\n", addr, err)
-		return false
-	}
-	return true
-}
-
-func (c *Compile) filterAvailableCNs(workers engine.Nodes) engine.Nodes {
-	if c.proc == nil {
-		return workers
-	}
-	client := cnclient.GetPipelineClient(
-		c.proc.GetService(),
-	)
-	if client == nil {
-		return workers
-	}
-	return toEngineNodes(schedule.FilterAvailableWorkers(schedule.AvailabilityRequest{
-		Workers:   toScheduleWorkers(workers),
-		LocalAddr: c.addr,
-		SameCN:    isSameCN,
-		IsAvailable: func(addr string) bool {
-			return isAvailable(client.Raw(), addr)
-		},
-	}))
-}
-
 func (c *Compile) getCandidateCNs() (engine.Nodes, error) {
 	return c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
 }
@@ -960,7 +918,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}
 	c.cnList = toEngineNodes(placement.Workers)
 	if c.execType == plan2.ExecTypeAP_MULTICN {
-		c.cnList = c.filterAvailableCNs(c.cnList)
 		// sort by addr to get fixed order of CN list
 		sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
 	}
