@@ -19,6 +19,8 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,6 +147,545 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
+}
+
+func TestClientCreationFallsBackFromUnreachableReplicaAddress(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	var cfg Config
+	genCfg := func() Config {
+		cfg = getServiceTestConfig()
+		return cfg
+	}
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	service, err := NewServiceWithRetry(
+		genCfg,
+		newFS(),
+		nil,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service.Close())
+	}()
+
+	init := make(map[uint64]string)
+	init[2] = service.ID()
+	require.NoError(t, service.store.startReplica(1, 2, init, false))
+
+	hangingAddress, cleanup := startHangingTCPServer(t)
+	defer cleanup()
+
+	scfg := ClientConfig{
+		LogShardID:     1,
+		TNReplicaID:    2,
+		MaxMessageSize: defaultMaxMessageSize,
+	}
+
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectFallbackDelay = 50 * time.Millisecond
+	defer func() { logServiceConnectFallbackDelay = origFallbackDelay }()
+
+	timeout := 5 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	start := time.Now()
+	c, err := connectToLogServiceAddresses(ctx, "", []string{
+		hangingAddress,
+		cfg.LogServiceServiceAddr(),
+	}, scfg)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	defer func() {
+		assert.NoError(t, c.close())
+	}()
+	assert.Less(t, elapsed, time.Second)
+}
+
+func TestShardInfoReplicaAddressesKeepsLeaderFirst(t *testing.T) {
+	addresses := shardInfoReplicaAddresses(ShardInfo{
+		ReplicaID: 2,
+		Replicas: map[uint64]string{
+			1: "replica-1",
+			2: "leader",
+			3: "replica-3",
+		},
+	})
+	require.Len(t, addresses, 3)
+	assert.Equal(t, "leader", addresses[0])
+	assert.ElementsMatch(t, []string{"leader", "replica-1", "replica-3"}, addresses)
+}
+
+func TestConnectToLogServiceWithNoTargets(t *testing.T) {
+	c, err := connectToLogService(context.Background(), "", nil, ClientConfig{})
+	require.NoError(t, err)
+	require.Nil(t, c)
+}
+
+func TestConnectToLogServiceAddressesReturnsLastError(t *testing.T) {
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectFallbackDelay = time.Millisecond
+	defer func() {
+		logServiceConnectFallbackDelay = origFallbackDelay
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	c, err := connectToLogServiceAddresses(ctx, "", []string{
+		"127.0.0.1:1",
+		"127.0.0.1:2",
+	}, ClientConfig{MaxMessageSize: defaultMaxMessageSize})
+	require.Error(t, err)
+	require.Nil(t, c)
+}
+
+func TestConnectToLogServiceAddressesReturnsContextError(t *testing.T) {
+	hangingAddress, cleanup := startHangingTCPServer(t)
+	defer cleanup()
+
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectFallbackDelay = time.Second
+	defer func() {
+		logServiceConnectFallbackDelay = origFallbackDelay
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	c, err := connectToLogServiceAddresses(
+		ctx,
+		"",
+		[]string{hangingAddress},
+		ClientConfig{MaxMessageSize: defaultMaxMessageSize},
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, c)
+}
+
+func TestConnectToLogServiceAddressesReturnsContextErrorAfterPreviousFailure(t *testing.T) {
+	origConnect := connectToLogServiceAddressFn
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectFallbackDelay = time.Millisecond
+	defer func() {
+		connectToLogServiceAddressFn = origConnect
+		logServiceConnectFallbackDelay = origFallbackDelay
+	}()
+
+	firstErr := errors.New("first failed")
+	connectToLogServiceAddressFn = func(
+		ctx context.Context,
+		sid string,
+		addr string,
+		cfg ClientConfig,
+	) (*client, error) {
+		if addr == "first" {
+			return nil, firstErr
+		}
+		<-ctx.Done()
+		time.Sleep(10 * time.Millisecond)
+		return nil, ctx.Err()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	c, err := connectToLogServiceAddresses(
+		ctx,
+		"",
+		[]string{"first", "second"},
+		ClientConfig{},
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorContains(t, err, firstErr.Error())
+	require.Nil(t, c)
+}
+
+func TestConnectToLogServiceAddressesUsesCallerContextForAttempts(t *testing.T) {
+	origConnect := connectToLogServiceAddressFn
+	origAttemptTimeout := logServiceConnectAttemptTimeout
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectAttemptTimeout = time.Second
+	logServiceConnectFallbackDelay = time.Millisecond
+	defer func() {
+		connectToLogServiceAddressFn = origConnect
+		logServiceConnectAttemptTimeout = origAttemptTimeout
+		logServiceConnectFallbackDelay = origFallbackDelay
+	}()
+
+	deadlines := make(chan time.Time, 2)
+	connectToLogServiceAddressFn = func(
+		ctx context.Context,
+		sid string,
+		addr string,
+		cfg ClientConfig,
+	) (*client, error) {
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		deadlines <- deadline
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	expectedDeadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	c, err := connectToLogServiceAddresses(
+		ctx,
+		"",
+		[]string{"first", "second"},
+		ClientConfig{},
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, c)
+	for i := 0; i < 2; i++ {
+		require.WithinDuration(t, expectedDeadline, <-deadlines, time.Millisecond)
+	}
+}
+
+func TestConnectToLogServiceAddressesAddsDeadlineForBackgroundContext(t *testing.T) {
+	origConnect := connectToLogServiceAddressFn
+	origAttemptTimeout := logServiceConnectAttemptTimeout
+	logServiceConnectAttemptTimeout = 20 * time.Millisecond
+	defer func() {
+		connectToLogServiceAddressFn = origConnect
+		logServiceConnectAttemptTimeout = origAttemptTimeout
+	}()
+
+	deadlineSeen := make(chan struct{}, 1)
+	connectToLogServiceAddressFn = func(
+		ctx context.Context,
+		sid string,
+		addr string,
+		cfg ClientConfig,
+	) (*client, error) {
+		_, ok := ctx.Deadline()
+		require.True(t, ok)
+		deadlineSeen <- struct{}{}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	c, err := connectToLogServiceAddresses(
+		context.Background(),
+		"",
+		[]string{"first"},
+		ClientConfig{},
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, moerr.CauseNewLogServiceClient)
+	require.Nil(t, c)
+	select {
+	case <-deadlineSeen:
+	default:
+		t.Fatal("attempt context deadline was not observed")
+	}
+}
+
+func TestConnectToLogServiceAddressesWithCanceledContextDoesNotDial(t *testing.T) {
+	origConnect := connectToLogServiceAddressFn
+	defer func() {
+		connectToLogServiceAddressFn = origConnect
+	}()
+
+	called := make(chan struct{}, 1)
+	connectToLogServiceAddressFn = func(
+		ctx context.Context,
+		sid string,
+		addr string,
+		cfg ClientConfig,
+	) (*client, error) {
+		called <- struct{}{}
+		return nil, errors.New("unexpected dial")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c, err := connectToLogServiceAddresses(
+		ctx,
+		"",
+		[]string{"first"},
+		ClientConfig{},
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, c)
+	select {
+	case <-called:
+		t.Fatal("unexpected connection attempt")
+	default:
+	}
+}
+
+func TestConnectToLogServiceAddressesReturnsWinnerWithoutWaitingForLoser(t *testing.T) {
+	origConnect := connectToLogServiceAddressFn
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectFallbackDelay = time.Millisecond
+	defer func() {
+		connectToLogServiceAddressFn = origConnect
+		logServiceConnectFallbackDelay = origFallbackDelay
+	}()
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	connectToLogServiceAddressFn = func(
+		ctx context.Context,
+		sid string,
+		addr string,
+		cfg ClientConfig,
+	) (*client, error) {
+		if addr == "first" {
+			close(firstStarted)
+			<-releaseFirst
+			return nil, errors.New("first failed")
+		}
+		return &client{
+			client: &closeTrackingRPCClient{
+				closeMu:    &sync.Mutex{},
+				closeCount: new(int),
+			},
+		}, nil
+	}
+
+	done := make(chan *client, 1)
+	errs := make(chan error, 1)
+	go func() {
+		c, err := connectToLogServiceAddresses(
+			context.Background(),
+			"",
+			[]string{"first", "second"},
+			ClientConfig{},
+		)
+		if err != nil {
+			errs <- err
+			return
+		}
+		done <- c
+	}()
+
+	<-firstStarted
+	var c *client
+	select {
+	case c = <-done:
+	case err := <-errs:
+		require.NoError(t, err)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for connection result")
+	}
+	require.NotNil(t, c)
+	require.NoError(t, c.close())
+	close(releaseFirst)
+}
+
+func TestConnectToLogServiceAddressesReturnsContextErrorWithoutWaitingForLoser(t *testing.T) {
+	origConnect := connectToLogServiceAddressFn
+	defer func() {
+		connectToLogServiceAddressFn = origConnect
+	}()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	connectToLogServiceAddressFn = func(
+		ctx context.Context,
+		sid string,
+		addr string,
+		cfg ClientConfig,
+	) (*client, error) {
+		close(started)
+		<-release
+		return nil, errors.New("first failed")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		c, err := connectToLogServiceAddresses(
+			ctx,
+			"",
+			[]string{"first"},
+			ClientConfig{},
+		)
+		require.Nil(t, c)
+		done <- err
+	}()
+
+	<-started
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for context error")
+	}
+	close(release)
+}
+
+func TestConnectToLogServiceAddressesClosesSuccessfulLosers(t *testing.T) {
+	origConnect := connectToLogServiceAddressFn
+	origFallbackDelay := logServiceConnectFallbackDelay
+	logServiceConnectFallbackDelay = time.Millisecond
+	defer func() {
+		connectToLogServiceAddressFn = origConnect
+		logServiceConnectFallbackDelay = origFallbackDelay
+	}()
+
+	called := make(chan string, 2)
+	release := make(chan struct{})
+	closeCount := 0
+	var closeMu sync.Mutex
+	connectToLogServiceAddressFn = func(
+		ctx context.Context,
+		sid string,
+		addr string,
+		cfg ClientConfig,
+	) (*client, error) {
+		called <- addr
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return &client{
+			client: &closeTrackingRPCClient{
+				closeMu:    &closeMu,
+				closeCount: &closeCount,
+			},
+		}, nil
+	}
+
+	done := make(chan *client, 1)
+	errs := make(chan error, 1)
+	go func() {
+		c, err := connectToLogServiceAddresses(
+			context.Background(),
+			"",
+			[]string{"first", "second"},
+			ClientConfig{},
+		)
+		if err != nil {
+			errs <- err
+			return
+		}
+		done <- c
+	}()
+
+	require.Equal(t, "first", readCalledAddress(t, called))
+	require.Equal(t, "second", readCalledAddress(t, called))
+	close(release)
+
+	var c *client
+	select {
+	case c = <-done:
+	case err := <-errs:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for connection result")
+	}
+	require.NotNil(t, c)
+
+	require.Eventually(t, func() bool {
+		closeMu.Lock()
+		defer closeMu.Unlock()
+		return closeCount == 1
+	}, time.Second, time.Millisecond)
+
+	require.NoError(t, c.close())
+	closeMu.Lock()
+	assert.Equal(t, 2, closeCount)
+	closeMu.Unlock()
+}
+
+func TestStopConnectFallbackTimer(t *testing.T) {
+	stopConnectFallbackTimer(nil)
+
+	timer := time.NewTimer(time.Hour)
+	stopConnectFallbackTimer(timer)
+
+	expired := time.NewTimer(time.Nanosecond)
+	time.Sleep(time.Millisecond)
+	stopConnectFallbackTimer(expired)
+}
+
+func readCalledAddress(t *testing.T, called <-chan string) string {
+	t.Helper()
+	select {
+	case addr := <-called:
+		return addr
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for connection attempt")
+	}
+	return ""
+}
+
+type closeTrackingRPCClient struct {
+	closeMu    *sync.Mutex
+	closeCount *int
+}
+
+func (c *closeTrackingRPCClient) Send(context.Context, string, morpc.Message) (*morpc.Future, error) {
+	return nil, errors.New("unexpected send")
+}
+
+func (c *closeTrackingRPCClient) NewStream(string, bool) (morpc.Stream, error) {
+	return nil, errors.New("unexpected stream")
+}
+
+func (c *closeTrackingRPCClient) Ping(context.Context, string) error {
+	return errors.New("unexpected ping")
+}
+
+func (c *closeTrackingRPCClient) Close() error {
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
+	(*c.closeCount)++
+	return nil
+}
+
+func (c *closeTrackingRPCClient) CloseBackend() error {
+	return nil
+}
+
+func startHangingTCPServer(t *testing.T) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() {
+					assert.NoError(t, conn.Close())
+				}()
+				<-done
+			}()
+		}
+	}()
+
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			assert.NoError(t, ln.Close())
+			close(done)
+			wg.Wait()
+		})
+	}
+	return ln.Addr().String(), cleanup
 }
 
 func TestClientGetTSOTimestamp(t *testing.T) {
