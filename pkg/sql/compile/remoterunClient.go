@@ -251,7 +251,7 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		connectorOperator.GetIdx(), connectorOperator.IsFirst, connectorOperator.IsLast, "connector")
 
 	mp := s.Proc.Mp()
-	nextChannel := s.RootOp.(*connector.Connector).Reg.Ch2
+	nextReg := s.RootOp.(*connector.Connector).Reg
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
@@ -259,7 +259,8 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		}
 		connectorAnalyze.Network(bat)
 
-		if err = forwardRemoteBatchWithContext(sender, nextChannel, bat, mp); err != nil {
+		var receiverDone bool
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil || receiverDone {
 			return err
 		}
 	}
@@ -544,23 +545,32 @@ func (sender *messageSenderOnClient) contextDoneError() error {
 
 func forwardRemoteBatchWithContext(
 	sender *messageSenderOnClient,
-	nextChannel chan process.PipelineSignal,
+	nextReg *process.WaitRegister,
 	bat *batch.Batch,
 	mp *mpool.MPool,
-) error {
-	signal := process.NewPipelineSignalToDirectly(bat, nil, mp)
-	if sender == nil || sender.ctx == nil {
-		nextChannel <- signal
-		return nil
+) (receiverDone bool, err error) {
+	if nextReg == nil || nextReg.Ch2 == nil {
+		bat.Clean(mp)
+		return true, moerr.NewInternalErrorNoCtx("remote batch forward target is nil")
 	}
 
-	select {
-	case nextChannel <- signal:
-		return nil
-	case <-sender.ctx.Done():
+	ctx := context.TODO()
+	if sender == nil || sender.ctx == nil {
+		if nextReg.SendDataDirect(ctx, bat, mp) {
+			return false, nil
+		}
 		bat.Clean(mp)
-		return sender.contextDoneError()
+		return true, nil
 	}
+
+	if nextReg.SendDataDirect(sender.ctx, bat, mp) {
+		return false, nil
+	}
+	bat.Clean(mp)
+	if err := sender.contextDoneError(); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // no matter how we stop the remote-run, we should get the final remote cost here.

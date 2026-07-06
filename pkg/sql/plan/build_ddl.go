@@ -827,6 +827,11 @@ func buildCreateTable(
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
+			// ConstructCreateTableSQL emits a bare `CREATE TABLE ...` without the
+			// IF NOT EXISTS clause, so propagate the original flag. Otherwise
+			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
+			// exists" when T exists instead of being a no-op (issue #25119).
+			stmtLike.IfNotExists = stmt.IfNotExists
 			p, err := buildCreateTable(ctx, stmtLike, nil)
 			if err != nil {
 				return nil, err

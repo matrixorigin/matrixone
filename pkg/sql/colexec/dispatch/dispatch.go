@@ -41,7 +41,10 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 		dispatch.OpAnalyzer.Reset()
 	}
 
-	ctr := new(container)
+	ctr := dispatch.ctr
+	if ctr == nil {
+		ctr = new(container)
+	}
 	dispatch.ctr = ctr
 	ctr.localRegsCnt = len(dispatch.LocalRegs)
 	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
@@ -184,21 +187,50 @@ func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, erro
 	return false, nil
 }
 
+// RegisterRemoteReceivers publishes remote receiver UUIDs before the dispatch
+// operator reaches Prepare, so remote notify streams can attach early.
+func (dispatch *Dispatch) RegisterRemoteReceivers(proc *process.Process) error {
+	if len(dispatch.RemoteRegs) == 0 {
+		return nil
+	}
+	if dispatch.ctr == nil {
+		dispatch.ctr = new(container)
+	}
+	return dispatch.prepareRemote(proc)
+}
+
 func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 	dispatch.ctr.prepared = false
 	dispatch.ctr.isRemote = true
+	dispatch.ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
 	dispatch.ctr.remoteReceivers = make([]*process.WrapCs, 0, dispatch.ctr.remoteRegsCnt)
 	dispatch.ctr.remoteToIdx = make(map[uuid.UUID]int)
-	dispatch.ctr.remoteInfo = make(chan *process.WrapCs)
+	needRegister := dispatch.ctr.remoteInfo == nil
+	if needRegister {
+		dispatch.ctr.remoteInfo = make(chan *process.WrapCs)
+	}
+	registered := make([]uuid.UUID, 0, len(dispatch.RemoteRegs))
 	for i, rr := range dispatch.RemoteRegs {
 		if dispatch.FuncId == ShuffleToAllFunc {
 			dispatch.ctr.remoteToIdx[rr.Uuid] = dispatch.ShuffleRegIdxRemote[i]
 		}
-		if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc, dispatch.ctr.remoteInfo); err != nil {
-			return err
+		if needRegister {
+			if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc, dispatch.ctr.remoteInfo); err != nil {
+				rollbackRemoteReceiverRegistrations(registered)
+				dispatch.ctr.remoteInfo = nil
+				return err
+			}
+			registered = append(registered, rr.Uuid)
 		}
 	}
 	return nil
+}
+
+func rollbackRemoteReceiverRegistrations(registered []uuid.UUID) {
+	colexec.Get().DeleteUuids(registered)
+	for _, u := range registered {
+		colexec.Get().GetProcByUuid(u, false)
+	}
 }
 
 func (dispatch *Dispatch) prepareLocal() {

@@ -110,20 +110,10 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
-	if node.OnDuplicateKey != nil {
-		for key := range node.OnDuplicateKey.OnDuplicateExpr {
-			oldExpr := node.OnDuplicateKey.OnDuplicateExpr[key]
-			node.OnDuplicateKey.OnDuplicateExpr[key], err = rule.ApplyExpr(oldExpr)
-			if err != nil {
-				return err
-			}
-		}
-	} else {
-		for i := range node.OnUpdateExprs {
-			node.OnUpdateExprs[i], err = rule.ApplyExpr(node.OnUpdateExprs[i])
-			if err != nil {
-				return err
-			}
+	for i := range node.OnUpdateExprs {
+		node.OnUpdateExprs[i], err = rule.ApplyExpr(node.OnUpdateExprs[i])
+		if err != nil {
+			return err
 		}
 	}
 
@@ -155,7 +145,7 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 				return nil, err
 			}
 		}
-		return forceCastExpr(ctx, e, oldType)
+		return forceAssignmentCastExpr(ctx, e, oldType)
 	}
 
 	if node.RowsetData != nil {

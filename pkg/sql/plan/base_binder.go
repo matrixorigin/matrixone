@@ -1586,25 +1586,46 @@ between_fallback:
 	return retExpr, nil
 }
 
+func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) (*plan.Expr, bool, error) {
+	if name != function.SerialFunctionName && name != function.SerialFullFunctionName {
+		return nil, false, nil
+	}
+	if len(args) != 1 {
+		return nil, false, nil
+	}
+
+	listExpr, ok := args[0].Expr.(*plan.Expr_List)
+	if !ok {
+		return nil, false, nil
+	}
+	if listExpr.List == nil || len(listExpr.List.List) == 0 {
+		return args[0], true, nil
+	}
+
+	// An IN-list is a set of scalar candidates, not one row-wise vector argument.
+	// Bind serial(v0, v1, ...) as list(serial(v0), serial(v1), ...).
+	for i, subExpr := range listExpr.List.List {
+		newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{subExpr})
+		if err != nil {
+			return nil, true, err
+		}
+		listExpr.List.List[i] = newSubExpr
+		if i == 0 {
+			args[0].Typ = newSubExpr.Typ
+		}
+	}
+	return args[0], true, nil
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
 	// deal with some special function
-	switch name {
-	case "serial":
-		if len(args) == 1 {
-			if listExpr, ok := args[0].Expr.(*plan.Expr_List); ok {
-				for i, subExpr := range listExpr.List.List {
-					newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, "serial", []*Expr{subExpr})
-					if err != nil {
-						return nil, err
-					}
-					listExpr.List.List[i] = newSubExpr
-				}
-				return args[0], nil
-			}
-		}
+	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
+		return listExpr, err
+	}
 
+	switch name {
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
@@ -1925,9 +1946,17 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
 			typLeft := makeTypeByPlan2Expr(args[0])
+			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
 
 			for _, rightVal := range rightList.List {
+				if _, ok := rightVal.Expr.(*plan.Expr_List); ok && !partitionIn {
+					return nil, moerr.NewOperandColumns(ctx, 1)
+				}
+				if leftIsConstNull && !partitionIn {
+					orExprList = append(orExprList, rightVal)
+					continue
+				}
 				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
 					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
 					if err != nil {
