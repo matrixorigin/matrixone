@@ -99,6 +99,69 @@ func TestRewriteCountNotNullColToStarcount(t *testing.T) {
 	assert.Equal(t, wantObj, agg.Func.Obj, "Obj must be CountStar overload so runtime uses countStarExec")
 }
 
+func TestConvertCharBinaryTypeResolution(t *testing.T) {
+	cases := []struct {
+		sql   string
+		oid   types.T
+		width int32
+		scale int32
+	}{
+		{
+			sql:   "select convert(12345, char)",
+			oid:   types.T_varchar,
+			width: types.MaxVarcharLen,
+		},
+		{
+			sql:   "select convert('ABCDE', char)",
+			oid:   types.T_varchar,
+			width: types.MaxVarcharLen,
+		},
+		{
+			sql:   "select convert(12345, char(3))",
+			oid:   types.T_char,
+			width: 3,
+		},
+		{
+			sql:   "select convert('AZ', binary)",
+			oid:   types.T_binary,
+			width: -1,
+			scale: -1,
+		},
+		{
+			sql:   "select convert('AZ', binary(1))",
+			oid:   types.T_binary,
+			width: 1,
+			scale: -1,
+		},
+		{
+			sql:   "select convert(12345, binary(3))",
+			oid:   types.T_binary,
+			width: 3,
+			scale: -1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			require.NoError(t, err)
+			require.NotNil(t, logicPlan.GetQuery())
+
+			var expr *plan.Expr
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_PROJECT && len(node.ProjectList) > 0 {
+					expr = node.ProjectList[0]
+					break
+				}
+			}
+			require.NotNil(t, expr)
+			require.Equal(t, int32(tc.oid), expr.Typ.Id)
+			require.Equal(t, tc.width, expr.Typ.Width)
+			require.Equal(t, tc.scale, expr.Typ.Scale)
+		})
+	}
+}
+
 func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "create table t (g point)", 1)
 	require.NoError(t, err)
@@ -404,4 +467,100 @@ func TestBuildDefaultExprKeepsBareUuidTypeGuard(t *testing.T) {
 	_, err = buildDefaultExpr(colDef, typ, proc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid default value for column 'a'")
+}
+
+// Column DEFAULT / ON UPDATE validation must use the strict assignment cast for
+// CHAR/VARCHAR targets: an over-length value is rejected, not silently truncated.
+func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, oid := range []types.T{types.T_varchar, types.T_char} {
+		typ := plan.Type{Id: int32(oid), Width: 3}
+
+		defaultCol := tree.NewColumnTableDef(
+			tree.NewUnresolvedColName("a"),
+			nil,
+			[]tree.ColumnAttribute{
+				&tree.AttributeDefault{Expr: tree.NewNumVal("abcdef", "abcdef", false, tree.P_char)},
+			},
+		)
+		_, err := buildDefaultExpr(defaultCol, typ, proc)
+		require.Error(t, err, "oversized DEFAULT for %v(3) must be rejected", oid)
+
+		onUpdateCol := tree.NewColumnTableDef(
+			tree.NewUnresolvedColName("a"),
+			nil,
+			[]tree.ColumnAttribute{
+				&tree.AttributeOnUpdate{Expr: tree.NewNumVal("abcdef", "abcdef", false, tree.P_char)},
+			},
+		)
+		_, err = buildOnUpdate(onUpdateCol, typ, proc)
+		require.Error(t, err, "oversized ON UPDATE for %v(3) must be rejected", oid)
+	}
+}
+
+// A value that fits the CHAR/VARCHAR width is accepted as a column DEFAULT.
+func TestBuildDefaultExprFitsVarchar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	defaultCol := tree.NewColumnTableDef(
+		tree.NewUnresolvedColName("a"),
+		nil,
+		[]tree.ColumnAttribute{
+			&tree.AttributeDefault{Expr: tree.NewNumVal("abc", "abc", false, tree.P_char)},
+		},
+	)
+	defaultValue, err := buildDefaultExpr(defaultCol, plan.Type{Id: int32(types.T_varchar), Width: 3}, proc)
+	require.NoError(t, err)
+	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
+}
+
+// makePlan2AssignmentCastExpr routes CHAR/VARCHAR targets through cast_strict,
+// while explicit casts via makePlan2CastExpr keep the lenient generic cast.
+func TestMakePlan2AssignmentCastExprUsesStrictForCharVarchar(t *testing.T) {
+	ctx := context.Background()
+	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
+
+	for _, oid := range []types.T{types.T_varchar, types.T_char} {
+		target := plan.Type{Id: int32(oid), Width: 3}
+
+		strictExpr, err := makePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
+		require.NoError(t, err)
+		require.Equal(t, "cast_strict", strictExpr.GetF().GetFunc().GetObjName())
+
+		genericExpr, err := makePlan2CastExpr(ctx, DeepCopyExpr(srcText), target)
+		require.NoError(t, err)
+		require.Equal(t, "cast", genericExpr.GetF().GetFunc().GetObjName())
+	}
+
+	// Non-string targets stay on the generic cast even for assignment.
+	intExpr, err := makePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), plan.Type{Id: int32(types.T_int64)})
+	require.NoError(t, err)
+	require.Equal(t, "cast", intExpr.GetF().GetFunc().GetObjName())
+}
+
+// A generated CHAR/VARCHAR column is materialized as a real column write, so
+// buildGeneratedExpr must wrap its expression with the strict assignment cast
+// (cast_strict): an over-length value is rejected, not silently truncated.
+func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	stmt, err := mysql.ParseOne(context.Background(),
+		"create table t (t text, g varchar(1) generated always as (coalesce(t, '')) stored)", 1)
+	require.NoError(t, err)
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+
+	var genCol *tree.ColumnTableDef
+	for _, def := range createTable.Defs {
+		if cd, ok := def.(*tree.ColumnTableDef); ok && cd.Name.ColNameOrigin() == "g" {
+			genCol = cd
+		}
+	}
+	require.NotNil(t, genCol)
+
+	existingCols := []*ColDef{{Name: "t", Typ: plan.Type{Id: int32(types.T_text)}}}
+	gen, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_varchar), Width: 1}, existingCols, proc)
+	require.NoError(t, err)
+	require.NotNil(t, gen)
+	require.Equal(t, "cast_strict", gen.Expr.GetF().GetFunc().GetObjName())
 }

@@ -125,6 +125,76 @@ func TestCheckWithDeadlockWith2Txn(t *testing.T) {
 	})
 }
 
+func TestCheckBusyDoesNotLeaveTxnMarkedActive(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		holdTxn := []byte("holder")
+		waitTxn := pb.WaitTxn{TxnID: []byte("waiter")}
+
+		d := &detector{
+			logger: runtime.DefaultRuntime().Logger(),
+			c:      make(chan deadlockTxn, 1),
+		}
+		d.mu.activeCheckTxn = make(map[string]struct{}, 1)
+		d.c <- deadlockTxn{}
+
+		assert.ErrorIs(t, d.check(holdTxn, waitTxn), ErrDeadlockCheckBusy)
+		_, ok := d.mu.activeCheckTxn[string(waitTxn.TxnID)]
+		assert.False(t, ok)
+
+		<-d.c
+		assert.NoError(t, d.check(holdTxn, waitTxn))
+		_, ok = d.mu.activeCheckTxn[string(waitTxn.TxnID)]
+		assert.True(t, ok)
+		assert.Len(t, d.c, 1)
+	})
+}
+
+func TestOwnerLocalDeadlockPathUsesWaitEdges(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		logger := runtime.DefaultRuntime().Logger()
+		txn1 := pb.WaitTxn{TxnID: []byte("txn1"), CreatedOn: "cn1"}
+		txn2 := pb.WaitTxn{TxnID: []byte("txn2"), CreatedOn: "cn1"}
+		txn3 := pb.WaitTxn{TxnID: []byte("txn3"), CreatedOn: "cn1"}
+
+		w1 := acquireWaiter(txn1, "owner-local-edge-test", logger)
+		defer w1.close("owner-local-edge-test", logger)
+		w1.setStatus(blocking)
+		w2 := acquireWaiter(txn2, "owner-local-edge-test", logger)
+		defer w2.close("owner-local-edge-test", logger)
+		w2.setStatus(blocking)
+
+		graph := map[ownerLocalTxnKey][]ownerLocalWaitEdge{
+			newOwnerLocalTxnKey(txn1): {{
+				waiter:  w1,
+				waitFor: []ownerLocalTxnKey{newOwnerLocalTxnKey(txn2)},
+			}},
+			newOwnerLocalTxnKey(txn2): {{
+				waiter:  w2,
+				waitFor: []ownerLocalTxnKey{newOwnerLocalTxnKey(txn3)},
+			}},
+		}
+
+		path, found := findOwnerLocalDeadlockPath(
+			graph,
+			newOwnerLocalTxnKey(txn3),
+			[]ownerLocalTxnKey{newOwnerLocalTxnKey(txn1)})
+		assert.True(t, found)
+		assert.Equal(t, []ownerLocalTxnKey{
+			newOwnerLocalTxnKey(txn3),
+			newOwnerLocalTxnKey(txn1),
+			newOwnerLocalTxnKey(txn2),
+			newOwnerLocalTxnKey(txn3),
+		}, path)
+
+		w2.setStatus(notified)
+		_, found = findOwnerLocalDeadlockPath(
+			graph,
+			newOwnerLocalTxnKey(txn3),
+			[]ownerLocalTxnKey{newOwnerLocalTxnKey(txn1)})
+		assert.False(t, found)
+	})
+}
+
 func TestPrintPathFromRoot(t *testing.T) {
 	// Test case 1: nil node
 	assert.Equal(t, "<nil>", printPathFromRoot(nil))
