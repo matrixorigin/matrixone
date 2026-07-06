@@ -155,7 +155,7 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 				return nil, err
 			}
 		}
-		return forceCastExpr(ctx, e, oldType)
+		return forceAssignmentCastExpr(ctx, e, oldType)
 	}
 
 	if node.RowsetData != nil {

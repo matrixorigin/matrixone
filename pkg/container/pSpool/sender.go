@@ -16,8 +16,11 @@ package pSpool
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 const (
@@ -45,6 +48,14 @@ type PipelineSpool struct {
 	//
 	// the data producer should wait all consumers done before its close.
 	csDoneSignal chan struct{}
+
+	// drainedReceivers counts how many receivers have already reached their
+	// End-message (i.e. how many csDoneSignal values have been consumed by the
+	// close/cleanup path). It is only touched from the single owner goroutine
+	// that runs Close / CloseWithTimeout / forceCleanup, never concurrently.
+	drainedReceivers int
+
+	cleanupOnce sync.Once
 }
 
 // pipelineSpoolMessage is the element of PipelineSpool.
@@ -115,14 +126,74 @@ func (ps *PipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
 
 // Close the sender and receivers, and do memory clean.
 func (ps *PipelineSpool) Close() {
-	// wait for all receivers done its work first.
-	requireEndingReceiver := len(ps.rs)
-	for requireEndingReceiver > 0 {
-		requireEndingReceiver--
+	ps.CloseWithTimeout(0)
+}
 
-		<-ps.csDoneSignal
+func (ps *PipelineSpool) CloseWithTimeout(timeout time.Duration) bool {
+	timer := (*time.Timer)(nil)
+	if timeout > 0 {
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
 	}
 
+	// wait for all receivers done its work first.
+	for ps.drainedReceivers < len(ps.rs) {
+		if timer == nil {
+			<-ps.csDoneSignal
+			ps.drainedReceivers++
+			continue
+		}
+
+		select {
+		case <-ps.csDoneSignal:
+			ps.drainedReceivers++
+		case <-timer.C:
+			return false
+		}
+	}
+
+	ps.ForceCleanup()
+	return true
+}
+
+// ForceCleanup reclaims spool-owned batch memory during query teardown, but
+// only once every receiver is confirmed done.
+//
+// Delivery through the spool is two-staged: SendBatch first stores a batch in a
+// slot, and only then is a GetFromSpool signal enqueued on the receiver channel.
+// A receiver that is merely backlogged during teardown can still hold a pending
+// GetFromSpool signal pointing at a slot with real data. Freeing the backing
+// buffer then (cache.free releases the whole buffer) would make that receiver
+// later read emptied memory -> silent batch loss / early EOS.
+//
+// So we reclaim only after draining one csDoneSignal per receiver (each receiver
+// emits it once it has read its End-message and therefore released every
+// real-data slot it consumed). If some receiver has not finished yet, we leave
+// the spool memory intact - it is bounded and reclaimed when the owning MPool is
+// destroyed - and do NOT consume cleanupOnce, so a later call can still reclaim
+// once the spool has fully drained.
+func (ps *PipelineSpool) ForceCleanup() {
+	if ps == nil {
+		return
+	}
+
+	for ps.drainedReceivers < len(ps.rs) {
+		select {
+		case <-ps.csDoneSignal:
+			ps.drainedReceivers++
+		default:
+			return
+		}
+	}
+
+	ps.cleanupOnce.Do(ps.forceCleanup)
+}
+
+func (ps *PipelineSpool) forceCleanup() {
+	// All receivers have reached End. The only remaining non-free slots are the
+	// End markers themselves (nil dataContent, no cached buffer memory); every
+	// real-data slot was already released back to the cache on consumption, so
+	// freeing the whole buffer is now safe.
 	ps.cache.free()
 }
 

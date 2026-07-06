@@ -34,4 +34,12 @@ var (
 			Help:      "Total number of stream connections to send messages to other CN.",
 		}, []string{"type"})
 	PipelineMessageSenderCounter = pipelineStreamCounter.WithLabelValues("living")
+
+	PipelineCleanupEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "pipeline",
+			Name:      "cleanup_event",
+			Help:      "Total number of abnormal pipeline cleanup events.",
+		}, []string{"event"})
 )
