@@ -5066,6 +5066,35 @@ func TestPowerOutOfRange(t *testing.T) {
 	}
 }
 
+func TestPowerRespectsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{-2, 2}, nil),
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5, 3}, nil),
+	}
+	tcc := NewFunctionTestCase(
+		proc,
+		inputs,
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 8}, []bool{true, false}),
+		Power,
+	)
+	require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+
+	selectList := &FunctionSelectList{
+		AnyNull:    true,
+		SelectList: []bool{false, true},
+	}
+	err := Power(tcc.parameters, tcc.result, proc, tcc.fnLength, selectList)
+	require.NoError(t, err)
+
+	resultVec := tcc.result.GetResultVector()
+	require.True(t, resultVec.GetNulls().Contains(0))
+	resultParam := vector.GenerateFunctionFixedTypeParameter[float64](resultVec)
+	value, isNull := resultParam.GetValue(1)
+	require.False(t, isNull)
+	require.Equal(t, float64(8), value)
+}
+
 // TRUNCATE
 func initTruncateTestCase() []tcTemp {
 	cases := []struct {

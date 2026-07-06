@@ -6722,6 +6722,13 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	rs := vector.MustFunctionResult[float64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 {
