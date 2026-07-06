@@ -1316,6 +1316,30 @@ func TestD128SubDiffScaleDecimalMinusIntLiteralCases(t *testing.T) {
 			require.Equal(t, tc.wantText, rs[0].Format(2))
 		})
 	}
+
+	t.Run("left scalar right vector with null", func(t *testing.T) {
+		v1 := []types.Decimal128{types.Decimal128FromInt64(30000)}
+		v2 := []types.Decimal128{
+			types.Decimal128FromInt64(300),
+			types.Decimal128FromInt64(301),
+			types.Decimal128FromInt64(777),
+			types.Decimal128FromInt64(3999),
+		}
+		rs := make([]types.Decimal128, len(v2))
+		nul := nulls.NewWithSize(len(v2))
+		nul.Add(2)
+
+		idx, err := d128SubDiffScale(v1, v2, rs, 2, 0, nul)
+		require.NoError(t, err)
+		require.Equal(t, -1, idx)
+		require.True(t, nul.Contains(2))
+		require.Equal(t, types.Decimal128FromInt64(0), rs[0])
+		require.Equal(t, types.Decimal128FromInt64(-100), rs[1])
+		require.Equal(t, types.Decimal128FromInt64(-369900), rs[3])
+		require.Equal(t, "0.00", rs[0].Format(2))
+		require.Equal(t, "-1.00", rs[1].Format(2))
+		require.Equal(t, "-3699.00", rs[3].Format(2))
+	})
 }
 
 func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
