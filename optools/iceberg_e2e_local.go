@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -352,9 +353,6 @@ func (r *caseRunner) mergeOnReadDeleteCase(ctx context.Context) caseResult {
 }
 
 func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
-	if err := createNamespace(ctx, cfg); err != nil {
-		return err
-	}
 	client := catalog.NewRESTClient(catalog.WithAllowPlainHTTP(true))
 	req := api.CatalogRequest{
 		Catalog: model.Catalog{
@@ -368,9 +366,16 @@ func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
 		},
 		ExternalPrincipal: "ci-local",
 	}
+	reqWithPrefix, err := catalogRequestWithPrefix(ctx, client, req, cfg.Warehouse)
+	if err != nil {
+		return err
+	}
+	if err := createNamespace(ctx, cfg, reqWithPrefix.Prefix); err != nil {
+		return err
+	}
 	for _, spec := range e2eTableSpecs(cfg.Namespace) {
 		_, err := client.CreateTable(ctx, api.CreateTableRequest{
-			CatalogRequest: req,
+			CatalogRequest: reqWithPrefix,
 			Namespace:      api.Namespace{cfg.Namespace},
 			Table:          spec.name,
 			Schema:         spec.schema,
@@ -416,7 +421,20 @@ func e2eTableSpecs(namespace string) []e2eTableSpec {
 	}
 }
 
-func createNamespace(ctx context.Context, cfg localE2EConfig) error {
+func catalogRequestWithPrefix(ctx context.Context, client *catalog.RESTClient, req api.CatalogRequest, warehouse string) (api.CatalogRequest, error) {
+	config, err := client.GetConfig(ctx, api.GetConfigRequest{
+		CatalogRequest: req,
+		Warehouse:      warehouse,
+		NoCache:        true,
+	})
+	if err != nil {
+		return api.CatalogRequest{}, fmt.Errorf("get Iceberg REST catalog config: %w", err)
+	}
+	req.Prefix = config.Prefix
+	return req, nil
+}
+
+func createNamespace(ctx context.Context, cfg localE2EConfig, prefix string) error {
 	body, err := json.Marshal(map[string]any{
 		"namespace":  []string{cfg.Namespace},
 		"properties": map[string]string{"owner": "matrixone-ci"},
@@ -424,7 +442,10 @@ func createNamespace(ctx context.Context, cfg localE2EConfig) error {
 	if err != nil {
 		return err
 	}
-	target := strings.TrimRight(cfg.CatalogURI, "/") + "/v1/namespaces"
+	target, err := createNamespaceURL(cfg.CatalogURI, prefix)
+	if err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -444,13 +465,18 @@ func createNamespace(ctx context.Context, cfg localE2EConfig) error {
 
 func currentSnapshotID(ctx context.Context, cfg localE2EConfig, table string) (int64, error) {
 	client := catalog.NewRESTClient(catalog.WithAllowPlainHTTP(true))
+	req := api.CatalogRequest{
+		Catalog:           model.Catalog{Name: cfg.Catalog, Type: "rest", URI: cfg.CatalogURI, Warehouse: cfg.Warehouse, AuthMode: "none"},
+		ExternalPrincipal: "ci-local",
+	}
+	reqWithPrefix, err := catalogRequestWithPrefix(ctx, client, req, cfg.Warehouse)
+	if err != nil {
+		return 0, err
+	}
 	resp, err := client.LoadTable(ctx, api.LoadTableRequest{
-		CatalogRequest: api.CatalogRequest{
-			Catalog:           model.Catalog{Name: cfg.Catalog, Type: "rest", URI: cfg.CatalogURI, Warehouse: cfg.Warehouse, AuthMode: "none"},
-			ExternalPrincipal: "ci-local",
-		},
-		Namespace: api.Namespace{cfg.Namespace},
-		Table:     table,
+		CatalogRequest: reqWithPrefix,
+		Namespace:      api.Namespace{cfg.Namespace},
+		Table:          table,
 	})
 	if err != nil {
 		return 0, err
@@ -468,6 +494,44 @@ func currentSnapshotID(ctx context.Context, cfg localE2EConfig, table string) (i
 		return 0, fmt.Errorf("table %s does not have a current snapshot", table)
 	}
 	return metadata.CurrentSnapshotID, nil
+}
+
+func createNamespaceURL(rawBase string, prefix string) (string, error) {
+	base, err := url.Parse(strings.TrimSpace(rawBase))
+	if err != nil {
+		return "", fmt.Errorf("invalid Iceberg REST catalog URI %q: %w", rawBase, err)
+	}
+	if base.Scheme == "" || base.Host == "" {
+		return "", fmt.Errorf("invalid Iceberg REST catalog URI %q", rawBase)
+	}
+	parts := splitURLPath(base.Path)
+	if len(parts) == 0 || parts[len(parts)-1] != "v1" {
+		parts = append(parts, "v1")
+	}
+	if strings.TrimSpace(prefix) != "" {
+		parts = append(parts, strings.TrimSpace(prefix))
+	}
+	parts = append(parts, "namespaces")
+	escaped := make([]string, 0, len(parts))
+	for _, part := range parts {
+		escaped = append(escaped, url.PathEscape(part))
+	}
+	base.Path = "/" + strings.Join(parts, "/")
+	base.RawPath = "/" + strings.Join(escaped, "/")
+	base.RawQuery = ""
+	base.Fragment = ""
+	return base.String(), nil
+}
+
+func splitURLPath(path string) []string {
+	raw := strings.Split(strings.Trim(path, "/"), "/")
+	parts := make([]string, 0, len(raw))
+	for _, part := range raw {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
 }
 
 func waitForDB(ctx context.Context, db *sql.DB) error {
