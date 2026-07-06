@@ -186,7 +186,13 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 					maybeHandleRemoteBindChanged(binds[idx])
 				}
 			} else if resp.NewBind != nil {
-				k.service.handleBindChanged(*resp.NewBind)
+				if binds[idx].AllocatorID != "" &&
+					resp.NewBind.AllocatorID != "" &&
+					binds[idx].AllocatorID != resp.NewBind.AllocatorID {
+					maybeHandleRemoteBindChanged(binds[idx])
+				} else {
+					k.service.handleBindChanged(*resp.NewBind)
+				}
 			}
 			releaseResponse(resp)
 		} else {
@@ -205,7 +211,8 @@ func canRefreshRemoteBindOnKeepError(err error) bool {
 }
 
 func (k *lockTableKeeper) maybeHandleRemoteBindChanged(bind pb.LockTable) {
-	newBind, err := getLockTableBind(
+	requestAllocator := k.service.allocatorStateSnapshot()
+	newBind, allocator, err := getLockTableBind(
 		k.client,
 		bind.Group,
 		bind.Table,
@@ -218,7 +225,16 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(bind pb.LockTable) {
 		return
 	}
 	if newBind.Changed(bind) {
-		k.service.handleBindChanged(newBind)
+		if err := k.service.handleBindChangedFromAllocator(
+			"keep-remote-refresh",
+			bind,
+			newBind,
+			allocator,
+			requestAllocator); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+				logGetRemoteBindFailed(k.service.logger, bind.Table, err)
+			}
+		}
 	}
 }
 
@@ -249,6 +265,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	if timeout > defaultRPCTimeout {
 		timeout = defaultRPCTimeout
 	}
+	requestAllocator := k.service.allocatorStateSnapshot()
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseDoKeepLockTableBind)
 	defer cancel()
 	resp, err := k.client.Send(ctx, req)
@@ -260,6 +277,17 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	defer releaseResponse(resp)
 
 	if resp.KeepLockTableBind.OK {
+		if _, accepted := k.service.observeAllocatorStateWithHoldersFromSnapshot(
+			"keepalive",
+			allocatorState{
+				id:      resp.KeepLockTableBind.AllocatorID,
+				version: resp.KeepLockTableBind.AllocatorVersion,
+			},
+			requestAllocator,
+			true,
+			k.groupTables); !accepted {
+			return
+		}
 		switch resp.KeepLockTableBind.Status {
 		case pb.Status_ServiceLockEnable:
 			if !k.service.isStatus(pb.Status_ServiceLockEnable) {
@@ -283,19 +311,15 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		return
 	}
 
-	n := 0
-	k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
-		newVersion := k.groupTables.getVersion()
-		if oldVersion != newVersion {
-			return false
-		}
-		bind := v.getBind()
-		if bind.ServiceID == k.serviceID {
-			n++
-			return true
-		}
-		return false
-	}, closeReasonKeepBindFailed)
+	n := k.service.handleKeepBindFailed(
+		k.serviceID,
+		k.groupTables,
+		oldVersion,
+		allocatorState{
+			id:      resp.KeepLockTableBind.AllocatorID,
+			version: resp.KeepLockTableBind.AllocatorVersion,
+		},
+		requestAllocator)
 
 	if n > 0 {
 		// Keep bind receiving an explicit failure means that all the binds of the local

@@ -312,7 +312,6 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `char`
 	{
 		functionId: CHAR,
-		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    builtInCharCheck,
 
