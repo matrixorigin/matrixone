@@ -602,16 +602,16 @@ execute s1 using @a1, @b1;
 40  ¦  xxx1
 execute s2 using @a1, @b1;
 ➤ a1[4,32,0]  ¦  a2[12,-1,0]  𝄀
+20  ¦  xxx1  𝄀
+30  ¦  xxx1  𝄀
+20  ¦  yyy1  𝄀
+40  ¦  xxx1  𝄀
 20  ¦  aaa1  𝄀
 30  ¦  aaa1  𝄀
 40  ¦  bbb1  𝄀
 50  ¦  aaa1  𝄀
 60  ¦  ccc1  𝄀
-20  ¦  ccc1  𝄀
-20  ¦  xxx1  𝄀
-30  ¦  xxx1  𝄀
-20  ¦  yyy1  𝄀
-40  ¦  xxx1
+20  ¦  ccc1
 drop table t5;
 drop table t6;
 set @maxint=18446744073709551615;
