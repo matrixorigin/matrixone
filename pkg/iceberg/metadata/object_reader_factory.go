@@ -76,7 +76,7 @@ func (f VendedObjectReaderFactory) newVendedObjectReader(ctx context.Context, re
 		ResidencyValidator:     combineObjectResidencyValidators(f.ResidencyValidator, objectResidencyValidatorFromRequest(req.ObjectResidencyValidator)),
 		RequireResidencyPolicy: f.RequireResidencyPolicy,
 	}
-	objectIORef, err := icebergio.RegisterObjectIOProvider(ctx, provider, scopeForLocation, objectIORefTTL(credentials, f.Now))
+	objectIORef, err := icebergio.RegisterEphemeralObjectIOProvider(ctx, provider, scopeForLocation, objectIORefTTL(credentials, f.Now))
 	if err != nil {
 		return nil, ObjectReaderContext{}, err
 	}
@@ -142,7 +142,7 @@ func (f VendedObjectReaderFactory) newRemoteSigningObjectReader(ctx context.Cont
 		ResidencyValidator:     combineObjectResidencyValidators(f.ResidencyValidator, objectResidencyValidatorFromRequest(req.ObjectResidencyValidator)),
 		RequireResidencyPolicy: f.RequireResidencyPolicy,
 	}
-	objectIORef, err := icebergio.RegisterObjectIOProvider(ctx, provider, scopeForLocation, 0)
+	objectIORef, err := icebergio.RegisterEphemeralObjectIOProvider(ctx, provider, scopeForLocation, 0)
 	if err != nil {
 		return nil, ObjectReaderContext{}, err
 	}

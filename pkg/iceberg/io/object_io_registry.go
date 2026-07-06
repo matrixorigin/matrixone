@@ -29,10 +29,11 @@ import (
 const defaultObjectIORefTTL = 30 * time.Minute
 
 type objectIORegistryEntry struct {
-	provider         ObjectIOProvider
-	scopeForLocation ObjectScopeForLocation
-	expiresAt        time.Time
-	refCount         int
+	provider           ObjectIOProvider
+	scopeForLocation   ObjectScopeForLocation
+	expiresAt          time.Time
+	refCount           int
+	deleteOnZeroRetain bool
 }
 
 var objectIORegistry = struct {
@@ -47,6 +48,25 @@ func RegisterObjectIOProvider(
 	provider ObjectIOProvider,
 	scopeForLocation ObjectScopeForLocation,
 	ttl time.Duration,
+) (string, error) {
+	return registerObjectIOProvider(ctx, provider, scopeForLocation, ttl, false)
+}
+
+func RegisterEphemeralObjectIOProvider(
+	ctx context.Context,
+	provider ObjectIOProvider,
+	scopeForLocation ObjectScopeForLocation,
+	ttl time.Duration,
+) (string, error) {
+	return registerObjectIOProvider(ctx, provider, scopeForLocation, ttl, true)
+}
+
+func registerObjectIOProvider(
+	ctx context.Context,
+	provider ObjectIOProvider,
+	scopeForLocation ObjectScopeForLocation,
+	ttl time.Duration,
+	deleteOnZeroRetain bool,
 ) (string, error) {
 	if provider == nil {
 		return "", api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg object IO registry requires provider", nil))
@@ -65,9 +85,10 @@ func RegisterObjectIOProvider(
 	objectIORegistry.Lock()
 	sweepExpiredObjectIORefsLocked(time.Now())
 	objectIORegistry.entries[ref] = objectIORegistryEntry{
-		provider:         provider,
-		scopeForLocation: scopeForLocation,
-		expiresAt:        expiresAt,
+		provider:           provider,
+		scopeForLocation:   scopeForLocation,
+		expiresAt:          expiresAt,
+		deleteOnZeroRetain: deleteOnZeroRetain,
 	}
 	objectIORegistry.Unlock()
 	return ref, nil
@@ -125,11 +146,21 @@ func ReleaseObjectIORef(ref string) {
 		return
 	}
 	objectIORegistry.Lock()
-	if entry, ok := objectIORegistry.entries[ref]; ok && entry.refCount > 1 {
-		entry.refCount--
-		objectIORegistry.entries[ref] = entry
-	} else {
-		delete(objectIORegistry.entries, ref)
+	if entry, ok := objectIORegistry.entries[ref]; ok {
+		switch {
+		case entry.refCount > 1:
+			entry.refCount--
+			objectIORegistry.entries[ref] = entry
+		case entry.refCount == 1:
+			entry.refCount = 0
+			if entry.deleteOnZeroRetain {
+				delete(objectIORegistry.entries, ref)
+			} else {
+				objectIORegistry.entries[ref] = entry
+			}
+		default:
+			delete(objectIORegistry.entries, ref)
+		}
 	}
 	objectIORegistry.Unlock()
 }

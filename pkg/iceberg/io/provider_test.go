@@ -144,9 +144,9 @@ func TestObjectIORegistryRetainedRefSurvivesSweep(t *testing.T) {
 	}
 }
 
-func TestObjectIORegistryRetainReleaseRefCounts(t *testing.T) {
+func TestObjectIORegistrySharedRefRequiresOwnerRelease(t *testing.T) {
 	ctx := context.Background()
-	fs, err := fileservice.NewMemoryFS("iceberg-registry-refcount", fileservice.DisabledCacheConfig, nil)
+	fs, err := fileservice.NewMemoryFS("iceberg-registry-shared-refcount", fileservice.DisabledCacheConfig, nil)
 	if err != nil {
 		t.Fatalf("new memory fs: %v", err)
 	}
@@ -172,8 +172,41 @@ func TestObjectIORegistryRetainReleaseRefCounts(t *testing.T) {
 		t.Fatalf("ref should remain registered after one of two releases, fs=%v err=%v", resolvedFS, err)
 	}
 	ReleaseObjectIORef(ref)
+	if resolvedFS, _, err := ResolveObjectIORef(ctx, ref, "s3://warehouse/orders.parquet"); err != nil || resolvedFS != fs {
+		t.Fatalf("shared ref should remain registered until owner release, fs=%v err=%v", resolvedFS, err)
+	}
+	ReleaseObjectIORef(ref)
 	if _, _, err := ResolveObjectIORef(ctx, ref, "s3://warehouse/orders.parquet"); err == nil {
-		t.Fatalf("ref should be removed after final release")
+		t.Fatalf("shared ref should be removed after owner release")
+	}
+}
+
+func TestObjectIORegistryEphemeralRefDeletesAfterFinalRetainRelease(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("iceberg-registry-ephemeral-refcount", fileservice.DisabledCacheConfig, nil)
+	if err != nil {
+		t.Fatalf("new memory fs: %v", err)
+	}
+	scopeForLocation := func(location string) ObjectScope {
+		return ObjectScope{
+			CatalogID:       7,
+			StorageLocation: location,
+			Endpoint:        "s3.me-central-1.amazonaws.com",
+			Region:          "me-central-1",
+			Bucket:          "warehouse",
+			Principal:       "ksa-analytics",
+		}
+	}
+	ref, err := RegisterEphemeralObjectIOProvider(ctx, ScopedProvider{FileService: fs}, scopeForLocation, time.Minute)
+	if err != nil {
+		t.Fatalf("register object io provider: %v", err)
+	}
+	if !RetainObjectIORef(ref) {
+		t.Fatalf("expected retain to succeed for registered ref")
+	}
+	ReleaseObjectIORef(ref)
+	if _, _, err := ResolveObjectIORef(ctx, ref, "s3://warehouse/orders.parquet"); err == nil {
+		t.Fatalf("ephemeral ref should be removed after final retain release")
 	}
 }
 

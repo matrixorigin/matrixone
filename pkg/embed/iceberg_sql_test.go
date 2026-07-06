@@ -90,7 +90,7 @@ func openIcebergTestDB(t *testing.T, c Cluster) *sql.DB {
 	t.Helper()
 	cn0, err := c.GetCNService(0)
 	require.NoError(t, err)
-	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn0.GetServiceConfig().CN.Frontend.Port)
+	dsn := fmt.Sprintf("sys#root#moadmin:111@tcp(127.0.0.1:%d)/", cn0.GetServiceConfig().CN.Frontend.Port)
 	db, err := sql.Open("mysql", dsn)
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)

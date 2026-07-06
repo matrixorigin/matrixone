@@ -129,6 +129,48 @@ func TestDMLMergeCoordinatorResolvesReorderedBatchAttrsByName(t *testing.T) {
 	require.Equal(t, "dee", committer.insertName)
 }
 
+func TestDMLMergeCoordinatorSplitsExecutionBatchWithoutAttrs(t *testing.T) {
+	bat, cleanup := newMergeActionScanBatch(t)
+	defer cleanup()
+	bat.Attrs = nil
+
+	committer := &recordingDMLMergeCommitter{}
+	coord := NewDMLMergeCoordinator(DMLMergeCoordinatorSpec{
+		Committer:      committer,
+		Base:           dml.CommitBase{BaseSnapshotID: 30, IdempotencyKey: "stmt-merge", StatementID: "stmt-merge"},
+		Schema:         api.Schema{SchemaID: 9},
+		DeleteSchemaID: 9,
+		ObjectWriter:   &recordingDMLDeleteObjectWriter{},
+		DataFiles:      dmlDeleteCoordinatorDataFiles(),
+	})
+	req := icebergwrite.AppendRequest{
+		Operation:               icebergwrite.OperationMerge,
+		Namespace:               "sales",
+		Table:                   "orders",
+		DefaultRef:              "main",
+		Attrs:                   []string{"id", "name", api.DMLDataFilePathColumnName, api.DMLRowOrdinalColumnName, api.DMLMergeActionColumnName},
+		DataFilePathColumnIndex: 2,
+		RowOrdinalColumnIndex:   3,
+		MergeActionColumnIndex:  4,
+	}
+	require.NoError(t, coord.Begin(context.Background(), req))
+
+	mp := mpool.MustNewZero()
+	proc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, coord.AppendWithProcess(proc, bat))
+	require.NoError(t, coord.Commit(context.Background()))
+
+	require.Len(t, committer.requests, 1)
+	require.Len(t, committer.requests[0].MatchedDeletes, 1)
+	require.Len(t, committer.requests[0].MatchedUpdates, 1)
+	require.Equal(t, []string{"id", "name"}, committer.updateAttrs)
+	require.Equal(t, int32(7), committer.updateID)
+	require.Equal(t, "alice-new", committer.updateName)
+	require.Equal(t, []string{"id", "name"}, committer.insertAttrs)
+	require.Equal(t, int32(12), committer.insertID)
+	require.Equal(t, "dee", committer.insertName)
+}
+
 func newMergeActionScanBatch(t *testing.T) (*batch.Batch, func()) {
 	t.Helper()
 	mp := mpool.MustNewZero()

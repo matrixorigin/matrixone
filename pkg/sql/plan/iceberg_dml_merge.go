@@ -482,7 +482,7 @@ func rewriteIcebergMergeProjection(ctx CompilerContext, query *planpb.Query, cla
 		root.InsertCtx.TableDef = tableDef
 	}
 	preProjects := clonePlanExprs(root.ProjectList)
-	metadataStart := shape.preMetadataCount
+	metadataStart := len(preProjects) - 2
 	if shape.tableColumnCount <= 0 || metadataStart+1 >= len(preProjects) {
 		return moerr.NewInvalidInputf(ctx.GetContext(), "Iceberg MERGE projection shape is invalid: %s projects=%d", shape.String(), len(preProjects))
 	}

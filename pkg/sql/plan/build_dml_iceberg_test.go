@@ -369,6 +369,15 @@ func TestIcebergMergeMatchedUpdateAndNotMatchedInsertBuildsDMLWriteIntent(t *tes
 	if len(project.GetProjectList()) != len(dmlSink.GetProjectList()) {
 		t.Fatalf("MERGE sink child project shape mismatch: child projects=%d sink projects=%d", len(project.GetProjectList()), len(dmlSink.GetProjectList()))
 	}
+	preProject := icebergDMLSinkChildProject(t, query, project)
+	metadataStart := len(project.GetProjectList()) - 3
+	preMetadataStart := len(preProject.GetProjectList()) - 2
+	if got := colRefPositions(project.GetProjectList()[metadataStart]); len(got) != 1 || got[0] != int32(preMetadataStart) {
+		t.Fatalf("MERGE data-file metadata should reference pre-project tail column %d, got %v", preMetadataStart, got)
+	}
+	if got := colRefPositions(project.GetProjectList()[metadataStart+1]); len(got) != 1 || got[0] != int32(preMetadataStart+1) {
+		t.Fatalf("MERGE row-ordinal metadata should reference pre-project tail column %d, got %v", preMetadataStart+1, got)
+	}
 }
 
 func TestIcebergMergeEmbeddedFourColumnProjectionShape(t *testing.T) {

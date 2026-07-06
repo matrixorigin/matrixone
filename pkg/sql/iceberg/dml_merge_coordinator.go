@@ -275,7 +275,8 @@ func emptyBatchLike(src *batch.Batch) *batch.Batch {
 	if src == nil {
 		return nil
 	}
-	out := batch.New(append([]string(nil), src.Attrs...))
+	out := batch.NewWithSize(len(src.Vecs))
+	out.Attrs = append([]string(nil), src.Attrs...)
 	for idx, vec := range src.Vecs {
 		if vec == nil {
 			continue
