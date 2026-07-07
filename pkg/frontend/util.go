@@ -19,7 +19,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"math/rand"
 	"os"
 	"strconv"
@@ -31,7 +30,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
-	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -54,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -92,17 +91,9 @@ func Max(a int, b int) int {
 	}
 }
 
-const (
-	invalidGoroutineId = math.MaxInt64
-)
-
 // GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
-	id := goid.Get()
-	if id == 0 {
-		id = invalidGoroutineId
-	}
-	return uint64(id)
+	return goroutine.GetRoutineId()
 }
 
 /*
