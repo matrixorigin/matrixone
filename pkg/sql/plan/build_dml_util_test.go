@@ -160,7 +160,7 @@ func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			numVal := tree.NewNumVal(tc.literal, tc.literal, false, tree.P_hexnum)
-			expr, err := MakeInsertValueConstExpr(proc, numVal, &tc.colType)
+			expr, err := MakeInsertValueConstExpr(proc, numVal, &tc.colType, false)
 			if tc.expectError {
 				require.Error(t, err)
 				return
