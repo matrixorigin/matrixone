@@ -9,6 +9,12 @@ SELECT POWER(2, 3) AS result4;
 SELECT POWER(2, 0) AS result5;
 SELECT POWER(4, 0.5) AS result6;
 
+#SELECT - Out-of-range results
+SELECT POW(-2, 0.5);
+SELECT POWER(0, -1);
+SELECT IF(0, POW(-2, 0.5), 1);
+SELECT CASE WHEN 0 THEN POWER(0, -1) ELSE 1 END;
+
 #SELECT - Verify POW and POWER are aliases
 SELECT POW(2, 3) = POWER(2, 3) AS same_result;
 
@@ -75,4 +81,3 @@ create table t1(a float,  b float);
 insert into t1 values(14.3, 4.413), (9.123, 9.409);
 select b from t1 group by b having power(1,b)>0;
 drop table t1;
-
