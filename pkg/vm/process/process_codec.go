@@ -323,6 +323,9 @@ func resolveSqlMode(proc *Process) string {
 	}
 	if v, err := proc.GetResolveVariableFunc()("sql_mode", true, false); err == nil {
 		if s, ok := v.(string); ok {
+			if s == "" {
+				return EmptySqlModeSentinel // explicitly non-strict
+			}
 			return s
 		}
 	}

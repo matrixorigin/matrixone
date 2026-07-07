@@ -55,6 +55,12 @@ var (
 	NormalEndRegisterMessage = NewRegMsg(nil)
 )
 
+// EmptySqlModeSentinel is used to distinguish an explicitly-empty (non-strict)
+// sql_mode from an unset field during serialization. When resolveSqlMode
+// successfully resolves sql_mode="" it stores this sentinel so the remote CN
+// can tell "explicitly non-strict" apart from "never captured".
+const EmptySqlModeSentinel = "\x00MO_EMPTY_SQL_MODE\x00"
+
 // RegisterMessage channel data
 // Err == nil means pipeline finish with error
 // Batch == nil means pipeline finish without error

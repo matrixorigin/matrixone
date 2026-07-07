@@ -475,8 +475,12 @@ func isStrictSqlMode(proc *process.Process) bool {
 	}
 	// Fall back to the captured SessionInfo.SqlMode (survives serialization to remote CNs).
 	if proc != nil && proc.Base.SessionInfo.SqlMode != "" {
-		return strings.Contains(proc.Base.SessionInfo.SqlMode, "STRICT_TRANS_TABLES") ||
-			strings.Contains(proc.Base.SessionInfo.SqlMode, "STRICT_ALL_TABLES")
+		mode := proc.Base.SessionInfo.SqlMode
+		if mode == process.EmptySqlModeSentinel {
+			mode = "" // normalize sentinel — explicitly non-strict
+		}
+		return strings.Contains(mode, "STRICT_TRANS_TABLES") ||
+			strings.Contains(mode, "STRICT_ALL_TABLES")
 	}
 	// Default to strict when sql_mode is unavailable (background/internal execution).
 	return true
@@ -553,7 +557,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = timestampToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_year:
 		s := vector.GenerateFunctionFixedTypeParameter[types.MoYear](from)
-		err = yearToOthers(proc.Ctx, s, *toType, result, length, selectList)
+		err = yearToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(proc, s, *toType, result, length, selectList, strictStringWidth, allowTrailingSpaceTrim)
@@ -6467,10 +6471,10 @@ func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, ex
 	return moerr.NewInternalError(ctx, errStr+" "+extraInfo)
 }
 
-// formatDataTruncationError reports a data-too-long error (1406 / SQLSTATE 22001)
+// formatDataTruncationError reports a data-too-long error (MySQL 1406 / SQLSTATE HY000)
 // for cast width violations, preserving the same diagnostic context as formatCastError
 // but with the correct MySQL error code (ER_DATA_TOO_LONG) instead of a generic internal
-// error (HY000).
+// error.
 func formatDataTruncationError(ctx context.Context, vec *vector.Vector, typ types.Type, extraInfo string) error {
 	var errStr string
 	if vec.IsConst() && !vec.IsConstNull() {
@@ -6526,7 +6530,7 @@ func floatToBytes(v float64, bitSize int) []byte {
 // yearToOthers converts YEAR type to other types
 func yearToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.MoYear],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	switch toType.Oid {
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
@@ -6563,7 +6567,7 @@ func yearToOthers(ctx context.Context,
 		return yearToFloat(ctx, source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return yearToStr(ctx, source, rs, length, toType)
+		return yearToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_date:
 		// MySQL returns NULL for CAST(year AS DATE)
 		rs := vector.MustFunctionResult[types.Date](result)
@@ -6644,7 +6648,7 @@ func yearToFloat[T constraints.Float](ctx context.Context,
 // yearToStr converts YEAR to string types
 func yearToStr(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.MoYear],
-	rs *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+	rs *vector.FunctionResult[types.Varlena], length int, toType types.Type, strictStringWidth ...bool) error {
 	for i := 0; i < length; i++ {
 		v, isnull := source.GetValue(uint64(i))
 		if isnull {
@@ -6652,8 +6656,9 @@ func yearToStr(ctx context.Context,
 				return err
 			}
 		} else {
-			result := v.String()
-			if err := rs.AppendBytes([]byte(result), false); err != nil {
+			result := []byte(v.String())
+			result = truncateCastBytesResult(result, toType, strictStringWidth...)
+			if err := rs.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
