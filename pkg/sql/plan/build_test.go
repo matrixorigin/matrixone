@@ -3316,6 +3316,10 @@ func TestCommaJoinWithExplicitJoin(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{
 		"select nation.n_name from nation, nation2 join region on nation2.r_regionkey = region.r_regionkey",
+		// ON condition references comma-join-LEFT table.
+		"select r.n_name from nation r, nation2 join region s on r.n_regionkey = s.r_regionkey",
+		// Comma join with subquery in FROM and WHERE referencing both left table and subquery.
+		"select r.n_name from nation r, (select max(n_regionkey) as v from nation) ld join region s on r.n_regionkey = s.r_regionkey where r.n_nationkey = ld.v",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 }
