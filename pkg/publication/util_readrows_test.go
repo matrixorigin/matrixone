@@ -50,6 +50,33 @@ func TestReadSingleTaskRunnerCountsRowsAcrossBatches(t *testing.T) {
 	require.Contains(t, err.Error(), "unexpected rows count: 2")
 }
 
+func TestReadSingleTaskRunnerAllowsNoRunner(t *testing.T) {
+	result, mp := newTaskRunnerResult(t, [][]string{{}})
+	defer func() {
+		result.Close()
+		require.Equal(t, int64(0), mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	}()
+
+	runner, err := readSingleTaskRunner(result)
+	require.NoError(t, err)
+	require.Empty(t, runner)
+}
+
+func TestReadSingleTaskRunnerRejectsEmptyRunner(t *testing.T) {
+	result, mp := newTaskRunnerResult(t, [][]string{{""}})
+	defer func() {
+		result.Close()
+		require.Equal(t, int64(0), mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	}()
+
+	runner, err := readSingleTaskRunner(result)
+	require.Error(t, err)
+	require.Empty(t, runner)
+	require.Contains(t, err.Error(), "task runner is null")
+}
+
 func newTaskRunnerResult(t *testing.T, batches [][]string) (executor.Result, *mpool.MPool) {
 	t.Helper()
 
