@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -134,6 +136,36 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 	}
 }
 
+// validateCountArgs validates COUNT function arguments against MySQL semantics.
+//   - COUNT(*), COUNT(expr): always valid
+//   - COUNT(expr1, expr2, ...): only valid with DISTINCT
+//   - COUNT((expr1, expr2, ...)): only valid with DISTINCT
+//
+// Call this from every binder path that constructs a COUNT aggregate or window
+// function (HavingBinder.BindAggFunc, bindWindowFuncExpr) before the call to
+// bindFuncExprImplByAstExpr.
+func validateCountArgs(ctx context.Context, funcName string, astExpr *tree.FuncExpr) error {
+	if funcName != "count" {
+		return nil
+	}
+	if len(astExpr.Exprs) == 0 {
+		// COUNT(*)
+		return nil
+	}
+	// COUNT((a, b, ...)) — tuple-as-single-arg, only valid with DISTINCT.
+	if len(astExpr.Exprs) == 1 {
+		if _, ok := astExpr.Exprs[0].(*tree.Tuple); ok && astExpr.Type != tree.FUNC_TYPE_DISTINCT {
+			return moerr.NewSyntaxErrorf(ctx, "Incorrect arguments to COUNT")
+		}
+		return nil
+	}
+	// COUNT(a, b, ...) — multiple separate args, only valid with DISTINCT.
+	if astExpr.Type != tree.FUNC_TYPE_DISTINCT {
+		return moerr.NewSyntaxErrorf(ctx, "Incorrect arguments to COUNT")
+	}
+	return nil
+}
+
 func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "aggregate function %s calls cannot be nested", funcName)
@@ -146,11 +178,37 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		}
 	}
 
+	if err := validateCountArgs(b.GetContext(), funcName, astExpr); err != nil {
+		return nil, err
+	}
+
 	b.insideAgg = true
 	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 	if err != nil {
 		return nil, err
 	}
+
+	// Normalize COUNT(DISTINCT (a, b)) → COUNT(DISTINCT a, b) by expanding
+	// the tuple arg into separate args. This must happen for every aggregate
+	// expression (not just inside optimizeDistinctAgg), otherwise the executor
+	// cannot build a correct multi-column distinct key from a single T_tuple vector.
+	//
+	// Only an AST tuple binds to Expr_List and can be expanded. A multi-column
+	// row subquery — e.g. COUNT(DISTINCT (SELECT a, b ...)) — also carries
+	// Typ.Id == T_tuple but is an Expr_Sub: GetList() is nil there, and leaving
+	// it unexpanded would let downstream either nil-deref, error as NYI, or
+	// silently collapse to the subquery's first column. Reject it explicitly.
+	f := expr.GetF()
+	if funcName == "count" && astExpr.Type == tree.FUNC_TYPE_DISTINCT &&
+		len(f.Args) == 1 && f.Args[0].Typ.Id == int32(types.T_tuple) {
+		list := f.Args[0].GetList()
+		if list == nil {
+			return nil, moerr.NewNotSupported(b.GetContext(),
+				"COUNT(DISTINCT ...) with a multi-column subquery argument")
+		}
+		f.Args = list.List
+	}
+
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		if funcName != "max" && funcName != "min" && funcName != "any_value" {
 			expr.GetF().Func.Obj = int64(uint64(expr.GetF().Func.Obj) | function.Distinct)
