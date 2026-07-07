@@ -227,6 +227,7 @@ func Test_storageCkpStatArg(t *testing.T) {
 	arg := new(storageCkpStatArg)
 	err := arg.FromCommand(cmd)
 	require.NoError(t, err)
+	arg.local = true // offline format must be stated explicitly (--local/--s3/--local2)
 	arg.dir = "ckp/"
 	arg.name = "xxx"
 	err = arg.Run()
@@ -291,6 +292,7 @@ func Test_storageCkpListArg(t *testing.T) {
 	arg := new(storageCkpListArg)
 	err := arg.FromCommand(cmd)
 	require.NoError(t, err)
+	arg.local = true // offline format must be stated explicitly (--local/--s3/--local2)
 	arg.dir = "ckp/"
 	arg.name = "xxx"
 	err = arg.Run()
@@ -323,6 +325,7 @@ func Test_storageCkpListArg(t *testing.T) {
 
 func Test_inspectArgs(t *testing.T) {
 	arg := new(moObjStatArg)
+	arg.s3 = true // offline format must be stated explicitly (--local/--s3/--local2)
 	err := arg.InitReader(context.Background(), "xxx")
 	require.NoError(t, err)
 
