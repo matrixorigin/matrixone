@@ -37,12 +37,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -117,11 +119,23 @@ func CnServerMessageHandler(
 		// to prevent some strange handle order between 'stop sending message' and others.
 		// todo: it is tcp connection now. should be very careful, we should listen to stream context next day.
 		if err == nil {
-			<-receiver.connectionCtx.Done()
+			receiver.waitUntilDisconnectedOrCancelled()
 		}
 		colexec.Get().RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
+}
+
+// waitUntilDisconnectedOrCancelled blocks until either the client connection is
+// closed or the message context is cancelled (e.g. the query was killed). It
+// keeps listening so a remote dispatch can still stream data back, but no longer
+// hangs forever on the TCP connection alone when the query is cancelled
+// (issue #25025).
+func (receiver *messageReceiverOnServer) waitUntilDisconnectedOrCancelled() {
+	select {
+	case <-receiver.connectionCtx.Done():
+	case <-receiver.messageCtx.Done():
+	}
 }
 
 func handlePipelineMessage(receiver *messageReceiverOnServer) error {
@@ -170,6 +184,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		defer func() {
+			runCompile.clear()
+			runCompile.Release()
+		}()
 
 		// decode and running the pipeline.
 		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -194,11 +212,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
-		defer func() {
-			runCompile.clear()
-			runCompile.Release()
-		}()
 
+		if err := registerRemoteDispatchReceivers(s, runCompile.proc); err != nil {
+			return err
+		}
 		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
@@ -219,6 +236,29 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
+	}
+	return nil
+}
+
+func registerRemoteDispatchReceivers(s *Scope, proc *process.Process) error {
+	if s == nil {
+		return nil
+	}
+	if s.RootOp != nil {
+		if err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			d, ok := op.(*dispatch.Dispatch)
+			if !ok {
+				return nil
+			}
+			return d.RegisterRemoteReceivers(proc)
+		}); err != nil {
+			return err
+		}
+	}
+	for _, pre := range s.PreScopes {
+		if err := registerRemoteDispatchReceivers(pre, proc); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -521,15 +561,17 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 
 // waitRegistrationTimeout bounds how long we wait for the dispatch operator
 // to register itself via PutProcIntoUuidMap. Under normal operation this
-// happens within seconds. A 5-minute timeout detects a fundamentally broken
-// remote CN (crash, network partition) without the false positives of a short
-// timeout, while avoiding the 24h hang of the unbounded RPC stream lifetime.
+// happens within seconds. The 30-second timeout matches dispatch's remote
+// receiver wait and detects a fundamentally broken remote CN (crash, network
+// partition) while avoiding the 24h hang of the unbounded RPC stream lifetime.
 const waitRegistrationTimeout = 30 * time.Second
 
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
 	deadline := time.NewTimer(waitRegistrationTimeout)
 	defer deadline.Stop()
 
+	connectionDone := contextDone(receiver.connectionCtx)
+	messageDone := contextDone(receiver.messageCtx)
 	for {
 		dispatchProc, notifyChannel, ok, changed := colexec.Get().GetProcByUuidOrWait(uid)
 		if ok {
@@ -537,14 +579,41 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 		}
 
 		select {
-		case <-receiver.connectionCtx.Done():
-			colexec.Get().GetProcByUuid(uid, true)
+		case <-connectionDone:
+			receiver.cancelPendingDispatchRegistration(uid,
+				moerr.NewInternalError(receiver.getMessageContext(), "remote receiver connection closed before dispatch registration"))
+			return nil, nil, nil
+		case <-messageDone:
+			receiver.cancelPendingDispatchRegistration(uid, receiver.getMessageContext().Err())
 			return nil, nil, nil
 		case <-deadline.C:
-			colexec.Get().GetProcByUuid(uid, true)
-			return nil, nil, moerr.NewInternalErrorf(receiver.messageCtx,
+			err := moerr.NewInternalErrorf(receiver.getMessageContext(),
 				"dispatch process not registered within %s, remote CN may have failed", waitRegistrationTimeout)
+			receiver.cancelPendingDispatchRegistration(uid, err)
+			return nil, nil, err
 		case <-changed:
 		}
 	}
+}
+
+func contextDone(ctx context.Context) <-chan struct{} {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Done()
+}
+
+func (receiver *messageReceiverOnServer) getMessageContext() context.Context {
+	if receiver.messageCtx != nil {
+		return receiver.messageCtx
+	}
+	return context.Background()
+}
+
+func (receiver *messageReceiverOnServer) cancelPendingDispatchRegistration(uid uuid.UUID, err error) {
+	dispatchProc, _, ok := colexec.Get().GetProcByUuid(uid, true)
+	if !ok || dispatchProc == nil || dispatchProc.Cancel == nil {
+		return
+	}
+	dispatchProc.Cancel(err)
 }

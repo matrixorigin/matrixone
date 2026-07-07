@@ -1,0 +1,50 @@
+set global enable_privilege_cache = off;
+drop user if exists rmp_user;
+drop role if exists rmp_role;
+drop database if exists rmp_db;
+create database rmp_db;
+create table rmp_db.t(id int, v int);
+insert into rmp_db.t values (1,10),(2,20),(3,30),(4,40),(5,50),(6,60);
+create role rmp_role;
+alter role rmp_role add rule "select * from rmp_db.t where id <= 4" on table rmp_db.t;
+create user rmp_user identified by '123456' default role rmp_role;
+grant connect on account * to rmp_role;
+grant select on table *.* to rmp_role;
+set enable_remap_hint = 1;
+select id from rmp_db.t order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+set remap_rewrites = '{"rmp_db.t": "select * from rmp_db.t where id >= 2"}';
+select id from rmp_db.t order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+4
+/*+ {"rewrites": {"rmp_db.t": "select * from rmp_db.t where id <= 3"}} */ select id from rmp_db.t order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from rmp_db.t order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+4
+set remap_rewrites = '{"rmp_db.t": "select * from rmp_db.t where id <= 2"}';
+select id from rmp_db.t order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+set remap_rewrites = '';
+select id from rmp_db.t order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+set enable_remap_hint = 0;
+drop user if exists rmp_user;
+drop role if exists rmp_role;
+drop database if exists rmp_db;
