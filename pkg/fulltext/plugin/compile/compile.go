@@ -142,8 +142,11 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 				return err
 			}
 		}
-		return ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
-			originalTableDef.TblId, indexDef.IndexName, sinkerType, true, "", originalTableDef)
+		if err = ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
+			originalTableDef.TblId, indexDef.IndexName, sinkerType, true, "", originalTableDef); err != nil {
+			return err
+		}
+		return registerIdxcronUpdate(ctx, indexDef, qryDatabase, originalTableDef)
 	}
 
 	// 3b. async (a retrieval index created with async=true, or a non-retrieval async
@@ -155,8 +158,14 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 		if err != nil {
 			return err
 		}
-		return ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
-			originalTableDef.TblId, indexDef.IndexName, sinkerType, false, initSQL, originalTableDef)
+		if err = ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
+			originalTableDef.TblId, indexDef.IndexName, sinkerType, false, initSQL, originalTableDef); err != nil {
+			return err
+		}
+		if retrieval {
+			return registerIdxcronUpdate(ctx, indexDef, qryDatabase, originalTableDef)
+		}
+		return nil
 	}
 
 	// 3c. sync (non-retrieval, async=false): populate the postings table inline.
@@ -284,10 +293,39 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 	return nil
 }
 
-// IdxcronMetadata — fulltext has no idxcron action
-// (SyncDescriptor().IdxcronAction == ""); this is never invoked.
-func (Hooks) IdxcronMetadata(_ compileplugin.CompileContext) ([]byte, error) {
-	return nil, nil
+// actionFulltextReindex mirrors runtime.ActionFulltextReindex / idxcron.Action_* —
+// inlined here (as ivfpq/cagra do) to avoid importing the idxcron executor or the
+// plugin's runtime package from the compile layer.
+const actionFulltextReindex = "fulltext_reindex"
+
+// IdxcronMetadata captures the build-time session vars the background idxcron
+// reindex needs — `fulltext_max_index_capacity`, so the cron-triggered
+// `ALTER … REINDEX … FULLTEXT FORCE_SYNC` rebuilds with the same capacity the
+// index was created with (the executor applies this blob as the reindex's resolver
+// overlay). Returns (nil, nil) on background re-entry / partial context, so the
+// existing task row persists. Only ever registered for a retrieval index.
+func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
+	return compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
+		FrontendProbeVar: "fulltext_max_index_capacity",
+		Capture:          []string{"fulltext_max_index_capacity"},
+	})
+}
+
+// registerIdxcronUpdate schedules the retrieval index's tag=1-tail compaction with
+// idxcron. Mirrors ivfpq's helper: skip the write on background re-entry (nil
+// metadata) so the frontend CREATE owns registration. Called only for a retrieval
+// index (postings/ngram has no rebuildable WAND store).
+func registerIdxcronUpdate(ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
+	qryDatabase string, originalTableDef *plan.TableDef) error {
+	metadata, err := Hooks{}.IdxcronMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	if len(metadata) == 0 {
+		return nil // background re-entry / partial context — existing row persists
+	}
+	return ctx.RegisterIdxcronUpdate(originalTableDef.TblId, qryDatabase,
+		originalTableDef.Name, indexDef.IndexName, actionFulltextReindex, metadata)
 }
 
 // genInsertSQL is lifted from pkg/sql/compile/util.go:528

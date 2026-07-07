@@ -113,10 +113,22 @@ func (CatalogHooks) ParamsFromTree(_ *tree.Index) (map[string]string, error) {
 // SyncDescriptor — fulltext participates in ISCP CDC when the index
 // is async (per the Async param in IndexAlgoParams). No idxcron action
 // today, matching the legacy inline behaviour.
+// ActionFulltextReindex is the idxcron action string for a retrieval (WAND) index's
+// scheduled rebuild. Mirrors idxcron.Action_* — inlined here (and in the compile hook)
+// to avoid importing the idxcron executor package. Only a retrieval index registers a
+// task under this action (the compile hook gates registration on parser=="retrieval");
+// a postings/ngram index has no rebuildable store.
+const ActionFulltextReindex = "fulltext_reindex"
+
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
 		UsesCDC:    true,
 		SinkerType: catalogplugin.SinkerType_IndexSync,
+		// Declares the cron action; the executor builds
+		// `ALTER TABLE … ALTER REINDEX … FULLTEXT FORCE_SYNC` from IdxcronAlgoToken.
+		// Only retrieval indexes actually register a task (see compile hook).
+		IdxcronAction:    ActionFulltextReindex,
+		IdxcronAlgoToken: "FULLTEXT",
 	}
 }
 

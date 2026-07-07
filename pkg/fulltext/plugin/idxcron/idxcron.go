@@ -12,19 +12,71 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package idxcron is fulltext's idxcron hook implementation. Fulltext
-// does not participate in scheduled rebuilds (no IdxcronAction in its
-// SyncDescriptor); the hook is unreachable in practice.
+// Package idxcron is fulltext's idxcron hook. A retrieval (WAND) index
+// participates in scheduled rebuilds (SyncDescriptor.IdxcronAction =
+// "fulltext_reindex"); the cron executor runs
+// `ALTER … REINDEX … FULLTEXT FORCE_SYNC` when Updatable returns true, which
+// rebuilds tag=0 from source and wipes the tag=1 CdcTail. A postings/ngram
+// index never registers a task (the compile hook gates on parser).
 package idxcron
 
 import (
+	"fmt"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/fulltext/wand"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 )
+
+// TailChunkThreshold gates the scheduled rebuild on tag=1 CdcTail growth: fire
+// only once the tail has accumulated at least this many chunk rows since the last
+// reindex. A chunk is ≤ MaxChunkSize (64 KB), so this bounds the delta the search
+// path must load+reconcile on top of tag=0 before a compaction folds it in.
+// (Stage 1 is a full reindex from source; Stage 2 will swap the reindex body for
+// tiered merge-compaction without changing this gate.)
+const TailChunkThreshold = 1024
 
 type Hooks struct{}
 
 var _ idxcronplugin.Hooks = Hooks{}
 
-func (Hooks) Updatable(_ idxcronplugin.UpdatableInput) (bool, string, error) {
+// Updatable fires the scheduled reindex when the tag=1 CdcTail has grown past
+// TailChunkThreshold. The framework has already applied the auto_update / hour /
+// cadence gates; this adds the WAND-specific "is there enough tail to bother"
+// check. A non-retrieval index has no WAND store, so it is skipped here too (a
+// defensive backstop — such an index should never have a task registered).
+func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (bool, string, error) {
+	// Cadence backstop (mirrors CuvsUpdatable): skip if rebuilt within the interval.
+	if in.LastUpdateAt != nil {
+		last := time.Unix(in.LastUpdateAt.Unix(), 0)
+		if last.Add(in.Interval).After(time.Now()) {
+			return false, fmt.Sprintf("within reindex interval (last %s + %v)",
+				last.Format("2006-01-02 15:04:05"), in.Interval), nil
+		}
+	}
+
+	// Locate the retrieval index's WAND chunk-store table. Absent ⇒ not a
+	// retrieval index (postings/ngram) ⇒ nothing to compact.
+	var storageTbl string
+	for _, idx := range in.TableDef.Indexes {
+		if idx.IndexName == in.IndexName &&
+			idx.IndexAlgoTableType == catalog.FullTextIndex_TblType_Storage {
+			storageTbl = idx.IndexTableName
+			break
+		}
+	}
+	if storageTbl == "" {
+		return false, "not a retrieval index (no WAND store)", nil
+	}
+
+	cfg := wand.TableConfig{DbName: in.TableDef.DbName, IndexTable: storageTbl}
+	count, err := wand.CountTailChunks(in.Sqlproc, cfg)
+	if err != nil {
+		return false, "", err
+	}
+	if count < TailChunkThreshold {
+		return false, fmt.Sprintf("tag=1 tail chunks %d < threshold %d", count, TailChunkThreshold), nil
+	}
 	return true, "", nil
 }

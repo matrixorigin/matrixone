@@ -277,10 +277,14 @@ func TestValidateReindexParams_Passthrough(t *testing.T) {
 	require.Equal(t, old, got)
 }
 
-func TestIdxcronMetadata_NoOp(t *testing.T) {
+// IdxcronMetadata captures fulltext_max_index_capacity so the background idxcron
+// reindex rebuilds with the right capacity. The stub ctx is a frontend session with a
+// resolvable capacity var, so the blob is non-empty (and carries the captured var).
+func TestIdxcronMetadata_CapturesCapacity(t *testing.T) {
 	got, err := Hooks{}.IdxcronMetadata(&stubCtx{})
 	require.NoError(t, err)
-	require.Nil(t, got)
+	require.NotEmpty(t, got)
+	require.Contains(t, string(got), "fulltext_max_index_capacity")
 }
 
 // A postings/ngram index has no Storage def, so HandleDropIndex is a no-op.

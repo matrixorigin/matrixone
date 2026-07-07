@@ -69,7 +69,11 @@ func TestFullTextSyncDescriptor(t *testing.T) {
 	d := CatalogHooks{}.SyncDescriptor()
 	require.True(t, d.UsesCDC)
 	require.Equal(t, int8(0), d.SinkerType) // SinkerType_IndexSync == 0
-	require.Equal(t, "", d.IdxcronAction)   // no scheduled rebuild
+	// A retrieval index participates in scheduled rebuilds; the executor builds
+	// `ALTER … REINDEX … FULLTEXT FORCE_SYNC` from IdxcronAlgoToken. (Only retrieval
+	// indexes register a task — the compile hook gates registration on the parser.)
+	require.Equal(t, ActionFulltextReindex, d.IdxcronAction)
+	require.Equal(t, "FULLTEXT", d.IdxcronAlgoToken)
 }
 
 func TestFullTextAlwaysAsync(t *testing.T) {

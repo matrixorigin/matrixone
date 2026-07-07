@@ -154,6 +154,30 @@ func DeleteTailSqls(cfg TableConfig) []string {
 	}
 }
 
+// CountTailChunks returns the number of tag=1 CdcTail chunk rows — a cheap,
+// monotonic proxy for accumulated tail size used by the idxcron reindex gate.
+// Chunk count, NOT doc count: an oversized frame is split across several chunk
+// rows (see Bug 1 / splitFrameChunks), so per-chunk UnframeCdcChunk cannot run on
+// continuation chunks; counting rows is robust and sufficient to gate "how much
+// tail has piled up since the last reindex".
+func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
+	sql := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = %d",
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+	res, err := sqlexec.RunSql(sqlproc, sql)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+	for _, bat := range res.Batches {
+		if bat == nil || bat.RowCount() == 0 {
+			continue
+		}
+		return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0), nil
+	}
+	return 0, nil
+}
+
 // LoadAllBases loads every tag=0 base sub-index listed in the metadata table. The
 // metadata table is per-fulltext-index, so every row names one of this index's bases
 // (mirrors HNSW's LoadMetadata). Returns nil when no base was built (empty-table create

@@ -19,18 +19,44 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-// TestFulltextUpdatable_AlwaysOK: fulltext doesn't participate in
-// scheduled rebuilds today; the hook is unreachable but must satisfy
-// the interface. Trivial-true ensures any future wiring doesn't
-// surprise-skip.
-func TestFulltextUpdatable_AlwaysOK(t *testing.T) {
-	ok, reason, err := Hooks{}.Updatable(idxcronplugin.UpdatableInput{})
+// TestFulltextUpdatable_NonRetrievalSkipped: an index without a WAND chunk-store
+// hidden table is a postings/ngram index — it has no rebuildable store, so Updatable
+// skips it (a defensive backstop; such an index never registers a task). This branch
+// runs before CountTailChunks, so it needs no live SqlProc.
+func TestFulltextUpdatable_NonRetrievalSkipped(t *testing.T) {
+	in := idxcronplugin.UpdatableInput{
+		IndexName: "ft",
+		TableDef: &plan.TableDef{
+			DbName:  "db",
+			Indexes: []*plan.IndexDef{{IndexName: "ft", IndexAlgoTableType: ""}}, // postings only
+		},
+	}
+	ok, reason, err := Hooks{}.Updatable(in)
 	require.NoError(t, err)
-	require.True(t, ok)
-	require.Empty(t, reason)
+	require.False(t, ok)
+	require.Contains(t, reason, "not a retrieval index")
+}
+
+// TestFulltextUpdatable_IndexNameMismatchSkipped: a table whose only WAND store belongs
+// to a different index still resolves no storage table for this IndexName → skip.
+func TestFulltextUpdatable_IndexNameMismatchSkipped(t *testing.T) {
+	in := idxcronplugin.UpdatableInput{
+		IndexName: "ft",
+		TableDef: &plan.TableDef{
+			DbName: "db",
+			Indexes: []*plan.IndexDef{
+				{IndexName: "other", IndexAlgoTableType: catalog.FullTextIndex_TblType_Storage, IndexTableName: "s"},
+			},
+		},
+	}
+	ok, _, err := Hooks{}.Updatable(in)
+	require.NoError(t, err)
+	require.False(t, ok)
 }
 
 // TestFulltextUpdatable_SatisfiesInterface: compile-time interface check.
