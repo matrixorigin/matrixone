@@ -5396,43 +5396,6 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		return 0, err
 	}
 
-	// Comma (CROSS) joins produce nested trees where the outer left context
-	// is not visible in the inner ON condition
-	// (e.g. FROM a, b JOIN c ON a.x = c.y). Temporarily add extLeftCtx
-	// bindings to ctx for the ON condition binding, then remove them so
-	// the outer mergeContexts doesn't see a duplicate.
-	var extBindingsRestore func()
-	if extLeftCtx != nil {
-		var addedTables []string
-		for _, binding := range extLeftCtx.bindings {
-			if _, ok := ctx.bindingByTable[binding.table]; !ok {
-				ctx.bindings = append(ctx.bindings, binding)
-				ctx.bindingByTag[binding.tag] = binding
-				ctx.bindingByTable[binding.table] = binding
-				addedTables = append(addedTables, binding.table)
-			}
-		}
-		var addedCols []string
-		for col, binding := range extLeftCtx.bindingByCol {
-			if _, ok := ctx.bindingByCol[col]; !ok {
-				ctx.bindingByCol[col] = binding
-				addedCols = append(addedCols, col)
-			}
-		}
-		extBindingsRestore = func() {
-			for _, table := range addedTables {
-				delete(ctx.bindingByTable, table)
-			}
-			for _, col := range addedCols {
-				delete(ctx.bindingByCol, col)
-			}
-			for _, binding := range extLeftCtx.bindings {
-				delete(ctx.bindingByTag, binding.tag)
-			}
-			ctx.bindings = ctx.bindings[:len(ctx.bindings)-len(addedTables)]
-		}
-	}
-
 	node := &plan.Node{
 		NodeType:     plan.Node_JOIN,
 		Children:     []int32{leftChildID, rightChildID},
@@ -5446,9 +5409,15 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:
-		joinConds, err := splitAndBindCondition(cond.Expr, NoAlias, ctx)
+		// Split the raw AST into conjuncts and separate out any that
+		// reference extLeftCtx tables. Those must be lifted to the outer
+		// join level where all referenced tables are in scope.
+		joinConds, extJoinConds, err := splitAndFilterExtConds(cond.Expr, ctx, extLeftCtx, NoAlias)
 		if err != nil {
 			return 0, err
+		}
+		if len(extJoinConds) > 0 {
+			ctx.extLeftConds = append(ctx.extLeftConds, extJoinConds...)
 		}
 
 		// For INNER JOIN, subquery conditions are semantically equivalent to
@@ -5529,9 +5498,19 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		}
 	}
 
-	if extBindingsRestore != nil {
-		extBindingsRestore()
+	// Bind and attach extLeftConds (ON-condition conjuncts that reference
+	// extLeftCtx tables and were lifted from an inner buildJoinTable call).
+	// We do this here because ctx.binder is now set and all tables have been
+	// merged into scope.
+	if len(rightCtx.extLeftConds) > 0 {
+		extCondExprs, err := bindConjuncts(rightCtx.extLeftConds, ctx, NoAlias)
+		if err != nil {
+			return 0, err
+		}
+		node.OnList = append(node.OnList, extCondExprs...)
+		rightCtx.extLeftConds = nil
 	}
+
 	return nodeID, nil
 }
 

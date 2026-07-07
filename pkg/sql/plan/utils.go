@@ -441,6 +441,117 @@ func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 	return astExprs
 }
 
+// splitAndFilterExtConds splits an ON-condition AST into conjuncts, binds those
+// that do NOT reference extLeftCtx tables (the normal join conditions), and
+// returns the raw AST of conjuncts that DO reference extLeftCtx tables (which
+// must be lifted to the outer join level). When extLeftCtx is nil all conjuncts
+// are bound normally.
+func splitAndFilterExtConds(astExpr tree.Expr, ctx *BindContext, extLeftCtx *BindContext, expandAlias ExpandAliasMode) (bound []*plan.Expr, extRaw []tree.Expr, err error) {
+	conjuncts := splitAstConjunction(astExpr)
+	if extLeftCtx == nil {
+		bound, err = bindConjuncts(conjuncts, ctx, expandAlias)
+		return bound, nil, err
+	}
+	for _, c := range conjuncts {
+		if astReferencesExtCtx(c, extLeftCtx) {
+			extRaw = append(extRaw, c)
+		} else {
+			b, e := bindConjuncts([]tree.Expr{c}, ctx, expandAlias)
+			if e != nil {
+				return nil, nil, e
+			}
+			bound = append(bound, b...)
+		}
+	}
+	return bound, extRaw, nil
+}
+
+// bindConjuncts binds a list of raw AST conjuncts.
+func bindConjuncts(conjuncts []tree.Expr, ctx *BindContext, expandAlias ExpandAliasMode) ([]*plan.Expr, error) {
+	if len(conjuncts) == 0 {
+		return nil, nil
+	}
+	var combined tree.Expr
+	for _, c := range conjuncts {
+		if combined == nil {
+			combined = c
+		} else {
+			combined = &tree.AndExpr{Left: combined, Right: c}
+		}
+	}
+	return splitAndBindCondition(combined, expandAlias, ctx)
+}
+
+// astReferencesExtCtx checks whether a raw AST expression references any table
+// from extLeftCtx. It walks common expression node types looking for
+// UnresolvedName nodes whose table part matches a binding in extLeftCtx.
+func astReferencesExtCtx(expr tree.Expr, extLeftCtx *BindContext) bool {
+	return astRefsExtCtxRec(expr, extLeftCtx)
+}
+
+func astRefsExtCtxRec(expr tree.Expr, extLeftCtx *BindContext) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *tree.UnresolvedName:
+		if e.NumParts >= 2 {
+			if _, ok := extLeftCtx.bindingByTable[e.TblName()]; ok {
+				return true
+			}
+		}
+	case *tree.AndExpr:
+		return astRefsExtCtxRec(e.Left, extLeftCtx) || astRefsExtCtxRec(e.Right, extLeftCtx)
+	case *tree.OrExpr:
+		return astRefsExtCtxRec(e.Left, extLeftCtx) || astRefsExtCtxRec(e.Right, extLeftCtx)
+	case *tree.NotExpr:
+		return astRefsExtCtxRec(e.Expr, extLeftCtx)
+	case *tree.ParenExpr:
+		return astRefsExtCtxRec(e.Expr, extLeftCtx)
+	case *tree.ComparisonExpr:
+		return astRefsExtCtxRec(e.Left, extLeftCtx) || astRefsExtCtxRec(e.Right, extLeftCtx)
+	case *tree.BinaryExpr:
+		return astRefsExtCtxRec(e.Left, extLeftCtx) || astRefsExtCtxRec(e.Right, extLeftCtx)
+	case *tree.UnaryExpr:
+		return astRefsExtCtxRec(e.Expr, extLeftCtx)
+	case *tree.IsNullExpr:
+		return astRefsExtCtxRec(e.Expr, extLeftCtx)
+	case *tree.IsNotNullExpr:
+		return astRefsExtCtxRec(e.Expr, extLeftCtx)
+	case *tree.FuncExpr:
+		for _, a := range e.Exprs {
+			if astRefsExtCtxRec(a, extLeftCtx) {
+				return true
+			}
+		}
+	case *tree.Tuple:
+		for _, a := range e.Exprs {
+			if astRefsExtCtxRec(a, extLeftCtx) {
+				return true
+			}
+		}
+	case *tree.RangeCond:
+		if astRefsExtCtxRec(e.Left, extLeftCtx) || astRefsExtCtxRec(e.From, extLeftCtx) || astRefsExtCtxRec(e.To, extLeftCtx) {
+			return true
+		}
+	case *tree.CastExpr:
+		return astRefsExtCtxRec(e.Expr, extLeftCtx)
+	case *tree.CaseExpr:
+		if astRefsExtCtxRec(e.Expr, extLeftCtx) {
+			return true
+		}
+		for _, w := range e.Whens {
+			if astRefsExtCtxRec(w.Cond, extLeftCtx) || astRefsExtCtxRec(w.Val, extLeftCtx) {
+				return true
+			}
+		}
+		if astRefsExtCtxRec(e.Else, extLeftCtx) {
+			return true
+		}
+	}
+	return false
+}
+
 // applyDistributivity (X AND B) OR (X AND C) OR (X AND D) => X AND (B OR C OR D)
 // TODO: move it into optimizer
 //

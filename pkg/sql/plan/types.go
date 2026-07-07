@@ -372,6 +372,11 @@ type BindContext struct {
 	// for join tables
 	bindingTree *BindingTreeNode
 
+	// extLeftConds stores raw ON-condition conjuncts that reference extLeftCtx
+	// tables. After buildJoinTable returns, the parent buildJoinTable binds them
+	// at the outer level where all referenced tables are in scope.
+	extLeftConds []tree.Expr
+
 	parent *BindContext
 
 	defaultDatabase string
