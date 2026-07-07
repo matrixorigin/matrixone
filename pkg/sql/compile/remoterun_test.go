@@ -804,6 +804,67 @@ func TestSendNotifyMessageRetriesUntilRemoteDispatchRegistered(t *testing.T) {
 	require.Equal(t, 2, attempts)
 }
 
+func TestGetProcByUuidCancelPendingRegistrationCancelsConsumedDispatchProc(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.Nil(t, err)
+
+	procCtx, procCancel := context.WithCancelCause(context.Background())
+	dispatchProc := &process.Process{
+		Ctx:    procCtx,
+		Cancel: procCancel,
+	}
+	notifyCh := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
+	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
+
+	receiver := &messageReceiverOnServer{messageCtx: context.Background()}
+	cancelCause := moerr.NewInternalErrorNoCtx("registration abandoned")
+	receiver.cancelPendingDispatchRegistration(uid, cancelCause)
+
+	require.ErrorIs(t, context.Cause(procCtx), cancelCause)
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+}
+
+func TestGetProcByUuidReturnsWhenMessageContextCanceledBeforeRegistration(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.Nil(t, err)
+
+	messageCtx, cancelMessage := context.WithCancel(context.Background())
+	receiver := &messageReceiverOnServer{
+		connectionCtx: context.Background(),
+		messageCtx:    messageCtx,
+	}
+
+	type result struct {
+		proc *process.Process
+		ch   process.RemotePipelineInformationChannel
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, c, e := receiver.GetProcByUuid(uid)
+		done <- result{proc: p, ch: c, err: e}
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancelMessage()
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.Nil(t, r.proc)
+		require.Nil(t, r.ch)
+	case <-time.After(time.Second):
+		t.Fatal("GetProcByUuid did not return after message context cancellation")
+	}
+
+	err = colexec.Get().PutProcIntoUuidMap(uid, &process.Process{}, make(chan *process.WrapCs))
+	require.Error(t, err)
+}
+
 var _ morpc.Stream = &fakeStreamSender{}
 
 // fakeStreamSender implement the morpc.Stream interface.
@@ -830,6 +891,25 @@ func (s *fakeStreamSender) Receive() (chan morpc.Message, error) {
 	return ch, nil
 }
 func (s *fakeStreamSender) Close(_ bool) error {
+	return nil
+}
+
+var _ morpc.Stream = &blockingSendStream{}
+
+type blockingSendStream struct {
+	sendStarted chan struct{}
+}
+
+func (s *blockingSendStream) ID() uint64 { return 0 }
+func (s *blockingSendStream) Send(ctx context.Context, request morpc.Message) error {
+	close(s.sendStarted)
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (s *blockingSendStream) Receive() (chan morpc.Message, error) {
+	return make(chan morpc.Message), nil
+}
+func (s *blockingSendStream) Close(_ bool) error {
 	return nil
 }
 
@@ -960,6 +1040,34 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 
 		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
 		require.NotNil(t, err)
+	}
+}
+
+func TestMessageSenderSendPipelineReturnsWhenSendObservesContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &blockingSendStream{sendStarted: make(chan struct{})}
+	sender := messageSenderOnClient{
+		ctx:          ctx,
+		streamSender: stream,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- sender.sendPipeline(make([]byte, 10), nil, true, 100, "")
+	}()
+
+	select {
+	case <-stream.sendStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "sendPipeline did not call Stream.Send")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		require.Fail(t, "sendPipeline did not return after sender context cancellation")
 	}
 }
 
