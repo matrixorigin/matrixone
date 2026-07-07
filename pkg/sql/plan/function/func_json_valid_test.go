@@ -1043,6 +1043,33 @@ func TestJsonContains(t *testing.T) {
 		require.True(t, s, info)
 	})
 
+	t.Run("typed json input", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains typed json input",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{
+						mustJsonBinaryString(t, `{"a":1,"b":[1,2,3]}`),
+						mustJsonBinaryString(t, `[1,2,3]`),
+						mustJsonBinaryString(t, `{"a":false}`),
+					},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `[1.0,3.0]`, `false`},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.a[0]`, `$`, `$.a[0]`},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 1, 1},
+				[]bool{false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
 	t.Run("strict scalar type matching", func(t *testing.T) {
 		tc := tcTemp{
 			info: "json_contains strict scalar type matching",
@@ -1163,6 +1190,27 @@ func TestJsonContainsSelectList(t *testing.T) {
 					[]bool{false, false}),
 			},
 			types.T_int64.ToType(), newOpBuiltInJsonContains().jsonContains, selectList)
+
+		require.True(t, vec.IsNull(0))
+		v, null := vector.GenerateFunctionFixedTypeParameter[int64](vec).GetValue(1)
+		require.False(t, null)
+		require.Equal(t, int64(1), v)
+	})
+
+	t.Run("null path row continues", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1}`, `{"a":1}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `1`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", `$.a`},
+					[]bool{true, false}),
+			},
+			types.T_int64.ToType(), newOpBuiltInJsonContains().jsonContains, nil)
 
 		require.True(t, vec.IsNull(0))
 		v, null := vector.GenerateFunctionFixedTypeParameter[int64](vec).GetValue(1)
