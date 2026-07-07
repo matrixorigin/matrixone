@@ -638,35 +638,48 @@ var for a sync build, or the InitSQL overlay resolver for the async build / the 
 InitSQL, which — unlike the sinker — *can* see the captured session var) — so the base is
 split into capacity-bounded sub-indexes, not one monolith.
 
-### Item 2 — delete-only single-txn compaction (capacity-capped, tiered)
-Compaction merges **already-built** segments (no re-tokenize) via `Merge(id, segs…)`
-(`wand.go:197`, "the compaction primitive"), dropping dead/superseded docs via
-`ComputeLiveness`, output **re-split to stay ≤ `max_index_capacity`** (never one
-monolithic base). Steps, all in **one transaction**:
+### Item 2 — recency-LSM compaction: O(tail) fold + tiered merge (capacity-capped)
+Compaction has **two phases**, both merging already-built segments (no re-tokenize) via
+`Merge(id, segs…)` (`wand.go:197`) + `ComputeLiveness`, output re-split to stay ≤
+`max_index_capacity` (`compact.go` `Split`), all in **one transaction**. Every base sub
+carries a recency key (`metadata.chunk_id`): **0** for a full build (oldest), **K** for a
+folded/merged base; the tail starts at **1**.
+
+**2-fold — DONE (`523d7daa2`), O(tail), memory-bounded.** Loads ONLY the threshold-bounded
+tag=1 tail (never the base), folds its live inserts into a new sub at recency K, and leaves
+the existing base subs untouched:
 ```
-1. read segments to merge, K = MAX(chunk_id) at the txn snapshot
-2. live-filter each (drop dead ords, densify) → disjoint live inputs   (Merge requires disjoint pk-sets)
-3. Merge → re-split at capacity → new sealed capped segment(s)
-4. DELETE old inputs (tag=0 rows + tag=1 chunk_id ≤ K)                  (physical delete, NOT renumber)
+1. K = MAX(tail chunk_id) at the txn snapshot; load ONLY the tag=1 tail (segs + deletes + pkType)
+2. live-filter the tail inserts among themselves (dedup by chunk_id, drop tail-deleted) → disjoint live inputs
+3. Merge → Split(capacity) → new tag=0 sub(s) at recency K   (metadata.chunk_id = K)
+4. surviving deletes = tail deletes whose pk is NOT a live tail insert (they target untouched
+   old-base docs) → re-frame as ONE tag=1 delete frame at NextTailChunkId = K+1
+5. DELETE the folded tail (chunk_id ≤ K).  Old base subs are NOT touched.
 commit
 ```
-Same-txn is **non-negotiable**: base-write and folded-delete in one txn ⇒ snapshot
-isolation makes it atomic (readers see either `(old, all deltas)` or `(new, deltas>K)`),
-crash rolls back, and the txn snapshot hands you the `K` boundary for free (anything
-ISCP commits after start is `> K`, outside the snapshot — never deleted). Deleting the
-**low** chunk prefix does not move `MAX`, so ISCP's append position is untouched.
-Deletes remain correct across the boundary: a delete at `chunk_id > K` still kills a
-folded (recency `-1`) base doc under `ComputeLiveness`; deletes inside `[0..K]` only
-ever targeted docs `≤ K`, so they resolve during the merge.
+Write + memory are **O(tail)**, not O(corpus) — the whole point of the recency key. Old-base
+docs the tail deleted stay shadowed by the surviving-delete frame (recency K+1 > any base
+recency); a doc re-inserted inside the tail is dropped, not re-deleted. Same-txn is
+**non-negotiable**: snapshot isolation makes it atomic (readers see either `(base, all
+deltas)` or `(base+new sub, deltas>K)`), crash rolls back, and the snapshot hands you the
+`K` boundary for free (anything ISCP commits after start is `> K`, outside the snapshot —
+never deleted). Deleting the **low** chunk prefix does not move `MAX`, so ISCP's append
+position is untouched (`NextTailChunkId` also maxes over base recency, so it never dips
+below K after the tail delete).
 
-- **Tiered, not full.** `Merge` accepts any subset → merge segments of *similar size*
-  (Lucene `TieredMergePolicy`), rewriting only that subset — O(merged subset), not O(N).
-- **Large-scale successor: watermark + lazy GC.** When the single compaction txn gets
-  too big/contended vs. live ISCP (≈ the 50 GB base case), split it: write the new
-  sealed segment(s) under a new version-id, atomically flip `{active set, watermark K}`
-  (manifest swap, crash-safe), skip `chunk_id ≤ K` at load, and delete `[0..K]` in a
-  deferred low-contention background GC. Same invariant (no reset); only the *timing*
-  of the physical delete moves out of the hot txn.
+**2b-tiered merge — TODO.** The fold accumulates one base sub per run (recency 0, 2, 5, …)
+and never reclaims the shadowed docs in old subs (or the surviving-delete tombstones). A
+tiered pass merges segments of *similar size* (Lucene `TieredMergePolicy`), live-filtering
+against the global `ComputeLiveness` to drop dead/shadowed docs + resolved surviving-deletes,
+re-split ≤ capacity — rewriting only that subset (O(merged subset), not O(N)) to bound the
+sub count and reclaim space.
+
+- **Large-scale successor: watermark + lazy GC.** When a single compaction txn gets too
+  big/contended vs. live ISCP (≈ the 50 GB base case), split it: write the new sealed
+  segment(s) under a new version-id, atomically flip `{active set, watermark K}` (manifest
+  swap, crash-safe), skip `chunk_id ≤ K` at load, and delete `[0..K]` in a deferred
+  low-contention background GC. Same invariant (no reset); only the *timing* of the physical
+  delete moves out of the hot txn.
 
 ### Item 3 — load-time liveness/stats caching (read path) [DONE — `7dc802bd1`]
 `ComputeLiveness` + corpus stats (`gN`, `gAvgDocLen`) depend only on the loaded
@@ -685,8 +698,8 @@ resident), and (c) per-compaction write amplification. Capacity trades *segment 
 default is now **1M** (`fulltext_max_index_capacity`, captured at CREATE — see Item 1),
 matching HNSW's order (~88 units at 88M). **DONE (2026-07-07, `a0573840d`):** the
 CREATE/REINDEX build (`fulltext_wand_create.end()`) now capacity-splits via
-`FinishSegments(capacity)` like the CDC path. **Still TODO:** compaction's `Merge` output
-must likewise be re-split to respect capacity (part of the not-yet-started item 2).
+`FinishSegments(capacity)` like the CDC path. **DONE (2026-07-07):** the fold's `Merge`
+output is re-split via `Split(capacity)` (`compact.go`), so folded subs also respect capacity.
 
 ### Comparison to HNSW's ISCP merge (why not just "merge like HNSW")
 HNSW's `runHnsw` (`index_consumer.go:251`) **loads all models at sinker startup**,
@@ -712,8 +725,9 @@ read side.
   `fulltext_max_index_capacity` + **tag=0 create-build capping (DONE 2026-07-07,
   `a0573840d`)**. Remaining: cross-invocation top-up (blocked on item 2's live-filter
   primitive).
-- **2 — next**: delete-only tiered compaction; its live-filter/dedup primitive also
-  unblocks item 1's top-up. Long-term space/count bound.
+- **2 — recency foundation + O(tail) fold DONE** (`0c72710e2`, `523d7daa2`); its
+  live-filter/dedup primitive also unblocks item 1's top-up. **Remaining:** 2b tiered
+  merge (space/count bound) + `MERGE` command wiring (idxcron → fold instead of full rebuild).
 
 ## Verification
 - **Unit**: (1) `tokenize → postings → fulltext_wand_create` round-trip builds a loadable WAND index. (2) **Differential**: `fulltext_wand_search` top-K vs a brute-force reference (`Σ tf·idf²` over all docs + full sort) on randomized corpora → assert identical top-K and scores (the WAND-correctness gold test). (3) Parser/mode parse tests in `pkg/sql/parsers/dialect/mysql/mysql_sql_test.go` (`IN RETRIEVAL MODE`, default-on-retrieval-parser).
