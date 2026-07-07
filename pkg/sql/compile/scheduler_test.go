@@ -259,6 +259,40 @@ func TestScheduleQueryWorkersDeduplicatesRequiredLocalByServiceID(t *testing.T) 
 	require.Equal(t, localID, decision.Workers[1].ID)
 }
 
+func TestScheduleQueryWorkersDeduplicatesRequiredLocalByAddressWhenServiceIDDifferent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	const localID = "local-cn"
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: localID}).AnyTimes()
+	c.proc.Base.LockService = lockSvc
+	c.e = &schedulerTestEngine{
+		nodes: engine.Nodes{
+			{Id: "remote", Addr: "remote:6001", Mcpu: 4},
+			{Id: "stale-local", Addr: "local:6001", Mcpu: 6},
+		},
+	}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{
+		{Id: "stale-local", Addr: "local:6001", Mcpu: 6},
+		{Id: "remote", Addr: "remote:6001", Mcpu: 4},
+	}, nodes)
+
+	decision, err := c.decideQueryPlacement()
+	require.NoError(t, err)
+	require.Equal(t, schedule.ReasonRequiredLocalCN, decision.Reason)
+	require.Equal(t, 2, len(decision.Workers))
+	require.Equal(t, "stale-local", decision.Workers[1].ID)
+	require.Equal(t, "local:6001", decision.Workers[1].Addr)
+}
+
 func TestScheduleQueryWorkersReturnsCandidateError(t *testing.T) {
 	expected := errors.New("nodes failed")
 	c := NewMockCompile(t)

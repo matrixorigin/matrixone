@@ -80,11 +80,11 @@ func ensureLocalWorker(workers Workers, local Worker) Workers {
 }
 
 func sameWorker(worker Worker, local Worker) bool {
-	if worker.ID != "" && local.ID != "" {
-		return worker.ID == local.ID
+	if worker.ID != "" && local.ID != "" && worker.ID == local.ID {
+		return true
 	}
-	if worker.Addr != "" && local.Addr != "" {
-		return worker.Addr == local.Addr
+	if worker.Addr != "" && local.Addr != "" && worker.Addr == local.Addr {
+		return true
 	}
 	return false
 }

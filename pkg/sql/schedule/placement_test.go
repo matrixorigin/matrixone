@@ -119,6 +119,21 @@ func TestDecideQueryPlacementDeduplicatesRequiredCurrentCNByAddressWhenIDMissing
 	require.Equal(t, ReasonRequiredLocalCN, decision.Reason)
 }
 
+func TestDecideQueryPlacementDeduplicatesRequiredCurrentCNByAddressWhenIDDifferent(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
+	candidates := Workers{{ID: "stale-local", Addr: "local:6001", Mcpu: 16}}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:     QueryExecAPMultiCN,
+		LocalWorker:  local,
+		Candidates:   candidates,
+		RequireLocal: true,
+	})
+
+	require.Equal(t, candidates, decision.Workers)
+	require.Equal(t, ReasonRequiredLocalCN, decision.Reason)
+}
+
 func TestDecideQueryPlacementAppendsRequiredCurrentCNWhenIDMissingAndAddressDiffers(t *testing.T) {
 	local := Worker{Addr: "local:6001", Mcpu: 8}
 	candidates := Workers{{Addr: "remote:6001", Mcpu: 16}}
