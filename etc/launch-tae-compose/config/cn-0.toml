@@ -6,7 +6,7 @@ format = "console"
 max-size = 512
 
 [[fileservice]]
-backend = "DISK"
+backend = "DISK-V2"
 data-dir = "/var/lib/matrixone/data"
 name = "LOCAL"
 
