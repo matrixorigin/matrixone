@@ -945,8 +945,9 @@ func CompileFilterExpr(
 				dataMeta := meta.MustDataMeta()
 				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyIn(vec), nil
 			}
+			vecHasNull := vec.IsConstNull() || vec.GetNulls().Any()
 			var maxVal []byte
-			if vec.Length() > 0 {
+			if vec.Length() > 0 && !vecHasNull {
 				maxVal = vec.GetRawBytesAt(vec.Length() - 1)
 			}
 			blockFilterOp = func(
@@ -972,7 +973,7 @@ func CompileFilterExpr(
 				}
 				return false, true, nil
 			}
-			if isSorted && vec.Length() > 0 {
+			if isSorted && vec.Length() > 0 && !vecHasNull {
 				minVal := vec.GetRawBytesAt(0)
 				seekOp = func(meta objectio.ObjectDataMeta) int {
 					blockCnt := int(meta.BlockCount())
