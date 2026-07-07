@@ -33,7 +33,7 @@ type CagraSearch[B, Q cuvs.VectorType] struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
 	Indexes       []*CagraModel[B, Q]
-	MultiIndex    *cuvs.MultiGpuCagra[B, Q]   // built once in Load; nil until indexes are loaded
+	MultiIndex    *cuvs.MultiGpuCagra[B, Q]  // built once in Load; nil until indexes are loaded
 	Overflow      cuvs.BruteForceOverflow[B] // CDC insert overflow; nil when no overflow records exist
 	Devices       []int
 	ThreadsSearch int64

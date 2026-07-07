@@ -290,7 +290,6 @@ func (gi *GpuIvfPq[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) er
 	return nil
 }
 
-
 // AddChunkQuantize adds a chunk of base-typed (B) data, quantizing natively to
 // the storage type Q (int8/uint8) via the B-source quantizer. base_data is the
 // raw bytes of chunkCount*dim B-typed elements. No f32 detour.
