@@ -380,4 +380,5 @@ message TxnOptions {
     bool autocommit = 15;//AUTOCOMMIT
     bool inIncrStmt = 16;
     bool inRollbackStmt = 17;
+    int64 lockWaitTimeout = 18;
 }

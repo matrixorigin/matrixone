@@ -38,15 +38,28 @@ var (
 	remoteRetryMaxBackoff     = 5 * time.Second
 )
 
+const (
+	// lockRpcSlack is the extra budget added to the RPC deadline beyond
+	// LockWaitTimeout.  The lock-table owner starts its own wait budget only
+	// after receiving the RPC, so the client-side RPC deadline must outlive the
+	// server-side wait timer for the owner to observe and return ErrLockTimeout.
+	// Without this slack, the client deadline can fire before the owner returns
+	// ErrLockTimeout, causing the client to see a retryable connectivity error
+	// instead of a lock-timeout result.
+	lockRpcSlack = 30 * time.Second
+)
+
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
-	logger             *log.MOLogger
-	removeLockTimeout  time.Duration
-	serviceID          string
-	bind               pb.LockTable
-	client             Client
-	bindChangedHandler func(pb.LockTable)
+	logger                      *log.MOLogger
+	removeLockTimeout           time.Duration
+	serviceID                   string
+	bind                        pb.LockTable
+	client                      Client
+	bindChangedHandler          func(pb.LockTable)
+	allocatorStateProvider      func() allocatorState
+	allocatorBindChangedHandler func(string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) error
 }
 
 func newRemoteLockTable(
@@ -94,10 +107,35 @@ func (l *remoteLockTable) lock(
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
 
+	if err := ctx.Err(); err != nil {
+		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
+		cb(pb.Result{}, err)
+		return
+	}
+
 	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
 	// after rpc completed
 	txn.Unlock()
-	resp, err := l.client.Send(ctx, req)
+
+	// When session-level lock_wait_timeout is set, bound the RPC by that
+	// timeout plus slack so the lock-table owner has enough time to observe
+	// and return ErrLockTimeout before the client-side RPC deadline fires.
+	// Without a session timeout, use the caller context as-is.
+	var rpcCtx context.Context
+	var rpcCancel context.CancelFunc
+	if d := time.Duration(opts.LockWaitTimeout) * time.Second; d > 0 {
+		lockRpcTimeout := d + lockRpcSlack
+		rpcCtx, rpcCancel = context.WithTimeout(ctx, lockRpcTimeout)
+	} else {
+		rpcCtx = ctx
+	}
+	defer func() {
+		if rpcCancel != nil {
+			rpcCancel()
+		}
+	}()
+	resp, err := l.client.Send(rpcCtx, req)
+
 	txn.Lock()
 
 	// txn closed
@@ -135,13 +173,15 @@ func (l *remoteLockTable) lock(
 		return
 	}
 
-	// Only record the lock on errors when the request could have been observed
-	// by the remote side. For local context timeouts / cancellations, the
-	// request may never be sent, and recording a phantom lock will leak waiters.
-	if !skipTrackLockOnError(ctx, err) {
-		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
-	}
+	// The request may have reached the remote owner and acquired locks even if
+	// the response was lost or the client-side context timed out. Keep local
+	// bookkeeping so normal transaction close can send the remote unlock.
+	_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
+	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
+		cb(pb.Result{}, err)
+		return
+	}
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
@@ -411,7 +451,11 @@ func (l *remoteLockTable) handleError(
 	// Note. Since the cn where the remote lock table is located may
 	// be permanently gone, we need to go to the allocator to check if
 	// the bind is valid.
-	new, err := getLockTableBind(
+	requestAllocator := allocatorState{}
+	if l.allocatorStateProvider != nil {
+		requestAllocator = l.allocatorStateProvider()
+	}
+	new, allocator, err := getLockTableBind(
 		l.client,
 		l.bind.Group,
 		l.bind.Table,
@@ -424,38 +468,23 @@ func (l *remoteLockTable) handleError(
 		return oldError
 	}
 	if new.Changed(l.bind) {
+		if l.allocatorBindChangedHandler != nil {
+			return l.allocatorBindChangedHandler(
+				"remote-bind-refresh",
+				l.bind,
+				new,
+				allocator,
+				requestAllocator)
+		}
 		l.bindChangedHandler(new)
 		return nil
 	}
 	return oldError
 }
 
-// skipTrackLockOnError returns true when the error indicates the request
-// definitely did not reach the remote lock service (e.g. local context
-// cancellation/timeout). In such cases, recording the lock would create a
-// phantom holder that can never be cleaned up.
-//
-// If the request actually reached the remote side before timeout, the remote
-// lock will be cleaned up by the keepRemoteLock timeout mechanism (bounded by
-// RemoteLockTimeout, default 10m), so skipping the local bookkeeping is safe
-// though it may introduce a bounded extra wait.
-func skipTrackLockOnError(ctx context.Context, err error) bool {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		if errors.Is(ctxErr, context.DeadlineExceeded) ||
-			errors.Is(ctxErr, context.Canceled) {
-			return true
-		}
-	}
-	if errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, context.Canceled) ||
-		moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) {
-		return true
-	}
-	return false
-}
-
 func retryRemoteLockError(err error) bool {
-	if e, ok := err.(net.Error); ok && e.Timeout() {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 	if errors.Is(err, io.EOF) ||
@@ -472,8 +501,40 @@ func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
 	if resp.NewBind == nil {
 		return nil
 	}
-	newBind := resp.NewBind
-	l.bindChangedHandler(*newBind)
+	newBind := *resp.NewBind
+	if l.allocatorBindChangedHandler != nil &&
+		l.allocatorStateProvider != nil &&
+		l.client != nil &&
+		l.bind.AllocatorID != "" &&
+		newBind.AllocatorID != "" &&
+		l.bind.AllocatorID != newBind.AllocatorID {
+		requestAllocator := l.allocatorStateProvider()
+		refreshedBind, allocator, err := getLockTableBind(
+			l.client,
+			newBind.Group,
+			newBind.Table,
+			newBind.OriginTable,
+			l.serviceID,
+			newBind.Sharding,
+		)
+		if err != nil {
+			logGetRemoteBindFailed(l.logger, newBind.Table, err)
+			return ErrLockTableBindChanged
+		}
+		if !refreshedBind.Changed(l.bind) {
+			return ErrLockTableBindChanged
+		}
+		if err := l.allocatorBindChangedHandler(
+			"remote-new-bind",
+			l.bind,
+			refreshedBind,
+			allocator,
+			requestAllocator); err != nil {
+			return err
+		}
+		return ErrLockTableBindChanged
+	}
+	l.bindChangedHandler(newBind)
 	return ErrLockTableBindChanged
 }
 

@@ -75,3 +75,15 @@ func TestClearTaskTableErrorsSQL_TaskIsolation(t *testing.T) {
 	assert.Contains(t, sql1, "account_id = 1")
 	assert.Contains(t, sql3, "account_id = 2")
 }
+
+func TestUpdateTaskStateAndErrMsgSQL_SQLInjectionProtection(t *testing.T) {
+	sql := CDCSQLBuilder.UpdateTaskStateAndErrMsgSQL(
+		3,
+		"task'; DROP TABLE task; --",
+		"failed",
+		"CDC table db'.tbl has permanent error: read tcp \\n",
+	)
+
+	expected := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = 'failed', err_msg = 'CDC table db''.tbl has permanent error: read tcp \\\\n' WHERE 1=1 AND account_id = 3 AND task_id = 'task''; DROP TABLE task; --'"
+	assert.Equal(t, expected, sql)
+}

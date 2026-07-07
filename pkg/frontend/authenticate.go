@@ -1348,8 +1348,6 @@ const (
 
 	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
-	checkDatabaseTableFormat = `select rel_logical_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and account_id = %d;`
-
 	checkDatabaseViewFormat = `select rel_logical_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
 
 	getViewMetaFormat             = `select viewdef, owner from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
@@ -2103,12 +2101,6 @@ func getSqlForCheckDatabaseTable(
 	dbName string,
 	tableName string,
 ) (string, error) {
-
-	err := inputNameIsInvalid(ctx, dbName, tableName)
-	if err != nil {
-		return "", err
-	}
-
 	var (
 		account uint32
 	)
@@ -2119,9 +2111,31 @@ func getSqlForCheckDatabaseTable(
 		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
 	}
 
-	// we need the account id here to filter out the same dbName and tableName that exist in the
-	// different accounts.
-	return fmt.Sprintf(checkDatabaseTableFormat, tableName, dbName, account), nil
+	return getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, account, 0)
+}
+
+func getSqlForCheckDatabaseTableWithSnapshot(
+	ctx context.Context,
+	dbName string,
+	tableName string,
+	account uint32,
+	snapshotTS int64,
+) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName, tableName)
+	if err != nil {
+		return "", err
+	}
+
+	snapshotSpec := ""
+	if snapshotTS != 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	}
+
+	// The account id disambiguates identical database/table names across tenants.
+	return fmt.Sprintf(
+		`select rel_logical_id from mo_catalog.mo_tables%s where relname = "%s" and reldatabase = "%s" and account_id = %d;`,
+		snapshotSpec, tableName, dbName, account,
+	), nil
 }
 
 func getSqlForCheckDatabaseView(
@@ -5157,6 +5171,139 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 	}
 }
 
+func copyTablePrivileges(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	srcDB, srcTable, dstDB, dstTable string,
+	srcAccountID, dstAccountID uint32,
+	snapshotTS int64,
+) error {
+	srcCtx := defines.AttachAccountId(ctx, srcAccountID)
+	dstCtx := defines.AttachAccountId(ctx, dstAccountID)
+
+	srcObjID, err := getTableIdWithSnapshot(srcCtx, bh, srcDB, srcTable, srcAccountID, snapshotTS)
+	if err != nil {
+		return err
+	}
+	dstObjID, err := getTableIdWithSnapshot(dstCtx, bh, dstDB, dstTable, dstAccountID, 0)
+	if err != nil {
+		return err
+	}
+
+	snapshotSpec := ""
+	if snapshotTS != 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	}
+	sql := fmt.Sprintf(
+		`select role_id, role_name, privilege_id, privilege_name, privilege_level, with_grant_option
+		 from mo_catalog.mo_role_privs%s
+		 where obj_type = "%s" and obj_id = %d
+		 order by role_id, privilege_id, privilege_level;`,
+		snapshotSpec, objectTypeTable.String(), srcObjID,
+	)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(srcCtx, sql); err != nil {
+		return err
+	}
+
+	erArray, err := getResultSet(srcCtx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(erArray) {
+		return nil
+	}
+
+	var operationUserID int64
+	if account := ses.GetTenantInfo(); account != nil {
+		operationUserID = int64(account.GetUserID())
+	} else {
+		operationUserID = int64(defines.GetUserId(ctx))
+	}
+
+	for row := uint64(0); row < erArray[0].GetRowCount(); row++ {
+		roleID, err := erArray[0].GetInt64(ctx, row, 0)
+		if err != nil {
+			return err
+		}
+		roleName, err := erArray[0].GetString(ctx, row, 1)
+		if err != nil {
+			return err
+		}
+		privilegeID, err := erArray[0].GetInt64(ctx, row, 2)
+		if err != nil {
+			return err
+		}
+		privilegeName, err := erArray[0].GetString(ctx, row, 3)
+		if err != nil {
+			return err
+		}
+		privilegeLevel, err := erArray[0].GetString(ctx, row, 4)
+		if err != nil {
+			return err
+		}
+		withGrantOptionStr, err := erArray[0].GetString(ctx, row, 5)
+		if err != nil {
+			return err
+		}
+		withGrantOption, err := strconv.ParseBool(strings.TrimSpace(withGrantOptionStr))
+		if err != nil {
+			return moerr.NewInvalidInputNoCtxf("invalid with_grant_option value %q", withGrantOptionStr)
+		}
+
+		insertSQL := fmt.Sprintf(
+			insertRolePrivsFormat,
+			roleID,
+			roleName,
+			objectTypeTable.String(),
+			dstObjID,
+			privilegeID,
+			privilegeName,
+			privilegeLevel,
+			operationUserID,
+			types.CurrentTimestamp().String2(time.UTC, 0),
+			withGrantOption,
+		)
+		bh.ClearExecResultSet()
+		if err = bh.Exec(dstCtx, insertSQL); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func getTableIdWithSnapshot(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName, tableName string,
+	accountID uint32,
+	snapshotTS int64,
+) (int64, error) {
+	sql, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, accountID, snapshotTS)
+	if err != nil {
+		return 0, err
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return 0, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return 0, err
+	}
+	if execResultArrayHasData(erArray) {
+		id, err := erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return 0, err
+		}
+		return id, nil
+	}
+	return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
+}
+
 func getViewId(ctx context.Context, bh BackgroundExec, dbName, viewName string) (int64, error) {
 	sql, err := getSqlForCheckDatabaseView(ctx, dbName, viewName)
 	if err != nil {
@@ -6871,6 +7018,9 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 				}
 			} else if node.NodeType == plan.Node_MULTI_UPDATE {
 				for _, updateCtx := range node.UpdateCtxList {
+					if updateCtx == nil || updateCtx.ObjRef == nil || updateCtx.TableDef == nil {
+						continue
+					}
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
 					scanSnapshot := node.GetScanSnapshot()
@@ -6950,6 +7100,223 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		}
 	}
 	return pts
+}
+
+func addReplaceDeletePrivilegeTips(arr privilegeTipsArray, p *plan2.Plan) privilegeTipsArray {
+	if p.GetQuery() == nil {
+		return arr
+	}
+
+	hasTip := make(map[[3]string]struct{}, len(arr))
+	for _, tip := range arr {
+		hasTip[[3]string{tip.typ.String(), tip.databaseName, tip.tableName}] = struct{}{}
+	}
+
+	for _, node := range p.GetQuery().GetNodes() {
+		if node.NodeType != plan.Node_MULTI_UPDATE {
+			continue
+		}
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx == nil || updateCtx.ObjRef == nil || updateCtx.TableDef == nil {
+				continue
+			}
+			dbName := updateCtx.ObjRef.GetSchemaName()
+			tableName := updateCtx.ObjRef.GetObjName()
+			if dbName == "" {
+				dbName = updateCtx.TableDef.DbName
+			}
+			if tableName == "" {
+				tableName = updateCtx.TableDef.Name
+			}
+			if tableName == "" || isIndexTable(tableName) || replaceTargetIsInsertOnly(updateCtx, node, p.GetQuery()) {
+				continue
+			}
+
+			key := [3]string{PrivilegeTypeDelete.String(), dbName, tableName}
+			if _, ok := hasTip[key]; ok {
+				continue
+			}
+			hasTip[key] = struct{}{}
+
+			isCluster := updateCtx.TableDef.TableType == catalog.SystemClusterRel
+			if !isCluster {
+				isCluster = isClusterTable(dbName, tableName)
+			}
+			arr = append(arr, privilegeTips{
+				typ:                   PrivilegeTypeDelete,
+				objType:               objectTypeTable,
+				databaseName:          dbName,
+				tableName:             tableName,
+				isClusterTable:        isCluster,
+				clusterTableOperation: clusterTableModify,
+				originViews:           node.GetOriginViews(),
+				directView:            node.GetDirectView(),
+				scanSnapshot:          node.GetScanSnapshot(),
+			})
+		}
+	}
+	return arr
+}
+
+func replaceTargetIsInsertOnly(updateCtx *plan.UpdateCtx, multiUpdateNode *plan.Node, query *plan.Query) bool {
+	if updateCtx == nil {
+		return false
+	}
+	tableDef := updateCtx.TableDef
+	if tableDef == nil || tableDef.Pkey == nil {
+		return false
+	}
+	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		return false
+	}
+	if replaceDeleteColsAlwaysStaticNull(updateCtx, multiUpdateNode, query) {
+		return true
+	}
+	for _, idx := range tableDef.Indexes {
+		if idx.Unique {
+			return false
+		}
+	}
+	return true
+}
+
+func replaceDeleteColsAlwaysStaticNull(updateCtx *plan.UpdateCtx, multiUpdateNode *plan.Node, query *plan.Query) bool {
+	if updateCtx == nil || query == nil || len(updateCtx.DeleteCols) == 0 {
+		return false
+	}
+	nodesByTag := replaceNodesByTag(query)
+	for _, deleteCol := range updateCtx.DeleteCols {
+		if !replaceColRefAlwaysStaticNull(deleteCol, multiUpdateNode, query, nodesByTag) {
+			return false
+		}
+	}
+	return true
+}
+
+func replaceNodesByTag(query *plan.Query) map[int32]*plan.Node {
+	nodesByTag := make(map[int32]*plan.Node, len(query.GetNodes()))
+	for _, node := range query.GetNodes() {
+		for _, tag := range node.GetBindingTags() {
+			nodesByTag[tag] = node
+		}
+	}
+	return nodesByTag
+}
+
+func replaceColRefAlwaysStaticNull(
+	colRef plan.ColRef,
+	contextNode *plan.Node,
+	query *plan.Query,
+	nodesByTag map[int32]*plan.Node,
+) bool {
+	return replaceExprAlwaysStaticNull(&plan.Expr{
+		Expr: &plan.Expr_Col{Col: &colRef},
+	}, contextNode, query, nodesByTag, 0)
+}
+
+func replaceExprAlwaysStaticNull(
+	expr *plan.Expr,
+	contextNode *plan.Node,
+	query *plan.Query,
+	nodesByTag map[int32]*plan.Node,
+	depth int,
+) bool {
+	if expr == nil || depth > 32 {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return lit.GetIsnull()
+	}
+	if colRef := expr.GetCol(); colRef != nil {
+		node := nodesByTag[colRef.GetRelPos()]
+		if node == nil && contextNode != nil {
+			node = replaceInputNodeByOrdinal(contextNode, query, colRef.GetRelPos())
+		}
+		if node == nil {
+			return false
+		}
+		colPos := int(colRef.GetColPos())
+		switch node.GetNodeType() {
+		case plan.Node_PROJECT:
+			if colPos < 0 || colPos >= len(node.GetProjectList()) {
+				return false
+			}
+			return replaceExprAlwaysStaticNull(node.GetProjectList()[colPos], node, query, nodesByTag, depth+1)
+		case plan.Node_VALUE_SCAN:
+			rowsetData := node.GetRowsetData()
+			if rowsetData == nil || colPos < 0 || colPos >= len(rowsetData.GetCols()) {
+				return false
+			}
+			colData := rowsetData.GetCols()[colPos]
+			if colData == nil || len(colData.GetData()) == 0 {
+				return false
+			}
+			for _, rowExpr := range colData.GetData() {
+				if rowExpr == nil || !replaceExprAlwaysStaticNull(rowExpr.GetExpr(), node, query, nodesByTag, depth+1) {
+					return false
+				}
+			}
+			return true
+		case plan.Node_LOCK_OP:
+			child := replaceInputNodeByOrdinal(node, query, 0)
+			if child == nil {
+				return false
+			}
+			return replaceNodeOutputAlwaysStaticNull(child, colPos, query, nodesByTag, depth+1)
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		args := fn.GetArgs()
+		if len(args) == 1 && replaceFunctionPreservesNull(fn) {
+			return replaceExprAlwaysStaticNull(args[0], contextNode, query, nodesByTag, depth+1)
+		}
+	}
+	return false
+}
+
+func replaceNodeOutputAlwaysStaticNull(
+	node *plan.Node,
+	colPos int,
+	query *plan.Query,
+	nodesByTag map[int32]*plan.Node,
+	depth int,
+) bool {
+	if node == nil || depth > 32 {
+		return false
+	}
+	switch node.GetNodeType() {
+	case plan.Node_PROJECT:
+		if colPos < 0 || colPos >= len(node.GetProjectList()) {
+			return false
+		}
+		return replaceExprAlwaysStaticNull(node.GetProjectList()[colPos], node, query, nodesByTag, depth+1)
+	case plan.Node_LOCK_OP:
+		child := replaceInputNodeByOrdinal(node, query, 0)
+		if child == nil {
+			return false
+		}
+		return replaceNodeOutputAlwaysStaticNull(child, colPos, query, nodesByTag, depth+1)
+	}
+	return false
+}
+
+func replaceInputNodeByOrdinal(node *plan.Node, query *plan.Query, ordinal int32) *plan.Node {
+	if node == nil || query == nil || ordinal < 0 || int(ordinal) >= len(node.GetChildren()) {
+		return nil
+	}
+	childID := node.GetChildren()[ordinal]
+	if childID < 0 || int(childID) >= len(query.GetNodes()) {
+		return nil
+	}
+	return query.GetNodes()[childID]
+}
+
+func replaceFunctionPreservesNull(fn *plan.Function) bool {
+	if fn == nil || fn.GetFunc() == nil {
+		return false
+	}
+	fnName := strings.ToLower(fn.GetFunc().GetObjName())
+	return strings.Contains(fnName, "cast")
 }
 
 // convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan
@@ -8267,6 +8634,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			return true, stats, nil
 		}
 		arr := extractPrivilegeTipsFromPlan(p)
+		if _, ok := stmt.(*tree.Replace); ok {
+			arr = addReplaceDeletePrivilegeTips(arr, p)
+		}
 		if len(arr) == 0 {
 			if ins, ok := stmt.(*tree.Insert); ok {
 				dbName, tableName, ok := getInsertTargetTableName(ins, ses)
