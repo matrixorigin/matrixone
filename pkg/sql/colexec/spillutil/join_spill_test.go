@@ -5,13 +5,19 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -908,4 +914,773 @@ func TestScatterSkipsDisabledWriters(t *testing.T) {
 		}
 	}
 	require.Equal(t, expectedOddRows, oddRows, "all odd-bucket rows must be in buffers")
+}
+
+// --- SpillEngine tests ---
+
+func makeTestKeyExpr() []*plan.Expr {
+	return []*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_int32), Width: 32},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}}
+}
+
+func makeTestEvalKeysFn() func(*batch.Batch) ([]*vector.Vector, error) {
+	return func(bat *batch.Batch) ([]*vector.Vector, error) {
+		return bat.Vecs[:1], nil
+	}
+}
+
+func makeInt32Batch(proc *process.Process, vals []int32) *batch.Batch {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(vals, nil, proc.Mp())
+	bat.SetRowCount(len(vals))
+	return bat
+}
+
+func resetCachedFS() { cachedFS = nil }
+
+func writeBuildFile(proc *process.Process, name string, bat *batch.Batch) *os.File {
+	resetCachedFS()
+	spillfs, _ := proc.GetSpillFileService()
+	f, _ := spillfs.CreateAndRemoveFile(context.Background(), name)
+	var buf bytes.Buffer
+	w := BucketWriter{Name: name, Fd: f}
+	FlushBucketBatch(proc, bat, &w, &buf, nil)
+	return w.HandOffFd()
+}
+
+func TestNewSpillEngineAndInit(t *testing.T) {
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:  makeTestKeyExpr(),
+		SpillThreshold: 1024,
+		HashOnPK:       true,
+	})
+	require.NotNil(t, engine)
+	require.Equal(t, 0, len(engine.buckets))
+
+	fds := make([]*os.File, 3)
+	err := engine.InitFromSpilledMap(fds)
+	require.NoError(t, err)
+	require.Equal(t, 3, len(engine.buckets))
+	for _, b := range engine.buckets {
+		require.Nil(t, b.BuildFd)
+		require.Equal(t, 1, b.Depth)
+	}
+}
+
+func TestInitFromSpilledMapMixed(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := makeInt32Batch(proc, []int32{1, 2, 3})
+	fd1 := writeBuildFile(proc, "test_mixed_1", bat)
+	fd2 := writeBuildFile(proc, "test_mixed_2", bat)
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	err := engine.InitFromSpilledMap([]*os.File{fd1, nil, fd2})
+	require.NoError(t, err)
+	require.Equal(t, 3, len(engine.buckets))
+	require.NotNil(t, engine.buckets[0].BuildFd)
+	require.Nil(t, engine.buckets[1].BuildFd)
+	require.NotNil(t, engine.buckets[2].BuildFd)
+	engine.Cleanup(proc)
+}
+
+func TestRebuildHashmapBasic(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	vals := make([]int32, 100)
+	for i := range vals {
+		vals[i] = int32(i)
+	}
+	bat := makeInt32Batch(proc, vals)
+	fd := writeBuildFile(proc, "test_rebuild", bat)
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{fd})
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	jm, res, err := engine.RebuildHashmap(proc, analyzer)
+	require.NoError(t, err)
+	require.Equal(t, BucketReady, res)
+	require.NotNil(t, jm)
+	require.Equal(t, int64(100), jm.GetRowCount())
+
+	jm2, res2, err := engine.RebuildHashmap(proc, analyzer)
+	require.NoError(t, err)
+	require.Equal(t, BucketQueueEmpty, res2)
+	require.Nil(t, jm2)
+
+	jm.Free()
+	engine.Cleanup(proc)
+}
+
+func TestRebuildHashmapEmptyBuild(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{nil})
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	jm, res, err := engine.RebuildHashmap(proc, analyzer)
+	require.NoError(t, err)
+	require.Equal(t, BucketSkip, res)
+	require.Nil(t, jm)
+	require.False(t, engine.HasMoreBuckets())
+	engine.Cleanup(proc)
+}
+
+func TestRebuildHashmapEmptyBuildOuterJoin(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	var buf bytes.Buffer
+	spillfs, _ := proc.GetSpillFileService()
+	f, _ := spillfs.CreateAndRemoveFile(context.Background(), "test_outer_probe")
+	bat := makeInt32Batch(proc, []int32{1, 2})
+	w := BucketWriter{Name: "test_outer_probe", Fd: f}
+	FlushBucketBatch(proc, bat, &w, &buf, nil)
+	probeFd := w.HandOffFd()
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:           makeTestKeyExpr(),
+		NeedsProbeForEmptyBuild: true,
+	})
+	engine.InitFromSpilledMap([]*os.File{nil})
+	engine.TestSetBucketProbeFd(0, probeFd)
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	jm, res, err := engine.RebuildHashmap(proc, analyzer)
+	require.NoError(t, err)
+	require.Equal(t, BucketEmptyBuild, res)
+	require.Nil(t, jm)
+	require.True(t, engine.IsProbing())
+	require.False(t, engine.HasMoreBuckets())
+
+	got, err := engine.NextProbeBatch(proc)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, 2, got.RowCount())
+
+	engine.Cleanup(proc)
+}
+
+func TestScatterProbeTable(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := makeInt32Batch(proc, []int32{10, 20, 30})
+	fd := writeBuildFile(proc, "test_sp_build", bat)
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{fd})
+
+	// Use many rows to ensure distribution across buckets.
+	vals := make([]int32, 1000)
+	for i := range vals {
+		vals[i] = int32(i)
+	}
+	batches := []*batch.Batch{makeInt32Batch(proc, vals)}
+	idx := 0
+	children := func() (*batch.Batch, error) {
+		if idx >= len(batches) {
+			return nil, nil
+		}
+		b := batches[idx]
+		idx++
+		return b, nil
+	}
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	err := engine.ScatterProbeTable(proc, children, analyzer, makeTestEvalKeysFn())
+	require.NoError(t, err)
+	require.NotNil(t, engine.probeKeyEval)
+
+	// At least one bucket should have probe data.
+	hasProbe := false
+	for _, b := range engine.buckets {
+		if b.ProbeFd != nil {
+			hasProbe = true
+			break
+		}
+	}
+	require.True(t, hasProbe, "at least one bucket should have probe data")
+
+	engine.Cleanup(proc)
+}
+
+func TestScatterProbeTableSkipEmptyBuild(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := makeInt32Batch(proc, []int32{1, 2, 3})
+	fd1 := writeBuildFile(proc, "test_skip_build_1", bat)
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{fd1, nil})
+
+	// Use many rows to ensure distribution.
+	vals := make([]int32, 1000)
+	for i := range vals {
+		vals[i] = int32(i)
+	}
+	batches := []*batch.Batch{makeInt32Batch(proc, vals)}
+	idx := 0
+	children := func() (*batch.Batch, error) {
+		if idx >= len(batches) {
+			return nil, nil
+		}
+		b := batches[idx]
+		idx++
+		return b, nil
+	}
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	err := engine.ScatterProbeTable(proc, children, analyzer, makeTestEvalKeysFn())
+	require.NoError(t, err)
+
+	// Bucket 1 (nil build, not outer join) should have no probe data.
+	require.Nil(t, engine.buckets[1].ProbeFd)
+
+	engine.Cleanup(proc)
+}
+
+func TestScatterProbeTableWithEmptyBatches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := makeInt32Batch(proc, []int32{1, 2})
+	fd := writeBuildFile(proc, "test_empty_bat", bat)
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{fd})
+
+	batches := []*batch.Batch{
+		batch.NewWithSize(0),
+		makeInt32Batch(proc, []int32{5, 6}),
+	}
+	idx := 0
+	children := func() (*batch.Batch, error) {
+		if idx >= len(batches) {
+			return nil, nil
+		}
+		b := batches[idx]
+		idx++
+		return b, nil
+	}
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	err := engine.ScatterProbeTable(proc, children, analyzer, makeTestEvalKeysFn())
+	require.NoError(t, err)
+
+	engine.Cleanup(proc)
+}
+
+func TestNextProbeBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	// Write build file.
+	bat := makeInt32Batch(proc, []int32{1, 2, 3})
+	fd := writeBuildFile(proc, "test_npb_build", bat)
+
+	// Write probe file manually (ensures bucket 0 has probe data).
+	probeFd := writeBuildFile(proc, "test_npb_probe", makeInt32Batch(proc, []int32{5, 6, 7}))
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{fd})
+	engine.TestSetBucketProbeFd(0, probeFd)
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	jm, res, err := engine.RebuildHashmap(proc, analyzer)
+	require.NoError(t, err)
+	require.Equal(t, BucketReady, res)
+	require.True(t, engine.IsProbing())
+
+	got, err := engine.NextProbeBatch(proc)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, 3, got.RowCount())
+
+	got2, err2 := engine.NextProbeBatch(proc)
+	require.NoError(t, err2)
+	require.Nil(t, got2)
+
+	engine.FinishBucket()
+	require.False(t, engine.IsProbing())
+	got3, err3 := engine.NextProbeBatch(proc)
+	require.NoError(t, err3)
+	require.Nil(t, got3)
+
+	jm.Free()
+	engine.Cleanup(proc)
+}
+
+func TestAdvanceToNextBucket(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	vals := make([]int32, 50)
+	for i := range vals {
+		vals[i] = int32(i)
+	}
+	bat := makeInt32Batch(proc, vals)
+	fd := writeBuildFile(proc, "test_advance_build", bat)
+	probeFd := writeBuildFile(proc, "test_advance_probe", makeInt32Batch(proc, []int32{5, 6}))
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{fd})
+	engine.TestSetBucketProbeFd(0, probeFd)
+
+	var capturedJM *message.JoinMap
+	var capturedRes BucketResult
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+
+	ok, err := engine.AdvanceToNextBucket(proc, analyzer, func(jm *message.JoinMap, res BucketResult) {
+		capturedJM = jm
+		capturedRes = res
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, capturedJM)
+	require.Equal(t, BucketReady, capturedRes)
+	require.True(t, engine.IsProbing())
+	require.False(t, engine.HasMoreBuckets())
+
+	capturedJM.Free()
+	engine.Cleanup(proc)
+}
+
+func TestAdvanceToNextBucketWithSkip(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := makeInt32Batch(proc, []int32{1, 2, 3})
+	fd1 := writeBuildFile(proc, "test_skip_adv_1", bat)
+	fd2 := writeBuildFile(proc, "test_skip_adv_2", bat)
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{fd1, fd2})
+
+	var results []BucketResult
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	for engine.HasMoreBuckets() {
+		_, err := engine.AdvanceToNextBucket(proc, analyzer, func(jm *message.JoinMap, res BucketResult) {
+			results = append(results, res)
+			if jm != nil {
+				jm.Free()
+			}
+		})
+		require.NoError(t, err)
+		engine.FinishBucket()
+	}
+	require.Equal(t, 2, len(results))
+	engine.Cleanup(proc)
+}
+
+func TestReSpillBucket(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	vals := make([]int32, 5000)
+	for i := range vals {
+		vals[i] = int32(i)
+	}
+	bat := makeInt32Batch(proc, vals)
+	fd := writeBuildFile(proc, "test_respill_build", bat)
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:  makeTestKeyExpr(),
+		SpillThreshold: 10000,
+	})
+	engine.InitFromSpilledMap([]*os.File{fd})
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	jm, res, err := engine.RebuildHashmap(proc, analyzer)
+	require.NoError(t, err)
+	require.Equal(t, BucketReSpilled, res)
+	require.Nil(t, jm)
+
+	// Drain all remaining buckets.
+	for engine.HasMoreBuckets() {
+		jm2, _, err2 := engine.RebuildHashmap(proc, analyzer)
+		require.NoError(t, err2)
+		if jm2 != nil {
+			jm2.Free()
+		}
+	}
+
+	engine.Cleanup(proc)
+}
+
+func TestReSpillDepthLimit(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := makeInt32Batch(proc, []int32{1, 2, 3, 4, 5})
+	fd := writeBuildFile(proc, "test_depth_build", bat)
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:  makeTestKeyExpr(),
+		SpillThreshold: 1,
+	})
+	engine.InitFromSpilledMap([]*os.File{fd})
+	engine.TestSetBucketDepth(0, SpillMaxPass)
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	jm, res, err := engine.RebuildHashmap(proc, analyzer)
+	require.NoError(t, err)
+	require.Equal(t, BucketReady, res, "must return BucketReady at max depth")
+	require.NotNil(t, jm)
+
+	jm.Free()
+	engine.Cleanup(proc)
+}
+
+func TestReSpillWithProbe(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	vals := make([]int32, 5000)
+	for i := range vals {
+		vals[i] = int32(i)
+	}
+	bat := makeInt32Batch(proc, vals)
+	fd := writeBuildFile(proc, "test_rsp_probe_build", bat)
+
+	// Manually write probe file.
+	probeFd := writeBuildFile(proc, "test_rsp_probe", makeInt32Batch(proc, []int32{100, 200, 300}))
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:  makeTestKeyExpr(),
+		SpillThreshold: 10000,
+	})
+	engine.InitFromSpilledMap([]*os.File{fd})
+	engine.TestSetBucketProbeFd(0, probeFd)
+
+	// Set probeKeyEval so scatterProbe works during re-spill.
+	engine.probeKeyEval = makeTestEvalKeysFn()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	jm, res, err := engine.RebuildHashmap(proc, analyzer)
+	require.NoError(t, err)
+	require.NotEqual(t, BucketQueueEmpty, res)
+
+	if jm != nil {
+		jm.Free()
+	}
+
+	for engine.HasMoreBuckets() {
+		jm2, _, err := engine.RebuildHashmap(proc, analyzer)
+		require.NoError(t, err)
+		if jm2 != nil {
+			jm2.Free()
+		}
+	}
+
+	engine.Cleanup(proc)
+}
+
+func TestAdvanceToNextBucketReSpilled(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	vals := make([]int32, 5000)
+	for i := range vals {
+		vals[i] = int32(i)
+	}
+	bat := makeInt32Batch(proc, vals)
+	fd := writeBuildFile(proc, "test_adv_re_build", bat)
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:  makeTestKeyExpr(),
+		SpillThreshold: 10000,
+	})
+	engine.InitFromSpilledMap([]*os.File{fd})
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+
+	for engine.HasMoreBuckets() {
+		ok, err := engine.AdvanceToNextBucket(proc, analyzer, func(jm *message.JoinMap, _ BucketResult) {
+			if jm != nil {
+				jm.Free()
+			}
+		})
+		require.NoError(t, err)
+		if ok {
+			engine.FinishBucket()
+		}
+	}
+	// Test passes if the loop terminates without errors.
+	engine.Cleanup(proc)
+}
+
+func TestBuilderMemSize(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	builder := &hashbuild.HashmapBuilder{}
+	err := builder.Prepare(makeTestKeyExpr(), -1, -1, nil, proc)
+	require.NoError(t, err)
+
+	sz := builderMemSize(builder)
+	require.Equal(t, int64(0), sz)
+
+	bat := makeInt32Batch(proc, []int32{1, 2, 3, 4, 5})
+	err = builder.Batches.CopyIntoBatches(bat, proc)
+	require.NoError(t, err)
+	builder.InputBatchRowCount += bat.RowCount()
+
+	sz2 := builderMemSize(builder)
+	require.Greater(t, sz2, int64(0), "size should grow after adding batches")
+
+	builder.FreeHashMapAndBatches(proc)
+	builder.Free(proc)
+}
+
+func TestFinishBucket(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{nil})
+
+	engine.probingActive = true
+	require.True(t, engine.IsProbing())
+
+	engine.FinishBucket()
+	require.False(t, engine.IsProbing())
+
+	engine.FinishBucket()
+	require.False(t, engine.IsProbing())
+
+	engine.Cleanup(proc)
+}
+
+func TestIsProbingAndHasMoreBuckets(t *testing.T) {
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	require.False(t, engine.IsProbing())
+	require.False(t, engine.HasMoreBuckets())
+
+	engine.probingActive = true
+	require.True(t, engine.IsProbing())
+
+	engine.buckets = []SpillBucket{{}}
+	require.True(t, engine.HasMoreBuckets())
+}
+
+func TestCleanupSpillEngine(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := makeInt32Batch(proc, []int32{1, 2, 3})
+	fd1 := writeBuildFile(proc, "test_cl_build", bat)
+
+	var buf bytes.Buffer
+	spillfs, _ := proc.GetSpillFileService()
+	probeFile, _ := spillfs.CreateAndRemoveFile(context.Background(), "test_cl_probe")
+	pw := BucketWriter{Name: "test_cl_probe", Fd: probeFile}
+	FlushBucketBatch(proc, bat, &pw, &buf, nil)
+	fd2 := pw.HandOffFd()
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{fd1})
+	engine.TestSetBucketProbeFd(0, fd2)
+
+	engine.buildReadBatch = batch.NewOffHeapWithSize(0)
+	engine.probeReadBatch = batch.NewOffHeapWithSize(0)
+	engine.probingActive = true
+
+	engine.keyExecs = make([]colexec.ExpressionExecutor, 1)
+	exec, _ := colexec.NewExpressionExecutor(proc, makeTestKeyExpr()[0])
+	engine.keyExecs[0] = exec
+
+	engine.Cleanup(proc)
+
+	require.False(t, engine.IsProbing())
+	require.Nil(t, engine.buckets)
+	require.Nil(t, engine.buildReadBatch)
+	require.Nil(t, engine.probeReadBatch)
+	require.Nil(t, engine.keyExecs)
+
+	b := make([]byte, 1)
+	_, err := fd1.Read(b)
+	require.Error(t, err, "fd1 should be closed")
+	_, err = fd2.Read(b)
+	require.Error(t, err, "fd2 should be closed")
+}
+
+func TestResetForFile(t *testing.T) {
+	resetCachedFS()
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	// Use CreateFile (not CreateAndRemoveFile) so the file persists.
+	f, err := spillfs.CreateFile(context.Background(), "test_rff")
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	bat := makeInt32Batch(proc, []int32{10, 20, 30})
+	w := BucketWriter{Name: "test_rff", Fd: f}
+	err = FlushBucketBatch(proc, bat, &w, &buf, nil)
+	require.NoError(t, err)
+	// Close the fd before opening via file name.
+	w.Close()
+
+	reader := BucketReader{}
+	err = reader.ResetForFile(context.Background(), spillfs, "test_rff")
+	require.NoError(t, err)
+	require.False(t, reader.Empty)
+
+	reuseBat := batch.NewOffHeapWithSize(0)
+	got, err := reader.ReadBatch(proc, reuseBat)
+	require.NoError(t, err)
+	require.Equal(t, 3, got.RowCount())
+
+	_, err = reader.ReadBatch(proc, reuseBat)
+	require.Equal(t, io.EOF, err)
+
+	reader.Close()
+	spillfs.RemoveFile(context.Background(), "test_rff")
+}
+
+func TestResetForFileEmptyName(t *testing.T) {
+	reader := BucketReader{}
+	err := reader.ResetForFile(context.Background(), nil, "")
+	require.NoError(t, err)
+	require.True(t, reader.Empty)
+}
+
+func TestResetForFileMissingFile(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	spillfs, _ := proc.GetSpillFileService()
+
+	reader := BucketReader{}
+	err := reader.ResetForFile(context.Background(), spillfs, "nonexistent_file_12345")
+	require.Error(t, err)
+}
+
+func TestScatterProbeFunctionUsesStoredEval(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+
+	evalCalled := false
+	engine.probeKeyEval = func(bat *batch.Batch) ([]*vector.Vector, error) {
+		evalCalled = true
+		return []*vector.Vector{bat.Vecs[0]}, nil
+	}
+
+	writers := MakeBucketWriters("test_scatter_func")
+	buffers := make([]*batch.Batch, len(writers))
+	bat := makeInt32Batch(proc, []int32{5, 15, 25})
+
+	err := scatterProbe(proc, engine, bat, writers, buffers, 1)
+	require.NoError(t, err)
+	require.True(t, evalCalled, "probeKeyEval must be used for scatterProbe")
+
+	for i := range writers {
+		writers[i].Close()
+	}
+}
+
+func TestGetSpillFS(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	cachedFS = nil
+	fs, err := GetSpillFS(proc)
+	require.NoError(t, err)
+	require.NotNil(t, fs)
+
+	fs2, err := GetSpillFS(proc)
+	require.NoError(t, err)
+	require.Equal(t, fs, fs2)
+}
+
+func TestScatterProbeTableOuterJoinKeepsProbe(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := makeInt32Batch(proc, []int32{10, 20, 30})
+	fd1 := writeBuildFile(proc, "test_outer_build", bat)
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:           makeTestKeyExpr(),
+		NeedsProbeForEmptyBuild: true,
+	})
+	engine.InitFromSpilledMap([]*os.File{fd1, nil})
+
+	vals := make([]int32, 1000)
+	for i := range vals {
+		vals[i] = int32(i)
+	}
+	batches := []*batch.Batch{makeInt32Batch(proc, vals)}
+	idx := 0
+	children := func() (*batch.Batch, error) {
+		if idx >= len(batches) {
+			return nil, nil
+		}
+		b := batches[idx]
+		idx++
+		return b, nil
+	}
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	err := engine.ScatterProbeTable(proc, children, analyzer, makeTestEvalKeysFn())
+	require.NoError(t, err)
+
+	require.NotNil(t, engine.buckets[0].ProbeFd)
+	require.NotNil(t, engine.buckets[1].ProbeFd, "outer join must keep probe for empty build")
+
+	engine.Cleanup(proc)
+}
+
+func TestCleanupDoubleSafe(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{nil, nil, nil})
+
+	engine.Cleanup(proc)
+	engine.Cleanup(proc)
+
+	require.Nil(t, engine.buckets)
 }
