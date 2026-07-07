@@ -15,8 +15,10 @@
 package schedule
 
 const (
-	ReasonLocalExecType = "local-exec-type"
-	ReasonMultiCN       = "multi-cn"
+	ReasonLocalExecType   = "local-exec-type"
+	ReasonMultiCN         = "multi-cn"
+	ReasonNoCandidateCN   = "no-candidate-cn"
+	ReasonRequiredLocalCN = "required-local-cn"
 )
 
 type QueryExecKind uint8
@@ -50,13 +52,18 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	}
 
 	workers := cloneWorkers(req.Candidates)
-	if len(workers) == 0 || req.RequireLocal {
+	reason := ReasonMultiCN
+	if len(workers) == 0 {
 		workers = ensureLocalWorker(workers, req.LocalWorker)
+		reason = ReasonNoCandidateCN
+	} else if req.RequireLocal {
+		workers = ensureLocalWorker(workers, req.LocalWorker)
+		reason = ReasonRequiredLocalCN
 	}
 	return QueryDecision{
 		ExecKind: req.ExecKind,
 		Workers:  workers,
-		Reason:   ReasonMultiCN,
+		Reason:   reason,
 	}
 }
 

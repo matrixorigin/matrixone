@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -231,6 +232,41 @@ func TestGenerateNodesKeepsLargeScanOnCurrentCNWhenNoWorkers(t *testing.T) {
 	}}, nodes)
 }
 
+func TestGenerateNodesKeepsLocalScanMcpuAtLeastOne(t *testing.T) {
+	for _, dop := range []int32{0, -2} {
+		c := NewMockCompile(t)
+		c.addr = "cn-local:6001"
+		c.e = newStubEngineForGenerateNodes("testdb", "t")
+		c.cnList = engine.Nodes{
+			{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 8},
+			{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+		}
+
+		node := &plan.Node{
+			NodeType: plan.Node_TABLE_SCAN,
+			ObjRef: &plan.ObjectRef{
+				SchemaName: "testdb",
+				ObjName:    "t",
+			},
+			TableDef: &plan.TableDef{
+				Name: "t",
+			},
+			Stats: &plan.Stats{
+				BlockNum: int32(plan2.BlockThresholdForOneCN),
+				Dop:      dop,
+			},
+		}
+
+		nodes, err := c.generateNodes(node)
+		require.NoError(t, err)
+		require.Equal(t, engine.Nodes{{
+			Addr:  "cn-local:6001",
+			Mcpu:  1,
+			CNCNT: 1,
+		}}, nodes)
+	}
+}
+
 func TestGenerateNodesKeepsForceOneCNOnCurrentCN(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
@@ -261,6 +297,39 @@ func TestGenerateNodesKeepsForceOneCNOnCurrentCN(t *testing.T) {
 	require.Equal(t, engine.Nodes{{
 		Addr:  "cn-local:6001",
 		Mcpu:  6,
+		CNCNT: 1,
+	}}, nodes)
+}
+
+func TestGenerateNodesKeepsTableCloneOnCurrentCN(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.e = newStubEngineForGenerateNodes("testdb", "t")
+	c.cnList = engine.Nodes{
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 8},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_TABLE_CLONE,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "t",
+		},
+		TableDef: &plan.TableDef{
+			Name: "t",
+		},
+		Stats: &plan.Stats{
+			BlockNum: int32(plan2.BlockThresholdForOneCN + 1),
+			Dop:      6,
+		},
+	}
+
+	nodes, err := c.generateNodes(node)
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{{
+		Addr:  "cn-local:6001",
+		Mcpu:  1,
 		CNCNT: 1,
 	}}, nodes)
 }
@@ -305,6 +374,43 @@ func TestGenerateNodesCollectsRemoteTombstonesOnce(t *testing.T) {
 		require.NotNil(t, nodes[i].Data)
 		require.Same(t, tombstones, nodes[i].Data.GetTombstones())
 	}
+	require.Equal(t, 1, rel.collectTombstonesCall)
+}
+
+func TestGenerateNodesReturnsRemoteTombstoneError(t *testing.T) {
+	expected := errors.New("collect tombstones failed")
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	rel := newStubRelation("t")
+	rel.collectTombstonesErr = expected
+	db := newStubDatabase("testdb")
+	db.rels["t"] = rel
+	e := newStubEngine()
+	e.dbs["testdb"] = db
+	c.e = e
+	c.cnList = engine.Nodes{
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 4},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 4},
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "t",
+		},
+		TableDef: &plan.TableDef{
+			Name: "t",
+		},
+		Stats: &plan.Stats{
+			BlockNum: int32(plan2.BlockThresholdForOneCN + 1),
+			Dop:      2,
+		},
+	}
+
+	nodes, err := c.generateNodes(node)
+	require.ErrorIs(t, err, expected)
+	require.Nil(t, nodes)
 	require.Equal(t, 1, rel.collectTombstonesCall)
 }
 

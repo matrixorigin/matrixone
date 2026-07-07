@@ -70,6 +70,7 @@ func TestDecideQueryPlacementCanRequireCurrentCN(t *testing.T) {
 	})
 
 	require.Equal(t, Workers{candidates[0], local}, decision.Workers)
+	require.Equal(t, ReasonRequiredLocalCN, decision.Reason)
 }
 
 func TestDecideQueryPlacementFallsBackToLocalWhenCandidatesEmpty(t *testing.T) {
@@ -81,7 +82,7 @@ func TestDecideQueryPlacementFallsBackToLocalWhenCandidatesEmpty(t *testing.T) {
 	})
 
 	require.Equal(t, QueryExecAPMultiCN, decision.ExecKind)
-	require.Equal(t, ReasonMultiCN, decision.Reason)
+	require.Equal(t, ReasonNoCandidateCN, decision.Reason)
 	require.Equal(t, Workers{local}, decision.Workers)
 }
 
@@ -100,6 +101,7 @@ func TestDecideQueryPlacementDoesNotDuplicateRequiredCurrentCN(t *testing.T) {
 	})
 
 	require.Equal(t, candidates, decision.Workers)
+	require.Equal(t, ReasonRequiredLocalCN, decision.Reason)
 }
 
 func TestDecideQueryPlacementDeduplicatesRequiredCurrentCNByAddressWhenIDMissing(t *testing.T) {
@@ -114,6 +116,7 @@ func TestDecideQueryPlacementDeduplicatesRequiredCurrentCNByAddressWhenIDMissing
 	})
 
 	require.Equal(t, candidates, decision.Workers)
+	require.Equal(t, ReasonRequiredLocalCN, decision.Reason)
 }
 
 func TestDecideQueryPlacementAppendsRequiredCurrentCNWhenIDMissingAndAddressDiffers(t *testing.T) {
@@ -128,6 +131,7 @@ func TestDecideQueryPlacementAppendsRequiredCurrentCNWhenIDMissingAndAddressDiff
 	})
 
 	require.Equal(t, Workers{candidates[0], local}, decision.Workers)
+	require.Equal(t, ReasonRequiredLocalCN, decision.Reason)
 }
 
 func TestDecideQueryPlacementFallsBackToLocalWhenRequiredCandidatesEmpty(t *testing.T) {
@@ -140,4 +144,5 @@ func TestDecideQueryPlacementFallsBackToLocalWhenRequiredCandidatesEmpty(t *test
 	})
 
 	require.Equal(t, Workers{local}, decision.Workers)
+	require.Equal(t, ReasonNoCandidateCN, decision.Reason)
 }
