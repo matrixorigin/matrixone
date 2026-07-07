@@ -36,8 +36,8 @@ func exerciseNarrowArray[T types.ArrayElement](t *testing.T, oid types.T, a, b [
 	require.NoError(t, AppendArrayList[T](vec, [][]T{a, b}, nil, mp))
 	require.Equal(t, a, GetArrayAt[T](vec, 0))
 	require.Equal(t, b, GetArrayAt[T](vec, 3))
-	_ = vec.String()          // String() narrow branch (multi-row + null bitmap)
-	_ = vec.RowToString(0)    // RowToString -> implArrayRowToString narrow branch
+	_ = vec.String()       // String() narrow branch (multi-row + null bitmap)
+	_ = vec.RowToString(0) // RowToString -> implArrayRowToString narrow branch
 	_ = vec.RowToString(2)
 	vec.Free(mp)
 
