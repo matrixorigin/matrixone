@@ -569,10 +569,10 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = arrayTypeToOthers(proc, s, *toType, result, length, selectList)
 	case types.T_uuid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](from)
-		err = uuidToOthers(proc.Ctx, s, *toType, result, length, selectList)
+		err = uuidToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_TS:
 		s := vector.GenerateFunctionFixedTypeParameter[types.TS](from)
-		err = tsToOthers(proc, s, *toType, result, length, selectList)
+		err = tsToOthers(proc, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_Rowid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
 		err = rowidToOthers(proc.Ctx, s, *toType, result, length, selectList)
@@ -581,10 +581,10 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = blockidToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = jsonToOthers(proc.Ctx, s, *toType, result, length, selectList)
+		err = jsonToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
 	case types.T_enum:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](from)
-		err = enumToOthers(proc.Ctx, s, *toType, result, length, selectList)
+		err = enumToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
 	default:
 		// XXX we set the function here to adapt to the BVT cases.
 		err = formatCastError(proc.Ctx, from, *toType, "")
@@ -2039,26 +2039,26 @@ func arrayTypeToOthers(proc *process.Process,
 
 func uuidToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Uuid],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	switch toType.Oid {
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return uuidToStr(ctx, source, rs, length, toType)
+		return uuidToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uuid to %s", toType))
 }
 
 func tsToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.TS],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	switch toType.Oid {
 	case types.T_TS:
 		rs := vector.MustFunctionResult[types.TS](result)
 		return rs.DupFromParameter(source, length)
 	case types.T_varchar:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return tsToStr(proc.Ctx, source, rs, length, toType)
+		return tsToStr(proc.Ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return tsToTimestamp(proc, source, rs, length, toType)
@@ -2091,7 +2091,7 @@ func blockidToOthers(ctx context.Context,
 
 func jsonToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	switch toType.Oid {
 	case types.T_json:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2104,7 +2104,7 @@ func jsonToOthers(ctx context.Context,
 		return nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return jsonToStr(ctx, source, rs, length, selectList)
+		return jsonToStr(ctx, source, rs, length, selectList, strictStringWidth...)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
@@ -2292,14 +2292,14 @@ func jsonAppendValue(ctx context.Context, result vector.FunctionResultWrapper, t
 
 func enumToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Enum],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	switch toType.Oid {
 	case types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128:
 		rs := vector.MustFunctionResult[uint16](result)
 		return enumToUint16(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return enumToStr(ctx, source, rs, length, selectList)
+		return enumToStr(ctx, source, rs, length, selectList, strictStringWidth...)
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
 		return rs.DupFromParameter(source, length)
@@ -5797,7 +5797,7 @@ func arrayToArray[I types.RealNumbers, O types.RealNumbers](
 func uuidToStr(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Uuid],
-	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+	to *vector.FunctionResult[types.Varlena], length int, toType types.Type, strictStringWidth ...bool) error {
 	var i uint64
 	var l = uint64(length)
 	// Here cast using cast(data_type as binary[(n)]).
@@ -5830,11 +5830,7 @@ func uuidToStr(
 					result = append(result, 0)
 				}
 			}
-			if toType.Oid == types.T_char || toType.Oid == types.T_varchar {
-				if int32(len(result)) > toType.Width {
-					return moerr.NewDataTruncatedNoCtx("Uuid", "truncated for char/varchar")
-				}
-			}
+			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
@@ -5852,15 +5848,25 @@ func tsToStr(
 	from vector.FunctionParameterWrapper[types.TS],
 	to *vector.FunctionResult[types.Varlena],
 	length int,
-	toType types.Type) error {
+	toType types.Type, strictStringWidth ...bool) error {
 
 	for i := 0; i < length; i++ {
-		tsVal, _ := from.GetValue(uint64(i))
-		str := tsVal.ToString()
-		result := []byte(str)
-
-		if err := to.AppendBytes(result, false); err != nil {
-			return err
+		tsVal, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			str := tsVal.ToString()
+			result := []byte(str)
+			result = truncateCastBytesResult(result, toType, strictStringWidth...)
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", tsVal, toType.Width))
+			}
+			if err := to.AppendBytes(result, false); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -5926,7 +5932,7 @@ func tsToInt64(
 func jsonToStr(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	var i uint64
 	toType := to.GetType()
 	for i = 0; i < uint64(length); i++ {
@@ -5952,6 +5958,7 @@ func jsonToStr(
 				str = string(bs)
 			}
 			val := []byte(str)
+			val = truncateCastBytesResult(val, toType, strictStringWidth...)
 			if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", val, toType.Width))
@@ -5986,7 +5993,7 @@ func enumToUint16(
 func enumToStr(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Enum],
-	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	var i uint64
 	toType := to.GetType()
 	for i = 0; i < uint64(length); i++ {
@@ -5996,12 +6003,13 @@ func enumToStr(
 				return err
 			}
 		} else {
-			result := strconv.FormatUint(uint64(v), 10)
+			result := []byte(strconv.FormatUint(uint64(v), 10))
+			result = truncateCastBytesResult(result, toType, strictStringWidth...)
 			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
-			if err := to.AppendBytes([]byte(result), false); err != nil {
+			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
@@ -6658,6 +6666,10 @@ func yearToStr(ctx context.Context,
 		} else {
 			result := []byte(v.String())
 			result = truncateCastBytesResult(result, toType, strictStringWidth...)
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+				return formatDataTruncationError(ctx, source.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v, toType.Width))
+			}
 			if err := rs.AppendBytes(result, false); err != nil {
 				return err
 			}
