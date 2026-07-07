@@ -20,10 +20,20 @@ import (
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool/interactive"
 	"github.com/spf13/cobra"
 )
+
+// kindFromFlags resolves the offline fs kind; exactly one of --local/--s3/
+// --local2 must be set, else it returns an error.
+func kindFromFlags(cmd *cobra.Command) (string, error) {
+	local, _ := cmd.Flags().GetBool("local")
+	s3, _ := cmd.Flags().GetBool("s3")
+	local2, _ := cmd.Flags().GetBool("local2")
+	return objectio.OfflineKindStrict(local, s3, local2)
+}
 
 func PrepareCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -36,9 +46,19 @@ func PrepareCommand() *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runViewer(dir)
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			return runViewer(dir, kind)
 		},
 	}
+
+	// Persistent so the info/view subcommands inherit them. Exactly one of these
+	// must be set to state the data dir's on-disk format.
+	cmd.PersistentFlags().Bool("local", false, "local DISK (CRC) format")
+	cmd.PersistentFlags().Bool("s3", false, "S3 (raw) format")
+	cmd.PersistentFlags().Bool("local2", false, "local DISK-V2 (raw) format")
 
 	cmd.AddCommand(infoCommand())
 	cmd.AddCommand(viewCommand())
@@ -76,7 +96,7 @@ func setupLogFile() (*os.File, error) {
 	return logFile, nil
 }
 
-func runViewer(dir string) error {
+func runViewer(dir string, kind string) error {
 	logFile, err := setupLogFile()
 	if err != nil {
 		return fmt.Errorf("setup log file: %w", err)
@@ -84,7 +104,7 @@ func runViewer(dir string) error {
 	defer logFile.Close()
 
 	ctx := context.Background()
-	reader, err := checkpointtool.Open(ctx, dir)
+	reader, err := checkpointtool.Open(ctx, dir, checkpointtool.WithKind(kind))
 	if err != nil {
 		return fmt.Errorf("open checkpoint dir: %w", err)
 	}
@@ -110,8 +130,12 @@ func infoCommand() *cobra.Command {
 			}
 			defer logFile.Close()
 
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
 			ctx := context.Background()
-			reader, err := checkpointtool.Open(ctx, dir)
+			reader, err := checkpointtool.Open(ctx, dir, checkpointtool.WithKind(kind))
 			if err != nil {
 				return fmt.Errorf("open checkpoint dir: %w", err)
 			}
@@ -144,7 +168,11 @@ func viewCommand() *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runViewer(dir)
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			return runViewer(dir, kind)
 		},
 	}
 }
