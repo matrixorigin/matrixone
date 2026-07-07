@@ -128,10 +128,11 @@ func PutArena(a *WriteArena) {
 }
 
 // arenaDrainDelay is how long to wait after the last checkpoint before
-// draining the arena pools.  Using 2× the default incremental checkpoint
-// interval ensures the timer is always reset during active operation,
-// so pools stay warm.  Draining only happens during genuine idle periods.
-const arenaDrainDelay = 2 * time.Minute
+// draining the arena pools.  Using 2x the default incremental checkpoint
+// interval (5 minutes) ensures the timer is always reset during active
+// operation, so pools stay warm.  Draining only happens during genuine
+// idle periods.
+const arenaDrainDelay = 10 * time.Minute
 
 var (
 	arenaDrainMu    sync.Mutex
@@ -139,9 +140,9 @@ var (
 )
 
 // ScheduleArenaDrain debounces arena pool draining.  Each call resets the
-// timer to arenaDrainDelay from now.  During steady-state checkpointing
-// (every ~60 s), the timer never fires and pools stay warm.  Once
-// activity ceases, the timer fires and RSS is reclaimed.
+// timer to arenaDrainDelay from now.  During steady-state checkpointing,
+// the timer never fires and pools stay warm.  Once activity ceases, the
+// timer fires and RSS is reclaimed.
 func ScheduleArenaDrain() {
 	arenaDrainMu.Lock()
 	defer arenaDrainMu.Unlock()

@@ -200,9 +200,9 @@ func makeSpecialAggExec(
 		case AggIdOfAvg:
 			return makeSumAvgExec(mp, false, id, isDistinct, params[0]), true, nil
 		case AggIdOfCountColumn:
-			return makeCount(mp, false, id, isDistinct, params[0]), true, nil
+			return makeCount(mp, false, id, isDistinct, params), true, nil
 		case AggIdOfCountStar:
-			return makeCount(mp, true, id, isDistinct, params[0]), true, nil
+			return makeCount(mp, true, id, isDistinct, params), true, nil
 		case AggIdOfMedian:
 			exec, err := makeMedian(mp, id, isDistinct, params[0])
 			return exec, true, err

@@ -319,6 +319,73 @@ func TestVectorZM(t *testing.T) {
 	require.Zero(t, m.CurrNB())
 }
 
+func TestZoneMapAnyInSkipsNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+
+	require.NoError(t, vector.AppendBytes(vec, []byte("aaa"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, []byte("key"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, []byte("keep"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+
+	zm := NewZM(types.T_varchar, 0)
+	UpdateZM(zm, []byte("key"))
+	UpdateZM(zm, []byte("keep"))
+
+	require.True(t, zm.AnyIn(vec))
+	lower, upper := zm.SubVecIn(vec)
+	require.Equal(t, 0, lower)
+	require.Equal(t, vec.Length(), upper)
+}
+
+func TestZoneMapAnyInSkipsNullsForFixedTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	require.NoError(t, vector.AppendFixed(vec, int32(1), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, int32(2), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, int32(0), true, mp))
+
+	minVal, maxVal := int32(2), int32(4)
+	zm := NewZM(types.T_int32, 0)
+	UpdateZM(zm, types.EncodeInt32(&minVal))
+	UpdateZM(zm, types.EncodeInt32(&maxVal))
+
+	require.True(t, zm.AnyIn(vec))
+	lower, upper := zm.SubVecIn(vec)
+	require.Equal(t, 0, lower)
+	require.Equal(t, vec.Length(), upper)
+}
+
+func TestZoneMapAnyInAllNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+
+	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+
+	zm := NewZM(types.T_varchar, 0)
+	UpdateZM(zm, []byte("key"))
+
+	require.False(t, zm.AnyIn(vec))
+}
+
+func TestZoneMapAnyInConstNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewConstNull(types.T_varchar.ToType(), 1, mp)
+	defer vec.Free(mp)
+
+	zm := NewZM(types.T_varchar, 0)
+	UpdateZM(zm, []byte("key"))
+
+	require.False(t, zm.AnyIn(vec))
+	lower, upper := zm.SubVecIn(vec)
+	require.Equal(t, 0, lower)
+	require.Equal(t, 0, upper)
+}
+
 func TestZMArray(t *testing.T) {
 	zm := NewZM(types.T_array_float32, 0)
 	zm.Update(types.ArrayToBytes[float32]([]float32{1, 1, 1}))
