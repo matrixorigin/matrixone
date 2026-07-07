@@ -3163,7 +3163,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 
-		if astLimit != nil && builder.isForUpdate {
+		if astLimit != nil && lockNode != nil {
 			lockNode.Children[0] = nodeID
 			nodeID = builder.appendNode(lockNode, ctx)
 		}

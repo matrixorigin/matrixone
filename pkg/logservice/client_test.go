@@ -149,6 +149,21 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	}()
 }
 
+func TestConnectToLogServiceShufflesTargetsLength(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	require.NotPanics(t, func() {
+		_, _ = connectToLogService(ctx, "", []string{"127.0.0.1:1"}, ClientConfig{
+			ServiceAddresses: []string{
+				"127.0.0.1:1",
+				"127.0.0.1:2",
+				"127.0.0.1:3",
+			},
+		})
+	})
+}
+
 func TestClientCreationFallsBackFromUnreachableReplicaAddress(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	var cfg Config
