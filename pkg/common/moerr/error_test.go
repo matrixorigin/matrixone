@@ -251,4 +251,7 @@ func Test_ForCoverage(t *testing.T) {
 
 	err = NewTxnStaleNoCtxf("test")
 	require.True(t, IsMoErrCode(err, ErrTxnStale))
+
+	err = NewErrSubqueryNo1Row(ctx)
+	require.True(t, IsMoErrCode(err, ErrSubqueryNo1Row))
 }
