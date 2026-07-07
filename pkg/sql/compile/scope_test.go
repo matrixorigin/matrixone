@@ -331,6 +331,21 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 	})
 }
 
+func TestMessageSenderOnClientReceiveBatchReturnsStreamClosed(t *testing.T) {
+	sender := new(messageSenderOnClient)
+	sender.ctx = context.Background()
+	sender.receiveCh = make(chan morpc.Message)
+	close(sender.receiveCh)
+
+	bat, over, err := sender.receiveBatch()
+	require.Nil(t, bat)
+	require.False(t, over)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
+	require.True(t, sender.safeToClose)
+	require.True(t, sender.alreadyClose)
+}
+
 func TestNewParallelScope(t *testing.T) {
 	// function `newParallelScope` will dispatch one scope's work into n scopes.
 	testCompile := NewMockCompile(t)
