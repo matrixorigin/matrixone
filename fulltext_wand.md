@@ -340,9 +340,12 @@ without re-tokenizing.
    reindexes — plumb like `hnsw_max_index_capacity`.
 
 ### Consistency / concurrency notes
-- Async ⇒ eventually consistent (CDC lag), like HNSW/cuVS. **CREATE now returns
-  before the index is populated**; queries until CDC catch-up are partial. REINDEX
-  = an idxcron full-rebuild action (define à la cuVS reindex).
+- Async ⇒ eventually consistent (CDC lag), like HNSW/cuVS — for *DML after CREATE*.
+  **[SUPERSEDED 2026-07-07: the initial BUILD is now sync-by-default, so CREATE is
+  queryable immediately; only rows inserted AFTER create are subject to CDC catch-up.
+  An explicitly `async` retrieval index keeps the old "CREATE returns before populated"
+  behavior.]** REINDEX is now a user-facing `ALTER … REINDEX … FULLTEXT [FORCE_SYNC]`
+  (sync rebuild) in addition to the planned idxcron full-rebuild action.
 - A deleted/superseded doc still contributes to `df`/`N`/`avgdl` until reindex
   (standard Lucene/cuVS); the reindex makes it exact. **Stat drift scales with the
   un-reindexed delete/update ratio**, so the reindex gate should weigh delete-ratio,
@@ -365,7 +368,60 @@ without re-tokenizing.
   multi-segment search adapter.
 - **B3**: idxcron `Merge` compaction + `max_index_capacity` rollover.
 
-### Implementation status (branch `fulltext_wand`, HEAD `18713cb44`, updated 2026-07-02)
+### Implementation status (branch `fulltext_wand`, HEAD `a6d87b0d5`, updated 2026-07-07)
+
+**Update 2026-07-07 — CREATE is now sync-by-default, plus ALTER REINDEX, clone/restore,
+tag=0 capping, temporal/decimal PK, and a plan-time mode guard.** (Commits
+`a0573840d`, `9181cdc26`, `3edae8b5c`, `6716906f4`, `a6d87b0d5`, plus test/doc commits;
+`main` and `cuvs_quantize` were also merged in — the only conflict was the goyacc-generated
+`mysql_sql.go`, resolved by regenerating from the merged `.y`.)
+
+- **Initial BUILD is now SYNCHRONOUS by default — a design change from "always-async
+  build."** DML stays async (CDC), but the *build* decision is now separated from the
+  DML-async decision (the HNSW model): `HandleCreateIndex` builds the postings + tag=0
+  base **inline in the CREATE txn** (`retrieval && (!async || forceSync)`), so the index
+  is queryable immediately — CREATE no longer "returns before the index is populated."
+  The async InitSQL build (§Components 2/d) remains for an explicitly `async` retrieval
+  index. `AlwaysAsync` still governs DML only; `catalog.IsIndexAsync` (default false)
+  governs the build. See `pkg/indexplugin/HOOKS.md` §3 (the two async axes).
+- **ALTER … REINDEX … FULLTEXT [FORCE_SYNC]** — user-facing grammar (`mysql_sql.y`) +
+  dispatch (`ddl.go`), `HandleReindex` → sync rebuild (drop CDC → clear postings+tag0/1
+  → rebuild → re-arm CDC startFromNow). Only the retrieval parser is rebuildable.
+- **max_index_capacity multi-index tag=0 — DONE (supersedes Phase C's "tag=0 base capping
+  NOT DONE").** `fulltext_wand_create.end()` now `builder.FinishSegments(capacity)` (reads
+  `fulltext_max_index_capacity` via the resolver / the ISCP session_vars overlay), splitting
+  the base into capacity-bounded sub-indexes (`wand.SubIndexId(uid,i)`, per-build-unique).
+  `LoadAllBases` composes all bases + tail; `DeleteAllBasesSqls`/`DeleteTailSqls` for idempotent
+  rebuild.
+- **Clone + snapshot/restore — DONE (not previously in this doc).** A retrieval index's
+  sync build seeds tag=0 at CreateTable, which the block-clone would double; fixed by the
+  catalog/compile hook contract: `RestoreBehavior{}` is empty (fulltext is empty-at-create
+  like HNSW/CAGRA/IVF-PQ — the dead `DeleteBeforeClone=[postings]` was removed), and
+  `RestoreInitSQL` returns `ALTER … REINDEX … FULLTEXT FORCE_SYNC` for a retrieval index
+  (rebuild post-clone, discarding the seed+clone duplicate) / `"SELECT 1"` for
+  postings/ngram. Verified: clone/restore bases match a fresh build; capacity preserved
+  through clone/restore via the `session_vars` overlay. BVTs:
+  `pessimistic_transaction/fulltext/fulltext_retrieval_{clone,restore}`.
+- **Native temporal/decimal PK support** (`9181cdc26`) — uuid/datetime/decimal handled as
+  strings via the ISCP extractor.
+- **Plan-time mode guard** (`a6d87b0d5`) — `MATCH(...) IN RETRIEVAL MODE` on a
+  *non-retrieval* index is now rejected at plan time ("RETRIEVAL mode requires a fulltext
+  index created WITH PARSER retrieval") instead of the opaque runtime "invalid fulltext
+  search mode". BVT: `fulltext/fulltext_retrieval_mode_guard`.
+- **Tests + docs** — compile-hook unit tests (`compile_test.go`, 0→77.7%, `RestoreInitSQL`
+  100%); the index-plugin hook contract is now documented in `pkg/indexplugin/HOOKS.md`
+  (empty-at-create vs seeded; the two clone paths) + mo-dev skill pointers.
+- **Self-review (2026-07-07) vs `cuvs_quantize`** confirmed the two long-standing "known
+  gaps" below are the only correctness-adjacent items, both accepted/decision-logged:
+  the score-Sort + LIMIT-pushdown quirk (non-score `ORDER BY` / multi-predicate under-return
+  — invalid RETRIEVAL SQL, accepted) and CN-local cache eviction (matches HNSW/CAGRA/IVF-PQ).
+- **Still open:** **idxcron compaction (Phase B item g / Phase C item 2) — NOT STARTED.**
+  tag=1 grows unbounded between manual `ALTER … REINDEX`es. Cross-invocation open-segment
+  top-up (Phase C item 1b) remains, blocked on item 2's live-filter primitive.
+
+---
+
+### Implementation status — prior (HEAD `18713cb44`, 2026-07-02)
 
 **Branch state:** the Phase-B foundation (commit `eb94f4ae8`) is committed, then
 **`cuvs_quantize` was merged into `fulltext_wand`** (merge commit `7c20d9286`).
@@ -490,9 +546,10 @@ is retained only as a schema-change / corruption-recovery fallback).
   capacity is **1M** (`fulltext_max_index_capacity`, captured into `algo_params.session_vars`
   at CREATE via the `BuildSessionVars` hook so it reaches the always-async sinker). e2e:
   `cap=1000` → 100k docs → `segs=100`; `cap=1M` → `segs=1`; exact recall.
-  **Remaining item-1 pieces:** cross-*invocation* open-segment top-up (needs the
-  UPSERT-dedup / live-filter primitive shared with item 2) and **tag=0 create-build
-  capping** (`fulltext_wand_create.end()` still `builder.Finish()` — one uncapped base).
+  **Remaining item-1 piece:** cross-*invocation* open-segment top-up (needs the
+  UPSERT-dedup / live-filter primitive shared with item 2). **[tag=0 create-build capping
+  is now DONE (2026-07-07, `a0573840d`): `fulltext_wand_create.end()` uses
+  `FinishSegments(capacity)` reading `fulltext_max_index_capacity`.]**
 - **Item 2 (delete-only tiered compaction) — NOT STARTED.**
 
 ### Cost model (why this is needed)
@@ -551,10 +608,11 @@ merge the new batch, reseal) needs in-segment pk dedup for UPSERTs (`Merge` only
 concatenates disjoint sets) — the **live-filter primitive shared with item 2**. Deferred
 until item 2's primitive exists; deletes stay frames-only meanwhile.
 
-**tag=0 base capping (NOT DONE).** `fulltext_wand_create.end()` still emits one uncapped
-base via `builder.Finish()`; it must switch to `FinishSegments(capacity)` (resolving
-capacity through the InitSQL overlay resolver, which — unlike the sinker — *can* see the
-captured session var) so the base is capped too.
+**tag=0 base capping (DONE 2026-07-07, `a0573840d`).** `fulltext_wand_create.end()` now
+uses `FinishSegments(capacity)` — capacity resolved through the resolver (the live session
+var for a sync build, or the InitSQL overlay resolver for the async build / the reindex
+InitSQL, which — unlike the sinker — *can* see the captured session var) — so the base is
+split into capacity-bounded sub-indexes, not one monolith.
 
 ### Item 2 — delete-only single-txn compaction (capacity-capped, tiered)
 Compaction merges **already-built** segments (no re-tokenize) via `Merge(id, segs…)`
@@ -601,10 +659,10 @@ capacity bounds (a) load allocation, (b) compaction peak memory (`inputs+output`
 resident), and (c) per-compaction write amplification. Capacity trades *segment size*
 (memory, write-amp) against *segment count* (per-segment search overhead). **DONE:** the
 default is now **1M** (`fulltext_max_index_capacity`, captured at CREATE — see Item 1),
-matching HNSW's order (~88 units at 88M). **Still TODO:** the CREATE/REINDEX build
-(`fulltext_wand_create.end()`) emits **one** uncapped base (`builder.Finish()`) — it must
-capacity-split like the CDC path (`FinishSegments(capacity)`); compaction's `Merge` output
-must likewise be re-split to respect capacity.
+matching HNSW's order (~88 units at 88M). **DONE (2026-07-07, `a0573840d`):** the
+CREATE/REINDEX build (`fulltext_wand_create.end()`) now capacity-splits via
+`FinishSegments(capacity)` like the CDC path. **Still TODO:** compaction's `Merge` output
+must likewise be re-split to respect capacity (part of the not-yet-started item 2).
 
 ### Comparison to HNSW's ISCP merge (why not just "merge like HNSW")
 HNSW's `runHnsw` (`index_consumer.go:251`) **loads all models at sinker startup**,
@@ -627,8 +685,9 @@ read side.
 ### Build order: 3 → 1 → 2
 - **3 — DONE** (`7dc802bd1`): isolated per-query win.
 - **1 core — DONE**: streaming capacity-capped build (OOM fix) + 1M default / captured
-  `fulltext_max_index_capacity`. Remaining: tag=0 create-build capping + cross-invocation
-  top-up (the latter blocked on item 2's live-filter primitive).
+  `fulltext_max_index_capacity` + **tag=0 create-build capping (DONE 2026-07-07,
+  `a0573840d`)**. Remaining: cross-invocation top-up (blocked on item 2's live-filter
+  primitive).
 - **2 — next**: delete-only tiered compaction; its live-filter/dedup primitive also
   unblocks item 1's top-up. Long-term space/count bound.
 
