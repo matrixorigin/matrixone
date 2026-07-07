@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,9 +28,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -78,6 +75,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -827,64 +825,81 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 // 	return attachedScope, nil
 // }
 
-func isAvailable(client morpc.RPCClient, addr string) bool {
-	_, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
-		return false
-	}
-	logutil.Debugf("ping %s start", addr)
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 500*time.Millisecond, moerr.CauseIsAvailable)
-	defer cancel()
-	err = client.Ping(ctx, addr)
-	if err != nil {
-		err = moerr.AttachCause(ctx, err)
-		// ping failed
-		logutil.Debugf("ping %s err %+v\n", addr, err)
-		return false
-	}
-	return true
+func (c *Compile) getCandidateCNs() (engine.Nodes, error) {
+	return c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
 }
 
-func (c *Compile) removeUnavailableCN() {
-	client := cnclient.GetPipelineClient(
-		c.proc.GetService(),
-	)
-	if client == nil {
-		return
+func (c *Compile) decideQueryPlacement(execType plan2.ExecType) (schedule.QueryDecision, error) {
+	localNode := getEngineNode(c)
+	req := schedule.QueryRequest{
+		ExecKind:    toScheduleExecKind(execType),
+		LocalWorker: toScheduleWorker(localNode),
 	}
-	i := 0
-	for _, cn := range c.cnList {
-		if isSameCN(c.addr, cn.Addr) || isAvailable(client.Raw(), cn.Addr) {
-			c.cnList[i] = cn
-			i++
-		}
+	if execType != plan2.ExecTypeAP_MULTICN {
+		return schedule.DecideQueryPlacement(req), nil
 	}
-	c.cnList = c.cnList[:i]
+
+	candidates, err := c.getCandidateCNs()
+	if err != nil {
+		return schedule.QueryDecision{}, err
+	}
+
+	req.Candidates = toScheduleWorkers(candidates)
+	req.RequireLocal = c.proc != nil && c.proc.Base.QueryClient != nil
+	if req.RequireLocal {
+		localNode.Id = c.proc.GetService()
+		req.LocalWorker = toScheduleWorker(localNode)
+	}
+	return schedule.DecideQueryPlacement(req), nil
 }
 
-// getCNList gets the CN list from engine.Nodes() method. It will
-// ensure the current CN is included in the result.
-func (c *Compile) getCNList() (engine.Nodes, error) {
-	cnList, err := c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
-	if err != nil {
-		return nil, err
+func toScheduleExecKind(execType plan2.ExecType) schedule.QueryExecKind {
+	switch execType {
+	case plan2.ExecTypeTP:
+		return schedule.QueryExecTP
+	case plan2.ExecTypeAP_ONECN:
+		return schedule.QueryExecAPOneCN
+	default:
+		return schedule.QueryExecAPMultiCN
 	}
+}
 
-	// We should always make sure the current CN is contained in the cn list.
-	if c.proc == nil || c.proc.Base.QueryClient == nil {
-		return cnList, nil
+func toScheduleWorker(node engine.Node) schedule.Worker {
+	return schedule.Worker{
+		ID:   node.Id,
+		Addr: node.Addr,
+		Mcpu: node.Mcpu,
 	}
-	cnID := c.proc.GetService()
-	for _, node := range cnList {
-		if node.Id == cnID {
-			return cnList, nil
-		}
+}
+
+func toScheduleWorkers(nodes engine.Nodes) schedule.Workers {
+	if len(nodes) == 0 {
+		return nil
 	}
-	n := getEngineNode(c)
-	n.Id = cnID
-	cnList = append(cnList, n)
-	return cnList, nil
+	workers := make(schedule.Workers, 0, len(nodes))
+	for _, node := range nodes {
+		workers = append(workers, toScheduleWorker(node))
+	}
+	return workers
+}
+
+func toEngineNode(worker schedule.Worker) engine.Node {
+	return engine.Node{
+		Id:   worker.ID,
+		Addr: worker.Addr,
+		Mcpu: worker.Mcpu,
+	}
+}
+
+func toEngineNodes(workers schedule.Workers) engine.Nodes {
+	if len(workers) == 0 {
+		return nil
+	}
+	nodes := make(engine.Nodes, 0, len(workers))
+	for _, worker := range workers {
+		nodes = append(nodes, toEngineNode(worker))
+	}
+	return nodes
 }
 
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
@@ -897,15 +912,12 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
 
-	n := getEngineNode(c)
-	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
-		c.cnList = engine.Nodes{n}
-	} else {
-		c.cnList, err = c.getCNList()
-		if err != nil {
-			return nil, err
-		}
-		c.removeUnavailableCN()
+	placement, err := c.decideQueryPlacement(c.execType)
+	if err != nil {
+		return nil, err
+	}
+	c.cnList = toEngineNodes(placement.Workers)
+	if c.execType == plan2.ExecTypeAP_MULTICN {
 		// sort by addr to get fixed order of CN list
 		sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
 	}
@@ -1890,14 +1902,14 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 	if param.ExternType == int32(plan.ExternType_LOAD) &&
 		param.Format == tree.PARQUET &&
 		param.Parallel {
-		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(param, fileList, fileSize)
+		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(node, param, fileList, fileSize)
 		if err != nil {
 			return nil, err
 		}
 		logutil.Debugf("parquet load footer metadata: files=%d row_groups=%d rows=%d read_calls=%d read_bytes=%d duration=%s",
 			footerStats.Files, footerStats.RowGroups, footerStats.Rows,
 			footerStats.ReadCalls, footerStats.ReadBytes, footerStats.Duration)
-		if footerStats.RowGroups > len(fileList) {
+		if footerStats.RowGroups > parquetRowGroupFileCount(rowGroups) {
 			return c.compileExternScanParquetRowGroupFanout(node, param, fileList, fileSize, rowGroups, strictSqlMode)
 		}
 		if len(fileList) > 1 {
@@ -2119,6 +2131,7 @@ func (c *Compile) compileExternScanParquetRowGroupFanout(
 }
 
 func (c *Compile) readLoadParquetRowGroupMetadata(
+	node *plan.Node,
 	param *tree.ExternParam,
 	fileList []string,
 	fileSize []int64,
@@ -2170,6 +2183,12 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 		if err != nil {
 			return nil, stats, moerr.ConvertGoError(ctx, err)
 		}
+		if f.NumRows() == 0 {
+			if err := validateEmptyParquetLoadFile(ctx, node, param, f); err != nil {
+				return nil, stats, err
+			}
+			continue
+		}
 		rowGroups := f.RowGroups()
 		stats.RowGroups += len(rowGroups)
 		totalRows := f.NumRows()
@@ -2186,6 +2205,55 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 	}
 	stats.Duration = time.Since(start)
 	return metas, stats, nil
+}
+
+func validateEmptyParquetLoadFile(ctx context.Context, node *plan.Node, param *tree.ExternParam, f *parquet.File) error {
+	if param == nil || f == nil {
+		return nil
+	}
+	attrs := buildExternalAttrs(node)
+	if param.ExternType == int32(plan.ExternType_LOAD) &&
+		externalColumnListLen(node) > int32(len(attrs)) {
+		return moerr.NewNYI(ctx, "parquet load with @variables in column list")
+	}
+	if param.HivePartitioning {
+		return nil
+	}
+	parquetColCnt := len(f.Root().Columns())
+	tableColCnt := getCompileParquetExpectedColCnt(param, attrs)
+	if parquetColCnt != tableColCnt {
+		return moerr.NewInvalidInputf(ctx,
+			"column count mismatch: parquet file has %d columns, but table has %d columns",
+			parquetColCnt, tableColCnt)
+	}
+	return nil
+}
+
+func getCompileParquetExpectedColCnt(param *tree.ExternParam, attrs []plan.ExternAttr) int {
+	cnt := 0
+	for _, attr := range attrs {
+		if catalog.ContainExternalHidenCol(attr.ColName) {
+			continue
+		}
+		if compileParquetIsHivePartitionCol(param, attr.ColName) {
+			continue
+		}
+		cnt++
+	}
+	return cnt
+}
+
+func compileParquetIsHivePartitionCol(param *tree.ExternParam, colName string) bool {
+	if param == nil || !param.HivePartitioning {
+		return false
+	}
+	lower := strings.ToLower(colName)
+	for _, pc := range param.HivePartitionCols {
+		if pc == lower {
+			return true
+		}
+	}
+	return false
 }
 
 type compileParquetFooterReaderAt struct {
@@ -2235,6 +2303,14 @@ func estimateParquetRowGroupBytes(fileSize, totalRows, rowGroupRows int64, rowGr
 		}
 	}
 	return 1
+}
+
+func parquetRowGroupFileCount(rowGroups []parquetRowGroupMeta) int {
+	files := make(map[int32]struct{})
+	for _, meta := range rowGroups {
+		files[meta.fileIndex] = struct{}{}
+	}
+	return len(files)
 }
 
 func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
@@ -5129,21 +5205,6 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	return rel, db, ctx, nil
 }
 
-func shouldScanOnCurrentCN(c *Compile, node *plan.Node, forceSingle bool) bool {
-	if len(c.cnList) == 1 ||
-		node.Stats.ForceOneCN ||
-		forceSingle {
-		return true
-	}
-
-	if !plan2.GetForceScanOnMultiCN() &&
-		node.Stats.BlockNum <= int32(plan2.BlockThresholdForOneCN) {
-		return true
-	}
-
-	return false
-}
-
 func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 	rel, _, _, err := c.handleDbRelContext(node, false)
 	if err != nil {
@@ -5181,9 +5242,19 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 	}
 
 	var engNodes engine.Nodes
-	// scan on current CN
-	if shouldScanOnCurrentCN(c, node, forceSingle) {
-		mcpu := node.Stats.Dop
+	stats := toScheduleScanStats(node)
+	scanPlacement := schedule.DecideScanPlacement(schedule.ScanRequest{
+		QueryWorkers:        toScheduleWorkers(c.cnList),
+		Stats:               stats,
+		ForceSingle:         forceSingle,
+		ForceMultiCN:        plan2.GetForceScanOnMultiCN() || plan2.IsIvfSearchEntriesInternalScan(node),
+		OneCNBlockThreshold: int32(plan2.BlockThresholdForOneCN),
+	})
+	if scanPlacement.LocalOnly {
+		mcpu := int32(1)
+		if stats != nil {
+			mcpu = stats.Dop
+		}
 		if forceSingle {
 			mcpu = 1
 		}
@@ -5196,29 +5267,65 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 	}
 
 	// scan on multi CN
-	for i := range c.cnList {
-		mcpu := max(c.cnList[i].Mcpu, 1)
-		if node.Stats.Dop > 0 {
-			mcpu = min(mcpu, int(node.Stats.Dop))
+	scanWorkers := scanPlacement.Workers
+	remoteTombstones := remoteScanTombstoneAttacher{
+		c:    c,
+		node: node,
+		rel:  rel,
+	}
+	for i := range scanWorkers {
+		mcpu := max(scanWorkers[i].Mcpu, 1)
+		if stats != nil && stats.Dop > 0 {
+			mcpu = min(mcpu, int(stats.Dop))
 		}
 		engNode := engine.Node{
-			Id:    c.cnList[i].Id,
-			Addr:  c.cnList[i].Addr,
+			Id:    scanWorkers[i].ID,
+			Addr:  scanWorkers[i].Addr,
 			Mcpu:  mcpu,
-			CNCNT: int32(len(c.cnList)),
+			CNCNT: int32(len(scanWorkers)),
 			CNIDX: int32(i),
 		}
 		if engNode.Addr != c.addr {
-			uncommittedTombs, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones)
-			if err != nil {
+			if err := remoteTombstones.attach(&engNode); err != nil {
 				return nil, err
 			}
-			engNode.Data = readutil.BuildEmptyRelData()
-			engNode.Data.AttachTombstones(uncommittedTombs)
 		}
 		engNodes = append(engNodes, engNode)
 	}
 	return engNodes, nil
+}
+
+type remoteScanTombstoneAttacher struct {
+	c          *Compile
+	node       *plan.Node
+	rel        engine.Relation
+	collected  bool
+	tombstones engine.Tombstoner
+}
+
+func (a *remoteScanTombstoneAttacher) attach(node *engine.Node) error {
+	if !a.collected {
+		tombstones, err := collectTombstones(a.c, a.node, a.rel, engine.Policy_CollectAllTombstones)
+		if err != nil {
+			return err
+		}
+		a.tombstones = tombstones
+		a.collected = true
+	}
+	node.Data = readutil.BuildEmptyRelData()
+	_ = node.Data.AttachTombstones(a.tombstones)
+	return nil
+}
+
+func toScheduleScanStats(node *plan.Node) *schedule.ScanStats {
+	if node == nil || node.Stats == nil {
+		return nil
+	}
+	return &schedule.ScanStats{
+		BlockNum:   node.Stats.BlockNum,
+		Dop:        node.Stats.Dop,
+		ForceOneCN: node.Stats.ForceOneCN,
+	}
 }
 
 func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {

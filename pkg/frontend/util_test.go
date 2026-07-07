@@ -1063,6 +1063,7 @@ func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableNotFoundNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadlockCheckBusyNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockConflictNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRemoteLockWaitTimeoutNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewTxnUnknown(context.Background(), "test")))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendClosedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewNoAvailableBackendNoCtx()))

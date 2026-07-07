@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -383,24 +384,49 @@ func newMessageSenderOnClient(
 	mp *mpool.MPool,
 	analyzeModule *AnalyzeModule,
 ) (*messageSenderOnClient, error) {
-	streamSender, err := cnclient.GetPipelineClient(sid).NewStream(ctx, toAddr)
+	streamCtx := ctx
+	var streamCtxCancel context.CancelFunc
+	useInternalTimeout := false
+	if _, ok := ctx.Deadline(); !ok {
+		streamCtx, streamCtxCancel = context.WithTimeoutCause(ctx, MaxRpcTime, moerr.CauseNewMessageSenderOnClient)
+		useInternalTimeout = true
+	}
+	cleanupStreamCtx := func() {
+		if streamCtxCancel != nil {
+			streamCtxCancel()
+		}
+	}
+
+	if moruntime.ServiceRuntime(sid) == nil {
+		cleanupStreamCtx()
+		return nil, moerr.NewInternalErrorNoCtx("service runtime is not initialized")
+	}
+	pipelineClient := cnclient.GetPipelineClient(sid)
+	if pipelineClient == nil {
+		cleanupStreamCtx()
+		return nil, moerr.NewInternalErrorNoCtx("pipeline client is not initialized")
+	}
+
+	streamSender, err := pipelineClient.NewStream(streamCtx, toAddr)
 	if err != nil {
+		err = moerr.AttachCause(streamCtx, err)
+		cleanupStreamCtx()
 		return nil, err
+	}
+	if streamSender == nil {
+		cleanupStreamCtx()
+		return nil, moerr.NewInternalErrorNoCtx("pipeline stream is not initialized")
 	}
 
 	sender := &messageSenderOnClient{
-		safeToClose:  true,
-		alreadyClose: false,
-		mp:           mp,
-		anal:         analyzeModule,
-		streamSender: streamSender,
-	}
-
-	if _, ok := ctx.Deadline(); !ok {
-		sender.ctx, sender.ctxCancel = context.WithTimeoutCause(ctx, MaxRpcTime, moerr.CauseNewMessageSenderOnClient)
-		sender.useInternalTimeout = true
-	} else {
-		sender.ctx = ctx
+		ctx:                streamCtx,
+		ctxCancel:          streamCtxCancel,
+		useInternalTimeout: useInternalTimeout,
+		safeToClose:        true,
+		alreadyClose:       false,
+		mp:                 mp,
+		anal:               analyzeModule,
+		streamSender:       streamSender,
 	}
 
 	if sender.receiveCh == nil {
@@ -408,11 +434,15 @@ func newMessageSenderOnClient(
 	}
 
 	// Only Inc() when we return a valid sender that the caller will eventually close();
-	// when Receive() fails, remoteRun returns nil and never calls close(), so we must not Inc() to avoid gauge leak.
-	if err == nil {
-		v2.PipelineMessageSenderGauge.Inc()
+	// when Receive() fails, close the stream here because remoteRun returns nil and never calls close().
+	if err != nil {
+		err = moerr.AttachCause(streamCtx, err)
+		cleanupStreamCtx()
+		_ = streamSender.Close(true)
+		return nil, err
 	}
-	return sender, moerr.AttachCause(ctx, err)
+	v2.PipelineMessageSenderGauge.Inc()
+	return sender, nil
 }
 
 func (sender *messageSenderOnClient) sendPipeline(
