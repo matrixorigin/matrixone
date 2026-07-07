@@ -443,6 +443,8 @@ func CompareValue(left, right any) int {
 		return lVal.Compare(right.(Decimal64))
 	case Decimal128:
 		return lVal.Compare(right.(Decimal128))
+	case Decimal256:
+		return lVal.Compare(right.(Decimal256))
 	case Date:
 		return int(lVal - right.(Date))
 	case Time:
