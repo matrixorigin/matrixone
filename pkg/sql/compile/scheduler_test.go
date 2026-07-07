@@ -20,6 +20,9 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -221,6 +224,39 @@ func TestScheduleQueryWorkersDeduplicatesRequiredLocalByAddress(t *testing.T) {
 	require.Equal(t, 2, len(decision.Workers))
 	require.Equal(t, "remote:6001", decision.Workers[0].Addr)
 	require.Equal(t, "local:6001", decision.Workers[1].Addr)
+}
+
+func TestScheduleQueryWorkersDeduplicatesRequiredLocalByServiceID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	const localID = "local-cn"
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: localID}).AnyTimes()
+	c.proc.Base.LockService = lockSvc
+	c.e = &schedulerTestEngine{
+		nodes: engine.Nodes{
+			{Id: "remote", Addr: "remote:6001", Mcpu: 4},
+			{Id: localID, Addr: "local:6001", Mcpu: 6},
+		},
+	}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{
+		{Id: localID, Addr: "local:6001", Mcpu: 6},
+		{Id: "remote", Addr: "remote:6001", Mcpu: 4},
+	}, nodes)
+
+	decision, err := c.decideQueryPlacement()
+	require.NoError(t, err)
+	require.Equal(t, schedule.ReasonRequiredLocalCN, decision.Reason)
+	require.Equal(t, 2, len(decision.Workers))
+	require.Equal(t, localID, decision.Workers[1].ID)
 }
 
 func TestScheduleQueryWorkersReturnsCandidateError(t *testing.T) {
