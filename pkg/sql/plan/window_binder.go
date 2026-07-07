@@ -55,6 +55,10 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		return nil, moerr.NewNYI(b.GetContext(), "DISTINCT in window function")
 	}
 
+	if err := validateCountArgs(b.GetContext(), funcName, astExpr); err != nil {
+		return nil, err
+	}
+
 	astStr := windowExprAstKey(astExpr)
 
 	w := &plan.WindowSpec{}

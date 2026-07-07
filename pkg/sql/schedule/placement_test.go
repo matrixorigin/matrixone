@@ -72,6 +72,19 @@ func TestDecideQueryPlacementCanRequireCurrentCN(t *testing.T) {
 	require.Equal(t, Workers{candidates[0], local}, decision.Workers)
 }
 
+func TestDecideQueryPlacementFallsBackToLocalWhenCandidatesEmpty(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:    QueryExecAPMultiCN,
+		LocalWorker: local,
+	})
+
+	require.Equal(t, QueryExecAPMultiCN, decision.ExecKind)
+	require.Equal(t, ReasonMultiCN, decision.Reason)
+	require.Equal(t, Workers{local}, decision.Workers)
+}
+
 func TestDecideQueryPlacementDoesNotDuplicateRequiredCurrentCN(t *testing.T) {
 	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
 	candidates := Workers{
