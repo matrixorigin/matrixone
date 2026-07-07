@@ -81,10 +81,8 @@ INSERT INTO t1 (id,a) VALUES
 (3,CAST(0x8000000000000000 AS UNSIGNED)),
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 UPDATE t1 SET b = a;
--- @bvt:issue#4383
 select distinct * from t1 where ((a = '2147483647') and (b = '2147483647'));
 select a,count(a) from t1 group by a having count(a)>=2;
--- @bvt:issue
 
 #Test cases of operators
 CREATE TABLE t_decimal(id decimal(10,5));
@@ -109,11 +107,9 @@ SELECT * from t_decimal WHERE id BETWEEN '1.1e0' AND '1.9e0';
 drop table t1;
 CREATE TABLE t1 (a decimal(2,1));
 INSERT INTO t1 VALUES (1),(0.8999),(0.9);
--- @bvt:issue#3185
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
 SELECT * FROM t1 WHERE coalesce(a)=0.9;
 SELECT * FROM t1 WHERE coalesce(a) in (0.8,0.9);
--- @bvt:issue
 SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
 SELECT * FROM t1 WHERE a=0.9;
 SELECT * FROM t1 WHERE a IN (0.8,0.9);
@@ -127,7 +123,6 @@ where id>=88947549497796.3574 and id <=889475494977969.358;
 select count(*) from t
 where id between 88947549497796.3574 and 889475494977969.358;
 drop table t;
--- @bvt:issue
 SELECT CAST(1.00 AS decimal) BETWEEN 1 AND -1;
 SELECT CAST(1.00 AS decimal) NOT BETWEEN 1 AND -1;
 SELECT CAST(-0 AS decimal) BETWEEN 0 AND -1;
@@ -621,11 +616,9 @@ SELECT CAST(col4 AS decimal(20,3)) FROM decimal18;
 SELECT 0.32846287164921643232142372817438921749321 * col1 FROM decimal18;
 SELECT -0.487794599999999999999999999999999945451154 * col2 FROM decimal18;
 
--- @bvt:issue#8516
 SELECT col1 * col2 FROM decimal18;
 SELECT col3 * col2 FROM decimal18;
 SELECT col2 * col4 FROM decimal18;
--- @bvt:issue
 
 SELECT col1 / col2 FROM decimal18;
 SELECT 12345678965412365478965444565896532145 / col1 FROM decimal18;
