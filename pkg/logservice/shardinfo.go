@@ -58,13 +58,13 @@ func GetShardInfo(
 	sid string,
 	address string,
 	shardID uint64,
-	onlyLiveReplicaAddresses ...bool,
+	excludeHardDownReplicaAddresses ...bool,
 ) (ShardInfo, bool, error) {
-	onlyLive := true
-	if len(onlyLiveReplicaAddresses) > 0 {
-		onlyLive = onlyLiveReplicaAddresses[0]
+	excludeHardDown := true
+	if len(excludeHardDownReplicaAddresses) > 0 {
+		excludeHardDown = excludeHardDownReplicaAddresses[0]
 	}
-	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID, false, onlyLive)
+	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID, false, excludeHardDown)
 	if err != nil || !ok {
 		return ShardInfo{}, false, err
 	}
@@ -121,7 +121,7 @@ func queryShardInfoRaw(
 	address string,
 	shardID uint64,
 	includeExpiredReplicaAddresses bool,
-	onlyLiveReplicaAddresses bool,
+	excludeHardDownReplicaAddresses bool,
 ) (pb.ShardInfoQueryResult, bool, error) {
 	respPool := &sync.Pool{}
 	respPool.New = func() interface{} {
@@ -152,9 +152,9 @@ func queryShardInfoRaw(
 	req := pb.Request{
 		Method: pb.GET_SHARD_INFO,
 		LogRequest: pb.LogRequest{
-			ShardID:                        shardID,
-			IncludeExpiredReplicaAddresses: includeExpiredReplicaAddresses,
-			OnlyLiveReplicaAddresses:       onlyLiveReplicaAddresses,
+			ShardID:                         shardID,
+			IncludeExpiredReplicaAddresses:  includeExpiredReplicaAddresses,
+			ExcludeHardDownReplicaAddresses: excludeHardDownReplicaAddresses,
 		},
 	}
 	rpcReq := &RPCRequest{
@@ -190,7 +190,7 @@ func (s *Service) getShardInfo(
 	ctx context.Context,
 	shardID uint64,
 	includeExpiredReplicaAddresses bool,
-	onlyLiveReplicaAddresses bool,
+	excludeHardDownReplicaAddresses bool,
 ) (pb.ShardInfoQueryResult, bool) {
 	r, ok := s.store.nh.GetNodeHostRegistry()
 	if !ok {
@@ -209,7 +209,7 @@ func (s *Service) getShardInfo(
 	}
 	expiredState := s.getExpiredLogStoreState(ctx, includeExpiredReplicaAddresses)
 	for nodeID, uuid := range shard.Nodes {
-		if onlyLiveReplicaAddresses && !isLiveReplica(r, uuid) {
+		if excludeHardDownReplicaAddresses && isHardDownReplica(r, uuid) {
 			continue
 		}
 		replica := pb.ReplicaInfo{UUID: uuid}
@@ -236,9 +236,13 @@ func (s *Service) getShardInfo(
 	return result, true
 }
 
-func isLiveReplica(r dragonboat.INodeHostRegistry, uuid string) bool {
+func isHardDownReplica(r dragonboat.INodeHostRegistry, uuid string) bool {
 	state, _, ok := r.GetNodeHostState(uuid)
-	return ok && state == dragonboat.NodeHostStateAlive
+	if !ok {
+		return false
+	}
+	return state == dragonboat.NodeHostStateDead ||
+		state == dragonboat.NodeHostStateLeft
 }
 
 func (s *Service) filterExpiredReplicaAddress(

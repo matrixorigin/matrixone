@@ -74,10 +74,10 @@ func TestGetShardInfo_LeaderAddressEmptyReturnsNotReady(t *testing.T) {
 		address string,
 		shardID uint64,
 		includeExpiredReplicaAddresses bool,
-		onlyLiveReplicaAddresses bool,
+		excludeHardDownReplicaAddresses bool,
 	) (pb.ShardInfoQueryResult, bool, error) {
 		assert.False(t, includeExpiredReplicaAddresses)
-		assert.True(t, onlyLiveReplicaAddresses)
+		assert.True(t, excludeHardDownReplicaAddresses)
 		return pb.ShardInfoQueryResult{
 			ShardID:  shardID,
 			LeaderID: 1,
@@ -106,10 +106,10 @@ func TestGetShardInfo_OmitsUnreachableFollowers(t *testing.T) {
 		address string,
 		shardID uint64,
 		includeExpiredReplicaAddresses bool,
-		onlyLiveReplicaAddresses bool,
+		excludeHardDownReplicaAddresses bool,
 	) (pb.ShardInfoQueryResult, bool, error) {
 		assert.False(t, includeExpiredReplicaAddresses)
-		assert.True(t, onlyLiveReplicaAddresses)
+		assert.True(t, excludeHardDownReplicaAddresses)
 		return pb.ShardInfoQueryResult{
 			ShardID:  shardID,
 			LeaderID: 1,
@@ -131,7 +131,7 @@ func TestGetShardInfo_OmitsUnreachableFollowers(t *testing.T) {
 		"follower entry without a resolved address must be omitted from Replicas")
 }
 
-func TestGetShardInfoRequestsOnlyLiveReplicaAddressesByDefault(t *testing.T) {
+func TestGetShardInfoExcludesHardDownReplicaAddressesByDefault(t *testing.T) {
 	orig := queryShardInfoRawFn
 	defer func() { queryShardInfoRawFn = orig }()
 	queryShardInfoRawFn = func(
@@ -140,10 +140,10 @@ func TestGetShardInfoRequestsOnlyLiveReplicaAddressesByDefault(t *testing.T) {
 		address string,
 		shardID uint64,
 		includeExpiredReplicaAddresses bool,
-		onlyLiveReplicaAddresses bool,
+		excludeHardDownReplicaAddresses bool,
 	) (pb.ShardInfoQueryResult, bool, error) {
 		assert.False(t, includeExpiredReplicaAddresses)
-		assert.True(t, onlyLiveReplicaAddresses)
+		assert.True(t, excludeHardDownReplicaAddresses)
 		return pb.ShardInfoQueryResult{
 			ShardID:  shardID,
 			LeaderID: 1,
@@ -159,7 +159,7 @@ func TestGetShardInfoRequestsOnlyLiveReplicaAddressesByDefault(t *testing.T) {
 	assert.Equal(t, "10.0.0.1:1", info.Replicas[1])
 }
 
-func TestGetShardInfoCanDisableOnlyLiveReplicaAddresses(t *testing.T) {
+func TestGetShardInfoDoesNotDropTransientLeaderCandidate(t *testing.T) {
 	orig := queryShardInfoRawFn
 	defer func() { queryShardInfoRawFn = orig }()
 	queryShardInfoRawFn = func(
@@ -168,10 +168,40 @@ func TestGetShardInfoCanDisableOnlyLiveReplicaAddresses(t *testing.T) {
 		address string,
 		shardID uint64,
 		includeExpiredReplicaAddresses bool,
-		onlyLiveReplicaAddresses bool,
+		excludeHardDownReplicaAddresses bool,
 	) (pb.ShardInfoQueryResult, bool, error) {
 		assert.False(t, includeExpiredReplicaAddresses)
-		assert.False(t, onlyLiveReplicaAddresses)
+		assert.True(t, excludeHardDownReplicaAddresses)
+		return pb.ShardInfoQueryResult{
+			ShardID:  shardID,
+			LeaderID: 1,
+			Replicas: map[uint64]pb.ReplicaInfo{
+				1: {UUID: "suspect-leader", ServiceAddress: "10.0.0.1:1"},
+				2: {UUID: "alive-follower", ServiceAddress: "10.0.0.2:1"},
+			},
+		}, true, nil
+	}
+
+	info, ok, err := GetShardInfo("", "doesnt-matter", 3)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, uint64(1), info.ReplicaID)
+	assert.Equal(t, "10.0.0.1:1", info.Replicas[1])
+}
+
+func TestGetShardInfoCanDisableHardDownReplicaAddressFiltering(t *testing.T) {
+	orig := queryShardInfoRawFn
+	defer func() { queryShardInfoRawFn = orig }()
+	queryShardInfoRawFn = func(
+		ctx context.Context,
+		sid string,
+		address string,
+		shardID uint64,
+		includeExpiredReplicaAddresses bool,
+		excludeHardDownReplicaAddresses bool,
+	) (pb.ShardInfoQueryResult, bool, error) {
+		assert.False(t, includeExpiredReplicaAddresses)
+		assert.False(t, excludeHardDownReplicaAddresses)
 		return pb.ShardInfoQueryResult{
 			ShardID:  shardID,
 			LeaderID: 1,
@@ -196,10 +226,10 @@ func TestGetShardMembership_IncludesExpiredReplicaAddresses(t *testing.T) {
 		address string,
 		shardID uint64,
 		includeExpiredReplicaAddresses bool,
-		onlyLiveReplicaAddresses bool,
+		excludeHardDownReplicaAddresses bool,
 	) (pb.ShardInfoQueryResult, bool, error) {
 		assert.True(t, includeExpiredReplicaAddresses)
-		assert.False(t, onlyLiveReplicaAddresses)
+		assert.False(t, excludeHardDownReplicaAddresses)
 		return pb.ShardInfoQueryResult{
 			ShardID: shardID,
 			Replicas: map[uint64]pb.ReplicaInfo{
@@ -216,7 +246,7 @@ func TestGetShardMembership_IncludesExpiredReplicaAddresses(t *testing.T) {
 	assert.Equal(t, "10.0.0.2:1", members[2])
 }
 
-func TestIsLiveReplica(t *testing.T) {
+func TestIsHardDownReplica(t *testing.T) {
 	registry := &testNodeHostRegistry{
 		states: map[string]string{
 			"alive":   dragonboat.NodeHostStateAlive,
@@ -227,12 +257,12 @@ func TestIsLiveReplica(t *testing.T) {
 		},
 	}
 
-	assert.True(t, isLiveReplica(registry, "alive"))
-	assert.False(t, isLiveReplica(registry, "suspect"))
-	assert.False(t, isLiveReplica(registry, "dead"))
-	assert.False(t, isLiveReplica(registry, "left"))
-	assert.False(t, isLiveReplica(registry, "unknown"))
-	assert.False(t, isLiveReplica(registry, "missing"))
+	assert.False(t, isHardDownReplica(registry, "alive"))
+	assert.False(t, isHardDownReplica(registry, "suspect"))
+	assert.True(t, isHardDownReplica(registry, "dead"))
+	assert.True(t, isHardDownReplica(registry, "left"))
+	assert.False(t, isHardDownReplica(registry, "unknown"))
+	assert.False(t, isHardDownReplica(registry, "missing"))
 }
 
 type testNodeHostRegistry struct {
