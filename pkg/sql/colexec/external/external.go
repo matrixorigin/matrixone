@@ -1462,7 +1462,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	default:
-		return moerr.NewInternalErrorf(param.Ctx, "the value type %d is not support now", col.Typ.Id)
+		return moerr.NewInternalErrorf(param.Ctx, "the value type %s is not support now", id.String())
 	}
 	return nil
 }
