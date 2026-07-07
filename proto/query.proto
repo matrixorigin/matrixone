@@ -511,10 +511,19 @@ message PrepareStmt {
   bytes ParamTypes = 3;
 }
 
+enum MigrateConnFromAction {
+  // Default: export session state for connection migration.
+  MigrateConnFromExport = 0;
+  // Legacy compatibility mode used only by old proxies.
+  MigrateConnFromSkipUserLevelLockRelease = 1;
+  // Legacy compatibility mode used only by old proxies.
+  MigrateConnFromEnableUserLevelLockRelease = 2;
+}
+
 message MigrateConnFromRequest {
   uint32 ConnID = 1;
-  bool SkipUserLevelLockRelease = 2;
-  bool EnableUserLevelLockRelease = 3;
+  MigrateConnFromAction Action = 2;
+  reserved 3;
 }
 
 message MigrateConnFromResponse {

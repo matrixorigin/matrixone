@@ -7052,7 +7052,7 @@ func validateUserLevelLockName(name string) (string, error) {
 			maxUserLevelLockNameLength,
 		)
 	}
-	return name, nil
+	return strings.ToLower(name), nil
 }
 
 func userLevelLockTxnID(owner string, connID uint64, name string) []byte {
@@ -7242,6 +7242,9 @@ func UserLevelLocksForMigration(proc *process.Process) []UserLevelLockState {
 			result = append(result, UserLevelLockState{Name: name, Count: count})
 		}
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
 	return result
 }
 

@@ -72,7 +72,7 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(cc *cl
 				if req.MigrateConnFromRequest == nil {
 					return moerr.NewInternalError(ctx, "bad request")
 				}
-				if req.MigrateConnFromRequest.SkipUserLevelLockRelease {
+				if req.MigrateConnFromRequest.Action == pb.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease {
 					resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{}
 					return nil
 				}
@@ -203,10 +203,10 @@ func (c *migrationQueryClient) ServiceID() string {
 func (c *migrationQueryClient) SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error) {
 	switch req.CmdMethod {
 	case pb.CmdMethod_MigrateConnFrom:
-		if req.MigrateConnFromRequest.SkipUserLevelLockRelease {
+		if req.MigrateConnFromRequest.Action == pb.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease {
 			c.disableCalls++
 		}
-		if req.MigrateConnFromRequest.EnableUserLevelLockRelease {
+		if req.MigrateConnFromRequest.Action == pb.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease {
 			c.enableCalls++
 		}
 		return &pb.Response{MigrateConnFromResponse: &pb.MigrateConnFromResponse{

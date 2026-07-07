@@ -218,6 +218,34 @@ func (FileServiceCacheType) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_5c6ac9b241082464, []int{1}
 }
 
+type MigrateConnFromAction int32
+
+const (
+	MigrateConnFromAction_MigrateConnFromExport                     MigrateConnFromAction = 0
+	MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease   MigrateConnFromAction = 1
+	MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease MigrateConnFromAction = 2
+)
+
+var MigrateConnFromAction_name = map[int32]string{
+	0: "MigrateConnFromExport",
+	1: "MigrateConnFromSkipUserLevelLockRelease",
+	2: "MigrateConnFromEnableUserLevelLockRelease",
+}
+
+var MigrateConnFromAction_value = map[string]int32{
+	"MigrateConnFromExport":                     0,
+	"MigrateConnFromSkipUserLevelLockRelease":   1,
+	"MigrateConnFromEnableUserLevelLockRelease": 2,
+}
+
+func (x MigrateConnFromAction) String() string {
+	return proto.EnumName(MigrateConnFromAction_name, int32(x))
+}
+
+func (MigrateConnFromAction) EnumDescriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{2}
+}
+
 // QueryRequest is the common query request. It contains the query
 // statement that need to be executed on the specified CN node.
 type QueryRequest struct {
@@ -3498,9 +3526,8 @@ func (m *PrepareStmt) GetParamTypes() []byte {
 }
 
 type MigrateConnFromRequest struct {
-	ConnID                     uint32 `protobuf:"varint,1,opt,name=ConnID,proto3" json:"ConnID,omitempty"`
-	SkipUserLevelLockRelease   bool   `protobuf:"varint,2,opt,name=SkipUserLevelLockRelease,proto3" json:"SkipUserLevelLockRelease,omitempty"`
-	EnableUserLevelLockRelease bool   `protobuf:"varint,3,opt,name=EnableUserLevelLockRelease,proto3" json:"EnableUserLevelLockRelease,omitempty"`
+	ConnID uint32                `protobuf:"varint,1,opt,name=ConnID,proto3" json:"ConnID,omitempty"`
+	Action MigrateConnFromAction `protobuf:"varint,2,opt,name=Action,proto3,enum=query.MigrateConnFromAction" json:"Action,omitempty"`
 }
 
 func (m *MigrateConnFromRequest) Reset()         { *m = MigrateConnFromRequest{} }
@@ -3543,18 +3570,11 @@ func (m *MigrateConnFromRequest) GetConnID() uint32 {
 	return 0
 }
 
-func (m *MigrateConnFromRequest) GetSkipUserLevelLockRelease() bool {
+func (m *MigrateConnFromRequest) GetAction() MigrateConnFromAction {
 	if m != nil {
-		return m.SkipUserLevelLockRelease
+		return m.Action
 	}
-	return false
-}
-
-func (m *MigrateConnFromRequest) GetEnableUserLevelLockRelease() bool {
-	if m != nil {
-		return m.EnableUserLevelLockRelease
-	}
-	return false
+	return MigrateConnFromAction_MigrateConnFromExport
 }
 
 type MigrateConnFromResponse struct {
@@ -4979,6 +4999,7 @@ func (m *MinTimestampResponse) GetMinTimestamp() timestamp.Timestamp {
 func init() {
 	proto.RegisterEnum("query.CmdMethod", CmdMethod_name, CmdMethod_value)
 	proto.RegisterEnum("query.FileServiceCacheType", FileServiceCacheType_name, FileServiceCacheType_value)
+	proto.RegisterEnum("query.MigrateConnFromAction", MigrateConnFromAction_name, MigrateConnFromAction_value)
 	proto.RegisterType((*QueryRequest)(nil), "query.QueryRequest")
 	proto.RegisterType((*ShowProcessListRequest)(nil), "query.ShowProcessListRequest")
 	proto.RegisterType((*SyncCommitRequest)(nil), "query.SyncCommitRequest")
@@ -8146,23 +8167,8 @@ func (m *MigrateConnFromRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) 
 	_ = i
 	var l int
 	_ = l
-	if m.EnableUserLevelLockRelease {
-		i--
-		if m.EnableUserLevelLockRelease {
-			dAtA[i] = 1
-		} else {
-			dAtA[i] = 0
-		}
-		i--
-		dAtA[i] = 0x18
-	}
-	if m.SkipUserLevelLockRelease {
-		i--
-		if m.SkipUserLevelLockRelease {
-			dAtA[i] = 1
-		} else {
-			dAtA[i] = 0
-		}
+	if m.Action != 0 {
+		i = encodeVarintQuery(dAtA, i, uint64(m.Action))
 		i--
 		dAtA[i] = 0x10
 	}
@@ -10222,11 +10228,8 @@ func (m *MigrateConnFromRequest) ProtoSize() (n int) {
 	if m.ConnID != 0 {
 		n += 1 + sovQuery(uint64(m.ConnID))
 	}
-	if m.SkipUserLevelLockRelease {
-		n += 2
-	}
-	if m.EnableUserLevelLockRelease {
-		n += 2
+	if m.Action != 0 {
+		n += 1 + sovQuery(uint64(m.Action))
 	}
 	return n
 }
@@ -18227,9 +18230,9 @@ func (m *MigrateConnFromRequest) Unmarshal(dAtA []byte) error {
 			}
 		case 2:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field SkipUserLevelLockRelease", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field Action", wireType)
 			}
-			var v int
+			var v uint64
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowQuery
@@ -18239,15 +18242,15 @@ func (m *MigrateConnFromRequest) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= int(b&0x7F) << shift
+				v |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.SkipUserLevelLockRelease = bool(v != 0)
+			m.Action = MigrateConnFromAction(v)
 		case 3:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field EnableUserLevelLockRelease", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for legacy field EnableUserLevelLockRelease", wireType)
 			}
 			var v int
 			for shift := uint(0); ; shift += 7 {
@@ -18264,7 +18267,9 @@ func (m *MigrateConnFromRequest) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
-			m.EnableUserLevelLockRelease = bool(v != 0)
+			if v != 0 {
+				m.Action = MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipQuery(dAtA[iNdEx:])

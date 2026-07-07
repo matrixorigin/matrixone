@@ -58,10 +58,13 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 
 func (c *clientConn) setMigrateConnFromLockRelease(sqlAddr string, enabled bool) error {
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
+	action := query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease
+	if enabled {
+		action = query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease
+	}
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
-		ConnID:                     c.connID,
-		SkipUserLevelLockRelease:   !enabled,
-		EnableUserLevelLockRelease: enabled,
+		ConnID: c.connID,
+		Action: action,
 	}
 	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseMigrateConnFrom)
 	defer cancel()

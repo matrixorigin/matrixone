@@ -457,17 +457,18 @@ func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromReques
 	if routine == nil {
 		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
-	if req.SkipUserLevelLockRelease {
+	switch req.Action {
+	case query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease:
 		if states := function.UserLevelLocksForMigration(routine.getSession().proc); len(states) > 0 {
 			return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
 		}
 		return routine.migrateConnectionFrom(nil)
-	}
-	if req.EnableUserLevelLockRelease {
+	case query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease:
 		routine.getSession().userLevelLocksMigrated = false
 		return nil
+	default:
+		return routine.migrateConnectionFrom(resp)
 	}
-	return routine.migrateConnectionFrom(resp)
 }
 
 func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {

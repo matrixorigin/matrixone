@@ -384,15 +384,15 @@ func TestRoutineManagerMigrationAndResetErrorBranches(t *testing.T) {
 
 	ses.userLevelLocksMigrated = false
 	require.NoError(t, rm.MigrateConnectionFrom(&query.MigrateConnFromRequest{
-		ConnID:                   1005,
-		SkipUserLevelLockRelease: true,
+		ConnID: 1005,
+		Action: query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease,
 	}, &query.MigrateConnFromResponse{}))
 	require.True(t, ses.userLevelLocksMigrated)
 
 	ses.userLevelLocksMigrated = true
 	require.NoError(t, rm.MigrateConnectionFrom(&query.MigrateConnFromRequest{
-		ConnID:                     1005,
-		EnableUserLevelLockRelease: true,
+		ConnID: 1005,
+		Action: query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease,
 	}, &query.MigrateConnFromResponse{}))
 	require.False(t, ses.userLevelLocksMigrated)
 
@@ -405,8 +405,8 @@ func TestRoutineManagerMigrationAndResetErrorBranches(t *testing.T) {
 	defer function.DiscardMigratedUserLevelLocks(proc)
 	ses.proc = proc
 	require.ErrorContains(t, rm.MigrateConnectionFrom(&query.MigrateConnFromRequest{
-		ConnID:                   1005,
-		SkipUserLevelLockRelease: true,
+		ConnID: 1005,
+		Action: query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease,
 	}, &query.MigrateConnFromResponse{}), "cannot migrate connection while user-level locks are held")
 }
 
