@@ -983,6 +983,21 @@ func Test_toHours(t *testing.T) {
 	}
 }
 
+func TestPitrGranularitySqlEscapesStringLiterals(t *testing.T) {
+	dbWithAccount := getPitrDatabaseGranularitySql("db'name", 7, true)
+	require.Contains(t, dbWithAccount, "lower(database_name) = 'db''name'")
+	require.Contains(t, dbWithAccount, "account_id = 7")
+
+	dbWithoutAccount := getPitrDatabaseGranularitySql("db\\name", 7, false)
+	require.Contains(t, dbWithoutAccount, "lower(database_name) = 'db\\\\name'")
+	require.NotContains(t, dbWithoutAccount, "account_id")
+
+	tbl := getPitrTableGranularitySql("db'name", "tbl\\name", 9)
+	require.Contains(t, tbl, "lower(database_name)='db''name'")
+	require.Contains(t, tbl, "lower(table_name)='tbl\\\\name'")
+	require.Contains(t, tbl, "account_id = 9")
+}
+
 // TestDropDatabase_SnapshotAdvanceAndRestore verifies that DropDatabase
 // unconditionally advances SnapshotTS via UpdateSnapshot(HLC Now) after
 // acquiring the exclusive lock, and restores the original SnapshotTS

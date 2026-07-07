@@ -65,10 +65,10 @@ select id, cast(b as int) as bit_i, u8, u16, u32, u64, y, e from wide_base order
 select id, d256, st_astext(g) as g from wide_base order by id;
 
 create table pick_year_base(y year primary key, v int);
-insert into pick_year_base values (2024, 1), (2025, 2);
+insert into pick_year_base values (2024, 1);
 data branch create table pick_year_dst from pick_year_base;
 data branch create table pick_year_src from pick_year_base;
-update pick_year_src set v = 20250 where y = 2025;
+insert into pick_year_src values (2025, 20250);
 data branch pick pick_year_src into pick_year_dst keys('2025') when conflict accept;
 select y, v from pick_year_dst order by y;
 drop database br_matrix_types;

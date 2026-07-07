@@ -64,6 +64,35 @@ func TestGetSqlForFkReferredToEscapesStringLiterals(t *testing.T) {
 	require.Contains(t, sql, "table_name != 'quote''src'")
 }
 
+func TestGetSqlForAddFkEscapesStringLiterals(t *testing.T) {
+	fkData := &FkData{
+		Def: &plan.ForeignKeyDef{
+			Name:     "fk'child",
+			OnDelete: plan.ForeignKeyDef_CASCADE,
+			OnUpdate: plan.ForeignKeyDef_RESTRICT,
+		},
+		Cols:            &plan.FkColName{Cols: []string{"child'col"}},
+		ColsReferred:    &plan.FkColName{Cols: []string{"parent'col"}},
+		ParentDbName:    "parent\\db",
+		ParentTableName: "parent'table",
+	}
+
+	sql := getSqlForAddFk("child'db", "child\\table", fkData)
+	require.Contains(t, sql, "'fk''child'")
+	require.Contains(t, sql, "'child''db'")
+	require.Contains(t, sql, "'child\\\\table'")
+	require.Contains(t, sql, "'child''col'")
+	require.Contains(t, sql, "'parent\\\\db'")
+	require.Contains(t, sql, "'parent''table'")
+	require.Contains(t, sql, "'parent''col'")
+}
+
+func TestGetSqlForCheckHasDBRefersToEscapesStringLiterals(t *testing.T) {
+	sql := getSqlForCheckHasDBRefersTo("db'name")
+	require.Contains(t, sql, "refer_db_name = 'db''name'")
+	require.Contains(t, sql, "db_name != 'db''name'")
+}
+
 func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
 	{
 		//invalid json
