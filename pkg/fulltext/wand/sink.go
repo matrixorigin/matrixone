@@ -235,14 +235,21 @@ func BuildTailFrames(cdc *WandCdc, capacity int64, startChunkId int64, tokenize 
 	return frames, chunkId, nil
 }
 
-// NextTailChunkIdSql returns a SELECT for the next free tag=1 CdcTail chunk_id
-// (COALESCE(MAX+1, 0), scoped to index_id=CdcTailId, tag=Tag_CdcEvents) — the
-// monotonic append position the sinker frames at. Mirrors cuVS's NextChunkIdSql.
+// NextTailChunkIdSql returns a SELECT for the next free tag=1 CdcTail chunk_id —
+// the monotonic append position the sinker frames at. It is MAX over BOTH the
+// tail chunk_ids AND the tag=0 base recencies (metadata.chunk_id) + 1, floored so
+// the first append is 1 (base recency 0 = oldest is reserved). Widening past the
+// base recencies is what keeps the sequence from resetting after a compaction
+// folds the tail into a base at chunk_id K and deletes the tail ≤ K: the next
+// append continues at K+1, still newer than that base.
 func NextTailChunkIdSql(cfg TableConfig) string {
-	return fmt.Sprintf("SELECT COALESCE(MAX(%s)+1, 0) FROM %s WHERE %s = %s AND %s = %d",
+	tailMax := fmt.Sprintf("COALESCE((SELECT MAX(%s) FROM %s WHERE %s = %s AND %s = %d), 0)",
 		catalog.FullTextIndex_TblCol_Storage_Chunk_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullTextIndex_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
 		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+	baseMax := fmt.Sprintf("COALESCE((SELECT MAX(%s) FROM %s), 0)",
+		catalog.FullTextIndex_TblCol_Metadata_Chunk_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	return fmt.Sprintf("SELECT GREATEST(%s, %s) + 1", tailMax, baseMax)
 }
 
 // FrameChunkCount is the exported form: how many MaxChunkSize storage rows a frame

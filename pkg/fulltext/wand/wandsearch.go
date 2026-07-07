@@ -83,22 +83,16 @@ func (d *docFilterMembership) Contains(ord int64) bool {
 	return d.f.Test(raw)
 }
 
-// baseChunkId is the recency key assigned to the tag=0 compacted-main segment
-// when it is searched alongside tag=1 CdcTail delta segments. It sits below
-// every tail frame's chunk_id (which start at 0), so any pk re-inserted or
-// deleted in the tail supersedes its base copy (see ComputeLiveness).
-const baseChunkId int64 = -1
-
 // WandSearch adapts the loaded WAND segments to veccache.VectorIndexSearchIf so a
 // retrieval index shares the VectorIndexCache (load-once, RW-shared, TTL
 // eviction) with the vector plugins. The index is keyed in the cache by its
 // storage table name.
 type WandSearch struct {
 	cfg TableConfig
-	// segs[0] is the tag=0 compacted-main segment (ChunkId=baseChunkId) WHEN a base
-	// exists; the remaining entries are the tag=1 CdcTail delta segments in
-	// chunk_id order (ChunkId = frame chunk_id). An index created on an empty table
-	// has no tag=0 base, so segs may hold only tail segments (or be empty).
+	// segs holds the tag=0 base sub-indexes (each carrying its metadata.chunk_id
+	// recency — 0 for a full build, K for a compacted one) followed by the tag=1
+	// CdcTail delta segments (ChunkId = frame chunk_id). An index created on an
+	// empty table has no tag=0 base, so segs may hold only tail segments (or be empty).
 	// deletes is pk -> max delete-frame chunk_id from the tag=1 log.
 	segs    []*WandModel
 	deletes map[any]int64
@@ -133,11 +127,9 @@ func (s *WandSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 	if err != nil {
 		return err
 	}
-	// Sub-indexes are pk-disjoint, so they all sit at the same recency key below the
-	// tail; a tail delete still supersedes whichever base holds the pk.
-	for _, b := range bases {
-		b.ChunkId = baseChunkId
-	}
+	// Each base carries its recency key (model.ChunkId) from metadata.chunk_id — 0
+	// for a full-build base (oldest, below the tail which starts at 1), K for a
+	// folded/merged base — so ComputeLiveness dedups bases + tail uniformly.
 	tail, deletes, err := loadTailSegments(sqlproc, s.cfg)
 	if err != nil {
 		freeSegs(bases)

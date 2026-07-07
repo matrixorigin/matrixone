@@ -27,6 +27,11 @@ import (
 
 const testPkType = int32(types.T_int64)
 
+// baseChunkId — the recency of a full-build base in tests: 0 (oldest; the tail
+// starts at 1 under option (ii)). Production reads each base's recency from
+// metadata.chunk_id; these liveness tests just need base < tail.
+const baseChunkId int64 = 0
+
 // corpus mirrors what was fed to the Builder, for the brute-force reference.
 type corpus struct {
 	docTf  map[string]map[int64]int // term -> pk -> total tf (uncapped)

@@ -87,11 +87,12 @@ func (m *WandModel) ToInsertSqls(cfg TableConfig, ts int64, tag int) (sqls []str
 	}
 
 	metaTbl := sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)
-	sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s) VALUES (%s, %d, %s, %d)",
+	sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d)",
 		metaTbl,
 		catalog.FullTextIndex_TblCol_Metadata_Index_Id, catalog.FullTextIndex_TblCol_Metadata_Timestamp,
 		catalog.FullTextIndex_TblCol_Metadata_Checksum, catalog.FullTextIndex_TblCol_Metadata_Filesize,
-		sqlquote.String(m.Id), ts, sqlquote.String(checksum), filesize))
+		catalog.FullTextIndex_TblCol_Metadata_Chunk_Id,
+		sqlquote.String(m.Id), ts, sqlquote.String(checksum), filesize, m.ChunkId))
 	sqls = append(sqls, FileChunkInsertSqls(cfg, m.Id, 0, path, int(filesize), tag)...)
 	return sqls, cleanup, nil
 }
@@ -110,14 +111,15 @@ func DeleteSqls(cfg TableConfig, id string) []string {
 // readMetadata fetches an index id's tag=0 metadata (checksum + filesize).
 // found=false means no metadata row exists (a tag=0 base was never built — e.g.
 // an index created on an empty table, whose corpus is entirely tag=1 CDC deltas).
-func readMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (checksum string, filesize int64, found bool, err error) {
-	metaSQL := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s",
+func readMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (checksum string, filesize int64, chunkId int64, found bool, err error) {
+	metaSQL := fmt.Sprintf("SELECT %s, %s, %s FROM %s WHERE %s = %s",
 		catalog.FullTextIndex_TblCol_Metadata_Checksum, catalog.FullTextIndex_TblCol_Metadata_Filesize,
+		catalog.FullTextIndex_TblCol_Metadata_Chunk_Id,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
 		catalog.FullTextIndex_TblCol_Metadata_Index_Id, sqlquote.String(id))
 	mres, err := sqlexec.RunSql(sqlproc, metaSQL)
 	if err != nil {
-		return "", 0, false, err
+		return "", 0, 0, false, err
 	}
 	for _, bat := range mres.Batches {
 		if bat == nil || bat.RowCount() == 0 {
@@ -125,11 +127,12 @@ func readMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (chec
 		}
 		checksum = bat.Vecs[0].GetStringAt(0)
 		filesize = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0)
+		chunkId = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[2], 0)
 		found = true
 		break
 	}
 	mres.Close()
-	return checksum, filesize, found, nil
+	return checksum, filesize, chunkId, found, nil
 }
 
 // DeleteAllBasesSqls removes every tag=0 base sub-index — all tag=0 chunk rows (of all
@@ -237,7 +240,7 @@ func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandModel, e
 // removed before returning. Errors if the tag=0 metadata is absent (callers that
 // tolerate a missing base use LoadBaseOptional).
 func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*WandModel, error) {
-	checksum, filesize, found, err := readMetadata(sqlproc, cfg, id)
+	checksum, filesize, chunkId, found, err := readMetadata(sqlproc, cfg, id)
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +280,15 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 	if _, err = fp.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
-	return Deserialize(id, fp)
+	m, err := Deserialize(id, fp)
+	if err != nil {
+		return nil, err
+	}
+	// The base's recency key comes from SQL (metadata.chunk_id): 0 = oldest
+	// full-build base; K = the folded tail chunk_id for a compacted base. Query
+	// ComputeLiveness dedups bases + tail uniformly by this.
+	m.ChunkId = chunkId
+	return m, nil
 }
 
 // loadTailSegments streams the tag=1 CdcTail (index_id = CdcTailId) into a temp

@@ -364,6 +364,7 @@ func buildWandHiddenDefs(ctx planplugin.CompilerContext, indexName string, index
 			{Name: catalog.FullTextIndex_TblCol_Metadata_Timestamp, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
 			{Name: catalog.FullTextIndex_TblCol_Metadata_Checksum, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, Default: &plan.Default{}},
 			{Name: catalog.FullTextIndex_TblCol_Metadata_Filesize, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+			{Name: catalog.FullTextIndex_TblCol_Metadata_Chunk_Id, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
 		},
 	}
 	metaTbl.Pkey = &plan.PrimaryKeyDef{
