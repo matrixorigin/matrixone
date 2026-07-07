@@ -136,12 +136,8 @@ func (c *clientConn) migrateConn(prevAddr string, sc ServerConn) error {
 	if resp == nil {
 		return moerr.NewInternalError(c.ctx, "bad response")
 	}
-	if err := c.setMigrateConnFromLockRelease(prevAddr, false); err != nil {
-		return err
+	if len(resp.UserLevelLocks) > 0 {
+		return moerr.NewInternalError(c.ctx, "cannot migrate connection while user-level locks are held")
 	}
-	if err := c.migrateConnTo(sc, resp); err != nil {
-		_ = c.setMigrateConnFromLockRelease(prevAddr, true)
-		return err
-	}
-	return nil
+	return c.migrateConnTo(sc, resp)
 }

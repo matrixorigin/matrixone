@@ -2073,6 +2073,9 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	userID := defines.GetUserId(ctx)
 	ses.Infof(ctx, "do migration on connection %d, db: %s, account id: %d, user id: %d",
 		req.ConnID, req.DB, accountID, userID)
+	if len(req.UserLevelLocks) > 0 {
+		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
+	}
 
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(ctx, ses); err != nil {
@@ -2097,19 +2100,6 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	}
 	if maxStmtID > 0 {
 		ses.SetLastStmtID(maxStmtID)
-	}
-	if len(req.UserLevelLocks) > 0 {
-		states := make([]function.UserLevelLockState, 0, len(req.UserLevelLocks))
-		for _, l := range req.UserLevelLocks {
-			if l == nil {
-				continue
-			}
-			states = append(states, function.UserLevelLockState{
-				Name:  l.Name,
-				Count: l.Count,
-			})
-		}
-		function.RestoreUserLevelLocksFromMigration(ses.proc, states)
 	}
 	return nil
 }

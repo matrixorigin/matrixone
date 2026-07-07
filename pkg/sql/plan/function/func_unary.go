@@ -7076,7 +7076,12 @@ func userLevelLockConnectionIDFromTxnID(txnID []byte) (uint64, bool) {
 		return 0, false
 	}
 	if len(parts) == 3 {
-		return 0, false
+		ownerParts := strings.Split(parts[1], ":")
+		connID, err := strconv.ParseUint(ownerParts[len(ownerParts)-1], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return connID, true
 	}
 	connID, err := strconv.ParseUint(parts[3], 10, 64)
 	if err != nil {

@@ -395,9 +395,22 @@ func TestRoutineManagerMigrationAndResetErrorBranches(t *testing.T) {
 		EnableUserLevelLockRelease: true,
 	}, &query.MigrateConnFromResponse{}))
 	require.False(t, ses.userLevelLocksMigrated)
+
+	proc := testutil.NewProc(t)
+	proc.GetSessionInfo().Account = "acc"
+	proc.GetSessionInfo().ConnectionID = 1005
+	function.RestoreUserLevelLocksFromMigration(proc, []function.UserLevelLockState{
+		{Name: "held_lock", Count: 1},
+	})
+	defer function.DiscardMigratedUserLevelLocks(proc)
+	ses.proc = proc
+	require.ErrorContains(t, rm.MigrateConnectionFrom(&query.MigrateConnFromRequest{
+		ConnID:                   1005,
+		SkipUserLevelLockRelease: true,
+	}, &query.MigrateConnFromResponse{}), "cannot migrate connection while user-level locks are held")
 }
 
-func TestRoutineMigrateConnectionFromExportsUserLevelLocks(t *testing.T) {
+func TestRoutineMigrateConnectionFromRejectsUserLevelLocks(t *testing.T) {
 	rt, proto := newUnitTestRoutine(t, 1006)
 	proc := testutil.NewProc(t)
 	proc.GetSessionInfo().Account = "acc"
@@ -420,10 +433,8 @@ func TestRoutineMigrateConnectionFromExportsUserLevelLocks(t *testing.T) {
 	rt.setSession(ses)
 
 	resp := &query.MigrateConnFromResponse{}
-	require.NoError(t, rt.migrateConnectionFrom(resp))
-	require.Equal(t, "db1", resp.DB)
-	require.Equal(t, []*query.UserLevelLock{{Name: "exported_lock", Count: 2}}, resp.UserLevelLocks)
-	require.Len(t, resp.PrepareStmts, 1)
+	require.ErrorContains(t, rt.migrateConnectionFrom(resp), "cannot migrate connection while user-level locks are held")
+	require.Empty(t, resp.UserLevelLocks)
 }
 
 func TestRoutineMigrateConnectionToClosedRoutine(t *testing.T) {

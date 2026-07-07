@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -457,6 +458,9 @@ func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromReques
 		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
 	if req.SkipUserLevelLockRelease {
+		if states := function.UserLevelLocksForMigration(routine.getSession().proc); len(states) > 0 {
+			return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
+		}
 		return routine.migrateConnectionFrom(nil)
 	}
 	if req.EnableUserLevelLockRelease {

@@ -190,9 +190,10 @@ func TestMigrateConnQueryAddressAndRPCError(t *testing.T) {
 }
 
 type migrationQueryClient struct {
-	disableCalls int
-	enableCalls  int
-	migrateToErr bool
+	disableCalls   int
+	enableCalls    int
+	migrateToErr   bool
+	userLevelLocks []*pb.UserLevelLock
 }
 
 func (c *migrationQueryClient) ServiceID() string {
@@ -209,10 +210,8 @@ func (c *migrationQueryClient) SendMessage(ctx context.Context, address string, 
 			c.enableCalls++
 		}
 		return &pb.Response{MigrateConnFromResponse: &pb.MigrateConnFromResponse{
-			DB: "d1",
-			UserLevelLocks: []*pb.UserLevelLock{
-				{Name: "migration_lock", Count: 2},
-			},
+			DB:             "d1",
+			UserLevelLocks: c.userLevelLocks,
 		}}, nil
 	case pb.CmdMethod_MigrateConnTo:
 		if c.migrateToErr {
@@ -234,7 +233,7 @@ func (c *migrationQueryClient) Close() error {
 	return nil
 }
 
-func TestMigrateConnDisablesLockReleaseOnSuccess(t *testing.T) {
+func TestMigrateConnDoesNotDisableLockReleaseOnSuccess(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
 	cluster := clusterservice.NewMOCluster(
 		"",
@@ -255,11 +254,11 @@ func TestMigrateConnDisablesLockReleaseOnSuccess(t *testing.T) {
 	defer c1.Close()
 	err := ccc.migrateConn("pipe", newMockServerConn(c1))
 	assert.NoError(t, err)
-	assert.Equal(t, 1, qc.disableCalls)
+	assert.Equal(t, 0, qc.disableCalls)
 	assert.Equal(t, 0, qc.enableCalls)
 }
 
-func TestMigrateConnReenablesLockReleaseWhenMigrateToFails(t *testing.T) {
+func TestMigrateConnDoesNotToggleLockReleaseWhenMigrateToFails(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
 	cluster := clusterservice.NewMOCluster(
 		"",
@@ -280,6 +279,33 @@ func TestMigrateConnReenablesLockReleaseWhenMigrateToFails(t *testing.T) {
 	defer c1.Close()
 	err := ccc.migrateConn("pipe", newMockServerConn(c1))
 	assert.Error(t, err)
-	assert.Equal(t, 1, qc.disableCalls)
-	assert.Equal(t, 1, qc.enableCalls)
+	assert.Equal(t, 0, qc.disableCalls)
+	assert.Equal(t, 0, qc.enableCalls)
+}
+
+func TestMigrateConnRejectsUserLevelLocks(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	qc := &migrationQueryClient{
+		userLevelLocks: []*pb.UserLevelLock{{Name: "migration_lock", Count: 1}},
+	}
+	ccc.queryClient = qc
+	ccc.moCluster = cluster
+
+	c1, _ := net.Pipe()
+	defer c1.Close()
+	err := ccc.migrateConn("pipe", newMockServerConn(c1))
+	assert.ErrorContains(t, err, "cannot migrate connection while user-level locks are held")
+	assert.Equal(t, 0, qc.disableCalls)
+	assert.Equal(t, 0, qc.enableCalls)
 }

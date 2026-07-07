@@ -7749,9 +7749,10 @@ func TestIsUsedLockReturnsHolderConnectionID(t *testing.T) {
 	})
 }
 
-func TestIsUsedLockReturnsNullForLegacyHolderTxnID(t *testing.T) {
+func TestIsUsedLockReturnsConnectionIDForLegacyHolderTxnID(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc.GetSessionInfo().ConnectionID = 1001
 		state := services[0].(*userLevelLockTestService).state
 		state.Lock()
 		state.locks[string(userLevelLockRow(proc, "legacy_holder"))] = string(userLevelLockTxnIDOld(userLevelLockOwner(proc), "legacy_holder"))
@@ -7759,8 +7760,8 @@ func TestIsUsedLockReturnsNullForLegacyHolderTxnID(t *testing.T) {
 
 		holder, isNull, err := isUserLevelLockUsed("legacy_holder", proc)
 		require.NoError(t, err)
-		require.True(t, isNull)
-		require.Equal(t, uint64(0), holder)
+		require.False(t, isNull)
+		require.Equal(t, uint64(1001), holder)
 	})
 }
 

@@ -641,18 +641,35 @@ func TestSession_Migrate(t *testing.T) {
 				{Name: "p1", SQL: `select ?`},
 				{Name: "p2", SQL: `select ?`},
 			},
-			UserLevelLocks: []*query.UserLevelLock{
-				nil,
-				{Name: "restored_lock", Count: 2},
-			},
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, "d1", s.GetDatabaseName())
 		assert.Equal(t, 2, len(s.prepareStmts))
-		assert.Equal(t, []function.UserLevelLockState{
-			{Name: "restored_lock", Count: 2},
-		}, function.UserLevelLocksForMigration(s.proc))
-		function.DiscardMigratedUserLevelLocks(s.proc)
+	})
+
+	t.Run("reject user-level locks", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		err := Migrate(s, &query.MigrateConnToRequest{
+			ConnID: 88,
+			DB:     "d1",
+			UserLevelLocks: []*query.UserLevelLock{
+				{Name: "restored_lock", Count: 2},
+			},
+		})
+		assert.ErrorContains(t, err, "cannot migrate connection while user-level locks are held")
+		assert.Empty(t, function.UserLevelLocksForMigration(s.proc))
 	})
 
 	t.Run("db dropped", func(t *testing.T) {
