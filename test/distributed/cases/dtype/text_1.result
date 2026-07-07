@@ -266,12 +266,12 @@ select cast(col10 as varchar) from t8;
 this is a char type  𝄀
 this is a varchar type
 select cast(col10 as char(1)) from t8;
-cast(col10 as char(1))
-t
+➤ cast(col10 as char(1))[1,1,0]  𝄀
+t  𝄀
 t
 select cast(col10 as varchar(1)) from t8;
-cast(col10 as varchar(1))
-t
+➤ cast(col10 as varchar(1))[12,-1,0]  𝄀
+t  𝄀
 t
 delete from t8 where col10 is not NULL;
 insert into t8(col11) values ('2020-01-01');
@@ -483,8 +483,7 @@ insert into t10 values (10, 'aabsdfsb', 'aabdsfsfsdb');
 insert into t10 values (10, 'aa,bb', 'aa,bb');
 insert into t10 values (10, 'aa%bb', 'aa%bb');
 select * from t10 where c=1;
-a    b    c
-1    1    1
+invalid argument cast to int, bad value 
 update t10 set c=10000 where a=10;
 update t10 set c=true where a=10;
 update t10 set c='true' where a=10;
