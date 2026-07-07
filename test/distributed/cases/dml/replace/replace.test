@@ -296,6 +296,15 @@ insert into t_insert_check_no_key values (1, 2) on duplicate key update b = valu
 select * from t_insert_check_no_key order by a;
 drop table t_insert_check_no_key;
 
+-- a column-level CHECK may reference other columns of the same row, not just the
+-- column it is attached to (e.g. `b INT CHECK (a < b)`).
+drop table if exists t_column_check_cross;
+create table t_column_check_cross(id int primary key, a int, b int check (a < b));
+insert into t_column_check_cross values (1, 1, 2);
+insert into t_column_check_cross values (2, 3, 2);
+select * from t_column_check_cross order by id;
+drop table t_column_check_cross;
+
 -- fake-PK table with a composite nullable unique key: a REPLACE whose composite
 -- unique-key part is statically NULL (column a omitted -> NULL) serializes to a NULL
 -- key, can never conflict, and behaves like a plain INSERT (no existing row deleted;

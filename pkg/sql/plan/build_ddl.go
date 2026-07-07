@@ -1114,7 +1114,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		expr           tree.Expr
 		enforced       bool
 		enforcementSet bool
-		column         *ColDef
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
 
@@ -1318,7 +1317,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						expr:           checkAttr.Expr,
 						enforced:       checkAttr.Enforced,
 						enforcementSet: checkAttr.EnforcementSet,
-						column:         col,
 					})
 				}
 
@@ -1504,7 +1502,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if check.enforcementSet && !check.enforced {
 			return moerr.NewNotSupported(ctx.GetContext(), "CHECK constraint NOT ENFORCED")
 		}
-		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, check.column); err != nil {
+		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr); err != nil {
 			return err
 		}
 	}
@@ -1755,14 +1753,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	return nil
 }
 
-func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExpr tree.Expr, column *ColDef) error {
-	if column != nil {
-		// Bind against the defining column first to enforce column-level CHECK scope.
-		if _, err := bindCheckExpr(ctx, astExpr, []*ColDef{column}); err != nil {
-			return err
-		}
-	}
-
+func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExpr tree.Expr) error {
+	// Column-level and table-level CHECKs share the same row-level scope: the
+	// expression may reference any column of the table, not just the defining
+	// one (e.g. `b INT CHECK (a > 0)`). Binding is deferred until every column
+	// is collected, so `tableDef.Cols` is the complete column list here.
 	checkExpr, err := bindCheckExpr(ctx, astExpr, tableDef.Cols)
 	if err != nil {
 		return err

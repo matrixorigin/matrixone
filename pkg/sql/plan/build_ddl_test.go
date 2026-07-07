@@ -661,10 +661,16 @@ func TestBuildCreateTableCheckConstraintBindingScope(t *testing.T) {
 		require.Len(t, logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks(), 1)
 	})
 
-	t.Run("column check only references defining column", func(t *testing.T) {
-		_, err := runOneStmt(mock, t, "CREATE TABLE t_column_check_scope (a INT, b INT CHECK (a > 0));")
+	t.Run("column check can reference other columns", func(t *testing.T) {
+		logicPlan, err := runOneStmt(mock, t, "CREATE TABLE t_column_check_scope (a INT, b INT CHECK (a > 0));")
+		require.NoError(t, err)
+		require.Len(t, logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks(), 1)
+	})
+
+	t.Run("column check rejects unknown columns", func(t *testing.T) {
+		_, err := runOneStmt(mock, t, "CREATE TABLE t_column_check_unknown (a INT, b INT CHECK (missing > 0));")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "column 'a'")
+		require.Contains(t, err.Error(), "column 'missing'")
 	})
 }
 
