@@ -761,17 +761,13 @@ const (
 
 	// function `cast_strict`
 	CAST_STRICT = 541
-<<<<<<< HEAD
+DATE_TRUNC  = 542
 	// function `cast_explicit`
-	CAST_EXPLICIT = 542
-||||||| cb8510588
-=======
-	DATE_TRUNC  = 542
->>>>>>> refs/remotes/mo/main
+	CAST_EXPLICIT = 543
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 543
+	FUNCTION_END_NUMBER = 544
 )
 
 // functionIdRegister is what function we have registered already.
