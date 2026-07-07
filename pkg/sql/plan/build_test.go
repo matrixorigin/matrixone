@@ -427,7 +427,7 @@ func TestPrepareArithmeticParams(t *testing.T) {
 }
 
 // TestPrepareArithOpsAllOperators verifies that the binder promotes dual
-// T_text prepared-statement parameters to decimal128 for every arithmetic
+// T_text prepared-statement parameters to DOUBLE for every arithmetic
 // operator (+, -, *, /, %, DIV, MOD), fixing issue #25423 for all of them.
 func TestPrepareArithOpsAllOperators(t *testing.T) {
 	mock := NewMockOptimizer(true)
