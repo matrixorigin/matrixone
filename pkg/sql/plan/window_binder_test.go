@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -102,6 +103,56 @@ func testRangeWindowExpr() *tree.FuncExpr {
 	)
 }
 
+func testRowsWindowSpec() *tree.WindowSpec {
+	return &tree.WindowSpec{
+		HasFrame: true,
+		Frame: &tree.FrameClause{
+			Type: tree.Rows,
+			Start: &tree.FrameBound{
+				Type:      tree.Preceding,
+				UnBounded: true,
+			},
+			End: &tree.FrameBound{
+				Type: tree.CurrentRow,
+			},
+		},
+	}
+}
+
+func testRowNumberWindowExpr() *tree.FuncExpr {
+	return testWindowFuncExpr(
+		"row_number",
+		tree.FUNC_TYPE_DEFAULT,
+		&tree.WindowSpec{
+			OrderBy: tree.OrderBy{
+				tree.NewOrder(testNumVal(1), tree.Ascending, tree.DefaultNullsPosition, false),
+			},
+		},
+	)
+}
+
+func testScalarFuncExpr(name string, args ...tree.Expr) *tree.FuncExpr {
+	return &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(name)),
+		Type:  tree.FUNC_TYPE_DEFAULT,
+		Exprs: args,
+	}
+}
+
+func testWindowValidationBinder() *stubWindowBinder {
+	return &stubWindowBinder{
+		bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
+			return makePlan2Int64ConstExprWithType(1), nil
+		},
+		bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+			return makePlan2Int64ConstExprWithType(1), nil
+		},
+		makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+			return makePlan2Int64ConstExprWithType(1), nil
+		},
+	}
+}
+
 func TestProjectionAndHavingBinderBindExprOnWindowAlias(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
@@ -155,6 +206,26 @@ func TestProjectionBinderBindWinFuncCachesWindowExpr(t *testing.T) {
 	require.Equal(t, firstExpr.GetCol().ColPos, secondExpr.GetCol().ColPos)
 }
 
+func TestProjectionBinderRejectsNestedWindowFuncFromSQL(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	bindCtx.windowTag = builder.GenNewBindTag()
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		"select sum(row_number() over (order by a)) over () from select_test.bind_select",
+		1,
+	)
+	require.NoError(t, err)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+
+	_, err = projectionBinder.BindExpr(selectClause.Exprs[0].Expr, 0, true)
+	require.ErrorContains(t, err, "You cannot use the window function 'row_number' in this context")
+}
+
 func TestHavingBinderBindWinFuncCoversFrameAndGuard(t *testing.T) {
 	t.Run("inside aggregate rejects window func", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
@@ -187,6 +258,94 @@ func TestHavingBinderBindWinFuncCoversFrameAndGuard(t *testing.T) {
 }
 
 func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
+	t.Run("nested window function argument is rejected", func(t *testing.T) {
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+
+		_, err := bindWindowFuncExpr(
+			testWindowValidationBinder(),
+			ctx,
+			"sum",
+			testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT, testRowsWindowSpec(), testRowNumberWindowExpr()),
+			0,
+			true,
+		)
+		require.ErrorContains(t, err, "You cannot use the window function 'row_number' in this context")
+	})
+
+	t.Run("nested window function inside scalar argument is rejected", func(t *testing.T) {
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+
+		_, err := bindWindowFuncExpr(
+			testWindowValidationBinder(),
+			ctx,
+			"sum",
+			testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT, testRowsWindowSpec(), testScalarFuncExpr("abs", testRowNumberWindowExpr())),
+			0,
+			true,
+		)
+		require.ErrorContains(t, err, "You cannot use the window function 'row_number' in this context")
+	})
+
+	t.Run("nested window function in window spec is rejected", func(t *testing.T) {
+		tests := []struct {
+			name string
+			ws   *tree.WindowSpec
+		}{
+			{
+				name: "partition by",
+				ws: func() *tree.WindowSpec {
+					ws := testRowsWindowSpec()
+					ws.PartitionBy = tree.Exprs{testRowNumberWindowExpr()}
+					return ws
+				}(),
+			},
+			{
+				name: "order by",
+				ws: func() *tree.WindowSpec {
+					ws := testRowsWindowSpec()
+					ws.OrderBy = tree.OrderBy{tree.NewOrder(testRowNumberWindowExpr(), tree.Ascending, tree.DefaultNullsPosition, false)}
+					return ws
+				}(),
+			},
+			{
+				name: "frame start",
+				ws: func() *tree.WindowSpec {
+					ws := testRowsWindowSpec()
+					ws.Frame.Start.Expr = testRowNumberWindowExpr()
+					ws.Frame.Start.UnBounded = false
+					return ws
+				}(),
+			},
+			{
+				name: "frame end",
+				ws: func() *tree.WindowSpec {
+					ws := testRowsWindowSpec()
+					ws.Frame.HasEnd = true
+					ws.Frame.End = &tree.FrameBound{
+						Type: tree.Following,
+						Expr: testRowNumberWindowExpr(),
+					}
+					return ws
+				}(),
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+				_, err := bindWindowFuncExpr(
+					testWindowValidationBinder(),
+					ctx,
+					"sum",
+					testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT, tc.ws, testNumVal(1)),
+					0,
+					true,
+				)
+				require.ErrorContains(t, err, "You cannot use the window function 'row_number' in this context")
+			})
+		}
+	})
+
 	t.Run("distinct window func is rejected", func(t *testing.T) {
 		binder := &stubWindowBinder{
 			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
