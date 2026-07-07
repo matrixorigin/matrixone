@@ -258,6 +258,74 @@ func TestHavingBinderBindWinFuncCoversFrameAndGuard(t *testing.T) {
 }
 
 func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
+	t.Run("find nested window function across expression shapes", func(t *testing.T) {
+		nested := testRowNumberWindowExpr()
+		tests := []struct {
+			name string
+			expr tree.Expr
+		}{
+			{name: "binary", expr: &tree.BinaryExpr{Left: testNumVal(1), Right: nested}},
+			{name: "unary", expr: &tree.UnaryExpr{Expr: nested}},
+			{name: "comparison", expr: tree.NewComparisonExpr(tree.EQUAL, testNumVal(1), nested)},
+			{name: "and", expr: &tree.AndExpr{Left: testNumVal(1), Right: nested}},
+			{name: "xor", expr: &tree.XorExpr{Left: testNumVal(1), Right: nested}},
+			{name: "or", expr: &tree.OrExpr{Left: testNumVal(1), Right: nested}},
+			{name: "not", expr: &tree.NotExpr{Expr: nested}},
+			{name: "is null", expr: &tree.IsNullExpr{Expr: nested}},
+			{name: "is not null", expr: &tree.IsNotNullExpr{Expr: nested}},
+			{name: "is unknown", expr: &tree.IsUnknownExpr{Expr: nested}},
+			{name: "is not unknown", expr: &tree.IsNotUnknownExpr{Expr: nested}},
+			{name: "is true", expr: &tree.IsTrueExpr{Expr: nested}},
+			{name: "is not true", expr: &tree.IsNotTrueExpr{Expr: nested}},
+			{name: "is false", expr: &tree.IsFalseExpr{Expr: nested}},
+			{name: "is not false", expr: &tree.IsNotFalseExpr{Expr: nested}},
+			{name: "paren", expr: &tree.ParenExpr{Expr: nested}},
+			{name: "cast", expr: &tree.CastExpr{Expr: nested}},
+			{name: "bit cast", expr: &tree.BitCastExpr{Expr: nested}},
+			{name: "tuple", expr: &tree.Tuple{Exprs: tree.Exprs{testNumVal(1), nested}}},
+			{name: "range", expr: tree.NewRangeCond(false, testNumVal(1), testNumVal(2), nested)},
+			{name: "case expr", expr: &tree.CaseExpr{Expr: nested}},
+			{name: "case when", expr: &tree.CaseExpr{Whens: []*tree.When{{Cond: testNumVal(1), Val: nested}}}},
+			{name: "case else", expr: &tree.CaseExpr{Whens: []*tree.When{nil}, Else: nested}},
+			{name: "interval", expr: &tree.IntervalExpr{Expr: nested}},
+			{name: "default", expr: tree.NewDefaultVal(nested)},
+			{name: "serial extract", expr: &tree.SerialExtractExpr{SerialExpr: testNumVal(1), IndexExpr: nested}},
+			{
+				name: "function order by",
+				expr: &tree.FuncExpr{
+					Func:    tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("group_concat")),
+					Type:    tree.FUNC_TYPE_DEFAULT,
+					Exprs:   tree.Exprs{testNumVal(1)},
+					OrderBy: tree.OrderBy{nil, tree.NewOrder(nested, tree.Ascending, tree.DefaultNullsPosition, false)},
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				name, ok := findNestedWindowFuncName(tc.expr)
+				require.True(t, ok)
+				require.Equal(t, "row_number", name)
+			})
+		}
+
+		name, ok := findNestedWindowFuncName(nil)
+		require.False(t, ok)
+		require.Empty(t, name)
+
+		name, ok = findNestedWindowFuncName(testNumVal(1))
+		require.False(t, ok)
+		require.Empty(t, name)
+
+		name, ok = findNestedWindowFuncName(&tree.Subquery{})
+		require.False(t, ok)
+		require.Empty(t, name)
+
+		name, ok = findNestedWindowFuncNameInOrderBy(tree.OrderBy{nil})
+		require.False(t, ok)
+		require.Empty(t, name)
+	})
+
 	t.Run("nested window function argument is rejected", func(t *testing.T) {
 		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
 
