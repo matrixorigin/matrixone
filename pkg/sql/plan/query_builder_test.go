@@ -956,7 +956,7 @@ func TestGroupingOrderExprKeyNormalizesQualifiedColumn(t *testing.T) {
 	// Clone it and replace the argument with a qualified t.a reference.
 	qualifiedGrouping := cloneTreeExpr(unqualifiedGrouping)
 	qualifiedGrouping.(*tree.FuncExpr).Exprs[0] = &tree.UnresolvedName{
-		NumParts: 2,
+		NumParts:  2,
 		CStrParts: [4]*tree.CStr{tree.NewCStr("a", 0), tree.NewCStr("t", 0)},
 	}
 
