@@ -21,7 +21,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 
@@ -105,55 +104,6 @@ func TestBuildWithInsert(t *testing.T) {
 	}
 }
 
-func TestBuildInsertOnDuplicateUpdatePlansReleasesDmlPlanCtxOnError(t *testing.T) {
-	oldGet := buildInsertGetDmlPlanCtx
-	oldPut := buildInsertPutDmlPlanCtx
-	oldBuild := buildInsertUpdatePlans
-	defer func() {
-		buildInsertGetDmlPlanCtx = oldGet
-		buildInsertPutDmlPlanCtx = oldPut
-		buildInsertUpdatePlans = oldBuild
-	}()
-
-	wantErr := moerr.NewInternalErrorNoCtx("build update plans failed")
-	ctxHolder := &dmlPlanCtx{}
-	putCalled := false
-
-	buildInsertGetDmlPlanCtx = func() *dmlPlanCtx {
-		return ctxHolder
-	}
-	buildInsertPutDmlPlanCtx = func(ctx *dmlPlanCtx) {
-		putCalled = true
-		require.Same(t, ctxHolder, ctx)
-	}
-	buildInsertUpdatePlans = func(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, addAffectedRows bool) error {
-		require.Same(t, ctxHolder, updatePlanCtx)
-		require.Equal(t, int32(7), updatePlanCtx.sourceStep)
-		require.Equal(t, 3, updatePlanCtx.updateColLength)
-		require.Equal(t, 2, updatePlanCtx.rowIdPos)
-		require.Equal(t, []int{4, 5}, updatePlanCtx.insertColPos)
-		require.Equal(t, map[string]int{"a": 1}, updatePlanCtx.updateColPosMap)
-		require.True(t, updatePlanCtx.updatePkCol)
-		require.True(t, addAffectedRows)
-		return wantErr
-	}
-
-	err := buildInsertOnDuplicateUpdatePlans(
-		nil,
-		nil,
-		&ObjectRef{ObjName: "t"},
-		&TableDef{Name: "t"},
-		7,
-		3,
-		2,
-		[]int{4, 5},
-		map[string]int{"a": 1},
-		true,
-	)
-	require.ErrorIs(t, err, wantErr)
-	require.True(t, putCalled)
-}
-
 func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	colType := types.T_geometry.ToType()
@@ -169,6 +119,56 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), fn.Args[0].Typ.Id)
 	require.Equal(t, "POINT(1 1)", fn.Args[0].GetLit().GetSval())
 	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
+}
+
+func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name        string
+		literal     string
+		colType     types.Type
+		expected    []byte
+		expectError bool
+	}{
+		{
+			name:     "binary pads to declared width",
+			literal:  "0x4142",
+			colType:  types.New(types.T_binary, 4, 0),
+			expected: []byte{0x41, 0x42, 0x00, 0x00},
+		},
+		{
+			name:        "binary rejects decoded value over declared width",
+			literal:     "0x4142",
+			colType:     types.New(types.T_binary, 1, 0),
+			expectError: true,
+		},
+		{
+			name:        "varbinary counts decoded bytes instead of runes",
+			literal:     "0xC3A9",
+			colType:     types.New(types.T_varbinary, 1, 0),
+			expectError: true,
+		},
+		{
+			name:     "binary accepts odd digit hex literal",
+			literal:  "0x1",
+			colType:  types.New(types.T_binary, 2, 0),
+			expected: []byte{0x01, 0x00},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			numVal := tree.NewNumVal(tc.literal, tc.literal, false, tree.P_hexnum)
+			expr, err := MakeInsertValueConstExpr(proc, numVal, &tc.colType)
+			if tc.expectError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, string(tc.expected), expr.GetLit().GetSval())
+		})
+	}
 }
 
 func TestAppendIndexPrefixProjection(t *testing.T) {

@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"math"
 	"testing"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/mysql"
 )
 
 func Test_aes(t *testing.T) {
@@ -795,7 +797,7 @@ func Test_floatArrayToString(t *testing.T) {
 }
 
 func Test_openDbConn(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ string) (*sql.DB, error) {
+	stub := gostub.Stub(&tryConn, func(_ *mysql.Config) (*sql.DB, error) {
 		return nil, nil
 	})
 	defer stub.Reset()
@@ -806,7 +808,7 @@ func Test_openDbConn(t *testing.T) {
 }
 
 func Test_openDbConnFailed(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ string) (*sql.DB, error) {
+	stub := gostub.Stub(&tryConn, func(_ *mysql.Config) (*sql.DB, error) {
 		return nil, moerr.NewInternalErrorNoCtx("")
 	})
 	defer stub.Reset()
@@ -816,16 +818,33 @@ func Test_openDbConnFailed(t *testing.T) {
 	assert.Nil(t, conn)
 }
 
+func Test_makeMysqlConfig(t *testing.T) {
+	cfg, err := makeMysqlConfig("account:user:role", "p@ss", "127.0.0.1", 6001, CDCDefaultSendSqlTimeout)
+	require.NoError(t, err)
+	assert.Equal(t, "account:user:role", cfg.User)
+	assert.Equal(t, "p@ss", cfg.Passwd)
+	assert.Equal(t, "tcp", cfg.Net)
+	assert.Equal(t, "127.0.0.1:6001", cfg.Addr)
+	assert.Equal(t, 10*time.Minute, cfg.Timeout)
+	assert.Equal(t, 10*time.Minute, cfg.ReadTimeout)
+	assert.Equal(t, 10*time.Minute, cfg.WriteTimeout)
+	assert.True(t, cfg.MultiStatements)
+	assert.True(t, cfg.AllowNativePasswords)
+}
+
 func Test_tryConn(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	mock.ExpectPing()
 
-	stub := gostub.Stub(&openDb, func(_, _ string) (*sql.DB, error) {
-		return db, nil
+	stub := gostub.Stub(&openDbWithConnector, func(_ driver.Connector) *sql.DB {
+		return db
 	})
 	defer stub.Reset()
-	got, err := tryConn("dsn")
+
+	cfg, err := makeMysqlConfig("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	require.NoError(t, err)
+	got, err := tryConn(cfg)
 	assert.NoError(t, err)
 	assert.Equal(t, db, got)
 }
@@ -966,6 +985,29 @@ func Test_compUriInfo(t *testing.T) {
 
 	ret, _ = compositedUriInfo("prefixroot:111@3:4", "prefix")
 	assert.True(t, ret)
+
+	ret, info := compositedUriInfo("prefixaccount:user:role:p@ss@127.0.0.1:6001", "prefix")
+	assert.True(t, ret)
+	assert.Equal(t, "account:user:role", info.User)
+	assert.Equal(t, "p@ss", info.Password)
+	assert.Equal(t, "127.0.0.1", info.Ip)
+	assert.Equal(t, 6001, info.Port)
+
+	ret, info = compositedUriInfo("prefixaccount%3Auser%3Arole:p%40ss@127.0.0.1:6001", "prefix")
+	assert.True(t, ret)
+	assert.Equal(t, "account:user:role", info.User)
+	assert.Equal(t, "p@ss", info.Password)
+
+	ret, info = compositedUriInfo("prefixaccount%3Auser%3Arole:p%2540ss@127.0.0.1:6001", "prefix")
+	assert.True(t, ret)
+	assert.Equal(t, "account:user:role", info.User)
+	assert.Equal(t, "p%40ss", info.Password)
+
+	ret, _ = compositedUriInfo("prefixaccount%zzuser:111@127.0.0.1:6001", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixaccount:user:role:@127.0.0.1:6001", "prefix")
+	assert.False(t, ret)
 }
 
 func Test_uriHasPrefix(t *testing.T) {

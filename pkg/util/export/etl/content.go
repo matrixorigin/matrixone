@@ -219,6 +219,8 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 	}
 	if err != nil {
 		_ = db_holder.DBConnErrCount.Count()
+	} else {
+		db_holder.DBConnErrCount.Reset()
 	}
 
 	return 0, err
