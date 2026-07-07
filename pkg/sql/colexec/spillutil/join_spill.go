@@ -857,6 +857,20 @@ func (e *SpillEngine) freeKeyExecs() {
 	e.keyExecs = nil
 }
 
+// TestSetBucketDepth sets the depth of bucket 0 (test helper).
+func (e *SpillEngine) TestSetBucketDepth(idx int, depth int) {
+	if idx < len(e.buckets) {
+		e.buckets[idx].Depth = depth
+	}
+}
+
+// TestSetBucketProbeFd sets the probe fd of bucket 0 (test helper).
+func (e *SpillEngine) TestSetBucketProbeFd(idx int, fd *os.File) {
+	if idx < len(e.buckets) {
+		e.buckets[idx].ProbeFd = fd
+	}
+}
+
 // Cleanup releases all engine resources.
 func (e *SpillEngine) Cleanup(proc *process.Process) {
 	e.probeReader.Close()

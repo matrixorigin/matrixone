@@ -15,15 +15,16 @@
 package hashjoin
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -64,40 +65,35 @@ func TestHashJoinSpillDiskV2(t *testing.T) {
 	spillfs, err := proc.GetSpillFileService()
 	require.NoError(t, err)
 
-	analyzer := process.NewAnalyzer(0, false, false, "test")
-
 	// 100 int32 build rows
+	buildVals := make([]int32, 100)
+	for i := range buildVals {
+		buildVals[i] = int32(i)
+	}
 	buildBat := batch.NewWithSize(1)
-	buildBat.Vecs[0] = testutil.MakeInt32Vector(makeSequence(100), nil, proc.Mp())
+	buildBat.Vecs[0] = testutil.MakeInt32Vector(buildVals, nil, proc.Mp())
 	buildBat.SetRowCount(100)
 
-	// spill the build bucket
+	// spill the build bucket via FlushBucketBatch
 	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), "diskv2_build")
 	require.NoError(t, err)
-	ctr := &container{}
-	bw := spillBucketWriter{file: buildFile}
-	_, err = ctr.flushBucketBuffer(proc, buildBat, &bw, analyzer)
+	var buf bytes.Buffer
+	bw := spillutil.BucketWriter{Name: "diskv2_build", Fd: buildFile}
+	err = spillutil.FlushBucketBatch(proc, buildBat, &bw, &buf, nil)
 	require.NoError(t, err)
-	buildFd := bw.handOffFd()
+	buildFd := bw.HandOffFd()
 	require.NotNil(t, buildFd)
 
-	hashJoin := &HashJoin{
-		EqConds: [][]*plan.Expr{
-			{}, // probe side (unused in rebuild)
-			{
-				&plan.Expr{
-					Typ:  plan.Type{Id: int32(types.T_int32), Width: 32},
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-				},
-			},
-		},
-		HashOnPK: false,
-	}
-	bucket := spillBucket{buildFd: buildFd, probeFd: nil, depth: 1}
+	// rebuild via SpillEngine
+	engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+		BuildKeyExprs: makeKeyExpr(),
+	})
+	engine.InitFromSpilledMap([]*os.File{buildFd})
 
-	// rebuild the hashmap from the spilled bucket and verify all rows survive
-	jm, _, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	jm, res, err := engine.RebuildHashmap(proc, analyzer)
 	require.NoError(t, err)
+	require.Equal(t, spillutil.BucketReady, res)
 	require.NotNil(t, jm)
 	require.Equal(t, int64(100), jm.GetRowCount())
 
@@ -107,4 +103,5 @@ func TestHashJoinSpillDiskV2(t *testing.T) {
 	}
 	require.Equal(t, 100, totalRows)
 	jm.Free()
+	engine.Cleanup(proc)
 }
