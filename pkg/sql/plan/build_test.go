@@ -458,19 +458,55 @@ func TestPrepareArithOpsAllOperators(t *testing.T) {
 	}
 }
 
-// TestPrepareArithLargeInt verifies that the decimal128 promotion preserves
-// integer precision above 2^53 (the float64 precision limit), fixing P1.
-// 9007199254740993 (2^53+1) would lose the low bit as float64.
-func TestPrepareArithLargeInt(t *testing.T) {
+// TestPrepareArithPlan verifies that the plan for dual-param arithmetic
+// contains a Decimal128(38,12) cast (not float64 that would lose integer
+// precision, and not Decimal128(38,0) that would truncate fractional values).
+func TestPrepareArithPlan(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	// The promotion type must be decimal128, not float64, to preserve
-	// integer precision beyond float64's 53-bit mantissa.
-	_, err := runOneStmt(mock, t, "prepare s1 from select ? + ?")
-	assert.NoError(t, err)
-	_, err = runOneStmt(mock, t, "prepare s1 from select ? * ?")
-	assert.NoError(t, err)
-	_, err = runOneStmt(mock, t, "prepare s1 from select ? div ?")
-	assert.NoError(t, err)
+
+	tests := []string{
+		"prepare s1 from select ? + ?",
+		"prepare s1 from select ? - ?",
+		"prepare s1 from select ? * ?",
+		"prepare s1 from select ? / ?",
+		"prepare s1 from select ? % ?",
+		"prepare s1 from select ? div ?",
+		"prepare s1 from select ? mod ?",
+	}
+	for _, sql := range tests {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		assert.NoErrorf(t, err, "%s should succeed", sql)
+
+		// Verify that the cast inserted by the binder uses a decimal128
+		// with sufficient scale to preserve fractional values.
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		for _, node := range q.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				f := expr.GetF()
+				if f == nil {
+					continue
+				}
+				// Each arg should be cast(param, Decimal128(38,12)).
+				for _, arg := range f.Args {
+					cast := arg.GetF()
+					if cast == nil || cast.Func.GetObjName() != "cast" {
+						continue
+					}
+					// The cast target type.
+					target := cast.Args[1]
+					assert.Equalf(t, int32(types.T_decimal128), target.Typ.Id,
+						"cast target for %s must be decimal128", sql)
+					assert.Equalf(t, int32(38), target.Typ.Width,
+						"cast target for %s must be Width=38", sql)
+					assert.Equalf(t, int32(12), target.Typ.Scale,
+						"cast target for %s must be Scale=12", sql)
+				}
+			}
+		}
+	}
 }
 
 // TestPrepareArithMixedTextAndConstant verifies that ? + constant (mixed

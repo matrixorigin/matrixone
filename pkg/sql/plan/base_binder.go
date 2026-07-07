@@ -1765,7 +1765,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			// Promote to decimal128 so that numeric addition succeeds without
 			// the precision loss that float64 would cause for large integers
 			// (e.g. 9007199254740993). Real TEXT columns are NOT rewritten.
-			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, NotNullable: true}
+			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 12, NotNullable: true}
 			args[0], err = appendCastBeforeExpr(ctx, args[0], decimal128Type)
 			if err != nil {
 				return nil, err
@@ -1810,7 +1810,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_text) && args[1].Typ.Id == int32(types.T_text) &&
 			args[0].GetP() != nil && args[1].GetP() != nil {
 			// Both operands are prepared-statement parameters; promote to decimal128.
-			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, NotNullable: true}
+			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 12, NotNullable: true}
 			args[0], err = appendCastBeforeExpr(ctx, args[0], decimal128Type)
 			if err != nil {
 				return nil, err
@@ -1836,7 +1836,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if args[0].Typ.Id == int32(types.T_text) && args[1].Typ.Id == int32(types.T_text) &&
 			args[0].GetP() != nil && args[1].GetP() != nil {
 			// Both operands are prepared-statement parameters; promote to decimal128.
-			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, NotNullable: true}
+			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 12, NotNullable: true}
 			args[0], err = appendCastBeforeExpr(ctx, args[0], decimal128Type)
 			if err != nil {
 				return nil, err
