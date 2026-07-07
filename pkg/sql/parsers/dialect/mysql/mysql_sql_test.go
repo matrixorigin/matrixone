@@ -862,6 +862,9 @@ var (
 			input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
 			output: "select ADDDATE(DATE(2021-01-01), INTERVAL 1 day)",
 		}, {
+			input:  "SELECT DATE_ADD('2025-12-01', INTERVAL ((5*11)%180) DAY);",
+			output: "select DATE_ADD(2025-12-01, INTERVAL ((5 * 11) % 180) day)",
+		}, {
 			input:  "select '2007-01-01' + interval a day from t1;",
 			output: "select 2007-01-01 + INTERVAL a day from t1",
 		}, {
