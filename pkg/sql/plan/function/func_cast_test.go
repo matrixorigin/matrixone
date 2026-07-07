@@ -2675,7 +2675,9 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false)
 			if tt.wantErr {
 				require.Error(t, err)
-				require.Contains(t, err.Error(), "larger than Dest length")
+				// DDL (cast_strict, allowTrailingSpaceTrim=false) returns
+				// 1067 ER_INVALID_DEFAULT instead of 1406.
+				require.Contains(t, err.Error(), "Invalid default value")
 				return
 			}
 			require.NoError(t, err)

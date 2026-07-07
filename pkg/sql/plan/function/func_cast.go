@@ -5620,9 +5620,14 @@ func strToStr(
 				//   - otherwise (strict, real over-length): reject with 1406.
 				if (allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(s, destLen)) || !strictStringWidth {
 					v = []byte(truncateStringByRunes(s, destLen))
-				} else {
+				} else if allowTrailingSpaceTrim {
+					// DML assignment cast — reject with 1406 ER_DATA_TOO_LONG.
 					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 						"Src length %v is larger than Dest length %v", len(s), destLen))
+				} else {
+					// DDL (cast_strict) default/on-update value — reject with
+					// 1067 ER_INVALID_DEFAULT, matching MySQL semantics.
+					return moerr.NewErrInvalidDefault(ctx, s)
 				}
 			} else if utf8.RuneCountInString(s) > destLen {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
@@ -5958,10 +5963,21 @@ func jsonToStr(
 				str = string(bs)
 			}
 			val := []byte(str)
-			val = truncateCastBytesResult(val, toType, strictStringWidth...)
-			if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
-				return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
-					"%v is larger than Dest length %v", val, toType.Width))
+			// CHAR/VARCHAR width enforcement: use rune count (not byte
+			// count) for multi-byte-safe truncation. JSON output may
+			// contain Unicode characters.
+			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && utf8.RuneCountInString(str) > int(toType.Width) {
+				if len(strictStringWidth) > 0 && strictStringWidth[0] {
+					return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+						"%v is larger than Dest length %v", val, toType.Width))
+				}
+				val = []byte(truncateStringByRunes(str, int(toType.Width)))
+			} else {
+				val = truncateCastBytesResult(val, toType, strictStringWidth...)
+				if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
+					return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+						"%v is larger than Dest length %v", val, toType.Width))
+				}
 			}
 			if err := to.AppendBytes(val, false); err != nil {
 				return err
