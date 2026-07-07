@@ -91,6 +91,64 @@ func TestAVX2NarrowMatchesScalar(t *testing.T) {
 	}
 }
 
+// TestAVX2NarrowEdgeCases covers the early-return branches the match-scalar test
+// never hits: dimension mismatch, cosine empty-input, and cosine zero-norm. All
+// three return before (or skip) the 8-lane loop, so a tiny/zero dim is enough and
+// no AVX2 execution is required for the guard branches.
+func TestAVX2NarrowEdgeCases(t *testing.T) {
+	// Dimension mismatch -> error, returned before any SIMD work.
+	t.Run("mismatch", func(t *testing.T) {
+		bfA, bfB := make([]types.BF16, 8), make([]types.BF16, 7)
+		fA, fB := make([]types.Float16, 8), make([]types.Float16, 7)
+		iA, iB := make([]int8, 8), make([]int8, 7)
+		for name, fn := range map[string]func() (float64, error){
+			"bf16/l2sq":   func() (float64, error) { return l2sqBF16AVX2(bfA, bfB) },
+			"bf16/ip":     func() (float64, error) { return innerProductBF16AVX2(bfA, bfB) },
+			"bf16/l1":     func() (float64, error) { return l1DistanceBF16AVX2(bfA, bfB) },
+			"bf16/cosine": func() (float64, error) { return cosineDistanceBF16AVX2(bfA, bfB) },
+			"f16/l2sq":    func() (float64, error) { return l2sqF16AVX2(fA, fB) },
+			"f16/ip":      func() (float64, error) { return innerProductF16AVX2(fA, fB) },
+			"f16/l1":      func() (float64, error) { return l1DistanceF16AVX2(fA, fB) },
+			"f16/cosine":  func() (float64, error) { return cosineDistanceF16AVX2(fA, fB) },
+			"int8/l2sq":   func() (float64, error) { return l2sqInt8AVX2(iA, iB) },
+			"int8/ip":     func() (float64, error) { return innerProductInt8AVX2(iA, iB) },
+			"int8/l1":     func() (float64, error) { return l1DistanceInt8AVX2(iA, iB) },
+			"int8/cosine": func() (float64, error) { return cosineDistanceInt8AVX2(iA, iB) },
+		} {
+			_, err := fn()
+			require.Error(t, err, name)
+		}
+	})
+
+	// cosine on empty input returns (0, nil) before the length check.
+	t.Run("empty", func(t *testing.T) {
+		for name, fn := range map[string]func() (float64, error){
+			"bf16": func() (float64, error) { return cosineDistanceBF16AVX2(nil, nil) },
+			"f16":  func() (float64, error) { return cosineDistanceF16AVX2(nil, nil) },
+			"int8": func() (float64, error) { return cosineDistanceInt8AVX2(nil, nil) },
+		} {
+			d, err := fn()
+			require.NoError(t, err, name)
+			require.Equal(t, 0.0, d, name)
+		}
+	})
+
+	// A zero-norm vector hits the denom==0 guard -> distance 1.0. dim=4 keeps the
+	// 8-lane loop from running, so the tail alone drives na2/nb2 to zero.
+	t.Run("zero_norm", func(t *testing.T) {
+		const dim = 4
+		for name, fn := range map[string]func() (float64, error){
+			"bf16": func() (float64, error) { return cosineDistanceBF16AVX2(make([]types.BF16, dim), make([]types.BF16, dim)) },
+			"f16":  func() (float64, error) { return cosineDistanceF16AVX2(make([]types.Float16, dim), make([]types.Float16, dim)) },
+			"int8": func() (float64, error) { return cosineDistanceInt8AVX2(make([]int8, dim), make([]int8, dim)) },
+		} {
+			d, err := fn()
+			require.NoError(t, err, name)
+			require.Equal(t, 1.0, d, name)
+		}
+	})
+}
+
 // Benchmark_Narrow_AVX2vsAVX512 compares scalar / AVX2 (x8) / AVX-512 (x16) for
 // the narrow L2sq kernels in one binary.
 //
