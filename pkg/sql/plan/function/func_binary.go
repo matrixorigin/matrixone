@@ -6722,6 +6722,13 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	rs := vector.MustFunctionResult[float64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 {
@@ -6729,8 +6736,11 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 				return err
 			}
 		} else {
-			//TODO: Ignoring 4 switch cases:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/power.go#L36
 			res := math.Pow(v1, v2)
+			if math.IsNaN(res) || math.IsInf(res, 0) {
+				return moerr.NewOutOfRangeNoCtxf(
+					"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
+			}
 			if err = rs.Append(res, false); err != nil {
 				return err
 			}

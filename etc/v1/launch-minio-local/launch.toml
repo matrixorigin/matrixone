@@ -1,0 +1,11 @@
+logservices = [
+    "./etc/v1/launch-minio-local/log.toml",
+]
+
+tnservices = [
+    "./etc/v1/launch-minio-local/tn.toml"
+]
+
+cnservices = [
+    "./etc/v1/launch-minio-local/cn.toml"
+]
