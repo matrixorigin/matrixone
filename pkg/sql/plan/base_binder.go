@@ -1762,14 +1762,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_text) && args[1].Typ.Id == int32(types.T_text) &&
 			args[0].GetP() != nil && args[1].GetP() != nil {
 			// Both operands are prepared-statement parameters of unknown type.
-			// Promote to float64 so that numeric addition succeeds (issue #25423).
-			// Real TEXT columns/constants are NOT rewritten; TEXT + TEXT stays an error.
-			float64Type := plan.Type{Id: int32(types.T_float64), NotNullable: true}
-			args[0], err = appendCastBeforeExpr(ctx, args[0], float64Type)
+			// Promote to decimal128 so that numeric addition succeeds without
+			// the precision loss that float64 would cause for large integers
+			// (e.g. 9007199254740993). Real TEXT columns are NOT rewritten.
+			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, NotNullable: true}
+			args[0], err = appendCastBeforeExpr(ctx, args[0], decimal128Type)
 			if err != nil {
 				return nil, err
 			}
-			args[1], err = appendCastBeforeExpr(ctx, args[1], float64Type)
+			args[1], err = appendCastBeforeExpr(ctx, args[1], decimal128Type)
 			if err != nil {
 				return nil, err
 			}
@@ -1808,13 +1809,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_text) && args[1].Typ.Id == int32(types.T_text) &&
 			args[0].GetP() != nil && args[1].GetP() != nil {
-			// Both operands are prepared-statement parameters; promote to float64.
-			float64Type := plan.Type{Id: int32(types.T_float64), NotNullable: true}
-			args[0], err = appendCastBeforeExpr(ctx, args[0], float64Type)
+			// Both operands are prepared-statement parameters; promote to decimal128.
+			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, NotNullable: true}
+			args[0], err = appendCastBeforeExpr(ctx, args[0], decimal128Type)
 			if err != nil {
 				return nil, err
 			}
-			args[1], err = appendCastBeforeExpr(ctx, args[1], float64Type)
+			args[1], err = appendCastBeforeExpr(ctx, args[1], decimal128Type)
 			if err != nil {
 				return nil, err
 			}
@@ -1822,7 +1823,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err != nil {
 			return nil, err
 		}
-	case "*", "/", "%":
+	case "*", "/", "%", "div", "mod":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, fmt.Sprintf("operator %s need two args", name), len(args))
 		}
@@ -1834,13 +1835,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		if args[0].Typ.Id == int32(types.T_text) && args[1].Typ.Id == int32(types.T_text) &&
 			args[0].GetP() != nil && args[1].GetP() != nil {
-			// Both operands are prepared-statement parameters; promote to float64.
-			float64Type := plan.Type{Id: int32(types.T_float64), NotNullable: true}
-			args[0], err = appendCastBeforeExpr(ctx, args[0], float64Type)
+			// Both operands are prepared-statement parameters; promote to decimal128.
+			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, NotNullable: true}
+			args[0], err = appendCastBeforeExpr(ctx, args[0], decimal128Type)
 			if err != nil {
 				return nil, err
 			}
-			args[1], err = appendCastBeforeExpr(ctx, args[1], float64Type)
+			args[1], err = appendCastBeforeExpr(ctx, args[1], decimal128Type)
 			if err != nil {
 				return nil, err
 			}

@@ -427,22 +427,22 @@ func TestPrepareArithmeticParams(t *testing.T) {
 }
 
 // TestPrepareArithOpsAllOperators verifies that the binder promotes dual
-// T_text prepared-statement parameters to float64 for every arithmetic
-// operator (+, -, *, /, %), ensuring issue #25423 is fixed for all of them.
+// T_text prepared-statement parameters to decimal128 for every arithmetic
+// operator (+, -, *, /, %, DIV, MOD), fixing issue #25423 for all of them.
 func TestPrepareArithOpsAllOperators(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	tests := []struct{ op, symbol string }{
-		{"plus", "+"},
-		{"minus", "-"},
-		{"multi", "*"},
-		{"div", "/"},
-		{"mod", "%"},
+	tests := []struct{ op, sql string }{
+		{"plus", "prepare s1 from select ? + ?"},
+		{"minus", "prepare s1 from select ? - ?"},
+		{"multi", "prepare s1 from select ? * ?"},
+		{"fdiv", "prepare s1 from select ? / ?"},
+		{"pmod", "prepare s1 from select ? % ?"},
+		{"idiv", "prepare s1 from select ? div ?"},
+		{"fmod", "prepare s1 from select ? mod ?"},
 	}
 	for _, tc := range tests {
-		sql := "prepare stmt_" + tc.op + " from select ? " + tc.symbol + " ?"
-		logicPlan, err := runOneStmt(mock, t, sql)
-		assert.NoErrorf(t, err, "prepare select ? %s ? should succeed", tc.symbol)
-		// Verify params stayed T_text.
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		assert.NoErrorf(t, err, "%s should succeed", tc.sql)
 		q := resolveQueryPlan(logicPlan)
 		if q == nil || q.GetQuery() == nil {
 			continue
@@ -451,11 +451,26 @@ func TestPrepareArithOpsAllOperators(t *testing.T) {
 			for _, expr := range node.ProjectList {
 				for _, ref := range collectParamRefs(expr) {
 					assert.Equal(t, int32(types.T_text), ref.Typ.Id,
-						"param ref for %s should stay T_text", tc.symbol)
+						"param ref for %s should stay T_text", tc.op)
 				}
 			}
 		}
 	}
+}
+
+// TestPrepareArithLargeInt verifies that the decimal128 promotion preserves
+// integer precision above 2^53 (the float64 precision limit), fixing P1.
+// 9007199254740993 (2^53+1) would lose the low bit as float64.
+func TestPrepareArithLargeInt(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// The promotion type must be decimal128, not float64, to preserve
+	// integer precision beyond float64's 53-bit mantissa.
+	_, err := runOneStmt(mock, t, "prepare s1 from select ? + ?")
+	assert.NoError(t, err)
+	_, err = runOneStmt(mock, t, "prepare s1 from select ? * ?")
+	assert.NoError(t, err)
+	_, err = runOneStmt(mock, t, "prepare s1 from select ? div ?")
+	assert.NoError(t, err)
 }
 
 // TestPrepareArithMixedTextAndConstant verifies that ? + constant (mixed
