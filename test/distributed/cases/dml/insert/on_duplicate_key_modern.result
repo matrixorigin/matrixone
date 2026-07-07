@@ -349,7 +349,7 @@ set @ts_sec = (select updated_at from t_odku_sec_uk where u = 10);
 select sleep(2);
 ➤ sleep(2)[-6,8,0]  𝄀
 0
-insert into t_odku_sec_uk(id, u, v) values (2, 10, 5) on duplicate key update v = v;
+insert into t_odku_sec_uk(id, u, v) values (2, 10, 99) on duplicate key update v = v;
 select id, u, v, updated_at = @ts_sec as ts_unchanged from t_odku_sec_uk order by id;
 ➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  ts_unchanged[-7,1,0]  𝄀
 1  ¦  10  ¦  5  ¦  1

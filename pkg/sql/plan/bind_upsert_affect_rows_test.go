@@ -170,6 +170,24 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 			"ODKU plan should contain a no-op filter")
 		require.Equal(t, 1, countNoopEqComparisons(p),
 			"no-op FILTER must compare only the single written column (loc), not immutable deptno/dname")
+		require.True(t, noopEqRightOperandsAreCols(p),
+			"no-op FILTER must compare against the materialized new-image column, not re-run the assignment")
+	})
+
+	t.Run("ODKU no-op filter references materialized value for computed update", func(t *testing.T) {
+		// A computed assignment (loc = substring(loc, 1, 2)) is evaluated once by
+		// the dedup-update join and written into the new-image column. The no-op
+		// guard must compare against that materialized column, never re-evaluate
+		// the expression — otherwise a non-deterministic assignment would be
+		// evaluated twice and the no-op decision could disagree with the value
+		// actually stored.
+		p, err := runOneStmt(mock, t,
+			"insert into constraint_test.dept(deptno, dname, loc) values (1, 'A', 'B') on duplicate key update loc = substring(loc, 1, 2)")
+		require.NoError(t, err)
+		require.True(t, hasNoopFilter(p),
+			"ODKU plan should contain a no-op filter")
+		require.True(t, noopEqRightOperandsAreCols(p),
+			"no-op FILTER must reference the materialized new-image column, not the substring() expression")
 	})
 
 	t.Run("DeepCopyNode preserves CountDeleteAffectRows on MULTI_UPDATE", func(t *testing.T) {
@@ -270,6 +288,52 @@ func countNullSafeEq(expr *planpb.Expr) int {
 		return 1
 	default:
 		return 0
+	}
+}
+
+// noopEqRightOperandsAreCols reports whether every <=> in the ODKU no-op FILTER
+// compares against a bare column reference on its right-hand (new-image) side.
+// The no-op guard must reference the final written value the dedup-update join
+// already materialized into the new image, never re-evaluate the assignment
+// expression (which would double-evaluate a non-deterministic update such as
+// v = floor(rand()*2)). Returns false if no no-op FILTER exists.
+func noopEqRightOperandsAreCols(p *Plan) bool {
+	q := p.GetQuery()
+	if q == nil {
+		return false
+	}
+	for _, n := range q.Nodes {
+		if n.NodeType != planpb.Node_FILTER {
+			continue
+		}
+		for _, cond := range n.FilterList {
+			notExpr := noopFilterNotBranch(cond)
+			if notExpr == nil {
+				continue
+			}
+			return eqRightOperandsAreCols(notExpr.Args[0])
+		}
+	}
+	return false
+}
+
+func eqRightOperandsAreCols(expr *planpb.Expr) bool {
+	f := expr.GetF()
+	if f == nil || f.Func == nil {
+		return false
+	}
+	switch f.Func.ObjName {
+	case "and":
+		for _, arg := range f.Args {
+			if !eqRightOperandsAreCols(arg) {
+				return false
+			}
+		}
+		return true
+	case "<=>":
+		return len(f.Args) == 2 && f.Args[1].GetCol() != nil
+	default:
+		return false
 	}
 }
 

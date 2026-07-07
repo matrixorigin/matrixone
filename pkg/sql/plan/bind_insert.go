@@ -1999,9 +1999,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
-	// ODKU no-op guard: drop rows where every column the update would actually
-	// write (its final value in updateExprs) is NULL-safe-equal to the old image
-	// (scanTag). MySQL returns affected-rows=0 for such rows.
+	// ODKU no-op guard: drop rows where every column the update actually writes
+	// is NULL-safe-equal between the old image (scanTag) and the final written
+	// value the dedup-update join materialized into the new image (selectTag).
+	// MySQL returns affected-rows=0 for such rows.
 	// Placed before the final PROJECT so scanTag columns survive column remapping.
 	if onDupAction == plan.Node_UPDATE {
 		// Columns excluded from the no-op equality chain: implicit ON UPDATE
@@ -2037,14 +2038,23 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if noopSkipCols[col.Name] {
 				continue
 			}
-			// Compare against the final written value, not the raw incoming row
-			// image. A column absent from updateExprs is not written by ODKU, so it
-			// keeps its old value and is trivially unchanged — it must be excluded.
-			// Otherwise an immutable key column resolved through a secondary UNIQUE
-			// conflict (where the incoming PK differs from the existing row's PK)
-			// would spuriously fail the equality chain and turn a no-op update into
-			// a counted one.
-			newColExpr, ok := updateExprs[col.Name]
+			// Only compare columns the update actually writes. A column absent from
+			// updateExprs keeps its old value and is trivially unchanged, so it must
+			// be excluded — otherwise an immutable key column resolved through a
+			// secondary UNIQUE conflict (where the incoming PK differs from the
+			// existing row's PK) would spuriously fail the equality chain and turn a
+			// no-op update into a counted one.
+			if _, written := updateExprs[col.Name]; !written {
+				continue
+			}
+			// Compare the old value against the FINAL written value already
+			// materialized by the dedup-update join, not a fresh evaluation of the
+			// assignment expression. The join evaluates each update expression once
+			// and writes the result back into the new-image (selectTag) column at
+			// colName2Idx; re-executing it here would double-evaluate non-
+			// deterministic assignments (e.g. v = floor(rand()*2)), so the no-op
+			// check could disagree with the value actually stored.
+			newColPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
 			if !ok {
 				continue
 			}
@@ -2057,7 +2067,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					},
 				},
 			}
-			eqExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldColExpr, DeepCopyExpr(newColExpr)})
+			newColExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectTag,
+						ColPos: newColPos,
+					},
+				},
+			}
+			eqExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldColExpr, newColExpr})
 			if allColsEqual == nil {
 				allColsEqual = eqExpr
 			} else {

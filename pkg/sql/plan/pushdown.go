@@ -319,15 +319,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				}
 
 			case JoinSideLeft:
-				// A DEDUP-update join (ON DUPLICATE KEY UPDATE / REPLACE) NULL-extends
-				// its left (old-table) side: incoming rows with no match emit a NULL
-				// old image. Pushing a left-only filter below it would evaluate the
-				// predicate on the raw table scan, where the old image is never NULL,
-				// dropping rows that should have survived as inserts and corrupting
-				// the downstream unique-index dedup. Keep such filters above the join,
-				// exactly as OUTER joins already require.
-				if node.JoinType != plan.Node_OUTER &&
-					!(node.JoinType == plan.Node_DEDUP && node.DedupJoinCtx != nil) {
+				if node.JoinType != plan.Node_OUTER {
 					leftPushdown = append(leftPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
