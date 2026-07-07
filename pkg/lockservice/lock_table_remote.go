@@ -432,7 +432,15 @@ func shouldTrackRemoteLockOnSendError(err error) bool {
 	if errors.As(err, &notSent) {
 		return false
 	}
-	return !moerr.IsMoErrCode(err, moerr.ErrRPCTimeout)
+	return !moerr.IsMoErrCode(unwrapLockRequestNotSentError(err), moerr.ErrRPCTimeout)
+}
+
+func unwrapLockRequestNotSentError(err error) error {
+	var notSent *lockRequestNotSentError
+	if errors.As(err, &notSent) {
+		return notSent.err
+	}
+	return err
 }
 
 func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
@@ -477,6 +485,7 @@ func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
 }
 
 func isRetryError(err error) bool {
+	err = unwrapLockRequestNotSentError(err)
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 		return false

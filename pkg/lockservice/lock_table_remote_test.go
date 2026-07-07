@@ -344,6 +344,12 @@ func TestShouldTrackRemoteLockOnSendError(t *testing.T) {
 	require.True(t, shouldTrackRemoteLockOnSendError(context.DeadlineExceeded))
 }
 
+func TestNotSentErrorUnwrapsForRetryClassification(t *testing.T) {
+	require.False(t, isRetryError(wrapLockRequestNotSentError(moerr.NewBackendCannotConnectNoCtx())))
+	require.False(t, isRetryError(wrapLockRequestNotSentError(moerr.NewBackendClosedNoCtx())))
+	require.True(t, isRetryError(wrapLockRequestNotSentError(context.DeadlineExceeded)))
+}
+
 func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
 	runRPCTests(
 		t,
