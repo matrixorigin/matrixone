@@ -130,7 +130,7 @@ func (s *WandSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 	// Each base carries its recency key (model.ChunkId) from metadata.chunk_id — 0
 	// for a full-build base (oldest, below the tail which starts at 1), K for a
 	// folded/merged base — so ComputeLiveness dedups bases + tail uniformly.
-	tail, deletes, err := loadTailSegments(sqlproc, s.cfg)
+	tail, deletes, _, err := loadTailSegments(sqlproc, s.cfg)
 	if err != nil {
 		freeSegs(bases)
 		return err

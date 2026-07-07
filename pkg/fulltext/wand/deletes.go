@@ -76,6 +76,17 @@ func EncodeDeleteLog(pkType int32, recs []DeleteRecord) ([]byte, error) {
 
 // DecodeDeleteLog reverses EncodeDeleteLog, validating magic + CRC. Cursor-based
 // over the body (no bytes.Reader / binary.Read boxing / per-record buffer alloc).
+// deleteLogPkType peeks the pkType word (magic|pkType|…) of a delete-log blob
+// without a full decode — the tail loader uses it to surface the pk type of a
+// delete-only frame (no insert segment to read PkType from) so compaction can
+// re-frame surviving deletes. Returns (0, false) if the blob is too short.
+func deleteLogPkType(buf []byte) (int32, bool) {
+	if len(buf) < 8 {
+		return 0, false
+	}
+	return int32(binary.LittleEndian.Uint32(buf[4:8])), true
+}
+
 func DecodeDeleteLog(buf []byte) ([]DeleteRecord, error) {
 	if len(buf) < 4+4+8+4 {
 		return nil, moerr.NewInternalErrorNoCtx("wand delete log: truncated")

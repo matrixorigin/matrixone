@@ -16,8 +16,11 @@ package wand
 
 import (
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -136,103 +139,185 @@ func (m *WandModel) Split(capacity int64) []*WandModel {
 	return segs
 }
 
-// CompactSegments folds the tag=0 base sub-indexes + the entire visible tag=1
-// CdcTail into a fresh, capacity-split tag=0 base — WITHOUT re-tokenizing from
-// source — then deletes the old inputs, all in the caller's transaction. This is
-// the Stage-2 "merge-all" body run by the fulltext_wand_compact TVF (which idxcron
-// reaches via `ALTER … REINDEX … FULLTEXT MERGE`). Snapshot isolation makes it
-// atomic: K = MAX(chunk_id) is read within the txn, so concurrent sinker appends
-// (chunk_id > K) are invisible here and survive the `DELETE … chunk_id <= K`.
+// CompactSegments folds the visible tag=1 CdcTail into the tag=0 base WITHOUT
+// re-tokenizing from source and WITHOUT rewriting the existing base sub-indexes —
+// the O(tail) "fold" step of the recency LSM. It runs in the caller's transaction
+// (the fulltext_wand_compact TVF, reached by `ALTER … REINDEX … FULLTEXT MERGE`).
+// Snapshot isolation makes it atomic: K = MAX(chunk_id) is read within the txn, so
+// concurrent sinker appends (chunk_id > K) are invisible and survive the tail delete.
 //
-// Correctness: ComputeLiveness runs over ALL loaded segments (tag=0 + tag=1),
-// resolving owner-by-chunk_id + deletes globally; FilterLive drops the
-// dead/superseded ords so the merged base holds exactly the live corpus. The new
-// base loads at ChunkId=-1 (below any future tail), so a pk later re-appended at
-// chunk_id > K still supersedes the base copy at query time.
+// Only the (threshold-bounded) tail is loaded — never the base — so memory is O(tail),
+// not O(corpus). Steps:
+//  1. Load the tag=1 tail: insert segments + folded delete map + the pk type.
+//  2. Live-filter the tail inserts among themselves (dedup by chunk_id, drop those a
+//     later tail delete supersedes) → Merge into new capacity-split tag=0 sub(s) at
+//     recency K (metadata.chunk_id = K, above every existing base at recency < K).
+//  3. Surviving deletes = tail deletes whose pk is NOT a live tail insert. They must
+//     still shadow stale copies in the untouched OLD bases (recency < K), so re-frame
+//     them as ONE tail delete frame at NextTailChunkId (> K). Deletes resolved inside
+//     the tail (pk re-inserted live) are dropped.
+//  4. Delete the folded tail (chunk_id ≤ K). Old base subs are left in place; their
+//     stale/deleted copies are shadowed by the new sub (recency K) and the surviving
+//     deletes (recency > K) at query time. A later tiered merge (2b) reclaims the space.
 //
-// Returns the number of new tag=0 sub-indexes written. A no-op (0) when there is
-// nothing to compact. (Stage 2b will replace the merge-ALL with a tiered
-// similar-size subset selection; the TVF/command/idxcron wiring is unchanged.)
+// Returns the number of new tag=0 sub-indexes written (0 when the tail held only
+// resolved churn / nothing to fold).
 func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int64) (int, error) {
-	// K = MAX tail chunk_id in this snapshot (the prefix we will fold + delete).
+	// K = MAX tail chunk_id in this snapshot (the prefix we fold + delete).
 	_, k, emptyTail, err := tailChunkBounds(sqlproc, cfg)
 	if err != nil {
 		return 0, err
 	}
+	if emptyTail {
+		return 0, nil // no tail → nothing to fold
+	}
 
-	bases, err := LoadAllBases(sqlproc, cfg)
+	tailSegs, deletes, pkType, err := loadTailSegments(sqlproc, cfg)
 	if err != nil {
 		return 0, err
 	}
-	tailSegs, deletes, err := loadTailSegments(sqlproc, cfg)
-	if err != nil {
-		freeSegs(bases)
-		return 0, err
-	}
-	all := append(bases, tailSegs...)
-	if len(all) == 0 {
-		return 0, nil // empty index — nothing to compact
-	}
-	defer freeSegs(all) // free the off-heap loaded inputs; Merge copies what it keeps
+	defer freeSegs(tailSegs) // free off-heap loaded inputs; Merge copies what it keeps
 
-	// Global liveness over tag=0 + tag=1, then densify each to its live ords. After
-	// ComputeLiveness each pk has one owner, so the filtered models are pk-disjoint.
-	live := ComputeLiveness(all, deletes)
-	filtered := make([]*WandModel, 0, len(all))
-	for i, s := range all {
+	// Live-filter the tail inserts (dedup by chunk_id + drop tail-deleted); collect
+	// the surviving pks. After ComputeLiveness each pk has one owner, so the filtered
+	// models are pk-disjoint — Merge's precondition.
+	live := ComputeLiveness(tailSegs, deletes)
+	filtered := make([]*WandModel, 0, len(tailSegs))
+	livePks := make(map[any]struct{})
+	for i, s := range tailSegs {
 		f := s.FilterLive(live[i])
 		if f.N == 0 {
-			continue // segment fully dead/superseded
+			continue // segment fully dead/superseded within the tail
 		}
 		filtered = append(filtered, f)
+		for _, pk := range f.pks {
+			livePks[pk] = struct{}{}
+		}
+	}
+	if pkType == 0 && len(filtered) > 0 {
+		pkType = filtered[0].PkType
 	}
 
+	// Fold the live tail inserts → new base sub(s) at recency K. The id is timestamp-
+	// unique (disjoint from existing base ids); recency is carried by ChunkId, not id.
 	ts := time.Now().UnixMicro()
 	uid := fmt.Sprintf("%s:%d", cfg.IndexTable, ts)
-
-	// Build the new capped tag=0 sub-models (empty when the whole corpus is dead).
 	var segs []*WandModel
 	if len(filtered) > 0 {
-		segs = Merge(uid, filtered...).Split(capacity)
-	}
-
-	// Replace: drop all old tag=0 bases + the folded tail prefix, then write the new
-	// base. New sub-ids (uid:i) differ from the old ids, so order is immaterial; do
-	// deletes first (mirrors the create TVF) to keep the metadata table minimal.
-	clear := DeleteAllBasesSqls(cfg)
-	if !emptyTail {
-		clear = append(clear, DeleteTailChunksByMaxId(cfg, k)...)
-	}
-	for _, s := range clear {
-		res, e := sqlexec.RunSql(sqlproc, s)
-		if e != nil {
-			return 0, e
+		merged := Merge(uid, filtered...)
+		segs = merged.Split(capacity)
+		for _, s := range segs {
+			s.ChunkId = k
 		}
-		res.Close()
 	}
 
+	// Surviving deletes: tail deletes not resolved by a live re-insert. They shadow
+	// stale copies in the untouched old bases (recency < K).
+	var surviving []DeleteRecord
+	for pk := range deletes {
+		if _, ok := livePks[pk]; !ok {
+			surviving = append(surviving, DeleteRecord{Pk: pk})
+		}
+	}
+
+	// Write the new base sub(s) at recency K.
 	for i, m := range segs {
 		m.Id = SubIndexId(uid, i)
 		sqls, cleanup, e := m.ToInsertSqls(cfg, ts, int(0)) // tag=0 base
 		if e != nil {
 			return 0, e
 		}
-		runErr := func() error {
-			if cleanup != nil {
-				defer cleanup()
-			}
-			for _, s := range sqls {
-				res, e := sqlexec.RunSql(sqlproc, s)
-				if e != nil {
-					return e
-				}
-				res.Close()
-			}
-			return nil
-		}()
-		if runErr != nil {
-			return 0, runErr
+		if e := runSqlsWithCleanup(sqlproc, sqls, cleanup); e != nil {
+			return 0, e
 		}
 	}
+
+	// Re-frame surviving deletes as ONE tail delete frame. Runs AFTER writing the base
+	// at recency K, so NextTailChunkId = K+1 (still ≤ K tail present) → the frame lands
+	// above the new base and every old base; the tail delete below then spares it.
+	if len(surviving) > 0 {
+		if pkType == 0 {
+			return 0, moerr.NewInternalError(sqlproc.GetContext(),
+				"wand compact: surviving deletes but unknown pk type")
+		}
+		if e := appendDeleteFrame(sqlproc, cfg, pkType, surviving); e != nil {
+			return 0, e
+		}
+	}
+
+	// Delete the folded tail prefix (≤ K). Old base subs are left untouched.
+	for _, s := range DeleteTailChunksByMaxId(cfg, k) {
+		res, e := sqlexec.RunSql(sqlproc, s)
+		if e != nil {
+			return 0, e
+		}
+		res.Close()
+	}
 	return len(segs), nil
+}
+
+// runSqlsWithCleanup runs a group of statements, calling cleanup (temp-file removal)
+// after — even on error — so a failed base write never leaks its serialized blob.
+func runSqlsWithCleanup(sqlproc *sqlexec.SqlProcess, sqls []string, cleanup func()) error {
+	if cleanup != nil {
+		defer cleanup()
+	}
+	for _, s := range sqls {
+		res, e := sqlexec.RunSql(sqlproc, s)
+		if e != nil {
+			return e
+		}
+		res.Close()
+	}
+	return nil
+}
+
+// appendDeleteFrame persists one tag=1 delete frame (the compaction's surviving
+// deletes) at NextTailChunkId — the same file→chunk-rows path the CDC sinker uses,
+// so it re-loads as an ordinary tail delete frame.
+func appendDeleteFrame(sqlproc *sqlexec.SqlProcess, cfg TableConfig, pkType int32, recs []DeleteRecord) error {
+	framed, err := FrameDeletes(pkType, recs)
+	if err != nil {
+		return err
+	}
+	fp, err := os.CreateTemp("", "wanddel")
+	if err != nil {
+		return err
+	}
+	path := fp.Name()
+	defer func() { fp.Close(); os.Remove(path) }()
+	if _, err = fp.Write(framed); err != nil {
+		return err
+	}
+	if err = fp.Sync(); err != nil { // durable before load_file reads it
+		return err
+	}
+	start, err := nextTailChunkId(sqlproc, cfg)
+	if err != nil {
+		return err
+	}
+	for _, s := range TailFileInsertSqls(cfg, start, path, len(framed)) {
+		res, e := sqlexec.RunSql(sqlproc, s)
+		if e != nil {
+			return e
+		}
+		res.Close()
+	}
+	return nil
+}
+
+// nextTailChunkId runs NextTailChunkIdSql and returns the next free tag=1 append
+// position (GREATEST(max tail chunk_id, max base recency)+1).
+func nextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
+	res, err := sqlexec.RunSql(sqlproc, NextTailChunkIdSql(cfg))
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+	for _, bat := range res.Batches {
+		if bat != nil && bat.RowCount() > 0 {
+			return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0), nil
+		}
+	}
+	return 0, nil
 }

@@ -68,7 +68,7 @@ type TailFrame struct {
 // framing/decode error the partially-built segments are freed before returning.
 func AssembleFrames(frames []TailFrame) (segs []*WandModel, deletes map[any]int64, err error) {
 	for _, f := range frames {
-		segs, deletes, err = applyTailFrame(f.Data, f.ChunkId, segs, deletes)
+		segs, deletes, _, err = applyTailFrame(f.Data, f.ChunkId, segs, deletes)
 		if err != nil {
 			freeSegs(segs)
 			return nil, nil, err
@@ -82,29 +82,35 @@ func AssembleFrames(frames []TailFrame) (segs []*WandModel, deletes map[any]int6
 // chunkId) appended to segs; a delete frame → folded into the pk→max-delete-chunk_id
 // map. Shared by AssembleFrames (in-memory frames) and assembleFramesAt (streaming
 // file). On error the caller owns freeing the partial segs.
-func applyTailFrame(data []byte, chunkId int64, segs []*WandModel, deletes map[any]int64) ([]*WandModel, map[any]int64, error) {
+// applyTailFrame decodes one tail frame into the running (segs, deletes). It also
+// returns the frame's pkType (from an insert segment's PkType or a delete log's
+// header) so the caller can learn the index pk type even from a delete-only tail;
+// pkType is 0 (unknown) when the frame yields neither.
+func applyTailFrame(data []byte, chunkId int64, segs []*WandModel, deletes map[any]int64) ([]*WandModel, map[any]int64, int32, error) {
 	records, _, nInserts, nDeletes, _, uerr := cuvscdc.UnframeCdcChunk(data)
 	if uerr != nil {
-		return segs, deletes, uerr
+		return segs, deletes, 0, uerr
 	}
 	switch {
 	case nInserts > 0:
 		m, derr := Deserialize(fmt.Sprintf("tail-%d", chunkId), bytes.NewReader(records))
 		if derr != nil {
-			return segs, deletes, derr
+			return segs, deletes, 0, derr
 		}
 		m.ChunkId = chunkId
 		segs = append(segs, m)
+		return segs, deletes, m.PkType, nil
 	case nDeletes > 0:
 		recs, derr := DecodeDeleteLog(records)
 		if derr != nil {
-			return segs, deletes, derr
+			return segs, deletes, 0, derr
 		}
 		deletes = FoldDeleteFrame(deletes, recs, chunkId)
+		pkType, _ := deleteLogPkType(records)
+		return segs, deletes, pkType, nil
 	default:
-		return segs, deletes, moerr.NewInternalErrorNoCtx("wand tail frame: empty (neither inserts nor deletes)")
+		return segs, deletes, 0, moerr.NewInternalErrorNoCtx("wand tail frame: empty (neither inserts nor deletes)")
 	}
-	return segs, deletes, nil
 }
 
 // assembleFramesAt walks the tag=1 frames from a chunk-placed source (each chunk at
@@ -113,33 +119,37 @@ func applyTailFrame(data []byte, chunkId int64, segs []*WandModel, deletes map[a
 // at a time (the header to learn the length, then the frame bytes, freed before the
 // next), so the whole tail is never resident: peak transient is one frame, not the
 // delta. r is the streaming loader's temp file (or a bytes.Reader in tests).
-func assembleFramesAt(r io.ReaderAt, minChunk, span int64) (segs []*WandModel, deletes map[any]int64, err error) {
+func assembleFramesAt(r io.ReaderAt, minChunk, span int64) (segs []*WandModel, deletes map[any]int64, pkType int32, err error) {
 	hdr := make([]byte, cuvscdc.CdcHeaderSize)
 	for slot := int64(0); slot < span; {
 		off := slot * int64(vectorindex.MaxChunkSize)
 		if _, e := r.ReadAt(hdr, off); e != nil {
 			freeSegs(segs)
-			return nil, nil, e
+			return nil, nil, 0, e
 		}
 		total, e := cuvscdc.CdcFrameLen(hdr)
 		if e != nil {
 			freeSegs(segs)
-			return nil, nil, e
+			return nil, nil, 0, e
 		}
 		buf := make([]byte, total)
 		if _, e := r.ReadAt(buf, off); e != nil {
 			freeSegs(segs)
-			return nil, nil, e
+			return nil, nil, 0, e
 		}
-		segs, deletes, e = applyTailFrame(buf, minChunk+slot, segs, deletes)
+		var pt int32
+		segs, deletes, pt, e = applyTailFrame(buf, minChunk+slot, segs, deletes)
 		buf = nil // release before the next frame
 		if e != nil {
 			freeSegs(segs)
-			return nil, nil, e
+			return nil, nil, 0, e
+		}
+		if pt != 0 {
+			pkType = pt
 		}
 		slot += int64((total + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize)
 	}
-	return segs, deletes, nil
+	return segs, deletes, pkType, nil
 }
 
 // freeSegs releases the C-backed buffers of every segment (idempotent).

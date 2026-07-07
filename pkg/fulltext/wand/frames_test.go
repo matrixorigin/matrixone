@@ -207,7 +207,7 @@ func TestAssembleFramesAtStreaming(t *testing.T) {
 	}
 
 	buf, span, firstSlot := placeFrames([][]byte{fseg, fdel})
-	segs, deletes, err := assembleFramesAt(bytes.NewReader(buf), 0, span)
+	segs, deletes, _, err := assembleFramesAt(bytes.NewReader(buf), 0, span)
 	if err != nil {
 		t.Fatal(err)
 	}

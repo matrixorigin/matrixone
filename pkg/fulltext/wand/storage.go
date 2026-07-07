@@ -302,20 +302,20 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 // orders the chunks instead. (2) NO buffering the whole delta — chunks stream to
 // disk one batch at a time and frames are decoded one at a time, so the transient
 // footprint is a single frame, not the tail.
-func loadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandModel, map[any]int64, error) {
+func loadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandModel, map[any]int64, int32, error) {
 	minC, maxC, empty, err := tailChunkBounds(sqlproc, cfg)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if empty {
-		return nil, nil, nil
+		return nil, nil, 0, nil
 	}
 	span := maxC - minC + 1
 	filesize := span * int64(vectorindex.MaxChunkSize)
 
 	fp, err := os.CreateTemp("", "wandtail")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	path := fp.Name()
 	defer func() {
@@ -323,7 +323,7 @@ func loadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandMode
 		os.Remove(path)
 	}()
 	if err = fp.Truncate(filesize); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 
 	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s AND %s = %d",
@@ -333,12 +333,12 @@ func loadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandMode
 		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
 	_, n, err := streamChunkRowsToFile(sqlproc, sql, minC, filesize, fp)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	// tag=1 chunk_ids are a gapless run, so [min..max] must span exactly the row
 	// count; a mismatch is a missing/duplicate chunk (corruption).
 	if n != span {
-		return nil, nil, moerr.NewInternalError(sqlproc.GetContext(),
+		return nil, nil, 0, moerr.NewInternalError(sqlproc.GetContext(),
 			fmt.Sprintf("wand tail: chunk_id range [%d..%d] spans %d but got %d rows (gap or duplicate)", minC, maxC, span, n))
 	}
 	return assembleFramesAt(fp, minC, span)
