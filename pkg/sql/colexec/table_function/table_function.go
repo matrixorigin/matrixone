@@ -172,6 +172,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = fulltextIndexTokenizePrepare(proc, tblArg)
 	case "fulltext_wand_create":
 		tblArg.ctr.state, err = fulltextWandCreatePrepare(proc, tblArg)
+	case "fulltext_wand_compact":
+		tblArg.ctr.state, err = fulltextWandCompactPrepare(proc, tblArg)
 	case "fulltext_wand_search":
 		tblArg.ctr.state, err = fulltextWandSearchPrepare(proc, tblArg)
 	case "stage_list":

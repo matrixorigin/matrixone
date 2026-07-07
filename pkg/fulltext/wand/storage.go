@@ -154,6 +154,20 @@ func DeleteTailSqls(cfg TableConfig) []string {
 	}
 }
 
+// DeleteTailChunksByMaxId removes only the tag=1 CdcTail chunk rows with chunk_id
+// <= k — the prefix a merge-compaction folded into the new tag=0 base. Chunks with
+// chunk_id > k (appended by the sinker after the compaction's txn snapshot) are
+// preserved, so `chunk_id` is never renumbered and concurrent appends survive.
+func DeleteTailChunksByMaxId(cfg TableConfig, k int64) []string {
+	return []string{
+		fmt.Sprintf("DELETE FROM %s WHERE %s = %s AND %s = %d AND %s <= %d",
+			sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+			catalog.FullTextIndex_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+			catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents),
+			catalog.FullTextIndex_TblCol_Storage_Chunk_Id, k),
+	}
+}
+
 // CountTailChunks returns the number of tag=1 CdcTail chunk rows — a cheap,
 // monotonic proxy for accumulated tail size used by the idxcron reindex gate.
 // Chunk count, NOT doc count: an oversized frame is split across several chunk

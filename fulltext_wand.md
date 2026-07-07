@@ -550,7 +550,9 @@ is retained only as a schema-change / corruption-recovery fallback).
   UPSERT-dedup / live-filter primitive shared with item 2). **[tag=0 create-build capping
   is now DONE (2026-07-07, `a0573840d`): `fulltext_wand_create.end()` uses
   `FinishSegments(capacity)` reading `fulltext_max_index_capacity`.]**
-- **Item 2 (delete-only tiered compaction) — NOT STARTED.**
+- **Item 2 (delete-only tiered compaction) — IN PROGRESS (Stage 2, 2026-07-07).** Finalized
+  design below (`### Item 2`): a `MERGE` command runs a **standalone `fulltext_wand_compact`
+  table function** (SQL, not a Go API call from idxcron), tiered by `max_index_capacity`.
 
 ### Cost model (why this is needed)
 Measured on a live 100k-doc empty-table→CDC run (2026-07-02) and generalized:
