@@ -1784,6 +1784,12 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 			return moerr.NewInvalidInputNoCtx("expected timestamp value")
 		}
 		p.EncodeTimestamp(val)
+	case types.T_year:
+		val, ok := v.(types.MoYear)
+		if !ok {
+			return moerr.NewInvalidInputNoCtx("expected year value")
+		}
+		p.EncodeMoYear(val)
 	case types.T_decimal64:
 		val, ok := v.(types.Decimal64)
 		if !ok {
@@ -1824,12 +1830,6 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 		default:
 			return moerr.NewInvalidInputNoCtx("expected enum value")
 		}
-	case types.T_year:
-		val, ok := v.(types.MoYear)
-		if !ok {
-			return moerr.NewInvalidInputNoCtx("expected year value")
-		}
-		p.EncodeMoYear(val)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_array_float32, types.T_array_float64, types.T_TS:
@@ -1895,6 +1895,9 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 	case types.T_timestamp:
 		v := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
 		p.EncodeTimestamp(v)
+	case types.T_year:
+		v := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, row)
+		p.EncodeMoYear(v)
 	case types.T_decimal64:
 		v := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, row)
 		p.EncodeDecimal64(v)
@@ -1915,9 +1918,6 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 	case types.T_enum:
 		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, row)
 		p.EncodeEnum(v)
-	case types.T_year:
-		v := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, row)
-		p.EncodeMoYear(v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_array_float32, types.T_array_float64:

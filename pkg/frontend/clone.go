@@ -611,7 +611,6 @@ func rewriteCloneViewInfos(
 			info.createSql,
 			srcDBName,
 			dstDBName,
-			isSystemDatabaseName(srcDBName),
 		)
 		if err != nil {
 			return nil, nil, err
@@ -626,7 +625,7 @@ func rewriteCloneViewInfos(
 	return rewrittenViewMap, rewrittenViews, nil
 }
 
-func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, quoteIdentifiers bool) (string, error) {
+func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string) (string, error) {
 	if srcDBName == "" || srcDBName == dstDBName {
 		return sql, nil
 	}
@@ -642,24 +641,12 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, quoteIdentifiers bo
 
 	applyRemapDb([]tree.Statement{createView}, map[string]string{srcDBName: dstDBName})
 
-	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString()}
-	if quoteIdentifiers {
-		opts = append(opts, tree.WithQuoteIdentifier())
-	}
+	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
 	rewritten := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
 	if !strings.HasSuffix(strings.TrimSpace(rewritten), ";") {
 		rewritten += ";"
 	}
 	return rewritten, nil
-}
-
-func isSystemDatabaseName(name string) bool {
-	for _, dbName := range catalog.SystemDatabases {
-		if strings.EqualFold(name, dbName) {
-			return true
-		}
-	}
-	return false
 }
 
 func tryToIncreaseTxnPhysicalTS(

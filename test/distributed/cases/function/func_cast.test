@@ -7,6 +7,77 @@ select cast('7e0   ' as double), cast('-7.5e1   ' as float);
 select cast('1e-3   ' as decimal(8,4));
 select cast('+0012' as unsigned) as r;
 select CAST('10x' as unsigned integer);
+
+# String numeric cast with sign and radix prefixes.
+# 0b/0B is binary, 0o/0O is octal, 0x/0X is hexadecimal, and no prefix is decimal.
+# Leading zero without a radix prefix is still decimal.
+select cast('+123' as signed);
+select cast('-123' as signed);
+select cast('0123' as signed);
+select cast('+0123' as signed);
+select cast('-0123' as signed);
+select cast('+123' as unsigned);
+select cast('0123' as unsigned);
+select cast('-0' as unsigned);
+select cast('-000' as unsigned);
+select cast('-123' as unsigned);
+select cast('+000' as decimal(6,2));
+select cast('-000' as decimal(6,2));
+select cast('+0123' as decimal(6,2));
+select cast('-0123' as decimal(6,2));
+
+select cast('0b1010' as signed);
+select cast('+0b1010' as signed);
+select cast('-0b1010' as signed);
+select cast('0B1010' as signed);
+select cast('+0b1010' as unsigned);
+select cast('-0b0' as unsigned);
+select cast('-0b1010' as unsigned);
+select cast('+0b1010' as decimal(6,2));
+select cast('-0b1010' as decimal(6,2));
+
+select cast('0o17' as signed);
+select cast('+0o17' as signed);
+select cast('-0o17' as signed);
+select cast('0O17' as signed);
+select cast('+0o17' as unsigned);
+select cast('-0o0' as unsigned);
+select cast('-0o17' as unsigned);
+select cast('+0o17' as decimal(6,2));
+select cast('-0o17' as decimal(6,2));
+
+select cast('0x123' as signed);
+select cast('+0x123' as signed);
+select cast('-0x123' as signed);
+select cast('0X123' as signed);
+select cast('+0x123' as unsigned);
+select cast('-0x0' as unsigned);
+select cast('-0x123' as unsigned);
+select cast('+0x123' as decimal(6,2));
+select cast('-0x123' as decimal(6,2));
+
+select cast('  +123  ' as signed);
+select cast('  -0b1010  ' as signed);
+select cast('  +0o17  ' as signed);
+select cast('  -0x123  ' as signed);
+
+select cast('+-1' as signed);
+select cast('++1' as signed);
+select cast('--1' as signed);
+select cast('- 1' as signed);
+select cast('+ 1' as signed);
+select cast('+' as signed);
+select cast('-' as signed);
+select cast('0b' as signed);
+select cast('0b102' as signed);
+select cast('0o' as signed);
+select cast('0o18' as signed);
+select cast('0x' as signed);
+select cast('0x12g' as signed);
+select cast('x123' as signed);
+select cast('abc' as signed);
+select cast('1a' as signed);
+
 select cast('7e0' as double),
        cast('7e0' as float),
        cast('  +7e0' as double),

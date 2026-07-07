@@ -1634,6 +1634,16 @@ func TestEncodeRowCoversManyTypes(t *testing.T) {
 			},
 		},
 		{
+			name: "year",
+			typ:  types.T_year.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, types.MoYear(2024), false, mp))
+			},
+			assert: func(v any) {
+				require.Equal(t, types.MoYear(2024), v.(types.MoYear))
+			},
+		},
+		{
 			name: "bit",
 			typ:  types.T_bit.ToType(),
 			append: func(vec *vector.Vector) {
