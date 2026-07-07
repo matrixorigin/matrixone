@@ -73,6 +73,26 @@ func Test_inc_dec(t *testing.T) {
 	assert.False(t, rt.connectionBeCounted.Load())
 }
 
+func TestRoutineCleanupWithoutSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	rt := &Routine{
+		cancelRoutineCtx:  ctx,
+		cancelRoutineFunc: cancel,
+		goroutineID:       12345,
+		mc:                newMigrateController(),
+	}
+	rt.protocol.Store(&holder[MysqlRrWr]{value: &testMysqlWriter{}})
+
+	rt.cleanup()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("cleanup did not cancel routine context")
+	}
+	assert.Nil(t, rt.getProtocol())
+}
+
 const (
 	contextCancel int32 = -2
 	timeout       int32 = -1

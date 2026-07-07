@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -788,6 +789,55 @@ func TestFillEndToEndConditionGeneration(t *testing.T) {
 		require.Contains(t, f.condition, "a =")
 		require.Contains(t, f.condition, "b =")
 	})
+}
+
+func TestFillCompoundConditionUsesSingleQuotedSQLLiterals(t *testing.T) {
+	mp, err := mpool.NewMPool("test_compound_condition_quotes", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	dateVal := types.DateFromCalendar(2025, 1, 3)
+	yearVal := types.MoYear(2024)
+	decVal, err := types.ParseDecimal64("12.34", 10, 2)
+	require.NoError(t, err)
+
+	nameVal := `O'Reilly\docs`
+	packer.EncodeStringType([]byte(nameVal))
+	packer.EncodeDate(dateVal)
+	packer.EncodeMoYear(yearVal)
+	packer.EncodeDecimal64(decVal)
+
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, packer.GetBuf(), false, mp))
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer func() {
+		vec.Free(mp)
+		bat.Clean(mp)
+	}()
+
+	f := &fuzzyCheck{
+		attr:       "__mo_cpkey_col",
+		isCompound: true,
+		compoundCols: []*plan.ColDef{
+			{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "d", Typ: plan.Type{Id: int32(types.T_date)}},
+			{Name: "y", Typ: plan.Type{Id: int32(types.T_year)}},
+			{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal64), Scale: 2}},
+		},
+	}
+
+	require.NoError(t, f.fill(context.Background(), bat))
+	require.Contains(t, f.condition, "name = "+sqlquote.String(nameVal))
+	require.Contains(t, f.condition, "d = "+sqlquote.String(dateVal.String()))
+	require.Contains(t, f.condition, "y = "+sqlquote.String(yearVal.String()))
+	require.Contains(t, f.condition, "amount = "+decVal.Format(2))
+	require.NotContains(t, f.condition, `"`, "fuzzyCheck SQL literals must stay valid under ANSI_QUOTES")
 }
 
 // TestConcurrentFirstlyCheck verifies that firstlyCheck is safe to call
