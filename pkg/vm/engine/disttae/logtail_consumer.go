@@ -382,18 +382,51 @@ func (c *PushClient) canServeTableSnapshot(
 	ps *logtailreplay.PartitionState,
 	snapshot timestamp.Timestamp,
 ) bool {
+	canServe, _ := c.canServeTableSnapshotNoWait(dbId, tblId, ps, snapshot)
+	return canServe
+}
+
+func (c *PushClient) waitCanServeTableSnapshot(
+	ctx context.Context,
+	accId, dbId, tblId uint64,
+	ps *logtailreplay.PartitionState,
+	snapshot timestamp.Timestamp,
+) (*logtailreplay.PartitionState, bool, error) {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		canServe, needWait := c.canServeTableSnapshotNoWait(dbId, tblId, ps, snapshot)
+		if canServe || !needWait {
+			return ps, canServe, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case <-ticker.C:
+			ps = c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tblId).Snapshot()
+		}
+	}
+}
+
+func (c *PushClient) canServeTableSnapshotNoWait(
+	dbId, tblId uint64,
+	ps *logtailreplay.PartitionState,
+	snapshot timestamp.Timestamp,
+) (canServe bool, needWait bool) {
 	snapshotTS := types.TimestampToTS(snapshot)
 	if ps == nil || !ps.CanServe(snapshotTS) {
-		return false
+		return false, false
 	}
 	if snapshot.IsEmpty() {
-		return true
+		return true, false
 	}
 
 	visibleTS := types.TimestampToTS(snapshot.Prev())
 	appliedTo := ps.GetAppliedTo()
 	if !appliedTo.IsEmpty() && appliedTo.GE(&visibleTS) {
-		return true
+		return true, false
 	}
 
 	// If no update for this table is queued or being applied, the global
@@ -401,7 +434,10 @@ func (c *PushClient) canServeTableSnapshot(
 	// waterline. Only block the latest-state fast path when this table has a
 	// known pending update and the current state has not applied up to the
 	// statement snapshot yet.
-	return !c.subscribed.hasPendingUpdate(dbId, tblId)
+	if c.subscribed.hasPendingUpdate(dbId, tblId) {
+		return false, true
+	}
+	return true, false
 }
 
 func (c *PushClient) skipSubIfSubscribed(

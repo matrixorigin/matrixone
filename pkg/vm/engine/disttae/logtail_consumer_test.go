@@ -1120,6 +1120,47 @@ func TestCanServeTableSnapshotBlocksPendingUpdate(t *testing.T) {
 	assert.True(t, e.pClient.canServeTableSnapshot(10, 42, ps, snapshot))
 }
 
+func TestWaitCanServeTableSnapshotWaitsForPendingUpdate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	e := &Engine{
+		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
+		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 8)},
+	}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	pendingTo := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 0}
+	e.pClient.subscribed.setTablePendingUpdate(10, 42, pendingTo)
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		state, done := part.MutateState()
+		state.UpdateAppliedTo(types.TimestampToTS(snapshot.Prev()))
+		done()
+	}()
+
+	ps, ok, err := e.pClient.waitCanServeTableSnapshot(ctx, 0, 10, 42, part.Snapshot(), snapshot)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, ps)
+	expectedApplied := types.TimestampToTS(snapshot.Prev())
+	applied := ps.GetAppliedTo()
+	assert.True(t, applied.EQ(&expectedApplied))
+}
+
 func newTestRoutineControllers(buffer int) []*routineController {
 	recRoutines := make([]*routineController, consumerNumber)
 	for i := range recRoutines {
