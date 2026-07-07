@@ -487,3 +487,82 @@ func TestCleanupPipelinesForSession_CancelsRegisteredPipelines(t *testing.T) {
 	require.Equal(t, 0, waiterCount, "Session cleanup should remove the waiter registration")
 	require.NotNil(t, proc.GetQueryContextError(), "Session cleanup should cancel registered non-dispatch pipelines")
 }
+
+func TestRecordBuiltPipeline_CleansOnSessionClose(t *testing.T) {
+	srv := NewServer(nil)
+	require.NotNil(t, srv)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &mockClientSession{remoteAddr: "test-addr", ctx: ctx}
+	streamID := uint64(15)
+
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	queryCtx, queryCancel := context.WithCancel(context.Background())
+	defer queryCancel()
+	proc.Base.GetContextBase().BuildQueryCtx(queryCtx)
+
+	srv.RecordBuiltPipeline(session, streamID, proc)
+
+	key := generateRecordKey(session, streamID)
+	srv.receivedRunningPipeline.Lock()
+	_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+	_, waiterExists := srv.receivedRunningPipeline.sessionCleanupWaiters[session]
+	srv.receivedRunningPipeline.Unlock()
+
+	require.True(t, exists, "Registered pipeline should be tracked")
+	require.True(t, waiterExists, "Registered pipeline should install session cleanup")
+
+	cancel()
+
+	require.Eventually(t, func() bool {
+		srv.receivedRunningPipeline.Lock()
+		_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+		_, waiterExists := srv.receivedRunningPipeline.sessionCleanupWaiters[session]
+		srv.receivedRunningPipeline.Unlock()
+		return !exists && !waiterExists && proc.GetQueryContextError() != nil
+	}, time.Second, 10*time.Millisecond, "Session close should remove and cancel registered pipelines")
+}
+
+func TestRecordDispatchPipeline_MarksReceiverDoneOnSessionClose(t *testing.T) {
+	srv := NewServer(nil)
+	require.NotNil(t, srv)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &mockClientSession{remoteAddr: "test-addr", ctx: ctx}
+	streamID := uint64(16)
+
+	dispatchReceiver := &process.WrapCs{
+		ReceiverDone: false,
+		MsgId:        streamID,
+		Uid:          uuid.Must(uuid.NewV7()),
+		Cs:           session,
+		Err:          make(chan error, 1),
+	}
+
+	srv.RecordDispatchPipeline(session, streamID, dispatchReceiver)
+
+	key := generateRecordKey(session, streamID)
+	srv.receivedRunningPipeline.Lock()
+	_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+	_, waiterExists := srv.receivedRunningPipeline.sessionCleanupWaiters[session]
+	srv.receivedRunningPipeline.Unlock()
+
+	require.True(t, exists, "Dispatch receiver should be tracked")
+	require.True(t, waiterExists, "Dispatch receiver should install session cleanup")
+
+	cancel()
+
+	require.Eventually(t, func() bool {
+		srv.receivedRunningPipeline.Lock()
+		_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+		_, waiterExists := srv.receivedRunningPipeline.sessionCleanupWaiters[session]
+		srv.receivedRunningPipeline.Unlock()
+
+		dispatchReceiver.RLock()
+		receiverDone := dispatchReceiver.ReceiverDone
+		dispatchReceiver.RUnlock()
+
+		return !exists && !waiterExists && receiverDone
+	}, time.Second, 10*time.Millisecond, "Session close should remove and mark registered dispatch receivers done")
+}
