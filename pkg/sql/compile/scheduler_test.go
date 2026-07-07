@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -193,6 +194,33 @@ func TestScheduleQueryWorkersIncludesLocalWhenQueryClientExists(t *testing.T) {
 	nodes, err := c.scheduleQueryWorkers()
 	require.NoError(t, err)
 	require.Equal(t, []string{"local:6001", "remote:6001"}, []string{nodes[0].Addr, nodes[1].Addr})
+}
+
+func TestScheduleQueryWorkersDeduplicatesRequiredLocalByAddress(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+	c.e = &schedulerTestEngine{
+		nodes: engine.Nodes{
+			{Id: "remote", Addr: "remote:6001", Mcpu: 4},
+			{Addr: "local:6001", Mcpu: 6},
+		},
+	}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Len(t, nodes, 2)
+	addrs := []string{nodes[0].Addr, nodes[1].Addr}
+	sort.Strings(addrs)
+	require.Equal(t, []string{"local:6001", "remote:6001"}, addrs)
+
+	decision, err := c.decideQueryPlacement()
+	require.NoError(t, err)
+	require.Equal(t, schedule.ReasonRequiredLocalCN, decision.Reason)
+	require.Equal(t, 2, len(decision.Workers))
+	require.Equal(t, "remote:6001", decision.Workers[0].Addr)
+	require.Equal(t, "local:6001", decision.Workers[1].Addr)
 }
 
 func TestScheduleQueryWorkersReturnsCandidateError(t *testing.T) {

@@ -21,10 +21,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestForceSingleScanDistinctAgg(t *testing.T) {
+	node := &plan.Node{
+		AggList: []*plan.Expr{
+			{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{
+							ObjName: "sum",
+						},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Lit{
+									Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	node.AggList[0].Expr.(*plan.Expr_F).F.Func.Obj = int64(function.Distinct)
+
+	require.True(t, forceSingleScan(node))
+}
 
 func TestGenerateNodesRespectsNodeDOPOnMultiCN(t *testing.T) {
 	c := NewMockCompile(t)
