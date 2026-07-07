@@ -16,8 +16,11 @@ package lockservice
 
 import (
 	"testing"
+	"time"
 
+	tp "github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAdjustConfig(t *testing.T) {
@@ -27,5 +30,17 @@ func TestAdjustConfig(t *testing.T) {
 	assert.NotEmpty(t, c.ServiceAddress)
 	assert.NotEmpty(t, c.KeepBindDuration)
 	assert.NotEmpty(t, c.KeepRemoteLockDuration)
+	assert.NotNil(t, c.RemoteLockOwnerWaitTimeout)
+	assert.NotEmpty(t, c.RemoteLockOwnerWaitTimeout.Duration)
 	assert.NotEmpty(t, c.MaxFixedSliceSize)
+}
+
+func TestRemoteLockOwnerWaitTimeoutCanBeDisabled(t *testing.T) {
+	var c Config
+	_, err := tp.Decode(`remote-lock-owner-wait-timeout = "0s"`, &c)
+	require.NoError(t, err)
+	c.ServiceID = "s1"
+	c.Validate()
+	require.NotNil(t, c.RemoteLockOwnerWaitTimeout)
+	assert.Equal(t, time.Duration(0), c.RemoteLockOwnerWaitTimeout.Duration)
 }

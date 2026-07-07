@@ -20,6 +20,8 @@ drop table t1;
 #SELECT, 嵌套，NULL
 select concat_ws(', ','monty','was here','again');
 select concat_ws(',','',NULL,'a');
+select hex(concat_ws(',', null, null)) as result_hex,
+       concat_ws(',', null, null) is null as is_null;
 -- @separator:table
 SELECT CONCAT_WS('"',CONCAT_WS('";"',space(60),space(60),space(60),space(100)), '"');
 
@@ -123,5 +125,4 @@ insert into t2 values(1, "2012-10-12"),(2, "1994-10-04"),(3, "2018-06-04"),(4, "
 SELECT t1.a,t1.b, t2.a,t2.b FROM t1 JOIN t2 ON (concat_ws(t1.a, t1.b) = concat_ws(t2.a, t2.b)) HAVING substring(concat_ws(t1.a, t1.b),1,1)='2';
 drop table t1;
 drop table t2;
-
 
