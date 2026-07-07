@@ -292,4 +292,36 @@ insert into t_repro values ('id1', 'alice', 'semantic', 1);
 select count(*) from t_repro where uid = 'alice' and flag = 1;
 count(*)
 1
+drop table if exists t_cover_idx;
+create table t_cover_idx (id varchar(64) not null, g varchar(64) not null default '', s varchar(32) not null default 'pending', called bigint not null default 0, primary key(id), key idx_g (g, s, called, id));
+insert into t_cover_idx select cast(result as varchar(64)), '', 'pending', result from generate_series(1,1000) g;
+insert into t_cover_idx select cast(result+100000 as varchar(64)), concat('grp', result), 'pending', result from generate_series(1,300) g;
+insert into t_cover_idx select cast(result+200000 as varchar(64)), '', 'done', result from generate_series(1,200) g;
+select mo_ctl('dn', 'flush', 'd1.t_cover_idx');
+mo_ctl(dn, flush, d1.t_cover_idx)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select sleep(1);
+sleep(1)
+0
+select count(*) from t_cover_idx where g='' and s='pending';
+count(*)
+1000
+select count(*) from t_cover_idx where length(g)=0 and s='pending';
+count(*)
+1000
+update t_cover_idx set g='moved' where called between 1 and 100 and g='' and s='pending';
+delete from t_cover_idx where called between 101 and 150 and g='' and s='pending';
+select mo_ctl('dn', 'flush', 'd1.t_cover_idx');
+mo_ctl(dn, flush, d1.t_cover_idx)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select sleep(1);
+sleep(1)
+0
+select count(*) from t_cover_idx where g='' and s='pending';
+count(*)
+850
+select count(*) from t_cover_idx where length(g)=0 and s='pending';
+count(*)
+850
+drop table t_cover_idx;
 drop database d1;
