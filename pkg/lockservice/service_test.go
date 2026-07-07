@@ -5420,24 +5420,57 @@ func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
 			require.NoError(t, err)
 
 			option2 := option
-			option2.LockWaitTimeout = 3 // 3 seconds, more than enough
+			option2.LockWaitTimeout = 20 // long enough to keep scheduler pauses out of this test
 
-			var wg sync.WaitGroup
-			wg.Add(1)
+			row := []byte{1}
+			lockErrC := make(chan error, 1)
 			go func() {
-				defer wg.Done()
-				time.Sleep(200 * time.Millisecond)
-				require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+				_, err := l.Lock(ctx, 0, [][]byte{row}, []byte("txn2"), option2)
+				lockErrC <- err
 			}()
 
-			start := time.Now()
-			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
-			elapsed := time.Since(start)
+			hasWaiter := func() bool {
+				v, err := l.getLockTable(0, 0)
+				require.NoError(t, err)
+				lt := v.(*localLockTable)
+				lt.mu.Lock()
+				defer lt.mu.Unlock()
 
-			wg.Wait()
-			require.NoError(t, err)
-			require.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
-			require.Less(t, elapsed, 2*time.Second) // well within LockWaitTimeout
+				lock, ok := lt.mu.store.Get(row)
+				if !ok {
+					return false
+				}
+				return lock.waiters.size() == 1
+			}
+
+			waiterDeadline := time.NewTimer(10 * time.Second)
+			defer waiterDeadline.Stop()
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			for !hasWaiter() {
+				select {
+				case err := <-lockErrC:
+					require.FailNowf(t, "txn2 lock returned before txn1 unlock", "err: %v", err)
+				case <-waiterDeadline.C:
+					require.FailNow(t, "txn2 did not enter the wait queue before timeout")
+				case <-ticker.C:
+				}
+			}
+
+			select {
+			case err := <-lockErrC:
+				require.FailNowf(t, "txn2 lock returned before txn1 unlock", "err: %v", err)
+			default:
+			}
+
+			require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+			select {
+			case err := <-lockErrC:
+				require.NoError(t, err)
+			case <-time.After(10 * time.Second):
+				require.FailNow(t, "txn2 did not acquire the lock after txn1 unlocked")
+			}
+			require.NoError(t, l.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
 		},
 	)
 }
