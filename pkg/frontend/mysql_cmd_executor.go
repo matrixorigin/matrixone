@@ -2512,9 +2512,20 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 	initialSQLMode := sessionSQLModeForParser(execCtx.ses)
 	stmts, err = p.ParseWithSQLMode(execCtx.reqCtx, sql, lctn, initialSQLMode)
 	if err != nil {
+		incrementalStmts, incrementalErr := parseStatementsWithStaticSQLModeSet(execCtx, p, sql, lctn, initialSQLMode)
+		if incrementalErr == nil && hasStaticSQLModeSet(incrementalStmts) {
+			return incrementalStmts, nil
+		}
+		if incrementalErr == nil {
+			freeStatements(incrementalStmts)
+		}
 		return nil, err
 	}
-	return reparseAfterStaticSQLModeSet(execCtx, p, sql, lctn, initialSQLMode, stmts)
+	if !hasStaticSQLModeSet(stmts) {
+		return stmts, nil
+	}
+	freeStatements(stmts)
+	return parseStatementsWithStaticSQLModeSet(execCtx, p, sql, lctn, initialSQLMode)
 }
 
 func sessionSQLModeForParser(ses FeSession) string {
@@ -2529,65 +2540,129 @@ func sessionSQLModeForParser(ses FeSession) string {
 	return mysql.SessionSQLModeForParser(mode)
 }
 
-func reparseAfterStaticSQLModeSet(
+func parseStatementsWithStaticSQLModeSet(
 	execCtx *ExecCtx,
 	p *mysql.MySQLParser,
 	sql string,
 	lctn int64,
 	initialSQLMode string,
-	stmts []tree.Statement,
 ) ([]tree.Statement, error) {
-	if len(stmts) <= 1 {
-		return stmts, nil
-	}
-
-	fragments := statementFragments(sql)
-	if len(fragments) != len(stmts) {
-		return stmts, nil
-	}
-
+	remaining := sql
 	parserSQLMode := initialSQLMode
-	for i := range stmts {
-		if parserSQLMode != initialSQLMode {
-			reparsed, err := p.ParseWithSQLMode(execCtx.reqCtx, fragments[i], lctn, parserSQLMode)
-			if err != nil {
-				freeStatements(stmts)
-				return nil, err
-			}
-			if len(reparsed) != 1 {
-				freeStatements(reparsed)
-				freeStatements(stmts)
-				return nil, moerr.NewParseError(execCtx.reqCtx, "syntax error, or too many sql to parse")
-			}
-			stmts[i].Free()
-			stmts[i] = reparsed[0]
+	stmts := make([]tree.Statement, 0)
+	for {
+		stmt, rest, hasStmt, err := parseFirstStatementWithSQLMode(execCtx, p, remaining, lctn, parserSQLMode)
+		if err != nil {
+			freeStatements(stmts)
+			return nil, err
 		}
-		if nextSQLMode, ok := staticSQLModeSetValue(stmts[i]); ok {
+		remaining = rest
+		if !hasStmt {
+			if remaining == "" {
+				break
+			}
+			continue
+		}
+		stmts = append(stmts, stmt)
+		if nextSQLMode, ok := staticSQLModeSetValue(stmt); ok {
 			parserSQLMode = nextSQLMode
 		}
+		if remaining == "" {
+			break
+		}
+	}
+	if len(stmts) == 0 {
+		return []tree.Statement{&tree.EmptyStmt{}}, nil
 	}
 	return stmts, nil
 }
 
-func statementFragments(sql string) []string {
-	fragments := parsers.SplitSqlBySemicolon(sql)
-	ret := make([]string, 0, len(fragments))
-	for _, fragment := range fragments {
-		if fragmentHasStatement(fragment) {
-			ret = append(ret, fragment)
+func parseFirstStatementWithSQLMode(
+	execCtx *ExecCtx,
+	p *mysql.MySQLParser,
+	sql string,
+	lctn int64,
+	parserSQLMode string,
+) (tree.Statement, string, bool, error) {
+	if sql == "" {
+		return nil, "", false, nil
+	}
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(parserSQLMode))
+	defer mysql.PutScanner(scanner)
+	for scanner.Pos < len(sql) {
+		typ, _ := scanner.Scan()
+		switch typ {
+		case int(';'):
+			fragment := sql[:scanner.Pos-1]
+			rest := sql[scanner.Pos:]
+			if !fragmentHasStatement(fragment, parserSQLMode) {
+				return nil, rest, false, nil
+			}
+			stmt, err := parseSingleStatementWithSQLMode(execCtx, p, fragment, lctn, parserSQLMode)
+			if err == nil {
+				return stmt, rest, true, nil
+			}
+		case mysql.EofChar():
+			return parseLastStatementWithSQLMode(execCtx, p, sql, lctn, parserSQLMode)
+		case mysql.LEX_ERROR:
+			return parseLastStatementWithSQLMode(execCtx, p, sql, lctn, parserSQLMode)
 		}
 	}
-	return ret
+	return parseLastStatementWithSQLMode(execCtx, p, sql, lctn, parserSQLMode)
 }
 
-func fragmentHasStatement(fragment string) bool {
+func parseLastStatementWithSQLMode(
+	execCtx *ExecCtx,
+	p *mysql.MySQLParser,
+	sql string,
+	lctn int64,
+	parserSQLMode string,
+) (tree.Statement, string, bool, error) {
+	if !fragmentHasStatement(sql, parserSQLMode) {
+		return nil, "", false, nil
+	}
+	stmt, err := parseSingleStatementWithSQLMode(execCtx, p, sql, lctn, parserSQLMode)
+	if err != nil {
+		return nil, "", false, err
+	}
+	return stmt, "", true, nil
+}
+
+func parseSingleStatementWithSQLMode(
+	execCtx *ExecCtx,
+	p *mysql.MySQLParser,
+	sql string,
+	lctn int64,
+	parserSQLMode string,
+) (tree.Statement, error) {
+	parsed, err := p.ParseWithSQLMode(execCtx.reqCtx, sql, lctn, parserSQLMode)
+	if err != nil {
+		return nil, err
+	}
+	if len(parsed) != 1 {
+		freeStatements(parsed)
+		return nil, moerr.NewParseError(execCtx.reqCtx, "syntax error, or too many sql to parse")
+	}
+	return parsed[0], nil
+}
+
+func fragmentHasStatement(fragment string, parserSQLMode string) bool {
 	if strings.TrimSpace(fragment) == "" {
 		return false
 	}
-	scanner := mysql.NewScanner(dialect.MYSQL, fragment)
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, fragment, mysql.ParseSQLModeFlags(parserSQLMode))
 	defer mysql.PutScanner(scanner)
 	typ, _ := scanner.Scan()
 	return typ != 0 && typ != mysql.EofChar()
+}
+
+func hasStaticSQLModeSet(stmts []tree.Statement) bool {
+	for _, stmt := range stmts {
+		if _, ok := staticSQLModeSetValue(stmt); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func staticSQLModeSetValue(stmt tree.Statement) (string, bool) {

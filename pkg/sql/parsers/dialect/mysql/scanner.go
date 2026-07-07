@@ -98,6 +98,12 @@ func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
 	return scanner
 }
 
+func NewScannerWithSQLMode(dialectType dialect.DialectType, sql string, sqlMode SQLModeFlags) *Scanner {
+	scanner := NewScanner(dialectType, sql)
+	scanner.setSQLMode(sqlMode)
+	return scanner
+}
+
 func PutScanner(scanner *Scanner) {
 	oversized := len(scanner.buf) > maxPoolSQLSize
 	// Reset shared state. Only clear buffers/strings when oversized.

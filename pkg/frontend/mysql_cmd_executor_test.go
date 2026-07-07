@@ -1341,6 +1341,54 @@ func Test_ParseSqlUsesSQLModeSetEarlierInSamePacket(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, uint32(defines.MYSQL_TYPE_FLOAT), col.Type.(*tree.T).InternalType.Oid)
 	})
+
+	t.Run("no backslash escapes", func(t *testing.T) {
+		stmts := parseSQLModePacket(t, ctx, ses, `set sql_mode=NO_BACKSLASH_ESCAPES; select 'a\'; select 1`)
+		defer freeStatements(stmts)
+		require.Len(t, stmts, 3)
+
+		selectStmt, ok := stmts[1].(*tree.Select)
+		require.True(t, ok)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, selectClause.Exprs, 1)
+		lit, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
+		require.True(t, ok)
+		require.Equal(t, `a\`, lit.String())
+	})
+
+	t.Run("disable no backslash escapes", func(t *testing.T) {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "NO_BACKSLASH_ESCAPES"))
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+			input: &UserInput{
+				sql: `set sql_mode=''; select 'a\'; select 1`,
+			},
+		}
+		_, err := parseSql(execCtx, ses.GetMySQLParser())
+		require.Error(t, err)
+	})
+
+	t.Run("compound statement keeps internal semicolons", func(t *testing.T) {
+		stmts := parseSQLModePacket(t, ctx, ses, `set sql_mode=ANSI_QUOTES; begin select if(1, 2, 3); end; select "c"`)
+		defer freeStatements(stmts)
+		require.Len(t, stmts, 3)
+
+		compoundStmt, ok := stmts[1].(*tree.CompoundStmt)
+		require.True(t, ok)
+		require.NotEmpty(t, compoundStmt.Stmts)
+		require.NotNil(t, compoundStmt.Stmts[0])
+
+		selectStmt, ok := stmts[2].(*tree.Select)
+		require.True(t, ok)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, selectClause.Exprs, 1)
+		name, ok := selectClause.Exprs[0].Expr.(*tree.UnresolvedName)
+		require.True(t, ok)
+		require.Equal(t, "c", name.ColName())
+	})
 }
 
 func parseSQLModePacket(t *testing.T, ctx context.Context, ses *Session, sql string) []tree.Statement {
