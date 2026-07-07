@@ -343,7 +343,7 @@ func TestZombieRepro_WithoutFix(t *testing.T) {
 	// is the pre-fix behavior).
 	origFn := getShardMembershipFn
 	defer func() { getShardMembershipFn = origFn }()
-	getShardMembershipFn = func(sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		return nil, false, nil // shard unknown -> fallback = not a zombie
 	}
 

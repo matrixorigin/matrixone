@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -65,10 +66,16 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
-	var withoutOutput bool
-	scopeEncodeData, withoutOutput, processEncodeData, err = prepareRemoteRunSendingData(c.sql, s)
+	var withoutOutput, folded bool
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(c.sql, s, c.proc)
 	if err != nil {
 		return nil, err
+	}
+	if folded {
+		getLogger(s.Proc.GetService()).
+			Debug("fold variable expressions before remote run",
+				zap.String("local-address", c.addr),
+				zap.String("remote-address", s.NodeInfo.Addr))
 	}
 
 	// generate a new sender to do send work.
@@ -173,20 +180,24 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 	return true
 }
 
-func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, withoutOutput bool, processData []byte, err error) {
+func prepareRemoteRunSendingData(sqlStr string, s *Scope, proc *process.Process) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
+	encodedScope, folded, err = foldVarExprsInRemoteRunScope(encodedScope, proc)
+	if err != nil {
+		return nil, false, nil, false, err
+	}
 
 	// Encode the ScopeList which need to be sent.
 	if scopeData, err = encodeScope(encodedScope); err != nil {
-		return nil, false, nil, err
+		return nil, false, nil, false, err
 	}
 
 	// Encode the Process related information.
 	if processData, err = encodeProcessInfo(s.Proc, sqlStr); err != nil {
-		return nil, false, nil, err
+		return nil, false, nil, false, err
 	}
 
-	return scopeData, withoutOutput, processData, nil
+	return scopeData, withoutOutput, processData, folded, nil
 }
 
 func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSenderOnClient) error {
@@ -241,7 +252,7 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		connectorOperator.GetIdx(), connectorOperator.IsFirst, connectorOperator.IsLast, "connector")
 
 	mp := s.Proc.Mp()
-	nextChannel := s.RootOp.(*connector.Connector).Reg.Ch2
+	nextReg := s.RootOp.(*connector.Connector).Reg
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
@@ -249,7 +260,8 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		}
 		connectorAnalyze.Network(bat)
 
-		if err = forwardRemoteBatchWithContext(sender, nextChannel, bat, mp); err != nil {
+		var receiverDone bool
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil || receiverDone {
 			return err
 		}
 	}
@@ -372,24 +384,49 @@ func newMessageSenderOnClient(
 	mp *mpool.MPool,
 	analyzeModule *AnalyzeModule,
 ) (*messageSenderOnClient, error) {
-	streamSender, err := cnclient.GetPipelineClient(sid).NewStream(ctx, toAddr)
+	streamCtx := ctx
+	var streamCtxCancel context.CancelFunc
+	useInternalTimeout := false
+	if _, ok := ctx.Deadline(); !ok {
+		streamCtx, streamCtxCancel = context.WithTimeoutCause(ctx, MaxRpcTime, moerr.CauseNewMessageSenderOnClient)
+		useInternalTimeout = true
+	}
+	cleanupStreamCtx := func() {
+		if streamCtxCancel != nil {
+			streamCtxCancel()
+		}
+	}
+
+	if moruntime.ServiceRuntime(sid) == nil {
+		cleanupStreamCtx()
+		return nil, moerr.NewInternalErrorNoCtx("service runtime is not initialized")
+	}
+	pipelineClient := cnclient.GetPipelineClient(sid)
+	if pipelineClient == nil {
+		cleanupStreamCtx()
+		return nil, moerr.NewInternalErrorNoCtx("pipeline client is not initialized")
+	}
+
+	streamSender, err := pipelineClient.NewStream(streamCtx, toAddr)
 	if err != nil {
+		err = moerr.AttachCause(streamCtx, err)
+		cleanupStreamCtx()
 		return nil, err
+	}
+	if streamSender == nil {
+		cleanupStreamCtx()
+		return nil, moerr.NewInternalErrorNoCtx("pipeline stream is not initialized")
 	}
 
 	sender := &messageSenderOnClient{
-		safeToClose:  true,
-		alreadyClose: false,
-		mp:           mp,
-		anal:         analyzeModule,
-		streamSender: streamSender,
-	}
-
-	if _, ok := ctx.Deadline(); !ok {
-		sender.ctx, sender.ctxCancel = context.WithTimeoutCause(ctx, MaxRpcTime, moerr.CauseNewMessageSenderOnClient)
-		sender.useInternalTimeout = true
-	} else {
-		sender.ctx = ctx
+		ctx:                streamCtx,
+		ctxCancel:          streamCtxCancel,
+		useInternalTimeout: useInternalTimeout,
+		safeToClose:        true,
+		alreadyClose:       false,
+		mp:                 mp,
+		anal:               analyzeModule,
+		streamSender:       streamSender,
 	}
 
 	if sender.receiveCh == nil {
@@ -397,11 +434,15 @@ func newMessageSenderOnClient(
 	}
 
 	// Only Inc() when we return a valid sender that the caller will eventually close();
-	// when Receive() fails, remoteRun returns nil and never calls close(), so we must not Inc() to avoid gauge leak.
-	if err == nil {
-		v2.PipelineMessageSenderGauge.Inc()
+	// when Receive() fails, close the stream here because remoteRun returns nil and never calls close().
+	if err != nil {
+		err = moerr.AttachCause(streamCtx, err)
+		cleanupStreamCtx()
+		_ = streamSender.Close(true)
+		return nil, err
 	}
-	return sender, moerr.AttachCause(ctx, err)
+	v2.PipelineMessageSenderGauge.Inc()
+	return sender, nil
 }
 
 func (sender *messageSenderOnClient) sendPipeline(
@@ -534,23 +575,32 @@ func (sender *messageSenderOnClient) contextDoneError() error {
 
 func forwardRemoteBatchWithContext(
 	sender *messageSenderOnClient,
-	nextChannel chan process.PipelineSignal,
+	nextReg *process.WaitRegister,
 	bat *batch.Batch,
 	mp *mpool.MPool,
-) error {
-	signal := process.NewPipelineSignalToDirectly(bat, nil, mp)
-	if sender == nil || sender.ctx == nil {
-		nextChannel <- signal
-		return nil
+) (receiverDone bool, err error) {
+	if nextReg == nil || nextReg.Ch2 == nil {
+		bat.Clean(mp)
+		return true, moerr.NewInternalErrorNoCtx("remote batch forward target is nil")
 	}
 
-	select {
-	case nextChannel <- signal:
-		return nil
-	case <-sender.ctx.Done():
+	ctx := context.TODO()
+	if sender == nil || sender.ctx == nil {
+		if nextReg.SendDataDirect(ctx, bat, mp) {
+			return false, nil
+		}
 		bat.Clean(mp)
-		return sender.contextDoneError()
+		return true, nil
 	}
+
+	if nextReg.SendDataDirect(sender.ctx, bat, mp) {
+		return false, nil
+	}
+	bat.Clean(mp)
+	if err := sender.contextDoneError(); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // no matter how we stop the remote-run, we should get the final remote cost here.

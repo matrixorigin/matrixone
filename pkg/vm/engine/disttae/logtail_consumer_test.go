@@ -492,18 +492,24 @@ func TestPushClient_UnusedTableGCTicker(t *testing.T) {
 	t.Run("subscriber nil", func(t *testing.T) {
 		var c PushClient
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go c.unusedTableGCTicker(ctx)
+		done := startTickerForTest(t, func() {
+			c.unusedTableGCTicker(ctx)
+		})
 		time.Sleep(time.Millisecond * 10)
+		cancel()
+		waitTickerStopped(t, done)
 	})
 
 	t.Run("context done", func(t *testing.T) {
 		var c PushClient
 		c.subscriber = &logTailSubscriber{}
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go c.unusedTableGCTicker(ctx)
+		done := startTickerForTest(t, func() {
+			c.unusedTableGCTicker(ctx)
+		})
 		time.Sleep(time.Millisecond * 10)
+		cancel()
+		waitTickerStopped(t, done)
 	})
 }
 
@@ -600,26 +606,19 @@ func TestPushClient_PartitionStateGCTicker(t *testing.T) {
 		gcPartitionStateTicker = orig
 	}()
 
-	startPStateGCTicker := func(c *PushClient, ctx context.Context) {
-		var (
-			wait sync.WaitGroup
-		)
-
-		wait.Add(1)
-		go func() {
-			wait.Done()
+	startPStateGCTicker := func(t *testing.T, c *PushClient, ctx context.Context) <-chan struct{} {
+		return startTickerForTest(t, func() {
 			c.partitionStateGCTicker(ctx, nil)
-		}()
-
-		wait.Wait()
+		})
 	}
 
 	t.Run("subscriber nil", func(t *testing.T) {
 		var c PushClient
 		ctx, cancel := context.WithCancel(context.Background())
-		startPStateGCTicker(&c, ctx)
+		done := startPStateGCTicker(t, &c, ctx)
 		time.Sleep(time.Millisecond * 10)
 		cancel()
+		waitTickerStopped(t, done)
 	})
 
 	t.Run("context done", func(t *testing.T) {
@@ -627,11 +626,34 @@ func TestPushClient_PartitionStateGCTicker(t *testing.T) {
 		c.subscriber = &logTailSubscriber{}
 		ctx, cancel := context.WithCancel(context.Background())
 
-		startPStateGCTicker(&c, ctx)
+		done := startPStateGCTicker(t, &c, ctx)
 
 		time.Sleep(time.Millisecond * 10)
 		cancel()
+		waitTickerStopped(t, done)
 	})
+}
+
+func startTickerForTest(t *testing.T, run func()) <-chan struct{} {
+	t.Helper()
+	done := make(chan struct{})
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		defer close(done)
+		run()
+	}()
+	<-started
+	return done
+}
+
+func waitTickerStopped(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ticker goroutine did not stop")
+	}
 }
 
 func TestPushClient_DoGCPartitionState(t *testing.T) {
@@ -1024,6 +1046,13 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 8)},
 		skipConsume: true,
 	}
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			101: {dbID: 10, state: Subscribed},
+			105: {dbID: 10, state: Subscribed},
+		},
+	}
 	e.pClient.receivedLogTailTime.initLogTailTimestamp(tw)
 
 	recRoutines := newTestRoutineControllers(8)
@@ -1036,20 +1065,100 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 		},
 	}
 	require.NoError(t, dispatchUpdateResponse(ctx, e, response, recRoutines, time.Now()))
+	assert.True(t, e.pClient.subscribed.hasPendingUpdate(10, 101))
+	assert.True(t, e.pClient.subscribed.hasPendingUpdate(10, 105))
 
 	cmd := (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
 	require.False(t, cmd.notifyApplied)
 	require.NoError(t, cmd.action(ctx, e, recRoutines[1]))
+	assert.False(t, e.pClient.subscribed.hasPendingUpdate(10, 101))
+	assert.True(t, e.pClient.subscribed.hasPendingUpdate(10, 105))
+	expectedApplied := types.TimestampToTS(to)
+	applied := e.GetOrCreateLatestPart(ctx, 0, 10, 101).Snapshot().GetAppliedTo()
+	assert.True(t, applied.EQ(&expectedApplied))
 	assert.Equal(t, timestamp.Timestamp{}, e.pClient.receivedLogTailTime.tList[1].Load().(timestamp.Timestamp))
 
 	cmd = (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
 	require.True(t, cmd.notifyApplied)
 	require.NoError(t, cmd.action(ctx, e, recRoutines[1]))
+	assert.False(t, e.pClient.subscribed.hasPendingUpdate(10, 105))
+	applied = e.GetOrCreateLatestPart(ctx, 0, 10, 105).Snapshot().GetAppliedTo()
+	assert.True(t, applied.EQ(&expectedApplied))
 	assert.Equal(t, to, e.pClient.receivedLogTailTime.tList[1].Load().(timestamp.Timestamp))
 
 	timeCmd := (<-recRoutines[0].signalChan).(*cmdToUpdateTime)
 	require.NoError(t, timeCmd.action(ctx, e, recRoutines[0]))
 	assert.Equal(t, to, e.pClient.receivedLogTailTime.tList[0].Load().(timestamp.Timestamp))
+}
+
+func TestCanServeTableSnapshotBlocksPendingUpdate(t *testing.T) {
+	e := &Engine{}
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+
+	ps := logtailreplay.NewPartitionState("test", false, 42, false)
+	ps.UpdateDuration(types.TS{}, types.MaxTs())
+
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	pendingTo := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 0}
+
+	assert.True(t, e.pClient.canServeTableSnapshot(10, 42, ps, snapshot))
+
+	e.pClient.subscribed.setTablePendingUpdate(10, 42, pendingTo)
+	assert.False(t, e.pClient.canServeTableSnapshot(10, 42, ps, snapshot))
+
+	newerPending := timestamp.Timestamp{PhysicalTime: 101, LogicalTime: 0}
+	e.pClient.subscribed.setTablePendingUpdate(10, 42, newerPending)
+	e.pClient.subscribed.clearTablePendingUpdate(10, 42, pendingTo)
+	assert.True(t, e.pClient.subscribed.hasPendingUpdate(10, 42))
+
+	ps.UpdateAppliedTo(types.TimestampToTS(snapshot.Prev()))
+	assert.True(t, e.pClient.canServeTableSnapshot(10, 42, ps, snapshot))
+}
+
+func TestWaitCanServeTableSnapshotWaitsForPendingUpdate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	e := &Engine{
+		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
+		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 8)},
+	}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	pendingTo := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 0}
+	e.pClient.subscribed.setTablePendingUpdate(10, 42, pendingTo)
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		state, done := part.MutateState()
+		state.UpdateAppliedTo(types.TimestampToTS(snapshot.Prev()))
+		done()
+	}()
+
+	ps, ok, err := e.pClient.waitCanServeTableSnapshot(ctx, 0, 10, 42, part.Snapshot(), snapshot)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, ps)
+	expectedApplied := types.TimestampToTS(snapshot.Prev())
+	applied := ps.GetAppliedTo()
+	assert.True(t, applied.EQ(&expectedApplied))
 }
 
 func newTestRoutineControllers(buffer int) []*routineController {

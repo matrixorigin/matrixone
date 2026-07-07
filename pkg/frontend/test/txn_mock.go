@@ -249,6 +249,18 @@ func (mr *MockTxnClientMockRecorder) GetSyncLatestCommitTSTimes() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSyncLatestCommitTSTimes", reflect.TypeOf((*MockTxnClient)(nil).GetSyncLatestCommitTSTimes))
 }
 
+// IterTxnIDs mocks base method.
+func (m *MockTxnClient) IterTxnIDs(arg0 func([]byte) bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "IterTxnIDs", arg0)
+}
+
+// IterTxnIDs indicates an expected call of IterTxnIDs.
+func (mr *MockTxnClientMockRecorder) IterTxnIDs(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IterTxnIDs", reflect.TypeOf((*MockTxnClient)(nil).IterTxnIDs), arg0)
+}
+
 // IterTxns mocks base method.
 func (m *MockTxnClient) IterTxns(arg0 func(client.TxnOverview) bool) {
 	m.ctrl.T.Helper()
@@ -410,6 +422,20 @@ func (m *MockTxnOperator) AddLockTable(locktable lock.LockTable) error {
 func (mr *MockTxnOperatorMockRecorder) AddLockTable(locktable interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddLockTable", reflect.TypeOf((*MockTxnOperator)(nil).AddLockTable), locktable)
+}
+
+// CheckLockTableBinds mocks base method.
+func (m *MockTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CheckLockTableBinds", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CheckLockTableBinds indicates an expected call of CheckLockTableBinds.
+func (mr *MockTxnOperatorMockRecorder) CheckLockTableBinds(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckLockTableBinds", reflect.TypeOf((*MockTxnOperator)(nil).CheckLockTableBinds), ctx)
 }
 
 // AddWaitLock mocks base method.
@@ -790,6 +816,18 @@ func (mr *MockTxnOperatorMockRecorder) SetFootPrints(id, enter interface{}) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFootPrints", reflect.TypeOf((*MockTxnOperator)(nil).SetFootPrints), id, enter)
 }
 
+// SetSnapshotTS mocks base method.
+func (m *MockTxnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetSnapshotTS", ts)
+}
+
+// SetSnapshotTS indicates an expected call of SetSnapshotTS.
+func (mr *MockTxnOperatorMockRecorder) SetSnapshotTS(ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSnapshotTS", reflect.TypeOf((*MockTxnOperator)(nil).SetSnapshotTS), ts)
+}
+
 // Snapshot mocks base method.
 func (m *MockTxnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 	m.ctrl.T.Helper()
@@ -1110,6 +1148,30 @@ func (mr *MockWorkspaceMockRecorder) Commit(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Commit", reflect.TypeOf((*MockWorkspace)(nil).Commit), ctx)
 }
 
+// FinalizeCommit mocks base method.
+func (m *MockWorkspace) FinalizeCommit(ctx context.Context) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "FinalizeCommit", ctx)
+}
+
+// FinalizeCommit indicates an expected call of FinalizeCommit.
+func (mr *MockWorkspaceMockRecorder) FinalizeCommit(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinalizeCommit", reflect.TypeOf((*MockWorkspace)(nil).FinalizeCommit), ctx)
+}
+
+// FinalizeCommitWithUnknownResult mocks base method.
+func (m *MockWorkspace) FinalizeCommitWithUnknownResult(ctx context.Context) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "FinalizeCommitWithUnknownResult", ctx)
+}
+
+// FinalizeCommitWithUnknownResult indicates an expected call of FinalizeCommitWithUnknownResult.
+func (mr *MockWorkspaceMockRecorder) FinalizeCommitWithUnknownResult(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinalizeCommitWithUnknownResult", reflect.TypeOf((*MockWorkspace)(nil).FinalizeCommitWithUnknownResult), ctx)
+}
+
 // EndStatement mocks base method.
 func (m *MockWorkspace) EndStatement() {
 	m.ctrl.T.Helper()
@@ -1120,6 +1182,20 @@ func (m *MockWorkspace) EndStatement() {
 func (mr *MockWorkspaceMockRecorder) EndStatement() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EndStatement", reflect.TypeOf((*MockWorkspace)(nil).EndStatement))
+}
+
+// GetCCPRTaskID mocks base method.
+func (m *MockWorkspace) GetCCPRTaskID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCCPRTaskID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetCCPRTaskID indicates an expected call of GetCCPRTaskID.
+func (mr *MockWorkspaceMockRecorder) GetCCPRTaskID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCCPRTaskID", reflect.TypeOf((*MockWorkspace)(nil).GetCCPRTaskID))
 }
 
 // GetHaveDDL mocks base method.
@@ -1164,6 +1240,20 @@ func (mr *MockWorkspaceMockRecorder) GetSnapshotWriteOffset() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSnapshotWriteOffset", reflect.TypeOf((*MockWorkspace)(nil).GetSnapshotWriteOffset))
 }
 
+// GetSyncProtectionJobID mocks base method.
+func (m *MockWorkspace) GetSyncProtectionJobID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSyncProtectionJobID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetSyncProtectionJobID indicates an expected call of GetSyncProtectionJobID.
+func (mr *MockWorkspaceMockRecorder) GetSyncProtectionJobID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSyncProtectionJobID", reflect.TypeOf((*MockWorkspace)(nil).GetSyncProtectionJobID))
+}
+
 // IncrSQLCount mocks base method.
 func (m *MockWorkspace) IncrSQLCount() {
 	m.ctrl.T.Helper()
@@ -1188,6 +1278,20 @@ func (m *MockWorkspace) IncrStatementID(ctx context.Context, commit bool) error 
 func (mr *MockWorkspaceMockRecorder) IncrStatementID(ctx, commit interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatementID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatementID), ctx, commit)
+}
+
+// IsCCPRTxn mocks base method.
+func (m *MockWorkspace) IsCCPRTxn() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsCCPRTxn")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsCCPRTxn indicates an expected call of IsCCPRTxn.
+func (mr *MockWorkspaceMockRecorder) IsCCPRTxn() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsCCPRTxn", reflect.TypeOf((*MockWorkspace)(nil).IsCCPRTxn))
 }
 
 // PPString mocks base method.
@@ -1246,16 +1350,16 @@ func (mr *MockWorkspaceMockRecorder) RollbackLastStatement(ctx interface{}) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RollbackLastStatement", reflect.TypeOf((*MockWorkspace)(nil).RollbackLastStatement), ctx)
 }
 
-// SetCloneTxn mocks base method.
-func (m *MockWorkspace) SetCloneTxn(snapshot int64) {
+// SetCCPRTaskID mocks base method.
+func (m *MockWorkspace) SetCCPRTaskID(taskID string) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetCloneTxn", snapshot)
+	m.ctrl.Call(m, "SetCCPRTaskID", taskID)
 }
 
-// SetCloneTxn indicates an expected call of SetCloneTxn.
-func (mr *MockWorkspaceMockRecorder) SetCloneTxn(snapshot interface{}) *gomock.Call {
+// SetCCPRTaskID indicates an expected call of SetCCPRTaskID.
+func (mr *MockWorkspaceMockRecorder) SetCCPRTaskID(taskID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCloneTxn", reflect.TypeOf((*MockWorkspace)(nil).SetCloneTxn), snapshot)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCCPRTaskID", reflect.TypeOf((*MockWorkspace)(nil).SetCCPRTaskID), taskID)
 }
 
 // SetCCPRTxn mocks base method.
@@ -1270,70 +1374,16 @@ func (mr *MockWorkspaceMockRecorder) SetCCPRTxn() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCCPRTxn", reflect.TypeOf((*MockWorkspace)(nil).SetCCPRTxn))
 }
 
-// IsCCPRTxn mocks base method.
-func (m *MockWorkspace) IsCCPRTxn() bool {
+// SetCloneTxn mocks base method.
+func (m *MockWorkspace) SetCloneTxn(snapshot int64) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IsCCPRTxn")
-	ret0, _ := ret[0].(bool)
-	return ret0
+	m.ctrl.Call(m, "SetCloneTxn", snapshot)
 }
 
-// IsCCPRTxn indicates an expected call of IsCCPRTxn.
-func (mr *MockWorkspaceMockRecorder) IsCCPRTxn() *gomock.Call {
+// SetCloneTxn indicates an expected call of SetCloneTxn.
+func (mr *MockWorkspaceMockRecorder) SetCloneTxn(snapshot interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsCCPRTxn", reflect.TypeOf((*MockWorkspace)(nil).IsCCPRTxn))
-}
-
-// SetCCPRTaskID mocks base method.
-func (m *MockWorkspace) SetCCPRTaskID(taskID string) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetCCPRTaskID", taskID)
-}
-
-// SetCCPRTaskID indicates an expected call of SetCCPRTaskID.
-func (mr *MockWorkspaceMockRecorder) SetCCPRTaskID(taskID interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCCPRTaskID", reflect.TypeOf((*MockWorkspace)(nil).SetCCPRTaskID), taskID)
-}
-
-// GetCCPRTaskID mocks base method.
-func (m *MockWorkspace) GetCCPRTaskID() string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetCCPRTaskID")
-	ret0, _ := ret[0].(string)
-	return ret0
-}
-
-// GetCCPRTaskID indicates an expected call of GetCCPRTaskID.
-func (mr *MockWorkspaceMockRecorder) GetCCPRTaskID() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCCPRTaskID", reflect.TypeOf((*MockWorkspace)(nil).GetCCPRTaskID))
-}
-
-// SetSyncProtectionJobID mocks base method.
-func (m *MockWorkspace) SetSyncProtectionJobID(jobID string) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetSyncProtectionJobID", jobID)
-}
-
-// SetSyncProtectionJobID indicates an expected call of SetSyncProtectionJobID.
-func (mr *MockWorkspaceMockRecorder) SetSyncProtectionJobID(jobID interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSyncProtectionJobID", reflect.TypeOf((*MockWorkspace)(nil).SetSyncProtectionJobID), jobID)
-}
-
-// GetSyncProtectionJobID mocks base method.
-func (m *MockWorkspace) GetSyncProtectionJobID() string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetSyncProtectionJobID")
-	ret0, _ := ret[0].(string)
-	return ret0
-}
-
-// GetSyncProtectionJobID indicates an expected call of GetSyncProtectionJobID.
-func (mr *MockWorkspaceMockRecorder) GetSyncProtectionJobID() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSyncProtectionJobID", reflect.TypeOf((*MockWorkspace)(nil).GetSyncProtectionJobID))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCloneTxn", reflect.TypeOf((*MockWorkspace)(nil).SetCloneTxn), snapshot)
 }
 
 // SetHaveDDL mocks base method.
@@ -1346,6 +1396,18 @@ func (m *MockWorkspace) SetHaveDDL(flag bool) {
 func (mr *MockWorkspaceMockRecorder) SetHaveDDL(flag interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetHaveDDL", reflect.TypeOf((*MockWorkspace)(nil).SetHaveDDL), flag)
+}
+
+// SetSyncProtectionJobID mocks base method.
+func (m *MockWorkspace) SetSyncProtectionJobID(jobID string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetSyncProtectionJobID", jobID)
+}
+
+// SetSyncProtectionJobID indicates an expected call of SetSyncProtectionJobID.
+func (mr *MockWorkspaceMockRecorder) SetSyncProtectionJobID(jobID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSyncProtectionJobID", reflect.TypeOf((*MockWorkspace)(nil).SetSyncProtectionJobID), jobID)
 }
 
 // StartStatement mocks base method.

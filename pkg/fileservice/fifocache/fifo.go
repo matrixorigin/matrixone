@@ -24,13 +24,18 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-const numShards = 256
+const (
+	numShards               = 256
+	pressureEvictBatchItems = 64
+	pressureEvictBatchBytes = 64 << 20
+)
 
 // Cache implements an in-memory cache with FIFO-based eviction
 type Cache[K comparable, V any] struct {
-	capacity     fscache.CapacityFunc
-	capacity1    fscache.CapacityFunc
-	keyShardFunc func(K) uint64
+	capacity        fscache.CapacityFunc
+	capacity1       fscache.CapacityFunc
+	keyShardFunc    func(K) uint64
+	admissionTarget func(capacity int64) (int64, bool)
 
 	prepareSet func(ctx context.Context, key K, value V, size int64, seq uint64) func(inserted bool)
 	postSet    func(ctx context.Context, key K, value V, size int64, seq uint64)
@@ -141,7 +146,11 @@ func NewWithPrepareSet[K comparable, V any](
 	return ret
 }
 
-func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, seq uint64) (item *_CacheItem[K, V], ghostItemSet bool) {
+func (c *Cache[K, V]) SetAdmissionTarget(admissionTarget func(capacity int64) (int64, bool)) {
+	c.admissionTarget = admissionTarget
+}
+
+func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, seq uint64) (item *_CacheItem[K, V], replacedGhost *_CacheItem[K, V]) {
 	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
@@ -161,11 +170,11 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, seq u
 			}
 			// replacing the oldItem. oldItem will be evicted from ghost queue eventually.
 			shard.values[key] = item
-			return item, true
+			return item, oldItem
 		}
 
 		// existed and value ok, skip set
-		return nil, false
+		return nil, nil
 	}
 
 	item = &_CacheItem[K, V]{
@@ -177,23 +186,43 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, seq u
 	}
 	shard.values[key] = item
 
-	return item, false
+	return item, nil
 }
 
-func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
+func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) (inserted bool, rejected bool) {
 	seq := c.nextSeq.Add(1)
 	var finishSet func(inserted bool)
 	if c.prepareSet != nil {
 		finishSet = c.prepareSet(ctx, key, value, size, seq)
 	}
-	inserted := false
 	finished := false
 	defer func() {
 		if finishSet != nil && !finished {
 			finishSet(inserted)
 		}
 	}()
-	if item, ghostItemSet := c.set(ctx, key, value, size, seq); item != nil {
+	if item, replacedGhost := c.set(ctx, key, value, size, seq); item != nil {
+		ghostItemSet := replacedGhost != nil
+		if c.shouldApplyAdmissionTarget() {
+			if !c.enqueueWithAdmission(ctx, item, ghostItemSet) {
+				inserted = c.rollbackRejectedSet(item, replacedGhost)
+				if finishSet != nil {
+					finishSet(inserted)
+					finished = true
+				}
+				return inserted, !inserted
+			}
+			inserted = true
+			if c.postSet != nil {
+				c.postSet(ctx, key, value, size, item.seq)
+			}
+			if finishSet != nil {
+				finishSet(true)
+				finished = true
+			}
+			c.Evict(ctx, nil, 0)
+			return true, false
+		}
 		inserted = true
 		if c.postSet != nil {
 			c.postSet(ctx, key, value, size, item.seq)
@@ -205,10 +234,118 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 		// item inserted, enqueue
 		c.enqueue(item, ghostItemSet)
 		c.Evict(ctx, nil, 0)
+		return true, false
 	} else if finishSet != nil {
 		finishSet(false)
 		finished = true
 	}
+	return false, false
+}
+
+func (c *Cache[K, V]) shouldApplyAdmissionTarget() bool {
+	_, ok := c.currentAdmissionTarget()
+	return ok
+}
+
+func (c *Cache[K, V]) currentAdmissionTarget() (int64, bool) {
+	if c.admissionTarget == nil {
+		return 0, false
+	}
+	return c.admissionTarget(c.capacity())
+}
+
+func (c *Cache[K, V]) enqueueWithAdmission(ctx context.Context, item *_CacheItem[K, V], ghostItemSet bool) bool {
+	c.queueLock.Lock()
+
+	var pendingPostEvicts []_PendingPostEvict[K, V]
+	defer func() {
+		c.queueLock.Unlock()
+		c.runPendingPostEvicts(ctx, pendingPostEvicts)
+	}()
+	c.helpEnqueue()
+
+	queue := cacheItemQueue1
+	if ghostItemSet {
+		queue = cacheItemQueue2
+	}
+
+	target, ok := c.currentAdmissionTarget()
+	if !ok {
+		c.enqueuePendingItem(item, queue)
+		c.helpEnqueue()
+		return item.queue == queue
+	}
+	if c.used1+c.used2+item.size > target {
+		if !ghostItemSet || item.size > target {
+			return false
+		}
+		if !c.evictForAdmissionLocked(target-item.size, &pendingPostEvicts) {
+			return false
+		}
+	}
+
+	c.enqueuePendingItem(item, queue)
+	c.helpEnqueue()
+	return item.queue == queue
+}
+
+func (c *Cache[K, V]) evictForAdmissionLocked(target int64, pending *[]_PendingPostEvict[K, V]) bool {
+	if target < 0 {
+		target = 0
+	}
+	capacityCut := c.capacity() - target
+	if capacityCut < 0 {
+		capacityCut = 0
+	}
+	target1 := c.capacity1() - capacityCut
+	if target1 < 0 {
+		target1 = 0
+	}
+	for c.used1+c.used2 > target {
+		var (
+			used1Before int64
+			pe          _PendingPostEvict[K, V]
+			ok          bool
+		)
+		if c.used1 > target1 {
+			used1Before = c.used1
+			pe, ok = c.evict1()
+		} else {
+			pe, ok = c.evict2()
+		}
+		if !ok {
+			if used1Before > 0 && c.used1 != used1Before {
+				continue
+			}
+			return false
+		}
+		if c.postEvict != nil {
+			*pending = append(*pending, pe)
+		}
+	}
+	return true
+}
+
+func (c *Cache[K, V]) rollbackRejectedSet(item, replacedGhost *_CacheItem[K, V]) (finishInserted bool) {
+	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
+	shard.Lock()
+	defer shard.Unlock()
+
+	if !item.valueOK {
+		return true
+	}
+
+	if shard.values[item.key] == item {
+		if replacedGhost != nil && replacedGhost.queue == cacheItemGhost {
+			shard.values[item.key] = replacedGhost
+		} else {
+			delete(shard.values, item.key)
+		}
+	}
+	item.valueOK = false
+	var zero V
+	item.value = zero
+	return false
 }
 
 func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V], ghostItemSet bool) {
@@ -467,51 +604,122 @@ func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
 	c.Evict(ctx, nil, capacityCut)
 }
 
+// ForceEvictWithWait evicts n bytes despite capacity and waits for callbacks.
+func (c *Cache[K, V]) ForceEvictWithWait(ctx context.Context, n int64) int64 {
+	if n <= 0 {
+		return c.used()
+	}
+	target := c.used() - n
+	if target < 0 {
+		target = 0
+	}
+	return c.EvictToTargetWithWait(ctx, target)
+}
+
+func (c *Cache[K, V]) EvictToTargetWithWait(ctx context.Context, target int64) int64 {
+	if target < 0 {
+		target = 0
+	}
+	capacity := c.capacity()
+	if target > capacity {
+		target = capacity
+	}
+	return c.evictWithWait(ctx, capacity-target, false)
+}
+
 // EvictWithWait is like Evict but blocks until the eviction lock is acquired,
 // guaranteeing that eviction actually runs before returning. This is used by
 // EnsureNBytes to prevent unbounded memory growth under high concurrency where
-// TryLock-based Evict would skip eviction entirely.
-func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) {
-	c.queueLock.Lock()
-	var pendingPostEvicts []_PendingPostEvict[K, V]
-	defer func() {
-		c.queueLock.Unlock()
-		if c.postEvict != nil {
-			for i := range pendingPostEvicts {
-				c.postEvictItem(ctx, pendingPostEvicts[i], true)
-				pendingPostEvicts[i] = _PendingPostEvict[K, V]{}
-			}
-		}
-	}()
+// TryLock-based Evict would skip eviction entirely. It returns actual used
+// bytes after eviction stops.
+func (c *Cache[K, V]) EvictWithWait(ctx context.Context, capacityCut int64) int64 {
+	return c.evictWithWait(ctx, capacityCut, false)
+}
 
+func (c *Cache[K, V]) evictWithWait(ctx context.Context, capacityCut int64, includeAsyncDebt bool) int64 {
+	if capacityCut < 0 {
+		capacityCut = 0
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return c.used()
 		default:
 		}
-		c.helpEnqueue()
-		globalCapacityCut := c.capacityCut.Swap(0)
-		target := c.capacity() - capacityCut - globalCapacityCut
+		pendingPostEvicts, used, evicted := c.evictBatch(&capacityCut, includeAsyncDebt)
+		c.runPendingPostEvicts(ctx, pendingPostEvicts)
+		target := c.capacity() - capacityCut
 		if target < 0 {
 			target = 0
 		}
-		if c.used1+c.used2 <= target {
-			break
+		if used <= target || !evicted {
+			return used
 		}
-		target1 := c.capacity1() - capacityCut - globalCapacityCut
+	}
+}
+
+func (c *Cache[K, V]) evictBatch(capacityCut *int64, includeAsyncDebt bool) (pending []_PendingPostEvict[K, V], used int64, evicted bool) {
+	c.queueLock.Lock()
+	defer c.queueLock.Unlock()
+
+	var (
+		pendingBytes int64
+		pendingCount int
+	)
+
+	for {
+		c.helpEnqueue()
+		if includeAsyncDebt {
+			*capacityCut += c.capacityCut.Swap(0)
+		}
+		target := c.capacity() - *capacityCut
+		if target < 0 {
+			target = 0
+		}
+		used = c.used1 + c.used2
+		if used <= target {
+			return pending, used, evicted
+		}
+		target1 := c.capacity1() - *capacityCut
 		if target1 < 0 {
 			target1 = 0
 		}
+		var (
+			used1Before int64
+			pe          _PendingPostEvict[K, V]
+			ok          bool
+		)
 		if c.used1 > target1 {
-			if pe, ok := c.evict1(); ok {
-				pendingPostEvicts = append(pendingPostEvicts, pe)
-			}
+			used1Before = c.used1
+			pe, ok = c.evict1()
 		} else {
-			if pe, ok := c.evict2(); ok {
-				pendingPostEvicts = append(pendingPostEvicts, pe)
-			}
+			pe, ok = c.evict2()
 		}
+		if !ok {
+			if used1Before > 0 && c.used1 != used1Before {
+				continue
+			}
+			return pending, c.used1 + c.used2, evicted
+		}
+		evicted = true
+		pendingCount++
+		pendingBytes += pe.size
+		if c.postEvict != nil {
+			pending = append(pending, pe)
+		}
+		if pendingCount >= pressureEvictBatchItems || pendingBytes >= pressureEvictBatchBytes {
+			return pending, c.used1 + c.used2, evicted
+		}
+	}
+}
+
+func (c *Cache[K, V]) runPendingPostEvicts(ctx context.Context, pendingPostEvicts []_PendingPostEvict[K, V]) {
+	if c.postEvict == nil {
+		return
+	}
+	for i := range pendingPostEvicts {
+		c.postEvictItem(ctx, pendingPostEvicts[i], true)
+		pendingPostEvicts[i] = _PendingPostEvict[K, V]{}
 	}
 }
 
@@ -519,6 +727,14 @@ func (c *Cache[K, V]) used() int64 {
 	c.queueLock.RLock()
 	defer c.queueLock.RUnlock()
 	return c.used1 + c.used2
+}
+
+func (c *Cache[K, V]) Used() int64 {
+	return c.used()
+}
+
+func (c *Cache[K, V]) Capacity() int64 {
+	return c.capacity()
 }
 
 func (c *Cache[K, V]) evict1() (pe _PendingPostEvict[K, V], evicted bool) {

@@ -1,0 +1,68 @@
+select is_uuid('6ccd780c-baba-1026-9564-5b8c656024db');
+select is_uuid('6ccd780cbaba102695645b8c656024db');
+select is_uuid('{6ccd780c-baba-1026-9564-5b8c656024db}');
+select is_uuid('6CCD780C-BABA-1026-9564-5B8C656024DB');
+select is_uuid('urn:uuid:6ccd780c-baba-1026-9564-5b8c656024db');
+select is_uuid('6ccd780c-baba-1026-9564-5b8c656024d');
+select is_uuid('6ccd780c-baba-1026-9564-5b8c656024dz');
+select is_uuid('6ccd780c-baba-1026-95645b8c656024db');
+select is_uuid('{6ccd780cbaba102695645b8c656024db}');
+select is_uuid(' 6ccd780c-baba-1026-9564-5b8c656024db ');
+select is_uuid('');
+select is_uuid('not-a-uuid');
+select is_uuid(null);
+
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db'));
+select hex(uuid_to_bin('6ccd780cbaba102695645b8c656024db'));
+select hex(uuid_to_bin('{6ccd780c-baba-1026-9564-5b8c656024db}'));
+select hex(uuid_to_bin('6CCD780C-BABA-1026-9564-5B8C656024DB'));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 0));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 0.4));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', -0.4));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 0.0));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', '1'));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', '0'));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', '0.4'));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', '-0.4'));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', '1abc'));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', '2xyz'));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 'abc'));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', ''));
+select hex(uuid_to_bin(null));
+select hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', null));
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db'));
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 1);
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 0);
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 0.4);
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), -0.4);
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 0.0);
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), '1');
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), '0');
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), '0.4');
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), '-0.4');
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), '1abc');
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), '2xyz');
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), 'abc');
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', 1), '');
+select bin_to_uuid(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db'), null);
+select bin_to_uuid(null);
+select uuid_to_bin('not-a-uuid');
+select uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024dz');
+select bin_to_uuid(cast('short' as varbinary));
+select bin_to_uuid(cast('123456789012345' as varbinary));
+select bin_to_uuid(cast('12345678901234567' as varbinary));
+
+drop table if exists t_uuid_funcs;
+create table t_uuid_funcs(id int, u varchar(50), swap_flag int);
+insert into t_uuid_funcs values
+    (1, '6ccd780c-baba-1026-9564-5b8c656024db', 0),
+    (2, '6ccd780cbaba102695645b8c656024db', 1),
+    (3, '{6ccd780c-baba-1026-9564-5b8c656024db}', null),
+    (4, 'not-a-uuid', 0),
+    (5, null, 1);
+select id, is_uuid(u) from t_uuid_funcs order by id;
+select id, bin_to_uuid(uuid_to_bin(u)) from t_uuid_funcs where is_uuid(u) order by id;
+select id, hex(uuid_to_bin(u, swap_flag)) from t_uuid_funcs where is_uuid(u) order by id;
+select id, bin_to_uuid(uuid_to_bin(u, swap_flag), swap_flag) from t_uuid_funcs where is_uuid(u) and swap_flag is not null order by id;
+drop table t_uuid_funcs;

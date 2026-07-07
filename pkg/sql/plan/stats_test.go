@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,6 +27,249 @@ import (
 	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
+	t.Run("limit over zero cost", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		node := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats:    &planpb.Stats{},
+			Limit: &planpb.Expr{
+				Expr: &planpb.Expr_Lit{
+					Lit: &planpb.Literal{
+						Value: &planpb.Literal_U64Val{U64Val: 10},
+					},
+				},
+			},
+		}
+		builder.qry.Nodes = []*planpb.Node{node}
+
+		ReCalcNodeStats(0, builder, false, false, false)
+
+		require.True(t, isFinite(node.Stats.Selectivity), "selectivity = %v", node.Stats.Selectivity)
+	})
+
+	t.Run("runtime filter over zero table count", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		scanNode := &planpb.Node{
+			NodeType: planpb.Node_TABLE_SCAN,
+			Stats: &planpb.Stats{
+				TableCnt: 0,
+				Outcnt:   5,
+				BlockNum: 1,
+			},
+		}
+		buildNode := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats: &planpb.Stats{
+				Outcnt: 10,
+			},
+		}
+		joinNode := &planpb.Node{
+			NodeType: planpb.Node_JOIN,
+			JoinType: planpb.Node_INDEX,
+			Children: []int32{0, 1},
+		}
+		builder.qry.Nodes = []*planpb.Node{scanNode, buildNode, joinNode}
+
+		recalcStatsByRuntimeFilter(scanNode, joinNode, builder)
+
+		require.True(t, isFinite(scanNode.Stats.Selectivity), "selectivity = %v", scanNode.Stats.Selectivity)
+	})
+
+	t.Run("prefix equality over zero table count", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "prefix_eq"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+					},
+				},
+			},
+		}
+		stats := &pb.StatsInfo{TableCnt: 0}
+
+		selectivity := estimateExprSelectivity(expr, builder, stats)
+
+		require.True(t, isFinite(selectivity), "selectivity = %v", selectivity)
+	})
+
+	t.Run("tp force over zero table count", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		node := &planpb.Node{
+			NodeType: planpb.Node_TABLE_SCAN,
+			Stats: &planpb.Stats{
+				TableCnt: 0,
+				Outcnt:   10,
+				Cost:     10,
+			},
+		}
+		builder.qry.Nodes = []*planpb.Node{node}
+
+		forceScanNodeStatsTP(0, builder)
+
+		require.True(t, isFinite(node.Stats.Selectivity), "selectivity = %v", node.Stats.Selectivity)
+	})
+}
+
+func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
+	t.Run("not over year equality stays in range", func(t *testing.T) {
+		builder := newStatsTestBuilderWithNDV("d", 1)
+		col := &planpb.Expr{
+			Expr: &planpb.Expr_Col{
+				Col: &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "d"},
+			},
+		}
+		yearExpr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "year"},
+					Args: []*planpb.Expr{col},
+				},
+			},
+		}
+		eqExpr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "="},
+					Args: []*planpb.Expr{
+						yearExpr,
+						{
+							Expr: &planpb.Expr_P{
+								P: &planpb.ParamRef{Pos: 0},
+							},
+						},
+					},
+				},
+			},
+		}
+		notExpr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "not"},
+					Args: []*planpb.Expr{eqExpr},
+				},
+			},
+		}
+
+		selectivity := estimateExprSelectivity(notExpr, builder, nil)
+
+		require.True(t, isFinite(selectivity), "selectivity = %v", selectivity)
+		require.GreaterOrEqual(t, selectivity, 0.0)
+		require.LessOrEqual(t, selectivity, 1.0)
+	})
+
+	t.Run("join clamps invalid child selectivity before pow", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		left := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats: &planpb.Stats{
+				Outcnt:      10,
+				Cost:        10,
+				Selectivity: -364,
+				BlockNum:    1,
+			},
+		}
+		right := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats: &planpb.Stats{
+				Outcnt:      10,
+				Cost:        10,
+				Selectivity: 0.5,
+				BlockNum:    1,
+			},
+		}
+		join := &planpb.Node{
+			NodeType: planpb.Node_JOIN,
+			JoinType: planpb.Node_INNER,
+			Children: []int32{0, 1},
+			Stats:    DefaultStats(),
+		}
+		builder.qry.Nodes = []*planpb.Node{left, right, join}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.True(t, isFinite(join.Stats.Selectivity), "selectivity = %v", join.Stats.Selectivity)
+		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
+		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
+		require.True(t, isFinite(join.Stats.Outcnt), "outcnt = %v", join.Stats.Outcnt)
+	})
+
+	t.Run("anti join clamps invalid right selectivity for outcnt", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		left := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats: &planpb.Stats{
+				Outcnt:      100,
+				Cost:        100,
+				Selectivity: 0.5,
+				BlockNum:    1,
+			},
+		}
+		right := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats: &planpb.Stats{
+				Outcnt:      10,
+				Cost:        10,
+				Selectivity: math.Inf(1),
+				BlockNum:    1,
+			},
+		}
+		join := &planpb.Node{
+			NodeType: planpb.Node_JOIN,
+			JoinType: planpb.Node_ANTI,
+			Children: []int32{0, 1},
+			Stats:    DefaultStats(),
+		}
+		builder.qry.Nodes = []*planpb.Node{left, right, join}
+
+		ReCalcNodeStats(2, builder, false, false, false)
+
+		require.True(t, isFinite(join.Stats.Outcnt), "outcnt = %v", join.Stats.Outcnt)
+		require.GreaterOrEqual(t, join.Stats.Outcnt, 0.0)
+		require.True(t, isFinite(join.Stats.Selectivity), "selectivity = %v", join.Stats.Selectivity)
+		require.GreaterOrEqual(t, join.Stats.Selectivity, 0.0)
+		require.LessOrEqual(t, join.Stats.Selectivity, 1.0)
+	})
+}
+
+func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 1000
+	stats.NdvMap[colName] = ndv
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &planpb.TableDef{
+		TblId: 1,
+		Cols: []*planpb.ColDef{
+			{
+				Name: colName,
+				Typ:  planpb.Type{Id: int32(types.T_date)},
+			},
+		},
+	}
+	return builder
+}
+
+type statsCacheCompilerContext struct {
+	*MockCompilerContext
+	statsCache *StatsCache
+}
+
+func (ctx *statsCacheCompilerContext) GetStatsCache() *StatsCache {
+	return ctx.statsCache
+}
+
+func isFinite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
 
 func makeQueryWithScan(tableType string, rowsize float64, blockNum int32) *planpb.Query {
 	n := &planpb.Node{
@@ -39,6 +283,52 @@ func makeQueryWithScan(tableType string, rowsize float64, blockNum int32) *planp
 	return &planpb.Query{
 		Nodes: []*planpb.Node{n},
 		Steps: []int32{0},
+	}
+}
+
+func makeQueryWithScanStats(tableType string, rowsize float64, tableCnt float64, blockNum int32, nodes ...*planpb.Node) *planpb.Query {
+	scan := &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		TableDef: &planpb.TableDef{TableType: tableType},
+		Stats: &planpb.Stats{
+			Rowsize:  rowsize,
+			TableCnt: tableCnt,
+			BlockNum: blockNum,
+		},
+	}
+	qryNodes := append([]*planpb.Node{scan}, nodes...)
+	return &planpb.Query{
+		Nodes: qryNodes,
+		Steps: []int32{0},
+	}
+}
+
+func makeLimitExprForStatsTest() *planpb.Expr {
+	return &planpb.Expr{
+		Expr: &planpb.Expr_Lit{
+			Lit: &planpb.Literal{
+				Value: &planpb.Literal_U64Val{U64Val: 10},
+			},
+		},
+	}
+}
+
+func makeFunctionScanForStatsTest(funcName string, limit *planpb.Expr) *planpb.Node {
+	return &planpb.Node{
+		NodeType: planpb.Node_FUNCTION_SCAN,
+		Stats:    &planpb.Stats{},
+		TableDef: &planpb.TableDef{
+			TblFunc: &planpb.TableFunction{Name: funcName},
+		},
+		IndexReaderParam: &planpb.IndexReaderParam{Limit: limit},
+		Children:         []int32{0},
+	}
+}
+
+func makeIvfEntriesOrderByLimitParamForStatsTest() *planpb.IndexReaderParam {
+	return &planpb.IndexReaderParam{
+		OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
+		Limit:   makeLimitExprForStatsTest(),
 	}
 }
 
@@ -59,12 +349,302 @@ func TestGetExecType_VectorIndex_WideRows_MultiCN(t *testing.T) {
 	}
 }
 
+func TestGetExecType_VectorIndex_WideRows_MultiCNCappedForDDL(t *testing.T) {
+	q := makeQueryWithScan(catalog.Hnsw_TblType_Storage, float64(RowSizeThreshold+1), LargeBlockThresholdForMultiCN+1)
+	got := GetExecType(q, true, false)
+	require.Equal(t, ExecTypeAP_ONECN, got)
+}
+
 func TestGetExecType_NonVectorTable_NotForcedByRowsize(t *testing.T) {
 	// Non-vector tables should not trigger rowsize shortcut; with small blockNum, expect TP
 	q := makeQueryWithScan("normal_table", float64(RowSizeThreshold+10), LargeBlockThresholdForOneCN)
 	got := GetExecType(q, false, false)
 	if got != ExecTypeTP {
 		t.Fatalf("expected ExecTypeTP for non-vector table, got %v", got)
+	}
+}
+
+func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanUsesMultiCNEvenWithTinyStats(t *testing.T) {
+	q := makeQueryWithScanStats(
+		catalog.SystemSI_IVFFLAT_TblType_Entries,
+		1,
+		1,
+		1,
+	)
+	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
+
+	got := GetExecType(q, false, false)
+
+	require.Equal(t, ExecTypeAP_MULTICN, got)
+}
+
+func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanDoesNotRequireStatsEstimate(t *testing.T) {
+	q := makeQueryWithScanStats(
+		catalog.SystemSI_IVFFLAT_TblType_Entries,
+		0,
+		0,
+		1,
+	)
+	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
+
+	got := GetExecType(q, false, false)
+
+	require.Equal(t, ExecTypeAP_MULTICN, got)
+}
+
+func TestGetExecType_IvfSearchEntries_RowsizeShortcutDoesNotDowngradeMultiCN(t *testing.T) {
+	q := makeQueryWithScanStats(
+		catalog.SystemSI_IVFFLAT_TblType_Entries,
+		float64(RowSizeThreshold+1),
+		1,
+		LargeBlockThresholdForOneCN+1,
+	)
+	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
+
+	got := GetExecType(q, false, false)
+
+	require.Equal(t, ExecTypeAP_MULTICN, got)
+}
+
+func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanMultiCNCappedForDDL(t *testing.T) {
+	q := makeQueryWithScanStats(
+		catalog.SystemSI_IVFFLAT_TblType_Entries,
+		1,
+		1,
+		1,
+	)
+	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
+
+	got := GetExecType(q, true, false)
+
+	require.Equal(t, ExecTypeAP_ONECN, got)
+}
+
+func TestGetExecType_IvfSearchEntries_MultiCNCappedForExprBasedShuffle(t *testing.T) {
+	q := makeQueryWithScanStats(
+		catalog.SystemSI_IVFFLAT_TblType_Entries,
+		1,
+		1,
+		1,
+		&planpb.Node{
+			NodeType: planpb.Node_JOIN,
+			Stats: &planpb.Stats{
+				HashmapStats: &planpb.HashMapStats{
+					Shuffle:       true,
+					ShuffleColIdx: 0,
+				},
+			},
+			OnList: []*planpb.Expr{
+				{
+					Expr: &planpb.Expr_F{
+						F: &planpb.Function{
+							Args: []*planpb.Expr{
+								{
+									Expr: &planpb.Expr_Col{
+										Col: &planpb.ColRef{ColPos: 0},
+									},
+								},
+								{
+									Expr: &planpb.Expr_Lit{
+										Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
+
+	got := GetExecType(q, false, false)
+
+	require.Equal(t, ExecTypeAP_ONECN, got)
+}
+
+func TestGetExecType_IvfSearchEntries_MultiCNCappedForDDLEvenWithManyBlocks(t *testing.T) {
+	q := makeQueryWithScanStats(
+		catalog.SystemSI_IVFFLAT_TblType_Entries,
+		float64(RowSizeThreshold+1),
+		500*1024,
+		LargeBlockThresholdForMultiCN+1,
+	)
+	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
+
+	got := GetExecType(q, true, false)
+
+	require.Equal(t, ExecTypeAP_ONECN, got)
+}
+
+func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanRequiresSearchShape(t *testing.T) {
+	tests := []struct {
+		name  string
+		param *planpb.IndexReaderParam
+	}{
+		{
+			name: "nil index reader param",
+		},
+		{
+			name:  "limit only is not enough",
+			param: &planpb.IndexReaderParam{Limit: makeLimitExprForStatsTest()},
+		},
+		{
+			name:  "order only is not enough",
+			param: &planpb.IndexReaderParam{OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := makeQueryWithScanStats(
+				catalog.SystemSI_IVFFLAT_TblType_Entries,
+				1,
+				1,
+				1,
+			)
+			q.Nodes[0].IndexReaderParam = tt.param
+
+			got := GetExecType(q, false, false)
+
+			require.Equal(t, ExecTypeTP, got)
+		})
+	}
+}
+
+func TestGetExecType_IvfSearchEntries_FunctionScanDoesNotPromoteUnrelatedEntriesScan(t *testing.T) {
+	searchNode := makeFunctionScanForStatsTest("ivf_search", makeLimitExprForStatsTest())
+	q := makeQueryWithScanStats(
+		catalog.SystemSI_IVFFLAT_TblType_Entries,
+		1,
+		1,
+		1,
+		searchNode,
+	)
+
+	got := GetExecType(q, false, false)
+
+	require.Equal(t, ExecTypeTP, got)
+}
+
+func TestGetExecType_IvfSearchMultiCN_DoesNotApplyToOtherTableTypes(t *testing.T) {
+	q := makeQueryWithScanStats(
+		catalog.Hnsw_TblType_Storage,
+		1,
+		1,
+		1,
+	)
+	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
+
+	got := GetExecType(q, false, false)
+
+	require.Equal(t, ExecTypeTP, got)
+}
+
+func TestIsIvfSearchEntriesTableScan_UnhappyPaths(t *testing.T) {
+	require.False(t, isIvfSearchEntriesTableScan(nil))
+	require.False(t, isIvfSearchEntriesTableScan(&planpb.Node{NodeType: planpb.Node_VALUE_SCAN}))
+	require.False(t, isIvfSearchEntriesTableScan(&planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		TableDef: &planpb.TableDef{TableType: catalog.Hnsw_TblType_Storage},
+	}))
+	require.True(t, isIvfSearchEntriesTableScan(&planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+	}))
+}
+
+func TestIsIvfEntriesIndexReaderScan_UnhappyPaths(t *testing.T) {
+	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{}))
+	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{
+		IndexReaderParam: &planpb.IndexReaderParam{Limit: makeLimitExprForStatsTest()},
+	}))
+	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{
+		IndexReaderParam: &planpb.IndexReaderParam{OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}}},
+	}))
+	require.True(t, isIvfEntriesIndexReaderScan(&planpb.Node{
+		IndexReaderParam: &planpb.IndexReaderParam{
+			OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
+			Limit:   makeLimitExprForStatsTest(),
+		},
+	}))
+	require.True(t, isIvfEntriesIndexReaderScan(&planpb.Node{
+		IndexReaderParam: &planpb.IndexReaderParam{
+			Limit:        makeLimitExprForStatsTest(),
+			OrigFuncName: "l2_distance",
+		},
+	}))
+}
+
+func TestIsIvfSearchEntriesInternalScan(t *testing.T) {
+	tests := []struct {
+		name string
+		node *planpb.Node
+		want bool
+	}{
+		{
+			name: "nil node",
+		},
+		{
+			name: "wrong table type",
+			node: &planpb.Node{
+				NodeType: planpb.Node_TABLE_SCAN,
+				TableDef: &planpb.TableDef{TableType: catalog.Hnsw_TblType_Storage},
+				IndexReaderParam: &planpb.IndexReaderParam{
+					OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
+					Limit:   makeLimitExprForStatsTest(),
+				},
+			},
+		},
+		{
+			name: "not table scan",
+			node: &planpb.Node{
+				NodeType: planpb.Node_VALUE_SCAN,
+				TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+				IndexReaderParam: &planpb.IndexReaderParam{
+					OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
+					Limit:   makeLimitExprForStatsTest(),
+				},
+			},
+		},
+		{
+			name: "limit only is not internal search",
+			node: &planpb.Node{
+				NodeType:         planpb.Node_TABLE_SCAN,
+				TableDef:         &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+				IndexReaderParam: &planpb.IndexReaderParam{Limit: makeLimitExprForStatsTest()},
+			},
+		},
+		{
+			name: "valid order by limit",
+			node: &planpb.Node{
+				NodeType: planpb.Node_TABLE_SCAN,
+				TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+				IndexReaderParam: &planpb.IndexReaderParam{
+					OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
+					Limit:   makeLimitExprForStatsTest(),
+				},
+			},
+			want: true,
+		},
+		{
+			name: "valid original distance function",
+			node: &planpb.Node{
+				NodeType: planpb.Node_TABLE_SCAN,
+				TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+				IndexReaderParam: &planpb.IndexReaderParam{
+					Limit:        makeLimitExprForStatsTest(),
+					OrigFuncName: "l2_distance",
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, IsIvfSearchEntriesInternalScan(tt.node))
+		})
 	}
 }
 

@@ -86,6 +86,83 @@ func TestDedupLoadCleansUpAfterPanic(t *testing.T) {
 	assert.Equal(t, []byte("ok"), v)
 }
 
+func TestDedupLoadWaiterGetsSuccessfulOwnerValue(t *testing.T) {
+	oldMetaCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(1024))
+	defer func() {
+		metaCache = oldMetaCache
+	}()
+
+	var key mataCacheKey
+	key[0] = 8
+	started := make(chan struct{})
+	release := make(chan struct{})
+	waiterDone := make(chan struct {
+		val []byte
+		err error
+	}, 1)
+
+	go func() {
+		_, _ = dedupLoad(context.Background(), key, func() ([]byte, error) {
+			close(started)
+			<-release
+			return []byte("ok"), nil
+		})
+	}()
+	<-started
+
+	go func() {
+		v, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+			return nil, errors.New("unexpected waiter load")
+		})
+		waiterDone <- struct {
+			val []byte
+			err error
+		}{v, err}
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	result := <-waiterDone
+	assert.NoError(t, result.err)
+	assert.Equal(t, []byte("ok"), result.val)
+}
+
+func TestDedupLoadWaiterTimeoutWhileOwnerStillLoading(t *testing.T) {
+	oldMetaCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(1024))
+	defer func() {
+		metaCache = oldMetaCache
+	}()
+
+	var key mataCacheKey
+	key[0] = 7
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ownerDone := make(chan error, 1)
+
+	go func() {
+		_, err := dedupLoad(context.Background(), key, func() ([]byte, error) {
+			close(started)
+			<-release
+			return []byte("ok"), nil
+		})
+		ownerDone <- err
+	}()
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := dedupLoad(ctx, key, func() ([]byte, error) {
+		return nil, errors.New("unexpected waiter load")
+	})
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.NotContains(t, err.Error(), "dedup load did not complete")
+
+	close(release)
+	assert.NoError(t, <-ownerDone)
+}
+
 func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
 	oldMetaCache := metaCache
 	metaCache = newMetaCache(fscache.ConstCapacity(1024))
@@ -129,4 +206,73 @@ func TestDedupLoadCleansUpAfterLoadCancel(t *testing.T) {
 	_, ok := metaLoadCalls[key]
 	metaLoadMu.Unlock()
 	assert.False(t, ok)
+}
+
+func TestEvictCacheToCapacityPercent(t *testing.T) {
+	oldMetaCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(10))
+	defer func() {
+		metaCache = oldMetaCache
+	}()
+
+	ctx := context.Background()
+	var key mataCacheKey
+	key[0] = 3
+	metaCache.Set(ctx, key, []byte("1234567890"), 10)
+
+	used := EvictCacheToCapacityPercent(ctx, 50)
+
+	assert.LessOrEqual(t, used, int64(5))
+	assert.Equal(t, used, metaCache.Used())
+}
+
+func TestMetaCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
+	oldMetaCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(10))
+	clearMetaCachePressureTargetForTest()
+	defer func() {
+		clearMetaCachePressureTargetForTest()
+		metaCache = oldMetaCache
+	}()
+
+	ctx := context.Background()
+	var existingKey mataCacheKey
+	existingKey[0] = 4
+	metaCache.Set(ctx, existingKey, []byte("12345"), 5)
+
+	SetMetaCachePressureTargetPercent(50, time.Now().Add(time.Minute))
+
+	var key mataCacheKey
+	key[0] = 5
+	v, err := dedupLoad(ctx, key, func() ([]byte, error) {
+		return []byte("6"), nil
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("6"), v)
+	assert.Equal(t, int64(5), metaCache.Used())
+
+	_, ok := metaCache.Get(ctx, key)
+	assert.False(t, ok)
+}
+
+func TestMetaCachePressureAdmissionExpires(t *testing.T) {
+	oldMetaCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(10))
+	clearMetaCachePressureTargetForTest()
+	defer func() {
+		clearMetaCachePressureTargetForTest()
+		metaCache = oldMetaCache
+	}()
+
+	ctx := context.Background()
+	SetMetaCachePressureTargetPercent(50, time.Now().Add(-time.Second))
+
+	var key mataCacheKey
+	key[0] = 6
+	v, err := dedupLoad(ctx, key, func() ([]byte, error) {
+		return []byte("1"), nil
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("1"), v)
+	assert.Equal(t, int64(1), metaCache.Used())
 }

@@ -59,3 +59,23 @@ drop table if exists t7;
 create table t7 (a json default '{"t1":"a"}');
 drop table if exists t8;
 create table t8 (a json default null);
+
+#Test cases of typed array column
+drop table if exists typed_array_json;
+create table typed_array_json(id int primary key, tags array(varchar(20)), scores array(int), nested array(array(int)));
+desc typed_array_json;
+select column_name, data_type, column_type from information_schema.columns where table_schema = database() and table_name = 'typed_array_json' and column_name in ('tags','scores','nested') order by ordinal_position;
+insert into typed_array_json values (1, '["red","blue"]', '[1,2,null]', '[[1,2],[3,null]]');
+select id, tags, scores, nested from typed_array_json;
+insert into typed_array_json(id,tags) values (2, '{"red":true}');
+insert into typed_array_json(id,tags) values (3, '[1]');
+insert into typed_array_json(id,scores) values (4, '["1"]');
+update typed_array_json set tags='{"red":true}' where id=1;
+update typed_array_json set scores='[1,"2"]' where id=1;
+drop table typed_array_json;
+create table typed_array_unsupported(tags array(bit));
+drop table if exists typed_array_binary;
+create table typed_array_binary(id int primary key, payload array(varbinary(3)));
+insert into typed_array_binary values (1, '["abc"]');
+insert into typed_array_binary values (2, '["\\u00e9\\u00e9"]');
+drop table typed_array_binary;

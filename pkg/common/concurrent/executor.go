@@ -37,6 +37,14 @@ func (e ThreadPoolExecutor) Execute(
 	nitems int,
 	fn func(ctx context.Context, thread_id int, start, end int) error) (err error) {
 
+	if nitems <= 0 {
+		return nil
+	}
+
+	if e.nthreads <= 1 {
+		return fn(ctx, 0, 0, nitems)
+	}
+
 	g, ctx := errgroup.WithContext(ctx)
 
 	q := nitems / e.nthreads

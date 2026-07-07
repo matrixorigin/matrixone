@@ -43,6 +43,7 @@ func init() {
 	initFileServiceMetrics()
 	initLogtailMetrics()
 	initTxnMetrics()
+	initLockServiceMetrics()
 	initTaskMetrics()
 	initRPCMetrics()
 	initMemMetrics()
@@ -97,6 +98,8 @@ func initTaskMetrics() {
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
 	registry.MustRegister(fsCacheBytes)
+	registry.MustRegister(fsCachePressureCounter)
+	registry.MustRegister(fsCachePressureEvictDuration)
 
 	registry.MustRegister(s3IOBytesHistogram)
 	registry.MustRegister(s3ConnDurationHistogram)
@@ -141,10 +144,14 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnUserRollbackCounter)
 	registry.MustRegister(TxnRollbackLastStatementCounter)
 	registry.MustRegister(txnLockCounter)
+	registry.MustRegister(TxnDeadlockDetectorEnqueueCounter)
+	registry.MustRegister(TxnDeadlockOwnerLocalCounter)
+	registry.MustRegister(TxnRemoteLockOwnerTimeoutCounter)
 	registry.MustRegister(txnPKChangeCheckCounter)
 	registry.MustRegister(txnPKMayBeChangedCounter)
 
 	registry.MustRegister(txnQueueSizeGauge)
+	registry.MustRegister(TxnDeadlockDetectorQueueDepthGauge)
 
 	registry.MustRegister(txnCommitDurationHistogram)
 	registry.MustRegister(TxnLifeCycleDurationHistogram)
@@ -255,6 +262,7 @@ func initFrontendMetrics() {
 func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
 	registry.MustRegister(pipelineStreamGauge)
+	registry.MustRegister(PipelineCleanupEventCounter)
 }
 
 func initLogServiceMetrics() {

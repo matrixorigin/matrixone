@@ -37,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
@@ -85,6 +87,14 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		}
 	}
 
+	var sortSpillMem int64
+	sortSpillMemInt, err := ctx.ResolveVariable("sort_spill_mem", true, false)
+	if err == nil {
+		if sortSpillMemVal, ok := sortSpillMemInt.(int64); ok {
+			sortSpillMem = sortSpillMemVal
+		}
+	}
+
 	var maxDop int64
 	maxDopInt, err := ctx.ResolveVariable("max_dop", true, false)
 	if err == nil {
@@ -107,12 +117,16 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		mysqlCompatible:      mysqlCompatible,
 		aggSpillMem:          aggSpillMem,
 		joinSpillMem:         joinSpillMem,
+		sortSpillMem:         sortSpillMem,
 		tag2Table:            make(map[int32]*TableDef),
 		tag2NodeID:           make(map[int32]int32),
 		isPrepareStatement:   isPrepareStatement,
 		deleteNode:           make(map[uint64]int32),
 		skipStats:            skipStats,
 		optimizationHistory:  make([]string, 0),
+		// -1 means "no old-row delete maintenance" (set only on ODKU into an
+		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
+		irregularMaintDeleteStep: -1,
 	}
 }
 
@@ -2197,6 +2211,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
 	}
 
+	// Expose the SINK column remap so irregular-index maintenance sub-plans built
+	// after createQuery can translate pre-prune positions into the materialized
+	// sink's post-prune layout.
+	builder.sinkColRef = sinkColRef
+
 	err = builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
 	if err != nil {
 		return nil, err
@@ -2274,11 +2293,13 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	var nodeID int32
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
+		savedIsForUpdate := builder.isForUpdate
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
 		} else {
 			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt}, subCtx, isRoot)
 		}
+		builder.isForUpdate = savedIsForUpdate
 		if err != nil {
 			return 0, err
 		}
@@ -2506,6 +2527,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			NodeType: plan.Node_SORT,
 			Children: []int32{lastNodeID},
 			OrderBy:  orderBys,
+			SpillMem: builder.sortSpillMem,
 		}, ctx)
 	}
 
@@ -3141,7 +3163,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 
-		if astLimit != nil && builder.isForUpdate {
+		if astLimit != nil && lockNode != nil {
 			lockNode.Children[0] = nodeID
 			nodeID = builder.appendNode(lockNode, ctx)
 		}
@@ -3194,6 +3216,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			NodeType: plan.Node_SORT,
 			Children: []int32{nodeID},
 			OrderBy:  sortSpecs,
+			SpillMem: builder.sortSpillMem,
 		}, ctx)
 	}
 
@@ -3345,7 +3368,7 @@ func (builder *QueryBuilder) bindSelectClause(
 	// tree) restrict the row set the lock observes -- otherwise rows that the
 	// final result set filters out would still get locked.
 	if builder.isForUpdate {
-		lockTargets := builder.collectLockTargets(nodeID)
+		lockTargets := builder.collectLockTargets(nodeID, ctx)
 		if len(lockTargets) > 0 {
 			lockNode = &Node{
 				NodeType:    plan.Node_LOCK_OP,
@@ -4261,6 +4284,7 @@ func (builder *QueryBuilder) appendSortNode(ctx *BindContext, nodeID int32, boun
 		NodeType: plan.Node_SORT,
 		Children: []int32{nodeID},
 		OrderBy:  boundOrderBys,
+		SpillMem: builder.sortSpillMem,
 	}, ctx)
 }
 
@@ -4297,7 +4321,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 	h := &helpFunc{}
 
 	name := tree.NewUnresolvedColName("interval")
-	arg2 := tree.NewNumVal(astTimeWindow.Interval.Unit, astTimeWindow.Interval.Unit, false, tree.P_char)
+	arg2 := tree.NewTimeUnitExpr(astTimeWindow.Interval.Unit)
 	h.interval = &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(name),
 		Exprs: tree.Exprs{astTimeWindow.Interval.Val, arg2},
@@ -4307,7 +4331,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 
 	if astTimeWindow.Sliding != nil {
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewNumVal(astTimeWindow.Sliding.Unit, astTimeWindow.Sliding.Unit, false, tree.P_char)
+		arg2 = tree.NewTimeUnitExpr(astTimeWindow.Sliding.Unit)
 		h.sliding = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{astTimeWindow.Sliding.Val, arg2},
@@ -4320,7 +4344,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewNumVal("second", "second", false, tree.P_char)
+		arg2 = tree.NewTimeUnitExpr("second")
 		expr = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{div, arg2},
@@ -4446,7 +4470,11 @@ func appendSelectList(
 						break
 					}
 				}
-				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				if heading, ok := nameConstHeading(expr); ok {
+					ctx.headings = append(ctx.headings, heading)
+				} else {
+					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				}
 			}
 
 			newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
@@ -4461,6 +4489,37 @@ func appendSelectList(
 		}
 	}
 	return selectList, nil
+}
+
+func nameConstHeading(expr tree.Expr) (string, bool) {
+	fn, ok := expr.(*tree.FuncExpr)
+	if !ok || fn.FuncName == nil || !strings.EqualFold(fn.FuncName.Origin(), "name_const") || len(fn.Exprs) != 2 {
+		return "", false
+	}
+
+	nameExpr := fn.Exprs[0]
+	for {
+		paren, ok := nameExpr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		nameExpr = paren.Expr
+	}
+
+	name, ok := nameExpr.(*tree.NumVal)
+	if !ok || !validNameConstNameLiteral(name) {
+		return "", false
+	}
+	return name.String(), true
+}
+
+func validNameConstNameLiteral(name *tree.NumVal) bool {
+	switch name.ValType {
+	case tree.P_null, tree.P_nulltext, tree.P_star:
+		return false
+	default:
+		return true
+	}
 }
 
 func bindProjectionList(
@@ -4852,11 +4911,30 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				schema = builder.compCtx.DefaultDatabase()
 			}
 			key := schema + "." + table
-			if rewrite, ok := ctx.remapOption.Rewrites[key]; ok {
-				// prevent recursion from occurring
+			if chain, ok := ctx.remapOption.Rewrites[key]; ok && len(chain) > 0 {
+				// Apply the rewrite chain as stacked views: build the outermost
+				// (last) layer now. A reference to this same table inside that
+				// layer's body resolves to the next inner layer (the chain minus
+				// its last element); when the chain is exhausted it resolves to
+				// the base table. Peeling one layer per nested reference also
+				// guarantees termination.
+				//
+				// Inside a layer's body, only this table's remaining chain stays
+				// active; every other table's rewrite is disabled (matching the
+				// long-standing behavior where rewrites do not apply within a
+				// rewrite body). Sibling tables in the original query still get
+				// rewritten because ctx.remapOption is restored below before the
+				// caller builds them.
+				top := chain[len(chain)-1]
 				m := ctx.remapOption
-				ctx.remapOption = nil
-				nodeID, err = builder.buildTable(rewrite.Stmt, ctx, preNodeId, leftCtx)
+				if len(chain) == 1 {
+					ctx.remapOption = nil
+				} else {
+					ctx.remapOption = &tree.RewriteOption{
+						Rewrites: map[string][]*tree.Rewrite{key: chain[:len(chain)-1]},
+					}
+				}
+				nodeID, err = builder.buildTable(top.Stmt, ctx, preNodeId, leftCtx)
 				if err != nil {
 					return
 				}
@@ -5335,6 +5413,33 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		if err != nil {
 			return 0, err
 		}
+
+		// For INNER JOIN, subquery conditions are semantically equivalent to
+		// WHERE. Separate them from join conditions, flatten via
+		// flattenSubqueries (same as bindWhere), and wrap in a FILTER above
+		// the join.
+		if joinType == plan.Node_INNER {
+			var onConds, filterConds []*plan.Expr
+			for _, cond := range joinConds {
+				if hasSubquery(cond) {
+					nodeID, cond, err = builder.flattenSubqueries(nodeID, cond, ctx)
+					if err != nil {
+						return 0, err
+					}
+					filterConds = append(filterConds, cond)
+				} else {
+					onConds = append(onConds, cond)
+				}
+			}
+			joinConds = onConds
+			if len(filterConds) > 0 {
+				nodeID = builder.appendNode(&plan.Node{
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{nodeID},
+					FilterList: filterConds,
+				}, ctx)
+			}
+		}
 		node.OnList = joinConds
 
 	case *tree.UsingJoinCond:
@@ -5451,6 +5556,18 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		exprs = append(exprs, curExpr)
 	}
 	id := tbl.Id()
+
+	// Plugin-registered table functions (hnsw_create / hnsw_search /
+	// ivf_create / ivf_search / cagra_create / cagra_search /
+	// ivfpq_create / ivfpq_search) live under
+	// pkg/vectorindex/<algo>/plugin/plan/tablefunc.go. The plugin
+	// registers each builder via planplugin.RegisterTableFunc at init
+	// time; this lookup routes the parser-side dispatch through that
+	// registry before the hardcoded switch below.
+	if b, ok := planplugin.TableFunc(id); ok {
+		return b(builder, tbl, ctx, exprs, children)
+	}
+
 	switch id {
 	case "unnest":
 		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, children)
@@ -5484,14 +5601,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildStageList(tbl, ctx, exprs, children)
 	case "moplugin_table":
 		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, children)
-	case "hnsw_create":
-		nodeId, err = builder.buildHnswCreate(tbl, ctx, exprs, children)
-	case "hnsw_search":
-		nodeId, err = builder.buildHnswSearch(tbl, ctx, exprs, children)
-	case "ivf_create":
-		nodeId, err = builder.buildIvfCreate(tbl, ctx, exprs, children)
-	case "ivf_search":
-		nodeId, err = builder.buildIvfSearch(tbl, ctx, exprs, children)
 	case "parse_jsonl_data":
 		nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, children)
 	case "parse_jsonl_file":
@@ -5653,12 +5762,21 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 		} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 			return builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
 		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
-			var ts timestamp.Timestamp
-			if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
-				return
+			// try human-readable datetime first, fall back to debug timestamp format
+			if ts, err2 := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval); err2 == nil {
+				tsNano := ts.UTC().UnixNano()
+				if tsNano <= 0 {
+					err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+					return
+				}
+				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
+			} else {
+				var ts timestamp.Timestamp
+				if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
+					return
+				}
+				snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 			}
-
-			snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 		} else if tsExpr.Type == tree.ASOFTIMESTAMP {
 			var ts int64
 			if ts, err = doResolveTimeStamp(lit.Sval); err != nil {
@@ -5739,15 +5857,20 @@ func getPartitionColNameFromExpr(expr *plan.Expr) string {
 // (typically the flattened body of an EXISTS / IN / scalar subquery) does not
 // contribute to the outer result rows and must not be locked, matching MySQL's
 // rule that an outer FOR UPDATE does not lock subquery tables.
-func (builder *QueryBuilder) collectLockTargets(nodeID int32) []*plan.LockTarget {
+func (builder *QueryBuilder) collectLockTargets(nodeID int32, callerCtx *BindContext) []*plan.LockTarget {
 	node := builder.qry.Nodes[nodeID]
 	var targets []*plan.LockTarget
+
+	nodeCtx := builder.ctxByNode[nodeID]
+	if callerCtx != nil && !callerCtx.bindingCte() && nodeCtx != nil && nodeCtx.bindingCte() {
+		return targets
+	}
 
 	if node.NodeType == plan.Node_JOIN {
 		switch node.JoinType {
 		case plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
 			if len(node.Children) > 0 {
-				targets = append(targets, builder.collectLockTargets(node.Children[0])...)
+				targets = append(targets, builder.collectLockTargets(node.Children[0], callerCtx)...)
 			}
 			return targets
 		}
@@ -5782,7 +5905,7 @@ func (builder *QueryBuilder) collectLockTargets(nodeID int32) []*plan.LockTarget
 	}
 
 	for _, childID := range node.Children {
-		targets = append(targets, builder.collectLockTargets(childID)...)
+		targets = append(targets, builder.collectLockTargets(childID, callerCtx)...)
 	}
 
 	return targets

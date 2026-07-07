@@ -46,6 +46,7 @@ var causeArray = []error{
 	CauseHeartbeat,
 	CauseCanClaimDaemonTask,
 	CauseMergeObject,
+	CauseRSSCacheEvict,
 
 	CauseDeadlineContextCodec,
 	CausePingPongMain,
@@ -69,6 +70,8 @@ var causeArray = []error{
 	CauseNewAwsSDKv2,
 	CauseReadCache,
 	CauseRemoteCacheRead,
+
+	CauseWorkspaceRSSCacheEvict,
 
 	CauseRegisterCdc,
 	CauseInternalExecutorExec,

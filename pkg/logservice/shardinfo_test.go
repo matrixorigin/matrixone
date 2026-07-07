@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -22,6 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -65,7 +68,14 @@ func TestGetShardInfo(t *testing.T) {
 func TestGetShardInfo_LeaderAddressEmptyReturnsNotReady(t *testing.T) {
 	orig := queryShardInfoRawFn
 	defer func() { queryShardInfoRawFn = orig }()
-	queryShardInfoRawFn = func(sid, address string, shardID uint64) (pb.ShardInfoQueryResult, bool, error) {
+	queryShardInfoRawFn = func(
+		ctx context.Context,
+		sid string,
+		address string,
+		shardID uint64,
+		includeExpiredReplicaAddresses bool,
+	) (pb.ShardInfoQueryResult, bool, error) {
+		assert.False(t, includeExpiredReplicaAddresses)
 		return pb.ShardInfoQueryResult{
 			ShardID:  shardID,
 			LeaderID: 1,
@@ -88,7 +98,14 @@ func TestGetShardInfo_LeaderAddressEmptyReturnsNotReady(t *testing.T) {
 func TestGetShardInfo_OmitsUnreachableFollowers(t *testing.T) {
 	orig := queryShardInfoRawFn
 	defer func() { queryShardInfoRawFn = orig }()
-	queryShardInfoRawFn = func(sid, address string, shardID uint64) (pb.ShardInfoQueryResult, bool, error) {
+	queryShardInfoRawFn = func(
+		ctx context.Context,
+		sid string,
+		address string,
+		shardID uint64,
+		includeExpiredReplicaAddresses bool,
+	) (pb.ShardInfoQueryResult, bool, error) {
+		assert.False(t, includeExpiredReplicaAddresses)
 		return pb.ShardInfoQueryResult{
 			ShardID:  shardID,
 			LeaderID: 1,
@@ -108,4 +125,81 @@ func TestGetShardInfo_OmitsUnreachableFollowers(t *testing.T) {
 	_, follower2Present := info.Replicas[2]
 	assert.False(t, follower2Present,
 		"follower entry without a resolved address must be omitted from Replicas")
+}
+
+func TestGetShardMembership_IncludesExpiredReplicaAddresses(t *testing.T) {
+	orig := queryShardInfoRawFn
+	defer func() { queryShardInfoRawFn = orig }()
+	queryShardInfoRawFn = func(
+		ctx context.Context,
+		sid string,
+		address string,
+		shardID uint64,
+		includeExpiredReplicaAddresses bool,
+	) (pb.ShardInfoQueryResult, bool, error) {
+		assert.True(t, includeExpiredReplicaAddresses)
+		return pb.ShardInfoQueryResult{
+			ShardID: shardID,
+			Replicas: map[uint64]pb.ReplicaInfo{
+				1: {UUID: "uuid-1", ServiceAddress: "10.0.0.1:1"},
+				2: {UUID: "uuid-2", ServiceAddress: "10.0.0.2:1"},
+			},
+		}, true, nil
+	}
+
+	members, ok, err := getShardMembership(context.Background(), "", "doesnt-matter", 3)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "10.0.0.1:1", members[1])
+	assert.Equal(t, "10.0.0.2:1", members[2])
+}
+
+func TestIsExpiredLogStoreInState(t *testing.T) {
+	cfg := hakeeper.Config{
+		TickPerSecond:   10,
+		LogStoreTimeout: 5 * time.Second,
+	}
+	state := &pb.CheckerState{
+		Tick: 100,
+		LogState: pb.LogState{
+			Stores: map[string]pb.LogStoreInfo{
+				"expired": {Tick: 49},
+				"live":    {Tick: 50},
+			},
+		},
+	}
+
+	assert.True(t, isExpiredLogStoreInState(cfg, state, "expired"))
+	assert.False(t, isExpiredLogStoreInState(cfg, state, "live"))
+	assert.False(t, isExpiredLogStoreInState(cfg, state, "unknown"))
+	assert.False(t, isExpiredLogStoreInState(cfg, nil, "expired"))
+}
+
+func TestGetExpiredLogStoreStateFailsOpenBeforeGetShardInfoDeadline(t *testing.T) {
+	orig := getCheckerStateForShardInfo
+	defer func() { getCheckerStateForShardInfo = orig }()
+
+	deadlineC := make(chan time.Duration, 1)
+	getCheckerStateForShardInfo = func(ctx context.Context, l *store) (*pb.CheckerState, error) {
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		deadlineC <- time.Until(deadline)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		time.Second,
+		moerr.CauseGetShardInfo,
+	)
+	defer cancel()
+
+	start := time.Now()
+	state := (&Service{store: &store{}}).getExpiredLogStoreState(ctx, false)
+	elapsed := time.Since(start)
+
+	require.Nil(t, state)
+	assert.Less(t, elapsed, 500*time.Millisecond)
+	assert.LessOrEqual(t, <-deadlineC, getShardInfoCheckerStateTimeout)
 }

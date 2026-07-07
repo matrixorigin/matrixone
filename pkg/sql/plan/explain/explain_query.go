@@ -68,7 +68,6 @@ const (
 	Label_Split             = "Split"
 	Label_Gather            = "Gather"
 	Label_Assert            = "Assert"
-	Label_On_Duplicate_Key  = "On duplicate key"
 	Label_Fuzzy_Filter      = "Fuzzy filter"
 	Label_External_Function = "External Function"
 	Label_Distinct          = "Distinct"

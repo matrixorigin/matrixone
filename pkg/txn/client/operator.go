@@ -77,6 +77,8 @@ var (
 	runningSQLWaitTimeout = 30 * time.Second
 )
 
+const lockTableBindCheckInterval = 3 * time.Minute
+
 type runSQLSkipTokenKey struct{}
 
 func WithRunSQLSkipToken(ctx context.Context, token uint64) context.Context {
@@ -134,6 +136,14 @@ func WithTxnCNCoordinator() TxnOption {
 func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	return func(tc *txnOperator) {
 		tc.lockService = lockService
+	}
+}
+
+// WithTxnLockWaitTimeout sets the session-level lock wait timeout on the txn.
+// If set, the lock service will use this value instead of the global config.
+func WithTxnLockWaitTimeout(timeout time.Duration) TxnOption {
+	return func(tc *txnOperator) {
+		tc.opts.options.LockWaitTimeout = int64(timeout)
 	}
 }
 
@@ -264,15 +274,17 @@ type txnOperator struct {
 
 	mu struct {
 		sync.RWMutex
-		waitActive   bool
-		closed       bool
-		txn          txn.TxnMeta
-		cachedWrites map[uint64][]txn.TxnRequest
-		lockTables   []lock.LockTable
-		callbacks    map[EventType][]TxnEventCallback
-		retry        bool
-		lockSeq      uint64
-		waitLocks    map[uint64]Lock
+		waitActive             bool
+		closed                 bool
+		txn                    txn.TxnMeta
+		cachedWrites           map[uint64][]txn.TxnRequest
+		lockTables             []lock.LockTable
+		callbacks              map[EventType][]TxnEventCallback
+		retry                  bool
+		lockSeq                uint64
+		waitLocks              map[uint64]Lock
+		lastLockTableBindCheck time.Time
+		lockTableBindChanged   bool
 		//read-only txn operators for supporting snapshot read feature.
 		children []*txnOperator
 		flag     uint32
@@ -546,6 +558,8 @@ func (tc *txnOperator) initProtectedFields() {
 	tc.mu.retry = false
 	tc.mu.lockSeq = 0
 	tc.mu.txn = txn.TxnMeta{}
+	tc.mu.lastLockTableBindCheck = time.Time{}
+	tc.mu.lockTableBindChanged = false
 	tc.mu.lockTables = tc.mu.lockTables[:0]
 	tc.mu.children = tc.mu.children[:0]
 	if tc.mu.cachedWrites != nil {
@@ -642,6 +656,15 @@ func (tc *txnOperator) GetWaitActiveCost() time.Duration {
 	return tc.reset.waitActiveCost
 }
 
+// LockWaitTimeoutFromTxn returns the lock wait timeout from a txn operator, or 0.
+// The timeout is stored in TxnOptions as a time.Duration in nanoseconds.
+func LockWaitTimeoutFromTxn(op TxnOperator) time.Duration {
+	if op == nil {
+		return 0
+	}
+	return time.Duration(op.TxnOptions().LockWaitTimeout)
+}
+
 func (tc *txnOperator) notifyActive() {
 	if tc.reset.waiter == nil {
 		panic("BUG: notify active on non-waiter txn operator")
@@ -684,6 +707,12 @@ func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return tc.mu.txn.SnapshotTS
+}
+
+func (tc *txnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.txn.SnapshotTS = ts
 }
 
 func (tc *txnOperator) CreateTS() timestamp.Timestamp {
@@ -817,6 +846,9 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<commit>"); err != nil {
+		// Commit can be called with an already-canceled context while SQL is still running.
+		// The commit has not been sent yet, so close locally as aborted to release active/leak state.
+		tc.closeAsAborted(ctx, err)
 		return err
 	}
 
@@ -868,6 +900,9 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
 	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<rollback>"); err != nil {
+		// Rollback can be called from connection cleanup with an already-canceled context.
+		// Still close the operator locally so txnClient active/leak-check state is released.
+		tc.closeAsAborted(ctx, err)
 		return err
 	}
 
@@ -957,6 +992,81 @@ func (tc *txnOperator) HasLockTable(table uint64) bool {
 	return tc.hasLockTableLocked(table)
 }
 
+func (tc *txnOperator) CheckLockTableBinds(ctx context.Context) error {
+	tc.mu.Lock()
+	if tc.mu.txn.Mode != txn.TxnMode_Pessimistic ||
+		tc.lockService == nil ||
+		len(tc.mu.lockTables) == 0 {
+		tc.mu.Unlock()
+		return nil
+	}
+	if !tc.mu.txn.Mirror {
+		if err := tc.checkStatus(true); err != nil {
+			tc.mu.Unlock()
+			return err
+		}
+	}
+	if tc.mu.lockTableBindChanged {
+		tc.mu.Unlock()
+		return moerr.NewLockTableBindChangedNoCtx()
+	}
+	if !tc.mu.lastLockTableBindCheck.IsZero() &&
+		time.Since(tc.mu.lastLockTableBindCheck) < lockTableBindCheckInterval {
+		tc.mu.Unlock()
+		return nil
+	}
+	tc.mu.lastLockTableBindCheck = time.Now()
+	lockTables := append([]lock.LockTable(nil), tc.mu.lockTables...)
+	tc.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		tc.mu.Lock()
+		tc.mu.lastLockTableBindCheck = time.Time{}
+		tc.mu.Unlock()
+		return err
+	}
+
+	var invalid []uint64
+	for _, hold := range lockTables {
+		if err := ctx.Err(); err != nil {
+			tc.mu.Lock()
+			tc.mu.lastLockTableBindCheck = time.Time{}
+			tc.mu.Unlock()
+			return err
+		}
+		current, err := tc.lockService.GetLatestLockTableBind(hold)
+		if err != nil {
+			tc.mu.Lock()
+			tc.mu.lastLockTableBindCheck = time.Time{}
+			tc.mu.Unlock()
+			return err
+		}
+		if current.Changed(hold) {
+			invalid = append(invalid, hold.Table)
+		}
+	}
+
+	if len(invalid) == 0 {
+		return nil
+	}
+
+	tc.mu.Lock()
+	tc.mu.lockTableBindChanged = true
+	tc.mu.Unlock()
+
+	tc.lockService.ForceRefreshLockTableBinds(
+		invalid,
+		func(bind lock.LockTable) bool {
+			for _, hold := range lockTables {
+				if hold.Table == bind.Table && !hold.Changed(bind) {
+					return true
+				}
+			}
+			return false
+		})
+	return moerr.NewLockTableBindChangedNoCtx()
+}
+
 func (tc *txnOperator) ResetRetry(retry bool) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -1006,7 +1116,11 @@ func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*r
 	return tc.trimResponses(tc.handleError(ctx, result, err))
 }
 
-func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, commit bool) (*rpc.SendResult, error) {
+func (tc *txnOperator) doWrite(
+	ctx context.Context,
+	requests []txn.TxnRequest,
+	commit bool,
+) (resp *rpc.SendResult, err error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Write
 	}
@@ -1015,16 +1129,40 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		tc.logger.Fatal("can not write on ready only transaction")
 	}
 	var payload []txn.TxnRequest
+	workspacePrepared := false
 	if commit {
 		if tc.reset.workspace != nil {
-			reqs, err := tc.reset.workspace.Commit(ctx)
+			var reqs []txn.TxnRequest
+			reqs, err = tc.reset.workspace.Commit(ctx)
 			if err != nil {
 				return nil, errors.Join(err, tc.Rollback(ctx))
 			}
 			payload = reqs
+			workspacePrepared = true
+			defer func() {
+				if !workspacePrepared {
+					return
+				}
+				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+						tc.reset.workspace.FinalizeCommitWithUnknownResult(ctx)
+						return
+					}
+					if e := tc.reset.workspace.Rollback(ctx); e != nil {
+						tc.logger.Error("rollback prepared workspace failed",
+							util.TxnIDField(tc.getTxnMeta(false)), zap.Error(e))
+						err = errors.Join(err, e)
+					}
+					return
+				}
+				tc.reset.workspace.FinalizeCommit(ctx)
+			}()
 		}
 		tc.mu.Lock()
 		defer func() {
+			if err != nil && tc.reset.commitErr == nil {
+				tc.reset.commitErr = err
+			}
 			tc.closeLocked(ctx)
 			tc.mu.Unlock()
 		}()
@@ -1080,8 +1218,9 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		return nil, tc.reset.commitErr
 	}
 
-	result, err := tc.doSend(ctx, requests, commit)
-	resp, err := tc.trimResponses(tc.handleError(ctx, result, err))
+	var result *rpc.SendResult
+	result, err = tc.doSend(ctx, requests, commit)
+	resp, err = tc.trimResponses(tc.handleError(ctx, result, err))
 	if err != nil && commit {
 		tc.reset.commitErr = err
 	}
@@ -1504,6 +1643,17 @@ func (tc *txnOperator) closeLocked(ctx context.Context) {
 				Txn:   tc.mu.txn,
 				Err:   tc.reset.commitErr,
 			})
+	}
+}
+
+func (tc *txnOperator) closeAsAborted(ctx context.Context, err error) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	if !tc.mu.closed {
+		tc.reset.commitErr = err
+		tc.mu.txn.Status = txn.TxnStatus_Aborted
+		tc.closeLocked(ctx)
 	}
 }
 

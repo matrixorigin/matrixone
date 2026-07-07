@@ -166,6 +166,36 @@ var (
 		}, []string{"component", "type"})
 )
 
+var (
+	fsCachePressureCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "cache_pressure_total",
+			Help:      "Total number of fs cache pressure events.",
+		}, []string{"component", "event"})
+
+	FSCachePressureTriggerCounter     = fsCachePressureCounter.WithLabelValues("rss", "trigger")
+	FSCachePressureMemoryEvictCounter = fsCachePressureCounter.WithLabelValues("memory", "evict")
+	FSCachePressureMetaEvictCounter   = fsCachePressureCounter.WithLabelValues("meta", "evict")
+	FSCachePressureMemorySkipCounter  = fsCachePressureCounter.WithLabelValues("memory", "admission-skip")
+	FSCachePressureMetaSkipCounter    = fsCachePressureCounter.WithLabelValues("meta", "admission-skip")
+)
+
+var (
+	fsCachePressureEvictDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "cache_pressure_evict_duration_seconds",
+			Help:      "Bucketed histogram of fs cache pressure eviction duration.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"component"})
+
+	FSCachePressureMemoryEvictDuration = fsCachePressureEvictDuration.WithLabelValues("memory")
+	FSCachePressureMetaEvictDuration   = fsCachePressureEvictDuration.WithLabelValues("meta")
+)
+
 // GetFsCacheBytesGauge return inuse, cap Gauge metric
 // {typ} should be [mem, disk, meta]
 func GetFsCacheBytesGauge(name, typ string) (inuse prometheus.Gauge, capacity prometheus.Gauge) {

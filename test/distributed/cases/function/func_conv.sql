@@ -203,7 +203,6 @@ drop table if exists test_conv;
 -- MO vs MySQL differing cases (issue #23845)
 -- All failures are case sensitivity: MySQL returns uppercase, MO returns lowercase
 -- ============================================
--- @bvt:issue#23845
 -- test 2: decimal to hex
 select conv('255', 10, 16) as result2;
 -- expected: ff
@@ -260,43 +259,96 @@ select concat('0x', conv('255', 10, 16)) as hex_with_prefix;
 -- expected: 0xff
 
 select conv('g', 16, 10) as result8;
--- expected: MySQL returns 0, MO returns null
+-- expected: MO returns error on invalid character
 
 select conv('10', 1, 10) as result9;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('abc', 16, 10) as result10;
--- expected: 2748 (MO result parsing issue)
+-- expected: 2748
 
 select conv('10', null, 16) as null_from_base;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('10', 10, null) as null_to_base;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('g', 16, 10) as invalid_hex_char;
--- expected: MySQL returns 0, MO returns null
+-- expected: MO returns error on invalid character
 
 select conv('2', 2, 10) as invalid_binary_char;
--- expected: MySQL returns 0, MO returns null
+-- expected: MO returns error on invalid character
 
 select conv('8', 8, 10) as invalid_octal_char;
--- expected: MySQL returns 0, MO returns null
+-- expected: MO returns error on invalid character
 
 select conv('10', 1, 10) as invalid_from_base;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('10', 10, 1) as invalid_to_base;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('10', 37, 10) as invalid_from_base_high;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv('10', 10, 37) as invalid_to_base_high;
--- expected: MySQL returns null, MO returns error
+-- expected: null
 
 select conv(10, 10, 16) as numeric_input;
--- expected: a (MO result parsing issue)
--- @bvt:issue
+-- expected: A
+
+-- negative base semantics
+select conv(-17, 10, -18) as negative_to_negative_base;
+-- expected: -H
+
+select conv(17, 10, -18) as positive_to_negative_base;
+-- expected: H
+
+select conv('-17', -10, 16) as negative_from_negative_base;
+-- expected: FFFFFFFFFFFFFFEF
+
+select conv('17', -10, 16) as positive_from_negative_base;
+-- expected: 11
+
+select conv('ffffffffffffffff', 16, -10) as unsigned_to_negative_base;
+-- expected: -1
+
+select conv('-9223372036854775808', 10, 16) as negative_int64_min;
+-- expected: 8000000000000000
+
+select conv('-9223372036854775809', 10, 16) as negative_below_int64_min;
+-- expected: 7FFFFFFFFFFFFFFF
+
+select conv('-18446744073709551615', 10, 16) as negative_uint64_max_minus_one;
+-- expected: 1
+
+select conv('-18446744073709551616', 10, 16) as negative_uint64_overflow;
+-- expected: 0
+
+select conv('10xyz', 10, 16) as invalid_suffix;
+-- expected: MO returns error on prefix truncation / invalid suffix
+
+-- overflow semantics (saturate to uint64 max)
+select conv('18446744073709551616', 10, 16) as overflow_decimal_to_hex;
+-- expected: FFFFFFFFFFFFFFFF
+
+select conv('-18446744073709551616', 10, 16) as overflow_negative_decimal_to_hex;
+-- expected: 0
+
+select conv('10000000000000000', 16, 10) as overflow_hex_to_decimal;
+-- expected: 18446744073709551615
+
+-- plus-prefixed unsigned values above int64 must still use unsigned parsing
+select conv('+9223372036854775808', 10, 16) as plus_prefixed_above_max_int64;
+-- expected: 8000000000000000
+
+select conv('+18446744073709551614', 10, 16) as plus_prefixed_near_uint64_max;
+-- expected: FFFFFFFFFFFFFFFE
+
+select conv('+FFFFFFFFFFFFFFFF', 16, 10) as plus_prefixed_hex_uint64_max;
+-- expected: 18446744073709551615
+
+select conv('+', 10, 16) as sign_only_invalid;
+-- expected: MO returns error on sign-only invalid input
 
 drop database conv_func;

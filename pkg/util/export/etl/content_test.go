@@ -186,3 +186,41 @@ func TestWriteRowRecords_WithBackoff(t *testing.T) {
 
 	require.True(t, newConn)
 }
+
+func TestSQLFlusher_ResetBackoffAfterSuccessfulFlush(t *testing.T) {
+	old := db_holder.DBConnErrCount
+	defer func() {
+		db_holder.DBConnErrCount = old
+	}()
+
+	db_holder.DBConnErrCount = db_holder.NewReConnectionBackOff(time.Hour, 0)
+	db_holder.DBConnErrCount.Count()
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	for i := 0; i < 3; i++ {
+		mock.ExpectExec(regexp.QuoteMeta(`LOAD DATA INLINE FORMAT='csv', DATA='record1' INTO TABLE testDB.testTable FIELDS TERMINATED BY ','`)).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+	}
+
+	var forceNewConnFlags []bool
+	stubs := gostub.Stub(&db_holder.GetOrInitDBConn, func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
+		forceNewConnFlags = append(forceNewConnFlags, forceNewConn)
+		return db, nil
+	})
+	defer stubs.Reset()
+
+	f := &SQLFlusher{
+		database: "testDB",
+		table:    "testTable",
+	}
+	for i := 0; i < 3; i++ {
+		_, err = f.FlushBuffer(bytes.NewBufferString("record1"))
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, []bool{true, false, false}, forceNewConnFlags)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

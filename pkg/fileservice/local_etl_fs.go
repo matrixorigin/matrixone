@@ -446,10 +446,13 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEnt
 			if strings.HasPrefix(name, ".") {
 				continue
 			}
-			info, err := entry.Info()
+			info, ok, err := localDirEntryInfo(entry)
 			if err != nil {
 				yield(nil, err)
 				return
+			}
+			if !ok {
+				continue
 			}
 			isDir, err := entryIsDir(nativePath, name, info)
 			if err != nil {

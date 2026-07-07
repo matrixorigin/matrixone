@@ -1926,6 +1926,20 @@ func buildTableInfoListSQL(dbName string, tblName string, ts int64, accountId ui
 	if ts > 0 {
 		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
+	whereClause := buildTableInfoListWhereClause(dbName, tblName, accountId)
+	sql := fmt.Sprintf(
+		"select relname, case relkind when %s then 'VIEW' when %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, relkind from %s.mo_tables%s where %s",
+		quoteSQLStringLiteral(catalog.SystemViewRel),
+		quoteSQLStringLiteral(catalog.SystemClusterRel),
+		moCatalog,
+		snapshotSpec,
+		whereClause,
+	)
+	sql += fmt.Sprintf(" order by %s", catalog.SystemRelAttr_Name)
+	return sql
+}
+
+func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint32) string {
 	mustShowTable := fmt.Sprintf(
 		"relname = %s or relname = %s or relname = %s",
 		quoteSQLStringLiteral("mo_database"),
@@ -1934,26 +1948,34 @@ func buildTableInfoListSQL(dbName string, tblName string, ts int64, accountId ui
 	)
 	clusterTableClause := fmt.Sprintf(" or relkind = %s", quoteSQLStringLiteral(catalog.SystemClusterRel))
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTableClause)
-	sql := fmt.Sprintf(
-		"select relname, case relkind when %s then 'VIEW' when %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, relkind from %s.mo_tables%s where reldatabase = %s and relname != %s and relname not like %s and relname not like %s and relname != %s and relkind != %s and (%s)",
-		quoteSQLStringLiteral(catalog.SystemViewRel),
-		quoteSQLStringLiteral(catalog.SystemClusterRel),
-		moCatalog,
-		snapshotSpec,
+	indexTablePattern := quoteSQLLikePattern(catalog.IndexTableNamePrefix)
+	tempTablePattern := quoteSQLLikePattern("__mo_tmp_")
+	whereClause := fmt.Sprintf(
+		"reldatabase = %s and relname != %s and relname not like %s escape %s and relname not like %s escape %s and relname != %s and relkind != %s and (%s)",
 		quoteSQLStringLiteral(dbName),
 		quoteSQLStringLiteral(catalog.MOAutoIncrTable),
-		quoteSQLStringLiteral(catalog.IndexTableNamePrefix+"%"),
-		quoteSQLStringLiteral("__mo_tmp_%"),
+		indexTablePattern,
+		quoteSQLStringLiteral(`\`),
+		tempTablePattern,
+		quoteSQLStringLiteral(`\`),
 		quoteSQLStringLiteral(catalog.MO_ACCOUNT_LOCK),
 		quoteSQLStringLiteral(catalog.SystemPartitionRel),
 		accountClause,
 	)
 	if len(tblName) > 0 {
-		sql += fmt.Sprintf(" and relname like %s", quoteSQLStringLiteral(tblName))
+		whereClause += fmt.Sprintf(" and relname like %s", quoteSQLStringLiteral(tblName))
 	}
-	sql += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
-	sql += fmt.Sprintf(" order by %s", catalog.SystemRelAttr_Name)
-	return sql
+	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
+	return whereClause
+}
+
+func quoteSQLLikePattern(literalPrefix string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	)
+	return quoteSQLStringLiteral(replacer.Replace(literalPrefix) + "%")
 }
 
 func getTableInfos(
@@ -1974,16 +1996,43 @@ func getTableInfos(
 		return nil, err
 	}
 
-	// only recreate snapshoted table need create sql
+	return fillTableCreateSQLsForRestore(
+		sid,
+		fmt.Sprint(snapshot),
+		tableInfos,
+		func(tblInfo *tableInfo) (string, error) {
+			return getCreateTableSql(ctx, bh, snapshot, tblInfo.dbName, tblInfo.tblName)
+		},
+	)
+}
+
+func fillTableCreateSQLsForRestore(
+	sid string,
+	restoreSource string,
+	tableInfos []*tableInfo,
+	getCreateSQL func(*tableInfo) (string, error),
+) ([]*tableInfo, error) {
+	restorable := make([]*tableInfo, 0, len(tableInfos))
 	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSql(
-			ctx, bh, snapshot, dbName, tblInfo.tblName,
-		); err != nil {
+		createSQL, err := getCreateSQL(tblInfo)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				getLogger(sid).Warn(
+					"skip stale table metadata during restore",
+					zap.String("restore-source", restoreSource),
+					zap.String("database", tblInfo.dbName),
+					zap.String("table", tblInfo.tblName),
+					zap.Error(err),
+				)
+				continue
+			}
 			return nil, err
 		}
-	}
 
-	return tableInfos, nil
+		tblInfo.createSql = createSQL
+		restorable = append(restorable, tblInfo)
+	}
+	return restorable, nil
 }
 
 func getCreateDatabaseSql(ctx context.Context,

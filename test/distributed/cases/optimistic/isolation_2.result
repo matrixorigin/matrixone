@@ -477,7 +477,7 @@ begin ;
 use isolation_2;
 create temporary table dis_table_05(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
 load data infile 'fff.csv' to dis_table_05 fields terminated by ',';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " to dis_table_05;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " to dis_table_05 fields terminated by ',';";
 use isolation_2;
 select * from dis_table_05;
 SQL parser error: table "dis_table_05" does not exist

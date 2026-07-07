@@ -114,6 +114,16 @@ func RegisterApproxCountAgg(id int64) {
 	AggIdOfApproxCount = id
 }
 
+func RegisterHllAddAgg(id int64) {
+	specialAgg[id] = true
+	AggIdOfHllAdd = id
+}
+
+func RegisterHllMergeAgg(id int64) {
+	specialAgg[id] = true
+	AggIdOfHllMerge = id
+}
+
 func RegisterMedian(id int64) {
 	specialAgg[id] = true
 	AggIdOfMedian = id
@@ -222,6 +232,8 @@ var (
 	WinIdOfPercentRank     = int64(-32)
 	AggIdOfAvgTwCache      = int64(-33)
 	AggIdOfAvgTwResult     = int64(-34)
+	AggIdOfHllAdd          = int64(-35)
+	AggIdOfHllMerge        = int64(-36)
 	groupConcatSep         = ","
 	getGroupConcatRet      = func(args ...types.Type) types.Type {
 		for _, p := range args {

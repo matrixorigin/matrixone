@@ -27,10 +27,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
@@ -119,6 +121,37 @@ func TestHandleBootstrapFailure(t *testing.T) {
 	}()
 	s := store{}
 	s.handleBootstrapFailure()
+}
+
+func TestCheckBootstrapRetriesSetBootstrapStateFailure(t *testing.T) {
+	s := &store{bootstrapCheckCycles: checkBootstrapCycles}
+	state := &pb.CheckerState{
+		State: pb.HAKeeperBootstrapCommandsReceived,
+		ClusterInfo: pb.ClusterInfo{
+			LogShards: []metadata.LogShardRecord{{
+				ShardID:          1,
+				NumberOfReplicas: 1,
+			}},
+		},
+		LogState: pb.LogState{
+			Shards: map[uint64]pb.LogShardInfo{
+				1: {
+					ShardID:  1,
+					Replicas: map[uint64]string{1: "log-1"},
+				},
+			},
+		},
+	}
+
+	calls := 0
+	s.checkBootstrapWithSetter(state, func(success bool) error {
+		calls++
+		require.True(t, success)
+		return moerr.NewInternalErrorNoCtx("injected bootstrap state timeout")
+	})
+
+	require.Equal(t, 1, calls)
+	require.Equal(t, uint64(checkBootstrapCycles), s.bootstrapCheckCycles)
 }
 
 func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T, *store)) {

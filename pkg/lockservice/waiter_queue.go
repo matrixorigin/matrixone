@@ -31,6 +31,7 @@ type waiterQueue interface {
 	resetCommittedAt(timestamp.Timestamp)
 	moveTo(to waiterQueue)
 	put(...*waiter)
+	remove(*waiter) (bool, bool)
 	notify(value notifyValue)
 	notifyAll(value notifyValue)
 	first() *waiter
@@ -77,6 +78,28 @@ func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 	}
 	q.waiters = append(q.waiters, ws...)
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
+}
+
+func (q *sliceBasedWaiterQueue) remove(w *waiter) (bool, bool) {
+	q.Lock()
+	defer q.Unlock()
+
+	if q.beginChangeIdx != -1 {
+		panic("BUG: cannot remove waiter in changing waiter queue")
+	}
+
+	for i, v := range q.waiters {
+		if v != w {
+			continue
+		}
+		v.close("sliceBasedWaiterQueue remove", q.logger)
+		copy(q.waiters[i:], q.waiters[i+1:])
+		q.waiters[len(q.waiters)-1] = nil
+		q.waiters = q.waiters[:len(q.waiters)-1]
+		v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
+		return true, i == 0
+	}
+	return false, false
 }
 
 func (q *sliceBasedWaiterQueue) notifyAll(value notifyValue) {

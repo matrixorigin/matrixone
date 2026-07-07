@@ -1,0 +1,40 @@
+drop snapshot if exists issue21685_user_lock_acc_sp;
+drop snapshot if exists issue21685_admin_lock_acc_sp;
+drop account if exists issue21685_restore_acc;
+create account issue21685_restore_acc admin_name = 'admin' identified by '111';
+create user issue21685_restore_user identified by '111';
+alter user issue21685_restore_user lock;
+select user_name,status from mo_catalog.mo_user where user_name='issue21685_restore_user';
+user_name    status
+issue21685_restore_user    forbid
+create snapshot issue21685_user_lock_acc_sp for account issue21685_restore_acc;
+alter user issue21685_restore_user unlock;
+select user_name,status from mo_catalog.mo_user where user_name='issue21685_restore_user';
+user_name    status
+issue21685_restore_user    unlock
+restore account issue21685_restore_acc {snapshot = "issue21685_user_lock_acc_sp"};
+select user_name,status from mo_catalog.mo_user where user_name='issue21685_restore_user';
+user_name    status
+issue21685_restore_user    forbid
+alter user issue21685_restore_user unlock;
+drop user if exists issue21685_restore_user;
+alter user admin lock;
+select user_name,status from mo_catalog.mo_user where user_name='admin';
+user_name    status
+admin    forbid
+create snapshot issue21685_admin_lock_acc_sp for account issue21685_restore_acc;
+alter user admin unlock;
+select user_name,status from mo_catalog.mo_user where user_name='admin';
+user_name    status
+admin    unlock
+restore account issue21685_restore_acc {snapshot = "issue21685_admin_lock_acc_sp"};
+select user_name,status from mo_catalog.mo_user where user_name='admin';
+user_name    status
+admin    forbid
+alter user admin unlock;
+select user_name,status from mo_catalog.mo_user where user_name='admin';
+user_name    status
+admin    unlock
+drop account if exists issue21685_restore_acc;
+drop snapshot if exists issue21685_user_lock_acc_sp;
+drop snapshot if exists issue21685_admin_lock_acc_sp;

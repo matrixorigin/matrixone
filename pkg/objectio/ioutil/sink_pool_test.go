@@ -561,6 +561,50 @@ func TestSinker_WithPipelineFlush_WithSortKey(t *testing.T) {
 	require.NoError(t, sinker.Close())
 }
 
+func TestSinker_WithPipelineFlush_WithSortKeyGroupsBlocks(t *testing.T) {
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	attrs, typs, seqnums := mockSchema(3, 2)
+
+	factory := NewFSinkerImplFactory(
+		seqnums,
+		2,
+		true,
+		false,
+		0,
+	)
+
+	sinker := NewSinker(
+		2,
+		attrs,
+		typs,
+		factory,
+		proc.Mp(),
+		fs,
+		WithMemorySizeThreshold(1<<30),
+		WithAllMergeSorted(),
+		WithPipelineFlush(),
+	)
+
+	for i := 0; i < 3; i++ {
+		bat := containers.MockBatch(typs, 8192, 2, nil)
+		err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
+		assert.NoError(t, err)
+	}
+
+	err = sinker.Sync(context.Background())
+	assert.NoError(t, err)
+
+	require.Len(t, sinker.result.persisted, 1)
+	require.Equal(t, uint32(8192*3), sinker.result.persisted[0].Rows())
+	require.Equal(t, uint32(3), sinker.result.persisted[0].BlkCnt())
+
+	require.NoError(t, sinker.Close())
+}
+
 func TestSinker_WithPipelineFlush_Reset(t *testing.T) {
 	proc := testutil.NewProc(t)
 	fs, err := fileservice.Get[fileservice.FileService](

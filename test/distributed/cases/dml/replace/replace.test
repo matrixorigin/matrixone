@@ -194,3 +194,102 @@ insert into t_replace_not_null_after_filter values (0, 1, 100, 1);
 replace into t_replace_not_null_after_filter values (null, 1, 200, 10), (5, 2, 200, null);
 select * from t_replace_not_null_after_filter order by id;
 drop table t_replace_not_null_after_filter;
+
+-- one new row conflicts with different old rows via different unique keys:
+-- delete every matched old row and insert the new row exactly once
+drop table if exists t_replace_multi_uk_fanout;
+create table t_replace_multi_uk_fanout (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into t_replace_multi_uk_fanout (name, email, value) values ('a', 'x@a.com', 100), ('b', 'y@a.com', 200);
+replace into t_replace_multi_uk_fanout (name, email, value) values ('a', 'y@a.com', 300);
+select name, email, value from t_replace_multi_uk_fanout order by name;
+drop table t_replace_multi_uk_fanout;
+
+-- new row's explicit primary key matches one old row while two unique keys
+-- match two other old rows (three-way fan-out)
+drop table if exists t_replace_pk_and_uk_fanout;
+create table t_replace_pk_and_uk_fanout (id int primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into t_replace_pk_and_uk_fanout values (1, 'a', 'x@a.com', 100), (2, 'b', 'y@a.com', 200), (3, 'c', 'z@a.com', 300);
+replace into t_replace_pk_and_uk_fanout values (1, 'b', 'z@a.com', 999);
+select * from t_replace_pk_and_uk_fanout order by id;
+drop table t_replace_pk_and_uk_fanout;
+
+-- fake-PK table (no real primary key) with multiple unique keys: a new row
+-- conflicting on different unique keys must also delete all matched old rows
+drop table if exists t_replace_fakepk_multi_uk;
+create table t_replace_fakepk_multi_uk (a varchar(50) unique, b varchar(100) unique, v int);
+insert into t_replace_fakepk_multi_uk values ('a', 'x', 100), ('b', 'y', 200);
+replace into t_replace_fakepk_multi_uk values ('a', 'y', 300);
+select * from t_replace_fakepk_multi_uk order by a;
+drop table t_replace_fakepk_multi_uk;
+
+-- composite unique key fan-out
+drop table if exists t_replace_composite_uk_fanout;
+create table t_replace_composite_uk_fanout (id int primary key, a int, b int, v int, unique key uk(a, b));
+insert into t_replace_composite_uk_fanout values (1, 10, 20, 100), (2, 30, 40, 200);
+replace into t_replace_composite_uk_fanout values (3, 10, 20, 999);
+select * from t_replace_composite_uk_fanout order by id;
+drop table t_replace_composite_uk_fanout;
+
+-- multi-row REPLACE batch where each row independently fans out
+drop table if exists t_replace_multi_uk_batch;
+create table t_replace_multi_uk_batch (id int auto_increment primary key, name varchar(50) unique, email varchar(100) unique, value int);
+insert into t_replace_multi_uk_batch (name, email, value) values ('a', 'x@a.com', 100), ('b', 'y@a.com', 200), ('c', 'z@a.com', 300);
+replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com', 111), ('b', 'z@a.com', 222);
+select name, email, value from t_replace_multi_uk_batch order by name;
+drop table t_replace_multi_uk_batch;
+
+-- MySQL-compatible REPLACE syntax variants: TABLE source (with/without column list), LOW_PRIORITY, DELAYED
+drop table if exists t_replace_src;
+drop table if exists t_replace_dst;
+create table t_replace_src (id int primary key, v int);
+create table t_replace_dst (id int primary key, v int);
+insert into t_replace_src values (1, 10), (2, 20), (3, 30);
+insert into t_replace_dst values (1, 999);
+replace into t_replace_dst table t_replace_src;
+select * from t_replace_dst order by id;
+replace into t_replace_dst (id, v) table t_replace_src;
+select * from t_replace_dst order by id;
+truncate table t_replace_dst;
+replace into t_replace_dst table t_replace_src order by id desc limit 1;
+select * from t_replace_dst order by id;
+replace into t_replace_dst (id, v) table t_replace_src order by id limit 1 offset 1;
+select * from t_replace_dst order by id;
+drop table t_replace_src;
+drop table t_replace_dst;
+drop table if exists t_replace_prio;
+create table t_replace_prio (id int primary key, v int);
+replace low_priority into t_replace_prio values (1, 20);
+replace delayed into t_replace_prio values (1, 30);
+select * from t_replace_prio order by id;
+drop table t_replace_prio;
+
+-- fake-PK table with a composite nullable unique key: a REPLACE whose composite
+-- unique-key part is statically NULL (column a omitted -> NULL) serializes to a NULL
+-- key, can never conflict, and behaves like a plain INSERT (no existing row deleted;
+-- a NULL key is allowed multiple times). A fully non-NULL key still conflicts and replaces.
+drop table if exists t_replace_fakepk_comp_null;
+create table t_replace_fakepk_comp_null (a int, b int, c varchar(20), unique key uk_ab(a, b));
+insert into t_replace_fakepk_comp_null values (1, 1, 'one'), (2, 2, 'two');
+replace into t_replace_fakepk_comp_null (b, c) values (1, 'null-a');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+replace into t_replace_fakepk_comp_null (b, c) values (1, 'null-a-2');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+replace into t_replace_fakepk_comp_null (a, b, c) values (1, 1, 'one-replaced');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+drop table t_replace_fakepk_comp_null;
+
+-- REPLACE enforces the child->parent foreign key on the inserted row (modern path).
+-- An orphan reference fails for both insert-only REPLACE and conflict REPLACE; a valid
+-- parent succeeds.
+drop table if exists t_replace_fk_child;
+drop table if exists t_replace_fk_parent;
+create table t_replace_fk_parent(id int primary key);
+create table t_replace_fk_child(id int primary key, pid int, foreign key(pid) references t_replace_fk_parent(id));
+insert into t_replace_fk_parent values (1), (2);
+replace into t_replace_fk_child values (1, 999);
+insert into t_replace_fk_child values (1, 1);
+replace into t_replace_fk_child values (1, 888);
+replace into t_replace_fk_child values (2, 2);
+select id, pid from t_replace_fk_child order by id;
+drop table if exists t_replace_fk_child;
+drop table if exists t_replace_fk_parent;

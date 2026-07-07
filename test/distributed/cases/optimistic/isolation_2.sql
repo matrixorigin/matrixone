@@ -164,7 +164,7 @@ select b, c from dis_table_02;
 insert into dis_table_02(b,c) values ('','1999-06-04');
 
 ------------------------------
--- @bvt:issue#9124
+-- @bvt:issue
 create temporary table dis_temp_01(a int,b varchar(100),primary key(a));
 begin ;
 insert into dis_temp_01 values (233,'uuuu');
@@ -292,7 +292,7 @@ update dis_table_04 set b=(select 'kkkk')  where a=879;
 select * from dis_table_04;
 -- @session}
 ----------------------------
--- @bvt:issue#9124
+-- @bvt:issue
 begin ;
 use isolation_2;
 create temporary table dis_table_05(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));

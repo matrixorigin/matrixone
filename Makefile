@@ -161,7 +161,14 @@ vendor-build:
 .PHONY: config
 config:
 	$(info [Create build config])
-	@go mod tidy
+	@for i in 1 2 3; do \
+		mod_cmd=$${CI:+download}; mod_cmd=$${mod_cmd:-tidy}; \
+		GOPROXY="$(GOPROXY)" go mod $$mod_cmd && exit 0; \
+		echo "go mod $$mod_cmd failed (attempt $$i/3), retrying..."; \
+		sleep $$((i * 5)); \
+	done; \
+	echo "go mod failed after 3 attempts"; \
+	exit 1
 
 .PHONY: generate-pb
 generate-pb:
@@ -178,6 +185,7 @@ pb: vendor-build generate-pb fmt
 
 VERSION_INFO :=-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'
 THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
+CGO_DIR=$(ROOT_DIR)/cgo
 JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
 RACE_OPT :=
 DEBUG_OPT :=
@@ -189,7 +197,7 @@ ifeq ($(MO_CL_CUDA),1)
     $(error CONDA_PREFIX env variable not found.)
   endif
 	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
-	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/envs/go/lib -lcuvs -lcuvs_c
+	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c
 	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
 	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
 	TAGS += -tags "gpu"
@@ -199,11 +207,11 @@ ifeq ($(TYPECHECK),1)
 	TAGS += -tags "typecheck"
 endif
 
-CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
-GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
+CGO_OPTS :=CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
+GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
-GOLDFLAGS:=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
+GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
 endif
 
 ifeq ($(GOBUILD_OPT),)
@@ -306,7 +314,8 @@ endif
 ###############################################################################
 UT_PARALLEL ?= 1
 ENABLE_UT ?= "false"
-GOPROXY ?= "https://proxy.golang.com.cn,direct"
+GOPROXY ?= https://proxy.golang.com.cn,https://goproxy.cn,https://proxy.golang.org
+export GOPROXY
 LAUNCH ?= "launch"
 
 .PHONY: ci
@@ -1039,7 +1048,7 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v2.6.2
+	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 

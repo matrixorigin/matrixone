@@ -88,3 +88,102 @@ func TestApproxCountExecFillMergeFlush(t *testing.T) {
 	left.Free()
 	right.Free()
 }
+
+func TestHllAddExecFillMergeFlush(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	left := makeHllAdd(mp, 1, types.T_int64.ToType()).(*hllAddExec)
+	right := makeHllAdd(mp, 1, types.T_int64.ToType()).(*hllAddExec)
+	require.NoError(t, left.GroupGrow(2))
+	require.NoError(t, right.GroupGrow(2))
+
+	values := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(values, []int64{1, 2, 2, 3}, nil, mp))
+	require.NoError(t, left.BatchFill(0, []uint64{1, 1, 1, GroupNotMatched}, []*vector.Vector{values}))
+
+	rightValues := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(rightValues, []int64{3, 4}, nil, mp))
+	require.NoError(t, right.BatchFill(0, []uint64{1, 2}, []*vector.Vector{rightValues}))
+
+	require.NoError(t, left.SetExtraInformation(nil, 0))
+	require.NoError(t, left.BatchMerge(right, 0, []uint64{1, 2}))
+	require.NoError(t, left.Merge(right, 0, 0))
+	require.Greater(t, left.Size(), int64(0))
+
+	vecs, err := left.Flush()
+	require.NoError(t, err)
+	require.False(t, vecs[0].IsNull(0))
+	require.False(t, vecs[0].IsNull(1))
+
+	group1 := &hllSketch{}
+	require.NoError(t, group1.UnmarshalBinary(vecs[0].GetBytesAt(0)))
+	require.Equal(t, uint64(3), group1.Estimate())
+
+	group2 := &hllSketch{}
+	require.NoError(t, group2.UnmarshalBinary(vecs[0].GetBytesAt(1)))
+	require.Equal(t, uint64(1), group2.Estimate())
+
+	values.Free(mp)
+	rightValues.Free(mp)
+	vecs[0].Free(mp)
+	left.Free()
+	right.Free()
+}
+
+func TestHllMergeExecFillMergeFlush(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	buildSketch := func(values ...int64) []byte {
+		sketch, err := makeHllSketch(mp)
+		require.NoError(t, err)
+		hlls := sketch.(*hllSketch)
+		for _, value := range values {
+			hlls.Insert(types.EncodeInt64(&value))
+		}
+		data, err := hlls.MarshalBinary()
+		require.NoError(t, err)
+		return data
+	}
+
+	left := makeHllMerge(mp, 1, types.T_varbinary.ToType()).(*hllMergeExec)
+	right := makeHllMerge(mp, 1, types.T_varbinary.ToType()).(*hllMergeExec)
+	require.NoError(t, left.GroupGrow(2))
+	require.NoError(t, right.GroupGrow(2))
+
+	values := vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(values, buildSketch(1, 2), false, mp))
+	require.NoError(t, vector.AppendBytes(values, buildSketch(2, 3), false, mp))
+	require.NoError(t, vector.AppendBytes(values, nil, true, mp))
+	require.NoError(t, left.BatchFill(0, []uint64{1, 1, 2}, []*vector.Vector{values}))
+
+	rightValues := vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(rightValues, buildSketch(3, 4), false, mp))
+	require.NoError(t, vector.AppendBytes(rightValues, buildSketch(5), false, mp))
+	require.NoError(t, right.BatchFill(0, []uint64{1, 2}, []*vector.Vector{rightValues}))
+
+	require.NoError(t, left.BatchMerge(right, 0, []uint64{1, 2}))
+	require.NoError(t, left.Merge(right, 0, 0))
+	require.Greater(t, left.Size(), int64(0))
+
+	vecs, err := left.Flush()
+	require.NoError(t, err)
+
+	group1 := &hllSketch{}
+	require.NoError(t, group1.UnmarshalBinary(vecs[0].GetBytesAt(0)))
+	require.Equal(t, uint64(4), group1.Estimate())
+
+	group2 := &hllSketch{}
+	require.NoError(t, group2.UnmarshalBinary(vecs[0].GetBytesAt(1)))
+	require.Equal(t, uint64(1), group2.Estimate())
+
+	invalid := vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(invalid, []byte("bad"), false, mp))
+	require.Error(t, left.BatchFill(0, []uint64{1}, []*vector.Vector{invalid}))
+
+	values.Free(mp)
+	rightValues.Free(mp)
+	invalid.Free(mp)
+	vecs[0].Free(mp)
+	left.Free()
+	right.Free()
+}

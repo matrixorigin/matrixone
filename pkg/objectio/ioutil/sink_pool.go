@@ -83,20 +83,26 @@ var (
 	defaultPoolOnce sync.Once
 )
 
-// GetDefaultSinkPool returns the process-global sink pool, creating it
-// lazily on first call. Sink workers = min(NumCPU, 8), sync workers = 2.
+// GetDefaultSinkPool returns the process-global sink pool, creating it lazily.
+// Sink workers cap serialization fanout, while sync workers cap concurrent IO.
 func GetDefaultSinkPool() *SinkPool {
 	defaultPoolOnce.Do(func() {
-		sinkWorkers := runtime.NumCPU()
-		if sinkWorkers > 8 {
-			sinkWorkers = 8
-		}
-		if sinkWorkers < 2 {
-			sinkWorkers = 2
-		}
-		defaultPool = NewSinkPool(sinkWorkers, 2)
+		sinkWorkers := boundedWorkerCount(8)
+		syncWorkers := boundedWorkerCount(4)
+		defaultPool = NewSinkPool(sinkWorkers, syncWorkers)
 	})
 	return defaultPool
+}
+
+func boundedWorkerCount(maxWorkers int) int {
+	workers := runtime.NumCPU()
+	if workers < 2 {
+		return 2
+	}
+	if workers > maxWorkers {
+		return maxWorkers
+	}
+	return workers
 }
 
 // CloseDefaultSinkPool drains and closes the global sink pool, allowing

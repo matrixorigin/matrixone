@@ -568,47 +568,49 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 		}
 	} else {
 
-		oncond := make([]string, len(ps)-1)
-		tables := make([]string, len(ps))
-		for i, tp := range ps {
-			var subsql string
+		// Phrase match without an N-way self-join.  A phrase occurrence is a set
+		// of positions where every word i sits at pos = anchor + offset_i for one
+		// common anchor (offset_i is the word's distance from the first word).
+		// Normalize each word's hit to its anchor (anchor = pos - offset_i),
+		// UNION ALL the per-word hits, then group by (doc_id, anchor): a group
+		// holding all len(ps) words is one phrase occurrence.  This is linear in
+		// the per-word posting lists instead of the combinatorial blow-up of
+		// joining all len(ps) words pairwise on doc_id + pos.  Including anchor in
+		// the group key keeps it correct when a word repeats in a document: each
+		// occurrence falls into a distinct anchor bucket and every slot
+		// contributes at most one row per anchor, so COUNT(*) = len(ps) holds.
+		base := ps[0].Position
+		for _, tp := range ps {
+			var cond string
 			kw := tp.Text
-			tblname := fmt.Sprintf("kw%d", i)
-			tables[i] = tblname
 			if tp.Operator == TEXT {
-				subsql = fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE word = '%s')",
-					tblname, idxtbl, escape(kw))
+				cond = fmt.Sprintf("word = '%s'", escape(kw))
 			} else {
 				if kw[len(kw)-1] != '*' {
 					return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
 				}
 				prefix := kw[0 : len(kw)-1]
-				subsql = fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE prefix_eq(word,'%s'))",
-					tblname, idxtbl, escape(prefix))
-
+				cond = fmt.Sprintf("prefix_eq(word,'%s')", escape(prefix))
 			}
-			union = append(union, subsql)
-			if i > 0 {
-				oncond[i-1] = fmt.Sprintf("%s.doc_id = %s.doc_id AND %s.pos - %s.pos = %d",
-					tables[0], tables[i], tables[i], tables[0], ps[i].Position-ps[0].Position)
-			}
+			union = append(union, fmt.Sprintf("SELECT doc_id, pos - %d AS anchor FROM %s WHERE %s",
+				tp.Position-base, idxtbl, cond))
 		}
-		sql = "WITH "
-		sql += strings.Join(union, ", ")
+
+		innerUnion := strings.Join(union, " UNION ALL ")
+		proj := "doc_id"
 		if withIndex {
-			sql += fmt.Sprintf(" SELECT %s.doc_id, CAST(0 as int) FROM ", tables[0])
-		} else {
-			sql += fmt.Sprintf(" SELECT %s.doc_id FROM ", tables[0])
+			proj = "doc_id, CAST(0 as int)"
 		}
-
-		sql += strings.Join(tables, ", ")
-		sql += " WHERE "
-		sql += strings.Join(oncond, " AND ")
 
 		if mode == int64(tree.FULLTEXT_BOOLEAN) {
-			// in boolean mode, we ignore the word occurrence.  GROUP BY will remove the duplicate doc_id and
-			// hence avoid a huge number of records produced after JOIN.
-			sql += fmt.Sprintf(" GROUP BY %s.doc_id", tables[0])
+			// in boolean mode we ignore the occurrence count: collapse to one
+			// row per doc_id, the same dedup the old GROUP BY kw0.doc_id did.
+			sql = fmt.Sprintf("SELECT %s FROM (SELECT doc_id FROM (%s) anchors GROUP BY doc_id, anchor HAVING COUNT(*) = %d) phrase GROUP BY doc_id",
+				proj, innerUnion, len(ps))
+		} else {
+			// NL mode keeps one row per phrase occurrence so tf is preserved.
+			sql = fmt.Sprintf("SELECT %s FROM (%s) anchors GROUP BY doc_id, anchor HAVING COUNT(*) = %d",
+				proj, innerUnion, len(ps))
 		}
 	}
 

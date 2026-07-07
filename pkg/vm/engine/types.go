@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -1340,8 +1339,35 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 	return true, regexps
 }
 
+// MembershipFilter is a membership filter over the indexed primary-key values
+// (fulltext calls this PK doc_id) used to prune an index scan to the candidate
+// rows that pass the surrounding relational predicate. It is implemented in
+// pkg/common/docfilter by an exact bitset (cbitmap / CRoaring) for integer PKs
+// and by a CBloomFilter (approximate) for non-integer PKs.
+//
+// This is the CONSUMER (probe) view, so it deliberately omits Share() — a plain
+// *bloomfilter.CBloomFilter satisfies it directly. The PRODUCER superset is
+// docfilter.MembershipFilter, which adds Share() and is assignable to this
+// interface (enforced by a compile-time assertion in package disttae, where
+// both packages are imported). Keep the shared method set here as the single
+// source of truth; docfilter's interface only adds to it.
+type MembershipFilter interface {
+	// Test reports whether the raw fixed bytes of a single key may be present.
+	Test(data []byte) bool
+	// TestVector tests every row of a key vector, invoking cb(exist, isnull, row).
+	TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8
+	// Valid reports whether the filter is usable.
+	Valid() bool
+	// Exact reports whether membership is exact (a bitset, no false positives)
+	// rather than approximate (a bloom filter). Callers can skip downstream
+	// re-verification when this is true.
+	Exact() bool
+	// Free releases any resources held by the filter.
+	Free()
+}
+
 type FilterHint struct {
-	Must        bool
-	BloomFilter []byte
-	BF          *bloomfilter.CBloomFilter
+	Must                  bool
+	MembershipFilterBytes []byte
+	BF                    MembershipFilter
 }

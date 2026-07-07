@@ -483,5 +483,30 @@ EXECUTE mo_stmt_id_1 USING @dbname1, @dbname2;
 DEALLOCATE PREPARE mo_stmt_id_1;
 DROP DATABASE mocloud_meta;
 
+-- test prepared REPLACE via unquoted prepareable_stmt grammar (same path as binary protocol COM_STMT_PREPARE)
+drop table if exists replace_prepare;
+CREATE TABLE replace_prepare (a INT PRIMARY KEY, b INT);
+INSERT INTO replace_prepare VALUES (1, 10), (2, 20);
+PREPARE rp1 FROM replace into replace_prepare values (?, ?);
+SET @k = 1;
+SET @v = 100;
+EXECUTE rp1 USING @k, @v;
+SET @k = 3;
+SET @v = 30;
+EXECUTE rp1 USING @k, @v;
+SELECT * FROM replace_prepare ORDER BY a;
+DEALLOCATE PREPARE rp1;
+
+drop table if exists replace_prepare_src;
+CREATE TABLE replace_prepare_src (a INT, b INT);
+INSERT INTO replace_prepare_src VALUES (2, 222), (4, 44);
+PREPARE rp2 FROM replace into replace_prepare (a, b) select a, b from replace_prepare_src where a > ?;
+SET @t = 1;
+EXECUTE rp2 USING @t;
+SELECT * FROM replace_prepare ORDER BY a;
+DEALLOCATE PREPARE rp2;
+drop table if exists replace_prepare;
+drop table if exists replace_prepare_src;
+
 # reset
 SET TIME_ZONE = "SYSTEM";

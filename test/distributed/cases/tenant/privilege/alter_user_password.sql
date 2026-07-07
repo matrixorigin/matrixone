@@ -14,12 +14,27 @@ alter user 'root' identified by '111' LOCK;
 alter user 'root' identified by '111' PASSWORD HISTORY DEFAULT;
 alter user 'root' identified by '111' comment 'alter user test';
 alter user 'root' identified by '111' attribute 'test';
+drop user if exists issue21685_tenant_user;
+create user issue21685_tenant_user identified by '111';
+select user_name,status from mo_catalog.mo_user where user_name='issue21685_tenant_user';
+alter user issue21685_tenant_user lock;
+select user_name,status from mo_catalog.mo_user where user_name='issue21685_tenant_user';
+alter user issue21685_tenant_user unlock;
+select user_name,status from mo_catalog.mo_user where user_name='issue21685_tenant_user';
+drop user if exists issue21685_tenant_user;
 -- @session
 drop account acc_idx;
 alter user root identified by 'UI235_ace';
 -- @session:id=2&user=sys:root&password=UI235_ace
 select user_name,status from mo_catalog.mo_user where user_name="root";
 -- @session
+drop user if exists issue21685_user;
+create user issue21685_user identified by '111';
+select user_name,status from mo_catalog.mo_user where user_name='issue21685_user';
+alter user issue21685_user lock;
+select user_name,status from mo_catalog.mo_user where user_name='issue21685_user';
+alter user issue21685_user unlock;
+select user_name,status from mo_catalog.mo_user where user_name='issue21685_user';
 create user  efg identified by '111';
 alter user `efg` identified by 'eee中文';
 -- @session:id=3&user=sys:efg:public&password=eee中文
@@ -48,6 +63,7 @@ drop user rst;
 -- @session
 drop user if exists efg;
 drop user if exists hjk;
+drop user if exists issue21685_user;
 drop user if exists opp;
 drop role if exists role1;
 alter user root identified by '111';

@@ -35,6 +35,10 @@ import (
 
 const DefaultInMemoryStagedSize = mpool.MB * 16
 
+// Cap each sort-key pipeline submission so backfill can produce reasonably
+// sized objects without letting pending sorted batches grow without bound.
+const pipelineSortKeySubmitThreshold = mpool.MB * 128
+
 type pipelineFlushKeyType struct{}
 
 // PipelineFlushKey is the context key used to enable pipeline flush in Sinker.
@@ -747,13 +751,54 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 	return nil
 }
 
-// trySpillMergeSortPipeline merge-sorts staged data and submits each sorted
-// block to the pipeline as it is produced, avoiding accumulating all sorted
-// batches in memory (which would double peak memory usage).
-func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) error {
+// trySpillMergeSortPipeline merge-sorts staged data and submits sorted blocks
+// to the pipeline in bounded groups. Grouping keeps the pipeline async path from
+// turning every BlockMaxRows output block into its own tiny persisted object.
+func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error) {
+	submitThreshold := sinker.staged.memorySizeThreshold
+	if submitThreshold <= 0 {
+		submitThreshold = DefaultInMemoryStagedSize
+	}
+	if submitThreshold > pipelineSortKeySubmitThreshold {
+		submitThreshold = pipelineSortKeySubmitThreshold
+	}
+
+	var (
+		pending     []*batch.Batch
+		pendingSize int
+	)
+	cleanupPending := func() {
+		for _, bat := range pending {
+			if bat != nil {
+				sinker.putBackBuffer(bat)
+			}
+		}
+		pending = nil
+		pendingSize = 0
+	}
+	defer func() {
+		if err != nil {
+			cleanupPending()
+		}
+	}()
+
+	submitPending := func() error {
+		if len(pending) == 0 {
+			return nil
+		}
+		jobData := pending
+		pending = nil
+		pendingSize = 0
+		return sinker.pipelineSubmit(ctx, jobData)
+	}
+
 	streamSubmit := func(data *batch.Batch) (*batch.Batch, error) {
-		if err := sinker.pipelineSubmit(ctx, []*batch.Batch{data}); err != nil {
-			return nil, err
+		pending = append(pending, data)
+		pendingSize += data.Size()
+		if pendingSize >= submitThreshold {
+			if err := submitPending(); err != nil {
+				return nil, err
+			}
 		}
 		return sinker.fetchBuffer()
 	}
@@ -770,8 +815,16 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) error {
 		sinker.mp,
 		sinker.putBackOneInMemory,
 	)
-	sinker.putBackBuffer(buffer)
-	return err
+	if buffer != nil {
+		sinker.putBackBuffer(buffer)
+	}
+	if err != nil {
+		return err
+	}
+	if err := submitPending(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (sinker *Sinker) resetFileSinker() {

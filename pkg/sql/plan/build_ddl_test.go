@@ -493,6 +493,93 @@ func TestBuildAlterTableError(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestBuildIndexAllowsEnumAndTextBlobPrefix(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE enum_idx_ok1 (id VARCHAR(191) PRIMARY KEY, role ENUM('a','b','c'), INDEX idx_role(role));",
+		"CREATE TABLE enum_idx_ok2 (id VARCHAR(191) PRIMARY KEY, role ENUM('a','b','c'), UNIQUE INDEX uq_role(role));",
+		"CREATE TABLE enum_idx_ok3 (id VARCHAR(191) PRIMARY KEY, name VARCHAR(191), role ENUM('a','b','c'), INDEX idx_name_role(name, role));",
+		"CREATE TABLE text_prefix_ok1 (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t(100)));",
+		"CREATE TABLE text_prefix_ok2 (id INT PRIMARY KEY, t TEXT, UNIQUE INDEX uq_t(t(100)));",
+		"CREATE TABLE blob_prefix_ok1 (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b(100)));",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestBuildIndexRejectsTextBlobPlainIndex(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqlerrs := []string{
+		"CREATE TABLE text_plain_err1 (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t));",
+		"CREATE TABLE text_plain_err2 (id INT PRIMARY KEY, t TEXT, UNIQUE INDEX uq_t(t));",
+		"CREATE TABLE text_comp_pk_err (id INT, t TEXT, PRIMARY KEY(id, t));",
+		"CREATE TABLE blob_plain_err1 (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b));",
+		"CREATE TABLE blob_comp_pk_err (b BLOB, id INT, PRIMARY KEY(b, id));",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
+func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name   string
+		sql    string
+		column string
+		length int
+	}{
+		{
+			name:   "text",
+			sql:    "CREATE TABLE text_prefix_secondary_ok (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t(100)));",
+			column: "t",
+			length: 100,
+		},
+		{
+			name:   "blob",
+			sql:    "CREATE TABLE blob_prefix_secondary_ok (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b(100)));",
+			column: "b",
+			length: 100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+
+			createTable := logicPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			require.Len(t, createTable.GetTableDef().GetIndexes(), 1)
+
+			indexDef := createTable.GetTableDef().GetIndexes()[0]
+			prefixLengths := catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams)
+			require.Equal(t, tt.length, prefixLengths[tt.column])
+		})
+	}
+}
+
+func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE vec_idx_ok1 (id INT PRIMARY KEY, embedding VECF32(3), KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops');",
+		"CREATE TABLE vec_idx_ok2 (id INT PRIMARY KEY, embedding VECF64(3), KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops');",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	sqlerrs := []string{
+		"CREATE TABLE vec_idx_err1 (id INT PRIMARY KEY, embedding VECF32(3), KEY idx_emb (embedding));",
+		"CREATE TABLE vec_idx_err2 (id INT PRIMARY KEY, embedding VECF64(3), KEY idx_emb (embedding));",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
+func TestBuildIndexAllowsRTreeGeometry(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE geo_spatial_ok (id INT PRIMARY KEY, g POINT NOT NULL, KEY idx_g USING RTREE (g));",
+		"CREATE TABLE geo_spatial_nullable_ok (id INT PRIMARY KEY, g POINT, KEY idx_g USING RTREE (g));",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
 func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	rt := moruntime.DefaultRuntime()
@@ -506,7 +593,6 @@ func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
 		"CREATE TABLE geo_pk_err (g GEOMETRY PRIMARY KEY);",
 		"CREATE TABLE geo_uk_err (g GEOMETRY UNIQUE KEY);",
 		"CREATE TABLE geo_idx_err (g GEOMETRY, KEY(g));",
-		"CREATE TABLE geo_spatial_nullable_err (id INT PRIMARY KEY, g POINT, KEY idx_g USING RTREE (g));",
 		"ALTER TABLE emp ADD COLUMN g GEOMETRY UNIQUE KEY;",
 		"ALTER TABLE emp ADD COLUMN g GEOMETRY PRIMARY KEY;",
 	}

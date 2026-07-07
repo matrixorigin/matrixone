@@ -1,0 +1,26 @@
+drop table if exists hll_01;
+drop table if exists hll_daily;
+create table hll_01(dt date, user_id int);
+insert into hll_01 values ('2026-05-01', 1), ('2026-05-01', 1), ('2026-05-01', 2), ('2026-05-02', 2), ('2026-05-02', 3), ('2026-05-02', null);
+select hll_cardinality(hll_add_agg(user_id)) from hll_01;
+➤ hll_cardinality(hll_add_agg(user_id))[-5,64,0]  𝄀
+3
+select dt, hll_cardinality(hll_add_agg(user_id)) from hll_01 group by dt order by dt;
+➤ dt[91,64,0]  ¦  hll_cardinality(hll_add_agg(user_id))[-5,64,0]  𝄀
+2026-05-01  ¦  2  𝄀
+2026-05-02  ¦  2
+create table hll_daily(dt date, sketch blob);
+insert into hll_daily select dt, hll_add_agg(user_id) from hll_01 group by dt;
+select hll_cardinality(hll_merge_agg(sketch)) from hll_daily;
+➤ hll_cardinality(hll_merge_agg(sketch))[-5,64,0]  𝄀
+3
+select hll_cardinality(hll_merge_agg(null));
+➤ hll_cardinality(hll_merge_agg(null))[-5,64,0]  𝄀
+0
+select hll_cardinality(null);
+➤ hll_cardinality(null)[-5,64,0]  𝄀
+NULL
+select hll_cardinality(cast('bad' as varbinary));
+invalid input: invalid HLL sketch: too short binary
+drop table hll_daily;
+drop table hll_01;

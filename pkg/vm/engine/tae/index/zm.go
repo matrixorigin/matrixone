@@ -747,6 +747,12 @@ func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 // anyIn has been called, so there must be a subvector in this zonemap
 // return lower bound and upper bound
 func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
+	if vec.IsConstNull() {
+		return 0, 0
+	}
+	if vec.GetNulls().Any() {
+		return 0, vec.Length()
+	}
 	if vec.Length() <= 3 {
 		return 0, vec.Length()
 	}
@@ -1040,6 +1046,12 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 }
 
 func (zm ZM) AnyIn(vec *vector.Vector) bool {
+	if vec.IsConstNull() {
+		return false
+	}
+	if vec.GetNulls().Any() {
+		return zm.anyInNullableVec(vec)
+	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		col := vector.MustFixedColNoTypeCheck[bool](vec)
@@ -1278,6 +1290,19 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 	default:
 		return true
 	}
+}
+
+func (zm ZM) anyInNullableVec(vec *vector.Vector) bool {
+	for i := 0; i < vec.Length(); i++ {
+		if vec.IsNull(uint64(i)) {
+			continue
+		}
+		value := vec.GetRawBytesAt(i)
+		if zm.AnyLEByValue(value) && zm.AnyGEByValue(value) {
+			return true
+		}
+	}
+	return false
 }
 
 // max = v1.max+v2.max

@@ -242,6 +242,27 @@ func TestVarExpressionExecutor(t *testing.T) {
 	// require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestVarExpressionExecutorWithoutResolveVariableFunc(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	varExpr := &plan.Expr{
+		Expr: &plan.Expr_V{
+			V: &plan.VarRef{
+				Name:   "test_var",
+				System: true,
+			},
+		},
+		Typ: plan.Type{
+			Id: int32(types.T_text),
+		},
+	}
+
+	varExprExecutor, err := NewExpressionExecutor(proc, varExpr)
+	require.NoError(t, err)
+	_, err = varExprExecutor.Eval(proc, nil, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "resolve variable function is not set")
+}
+
 func TestColumnExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

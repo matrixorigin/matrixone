@@ -121,6 +121,48 @@ SELECT id, base, gen_col FROM gen_t ORDER BY id;
 DROP TABLE gen_t;
 DROP TABLE gen_src;
 
+-- Duplicate source rows must not make generated columns come from a different
+-- source row than their referenced base columns.
+DROP TABLE IF EXISTS gen_dup_t;
+DROP TABLE IF EXISTS gen_dup_s;
+CREATE TABLE gen_dup_t (
+    id INT PRIMARY KEY,
+    base INT,
+    gen_col INT AS (ifnull(base, 0)) STORED
+);
+INSERT INTO gen_dup_t (id, base) VALUES (1, 5);
+CREATE TABLE gen_dup_s (t_id INT, new_base INT);
+INSERT INTO gen_dup_s VALUES (1, NULL), (1, 7);
+UPDATE gen_dup_t SET base = s.new_base FROM gen_dup_s s WHERE s.t_id = gen_dup_t.id;
+SELECT COUNT(*) AS valid_generated_row FROM gen_dup_t
+WHERE (base IS NULL AND gen_col = 0) OR (base = 7 AND gen_col = 7);
+DROP TABLE gen_dup_t;
+DROP TABLE gen_dup_s;
+
+-- Duplicate source rows must be deduped as whole rows. Per-column any_value()
+-- can synthesize (new_a = 7, new_b = 'from-null-a'), which is not present in
+-- the source.
+DROP TABLE IF EXISTS whole_row_t;
+DROP TABLE IF EXISTS whole_row_s;
+CREATE TABLE whole_row_t (
+    id INT PRIMARY KEY,
+    a INT,
+    b VARCHAR(20)
+);
+CREATE TABLE whole_row_s (
+    t_id INT,
+    new_a INT,
+    new_b VARCHAR(20)
+);
+INSERT INTO whole_row_t VALUES (1, 0, 'orig');
+INSERT INTO whole_row_s VALUES (1, NULL, 'from-null-a'), (1, 7, NULL);
+UPDATE whole_row_t SET a = s.new_a, b = s.new_b FROM whole_row_s s WHERE s.t_id = whole_row_t.id;
+SELECT COUNT(*) AS valid_whole_row FROM whole_row_t
+WHERE (a IS NULL AND b = 'from-null-a') OR (a = 7 AND b IS NULL);
+SELECT COUNT(*) AS synthesized_row FROM whole_row_t WHERE a = 7 AND b = 'from-null-a';
+DROP TABLE whole_row_t;
+DROP TABLE whole_row_s;
+
 -- FK target with a generated column: the FK forces the fallback planner
 -- (buildTableUpdate). Generated column protection must still apply there.
 DROP TABLE IF EXISTS fk_parent;
@@ -173,9 +215,8 @@ DROP TABLE ob_s;
 
 -- Duplicate-match on the fallback path: target row 1 is matched by both
 -- (10,1,...) and (11,1,...) source rows. Because dup_t has a FK the fallback
--- planner (buildTableUpdate) handles this, and needAggFilter must be set so
--- the AGG any_value() dedup runs. Without v3's needAggFilter wiring for
--- stmt.From, this would silently double-write target row 1.
+-- planner (buildTableUpdate) handles this. It must still dedup duplicate
+-- matches instead of silently double-writing target row 1.
 DROP TABLE IF EXISTS dup_t;
 DROP TABLE IF EXISTS dup_p;
 DROP TABLE IF EXISTS dup_s;
@@ -195,6 +236,171 @@ SELECT id, p_id, v FROM dup_t ORDER BY id;
 DROP TABLE dup_t;
 DROP TABLE dup_p;
 DROP TABLE dup_s;
+
+-- Fallback UPDATE ... FROM dedup must also pick a whole source row. FK on the
+-- target forces buildTableUpdate instead of the new bindUpdate path.
+DROP TABLE IF EXISTS fk_whole_row_t;
+DROP TABLE IF EXISTS fk_whole_row_p;
+DROP TABLE IF EXISTS fk_whole_row_s;
+CREATE TABLE fk_whole_row_p (id INT PRIMARY KEY);
+INSERT INTO fk_whole_row_p VALUES (1);
+CREATE TABLE fk_whole_row_t (
+    id INT PRIMARY KEY,
+    p_id INT,
+    a INT,
+    b VARCHAR(20),
+    FOREIGN KEY (p_id) REFERENCES fk_whole_row_p(id)
+);
+CREATE TABLE fk_whole_row_s (
+    t_id INT,
+    new_a INT,
+    new_b VARCHAR(20)
+);
+INSERT INTO fk_whole_row_t VALUES (1, 1, 0, 'orig');
+INSERT INTO fk_whole_row_s VALUES (1, NULL, 'from-null-a'), (1, 7, NULL);
+UPDATE fk_whole_row_t SET a = s.new_a, b = s.new_b FROM fk_whole_row_s s WHERE s.t_id = fk_whole_row_t.id;
+SELECT COUNT(*) AS valid_whole_row FROM fk_whole_row_t
+WHERE (a IS NULL AND b = 'from-null-a') OR (a = 7 AND b IS NULL);
+SELECT COUNT(*) AS synthesized_row FROM fk_whole_row_t WHERE a = 7 AND b = 'from-null-a';
+DROP TABLE fk_whole_row_t;
+DROP TABLE fk_whole_row_p;
+DROP TABLE fk_whole_row_s;
+
+-- Duplicate-match on the new UPDATE path without FK constraints must still
+-- update each target row once instead of producing duplicate primary keys.
+DROP TABLE IF EXISTS dup_no_fk_t;
+DROP TABLE IF EXISTS dup_no_fk_s;
+CREATE TABLE dup_no_fk_t (
+    id INT PRIMARY KEY,
+    v VARCHAR(20)
+);
+CREATE TABLE dup_no_fk_s (
+    t_id INT,
+    v VARCHAR(20)
+);
+INSERT INTO dup_no_fk_t VALUES (1, 'orig'), (2, 'orig');
+INSERT INTO dup_no_fk_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE dup_no_fk_t SET v = s.v FROM dup_no_fk_s s WHERE s.t_id = dup_no_fk_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM dup_no_fk_t;
+SELECT id, COUNT(*) AS per_id_cnt FROM dup_no_fk_t GROUP BY id ORDER BY id;
+SELECT v FROM dup_no_fk_t WHERE id = 2;
+DROP TABLE dup_no_fk_t;
+DROP TABLE dup_no_fk_s;
+
+-- A GEOMETRY32 target column has no comparator, so a dedup key built from the
+-- whole old target row would crash Node_PARTITION. Dedup now partitions on the
+-- target row_id, so UPDATE ... FROM with duplicate source matches succeeds on
+-- the new bindUpdate path (no FK) and updates each target row exactly once.
+DROP TABLE IF EXISTS geo_dedup_t;
+DROP TABLE IF EXISTS geo_dedup_s;
+CREATE TABLE geo_dedup_t (
+    id INT PRIMARY KEY,
+    g GEOMETRY32,
+    v VARCHAR(20)
+);
+CREATE TABLE geo_dedup_s (
+    t_id INT,
+    v VARCHAR(20)
+);
+INSERT INTO geo_dedup_t VALUES
+    (1, ST_GeomFromText('POINT(1 2)'), 'orig'),
+    (2, ST_GeomFromText('POINT(3 4)'), 'orig');
+INSERT INTO geo_dedup_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE geo_dedup_t SET v = s.v FROM geo_dedup_s s WHERE s.t_id = geo_dedup_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM geo_dedup_t;
+SELECT id, COUNT(*) AS per_id_cnt FROM geo_dedup_t GROUP BY id ORDER BY id;
+SELECT v FROM geo_dedup_t WHERE id = 2;
+DROP TABLE geo_dedup_t;
+DROP TABLE geo_dedup_s;
+
+-- Same GEOMETRY32 guard on the fallback path: a foreign key on the target
+-- forces buildTableUpdate, which must also dedup on row_id instead of the
+-- whole old row.
+DROP TABLE IF EXISTS geo_fk_dedup_t;
+DROP TABLE IF EXISTS geo_fk_dedup_p;
+DROP TABLE IF EXISTS geo_fk_dedup_s;
+CREATE TABLE geo_fk_dedup_p (id INT PRIMARY KEY);
+INSERT INTO geo_fk_dedup_p VALUES (1), (2);
+CREATE TABLE geo_fk_dedup_t (
+    id INT PRIMARY KEY,
+    p_id INT,
+    g GEOMETRY32,
+    v VARCHAR(20),
+    FOREIGN KEY (p_id) REFERENCES geo_fk_dedup_p(id)
+);
+CREATE TABLE geo_fk_dedup_s (
+    t_id INT,
+    v VARCHAR(20)
+);
+INSERT INTO geo_fk_dedup_t VALUES
+    (1, 1, ST_GeomFromText('POINT(1 2)'), 'orig'),
+    (2, 2, ST_GeomFromText('POINT(3 4)'), 'orig');
+INSERT INTO geo_fk_dedup_s VALUES (1, 'first'), (1, 'second'), (2, 'only');
+UPDATE geo_fk_dedup_t SET v = s.v FROM geo_fk_dedup_s s WHERE s.t_id = geo_fk_dedup_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM geo_fk_dedup_t;
+SELECT id, COUNT(*) AS per_id_cnt FROM geo_fk_dedup_t GROUP BY id ORDER BY id;
+SELECT v FROM geo_fk_dedup_t WHERE id = 2;
+DROP TABLE geo_fk_dedup_t;
+DROP TABLE geo_fk_dedup_p;
+DROP TABLE geo_fk_dedup_s;
+
+-- Fallback multi-target UPDATE ... FROM with LEFT JOIN target must still drop
+-- NULL rows of unmatched left-join targets. jt1.id=2 has no jt2 match, so
+-- jt2's row_id is NULL for that row; it must be filtered out of jt2's update
+-- pipeline while jt1.id=2 is still updated. Replacing the any_value dedup with
+-- a row_number() window must not lose this NULL-row safeguard.
+-- (Multi-target routes through the fallback buildTableUpdate path.)
+DROP TABLE IF EXISTS jt1;
+DROP TABLE IF EXISTS jt2;
+DROP TABLE IF EXISTS js;
+CREATE TABLE jt1 (id INT PRIMARY KEY, v VARCHAR(20));
+CREATE TABLE jt2 (id INT PRIMARY KEY, k INT, v VARCHAR(20));
+CREATE TABLE js (t_id INT, v VARCHAR(20));
+INSERT INTO jt1 VALUES (1, 'a'), (2, 'b');
+INSERT INTO jt2 VALUES (10, 1, 'x');
+INSERT INTO js VALUES (1, 'new1'), (2, 'new2');
+UPDATE jt1 LEFT JOIN jt2 ON jt2.k = jt1.id SET jt1.v = s.v, jt2.v = s.v FROM js s WHERE s.t_id = jt1.id;
+SELECT id, v FROM jt1 ORDER BY id;
+SELECT id, k, v FROM jt2 ORDER BY id;
+SELECT COUNT(*) AS jt2_cnt FROM jt2;
+DROP TABLE jt1;
+DROP TABLE jt2;
+DROP TABLE js;
+
+-- Single-target UPDATE ... FROM with a LEFT JOIN on the source side routes
+-- through the new bindUpdate path. The target is always INNER-joined so its
+-- row_id is never NULL, and dedup on row_id must succeed for duplicate source
+-- matches even when the source uses LEFT JOIN.
+DROP TABLE IF EXISTS left_src_t;
+DROP TABLE IF EXISTS left_src_s1;
+DROP TABLE IF EXISTS left_src_s2;
+CREATE TABLE left_src_t (id INT PRIMARY KEY, v VARCHAR(20));
+CREATE TABLE left_src_s1 (t_id INT, v VARCHAR(20));
+CREATE TABLE left_src_s2 (t_id INT, tag VARCHAR(10));
+INSERT INTO left_src_t VALUES (1, 'orig'), (2, 'orig');
+INSERT INTO left_src_s1 VALUES (1, 'first'), (1, 'second'), (2, 'only');
+INSERT INTO left_src_s2 VALUES (1, 'tag1');
+UPDATE left_src_t SET v = s1.v FROM left_src_s1 s1 LEFT JOIN left_src_s2 s2 ON s1.t_id = s2.t_id WHERE s1.t_id = left_src_t.id;
+SELECT COUNT(*) AS row_cnt, COUNT(DISTINCT id) AS id_cnt FROM left_src_t;
+SELECT id, COUNT(*) AS per_id_cnt FROM left_src_t GROUP BY id ORDER BY id;
+SELECT v FROM left_src_t WHERE id = 2;
+DROP TABLE left_src_t;
+DROP TABLE left_src_s1;
+DROP TABLE left_src_s2;
+
+-- UPDATE ... FROM dedup via row_id must also work on tables without an
+-- explicit PRIMARY KEY (fake-PK / hidden row_id only).
+DROP TABLE IF EXISTS no_pk_t;
+DROP TABLE IF EXISTS no_pk_s;
+CREATE TABLE no_pk_t (v VARCHAR(20));
+CREATE TABLE no_pk_s (t_id INT, v VARCHAR(20));
+INSERT INTO no_pk_t VALUES ('orig');
+INSERT INTO no_pk_s VALUES (1, 'first'), (1, 'second');
+UPDATE no_pk_t SET v = s.v FROM no_pk_s s;
+SELECT COUNT(*) AS row_cnt FROM no_pk_t;
+SELECT v FROM no_pk_t;
+DROP TABLE no_pk_t;
+DROP TABLE no_pk_s;
 
 DROP TABLE IF EXISTS company;
 DROP TABLE IF EXISTS vec_join_case;

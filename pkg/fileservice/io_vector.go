@@ -63,27 +63,31 @@ func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {
 
 	} else {
 		// minimal range
-		min = ptrTo(int64(math.MaxInt))
-		max = ptrTo(int64(0))
-		for _, entry := range i.Entries {
-			if entry.done {
-				continue
-			}
-			if entry.Offset < *min {
-				min = &entry.Offset
-			}
-			if entry.Size < 0 {
-				entry.Size = 0
-				max = nil
-			}
-			if max != nil {
-				if end := entry.Offset + entry.Size; end > *max {
-					max = &end
-				}
+		min, max = i.readMinimalRange()
+	}
+
+	return
+}
+
+func (i *IOVector) readMinimalRange() (min *int64, max *int64) {
+	min = ptrTo(int64(math.MaxInt))
+	max = ptrTo(int64(0))
+	for _, entry := range i.Entries {
+		if entry.done {
+			continue
+		}
+		if entry.Offset < *min {
+			min = &entry.Offset
+		}
+		if entry.Size < 0 {
+			max = nil
+		}
+		if max != nil {
+			if end := entry.Offset + entry.Size; end > *max {
+				max = &end
 			}
 		}
 	}
-
 	return
 }
 

@@ -238,6 +238,11 @@ func (s *service) parallelSendWithRetry(
 	ctx context.Context,
 	requests []txn.TxnRequest,
 	ignoreTxnErrorCodes map[uint16]struct{}) *rpc.SendResult {
+	const (
+		initialBackoff = 100 * time.Millisecond
+		maxBackoff     = time.Second
+	)
+	backoff := initialBackoff
 	for {
 		select {
 		case <-ctx.Done():
@@ -248,6 +253,10 @@ func (s *service) parallelSendWithRetry(
 			if err != nil {
 				err = moerr.AttachCause(ctx, err)
 				util.LogTxnSendRequestsFailed(s.logger, requests, err)
+				if !waitParallelSendRetryBackoff(ctx, backoff) {
+					return nil
+				}
+				backoff = nextParallelSendRetryBackoff(backoff, maxBackoff)
 				continue
 			}
 			util.LogTxnReceivedResponses(s.logger, result.Responses)
@@ -264,8 +273,37 @@ func (s *service) parallelSendWithRetry(
 				return result
 			}
 			result.Release()
+			if !waitParallelSendRetryBackoff(ctx, backoff) {
+				return nil
+			}
+			backoff = nextParallelSendRetryBackoff(backoff, maxBackoff)
 		}
 	}
+}
+
+func waitParallelSendRetryBackoff(ctx context.Context, backoff time.Duration) bool {
+	if backoff <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return ctx.Err() == nil
+	}
+}
+
+func nextParallelSendRetryBackoff(backoff, maxBackoff time.Duration) time.Duration {
+	if backoff <= 0 {
+		return maxBackoff
+	}
+	backoff *= 2
+	if backoff > maxBackoff {
+		return maxBackoff
+	}
+	return backoff
 }
 
 type txnContext struct {

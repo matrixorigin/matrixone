@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -42,6 +43,31 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	err = rewriteUpdateQueryLastNode(builder, updatePlanCtxs, lastNodeId)
 	if err != nil {
 		return nil, err
+	}
+	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId)
+	if err != nil {
+		return nil, err
+	}
+	if stmt.From != nil && len(stmt.From.Tables) > 0 && tblInfo.needAggFilter {
+		lastNode := builder.qry.Nodes[lastNodeId]
+		lastNodeId, _, _, err = builder.appendRowNumberDedupNode(
+			queryBindCtx,
+			lastNodeId,
+			lastNode,
+			lastNode.BindingTags[0],
+			fallbackUpdateFromDedupPartitionCols(updatePlanCtxs),
+		)
+		if err != nil {
+			return nil, err
+		}
+		// Duplicate source matches are now deduped by the row_number() window
+		// above, so the per-table plan must skip the any_value aggregation. Keep
+		// needAggFilter set, though: it also drives the join-target NULL-row
+		// filter (row_id IS NOT NULL) that must survive for joined-target
+		// UPDATE ... FROM.
+		for _, updatePlanCtx := range updatePlanCtxs {
+			updatePlanCtx.dedupByRowNumber = true
+		}
 	}
 
 	sourceStep := builder.appendStep(lastNodeId)
@@ -145,7 +171,7 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, col.Typ)
+					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), posExpr, col.Typ)
 					if err != nil {
 						return err
 					}
@@ -178,7 +204,7 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
 					if err != nil {
 						return err
 					}
@@ -188,6 +214,86 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 		idx = planCtx.updateColLength + len(tableDef.Cols)
 	}
 	return nil
+}
+
+func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32) error {
+	selectNode := builder.qry.Nodes[lastNodeId]
+	tableBase := int32(0)
+	for _, upPlanCtx := range planCtxs {
+		tableDef := upPlanCtx.tableDef
+		hasGenerated := false
+		for _, col := range tableDef.Cols {
+			if col.GeneratedCol != nil {
+				hasGenerated = true
+				break
+			}
+		}
+		if hasGenerated {
+			baseLookup := make([]*plan.Expr, len(tableDef.Cols))
+			for ci, col := range tableDef.Cols {
+				if newOff, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
+					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(newOff)]
+				} else {
+					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(ci)]
+				}
+			}
+			for ci, col := range tableDef.Cols {
+				if col.GeneratedCol == nil {
+					continue
+				}
+				if _, alreadySet := upPlanCtx.updateColPosMap[col.Name]; alreadySet {
+					// SET on a stored generated column was rejected earlier
+					// (or dropped for SET = DEFAULT); should not happen here.
+					continue
+				}
+				genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, baseLookup, 0)
+				insertPos := int(tableBase) + len(tableDef.Cols) + upPlanCtx.updateColLength
+				selectNode.ProjectList = append(selectNode.ProjectList, nil)
+				copy(selectNode.ProjectList[insertPos+1:], selectNode.ProjectList[insertPos:])
+				selectNode.ProjectList[insertPos] = genExpr
+				newOffset := int32(insertPos) - tableBase
+				upPlanCtx.updateColPosMap[col.Name] = int(newOffset)
+				upPlanCtx.updateColLength++
+				baseLookup[ci] = genExpr
+			}
+		}
+		tableBase += int32(len(tableDef.Cols) + upPlanCtx.updateColLength)
+	}
+
+	for _, upPlanCtx := range planCtxs {
+		tableDef := upPlanCtx.tableDef
+		for idx, col := range tableDef.Cols {
+			// row_id, compPrimaryKey, clusterByKey are not inserted from old data.
+			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+				continue
+			}
+			if offset, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
+				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, offset)
+			} else {
+				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, idx)
+			}
+		}
+	}
+
+	return nil
+}
+
+// fallbackUpdateFromDedupPartitionCols returns the projection positions used to
+// dedup duplicate source matches on the fallback (buildTableUpdate) path. The
+// key is each updated target table's row_id, a stable row identity, rather than
+// the whole old target row: partitioning on every old column would crash on
+// GEOMETRY32 (no comparator), miss dedup on float columns holding NaN
+// (NaN != NaN), and wrongly merge distinct rows whose columns happen to match.
+func fallbackUpdateFromDedupPartitionCols(planCtxs []*dmlPlanCtx) []int32 {
+	partitionCols := make([]int32, 0)
+	offset := int32(0)
+	for _, planCtx := range planCtxs {
+		if planCtx.updateColLength > 0 && planCtx.rowIdPos >= 0 {
+			partitionCols = append(partitionCols, offset+int32(planCtx.rowIdPos))
+		}
+		offset += int32(len(planCtx.tableDef.Cols) + planCtx.updateColLength)
+	}
+	return partitionCols
 }
 
 func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo) (int32, []*dmlPlanCtx, error) {
@@ -242,7 +348,21 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 			}
 		}
 
-		for colName, updateKey := range updateKeys {
+		// Emit the update columns in a deterministic order. updateKeys is a Go
+		// map, so ranging it directly appended the update exprs to the project
+		// list (and recorded updateColPosMap) in random order across runs — the
+		// per-target column-block half of the same nondeterministic-layout bug
+		// the table-order fix in getUpdateTableInfo addresses. Sorting the column
+		// names emits exactly the same set in a stable order. (Order only affects
+		// layout, not correctness: downstream looks columns up by name via
+		// updateColPosMap, not by position.)
+		updateColNames := make([]string, 0, len(updateKeys))
+		for colName := range updateKeys {
+			updateColNames = append(updateColNames, colName)
+		}
+		sort.Strings(updateColNames)
+		for _, colName := range updateColNames {
+			updateKey := updateKeys[colName]
 			for _, coldef := range tableDef.Cols {
 				if coldef.Name == colName && isEnumOrSetPlanType(&coldef.Typ) {
 					updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
@@ -296,71 +416,6 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	lastNodeId, err := builder.bindSelect(selectAst, bindCtx, false)
 	if err != nil {
 		return -1, nil, err
-	}
-
-	// Recompute generated columns after binding so the values are based on the
-	// post-update base columns. Mirrors the main bind_update.go path; without
-	// this, fallback (FK targets etc.) would leave stored generated columns
-	// holding stale values. Must run BEFORE insertColPos is constructed so the
-	// new ProjectList positions are reflected.
-	selectNode := builder.qry.Nodes[lastNodeId]
-	tableBase := int32(0)
-	for i := range aliasList {
-		tableDef := tableInfo.tableDefs[i]
-		upPlanCtx := updatePlanCtxs[i]
-		hasGenerated := false
-		for _, col := range tableDef.Cols {
-			if col.GeneratedCol != nil {
-				hasGenerated = true
-				break
-			}
-		}
-		if hasGenerated {
-			// Per-target lookup: colIdx → ProjectList Expr that holds the
-			// post-update value of that base column.
-			baseLookup := make([]*plan.Expr, len(tableDef.Cols))
-			for ci, col := range tableDef.Cols {
-				if newOff, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
-					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(newOff)]
-				} else {
-					baseLookup[ci] = selectNode.ProjectList[tableBase+int32(ci)]
-				}
-			}
-			for _, col := range tableDef.Cols {
-				if col.GeneratedCol == nil {
-					continue
-				}
-				if _, alreadySet := upPlanCtx.updateColPosMap[col.Name]; alreadySet {
-					// SET on a stored generated column was rejected earlier
-					// (or dropped for SET = DEFAULT); should not happen here.
-					continue
-				}
-				genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, baseLookup, 0)
-				newOffset := int32(len(selectNode.ProjectList)) - tableBase
-				selectNode.ProjectList = append(selectNode.ProjectList, genExpr)
-				upPlanCtx.updateColPosMap[col.Name] = int(newOffset)
-				upPlanCtx.updateColLength++
-			}
-		}
-		tableBase += int32(len(tableDef.Cols) + upPlanCtx.updateColLength)
-	}
-
-	// insertColPos may reference positions added by generated-column rewrite
-	// above, so build it now that updateColPosMap is final.
-	for i := range aliasList {
-		tableDef := tableInfo.tableDefs[i]
-		upPlanCtx := updatePlanCtxs[i]
-		for idx, col := range tableDef.Cols {
-			// row_id, compPrimaryKey, clusterByKey are not inserted from old data.
-			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-				continue
-			}
-			if offset, ok := upPlanCtx.updateColPosMap[col.Name]; ok {
-				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, offset)
-			} else {
-				upPlanCtx.insertColPos = append(upPlanCtx.insertColPos, idx)
-			}
-		}
 	}
 
 	return lastNodeId, updatePlanCtxs, nil

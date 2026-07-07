@@ -156,6 +156,11 @@ func (bf *CBloomFilter) Valid() bool {
 	return (bf != nil && bf.ptr != nil)
 }
 
+// Exact reports whether membership is exact. A bloom filter is approximate (it
+// has false positives), so this is always false. It lets CBloomFilter satisfy
+// the engine.MembershipFilter interface alongside the exact bitset filters.
+func (bf *CBloomFilter) Exact() bool { return false }
+
 // Add inserts a byte slice into the bloom filter.
 func (bf *CBloomFilter) Add(data []byte) {
 	if bf == nil || bf.ptr == nil || data == nil {

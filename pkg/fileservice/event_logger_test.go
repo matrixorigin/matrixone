@@ -57,6 +57,49 @@ func TestEventLoggerPoolCleanup(t *testing.T) {
 	}
 }
 
+func TestEventLoggerDropsAfterLimit(t *testing.T) {
+	ctx := WithEventLogger(context.Background())
+	logger := ctx.Value(EventLoggerKey).(*eventLogger)
+
+	for i := 0; i < maxEventLoggerEvents+7; i++ {
+		LogEvent(ctx, str_to_cache_data_begin, i)
+	}
+
+	logger.mu.Lock()
+	if n := len(*logger.events); n != maxEventLoggerEvents {
+		t.Fatalf("got %d events, want %d", n, maxEventLoggerEvents)
+	}
+	if logger.dropped != 7 {
+		t.Fatalf("got %d dropped events, want 7", logger.dropped)
+	}
+	logger.mu.Unlock()
+
+	LogSlowEvent(ctx, time.Hour)
+}
+
+func TestWithoutEventLogger(t *testing.T) {
+	ctx := WithEventLogger(context.Background())
+	logger := ctx.Value(EventLoggerKey).(*eventLogger)
+
+	child := withoutEventLogger(ctx)
+	LogEvent(child, str_to_cache_data_begin)
+
+	logger.mu.Lock()
+	if n := len(*logger.events); n != 0 {
+		t.Fatalf("got %d parent events after child log, want 0", n)
+	}
+	logger.mu.Unlock()
+
+	LogEvent(ctx, str_to_cache_data_begin)
+	logger.mu.Lock()
+	if n := len(*logger.events); n != 1 {
+		t.Fatalf("got %d parent events after parent log, want 1", n)
+	}
+	logger.mu.Unlock()
+
+	LogSlowEvent(ctx, time.Hour)
+}
+
 func BenchmarkEventLogger(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ctx := context.Background()

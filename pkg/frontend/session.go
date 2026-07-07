@@ -145,6 +145,8 @@ type Session struct {
 
 	priv *privilege
 
+	ddlOwnerRoleID uint32
+
 	errInfo *errInfo
 
 	cache       *privilegeCache
@@ -1191,6 +1193,20 @@ func (ses *Session) RemovePrepareStmt(name string) {
 	delete(ses.prepareStmts, name)
 }
 
+// RemoveAllPrepareStmts closes and drops every cached prepared statement. It is
+// used when a session variable that changes how statements are rewritten (e.g.
+// remap_rewrites / enable_remap_hint) is set: a prepared statement bakes in the
+// rewrite state captured at PREPARE time, so it must be invalidated when that
+// state changes, otherwise a later EXECUTE would run with a stale rewrite.
+func (ses *Session) RemoveAllPrepareStmts() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, stmt := range ses.prepareStmts {
+		stmt.Close()
+	}
+	ses.prepareStmts = make(map[string]*PrepareStmt)
+}
+
 // GetUserDefinedVar gets value of the config
 func (ses *Session) GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error) {
 	// if val, ok := ses.configs[dbName+"-"+varName]; ok {
@@ -1719,6 +1735,17 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 	return
 }
 
+func (ses *Session) refreshGlobalSysVars(ctx context.Context, bh BackgroundExec) (err error) {
+	var sv *SystemVariables
+	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.gSysVars = sv
+	return
+}
+
 func (ses *Session) GetPrivilege() *privilege {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1729,6 +1756,22 @@ func (ses *Session) SetPrivilege(priv *privilege) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.priv = priv
+}
+
+func (ses *Session) SetDDLOwnerRoleID(roleID uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.ddlOwnerRoleID = roleID
+}
+
+func (ses *Session) GetDDLOwnerRoleID() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.ddlOwnerRoleID
+}
+
+func (ses *Session) ClearDDLOwnerRoleID() {
+	ses.SetDDLOwnerRoleID(0)
 }
 
 func (ses *Session) SetFromRealUser(b bool) {

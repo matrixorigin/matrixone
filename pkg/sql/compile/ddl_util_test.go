@@ -15,14 +15,58 @@
 package compile
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestAlterIndexVisibleEscaping is a regression for the ALTER TABLE ... ALTER
+// INDEX ... VISIBLE/INVISIBLE catalog write (ddl.go, updateMoIndexesVisibleFormat).
+// A backticked index identifier may contain single quotes and backslashes, and
+// the MySQL scanner treats backslash as an escape inside '...', so an unescaped
+// name could corrupt or break out of `name = '...'`. The fix routes the name
+// through sqlquote.EscapeString, same as the AUTO_UPDATE / REINDEX branches.
+func TestAlterIndexVisibleEscaping(t *testing.T) {
+	// Index names crafted to break out of name = '...': a single quote, a
+	// trailing backslash (would otherwise swallow the closing quote), and a
+	// quote-then-statement injection attempt.
+	names := []string{
+		"idx`weird",
+		`idx\name`,
+		`idx'; drop table mo_indexes; --`,
+		`trailing\`,
+		`both'and\slash`,
+	}
+	for _, name := range names {
+		for _, visible := range []int{0, 1} {
+			// Build the SQL exactly as the fixed visibility branch does.
+			sql := fmt.Sprintf(updateMoIndexesVisibleFormat, visible, uint64(42),
+				sqlquote.EscapeString(name))
+
+			// '%s' + EscapeString == sqlquote.String: the name must be fully quoted.
+			require.Contains(t, sql, "name = "+sqlquote.String(name),
+				"name %q not properly escaped in %q", name, sql)
+
+			// It must parse to exactly ONE statement — a break-out would yield
+			// multiple statements (e.g. the injected DROP) or a parse error.
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err, "name %q produced unparseable SQL: %q", name, sql)
+			require.Len(t, stmts, 1, "name %q broke out into %d statements: %q", name, len(stmts), sql)
+			for _, s := range stmts {
+				s.Free()
+			}
+		}
+	}
+}
 
 func TestCoverage_hasSpecialChars(t *testing.T) {
 	tests := []struct {
@@ -166,25 +210,37 @@ func TestCoverage_getInterfaceValue(t *testing.T) {
 	}
 }
 
-func TestCoverage_isMissingTableForFkCleanup(t *testing.T) {
+func TestCoverage_isMissingTableByIdForFkCleanup(t *testing.T) {
 	t.Run("no such table error", func(t *testing.T) {
 		err := moerr.NewNoSuchTableNoCtx("db", "tbl")
-		assert.True(t, isMissingTableForFkCleanup(err))
+		assert.True(t, isMissingTableByIdForFkCleanup(err))
 	})
 
 	t.Run("internal error with can not find table", func(t *testing.T) {
 		err := moerr.NewInternalErrorNoCtx("can not find table by id 123")
-		assert.True(t, isMissingTableForFkCleanup(err))
+		assert.True(t, isMissingTableByIdForFkCleanup(err))
 	})
 
 	t.Run("internal error without matching message", func(t *testing.T) {
 		err := moerr.NewInternalErrorNoCtx("something else")
-		assert.False(t, isMissingTableForFkCleanup(err))
+		assert.False(t, isMissingTableByIdForFkCleanup(err))
 	})
 
 	t.Run("other error type", func(t *testing.T) {
 		err := moerr.NewInvalidInputNoCtx("bad input")
-		assert.False(t, isMissingTableForFkCleanup(err))
+		assert.False(t, isMissingTableByIdForFkCleanup(err))
+	})
+}
+
+func TestCoverage_isMissingTableByNameForDropDatabase(t *testing.T) {
+	t.Run("no such table error", func(t *testing.T) {
+		err := moerr.NewNoSuchTableNoCtx("db", "tbl")
+		assert.True(t, isMissingTableByNameForDropDatabase(err))
+	})
+
+	t.Run("internal table id error is not a name lookup miss", func(t *testing.T) {
+		err := moerr.NewInternalErrorNoCtx("can not find table by id 123")
+		assert.False(t, isMissingTableByNameForDropDatabase(err))
 	})
 }
 
@@ -338,12 +394,12 @@ func TestCoverage_getInterfaceValueUint(t *testing.T) {
 func TestCoverage_isMissingTableContainsSubstring(t *testing.T) {
 	// Verify exact substring matching
 	err := moerr.NewInternalErrorNoCtx("prefix can not find table by id suffix")
-	result := isMissingTableForFkCleanup(err)
+	result := isMissingTableByIdForFkCleanup(err)
 	assert.True(t, result)
 
 	// Check case sensitivity
 	errCase := moerr.NewInternalErrorNoCtx("CAN NOT FIND TABLE BY ID")
-	resultCase := isMissingTableForFkCleanup(errCase)
+	resultCase := isMissingTableByIdForFkCleanup(errCase)
 	// The function uses strings.Contains which is case-sensitive
 	assert.Equal(t, strings.Contains(errCase.Error(), "can not find table by id"), resultCase)
 }

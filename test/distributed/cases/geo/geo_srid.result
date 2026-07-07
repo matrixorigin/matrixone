@@ -1,0 +1,58 @@
+select st_srid(st_geomfromtext('POINT(1 2)', 4326)) as srid_4326;
+srid_4326
+4326
+select st_srid(st_geomfromtext('POINT(1 2)', 0)) as srid_0;
+srid_0
+0
+select st_srid(st_geomfromtext('POINT(1 2)')) as srid_default;
+srid_default
+0
+select st_srid(st_centroid(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326))) as srid_centroid;
+srid_centroid
+4326
+select st_srid(st_boundary(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326))) as srid_boundary;
+srid_boundary
+4326
+select st_srid(st_envelope(st_geomfromtext('LINESTRING(0 0,1 1)', 4326))) as srid_envelope;
+srid_envelope
+4326
+select st_srid(st_startpoint(st_geomfromtext('LINESTRING(7 8,9 10)', 4326))) as srid_startpoint;
+srid_startpoint
+4326
+select st_srid(st_geometryn(st_geomfromtext('MULTIPOINT(1 1,2 2)', 4326), 1)) as srid_geometryn;
+srid_geometryn
+4326
+select st_astext(st_geomfromtext('POINT(1 2)', 4326)) as wkt_with_srid;
+wkt_with_srid
+POINT(1 2)
+drop database if exists geo_srid;
+create database geo_srid;
+use geo_srid;
+drop table if exists gs;
+create table gs(g point srid 4326);
+show create table gs;
+Table    Create Table
+gs    CREATE TABLE `gs` (\n  `g` point srid 4326 DEFAULT NULL\n)
+insert into gs values (st_geomfromtext('POINT(1 1)', 4326));
+insert into gs values (st_geomfromtext('POINT(2 2)', 4326));
+select st_astext(g) as wkt, st_srid(g) as srid from gs order by 1;
+wkt    srid
+POINT(1 1)    4326
+POINT(2 2)    4326
+insert into gs values (st_geomfromtext('POINT(3 3)', 0));
+invalid input: The SRID of the geometry does not match the SRID of the column. The SRID of the geometry is 0, but the SRID of the column is 4326.
+insert into gs values (st_geomfromtext('POINT(3 3)'));
+invalid input: The SRID of the geometry does not match the SRID of the column. The SRID of the geometry is 0, but the SRID of the column is 4326.
+drop table gs;
+drop table if exists gp;
+create table gp(g geometry);
+insert into gp values (st_geomfromtext('POINT(1 1)'));
+select st_srid(g) as plain_srid from gp;
+plain_srid
+0
+drop table gp;
+drop database geo_srid;
+select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(3 4)', 0));
+invalid input: Binary geometry function ST_DISTANCE given two geometries of different srids: 4326 and 0, which should have been identical.
+select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))', 4326), st_geomfromtext('POINT(2 2)', 0));
+invalid input: Binary geometry function ST_CONTAINS given two geometries of different srids: 4326 and 0, which should have been identical.

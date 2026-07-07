@@ -359,7 +359,9 @@ func TestAddRewriteHints_ValidSimple(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, sel.RewriteOption)
 	require.Contains(t, sel.RewriteOption.Rewrites, "db1.t1")
-	r := sel.RewriteOption.Rewrites["db1.t1"]
+	chain := sel.RewriteOption.Rewrites["db1.t1"]
+	require.Len(t, chain, 1)
+	r := chain[0]
 	require.Equal(t, "t1", r.TableName)
 	require.Equal(t, "db1", r.DbName)
 	switch r.Stmt.(type) {
@@ -380,13 +382,79 @@ func TestAddRewriteHints_ValidWithBangPlusComment(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, sel.RewriteOption)
 	require.Contains(t, sel.RewriteOption.Rewrites, "db2.t2")
-	r := sel.RewriteOption.Rewrites["db2.t2"]
+	chain := sel.RewriteOption.Rewrites["db2.t2"]
+	require.Len(t, chain, 1)
+	r := chain[0]
 	require.Equal(t, "t2", r.TableName)
 	require.Equal(t, "db2", r.DbName)
 	switch r.Stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
 	default:
 		t.Fatalf("unexpected rewrite stmt type: %T", r.Stmt)
+	}
+}
+
+func TestAddRewriteHints_RemapDb(t *testing.T) {
+	t.Run("valid multi", func(t *testing.T) {
+		stmts, err := parseAndApply(t, `/*+ {"remapdb": {"a": "b", "x": "y"}} */ select * from a.t`)
+		require.NoError(t, err)
+		sel, ok := stmts[0].(*tree.Select)
+		require.True(t, ok)
+		require.NotNil(t, sel.RewriteOption)
+		require.Equal(t, map[string]string{"a": "b", "x": "y"}, sel.RewriteOption.RemapDb)
+	})
+	t.Run("invalid identifier", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"a.b": "c"}} */ select 1`)
+		require.ErrorContains(t, err, "valid identifiers")
+	})
+	t.Run("chaining rejected", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"x": "y", "y": "z"}} */ select 1`)
+		require.ErrorContains(t, err, "must not be both a source and a destination")
+	})
+	t.Run("self map rejected", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"x": "x"}} */ select 1`)
+		require.ErrorContains(t, err, "must not be both a source and a destination")
+	})
+	t.Run("system database source rejected", func(t *testing.T) {
+		for _, src := range []string{"mysql", "information_schema", "system", "system_metrics", "mo_catalog", "mo_anything"} {
+			_, err := parseAndApply(t, `/*+ {"remapdb": {"`+src+`": "y"}} */ select 1`)
+			require.ErrorContains(t, err, "must not remap a system database", "src=%s", src)
+		}
+	})
+	t.Run("system database destination rejected", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"x": "mo_catalog"}} */ select 1`)
+		require.ErrorContains(t, err, "must not remap a system database")
+	})
+}
+
+func TestIsSystemDatabase(t *testing.T) {
+	for _, n := range []string{"mysql", "MySQL", "information_schema", "system", "system_metrics", "mo_catalog", "mo_task", "mo_foo", "MO_BAR"} {
+		require.True(t, IsSystemDatabase(n), n)
+	}
+	for _, n := range []string{"db1", "users", "moose", "system2", "mo", "mox"} {
+		require.False(t, IsSystemDatabase(n), n)
+	}
+}
+
+func TestAddRewriteHints_ChainArray(t *testing.T) {
+	sql := `/*+ {"rewrites": {"db1.t1": ["select * from db1.t1 where a < 4", "select * from db1.t1 where a > 1"]}} */ select * from db1.t1`
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+
+	sel, ok := stmts[0].(*tree.Select)
+	require.True(t, ok)
+	require.NotNil(t, sel.RewriteOption)
+	chain := sel.RewriteOption.Rewrites["db1.t1"]
+	require.Len(t, chain, 2)
+	for _, r := range chain {
+		require.Equal(t, "t1", r.TableName)
+		require.Equal(t, "db1", r.DbName)
+		switch r.Stmt.(type) {
+		case *tree.Select, *tree.ParenSelect:
+		default:
+			t.Fatalf("unexpected rewrite stmt type: %T", r.Stmt)
+		}
 	}
 }
 
@@ -480,6 +548,46 @@ func TestAddRewriteHints_ParenSelectTopLevel(t *testing.T) {
 	}
 	require.NotNil(t, ps.Select)
 	require.NotNil(t, ps.Select.RewriteOption)
+}
+
+func TestAddRewriteHints_TrailingLineComment(t *testing.T) {
+	// A trailing "stmt; -- comment" splits into two fragments but parses into a
+	// single statement. The comment-only tail must not be counted, otherwise the
+	// hint/statement counts mismatch and this valid query is rejected.
+	t.Run("select with trailing line comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "select 1; -- a trailing comment")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+	})
+
+	t.Run("use with trailing line comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "use db1; -- USE is not remapped")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+	})
+
+	t.Run("trailing block comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "select 1; /* trailing block */")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+	})
+
+	t.Run("hint survives with trailing comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "/*+ {\"rewrites\": {\"db1.t1\": \"select 1\"}} */ select * from db1.t1; -- tail")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		sel := stmts[0].(*tree.Select)
+		require.NotNil(t, sel.RewriteOption)
+		require.Contains(t, sel.RewriteOption.Rewrites, "db1.t1")
+	})
+
+	t.Run("comment-only input is accepted", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "-- just a comment")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		_, ok := stmts[0].(*tree.EmptyStmt)
+		require.True(t, ok)
+	})
 }
 
 func TestAddRewriteHints_ParseHintsBug_MismatchedInputs(t *testing.T) {

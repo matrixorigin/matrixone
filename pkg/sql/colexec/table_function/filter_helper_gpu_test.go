@@ -1,0 +1,285 @@
+//go:build gpu
+
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package table_function
+
+import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
+	"github.com/stretchr/testify/require"
+)
+
+// mockFilterBuilder captures SetFilterColumns / AddFilterChunk calls so tests
+// can assert the bytes the table function hands to CGo without actually
+// spinning up a GPU index.
+type mockFilterBuilder struct {
+	metaJSON string
+	chunks   []mockChunk
+}
+
+type mockChunk struct {
+	colIdx     uint32
+	data       []byte
+	nullBitmap []uint32
+	nrows      uint64
+}
+
+func (m *mockFilterBuilder) SetFilterColumns(colMetaJSON string) {
+	m.metaJSON = colMetaJSON
+}
+
+func (m *mockFilterBuilder) AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error {
+	// Copy: the helper hands us slices aliased over the original value which
+	// goes out of scope after the loop iteration.
+	cp := make([]byte, len(data))
+	copy(cp, data)
+	var nb []uint32
+	if nullBitmap != nil {
+		nb = make([]uint32, len(nullBitmap))
+		copy(nb, nullBitmap)
+	}
+	m.chunks = append(m.chunks, mockChunk{colIdx: colIdx, data: cp, nullBitmap: nb, nrows: nrows})
+	return nil
+}
+
+func TestInitFilterColumnsSerialisesJSON(t *testing.T) {
+	mb := &mockFilterBuilder{}
+	cols := []cuvsfilter.ColumnMeta{
+		{Name: "price", TypeOid: cuvsfilter.ColTypeFloat32},
+		{Name: "cat", TypeOid: cuvsfilter.ColTypeInt64},
+	}
+	require.NoError(t, initFilterColumns(mb, cols))
+	require.JSONEq(t,
+		`[{"name":"price","type":2},{"name":"cat","type":1}]`,
+		mb.metaJSON,
+	)
+}
+
+func TestInitFilterColumnsEmptyIsNoop(t *testing.T) {
+	mb := &mockFilterBuilder{}
+	require.NoError(t, initFilterColumns(mb, nil))
+	require.Equal(t, "", mb.metaJSON)
+}
+
+// Builds a one-row *vector.Vector holding `val` of the given types.T, for use
+// as a stand-in table-function argVec in appendFilterRow tests.
+func singleRowVec[T any](t *testing.T, mp *mpool.MPool, oid types.T, val T) *vector.Vector {
+	t.Helper()
+	v := vector.NewVec(types.T_int64.ToType()) // placeholder, overwritten below
+	v.ResetWithSameType()
+	var width int32 = 8
+	switch oid {
+	case types.T_int32, types.T_float32:
+		width = 4
+	}
+	v.ResetWithNewType(&types.Type{Oid: oid, Size: width, Width: width})
+	require.NoError(t, vector.AppendFixed(v, val, false, mp))
+	return v
+}
+
+// Exercises every supported FilterColType: verify the byte payload written to
+// the builder matches the native in-memory representation of the value.
+func TestAppendFilterRowAllTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	baseOffset := 3 // matches cagra_create / ivfpq_create arg layout
+
+	cols := []cuvsfilter.ColumnMeta{
+		{Name: "a", TypeOid: cuvsfilter.ColTypeInt32},
+		{Name: "b", TypeOid: cuvsfilter.ColTypeInt64},
+		{Name: "c", TypeOid: cuvsfilter.ColTypeFloat32},
+		{Name: "d", TypeOid: cuvsfilter.ColTypeFloat64},
+		{Name: "e", TypeOid: cuvsfilter.ColTypeUint64},
+	}
+
+	// Fill argVecs with 3 dummy "base" slots + 5 filter slots.
+	argVecs := make([]*vector.Vector, baseOffset+len(cols))
+	for i := 0; i < baseOffset; i++ {
+		argVecs[i] = singleRowVec(t, mp, types.T_int64, int64(0))
+	}
+	argVecs[baseOffset+0] = singleRowVec(t, mp, types.T_int32, int32(-42))
+	argVecs[baseOffset+1] = singleRowVec(t, mp, types.T_int64, int64(0x1122334455667788))
+	argVecs[baseOffset+2] = singleRowVec(t, mp, types.T_float32, float32(3.14))
+	argVecs[baseOffset+3] = singleRowVec(t, mp, types.T_float64, float64(2.718281828))
+	argVecs[baseOffset+4] = singleRowVec(t, mp, types.T_uint64, uint64(0xDEADBEEFCAFEBABE))
+
+	mb := &mockFilterBuilder{}
+	require.NoError(t, appendFilterRow(mb, cols, argVecs, baseOffset, 0))
+
+	require.Len(t, mb.chunks, 5)
+
+	// Native little-endian byte patterns on x86_64.
+	require.Equal(t, uint32(0), mb.chunks[0].colIdx)
+	require.Equal(t, []byte{0xD6, 0xFF, 0xFF, 0xFF}, mb.chunks[0].data) // -42 as int32 LE
+	require.Equal(t, uint64(1), mb.chunks[0].nrows)
+
+	require.Equal(t, uint32(1), mb.chunks[1].colIdx)
+	require.Equal(t,
+		[]byte{0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11},
+		mb.chunks[1].data)
+
+	require.Equal(t, uint32(2), mb.chunks[2].colIdx)
+	require.Len(t, mb.chunks[2].data, 4)
+
+	require.Equal(t, uint32(3), mb.chunks[3].colIdx)
+	require.Len(t, mb.chunks[3].data, 8)
+
+	require.Equal(t, uint32(4), mb.chunks[4].colIdx)
+	require.Equal(t,
+		[]byte{0xBE, 0xBA, 0xFE, 0xCA, 0xEF, 0xBE, 0xAD, 0xDE},
+		mb.chunks[4].data)
+}
+
+// A NULL filter-column value is accepted and forwarded with a nullBitmap so
+// the C++ side can record the validity bit. Non-null rows pass nil so the
+// column stays dense (no validity allocation) in the common case.
+func TestAppendFilterRowNullMarksValidity(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vNull := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(vNull, int64(0), true, mp)) // null
+
+	vLive := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(vLive, int64(42), false, mp))
+
+	cols := []cuvsfilter.ColumnMeta{
+		{Name: "a", TypeOid: cuvsfilter.ColTypeInt64},
+	}
+
+	// Null row → bitmap [1] (bit 0 = 1 = null, MO null-mask semantics).
+	mb := &mockFilterBuilder{}
+	require.NoError(t, appendFilterRow(mb, cols, []*vector.Vector{nil, nil, nil, vNull}, 3, 0))
+	require.Len(t, mb.chunks, 1)
+	require.Equal(t, []uint32{1}, mb.chunks[0].nullBitmap)
+	require.Equal(t, uint64(1), mb.chunks[0].nrows)
+
+	// Live row → nil bitmap (fast path; column stays dense).
+	mb = &mockFilterBuilder{}
+	require.NoError(t, appendFilterRow(mb, cols, []*vector.Vector{nil, nil, nil, vLive}, 3, 0))
+	require.Len(t, mb.chunks, 1)
+	require.Nil(t, mb.chunks[0].nullBitmap)
+	require.Equal(t, uint64(1), mb.chunks[0].nrows)
+}
+
+// TestIncludeBytesPerRowFromCols asserts the per-row size matches the
+// sum of element sizes plus a packed null-mask trailing byte. Mirrors
+// the cuvscdc.CdcIncludeBytesPerRow layout exactly so the small-tail
+// CDC writer produces records the search-side replay can decode.
+func TestIncludeBytesPerRowFromCols(t *testing.T) {
+	require.Equal(t, 0, includeBytesPerRowFromCols(nil))
+
+	// 1 int32 (4) + 1 null-mask byte = 5.
+	cols := []cuvsfilter.ColumnMeta{{TypeOid: cuvsfilter.ColTypeInt32}}
+	require.Equal(t, 5, includeBytesPerRowFromCols(cols))
+
+	// int32 + int64 + float32 + float64 + uint64 = 4+8+4+8+8 = 32, plus
+	// ceil(5/8) = 1 mask byte → 33.
+	cols = []cuvsfilter.ColumnMeta{
+		{TypeOid: cuvsfilter.ColTypeInt32},
+		{TypeOid: cuvsfilter.ColTypeInt64},
+		{TypeOid: cuvsfilter.ColTypeFloat32},
+		{TypeOid: cuvsfilter.ColTypeFloat64},
+		{TypeOid: cuvsfilter.ColTypeUint64},
+	}
+	require.Equal(t, 33, includeBytesPerRowFromCols(cols))
+
+	// 9 columns → ceil(9/8) = 2 mask bytes.
+	cols = make([]cuvsfilter.ColumnMeta, 9)
+	for i := range cols {
+		cols[i] = cuvsfilter.ColumnMeta{TypeOid: cuvsfilter.ColTypeInt32}
+	}
+	require.Equal(t, 9*4+2, includeBytesPerRowFromCols(cols))
+}
+
+// TestEncodeIncludeRowFromArgVecs round-trips per-row include bytes
+// through the same layout cuvscdc.DecodeEventRecord consumes at
+// replay. Mirrors the all-types appendFilterRow case but writes into
+// our flat buffer instead of forwarding to the cuvs builder.
+func TestEncodeIncludeRowFromArgVecs(t *testing.T) {
+	mp := mpool.MustNewZero()
+	baseOffset := 3
+
+	cols := []cuvsfilter.ColumnMeta{
+		{Name: "a", TypeOid: cuvsfilter.ColTypeInt32},
+		{Name: "b", TypeOid: cuvsfilter.ColTypeInt64},
+		{Name: "c", TypeOid: cuvsfilter.ColTypeFloat32},
+		{Name: "d", TypeOid: cuvsfilter.ColTypeFloat64},
+		{Name: "e", TypeOid: cuvsfilter.ColTypeUint64},
+	}
+
+	argVecs := make([]*vector.Vector, baseOffset+len(cols))
+	for i := 0; i < baseOffset; i++ {
+		argVecs[i] = singleRowVec(t, mp, types.T_int64, int64(0))
+	}
+	argVecs[baseOffset+0] = singleRowVec(t, mp, types.T_int32, int32(-42))
+	argVecs[baseOffset+1] = singleRowVec(t, mp, types.T_int64, int64(0x1122334455667788))
+	argVecs[baseOffset+2] = singleRowVec(t, mp, types.T_float32, float32(3.14))
+	argVecs[baseOffset+3] = singleRowVec(t, mp, types.T_float64, float64(2.718281828))
+	argVecs[baseOffset+4] = singleRowVec(t, mp, types.T_uint64, uint64(0xDEADBEEFCAFEBABE))
+
+	got, err := encodeIncludeRowFromArgVecs(cols, argVecs, baseOffset, 0)
+	require.NoError(t, err)
+	require.Len(t, got, includeBytesPerRowFromCols(cols))
+
+	// int32 -42 LE
+	require.Equal(t, []byte{0xD6, 0xFF, 0xFF, 0xFF}, got[0:4])
+	// int64 LE
+	require.Equal(t,
+		[]byte{0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11},
+		got[4:12])
+	// uint64 LE
+	require.Equal(t,
+		[]byte{0xBE, 0xBA, 0xFE, 0xCA, 0xEF, 0xBE, 0xAD, 0xDE},
+		got[24:32])
+	// null mask: no nulls, trailing byte is 0.
+	require.Equal(t, byte(0), got[32])
+
+	// Nil cols → no allocation.
+	got, err = encodeIncludeRowFromArgVecs(nil, argVecs, baseOffset, 0)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+// TestEncodeIncludeRowFromArgVecs_NullMarks asserts a null cell sets
+// the corresponding bit in the trailing null-mask byte (LSB-first).
+func TestEncodeIncludeRowFromArgVecs_NullMarks(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vNull := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(vNull, int64(0), true, mp)) // null
+
+	cols := []cuvsfilter.ColumnMeta{{Name: "a", TypeOid: cuvsfilter.ColTypeInt64}}
+	got, err := encodeIncludeRowFromArgVecs(cols,
+		[]*vector.Vector{nil, nil, nil, vNull}, 3, 0)
+	require.NoError(t, err)
+	require.Len(t, got, 8+1)             // int64 + 1 mask byte
+	require.Equal(t, byte(0x01), got[8]) // bit 0 set → col 0 is null
+}
+
+func TestValidateFilterArgCount(t *testing.T) {
+	cols := []cuvsfilter.ColumnMeta{{Name: "a", TypeOid: cuvsfilter.ColTypeInt64}}
+
+	// Enough args.
+	argVecs := make([]*vector.Vector, 4) // 3 base + 1 filter
+	require.NoError(t, validateFilterArgCount(argVecs, 3, cols))
+
+	// Too few.
+	argVecs = make([]*vector.Vector, 3)
+	require.Error(t, validateFilterArgCount(argVecs, 3, cols))
+}

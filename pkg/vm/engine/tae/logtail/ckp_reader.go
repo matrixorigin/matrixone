@@ -436,7 +436,7 @@ func readMetaBatch(
 	fs fileservice.FileService,
 ) (metaBatch *batch.Batch, release func(), err error) {
 	metaVecs := containers.NewVectors(len(ckputil.MetaAttrs))
-	if _, release, err = ioutil.LoadColumnsData(
+	if _, release, _, err = ioutil.LoadColumnsData(
 		ctx,
 		ckputil.MetaSeqnums,
 		ckputil.MetaTypes,
@@ -1102,7 +1102,7 @@ func (reader *SyncTableIDReader) Read(ctx context.Context) (release func(), bat 
 	}
 
 	preTableIDVecs := containers.NewVectors(len(TableIDAttrs))
-	if _, release, err = ioutil.LoadColumnsData(
+	if _, release, _, err = ioutil.LoadColumnsData(
 		ctx,
 		TableIDSeqnums,
 		TableIDTypes,

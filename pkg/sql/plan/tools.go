@@ -24,4 +24,5 @@ const (
 	moSetCastIndexValueToIndexFun = "cast_set_index_value_to_index"
 
 	moGeometryCastToSubtypeFun = "cast_geometry_to_subtype"
+	moJsonCastToArrayFun       = "cast_json_to_array"
 )
