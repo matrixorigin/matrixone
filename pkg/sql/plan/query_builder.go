@@ -3935,26 +3935,30 @@ func qualifyGroupingOrderExpr(
 
 // groupingOrderExprKey returns a canonical string key for astExpr so that an
 // ORDER BY expression can be matched against a visible select-list expression
-// regardless of alias-vs-column spelling, table qualifiers, or redundant
-// parentheses.
+// regardless of alias-vs-column spelling, table qualifiers, function-name case,
+// or redundant parentheses.
 func groupingOrderExprKey(
 	builder *QueryBuilder,
 	selectList tree.SelectExprs,
 	astExpr tree.Expr,
 ) (string, error) {
-	qualified, err := qualifyGroupingOrderExpr(builder, selectList, astExpr)
+	// Unwrap parentheses wrapping the whole expression, e.g. (GROUPING(a)),
+	// before qualification so both ORDER BY and select-list spellings agree.
+	qualified, err := qualifyGroupingOrderExpr(builder, selectList, unwrapParenExpr(astExpr))
 	if err != nil {
 		return "", err
 	}
-	normalizeGroupingArgsForComparison(qualified)
+	normalizeExprForComparison(qualified)
 	return tree.String(qualified, dialect.MYSQL), nil
 }
 
-// normalizeGroupingArgsForComparison strips table qualifiers and unwraps
-// redundant parentheses from GROUPING() arguments so that, for example,
-// GROUPING(t.a), GROUPING(a), and GROUPING((a)) all canonicalize to the
-// same comparison key used by the DISTINCT guard.
-func normalizeGroupingArgsForComparison(astExpr tree.Expr) {
+// normalizeExprForComparison rewrites a cloned expression into a canonical form
+// for textual comparison: every function name is folded to lower case, and
+// GROUPING() arguments have their table qualifiers stripped and redundant
+// parentheses unwrapped. So, for example, GROUPING(A), grouping(a),
+// GROUPING(t.a) and GROUPING((a)) all canonicalize to the same key, while
+// case-sensitive string literals are left untouched.
+func normalizeExprForComparison(astExpr tree.Expr) {
 	visited := make(map[uintptr]struct{})
 	var walk func(reflect.Value)
 	walk = func(value reflect.Value) {
@@ -3978,17 +3982,23 @@ func normalizeGroupingArgsForComparison(astExpr tree.Expr) {
 			}
 			visited[pointer] = struct{}{}
 
-			if funcExpr, ok := value.Interface().(*tree.FuncExpr); ok &&
-				funcExpr.FuncName != nil &&
-				funcExpr.FuncName.Compare() == "grouping" {
-				for i := range funcExpr.Exprs {
-					funcExpr.Exprs[i] = unwrapParenExpr(funcExpr.Exprs[i])
-					if name, ok := funcExpr.Exprs[i].(*tree.UnresolvedName); ok &&
-						name.NumParts > 1 && !name.Star {
-						name.NumParts = 1
-					}
+			if funcExpr, ok := value.Interface().(*tree.FuncExpr); ok {
+				isGrouping := false
+				if funcExpr.FuncName != nil {
+					// Fold the function-name case, e.g. GROUPING -> grouping.
+					isGrouping = strings.EqualFold(funcExpr.FuncName.Origin(), "grouping")
+					funcExpr.FuncName = tree.NewCStr(strings.ToLower(funcExpr.FuncName.Origin()), 0)
 				}
-				return
+				if isGrouping {
+					for i := range funcExpr.Exprs {
+						funcExpr.Exprs[i] = unwrapParenExpr(funcExpr.Exprs[i])
+						if name, ok := funcExpr.Exprs[i].(*tree.UnresolvedName); ok &&
+							name.NumParts > 1 && !name.Star {
+							name.NumParts = 1
+						}
+					}
+					return
+				}
 			}
 			walk(value.Elem())
 			return
