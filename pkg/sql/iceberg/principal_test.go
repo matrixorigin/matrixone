@@ -37,6 +37,46 @@ func TestPrincipalMapSpecificity(t *testing.T) {
 	}
 }
 
+func TestPrincipalMapConflictDetection(t *testing.T) {
+	ctx := context.Background()
+	mappings := []model.PrincipalMap{
+		{AccountID: 1, CatalogID: 2, MORoleID: 10, ExternalPrincipal: "same"},
+		{AccountID: 1, CatalogID: 2, MORoleID: 10, ExternalPrincipal: "same"},
+		{AccountID: 1, CatalogID: 2, MOUserID: 20, ExternalPrincipal: "user"},
+	}
+	if err := DetectPrincipalConflicts(ctx, mappings); err != nil {
+		t.Fatalf("same principal mapping should not conflict: %v", err)
+	}
+
+	conflicting := append([]model.PrincipalMap{}, mappings...)
+	conflicting = append(conflicting, model.PrincipalMap{
+		AccountID:         1,
+		CatalogID:         2,
+		MORoleID:          10,
+		ExternalPrincipal: "different",
+	})
+	if err := DetectPrincipalConflicts(ctx, conflicting); err == nil {
+		t.Fatalf("different external principal at same account/catalog/role/user should conflict")
+	}
+
+	if err := DetectPrincipalConflicts(ctx, []model.PrincipalMap{{AccountID: 1, ExternalPrincipal: "missing catalog"}}); err == nil {
+		t.Fatalf("invalid principal mapping should be rejected before conflict detection")
+	}
+}
+
+func TestSelectPrincipalMapConflictAtSameSpecificity(t *testing.T) {
+	_, ok, err := SelectPrincipalMap(context.Background(), []model.PrincipalMap{
+		{AccountID: 1, CatalogID: 2, MORoleID: 10, ExternalPrincipal: "a"},
+		{AccountID: 1, CatalogID: 2, MORoleID: 10, ExternalPrincipal: "b"},
+	}, 10, 20)
+	if err == nil {
+		t.Fatalf("conflicting same-specificity principal mappings should fail")
+	}
+	if ok {
+		t.Fatalf("conflicting selection should not return ok")
+	}
+}
+
 func TestPrincipalMapRequiresRoleOrUserSentinel(t *testing.T) {
 	err := ValidatePrincipalMap(context.Background(), model.PrincipalMap{
 		AccountID:         1,

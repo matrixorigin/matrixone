@@ -176,6 +176,59 @@ func TestP2MaintenanceSystemTableDDLs(t *testing.T) {
 	}
 }
 
+func TestDeferredMappingUpdateValidationAndApply(t *testing.T) {
+	ctx := context.Background()
+	valid := DeferredMappingUpdate{
+		AccountID:                1,
+		DatabaseID:               2,
+		TableID:                  3,
+		LastSnapshotID:           "123",
+		LastMetadataLocationHash: "hash",
+		ExpectedVersion:          4,
+	}
+	if err := ValidateDeferredMappingUpdate(ctx, valid); err != nil {
+		t.Fatalf("valid deferred update should pass: %v", err)
+	}
+	sql := BuildDeferredMappingUpdateSQL(valid)
+	for _, want := range []string{
+		"update mo_catalog.mo_iceberg_tables",
+		"last_snapshot_id = '123'",
+		"last_metadata_location_hash = 'hash'",
+		"account_id = 1",
+		"db_id = 2",
+		"table_id = 3",
+		"version = 4",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("deferred update SQL missing %q: %s", want, sql)
+		}
+	}
+
+	exec := &fakeExec{}
+	if err := NewDAO(exec).ApplyDeferredMappingUpdate(ctx, valid); err != nil {
+		t.Fatalf("apply deferred update should execute: %v", err)
+	}
+	if len(exec.sqls) != 1 || exec.sqls[0] != sql {
+		t.Fatalf("unexpected executed SQL: %#v", exec.sqls)
+	}
+
+	if err := (&DAO{}).ApplyDeferredMappingUpdate(ctx, valid); err == nil {
+		t.Fatalf("nil executor should be rejected")
+	}
+	for _, bad := range []DeferredMappingUpdate{
+		{DatabaseID: 2, TableID: 3, LastSnapshotID: "123", LastMetadataLocationHash: "hash", ExpectedVersion: 4},
+		{AccountID: 1, TableID: 3, LastSnapshotID: "123", LastMetadataLocationHash: "hash", ExpectedVersion: 4},
+		{AccountID: 1, DatabaseID: 2, LastSnapshotID: "123", LastMetadataLocationHash: "hash", ExpectedVersion: 4},
+		{AccountID: 1, DatabaseID: 2, TableID: 3, LastMetadataLocationHash: "hash", ExpectedVersion: 4},
+		{AccountID: 1, DatabaseID: 2, TableID: 3, LastSnapshotID: "123", ExpectedVersion: 4},
+		{AccountID: 1, DatabaseID: 2, TableID: 3, LastSnapshotID: "123", LastMetadataLocationHash: "hash"},
+	} {
+		if err := ValidateDeferredMappingUpdate(ctx, bad); err == nil {
+			t.Fatalf("invalid deferred update should be rejected: %+v", bad)
+		}
+	}
+}
+
 func TestDAOInsertCatalogSQL(t *testing.T) {
 	exec := &fakeExec{}
 	dao := NewDAO(exec)
