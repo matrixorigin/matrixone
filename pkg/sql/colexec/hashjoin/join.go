@@ -334,7 +334,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 			}
 			if bat != nil {
 				result.Batch = bat
-							return result, nil
+				return result, nil
 			}
 			// EOF on probe file.
 			engine.FinishBucket()

@@ -836,7 +836,6 @@ func (e *SpillEngine) AdvanceToNextBucket(
 	return true, nil
 }
 
-
 // scatterProbe evaluates probe-side keys (EqConds[0]) for probe re-scatter.
 // Uses probeKeyEval — NOT keyExecs — to get correct column subscripts
 // when probe and build batches have different column layouts.
@@ -897,4 +896,3 @@ func (e *SpillEngine) Cleanup(proc *process.Process) {
 	e.probePool.Release(proc)
 	e.freeKeyExecs()
 }
-

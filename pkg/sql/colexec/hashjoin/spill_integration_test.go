@@ -128,7 +128,7 @@ func TestSpillEngineReSpill(t *testing.T) {
 
 	// Set threshold to 1000 bytes to guarantee re-spill at depth 1.
 	engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
-		BuildKeyExprs: makeKeyExpr(),
+		BuildKeyExprs:  makeKeyExpr(),
 		SpillThreshold: 1000,
 	})
 	engine.InitFromSpilledMap([]*os.File{buildFd})
@@ -171,7 +171,7 @@ func TestSpillEngineDepthLimit(t *testing.T) {
 
 	// Set depth to SpillMaxPass so no further re-spill occurs.
 	engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
-		BuildKeyExprs: makeKeyExpr(),
+		BuildKeyExprs:  makeKeyExpr(),
 		SpillThreshold: 1,
 	})
 	engine.InitFromSpilledMap([]*os.File{buildFd})
