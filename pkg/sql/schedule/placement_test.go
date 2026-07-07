@@ -93,6 +93,25 @@ func TestDecideQueryPlacementKeepsRequiredAndPreferredLocalExecTypesLocal(t *tes
 	}
 }
 
+func TestDecideQueryPlacementAllowsLocalExecTypeWithoutRoute(t *testing.T) {
+	local := Worker{Mcpu: 1}
+
+	for _, policy := range []CurrentCNPolicy{CurrentCNAllowed, CurrentCNPreferred} {
+		for _, execKind := range []QueryExecKind{QueryExecTP, QueryExecAPOneCN} {
+			decision := DecideQueryPlacement(QueryRequest{
+				ExecKind:        execKind,
+				CurrentCN:       local,
+				CurrentCNPolicy: policy,
+			})
+
+			require.Equal(t, execKind, decision.ExecKind)
+			require.Equal(t, ReasonLocalExecType, decision.Reason)
+			require.Equal(t, Workers{local}, decision.Workers)
+			require.True(t, decision.Satisfied)
+		}
+	}
+}
+
 func TestDecideQueryPlacementRejectsRequiredLocalExecTypeWithoutRoute(t *testing.T) {
 	local := Worker{ID: "local", Mcpu: 8}
 

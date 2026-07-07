@@ -131,10 +131,10 @@ func decideLocalQueryPlacement(req QueryRequest) QueryDecision {
 	if req.CurrentCNPolicy == CurrentCNRequired && !hasWorkerIdentity(req.CurrentCN) {
 		return queryDecision(req, nil, ReasonCurrentCNMissingIdentity, false)
 	}
-	workers := ensureCurrentWorker(nil, req.CurrentCN)
-	if len(workers) == 0 {
-		return queryDecision(req, workers, ReasonCurrentCNUnavailable, false)
+	if req.CurrentCNPolicy == CurrentCNRequired && !hasWorkerRoute(req.CurrentCN) {
+		return queryDecision(req, nil, ReasonCurrentCNUnavailable, false)
 	}
+	workers := Workers{req.CurrentCN}
 	return queryDecision(req, workers, ReasonLocalExecType, true)
 }
 

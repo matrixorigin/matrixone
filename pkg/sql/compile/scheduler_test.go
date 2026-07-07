@@ -81,6 +81,16 @@ func TestScheduleQueryWorkersKeepsLocalExecTypesLocal(t *testing.T) {
 	}
 }
 
+func TestScheduleQueryWorkersAllowsLocalExecWithoutAddress(t *testing.T) {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeTP
+	c.e = &schedulerTestEngine{err: errors.New("candidate lookup should not run")}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{{Mcpu: 1}}, nodes)
+}
+
 func TestScheduleQueryWorkersSortsMultiCNCandidates(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "local:6001"
