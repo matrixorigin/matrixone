@@ -2499,7 +2499,12 @@ func (tbl *txnTable) getPartitionState(
 			return nil, err
 		}
 
-	} else if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
+	} else if eng.PushClient().canServeTableSnapshot(
+		tbl.db.databaseId,
+		tbl.tableId,
+		ps,
+		tbl.db.op.SnapshotTS(),
+	) {
 		return
 	}
 
