@@ -426,6 +426,49 @@ func TestPrepareArithmeticParams(t *testing.T) {
 	}
 }
 
+// TestPrepareArithOpsAllOperators verifies that the binder promotes dual
+// T_text prepared-statement parameters to float64 for every arithmetic
+// operator (+, -, *, /, %), ensuring issue #25423 is fixed for all of them.
+func TestPrepareArithOpsAllOperators(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tests := []struct{ op, symbol string }{
+		{"plus", "+"},
+		{"minus", "-"},
+		{"multi", "*"},
+		{"div", "/"},
+		{"mod", "%"},
+	}
+	for _, tc := range tests {
+		sql := "prepare stmt_" + tc.op + " from select ? " + tc.symbol + " ?"
+		logicPlan, err := runOneStmt(mock, t, sql)
+		assert.NoErrorf(t, err, "prepare select ? %s ? should succeed", tc.symbol)
+		// Verify params stayed T_text.
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		for _, node := range q.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				for _, ref := range collectParamRefs(expr) {
+					assert.Equal(t, int32(types.T_text), ref.Typ.Id,
+						"param ref for %s should stay T_text", tc.symbol)
+				}
+			}
+		}
+	}
+}
+
+// TestPrepareArithMixedTextAndConstant verifies that ? + constant (mixed
+// types) does NOT trigger the dual-param promotion, but still succeeds
+// through the normal implicit cast rules (e.g. int64 + text → int64).
+func TestPrepareArithMixedTextAndConstant(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t, "prepare stmt1 from select ? + 5")
+	assert.NoError(t, err, "? + 5 should succeed via implicit cast rules")
+	_, err = runOneStmt(mock, t, "prepare stmt1 from select 5 + ?")
+	assert.NoError(t, err, "5 + ? should succeed via implicit cast rules")
+}
+
 func TestUpdateTextCaseKeepsTextAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
