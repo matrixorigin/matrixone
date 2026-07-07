@@ -356,6 +356,10 @@ func (l *store) setBootstrapState(success bool) error {
 func (l *store) getCheckerState() (*pb.CheckerState, error) {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseGetCheckerState)
 	defer cancel()
+	return l.getCheckerStateWithContext(ctx)
+}
+
+func (l *store) getCheckerStateWithContext(ctx context.Context) (*pb.CheckerState, error) {
 	s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.StateQuery{})
 	if err != nil {
 		return &pb.CheckerState{}, moerr.AttachCause(ctx, err)
