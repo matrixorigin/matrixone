@@ -7038,7 +7038,7 @@ func userLevelLockSessionID(proc *process.Process) string {
 const maxUserLevelLockNameLength = 64
 
 // validateUserLevelLockName validates a MySQL user-level lock name.
-// It preserves the original lock-name bytes/casing for lock identity.
+// It normalizes casing so lock-name identity is case-insensitive.
 func validateUserLevelLockName(name string) (string, error) {
 	if len(name) == 0 {
 		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not be empty")
