@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -30,9 +31,9 @@ import (
 )
 
 // buildFullTextParams builds the algo_params JSON for a fulltext index from its
-// parsed options (parser name + async). Moved from the former
-// catalog.fullTextIndexParamsToMap so fulltext owns its own param parsing, like
-// the vector plugins' BuildIndexParams hooks.
+// parsed options (parser name, async, and the idxcron cadence knobs). Moved from
+// the former catalog.fullTextIndexParamsToMap so fulltext owns its own param
+// parsing, like the vector plugins' ParamsFromTree hooks.
 func buildFullTextParams(idx *tree.FullTextIndex) (string, error) {
 	res := make(map[string]string)
 	if idx.IndexOption != nil {
@@ -47,6 +48,21 @@ func buildFullTextParams(idx *tree.FullTextIndex) (string, error) {
 		}
 		if idx.IndexOption.Async {
 			res[catalog.Async] = "true"
+		}
+		// Idxcron cadence knobs — mirror the vector plugins' ParamsFromTree
+		// (e.g. ivfpq/runtime.go). Without this a retrieval index's
+		// AUTO_UPDATE/DAY/HOUR parse but never reach algo_params, so the idxcron
+		// gate never sees auto_update=true and the scheduled tag=1 compaction
+		// never fires. (Only a retrieval index registers an idxcron task; on a
+		// non-retrieval index these params are inert.)
+		if idx.IndexOption.AutoUpdate {
+			res[catalog.AutoUpdate] = "true"
+		}
+		if idx.IndexOption.Day > 0 {
+			res[catalog.Day] = strconv.FormatInt(idx.IndexOption.Day, 10)
+		}
+		if idx.IndexOption.Hour > 0 {
+			res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
 		}
 	}
 	if len(res) == 0 {
