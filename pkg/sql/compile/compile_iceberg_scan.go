@@ -134,6 +134,8 @@ func applyIcebergScanAccessContext(req *icebergapi.ScanPlanRequest, access icebe
 		req.EnableDeleteApply = true
 	}
 	if len(access.residencyPolicies) > 0 {
+		// Catalog metadata checks are request-scoped and only run when policy rows
+		// are configured; object IO remains fail-closed in the default planner.
 		req.ResidencyPolicies = append([]model.ResidencyPolicy(nil), access.residencyPolicies...)
 		req.CatalogValidator = sqliceberg.CatalogRequestResidencyValidator(req.ResidencyPolicies)
 		req.ObjectResidencyValidator = sqliceberg.ObjectResidencyRequestValidator(req.ResidencyPolicies, req.Catalog.URI)

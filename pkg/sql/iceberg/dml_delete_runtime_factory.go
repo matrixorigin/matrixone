@@ -529,9 +529,6 @@ func (f DMLDeleteRuntimeCoordinatorFactory) requireResidencyPolicy() bool {
 	if f.opts.ObjectIOProvider != nil {
 		return false
 	}
-	if f.opts.RequireResidencyPolicy {
-		return true
-	}
 	return true
 }
 
