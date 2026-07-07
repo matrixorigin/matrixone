@@ -251,6 +251,24 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldCast: false,
 			requireRet: types.T_varchar.ToType(),
 		},
+		{
+			name: "date_trunc", args: []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+			shouldErr: true,
+		},
+		{
+			name: "date_trunc", args: []types.Type{types.T_varchar.ToType(), types.T_datetime.ToTypeWithScale(6)},
+			shouldErr:  false,
+			requireFid: DATE_TRUNC, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_datetime.ToType(),
+		},
+		{
+			name: "date_trunc", args: []types.Type{types.T_varchar.ToType(), types.T_timestamp.ToType()},
+			shouldErr:  false,
+			requireFid: DATE_TRUNC, requireOid: 2,
+			shouldCast: false,
+			requireRet: types.T_timestamp.ToType(),
+		},
 	}
 
 	proc := testutil.NewProcess(t)

@@ -721,11 +721,10 @@ const (
 	// merged from upstream/main (renumbered to avoid colliding with the GIS block above)
 	CAST_JSON_TO_ARRAY = 513
 
-	BIT_COUNT   = 514
-	IS_UUID     = 515
-	UUID_TO_BIN = 516
-	BIN_TO_UUID = 517
-
+	BIT_COUNT         = 514
+	IS_UUID           = 515
+	UUID_TO_BIN       = 516
+	BIN_TO_UUID       = 517
 	NAME_CONST        = 518
 	GET_LOCK          = 519
 	RELEASE_LOCK      = 520
@@ -762,6 +761,7 @@ const (
 
 	// function `cast_strict`
 	CAST_STRICT = 541
+	DATE_TRUNC  = 542
 
 	// vec{bf16,f16,int8}_from_base64: decode a base64 payload of the narrow type's
 	// raw bytes into that narrow vector type — the narrow siblings of
@@ -769,17 +769,17 @@ const (
 	// where the query must be a constant narrow vec literal matching the narrow
 	// entries (a cast of vecf32_from_base64 does not constant-fold, breaking the
 	// ORDER BY index pushdown).
-	// Renumbered after the main merge, which took 524-541 for the S2/H3/ST_POINT/
-	// CAST_STRICT functions. These IDs are referenced by name only (name map +
-	// list_builtIn registration), so renumbering is safe.
-	VECBF16_FROM_BASE64  = 542
-	VECF16_FROM_BASE64   = 543
-	VECINT8_FROM_BASE64  = 544
-	VECUINT8_FROM_BASE64 = 545
+	// Renumbered after the main merge, which took 524-542 for the S2/H3/ST_POINT/
+	// CAST_STRICT/DATE_TRUNC functions. These IDs are referenced by name only (name
+	// map + list_builtIn registration), so renumbering is safe.
+	VECBF16_FROM_BASE64  = 543
+	VECF16_FROM_BASE64   = 544
+	VECINT8_FROM_BASE64  = 545
+	VECUINT8_FROM_BASE64 = 546
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 546
+	FUNCTION_END_NUMBER = 547
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1371,4 +1371,7 @@ var functionIdRegister = map[string]int32{
 
 	// fault inject function
 	"fault_inject": FAULT_INJECT,
+
+	// date_trunc function
+	"date_trunc": DATE_TRUNC,
 }
