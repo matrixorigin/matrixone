@@ -241,14 +241,29 @@ func (Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[strin
 	return handleCreate(ctx, indexDefs, true)
 }
 
-// RestoreInitSQL — fulltext has no compact model to rebuild; the clone copies
-// the inverted-index hidden table and the CDC catch-up handles incremental
-// changes. Register the CDC with startFromNow=true so its watermark is the
-// post-clone TS (not the snapshot TS), avoiding a replay of the already-cloned
-// rows. A non-empty InitSQL is required for startFromNow to be honored, so hand
-// it a no-op "SELECT 1".
-func (Hooks) RestoreInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) (bool, string, error) {
-	return true, "SELECT 1", nil
+// RestoreInitSQL — a retrieval (WAND) index carries a compact tag=0 model that
+// CreateTable's sync build SEEDS and the block-level clone then APPENDS onto,
+// doubling the base. Mirror HNSW: rebuild it post-commit. RestoreTable registers
+// the CDC with this ALTER … REINDEX … FORCE_SYNC as its InitSQL (startFromNow=true),
+// so the CDC's first iteration reindexes in its own txn — clearing postings +
+// tag=0/1 and rebuilding the base from the committed cloned rows, discarding the
+// seed+clone duplicate.
+//
+// A postings/ngram index has no compact model to rebuild: the clone copies its one
+// inverted-index hidden table verbatim and the CDC catch-up handles increments. It
+// still needs a NON-empty InitSQL so RestoreTable keeps startFromNow=true (watermark
+// = post-clone TS, not the snapshot TS) — otherwise the CDC replays the already-cloned
+// rows and doubles the postings. Hand it a no-op "SELECT 1".
+func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	indexDef, ok := indexDefs[""]
+	if !ok {
+		return false, "", moerr.NewInternalErrorNoCtx("fulltext postings index definition not found")
+	}
+	if catalog.GetIndexParser(indexDef.IndexAlgoParams) != "retrieval" {
+		return true, "SELECT 1", nil
+	}
+	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` FULLTEXT FORCE_SYNC",
+		ctx.QryDatabase(), ctx.OriginalTableDef().Name, indexDef.IndexName), nil
 }
 
 // ValidateReindexParams — no-op; fulltext has no reindex-time params.
