@@ -17,6 +17,8 @@ package idxcron
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -397,7 +399,19 @@ func runReindex(ctx context.Context,
 				break
 			}
 
+			// dev/test fast mode: a short interval + bypass the hour-of-day gate so a
+			// freshly-created index can be observed rebuilding within seconds.
+			if idxcronFastIntervalSec > 0 {
+				interval = time.Duration(idxcronFastIntervalSec) * time.Second
+				hour = int64(currentHour)
+			}
+
+			logutil.Infof("[idxcron] eval action=%s db=%s table=%s index=%s: auto_update=%v interval=%v hour=%d currentHour=%d",
+				task.Action, task.DbName, task.TableName, task.IndexName, auto_update, interval, hour, currentHour)
+
 			if !auto_update || interval == 0 || currentHour != int(hour) {
+				logutil.Infof("[idxcron] skip index=%s: gate (auto_update=%v interval=%v hour=%d vs currentHour=%d)",
+					task.IndexName, auto_update, interval, hour, currentHour)
 				reason = Reason_Skipped
 				return
 			}
@@ -428,17 +442,21 @@ func runReindex(ctx context.Context,
 			}
 			reason = reason2
 			if !ok {
+				logutil.Infof("[idxcron] skip index=%s: Updatable=false reason=%q", task.IndexName, reason2)
 				return
 			}
 
 			// run alter table alter reindex in force synchronous mode to make sure to build index in single transaction
 			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` %s FORCE_SYNC",
 				task.DbName, task.TableName, task.IndexName, d.IdxcronAlgoToken)
+			logutil.Infof("[idxcron] reindex FIRING index=%s: %s", task.IndexName, sql)
 			res, err2 := runReindexSql(sqlproc, sql)
 			if err2 != nil {
+				logutil.Errorf("[idxcron] reindex FAILED index=%s: %v", task.IndexName, err2)
 				return
 			}
 			res.Close()
+			logutil.Infof("[idxcron] reindex DONE index=%s", task.IndexName)
 
 			// mark reindex is performed
 			updated = true
@@ -499,11 +517,29 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 	return nil
 }
 
-var IndexUpdateTaskCronExpr = "0 0 * * * *" // run once an hour, beginning of hour
-// var IndexUpdateTaskCronExpr = "0 55 23 * * *" // 23:55:00 everyday
+// IndexUpdateTaskCronExpr — how often the executor ticks. Default hourly; a dev/test
+// deploy can lower it via env MO_IDXCRON_CRON (e.g. "*/20 * * * * *" every 20s) to
+// observe scheduled rebuilds without waiting for the top of the hour. Read once at
+// init; the cron task is registered from this value at bootstrap (predefine.go).
+var IndexUpdateTaskCronExpr = func() string {
+	if v := os.Getenv("MO_IDXCRON_CRON"); v != "" {
+		return v
+	}
+	return "0 0 * * * *" // run once an hour, beginning of hour
+}()
 
-// var IndexUpdateTaskCronExpr = "0 */5 * * * *" // every 5 minutes
-// var IndexUpdateTaskCronExpr = "*/15 * * * * *" // every 15 seconds
+// idxcronFastIntervalSec — dev/test override (env MO_IDXCRON_INTERVAL_SEC, in seconds).
+// When > 0, runReindex uses it as the cadence interval AND bypasses the hour-of-day
+// gate, so a freshly-created index can be observed rebuilding within seconds instead of
+// waiting a day (the DAY param's minimum) at a specific HOUR. Unset (0) in production.
+var idxcronFastIntervalSec = func() int64 {
+	if v := os.Getenv("MO_IDXCRON_INTERVAL_SEC"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}()
 
 const ParamSeparator = " "
 

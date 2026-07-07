@@ -22,20 +22,31 @@ package idxcron
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/fulltext/wand"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-// TailChunkThreshold gates the scheduled rebuild on tag=1 CdcTail growth: fire
-// only once the tail has accumulated at least this many chunk rows since the last
-// reindex. A chunk is ≤ MaxChunkSize (64 KB), so this bounds the delta the search
-// path must load+reconcile on top of tag=0 before a compaction folds it in.
-// (Stage 1 is a full reindex from source; Stage 2 will swap the reindex body for
-// tiered merge-compaction without changing this gate.)
-const TailChunkThreshold = 1024
+// TailChunkThreshold gates the scheduled rebuild on tag=1 CdcTail growth: fire only
+// once the tail has accumulated at least this many chunk rows since the last reindex.
+// A chunk is ≤ MaxChunkSize (64 KB), so this bounds the delta the search path must
+// load+reconcile on top of tag=0 before a compaction folds it in. Default 1024; a
+// dev/test deploy can lower it via env MO_IDXCRON_WAND_TAIL_THRESHOLD (e.g. 1) to
+// observe a rebuild without generating ~64 MB of tail. (Stage 1 is a full reindex from
+// source; Stage 2 will swap the reindex body for tiered merge without changing this gate.)
+var TailChunkThreshold = func() int64 {
+	if v := os.Getenv("MO_IDXCRON_WAND_TAIL_THRESHOLD"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 1024
+}()
 
 type Hooks struct{}
 
@@ -75,6 +86,8 @@ func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (bool, string, error) {
 	if err != nil {
 		return false, "", err
 	}
+	logutil.Infof("[idxcron][wand] Updatable index=%s: tag=1 tail chunks=%d threshold=%d",
+		in.IndexName, count, TailChunkThreshold)
 	if count < TailChunkThreshold {
 		return false, fmt.Sprintf("tag=1 tail chunks %d < threshold %d", count, TailChunkThreshold), nil
 	}
