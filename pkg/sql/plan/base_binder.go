@@ -1617,6 +1617,40 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 	return args[0], true, nil
 }
 
+func isNumericOid(oid int32) bool {
+	t := types.T(oid)
+	return t.IsSignedInt() || t.IsUnsignedInt() || t.IsFloat() ||
+		t == types.T_decimal64 || t == types.T_decimal128 || t == types.T_decimal256 ||
+		t == types.T_bit
+}
+
+// promoteTextParamsForArith promotes each T_text prepared-statement parameter
+// reference to DOUBLE when its peer operand is also a ParamRef or is numeric.
+// This allows arithmetic on unresolved params to succeed at PREPARE time while
+// keeping TEXT-column arithmetic (text + text_column) unchanged.
+// The DOUBLE return type matches MySQL binary-protocol semantics for prepared
+// arithmetic expressions.
+func promoteTextParamsForArith(ctx context.Context, args []*plan.Expr) error {
+	if len(args) != 2 {
+		return nil
+	}
+	doubleType := plan.Type{Id: int32(types.T_float64), NotNullable: true}
+	for i := range args {
+		if args[i].Typ.Id != int32(types.T_text) || args[i].GetP() == nil {
+			continue
+		}
+		peer := args[1-i]
+		if peer.GetP() != nil || isNumericOid(peer.Typ.Id) {
+			var err error
+			args[i], err = appendCastBeforeExpr(ctx, args[i], doubleType)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
@@ -1759,21 +1793,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "concat"
-		} else if args[0].Typ.Id == int32(types.T_text) && args[1].Typ.Id == int32(types.T_text) &&
-			args[0].GetP() != nil && args[1].GetP() != nil {
-			// Both operands are prepared-statement parameters of unknown type.
-			// Promote to decimal128 so that numeric addition succeeds without
-			// the precision loss that float64 would cause for large integers
-			// (e.g. 9007199254740993). Real TEXT columns are NOT rewritten.
-			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 12, NotNullable: true}
-			args[0], err = appendCastBeforeExpr(ctx, args[0], decimal128Type)
-			if err != nil {
-				return nil, err
-			}
-			args[1], err = appendCastBeforeExpr(ctx, args[1], decimal128Type)
-			if err != nil {
-				return nil, err
-			}
+		}
+		if err = promoteTextParamsForArith(ctx, args); err != nil {
+			return nil, err
 		}
 		if err != nil {
 			return nil, err
@@ -1807,18 +1829,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_int64) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_text) && args[1].Typ.Id == int32(types.T_text) &&
-			args[0].GetP() != nil && args[1].GetP() != nil {
-			// Both operands are prepared-statement parameters; promote to decimal128.
-			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 12, NotNullable: true}
-			args[0], err = appendCastBeforeExpr(ctx, args[0], decimal128Type)
-			if err != nil {
-				return nil, err
-			}
-			args[1], err = appendCastBeforeExpr(ctx, args[1], decimal128Type)
-			if err != nil {
-				return nil, err
-			}
+		}
+		if err = promoteTextParamsForArith(ctx, args); err != nil {
+			return nil, err
 		}
 		if err != nil {
 			return nil, err
@@ -1833,18 +1846,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if isNullExpr(args[1]) {
 			return args[1], nil
 		}
-		if args[0].Typ.Id == int32(types.T_text) && args[1].Typ.Id == int32(types.T_text) &&
-			args[0].GetP() != nil && args[1].GetP() != nil {
-			// Both operands are prepared-statement parameters; promote to decimal128.
-			decimal128Type := plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 12, NotNullable: true}
-			args[0], err = appendCastBeforeExpr(ctx, args[0], decimal128Type)
-			if err != nil {
-				return nil, err
-			}
-			args[1], err = appendCastBeforeExpr(ctx, args[1], decimal128Type)
-			if err != nil {
-				return nil, err
-			}
+		if err = promoteTextParamsForArith(ctx, args); err != nil {
+			return nil, err
 		}
 	case "unary_minus":
 		if len(args) == 0 {

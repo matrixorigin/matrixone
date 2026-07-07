@@ -458,66 +458,73 @@ func TestPrepareArithOpsAllOperators(t *testing.T) {
 	}
 }
 
-// TestPrepareArithPlan verifies that the plan for dual-param arithmetic
-// contains a Decimal128(38,12) cast (not float64 that would lose integer
-// precision, and not Decimal128(38,0) that would truncate fractional values).
+// TestPrepareArithPlan verifies that the plan for dual-param and param+numeric
+// arithmetic promotes unresolved text params to DOUBLE (matching MySQL's float
+// semantics for prepared arithmetic), and that non-param TEXT columns are left
+// alone.
 func TestPrepareArithPlan(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
-	tests := []string{
-		"prepare s1 from select ? + ?",
-		"prepare s1 from select ? - ?",
-		"prepare s1 from select ? * ?",
-		"prepare s1 from select ? / ?",
-		"prepare s1 from select ? % ?",
-		"prepare s1 from select ? div ?",
-		"prepare s1 from select ? mod ?",
+	tests := []struct {
+		sql       string
+		wantCasts int // expected number of cast(param, float64) wrappers
+	}{
+		// Dual param: both promoted.
+		{"prepare s1 from select ? + ?", 2},
+		{"prepare s1 from select ? - ?", 2},
+		{"prepare s1 from select ? * ?", 2},
+		{"prepare s1 from select ? / ?", 2},
+		{"prepare s1 from select ? % ?", 2},
+		{"prepare s1 from select ? div ?", 2},
+		{"prepare s1 from select ? mod ?", 2},
+		// Mixed: single param + numeric → param promoted.
+		{"prepare s1 from select ? + 5", 1},
+		{"prepare s1 from select 5 + ?", 1},
+		{"prepare s1 from select ? + 5.5", 1},
 	}
-	for _, sql := range tests {
-		logicPlan, err := runOneStmt(mock, t, sql)
-		assert.NoErrorf(t, err, "%s should succeed", sql)
+	for _, tc := range tests {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		if err != nil {
+			assert.NoErrorf(t, err, "%s should succeed", tc.sql)
+			continue
+		}
 
-		// Verify that the cast inserted by the binder uses a decimal128
-		// with sufficient scale to preserve fractional values.
 		q := resolveQueryPlan(logicPlan)
 		if q == nil || q.GetQuery() == nil {
 			continue
 		}
+		castCount := 0
 		for _, node := range q.GetQuery().Nodes {
 			for _, expr := range node.ProjectList {
-				f := expr.GetF()
-				if f == nil {
-					continue
-				}
-				// Each arg should be cast(param, Decimal128(38,12)).
-				for _, arg := range f.Args {
-					cast := arg.GetF()
-					if cast == nil || cast.Func.GetObjName() != "cast" {
-						continue
-					}
-					// The cast target type.
-					target := cast.Args[1]
-					assert.Equalf(t, int32(types.T_decimal128), target.Typ.Id,
-						"cast target for %s must be decimal128", sql)
-					assert.Equalf(t, int32(38), target.Typ.Width,
-						"cast target for %s must be Width=38", sql)
-					assert.Equalf(t, int32(12), target.Typ.Scale,
-						"cast target for %s must be Scale=12", sql)
-				}
+				castCount += countFloat64Casts(expr)
 			}
 		}
+		assert.Equalf(t, tc.wantCasts, castCount,
+			"%s should have %d cast(arg, float64)", tc.sql, tc.wantCasts)
 	}
 }
 
-// TestPrepareArithMixedTextAndConstant verifies that ? + constant (mixed
-// types) does NOT trigger the dual-param promotion, but still succeeds
-// through the normal implicit cast rules (e.g. int64 + text → int64).
-func TestPrepareArithMixedTextAndConstant(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	_, err := runOneStmt(mock, t, "prepare stmt1 from select ? + 5")
-	assert.NoError(t, err, "? + 5 should succeed via implicit cast rules")
-	_, err = runOneStmt(mock, t, "prepare stmt1 from select 5 + ?")
-	assert.NoError(t, err, "5 + ? should succeed via implicit cast rules")
+// countFloat64Casts counts how many cast(arg, T_float64) nodes exist in expr.
+func countFloat64Casts(expr *plan.Expr) int {
+	if expr == nil {
+		return 0
+	}
+	n := 0
+	if f := expr.GetF(); f != nil {
+		if f.Func.GetObjName() == "cast" && len(f.Args) >= 2 &&
+			f.Args[1].Typ.Id == int32(types.T_float64) {
+			n++
+		}
+		for _, arg := range f.Args {
+			n += countFloat64Casts(arg)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			n += countFloat64Casts(item)
+		}
+	}
+	return n
 }
 
 func TestUpdateTextCaseKeepsTextAssignmentCast(t *testing.T) {
