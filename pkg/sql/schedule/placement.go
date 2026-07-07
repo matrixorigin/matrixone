@@ -50,7 +50,7 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	}
 
 	workers := cloneWorkers(req.Candidates)
-	if req.RequireLocal {
+	if len(workers) == 0 || req.RequireLocal {
 		workers = ensureLocalWorker(workers, req.LocalWorker)
 	}
 	return QueryDecision{
