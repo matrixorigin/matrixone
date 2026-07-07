@@ -593,9 +593,7 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 			return
 		}
 
-		tc.IterTxns(func(to client.TxnOverview) bool {
-			return f(to.Meta.ID)
-		})
+		tc.IterTxnIDs(f)
 	}
 	return s.cfg.LockService
 }
