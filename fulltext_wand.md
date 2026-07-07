@@ -550,9 +550,31 @@ is retained only as a schema-change / corruption-recovery fallback).
   UPSERT-dedup / live-filter primitive shared with item 2). **[tag=0 create-build capping
   is now DONE (2026-07-07, `a0573840d`): `fulltext_wand_create.end()` uses
   `FinishSegments(capacity)` reading `fulltext_max_index_capacity`.]**
-- **Item 2 (delete-only tiered compaction) — IN PROGRESS (Stage 2, 2026-07-07).** Finalized
-  design below (`### Item 2`): a `MERGE` command runs a **standalone `fulltext_wand_compact`
-  table function** (SQL, not a Go API call from idxcron), tiered by `max_index_capacity`.
+- **Item 2 (tiered compaction) — Stage 2 progress (2026-07-07):**
+  - **2-recency foundation — DONE (commit `0c72710e2`).** Every tag=0 base sub carries a
+    recency key in a new `metadata.chunk_id` column: **0** for a full-build base (oldest;
+    the tail now starts at **1**), **K** for a folded/merged base. `ComputeLiveness` dedups
+    bases + tail uniformly by chunk_id; `NextTailChunkId = GREATEST(max tail chunk_id, max
+    base recency)+1` so the append sequence floors at 1 and never resets after a fold.
+  - **2-fold (memory-bounded O(tail) compaction) — DONE (commit `523d7daa2`).** `CompactSegments`
+    loads ONLY the threshold-bounded tag=1 tail (never the base), merges its live inserts
+    into a NEW tag=0 sub at recency K, and **leaves the existing base subs untouched**
+    (O(tail) memory + write). A tail delete that targets an untouched old-base doc is
+    re-framed as one delete frame at K+1 (a "surviving delete", above every base recency)
+    so the doc stays shadowed; deletes resolved inside the tail are dropped. Then the folded
+    tail (chunk_id ≤ K) is deleted. Verified live: normal fold, multi-fold (subs accumulate
+    at 0/2/5, surviving deletes persist, tail stays one frame), pure churn (no-op), and
+    delete-only tail. Run by the standalone `fulltext_wand_compact` TVF (SQL, not a Go API
+    call from idxcron).
+  - **2b-tiered merge — TODO.** Sub count grows one per fold (0, 2, 5, …) and folded/old subs
+    accumulate shadowed docs. A tiered pass merges similar-size subs (≤ `max_index_capacity`),
+    dropping dead/shadowed docs + resolved surviving-deletes, to bound sub count + reclaim space.
+  - **`MERGE` command wiring — TODO.** idxcron currently fires a full `FORCE_SYNC` REBUILD
+    (O(N) re-tokenize). To make it fire the fold instead: grammar `MERGE` keyword in the
+    REINDEX fulltext option (goyacc regen) + `AlterTableAlterReIndex.Merge` proto (`make pb`)
+    + `HandleReindex` merge flag → run the `fulltext_wand_compact` TVF + `SyncDescriptor`
+    `IdxcronReindexOption="MERGE"`. Until then the fold is reachable manually via
+    `SELECT * FROM fulltext_wand_compact('db','store','meta') AS f`.
 
 ### Cost model (why this is needed)
 Measured on a live 100k-doc empty-table→CDC run (2026-07-02) and generalized:
