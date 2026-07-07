@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
@@ -48,7 +47,7 @@ func TestForceSingleScanDistinctAgg(t *testing.T) {
 			},
 		},
 	}
-	node.AggList[0].Expr.(*plan.Expr_F).F.Func.Obj = int64(function.Distinct)
+	node.AggList[0].Expr.(*plan.Expr_F).F.Func.Obj = -9223372036854775808
 
 	require.True(t, forceSingleScan(node))
 }
