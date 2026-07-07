@@ -95,15 +95,26 @@ func (exec *sumDecimal64FastExec) bulkFillSingleGroup(groupIndex int, vectors []
 	sums := chunkArr[types.Decimal128](exec.state[x].vecs[0])
 	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
 
+	var localSum types.Decimal128
+	var localCnt int64
 	for i := 0; i < n; i++ {
 		if hasNull && np.Contains(uint64(i)) {
 			continue
 		}
 		raw := vals[i&constMask]
 		val := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
-		sums[y] = sums[y].Add128Unchecked(val)
-		cnts[y]++
+		if localCnt == 0 {
+			localSum = val
+		} else {
+			localSum = localSum.Add128Unchecked(val)
+		}
+		localCnt++
 	}
+	if localCnt == 0 {
+		return nil
+	}
+	sums[y] = sums[y].Add128Unchecked(localSum)
+	cnts[y] += localCnt
 	return nil
 }
 
@@ -389,21 +400,39 @@ func (exec *sumDecimal128FastExec) bulkFillSingleGroup(groupIndex int, vectors [
 	sums := chunkArr[types.Decimal128](exec.state[x].vecs[0])
 	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
 
+	var localSum types.Decimal128
+	var localCnt int64
 	for i := 0; i < n; i++ {
 		if hasNull && np.Contains(uint64(i)) {
 			continue
 		}
 		val := vals[i&constMask]
-		if checked {
-			var err error
-			if sums[y], err = sums[y].Add128(val); err != nil {
-				return err
-			}
+		if localCnt == 0 {
+			localSum = val
 		} else {
-			sums[y] = sums[y].Add128Unchecked(val)
+			if checked {
+				var err error
+				if localSum, err = localSum.Add128(val); err != nil {
+					return err
+				}
+			} else {
+				localSum = localSum.Add128Unchecked(val)
+			}
 		}
-		cnts[y]++
+		localCnt++
 	}
+	if localCnt == 0 {
+		return nil
+	}
+	if checked {
+		var err error
+		if sums[y], err = sums[y].Add128(localSum); err != nil {
+			return err
+		}
+	} else {
+		sums[y] = sums[y].Add128Unchecked(localSum)
+	}
+	cnts[y] += localCnt
 	return nil
 }
 

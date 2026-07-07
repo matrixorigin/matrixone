@@ -864,6 +864,51 @@ func TestSumDecimal128Fast_BulkFillOverflowCheck(t *testing.T) {
 	exec.Free()
 }
 
+func TestSumDecimal128Fast_BulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
+	mp := mpool.MustNewZero()
+	param := types.New(types.T_decimal128, 38, 0)
+	one := types.Decimal128FromInt64(1)
+	two := types.Decimal128FromInt64(2)
+	seedVal, err := types.Decimal128Max.Sub128(one)
+	require.NoError(t, err)
+
+	seed := vector.NewVec(param)
+	delta := vector.NewVec(param)
+	defer seed.Free(mp)
+	defer delta.Free(mp)
+	require.NoError(t, vector.AppendFixed(seed, seedVal, false, mp))
+	require.NoError(t, vector.AppendFixed(delta, one, false, mp))
+	require.NoError(t, vector.AppendFixed(delta, one, false, mp))
+	require.NoError(t, vector.AppendFixed(delta, two.Minus(), false, mp))
+
+	testCases := []struct {
+		name  string
+		isSum bool
+		aggID int64
+	}{
+		{"sum", true, AggIdOfSum},
+		{"avg", false, AggIdOfAvg},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			batch := newSumDecimal128FastExec(mp, tc.isSum, tc.aggID, false, param)
+			bulk := newSumDecimal128FastExec(mp, tc.isSum, tc.aggID, false, param)
+			defer batch.Free()
+			defer bulk.Free()
+
+			require.NoError(t, batch.GroupGrow(1))
+			require.NoError(t, bulk.GroupGrow(1))
+			require.NoError(t, batch.BatchFill(0, []uint64{1}, []*vector.Vector{seed}))
+			require.NoError(t, bulk.BatchFill(0, []uint64{1}, []*vector.Vector{seed}))
+
+			require.NoError(t, batch.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{delta}))
+			require.NoError(t, bulk.BulkFill(0, []*vector.Vector{delta}))
+			requireSingleAggResultEqual(t, mp, batch, bulk)
+		})
+	}
+}
+
 func TestSumDecimal128Fast_BulkFillAvgCountsOnlyNonNullRows(t *testing.T) {
 	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
 	defer mp.Free(nil)

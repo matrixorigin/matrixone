@@ -143,6 +143,8 @@ func (exec *sumAvgExec[T, A]) bulkFillSumSingleGroup(groupIndex int, vectors []*
 	sums := chunkArr[T](exec.state[x].vecs[0])
 	sumVec := exec.state[x].vecs[0]
 
+	var localSum T
+	filled := false
 	for i := 0; i < n; i++ {
 		row := i
 		if isConst {
@@ -153,15 +155,29 @@ func (exec *sumAvgExec[T, A]) bulkFillSumSingleGroup(groupIndex int, vectors []*
 		}
 
 		val := T(vals[row])
-		old := sums[y]
-		result := old + val
-		if err := exec.ofCheck(old, val, result); err != nil {
+		if !filled {
+			localSum = val
+			filled = true
+			continue
+		}
+		result := localSum + val
+		if err := exec.ofCheck(localSum, val, result); err != nil {
 			return err
 		}
-		sums[y] = result
-		if sumVec.IsNull(y) {
-			sumVec.UnsetNull(y)
-		}
+		localSum = result
+	}
+	if !filled {
+		return nil
+	}
+
+	old := sums[y]
+	result := old + localSum
+	if err := exec.ofCheck(old, localSum, result); err != nil {
+		return err
+	}
+	sums[y] = result
+	if sumVec.IsNull(y) {
+		sumVec.UnsetNull(y)
 	}
 	return nil
 }
@@ -183,6 +199,8 @@ func (exec *sumAvgExec[T, A]) bulkFillAvgSingleGroup(groupIndex int, vectors []*
 	sums := chunkArr[T](exec.state[x].vecs[0])
 	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
 
+	var localSum T
+	var localCnt int64
 	for i := 0; i < n; i++ {
 		row := i
 		if isConst {
@@ -193,14 +211,29 @@ func (exec *sumAvgExec[T, A]) bulkFillAvgSingleGroup(groupIndex int, vectors []*
 		}
 
 		val := T(vals[row])
-		old := sums[y]
-		result := old + val
-		if err := exec.ofCheck(old, val, result); err != nil {
+		if localCnt == 0 {
+			localSum = val
+			localCnt = 1
+			continue
+		}
+		result := localSum + val
+		if err := exec.ofCheck(localSum, val, result); err != nil {
 			return err
 		}
-		sums[y] = result
-		cnts[y]++
+		localSum = result
+		localCnt++
 	}
+	if localCnt == 0 {
+		return nil
+	}
+
+	old := sums[y]
+	result := old + localSum
+	if err := exec.ofCheck(old, localSum, result); err != nil {
+		return err
+	}
+	sums[y] = result
+	cnts[y] += localCnt
 	return nil
 }
 
@@ -671,6 +704,8 @@ func (exec *sumAvgDecExec[A, S]) bulkFillSumSingleGroup(groupIndex int, vectors 
 	sums := chunkArr[S](exec.state[x].vecs[0])
 	sumVec := exec.state[x].vecs[0]
 
+	var localSum S
+	filled := false
 	for i := 0; i < n; i++ {
 		row := i
 		if isConst {
@@ -681,15 +716,32 @@ func (exec *sumAvgDecExec[A, S]) bulkFillSumSingleGroup(groupIndex int, vectors 
 		}
 
 		val := decimalStateFromArg[A, S](args[row], argScale)
-		if sumVec.IsNull(y) {
-			sumVec.UnsetNull(y)
-			sums[y] = val
+		if !filled {
+			localSum = val
+			filled = true
 			continue
 		}
-		var err error
-		if sums[y], err = decimalStateAdd(sums[y], val); err != nil {
-			return err
+		if exec.localAddSafe {
+			localSum = decimalStateAddUnchecked(localSum, val)
+		} else {
+			var err error
+			if localSum, err = decimalStateAdd(localSum, val); err != nil {
+				return err
+			}
 		}
+	}
+	if !filled {
+		return nil
+	}
+
+	if sumVec.IsNull(y) {
+		sumVec.UnsetNull(y)
+		sums[y] = localSum
+		return nil
+	}
+	var err error
+	if sums[y], err = decimalStateAdd(sums[y], localSum); err != nil {
+		return err
 	}
 	return nil
 }
@@ -712,6 +764,8 @@ func (exec *sumAvgDecExec[A, S]) bulkFillAvgSingleGroup(groupIndex int, vectors 
 	sums := chunkArr[S](exec.state[x].vecs[0])
 	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
 
+	var localSum S
+	var localCnt int64
 	for i := 0; i < n; i++ {
 		row := i
 		if isConst {
@@ -722,12 +776,30 @@ func (exec *sumAvgDecExec[A, S]) bulkFillAvgSingleGroup(groupIndex int, vectors 
 		}
 
 		val := decimalStateFromArg[A, S](args[row], argScale)
-		var err error
-		if sums[y], err = decimalStateAdd(sums[y], val); err != nil {
-			return err
+		if localCnt == 0 {
+			localSum = val
+			localCnt = 1
+			continue
 		}
-		cnts[y]++
+		if exec.localAddSafe {
+			localSum = decimalStateAddUnchecked(localSum, val)
+		} else {
+			var err error
+			if localSum, err = decimalStateAdd(localSum, val); err != nil {
+				return err
+			}
+		}
+		localCnt++
 	}
+	if localCnt == 0 {
+		return nil
+	}
+
+	var err error
+	if sums[y], err = decimalStateAdd(sums[y], localSum); err != nil {
+		return err
+	}
+	cnts[y] += localCnt
 	return nil
 }
 

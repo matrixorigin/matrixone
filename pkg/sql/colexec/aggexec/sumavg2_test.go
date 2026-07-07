@@ -162,6 +162,52 @@ func checkVecAll(vec *vector.Vector, expected []expectedResult) error {
 	return nil
 }
 
+func requireSingleAggResultEqual(t *testing.T, mp *mpool.MPool, left, right AggFuncExec) {
+	t.Helper()
+
+	leftResults, err := left.Flush()
+	require.NoError(t, err)
+	defer func() {
+		for _, result := range leftResults {
+			result.Free(mp)
+		}
+	}()
+
+	rightResults, err := right.Flush()
+	require.NoError(t, err)
+	defer func() {
+		for _, result := range rightResults {
+			result.Free(mp)
+		}
+	}()
+
+	require.Len(t, leftResults, 1)
+	require.Len(t, rightResults, 1)
+	require.Equal(t, leftResults[0].Length(), rightResults[0].Length())
+	require.Equal(t, leftResults[0].GetType().Oid, rightResults[0].GetType().Oid)
+
+	switch leftResults[0].GetType().Oid {
+	case types.T_int64:
+		require.Equal(t,
+			vector.MustFixedColNoTypeCheck[int64](leftResults[0]),
+			vector.MustFixedColNoTypeCheck[int64](rightResults[0]))
+	case types.T_float64:
+		require.Equal(t,
+			vector.MustFixedColNoTypeCheck[float64](leftResults[0]),
+			vector.MustFixedColNoTypeCheck[float64](rightResults[0]))
+	case types.T_decimal128:
+		require.Equal(t,
+			vector.MustFixedColNoTypeCheck[types.Decimal128](leftResults[0]),
+			vector.MustFixedColNoTypeCheck[types.Decimal128](rightResults[0]))
+	case types.T_decimal256:
+		require.Equal(t,
+			vector.MustFixedColNoTypeCheck[types.Decimal256](leftResults[0]),
+			vector.MustFixedColNoTypeCheck[types.Decimal256](rightResults[0]))
+	default:
+		require.Failf(t, "unsupported result type", "%s", leftResults[0].GetType().Oid)
+	}
+}
+
 type expectedSumAvg struct {
 	expected    expectedResult
 	b2          [2]expectedResult
@@ -222,6 +268,88 @@ func TestAvg(t *testing.T) {
 
 func TestAvgDistinct(t *testing.T) {
 	testSumAvg(t, makeAvgDistinctExec, newExpectedSumAvg(6, 6, 6, 126000))
+}
+
+func TestSumAvgBulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_int64.ToType()
+	seed := testutil.NewInt64Vector(1, typ, mp, false, nil, []int64{math.MaxInt64 - 1})
+	delta := testutil.NewInt64Vector(3, typ, mp, false, nil, []int64{1, 1, -2})
+	defer seed.Free(mp)
+	defer delta.Free(mp)
+
+	testCases := []struct {
+		name     string
+		makeExec func(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec
+	}{
+		{"sum", makeSumExec},
+		{"avg", makeAvgExec},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			batch := tc.makeExec(t, mp, typ)
+			bulk := tc.makeExec(t, mp, typ)
+			defer batch.Free()
+			defer bulk.Free()
+
+			require.NoError(t, batch.GroupGrow(1))
+			require.NoError(t, bulk.GroupGrow(1))
+			require.NoError(t, batch.BatchFill(0, []uint64{1}, []*vector.Vector{seed}))
+			require.NoError(t, bulk.BatchFill(0, []uint64{1}, []*vector.Vector{seed}))
+
+			require.NoError(t, batch.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{delta}))
+			require.NoError(t, bulk.BulkFill(0, []*vector.Vector{delta}))
+			requireSingleAggResultEqual(t, mp, batch, bulk)
+		})
+	}
+}
+
+func TestSumAvgDecimal256BulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.New(types.T_decimal256, 76, 0)
+	one := types.Decimal256FromInt64(1)
+	two := types.Decimal256FromInt64(2)
+	max := types.Decimal256{
+		B0_63:    ^uint64(0),
+		B64_127:  ^uint64(0),
+		B128_191: ^uint64(0),
+		B192_255: ^(uint64(1) << 63),
+	}
+	seedVal, err := max.Sub256(one)
+	require.NoError(t, err)
+
+	seed := buildDecimal256Vector(t, mp, typ, nil, []types.Decimal256{seedVal})
+	delta := buildDecimal256Vector(t, mp, typ, nil, []types.Decimal256{one, one, two.Minus()})
+	defer seed.Free(mp)
+	defer delta.Free(mp)
+
+	testCases := []struct {
+		name  string
+		isSum bool
+		aggID int64
+	}{
+		{"sum", true, AggIdOfSum},
+		{"avg", false, AggIdOfAvg},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			batch := newSumAvgDecExec[types.Decimal256, types.Decimal256](mp, tc.isSum, tc.aggID, false, typ)
+			bulk := newSumAvgDecExec[types.Decimal256, types.Decimal256](mp, tc.isSum, tc.aggID, false, typ)
+			defer batch.Free()
+			defer bulk.Free()
+
+			require.NoError(t, batch.GroupGrow(1))
+			require.NoError(t, bulk.GroupGrow(1))
+			require.NoError(t, batch.BatchFill(0, []uint64{1}, []*vector.Vector{seed}))
+			require.NoError(t, bulk.BatchFill(0, []uint64{1}, []*vector.Vector{seed}))
+
+			require.NoError(t, batch.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{delta}))
+			require.NoError(t, bulk.BulkFill(0, []*vector.Vector{delta}))
+			requireSingleAggResultEqual(t, mp, batch, bulk)
+		})
+	}
 }
 
 func TestSumAvgBulkFillIntermediateRoundTrip(t *testing.T) {
