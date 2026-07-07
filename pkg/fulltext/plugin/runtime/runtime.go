@@ -50,15 +50,19 @@ func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehav
 	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
-// RestoreBehavior — CreateTable populates fulltext's inverted-index hidden table
-// inline for a sync index (CROSS APPLY fulltext_index_tokenize), and the
-// restore's block-level clone APPENDS, so it must be emptied with DELETE …
-// WHERE TRUE before the clone re-supplies it — DeleteBeforeClone is the hidden
-// table. (For an async index the table is empty at CreateTable, so the delete is
-// a harmless no-op.) The compile hook's RestoreInitSQL returns "" — no reindex;
-// clone + CDC catch-up rebuild it.
-func (h CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
-	return catalogplugin.RestoreBehavior{DeleteBeforeClone: h.HiddenTableTypes()}
+// RestoreBehavior — empty, like the other empty-at-create algos (HNSW/CAGRA/IVF-PQ).
+// A fulltext index's hidden tables are empty at CreateTable during a clone (the source
+// rows arrive with the block-level clone, not the inline populate), so there is no seed
+// to DELETE before the clone — DeleteBeforeClone is an IVF-FLAT need (it seeds
+// centroids/entries non-empty), not fulltext's. Reconstruction happens in the compile
+// hook's RestoreInitSQL: a retrieval index rebuilds its tag=0 base (ALTER … REINDEX …
+// FULLTEXT FORCE_SYNC — its sync build would otherwise seed a base the block-clone
+// doubles), while a postings/ngram index keeps the no-op "SELECT 1" (the clone copies
+// its one hidden table verbatim; CDC catch-up handles increments). (A DeleteBeforeClone
+// list would also be dead here: the postings def's IndexAlgoTableType is "", which never
+// matches the table-type-keyed list.)
+func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
+	return catalogplugin.RestoreBehavior{}
 }
 
 // BuildSessionVars captures fulltext_max_index_capacity into algo_params at
