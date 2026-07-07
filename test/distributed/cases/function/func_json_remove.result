@@ -1,0 +1,76 @@
+SELECT JSON_REMOVE('{"a":1,"b":2}', '$.a') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"b": 2}
+SELECT JSON_REMOVE('["a", ["b", "c"], "d"]', '$[1]') AS result;
+➤ result[-1,2147483647,0]  𝄀
+["a", "d"]
+SELECT JSON_REMOVE('{"a":{"b":1,"c":2},"d":3}', '$.a.b') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": {"c": 2}, "d": 3}
+SELECT JSON_REMOVE('{"a":1}', '$.missing') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": 1}
+SELECT JSON_REMOVE('{"a":1}', '$.a.b') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": 1}
+SELECT JSON_REMOVE('{"a":1,"b":2}', '$.a[0]') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"b": 2}
+SELECT JSON_REMOVE('{"a":1,"b":2}', '$[0].a') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"b": 2}
+SELECT JSON_REMOVE('1', '$[0]') AS result;
+➤ result[-1,2147483647,0]  𝄀
+1
+SELECT JSON_REMOVE('["a","b","c","d"]', '$[1]', '$[1]') AS result;
+➤ result[-1,2147483647,0]  𝄀
+["a", "d"]
+SELECT JSON_REMOVE('{"a":1,"b":2,"c":3}', '$.a', '$.c') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"b": 2}
+SELECT JSON_REMOVE(NULL, '$.a') AS result;
+➤ result[-1,2147483647,0]  𝄀
+null
+SELECT JSON_REMOVE('{"a":1}', NULL) AS result;
+➤ result[-1,2147483647,0]  𝄀
+null
+SELECT JSON_REMOVE('{"a":1}', '$') AS result;
+invalid argument json_remove, bad value invalid path expression
+SELECT JSON_REMOVE('{"a":1}', '$.*') AS result;
+invalid argument json_remove, bad value invalid path expression
+SELECT JSON_REMOVE('{"a":1}', '$**.a') AS result;
+invalid argument json_remove, bad value invalid path expression
+DROP TABLE IF EXISTS json_remove_users;
+CREATE TABLE json_remove_users (
+id INT PRIMARY KEY,
+info JSON
+);
+INSERT INTO json_remove_users (id, info) VALUES
+(1, '{"name":"Alice","age":30,"email":"alice@example.com","skills":["Go","SQL","Python"]}'),
+(2, '{"name":"Bob","age":25,"address":{"city":"Beijing","zip":"100000"}}');
+SELECT * FROM json_remove_users ORDER BY id;
+➤ id[4,32,0]  ¦  info[-1,2147483647,0]  𝄀
+1  ¦  {"age": 30, "email": "alice@example.com", "name": "Alice", "skills": ["Go", "SQL", "Python"]}  𝄀
+2  ¦  {"address": {"city": "Beijing", "zip": "100000"}, "age": 25, "name": "Bob"}
+UPDATE json_remove_users
+SET info = JSON_REMOVE(info, '$.email')
+WHERE id = 1;
+SELECT * FROM json_remove_users ORDER BY id;
+➤ id[4,32,0]  ¦  info[-1,2147483647,0]  𝄀
+1  ¦  {"age": 30, "name": "Alice", "skills": ["Go", "SQL", "Python"]}  𝄀
+2  ¦  {"address": {"city": "Beijing", "zip": "100000"}, "age": 25, "name": "Bob"}
+UPDATE json_remove_users
+SET info = JSON_REMOVE(info, '$.skills[1]')
+WHERE id = 1;
+SELECT * FROM json_remove_users ORDER BY id;
+➤ id[4,32,0]  ¦  info[-1,2147483647,0]  𝄀
+1  ¦  {"age": 30, "name": "Alice", "skills": ["Go", "Python"]}  𝄀
+2  ¦  {"address": {"city": "Beijing", "zip": "100000"}, "age": 25, "name": "Bob"}
+UPDATE json_remove_users
+SET info = JSON_REMOVE(info, '$.address.zip', '$.missing')
+WHERE id = 2;
+SELECT * FROM json_remove_users ORDER BY id;
+➤ id[4,32,0]  ¦  info[-1,2147483647,0]  𝄀
+1  ¦  {"age": 30, "name": "Alice", "skills": ["Go", "Python"]}  𝄀
+2  ¦  {"address": {"city": "Beijing"}, "age": 25, "name": "Bob"}
+DROP TABLE json_remove_users;

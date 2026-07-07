@@ -15,6 +15,7 @@
 package bytejson
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -63,6 +64,89 @@ func Test_Modify(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+}
+
+func TestRemove(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		paths []string
+		want  string
+	}{
+		{
+			name:  "object key",
+			input: `{"a":1,"b":2}`,
+			paths: []string{"$.a"},
+			want:  `{"b": 2}`,
+		},
+		{
+			name:  "array element compacts",
+			input: `["a",["b","c"],"d"]`,
+			paths: []string{"$[1]"},
+			want:  `["a", "d"]`,
+		},
+		{
+			name:  "nested object key",
+			input: `{"a":{"b":1,"c":2},"d":3}`,
+			paths: []string{"$.a.b"},
+			want:  `{"a": {"c": 2}, "d": 3}`,
+		},
+		{
+			name:  "missing path is noop",
+			input: `{"a":1}`,
+			paths: []string{"$.b", "$.a.b", "$[1]"},
+			want:  `{"a": 1}`,
+		},
+		{
+			name:  "paths are applied left to right",
+			input: `["a","b","c","d"]`,
+			paths: []string{"$[1]", "$[1]"},
+			want:  `["a", "d"]`,
+		},
+		{
+			name:  "scalar array index zero autowrap removes target",
+			input: `{"a":1,"b":2}`,
+			paths: []string{"$.a[0]"},
+			want:  `{"b": 2}`,
+		},
+		{
+			name:  "root object array index zero autowrap removes member",
+			input: `{"a":1,"b":2}`,
+			paths: []string{"$[0].a"},
+			want:  `{"b": 2}`,
+		},
+		{
+			name:  "root scalar array index zero autowrap is noop",
+			input: `1`,
+			paths: []string{"$[0]"},
+			want:  `1`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bj := mustParseByteJson(t, tt.input)
+			paths := make([]*Path, 0, len(tt.paths))
+			for _, pathStr := range tt.paths {
+				path, err := ParseJsonPath(pathStr)
+				require.NoError(t, err)
+				paths = append(paths, &path)
+			}
+
+			got, err := bj.Remove(paths)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, mustMarshalByteJson(t, got))
+		})
+	}
+}
+
+func TestRemoveRejectsNonSimplePath(t *testing.T) {
+	bj := mustParseByteJson(t, `{"a":1}`)
+	path, err := ParseJsonPath("$.*")
+	require.NoError(t, err)
+
+	_, err = bj.Remove([]*Path{&path})
+	require.Error(t, err)
 }
 
 func TestAppendBinaryJSON(t *testing.T) {
@@ -160,6 +244,24 @@ func TestAppendBinaryJSON(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mustParseByteJson(t *testing.T, input string) ByteJson {
+	t.Helper()
+	var v any
+	decoder := json.NewDecoder(bytes.NewBufferString(input))
+	decoder.UseNumber()
+	require.NoError(t, decoder.Decode(&v))
+	bj, err := CreateByteJSON(v)
+	require.NoError(t, err)
+	return bj
+}
+
+func mustMarshalByteJson(t *testing.T, bj ByteJson) string {
+	t.Helper()
+	out, err := bj.MarshalJSON()
+	require.NoError(t, err)
+	return string(out)
 }
 
 func TestAppendBinaryNumber(t *testing.T) {

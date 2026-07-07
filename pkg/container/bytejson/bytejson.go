@@ -570,6 +570,28 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 	return bj, nil
 }
 
+func (bj ByteJson) Remove(pathList []*Path) (ByteJson, error) {
+	if len(pathList) == 0 {
+		return bj, nil
+	}
+
+	for _, path := range pathList {
+		if path == nil || path.empty() || !path.IsSimple() {
+			return Null, moerr.NewInvalidInputNoCtx("path expression is not simple")
+		}
+	}
+
+	var err error
+	for _, path := range pathList {
+		modifier := &bytejsonModifier{bj: bj}
+		bj, err = modifier.remove(path)
+		if err != nil {
+			return Null, err
+		}
+	}
+	return bj, nil
+}
+
 func (bj ByteJson) canUnnest() bool {
 	return bj.Type == TpCodeArray || bj.Type == TpCodeObject
 }

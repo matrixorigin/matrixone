@@ -1999,6 +1999,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_remove`
+	{
+		functionId: JSON_REMOVE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonRemoveCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonRemove().buildJsonRemove
+				},
+			},
+		},
+	},
+
 	// function `json_length`
 	{
 		functionId: JSON_LENGTH,
