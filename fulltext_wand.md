@@ -566,9 +566,15 @@ is retained only as a schema-change / corruption-recovery fallback).
     at 0/2/5, surviving deletes persist, tail stays one frame), pure churn (no-op), and
     delete-only tail. Run by the standalone `fulltext_wand_compact` TVF (SQL, not a Go API
     call from idxcron).
-  - **2b-tiered merge — TODO.** Sub count grows one per fold (0, 2, 5, …) and folded/old subs
-    accumulate shadowed docs. A tiered pass merges similar-size subs (≤ `max_index_capacity`),
-    dropping dead/shadowed docs + resolved surviving-deletes, to bound sub count + reclaim space.
+  - **2b-tiered merge — DONE (commit `21b189e69`).** `TieredMergeBases` coalesces one adjacent,
+    recency-contiguous run of small subs into fewer capacity-capped subs, re-applying the tail
+    deletes so promoted docs stay dead. Memory O(run) ≤ 128 MiB. Runs opportunistically at the
+    end of `CompactSegments` (self-gating). **Adjacency is a correctness requirement:** the merged
+    sub takes the run's MAX recency (promoting lower-recency members), so a non-adjacent pick could
+    leapfrog an excluded middle sub holding a newer copy → stale result. Verified live: 3 fold
+    rounds of updates+deletes coalesce 4 subs → 1, newest version always wins, stale/deleted docs
+    gone. **Known limitation:** delete tombstones persist in the tail until a full merge (bounded
+    by distinct deleted pks).
   - **`MERGE` command wiring — TODO.** idxcron currently fires a full `FORCE_SYNC` REBUILD
     (O(N) re-tokenize). To make it fire the fold instead: grammar `MERGE` keyword in the
     REINDEX fulltext option (goyacc regen) + `AlterTableAlterReIndex.Merge` proto (`make pb`)
@@ -667,12 +673,26 @@ never deleted). Deleting the **low** chunk prefix does not move `MAX`, so ISCP's
 position is untouched (`NextTailChunkId` also maxes over base recency, so it never dips
 below K after the tail delete).
 
-**2b-tiered merge — TODO.** The fold accumulates one base sub per run (recency 0, 2, 5, …)
-and never reclaims the shadowed docs in old subs (or the surviving-delete tombstones). A
-tiered pass merges segments of *similar size* (Lucene `TieredMergePolicy`), live-filtering
-against the global `ComputeLiveness` to drop dead/shadowed docs + resolved surviving-deletes,
-re-split ≤ capacity — rewriting only that subset (O(merged subset), not O(N)) to bound the
-sub count and reclaim space.
+**2b-tiered merge — DONE (`21b189e69`).** `TieredMergeBases` (`compact.go`) coalesces one
+adjacent, recency-contiguous run of small subs (< `smallSubBytes`, ≤ `mergeFactor` subs,
+≤ `maxMergeBytes` = 128 MiB resident) into fewer `Split(capacity)` subs at the run's MAX
+recency, `FilterLive`'d against `ComputeLiveness(run, tailDeletes)` — dropping docs a
+higher-recency run member or a tail delete supersedes, O(run) memory. Runs opportunistically
+at the end of `CompactSegments` (self-gating: a metadata scan + no-op when no run qualifies).
+Two correctness constraints, both enforced by `selectMergeRun` + the delete re-application:
+1. **Adjacency (not similar-size).** The merged sub is promoted to the run's max recency, so
+   the run must skip no sub whose recency lies inside its range — else a promoted stale copy
+   could leapfrog an excluded middle sub holding a newer copy of the same pk. `selectMergeRun`
+   only returns an adjacent run in recency order. (This is why it is NOT the Lucene
+   similar-size `TieredMergePolicy` — recency contiguity dominates size grouping.)
+2. **Re-apply deletes.** Promotion could also lift a doc past a delete frame whose chunk_id
+   sits between the doc's old recency and the run max; the merge re-applies the tail delete
+   map so it stays dead. The tail itself is untouched (its frames still shadow non-merged subs).
+
+*Tombstone reclamation* is deferred: a delete frame persists in the tail even after its doc is
+fully merged out of every base, because neither the fold nor a partial tiered run has the global
+pk knowledge to prove it redundant. Bounded by distinct-deleted-pks (the fold re-frames them into
+one frame); a future full/global merge drops them.
 
 - **Large-scale successor: watermark + lazy GC.** When a single compaction txn gets too
   big/contended vs. live ISCP (≈ the 50 GB base case), split it: write the new sealed
@@ -725,9 +745,10 @@ read side.
   `fulltext_max_index_capacity` + **tag=0 create-build capping (DONE 2026-07-07,
   `a0573840d`)**. Remaining: cross-invocation top-up (blocked on item 2's live-filter
   primitive).
-- **2 — recency foundation + O(tail) fold DONE** (`0c72710e2`, `523d7daa2`); its
-  live-filter/dedup primitive also unblocks item 1's top-up. **Remaining:** 2b tiered
-  merge (space/count bound) + `MERGE` command wiring (idxcron → fold instead of full rebuild).
+- **2 — recency foundation + O(tail) fold + tiered merge DONE** (`0c72710e2`, `523d7daa2`,
+  `21b189e69`); its live-filter/dedup primitive also unblocks item 1's top-up. **Remaining:**
+  `MERGE` command wiring (idxcron → the fold+tiered `fulltext_wand_compact` TVF instead of a
+  full REBUILD) + tombstone GC.
 
 ## Verification
 - **Unit**: (1) `tokenize → postings → fulltext_wand_create` round-trip builds a loadable WAND index. (2) **Differential**: `fulltext_wand_search` top-K vs a brute-force reference (`Σ tf·idf²` over all docs + full sort) on randomized corpora → assert identical top-K and scores (the WAND-correctness gold test). (3) Parser/mode parse tests in `pkg/sql/parsers/dialect/mysql/mysql_sql_test.go` (`IN RETRIEVAL MODE`, default-on-retrieval-parser).
