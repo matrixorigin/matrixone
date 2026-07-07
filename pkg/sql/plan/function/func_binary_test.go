@@ -2206,6 +2206,66 @@ func TestDateAddOverflow(t *testing.T) {
 	}
 }
 
+func TestDateIntAddOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	ivecs := make([]*vector.Vector, 3)
+	var err error
+	ivecs[0], err = vector.NewConstFixed(types.T_int32.ToType(), int32(99991231), 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Day), 1, proc.Mp())
+	require.NoError(t, err)
+
+	result := vector.NewFunctionResultWrapper(types.T_int32.ToType(), proc.Mp())
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	err = DateIntAdd(ivecs, result, proc, 1, nil)
+	require.NoError(t, err)
+	require.True(t, result.GetResultVector().GetNulls().Contains(0))
+
+	for _, v := range ivecs {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	if result != nil {
+		result.Free()
+	}
+}
+
+func TestDateIntSubOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	ivecs := make([]*vector.Vector, 3)
+	var err error
+	ivecs[0], err = vector.NewConstFixed(types.T_int32.ToType(), int32(10101), 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Day), 1, proc.Mp())
+	require.NoError(t, err)
+
+	result := vector.NewFunctionResultWrapper(types.T_int32.ToType(), proc.Mp())
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	err = DateIntSub(ivecs, result, proc, 1, nil)
+	require.NoError(t, err)
+	require.True(t, result.GetResultVector().GetNulls().Contains(0))
+
+	for _, v := range ivecs {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	if result != nil {
+		result.Free()
+	}
+}
+
 // TestDateAddOverflowNegative tests that date_sub with large negative interval returns zero date
 func TestDateAddOverflowNegative(t *testing.T) {
 	proc := testutil.NewProcess(t)
