@@ -1797,12 +1797,7 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 		}
 		p.EncodeDecimal128(val)
 	case types.T_decimal256:
-		val, ok := v.(types.Decimal256)
-		if !ok {
-			return moerr.NewInvalidInputNoCtx("expected decimal256 value")
-		}
-		raw := types.EncodeDecimal256(&val)
-		p.EncodeStringType(raw)
+		return encodeDecodedDecimal256(p, v)
 	case types.T_uuid:
 		val, ok := v.(types.Uuid)
 		if !ok {
@@ -1844,6 +1839,21 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 			return moerr.NewInvalidInputNoCtx("expected byte slice value")
 		}
 		p.EncodeStringType(bytesVal)
+	}
+	return nil
+}
+
+func encodeDecodedDecimal256(p *types.Packer, v any) error {
+	switch val := v.(type) {
+	case types.Decimal256:
+		p.EncodeStringType(types.EncodeDecimal256(&val))
+	case []byte:
+		if len(val) != types.Decimal256Size {
+			return moerr.NewInvalidInputNoCtxf("expected decimal256 raw bytes length %d, got %d", types.Decimal256Size, len(val))
+		}
+		p.EncodeStringType(val)
+	default:
+		return moerr.NewInvalidInputNoCtx("expected decimal256 value")
 	}
 	return nil
 }

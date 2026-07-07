@@ -450,6 +450,108 @@ func TestBranchHashmapProjectChangeKey(t *testing.T) {
 	require.Equal(t, []byte("c"), row[1])
 }
 
+func TestBranchHashmapDecimal256DecodedReencodePaths(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	decimalTyp := types.New(types.T_decimal256, 65, 30)
+	amountA := mustParseDecimal256(t, decimalTyp, "12345678901234567890123456789012345.123456789012345678901234567890")
+	amountB := mustParseDecimal256(t, decimalTyp, "-22345678901234567890123456789012345.123456789012345678901234567890")
+
+	t.Run("project", func(t *testing.T) {
+		idVec := buildInt64Vector(t, mp, []int64{1, 2})
+		amountVec := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA, amountB})
+		payloadVec := buildStringVector(t, mp, []string{"a", "b"})
+		defer idVec.Free(mp)
+		defer amountVec.Free(mp)
+		defer payloadVec.Free(mp)
+
+		bh, err := NewBranchHashmap()
+		require.NoError(t, err)
+		defer bh.Close()
+
+		require.NoError(t, bh.PutByVectors([]*vector.Vector{idVec, amountVec, payloadVec}, []int{0}))
+
+		projected, err := bh.Project([]int{1}, 1)
+		require.NoError(t, err)
+		defer projected.Close()
+
+		probe := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA})
+		defer probe.Free(mp)
+
+		results, err := projected.GetByVectors([]*vector.Vector{probe})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		require.True(t, results[0].Exists)
+		require.Len(t, results[0].Rows, 1)
+
+		tuple, _, err := projected.DecodeRow(results[0].Rows[0])
+		require.NoError(t, err)
+		require.Equal(t, types.EncodeDecimal256(&amountA), tuple[1])
+	})
+
+	t.Run("pop full value", func(t *testing.T) {
+		amountVec := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA, amountB})
+		payloadVec := buildStringVector(t, mp, []string{"a", "b"})
+		defer amountVec.Free(mp)
+		defer payloadVec.Free(mp)
+
+		bh, err := NewBranchHashmap()
+		require.NoError(t, err)
+		defer bh.Close()
+
+		require.NoError(t, bh.PutByVectors([]*vector.Vector{amountVec, payloadVec}, []int{0}))
+
+		probe := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA})
+		defer probe.Free(mp)
+
+		results, err := bh.GetByVectors([]*vector.Vector{probe})
+		require.NoError(t, err)
+		require.True(t, results[0].Exists)
+		require.Len(t, results[0].Rows, 1)
+
+		removed, err := bh.PopByEncodedFullValue(results[0].Rows[0], true)
+		require.NoError(t, err)
+		require.True(t, removed.Exists)
+		require.Len(t, removed.Rows, 1)
+
+		after, err := bh.GetByVectors([]*vector.Vector{probe})
+		require.NoError(t, err)
+		require.False(t, after[0].Exists)
+	})
+
+	t.Run("pop exact full value", func(t *testing.T) {
+		amountVec := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA, amountA})
+		payloadVec := buildStringVector(t, mp, []string{"one", "two"})
+		defer amountVec.Free(mp)
+		defer payloadVec.Free(mp)
+
+		bh, err := NewBranchHashmap()
+		require.NoError(t, err)
+		defer bh.Close()
+
+		require.NoError(t, bh.PutByVectors([]*vector.Vector{amountVec, payloadVec}, []int{0}))
+
+		probe := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA})
+		defer probe.Free(mp)
+
+		results, err := bh.GetByVectors([]*vector.Vector{probe})
+		require.NoError(t, err)
+		require.True(t, results[0].Exists)
+		require.Len(t, results[0].Rows, 2)
+
+		valueCopy := append([]byte(nil), results[0].Rows[0]...)
+		removed, err := bh.PopByEncodedFullValueExact(valueCopy, false)
+		require.NoError(t, err)
+		require.Equal(t, 1, removed)
+
+		after, err := bh.GetByVectors([]*vector.Vector{probe})
+		require.NoError(t, err)
+		require.True(t, after[0].Exists)
+		require.Len(t, after[0].Rows, 1)
+	})
+}
+
 func TestBranchHashmapPopByEncodedFullValues(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -1762,6 +1864,20 @@ func buildInt32Vector(tb testing.TB, mp *mpool.MPool, values []int32) *vector.Ve
 	return vec
 }
 
+func buildDecimal256Vector(tb testing.TB, mp *mpool.MPool, typ types.Type, values []types.Decimal256) *vector.Vector {
+	tb.Helper()
+	vec := vector.NewVec(typ)
+	require.NoError(tb, vector.AppendFixedList(vec, values, nil, mp))
+	return vec
+}
+
+func mustParseDecimal256(tb testing.TB, typ types.Type, s string) types.Decimal256 {
+	tb.Helper()
+	val, err := types.ParseDecimal256(s, typ.Width, typ.Scale)
+	require.NoError(tb, err)
+	return val
+}
+
 type limitedAllocator struct {
 	mu    sync.Mutex
 	limit uint64
@@ -2081,6 +2197,10 @@ func TestEncodeDecodedValue_AllTypes(t *testing.T) {
 	p := types.NewPacker()
 	defer p.Close()
 
+	decimal256Typ := types.New(types.T_decimal256, 65, 30)
+	decimal256Val := mustParseDecimal256(t, decimal256Typ, "12345678901234567890123456789012345.123456789012345678901234567890")
+	decimal256Raw := append([]byte(nil), types.EncodeDecimal256(&decimal256Val)...)
+
 	stringTypeOids := []types.T{
 		types.T_char,
 		types.T_varchar,
@@ -2118,6 +2238,8 @@ func TestEncodeDecodedValue_AllTypes(t *testing.T) {
 		{name: "timestamp", typ: types.T_timestamp.ToType(), value: types.Timestamp(456), expect: types.Timestamp(456)},
 		{name: "decimal64", typ: types.T_decimal64.ToType(), value: types.Decimal64(123456), expect: types.Decimal64(123456)},
 		{name: "decimal128", typ: types.T_decimal128.ToType(), value: types.Decimal128{B0_63: 1, B64_127: 2}, expect: types.Decimal128{B0_63: 1, B64_127: 2}},
+		{name: "decimal256_typed", typ: decimal256Typ, value: decimal256Val, expect: decimal256Raw},
+		{name: "decimal256_raw", typ: decimal256Typ, value: decimal256Raw, expect: decimal256Raw},
 		{name: "uuid", typ: types.T_uuid.ToType(), value: types.Uuid{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, expect: types.Uuid{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}},
 		{name: "bit", typ: types.T_bit.ToType(), value: uint64(10), expect: uint64(10)},
 		{name: "enum_value", typ: types.T_enum.ToType(), value: types.Enum(7), expect: types.Enum(7)},
@@ -2164,6 +2286,7 @@ func TestEncodeDecodedValue_TypeMismatch(t *testing.T) {
 		{name: "int8_from_int16", typ: types.T_int8.ToType(), value: int16(1)},
 		{name: "string_from_string", typ: types.T_varchar.ToType(), value: "not-bytes"},
 		{name: "enum_invalid_type", typ: types.T_enum.ToType(), value: int32(3)},
+		{name: "decimal256_invalid_raw", typ: types.New(types.T_decimal256, 65, 30), value: []byte{1, 2, 3}},
 	}
 
 	for _, tc := range cases {
