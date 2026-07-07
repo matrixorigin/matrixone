@@ -794,7 +794,7 @@ func TestReadLoadParquetRowGroupMetadataLocalFile(t *testing.T) {
 	}
 
 	metas, stats, err := testCompile.readLoadParquetRowGroupMetadata(
-		param, []string{filePath}, []int64{int64(len(data))})
+		&plan.Node{}, param, []string{filePath}, []int64{int64(len(data))})
 	require.NoError(t, err)
 	require.Len(t, metas, 3)
 	t.Logf("parquet footer metadata stats: files=%d row_groups=%d rows=%d bytes=%d read_calls=%d read_bytes=%d duration=%s",
@@ -853,6 +853,7 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 		Stats: &plan.Stats{Cost: float64(len(data)), Rowsize: 1},
 		TableDef: &plan.TableDef{
 			Createsql: string(createSQL),
+			Cols:      []*plan.ColDef{{Name: "c"}},
 		},
 		ExternScan: &plan.ExternScan{
 			Type:           int32(plan.ExternType_LOAD),
@@ -880,6 +881,129 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 		}
 	}
 	require.Equal(t, map[int32]bool{0: true, 1: true, 2: true}, seen)
+}
+
+func TestCompileExternScanParquetLoadUsesRowGroupFanoutWithEmptyFiles(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	dir := t.TempDir()
+	emptyData := writeCompileInt32ParquetWithRowGroups(t, nil, 2)
+	data := writeCompileInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3}, 2)
+	emptyFile := filepath.Join(dir, "part-0.parquet")
+	dataFile := filepath.Join(dir, "part-1.parquet")
+	require.NoError(t, os.WriteFile(emptyFile, emptyData, 0o600))
+	require.NoError(t, os.WriteFile(dataFile, data, 0o600))
+	pattern := filepath.Join(dir, "part-*.parquet")
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: pattern,
+			Format:   tree.PARQUET,
+			FileSize: int64(len(emptyData) + len(data)),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD),
+			Parallel:   true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	node := &plan.Node{
+		Stats: &plan.Stats{Cost: float64(len(emptyData) + len(data)), Rowsize: 1},
+		TableDef: &plan.TableDef{
+			Createsql: string(createSQL),
+			Cols:      []*plan.ColDef{{Name: "c"}},
+		},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	ss, err := testCompile.compileExternScan(node)
+	require.NoError(t, err)
+	require.Len(t, ss, 2)
+
+	seen := make(map[int32]bool)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		ext := scope.RootOp.(*external.External)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.Equal(t, []string{dataFile}, ext.Es.FileList)
+		require.NotEmpty(t, ext.Es.ParquetRowGroupShards)
+		for _, shard := range ext.Es.ParquetRowGroupShards {
+			require.Equal(t, int32(0), shard.FileIndex)
+			for rowGroupIdx := shard.RowGroupStart; rowGroupIdx < shard.RowGroupEnd; rowGroupIdx++ {
+				seen[rowGroupIdx] = true
+			}
+		}
+	}
+	require.Equal(t, map[int32]bool{0: true, 1: true}, seen)
+}
+
+func TestCompileExternScanParquetRowGroupFanoutValidatesEmptyFileColumnCount(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	dir := t.TempDir()
+	emptyData := writeCompileEmptyParquet(t, parquet.Group{
+		"c":     parquet.Leaf(parquet.Int32Type),
+		"extra": parquet.Leaf(parquet.Int32Type),
+	})
+	data := writeCompileInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3}, 2)
+	emptyFile := filepath.Join(dir, "part-0.parquet")
+	dataFile := filepath.Join(dir, "part-1.parquet")
+	require.NoError(t, os.WriteFile(emptyFile, emptyData, 0o600))
+	require.NoError(t, os.WriteFile(dataFile, data, 0o600))
+	pattern := filepath.Join(dir, "part-*.parquet")
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: pattern,
+			Format:   tree.PARQUET,
+			FileSize: int64(len(emptyData) + len(data)),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD),
+			Parallel:   true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	node := &plan.Node{
+		Stats: &plan.Stats{Cost: float64(len(emptyData) + len(data)), Rowsize: 1},
+		TableDef: &plan.TableDef{
+			Createsql: string(createSQL),
+			Cols:      []*plan.ColDef{{Name: "c"}},
+		},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	_, err = testCompile.compileExternScan(node)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "column count mismatch")
 }
 
 func TestCompileExternScanParquetLoadUsesFileFanoutMainPath(t *testing.T) {
@@ -961,6 +1085,14 @@ func writeCompileInt32ParquetWithRowGroups(t *testing.T, values []int32, rowsPer
 	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
 	require.Len(t, f.RowGroups(), (len(values)+int(rowsPerGroup)-1)/int(rowsPerGroup))
+	return buf.Bytes()
+}
+
+func writeCompileEmptyParquet(t *testing.T, group parquet.Group) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, parquet.NewSchema("x", group))
+	require.NoError(t, w.Close())
 	return buf.Bytes()
 }
 
