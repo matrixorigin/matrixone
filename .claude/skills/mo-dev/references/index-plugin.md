@@ -12,6 +12,14 @@
 - [8. Testing And Completion](#8-testing-and-completion)
 - [9. Reviewing An Index-Plugin Change](#9-reviewing-an-index-plugin-change)
 
+> **READ FIRST — the hook contract lives in the repo:** `pkg/indexplugin/HOOKS.md`
+> is the canonical per-hook contract (both hook interfaces, the empty-at-create vs
+> seeded invariant, the two async axes, the **two clone/restore paths** and their
+> hooks, and a per-algo matrix). This skill file is the *process*; HOOKS.md is the
+> *contract*. Before implementing or changing ANY hook, open HOOKS.md and the
+> matching hook in HNSW (`pkg/vectorindex/hnsw/plugin/`, the reference impl for an
+> async/rebuilt index) or IVF-FLAT (the reference for a sync/seeded index).
+
 ## 1. Why The Framework Exists
 
 Adding a vector index used to mean editing many files across `pkg/sql/compile`, `pkg/sql/plan`, `pkg/catalog`, and `pkg/vectorindex`, wired through repeated switch/if chains. Miss one site and the algorithm silently misbehaves.
@@ -109,9 +117,11 @@ Lift code into the sub-package matching the original SQL layer:
    - hidden-table-type constants in `pkg/catalog/types.go`
    - parser keyword only if syntax needs it
 2. Copy `pkg/vectorindex/ivfpq/plugin/` to `pkg/vectorindex/<x>/plugin/`, then rename packages/imports.
-3. Implement four hooks:
+3. Implement four hooks (per-hook contract + per-algo return values: `pkg/indexplugin/HOOKS.md`):
    - `catalog.Hooks`: hidden table types, params, defaults, supported types, quantization, clone/restore behavior, session vars, sync descriptor.
    - `compile.Hooks`: create, reindex, validate reindex params, drop, restore init SQL, idxcron metadata.
+   - Classify the index on the HOOKS.md §2 axis (empty-at-create vs seeded) and §3 axes
+     (DML-async vs build-async) FIRST — every clone/restore hook follows from those answers.
    - `plan.Hooks`: secondary/fulltext index defs, `CanApply`, `ApplyForSort`.
    - `idxcron.Hooks`: `Updatable`.
 4. If ANN rewrite is supported, add `applyIndicesForSortUsing<X>` + `prepare<X>IndexContext` in `pkg/sql/plan/apply_indices_<x>.go`, redirect methods in `pkg/sql/plan/plugin_builder.go`, and dispatch via `p.Plan().CanApply`.
@@ -192,3 +202,9 @@ git diff | grep -E '^-.*var _ (plugin\.)?(AlgoPlugin|Hooks)'
 
 6. Runtime kept out: no build/search kernel logic copied into plugin.
 7. New-algo completeness: registered in `all/` or `all_gpu/`, SQL case added under `test/distributed/cases/vector/`, CPU unit tests cover plan/schema/runtime hooks.
+8. Clone/restore closure (if the diff changes how any hidden table is populated — e.g.
+   a sync vs async build, a new hidden table, a seed): trace BOTH clone paths per
+   `pkg/indexplugin/HOOKS.md` §4 — Path A `cloneUnaffectedIndexes`/`AlterTableCloneBehavior`
+   and Path B `RestoreTable`/`RestoreBehavior`+`RestoreInitSQL`. A build that moves a
+   table from empty-at-create to seeded (or back) MUST update both. Clone-awareness
+   belongs in those hooks, never as an `IsTableClone()` branch inside `HandleCreateIndex`.

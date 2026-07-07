@@ -83,7 +83,7 @@ Read [references/operator-pipeline.md](references/operator-pipeline.md) before c
 
 ## Index-Plugin Rules
 
-Read [references/index-plugin.md](references/index-plugin.md) before touching vector/fulltext index algorithm dispatch.
+Read [references/index-plugin.md](references/index-plugin.md) before touching vector/fulltext index algorithm dispatch. For the per-hook contract (empty-vs-seeded invariant, the two async axes, the two clone/restore paths, per-algo matrix), read the in-repo `pkg/indexplugin/HOOKS.md` — and open the matching hook in HNSW (async/rebuilt) or IVF-FLAT (sync/seeded) as the template.
 
 - Work through `pkg/indexplugin.Get(algo)` and hook interfaces.
 - Do not add new per-algorithm `switch` / `if IsXxxIndexAlgo || ...` in SQL/catalog layers.
