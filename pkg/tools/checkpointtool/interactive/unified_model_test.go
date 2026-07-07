@@ -22,13 +22,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestUnifiedModel(t *testing.T) {
 	// Create empty reader for testing
 	reader := &checkpointtool.CheckpointReader{}
 	model := NewUnifiedModel(reader)
+	assert.Nil(t, model.Init())
+	assert.Equal(t, ViewModeList, model.state.Mode())
+	assert.Nil(t, model.state.Entries())
 
 	// Test initial view
 	view := model.View()
@@ -60,6 +65,57 @@ func TestUnifiedModelPageStack(t *testing.T) {
 
 	// After selecting checkpoint, stack should have 1 page
 	// (This would require mock data to work properly)
+}
+
+func TestUnifiedModelOpenObjectMessageTracksRange(t *testing.T) {
+	reader := &checkpointtool.CheckpointReader{}
+	model := NewUnifiedModel(reader)
+	stats := testObjectStats(t, 7, 10, 1, 100, 200)
+	rng := ckputil.TableRange{
+		TableID:     42,
+		ObjectType:  ckputil.ObjectType_Data,
+		ObjectStats: stats,
+	}
+	model.state.dataEntries = []*checkpointtool.ObjectEntryInfo{{
+		ObjectStats: stats,
+		Range:       rng,
+	}}
+
+	updated, cmd := model.Update(openObjectMsg{path: "obj"})
+	require.Same(t, model, updated)
+	require.NotNil(t, cmd)
+	assert.Equal(t, "obj", model.GetObjectToOpen())
+	require.NotNil(t, model.GetRangeToOpen())
+	assert.Equal(t, uint64(42), model.GetRangeToOpen().TableID)
+
+	model.ClearObjectToOpen()
+	assert.Empty(t, model.GetObjectToOpen())
+	assert.Nil(t, model.GetRangeToOpen())
+}
+
+func TestUnifiedModelCreatesPages(t *testing.T) {
+	model := NewUnifiedModel(&checkpointtool.CheckpointReader{})
+	model.state.logicalView = &checkpointtool.LogicalTableView{
+		Headers: []string{"object", "block", "row", "id"},
+	}
+
+	assert.NotNil(t, model.createTablesListPage())
+	assert.NotNil(t, model.createTableDetailPage())
+	assert.NotNil(t, model.createLogicalTablePage())
+	model.state.logicalView = nil
+	assert.NotNil(t, model.createLogicalTablePage())
+}
+
+func testObjectStats(t *testing.T, idByte byte, rows, blocks, size, originSize uint32) objectio.ObjectStats {
+	t.Helper()
+	stats := objectio.ObjectStats{}
+	objName := objectio.BuildObjectName(&types.Uuid{idByte}, uint16(idByte))
+	require.NoError(t, objectio.SetObjectStatsObjectName(&stats, objName))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(&stats, rows))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats, blocks))
+	require.NoError(t, objectio.SetObjectStatsSize(&stats, size))
+	require.NoError(t, objectio.SetObjectStatsOriginSize(&stats, originSize))
+	return stats
 }
 
 // TestExpandObjectStats tests the ObjectStats expansion function
@@ -187,6 +243,115 @@ func TestCheckpointListProvider(t *testing.T) {
 	})
 }
 
+func TestStateAndProvidersWithData(t *testing.T) {
+	dataStats := testObjectStats(t, 1, 100, 3, 2048, 4096)
+	tombStats := testObjectStats(t, 2, 5, 1, 256, 512)
+	otherStats := testObjectStats(t, 3, 7, 1, 128, 256)
+
+	state := &State{
+		filterAccountID: -1,
+		selectedTable:   100,
+		info: &checkpointtool.CheckpointInfo{
+			Dir:          "/tmp/ckp",
+			TotalEntries: 3,
+			GlobalCount:  1,
+			IncrCount:    2,
+		},
+		tables: []*checkpointtool.TableInfo{
+			{
+				AccountID: 1,
+				TableID:   100,
+				DataRanges: []ckputil.TableRange{{
+					TableID:     100,
+					ObjectType:  ckputil.ObjectType_Data,
+					ObjectStats: dataStats,
+				}},
+				TombRanges: []ckputil.TableRange{{
+					TableID:     100,
+					ObjectType:  ckputil.ObjectType_Tombstone,
+					ObjectStats: tombStats,
+				}},
+			},
+			{
+				AccountID: 2,
+				TableID:   200,
+				DataRanges: []ckputil.TableRange{{
+					TableID:     200,
+					ObjectType:  ckputil.ObjectType_Data,
+					ObjectStats: otherStats,
+				}},
+			},
+		},
+		dataEntries: []*checkpointtool.ObjectEntryInfo{{ObjectStats: dataStats}},
+		tombEntries: []*checkpointtool.ObjectEntryInfo{{ObjectStats: tombStats}},
+		logicalView: &checkpointtool.LogicalTableView{
+			Headers:      []string{"object", "block", "row", "id"},
+			Rows:         [][]string{{"obj", "0", "1", "42"}},
+			VisibleRows:  1,
+			DeletedRows:  2,
+			PhysicalRows: 3,
+		},
+	}
+
+	t.Run("state_filters_accounts_and_selection", func(t *testing.T) {
+		require.Same(t, state.tables[0], state.GetSelectedTable())
+		require.Len(t, state.FilteredTables(), 2)
+		state.SetAccountFilter(1)
+		require.True(t, state.HasAccountFilter())
+		assert.Equal(t, int64(1), state.GetAccountFilter())
+		filtered := state.FilteredTables()
+		require.Len(t, filtered, 1)
+		assert.Equal(t, uint64(100), filtered[0].TableID)
+		state.ClearAccountFilter()
+		require.False(t, state.HasAccountFilter())
+
+		accounts := state.Accounts()
+		require.Len(t, accounts, 2)
+		assert.ElementsMatch(t, []uint32{1, 2}, []uint32{accounts[0].AccountID, accounts[1].AccountID})
+	})
+
+	t.Run("providers_render_rows_and_overviews", func(t *testing.T) {
+		checkpoints := (&CheckpointListProvider{state: state}).GetOverview()
+		assert.Contains(t, checkpoints, "/tmp/ckp")
+		assert.Contains(t, checkpoints, "Total: 3")
+
+		tables := &TablesListProvider{state: state}
+		tableRows := tables.GetRows()
+		require.Len(t, tableRows, 2)
+		assert.Equal(t, []string{"1", "100", "1", "1"}, tableRows[0])
+		assert.Nil(t, tables.GetRowNums())
+		assert.Contains(t, tables.GetOverview(), "2 tables")
+
+		details := &TableDetailProvider{state: state}
+		detailRows := details.GetRows()
+		require.Len(t, detailRows, 2)
+		assert.Equal(t, "Data", detailRows[0][0])
+		assert.Equal(t, "0..2", detailRows[0][2])
+		assert.Equal(t, "Tomb", detailRows[1][0])
+		assert.Nil(t, details.GetRowNums())
+		assert.Contains(t, details.GetOverview(), "1 data objs")
+		assert.Contains(t, details.GetOverview(), "1 tomb objs")
+
+		logical := &LogicalTableProvider{state: state}
+		assert.Equal(t, state.logicalView.Rows, logical.GetRows())
+		assert.Nil(t, logical.GetRowNums())
+		assert.Contains(t, logical.GetOverview(), "visible: 1")
+
+		accounts := &AccountListProvider{state: state}
+		accountRows := accounts.GetRows()
+		require.Len(t, accountRows, 2)
+		assert.Nil(t, accounts.GetRowNums())
+		assert.Contains(t, accounts.GetOverview(), "2 accounts")
+	})
+
+	t.Run("providers_empty_overviews", func(t *testing.T) {
+		empty := &State{}
+		assert.Empty(t, (&TableDetailProvider{state: empty}).GetOverview())
+		assert.Nil(t, (&LogicalTableProvider{state: empty}).GetRows())
+		assert.Empty(t, (&LogicalTableProvider{state: empty}).GetOverview())
+	})
+}
+
 // TestCheckpointListHandler tests the handler behavior
 func TestCheckpointListHandler(t *testing.T) {
 	t.Run("match_row", func(t *testing.T) {
@@ -206,6 +371,51 @@ func TestCheckpointListHandler(t *testing.T) {
 		cmd := handler.OnBack()
 		// OnBack returns nil for checkpoint list (top level)
 		assert.Nil(t, cmd)
+	})
+}
+
+func TestTableHandlersCommands(t *testing.T) {
+	stats := testObjectStats(t, 9, 10, 1, 100, 200)
+	state := &State{
+		tables:      []*checkpointtool.TableInfo{{TableID: 42}},
+		dataEntries: []*checkpointtool.ObjectEntryInfo{{ObjectStats: stats}},
+		tombEntries: []*checkpointtool.ObjectEntryInfo{{ObjectStats: stats}},
+	}
+
+	t.Run("tables_select_back_and_filter", func(t *testing.T) {
+		handler := &tablesListHandler{state: state}
+		cmd := handler.OnSelect(0)
+		require.NotNil(t, cmd)
+		msg, ok := cmd().(selectTableMsg)
+		require.True(t, ok)
+		assert.Equal(t, uint64(42), msg.tableID)
+		assert.Nil(t, handler.OnSelect(99))
+		assert.Nil(t, handler.OnCustomKey("x"))
+		assert.True(t, handler.FilterRow([]string{"1"}, "1"))
+		assert.False(t, handler.FilterRow(nil, "1"))
+		_, ok = handler.OnBack()().(goBackMsg)
+		assert.True(t, ok)
+	})
+
+	t.Run("table_detail_select_back_filter_and_custom", func(t *testing.T) {
+		handler := &tableDetailHandler{state: state}
+		cmd := handler.OnSelect(0)
+		require.NotNil(t, cmd)
+		msg, ok := cmd().(openObjectMsg)
+		require.True(t, ok)
+		assert.Equal(t, stats.ObjectName().String(), msg.path)
+		require.NotNil(t, handler.OnSelect(1))
+		assert.Nil(t, handler.OnSelect(99))
+		assert.True(t, handler.FilterRow([]string{"Data"}, "data"))
+		assert.False(t, handler.FilterRow(nil, "data"))
+		assert.Nil(t, handler.OnCustomKey("x"))
+		_, ok = handler.OnBack()().(goBackMsg)
+		assert.True(t, ok)
+	})
+
+	t.Run("logical_back", func(t *testing.T) {
+		_, ok := (&logicalTableHandler{}).OnBack()().(goBackMsg)
+		assert.True(t, ok)
 	})
 }
 

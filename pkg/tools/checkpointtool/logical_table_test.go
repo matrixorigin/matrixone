@@ -76,6 +76,31 @@ func TestDedupeObjectStats(t *testing.T) {
 	assert.NotEqual(t, stats[0].ObjectName().String(), stats[1].ObjectName().String())
 }
 
+func TestLogicalTableViewWidthsAndRows(t *testing.T) {
+	require.Equal(t, len(logicalTableViewMetaHeaders), (*LogicalTableView)(nil).MetaWidth())
+	require.Zero(t, (*LogicalTableView)(nil).DataWidth())
+
+	view := newLogicalTableView()
+	require.Equal(t, len(logicalTableViewMetaHeaders), view.MetaWidth())
+	require.Zero(t, view.DataWidth())
+
+	view.Headers = append(view.Headers, "id", "name")
+	require.Equal(t, 3, view.MetaWidth())
+	require.Equal(t, 2, view.DataWidth())
+	require.Equal(t, []string{"42", "alice"}, view.DataRow([]string{"obj", "0", "1", "42", "alice"}))
+	require.Nil(t, view.DataRow([]string{"obj", "0"}))
+
+	view.Headers = []string{"object", "id"}
+	require.Equal(t, 1, view.MetaWidth())
+	require.Equal(t, 1, view.DataWidth())
+	require.Equal(t, []string{"42"}, view.DataRow([]string{"obj", "42"}))
+
+	view.Headers = nil
+	require.Zero(t, view.MetaWidth())
+	require.Zero(t, view.DataWidth())
+	require.Empty(t, view.DataRow(nil))
+}
+
 func newTestObjectEntryInfo(idByte byte, createPhysical int64, deletePhysical int64) *ObjectEntryInfo {
 	var objectID objectio.ObjectId
 	objectID[0] = idByte

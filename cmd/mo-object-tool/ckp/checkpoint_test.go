@@ -15,6 +15,7 @@
 package ckp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -446,6 +447,74 @@ func TestCleanObjectPath(t *testing.T) {
 	assert.Equal(t, "dump/account_1/t.csv", cleanObjectPath("dump/account_1/t.csv"))
 	assert.Equal(t, "tmp/dump/t.csv", cleanObjectPath("/tmp/dump/t.csv"))
 	assert.Equal(t, "dump/t.csv", cleanObjectPath("dump//nested/../t.csv"))
+}
+
+func TestPrintCatalogList(t *testing.T) {
+	tables := []checkpointtool.TableCatalogEntry{
+		{AccountID: 2, DatabaseID: 20, DatabaseName: "db2", TableID: 201, TableName: "t2", RelKind: "r"},
+		{AccountID: 1, DatabaseID: 10, DatabaseName: "db1", TableID: 101, TableName: "t1", RelKind: "v"},
+		{AccountID: 1, DatabaseID: 10, DatabaseName: "db1", TableID: 102, TableName: "t1_b", RelKind: "r"},
+	}
+
+	t.Run("tables", func(t *testing.T) {
+		var buf bytes.Buffer
+		require.NoError(t, printCatalogList(&buf, tables, "tables"))
+		got := buf.String()
+		assert.Contains(t, got, "ACCOUNT_ID")
+		assert.Contains(t, got, "db1")
+		assert.Contains(t, got, "t2")
+		assert.Contains(t, got, "REL_KIND")
+	})
+
+	t.Run("databases_dedupes_and_sorts", func(t *testing.T) {
+		var buf bytes.Buffer
+		require.NoError(t, printCatalogList(&buf, tables, "databases"))
+		lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+		require.Len(t, lines, 3)
+		assert.Contains(t, lines[1], "1")
+		assert.Contains(t, lines[1], "db1")
+		assert.Contains(t, lines[2], "db2")
+	})
+
+	t.Run("accounts_dedupes_and_sorts", func(t *testing.T) {
+		var buf bytes.Buffer
+		require.NoError(t, printCatalogList(&buf, tables, "accounts"))
+		assert.Equal(t, "ACCOUNT_ID\n1\n2\n", buf.String())
+	})
+
+	t.Run("unknown_type", func(t *testing.T) {
+		var buf bytes.Buffer
+		require.Error(t, printCatalogList(&buf, tables, "indexes"))
+	})
+}
+
+func TestDumpOutputLocalAndRemoteHelpers(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("nil_or_local", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "out")
+		var out *dumpOutput
+		require.NoError(t, out.MkdirAll(dir))
+		_, err := os.Stat(dir)
+		require.NoError(t, err)
+
+		filePath := filepath.Join(dir, "rows.csv")
+		w, err := out.Create(ctx, filePath)
+		require.NoError(t, err)
+		_, err = w.Write([]byte("a,b\n"))
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+		data, err := os.ReadFile(filePath)
+		require.NoError(t, err)
+		assert.Equal(t, "a,b\n", string(data))
+		out.Close(ctx)
+	})
+
+	t.Run("remote_noop_mkdir", func(t *testing.T) {
+		out := &dumpOutput{remote: true}
+		require.NoError(t, out.MkdirAll(filepath.Join(t.TempDir(), "not-created")))
+		out.Close(ctx)
+	})
 }
 
 func TestLoadDataPathResolverLocal(t *testing.T) {
