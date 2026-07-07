@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/format"
 	"github.com/stretchr/testify/require"
 )
 
@@ -389,6 +390,40 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		require.Equal(t, [][]float64{{1.25, 2.25, 3.25}, {4.25, 5.25, 6.25}}, vector.MustArrayCol[float64](vec))
 	})
 
+	t.Run("float list to vecf64", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{{
+			parquet.FloatValue(1.5).Level(0, 1, 0),
+			parquet.FloatValue(2.5).Level(1, 1, 0),
+			parquet.FloatValue(3.5).Level(1, 1, 0),
+		}})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float64), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, [][]float64{{1.5, 2.5, 3.5}}, vector.MustArrayCol[float64](vec))
+	})
+
+	t.Run("double list to vecf32", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Row{{
+			parquet.DoubleValue(1.25).Level(0, 1, 0),
+			parquet.DoubleValue(2.25).Level(1, 1, 0),
+			parquet.DoubleValue(3.25).Level(1, 1, 0),
+		}})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, [][]float32{{1.25, 2.25, 3.25}}, vector.MustArrayCol[float32](vec))
+	})
+
 	t.Run("dimension mismatch", func(t *testing.T) {
 		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
 			{
@@ -511,6 +546,13 @@ func TestParquetListToVectorMapping(t *testing.T) {
 func TestParquetCrossTypeMappings(t *testing.T) {
 	proc := testutil.NewProc(t)
 	ctx := context.Background()
+	requireJSONAt := func(t *testing.T, vec *vector.Vector, row int, expected string) {
+		t.Helper()
+		want, err := types.ParseStringToByteJson(expected)
+		require.NoError(t, err)
+		got := types.DecodeJson(vec.GetBytesAt(row))
+		require.Equal(t, want.String(), got.String())
+	}
 
 	t.Run("bool to tinyint and varchar", func(t *testing.T) {
 		values := []parquet.Value{parquet.BooleanValue(true), parquet.BooleanValue(false)}
@@ -530,6 +572,172 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.NoError(t, mp.mapping(page, proc, vecStr))
 		require.Equal(t, "true", vecStr.GetStringAt(0))
 		require.Equal(t, "false", vecStr.GetStringAt(1))
+	})
+
+	t.Run("bool to float json and decimal", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.BooleanType), []parquet.Value{
+			parquet.BooleanValue(true),
+			parquet.BooleanValue(false),
+		})
+		col := f.Root().Column("c")
+		var h ParquetHandler
+
+		vecFloat := vector.NewVec(types.T_float64.ToType())
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_float64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecFloat))
+		require.Equal(t, []float64{1, 0}, vector.MustFixedColWithTypeCheck[float64](vecFloat))
+
+		vecJSON := vector.NewVec(types.T_json.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_json), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecJSON))
+		requireJSONAt(t, vecJSON, 0, `true`)
+		requireJSONAt(t, vecJSON, 1, `false`)
+
+		vecDec := vector.NewVec(types.New(types.T_decimal128, 10, 2))
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_decimal128), Width: 10, Scale: 2, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecDec))
+		wantTrue, err := types.ParseDecimal128("1.00", 10, 2)
+		require.NoError(t, err)
+		wantFalse, err := types.ParseDecimal128("0.00", 10, 2)
+		require.NoError(t, err)
+		require.Equal(t, []types.Decimal128{wantTrue, wantFalse}, vector.MustFixedColWithTypeCheck[types.Decimal128](vecDec))
+	})
+
+	t.Run("int32 to bool json and enum", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Value{
+			parquet.Int32Value(1),
+			parquet.Int32Value(0),
+			parquet.Int32Value(2),
+		})
+		col := f.Root().Column("c")
+		var h ParquetHandler
+
+		vecBool := vector.NewVec(types.T_bool.ToType())
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_bool), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecBool))
+		require.Equal(t, []bool{true, false, true}, vector.MustFixedColWithTypeCheck[bool](vecBool))
+
+		vecJSON := vector.NewVec(types.T_json.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_json), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecJSON))
+		requireJSONAt(t, vecJSON, 0, `1`)
+		requireJSONAt(t, vecJSON, 1, `0`)
+		requireJSONAt(t, vecJSON, 2, `2`)
+
+		fEnum, pageEnum := writeDictAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Value{
+			parquet.Int32Value(1),
+			parquet.Int32Value(2),
+			parquet.Int32Value(3),
+		})
+		vecEnum := vector.NewVec(types.T_enum.ToType())
+		mp = h.getMapper(fEnum.Root().Column("c"), plan.Type{Id: int32(types.T_enum), Enumvalues: "red,green,blue", NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(pageEnum, proc, vecEnum))
+		require.Equal(t, []types.Enum{1, 2, 3}, vector.MustFixedColWithTypeCheck[types.Enum](vecEnum))
+		require.True(t, vecEnum.GetNulls().IsEmpty())
+	})
+
+	t.Run("float to bool int64 json and decimal", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Value{
+			parquet.FloatValue(1.4),
+			parquet.FloatValue(1.5),
+			parquet.FloatValue(0),
+		})
+		col := f.Root().Column("c")
+		var h ParquetHandler
+
+		vecBool := vector.NewVec(types.T_bool.ToType())
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_bool), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecBool))
+		require.Equal(t, []bool{true, true, false}, vector.MustFixedColWithTypeCheck[bool](vecBool))
+
+		vecInt := vector.NewVec(types.T_int64.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_int64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecInt))
+		require.Equal(t, []int64{1, 2, 0}, vector.MustFixedColWithTypeCheck[int64](vecInt))
+
+		vecJSON := vector.NewVec(types.T_json.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_json), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecJSON))
+		requireJSONAt(t, vecJSON, 0, `1.4`)
+		requireJSONAt(t, vecJSON, 1, `1.5`)
+		requireJSONAt(t, vecJSON, 2, `0`)
+
+		vecDec := vector.NewVec(types.New(types.T_decimal128, 10, 2))
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_decimal128), Width: 10, Scale: 2, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecDec))
+		want0, err := types.ParseDecimal128("1.40", 10, 2)
+		require.NoError(t, err)
+		want1, err := types.ParseDecimal128("1.50", 10, 2)
+		require.NoError(t, err)
+		want2, err := types.ParseDecimal128("0.00", 10, 2)
+		require.NoError(t, err)
+		require.Equal(t, []types.Decimal128{want0, want1, want2}, vector.MustFixedColWithTypeCheck[types.Decimal128](vecDec))
+	})
+
+	t.Run("decimal int32 to int64 and json", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.Decimal(2, 9, parquet.Int32Type), []parquet.Value{
+			parquet.Int32Value(12345),
+			parquet.Int32Value(-6789),
+		})
+		col := f.Root().Column("c")
+		var h ParquetHandler
+
+		vecInt := vector.NewVec(types.T_int64.ToType())
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_int64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecInt))
+		require.Equal(t, []int64{123, -68}, vector.MustFixedColWithTypeCheck[int64](vecInt))
+
+		vecJSON := vector.NewVec(types.T_json.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_json), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecJSON))
+		requireJSONAt(t, vecJSON, 0, `123.45`)
+		requireJSONAt(t, vecJSON, 1, `-67.89`)
+	})
+
+	t.Run("string to bool and bit", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
+			parquet.ByteArrayValue([]byte("true")),
+			parquet.ByteArrayValue([]byte("0")),
+		})
+		col := f.Root().Column("c")
+		var h ParquetHandler
+
+		vecBool := vector.NewVec(types.T_bool.ToType())
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_bool), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecBool))
+		require.Equal(t, []bool{true, false}, vector.MustFixedColWithTypeCheck[bool](vecBool))
+
+		vecBit := vector.NewVec(types.New(types.T_bit, 1, 0))
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_bit), Width: 1, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecBit))
+		require.Equal(t, []uint64{1, 0}, vector.MustFixedColWithTypeCheck[uint64](vecBit))
+	})
+
+	t.Run("string to bit parses decimal", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
+			parquet.ByteArrayValue([]byte("010")),
+		})
+
+		vec := vector.NewVec(types.New(types.T_bit, 4, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bit), Width: 4, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []uint64{10}, vector.MustFixedColWithTypeCheck[uint64](vec))
 	})
 
 	t.Run("int8 to bit", func(t *testing.T) {
@@ -786,6 +994,19 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.NoError(t, mp.mapping(page, proc, vecStr))
 		require.Equal(t, "100.00", vecStr.GetStringAt(0))
 		require.Equal(t, "200.50", vecStr.GetStringAt(1))
+
+		vecInt := vector.NewVec(types.T_int64.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_int64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecInt))
+		require.Equal(t, []int64{100, 201}, vector.MustFixedColWithTypeCheck[int64](vecInt))
+
+		vecJSON := vector.NewVec(types.T_json.ToType())
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_json), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecJSON))
+		requireJSONAt(t, vecJSON, 0, `100.00`)
+		requireJSONAt(t, vecJSON, 1, `200.50`)
 	})
 
 	t.Run("date to varchar", func(t *testing.T) {
@@ -802,6 +1023,58 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.Equal(t, "2024-01-01", vec.GetStringAt(0))
 		require.Equal(t, "2024-06-01", vec.GetStringAt(1))
 	})
+
+	t.Run("date to timestamp", func(t *testing.T) {
+		proc.Base.SessionInfo.TimeZone = time.UTC
+		f, page := writeDictAndGetPage(t, parquet.Date(), []parquet.Value{
+			parquet.Int32Value(19723),
+		})
+
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), Scale: 6, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []types.Timestamp{types.DaysFromUnixEpochToDate(19723).ToTimestamp(time.UTC)}, vector.MustFixedColWithTypeCheck[types.Timestamp](vec))
+	})
+
+	t.Run("timestamp to date and time", func(t *testing.T) {
+		proc.Base.SessionInfo.TimeZone = time.UTC
+		micros := time.Date(2024, 1, 1, 12, 30, 45, 123456000, time.UTC).UnixMicro()
+		f, page := writeDictAndGetPage(t, parquet.Timestamp(parquet.Microsecond), []parquet.Value{
+			parquet.Int64Value(micros),
+		})
+		col := f.Root().Column("c")
+		var h ParquetHandler
+
+		vecDate := vector.NewVec(types.T_date.ToType())
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_date), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecDate))
+		wantDate, err := types.ParseDateCast("2024-01-01")
+		require.NoError(t, err)
+		require.Equal(t, []types.Date{wantDate}, vector.MustFixedColWithTypeCheck[types.Date](vecDate))
+
+		vecTime := vector.NewVec(types.New(types.T_time, 0, 6))
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_time), Scale: 6, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecTime))
+		wantTime, err := types.ParseTime("12:30:45.123456", 6)
+		require.NoError(t, err)
+		require.Equal(t, []types.Time{wantTime}, vector.MustFixedColWithTypeCheck[types.Time](vecTime))
+	})
+}
+
+func TestParquetTimestampLogicalMissingUnit(t *testing.T) {
+	ctx := context.Background()
+	lt := &format.LogicalType{Timestamp: &format.TimestampType{}}
+	v := parquet.Int64Value(1)
+
+	_, err := parquetTimestampValueToMicros(ctx, v, lt)
+	require.ErrorContains(t, err, "missing parquet timestamp unit")
+
+	_, err = parquetTimestampValueToString(ctx, v, lt)
+	require.ErrorContains(t, err, "missing parquet timestamp unit")
 }
 
 // fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt.
