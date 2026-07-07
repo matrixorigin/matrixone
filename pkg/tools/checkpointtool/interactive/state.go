@@ -145,6 +145,22 @@ func (s *State) SelectTable(tableID uint64) error {
 	if err != nil {
 		return err
 	}
+	for _, table := range s.tables {
+		if table.TableID != tableID {
+			continue
+		}
+		for i := range dataEntries {
+			if i < len(table.DataRanges) {
+				dataEntries[i].Range = table.DataRanges[i]
+			}
+		}
+		for i := range tombEntries {
+			if i < len(table.TombRanges) {
+				tombEntries[i].Range = table.TombRanges[i]
+			}
+		}
+		break
+	}
 	s.dataEntries = dataEntries
 	s.tombEntries = tombEntries
 	s.logicalView = nil

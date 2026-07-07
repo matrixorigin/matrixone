@@ -312,7 +312,6 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `char`
 	{
 		functionId: CHAR,
-		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    builtInCharCheck,
 
@@ -372,7 +371,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return builtInConvertFake
+					return builtInConvertUsingCharset
 				},
 			},
 		},

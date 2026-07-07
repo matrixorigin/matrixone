@@ -18,11 +18,18 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
-// Run runs the interactive interface
+// Run runs the interactive interface against a local DISK (CRC-framed) data dir.
 func Run(path string) error {
-	return RunUnified(context.Background(), path, nil)
+	return RunWithKind(path, objectio.OfflineKindLocal)
+}
+
+// RunWithKind runs the interactive interface, reading the data dir in the given
+// offline fs kind ("local", "local2" or "s3").
+func RunWithKind(path string, kind string) error {
+	return RunUnified(context.Background(), path, &ViewOptions{Kind: kind})
 }
 
 // RunWithFS runs the interactive interface using an existing file service.

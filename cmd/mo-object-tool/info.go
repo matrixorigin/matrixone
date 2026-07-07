@@ -33,14 +33,18 @@ func infoCommand(storage *toolfs.StorageOptions) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
-			return showInfo(path, *storage)
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			return showInfo(path, *storage, kind)
 		},
 	}
 
 	return cmd
 }
 
-func showInfo(path string, storage toolfs.StorageOptions) error {
+func showInfo(path string, storage toolfs.StorageOptions, kind string) error {
 	ctx := context.Background()
 
 	var reader *objecttool.ObjectReader
@@ -56,7 +60,7 @@ func showInfo(path string, storage toolfs.StorageOptions) error {
 		}
 	} else {
 		var err error
-		reader, err = objecttool.Open(ctx, path)
+		reader, err = objecttool.OpenWithKind(ctx, path, kind)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to open object: %v", err)
 		}

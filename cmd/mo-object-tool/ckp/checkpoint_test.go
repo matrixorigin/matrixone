@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
@@ -481,4 +482,43 @@ func TestLoadDataPathResolverS3(t *testing.T) {
 		"LOAD DATA URL s3option{'bucket'='mo-nightly-gz-1308875761', 'filepath'='ckp-dump-test/tpcc_100_20260612_174916/bmsql_config/bmsql_config/account_0/db_272577/bmsql_config_272578.csv', 'endpoint'='https://cos.ap-guangzhou.myqcloud.com', 'region'='ap-guangzhou', 'access_key_id'='xxx', 'secret_access_key'='yyy'}",
 		resolver.loadDataSource("bmsql_config", table),
 	)
+}
+
+// TestCkpOfflineKindFlags checks the ckp command exposes the local format flags.
+// The branch keeps --s3 as remote storage arguments, so local DISK remains the
+// default and DISK-V2 is selected explicitly with --local2.
+func TestCkpOfflineKindFlags(t *testing.T) {
+	cmd := PrepareCommand()
+	for _, name := range []string{"local", "local2"} {
+		require.NotNilf(t, cmd.PersistentFlags().Lookup(name), "ckp --%s", name)
+	}
+
+	kind, err := kindFromFlags(cmd)
+	require.NoError(t, err)
+	require.Equal(t, objectio.OfflineKindLocal, kind)
+
+	c2 := PrepareCommand()
+	c2.SetArgs([]string{"--local2"})
+	require.NoError(t, c2.ParseFlags([]string{"--local2"}))
+	kind, err = kindFromFlags(c2)
+	require.NoError(t, err)
+	require.Equal(t, objectio.OfflineKindLocal2, kind)
+
+	c3 := PrepareCommand()
+	require.NoError(t, c3.ParseFlags([]string{"--local", "--local2"}))
+	_, err = kindFromFlags(c3)
+	require.Error(t, err)
+}
+
+// TestCkpInfoEmptyDir runs `info` against an empty dir: the offline fs opens,
+// finds zero checkpoint metas, prints the summary and returns nil. It exercises
+// infoCommand/setupLogFile/checkpointtool.Open without launching the TUI.
+func TestCkpInfoEmptyDir(t *testing.T) {
+	// setupLogFile writes $HOME/.mo-tool/ckp.log; point HOME at a writable temp
+	// dir so the test does not depend on (or pollute) the real home directory
+	// and works in a read-only-home sandbox.
+	t.Setenv("HOME", t.TempDir())
+	cmd := PrepareCommand()
+	cmd.SetArgs([]string{"info", "--local", t.TempDir()})
+	require.NoError(t, cmd.Execute())
 }

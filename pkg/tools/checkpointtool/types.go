@@ -70,6 +70,7 @@ type TableInfo struct {
 // ObjectEntryInfo contains detailed object entry information with timestamps
 type ObjectEntryInfo struct {
 	ObjectStats objectio.ObjectStats
+	Range       ckputil.TableRange
 	CreateTime  types.TS
 	DeleteTime  types.TS
 }

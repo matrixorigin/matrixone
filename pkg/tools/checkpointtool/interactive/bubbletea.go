@@ -18,8 +18,10 @@ import (
 	"context"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	objectinteractive "github.com/matrixorigin/matrixone/pkg/tools/objecttool/interactive"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 )
 
 // Run starts the interactive checkpoint viewer
@@ -39,9 +41,44 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 		}
 
 		// Check if we need to open an object file
-		if um.GetObjectToOpen() != "" {
+		if um.GetObjectToOpen() != "" && um.GetRangeToOpen() != nil {
+			rng := um.GetRangeToOpen()
+			opts := &objectinteractive.ViewOptions{
+				StartRow: int64(rng.Start.GetRowOffset()),
+				EndRow:   int64(rng.End.GetRowOffset()),
+				ColumnNames: map[uint16]string{
+					0:  ckputil.TableObjectsAttr_Accout,
+					1:  ckputil.TableObjectsAttr_DB,
+					2:  ckputil.TableObjectsAttr_Table,
+					3:  ckputil.TableObjectsAttr_ObjectType,
+					4:  "object_name",
+					5:  "flags",
+					6:  "rows",
+					7:  "osize",
+					8:  "csize",
+					9:  ckputil.TableObjectsAttr_CreateTS,
+					10: ckputil.TableObjectsAttr_DeleteTS,
+					11: ckputil.TableObjectsAttr_Cluster,
+				},
+				ColumnExpander: &objectinteractive.ColumnExpander{
+					SourceCol: 4, // id column
+					NewCols:   []string{"object_name", "flags", "rows", "osize", "csize"},
+					NewTypes: []types.Type{
+						types.T_varchar.ToType(),
+						types.T_varchar.ToType(),
+						types.T_uint32.ToType(),
+						types.T_varchar.ToType(),
+						types.T_varchar.ToType(),
+					},
+					ExpandFunc: expandObjectStats,
+				},
+				ObjectNameCol:  4,                     // object_name column after expansion
+				BaseDir:        m.state.reader.Dir(),  // Base directory for nested objects
+				Kind:           m.state.reader.Kind(), // read nested objects in the same on-disk format
+				CustomOverview: ckpDataOverview,
+			}
 			if err := objectinteractive.RunUnifiedWithFS(
-				context.Background(), m.state.reader.FS(), um.GetObjectToOpen(), nil,
+				context.Background(), m.state.reader.FS(), um.GetObjectToOpen(), opts,
 			); err != nil {
 				return err
 			}

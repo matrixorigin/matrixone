@@ -42,6 +42,12 @@ select 10E+0+'10';
 #SELECT CONVERT(TIMESTAMP "2004-01-22 21:45:33", CHAR(4));
 #SELECT CONVERT(TIMESTAMP "2004-01-22 21:45:33", BINARY(4));
 #select CAST(TIMESTAMP "2004-01-22 21:45:33" AS BINARY(4));
+select convert(12345, char) as r, length(convert(12345, char)) as l;
+select convert('ABCDE', char) as r, length(convert('ABCDE', char)) as l;
+select hex(convert('AZ', binary)) as r, length(convert('AZ', binary)) as l;
+select hex(convert(12345, binary)) as r, length(convert(12345, binary)) as l;
+select hex(convert('AZ', binary(1))) as r, length(convert('AZ', binary(1))) as l;
+select hex(convert(12345, binary(3))) as r, length(convert(12345, binary(3))) as l;
 select CAST(0xb3 as signed);
 SELECT CAST(X'' AS SIGNED);
 SELECT CAST(X'11111111111111111111111111' AS SIGNED);
@@ -296,6 +302,16 @@ drop table t1;
 #  SELECT CONVERT(t2.a USING UTF8) FROM t1, t1 t2 LIMIT 1
 # ) AS s LIMIT 1;
 # DROP TABLE t1;
+
+select convert(_binary x'ff' using utf8mb4) is null,
+       hex(convert(_binary x'ff' using utf8mb4)),
+       length(convert(_binary x'ff' using utf8mb4));
+select hex(convert(_binary x'4142' using utf8mb4)),
+       length(convert(_binary x'4142' using utf8mb4));
+select hex(convert(_binary x'e4bda0e5a5bd' using utf8mb4)),
+       length(convert(_binary x'e4bda0e5a5bd' using utf8mb4));
+select hex(convert(_binary x'f09f9880' using utf8mb4)),
+       length(convert(_binary x'f09f9880' using utf8mb4));
 
 # #echo #
 # #echo # Bug #11765023: 57934: DOS POSSIBLE SINCE BINARY CASTING 

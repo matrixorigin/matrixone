@@ -77,6 +77,7 @@ func IsRetryableError(err error) bool {
 		strings.Contains(str, "server closed idle connection") ||
 		strings.Contains(str, "server closed connection") ||
 		strings.Contains(str, "i/o timeout") ||
+		strings.Contains(str, "server closed idle connection") ||
 		strings.Contains(str, "write: broken pipe") ||
 		strings.Contains(str, "TLS handshake timeout") ||
 		strings.Contains(str, "replication in progress") || // HDFS error

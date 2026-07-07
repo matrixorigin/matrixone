@@ -17,6 +17,7 @@ package object
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool/interactive"
 	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
 	"github.com/spf13/cobra"
@@ -32,7 +33,11 @@ func PrepareCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// If file path is provided, enter view mode directly
 			if len(args) == 1 {
-				return runObjectView(context.Background(), args[0], storage)
+				kind, err := kindFromFlags(cmd)
+				if err != nil {
+					return err
+				}
+				return runObjectView(context.Background(), args[0], storage, kind)
 			}
 			// Otherwise show help
 			return cmd.Help()
@@ -40,6 +45,7 @@ func PrepareCommand() *cobra.Command {
 	}
 	addStorageFlags(cmd, &storage)
 
+	addOfflineKindFlags(cmd)
 	cmd.AddCommand(viewCommand(&storage))
 	cmd.AddCommand(infoCommand(&storage))
 
@@ -53,9 +59,9 @@ func addStorageFlags(cmd *cobra.Command, storage *toolfs.StorageOptions) {
 	cmd.PersistentFlags().StringVar(&storage.Backend, "backend", "", "remote backend for --s3: S3 or MINIO")
 }
 
-func runObjectView(ctx context.Context, path string, storage toolfs.StorageOptions) error {
+func runObjectView(ctx context.Context, path string, storage toolfs.StorageOptions, kind string) error {
 	if !storage.IsRemote() {
-		return interactive.Run(path)
+		return interactive.RunWithKind(path, kind)
 	}
 	fs, _, err := toolfs.Open(ctx, storage)
 	if err != nil {
@@ -63,4 +69,27 @@ func runObjectView(ctx context.Context, path string, storage toolfs.StorageOptio
 	}
 	defer fs.Close(ctx)
 	return interactive.RunWithFS(ctx, fs, path)
+}
+
+// addOfflineKindFlags registers the --local / --s3 / --local2 format flags as
+// persistent flags so subcommands inherit them. Exactly one must be set.
+func addOfflineKindFlags(cmd *cobra.Command) {
+	fs := cmd.PersistentFlags()
+	fs.Bool("local", false, "local DISK (CRC) format")
+	fs.Bool("local2", false, "local DISK-V2 (raw) format")
+}
+
+// kindFromFlags resolves the offline fs kind; exactly one of --local/--s3/
+// --local2 must be set, else it returns an error.
+func kindFromFlags(cmd *cobra.Command) (string, error) {
+	local, _ := cmd.Flags().GetBool("local")
+	local2, _ := cmd.Flags().GetBool("local2")
+	if local && local2 {
+		_, err := objectio.OfflineKindStrict(true, false, true)
+		return "", err
+	}
+	if local2 {
+		return objectio.OfflineKindLocal2, nil
+	}
+	return objectio.OfflineKindLocal, nil
 }

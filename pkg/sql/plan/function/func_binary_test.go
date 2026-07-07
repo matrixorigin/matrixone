@@ -5033,6 +5033,68 @@ func TestPower(t *testing.T) {
 	}
 }
 
+func TestPowerOutOfRange(t *testing.T) {
+	testCases := []struct {
+		name      string
+		bases     []float64
+		exponents []float64
+	}{
+		{name: "negative base with fractional exponent", bases: []float64{-2}, exponents: []float64{0.5}},
+		{name: "zero base with negative exponent", bases: []float64{0}, exponents: []float64{-1}},
+		{name: "invalid value after valid value", bases: []float64{2, -2}, exponents: []float64{3, 0.5}},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_float64.ToType(), tc.bases, nil),
+					NewFunctionTestInput(types.T_float64.ToType(), tc.exponents, nil),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil),
+				Power,
+			)
+
+			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+			_, err := tcc.DebugRun()
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+			require.ErrorContains(t, err, "DOUBLE value is out of range")
+		})
+	}
+}
+
+func TestPowerRespectsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{-2, 2}, nil),
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5, 3}, nil),
+	}
+	tcc := NewFunctionTestCase(
+		proc,
+		inputs,
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 8}, []bool{true, false}),
+		Power,
+	)
+	require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+
+	selectList := &FunctionSelectList{
+		AnyNull:    true,
+		SelectList: []bool{false, true},
+	}
+	err := Power(tcc.parameters, tcc.result, proc, tcc.fnLength, selectList)
+	require.NoError(t, err)
+
+	resultVec := tcc.result.GetResultVector()
+	require.True(t, resultVec.GetNulls().Contains(0))
+	resultParam := vector.GenerateFunctionFixedTypeParameter[float64](resultVec)
+	value, isNull := resultParam.GetValue(1)
+	require.False(t, isNull)
+	require.Equal(t, float64(8), value)
+}
+
 // TRUNCATE
 func initTruncateTestCase() []tcTemp {
 	cases := []struct {
@@ -8905,6 +8967,26 @@ func initInsertTestCase() []tcTemp {
 				[]bool{false}),
 		},
 		{
+			info: "test insert negative length replaces to end",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Quadratic"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{3},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-1},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"What"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"QuWhat"},
+				[]bool{false}),
+		},
+		{
 			info: "test insert at beginning",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
@@ -9043,7 +9125,7 @@ func initInsertTestCase() []tcTemp {
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"Hello MySQL World"},
+				[]string{"Hello MySQL "},
 				[]bool{false}),
 		},
 		{
@@ -9064,6 +9146,46 @@ func initInsertTestCase() []tcTemp {
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"HMySQL"},
+				[]bool{false}),
+		},
+		{
+			info: "test insert with max int64 length exceeding string",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abc"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{2},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{math.MaxInt64},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"X"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"aX"},
+				[]bool{false}),
+		},
+		{
+			info: "test insert with max int64 length exceeding multibyte string",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"你好世界"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{3},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{math.MaxInt64},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"MO"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"你好MO"},
 				[]bool{false}),
 		},
 	}

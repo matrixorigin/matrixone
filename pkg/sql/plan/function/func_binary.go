@@ -1148,7 +1148,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			allNull = false
 		}
 		if allNull {
-			if err = rs.AppendBytes(nil, true); err != nil {
+			if err = rs.AppendBytes(nil, false); err != nil {
 				return err
 			}
 			continue
@@ -6722,6 +6722,13 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	rs := vector.MustFunctionResult[float64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 {
@@ -6729,8 +6736,11 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 				return err
 			}
 		} else {
-			//TODO: Ignoring 4 switch cases:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/power.go#L36
 			res := math.Pow(v1, v2)
+			if math.IsNaN(res) || math.IsInf(res, 0) {
+				return moerr.NewOutOfRangeNoCtxf(
+					"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
+			}
 			if err = rs.Append(res, false); err != nil {
 				return err
 			}
@@ -7891,7 +7901,8 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 
 			// MySQL INSERT behavior:
 			// - If pos <= 0 or pos > string length, return original string
-			// - If replaceLen <= 0, insert newstr at position pos without removing anything
+			// - If replaceLen = 0, insert newstr at position pos without removing anything
+			// - If replaceLen < 0, replace from pos to the end of the string
 			// - Otherwise, replace replaceLen characters starting at pos with newstr
 			// - Position is 1-based
 
@@ -7899,7 +7910,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			if pos <= 0 || pos > strLen {
 				// Invalid position, return original string
 				result = str
-			} else if replaceLen <= 0 {
+			} else if replaceLen == 0 {
 				// Insert without removing
 				posIdx := int(pos - 1) // Convert to 0-based index
 				if posIdx >= len(runes) {
@@ -7910,9 +7921,10 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			} else {
 				// Replace replaceLen characters starting at pos
 				posIdx := int(pos - 1) // Convert to 0-based index
-				endIdx := posIdx + int(replaceLen)
-				if endIdx > len(runes) {
-					endIdx = len(runes)
+				endIdx := len(runes)
+				remaining := int64(len(runes) - posIdx)
+				if replaceLen > 0 && replaceLen < remaining {
+					endIdx = posIdx + int(replaceLen)
 				}
 				if posIdx >= len(runes) {
 					result = str + newstr

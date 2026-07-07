@@ -38,12 +38,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool/interactive"
 	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
 	"github.com/spf13/cobra"
 )
+
+// kindFromFlags resolves the offline fs kind; exactly one of --local/--s3/
+// --local2 must be set, else it returns an error.
+func kindFromFlags(cmd *cobra.Command) (string, error) {
+	local, _ := cmd.Flags().GetBool("local")
+	local2, _ := cmd.Flags().GetBool("local2")
+	if local && local2 {
+		_, err := objectio.OfflineKindStrict(true, false, true)
+		return "", err
+	}
+	if local2 {
+		return objectio.OfflineKindLocal2, nil
+	}
+	return objectio.OfflineKindLocal, nil
+}
 
 func PrepareCommand() *cobra.Command {
 	var storage toolfs.StorageOptions
@@ -57,10 +73,17 @@ func PrepareCommand() *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runViewer(dir, storage)
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			return runViewer(dir, storage, kind)
 		},
 	}
 	addStorageFlags(cmd, &storage)
+
+	cmd.PersistentFlags().Bool("local", false, "local DISK (CRC) format")
+	cmd.PersistentFlags().Bool("local2", false, "local DISK-V2 (raw) format")
 
 	cmd.AddCommand(infoCommand(&storage))
 	cmd.AddCommand(viewCommand(&storage))
@@ -115,7 +138,7 @@ func setupLogFile() (*os.File, error) {
 	return logFile, nil
 }
 
-func runViewer(dir string, storage toolfs.StorageOptions) error {
+func runViewer(dir string, storage toolfs.StorageOptions, kind string) error {
 	logFile, err := setupLogFile()
 	if err != nil {
 		return fmt.Errorf("setup log file: %w", err)
@@ -123,7 +146,7 @@ func runViewer(dir string, storage toolfs.StorageOptions) error {
 	defer logFile.Close()
 
 	ctx := context.Background()
-	reader, err := openReader(ctx, dir, storage)
+	reader, err := openReader(ctx, dir, storage, kind)
 	if err != nil {
 		return fmt.Errorf("open checkpoint dir: %w", err)
 	}
@@ -149,8 +172,12 @@ func infoCommand(storage *toolfs.StorageOptions) *cobra.Command {
 			}
 			defer logFile.Close()
 
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
 			ctx := context.Background()
-			reader, err := openReader(ctx, dir, *storage)
+			reader, err := openReader(ctx, dir, *storage, kind)
 			if err != nil {
 				return fmt.Errorf("open checkpoint dir: %w", err)
 			}
@@ -183,7 +210,11 @@ func viewCommand(storage *toolfs.StorageOptions) *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
-			return runViewer(dir, *storage)
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			return runViewer(dir, *storage, kind)
 		},
 	}
 }
@@ -218,7 +249,11 @@ to narrow the result.`,
 			defer logFile.Close()
 
 			ctx := context.Background()
-			reader, err := openReader(ctx, dir, *storage)
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			reader, err := openReader(ctx, dir, *storage, kind)
 			if err != nil {
 				return fmt.Errorf("open checkpoint dir: %w", err)
 			}
@@ -320,9 +355,9 @@ func printCatalogList(w io.Writer, tables []checkpointtool.TableCatalogEntry, li
 	return tw.Flush()
 }
 
-func openReader(ctx context.Context, dir string, storage toolfs.StorageOptions) (*checkpointtool.CheckpointReader, error) {
+func openReader(ctx context.Context, dir string, storage toolfs.StorageOptions, kind string) (*checkpointtool.CheckpointReader, error) {
 	if !storage.IsRemote() {
-		return checkpointtool.Open(ctx, dir)
+		return checkpointtool.Open(ctx, dir, checkpointtool.WithKind(kind))
 	}
 	fs, display, err := toolfs.Open(ctx, storage)
 	if err != nil {
@@ -529,7 +564,11 @@ Examples:
 			defer logFile.Close()
 
 			ctx := context.Background()
-			reader, err := openReader(ctx, dir, *storage)
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			reader, err := openReader(ctx, dir, *storage, kind)
 			if err != nil {
 				return fmt.Errorf("open checkpoint dir: %w", err)
 			}
@@ -2181,7 +2220,11 @@ Examples:
 			defer logFile.Close()
 
 			ctx := context.Background()
-			reader, err := openReader(ctx, dir, *storage)
+			kind, err := kindFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			reader, err := openReader(ctx, dir, *storage, kind)
 			if err != nil {
 				return fmt.Errorf("open checkpoint dir: %w", err)
 			}

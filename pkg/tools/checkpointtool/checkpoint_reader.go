@@ -39,6 +39,7 @@ type CheckpointReader struct {
 	ctx     context.Context
 	fs      fileservice.FileService
 	dir     string
+	kind    string
 	entries []*checkpoint.CheckpointEntry
 	mp      *mpool.MPool
 	closeFS bool
@@ -57,6 +58,19 @@ func WithMPool(mp *mpool.MPool) Option {
 	}
 }
 
+// WithKind selects the on-disk format of the data dir: "local" (default,
+// DISK/CRC), "local2" (DISK-V2/raw) or "s3" (S3FS-on-disk/raw).
+func WithKind(kind string) Option {
+	return func(r *CheckpointReader) {
+		r.kind = kind
+	}
+}
+
+// Kind returns the offline fs kind the reader was opened with.
+func (r *CheckpointReader) Kind() string {
+	return r.kind
+}
+
 // WithCloseFS closes the file service when the reader is closed.
 func WithCloseFS() Option {
 	return func(r *CheckpointReader) {
@@ -66,24 +80,46 @@ func WithCloseFS() Option {
 
 // Open opens checkpoint data from a directory
 func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, error) {
-	fs, err := fileservice.NewLocalFS(ctx, "local", dir, fileservice.DisabledCacheConfig, nil)
+	r := &CheckpointReader{
+		ctx:  ctx,
+		dir:  dir,
+		kind: objectio.OfflineKindLocal,
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+
+	fs, err := objectio.NewOfflineFS(ctx, dir, r.kind)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
 	}
 
-	return OpenWithFS(ctx, fs, dir, append(opts, WithCloseFS())...)
+	r.fs = fs
+	r.closeFS = true
+
+	if r.mp == nil {
+		r.mp = mpool.MustNewZero()
+	}
+
+	if err := r.loadEntries(); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 // OpenWithFS opens checkpoint data from an existing file service.
 func OpenWithFS(ctx context.Context, fs fileservice.FileService, dir string, opts ...Option) (*CheckpointReader, error) {
 	r := &CheckpointReader{
-		ctx: ctx,
-		fs:  fs,
-		dir: dir,
+		ctx:  ctx,
+		dir:  dir,
+		kind: objectio.OfflineKindLocal,
 	}
 	for _, opt := range opts {
 		opt(r)
 	}
+
+	r.fs = fs
+
 	if r.mp == nil {
 		r.mp = mpool.MustNewZero()
 	}
@@ -110,6 +146,7 @@ func (r *CheckpointReader) Fork(ctx context.Context) *CheckpointReader {
 		ctx:                     ctx,
 		fs:                      r.fs,
 		dir:                     r.dir,
+		kind:                    r.kind,
 		entries:                 r.entries,
 		mp:                      mpool.MustNewZero(),
 		getTablesForTest:        r.getTablesForTest,
