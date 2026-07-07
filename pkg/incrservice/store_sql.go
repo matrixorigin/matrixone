@@ -139,7 +139,8 @@ func (s *sqlStore) Allocate(
 				if err != nil {
 					return err
 				}
-				current, step, rows := readSingleOffsetStep(res)
+				var rows int
+				current, step, rows = readSingleOffsetStep(res)
 				res.Close()
 
 				if rows != 1 {
