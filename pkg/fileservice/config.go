@@ -26,6 +26,7 @@ import (
 const (
 	memFileServiceBackend     = "MEM"
 	diskFileServiceBackend    = "DISK"
+	diskV2FileServiceBackend  = "DISK-V2"
 	diskETLFileServiceBackend = "DISK-ETL"
 	diskTmpFileServiceBackend = "DISK-TMP"
 	s3FileServiceBackend      = "S3"
@@ -36,7 +37,9 @@ const (
 type Config struct {
 	// Name name of fileservice, describe what an instance of fileservice is used for
 	Name string `toml:"name"`
-	// Backend fileservice backend. [MEM|DISK|DISK-ETL|S3|MINIO]
+	// Backend fileservice backend. [MEM|DISK|DISK-V2|DISK-ETL|S3|MINIO]
+	// DISK uses the legacy per-2KB-block CRC32 format; DISK-V2 stores raw bytes
+	// matching the S3 (disk-backed) on-disk format.
 	Backend string `toml:"backend"`
 	// S3 used to create fileservice using s3 as the backend
 	S3 ObjectStorageArguments `toml:"s3"`
@@ -63,6 +66,8 @@ func NewFileService(
 		return newMemFileService(cfg, perfCounterSets)
 	case diskFileServiceBackend:
 		return newDiskFileService(ctx, cfg, perfCounterSets)
+	case diskV2FileServiceBackend:
+		return newDiskV2FileService(ctx, cfg, perfCounterSets)
 	case diskETLFileServiceBackend:
 		return newDiskETLFileService(cfg, perfCounterSets)
 	case diskTmpFileServiceBackend:
@@ -93,6 +98,23 @@ func newDiskFileService(ctx context.Context, cfg Config, perfCounters []*perfcou
 		panic(fmt.Sprintf("empty data dir: %+v", cfg))
 	}
 	fs, err := NewLocalFS(
+		ctx,
+		cfg.Name,
+		cfg.DataDir,
+		cfg.Cache,
+		perfCounters,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return fs, nil
+}
+
+func newDiskV2FileService(ctx context.Context, cfg Config, perfCounters []*perfcounter.CounterSet) (FileService, error) {
+	if cfg.DataDir == "" {
+		panic(fmt.Sprintf("empty data dir: %+v", cfg))
+	}
+	fs, err := NewLocalFS2(
 		ctx,
 		cfg.Name,
 		cfg.DataDir,
