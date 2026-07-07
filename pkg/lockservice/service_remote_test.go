@@ -372,6 +372,47 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 	})
 }
 
+func TestHandleCheckActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			visited := 0
+			s.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				for _, txnID := range [][]byte{
+					[]byte("txn1"),
+					[]byte("txn2"),
+					[]byte("txn3"),
+				} {
+					visited++
+					if !fn(txnID) {
+						return
+					}
+				}
+			}
+
+			req := &pb.Request{
+				Method: pb.Method_CheckActiveTxn,
+				CheckActiveTxn: pb.CheckActiveTxnRequest{
+					ServiceID: s.serviceID,
+					Txn:       []byte("txn2"),
+				},
+			}
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+
+			require.True(t, cs.writeCalled)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.True(t, resp.CheckActiveTxn.Active)
+			require.Equal(t, 2, visited)
+		},
+	)
+}
+
 func TestKeepRemoteActiveTxn(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
