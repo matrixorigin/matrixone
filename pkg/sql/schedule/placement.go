@@ -111,7 +111,7 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	switch req.CurrentCNPolicy {
 	case CurrentCNRequired:
 		workers = ensureCurrentWorker(workers, req.CurrentCN)
-		if !containsRoutableWorker(workers, req.CurrentCN) {
+		if !containsWorker(workers, req.CurrentCN) {
 			return queryDecision(req, workers, ReasonCurrentCNUnavailable, false)
 		}
 		reason = ReasonRequiredCurrentCN
@@ -130,9 +130,6 @@ func decideLocalQueryPlacement(req QueryRequest) QueryDecision {
 	}
 	if req.CurrentCNPolicy == CurrentCNRequired && !hasWorkerIdentity(req.CurrentCN) {
 		return queryDecision(req, nil, ReasonCurrentCNMissingIdentity, false)
-	}
-	if req.CurrentCNPolicy == CurrentCNRequired && !hasWorkerRoute(req.CurrentCN) {
-		return queryDecision(req, nil, ReasonCurrentCNUnavailable, false)
 	}
 	workers := Workers{req.CurrentCN}
 	return queryDecision(req, workers, ReasonLocalExecType, true)
@@ -178,7 +175,7 @@ func sortWorkersByAddr(workers Workers) {
 }
 
 func ensureCurrentWorker(workers Workers, current Worker) Workers {
-	if !hasWorkerRoute(current) {
+	if !hasWorkerIdentity(current) {
 		return workers
 	}
 	for _, worker := range workers {
@@ -246,15 +243,6 @@ func dedupeWorkers(workers Workers) Workers {
 func containsWorker(workers Workers, target Worker) bool {
 	for _, worker := range workers {
 		if sameWorker(worker, target) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsRoutableWorker(workers Workers, target Worker) bool {
-	for _, worker := range workers {
-		if hasWorkerRoute(worker) && sameWorker(worker, target) {
 			return true
 		}
 	}

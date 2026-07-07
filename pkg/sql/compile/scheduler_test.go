@@ -129,21 +129,29 @@ func TestScheduleQueryWorkersForwardsCandidateFilters(t *testing.T) {
 	require.Equal(t, map[string]string{"role": "ap"}, e.cnLabel)
 }
 
-func TestScheduleQueryWorkersRequiredLocalExecWithoutRouteReturnsError(t *testing.T) {
+func TestScheduleQueryWorkersRequiredLocalExecWithoutAddress(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	const localID = "local-cn"
-	for _, execType := range []plan2.ExecType{plan2.ExecTypeTP, plan2.ExecTypeAP_ONECN} {
+	for _, tt := range []struct {
+		execType plan2.ExecType
+		mcpu     int
+	}{
+		{execType: plan2.ExecTypeTP, mcpu: 1},
+		{execType: plan2.ExecTypeAP_ONECN, mcpu: 6},
+	} {
 		c := NewMockCompile(t)
-		c.execType = execType
+		c.ncpu = 6
+		c.execType = tt.execType
 		c.proc.Base.QueryClient = fakeQueryClient{}
 		lockSvc := mock_lock.NewMockLockService(ctrl)
 		lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: localID}).AnyTimes()
 		c.proc.Base.LockService = lockSvc
 
-		_, err := c.scheduleQueryWorkers()
-		require.ErrorContains(t, err, schedule.ReasonCurrentCNUnavailable)
+		nodes, err := c.scheduleQueryWorkers()
+		require.NoError(t, err)
+		require.Equal(t, engine.Nodes{{Id: localID, Mcpu: tt.mcpu}}, nodes)
 	}
 }
 
@@ -225,6 +233,42 @@ func TestScheduleQueryWorkersIncludesLocalWhenQueryClientExists(t *testing.T) {
 	nodes, err := c.scheduleQueryWorkers()
 	require.NoError(t, err)
 	require.Equal(t, []string{"local:6001", "remote:6001"}, []string{nodes[0].Addr, nodes[1].Addr})
+}
+
+func TestScheduleQueryWorkersIncludesRequiredCurrentCNWithoutAddress(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	const localID = "local-cn"
+	c := NewMockCompile(t)
+	c.ncpu = 6
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: localID}).AnyTimes()
+	c.proc.Base.LockService = lockSvc
+	c.e = &schedulerTestEngine{
+		nodes: engine.Nodes{{Id: "remote", Addr: "remote:6001", Mcpu: 4}},
+	}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{
+		{Id: localID, Mcpu: 6},
+		{Id: "remote", Addr: "remote:6001", Mcpu: 4},
+	}, nodes)
+}
+
+func TestScheduleQueryWorkersReturnsErrorWhenRequiredCurrentCNMissingIdentity(t *testing.T) {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+	c.e = &schedulerTestEngine{
+		nodes: engine.Nodes{{Id: "remote", Addr: "remote:6001", Mcpu: 4}},
+	}
+
+	_, err := c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, schedule.ReasonCurrentCNMissingIdentity)
 }
 
 func TestScheduleQueryWorkersDeduplicatesRequiredLocalByAddress(t *testing.T) {

@@ -112,7 +112,7 @@ func TestDecideQueryPlacementAllowsLocalExecTypeWithoutRoute(t *testing.T) {
 	}
 }
 
-func TestDecideQueryPlacementRejectsRequiredLocalExecTypeWithoutRoute(t *testing.T) {
+func TestDecideQueryPlacementAllowsRequiredLocalExecTypeWithoutRoute(t *testing.T) {
 	local := Worker{ID: "local", Mcpu: 8}
 
 	for _, execKind := range []QueryExecKind{QueryExecTP, QueryExecAPOneCN} {
@@ -123,9 +123,9 @@ func TestDecideQueryPlacementRejectsRequiredLocalExecTypeWithoutRoute(t *testing
 		})
 
 		require.Equal(t, execKind, decision.ExecKind)
-		require.Equal(t, ReasonCurrentCNUnavailable, decision.Reason)
-		require.Empty(t, decision.Workers)
-		require.False(t, decision.Satisfied)
+		require.Equal(t, ReasonLocalExecType, decision.Reason)
+		require.Equal(t, Workers{local}, decision.Workers)
+		require.True(t, decision.Satisfied)
 	}
 }
 
@@ -230,7 +230,7 @@ func TestDecideQueryPlacementFallsBackToLocalWhenCandidatesEmpty(t *testing.T) {
 	require.True(t, decision.Satisfied)
 }
 
-func TestDecideQueryPlacementRejectsFallbackWhenCurrentCNHasNoRoute(t *testing.T) {
+func TestDecideQueryPlacementFallsBackToCurrentCNWithoutRoute(t *testing.T) {
 	local := Worker{ID: "local", Mcpu: 8}
 
 	decision := DecideQueryPlacement(QueryRequest{
@@ -239,8 +239,8 @@ func TestDecideQueryPlacementRejectsFallbackWhenCurrentCNHasNoRoute(t *testing.T
 	})
 
 	require.Equal(t, ReasonNoCandidateCN, decision.Reason)
-	require.Empty(t, decision.Workers)
-	require.False(t, decision.Satisfied)
+	require.Equal(t, Workers{local}, decision.Workers)
+	require.True(t, decision.Satisfied)
 }
 
 func TestDecideQueryPlacementDoesNotDuplicateRequiredCurrentCN(t *testing.T) {
@@ -354,7 +354,7 @@ func TestDecideQueryPlacementRejectsRequiredFallbackWithoutIdentity(t *testing.T
 	require.False(t, decision.Satisfied)
 }
 
-func TestDecideQueryPlacementRejectsRequiredFallbackWithoutRoute(t *testing.T) {
+func TestDecideQueryPlacementFallsBackToRequiredCurrentCNWithoutRoute(t *testing.T) {
 	local := Worker{ID: "local", Mcpu: 8}
 
 	decision := DecideQueryPlacement(QueryRequest{
@@ -363,9 +363,25 @@ func TestDecideQueryPlacementRejectsRequiredFallbackWithoutRoute(t *testing.T) {
 		CurrentCNPolicy: CurrentCNRequired,
 	})
 
-	require.Empty(t, decision.Workers)
-	require.Equal(t, ReasonCurrentCNUnavailable, decision.Reason)
-	require.False(t, decision.Satisfied)
+	require.Equal(t, Workers{local}, decision.Workers)
+	require.Equal(t, ReasonNoCandidateCN, decision.Reason)
+	require.True(t, decision.Satisfied)
+}
+
+func TestDecideQueryPlacementAppendsRequiredCurrentCNWithoutRoute(t *testing.T) {
+	local := Worker{ID: "local", Mcpu: 8}
+	candidates := Workers{{ID: "remote", Addr: "remote:6001", Mcpu: 16}}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:        QueryExecAPMultiCN,
+		CurrentCN:       local,
+		Candidates:      candidates,
+		CurrentCNPolicy: CurrentCNRequired,
+	})
+
+	require.Equal(t, Workers{local, candidates[0]}, decision.Workers)
+	require.Equal(t, ReasonRequiredCurrentCN, decision.Reason)
+	require.True(t, decision.Satisfied)
 }
 
 func TestDecideQueryPlacementDeduplicatesCandidateWorkers(t *testing.T) {
@@ -505,7 +521,7 @@ func TestDecideQueryPlacementRejectsRequiredCurrentCNWithoutIdentity(t *testing.
 	require.False(t, decision.Satisfied)
 }
 
-func TestDecideQueryPlacementRejectsRequiredCurrentCNWithoutRoute(t *testing.T) {
+func TestDecideQueryPlacementRequiresCurrentCNByIdentityWithoutRoute(t *testing.T) {
 	local := Worker{ID: "local", Mcpu: 8}
 	candidates := Workers{{ID: "remote", Addr: "remote:6001", Mcpu: 16}}
 
@@ -516,7 +532,7 @@ func TestDecideQueryPlacementRejectsRequiredCurrentCNWithoutRoute(t *testing.T) 
 		CurrentCNPolicy: CurrentCNRequired,
 	})
 
-	require.Equal(t, candidates, decision.Workers)
-	require.Equal(t, ReasonCurrentCNUnavailable, decision.Reason)
-	require.False(t, decision.Satisfied)
+	require.Equal(t, Workers{local, candidates[0]}, decision.Workers)
+	require.Equal(t, ReasonRequiredCurrentCN, decision.Reason)
+	require.True(t, decision.Satisfied)
 }
