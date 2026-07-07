@@ -804,6 +804,8 @@ type notifyMessageResult struct {
 
 const notifyMessageRetryInterval = 200 * time.Millisecond
 
+var notifyMessageWaitRegistrationTimeout = waitRegistrationTimeout
+
 type notifyMessageSenderFactory func(
 	ctx context.Context,
 	sid string,
@@ -856,7 +858,7 @@ func (s *Scope) sendNotifyMessageWithFactory(
 
 		errSubmit := ants.Submit(
 			func() {
-				deadline := time.NewTimer(waitRegistrationTimeout)
+				deadline := time.NewTimer(notifyMessageWaitRegistrationTimeout)
 				defer deadline.Stop()
 
 				for {
@@ -898,7 +900,7 @@ func (s *Scope) sendNotifyMessageWithFactory(
 						return
 					case <-deadline.C:
 						err = moerr.NewInternalErrorf(s.Proc.Ctx,
-							"dispatch process not registered within %s, remote CN may have failed", waitRegistrationTimeout)
+							"dispatch process not registered within %s, remote CN may have failed", notifyMessageWaitRegistrationTimeout)
 						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 						return
 					case <-time.After(notifyMessageRetryInterval):
