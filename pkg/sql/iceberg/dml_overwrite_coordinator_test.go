@@ -16,12 +16,12 @@ package iceberg
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/dml"
@@ -160,7 +160,7 @@ func TestDMLOverwriteCoordinatorRejectsInvalidLifecycle(t *testing.T) {
 
 	require.Error(t, (*DMLOverwriteCoordinator)(nil).Begin(ctx, req))
 	require.Error(t, (*DMLOverwriteCoordinator)(nil).Commit(ctx))
-	require.NoError(t, (*DMLOverwriteCoordinator)(nil).Abort(ctx, errors.New("ignored")))
+	require.NoError(t, (*DMLOverwriteCoordinator)(nil).Abort(ctx, moerr.NewInternalErrorNoCtx("ignored")))
 	require.Error(t, NewDMLOverwriteCoordinator(validSpec).Append(ctx, nil))
 	require.Error(t, NewDMLOverwriteCoordinator(validSpec).AppendWithProcess(nil, nil))
 
@@ -174,7 +174,7 @@ func TestDMLOverwriteCoordinatorRejectsInvalidLifecycle(t *testing.T) {
 	require.Error(t, noWriter.Begin(ctx, req))
 
 	coord = NewDMLOverwriteCoordinator(validSpec)
-	require.NoError(t, coord.Abort(ctx, errors.New("abort before begin")))
+	require.NoError(t, coord.Abort(ctx, moerr.NewInternalErrorNoCtx("abort before begin")))
 	require.Error(t, coord.Begin(ctx, req))
 
 	coord = NewDMLOverwriteCoordinator(validSpec)
@@ -202,7 +202,7 @@ func TestDMLOverwriteCoordinatorNoopCommitAndCommitError(t *testing.T) {
 	require.Empty(t, noopCommitter.requests)
 	require.NoError(t, coord.Commit(ctx))
 
-	commitErr := errors.New("commit failed")
+	commitErr := moerr.NewInternalErrorNoCtx("commit failed")
 	failingCommitter := &recordingDMLOverwriteCommitter{err: commitErr}
 	coord = NewDMLOverwriteCoordinator(DMLOverwriteCoordinatorSpec{
 		Committer:    failingCommitter,
@@ -240,7 +240,7 @@ func TestDMLOverwriteCoordinatorAppendRejectsClosedStates(t *testing.T) {
 
 	aborted := NewDMLOverwriteCoordinator(spec)
 	require.NoError(t, aborted.Begin(ctx, req))
-	require.NoError(t, aborted.Abort(ctx, errors.New("abort")))
+	require.NoError(t, aborted.Abort(ctx, moerr.NewInternalErrorNoCtx("abort")))
 	err := aborted.AppendWithProcess(proc, bat)
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "aborted"))

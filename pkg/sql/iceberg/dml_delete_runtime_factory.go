@@ -526,10 +526,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) effectiveConfig(accountID uint32) ap
 }
 
 func (f DMLDeleteRuntimeCoordinatorFactory) requireResidencyPolicy() bool {
-	if f.opts.ObjectIOProvider != nil {
-		return false
-	}
-	return true
+	return f.opts.ObjectIOProvider == nil
 }
 
 func (f DMLDeleteRuntimeCoordinatorFactory) now() time.Time {

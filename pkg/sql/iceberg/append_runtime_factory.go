@@ -688,10 +688,7 @@ func (f AppendRuntimeCoordinatorFactory) objectIOContext(
 }
 
 func (f AppendRuntimeCoordinatorFactory) requireResidencyPolicy() bool {
-	if f.opts.ObjectIOProvider != nil {
-		return false
-	}
-	return true
+	return f.opts.ObjectIOProvider == nil
 }
 
 func filterS3AccessCredentials(credentials []api.StorageCredential) []api.StorageCredential {
