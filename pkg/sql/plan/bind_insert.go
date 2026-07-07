@@ -88,11 +88,32 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 			continue
 		}
 
-		// If a regular index table exists, DML must maintain it even when the
-		// index parts include the full primary key. The optimizer can still choose
-		// that hidden table for leading-prefix predicates, and stale index data
-		// would cause incorrect query results (e.g. #25460).
-		indexes = append(indexes, idxDef)
+		colMap := make(map[string]bool)
+		for _, part := range idxDef.Parts {
+			colMap[part] = true
+		}
+
+		coversPk := true
+		for _, part := range tableDef.Pkey.Names {
+			if !colMap[part] {
+				coversPk = false
+				break
+			}
+		}
+
+		// An index whose parts are exactly the primary key is redundant with the
+		// PK itself: the optimizer serves reads from the PK, and maintaining its
+		// hidden table through the DML path is unsupported here (it would break
+		// DELETE/UPDATE). Skip only that degenerate case.
+		//
+		// Every other index must be maintained, including one that covers the full
+		// primary key but carries additional columns (e.g. #25460). The optimizer
+		// can pick that hidden table for leading-prefix index-only scans, so stale
+		// index data would otherwise cause incorrect query results (over-count).
+		redundantWithPk := coversPk && len(colMap) == len(tableDef.Pkey.Names)
+		if !redundantWithPk {
+			indexes = append(indexes, idxDef)
+		}
 	}
 
 	return
