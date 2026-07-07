@@ -413,6 +413,90 @@ func TestHandleCheckActiveTxn(t *testing.T) {
 	)
 }
 
+func TestValidRemoteTxnUsesCheckActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.False(t, fn([]byte("txn1")))
+			}
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.True(t, valid)
+		},
+	)
+}
+
+func TestValidRemoteTxnFallsBackToGetActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.True(t, fn([]byte("txn1")))
+			}
+			target.remote.server.RegisterMethodHandler(
+				pb.Method_CheckActiveTxn,
+				func(_ context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+					writeResponse(
+						target.logger,
+						cancel,
+						resp,
+						moerr.NewNotSupportedNoCtx("check active txn"),
+						cs,
+					)
+				},
+			)
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.True(t, valid)
+		},
+	)
+}
+
+func TestValidRemoteTxnFallsBackToGetActiveTxnMiss(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.True(t, fn([]byte("txn2")))
+			}
+			target.remote.server.RegisterMethodHandler(
+				pb.Method_CheckActiveTxn,
+				func(_ context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+					writeResponse(
+						target.logger,
+						cancel,
+						resp,
+						moerr.NewNotSupportedNoCtx("check active txn"),
+						cs,
+					)
+				},
+			)
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.False(t, valid)
+		},
+	)
+}
+
 func TestKeepRemoteActiveTxn(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(

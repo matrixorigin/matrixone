@@ -817,9 +817,8 @@ func (client *txnClient) IterTxnIDs(fn func([]byte) bool) {
 		}
 	}
 
-	var waitActiveTxnIDs [][]byte
 	client.mu.RLock()
-	waitActiveTxnIDs = make([][]byte, 0, len(client.mu.waitActiveTxns))
+	waitActiveTxnIDs := make([][]byte, 0, len(client.mu.waitActiveTxns))
 	for _, op := range client.mu.waitActiveTxns {
 		waitActiveTxnIDs = append(waitActiveTxnIDs, append([]byte(nil), op.reset.txnID...))
 	}
