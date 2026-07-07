@@ -667,25 +667,77 @@ func TestCannotHungWithUnstableNetwork(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 
+			const workers = 3
+			// Keep this as a bounded hung regression, not a lockservice load test.
+			const iterations = 32
+
+			type workerResult struct {
+				idx        int
+				completed  int
+				lockErrors int64
+				err        error
+			}
+
 			var wg sync.WaitGroup
-			n := 10000
+			progress := make([]atomic.Int64, workers)
+			lockErrors := make([]atomic.Int64, workers)
+			results := make(chan workerResult, workers)
 			fn := func(s *service, idx int) {
-				defer wg.Done()
-				for i := 0; i < n; i++ {
+				result := workerResult{idx: idx}
+				defer func() {
+					results <- result
+					wg.Done()
+				}()
+
+				for i := 0; i < iterations; i++ {
 					txnID := append([]byte{byte(idx)}, buf.Int2Bytes(i)...)
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-					s.Lock(ctx, tableID, rows, txnID, opts)
-					require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+					_, err := s.Lock(ctx, tableID, rows, txnID, opts)
 					cancel()
+					if err != nil {
+						result.lockErrors++
+						lockErrors[idx].Add(1)
+					}
+
+					ctx, cancel = context.WithTimeout(context.Background(), time.Second*5)
+					if err := s.Unlock(ctx, txnID, timestamp.Timestamp{}); err != nil {
+						cancel()
+						result.err = err
+						return
+					}
+					cancel()
+
+					result.completed = i + 1
+					progress[idx].Store(int64(result.completed))
 				}
 			}
 
-			wg.Add(3)
+			wg.Add(workers)
 			go fn(s1, 0)
 			go fn(s2, 1)
 			go fn(s3, 2)
 
-			wg.Wait()
+			doneC := make(chan struct{})
+			go func() {
+				wg.Wait()
+				close(doneC)
+			}()
+
+			select {
+			case <-doneC:
+			case <-time.After(time.Second * 20):
+				t.Errorf("unstable-network lock workers did not finish: progress=[%d,%d,%d], lockErrors=[%d,%d,%d]",
+					progress[0].Load(), progress[1].Load(), progress[2].Load(),
+					lockErrors[0].Load(), lockErrors[1].Load(), lockErrors[2].Load())
+				return
+			}
+
+			close(results)
+			for result := range results {
+				require.NoErrorf(t, result.err, "worker %d stopped after %d/%d iterations with %d lock errors",
+					result.idx, result.completed, iterations, result.lockErrors)
+				require.Equalf(t, iterations, result.completed, "worker %d did not complete all iterations", result.idx)
+			}
 		},
 		func(c *Config) {
 			// close the connection after every 5 messages received
