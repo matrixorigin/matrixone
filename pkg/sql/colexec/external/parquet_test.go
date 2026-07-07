@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"testing"
 	"time"
@@ -582,8 +583,14 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		col := f.Root().Column("c")
 		var h ParquetHandler
 
+		vecFloat32 := vector.NewVec(types.T_float32.ToType())
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_float32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vecFloat32))
+		require.Equal(t, []float32{1, 0}, vector.MustFixedColWithTypeCheck[float32](vecFloat32))
+
 		vecFloat := vector.NewVec(types.T_float64.ToType())
-		mp := h.getMapper(col, plan.Type{Id: int32(types.T_float64), NotNullable: true})
+		mp = h.getMapper(col, plan.Type{Id: int32(types.T_float64), NotNullable: true})
 		require.NotNil(t, mp)
 		require.NoError(t, mp.mapping(page, proc, vecFloat))
 		require.Equal(t, []float64{1, 0}, vector.MustFixedColWithTypeCheck[float64](vecFloat))
@@ -738,6 +745,26 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.NotNil(t, mp)
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, []uint64{10}, vector.MustFixedColWithTypeCheck[uint64](vec))
+	})
+
+	t.Run("string to bit rejects invalid and overflow", func(t *testing.T) {
+		var h ParquetHandler
+
+		fInvalid, pageInvalid := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
+			parquet.ByteArrayValue([]byte("not-a-bit")),
+		})
+		vecInvalid := vector.NewVec(types.New(types.T_bit, 4, 0))
+		mp := h.getMapper(fInvalid.Root().Column("c"), plan.Type{Id: int32(types.T_bit), Width: 4, NotNullable: true})
+		require.NotNil(t, mp)
+		require.Error(t, mp.mapping(pageInvalid, proc, vecInvalid))
+
+		fOverflow, pageOverflow := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
+			parquet.ByteArrayValue([]byte("16")),
+		})
+		vecOverflow := vector.NewVec(types.New(types.T_bit, 4, 0))
+		mp = h.getMapper(fOverflow.Root().Column("c"), plan.Type{Id: int32(types.T_bit), Width: 4, NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(pageOverflow, proc, vecOverflow), "overflows BIT(4)")
 	})
 
 	t.Run("int8 to bit", func(t *testing.T) {
@@ -1063,6 +1090,104 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []types.Time{wantTime}, vector.MustFixedColWithTypeCheck[types.Time](vecTime))
 	})
+}
+
+func TestParquetCrossTypeHelperCoverage(t *testing.T) {
+	ctx := context.Background()
+
+	decimalInt32 := parquet.Decimal(2, 9, parquet.Int32Type).Type()
+	require.True(t, isParquetScalarBoolConvertibleSource(decimalInt32))
+	require.False(t, isParquetScalarBoolConvertibleSource(parquet.String().Type()))
+	require.True(t, isParquetDecimalCastSource(parquet.BooleanType))
+	require.False(t, isParquetDecimalCastSource(parquet.String().Type()))
+	require.True(t, useRawIntegerDecimalMapping(parquet.Int32Type, 0, 0))
+	require.False(t, useRawIntegerDecimalMapping(parquet.BooleanType, 0, 0))
+	require.False(t, useRawIntegerDecimalMapping(decimalInt32, 0, 0))
+
+	boolVal, err := parquetValueToBool(ctx, decimalInt32, parquet.Int32Value(100))
+	require.NoError(t, err)
+	require.True(t, boolVal)
+	boolVal, err = parquetValueToBool(ctx, parquet.Int64Type, parquet.Int64Value(0))
+	require.NoError(t, err)
+	require.False(t, boolVal)
+	boolVal, err = parquetValueToBool(ctx, parquet.FloatType, parquet.FloatValue(1))
+	require.NoError(t, err)
+	require.True(t, boolVal)
+	boolVal, err = parquetValueToBool(ctx, parquet.DoubleType, parquet.DoubleValue(0))
+	require.NoError(t, err)
+	require.False(t, boolVal)
+	_, err = parquetValueToBool(ctx, parquet.String().Type(), parquet.ByteArrayValue([]byte("true")))
+	require.ErrorContains(t, err, "cannot convert parquet")
+
+	rounded, err := parquetValueToRoundedInt64(ctx, decimalInt32, parquet.Int32Value(12345))
+	require.NoError(t, err)
+	require.Equal(t, int64(123), rounded)
+	rounded, err = parquetValueToRoundedInt64(ctx, parquet.Int64Type, parquet.Int64Value(7))
+	require.NoError(t, err)
+	require.Equal(t, int64(7), rounded)
+	_, err = roundParquetFloatToInt64(ctx, math.NaN())
+	require.ErrorContains(t, err, "cannot convert parquet floating point")
+	_, err = roundParquetFloatToInt64(ctx, float64(uint64(1)<<63))
+	require.ErrorContains(t, err, "overflows BIGINT")
+
+	text, err := parquetValueToDecimalString(ctx, decimalInt32, parquet.Int32Value(12345))
+	require.NoError(t, err)
+	require.Equal(t, "123.45", text)
+	text, err = parquetValueToDecimalString(ctx, parquet.BooleanType, parquet.BooleanValue(false))
+	require.NoError(t, err)
+	require.Equal(t, "0", text)
+	text, err = parquetValueToDecimalString(ctx, parquet.Uint(32).Type(), parquet.ValueOf(uint32(42)))
+	require.NoError(t, err)
+	require.Equal(t, "42", text)
+	text, err = parquetValueToDecimalString(ctx, parquet.Int64Type, parquet.Int64Value(-7))
+	require.NoError(t, err)
+	require.Equal(t, "-7", text)
+	text, err = parquetValueToDecimalString(ctx, parquet.FloatType, parquet.FloatValue(1.5))
+	require.NoError(t, err)
+	require.Equal(t, "1.5", text)
+	text, err = parquetValueToDecimalString(ctx, parquet.DoubleType, parquet.DoubleValue(2.25))
+	require.NoError(t, err)
+	require.Equal(t, "2.25", text)
+	_, err = parquetValueToDecimalString(ctx, parquet.String().Type(), parquet.ByteArrayValue([]byte("1")))
+	require.ErrorContains(t, err, "cannot convert parquet")
+
+	jsonVal, err := parquetValueToByteJson(ctx, parquet.Date().Type(), parquet.Int32Value(19723))
+	require.NoError(t, err)
+	require.Equal(t, `"2024-01-01"`, jsonVal.String())
+	jsonVal, err = parquetValueToByteJson(ctx, parquet.Int32Type, parquet.Int32Value(3))
+	require.NoError(t, err)
+	require.Equal(t, "3", jsonVal.String())
+	_, err = parquetValueToByteJson(ctx, parquet.String().Type(), parquet.ByteArrayValue([]byte("bad")))
+	require.ErrorContains(t, err, "cannot convert parquet")
+
+	micros, err := parquetTimestampValueToMicros(ctx, parquet.Int64Value(1_000), parquet.Timestamp(parquet.Nanosecond).Type().LogicalType())
+	require.NoError(t, err)
+	require.Equal(t, int64(1), micros)
+	micros, err = parquetTimestampValueToMicros(ctx, parquet.Int64Value(2), parquet.Timestamp(parquet.Microsecond).Type().LogicalType())
+	require.NoError(t, err)
+	require.Equal(t, int64(2), micros)
+	micros, err = parquetTimestampValueToMicros(ctx, parquet.Int64Value(3), parquet.Timestamp(parquet.Millisecond).Type().LogicalType())
+	require.NoError(t, err)
+	require.Equal(t, int64(3000), micros)
+
+	_, err = parquetTimestampValueToDatetime(ctx, parquet.TimestampAdjusted(parquet.Microsecond, false).Type(), parquet.Int64Value(1), time.UTC)
+	require.NoError(t, err)
+	_, err = parquetTimestampValueToDatetime(ctx, parquet.TimestampAdjusted(parquet.Microsecond, true).Type(), parquet.Int64Value(1), time.UTC)
+	require.NoError(t, err)
+
+	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.TimeZone = nil
+	require.Equal(t, time.Local, parquetSessionLocation(proc))
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	require.Equal(t, time.UTC, parquetSessionLocation(proc))
+
+	dec256, err := parseStringToDecimal256("12.34", 10, 2)
+	require.NoError(t, err)
+	wantDec256, err := types.ParseDecimal256("12.34", 10, 2)
+	require.NoError(t, err)
+	require.Equal(t, wantDec256, dec256)
+	_, err = parseStringToDecimal256("", 10, 2)
+	require.ErrorContains(t, err, "empty string")
 }
 
 func TestParquetTimestampLogicalMissingUnit(t *testing.T) {
