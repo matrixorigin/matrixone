@@ -681,6 +681,67 @@ func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
 	colexec.Get().DeleteUuids([]uuid.UUID{uid})
 }
 
+func TestGetProcByUuidCancelPendingRegistrationCancelsConsumedDispatchProc(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.Nil(t, err)
+
+	procCtx, procCancel := context.WithCancelCause(context.Background())
+	dispatchProc := &process.Process{
+		Ctx:    procCtx,
+		Cancel: procCancel,
+	}
+	notifyCh := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
+	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
+
+	receiver := &messageReceiverOnServer{messageCtx: context.Background()}
+	cancelCause := moerr.NewInternalErrorNoCtx("registration abandoned")
+	receiver.cancelPendingDispatchRegistration(uid, cancelCause)
+
+	require.ErrorIs(t, context.Cause(procCtx), cancelCause)
+	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+}
+
+func TestGetProcByUuidReturnsWhenMessageContextCanceledBeforeRegistration(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.Nil(t, err)
+
+	messageCtx, cancelMessage := context.WithCancel(context.Background())
+	receiver := &messageReceiverOnServer{
+		connectionCtx: context.Background(),
+		messageCtx:    messageCtx,
+	}
+
+	type result struct {
+		proc *process.Process
+		ch   process.RemotePipelineInformationChannel
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, c, e := receiver.GetProcByUuid(uid)
+		done <- result{proc: p, ch: c, err: e}
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancelMessage()
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.Nil(t, r.proc)
+		require.Nil(t, r.ch)
+	case <-time.After(time.Second):
+		t.Fatal("GetProcByUuid did not return after message context cancellation")
+	}
+
+	err = colexec.Get().PutProcIntoUuidMap(uid, &process.Process{}, make(chan *process.WrapCs))
+	require.Error(t, err)
+}
+
 var _ morpc.Stream = &fakeStreamSender{}
 
 // fakeStreamSender implement the morpc.Stream interface.
@@ -707,6 +768,25 @@ func (s *fakeStreamSender) Receive() (chan morpc.Message, error) {
 	return ch, nil
 }
 func (s *fakeStreamSender) Close(_ bool) error {
+	return nil
+}
+
+var _ morpc.Stream = &blockingSendStream{}
+
+type blockingSendStream struct {
+	sendStarted chan struct{}
+}
+
+func (s *blockingSendStream) ID() uint64 { return 0 }
+func (s *blockingSendStream) Send(ctx context.Context, request morpc.Message) error {
+	close(s.sendStarted)
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (s *blockingSendStream) Receive() (chan morpc.Message, error) {
+	return make(chan morpc.Message), nil
+}
+func (s *blockingSendStream) Close(_ bool) error {
 	return nil
 }
 
@@ -840,6 +920,34 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 	}
 }
 
+func TestMessageSenderSendPipelineReturnsWhenSendObservesContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &blockingSendStream{sendStarted: make(chan struct{})}
+	sender := messageSenderOnClient{
+		ctx:          ctx,
+		streamSender: stream,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- sender.sendPipeline(make([]byte, 10), nil, true, 100, "")
+	}()
+
+	select {
+	case <-stream.sendStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "sendPipeline did not call Stream.Send")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		require.Fail(t, "sendPipeline did not return after sender context cancellation")
+	}
+}
+
 func Test_ReceiveMessageFromCnServer(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	sender := messageSenderOnClient{
@@ -919,9 +1027,7 @@ func TestReceiveMessageFromCnServerIfConnector_ReturnsOnBlockedReceiverCancel(t 
 		Proc:   proc,
 		RootOp: connector.NewArgument(),
 	}
-	s.RootOp.(*connector.Connector).Reg = &process.WaitRegister{
-		Ch2: make(chan process.PipelineSignal, 1),
-	}
+	s.RootOp.(*connector.Connector).Reg = process.NewPipelineEdge(1, 0)
 	s.RootOp.(*connector.Connector).Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
 
 	sender := &messageSenderOnClient{
@@ -952,8 +1058,8 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	forwardCh := make(chan process.PipelineSignal, 1)
-	forwardCh <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+	forwardReg := process.NewPipelineEdge(1, 0)
+	forwardReg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
 
 	sender := &messageSenderOnClient{
 		ctx:       ctx,
@@ -964,7 +1070,7 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- receiveMsgAndForward(sender, forwardCh)
+		done <- receiveMsgAndForward(sender, forwardReg)
 	}()
 
 	cancel()
@@ -974,9 +1080,133 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
 	case <-time.After(time.Second):
-		<-forwardCh
+		<-forwardReg.Ch2
 		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
 	}
+}
+
+func TestReceiveMsgAndForward_ReturnsOnReceiverTerminal(t *testing.T) {
+	forwardReg := process.NewPipelineEdge(1, 0)
+	require.True(t, forwardReg.Abort(moerr.NewInternalErrorNoCtx("receiver terminal")))
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        mpool.MustNewZero(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMsgAndForward(sender, forwardReg)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.Fail(t, "receiveMsgAndForward did not unblock after receiver terminal")
+	}
+}
+
+func TestReceiveMessageFromCnServerIfConnector_ReturnsOnReceiverTerminal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+
+	reg := process.NewPipelineEdge(1, 0)
+	require.True(t, reg.Abort(moerr.NewInternalErrorNoCtx("receiver terminal")))
+	s := &Scope{
+		Proc:   proc,
+		RootOp: connector.NewArgument().WithReg(reg),
+	}
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        proc.Mp(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMessageFromCnServerIfConnector(s, sender)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after receiver terminal")
+	}
+}
+
+func TestReceiveMsgAndForward_NilReceiverReturnsError(t *testing.T) {
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        mpool.MustNewZero(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	err := receiveMsgAndForward(sender, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "remote batch forward target is nil")
+}
+
+func TestRemoteNotifyCleanupUsesTypedErrorForSharedReceiver(t *testing.T) {
+	reg := process.NewPipelineEdge(3, 3)
+	testErr := moerr.NewInternalErrorNoCtx("remote notify failed")
+
+	require.True(t, sendRemoteNotifyCleanupTerminal(nil, reg, testErr))
+
+	receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+	bat, err := receiver.GetNextBatch(nil)
+	require.Nil(t, bat)
+	require.ErrorIs(t, err, testErr)
+
+	require.Equal(t, 2, len(reg.Ch2))
+	for len(reg.Ch2) > 0 {
+		signal := <-reg.Ch2
+		require.Equal(t, process.EventError, signal.EventType)
+		require.ErrorIs(t, signal.TerminalErr(), testErr)
+	}
+}
+
+func TestRemoteNotifyCleanupUsesTypedEndForSingleSender(t *testing.T) {
+	reg := process.NewPipelineEdge(1, 2)
+
+	require.True(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
+
+	signal := <-reg.Ch2
+	require.Equal(t, process.EventEnd, signal.EventType)
+	select {
+	case <-reg.Done():
+		require.Fail(t, "single remote End should not close a shared receiver edge")
+	default:
+	}
+}
+
+func TestRemoteNotifyCleanupUsesSharedTerminalSendBudget(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 200 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+
+	start := time.Now()
+	require.False(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 300*time.Millisecond)
+	select {
+	case <-reg.Done():
+	default:
+		t.Fatal("fallback abort should mark the remote notify edge terminal")
+	}
+	require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
 }
 
 func TestReceiveMessageFromCnServerIfDispatch_PreservesCleanupOnOriginalRoot(t *testing.T) {

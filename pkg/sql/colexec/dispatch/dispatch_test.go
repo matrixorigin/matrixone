@@ -15,6 +15,7 @@
 package dispatch
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -23,7 +24,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -171,6 +176,32 @@ func TestDispatchResetDoesNotBlockWhenRemoteErrChannelIsFull(t *testing.T) {
 	}
 }
 
+func TestDispatchResetFailedNilErrorNotifiesRemoteWithCause(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	errCh := make(chan error, 1)
+	d := &Dispatch{
+		ctr: &container{
+			isRemote: true,
+			remoteReceivers: []*process.WrapCs{
+				{Err: errCh, Uid: uid, MsgId: 1},
+			},
+		},
+	}
+
+	d.Reset(nil, true, nil)
+
+	select {
+	case got := <-errCh:
+		require.ErrorIs(t, got, process.ErrPipelineTerminalWithoutCause)
+	default:
+		t.Fatal("Dispatch.Reset did not notify remote receiver")
+	}
+}
+
 func TestDispatchResetSendsHealthyLocalRegWhenEarlierRegIsFull(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 10 * time.Millisecond
@@ -205,6 +236,280 @@ func TestDispatchResetSendsHealthyLocalRegWhenEarlierRegIsFull(t *testing.T) {
 	}
 }
 
+func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newDispatchSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 2)
+	queryDone, err := sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	fullReg := process.NewPipelineEdge(1, 0)
+	fullReg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	healthyReg := process.NewPipelineEdge(1, 0)
+	d := &Dispatch{
+		ctr:       &container{sp: sp},
+		LocalRegs: []*process.WaitRegister{fullReg, healthyReg},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		d.Reset(nil, true, moerr.NewInternalErrorNoCtx("cleanup"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Dispatch.Reset blocked on a full local receiver channel")
+	}
+	require.Equal(t, int64(0), mp.CurrNB())
+	require.Nil(t, d.ctr)
+	select {
+	case <-fullReg.Done():
+	default:
+		t.Fatal("Dispatch.Reset did not close the full receiver edge Done")
+	}
+	select {
+	case <-healthyReg.Done():
+	default:
+		t.Fatal("Dispatch.Reset did not close the healthy receiver edge Done")
+	}
+
+	staleSignal := <-fullReg.Ch2
+	got, info := staleSignal.Action()
+	require.Nil(t, got)
+	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+
+	select {
+	case signal := <-healthyReg.Ch2:
+		require.True(t, signal.IsTerminal())
+	default:
+		t.Fatal("Dispatch.Reset did not notify the healthy local receiver")
+	}
+}
+
+func TestDispatchResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newDispatchSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 2)
+	queryDone, err := sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	fullReg := process.NewPipelineEdge(1, 0)
+	fullReg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	healthyReg := process.NewPipelineEdge(2, 0)
+	healthyReg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 1)
+	d := &Dispatch{
+		ctr:       &container{sp: sp},
+		LocalRegs: []*process.WaitRegister{fullReg, healthyReg},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		d.Reset(nil, false, nil)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Dispatch.Reset blocked after normal End delivery failed")
+	}
+	require.Nil(t, d.ctr)
+	require.Nil(t, d.cleanupSpool)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	select {
+	case <-fullReg.Done():
+	default:
+		t.Fatal("fallback abort did not close Done for full receiver")
+	}
+	require.ErrorIs(t, fullReg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+	select {
+	case <-healthyReg.Done():
+	default:
+		t.Fatal("End did not close Done for healthy receiver")
+	}
+
+	staleSignal := <-fullReg.Ch2
+	got, info := staleSignal.Action()
+	require.Nil(t, got)
+	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+
+	staleSignal = <-healthyReg.Ch2
+	got, info = staleSignal.Action()
+	require.Nil(t, got)
+	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+
+	terminalSignal := <-healthyReg.Ch2
+	require.Equal(t, process.EventEnd, terminalSignal.EventType)
+}
+
+func TestDispatchResetUsesSharedTerminalSendBudget(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 200 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	regs := make([]*process.WaitRegister, 4)
+	for i := range regs {
+		regs[i] = process.NewPipelineEdge(1, 0)
+		regs[i].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+	}
+	d := &Dispatch{LocalRegs: regs}
+
+	start := time.Now()
+	d.Reset(nil, false, nil)
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 300*time.Millisecond)
+	for _, reg := range regs {
+		select {
+		case <-reg.Done():
+		default:
+			t.Fatal("fallback abort should mark every failed receiver edge terminal")
+		}
+		require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+	}
+}
+
+func TestDispatchResetNilLocalRegAbortsSpoolWithoutPanic(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newDispatchSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 2)
+	queryDone, err := sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	healthyReg := process.NewPipelineEdge(1, 0)
+	d := &Dispatch{
+		ctr:       &container{sp: sp},
+		LocalRegs: []*process.WaitRegister{nil, healthyReg},
+	}
+
+	require.NotPanics(t, func() {
+		d.Reset(nil, false, nil)
+	})
+	require.Nil(t, d.ctr)
+	require.Nil(t, d.cleanupSpool)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	select {
+	case signal := <-healthyReg.Ch2:
+		require.Equal(t, process.EventEnd, signal.EventType)
+	default:
+		t.Fatal("Dispatch.Reset did not notify the healthy local receiver")
+	}
+}
+
+func TestDispatchResetEndPreservesQueuedBroadcastBatchUntilDeferredCleanup(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newDispatchSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 2)
+	queryDone, err := sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	reg0 := process.NewPipelineEdge(2, 0)
+	reg1 := process.NewPipelineEdge(2, 0)
+	reg0.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	reg1.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 1)
+	d := &Dispatch{
+		ctr:       &container{sp: sp},
+		LocalRegs: []*process.WaitRegister{reg0, reg1},
+	}
+
+	d.Reset(nil, false, nil)
+	require.Nil(t, d.ctr)
+	require.Same(t, sp, d.cleanupSpool)
+
+	for i, reg := range []*process.WaitRegister{reg0, reg1} {
+		select {
+		case <-reg.Done():
+		default:
+			t.Fatalf("Dispatch.Reset did not close Done for receiver %d", i)
+		}
+
+		dataSignal := <-reg.Ch2
+		got, info := dataSignal.Action()
+		require.NoError(t, info)
+		require.NotNil(t, got)
+		require.Equal(t, 1024, got.RowCount())
+		sp.ReleaseCurrent(i)
+
+		terminalSignal := <-reg.Ch2
+		require.Equal(t, process.EventEnd, terminalSignal.EventType)
+	}
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	d.CleanupDeferredSpool()
+	require.Nil(t, d.cleanupSpool)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
 func TestReceiverDone_OldBehavior(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -225,6 +530,19 @@ func TestReceiverDone_OldBehavior(t *testing.T) {
 
 	err = sendBatToMultiMatchedReg(d, proc, bat, 0)
 	require.Error(t, err, "shuffle should fail when receiver is done")
+}
+
+func newDispatchSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {
+	t.Helper()
+	src := batch.NewWithSize(1)
+	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+	values := make([]int64, rows)
+	for i := range values {
+		values[i] = int64(i + 1)
+	}
+	require.NoError(t, vector.AppendFixedList[int64](src.Vecs[0], values, nil, mp))
+	src.SetRowCount(len(values))
+	return src
 }
 
 // Test_sendBatToMultiMatchedReg_ReceiverRemoved tests the specific error path in sendBatToMultiMatchedReg

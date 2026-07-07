@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -184,6 +185,66 @@ func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}
 
 	return nil
+}
+
+// parseLeadingInteger extracts and parses the longest leading integer prefix
+// from s. Leading whitespace must already be stripped by the caller.
+// Returns (0, false) when s has no leading digits, matching MySQL's
+// CHAR('abc') → 0x00 behavior.
+func parseLeadingInteger(s string) (int64, bool) {
+	if len(s) == 0 {
+		return 0, false
+	}
+	start := 0
+	// optional sign
+	if s[0] == '+' || s[0] == '-' {
+		start = 1
+	}
+	// scan digits
+	end := start
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == start {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(s[:end], 10, 64)
+	if err != nil {
+		// overflow → clamp and let the caller's mod-256 wrap handle it
+		if s[0] == '-' {
+			return -1 << 63, true
+		}
+		return 1<<63 - 1, true
+	}
+	return v, true
+}
+
+// encodeCharBytes converts an int64 argument for MySQL CHAR() into big-endian
+// bytes. MySQL treats CHAR(N) values as unsigned 32-bit integers and expands
+// values > 255 into multiple big-endian bytes:
+//
+//	CHAR(256)   → 0x0100       (two bytes)
+//	CHAR(65536) → 0x010000     (three bytes)
+//	CHAR(-1)    → 0xFFFFFFFF   (four bytes, via two's complement uint32)
+//
+// See MySQL docs: https://dev.mysql.com/doc/refman/8.4/en/string-functions.html#function_char
+func encodeCharBytes(v int64) []byte {
+	uv := uint32(v)
+	if uv == 0 {
+		return []byte{0}
+	}
+	// Encode as big-endian 32-bit, then strip leading zero bytes.
+	var buf [4]byte
+	buf[0] = byte(uv >> 24)
+	buf[1] = byte(uv >> 16)
+	buf[2] = byte(uv >> 8)
+	buf[3] = byte(uv)
+
+	start := 0
+	for start < 3 && buf[start] == 0 {
+		start++
+	}
+	return buf[start:]
 }
 
 const (
@@ -991,7 +1052,15 @@ func (p intervalParam) decimalScale() int32 {
 }
 
 func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
-	// CHAR accepts one or more integer arguments
+	// CHAR accepts one or more arguments, which MySQL interprets as integers.
+	// MySQL coerces arguments differently depending on their type:
+	//   - integer types  : used as-is
+	//   - numeric types (float/decimal/bool/bit/...) : rounded to nearest integer
+	//   - string types   : the leading numeric prefix is truncated to an integer
+	//     (e.g. '65.9' -> 65, not 66)
+	// To preserve this distinction we keep integers, cast string types to varchar
+	// (parsed & truncated in builtInChar), and cast every other numeric type to
+	// int64 (the numeric->int64 cast rounds, matching MySQL).
 	if len(inputs) < 1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
@@ -999,19 +1068,23 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 	shouldCast := false
 	ret := make([]types.Type, len(inputs))
 	for i, source := range inputs {
-		// Check if it's an integer type
-		if !source.Oid.IsInteger() {
-			// Try to cast to int64
+		switch {
+		case source.Oid.IsInteger():
+			ret[i] = source
+		case source.Oid == types.T_varchar:
+			ret[i] = source
+		case source.Oid.IsMySQLString():
+			// char/text/blob/binary/varbinary -> varchar (truncated in builtInChar)
+			shouldCast = true
+			ret[i] = types.T_varchar.ToType()
+		default:
+			// float/decimal/bool/bit/... -> int64 (rounded by the cast, like MySQL)
 			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
 			if c == matchFailed {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
-			if c == matchByCast {
-				shouldCast = true
-				ret[i] = types.T_int64.ToType()
-			}
-		} else {
-			ret[i] = source
+			shouldCast = true
+			ret[i] = types.T_int64.ToType()
 		}
 	}
 	if shouldCast {
@@ -1023,8 +1096,11 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// Create getter functions for each parameter that handle different integer types
-	getters := make([]func(uint64) (int64, bool), len(parameters))
+	// After builtInCharCheck, parameters are either integer types or varchar.
+	// (numeric types were cast to int64, string types to varchar).
+	// Each getter returns an int64 value and a null flag.
+	type intGetter func(uint64) (int64, bool)
+	getters := make([]intGetter, len(parameters))
 	for i, param := range parameters {
 		paramType := param.GetType().Oid
 		switch paramType {
@@ -1077,11 +1153,39 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				return int64(val), null
 			}
 		default:
-			// For non-integer types, try to cast to int64
-			p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+			// varchar: parse the leading numeric prefix as an integer.
+			// MySQL parses the longest leading integer prefix
+			// (e.g. CHAR('65xyz') → 0x41, CHAR('77.3') → 77).
+			// Direct integer parsing avoids float64 precision loss
+			// for large values (e.g. '9007199254740993').
+			sp := vector.GenerateFunctionStrParameter(param)
+			isBin := param.GetIsBin()
 			getters[i] = func(idx uint64) (int64, bool) {
-				val, null := p.GetValue(idx)
-				return val, null
+				v, null := sp.GetStrValue(idx)
+				if null {
+					return 0, true
+				}
+				if isBin {
+					// hex/bit literals (e.g. 0x41, b'01000001') arrive as raw
+					// bytes with IsBin set; interpret them as a big-endian
+					// integer, mirroring the varchar->int64 cast path
+					// (strToSigned) that CHAR used before.
+					if len(v) > 8 {
+						// MySQL: truncated incorrect BINARY value -> 0
+						return 0, false
+					}
+					var num uint64
+					for _, b := range v {
+						num = num<<8 | uint64(b)
+					}
+					return int64(num), false
+				}
+				s := strings.TrimSpace(string(v))
+				if len(s) == 0 {
+					return 0, false
+				}
+				val, _ := parseLeadingInteger(s)
+				return val, false
 			}
 		}
 	}
@@ -1095,38 +1199,25 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 
 		var resultBytes []byte
-		hasNull := false
 
-		// Process all integer arguments
+		// Process all arguments
 		for _, getter := range getters {
 			v, null := getter(i)
 			if null {
-				hasNull = true
-				break
+				// MySQL skips NULL arguments instead of returning NULL
+				continue
 			}
-			// Convert integer to byte value (0-255)
-			// MySQL CHAR function interprets integers as byte values in UTF-8 encoding
-			// For example: CHAR(228, 184, 173) returns "中" (the UTF-8 bytes for U+4E2D)
-			if v < 0 {
-				// Negative values are treated as 0
-				resultBytes = append(resultBytes, 0)
-			} else if v > 255 {
-				// Values > 255 are treated modulo 256
-				resultBytes = append(resultBytes, byte(v&0xFF))
-			} else {
-				resultBytes = append(resultBytes, byte(v))
-			}
+			// Convert argument to big-endian multi-byte sequence.
+			// MySQL treats CHAR(N) as unsigned 32-bit ints and expands
+			// values > 255 into multiple big-endian bytes (CHAR(256) → 0x0100).
+			// Negative values use two's complement uint32 (CHAR(-1) → 0xFFFFFFFF).
+			resultBytes = append(resultBytes, encodeCharBytes(v)...)
 		}
 
-		if hasNull {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			// Convert byte slice to string (UTF-8 decoding happens automatically)
-			if err := rs.AppendBytes(resultBytes, false); err != nil {
-				return err
-			}
+		// resultBytes is empty only when every argument was NULL. MySQL returns
+		// an empty (non-NULL) string in that case, e.g. CHAR(NULL, NULL) -> ''.
+		if err := rs.AppendBytes(resultBytes, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -3359,7 +3450,10 @@ func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func builtInCot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+	return opUnaryFixedToFixedWithErrorCheck[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		if v == 0 {
+			return 0, moerr.NewOutOfRangeNoCtxf("float64", "DOUBLE value is out of range in 'cot(0)'")
+		}
 		return momath.Cot(v)
 	}, selectList)
 }
@@ -3577,11 +3671,59 @@ func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.
 	return nil
 }
 
-func builtInConvertFake(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// ignore the second parameter and just set result the same to the first parameter.
-	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
-		return v
-	}, selectList)
+func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, parameters[1])
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		valueRow := i
+		if parameters[0].IsConst() {
+			valueRow = 0
+		}
+		charsetRow := i
+		if parameters[1].IsConst() {
+			charsetRow = 0
+		}
+
+		value, valueNull := p1.GetStrValue(valueRow)
+		charset, charsetNull := p2.GetStrValue(charsetRow)
+		if valueNull || charsetNull {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if isUTF8Charset(charset) && !utf8.Valid(value) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendMustBytesValue(value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isUTF8Charset(charset []byte) bool {
+	return strings.EqualFold(string(charset), "utf8") || strings.EqualFold(string(charset), "utf8mb4")
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

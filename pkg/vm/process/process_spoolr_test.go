@@ -18,6 +18,9 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 func TestPipelineSignalReceiverWaitingEndUsesCleanupTimeout(t *testing.T) {
@@ -71,6 +74,53 @@ func TestPipelineSignalReceiverWaitingEndWithTimeoutCompletesWhenEndSignalArrive
 	}
 }
 
+func TestPipelineSignalReceiverSharedEdgeContinuesAfterFirstEndSignal(t *testing.T) {
+	reg := NewPipelineEdge(3, 2)
+	reg.Ch2 <- NewEndSignal()
+	reg.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+	reg.Ch2 <- NewEndSignal()
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{reg})
+	got, err := receiver.GetNextBatch(nil)
+	if err != nil {
+		t.Fatalf("GetNextBatch returned error: %v", err)
+	}
+	if got != batch.EmptyBatch {
+		t.Fatal("receiver did not continue to data after the first shared End signal")
+	}
+	if !receiver.WaitingEndWithTimeout(time.Second) {
+		t.Fatal("receiver did not complete after the second shared End signal")
+	}
+}
+
+func TestPipelineSignalReceiverSharedFatalCompletesRemainingCount(t *testing.T) {
+	reg := NewPipelineEdge(2, 2)
+	if !reg.SendError(moerr.NewInternalErrorNoCtx("shared fatal")) {
+		t.Fatal("failed to send shared fatal")
+	}
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{reg})
+	if !receiver.WaitingEndWithTimeout(time.Second) {
+		t.Fatal("shared fatal did not complete the receiver terminal count")
+	}
+}
+
+func TestPipelineSignalReceiverFailedCleanupWithoutCauseReturnsError(t *testing.T) {
+	reg := NewPipelineEdge(1, 1)
+	if !SendPipelineSignalWithTimeout(reg, BuildCleanupSignal(true, nil), time.Second) {
+		t.Fatal("failed to send cleanup failure signal")
+	}
+
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{reg})
+	got, err := receiver.GetNextBatch(nil)
+	if got != nil {
+		t.Fatal("failure terminal returned a batch")
+	}
+	if err != ErrPipelineTerminalWithoutCause {
+		t.Fatal("failure terminal without cause did not return ErrPipelineTerminalWithoutCause")
+	}
+}
+
 func TestSendPipelineSignalWithTimeoutReturnsWhenChannelIsFull(t *testing.T) {
 	reg := &WaitRegister{Ch2: make(chan PipelineSignal, 1)}
 	reg.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
@@ -105,4 +155,8 @@ func TestCleanupWarnLimiterSuppressesStorm(t *testing.T) {
 	if suppressed != wantSuppressed {
 		t.Fatalf("unexpected suppressed count: got %d, want %d", suppressed, wantSuppressed)
 	}
+}
+
+func TestWarnPipelineCleanupfNilProcessIsSafe(t *testing.T) {
+	WarnPipelineCleanupf(nil, "nil_proc_cleanup", "cleanup warning with nil process")
 }
