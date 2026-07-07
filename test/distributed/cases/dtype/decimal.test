@@ -620,6 +620,8 @@ SELECT col1 * col2 FROM decimal18;
 SELECT col3 * col2 FROM decimal18;
 SELECT col2 * col4 FROM decimal18;
 
+
+
 SELECT col1 / col2 FROM decimal18;
 SELECT 12345678965412365478965444565896532145 / col1 FROM decimal18;
 SELECT col2/522222222225456987.23212654569987523654 FROM decimal18;
@@ -903,3 +905,49 @@ SELECT COUNT(*) FROM float_precision_test WHERE f32_col = 16777217;
 SELECT * FROM float_precision_test WHERE f64_col = 1000000;
 
 DROP TABLE float_precision_test;
+
+-- Test 33-39: DECIMAL minus integer literal should allow negative results.
+-- This covers Decimal128 diff-scale subtraction where the scaled operand may
+-- alias the result buffer.
+SELECT CAST(8000.00 AS DECIMAL(12,2)) - 1299 AS dec_minus_int_positive;
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 300 AS dec_minus_int_zero;
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 301 AS dec_minus_int_negative_one;
+SELECT CAST(100.00 AS DECIMAL(12,2)) - 200 AS dec_minus_int_negative_hundred;
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999 AS dec_minus_int_large_negative;
+
+-- Decimal literal right operand keeps the same-scale Decimal64 path.
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999.00 AS dec_minus_decimal_large_negative;
+
+-- Column path reproduces vector/scalar execution instead of constant-only execution.
+DROP TABLE IF EXISTS decimal_minus_int_regression;
+CREATE TABLE decimal_minus_int_regression(bal DECIMAL(12,2));
+INSERT INTO decimal_minus_int_regression VALUES (300.00);
+SELECT bal - 3999 AS bal_minus_int FROM decimal_minus_int_regression;
+DROP TABLE decimal_minus_int_regression;
+
+-- Right operand as an integer column covers const DECIMAL minus vector INT.
+DROP TABLE IF EXISTS decimal_minus_int_rhs_vector;
+CREATE TABLE decimal_minus_int_rhs_vector(i INT);
+INSERT INTO decimal_minus_int_rhs_vector VALUES (300), (301), (3999);
+SELECT CAST(300.00 AS DECIMAL(12,2)) - i AS dec_minus_int_col
+FROM decimal_minus_int_rhs_vector
+ORDER BY i;
+DROP TABLE decimal_minus_int_rhs_vector;
+
+-- Right operand as an integer column with NULL covers the null bitmap path.
+DROP TABLE IF EXISTS decimal_minus_int_rhs_null;
+CREATE TABLE decimal_minus_int_rhs_null(id INT, i INT);
+INSERT INTO decimal_minus_int_rhs_null VALUES (1, 300), (2, NULL), (3, 301), (4, 3999);
+SELECT id, CAST(300.00 AS DECIMAL(12,2)) - i AS dec_minus_nullable_int_col
+FROM decimal_minus_int_rhs_null
+ORDER BY id;
+DROP TABLE decimal_minus_int_rhs_null;
+
+-- Explicit Decimal128 left operand keeps the regression covered even if
+-- decimal-int cast rules change for narrower DECIMAL widths.
+SELECT CAST(300.00 AS DECIMAL(20,2)) - 301 AS dec128_minus_int_negative_one;
+SELECT CAST(300.00 AS DECIMAL(20,2)) - 3999 AS dec128_minus_int_large_negative;
+
+-- Reverse operand order is a related decimal-int diff-scale subtraction shape.
+SELECT 301 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_positive_one;
+SELECT 200 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_negative_hundred;
