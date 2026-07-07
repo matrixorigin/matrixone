@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,9 +28,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -828,45 +825,6 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 // 	return attachedScope, nil
 // }
 
-func isAvailable(client morpc.RPCClient, addr string) bool {
-	_, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
-		return false
-	}
-	logutil.Debugf("ping %s start", addr)
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 500*time.Millisecond, moerr.CauseIsAvailable)
-	defer cancel()
-	err = client.Ping(ctx, addr)
-	if err != nil {
-		err = moerr.AttachCause(ctx, err)
-		// ping failed
-		logutil.Debugf("ping %s err %+v\n", addr, err)
-		return false
-	}
-	return true
-}
-
-func (c *Compile) filterAvailableCNs(workers engine.Nodes) engine.Nodes {
-	if c.proc == nil {
-		return workers
-	}
-	client := cnclient.GetPipelineClient(
-		c.proc.GetService(),
-	)
-	if client == nil {
-		return workers
-	}
-	return toEngineNodes(schedule.FilterAvailableWorkers(schedule.AvailabilityRequest{
-		Workers:   toScheduleWorkers(workers),
-		LocalAddr: c.addr,
-		SameCN:    isSameCN,
-		IsAvailable: func(addr string) bool {
-			return isAvailable(client.Raw(), addr)
-		},
-	}))
-}
-
 func (c *Compile) getCandidateCNs() (engine.Nodes, error) {
 	return c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
 }
@@ -960,7 +918,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}
 	c.cnList = toEngineNodes(placement.Workers)
 	if c.execType == plan2.ExecTypeAP_MULTICN {
-		c.cnList = c.filterAvailableCNs(c.cnList)
 		// sort by addr to get fixed order of CN list
 		sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
 	}
@@ -5311,6 +5268,11 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 
 	// scan on multi CN
 	scanWorkers := scanPlacement.Workers
+	remoteTombstones := remoteScanTombstoneAttacher{
+		c:    c,
+		node: node,
+		rel:  rel,
+	}
 	for i := range scanWorkers {
 		mcpu := max(scanWorkers[i].Mcpu, 1)
 		if stats != nil && stats.Dop > 0 {
@@ -5324,16 +5286,35 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 			CNIDX: int32(i),
 		}
 		if engNode.Addr != c.addr {
-			uncommittedTombs, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones)
-			if err != nil {
+			if err := remoteTombstones.attach(&engNode); err != nil {
 				return nil, err
 			}
-			engNode.Data = readutil.BuildEmptyRelData()
-			engNode.Data.AttachTombstones(uncommittedTombs)
 		}
 		engNodes = append(engNodes, engNode)
 	}
 	return engNodes, nil
+}
+
+type remoteScanTombstoneAttacher struct {
+	c          *Compile
+	node       *plan.Node
+	rel        engine.Relation
+	collected  bool
+	tombstones engine.Tombstoner
+}
+
+func (a *remoteScanTombstoneAttacher) attach(node *engine.Node) error {
+	if !a.collected {
+		tombstones, err := collectTombstones(a.c, a.node, a.rel, engine.Policy_CollectAllTombstones)
+		if err != nil {
+			return err
+		}
+		a.tombstones = tombstones
+		a.collected = true
+	}
+	node.Data = readutil.BuildEmptyRelData()
+	_ = node.Data.AttachTombstones(a.tombstones)
+	return nil
 }
 
 func toScheduleScanStats(node *plan.Node) *schedule.ScanStats {

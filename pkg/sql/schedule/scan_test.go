@@ -119,13 +119,13 @@ func TestDecideScanPlacementUsesMultiCNForLargeScans(t *testing.T) {
 	require.Equal(t, workers, decision.Workers)
 }
 
-func TestDecideScanPlacementKeepsLargeScanEmptyWhenNoWorkers(t *testing.T) {
+func TestDecideScanPlacementKeepsLargeScanLocalWhenNoWorkers(t *testing.T) {
 	decision := DecideScanPlacement(ScanRequest{
 		Stats:               scanStats(11, 4, false),
 		OneCNBlockThreshold: 10,
 	})
 
-	require.False(t, decision.LocalOnly)
+	require.True(t, decision.LocalOnly)
 	require.Equal(t, ReasonScanNoWorkers, decision.Reason)
 	require.Nil(t, decision.Workers)
 }
