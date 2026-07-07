@@ -989,6 +989,37 @@ func TestNormalizeExprForComparisonFoldsFunctionNameCase(t *testing.T) {
 	require.Equal(t, "grouping", groupingExpr.FuncName.Origin())
 }
 
+// normalizeExprForComparison must recurse into the expression subtrees of
+// GROUPING() arguments so that qualifiers on nested expression arguments are
+// also stripped. E.g. GROUPING(abs(t.col)) should canonicalize its inner t.col
+// to col so the key matches GROUPING(abs(col)).
+func TestNormalizeExprForComparisonStripsQualifierInsideGroupingArgExpr(t *testing.T) {
+	expr := &tree.FuncExpr{
+		FuncName: tree.NewCStr("GROUPING", 0),
+		Exprs: tree.Exprs{
+			&tree.FuncExpr{
+				FuncName: tree.NewCStr("ABS", 0),
+				Exprs: tree.Exprs{
+					&tree.UnresolvedName{
+						NumParts: 2,
+						CStrParts: [4]*tree.CStr{
+							tree.NewCStr("col", 0),
+							tree.NewCStr("t", 0),
+						},
+					},
+				},
+			},
+		},
+	}
+	normalizeExprForComparison(expr)
+	require.Equal(t, "grouping", expr.FuncName.Origin())
+	nestedFunc := expr.Exprs[0].(*tree.FuncExpr)
+	require.Equal(t, "abs", nestedFunc.FuncName.Origin())
+	innerName := nestedFunc.Exprs[0].(*tree.UnresolvedName)
+	require.Equal(t, 1, innerName.NumParts)
+	require.Equal(t, "col", innerName.CStrParts[0].Compare())
+}
+
 // groupingOrderExprKey must return the same key for GROUPING(a) and
 // GROUPING(t.a) so that the DISTINCT guard matches them as the same expression.
 func TestGroupingOrderExprKeyNormalizesQualifiedColumn(t *testing.T) {

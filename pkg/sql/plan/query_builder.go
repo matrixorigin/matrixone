@@ -3999,8 +3999,11 @@ func normalizeExprForComparison(astExpr tree.Expr) {
 							name.NumParts = 1
 						}
 					}
-					return
 				}
+			}
+			if name, ok := value.Interface().(*tree.UnresolvedName); ok &&
+				name.NumParts > 1 && !name.Star {
+				name.NumParts = 1
 			}
 			walk(value.Elem())
 			return
