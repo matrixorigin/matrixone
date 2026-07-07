@@ -327,6 +327,16 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				As: tree.AliasClause{Alias: tree.Identifier(alias_name)},
 			}
 		} else {
+			// A non-retrieval (classic postings) fulltext index does not implement
+			// RETRIEVAL mode. Reject it here at plan time with a clear message rather
+			// than letting fulltext_index_scan carry mode=FULLTEXT_RETRIEVAL into
+			// patternToSql, whose default arm fails at runtime with the opaque
+			// "invalid fulltext search mode". (DEFAULT mode maps to natural-language
+			// for a classic index, so only explicit RETRIEVAL is rejected.)
+			if mode == int64(tree.FULLTEXT_RETRIEVAL) {
+				return -1, nil, nil, moerr.NewNotSupported(builder.GetContext(),
+					"RETRIEVAL mode requires a fulltext index created WITH PARSER retrieval")
+			}
 			fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
 			var exprs tree.Exprs
 			exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))

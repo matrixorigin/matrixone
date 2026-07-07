@@ -1,0 +1,18 @@
+drop database if exists ft_mode;
+create database ft_mode;
+use ft_mode;
+create table t (id bigint primary key, txt text);
+insert into t values (1,'apple banana'),(2,'banana cherry'),(3,'cherry date');
+create fulltext index ft on t(txt);
+select id from t where match(txt) against('apple' in retrieval mode) order by id;
+not supported: RETRIEVAL mode requires a fulltext index created WITH PARSER retrieval
+select id from t where match(txt) against('apple') order by id;
+id
+1
+select id from t where match(txt) against('+apple' in boolean mode) order by id;
+id
+1
+select id from t where match(txt) against('apple' in natural language mode) order by id;
+id
+1
+drop database ft_mode;
