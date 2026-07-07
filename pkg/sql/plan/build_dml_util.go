@@ -3521,7 +3521,7 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 					sb.WriteByte(',')
 				}
 				sb.WriteByte('\'')
-				sb.WriteString(col)
+				sb.WriteString(sqlquote.EscapeString(col))
 				sb.WriteByte('\'')
 			}
 			sb.WriteByte(')')
@@ -3602,7 +3602,8 @@ func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
 func getSqlForCheckHasDBRefersTo(db string) string {
 	sb := strings.Builder{}
 	sb.WriteString("select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and db_name != '%s';", db, db))
+	dbLit := sqlquote.EscapeString(db)
+	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and db_name != '%s';", dbLit, dbLit))
 	return sb.String()
 }
 

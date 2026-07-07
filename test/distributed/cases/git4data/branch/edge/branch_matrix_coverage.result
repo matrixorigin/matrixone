@@ -70,10 +70,10 @@ select id, d256, st_astext(g) as g from wide_base order by id;
 1  ¦  42.000000000000000000000000000000  ¦  POINT(2 2)  𝄀
 3  ¦  7.000000000000000000000000000000  ¦  POINT(3 3)
 create table pick_year_base(y year primary key, v int);
-insert into pick_year_base values (2024, 1), (2025, 2);
+insert into pick_year_base values (2024, 1);
 data branch create table pick_year_dst from pick_year_base;
 data branch create table pick_year_src from pick_year_base;
-update pick_year_src set v = 20250 where y = 2025;
+insert into pick_year_src values (2025, 20250);
 data branch pick pick_year_src into pick_year_dst keys('2025') when conflict accept;
 select y, v from pick_year_dst order by y;
 ➤ y[91,2147483647,0]  ¦  v[4,32,0]  𝄀
