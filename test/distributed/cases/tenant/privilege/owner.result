@@ -45,4 +45,18 @@ a
 2
 3
 drop account default_1;
+create account ddl_orphan_owner ADMIN_NAME admin IDENTIFIED BY '111111';
+create role owner_r;
+grant connect,create database on account * to owner_r;
+create user owner_u identified by '123456' default role owner_r;
+create role dropper_r;
+grant connect,drop database on account * to dropper_r;
+create user dropper_u identified by '123456' default role dropper_r;
+create database orphan_db;
+create table orphan_db.orphan_t(a int);
+grant drop table on database orphan_db to dropper_r;
+drop role owner_r;
+drop table orphan_db.orphan_t;
+drop database orphan_db;
+drop account ddl_orphan_owner;
 set global enable_privilege_cache = on;

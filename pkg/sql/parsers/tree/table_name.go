@@ -21,27 +21,15 @@ type TableName struct {
 }
 
 func (tn TableName) Format(ctx *FmtCtx) {
-	if ctx.quoteIdentifier {
-		if tn.ExplicitCatalog {
-			ctx.WriteString("`" + string(tn.CatalogName) + "`")
-			ctx.WriteByte('.')
-		}
-		if tn.ExplicitSchema {
-			ctx.WriteString("`" + string(tn.SchemaName) + "`")
-			ctx.WriteByte('.')
-		}
-		ctx.WriteString("`" + string(tn.ObjectName) + "`")
-	} else {
-		if tn.ExplicitCatalog {
-			ctx.WriteString(string(tn.CatalogName))
-			ctx.WriteByte('.')
-		}
-		if tn.ExplicitSchema {
-			ctx.WriteString(string(tn.SchemaName))
-			ctx.WriteByte('.')
-		}
-		ctx.WriteString(string(tn.ObjectName))
+	if tn.ExplicitCatalog {
+		ctx.WriteIdentifier(tn.CatalogName)
+		ctx.WriteByte('.')
 	}
+	if tn.ExplicitSchema {
+		ctx.WriteIdentifier(tn.SchemaName)
+		ctx.WriteByte('.')
+	}
+	ctx.WriteIdentifier(tn.ObjectName)
 	if tn.AtTsExpr != nil {
 		tn.AtTsExpr.Format(ctx)
 	}
@@ -119,8 +107,8 @@ func (a ATTimeStampType) String() string {
 		return "timestamp"
 	case ATTIMESTAMPSNAPSHOT: // format: {snapshot = expr}
 		return "snapshot"
-	case ATMOTIMESTAMP: // format: {mo-timestamp = expr}
-		return "mo-timestamp"
+	case ATMOTIMESTAMP: // format: {MO_TS = expr}
+		return "MO_TS"
 	case ASOFTIMESTAMP: // format: {as of timestamp = expr}
 		return "as of timestamp"
 	}

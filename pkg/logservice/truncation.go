@@ -128,15 +128,86 @@ func (l *store) truncationWorker(ctx context.Context) {
 // processTruncateLog process log truncation for all shards excpet
 // hakeeper shard.
 func (l *store) processTruncateLog(ctx context.Context) error {
+	activeReplicas := l.startedReplicaIDs()
+	processed := make(map[uint64]struct{})
 	for _, shard := range l.getShards() {
 		if shard.ShardID == hakeeper.DefaultHAKeeperShardID {
 			continue
 		}
-		if err := l.processShardTruncateLog(ctx, shard.ShardID); err != nil {
+		replicas := activeReplicas[shard.ShardID]
+		if _, ok := replicas[shard.ReplicaID]; !ok {
+			if len(replicas) > 0 ||
+				l.isSkippedZombie(shard.ShardID, shard.ReplicaID) {
+				replicas = l.startedReplicaIDs()[shard.ShardID]
+				if _, ok := replicas[shard.ReplicaID]; ok {
+					continue
+				}
+				if len(replicas) == 0 &&
+					!l.isSkippedZombie(shard.ShardID, shard.ReplicaID) {
+					continue
+				}
+				l.cleanupStaleReplica(shard.ShardID, shard.ReplicaID,
+					l.newestActiveSnapshotIndex(shard.ShardID, replicas))
+			}
+			continue
+		}
+		if _, ok := processed[shard.ShardID]; ok {
+			continue
+		}
+		processed[shard.ShardID] = struct{}{}
+		if err := l.processShardTruncateLogWithReplica(ctx, shard.ShardID, shard.ReplicaID); err != nil {
 			l.runtime.Logger().Error("process truncate log failed", zap.Error(err))
 		}
 	}
 	return nil
+}
+
+func (l *store) startedReplicaIDs() map[uint64]map[uint64]struct{} {
+	opts := dragonboat.NodeHostInfoOption{SkipLogInfo: true}
+	nhi := l.nh.GetNodeHostInfo(opts)
+	replicas := make(map[uint64]map[uint64]struct{})
+	for _, ci := range nhi.ShardInfoList {
+		if ci.Pending {
+			continue
+		}
+		if _, ok := replicas[ci.ShardID]; !ok {
+			replicas[ci.ShardID] = make(map[uint64]struct{})
+		}
+		replicas[ci.ShardID][ci.ReplicaID] = struct{}{}
+	}
+	return replicas
+}
+
+func (l *store) newestActiveSnapshotIndex(
+	shardID uint64, replicas map[uint64]struct{},
+) uint64 {
+	var index uint64
+	for replicaID := range replicas {
+		if newest := l.snapshotMgr.NewestIndex(shardID, replicaID); newest > index {
+			index = newest
+		}
+	}
+	return index
+}
+
+func (l *store) cleanupStaleReplica(
+	shardID uint64, replicaID uint64, activeSnapshotIndex uint64,
+) {
+	if err := l.snapshotMgr.RemoveReplica(shardID, replicaID); err != nil {
+		l.runtime.Logger().Error("remove stale exported snapshots failed",
+			zap.Uint64("shardID", shardID),
+			zap.Uint64("replicaID", replicaID),
+			zap.Error(err),
+		)
+		return
+	}
+	l.shardSnapshotInfo.setSnapshotIndex(shardID, activeSnapshotIndex)
+	l.runtime.Logger().Info("remove stale log replica metadata",
+		zap.Uint64("shardID", shardID),
+		zap.Uint64("replicaID", replicaID),
+		zap.Uint64("activeSnapshotIndex", activeSnapshotIndex),
+	)
+	l.removeMetadata(shardID, replicaID)
 }
 
 // exportSnapshot just export the snapshot but do NOT truncate logs.
@@ -347,6 +418,14 @@ func (l *store) dropNewestOnTimeout(shardID uint64, replicaID uint64) {
 }
 
 func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) error {
+	replicaID := l.getReplicaID(shardID)
+	if replicaID <= 0 {
+		return nil
+	}
+	return l.processShardTruncateLogWithReplica(ctx, shardID, uint64(replicaID))
+}
+
+func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID uint64, replicaID uint64) error {
 	// Do NOT process before leader is OK.
 	leaderID, err := l.leaderID(shardID)
 	if err != nil {
@@ -378,11 +457,8 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 		// of wedging permanently. See issue #24315.
 		l.runtime.Logger().Warn("get truncated lsn timed out, tick skipped",
 			zap.Uint64("shardID", shardID), zap.Error(err))
-		if rid := l.getReplicaID(shardID); rid > 0 {
-			replicaID := uint64(rid)
-			if l.snapshotMgr.Count(shardID, replicaID) >= l.cfg.MaxExportedSnapshot {
-				l.dropNewestOnTimeout(shardID, replicaID)
-			}
+		if l.snapshotMgr.Count(shardID, replicaID) >= l.cfg.MaxExportedSnapshot {
+			l.dropNewestOnTimeout(shardID, replicaID)
 		}
 		return nil
 	}
@@ -391,7 +467,6 @@ func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) err
 		return nil
 	}
 
-	replicaID := uint64(l.getReplicaID(shardID))
 	dir, lsn := l.snapshotMgr.EvalImportSnapshot(shardID, replicaID, lsnInSM)
 	if l.shouldDoImport(ctx, shardID, lsnInSM, lsn, dir) {
 		if err := l.importSnapshot(ctx, shardID, replicaID, lsn, dir); err != nil {

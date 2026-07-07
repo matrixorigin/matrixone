@@ -36,6 +36,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
+const checkpointIntentOldAge = 2 * time.Minute
+
 type timeBasedPolicy struct {
 	interval time.Duration
 }
@@ -215,7 +217,7 @@ func NewRunner(
 	cfg = r.GetCfg()
 
 	// Note: we can't change the global history interval in runtime
-	r.store = newRunnerStore(r.rt.SID(), cfg.GlobalHistoryDuration, time.Minute*2)
+	r.store = newRunnerStore(r.rt.SID(), cfg.GlobalHistoryDuration, checkpointIntentOldAge)
 
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)

@@ -118,6 +118,45 @@ func TestSort(t *testing.T) {
 	}
 }
 
+func TestSortDecimal256(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.New(types.T_decimal256, 39, 4)
+	values := []string{
+		"1234567890123456789012345678901234.5678",
+		"-2.0000",
+		"0.0001",
+		"9999999999999999999999999999999999.9999",
+		"1234567890123456789012345678901234.5677",
+	}
+	vec := newDecimal256VectorForSortTest(t, typ, values, mp)
+	defer vec.Free(mp)
+
+	os := make([]int64, vec.Length())
+	for i := range os {
+		os[i] = int64(i)
+	}
+	Sort(false, false, false, os, vec)
+	require.Equal(t, []string{
+		"-2.0000",
+		"0.0001",
+		"1234567890123456789012345678901234.5677",
+		"1234567890123456789012345678901234.5678",
+		"9999999999999999999999999999999999.9999",
+	}, decimal256ValuesByOffsets(vec, os, typ.Scale))
+
+	for i := range os {
+		os[i] = int64(i)
+	}
+	Sort(true, false, false, os, vec)
+	require.Equal(t, []string{
+		"9999999999999999999999999999999999.9999",
+		"1234567890123456789012345678901234.5678",
+		"1234567890123456789012345678901234.5677",
+		"0.0001",
+		"-2.0000",
+	}, decimal256ValuesByOffsets(vec, os, typ.Scale))
+}
+
 func BenchmarkSortInt(b *testing.B) {
 	vs := make([]int, BenchmarkRows)
 	for i := range vs {
@@ -288,4 +327,25 @@ func newTestCase(t *testing.T, desc bool, m *mpool.MPool, typ types.Type) testCa
 		proc: testutil.NewProcessWithMPool(t, "", m),
 		vec:  testutil.NewVector(Rows, typ, m, true, nil),
 	}
+}
+
+func newDecimal256VectorForSortTest(t *testing.T, typ types.Type, values []string, mp *mpool.MPool) *vector.Vector {
+	t.Helper()
+
+	vec := vector.NewVec(typ)
+	for _, value := range values {
+		decimalValue, err := types.ParseDecimal256(value, typ.Width, typ.Scale)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendFixed(vec, decimalValue, false, mp))
+	}
+	return vec
+}
+
+func decimal256ValuesByOffsets(vec *vector.Vector, offsets []int64, scale int32) []string {
+	values := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
+	result := make([]string, 0, len(offsets))
+	for _, offset := range offsets {
+		result = append(result, values[offset].Format(scale))
+	}
+	return result
 }

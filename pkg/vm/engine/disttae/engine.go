@@ -260,10 +260,11 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
-	accountId, userId, roleId, err := getAccessInfo(ctx)
+	accountId, userId, _, err := getAccessInfo(ctx)
 	if err != nil {
 		return err
 	}
+	roleId := getDDLOwnerRoleId(ctx)
 	databaseId, err := txn.allocateID(ctx)
 	if err != nil {
 		return err

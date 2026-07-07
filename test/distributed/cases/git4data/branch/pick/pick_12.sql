@@ -92,4 +92,65 @@ drop table t0;
 drop table t1;
 drop table t2;
 
+-- case 6: decimal256 non-PK conflict
+create table t0 (
+id int primary key,
+amount decimal(39,4),
+note varchar(20)
+);
+insert into t0 values
+(1, 1234567890123456789012345678901230.0001, 'base'),
+(2, 1234567890123456789012345678901230.0002, 'same');
+
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+
+update t1
+set amount = 1234567890123456789012345678901231.1111,
+	note = 'left'
+where id = 1;
+update t2
+set amount = 1234567890123456789012345678901232.2222,
+	note = 'right'
+where id = 1;
+
+data branch pick t2 into t1 keys(1) when conflict fail;
+data branch pick t2 into t1 keys(1) when conflict skip;
+select * from t1 where id = 1;
+data branch pick t2 into t1 keys(1) when conflict accept;
+select * from t1 where id = 1;
+
+drop table t0;
+drop table t1;
+drop table t2;
+
+-- case 7: decimal256 PK — literal and subquery keys
+create table t0 (
+id decimal(39,4) primary key,
+note varchar(20)
+);
+insert into t0 values
+(1234567890123456789012345678901230.0001, 'base1'),
+(1234567890123456789012345678901230.0002, 'base2');
+
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+
+insert into t2 values
+(1234567890123456789012345678901231.1111, 'literal'),
+(1234567890123456789012345678901232.2222, 'subquery'),
+(1234567890123456789012345678901233.3333, 'remain');
+
+data branch pick t2 into t1 keys(1234567890123456789012345678901231.1111);
+select * from t1 order by id;
+
+data branch pick t2 into t1 keys(select cast(id as decimal(40,4)) from t2 where note = 'subquery');
+select * from t1 order by id;
+
+data branch diff t2 against t1;
+
+drop table t0;
+drop table t1;
+drop table t2;
+
 drop database test;

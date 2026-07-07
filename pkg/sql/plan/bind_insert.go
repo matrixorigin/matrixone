@@ -175,7 +175,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, err
 				}
 			} else {
-				updateExpr, err = forceCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
+				updateExpr, err = forceAssignmentCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
 				if err != nil {
 					return 0, err
 				}
@@ -1145,7 +1145,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		case isGeometryPlanType(&colTyp):
 			projExpr, err = funcCastForGeometryType(builder.GetContext(), projExpr, colTyp)
 		default:
-			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, colTyp)
+			projExpr, err = forceAssignmentCastExpr(builder.GetContext(), projExpr, colTyp)
 		}
 		if err != nil {
 			return 0, nil, nil, err

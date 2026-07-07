@@ -590,7 +590,7 @@ func buildOutputSchema(
 
 		for _, idx := range displayIdxes {
 			nCol := new(MysqlColumn)
-			if err = convertEngineTypeToMysqlType(ctx, tblStuff.def.colTypes[idx].Oid, nCol); err != nil {
+			if err = setMysqlColumnTypeInfo(ctx, tblStuff.def.colTypes[idx], nCol); err != nil {
 				return
 			}
 
@@ -1012,21 +1012,8 @@ func appendBatchRowsAsSQLValues(
 					rowIdx, wrapped.batch.RowCount(), colIdx, vec.Length(), vec.GetType().String(),
 				)
 			}
-			if vec.GetNulls().Contains(uint64(rowIdx)) {
-				row[colIdx] = nil
-				continue
-			}
-
-			switch vec.GetType().Oid {
-			case types.T_datetime, types.T_timestamp, types.T_decimal64,
-				types.T_decimal128, types.T_time:
-				row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
-			default:
-				if err = extractRowFromVector(
-					ctx, ses, vec, colIdx, row, rowIdx, false,
-				); err != nil {
-					return
-				}
+			if err = extractDataBranchSQLRowValue(ctx, ses, vec, colIdx, row, rowIdx); err != nil {
+				return
 			}
 		}
 

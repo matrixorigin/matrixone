@@ -683,6 +683,34 @@ func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[2].Width)
 }
 
+func Test_CaseCheck_TextStringBranchesStayText(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.T_text.ToType(),
+		types.New(types.T_varchar, 255, 0),
+	}
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool, result.finalType[0].Oid)
+	require.Equal(t, types.T_text, result.finalType[1].Oid)
+	require.Equal(t, types.T_text, result.finalType[2].Oid)
+}
+
+func Test_IffCheck_TextStringBranchesStayText(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.T_text.ToType(),
+		types.New(types.T_varchar, 255, 0),
+	}
+	result := iffCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool, result.finalType[0].Oid)
+	require.Equal(t, types.T_text, result.finalType[1].Oid)
+	require.Equal(t, types.T_text, result.finalType[2].Oid)
+}
+
 func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
 	overloads := []overload{
 		{args: []types.T{types.T_varchar}},
@@ -701,6 +729,26 @@ func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
 	for _, typ := range result.finalType {
 		require.True(t, typ.Oid.IsMySQLString())
 		require.Equal(t, int32(types.MaxVarBinaryLen), typ.Width)
+	}
+}
+
+func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_varchar}},
+		{args: []types.T{types.T_char}},
+		{args: []types.T{types.T_text}},
+	}
+	inputs := []types.Type{
+		types.T_text.ToType(),
+		types.New(types.T_varchar, 255, 0),
+		types.New(types.T_char, 1, 0),
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 2, result.idx)
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_text, typ.Oid)
 	}
 }
 

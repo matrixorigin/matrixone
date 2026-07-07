@@ -264,6 +264,11 @@ func TestNumericGap_AllTypes(t *testing.T) {
 			b, _ := types.ParseDecimal128("200.75", 20, 2)
 			return types.EncodeDecimal128(&a), types.EncodeDecimal128(&b)
 		}, 100.50},
+		{"decimal256", types.T_decimal256, types.New(types.T_decimal256, 39, 4), func() ([]byte, []byte) {
+			a, _ := types.ParseDecimal256("1234567890123456789012345678901230.0001", 39, 4)
+			b, _ := types.ParseDecimal256("1234567890123456789012345678901232.0001", 39, 4)
+			return types.EncodeDecimal256(&a), types.EncodeDecimal256(&b)
+		}, 2.0},
 		{"varchar_returns_zero", types.T_varchar, types.Type{}, func() ([]byte, []byte) {
 			return []byte("aaa"), []byte("zzz")
 		}, 0.0},
@@ -287,7 +292,7 @@ func TestIsNumericType(t *testing.T) {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 	}
 	for _, oid := range numeric {
 		require.True(t, isNumericType(oid), "expected numeric: %s", oid)
@@ -373,6 +378,10 @@ func TestAppendNumericStringToVec_AllTypes(t *testing.T) {
 		{"decimal128", types.New(types.T_decimal128, 20, 2), types.T_decimal128, "56789.12", func(v *vector.Vector) {
 			expected, _ := types.ParseDecimal128("56789.12", 20, 2)
 			require.Equal(t, expected, vector.MustFixedColNoTypeCheck[types.Decimal128](v)[0])
+		}},
+		{"decimal256", types.New(types.T_decimal256, 39, 4), types.T_decimal256, "1234567890123456789012345678901234.5678", func(v *vector.Vector) {
+			expected, _ := types.ParseDecimal256("1234567890123456789012345678901234.5678", 39, 4)
+			require.Equal(t, expected, vector.MustFixedColNoTypeCheck[types.Decimal256](v)[0])
 		}},
 		{"varchar", types.Type{}, types.T_varchar, "hello", func(v *vector.Vector) {
 			require.Equal(t, []byte("hello"), v.GetBytesAt(0))
@@ -1041,6 +1050,48 @@ func TestCoercePickKeyVectorToType_RejectsUnsupportedSourceType(t *testing.T) {
 	require.False(t, owned)
 }
 
+func TestCoercePickKeyVectorToType_Decimal256ReformatsToTargetType(t *testing.T) {
+	ses := newValidateSession(t)
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	srcType := types.New(types.T_decimal256, 40, 4)
+	dstType := types.New(types.T_decimal256, 39, 4)
+	srcVal, err := types.ParseDecimal256("1234567890123456789012345678901234.5678", srcType.Width, srcType.Scale)
+	require.NoError(t, err)
+
+	srcVec := vector.NewVec(srcType)
+	defer srcVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(srcVec, srcVal, false, mp))
+
+	coerced, owned, err := coercePickKeyVectorToType(ses, srcVec, dstType, mp)
+	require.NoError(t, err)
+	require.True(t, owned)
+	defer coerced.Free(mp)
+
+	expected, err := types.ParseDecimal256("1234567890123456789012345678901234.5678", dstType.Width, dstType.Scale)
+	require.NoError(t, err)
+	require.Equal(t, expected, vector.MustFixedColNoTypeCheck[types.Decimal256](coerced)[0])
+}
+
+func TestExtractPKValDecimal256(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.New(types.T_decimal256, 39, 4)
+	pkVal, err := types.ParseDecimal256("1234567890123456789012345678901234.5678", pkType.Width, pkType.Scale)
+	require.NoError(t, err)
+
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, pkVal, false, mp))
+
+	require.Equal(t, pkVal, extractPKVal(vec, 0))
+}
+
 func TestMaterializeSubqueryUnified_AuthFailureShortCircuits(t *testing.T) {
 	ses := newValidateSession(t)
 	stmtNode, err := parsers.ParseOne(
@@ -1177,6 +1228,71 @@ func TestMaterializeSubqueryUnified_SinglePKSuccessBuildsFilterAndHashmap(t *tes
 	for _, result := range results {
 		require.True(t, result.Exists)
 	}
+}
+
+func TestMaterializeSubqueryUnified_PreservesStringLiteralQuotes(t *testing.T) {
+	ses := newValidateSession(t)
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick orders_fix into orders keys(select order_id from orders_fix where customer = 'Grace') when conflict accept",
+		1,
+	)
+	require.NoError(t, err)
+
+	stmt, ok := stmtNode.(*tree.DataBranchPick)
+	require.True(t, ok)
+
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		reqCtx context.Context,
+		ses FeSession,
+		ctx plan2.CompilerContext,
+		stmt tree.Statement,
+	) (*plan2.Plan, error) {
+		return nil, nil
+	}
+
+	tblStuff := tableStuff{}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+
+	hm, err := databranchutils.NewBranchHashmap(databranchutils.WithBranchHashmapShardCount(1))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, hm.Close())
+	}()
+
+	exec := &pickStreamingExecutor{
+		result: executor.Result{
+			Batches: []*batch.Batch{buildPickStreamingBatch(
+				t,
+				ses.proc.Mp(),
+				[]types.Type{types.T_int64.ToType()},
+				nil,
+			)},
+			Mp: ses.proc.Mp(),
+		},
+	}
+	bh := newPickStreamingBackExecForTest(t, ses, exec)
+
+	pkFilter, err := materializeSubqueryUnified(
+		context.Background(),
+		ses,
+		bh,
+		stmt,
+		tblStuff,
+		false,
+		hm,
+	)
+	require.NoError(t, err)
+	require.Nil(t, pkFilter)
+	require.Contains(t, exec.sql, "customer = 'Grace'")
+	require.NotContains(t, exec.sql, "customer = Grace")
 }
 
 func TestMaterializeSubqueryUnified_CompositePKOrdersAllColumns(t *testing.T) {
@@ -1384,6 +1500,9 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 	dec128Type := types.New(types.T_decimal128, 20, 3)
 	dec128Val, err := types.ParseDecimal128("200.125", dec128Type.Width, dec128Type.Scale)
 	require.NoError(t, err)
+	dec256Type := types.New(types.T_decimal256, 39, 4)
+	dec256Val, err := types.ParseDecimal256("1234567890123456789012345678901234.5678", dec256Type.Width, dec256Type.Scale)
+	require.NoError(t, err)
 	dateVal, err := types.ParseDateCast("2025-01-03")
 	require.NoError(t, err)
 	datetimeType := types.New(types.T_datetime, 0, 0)
@@ -1531,6 +1650,14 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(vec, dec128Val, false, mp))
 			},
 			want: dec128Val.Format(dec128Type.Scale),
+		},
+		{
+			name: "decimal256",
+			typ:  dec256Type,
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, dec256Val, false, mp))
+			},
+			want: dec256Val.Format(dec256Type.Scale),
 		},
 		{
 			name: "date",

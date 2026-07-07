@@ -36,15 +36,16 @@ const (
 	DefaultBlockMaxRows    = objectio.BlockMaxRows
 	DefaultBlocksPerObject = uint16(256)
 
-	DefaultScannerInterval              = time.Second * 5
-	DefaultCheckpointFlushInterval      = time.Minute
-	DefaultCheckpointTransferInterval   = time.Second * 5
-	DefaultCheckpointMinCount           = int64(100)
-	DefaultCheckpointIncremetalInterval = time.Minute
-	DefaultCheckpointGlobalMinCount     = 10
-	DefaultGlobalVersionInterval        = time.Hour
-	DefaultGCCheckpointInterval         = time.Minute
-	DefaultOverallFlushMemControl       = common.Const1GBytes
+	DefaultScannerInterval               = time.Second * 5
+	DefaultCheckpointFlushInterval       = time.Minute
+	DefaultCheckpointTransferInterval    = time.Second * 5
+	DefaultCheckpointMinCount            = int64(100)
+	DefaultCheckpointIncrementalInterval = time.Minute * 5
+	DefaultCheckpointIncremetalInterval  = DefaultCheckpointIncrementalInterval
+	DefaultCheckpointGlobalMinCount      = 10
+	DefaultGlobalVersionInterval         = time.Hour
+	DefaultGCCheckpointInterval          = time.Minute
+	DefaultOverallFlushMemControl        = common.Const1GBytes
 
 	DefaultScanGCInterval    = time.Minute * 30
 	DefaultGCTTL             = time.Hour

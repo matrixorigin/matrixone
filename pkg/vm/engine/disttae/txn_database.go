@@ -403,10 +403,11 @@ func (db *txnDatabase) createWithID(
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
-	accountId, userId, roleId, err := getAccessInfo(ctx)
+	accountId, userId, _, err := getAccessInfo(ctx)
 	if err != nil {
 		return err
 	}
+	roleId := getDDLOwnerRoleId(ctx)
 	txn := db.getTxn()
 	m := txn.proc.Mp()
 

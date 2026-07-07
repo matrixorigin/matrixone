@@ -267,6 +267,12 @@ func TestType_DescString(t *testing.T) {
 	}.DescString(), "DECIMAL(20,10)")
 
 	require.Equal(t, Type{
+		Oid:   T_decimal256,
+		Width: 39,
+		Scale: 4,
+	}.DescString(), "DECIMAL(39,4)")
+
+	require.Equal(t, Type{
 		Oid:   T_bit,
 		Width: 10,
 	}.DescString(), "BIT(10)")

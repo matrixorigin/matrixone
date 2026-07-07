@@ -159,6 +159,11 @@ func NewMemPKFilter(
 			if len(basePKFilter.UB) > 0 {
 				ubVal = types.DecodeDecimal128(basePKFilter.UB)
 			}
+		case types.T_decimal256:
+			lbVal = types.DecodeDecimal256(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeDecimal256(basePKFilter.UB)
+			}
 		case types.T_varchar, types.T_char, types.T_binary:
 			lbVal = basePKFilter.LB
 			ubVal = basePKFilter.UB

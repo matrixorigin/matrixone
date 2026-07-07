@@ -1879,7 +1879,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				},
 				ObjType: tree.OBJECT_TYPE_TABLE,
 				Level: &tree.PrivilegeLevel{
-					Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+					Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+					DbName: "db",
 				},
 			},
 			{
@@ -1922,8 +1923,26 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			//TODO: make sql2result
 			bh.init()
 
-			// Mock getDatabaseOrTableId for DATABASE_TABLE and TABLE levels
-			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
+			// Mock getDatabaseOrTableId for scoped levels.
+			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
+				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR {
+				dbName := stmt.Level.DbName
+				if dbName == "" {
+					dbName = ses.GetDatabaseName()
+				}
+				checkSql, _ := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), dbName)
+				bh.sql2result[checkSql] = newMrsForCheckDatabase([][]interface{}{{10001}})
+
+				for _, p := range stmt.Privileges {
+					privType, _ := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
+					scopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+						int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+						objectTypeTable, 10001)
+					bh.sql2result[scopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+						{ses.GetTenantInfo().GetDefaultRoleID()},
+					})
+				}
+			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
 				dbName := stmt.Level.DbName
 				tabName := stmt.Level.TabName
@@ -1932,6 +1951,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				}
 				checkSql, _ := getSqlForCheckDatabaseTable(ses.GetTxnHandler().GetTxnCtx(), dbName, tabName)
 				bh.sql2result[checkSql] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+				checkDbSQL, _ := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), dbName)
+				bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{20001}})
 
 				// Mock scoped WGO queries
 				for _, p := range stmt.Privileges {
@@ -1942,6 +1963,10 @@ func Test_determineGrantPrivilege(t *testing.T) {
 					bh.sql2result[scopedSql] = newMrsForPrivilegeWGO([][]interface{}{
 						{ses.GetTenantInfo().GetDefaultRoleID()},
 					})
+					dbScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+						int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+						objectTypeTable, 20001)
+					bh.sql2result[dbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
 				}
 			}
 
@@ -1971,6 +1996,16 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				bh.sql2result[objTypeScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
 					{ses.GetTenantInfo().GetDefaultRoleID()},
 				})
+				globalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+					int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+					objType, objectIDAll)
+				if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR {
+					bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+						{ses.GetTenantInfo().GetDefaultRoleID()},
+					})
+				} else {
+					bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+				}
 			}
 
 			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
@@ -2017,7 +2052,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				},
 				ObjType: tree.OBJECT_TYPE_TABLE,
 				Level: &tree.PrivilegeLevel{
-					Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+					Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+					DbName: "db",
 				},
 			},
 			{
@@ -2060,8 +2096,16 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			//TODO: make sql2result
 			bh.init()
 
-			// Mock getDatabaseOrTableId for DATABASE_TABLE and TABLE levels
-			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
+			// Mock getDatabaseOrTableId for scoped levels.
+			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
+				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR {
+				dbName := stmt.Level.DbName
+				if dbName == "" {
+					dbName = ses.GetDatabaseName()
+				}
+				checkSql, _ := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), dbName)
+				bh.sql2result[checkSql] = newMrsForCheckDatabase([][]interface{}{{10001}})
+			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
 				dbName := stmt.Level.DbName
 				tabName := stmt.Level.TabName
@@ -2070,6 +2114,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				}
 				checkSql, _ := getSqlForCheckDatabaseTable(ses.GetTxnHandler().GetTxnCtx(), dbName, tabName)
 				bh.sql2result[checkSql] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+				checkDbSQL, _ := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), dbName)
+				bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{20001}})
 
 				// Mock scoped WGO queries (empty = no WGO, to match fail scenario)
 				for _, p := range stmt.Privileges {
@@ -2078,6 +2124,10 @@ func Test_determineGrantPrivilege(t *testing.T) {
 						int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 						objectTypeTable, 10001)
 					bh.sql2result[scopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+					dbScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+						int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+						objectTypeTable, 20001)
+					bh.sql2result[dbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
 				}
 			}
 
@@ -2116,9 +2166,15 @@ func Test_determineGrantPrivilege(t *testing.T) {
 						{ses.GetTenantInfo().GetDefaultRoleID()},
 					})
 				}
+				globalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+					int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+					objType, objectIDAll)
+				bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
 
 				// Mock obj-scoped WGO query for DATABASE_TABLE/TABLE levels
-				if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
+				if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
+					stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR ||
+					stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE ||
 					stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
 					scopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
 						int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
@@ -2137,6 +2193,299 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
+	})
+
+	convey.Convey("grant privilege [ObjectType: Table] global star star covers database star", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{
+				{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+			},
+			ObjType: tree.OBJECT_TYPE_TABLE,
+			Level: &tree.PrivilegeLevel{
+				Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+				DbName: "db",
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.tenant = &TenantInfo{
+			Tenant:        "xxx",
+			User:          "xxx",
+			DefaultRole:   "xxx",
+			TenantID:      1001,
+			UserID:        1001,
+			DefaultRoleID: 1001,
+		}
+		bh.init()
+
+		checkSql, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkSql] = newMrsForCheckDatabase([][]interface{}{{10001}})
+
+		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
+		convey.So(err, convey.ShouldBeNil)
+		objScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2result[objScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		globalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+			{ses.GetTenantInfo().GetDefaultRoleID()},
+		})
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("grant privilege [ObjectType: Table] global star star covers star", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{
+				{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+			},
+			ObjType: tree.OBJECT_TYPE_TABLE,
+			Level: &tree.PrivilegeLevel{
+				Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.tenant = &TenantInfo{
+			Tenant:        "xxx",
+			User:          "xxx",
+			DefaultRole:   "xxx",
+			TenantID:      1001,
+			UserID:        1001,
+			DefaultRoleID: 1001,
+		}
+		ses.SetDatabaseName("db")
+		bh.init()
+
+		checkSql, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkSql] = newMrsForCheckDatabase([][]interface{}{{10001}})
+
+		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
+		convey.So(err, convey.ShouldBeNil)
+		objScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2result[objScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		globalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+			{ses.GetTenantInfo().GetDefaultRoleID()},
+		})
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("grant privilege [ObjectType: Table] global star star covers database table", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{
+				{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+			},
+			ObjType: tree.OBJECT_TYPE_TABLE,
+			Level: &tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "db",
+				TabName: "t1",
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.tenant = &TenantInfo{
+			Tenant:        "xxx",
+			User:          "xxx",
+			DefaultRole:   "xxx",
+			TenantID:      1001,
+			UserID:        1001,
+			DefaultRoleID: 1001,
+		}
+		bh.init()
+
+		checkSql, err := getSqlForCheckDatabaseTable(ses.GetTxnHandler().GetTxnCtx(), "db", "t1")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkSql] = newMrsForCheckDatabaseTable([][]interface{}{{10002}})
+		checkDbSQL, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{10001}})
+
+		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
+		convey.So(err, convey.ShouldBeNil)
+		objScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10002)
+		bh.sql2result[objScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		dbScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2result[dbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		globalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+			{ses.GetTenantInfo().GetDefaultRoleID()},
+		})
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("grant privilege [ObjectType: Table] global star star covers table", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{
+				{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+			},
+			ObjType: tree.OBJECT_TYPE_TABLE,
+			Level: &tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+				TabName: "t1",
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.tenant = &TenantInfo{
+			Tenant:        "xxx",
+			User:          "xxx",
+			DefaultRole:   "xxx",
+			TenantID:      1001,
+			UserID:        1001,
+			DefaultRoleID: 1001,
+		}
+		ses.SetDatabaseName("db")
+		bh.init()
+
+		checkSql, err := getSqlForCheckDatabaseTable(ses.GetTxnHandler().GetTxnCtx(), "db", "t1")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkSql] = newMrsForCheckDatabaseTable([][]interface{}{{10002}})
+		checkDbSQL, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{10001}})
+
+		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
+		convey.So(err, convey.ShouldBeNil)
+		objScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10002)
+		bh.sql2result[objScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		dbScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2result[dbScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		globalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+			{ses.GetTenantInfo().GetDefaultRoleID()},
+		})
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("grant privilege [ObjectType: Table] database star does not leak across databases", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{
+				{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+			},
+			ObjType: tree.OBJECT_TYPE_TABLE,
+			Level: &tree.PrivilegeLevel{
+				Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+				DbName: "db1",
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.tenant = &TenantInfo{
+			Tenant:        "xxx",
+			User:          "xxx",
+			DefaultRole:   "xxx",
+			TenantID:      1001,
+			UserID:        1001,
+			DefaultRoleID: 1001,
+		}
+		bh.init()
+
+		checkSql, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db1")
+		convey.So(err, convey.ShouldBeNil)
+		bh.sql2result[checkSql] = newMrsForCheckDatabase([][]interface{}{{10001}})
+
+		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
+		convey.So(err, convey.ShouldBeNil)
+		objScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2result[objScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		globalScopedSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalScopedSql] = newMrsForPrivilegeWGO([][]interface{}{})
+		unscopedSql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
+		bh.sql2result[unscopedSql] = newMrsForPrivilegeWGO([][]interface{}{
+			{ses.GetTenantInfo().GetDefaultRoleID()},
+		})
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
 	})
 
 	convey.Convey("grant privilege [ObjectType: Database] succ", t, func() {
@@ -2665,6 +3014,63 @@ func Test_determineCreateDatabase(t *testing.T) {
 		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
+func TestCreateDatabaseOwnerRoleFollowsActiveInheritedRoleRoot(t *testing.T) {
+	convey.Convey("create database owner role follows active inherited role root", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateDatabase{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.GetTenantInfo().SetDefaultRoleID(5)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{5, false},
+		}
+		roleIdsInMoRolePrivs := []int{5, 7}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{{7, false}}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{5, 7}
+		rowsOfMoRoleGrant := [][][]interface{}{
+			{{7, false}},
+			{},
+		}
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roleIdsInMoRolePrivs {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if roleId == 7 && entry.privilegeId == PrivilegeTypeCreateDatabase {
+						rows = [][]interface{}{{roleId, false}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(5))
 	})
 }
 
@@ -3292,6 +3698,177 @@ func Test_determineCreateTable(t *testing.T) {
 		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
+func TestCreateTableOwnerRoleFollowsPrivilegeRole(t *testing.T) {
+	convey.Convey("create table owner role follows secondary role privilege", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.GetTenantInfo().SetDefaultRoleID(5)
+		ses.GetTenantInfo().SetUseSecondaryRole(true)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{5, false},
+			{7, false},
+		}
+		roleIdsInMoRolePrivs := []int{5, 7}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][2] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{{7, false}}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][2] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, nil, nil, nil, nil)
+
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roleIdsInMoRolePrivs {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if roleId == 7 && entry.privilegeId == PrivilegeTypeCreateTable {
+						rows = [][]interface{}{{7, false}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+		sql2result[getSqlForInheritedRoleIdOfRoleId(5)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(7)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(7))
+	})
+
+	convey.Convey("create table owner role prefers primary role privilege", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.GetTenantInfo().SetDefaultRoleID(5)
+		ses.GetTenantInfo().SetUseSecondaryRole(true)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{5, false},
+			{7, false},
+		}
+		roleIdsInMoRolePrivs := []int{5, 7}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{{5, false}}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][2] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{{7, false}}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][2] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, nil, nil, nil, nil)
+
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roleIdsInMoRolePrivs {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if entry.privilegeId == PrivilegeTypeCreateTable {
+						rows = [][]interface{}{{roleId, false}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+		sql2result[getSqlForInheritedRoleIdOfRoleId(5)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+		sql2result[getSqlForInheritedRoleIdOfRoleId(7)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(5))
+	})
+
+	convey.Convey("create table owner role follows active inherited role root", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		ses.GetTenantInfo().SetDefaultRoleID(5)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{5, false},
+		}
+		roleIdsInMoRolePrivs := []int{5, 7}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][2] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{{7, false}}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][2] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{5, 7}
+		rowsOfMoRoleGrant := [][][]interface{}{
+			{{7, false}},
+			{},
+		}
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roleIdsInMoRolePrivs {
+					sql, err := getSqlForPrivilege(context.TODO(), int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows := [][]interface{}{}
+					if roleId == 7 && entry.privilegeId == PrivilegeTypeCreateTable {
+						rows = [][]interface{}{{roleId, false}}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(ses.GetDDLOwnerRoleID(), convey.ShouldEqual, uint32(5))
 	})
 }
 
@@ -6966,6 +7543,8 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 
 		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
 	})
 
 	convey.Convey("do set secondary role succ", t, func() {
@@ -7005,6 +7584,8 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 
 		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
 	})
 }
 
@@ -7044,6 +7625,8 @@ func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
 		})
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeTrue)
+		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
+		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
 
 		ses.ruleCacheMu.RLock()
 		cacheIsNil := ses.ruleCache == nil
@@ -7118,8 +7701,8 @@ func TestDoSwitchRoleSecondaryRoleNoneInvalidatesRuleCache(t *testing.T) {
 	})
 }
 
-func TestDoSwitchRoleNormalRoleInvalidatesRuleCache(t *testing.T) {
-	convey.Convey("set role invalidates rule cache after successful switch", t, func() {
+func TestDoSwitchRolePrimaryRoleInvalidatesCaches(t *testing.T) {
+	convey.Convey("set role invalidates privilege and rule cache", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -7141,6 +7724,7 @@ func TestDoSwitchRoleNormalRoleInvalidatesRuleCache(t *testing.T) {
 		tenant.SetUseSecondaryRole(true)
 		ses.SetTenantInfo(tenant)
 		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
+		ses.cache.add(objectTypeTable, privilegeLevelStarStar, "", "", PrivilegeTypeCreateAccount)
 
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
@@ -7166,6 +7750,7 @@ func TestDoSwitchRoleNormalRoleInvalidatesRuleCache(t *testing.T) {
 		cacheIsNil := ses.ruleCache == nil
 		ses.ruleCacheMu.RUnlock()
 		convey.So(cacheIsNil, convey.ShouldBeTrue)
+		convey.So(ses.cache.has(objectTypeTable, privilegeLevelStarStar, "", "", PrivilegeTypeCreateAccount), convey.ShouldBeFalse)
 	})
 }
 
@@ -8481,6 +9066,75 @@ func Test_genRevokeCases(t *testing.T) {
 	}
 }
 
+func Test_shouldSkipImplicitOwnershipRevoke(t *testing.T) {
+	convey.Convey("skip implicit ownership revoke for admin owner roles", t, func() {
+		sysSes := &Session{}
+		sysSes.SetTenantInfo(&TenantInfo{
+			Tenant:      sysAccountName,
+			DefaultRole: "r1",
+			TenantID:    sysAccountID,
+		})
+		convey.So(shouldSkipImplicitOwnershipRevoke(sysSes, moAdminRoleName), convey.ShouldBeTrue)
+		convey.So(shouldSkipImplicitOwnershipRevoke(sysSes, "r1"), convey.ShouldBeFalse)
+
+		accountSes := &Session{}
+		accountSes.SetTenantInfo(&TenantInfo{
+			Tenant:      "acc1",
+			DefaultRole: "r1",
+			TenantID:    1,
+		})
+		convey.So(shouldSkipImplicitOwnershipRevoke(accountSes, accountAdminRoleName), convey.ShouldBeTrue)
+		convey.So(shouldSkipImplicitOwnershipRevoke(accountSes, "r1"), convey.ShouldBeFalse)
+
+		convey.So(shouldSkipImplicitOwnershipRevoke(nil, "r1"), convey.ShouldBeTrue)
+		convey.So(shouldSkipImplicitOwnershipRevoke(sysSes, ""), convey.ShouldBeTrue)
+	})
+}
+
+func TestGetObjectOwnerRoleNameSkipsDeletedOwnerRole(t *testing.T) {
+	ctx := context.TODO()
+
+	for _, tc := range []struct {
+		name     string
+		ownerSQL string
+	}{
+		{
+			name:     "database",
+			ownerSQL: getSqlForGetOwnerOfDatabase("db1"),
+		},
+		{
+			name:     "table",
+			ownerSQL: getSqlForGetOwnerOfTable("db1", "t1"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+
+			bh.sql2result[tc.ownerSQL] = newMrsForOwner([][]interface{}{{int64(100)}})
+			bh.sql2result[getSqlForRoleNameOfRoleId(100)] = newMrsForRoleName([][]interface{}{})
+
+			roleName, err := getObjectOwnerRoleName(ctx, bh, tc.ownerSQL)
+			require.NoError(t, err)
+			require.Empty(t, roleName)
+		})
+	}
+}
+
+func TestGetObjectOwnerRoleNameReturnsExistingOwnerRole(t *testing.T) {
+	ctx := context.TODO()
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	ownerSQL := getSqlForGetOwnerOfTable("db1", "t1")
+	bh.sql2result[ownerSQL] = newMrsForOwner([][]interface{}{{int64(100)}})
+	bh.sql2result[getSqlForRoleNameOfRoleId(100)] = newMrsForRoleName([][]interface{}{{"r1"}})
+
+	roleName, err := getObjectOwnerRoleName(ctx, bh, ownerSQL)
+	require.NoError(t, err)
+	require.Equal(t, "r1", roleName)
+}
+
 func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
@@ -8682,6 +9336,38 @@ func newMrsForRoleIdOfRole(rows [][]interface{}) *MysqlResultSet {
 
 	col1 := &MysqlColumn{}
 	col1.SetName("role_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForRoleName(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("role_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForOwner(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("owner")
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
@@ -9895,16 +10581,31 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedFallsBackToLegacyViewRecords(t
 	checkViewSQL, err := getSqlForCheckDatabaseView(ctx, "db", "v")
 	require.NoError(t, err)
 	bh.sql2result[checkViewSQL] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+	checkDbSQL, err := getSqlForCheckDatabase(ctx, "db")
+	require.NoError(t, err)
+	bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{20001}})
 
 	viewObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeView, 10001)
 	bh.sql2result[viewObjSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+	viewDbStarSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeView, 20001)
+	bh.sql2result[viewDbStarSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+	viewGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeView, objectIDAll)
+	bh.sql2result[viewGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	legacyObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeTable, 10001)
 	bh.sql2result[legacyObjSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+	legacyGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeTable, objectIDAll)
+	bh.sql2result[legacyGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
 		ctx,
@@ -9944,11 +10645,19 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedKeepsDatabaseScopeForViewDatab
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeView, dbID)
 	bh.sql2result[viewScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+	viewGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeView, objectIDAll)
+	bh.sql2result[viewGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	legacyScopedSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeTable, dbID)
 	bh.sql2result[legacyScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+	legacyGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeTable, objectIDAll)
+	bh.sql2result[legacyGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	// 旧实现会错误命中 obj_type 级别结果，把其他数据库上的 db.* WGO 复用到当前库。
 	viewObjTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
@@ -9999,11 +10708,19 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedKeepsCurrentDatabaseScopeForVi
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeView, dbID)
 	bh.sql2result[viewScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+	viewGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeView, objectIDAll)
+	bh.sql2result[viewGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	legacyScopedSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
 		objectTypeTable, dbID)
 	bh.sql2result[legacyScopedSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+	legacyGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+		objectTypeTable, objectIDAll)
+	bh.sql2result[legacyGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
 
 	viewObjTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
 		int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
@@ -10026,6 +10743,508 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedKeepsCurrentDatabaseScopeForVi
 	require.NoError(t, err)
 	require.Zero(t, roleSet.Len())
 	require.False(t, roleSet.Contains(roleID))
+}
+
+func TestGetSqlForScopedGrantOptionHelpers(t *testing.T) {
+	require.Equal(
+		t,
+		`select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = 38 and obj_type = "table" and obj_id = 10001;`,
+		getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001),
+	)
+	require.Equal(
+		t,
+		`select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = 38 and obj_type = "view";`,
+		getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(PrivilegeTypeTableOwnership), objectTypeView),
+	)
+}
+
+func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(1001))
+	roleID := int64(1001)
+
+	t.Run("non table privilege falls back to unscoped query", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeCreateDatabase)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			nil,
+			bh,
+			PrivilegeTypeCreateDatabase,
+			tree.OBJECT_TYPE_ACCOUNT,
+			tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR},
+		)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("table ownership uses object scoped ownership query", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("table ownership uses object type scoped ownership query", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(PrivilegeTypeTableOwnership), objectTypeView)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeView)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("unsupported scoped privilege falls back to unscoped WGO sql", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeCreateDatabase)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeCreateDatabase, objectTypeTable, objectIDAll)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("unsupported object type scoped privilege falls back to unscoped WGO sql", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeCreateDatabase)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+			ctx, bh, PrivilegeTypeCreateDatabase, objectTypeView)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("object scoped exec error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
+		bh.sql2err[sql] = moerr.NewInternalError(ctx, "object scoped WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("object scoped row decode error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{"bad-role-id"}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("object type scoped exec error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(PrivilegeTypeTableOwnership), objectTypeTable)
+		bh.sql2err[sql] = moerr.NewInternalError(ctx, "object type scoped WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("object type scoped get result error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(PrivilegeTypeTableOwnership), objectTypeTable)
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+		require.Equal(t, sql, bh.currentSql)
+	})
+
+	t.Run("object type scoped row decode error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObjType(int64(PrivilegeTypeTableOwnership), objectTypeTable)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{"bad-role-id"}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("table star star ignores narrower object type scoped WGO", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		objTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable)
+		bh.sql2result[objTypeSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			nil,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR},
+		)
+		require.NoError(t, err)
+		require.Zero(t, roleSet.Len())
+		require.False(t, roleSet.Contains(roleID))
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), objTypeSQL)
+	})
+
+	t.Run("table star star accepts global object scoped WGO", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			nil,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR},
+		)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+		require.Equal(t, globalSQL, bh.currentSql)
+	})
+
+	t.Run("table database star WGO covers exact table grant", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		dbID := int64(20001)
+		tableID := int64(30001)
+		checkTableSQL, err := getSqlForCheckDatabaseTable(ctx, "db", "t1")
+		require.NoError(t, err)
+		bh.sql2result[checkTableSQL] = newMrsForCheckDatabaseTable([][]interface{}{{tableID}})
+		checkDbSQL, err := getSqlForCheckDatabase(ctx, "db")
+		require.NoError(t, err)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{dbID}})
+		tableSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, tableID)
+		bh.sql2result[tableSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		dbStarSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, dbID)
+		bh.sql2result[dbStarSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+		globalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[globalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+				TabName: "t1",
+			},
+		)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+		require.Contains(t, strings.Join(bh.executedSQLs, "\n"), dbStarSQL)
+	})
+
+	t.Run("view grant ignores legacy table global WGO", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		viewID := int64(10001)
+		checkViewSQL, err := getSqlForCheckDatabaseView(ctx, "db", "v")
+		require.NoError(t, err)
+		bh.sql2result[checkViewSQL] = newMrsForCheckDatabaseTable([][]interface{}{{viewID}})
+		checkDbSQL, err := getSqlForCheckDatabase(ctx, "db")
+		require.NoError(t, err)
+		bh.sql2result[checkDbSQL] = newMrsForCheckDatabase([][]interface{}{{20001}})
+		viewObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, viewID)
+		bh.sql2result[viewObjSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		viewDbStarSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, 20001)
+		bh.sql2result[viewDbStarSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		viewGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, objectIDAll)
+		bh.sql2result[viewGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		legacyObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, viewID)
+		bh.sql2result[legacyObjSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		legacyGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, objectIDAll)
+		bh.sql2result[legacyGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_VIEW,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+				TabName: "v",
+			},
+		)
+		require.NoError(t, err)
+		require.Zero(t, roleSet.Len())
+		require.False(t, roleSet.Contains(roleID))
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), legacyGlobalSQL)
+	})
+
+	t.Run("view legacy fallback ignores broad scopes", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		roleSet, err := getRoleSetThatViewPrivilegeGrantedToWGOLegacyExact(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.PrivilegeLevel{
+				Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+				DbName: "db",
+			},
+		)
+		require.NoError(t, err)
+		require.Zero(t, roleSet.Len())
+		require.Empty(t, bh.executedSQLs)
+	})
+
+	t.Run("view legacy fallback ignores missing exact view", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkViewSQL, err := getSqlForCheckDatabaseView(ctx, "db", "missing_v")
+		require.NoError(t, err)
+		bh.sql2result[checkViewSQL] = newMrsForCheckDatabaseTable([][]interface{}{})
+
+		roleSet, err := getRoleSetThatViewPrivilegeGrantedToWGOLegacyExact(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+				TabName: "missing_v",
+			},
+		)
+		require.NoError(t, err)
+		require.Zero(t, roleSet.Len())
+	})
+
+	t.Run("unresolved object falls back to object type scoped lookup", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkTableSQL, err := getSqlForCheckDatabaseTable(ctx, "db", "missing_table")
+		require.NoError(t, err)
+		bh.sql2result[checkTableSQL] = newMrsForCheckDatabaseTable([][]interface{}{})
+		objTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable)
+		bh.sql2result[objTypeSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+				TabName: "missing_table",
+			},
+		)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("object resolution exec error is returned without fallback", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkTableSQL, err := getSqlForCheckDatabaseTable(ctx, "db", "t1")
+		require.NoError(t, err)
+		bh.sql2err[checkTableSQL] = moerr.NewInternalError(ctx, "resolve table failed")
+		objTypeSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObjType(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable)
+		bh.sql2result[objTypeSQL] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_TABLE,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+				TabName: "t1",
+			},
+		)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), objTypeSQL)
+	})
+
+	t.Run("view primary path error is returned before legacy lookup", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		checkViewSQL, err := getSqlForCheckDatabaseView(ctx, "db", "v")
+		require.NoError(t, err)
+		bh.sql2result[checkViewSQL] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+
+		viewObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, 10001)
+		bh.sql2err[viewObjSQL] = moerr.NewInternalError(ctx, "view WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_VIEW,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "db",
+				TabName: "v",
+			},
+		)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("view legacy path propagates legacy query error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(nil, ctrl)
+		ses.SetDatabaseName("db")
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		checkViewSQL, err := getSqlForCheckDatabaseView(ctx, "db", "v")
+		require.NoError(t, err)
+		bh.sql2result[checkViewSQL] = newMrsForCheckDatabaseTable([][]interface{}{{10001}})
+
+		viewObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, 10001)
+		bh.sql2result[viewObjSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+		viewGlobalSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeView, objectIDAll)
+		bh.sql2result[viewGlobalSQL] = newMrsForPrivilegeWGO([][]interface{}{})
+
+		legacyObjSQL := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShipWithObj(
+			int64(PrivilegeTypeSelect), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership),
+			objectTypeTable, 10001)
+		bh.sql2err[legacyObjSQL] = moerr.NewInternalError(ctx, "legacy view WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOScoped(
+			ctx,
+			ses,
+			bh,
+			PrivilegeTypeSelect,
+			tree.OBJECT_TYPE_VIEW,
+			tree.PrivilegeLevel{
+				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				DbName:  "db",
+				TabName: "v",
+			},
+		)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("merge tolerates nil and empty role sets", func(t *testing.T) {
+		dst := &btree.Set[int64]{}
+		dst.Insert(1)
+		mergeRoleSets(nil, dst)
+		mergeRoleSets(dst, nil)
+		mergeRoleSets(dst, &btree.Set[int64]{})
+		require.Equal(t, 1, dst.Len())
+
+		src := &btree.Set[int64]{}
+		src.Insert(2)
+		mergeRoleSets(dst, src)
+		require.True(t, dst.Contains(1))
+		require.True(t, dst.Contains(2))
+	})
 }
 
 func TestResolveViewChainPrivilegeContextSkipsNestedSystemViewPrivilegeChecks(t *testing.T) {
@@ -12689,7 +13908,7 @@ func Test_determineUserHasPrivilegeSet(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
-		priv := determinePrivilegeSetOfStatement(&tree.CreateTable{})
+		priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
 		_, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
@@ -12759,7 +13978,7 @@ func Test_determineUserHasPrivilegeSet(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 
-		priv := determinePrivilegeSetOfStatement(&tree.CreateTable{})
+		priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
 		ret, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 		convey.ShouldBeFalse(ret, false)
 		convey.So(err, convey.ShouldBeNil)
@@ -12806,6 +14025,9 @@ func Test_determineUserCanGrantRolesToOthers(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		_, _, err := determineUserCanGrantPrivilegesToOthers(ctx, ses, nil)
+		convey.So(err, convey.ShouldNotBeNil)
+
+		_, _, err = determineUserCanGrantPrivilegesToOthers(ctx, ses, &tree.GrantPrivilege{})
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

@@ -4755,7 +4755,7 @@ func BuildVarlenaFromArray[T types.RealNumbers](vec *Vector, v *types.Varlena, a
 
 // Intersection2VectorOrdered does a ∩ b ==> ret, keeps all item unique and sorted
 // it assumes that a and b all sorted already
-func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
+func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128 | types.Decimal256](
 	a, b []T,
 	ret *Vector,
 	mp *mpool.MPool,
@@ -4796,7 +4796,7 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 
 // Union2VectorOrdered does a ∪ b ==> ret, keeps all item unique and sorted
 // it assumes that a and b all sorted already
-func Union2VectorOrdered[T types.OrderedT | types.Decimal128](
+func Union2VectorOrdered[T types.OrderedT | types.Decimal128 | types.Decimal256](
 	a, b []T,
 	ret *Vector,
 	mp *mpool.MPool,

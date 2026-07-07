@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -297,11 +296,10 @@ func dataBranchCreateTable(
 	stmt *tree.DataBranchCreateTable,
 ) (err error) {
 	var (
-		bh          BackgroundExec
-		deferred    func(error) error
-		receipt     cloneReceipt
-		cloneStmt   *tree.CloneTable
-		tempExecCtx *ExecCtx
+		bh        BackgroundExec
+		deferred  func(error) error
+		receipt   cloneReceipt
+		cloneStmt *tree.CloneTable
 	)
 
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
@@ -325,23 +323,9 @@ func dataBranchCreateTable(
 		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
 	}()
 
-	//data branch create table xxx from yyy snap_opt to_account_op;
-	re := regexp.MustCompile(`(?i)^DATA\s+BRANCH\s+CREATE\s+TABLE\s+(\S+)\s+FROM\s+(.+?);?$`)
-	srcAndDst := re.FindStringSubmatch(execCtx.input.sql)
-	if srcAndDst == nil {
-		return moerr.NewInternalErrorNoCtxf("cannot find src and dst table: %s", execCtx.input.sql)
-	}
-
-	sql := fmt.Sprintf("CREATE TABLE %s CLONE %s", srcAndDst[1], srcAndDst[2])
-
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
 
-	tempExecCtx = &ExecCtx{
-		reqCtx: execCtx.reqCtx,
-		input:  &UserInput{sql: sql},
-	}
-
-	if receipt, err = handleCloneTable(tempExecCtx, ses, cloneStmt, bh); err != nil {
+	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh); err != nil {
 		return
 	}
 

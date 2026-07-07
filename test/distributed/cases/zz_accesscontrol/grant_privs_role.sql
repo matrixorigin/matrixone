@@ -1,11 +1,12 @@
 set global enable_privilege_cache = off;
 --env prepare statement
-drop user if exists user1,user2,user3,user4,user5,user11,user12,testuser,user_grant_1,user_grant_3,user_grant_4,user_grant_5,user_grant_6,user_grant_7,user_grant_8,user_grant_9,user_grant_10,user_prepare_01;
-drop role if exists u_role,test_role,grant_role_1,role_sys_priv,role_account_priv_2,role_account_priv_3,role_account_priv_4,role_account_priv_5,role_account_priv_6,role_account_priv_7,role_account_priv_8,role_account_priv_9,role_account_priv_10,role_prepare_1;
+drop user if exists user1,user2,user3,user4,user5,user11,user12,testuser,user_grant_1,user_grant_3,user_grant_4,user_grant_5,user_grant_6,user_grant_7,user_grant_8,user_grant_9,user_grant_10,user_grant_11,user_grant_12,user_grant_13,user_prepare_01;
+drop role if exists u_role,test_role,grant_role_1,role_sys_priv,role_account_priv_2,role_account_priv_3,role_account_priv_4,role_account_priv_5,role_account_priv_6,role_account_priv_7,role_account_priv_8,role_account_priv_9,role_account_priv_10,role_account_priv_11,role_account_priv_11_target,role_account_priv_12,role_account_priv_12_target,role_account_priv_13,role_account_priv_13_target,role_prepare_1;
 drop database if exists grant_db;
 drop database if exists testdb;
 drop database if exists testdb4;
 drop database if exists testdb5;
+drop database if exists testdb6;
 drop database if exists grant_db4;
 drop database if exists grant_db5;
 drop account if exists grant_account01;
@@ -236,6 +237,42 @@ create account `test@123456` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 drop table testdb4.table_1;
 -- @session
 
+-- table *.* with grant option covers db.* on a newly created database
+create user 'user_grant_11' identified by '123456';
+create role 'role_account_priv_11','role_account_priv_11_target';
+grant create database,drop database,connect,manage grants on account * to role_account_priv_11;
+grant all on table *.* to role_account_priv_11 with grant option;
+grant role_account_priv_11 to user_grant_11;
+-- @session:id=15&user=sys:user_grant_11:role_account_priv_11&password=123456
+create database testdb6;
+grant select on table testdb6.* to role_account_priv_11_target;
+-- @session
+select role_name,obj_type,privilege_name,privilege_level,with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_11_target';
+create table testdb6.grant_table_11(a int);
+create view testdb6.grant_view_11 as select * from testdb6.grant_table_11;
+-- @session:id=16&user=sys:user_grant_11:role_account_priv_11&password=123456
+grant select on view testdb6.grant_view_11 to role_account_priv_11_target;
+-- @session
+
+-- scoped table grant option boundaries
+create user 'user_grant_12' identified by '123456';
+create role 'role_account_priv_12','role_account_priv_12_target';
+grant select on table testdb6.* to role_account_priv_12 with grant option;
+grant role_account_priv_12 to user_grant_12;
+-- @session:id=17&user=sys:user_grant_12:role_account_priv_12&password=123456
+grant select on table *.* to role_account_priv_12_target;
+grant select on table testdb6.grant_table_11 to role_account_priv_12_target;
+grant select on view testdb6.grant_view_11 to role_account_priv_12_target;
+-- @session
+create user 'user_grant_13' identified by '123456';
+create role 'role_account_priv_13','role_account_priv_13_target';
+grant select on table testdb6.grant_table_11 to role_account_priv_13 with grant option;
+grant role_account_priv_13 to user_grant_13;
+-- @session:id=18&user=sys:user_grant_13:role_account_priv_13&password=123456
+grant select on table *.* to role_account_priv_13_target;
+-- @session
+select role_name,obj_type,privilege_name,privilege_level,with_grant_option from mo_catalog.mo_role_privs where role_name in ('role_account_priv_12_target','role_account_priv_13_target') order by role_name,obj_type,privilege_name,privilege_level;
+
 --多个权限授权给多个role
 drop role if exists r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
 create role r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
@@ -287,12 +324,13 @@ grant r1,r2 to r6,r7;
 grant r1,r2 to r6,r7;
 select mr.role_name,mp.role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_role_grant mg,mo_catalog.mo_role mr ,mo_catalog.mo_role_privs mp where  mg.grantee_id=mr.role_id and mg.granted_id = mp.role_id and mr.role_name in ('r6','r7');
 
-drop user if exists user1,user2,user3,user4,user5,user11,user12,testuser,user_grant_1,user_grant_3,user_grant_4,user_grant_5,user_grant_6,user_grant_7,user_grant_8,user_grant_9,user_grant_10,user_prepare_01;
-drop role if exists u_role,test_role,test_role_2,grant_role_1,role_sys_priv,role_account_priv_2,role_account_priv_3,role_account_priv_4,role_account_priv_5,role_account_priv_6,role_account_priv_7,role_account_priv_8,role_account_priv_9,role_account_priv_10,role_prepare_1;
+drop user if exists user1,user2,user3,user4,user5,user11,user12,testuser,user_grant_1,user_grant_3,user_grant_4,user_grant_5,user_grant_6,user_grant_7,user_grant_8,user_grant_9,user_grant_10,user_grant_11,user_grant_12,user_grant_13,user_prepare_01;
+drop role if exists u_role,test_role,test_role_2,grant_role_1,role_sys_priv,role_account_priv_2,role_account_priv_3,role_account_priv_4,role_account_priv_5,role_account_priv_6,role_account_priv_7,role_account_priv_8,role_account_priv_9,role_account_priv_10,role_account_priv_11,role_account_priv_11_target,role_account_priv_12,role_account_priv_12_target,role_account_priv_13,role_account_priv_13_target,role_prepare_1;
 drop database if exists grant_db;
 drop database if exists testdb;
 drop database if exists testdb4;
 drop database if exists testdb5;
+drop database if exists testdb6;
 drop database if exists grant_db4;
 drop database if exists grant_db5;
 drop account if exists grant_account01;

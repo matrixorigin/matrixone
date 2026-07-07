@@ -367,6 +367,8 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[Decimal64](val)
 	case T_decimal128:
 		return DecodeFixed[Decimal128](val)
+	case T_decimal256:
+		return DecodeFixed[Decimal256](val)
 	case T_uuid:
 		return DecodeFixed[Uuid](val)
 	case T_TS:
@@ -436,6 +438,8 @@ func CompareValue(left, right any) int {
 		return lVal.Compare(right.(Decimal64))
 	case Decimal128:
 		return lVal.Compare(right.(Decimal128))
+	case Decimal256:
+		return lVal.Compare(right.(Decimal256))
 	case Date:
 		return int(lVal - right.(Date))
 	case Time:
