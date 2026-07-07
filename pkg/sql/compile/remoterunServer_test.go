@@ -221,6 +221,45 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.NotNil(t, compile.fill, "fill callback should be set")
 }
 
+func TestHandlePipelineMessage_ReleasesCompileOnDecodeError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	mockEngine := mock_frontend.NewMockEngine(ctrl)
+	messageCenter := &message.MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*message.MessageBoard),
+		RwMutex:       &sync.Mutex{},
+	}
+	mockEngine.EXPECT().GetMessageCenter().Return(messageCenter).AnyTimes()
+
+	testTxnID := make([]byte, 16)
+	copy(testTxnID, "decode-error-txn")
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{ID: testTxnID}).AnyTimes()
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:    ctx,
+		connectionCtx: ctx,
+		messageTyp:    pipeline.Method_PipelineMessage,
+		cnInformation: cnInformation{
+			cnAddr:      "test-addr",
+			storeEngine: mockEngine,
+		},
+		procBuildHelper: processHelper{
+			id:          "test-proc-id",
+			accountId:   catalog.System_Account,
+			unixTime:    time.Now().Unix(),
+			txnOperator: txnOperator,
+		},
+		scopeData: []byte{0xff},
+	}
+
+	err := handlePipelineMessage(receiver)
+	require.Error(t, err)
+	require.Empty(t, messageCenter.StmtIDToBoard, "compile cleanup should unregister the remote message board on decode errors")
+}
+
 // TestGenerateProcessHelper_WithSnapshot tests process helper generation from snapshot.
 //
 // Test quality criteria:
