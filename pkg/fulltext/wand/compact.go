@@ -19,7 +19,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -253,6 +255,13 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 		}
 		res.Close()
 	}
+
+	// Opportunistic tiered merge: coalesce the small fold subs the folds accumulate so the
+	// sub count (hence query cost) stays bounded. Self-gating — a no-op metadata scan when
+	// no adjacent small run qualifies. Same txn as the fold, so it rolls back atomically.
+	if _, e := TieredMergeBases(sqlproc, cfg, capacity); e != nil {
+		return 0, e
+	}
 	return len(segs), nil
 }
 
@@ -320,4 +329,162 @@ func nextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 		}
 	}
 	return 0, nil
+}
+
+// Tiered-merge tuning. A base sub below smallSubBytes is a "small" merge candidate
+// (typically a fold sub — one tail's worth); full-build/large subs sit above it and
+// are left alone. A merge run coalesces up to mergeFactor adjacent small subs, capped
+// at maxMergeBytes of resident postings, so tiered-merge memory stays bounded.
+const (
+	mergeFactor   = 8
+	maxMergeBytes = 128 << 20 // 128 MiB resident per merge pass
+	smallSubBytes = maxMergeBytes / mergeFactor
+)
+
+// baseSubMeta is a tag=0 base sub-index's metadata row (id + recency + serialized size),
+// used by the tiered merge to pick a batch without loading any postings.
+type baseSubMeta struct {
+	id       string
+	recency  int64
+	filesize int64
+}
+
+// listBaseSubsByRecency returns the tag=0 base subs ordered by recency (metadata.chunk_id
+// ASC, then index_id for a stable order among a fold's capacity-split siblings) — the order
+// the tiered merge scans for an adjacent, recency-contiguous run.
+func listBaseSubsByRecency(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]baseSubMeta, error) {
+	sql := fmt.Sprintf("SELECT %s, %s, %s FROM %s ORDER BY %s ASC, %s ASC",
+		catalog.FullTextIndex_TblCol_Metadata_Index_Id, catalog.FullTextIndex_TblCol_Metadata_Chunk_Id,
+		catalog.FullTextIndex_TblCol_Metadata_Filesize, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+		catalog.FullTextIndex_TblCol_Metadata_Chunk_Id, catalog.FullTextIndex_TblCol_Metadata_Index_Id)
+	res, err := sqlexec.RunSql(sqlproc, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+	var metas []baseSubMeta
+	for _, bat := range res.Batches {
+		if bat == nil {
+			continue
+		}
+		for i := 0; i < bat.RowCount(); i++ {
+			metas = append(metas, baseSubMeta{
+				id:       bat.Vecs[0].GetStringAt(i),
+				recency:  vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], i),
+				filesize: vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[2], i),
+			})
+		}
+	}
+	return metas, nil
+}
+
+// selectMergeRun finds the first maximal run of ADJACENT small subs (in recency order)
+// worth merging — capped at mergeFactor subs and maxMergeBytes. It returns [lo,hi) with
+// hi-lo ≥ 2, or lo==hi when no run qualifies. Adjacency in the recency-sorted list is a
+// correctness requirement, not a heuristic: merging emits one sub at the run's MAX recency,
+// so a doc from a lower-recency member is "promoted". Because the run skips no sub whose
+// recency lies inside its range, the newest copy of every pk in that range is in the run
+// (its promoted copy is the true-newest); every excluded sub is strictly older (correctly
+// shadowed by the merged max) or strictly newer (correctly shadows it). A non-adjacent
+// pick could leapfrog an excluded middle sub holding a newer copy → stale result.
+func selectMergeRun(metas []baseSubMeta) (lo, hi int) {
+	for i := 0; i < len(metas); {
+		j, sum := i, int64(0)
+		for j < len(metas) && j-i < mergeFactor &&
+			metas[j].filesize < smallSubBytes && sum+metas[j].filesize <= maxMergeBytes {
+			sum += metas[j].filesize
+			j++
+		}
+		if j-i >= 2 {
+			return i, j
+		}
+		if j > i { // a single small sub then a large/over-budget one: resume at that sub
+			i = j
+		} else { // metas[i] itself is large: skip it
+			i++
+		}
+	}
+	return 0, 0
+}
+
+// TieredMergeBases coalesces one adjacent, recency-contiguous run of small tag=0 base subs
+// into fewer capacity-capped subs — bounding the sub count the fold grows (query cost scales
+// with sub count) and reclaiming docs a tail delete or a higher-recency member supersedes.
+// Memory is O(run) ≤ maxMergeBytes (never the whole base). The merged sub takes the run's MAX
+// recency; the tail is NOT touched (its delete frames still shadow non-merged subs, and are
+// re-applied here so a promoted doc is never resurrected past its delete). Returns the number
+// of new subs written (0 when no run qualifies).
+func TieredMergeBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int64) (int, error) {
+	metas, err := listBaseSubsByRecency(sqlproc, cfg)
+	if err != nil {
+		return 0, err
+	}
+	lo, hi := selectMergeRun(metas)
+	if hi-lo < 2 {
+		return 0, nil // no adjacent small run worth merging
+	}
+	batch := metas[lo:hi]
+	maxRecency := batch[len(batch)-1].recency // recency-sorted ⇒ last is the max
+
+	var subs []*WandModel
+	for _, b := range batch {
+		m, e := LoadFromStorage(sqlproc, cfg, b.id)
+		if e != nil {
+			freeSegs(subs)
+			return 0, e
+		}
+		subs = append(subs, m)
+	}
+	defer freeSegs(subs)
+
+	// The tail deletes must be re-applied: promoting a doc to maxRecency could lift it past
+	// a delete frame whose chunk_id sits between the doc's old recency and maxRecency, which
+	// would resurrect it. Load the tail only for its delete map, then free the insert segs.
+	tail, deletes, _, err := loadTailSegments(sqlproc, cfg)
+	if err != nil {
+		return 0, err
+	}
+	freeSegs(tail)
+
+	live := ComputeLiveness(subs, deletes)
+	filtered := make([]*WandModel, 0, len(subs))
+	for i, s := range subs {
+		f := s.FilterLive(live[i])
+		if f.N > 0 {
+			filtered = append(filtered, f)
+		}
+	}
+
+	ts := time.Now().UnixMicro()
+	uid := fmt.Sprintf("%s:tm:%d", cfg.IndexTable, ts)
+	var out []*WandModel
+	if len(filtered) > 0 {
+		out = Merge(uid, filtered...).Split(capacity)
+		for _, s := range out {
+			s.ChunkId = maxRecency
+		}
+	}
+
+	// Write the merged sub(s) at maxRecency, then delete the merged batch subs. New ids
+	// (uid:tm:ts) are disjoint from the batch ids, so order is immaterial.
+	for i, m := range out {
+		m.Id = SubIndexId(uid, i)
+		sqls, cleanup, e := m.ToInsertSqls(cfg, ts, int(0))
+		if e != nil {
+			return 0, e
+		}
+		if e := runSqlsWithCleanup(sqlproc, sqls, cleanup); e != nil {
+			return 0, e
+		}
+	}
+	for _, b := range batch {
+		for _, s := range DeleteSqls(cfg, b.id) {
+			res, e := sqlexec.RunSql(sqlproc, s)
+			if e != nil {
+				return 0, e
+			}
+			res.Close()
+		}
+	}
+	return len(out), nil
 }

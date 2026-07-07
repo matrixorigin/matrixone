@@ -88,3 +88,49 @@ func TestWandSplit_NoOpUnderCapacity(t *testing.T) {
 	require.Equal(t, []*WandModel{m}, m.Split(0))
 	require.Equal(t, []*WandModel{m}, m.Split(100))
 }
+
+// selectMergeRun picks the first maximal run of ADJACENT small subs (≥2), capped at
+// mergeFactor / maxMergeBytes. Adjacency is the correctness property (no skipped
+// middle sub), verified here across large/small interleavings and the caps.
+func TestSelectMergeRun(t *testing.T) {
+	sm := int64(1)             // a "small" sub
+	lg := int64(smallSubBytes) // a "large" sub (not < smallSubBytes ⇒ never in a run)
+	mk := func(sizes ...int64) []baseSubMeta {
+		metas := make([]baseSubMeta, len(sizes))
+		for i, s := range sizes {
+			metas[i] = baseSubMeta{id: fmt.Sprintf("s%d", i), recency: int64(i), filesize: s}
+		}
+		return metas
+	}
+	check := func(name string, metas []baseSubMeta, wantLo, wantHi int) {
+		lo, hi := selectMergeRun(metas)
+		require.Equal(t, [2]int{wantLo, wantHi}, [2]int{lo, hi}, name)
+	}
+
+	check("empty", nil, 0, 0)
+	check("single small", mk(sm), 0, 0)
+	check("all large", mk(lg, lg, lg), 0, 0)
+	check("two small", mk(sm, sm), 0, 2)
+	check("large then run", mk(lg, sm, sm), 1, 3)
+	check("run then large", mk(sm, sm, lg), 0, 2)
+	// first small is alone (followed by large); the real run is the trailing pair.
+	check("lone small, then large, then run", mk(sm, lg, sm, sm), 2, 4)
+
+	// mergeFactor cap: 10 small ⇒ first mergeFactor of them.
+	ten := mk(sm, sm, sm, sm, sm, sm, sm, sm, sm, sm)
+	check("mergeFactor cap", ten, 0, mergeFactor)
+
+	// byte-budget cap: subs at ~half smallSubBytes ⇒ maxMergeBytes/(smallSubBytes/2) = 2*mergeFactor
+	// would fit by count, but maxMergeBytes caps the run to mergeFactor*2 of them... actually each
+	// is < smallSubBytes so count-cap (mergeFactor) binds first here.
+	half := int64(smallSubBytes / 2)
+	budget := mk(half, half, half, half, half, half, half, half, half, half)
+	lo, hi := selectMergeRun(budget)
+	require.Equal(t, 0, lo)
+	require.LessOrEqual(t, hi-lo, mergeFactor, "run never exceeds mergeFactor")
+	var sum int64
+	for _, m := range budget[lo:hi] {
+		sum += m.filesize
+	}
+	require.LessOrEqual(t, sum, int64(maxMergeBytes), "run never exceeds the byte budget")
+}
