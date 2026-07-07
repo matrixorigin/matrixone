@@ -1794,10 +1794,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "concat"
 		}
-		if err = promoteTextParamsForArith(ctx, args); err != nil {
+		if err != nil {
 			return nil, err
 		}
-		if err != nil {
+		if err = promoteTextParamsForArith(ctx, args); err != nil {
 			return nil, err
 		}
 	case "-":
@@ -1830,10 +1830,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		}
-		if err = promoteTextParamsForArith(ctx, args); err != nil {
+		if err != nil {
 			return nil, err
 		}
-		if err != nil {
+		if err = promoteTextParamsForArith(ctx, args); err != nil {
 			return nil, err
 		}
 	case "*", "/", "%", "div", "mod":
