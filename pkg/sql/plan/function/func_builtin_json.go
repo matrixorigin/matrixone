@@ -240,7 +240,7 @@ func (op *opBuiltInJsonContains) jsonContains(parameters []*vector.Vector, resul
 				return moerr.NewInvalidArg(proc.Ctx, "json_contains", "invalid path expression")
 			}
 			var exists bool
-			target, exists = target.QuerySimpleExist(&path)
+			target, exists = target.QuerySimpleContainPath(&path)
 			if !exists {
 				if err := rs.Append(0, true); err != nil {
 					return err
@@ -348,21 +348,23 @@ func jsonContainsScalar(target, candidate bytejson.ByteJson) bool {
 		candidate.Type == bytejson.TpCodeArray || candidate.Type == bytejson.TpCodeObject {
 		return false
 	}
-	if !jsonScalarsComparable(target, candidate) {
+
+	if isJsonNumericType(target.Type) && isJsonNumericType(candidate.Type) {
+		return bytejson.CompareByteJson(target, candidate) == 0
+	}
+	if target.Type != candidate.Type {
 		return false
 	}
 	return bytejson.CompareByteJson(target, candidate) == 0
 }
 
-func jsonScalarsComparable(target, candidate bytejson.ByteJson) bool {
-	if target.TYPE() == candidate.TYPE() {
+func isJsonNumericType(tp bytejson.TpCode) bool {
+	switch tp {
+	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeDecimal:
 		return true
+	default:
+		return false
 	}
-	return isJsonIntegerOrDecimal(target) && isJsonIntegerOrDecimal(candidate)
-}
-
-func isJsonIntegerOrDecimal(v bytejson.ByteJson) bool {
-	return v.TYPE() == "INTEGER" || v.TYPE() == "DECIMAL"
 }
 
 func jsonLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

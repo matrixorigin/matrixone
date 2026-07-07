@@ -41,6 +41,7 @@ select json_contains('{"a": null}', '1', '$.a');
 select json_contains('{"a": 1}', '1', '$.missing');
 select json_contains('[1,2,3]', '2', '$[1]');
 select json_contains('[1,2,3]', '4', '$[1]');
+select json_contains('{"a":1}', '1', '$.a[0]');
 select json_contains('[1,{"a":["x","y"]}]', '"y"', '$[1].a');
 
 -- null arguments
@@ -57,10 +58,29 @@ select json_contains(json_array(1, 2, 3), '[1,2]');
 select json_contains(json_array(1, 2, 3), '2', '$[1]');
 select json_contains('{"a":{"b":1,"c":2}}', json_object('b', 1), '$.a');
 
--- INTEGER/DECIMAL comparable
+-- numeric cross-type comparable
 select json_contains('1', '1.0');
+select json_contains('-1', '-1.0');
+select json_contains('[1,2.0,3]', '[1.0,2,3.0]');
 select json_contains('{"a":1}', '{"a":1.0}');
 select json_contains('[1,2,3]', '[1.0,3.0]');
+select json_contains('{"a":[1,2,3]}', '[1.0,3.0]', '$.a');
+
+-- scalar [0] autowrap for simple paths
+select json_contains('1', '1', '$[0]');
+select json_contains('1', '1', '$[1]');
+select json_contains('{"a":true}', 'true', '$.a[0]');
+select json_contains('{"a":"x"}', '"x"', '$.a[0]');
+select json_contains('{"a":[{"b":1}]}', '1', '$.a[0].b[0]');
+
+-- strict scalar type matching for non-numeric values
+select json_contains('"1"', '1');
+select json_contains('1', '"1"');
+select json_contains('true', '1');
+select json_contains('{"a":"1"}', '1', '$.a');
+select json_contains('{"a":1}', '"1"', '$.a');
+select json_contains('{"a":false}', 'false', '$.a');
+select json_contains('{"a":false}', 'true', '$.a');
 
 -- candidate string must be a valid JSON string literal
 select json_contains('{"a":"x"}', '"x"', '$.a');
@@ -85,6 +105,7 @@ insert into t_json_contains_varchar values
 select id, json_contains(doc, '"doc"', '$.type') as is_doc from t_json_contains_varchar order by id;
 select id from t_json_contains_varchar where json_contains(doc, '"x"', '$.tags') order by id;
 select id, json_contains(doc, 'true', '$.meta.published') as is_published from t_json_contains_varchar order by id;
+select id from t_json_contains_varchar where json_contains(doc, '"doc"', '$.type[0]') order by id;
 
 drop table if exists t_json_contains_json;
 create table t_json_contains_json (id int, doc json);
@@ -96,6 +117,7 @@ insert into t_json_contains_json values
 select id, json_contains(doc, '{"sku":"a"}', '$.items') as has_sku_a from t_json_contains_json order by id;
 select id from t_json_contains_json where json_contains(doc, '{"sku":"c"}', '$.items') order by id;
 select id from t_json_contains_json where json_contains(doc, '{"items":[{"qty":5}]}') order by id;
+select id from t_json_contains_json where json_contains(doc, '2', '$.items[0].qty[0]') order by id;
 
 drop table t_json_contains_varchar;
 drop table t_json_contains_json;

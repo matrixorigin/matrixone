@@ -984,18 +984,19 @@ func TestJsonContains(t *testing.T) {
 						`{"a":1}`,
 						`{"a":null}`,
 						`{"a":1}`,
+						`{"a":1}`,
 					},
-					[]bool{false, false, false, false, false, false, false, true}),
+					[]bool{false, false, false, false, false, false, false, true, false}),
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`"x"`, `1`, `1`, `{"d":4}`, `{"d":4}`, `1`, `null`, `1`},
-					[]bool{false, false, false, false, false, false, false, false}),
+					[]string{`"x"`, `1`, `1`, `{"d":4}`, `{"d":4}`, `1`, `null`, `1`, `1`},
+					[]bool{false, false, false, false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`$.tags`, `$.a`, `$.b`, `$.c`, `$.a`, `$.missing`, `$.a`, `$.a`},
-					[]bool{false, false, false, false, false, false, false, false}),
+					[]string{`$.tags`, `$.a`, `$.b`, `$.c`, `$.a`, `$.missing`, `$.a`, `$.a`, `$.a[0]`},
+					[]bool{false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{1, 1, 0, 1, 0, 0, 1, 0},
-				[]bool{false, false, false, false, false, true, false, true}),
+				[]int64{1, 1, 0, 1, 0, 0, 1, 0, 1},
+				[]bool{false, false, false, false, false, true, false, true, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
 		s, info := fcTC.Run()
@@ -1016,6 +1017,72 @@ func TestJsonContains(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{1, 1, 0, 1, 1},
 				[]bool{false, false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("numeric cross type", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains numeric cross type",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `{"a":1}`, `[1,2,3]`, `-1`, `[1,2.0,3]`},
+					[]bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1.0`, `{"a":1.0}`, `[1.0,3.0]`, `-1.0`, `[1.0,2,3.0]`},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 1, 1, 1, 1},
+				[]bool{false, false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("strict scalar type matching", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains strict scalar type matching",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`"1"`, `1`, `true`, `{"a":"1"}`, `{"a":1}`, `{"a":false}`, `{"a":false}`},
+					[]bool{false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `"1"`, `1`, `1`, `"1"`, `false`, `true`},
+					[]bool{false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$`, `$`, `$`, `$.a`, `$.a`, `$.a`, `$.a`},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 0, 0, 0, 0, 1, 0},
+				[]bool{false, false, false, false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("scalar autowrap path variants", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains scalar autowrap path variants",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `1`, `{"a":true}`, `{"a":"x"}`, `{"a":[{"b":1}]}`},
+					[]bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `1`, `true`, `"x"`, `1`},
+					[]bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$[0]`, `$[1]`, `$.a[0]`, `$.a[0]`, `$.a[0].b[0]`},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 0, 1, 1, 1},
+				[]bool{false, true, false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
 		s, info := fcTC.Run()
