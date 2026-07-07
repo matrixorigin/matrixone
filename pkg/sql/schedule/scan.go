@@ -61,9 +61,7 @@ func DecideScanPlacement(req ScanRequest) ScanDecision {
 		return localScanDecision(ReasonScanSmallBlocks)
 	}
 	if len(req.QueryWorkers) == 0 {
-		return ScanDecision{
-			Reason: ReasonScanNoWorkers,
-		}
+		return localScanDecision(ReasonScanNoWorkers)
 	}
 	return ScanDecision{
 		Workers: cloneWorkers(req.QueryWorkers),

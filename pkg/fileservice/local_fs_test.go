@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -118,6 +120,38 @@ func TestLocalFS(t *testing.T) {
 		}
 	})
 
+}
+
+func TestLocalDirEntryInfoSkipsMissingEntries(t *testing.T) {
+	info, ok, err := localDirEntryInfo(fakeDirEntryInfo{
+		err: &os.PathError{Op: "lstat", Path: "/tmp/ccTEST.cdtor.c", Err: os.ErrNotExist},
+	})
+	assert.Nil(t, err)
+	assert.False(t, ok)
+	assert.Nil(t, info)
+
+	_, _, err = localDirEntryInfo(fakeDirEntryInfo{err: fs.ErrPermission})
+	assert.ErrorIs(t, err, fs.ErrPermission)
+}
+
+type fakeDirEntryInfo struct {
+	err error
+}
+
+func (f fakeDirEntryInfo) Name() string {
+	return "transient"
+}
+
+func (f fakeDirEntryInfo) IsDir() bool {
+	return false
+}
+
+func (f fakeDirEntryInfo) Type() fs.FileMode {
+	return 0
+}
+
+func (f fakeDirEntryInfo) Info() (fs.FileInfo, error) {
+	return nil, f.err
 }
 
 func BenchmarkLocalFS(b *testing.B) {
