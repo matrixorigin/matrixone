@@ -458,18 +458,18 @@ func TestPrepareArithOpsAllOperators(t *testing.T) {
 	}
 }
 
-// TestPrepareArithPlan verifies that the plan for dual-param and param+numeric
-// arithmetic promotes unresolved text params to DOUBLE (matching MySQL's float
-// semantics for prepared arithmetic), and that non-param TEXT columns are left
-// alone.
+// TestPrepareArithPlan verifies that dual-param arithmetic (the only case
+// promoteTextParamsForArith triggers) casts both params to Decimal128(38,12).
+// Mixed cases (e.g. "0 + ?") fall through to the existing initFixed1 rules
+// and are verified by TestPrepareArithMixedPreservesExactType.
 func TestPrepareArithPlan(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	tests := []struct {
 		sql       string
-		wantCasts int // expected number of cast(param, float64) wrappers
+		wantCasts int // expected number of cast(param, decimal128) wrappers
 	}{
-		// Dual param: both promoted.
+		// Dual param: both promoted to Decimal128(38,12).
 		{"prepare s1 from select ? + ?", 2},
 		{"prepare s1 from select ? - ?", 2},
 		{"prepare s1 from select ? * ?", 2},
@@ -477,17 +477,10 @@ func TestPrepareArithPlan(t *testing.T) {
 		{"prepare s1 from select ? % ?", 2},
 		{"prepare s1 from select ? div ?", 2},
 		{"prepare s1 from select ? mod ?", 2},
-		// Mixed: single param + numeric → param promoted.
-		{"prepare s1 from select ? + 5", 1},
-		{"prepare s1 from select 5 + ?", 1},
-		{"prepare s1 from select ? + 5.5", 1},
 	}
 	for _, tc := range tests {
 		logicPlan, err := runOneStmt(mock, t, tc.sql)
-		if err != nil {
-			assert.NoErrorf(t, err, "%s should succeed", tc.sql)
-			continue
-		}
+		assert.NoErrorf(t, err, "%s should succeed", tc.sql)
 
 		q := resolveQueryPlan(logicPlan)
 		if q == nil || q.GetQuery() == nil {
@@ -496,35 +489,68 @@ func TestPrepareArithPlan(t *testing.T) {
 		castCount := 0
 		for _, node := range q.GetQuery().Nodes {
 			for _, expr := range node.ProjectList {
-				castCount += countFloat64Casts(expr)
+				castCount += countDecimal128Casts(expr)
 			}
 		}
 		assert.Equalf(t, tc.wantCasts, castCount,
-			"%s should have %d cast(arg, float64)", tc.sql, tc.wantCasts)
+			"%s should have %d cast(arg, decimal128(38,12))", tc.sql, tc.wantCasts)
 	}
 }
 
-// countFloat64Casts counts how many cast(arg, T_float64) nodes exist in expr.
-func countFloat64Casts(expr *plan.Expr) int {
+// countDecimal128Casts counts cast(arg, T_decimal128) wrappers in expr.
+func countDecimal128Casts(expr *plan.Expr) int {
 	if expr == nil {
 		return 0
 	}
 	n := 0
 	if f := expr.GetF(); f != nil {
 		if f.Func.GetObjName() == "cast" && len(f.Args) >= 2 &&
-			f.Args[1].Typ.Id == int32(types.T_float64) {
+			f.Args[1].Typ.Id == int32(types.T_decimal128) {
 			n++
 		}
 		for _, arg := range f.Args {
-			n += countFloat64Casts(arg)
+			n += countDecimal128Casts(arg)
 		}
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			n += countFloat64Casts(item)
+			n += countDecimal128Casts(item)
 		}
 	}
 	return n
+}
+
+// TestPrepareArithMixedPreservesExactType verifies that mixed-type arithmetic
+// (e.g. "0 + ?") DOES NOT trigger promoteTextParamsForArith (because one peer
+// is a numeric literal, not a ParamRef), and keeps the existing initFixed1
+// exact cast path.  For int64 + text, the param stays on the int64 path so
+// large uint64 values > 2^63-1 correctly error with "data out of range".
+func TestPrepareArithMixedPreservesExactType(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Mixed cases: should succeed at PREPARE and produce no decimal128 casts
+	// because promoteTextParamsForArith only fires for dual params.
+	tests := []string{
+		"prepare s1 from select ? + 5",
+		"prepare s1 from select 5 + ?",
+		"prepare s1 from select ? + 5.5",
+		"prepare s1 from select 0 + ?",
+	}
+	for _, sql := range tests {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		assert.NoErrorf(t, err, "%s should succeed", sql)
+
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		for _, node := range q.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				assert.Equal(t, 0, countDecimal128Casts(expr),
+					"%s should NOT have decimal128 casts", sql)
+			}
+		}
+	}
 }
 
 func TestUpdateTextCaseKeepsTextAssignmentCast(t *testing.T) {

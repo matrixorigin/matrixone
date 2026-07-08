@@ -1617,35 +1617,26 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 	return args[0], true, nil
 }
 
-func isNumericOid(oid int32) bool {
-	t := types.T(oid)
-	return t.IsSignedInt() || t.IsUnsignedInt() || t.IsFloat() ||
-		t == types.T_decimal64 || t == types.T_decimal128 || t == types.T_decimal256 ||
-		t == types.T_bit
-}
-
 // promoteTextParamsForArith promotes each T_text prepared-statement parameter
-// reference to DOUBLE when its peer operand is also a ParamRef or is numeric.
-// This allows arithmetic on unresolved params to succeed at PREPARE time while
-// keeping TEXT-column arithmetic (text + text_column) unchanged.
-// The DOUBLE return type matches MySQL binary-protocol semantics for prepared
-// arithmetic expressions.
+// reference to Decimal128(38,12) when BOTH operands are unresolved ParamRefs
+// (e.g. "? + ?").  Decimal128 avoids float64's 2^53 precision ceiling for
+// integers and preserves fractional values.  Mixed cases (e.g. "0 + ?") fall
+// through to the existing initFixed1/initFixed2 coercion tables, whose rules
+// for known peer types are already correct.
 func promoteTextParamsForArith(ctx context.Context, args []*plan.Expr) error {
 	if len(args) != 2 {
 		return nil
 	}
-	doubleType := plan.Type{Id: int32(types.T_float64), NotNullable: true}
+	if args[0].Typ.Id != int32(types.T_text) || args[0].GetP() == nil ||
+		args[1].Typ.Id != int32(types.T_text) || args[1].GetP() == nil {
+		return nil
+	}
+	decType := plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 12, NotNullable: true}
 	for i := range args {
-		if args[i].Typ.Id != int32(types.T_text) || args[i].GetP() == nil {
-			continue
-		}
-		peer := args[1-i]
-		if peer.GetP() != nil || isNumericOid(peer.Typ.Id) {
-			var err error
-			args[i], err = appendCastBeforeExpr(ctx, args[i], doubleType)
-			if err != nil {
-				return err
-			}
+		var err error
+		args[i], err = appendCastBeforeExpr(ctx, args[i], decType)
+		if err != nil {
+			return err
 		}
 	}
 	return nil
