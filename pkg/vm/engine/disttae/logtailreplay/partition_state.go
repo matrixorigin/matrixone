@@ -67,6 +67,10 @@ type PartitionState struct {
 	//current partitionState can serve snapshot read only if start <= ts <= end
 	start types.TS
 	end   types.TS
+	// appliedTo is the latest logtail timestamp that has been fully applied
+	// to this state. Duration end can be MaxTs for subscribed latest states,
+	// so it is not a physical applied watermark.
+	appliedTo types.TS
 
 	// index
 
@@ -858,6 +862,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		lastFlushTimestamp:        p.lastFlushTimestamp,
 		start:                     p.start,
 		end:                       p.end,
+		appliedTo:                 p.appliedTo,
 		prefetch:                  p.prefetch,
 	}
 	if len(p.checkpoints) > 0 {
@@ -1185,6 +1190,19 @@ func (p *PartitionState) UpdateDuration(start types.TS, end types.TS) {
 
 func (p *PartitionState) GetDuration() (types.TS, types.TS) {
 	return p.start, p.end
+}
+
+func (p *PartitionState) UpdateAppliedTo(ts types.TS) {
+	if ts.IsEmpty() {
+		return
+	}
+	if p.appliedTo.IsEmpty() || p.appliedTo.LT(&ts) {
+		p.appliedTo = ts
+	}
+}
+
+func (p *PartitionState) GetAppliedTo() types.TS {
+	return p.appliedTo
 }
 
 func (p *PartitionState) IsValid() bool {
