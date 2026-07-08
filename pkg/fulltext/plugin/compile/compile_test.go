@@ -137,19 +137,30 @@ func TestRestoreInitSQL_MissingPostingsDef_Errors(t *testing.T) {
 
 // --- HandleReindex gate: only retrieval is rebuildable ---
 
-func TestHandleReindex_NonRetrieval_NotSupported(t *testing.T) {
+// MERGE (incremental WAND compaction) is retrieval-only — rejected on a non-retrieval
+// (ngram) index with a MERGE-specific message so the user knows to use a plain REBUILD.
+func TestHandleReindex_NonRetrievalMerge_NotSupported(t *testing.T) {
 	ctx := &stubCtx{qryDatabase: "db1", tableDef: &plan.TableDef{Name: "t1"}}
 	defs := map[string]*plan.IndexDef{"": {IndexName: "ftidx", IndexAlgoParams: ngramParams}}
-	// plain rebuild on a non-retrieval index: not supported
-	err := Hooks{}.HandleReindex(ctx, defs, false, false)
-	require.Error(t, err)
-	require.Contains(t, strings.ToLower(err.Error()), "not supported")
-	// MERGE (incremental compaction) on a non-retrieval index: not supported, and the
-	// message names MERGE so the user knows compaction is retrieval-only.
-	err = Hooks{}.HandleReindex(ctx, defs, false, true)
+	err := Hooks{}.HandleReindex(ctx, defs, false, true)
 	require.Error(t, err)
 	require.Contains(t, strings.ToLower(err.Error()), "not supported")
 	require.Contains(t, err.Error(), "MERGE")
+}
+
+// Plain REBUILD (merge=false) works for a non-retrieval (ngram) index: it clears the
+// postings table and re-tokenizes from source (no CDC, no WAND store) — the same 3c path
+// as CREATE, now idempotent.
+func TestHandleReindex_NonRetrievalRebuild_ClearsAndRepopulates(t *testing.T) {
+	ctx := retrievalCtx(false)
+	defs := map[string]*plan.IndexDef{
+		"": {IndexName: "ftidx", IndexTableName: "postings_tbl", IndexAlgoParams: ngramParams, Parts: []string{"body"}},
+	}
+	require.NoError(t, Hooks{}.HandleReindex(ctx, defs, false, false))
+	require.False(t, ctx.createCdcCalled, "ngram rebuild registers no CDC")
+	require.Len(t, ctx.runSqls, 2)
+	require.Contains(t, ctx.runSqls[0], "DELETE FROM")
+	require.Contains(t, ctx.runSqls[1], "fulltext_index_tokenize")
 }
 
 func TestHandleReindex_MissingPostingsDef_Errors(t *testing.T) {
@@ -217,8 +228,11 @@ func TestHandleCreateIndex_NonRetrievalSync_PopulatesPostingsOnly(t *testing.T) 
 	require.NoError(t, Hooks{}.HandleCreateIndex(ctx, defs))
 
 	require.False(t, ctx.createCdcCalled, "sync non-retrieval registers no CDC")
-	require.Len(t, ctx.runSqls, 1)
-	require.Contains(t, ctx.runSqls[0], "fulltext_index_tokenize")
+	// clear-then-repopulate (idempotent so ALTER … REINDEX rebuilds); the DELETE is a
+	// no-op on a fresh CREATE but keeps the path reusable for reindex.
+	require.Len(t, ctx.runSqls, 2)
+	require.Contains(t, ctx.runSqls[0], "DELETE FROM")
+	require.Contains(t, ctx.runSqls[1], "fulltext_index_tokenize")
 }
 
 // --- pure SQL builders ---

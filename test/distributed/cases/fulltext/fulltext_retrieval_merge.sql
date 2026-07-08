@@ -31,10 +31,14 @@ select id from t where match(txt) against('yellow' in retrieval mode) order by i
 -- plain reindex (full rebuild-from-source) yields the same result set
 alter table t alter reindex ft fulltext;
 select id from t where match(txt) against('apple' in retrieval mode) order by id;
--- MERGE (and reindex) is retrieval-only: a non-retrieval (ngram) fulltext index is
--- explicitly rejected (not the raw JSON parse error it used to surface)
+-- non-retrieval (ngram) fulltext index: a plain REBUILD works (clear + re-tokenize from
+-- source, idempotent), but MERGE (WAND compaction) is rejected with an explicit
+-- retrieval-only message (not the raw JSON parse error it used to surface).
 create table n (id bigint primary key, txt text);
-insert into n values (1,'hello world');
+insert into n values (1,'hello world'),(2,'hello mo');
 create fulltext index fn on n(txt);
+select id from n where match(txt) against('hello') order by id;
+alter table n alter reindex fn fulltext;
+select id from n where match(txt) against('hello') order by id;
 alter table n alter reindex fn fulltext merge;
 drop database ft_merge;

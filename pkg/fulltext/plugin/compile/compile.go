@@ -152,8 +152,9 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 	// 3b. async (a retrieval index created with async=true, or a non-retrieval async
 	// index): register a CDC task; data syncs via ISCP. A retrieval index's non-empty
 	// InitSQL builds tag=0 from postings at task start (capacity via the session_vars
-	// overlay). Only reached on CREATE — REINDEX forces the sync path above.
-	if async || retrieval {
+	// overlay). CREATE-only: a REINDEX (forceSync) always takes a sync (re)build — 3a for
+	// retrieval, 3c for non-retrieval — never re-registers CDC here.
+	if !forceSync && (async || retrieval) {
 		initSQL, err := wandInitSQL(indexDefs, originalTableDef, indexDef, qryDatabase)
 		if err != nil {
 			return err
@@ -168,7 +169,15 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 		return nil
 	}
 
-	// 3c. sync (non-retrieval, async=false): populate the postings table inline.
+	// 3c. sync (non-retrieval, async=false): (re)populate the postings table inline.
+	// Clear first so this is an idempotent rebuild — a no-op DELETE on a fresh CREATE
+	// (empty table), a full re-tokenize on ALTER … REINDEX (forceSync). The ngram
+	// postings are maintained synchronously by the DML rewrite (no CDC), so clearing +
+	// re-inserting from the current source rows is a complete rebuild.
+	if err = ctx.RunSql(fmt.Sprintf("DELETE FROM %s",
+		sqlquote.QualifiedIdent(qryDatabase, indexDef.IndexTableName))); err != nil {
+		return err
+	}
 	insertSQLs, err := genInsertSQL(originalTableDef, indexDef, qryDatabase)
 	if err != nil {
 		return err
@@ -234,29 +243,31 @@ func genWandBuildSQL(postingsDef, storeDef, metaDef *plan.IndexDef, qryDatabase 
 	return []string{sql}, nil
 }
 
-// HandleReindex handles ALTER … REINDEX for a retrieval index in one of two modes.
-// Default (merge=false): a full rebuild — reuse handleCreate with forceSync=true, which
-// drops the CDC task, clears the old postings + tag=0 + tag=1, rebuilds the tag=0 base
-// inline (max_index_capacity from the live resolver), and re-registers CDC from now.
-// MERGE (merge=true): incremental compaction — fold the tag=1 CdcTail into the tag=0 base
-// and tiered-merge small subs over the already-built segments (no re-tokenize, bounded
-// memory, O(tail) write) via the standalone fulltext_wand_compact TVF; the CDC task and
-// the corpus are untouched. Only the retrieval (WAND) parser has a rebuildable/compactable
-// store; a postings/ngram index has nothing to reindex.
+// HandleReindex handles ALTER … REINDEX for a fulltext index in one of two modes.
+// Default (merge=false): a full rebuild-from-source — reuse handleCreate with
+// forceSync=true. For any parser this re-tokenizes the current source rows: a
+// non-retrieval (ngram/postings) index clears + repopulates its one inverted-index
+// table; a retrieval (WAND) index additionally drops the CDC task, clears tag=0/tag=1,
+// rebuilds the tag=0 base inline (max_index_capacity from the live resolver), and
+// re-registers CDC from now.
+// MERGE (merge=true): incremental compaction — fold the tag=1 CdcTail into the tag=0
+// base and tiered-merge small subs over the already-built segments (no re-tokenize,
+// bounded memory, O(tail) write) via the standalone fulltext_wand_compact TVF; the CDC
+// task and the corpus are untouched. MERGE is WAND-specific — a non-retrieval index has
+// no compactable segment store, so it is rejected (use a plain REBUILD instead).
 func (Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _ bool, merge bool) error {
 	indexDef, ok := indexDefs[""]
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("fulltext postings index definition not found")
 	}
-	if catalog.GetIndexParser(indexDef.IndexAlgoParams) != "retrieval" {
-		if merge {
+	if merge {
+		if catalog.GetIndexParser(indexDef.IndexAlgoParams) != "retrieval" {
 			return moerr.NewNotSupportedNoCtx("ALTER ... REINDEX ... MERGE is only supported for retrieval fulltext indexes")
 		}
-		return moerr.NewNotSupportedNoCtx("ALTER ... REINDEX is only supported for retrieval fulltext indexes")
-	}
-	if merge {
 		return handleMergeCompact(ctx, indexDefs)
 	}
+	// Plain REBUILD works for every parser (retrieval and ngram) — handleCreate's
+	// forceSync path re-tokenizes from source idempotently.
 	return handleCreate(ctx, indexDefs, true)
 }
 

@@ -52,8 +52,17 @@ id
 4
 5
 create table n (id bigint primary key, txt text);
-insert into n values (1,'hello world');
+insert into n values (1,'hello world'),(2,'hello mo');
 create fulltext index fn on n(txt);
+select id from n where match(txt) against('hello') order by id;
+id
+1
+2
+alter table n alter reindex fn fulltext;
+select id from n where match(txt) against('hello') order by id;
+id
+1
+2
 alter table n alter reindex fn fulltext merge;
 not supported: ALTER ... REINDEX ... MERGE is only supported for retrieval fulltext indexes
 drop database ft_merge;
