@@ -22,11 +22,15 @@ data branch diff br against missing_base;
 SQL parser error: table "missing_base" does not exist
 alter table br add column c int default 0;
 data branch diff br against base;
--- @regex("schema is not equivalent", true)
-internal error: the target table schema is not equivalent to the base table.
+diff br against base    flag    a    b    c
 data branch merge br into base;
--- @regex("schema is not equivalent", true)
-internal error: the target table schema is not equivalent to the base table.
+create table type_base(a int primary key, b int);
+insert into type_base values (1, 10);
+create table type_branch(a int primary key, b varchar(20));
+insert into type_branch values (1, '10');
+data branch diff type_branch against type_base;
+-- @regex("schema compatibility check: column 'b' exists in both schemas but has different types", true)
+internal error: schema compatibility check: column 'b' exists in both schemas but has different types (target: 61, base: 22)
 create table no_pk(a int, b int);
 insert into no_pk values (1, 10), (2, 20);
 data branch create table no_pk_branch from no_pk;

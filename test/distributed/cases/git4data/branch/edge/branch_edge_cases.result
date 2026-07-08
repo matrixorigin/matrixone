@@ -56,10 +56,10 @@ insert into base values (1, 10), (2, 20), (3, 30);
 data branch create table left_add from base;
 data branch create table right_add from base;
 alter table left_add add column c varchar(20) default 'left-only';
-update left_add set b = 11, c = 'changed' where a = 1;
 insert into right_add values (4, 40);
-data branch diff left_add against right_add columns (a, b) output summary;
-internal error: the target table schema is not equivalent to the base table.
+data branch diff left_add against right_add;
+diff left_add against right_add    flag    a    b    c
+right_add    INSERT    4    40    null
 data branch create table both_add_left from base;
 data branch create table both_add_right from base;
 alter table both_add_left add column c varchar(20) default 'same';
@@ -72,11 +72,13 @@ both_add_left    INSERT    2    left
 both_add_right    INSERT    2    same
 both_add_left    INSERT    3    same
 both_add_right    INSERT    3    right
-data branch create table drop_left from base;
-data branch create table drop_right from base;
-alter table drop_left drop column b;
-data branch diff drop_left against drop_right;
-internal error: the target table schema is not equivalent to the base table.
+data branch create table type_left from base;
+data branch create table type_right from base;
+alter table type_left add column c int default 0;
+alter table type_right add column c varchar(20) default 'x';
+data branch diff type_left against type_right;
+-- @regex("schema compatibility check: column 'c' exists in both schemas but has different types", true)
+internal error: schema compatibility check: column 'c' exists in both schemas but has different types (target: 22, base: 61)
 data branch create table rename_left from base;
 data branch create table rename_right from base;
 alter table rename_left rename column b to bb;

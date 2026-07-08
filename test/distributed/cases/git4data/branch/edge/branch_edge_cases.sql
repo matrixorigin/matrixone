@@ -60,9 +60,9 @@ insert into base values (1, 10), (2, 20), (3, 30);
 data branch create table left_add from base;
 data branch create table right_add from base;
 alter table left_add add column c varchar(20) default 'left-only';
-update left_add set b = 11, c = 'changed' where a = 1;
 insert into right_add values (4, 40);
-data branch diff left_add against right_add columns (a, b) output summary;
+-- Target-only column c must not produce false diffs; only a=4 (base-only) appears.
+data branch diff left_add against right_add;
 
 data branch create table both_add_left from base;
 data branch create table both_add_right from base;
@@ -72,11 +72,13 @@ update both_add_left set c = 'left' where a = 2;
 update both_add_right set c = 'right' where a = 3;
 data branch diff both_add_left against both_add_right columns (a, c);
 
-data branch create table drop_left from base;
-data branch create table drop_right from base;
-alter table drop_left drop column b;
--- Divergent schemas are rejected with a schema-equivalence error.
-data branch diff drop_left against drop_right;
+data branch create table type_left from base;
+data branch create table type_right from base;
+alter table type_left add column c int default 0;
+alter table type_right add column c varchar(20) default 'x';
+-- Type mismatch on a common column is rejected.
+-- @regex("schema compatibility check: column 'c' exists in both schemas but has different types",true)
+data branch diff type_left against type_right;
 
 data branch create table rename_left from base;
 data branch create table rename_right from base;
