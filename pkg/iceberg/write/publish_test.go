@@ -51,6 +51,26 @@ func TestExecuteAppendEntrypointRequiresExecutor(t *testing.T) {
 	require.Contains(t, err.Error(), string(api.ErrConfigInvalid))
 }
 
+func TestExecuteMOIPublishAndEntrypointErrors(t *testing.T) {
+	executor := &capturingAppendExecutor{result: &api.CommitResult{SnapshotID: 302, CommitID: "commit-302"}}
+	result, err := ExecuteMOIPublish(context.Background(), executor, appendEntrypointSpec())
+	require.NoError(t, err)
+	require.Equal(t, int64(302), result.Commit.SnapshotID)
+	require.Equal(t, string(AppendSourceMOIPublish), result.Request.Summary["source-kind"])
+
+	_, err = ExecuteSinkPublish(context.Background(), AppendExecutorFunc(func(context.Context, api.AppendRequest) (*api.CommitResult, error) {
+		return nil, api.NewError(api.ErrCatalogUnavailable, "commit service unavailable", nil)
+	}), appendEntrypointSpec())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrCatalogUnavailable))
+
+	_, err = ExecuteSinkPublish(context.Background(), AppendExecutorFunc(func(context.Context, api.AppendRequest) (*api.CommitResult, error) {
+		return nil, nil
+	}), appendEntrypointSpec())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrInternal))
+}
+
 type capturingAppendExecutor struct {
 	request api.AppendRequest
 	result  *api.CommitResult

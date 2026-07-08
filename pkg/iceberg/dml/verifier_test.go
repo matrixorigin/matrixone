@@ -97,6 +97,72 @@ func TestCatalogCommitVerifierReturnsUnverifiedOnMetadataHashMismatch(t *testing
 	require.False(t, result.Verified)
 }
 
+func TestCatalogCommitVerifierRejectsMissingClientAndMetadata(t *testing.T) {
+	req, materialized := dmlVerifierRequest("main")
+	result, ok, err := (CatalogCommitVerifier{}).VerifyDMLCommit(context.Background(), req, materialized, &api.CommitResult{SnapshotID: 4})
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Equal(t, int64(4), result.SnapshotID)
+	require.Contains(t, err.Error(), string(api.ErrConfigInvalid))
+
+	result, ok, err = (CatalogCommitVerifier{Client: &catalog.MockClient{
+		LoadTableFunc: func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+			return nil, nil
+		},
+	}}).VerifyDMLCommit(context.Background(), req, materialized, &api.CommitResult{SnapshotID: 4})
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Equal(t, int64(4), result.SnapshotID)
+	require.Contains(t, err.Error(), string(api.ErrMetadataInvalid))
+
+	result, ok, err = (CatalogCommitVerifier{Client: &catalog.MockClient{}}).VerifyDMLCommit(context.Background(), req, materialized, nil)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Nil(t, result)
+}
+
+func TestDMLTargetSnapshotFallbacksAndErrors(t *testing.T) {
+	current := int64(4)
+	meta := &api.TableMetadata{
+		CurrentSnapshotID: &current,
+		Snapshots: []api.Snapshot{
+			{SnapshotID: 3, TimestampMS: 100},
+			{SnapshotID: 4, TimestampMS: 200},
+		},
+	}
+	snapshot, err := dmlTargetSnapshot(meta, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(4), snapshot.SnapshotID)
+
+	meta.Refs = map[string]api.SnapshotRef{"publish": {SnapshotID: 3, Type: "branch"}}
+	snapshot, err = dmlTargetSnapshot(meta, "publish")
+	require.NoError(t, err)
+	require.Equal(t, int64(3), snapshot.SnapshotID)
+
+	_, err = dmlTargetSnapshot(meta, "missing")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "target ref")
+	_, err = dmlTargetSnapshot(&api.TableMetadata{
+		Refs:      map[string]api.SnapshotRef{"publish": {SnapshotID: 99}},
+		Snapshots: []api.Snapshot{{SnapshotID: 3}},
+	}, "publish")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "target snapshot")
+	_, err = dmlTargetSnapshot(nil, "main")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires table snapshots")
+}
+
+func TestDMLTargetRefPrefersMaterializedAttemptThenBaseThenMain(t *testing.T) {
+	req, materialized := dmlVerifierRequest("branch:base")
+	materialized.Attempt.TargetRef = "attempt-ref"
+	require.Equal(t, "attempt-ref", dmlTargetRef(req, materialized))
+	materialized.Attempt.TargetRef = " "
+	require.Equal(t, "branch:base", dmlTargetRef(req, materialized))
+	req.Stream.Base.TargetRef = " "
+	require.Equal(t, "main", dmlTargetRef(req, nil))
+}
+
 func dmlVerifierRequest(ref string) (CommitWorkflowRequest, *ManifestMaterializeResult) {
 	stream := ActionStream{
 		Operation: OperationOverwrite,

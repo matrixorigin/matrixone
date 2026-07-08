@@ -15,6 +15,7 @@
 package api
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,4 +35,36 @@ func TestDMLOverwritePartitionPlanExtraOptionsRoundTrip(t *testing.T) {
 	require.Equal(t, "partition", decoded.OverwriteScope)
 	require.Equal(t, "ksa", decoded.OverwritePartition["region"])
 	require.Equal(t, int64(20260624), decoded.OverwritePartition["day"])
+}
+
+func TestDMLPlanExtraOptionsDecodeLegacyAndNestedEnvelope(t *testing.T) {
+	for _, value := range []string{"", DMLDeletePlanExtraOptions, DMLUpdatePlanExtraOptions, "custom_marker"} {
+		decoded, err := DecodeDMLPlanExtraOptions("  " + value + "  ")
+		require.NoError(t, err)
+		require.Equal(t, value, decoded.Kind)
+	}
+
+	payload := DMLPlanExtraOptions{
+		Kind:           DMLOverwritePlanExtraOptions,
+		OverwriteScope: "partition",
+		OverwritePartition: map[string]any{
+			"day": json.Number("20260708"),
+			"range": []any{
+				json.Number("1"),
+				json.Number("2.5"),
+				map[string]any{"nested": json.Number("3")},
+			},
+		},
+	}
+	raw, err := json.Marshal(payload)
+	require.NoError(t, err)
+	decoded, err := DecodeDMLPlanExtraOptions(DMLPlanExtraOptionsEnvelopePrefix + string(raw))
+	require.NoError(t, err)
+	require.Equal(t, int64(20260708), decoded.OverwritePartition["day"])
+	require.Equal(t, []any{int64(1), float64(2.5), map[string]any{"nested": int64(3)}}, decoded.OverwritePartition["range"])
+}
+
+func TestDMLPlanExtraOptionsRejectsInvalidEnvelope(t *testing.T) {
+	_, err := DecodeDMLPlanExtraOptions(DMLPlanExtraOptionsEnvelopePrefix + `{"kind":`)
+	require.Error(t, err)
 }
