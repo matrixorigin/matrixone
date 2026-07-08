@@ -147,7 +147,9 @@ func DeleteAllBasesSqls(cfg TableConfig) []string {
 	return []string{
 		fmt.Sprintf("DELETE FROM %s WHERE %s = %d", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 			catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_ModelChunk)),
-		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)),
+		// WHERE TRUE, not a bare DELETE: a bare DELETE takes MO's truncate fast-path
+		// (DROP + RECREATE the metadata hidden table object); WHERE TRUE keeps the object.
+		fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)),
 	}
 }
 
