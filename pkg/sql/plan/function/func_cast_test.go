@@ -3985,6 +3985,33 @@ func TestDecimal64ToDecimal128FastPaths(t *testing.T) {
 	}
 }
 
+// TestImplicitCastLargeIntStringPreservesPrecision verifies that the
+// comparisonTypeCastRule fix (no DOUBLE coercion for integer-string
+// comparisons) preserves 64-bit integer precision.  float64 has a
+// 53-bit mantissa and collapses distinct values above 2^53; implicit
+// integer casts must not do that.
+func TestImplicitCastLargeIntStringPreservesPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// These two strings differ by 1 but would both round to
+	// 9007199254740992.0 in float64.
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"9007199254740992", "9007199254740993",
+		}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+	}
+	want := []int64{9007199254740992, 9007199254740993}
+	tc := NewFunctionTestCase(
+		proc,
+		inputs,
+		NewFunctionTestResult(types.T_int64.ToType(), false, want, nil),
+		NewCast,
+	)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
 func TestCastNumericTokenInvalidInputErrors(t *testing.T) {
 	_, err := parseDecimal128CastString("", 38, 0)
 	require.ErrorContains(t, err, "invalid input:")
