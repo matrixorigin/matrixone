@@ -455,6 +455,7 @@ func (t *CDCDao) GetTaskKeys(
 	accountId uint64,
 	taskName string,
 	keys map[taskservice.CDCTaskKey]struct{},
+	ifExists bool,
 ) (cnt int64, err error) {
 	var (
 		executor = t.MustGetSQLExecutor(ctx)
@@ -478,7 +479,7 @@ func (t *CDCDao) GetTaskKeys(
 	); err != nil {
 		return
 	}
-	if cnt == 0 && taskName != "" {
+	if cnt == 0 && taskName != "" && !ifExists {
 		err = moerr.NewInternalErrorf(
 			ctx,
 			"no cdc task found, accountId: %d, taskName: %s",

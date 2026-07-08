@@ -70,14 +70,12 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 	}
 }
 
-// WaitRegister channel
-type WaitRegister struct {
-	// Ch2, data receiver's channel for receive-action-signal.
-	Ch2 chan PipelineSignal
-
-	// how many nil-batches this channel can receive, default 0 means every nil batch close channel
-	NilBatchCnt int
-}
+// WaitRegister is the historical name for a pipeline edge.
+//
+// Keep the old type name at API boundaries, but do not keep a second state
+// object. Ch2, the nil-batch counter, and typed terminal state all live in
+// PipelineEdge.
+type WaitRegister = PipelineEdge
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
 type Register struct {
@@ -113,6 +111,7 @@ type SessionInfo struct {
 	Database             string
 	Version              string
 	TimeZone             *time.Location
+	LockWaitTimeout      int64
 	StorageEngine        engine.Engine
 	QueryId              []string
 	ResultColTypes       []types.Type
@@ -347,6 +346,21 @@ type BaseProcess struct {
 	// DivByZeroErrorMode caches whether division by zero should error (true) or return NULL (false)
 	// -1: not initialized, 0: return NULL, 1: return error
 	DivByZeroErrorMode int32
+
+	// IsFrontend reports whether this proc is attached to a frontend
+	// client session (mysql client query or the in-frontend backSession
+	// that pkg/frontend/back_exec.go drives). Defaults false — every
+	// other proc (internal SQL executor invocations from idxcron,
+	// ProcessInitSQL, bootstrap, cron jobs, task service, …) is
+	// background. pkg/sql/compile/sql_executor.go's NewTopProcess sets
+	// this from opts.IsFrontend(); the two frontend proc-construction
+	// sites in pkg/frontend (mysql_cmd_executor, back_exec) set it
+	// directly. This is the canonical signal for code that needs to
+	// distinguish "have a session" from "don't" — relying on
+	// proc.resolveVariableFunc being nil is unreliable because
+	// background paths also attach resolvers (idxcron via the task's
+	// captured Metadata, ProcessInitSQL via executor.DefaultResolveVariable).
+	IsFrontend bool
 }
 
 // Process contains context used in query execution

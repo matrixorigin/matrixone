@@ -1,0 +1,274 @@
+drop table if exists t_odku_fakepk;
+create table t_odku_fakepk (a int, b varchar(20), unique key(a));
+insert into t_odku_fakepk values (1, 'x');
+insert into t_odku_fakepk values (1, 'y') on duplicate key update b = 'updated';
+select * from t_odku_fakepk order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  updated
+insert into t_odku_fakepk values (2, 'new') on duplicate key update b = 'z';
+select * from t_odku_fakepk order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  updated  𝄀
+2  ¦  new
+insert into t_odku_fakepk values (1, 'fromvalues') on duplicate key update b = values(b);
+select * from t_odku_fakepk order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  fromvalues  𝄀
+2  ¦  new
+insert into t_odku_fakepk values (1, 'b1'), (3, 'b3'), (2, 'b2')
+on duplicate key update b = values(b);
+select * from t_odku_fakepk order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  b1  𝄀
+2  ¦  b2  𝄀
+3  ¦  b3
+drop table if exists t_odku_fakepk;
+drop table if exists t_odku_fakepk_multi;
+create table t_odku_fakepk_multi (a int, b int, c varchar(20), unique key(a, b));
+insert into t_odku_fakepk_multi values (1, 1, 'first');
+insert into t_odku_fakepk_multi values (1, 1, 'dup') on duplicate key update c = 'merged';
+select * from t_odku_fakepk_multi order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  𝄀
+1  ¦  1  ¦  merged
+insert into t_odku_fakepk_multi values (1, 2, 'second') on duplicate key update c = 'should_not_apply';
+select * from t_odku_fakepk_multi order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  𝄀
+1  ¦  1  ¦  merged  𝄀
+1  ¦  2  ¦  second
+drop table if exists t_odku_fakepk_multi;
+drop table if exists t_odku_nopk;
+create table t_odku_nopk (a int, b varchar(20));
+insert into t_odku_nopk values (1, 'one');
+insert into t_odku_nopk values (1, 'two') on duplicate key update b = 'never';
+select * from t_odku_nopk order by a, b;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  one  𝄀
+1  ¦  two
+drop table if exists t_odku_nopk;
+drop table if exists t_odku_child;
+drop table if exists t_odku_parent;
+create table t_odku_parent (id int primary key, name varchar(20));
+create table t_odku_child (
+cid int primary key,
+pid int,
+v int,
+foreign key (pid) references t_odku_parent(id)
+);
+insert into t_odku_parent values (1, 'p1'), (2, 'p2');
+insert into t_odku_child values (10, 1, 100);
+insert into t_odku_child values (10, 1, 999) on duplicate key update v = 999;
+select * from t_odku_child order by cid;
+➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  v[4,32,0]  𝄀
+10  ¦  1  ¦  999
+insert into t_odku_child values (20, 2, 200) on duplicate key update v = 200;
+select * from t_odku_child order by cid;
+➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  v[4,32,0]  𝄀
+10  ¦  1  ¦  999  𝄀
+20  ¦  2  ¦  200
+insert into t_odku_child values (30, 99, 300) on duplicate key update v = 300;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select * from t_odku_child order by cid;
+➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  v[4,32,0]  𝄀
+10  ¦  1  ¦  999  𝄀
+20  ¦  2  ¦  200
+insert into t_odku_child values (40, 1, 400);
+select * from t_odku_child order by cid;
+➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  v[4,32,0]  𝄀
+10  ¦  1  ¦  999  𝄀
+20  ¦  2  ¦  200  𝄀
+40  ¦  1  ¦  400
+insert into t_odku_child values (50, 99, 500);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select * from t_odku_child order by cid;
+➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  v[4,32,0]  𝄀
+10  ¦  1  ¦  999  𝄀
+20  ¦  2  ¦  200  𝄀
+40  ¦  1  ¦  400
+drop table if exists t_odku_child;
+drop table if exists t_odku_parent;
+drop table if exists t_odku_realpk;
+create table t_odku_realpk (
+id int primary key,
+uk1 int unique,
+uk2 int unique,
+val int
+);
+insert into t_odku_realpk values (1, 10, 100, 1000), (2, 20, 200, 2000);
+insert into t_odku_realpk values (1, 99, 999, 5) on duplicate key update val = val + 1;
+select * from t_odku_realpk order by id;
+➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  100  ¦  1001  𝄀
+2  ¦  20  ¦  200  ¦  2000
+insert into t_odku_realpk values (3, 10, 888, 5) on duplicate key update val = val + 1;
+select * from t_odku_realpk order by id;
+➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  100  ¦  1002  𝄀
+2  ¦  20  ¦  200  ¦  2000
+insert into t_odku_realpk values (4, 10, 200, 5) on duplicate key update val = val + 1;
+select * from t_odku_realpk order by id;
+➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  100  ¦  1003  𝄀
+2  ¦  20  ¦  200  ¦  2000
+insert into t_odku_realpk values (2, 10, 222, 5) on duplicate key update val = val + 1;
+select * from t_odku_realpk order by id;
+➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  100  ¦  1003  𝄀
+2  ¦  20  ¦  200  ¦  2001
+insert into t_odku_realpk values (5, NULL, NULL, 5) on duplicate key update val = val + 1;
+select * from t_odku_realpk order by id;
+➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  100  ¦  1003  𝄀
+2  ¦  20  ¦  200  ¦  2001  𝄀
+5  ¦  null  ¦  null  ¦  5
+insert into t_odku_realpk values (20, 77, 701, 5), (21, 77, 702, 5) on duplicate key update val = val + 1;
+Duplicate entry '77' for key 'uk1'
+select * from t_odku_realpk order by id;
+➤ id[4,32,0]  ¦  uk1[4,32,0]  ¦  uk2[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  100  ¦  1003  𝄀
+2  ¦  20  ¦  200  ¦  2001  𝄀
+5  ¦  null  ¦  null  ¦  5
+drop table if exists t_odku_realpk;
+set experimental_fulltext_index = 1;
+drop table if exists t_odku_ft;
+create table t_odku_ft(id int primary key, uk int unique, body text, val int);
+insert into t_odku_ft values (1, 10, 'hello world', 100), (2, 20, 'foo bar', 200);
+create fulltext index ftidx on t_odku_ft(body);
+insert into t_odku_ft values (1, 99, 'changed', 5) on duplicate key update val = val + 1;
+select id, uk, val from t_odku_ft order by id;
+➤ id[4,32,0]  ¦  uk[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  101  𝄀
+2  ¦  20  ¦  200
+insert into t_odku_ft values (3, 10, 'new', 5) on duplicate key update val = val + 1;
+select id, uk, val from t_odku_ft order by id;
+➤ id[4,32,0]  ¦  uk[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  102  𝄀
+2  ¦  20  ¦  200
+drop table if exists t_odku_ft;
+drop table if exists t_odku_ft2;
+create table t_odku_ft2(id int primary key, body text);
+create fulltext index ftidx2 on t_odku_ft2(body);
+insert into t_odku_ft2 values (1, 'hello world'), (2, 'foo bar');
+insert into t_odku_ft2 values (1, 'ignored') on duplicate key update body = 'alpha beta';
+select id, body from t_odku_ft2 order by id;
+➤ id[4,32,0]  ¦  body[12,0,0]  𝄀
+1  ¦  alpha beta  𝄀
+2  ¦  foo bar
+select id from t_odku_ft2 where match(body) against('alpha') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t_odku_ft2 where match(body) against('hello') order by id;
+➤ id[4,32,0]
+select id from t_odku_ft2 where match(body) against('foo') order by id;
+➤ id[4,32,0]  𝄀
+2
+insert into t_odku_ft2 values (3, 'gamma delta') on duplicate key update body = 'nope';
+select id from t_odku_ft2 where match(body) against('gamma') order by id;
+➤ id[4,32,0]  𝄀
+3
+drop table if exists t_odku_ft2;
+drop table if exists t_odku_vec;
+create table t_odku_vec(id int primary key, uk int unique, embedding vecf32(3), val int);
+insert into t_odku_vec values (1, 10, '[1,2,3]', 100), (2, 20, '[4,5,6]', 200);
+create index idx_vec using ivfflat on t_odku_vec(embedding) lists = 2 op_type 'vector_l2_ops';
+insert into t_odku_vec values (1, 99, '[7,8,9]', 5) on duplicate key update val = val + 1;
+select id, uk, val from t_odku_vec order by id;
+➤ id[4,32,0]  ¦  uk[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  101  𝄀
+2  ¦  20  ¦  200
+insert into t_odku_vec values (3, 10, '[1,1,1]', 5) on duplicate key update val = val + 1;
+select id, uk, val from t_odku_vec order by id;
+➤ id[4,32,0]  ¦  uk[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  102  𝄀
+2  ¦  20  ¦  200
+insert into t_odku_vec values (4, 40, '[2,2,2]', 400) on duplicate key update val = val + 1;
+select id, uk, val from t_odku_vec order by id;
+➤ id[4,32,0]  ¦  uk[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  ¦  102  𝄀
+2  ¦  20  ¦  200  𝄀
+4  ¦  40  ¦  400
+drop table if exists t_odku_vec;
+drop table if exists t_odku_vec2;
+create table t_odku_vec2(id int primary key, embedding vecf32(3));
+insert into t_odku_vec2 values (1, '[1,1,1]'), (2, '[9,9,9]');
+create index idx2 using ivfflat on t_odku_vec2(embedding) lists = 2 op_type 'vector_l2_ops';
+insert into t_odku_vec2 values (1, '[0,0,0]') on duplicate key update embedding = '[100,100,100]';
+select id, embedding from t_odku_vec2 order by id;
+➤ id[4,32,0]  ¦  embedding[12,3,0]  𝄀
+1  ¦  [100, 100, 100]  𝄀
+2  ¦  [9, 9, 9]
+select id from t_odku_vec2 order by l2_distance(embedding, '[100,100,100]') asc limit 1;
+➤ id[4,32,0]  𝄀
+1
+select id from t_odku_vec2 order by l2_distance(embedding, '[1,1,1]') asc limit 1;
+➤ id[4,32,0]  𝄀
+2
+drop table if exists t_odku_vec2;
+drop table if exists t_odku_prefix;
+create table t_odku_prefix(id int primary key, body varchar(64), v int, unique key u(body(4)));
+insert into t_odku_prefix values (1, 'abcdxxxx', 10);
+insert into t_odku_prefix values (2, 'abcdyyyy', 20) on duplicate key update v = v + 100;
+select id, body, v from t_odku_prefix order by id;
+➤ id[4,32,0]  ¦  body[12,-1,0]  ¦  v[4,32,0]  𝄀
+1  ¦  abcdxxxx  ¦  110
+insert into t_odku_prefix values (3, 'wxyzzzzz', 30) on duplicate key update v = v + 100;
+select id, body, v from t_odku_prefix order by id;
+➤ id[4,32,0]  ¦  body[12,-1,0]  ¦  v[4,32,0]  𝄀
+1  ¦  abcdxxxx  ¦  110  𝄀
+3  ¦  wxyzzzzz  ¦  30
+drop table if exists t_odku_prefix;
+drop table if exists t_odku_fk_child;
+drop table if exists t_odku_fk_parent;
+create table t_odku_fk_parent(pid int primary key, pname varchar(20));
+create table t_odku_fk_child(cid int primary key, pid int, val int, foreign key(pid) references t_odku_fk_parent(pid));
+insert into t_odku_fk_parent values (1, 'P1'), (2, 'P2');
+insert into t_odku_fk_child values (1, 1, 100);
+set foreign_key_checks=0;
+insert into t_odku_fk_child values (2, 99, 200);
+set foreign_key_checks=1;
+insert into t_odku_fk_child values (1, 1, 5) on duplicate key update val = val + 1;
+select cid, pid, val from t_odku_fk_child order by cid;
+➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  1  ¦  101  𝄀
+2  ¦  99  ¦  200
+insert into t_odku_fk_child values (1, 1, 5) on duplicate key update pid = 999;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t_odku_fk_child values (3, 888, 1) on duplicate key update val = val + 1;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select cid, pid, val from t_odku_fk_child order by cid;
+➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  1  ¦  101  𝄀
+2  ¦  99  ¦  200
+drop table if exists t_odku_fk_child;
+drop table if exists t_odku_fk_parent;
+drop table if exists t_ign_fk_child;
+drop table if exists t_ign_fk_parent;
+create table t_ign_fk_parent(pid int primary key, pname varchar(20));
+create table t_ign_fk_child(cid int primary key, pid int, foreign key(pid) references t_ign_fk_parent(pid));
+insert into t_ign_fk_parent values (1, 'P1'), (2, 'P2'), (3, 'P3');
+insert ignore into t_ign_fk_child values (10, 1), (11, 2), (12, 4), (13, 1), (14, NULL);
+select cid, pid from t_ign_fk_child order by cid;
+➤ cid[4,32,0]  ¦  pid[4,32,0]  𝄀
+10  ¦  1  𝄀
+11  ¦  2  𝄀
+13  ¦  1  𝄀
+14  ¦  null
+drop table if exists t_ign_fk_child;
+drop table if exists t_ign_fk_parent;
+drop table if exists t_odku_mfk_child;
+drop table if exists t_odku_mfk_p1;
+drop table if exists t_odku_mfk_p2;
+create table t_odku_mfk_p1(id int primary key);
+create table t_odku_mfk_p2(id int primary key);
+create table t_odku_mfk_child(cid int primary key, a int, b int, foreign key(a) references t_odku_mfk_p1(id), foreign key(b) references t_odku_mfk_p2(id));
+insert into t_odku_mfk_p1 values (1);
+insert into t_odku_mfk_p2 values (1);
+insert into t_odku_mfk_child values (1, 1, 1);
+insert into t_odku_mfk_child values (1, 1, 1) on duplicate key update a = NULL, b = 999;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t_odku_mfk_child values (1, 1, 1) on duplicate key update a = NULL, b = 1;
+select cid, a, b from t_odku_mfk_child order by cid;
+➤ cid[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  1
+drop table if exists t_odku_mfk_child;
+drop table if exists t_odku_mfk_p1;
+drop table if exists t_odku_mfk_p2;

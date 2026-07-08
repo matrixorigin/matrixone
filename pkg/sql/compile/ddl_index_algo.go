@@ -16,31 +16,17 @@ package compile
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"slices"
-	"strconv"
 	"strings"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-)
-
-const (
-	hnswIndexFlag  = "experimental_hnsw_index"
-	cagraIndexFlag = "experimental_cagra_index"
-	ivfpqIndexFlag = "experimental_ivfpq_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(
@@ -73,21 +59,32 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
 		return nil
 	}
-	insertSQL := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
+	insertSQL, err := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
+	if err != nil {
+		return err
+	}
 	if indexDef.Unique {
 		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL)
 	}
 	return c.runSql(insertSQL)
 }
 
-func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) string {
-	groupExpr := partsToColsStr(indexDef.Parts)
+func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) (string, error) {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexDef.IndexAlgoParams)
+	if err != nil {
+		return "", err
+	}
+	groupExpr := partsToIndexExprStr(indexDef.Parts, prefixLengths)
 	nullCheckExpr := fmt.Sprintf("%s IS NOT NULL", groupExpr)
 	if len(indexDef.Parts) > 1 {
 		nullChecks := make([]string, 0, len(indexDef.Parts))
 		for _, part := range indexDef.Parts {
 			part = catalog.ResolveAlias(part)
-			nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", quoteMySQLQualifiedIdent(part)))
+			partExpr := quoteMySQLQualifiedIdent(part)
+			if length := prefixLengths[part]; length > 0 {
+				partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
+			}
+			nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", partExpr))
 		}
 		nullCheckExpr = strings.Join(nullChecks, " AND ")
 	}
@@ -97,7 +94,7 @@ func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.Table
 		quoteMySQLIdent(tableDef.Name),
 		nullCheckExpr,
 		groupExpr,
-	)
+	), nil
 }
 
 func (c *Compile) precheckAndInsertUniqueIndexTable(
@@ -108,7 +105,10 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 ) error {
 	// Unique indexes allow NULL keys, so the check mirrors the hidden-index
 	// backfill filter and only groups non-NULL keys.
-	duplicateCheckSQL := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
+	duplicateCheckSQL, err := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
+	if err != nil {
+		return err
+	}
 	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "create unique index duplicate check failed, sql is %s", duplicateCheckSQL)
@@ -201,429 +201,28 @@ func (s *Scope) handleMasterIndexTable(
 	return nil
 }
 
-func (s *Scope) handleFullTextIndexTable(
-	c *Compile,
-	mainTableID uint64,
-	mainExtra *api.SchemaExtra,
-	dbSource engine.Database,
-	indexDef *plan.IndexDef,
-	qryDatabase string,
-	originalTableDef *plan.TableDef,
-	indexInfo *plan.CreateTable,
-) (err error) {
-	// create hidden tables
-	if indexInfo != nil {
-		if len(indexInfo.GetIndexTables()) != 1 {
-			return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
-		}
-
-		def := indexInfo.GetIndexTables()[0]
-		err = indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Skip index data population for CCPR tables when this is a CCPR task transaction.
-	// The index data will be synced via CCPR data synchronization instead.
-	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
-		return nil
-	}
-
-	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-	// create ISCP job for Async fulltext index
-	if async {
-		logutil.Infof("fulltext index Async is true")
-		sinker_type := getSinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
-		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId,
-			indexDef.IndexName, sinker_type, false, "", originalTableDef)
-		if err != nil {
-			return err
-		}
-	} else {
-
-		insertSQLs, err := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
-		if err != nil {
-			return err
-		}
-
-		for _, insertSQL := range insertSQLs {
-			err = c.runSql(insertSQL)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
-
-	indexColumnName := indexDef.Parts[0]
-	countTotalSql := fmt.Sprintf("select count(`%s`) from `%s`.`%s`;",
-		indexColumnName,
-		qryDatabase,
-		originalTableDef.Name)
-	rs, err := c.runSqlWithResult(countTotalSql, NoAccountId)
-	if err != nil {
-		return 0, err
-	}
-
-	var totalCnt int64
-	rs.ReadRows(func(_ int, cols []*vector.Vector) bool {
-		totalCnt = executor.GetFixedRows[int64](cols[0])[0]
-		return false
-	})
-	rs.Close()
-
-	return totalCnt, nil
-}
-
-func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string) error {
-
-	/*
-		The meta table will contain version number for now. In the future, it can contain `index progress` etc.
-		The version number is incremented monotonically for each re-index.
-		NOTE: We don't handle version number overflow as BIGINT has a large upper bound.
-
-		Sample SQL:
-
-		CREATE TABLE meta ( `key` VARCHAR(255), `value` VARCHAR(255), PRIMARY KEY (`key`));
-		INSERT INTO meta (`key`, `value`) VALUES ('version', '0') ON DUPLICATE KEY UPDATE `value` = CAST( (cast(`value` AS BIGINT) + 1) AS CHAR);
-	*/
-
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '0')"+
-		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS BIGINT) + 1) AS CHAR);",
-		qryDatabase,
-		indexDef.IndexTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-	)
-
-	err := c.runSql(insertSQL)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string, forceSync bool) error {
-
-	var cfg vectorindex.IndexTableConfig
-	src_alias := "src"
-	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
-
-	cfg.MetadataTable = metadataTableName
-	cfg.IndexTable = indexDef.IndexTableName
-	cfg.DbName = qryDatabase
-	cfg.SrcTable = originalTableDef.Name
-	cfg.PKey = pkColName
-	cfg.KeyPart = indexDef.Parts[0]
-	cfg.DataSize = totalCnt
-
-	// 1.a algo params
-	listsval, err := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.IndexAlgoParamLists)
-	if err != nil {
-		return err
-	}
-	centroidParamsListsStr, err := listsval.StrictString()
-	if err != nil {
-		return err
-	}
-
-	centroidParamsLists, err := strconv.Atoi(centroidParamsListsStr)
-	if err != nil {
-		return err
-	}
-
-	var sql string
-	// 1.b init centroids table with default centroid, if centroids are not enough.
-	// NOTE: we can run re-index to improve the centroid quality.
-	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
-		sql = fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
-			"SELECT "+
-			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
-			"1, NULL;",
-			qryDatabase,
-			indexDef.IndexTableName,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-			qryDatabase,
-			metadataTableName,
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		)
-	} else {
-
-		val, err := c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
-		if err != nil {
-			return err
-		}
-		cfg.ThreadsBuild = val.(int64)
-
-		val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
-		if err != nil {
-			return err
-		}
-		cfg.KmeansTrainPercent = val.(float64)
-
-		val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
-		if err != nil {
-			return err
-		}
-		cfg.KmeansMaxIteration = val.(int64)
-
-		params_str := indexDef.IndexAlgoParams
-
-		cfgbytes, err := json.Marshal(cfg)
-		if err != nil {
-			return err
-		}
-
-		//part := src_alias + "." + indexDef.Parts[0]
-		insertIntoIvfIndexTableFormat := "SELECT * FROM ivf_create('%s', '%s') AS f;"
-		sql = fmt.Sprintf(insertIntoIvfIndexTableFormat,
-			params_str,
-			string(cfgbytes))
-	}
-
-	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-	if async {
-
-		if forceSync {
-			// background reindex must use force_sync = true so build index to run in single transaction
-
-			// build centroid in synchronous mode
-			err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
-			if err != nil {
-				return err
-			}
-
-			err = c.runSql(sql)
-			if err != nil {
-				return err
-			}
-
-			err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_end")
-			if err != nil {
-				return err
-			}
-
-			// if forceSync == true, start index update from ts = transaction start time
-			err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDef.IndexName)
-			if err != nil {
-				return err
-			}
-
-			logutil.Infof("Ivfflat index Async = true, forceSync = true")
-			sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDef.IndexName, sinker_type, true, "", originalTableDef)
-			if err != nil {
-				return err
-			}
-
-		} else {
-			// if forceSync == false, start index update from ts = 0
-
-			// create ISCP job when Async is true
-			// unregister ISCP job so that it can restart index update from ts=0
-			err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDef.IndexName)
-			if err != nil {
-				return err
-			}
-
-			logutil.Infof("Ivfflat index Async is true")
-			sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDef.IndexName, sinker_type, false, sql, originalTableDef)
-			if err != nil {
-				return err
-			}
-		}
-
-	} else {
-		err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
-		if err != nil {
-			return err
-		}
-
-		err = c.runSql(sql)
-		if err != nil {
-			return err
-		}
-
-		err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_end")
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
-	metadataTableName string,
-	centroidsTableName string) error {
-
-	// 1.a algo params
-	val, err := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
-	if err != nil {
-		return err
-	}
-	optype, err := val.StrictString()
-	if err != nil {
-		return err
-	}
-
-	// 1. Original table's pkey name and value
-	var originalTblPkColsCommaSeperated string
-	var originalTblPkColMaySerial string
-	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		for i, part := range originalTableDef.Pkey.Names {
-			if i > 0 {
-				originalTblPkColsCommaSeperated += ","
-			}
-			originalTblPkColsCommaSeperated += fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, part)
-		}
-		originalTblPkColMaySerial = fmt.Sprintf("serial(%s)", originalTblPkColsCommaSeperated)
-	} else {
-		originalTblPkColsCommaSeperated = fmt.Sprintf("`%s`.`%s`", originalTableDef.Name, originalTableDef.Pkey.PkeyColName)
-		originalTblPkColMaySerial = originalTblPkColsCommaSeperated
-	}
-
-	// 2. insert into entries table
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
-		qryDatabase,
-		indexDef.IndexTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-	)
-
-	// 3. centroids table with latest version
-	centroidsTableForCurrentVersionSql := fmt.Sprintf("(select * from "+
-		"`%s`.`%s` where `%s` = "+
-		"(select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version'))  as `%s`",
-		qryDatabase,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		centroidsTableName,
-	)
-
-	// 4. select * from table and cross join centroids;
-	indexColumnName := indexDef.Parts[0]
-	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
-		"SELECT `%s`, `%s`,  %s, `%s`"+
-		" FROM `%s`.`%s` CENTROIDX ('%s') join %s "+
-		" using (`%s`, `%s`) ",
-		insertSQL,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-		originalTblPkColMaySerial,
-		indexColumnName,
-
-		qryDatabase,
-		originalTableDef.Name,
-		optype,
-		centroidsTableForCurrentVersionSql,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-		indexColumnName,
-	)
-
-	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
-	if err != nil {
-		return err
-	}
-
-	err = c.runSql(centroidsCrossL2JoinTbl)
-	if err != nil {
-		return err
-	}
-
-	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_end")
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (s *Scope) handleIvfIndexRegisterUpdate(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) error {
-
-	metadata, frontend, err := getIvfflatMetadata(c)
-	if err != nil {
-		return err
-	}
-
-	if !frontend {
-		// this function call is from background so ignore it
-		logutil.Infof("Background invoke reindex and ignore register index update function call")
-		return nil
-	}
-
-	return idxcron.RegisterUpdate(c.proc.Ctx,
-		c.proc.GetService(),
-		c.proc.GetTxnOperator(),
-		originalTableDef.TblId,
-		qryDatabase,
-		originalTableDef.Name,
-		indexDef.IndexName,
-		idxcron.Action_Ivfflat_Reindex,
-		string(metadata))
-}
-
-func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {
-	return c.runSql(fmt.Sprintf("INSERT INTO `%s`.`%s` (%s, %s) "+
-		" VALUES ('%s', NOW()) "+
-		" ON DUPLICATE KEY UPDATE %s = NOW();",
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-
-		metrics,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-	))
+// IsTableClone reports whether this scope executes a `create table … clone` —
+// the statement snapshot/restore replays to rebuild a table. Restore-aware
+// behavior in the compile/plugin layer keys off this: the experimental-flag
+// gate below, and pluginCompileCtx.IsTableClone exposed to index plugins.
+func (s *Scope) IsTableClone() bool {
+	return s.Magic == TableClone
 }
 
 func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
-	if s.Magic == TableClone {
-		skipFlags := []string{
-			hnswIndexFlag,
-		}
-
-		// if the scope is a table clone means we are trying to
-		// clone a table that has an experimental index type,
-		// if the source table (we want clone) exists already, we can just skip the flag check.
-		// (the source table existence check has done before this check, so skip at here is fine)
-		if slices.Index(skipFlags, flag) != -1 {
-			return true, nil
-		}
+	if s.IsTableClone() && isPluginExperimentalFlag(flag) {
+		// A table-clone scope inherits the source table's index set,
+		// which was already created (and gated) when the source went
+		// in. Re-checking the experimental gate at clone time would
+		// reject existing tables every time the operator demotes the
+		// flag back to off — surprising, and not what the legacy
+		// behaviour did. Allow any plugin-declared experimental flag
+		// to skip the gate at clone; non-plugin flags fall through to
+		// the normal resolve.
+		return true, nil
 	}
 
-	val, err := c.proc.GetResolveVariableFunc()(flag, true, false)
+	val, err := resolveVariableOrDefault(c.proc, flag, true, false)
 	if err != nil {
 		return false, err
 	}
@@ -635,290 +234,21 @@ func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
 	return fmt.Sprintf("%v", val) == "1", nil
 }
 
-func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
-	metadataTableName string,
-	centroidsTableName string,
-	entriesTableName string,
-	qryDatabase string) error {
-
-	pruneCentroidsTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
-		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
-		qryDatabase,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-	)
-
-	pruneEntriesTbl := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
-		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
-		qryDatabase,
-		entriesTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-	)
-
-	err := s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_start")
-	if err != nil {
-		return err
+// isPluginExperimentalFlag reports whether flag matches any registered
+// plugin's catalog.Hooks.ExperimentalFlag() value. Derives the skip set
+// from the plugin registry at call time so a new plugin that declares
+// an experimental flag automatically participates in the table-clone
+// bypass — no manual update to this file required. Plugins that return
+// "" from ExperimentalFlag() (e.g. IVF-FLAT, fulltext) are naturally
+// excluded.
+func isPluginExperimentalFlag(flag string) bool {
+	if flag == "" {
+		return false
 	}
-
-	err = c.runSql(pruneCentroidsTbl)
-	if err != nil {
-		return err
-	}
-
-	err = c.runSql(pruneEntriesTbl)
-	if err != nil {
-		return err
-	}
-
-	err = s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_end")
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (s *Scope) handleVectorHnswIndex(
-	c *Compile,
-	mainTableID uint64,
-	mainExtra *api.SchemaExtra,
-	dbSource engine.Database,
-	indexDefs map[string]*plan.IndexDef,
-	qryDatabase string,
-	originalTableDef *plan.TableDef,
-	indexInfo *plan.CreateTable,
-) error {
-
-	if ok, err := s.isExperimentalEnabled(c, hnswIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("experimental_hnsw_index is not enabled")
-	}
-
-	// 1. static check
-	if len(indexDefs) != 2 {
-		return moerr.NewInternalErrorNoCtx("invalid hnsw index table definition")
-	}
-	if len(indexDefs[catalog.Hnsw_TblType_Metadata].Parts) != 1 {
-		return moerr.NewInternalErrorNoCtx("invalid hnsw index part must be 1.")
-	}
-
-	// 2. create hidden tables
-	if indexInfo != nil {
-		for _, table := range indexInfo.GetIndexTables() {
-			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
-				return err
-			}
+	for _, p := range indexplugin.All() {
+		if p.Catalog().ExperimentalFlag() == flag {
+			return true
 		}
 	}
-
-	// Skip index data population for CCPR tables when this is a CCPR task transaction.
-	// The index data will be synced via CCPR data synchronization instead.
-	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
-		return nil
-	}
-
-	// clear the cache (it only work in standalone mode though)
-	key := indexDefs[catalog.Hnsw_TblType_Storage].IndexTableName
-	cache.Cache.Remove(key)
-
-	// delete old data first
-	{
-		sqls, err := genDeleteHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-		if err != nil {
-			return err
-		}
-
-		for _, sql := range sqls {
-			err = c.runSql(sql)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	async, err := catalog.IsIndexAsync(indexDefs[catalog.Hnsw_TblType_Metadata].IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-
-	if !async {
-		// 3. build hnsw index
-		sqls, err := genBuildHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-		if err != nil {
-			return err
-		}
-
-		for _, sql := range sqls {
-			err = c.runSql(sql)
-			if err != nil {
-				return err
-			}
-		}
-
-		// register ISCP job with startFromNow = true
-		// 4. register ISCP job for async update
-		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
-		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, true, "", originalTableDef)
-		if err != nil {
-			return err
-		}
-	}
-
-	if async {
-		// unregister ISCP job
-		err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName)
-		if err != nil {
-			return err
-		}
-
-		// 4. register ISCP job for async update with startFromNow = false
-		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
-		err := CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, originalTableDef.TblId, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type, false, "", originalTableDef)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (s *Scope) handleVectorCagraIndex(
-	c *Compile,
-	mainTableID uint64,
-	mainExtra *api.SchemaExtra,
-	dbSource engine.Database,
-	indexDefs map[string]*plan.IndexDef,
-	qryDatabase string,
-	originalTableDef *plan.TableDef,
-	indexInfo *plan.CreateTable,
-) error {
-	/*
-		if ok, err := s.isExperimentalEnabled(c, cagraIndexFlag); err != nil {
-			return err
-		} else if !ok {
-			return moerr.NewInternalErrorNoCtx("experimental_cagra_index is not enabled")
-		}
-	*/
-
-	// 1. static check
-	if len(indexDefs) != 2 {
-		return moerr.NewInternalErrorNoCtx("invalid cagra index table definition")
-	}
-	if len(indexDefs[catalog.Cagra_TblType_Metadata].Parts) != 1 {
-		return moerr.NewInternalErrorNoCtx("invalid hnsw index part must be 1.")
-	}
-
-	// 2. create hidden tables
-	if indexInfo != nil {
-		for _, table := range indexInfo.GetIndexTables() {
-			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
-				return err
-			}
-		}
-	}
-
-	// clear the cache (it only work in standalone mode though)
-	key := indexDefs[catalog.Cagra_TblType_Storage].IndexTableName
-	cache.Cache.Remove(key)
-
-	// delete old data first
-	{
-		sqls, err := genDeleteCagraIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-		if err != nil {
-			return err
-		}
-
-		for _, sql := range sqls {
-			err = c.runSql(sql)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	// 3. build hnsw index
-	sqls, err := genBuildCagraIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-	if err != nil {
-		return err
-	}
-
-	for _, sql := range sqls {
-		err = c.runSql(sql)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (s *Scope) handleVectorIvfpqIndex(
-	c *Compile,
-	mainTableID uint64,
-	mainExtra *api.SchemaExtra,
-	dbSource engine.Database,
-	indexDefs map[string]*plan.IndexDef,
-	qryDatabase string,
-	originalTableDef *plan.TableDef,
-	indexInfo *plan.CreateTable,
-) error {
-	// 1. static check
-	if len(indexDefs) != 2 {
-		return moerr.NewInternalErrorNoCtx("invalid ivfpq index table definition")
-	}
-	if len(indexDefs[catalog.Ivfpq_TblType_Metadata].Parts) != 1 {
-		return moerr.NewInternalErrorNoCtx("invalid ivfpq index part must be 1.")
-	}
-
-	// 2. create hidden tables
-	if indexInfo != nil {
-		for _, table := range indexInfo.GetIndexTables() {
-			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
-				return err
-			}
-		}
-	}
-
-	// clear the cache
-	key := indexDefs[catalog.Ivfpq_TblType_Storage].IndexTableName
-	cache.Cache.Remove(key)
-
-	// delete old data first
-	{
-		sqls, err := genDeleteIvfpqIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-		if err != nil {
-			return err
-		}
-
-		for _, sql := range sqls {
-			if err = c.runSql(sql); err != nil {
-				return err
-			}
-		}
-	}
-
-	// 3. build ivfpq index
-	sqls, err := genBuildIvfpqIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
-	if err != nil {
-		return err
-	}
-
-	for _, sql := range sqls {
-		if err = c.runSql(sql); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return false
 }

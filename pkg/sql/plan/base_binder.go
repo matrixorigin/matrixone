@@ -423,6 +423,23 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 	}
 
+	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok {
+		expr = &plan.Expr{
+			Typ: b.ctx.groups[groupPos].Typ,
+			Expr: &plan.Expr_Corr{
+				Corr: &plan.CorrColRef{
+					RelPos: b.ctx.groupTag,
+					ColPos: groupPos,
+					Depth:  depth,
+				},
+			},
+		}
+		if err != nil {
+			errutil.ReportError(b.GetContext(), err)
+		}
+		return
+	}
+
 	if isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
@@ -511,6 +528,36 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	return
+}
+
+func (b *baseBinder) correlatedGroupByColPos(depth int32, astName, table, col string) (int32, bool) {
+	if depth == 0 || b.ctx == nil || len(b.ctx.groupByAst) == 0 {
+		return 0, false
+	}
+	if pos, ok := b.ctx.groupByAst[astName]; ok && int(pos) < len(b.ctx.groups) {
+		return pos, true
+	}
+	if table != "" {
+		if pos, ok := b.ctx.groupByAst[table+"."+col]; ok && int(pos) < len(b.ctx.groups) {
+			return pos, true
+		}
+	}
+	return 0, false
+}
+
+func (b *baseBinder) corrColRefTargetsGroup(corr *plan.CorrColRef) bool {
+	if corr == nil {
+		return false
+	}
+	ctx := b.ctx
+	for depth := int32(0); depth < corr.Depth && ctx != nil; depth++ {
+		ctx = ctx.parent
+	}
+	return ctx != nil && ctx.groupTag > 0 && corr.RelPos == ctx.groupTag
+}
+
+func (b *baseBinder) corrColRefTargetsCurrentGroup(corr *plan.CorrColRef) bool {
+	return corr != nil && b.ctx != nil && b.ctx.groupTag > 0 && corr.RelPos == b.ctx.groupTag
 }
 
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
@@ -1315,6 +1362,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
+	if name == "name_const" {
+		if !validNameConstNameAst(astArgs) || !validNameConstValueAst(astArgs) {
+			return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
+		}
+		if err := validateNameConstArgs(b.GetContext(), args); err != nil {
+			return nil, err
+		}
+	}
 
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
@@ -1441,6 +1496,14 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
+		}
+
+	case "name_const":
+		if proc == nil {
+			return nil, moerr.NewInvalidInput(ctx, "can't use name_const without proc")
+		}
+		if err := foldNameConstArgs(ctx, proc, retExpr.GetF().Args); err != nil {
+			return nil, err
 		}
 
 	case "between":
@@ -1570,25 +1633,46 @@ between_fallback:
 	return retExpr, nil
 }
 
+func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) (*plan.Expr, bool, error) {
+	if name != function.SerialFunctionName && name != function.SerialFullFunctionName {
+		return nil, false, nil
+	}
+	if len(args) != 1 {
+		return nil, false, nil
+	}
+
+	listExpr, ok := args[0].Expr.(*plan.Expr_List)
+	if !ok {
+		return nil, false, nil
+	}
+	if listExpr.List == nil || len(listExpr.List.List) == 0 {
+		return args[0], true, nil
+	}
+
+	// An IN-list is a set of scalar candidates, not one row-wise vector argument.
+	// Bind serial(v0, v1, ...) as list(serial(v0), serial(v1), ...).
+	for i, subExpr := range listExpr.List.List {
+		newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{subExpr})
+		if err != nil {
+			return nil, true, err
+		}
+		listExpr.List.List[i] = newSubExpr
+		if i == 0 {
+			args[0].Typ = newSubExpr.Typ
+		}
+	}
+	return args[0], true, nil
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
 	// deal with some special function
-	switch name {
-	case "serial":
-		if len(args) == 1 {
-			if listExpr, ok := args[0].Expr.(*plan.Expr_List); ok {
-				for i, subExpr := range listExpr.List.List {
-					newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, "serial", []*Expr{subExpr})
-					if err != nil {
-						return nil, err
-					}
-					listExpr.List.List[i] = newSubExpr
-				}
-				return args[0], nil
-			}
-		}
+	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
+		return listExpr, err
+	}
 
+	switch name {
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
@@ -1909,9 +1993,17 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
 			typLeft := makeTypeByPlan2Expr(args[0])
+			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
 
 			for _, rightVal := range rightList.List {
+				if _, ok := rightVal.Expr.(*plan.Expr_List); ok && !partitionIn {
+					return nil, moerr.NewOperandColumns(ctx, 1)
+				}
+				if leftIsConstNull && !partitionIn {
+					orExprList = append(orExprList, rightVal)
+					continue
+				}
 				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
 					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
 					if err != nil {
@@ -2923,4 +3015,117 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 		return BindFuncExprImplByPlanExpr(ctx, "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
+	if err := validateNameConstArgs(ctx, args); err != nil {
+		return err
+	}
+
+	foldedArg, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	if err != nil {
+		return err
+	}
+	args[1] = foldedArg
+
+	if args[1].GetLit() == nil {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
+}
+
+func validateNameConstArgs(ctx context.Context, args []*plan.Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
+	}
+
+	nameLit := args[0].GetLit()
+	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
+}
+
+func validNameConstValueExpr(arg *plan.Expr) bool {
+	if arg == nil {
+		return false
+	}
+	if arg.GetLit() != nil {
+		return true
+	}
+	if isDecimalLiteralCast(arg) {
+		return true
+	}
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return false
+	}
+	if fn.Func.GetObjName() != "unary_minus" && fn.Func.GetObjName() != "unary_plus" {
+		return false
+	}
+	return fn.Args[0].GetLit() != nil || isDecimalLiteralCast(fn.Args[0])
+}
+
+func validNameConstNameAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	name := stripNameConstParens(args[0])
+	nameLit, ok := name.(*tree.NumVal)
+	return ok && validNameConstNameLiteral(nameLit)
+}
+
+func validNameConstValueAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	return validNameConstLiteralValueAst(args[1])
+}
+
+func validNameConstLiteralValueAst(expr tree.Expr) bool {
+	expr = stripNameConstParens(expr)
+	switch value := expr.(type) {
+	case *tree.NumVal:
+		return true
+	case *tree.UnaryExpr:
+		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
+			return false
+		}
+		_, ok := stripNameConstParens(value.Expr).(*tree.NumVal)
+		return ok
+	default:
+		return false
+	}
+}
+
+func stripNameConstParens(expr tree.Expr) tree.Expr {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	return expr
+}
+
+func isDecimalLiteralCast(arg *plan.Expr) bool {
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return false
+	}
+	if !types.T(arg.Typ.Id).IsDecimal() || fn.Args[0].GetLit() == nil || fn.Args[1].GetT() == nil {
+		return false
+	}
+	lit := fn.Args[0].GetLit()
+	if lit.Isnull || lit.GetSval() == "" {
+		return false
+	}
+	if _, _, err := types.Parse128(lit.GetSval()); err == nil {
+		return true
+	}
+	if _, _, err := types.Parse256(lit.GetSval()); err == nil {
+		return true
+	}
+	return false
 }

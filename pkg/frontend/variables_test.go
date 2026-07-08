@@ -23,6 +23,18 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
+func TestEventSchedulerDefaultDisabled(t *testing.T) {
+	convey.Convey("event_scheduler default should be DISABLED", t, func() {
+		sv, ok := gSysVarsDefs["event_scheduler"]
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(sv.Default, convey.ShouldEqual, "DISABLED")
+		// DISABLED must be a valid enum value so the default is convertible.
+		got, err := sv.Type.Convert(sv.Default)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(got, convey.ShouldEqual, "DISABLED")
+	})
+}
+
 func TestScope(t *testing.T) {
 	convey.Convey("test scope", t, func() {
 		wanted := make(map[Scope]string)

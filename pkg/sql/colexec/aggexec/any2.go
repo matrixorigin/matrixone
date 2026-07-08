@@ -48,7 +48,9 @@ func (exec *anyExec) BatchFill(offset int, groups []uint64, vectors []*vector.Ve
 			if exec.state[x].vecs[0].IsNull(uint64(y)) {
 				exec.state[x].vecs[0].UnsetNull(uint64(y))
 				bs := vectors[0].GetRawBytesAt(int(idx))
-				exec.state[x].vecs[0].SetRawBytesAt(int(y), bs, exec.mp)
+				if err := exec.state[x].vecs[0].SetRawBytesAt(int(y), bs, exec.mp); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -74,7 +76,9 @@ func (exec *anyExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) e
 		if exec.state[x1].vecs[0].IsNull(uint64(y1)) {
 			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
 			bs := other.state[x2].vecs[0].GetRawBytesAt(int(y2))
-			exec.state[x1].vecs[0].SetRawBytesAt(int(y1), bs, exec.mp)
+			if err := exec.state[x1].vecs[0].SetRawBytesAt(int(y1), bs, exec.mp); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

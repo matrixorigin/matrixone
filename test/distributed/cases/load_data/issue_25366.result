@@ -1,0 +1,77 @@
+drop database if exists issue_25366_load_data_local_adjusted;
+create database issue_25366_load_data_local_adjusted;
+use issue_25366_load_data_local_adjusted;
+set sql_mode = '';
+create table t_load(
+id int primary key,
+i int,
+d decimal(5,2),
+dt date,
+vc varchar(4),
+nullable_i int
+);
+load data local infile '$resources/load_data/issue_25366_load_data_local_adjusted.csv'
+into table t_load
+fields terminated by ',' lines terminated by '\n';
+select id, i, d, dt, vc, hex(vc), nullable_i from t_load order by id;
+id	i	d	dt	vc	hex(vc)	nullable_i
+1	12	12.35	2024-01-02	abcd	61626364	null
+2	0	10.00	0001-01-01	abcd	61626364	0
+3	0	0.00	0001-01-01	xy	7879	7
+set sql_mode = 'STRICT_TRANS_TABLES';
+truncate table t_load;
+load data local infile '$resources/load_data/issue_25366_load_data_local_adjusted.csv'
+into table t_load
+fields terminated by ',' lines terminated by '\n';
+internal error: the input value 'abc' is not int32 type for column 1
+select count(*) from t_load;
+count(*)
+0
+set sql_mode = '';
+truncate table t_load;
+load data infile '$resources/load_data/issue_25366_load_data_local_adjusted.csv'
+into table t_load
+fields terminated by ',' lines terminated by '\n';
+internal error: the input value 'abc' is not int32 type for column 1
+select count(*) from t_load;
+count(*)
+0
+create table t_quoted_int(id int primary key, i int);
+load data local infile '$resources/load_data/issue_25366_quoted_invalid_int.csv'
+into table t_quoted_int
+fields terminated by ',' enclosed by '"' lines terminated by '\n';
+internal error: the input value 'abc' is not int32 type for column 1
+select count(*) from t_quoted_int;
+count(*)
+0
+set sql_mode = 'STRICT_TRANS_TABLES';
+truncate table t_quoted_int;
+load data local infile '$resources/load_data/issue_25366_quoted_invalid_int.csv'
+into table t_quoted_int
+fields terminated by ',' enclosed by '"' lines terminated by '\n';
+internal error: the input value 'abc' is not int32 type for column 1
+select count(*) from t_quoted_int;
+count(*)
+0
+set sql_mode = '';
+truncate table t_quoted_int;
+load data infile '$resources/load_data/issue_25366_quoted_invalid_int.csv'
+into table t_quoted_int
+fields terminated by ',' enclosed by '"' lines terminated by '\n';
+internal error: the input value 'abc' is not int32 type for column 1
+select count(*) from t_quoted_int;
+count(*)
+0
+create table t_quoted_decimal(id int primary key, d decimal(5,2));
+load data local infile '$resources/load_data/issue_25366_quoted_invalid_decimal.csv'
+into table t_quoted_decimal
+fields terminated by ',' enclosed by '"' lines terminated by '\n';
+internal error: the input value '10x' is invalid Decimal64 type for column 1
+select count(*) from t_quoted_decimal;
+count(*)
+0
+set sql_mode = default;
+drop table t_quoted_decimal;
+drop table t_quoted_int;
+drop table t_load;
+drop database issue_25366_load_data_local_adjusted;

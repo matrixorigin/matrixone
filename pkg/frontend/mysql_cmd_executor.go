@@ -2407,16 +2407,6 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 					return true, err
 				}
 			}
-			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef, &plan.TableDef{
-					Name:    ctx.TableName,
-					TblId:   ctx.TableId,
-					Version: ctx.TableVersion,
-				})
-				if err != nil || flag {
-					return true, err
-				}
-			}
 		}
 	default:
 	}
@@ -2424,6 +2414,9 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+	// Reset the per-statement database remap; it is (re)populated below only when
+	// the rewrite feature is enabled and a remapdb is configured.
+	execCtx.remapDb = nil
 	var cws []ComputationWrapper = nil
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
@@ -2514,6 +2507,19 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 				if err != nil {
 					return nil, err
 				}
+				// Apply remapdb (database-name substitution) on the parsed AST
+				// before privilege checks and planning resolve the original
+				// database. The effective remapdb (role rules carry none, the
+				// session variable and any inline hint are merged by rewriteSQL
+				// into the leading hint) is read back from the statement text and
+				// applied to qualified references in SELECT and INSERT/UPDATE/
+				// DELETE alike. Only the remapdb field is decoded here, so layered
+				// (array-form) rewrites in the merged hint do not interfere. It is
+				// also stashed on execCtx so DefaultDatabase can remap the current
+				// database for UNQUALIFIED references (USE itself is not remapped).
+				remapDb := extractInlineRemapDb(execCtx.input.getSql())
+				applyRemapDb(stmts, remapDb)
+				execCtx.remapDb = remapDb
 			}
 		}
 	}
@@ -2598,6 +2604,15 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		if !havePrivilege {
 			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
 			return stats, err
+		}
+
+		//!!!note: clone table executed in the frontend.
+		//handle privilege check here for it
+		priv := ses.GetPrivilege()
+		if priv.objectType() == objectTypeTable {
+			if !checkProtectedDatabaseWriteByPrivilege(reqCtx, ses, priv) {
+				return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+			}
 		}
 	}
 	return stats, nil
@@ -2719,11 +2734,7 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 	if !skipWrite {
 		_, err = writer.Write(payload)
 		if err != nil {
-			ses.Errorf(execCtx.reqCtx,
-				"Failed to load local file",
-				zap.String("path", param.Filepath),
-				zap.Uint64("epoch", epoch),
-				zap.Error(err))
+			ses.Errorf(execCtx.reqCtx, "Failed to load local file: epoch=%d, error=%v", epoch, err)
 			skipWrite = true
 		}
 		writeTime = time.Since(start)
@@ -2805,6 +2816,23 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		}
 	}
 
+	checkLockTableBinds := func() error {
+		if execCtx == nil || execCtx.proc == nil || execCtx.proc.GetTxnOperator() == nil {
+			return nil
+		}
+		ctx := execCtx.reqCtx
+		if ctx == nil && execCtx.proc.Ctx != nil {
+			ctx = execCtx.proc.Ctx
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return execCtx.proc.GetTxnOperator().CheckLockTableBinds(ctx)
+	}
+
+	if err = checkLockTableBinds(); err != nil {
+		return
+	}
 	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
 	if err != nil {
 		if errors.Is(err, errorInvalidLength0) {
@@ -2823,6 +2851,9 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	consecutiveLoopStartTime := time.Now()
 
 	for {
+		if err = checkLockTableBinds(); err != nil {
+			return
+		}
 		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
 		if err != nil {
 			if errors.Is(err, errorInvalidLength0) {
@@ -3305,6 +3336,7 @@ func executeStmt(ses *Session,
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
+	defer ses.ClearDDLOwnerRoleID()
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	// set the batch buf for stream scan
 	var inMemStreamScan []*kafka.Message
@@ -3315,6 +3347,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
+	execCtx.reqCtx = defines.AttachDDLOwnerRoleIDProvider(execCtx.reqCtx, ses)
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	resper := ses.GetResponser()
@@ -3373,6 +3406,13 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
+	// Frontend client SQL — session-bound resolver. Procs constructed
+	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
+	// IsFrontend from opts.IsFrontend() (default false → background);
+	// this proc is built inline here so we set the flag explicitly,
+	// paired with the resolver bind above as the "I have a session"
+	// signal.
+	proc.Base.IsFrontend = true
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.
@@ -3479,6 +3519,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
+			ses.ClearDDLOwnerRoleID()
 			authStats, err := authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
 			if err != nil {
 				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
@@ -3527,6 +3568,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.input = input
 
 		err = executeStmtWithResponse(ses, execCtx)
+		ses.ClearDDLOwnerRoleID()
 		if err != nil {
 			return err
 		}

@@ -58,12 +58,13 @@ const (
 	ErrWarnDataTruncated uint16 = 201
 
 	// Group 1: Internal errors
-	ErrStart            uint16 = 20100
-	ErrInternal         uint16 = 20101
-	ErrNYI              uint16 = 20102
-	ErrOOM              uint16 = 20103
-	ErrQueryInterrupted uint16 = 20104
-	ErrNotSupported     uint16 = 20105
+	ErrStart                       uint16 = 20100
+	ErrInternal                    uint16 = 20101
+	ErrNYI                         uint16 = 20102
+	ErrOOM                         uint16 = 20103
+	ErrQueryInterrupted            uint16 = 20104
+	ErrNotSupported                uint16 = 20105
+	ErrRemoteDispatchNotRegistered uint16 = 20106
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -72,6 +73,7 @@ const (
 	ErrInvalidArg                  uint16 = 20203
 	ErrTruncatedWrongValueForField uint16 = 20204
 	ErrTooBigPrecision             uint16 = 20205
+	ErrRegexpIllegalArgument       uint16 = 20206
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -88,6 +90,7 @@ const (
 	ErrUpgrateError         uint16 = 20311
 	ErrInvalidTz            uint16 = 20312
 	ErrUnsupportedDML       uint16 = 20313
+	ErrOperandColumns       uint16 = 20314
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -277,6 +280,8 @@ const (
 	ErrLockNeedUpgrade uint16 = 20707
 	// ErrCannotCommitOnInvalidCN cannot commit transaction on invalid CN
 	ErrCannotCommitOnInvalidCN uint16 = 20708
+	// ErrRemoteLockWaitTimeout remote lock owner-side wait timeout
+	ErrRemoteLockWaitTimeout uint16 = 20709
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -358,12 +363,13 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWarnDataTruncated: {WARN_DATA_TRUNCATED, []string{MySQLDefaultSqlState}, "warning: data truncated"},
 
 	// Group 1: Internal errors
-	ErrStart:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: error code start"},
-	ErrInternal:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: %s"},
-	ErrNYI:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s is not yet implemented"},
-	ErrOOM:              {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "error: out of memory"},
-	ErrQueryInterrupted: {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
-	ErrNotSupported:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
+	ErrStart:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: error code start"},
+	ErrInternal:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: %s"},
+	ErrNYI:                         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s is not yet implemented"},
+	ErrOOM:                         {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "error: out of memory"},
+	ErrQueryInterrupted:            {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
+	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
+	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
@@ -372,6 +378,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidArg:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid argument %s, bad value %s"},
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
+	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -387,6 +394,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
 	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
+	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -537,6 +545,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrLockConflict:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
 	ErrLockNeedUpgrade:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
 	ErrCannotCommitOnInvalidCN: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
+	ErrRemoteLockWaitTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock wait timeout"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -898,6 +907,10 @@ func NewNotSupported(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrNotSupported, msg)
 }
 
+func NewRemoteDispatchNotRegistered(ctx context.Context, uuid string) *Error {
+	return newError(ctx, ErrRemoteDispatchNotRegistered, uuid)
+}
+
 func NewOOM(ctx context.Context) *Error {
 	return newError(ctx, ErrOOM)
 }
@@ -908,6 +921,10 @@ func NewQueryInterrupted(ctx context.Context) *Error {
 
 func NewDivByZero(ctx context.Context) *Error {
 	return newError(ctx, ErrDivByZero)
+}
+
+func NewRegexpIllegalArgument(ctx context.Context) *Error {
+	return newError(ctx, ErrRegexpIllegalArgument)
 }
 
 func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any) *Error {
@@ -1402,6 +1419,10 @@ func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 	return newError(ctx, ErrWrongValueCountOnRow, row)
 }
 
+func NewOperandColumns(ctx context.Context, columns int) *Error {
+	return newError(ctx, ErrOperandColumns, columns)
+}
+
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
 	return newError(ctx, ErrBadFieldError, column, table)
 }
@@ -1476,6 +1497,10 @@ func NewLockTableNotFound(ctx context.Context) *Error {
 
 func NewLockConflict(ctx context.Context) *Error {
 	return newError(ctx, ErrLockConflict)
+}
+
+func NewRemoteLockWaitTimeout(ctx context.Context) *Error {
+	return newError(ctx, ErrRemoteLockWaitTimeout)
 }
 
 func NewPartitionFunctionIsNotAllowed(ctx context.Context) *Error {

@@ -79,10 +79,20 @@ type RSCThrottler interface {
 }
 
 type memThrottler struct {
-	limit    atomic.Int64
-	rss      atomic.Int64
-	reserved atomic.Int64
-	proc     *process.Process
+	limit atomic.Int64
+	rss   atomic.Int64
+	// rssReservedBase records the reserved bytes that were already reflected in
+	// the latest rss sample. S3 admission can then add only the delta above this
+	// base, avoiding the rss+reserved double-count that caused #24881 while
+	// still keeping a synchronous physical-memory backstop for new growth.
+	rssReservedBase atomic.Int64
+	// rssMpoolLiveBase records the mpool live-byte baseline associated with
+	// rssReservedBase. As off-heap live bytes rise back toward this baseline,
+	// previously released S3 pages are being reused and the covered stale
+	// portion of rssReservedBase must shrink accordingly.
+	rssMpoolLiveBase atomic.Int64
+	reserved         atomic.Int64
+	proc             *process.Process
 
 	cgroup atomic.Uint64
 	total  atomic.Uint64
@@ -162,11 +172,11 @@ func (m *memThrottler) refresh(force bool) {
 	m.lastRefresh.Store(now)
 
 	var (
-		err    error
-		cgroup uint64
-		info   *process.MemoryInfoStat
-
-		total uint64
+		err            error
+		cgroup         uint64
+		info           *process.MemoryInfoStat
+		total          uint64
+		reservedBefore int64
 	)
 
 	defer func() {
@@ -201,9 +211,37 @@ func (m *memThrottler) refresh(force bool) {
 		m.proc, _ = process.NewProcess(int32(os.Getpid()))
 	}
 
+	prevRSS := m.rss.Load()
+	prevBase := m.rssReservedBase.Load()
+	prevLiveBase := m.rssMpoolLiveBase.Load()
+	reservedBefore = m.reserved.Load()
+	if reservedBefore < 0 {
+		reservedBefore = 0
+	}
 	if info, err = m.proc.MemoryInfo(); err == nil {
-		m.rss.Store(int64(info.RSS))
-		m.tryScavengeRSS(now, int64(info.RSS))
+		rss := int64(info.RSS)
+		m.rss.Store(rss)
+
+		reservedAfter := m.reserved.Load()
+		if reservedAfter < 0 {
+			reservedAfter = 0
+		}
+
+		currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+		// Sample the S3 reservation base conservatively from the same refresh
+		// window as RSS. Using the smaller of the before/after counters avoids
+		// treating a concurrent new acquire as already reflected in the RSS
+		// sample. Any stale covered portion then decays not only when RSS drops
+		// but also when off-heap live bytes rise back toward the earlier live
+		// baseline, which means the freed S3 pages are being reused by other
+		// work and can no longer be treated as reusable S3 headroom.
+		sampledReserved := min(reservedBefore, reservedAfter)
+		base, liveBase := nextCNFlushS3RSSState(
+			prevRSS, prevBase, prevLiveBase, rss, currentLive, sampledReserved,
+		)
+		m.rssReservedBase.Store(base)
+		m.rssMpoolLiveBase.Store(liveBase)
+		m.tryScavengeRSS(now, rss)
 	}
 
 	m.cgroup.Store(cgroup)
@@ -458,12 +496,16 @@ func (m *memThrottler) Acquire(ask int64) (int64, bool) {
 }
 
 func (m *memThrottler) Release(mem int64) int64 {
-	m.reserved.Add(-int64(mem))
-	if m.reserved.Load() < 0 {
-		m.reserved.Store(0)
+	for {
+		currReserved := m.reserved.Load()
+		newReserved := currReserved - mem
+		if newReserved < 0 {
+			newReserved = 0
+		}
+		if m.reserved.CompareAndSwap(currReserved, newReserved) {
+			return m.Available()
+		}
 	}
-
-	return m.Available()
 }
 
 // NewMemThrottler creates a new throttler for the `name`.
@@ -575,35 +617,148 @@ func defaultAcquirePolicy(m *memThrottler, ask int64) (int64, bool) {
 	}
 }
 
+const (
+	// cnFlushS3PinnedRejectRate is the hard ceiling on pinnedRate
+	// (reserved / limit) for the CN S3 write throttler.
+	//
+	// Removing the old RSS-based physical-memory gate (#24892) relies on
+	// this ceiling to bound S3 write-buffer growth: reserved is the only
+	// signal that is both responsive (it drops immediately on flush, unlike
+	// RSS, which lags behind frees because the allocator pools the memory
+	// until FreeOSMemory runs) and not double-counted. For the ceiling to
+	// actually cap physical memory it must be enforced on every grant, not
+	// only as a soft entry check.
+	cnFlushS3PinnedRejectRate = 0.80
+
+	// cnFlushS3PinnedSmallBatchRate is the pinnedRate above which only small
+	// batches may be pinned.
+	cnFlushS3PinnedSmallBatchRate = 0.50
+
+	// cnFlushS3SmallBatchMaxAsk is the largest ask allowed once pinnedRate is
+	// at or above cnFlushS3PinnedSmallBatchRate.
+	cnFlushS3SmallBatchMaxAsk = mpool.MB * 10
+)
+
 func AcquirePolicyForCNFlushS3(
 	throttler *memThrottler,
 	ask int64,
 ) (int64, bool) {
-	rate := throttler.pinnedRate()
-
-	if rate >= 0.80 {
-		// almost exhausted the memory,
-		// cannot pin only batch anymore.
-		return 0, false
-	}
-
-	if rate >= 0.50 {
-		// pinned more than half, only allow pinning small batch
-		if ask >= mpool.MB*10 {
-			return 0, false
-		}
-		return acquireWithinRSSLimit(throttler, ask)
-	}
-
 	return acquireWithinRSSLimit(throttler, ask)
 }
 
+func currentCNFlushS3RSSCovered(base, liveBase, reserved, currentLive int64) int64 {
+	if base < 0 {
+		base = 0
+	}
+	if liveBase < currentLive {
+		liveBase = currentLive
+	}
+	if reserved < 0 {
+		reserved = 0
+	}
+
+	liveOverlap := min(base, reserved)
+	staleReusable := max(0, liveBase-currentLive)
+	return min(base, liveOverlap+staleReusable)
+}
+
+func nextCNFlushS3RSSState(
+	prevRSS, prevBase, prevLiveBase, rss, currentLive, sampledReserved int64,
+) (base int64, liveBase int64) {
+	if currentLive < 0 {
+		currentLive = 0
+	}
+	if sampledReserved < 0 {
+		sampledReserved = 0
+	}
+
+	carried := currentCNFlushS3RSSCovered(prevBase, prevLiveBase, sampledReserved, currentLive)
+	staleReusable := max(0, carried-sampledReserved)
+	if rssDrop := prevRSS - rss; rssDrop > 0 {
+		staleReusable = max(0, staleReusable-rssDrop)
+	}
+
+	base = sampledReserved + staleReusable
+	if base > rss {
+		base = rss
+	}
+	liveBase = currentLive + staleReusable
+	return
+}
+
+func cnFlushS3PhysicalAvailable(throttler *memThrottler, reserved int64) int64 {
+	total := int64(throttler.actualTotalMemory.Load())
+	if total <= 0 || total == math.MaxInt64 {
+		return math.MaxInt64
+	}
+	base := throttler.rssReservedBase.Load()
+	liveBase := throttler.rssMpoolLiveBase.Load()
+	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+	covered := currentCNFlushS3RSSCovered(base, liveBase, reserved, currentLive)
+	used := throttler.rss.Load()
+	if delta := reserved - covered; delta > 0 {
+		used += delta
+	}
+
+	return max(0, total-used)
+}
+
+func cnFlushS3ProjectedPhysicalUsed(throttler *memThrottler, reserved int64) int64 {
+	base := throttler.rssReservedBase.Load()
+	liveBase := throttler.rssMpoolLiveBase.Load()
+	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+	covered := currentCNFlushS3RSSCovered(base, liveBase, reserved, currentLive)
+	used := throttler.rss.Load()
+	if delta := reserved - covered; delta > 0 {
+		used += delta
+	}
+
+	return used
+}
+
+func (m *memThrottler) ShouldRefreshBeforeRelease() bool {
+	reserved := m.reserved.Load()
+	if reserved <= 0 {
+		return false
+	}
+	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+	covered := currentCNFlushS3RSSCovered(
+		m.rssReservedBase.Load(),
+		m.rssMpoolLiveBase.Load(),
+		reserved,
+		currentLive,
+	)
+	return covered < reserved
+}
+
 func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
+	limit := throttler.limit.Load()
+	smallBatchCap := int64(float64(limit) * cnFlushS3PinnedSmallBatchRate)
+	hardCap := int64(float64(limit) * cnFlushS3PinnedRejectRate)
+	total := int64(throttler.actualTotalMemory.Load())
+
 	for {
-		limit := throttler.limit.Load()
-		reserved := throttler.reserved.Load()
-		if reserved < 0 {
-			reserved = 0
+		observed := throttler.reserved.Load()
+		if observed < 0 {
+			// Release clamps atomically, so negative reserved should not occur in
+			// normal operation. Self-heal it defensively to keep the throttler
+			// robust against transient corruption or tests that seed negatives.
+			if !throttler.reserved.CompareAndSwap(observed, 0) {
+				continue
+			}
+			observed = 0
+		}
+		reserved := observed
+
+		if !throttler.options.allowOutOfMemoryAcquire {
+			if reserved >= hardCap {
+				// almost exhausted the memory, cannot pin more batch memory.
+				return 0, false
+			}
+			if reserved >= smallBatchCap && ask >= cnFlushS3SmallBatchMaxAsk {
+				// once pinned more than half, only allow pinning small batch.
+				return 0, false
+			}
 		}
 
 		// Pool check: use limit - reserved directly instead of calling
@@ -613,22 +768,27 @@ func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 		// The pool only needs to bound forward-looking reservations
 		// against the throttler limit.
 		//
-		// No separate RSS-based physical memory gate is needed here:
-		// - pinnedRate >= 0.80 at the AcquirePolicyForCNFlushS3 level
-		//   provides a hard ceiling on pool utilisation.
-		// - RSS scavenging (85 % / 92 % thresholds in tryScavengeRSS)
-		//   handles physical memory pressure with a graduated response
-		//   (cache eviction + FreeOSMemory) that is more effective than
-		//   a binary reject.
-		// The original RSS gate (added in PR #24268 for non-S3 memory
-		// pressure) has been superseded by RSS scavenging.
 		avail := limit - reserved
 		if !throttler.options.allowOutOfMemoryAcquire && avail < ask {
 			return avail, false
 		}
 
 		newReserved := reserved + ask
-		if throttler.reserved.CompareAndSwap(reserved, newReserved) {
+		// Physical-memory backstop: the latest RSS sample already includes the
+		// S3 bytes recorded in rssReservedBase, so only reserved growth above
+		// that base should consume additional physical headroom. This avoids the
+		// rss+reserved double-count that broke ForceRefresh() while still
+		// rejecting new S3 growth when non-S3 RSS has already eaten the cgroup.
+		if !throttler.options.allowOutOfMemoryAcquire &&
+			total > 0 && total != math.MaxInt64 &&
+			cnFlushS3ProjectedPhysicalUsed(throttler, newReserved) > total {
+			return min(avail, cnFlushS3PhysicalAvailable(throttler, reserved)), false
+		}
+		if !throttler.options.allowOutOfMemoryAcquire && newReserved > hardCap {
+			return max(0, hardCap-reserved), false
+		}
+
+		if throttler.reserved.CompareAndSwap(observed, newReserved) {
 			return limit - newReserved, true
 		}
 	}

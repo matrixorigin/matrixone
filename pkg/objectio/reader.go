@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -332,6 +333,12 @@ func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Head
 		return
 	}
 	h = Header(v)
+	if len(h) < HeaderSize || h.Magic() != uint64(Magic) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"objectio %s: bad header magic (got %x, want %x): wrong on-disk format "+
+				"(e.g. a legacy DISK/CRC file read as raw DISK-V2) or corruption",
+			r.name, h.Magic(), uint64(Magic))
+	}
 	return
 }
 

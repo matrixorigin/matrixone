@@ -32,6 +32,17 @@ func sqlTaskNodeString(node tree.NodeFormatter) string {
     return tree.StringWithOpts(node, dialect.MYSQL, tree.WithSingleQuoteString())
 }
 
+// makeSelectStarFromTable builds the `SELECT * FROM tbl` clause used to desugar
+// the MySQL `REPLACE ... TABLE tbl` source form.
+func makeSelectStarFromTable(tbl tree.TableExpr) *tree.SelectClause {
+    return &tree.SelectClause{
+        Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.StarExpr()}},
+        From: &tree.From{
+            Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tbl}},
+        },
+    }
+}
+
 func sqlTaskBodyString(stmt tree.Statement) string {
     compound, ok := stmt.(*tree.CompoundStmt)
     if !ok || compound == nil {
@@ -378,7 +389,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Type
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
-%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE
+%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE PRECISION
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
@@ -419,7 +430,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -482,7 +493,8 @@ func sqlTaskInt64(v any) int64 {
 %token <str> RECURSIVE CONFIG DRAINER
 
 // Source
-%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME SCHEDULE TIMEZONE TIMEOUT
+%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL RESUME SCHEDULE TIMEZONE TIMEOUT
+%nonassoc <str> TASK
 
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
@@ -545,7 +557,9 @@ func sqlTaskInt64(v any) int64 {
 %token <str> MO_TS
 
 // PITR
-%token <str> PITR RECOVERY_WINDOW INTERNAL
+%token <str> PITR RECOVERY_WINDOW
+%nonassoc <str> INTERNAL
+%nonassoc CDC_TASK_NAME
 
 // CDC
 %token <str> CDC
@@ -625,11 +639,12 @@ func sqlTaskInt64(v any) int64 {
 %type <str> alter_publication_db_name_opt
 %type <statement> branch_stmt
 %type <toAccountOpt> to_account_opt
+%type <boolVal> copy_grants_opt
 %type <conflictOpt> conflict_opt
 %type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
-%type <select> select_stmt select_no_parens
+%type <select> select_stmt select_no_parens replace_table_source
 %type <selectStatement> simple_select select_with_parens simple_select_clause
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
@@ -883,7 +898,7 @@ func sqlTaskInt64(v any) int64 {
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 %type <snapshotObject> snapshot_object_opt
-%type <allCDCOption> all_cdc_opt
+%type <allCDCOption> all_cdc_opt show_cdc_opt drop_cdc_opt
 
 %type <indexHintType> index_hint_type
 %type <indexHintScope> index_hint_scope
@@ -1114,7 +1129,7 @@ create_cdc_opt:
     }
 
 show_cdc_stmt:
-    SHOW CDC all_cdc_opt
+    SHOW CDC show_cdc_opt
     {
         $$ = &tree.ShowCDC{
                     Option:      $3,
@@ -1130,9 +1145,35 @@ pause_cdc_stmt:
     }
 
 drop_cdc_stmt:
-    DROP CDC all_cdc_opt internal_opt
+    DROP CDC exists_opt drop_cdc_opt internal_opt
     {
-        $$ = tree.NewDropCDC($3, $4)
+        $$ = tree.NewDropCDC($4, $3, $5)
+    }
+
+show_cdc_opt:
+    {
+        $$ = &tree.AllOrNotCDC{
+                    All: true,
+                    TaskName: "",
+        }
+    }
+|   all_cdc_opt
+    {
+        $$ = $1
+    }
+
+drop_cdc_opt:
+    all_cdc_opt
+    {
+        $$ = $1
+    }
+|   ident
+    %prec CDC_TASK_NAME
+    {
+        $$ = &tree.AllOrNotCDC{
+            All: false,
+            TaskName: tree.Identifier($1.Compare()),
+        }
     }
 
 all_cdc_opt:
@@ -3268,6 +3309,7 @@ prepareable_stmt:
     create_stmt
 |   alter_stmt
 |   insert_stmt
+|   replace_stmt
 |   delete_stmt
 |   drop_stmt
 |   show_stmt
@@ -3962,9 +4004,7 @@ alter_option:
     }
 |   ALGORITHM equal_opt algorithm_type
     {
-        var checkType = $1
-        var enforce bool
-        $$ = tree.NewAlterOptionAlterCheck(checkType, enforce)
+        $$ = tree.NewAlterOptionAlgorithm($3)
     }
 |   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
     {
@@ -3992,7 +4032,7 @@ alter_option:
     }
 |   LOCK equal_opt lock_type
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewAlterOptionLock($3)
     }
 |   with_type VALIDATION
     {
@@ -4164,12 +4204,16 @@ alter_table_alter:
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
-| REINDEX ident HNSW
+| REINDEX ident HNSW index_option_list
     {
-	
         var io *tree.IndexOption = nil
-        io = tree.NewIndexOption()
-        io.IType = tree.INDEX_TYPE_HNSW
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_HNSW
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_HNSW
+        }
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
@@ -4186,11 +4230,16 @@ alter_table_alter:
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
-| REINDEX ident CAGRA
+| REINDEX ident CAGRA index_option_list
     {
         var io *tree.IndexOption = nil
-        io = tree.NewIndexOption()
-        io.IType = tree.INDEX_TYPE_CAGRA
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_CAGRA
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_CAGRA
+        }
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
@@ -5396,13 +5445,21 @@ ignore_opt:
     {}
 |    IGNORE
 
+// MySQL REPLACE only allows LOW_PRIORITY or DELAYED (not HIGH_PRIORITY). Both are
+// accepted for compatibility and ignored: MatrixOne has no corresponding scheduling,
+// and DELAYED is treated as a plain REPLACE (as in MySQL 8.0).
+replace_priority_opt:
+    {}
+|    LOW_PRIORITY
+|    DELAYED
+
 replace_stmt:
-    REPLACE into_table_name partition_clause_opt replace_data
+    REPLACE replace_priority_opt into_table_name partition_clause_opt replace_data
     {
-    	rep := $4
-    	rep.Table = $2
-    	rep.PartitionNames = $3
-    	$$ = rep
+        rep := $5
+        rep.Table = $3
+        rep.PartitionNames = $4
+        $$ = rep
     }
 
 replace_data:
@@ -5411,6 +5468,19 @@ replace_data:
         vc := tree.NewValuesClause($2)
         $$ = &tree.Replace{
             Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   replace_table_source
+    {
+        $$ = &tree.Replace{
+            Rows: $1,
+        }
+    }
+|   '(' insert_column_list ')' replace_table_source
+    {
+        $$ = &tree.Replace{
+            Columns: $2,
+            Rows: $4,
         }
     }
 |   select_stmt
@@ -5459,6 +5529,14 @@ replace_data:
 			Rows: tree.NewSelect(vc, nil, nil),
 		}
 	}
+
+replace_table_source:
+    TABLE table_name order_by_opt limit_opt
+    {
+        // MySQL treats TABLE as a query source, so ORDER BY and LIMIT belong to
+        // the SELECT wrapper produced by the TABLE-to-SELECT rewrite.
+        $$ = tree.NewSelect(makeSelectStarFromTable($2), $3, $4)
+    }
 
 insert_stmt:
     insert_no_with_stmt
@@ -8330,6 +8408,12 @@ index_option_list:
               opt1.BitsPerCode = opt2.BitsPerCode
             } else if opt2.ITopkSize > 0 {
               opt1.ITopkSize = opt2.ITopkSize
+            } else if opt2.KmeansTrainPercent > 0 {
+              opt1.KmeansTrainPercent = opt2.KmeansTrainPercent
+            } else if opt2.KmeansMaxIteration > 0 {
+              opt1.KmeansMaxIteration = opt2.KmeansMaxIteration
+            } else if opt2.MaxIndexCapacity > 0 {
+              opt1.MaxIndexCapacity = opt2.MaxIndexCapacity
             } else if len(opt2.IncludeColumns) > 0 {
               opt1.IncludeColumns = opt2.IncludeColumns
             }
@@ -8479,6 +8563,39 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.BitsPerCode = val
+	$$ = io
+    }
+|   KMEANS_TRAIN_PERCENT equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("KMEANS_TRAIN_PERCENT should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.KmeansTrainPercent = val
+	$$ = io
+    }
+|   KMEANS_MAX_ITERATION equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("KMEANS_MAX_ITERATION should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.KmeansMaxIteration = val
+	$$ = io
+    }
+|   MAX_INDEX_CAPACITY equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("MAX_INDEX_CAPACITY should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.MaxIndexCapacity = val
 	$$ = io
     }
 |    ASYNC
@@ -9032,6 +9149,16 @@ to_account_opt:
     	}
     }
 
+copy_grants_opt:
+    /* empty */
+    {
+        $$ = false
+    }
+    | COPY GRANTS
+    {
+        $$ = true
+    }
+
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
@@ -9122,6 +9249,8 @@ create_table_stmt:
     {
         t := tree.NewCreateTable()
         t.IsAsLike = true
+        t.Temporary = $2
+        t.IfNotExists = $4
         t.Table = *$5
         t.LikeTableName = *$7
         $$ = t
@@ -9135,15 +9264,18 @@ create_table_stmt:
         t.SubscriptionOption = $6
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name to_account_opt
+|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name copy_grants_opt to_account_opt
     {
-	t := tree.NewCloneTable()
-	t.CreateTable.Table = *$5
-	t.CreateTable.LikeTableName = *$7
-	t.CreateTable.IsAsLike = true
-	t.SrcTable = *$7
-	t.ToAccountOpt = $8
-	$$ = t
+        t := tree.NewCloneTable()
+        t.CreateTable.Temporary = $2
+        t.CreateTable.IfNotExists = $4
+        t.CreateTable.Table = *$5
+        t.CreateTable.LikeTableName = *$7
+        t.CreateTable.IsAsLike = true
+        t.SrcTable = *$7
+        t.CopyGrants = $8
+        t.ToAccountOpt = $9
+        $$ = t
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name FROM STRING ident PUBLICATION ident sync_interval_opt
     {
@@ -11452,18 +11584,25 @@ mysql_cast_type:
                 Locale: &locale,
                 Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
                 DisplayWith: $2,
+                Scale: -1,
             },
         }
     }
 |   CHAR length_option_opt
     {
         locale := ""
+        oid := uint32(defines.MYSQL_TYPE_STRING)
+        familyString := $1
+        if $2 == -1 {
+            oid = uint32(defines.MYSQL_TYPE_VARCHAR)
+            familyString = "varchar"
+        }
         $$ = &tree.T{
             InternalType: tree.InternalType{
                 Family: tree.StringFamily,
-                FamilyString: $1,
+                FamilyString: familyString,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+                Oid:    oid,
                 DisplayWith: $2,
             },
         }
@@ -11558,7 +11697,9 @@ mysql_cast_type:
 
 integer_opt:
     %prec LOWER_THAN_INT
-    {}
+    {
+        $$ = ""
+    }
 |    INTEGER
 |    INT
 
@@ -13114,6 +13255,34 @@ decimal_type:
         	},
         }
     }
+|   DOUBLE PRECISION float_length_opt
+    {
+        // DOUBLE PRECISION is the SQL-standard synonym for DOUBLE (float64).
+        locale := ""
+        if $3.DisplayWith > 255 {
+            yylex.Error("Display width for double out of range (max = 255)")
+            goto ret1
+        }
+        if $3.Scale > 30 {
+            yylex.Error("Display scale for double out of range (max = 30)")
+            goto ret1
+        }
+        if $3.Scale != tree.NotDefineDec && $3.Scale > $3.DisplayWith {
+            yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+                goto ret1
+        }
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+        		Family: tree.FloatFamily,
+                FamilyString: $1,
+        		Width:  64,
+        		Locale: &locale,
+       			Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
+                DisplayWith: $3.DisplayWith,
+                Scale: $3.Scale,
+        	},
+        }
+    }
 |   FLOAT_TYPE float_length_opt
     {
         locale := ""
@@ -14076,6 +14245,9 @@ non_reserved_keyword:
 |   KEY_BLOCK_SIZE
 |   LISTS
 |   OP_TYPE
+|   KMEANS_TRAIN_PERCENT
+|   KMEANS_MAX_ITERATION
+|   MAX_INDEX_CAPACITY
 |   KEYS
 |   LANGUAGE
 |   LESS

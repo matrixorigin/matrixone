@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -249,6 +250,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
 		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
+		if projNode == nil {
+			alias_name = fmt.Sprintf("mo_fulltext_alias_%d_%d", scanNode.NodeId, i)
+		}
 		params := idxdef.IndexAlgoParams
 
 		var exprs tree.Exprs
@@ -599,6 +603,74 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, nil
 }
 
+func (builder *QueryBuilder) scanHasMatchedFullTextFilter(node *plan.Node) bool {
+	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(node)
+	return len(filterids) > 0
+}
+
+func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, joinNode *plan.Node,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (bool, error) {
+	if joinNode == nil || joinNode.JoinType != plan.Node_INNER {
+		return false, nil
+	}
+
+	changed := false
+	for i, childID := range joinNode.Children {
+		child := builder.qry.Nodes[childID]
+		if child == nil || child.NodeType != plan.Node_TABLE_SCAN {
+			continue
+		}
+
+		newNodeID, ok, err := builder.applyFullTextFiltersForScanInJoin(nodeID, child, colRefCnt, idxColMap)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			joinNode.Children[i] = newNodeID
+			changed = true
+		}
+	}
+
+	return changed, nil
+}
+
+func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, scanNode *plan.Node,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, bool, error) {
+	filterids, filterIndexDefs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+	if len(filterids) == 0 {
+		return scanNode.NodeId, false, nil
+	}
+
+	ctxNodeID := builder.fullTextRewriteContextNodeID(nodeID, scanNode)
+	newNodeID, _, _, err := builder.applyJoinFullTextIndices(
+		ctxNodeID,
+		nil,
+		scanNode,
+		filterids,
+		filterIndexDefs,
+		nil,
+		nil,
+		map[int32]int32{},
+		colRefCnt,
+		idxColMap,
+	)
+	if err != nil {
+		return -1, false, err
+	}
+
+	return newNodeID, true, nil
+}
+
+func (builder *QueryBuilder) fullTextRewriteContextNodeID(preferredNodeID int32, scanNode *plan.Node) int32 {
+	if preferredNodeID >= 0 && int(preferredNodeID) < len(builder.ctxByNode) && builder.ctxByNode[preferredNodeID] != nil {
+		return preferredNodeID
+	}
+	if scanNode != nil && scanNode.NodeId >= 0 && int(scanNode.NodeId) < len(builder.ctxByNode) && builder.ctxByNode[scanNode.NodeId] != nil {
+		return scanNode.NodeId
+	}
+	return preferredNodeID
+}
+
 func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {
 
 	nargs1 := len(fn1.Args)
@@ -652,13 +724,48 @@ func (builder *QueryBuilder) findEqualFullTextMatchFunc(projNode *plan.Node, sca
 }
 
 func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode *plan.Node) *plan.IndexDef {
+	if fn == nil || scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
+		return nil
+	}
+	if len(fn.Args) < 3 || fn.Args[0].GetLit() == nil || fn.Args[1].GetLit() == nil {
+		return nil
+	}
+	if scanNode.TableDef.Pkey == nil || scanNode.TableDef.Pkey.PkeyColName == "" {
+		return nil
+	}
+
+	scanTag := scanNode.BindingTags[0]
+	argColNames := make([]string, 0, len(fn.Args)-2)
+	for j := 2; j < len(fn.Args); j++ {
+		col := fn.Args[j].GetCol()
+		if col == nil || col.RelPos != scanTag {
+			return nil
+		}
+
+		colName := col.Name
+		if colName == "" {
+			if col.ColPos < 0 || int(col.ColPos) >= len(scanNode.TableDef.Cols) {
+				return nil
+			}
+			colName = scanNode.TableDef.Cols[col.ColPos].Name
+		}
+		argColNames = append(argColNames, colName)
+	}
 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
+		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+			continue
+		}
+		if len(idx.Parts) != nargs {
+			continue
+		}
+
 		nfound := 0
 		for _, p := range idx.Parts {
-			for j := 2; j < len(fn.Args); j++ {
-				if strings.EqualFold(p, fn.Args[j].GetCol().GetName()) {
+			partName := catalog.ResolveAlias(p)
+			for _, colName := range argColNames {
+				if strings.EqualFold(partName, colName) || strings.EqualFold(p, colName) {
 					// found
 					nfound++
 					break

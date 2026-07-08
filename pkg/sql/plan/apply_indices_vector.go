@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -240,7 +241,14 @@ func (builder *QueryBuilder) directScanWithVectorIndex(node *plan.Node) *plan.No
 		return nil
 	}
 	for _, idx := range node.TableDef.Indexes {
-		if catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
+		// Recognize every plugin-registered vector index (HNSW, CAGRA,
+		// IVF-PQ, IVF-FLAT). The join-through and direct-scan rewrites
+		// must agree on the algo set — using the central
+		// indexplugin.IsVectorIndexAlgo capability check keeps them
+		// from drifting back into hardcoded algo lists like the previous
+		// IsIvfIndexAlgo || IsHnswIndexAlgo gate, which silently
+		// excluded CAGRA / IVF-PQ from the join-through path.
+		if indexplugin.IsVectorIndexAlgo(idx.IndexAlgo) {
 			return node
 		}
 	}
