@@ -125,12 +125,12 @@ func TestAMD64DimensionMismatch(t *testing.T) {
 	x32, y32 := make([]float32, 8), make([]float32, 7)
 	x64, y64 := make([]float64, 8), make([]float64, 7)
 	for name, fn := range map[string]func() error{
-		"L2sqF32":   func() error { _, e := L2DistanceSqFloat32(x32, y32); return e },
-		"L2sqF64":   func() error { _, e := L2DistanceSqFloat64(x64, y64); return e },
-		"IPF32":     func() error { _, e := InnerProductFloat32(x32, y32); return e },
-		"IPF64":     func() error { _, e := InnerProductFloat64(x64, y64); return e },
-		"L1F32":     func() error { _, e := L1DistanceFloat32(x32, y32); return e },
-		"L1F64":     func() error { _, e := L1DistanceFloat64(x64, y64); return e },
+		"L2sqF32":    func() error { _, e := L2DistanceSqFloat32(x32, y32); return e },
+		"L2sqF64":    func() error { _, e := L2DistanceSqFloat64(x64, y64); return e },
+		"IPF32":      func() error { _, e := InnerProductFloat32(x32, y32); return e },
+		"IPF64":      func() error { _, e := InnerProductFloat64(x64, y64); return e },
+		"L1F32":      func() error { _, e := L1DistanceFloat32(x32, y32); return e },
+		"L1F64":      func() error { _, e := L1DistanceFloat64(x64, y64); return e },
 		"CosDistF32": func() error { _, e := CosineDistanceF32(x32, y32); return e },
 		"CosDistF64": func() error { _, e := CosineDistanceF64(x64, y64); return e },
 		"CosSimF32":  func() error { _, e := CosineSimilarityF32(x32, y32); return e },
@@ -190,20 +190,20 @@ func TestAMD64GenericDispatchers(t *testing.T) {
 	a32, b32 := []float32{1, 2, 3, 4}, []float32{4, 3, 2, 1}
 	a64, b64 := []float64{1, 2, 3, 4}, []float64{4, 3, 2, 1}
 	for name, fn := range map[string]func() error{
-		"L2sq/32":    func() error { _, e := L2DistanceSq(a32, b32); return e },
-		"L2sq/64":    func() error { _, e := L2DistanceSq(a64, b64); return e },
-		"L2/32":      func() error { _, e := L2Distance(a32, b32); return e },
-		"L2/64":      func() error { _, e := L2Distance(a64, b64); return e },
-		"IP/32":      func() error { _, e := InnerProduct(a32, b32); return e },
-		"IP/64":      func() error { _, e := InnerProduct(a64, b64); return e },
-		"L1/32":      func() error { _, e := L1Distance(a32, b32); return e },
-		"L1/64":      func() error { _, e := L1Distance(a64, b64); return e },
-		"Cos/32":     func() error { _, e := CosineDistance(a32, b32); return e },
-		"Cos/64":     func() error { _, e := CosineDistance(a64, b64); return e },
-		"CosSim/32":  func() error { _, e := CosineSimilarity(a32, b32); return e },
-		"CosSim/64":  func() error { _, e := CosineSimilarity(a64, b64); return e },
-		"Sph/32":     func() error { _, e := SphericalDistance(a32, b32); return e },
-		"Sph/64":     func() error { _, e := SphericalDistance(a64, b64); return e },
+		"L2sq/32":   func() error { _, e := L2DistanceSq(a32, b32); return e },
+		"L2sq/64":   func() error { _, e := L2DistanceSq(a64, b64); return e },
+		"L2/32":     func() error { _, e := L2Distance(a32, b32); return e },
+		"L2/64":     func() error { _, e := L2Distance(a64, b64); return e },
+		"IP/32":     func() error { _, e := InnerProduct(a32, b32); return e },
+		"IP/64":     func() error { _, e := InnerProduct(a64, b64); return e },
+		"L1/32":     func() error { _, e := L1Distance(a32, b32); return e },
+		"L1/64":     func() error { _, e := L1Distance(a64, b64); return e },
+		"Cos/32":    func() error { _, e := CosineDistance(a32, b32); return e },
+		"Cos/64":    func() error { _, e := CosineDistance(a64, b64); return e },
+		"CosSim/32": func() error { _, e := CosineSimilarity(a32, b32); return e },
+		"CosSim/64": func() error { _, e := CosineSimilarity(a64, b64); return e },
+		"Sph/32":    func() error { _, e := SphericalDistance(a32, b32); return e },
+		"Sph/64":    func() error { _, e := SphericalDistance(a64, b64); return e },
 	} {
 		require.NoError(t, fn(), name)
 	}

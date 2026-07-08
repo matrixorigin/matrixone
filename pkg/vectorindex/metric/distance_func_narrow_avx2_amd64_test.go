@@ -121,21 +121,21 @@ func TestAVX2NarrowEdgeCases(t *testing.T) {
 		iA, iB := make([]int8, 8), make([]int8, 7)
 		uA, uB := make([]uint8, 8), make([]uint8, 7)
 		for name, fn := range map[string]func() (float64, error){
-			"bf16/l2sq":   func() (float64, error) { return l2sqBF16AVX2(bfA, bfB) },
-			"bf16/ip":     func() (float64, error) { return innerProductBF16AVX2(bfA, bfB) },
-			"bf16/l1":     func() (float64, error) { return l1DistanceBF16AVX2(bfA, bfB) },
-			"bf16/cosine": func() (float64, error) { return cosineDistanceBF16AVX2(bfA, bfB) },
-			"f16/l2sq":    func() (float64, error) { return l2sqF16AVX2(fA, fB) },
-			"f16/ip":      func() (float64, error) { return innerProductF16AVX2(fA, fB) },
-			"f16/l1":      func() (float64, error) { return l1DistanceF16AVX2(fA, fB) },
-			"f16/cosine":  func() (float64, error) { return cosineDistanceF16AVX2(fA, fB) },
-			"int8/l2sq":   func() (float64, error) { return l2sqInt8AVX2(iA, iB) },
-			"int8/ip":     func() (float64, error) { return innerProductInt8AVX2(iA, iB) },
-			"int8/l1":     func() (float64, error) { return l1DistanceInt8AVX2(iA, iB) },
-			"int8/cosine": func() (float64, error) { return cosineDistanceInt8AVX2(iA, iB) },
-			"uint8/l2sq":  func() (float64, error) { return l2sqUint8AVX2(uA, uB) },
-			"uint8/ip":    func() (float64, error) { return innerProductUint8AVX2(uA, uB) },
-			"uint8/l1":    func() (float64, error) { return l1DistanceUint8AVX2(uA, uB) },
+			"bf16/l2sq":    func() (float64, error) { return l2sqBF16AVX2(bfA, bfB) },
+			"bf16/ip":      func() (float64, error) { return innerProductBF16AVX2(bfA, bfB) },
+			"bf16/l1":      func() (float64, error) { return l1DistanceBF16AVX2(bfA, bfB) },
+			"bf16/cosine":  func() (float64, error) { return cosineDistanceBF16AVX2(bfA, bfB) },
+			"f16/l2sq":     func() (float64, error) { return l2sqF16AVX2(fA, fB) },
+			"f16/ip":       func() (float64, error) { return innerProductF16AVX2(fA, fB) },
+			"f16/l1":       func() (float64, error) { return l1DistanceF16AVX2(fA, fB) },
+			"f16/cosine":   func() (float64, error) { return cosineDistanceF16AVX2(fA, fB) },
+			"int8/l2sq":    func() (float64, error) { return l2sqInt8AVX2(iA, iB) },
+			"int8/ip":      func() (float64, error) { return innerProductInt8AVX2(iA, iB) },
+			"int8/l1":      func() (float64, error) { return l1DistanceInt8AVX2(iA, iB) },
+			"int8/cosine":  func() (float64, error) { return cosineDistanceInt8AVX2(iA, iB) },
+			"uint8/l2sq":   func() (float64, error) { return l2sqUint8AVX2(uA, uB) },
+			"uint8/ip":     func() (float64, error) { return innerProductUint8AVX2(uA, uB) },
+			"uint8/l1":     func() (float64, error) { return l1DistanceUint8AVX2(uA, uB) },
 			"uint8/cosine": func() (float64, error) { return cosineDistanceUint8AVX2(uA, uB) },
 		} {
 			_, err := fn()
@@ -162,8 +162,12 @@ func TestAVX2NarrowEdgeCases(t *testing.T) {
 	t.Run("zero_norm", func(t *testing.T) {
 		const dim = 4
 		for name, fn := range map[string]func() (float64, error){
-			"bf16":  func() (float64, error) { return cosineDistanceBF16AVX2(make([]types.BF16, dim), make([]types.BF16, dim)) },
-			"f16":   func() (float64, error) { return cosineDistanceF16AVX2(make([]types.Float16, dim), make([]types.Float16, dim)) },
+			"bf16": func() (float64, error) {
+				return cosineDistanceBF16AVX2(make([]types.BF16, dim), make([]types.BF16, dim))
+			},
+			"f16": func() (float64, error) {
+				return cosineDistanceF16AVX2(make([]types.Float16, dim), make([]types.Float16, dim))
+			},
 			"int8":  func() (float64, error) { return cosineDistanceInt8AVX2(make([]int8, dim), make([]int8, dim)) },
 			"uint8": func() (float64, error) { return cosineDistanceUint8AVX2(make([]uint8, dim), make([]uint8, dim)) },
 		} {

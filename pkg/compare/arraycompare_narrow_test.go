@@ -32,13 +32,13 @@ func TestArrayCompareNarrow(t *testing.T) {
 
 	buildBF16 := func() (a, b *vector.Vector) {
 		return newArrayVec(t, mp, types.T_array_bf16,
-			[][]types.BF16{{types.BF16FromFloat32(1), types.BF16FromFloat32(2)}}),
+				[][]types.BF16{{types.BF16FromFloat32(1), types.BF16FromFloat32(2)}}),
 			newArrayVec(t, mp, types.T_array_bf16,
 				[][]types.BF16{{types.BF16FromFloat32(1), types.BF16FromFloat32(3)}})
 	}
 	buildF16 := func() (a, b *vector.Vector) {
 		return newArrayVec(t, mp, types.T_array_float16,
-			[][]types.Float16{{types.Float16FromFloat32(1), types.Float16FromFloat32(2)}}),
+				[][]types.Float16{{types.Float16FromFloat32(1), types.Float16FromFloat32(2)}}),
 			newArrayVec(t, mp, types.T_array_float16,
 				[][]types.Float16{{types.Float16FromFloat32(1), types.Float16FromFloat32(3)}})
 	}
