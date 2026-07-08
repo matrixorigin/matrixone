@@ -566,6 +566,13 @@ is retained only as a schema-change / corruption-recovery fallback).
     at 0/2/5, surviving deletes persist, tail stays one frame), pure churn (no-op), and
     delete-only tail. Run by the standalone `fulltext_wand_compact` TVF (SQL, not a Go API
     call from idxcron).
+  - **2b-tiered merge — capacity-aware refinement DONE (commit `340f19c09`).** Fullness is now
+    `nrow >= max_index_capacity` (a new `metadata.nrow` column), so a full base sub is NEVER a
+    merge candidate — a MERGE over a pure-insert tail folds the tail into a new sub and leaves the
+    full base untouched (the old absolute `smallSubBytes` threshold re-merged the whole base when
+    capacity was small). `max_index_capacity` is now an immutable, SQL-settable algo-param (see
+    the `max_index_capacity` section): resolved once at CREATE (option > session var > 1M) and read
+    identically by build/fold/tiered, so a MERGE from any session agrees on which subs are full.
   - **2b-tiered merge — DONE (commit `21b189e69`).** `TieredMergeBases` coalesces one adjacent,
     recency-contiguous run of small subs into fewer capacity-capped subs, re-applying the tail
     deletes so promoted docs stay dead. Memory O(run) ≤ 128 MiB. Runs opportunistically at the
