@@ -92,4 +92,36 @@ drop table t0;
 drop table t1;
 drop table t2;
 
+-- case 6: decimal256 non-PK conflict
+create table t0 (
+id int primary key,
+amount decimal(39,4),
+note varchar(20)
+);
+insert into t0 values
+(1, 1234567890123456789012345678901230.0001, 'base'),
+(2, 1234567890123456789012345678901230.0002, 'same');
+
+data branch create table t1 from t0;
+data branch create table t2 from t0;
+
+update t1
+set amount = 1234567890123456789012345678901231.1111,
+	note = 'left'
+where id = 1;
+update t2
+set amount = 1234567890123456789012345678901232.2222,
+	note = 'right'
+where id = 1;
+
+data branch pick t2 into t1 keys(1) when conflict fail;
+data branch pick t2 into t1 keys(1) when conflict skip;
+select * from t1 where id = 1;
+data branch pick t2 into t1 keys(1) when conflict accept;
+select * from t1 where id = 1;
+
+drop table t0;
+drop table t1;
+drop table t2;
+
 drop database test;

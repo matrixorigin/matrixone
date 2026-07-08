@@ -19,10 +19,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"math/big"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 	"unsafe"
 
@@ -5202,8 +5204,30 @@ func strToSigned[T constraints.Signed](
 				s := strings.TrimSpace(convertByteSliceToString(v))
 				var r int64
 				var err error
-				if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
-					r, err = strconv.ParseInt(s[2:], 16, bitSize)
+				neg := false
+				body := s
+				hasRadix := false
+				if len(s) > 0 && (s[0] == '+' || s[0] == '-') {
+					neg = s[0] == '-'
+					body = s[1:]
+				}
+				if len(body) >= 2 && body[0] == '0' {
+					switch body[1] {
+					case 'b', 'B':
+						r, err = strconv.ParseInt(body[2:], 2, bitSize)
+						hasRadix = true
+					case 'o', 'O':
+						r, err = strconv.ParseInt(body[2:], 8, bitSize)
+						hasRadix = true
+					case 'x', 'X':
+						r, err = strconv.ParseInt(body[2:], 16, bitSize)
+						hasRadix = true
+					}
+				}
+				if hasRadix {
+					if neg {
+						r = -r
+					}
 				} else {
 					integer, parseErr := integerStringForCast(s, mode)
 					if parseErr != nil {
@@ -5227,6 +5251,117 @@ func strToSigned[T constraints.Signed](
 		}
 	}
 	return nil
+}
+
+func splitCastNumericSign(s string) (trimmed string, body string, negative bool, hasSign bool) {
+	trimmed = strings.TrimSpace(s)
+	if trimmed == "" {
+		return trimmed, trimmed, false, false
+	}
+	switch trimmed[0] {
+	case '+':
+		return trimmed, trimmed[1:], false, true
+	case '-':
+		return trimmed, trimmed[1:], true, true
+	default:
+		return trimmed, trimmed, false, false
+	}
+}
+
+type castNumericToken struct {
+	digits   string
+	base     int
+	negative bool
+}
+
+func parseCastNumericToken(s string) (castNumericToken, error) {
+	trimmed, body, negative, _ := splitCastNumericSign(s)
+	if body == "" {
+		return castNumericToken{}, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
+	}
+	if body[0] == '+' || body[0] == '-' {
+		return castNumericToken{}, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
+	}
+	if strings.IndexFunc(body, unicode.IsSpace) >= 0 {
+		return castNumericToken{}, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
+	}
+
+	token := castNumericToken{
+		digits:   body,
+		base:     10,
+		negative: negative,
+	}
+	if len(body) >= 2 && body[0] == '0' {
+		switch body[1] {
+		case 'b', 'B':
+			token.base = 2
+			token.digits = body[2:]
+		case 'o', 'O':
+			token.base = 8
+			token.digits = body[2:]
+		case 'x', 'X':
+			token.base = 16
+			token.digits = body[2:]
+		}
+		if token.digits == "" {
+			return castNumericToken{}, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", trimmed)
+		}
+	}
+	return token, nil
+}
+
+func prefixedDigitsToDecimalString(digits string, base int) (string, error) {
+	if base == 10 {
+		return digits, nil
+	}
+	var value big.Int
+	if _, ok := value.SetString(digits, base); !ok {
+		return "", moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", digits)
+	}
+	return value.String(), nil
+}
+
+func parseSignedCastString(s string, bitSize int) (int64, error) {
+	token, err := parseCastNumericToken(s)
+	if err != nil {
+		return 0, err
+	}
+	value, err := strconv.ParseUint(token.digits, token.base, bitSize)
+	if err != nil {
+		return 0, err
+	}
+	maxAbsNegative := uint64(1) << uint(bitSize-1)
+	if token.negative {
+		if value > maxAbsNegative {
+			return 0, strconv.ErrRange
+		}
+		if value == maxAbsNegative {
+			if bitSize == 64 {
+				return math.MinInt64, nil
+			}
+			return -int64(maxAbsNegative), nil
+		}
+		return -int64(value), nil
+	}
+	if value >= maxAbsNegative {
+		return 0, strconv.ErrRange
+	}
+	return int64(value), nil
+}
+
+func parseUnsignedCastString(s string, bitSize int) (uint64, error) {
+	token, err := parseCastNumericToken(s)
+	if err != nil {
+		return 0, err
+	}
+	val, err := strconv.ParseUint(token.digits, token.base, bitSize)
+	if err != nil {
+		return 0, err
+	}
+	if token.negative && val != 0 {
+		return 0, strconv.ErrSyntax
+	}
+	return val, nil
 }
 
 func strToUnsigned[T constraints.Unsigned](
@@ -5259,8 +5394,30 @@ func strToUnsigned[T constraints.Unsigned](
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
 				res = &s
-				if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
-					val, tErr = strconv.ParseUint(s[2:], 16, bitSize)
+				neg := false
+				body := s
+				hasRadix := false
+				if len(s) > 0 && (s[0] == '+' || s[0] == '-') {
+					neg = s[0] == '-'
+					body = s[1:]
+				}
+				if len(body) >= 2 && body[0] == '0' {
+					switch body[1] {
+					case 'b', 'B':
+						val, tErr = strconv.ParseUint(body[2:], 2, bitSize)
+						hasRadix = true
+					case 'o', 'O':
+						val, tErr = strconv.ParseUint(body[2:], 8, bitSize)
+						hasRadix = true
+					case 'x', 'X':
+						val, tErr = strconv.ParseUint(body[2:], 16, bitSize)
+						hasRadix = true
+					}
+				}
+				if hasRadix {
+					if neg && val != 0 {
+						tErr = strconv.ErrSyntax
+					}
 				} else {
 					integer, parseErr := integerStringForCast(s, mode)
 					if parseErr != nil {
@@ -5417,7 +5574,7 @@ func strToDecimal64(
 		} else {
 			s := convertByteSliceToString(v)
 			if !isb {
-				result, err := types.ParseDecimal64(s, totype.Width, totype.Scale)
+				result, err := parseDecimal64CastString(s, totype.Width, totype.Scale)
 				if err != nil {
 					return err
 				}
@@ -5438,6 +5595,63 @@ func strToDecimal64(
 	return nil
 }
 
+func parseDecimal64CastString(s string, width, scale int32) (types.Decimal64, error) {
+	token, err := parseCastNumericToken(s)
+	if err != nil {
+		return 0, err
+	}
+	parseStr, err := prefixedDigitsToDecimalString(token.digits, token.base)
+	if err != nil {
+		return 0, err
+	}
+	result, err := types.ParseDecimal64(parseStr, width, scale)
+	if err != nil {
+		return 0, err
+	}
+	if token.negative {
+		result = result.Minus()
+	}
+	return result, nil
+}
+
+func parseDecimal128CastString(s string, width, scale int32) (types.Decimal128, error) {
+	token, err := parseCastNumericToken(s)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	parseStr, err := prefixedDigitsToDecimalString(token.digits, token.base)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	result, err := types.ParseDecimal128(parseStr, width, scale)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	if token.negative {
+		result = result.Minus()
+	}
+	return result, nil
+}
+
+func parseDecimal256CastString(s string, width, scale int32) (types.Decimal256, error) {
+	token, err := parseCastNumericToken(s)
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	parseStr, err := prefixedDigitsToDecimalString(token.digits, token.base)
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	result, err := types.ParseDecimal256(parseStr, width, scale)
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	if token.negative {
+		result = result.Minus()
+	}
+	return result, nil
+}
+
 func strToDecimal128(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList,
@@ -5456,7 +5670,7 @@ func strToDecimal128(
 		} else {
 			s := convertByteSliceToString(v)
 			if !isb {
-				result, err := types.ParseDecimal128(s, totype.Width, totype.Scale)
+				result, err := parseDecimal128CastString(s, totype.Width, totype.Scale)
 				if err != nil {
 					return err
 				}
@@ -5495,7 +5709,7 @@ func strToDecimal256(
 		} else {
 			s := convertByteSliceToString(v)
 			if !isb {
-				result, err := types.ParseDecimal256(s, totype.Width, totype.Scale)
+				result, err := parseDecimal256CastString(s, totype.Width, totype.Scale)
 				if err != nil {
 					return err
 				}
