@@ -139,7 +139,6 @@ func assembleFramesAt(r io.ReaderAt, minChunk, span int64) (segs []*WandModel, d
 		}
 		var pt int32
 		segs, deletes, pt, e = applyTailFrame(buf, minChunk+slot, segs, deletes)
-		buf = nil // release before the next frame
 		if e != nil {
 			freeSegs(segs)
 			return nil, nil, 0, e

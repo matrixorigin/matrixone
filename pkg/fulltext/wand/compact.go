@@ -437,7 +437,7 @@ func TieredMergeBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int
 	batch := metas[lo:hi]
 	maxRecency := batch[len(batch)-1].recency // recency-sorted ⇒ last is the max
 
-	var subs []*WandModel
+	subs := make([]*WandModel, 0, len(batch))
 	for _, b := range batch {
 		m, e := LoadFromStorage(sqlproc, cfg, b.id)
 		if e != nil {

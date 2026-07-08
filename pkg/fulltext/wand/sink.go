@@ -209,7 +209,8 @@ func BuildTailFrames(cdc *WandCdc, capacity int64, startChunkId int64, tokenize 
 		}
 	}
 
-	var frames []TailFrame
+	segs := b.FinishSegments(capacity)
+	frames := make([]TailFrame, 0, len(segs)+1) // +1 for the optional deletes frame
 	chunkId := startChunkId
 	if len(deletes) > 0 {
 		frame, err := FrameDeletes(cdc.PkType, deletes)
@@ -219,7 +220,7 @@ func BuildTailFrames(cdc *WandCdc, capacity int64, startChunkId int64, tokenize 
 		frames = append(frames, TailFrame{Recency: chunkId, Data: frame})
 		chunkId += frameChunkCount(len(frame))
 	}
-	for _, seg := range b.FinishSegments(capacity) {
+	for _, seg := range segs {
 		if seg.N == 0 {
 			seg.Free()
 			continue

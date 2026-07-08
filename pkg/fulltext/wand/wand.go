@@ -255,15 +255,6 @@ func (m *WandModel) PkAt(ord int64) any {
 	return m.pks[ord]
 }
 
-// idfSq returns idf(df)^2 = (log10(N/df))^2.
-func (m *WandModel) idfSq(df int) float64 {
-	if df <= 0 || m.N <= 0 {
-		return 0
-	}
-	idf := log10(float64(m.N) / float64(df))
-	return idf * idf
-}
-
 // resolveWordID maps a query/build word to its word-id. ok is false when the
 // word is neither a dictionary word nor (for queries) a known overflow term.
 func (m *WandModel) resolveWordID(word string) (int32, bool, error) {

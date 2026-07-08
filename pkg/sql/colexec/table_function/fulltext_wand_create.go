@@ -124,7 +124,7 @@ func (u *fulltextWandCreateState) end(tf *TableFunction, proc *process.Process) 
 	// repeated builds from writing colliding sub-index ids (mirrors HNSW's uid:n).
 	ts := time.Now().UnixMicro()
 	uid := fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, ts)
-	var cleanups []func()
+	cleanups := make([]func(), 0, len(nonEmpty))
 	defer func() {
 		for _, c := range cleanups {
 			c()

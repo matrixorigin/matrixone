@@ -247,7 +247,7 @@ func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandModel, e
 	}
 	res.Close()
 
-	var bases []*WandModel
+	bases := make([]*WandModel, 0, len(ids))
 	for _, id := range ids {
 		m, lerr := LoadFromStorage(sqlproc, cfg, id)
 		if lerr != nil {

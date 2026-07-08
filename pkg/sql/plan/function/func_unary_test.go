@@ -3546,11 +3546,12 @@ func TestLoadFileDatalink(t *testing.T) {
 // `INSERT INTO t VALUES (load_file(a)), (load_file(b)), ...` produces, where the
 // function is evaluated over a vector of rows in ONE call reusing a single read
 // buffer. It guards three things:
-//   (1) an EMPTY file in the middle must NOT abandon the rows after it (the old code
-//       `return nil`d instead of continuing);
-//   (2) the reused buffer must GROW correctly for a larger file (row 0 -> row 1); and
-//   (3) a smaller file after a larger one must not leave a STALE TAIL from the prior
-//       read (row 1 "worldwide" -> row 3 "hi", not "hirldwide").
+//
+//	(1) an EMPTY file in the middle must NOT abandon the rows after it (the old code
+//	    `return nil`d instead of continuing);
+//	(2) the reused buffer must GROW correctly for a larger file (row 0 -> row 1); and
+//	(3) a smaller file after a larger one must not leave a STALE TAIL from the prior
+//	    read (row 1 "worldwide" -> row 3 "hi", not "hirldwide").
 func TestLoadFileDatalinkBatch(t *testing.T) {
 	dir := t.TempDir()
 	proc := testutil.NewProc(t)
@@ -3559,10 +3560,10 @@ func TestLoadFileDatalinkBatch(t *testing.T) {
 		require.NoError(t, os.WriteFile(p, []byte(data), 0o600))
 		return "file://" + p
 	}
-	hello := write("hello", "hello")          // 5 bytes
-	wide := write("wide", "worldwide")        // 9 bytes -> buffer grows
-	empty := write("empty", "")               // 0 bytes -> null, must not abort batch
-	small := write("small", "hi")             // 2 bytes -> reslice, no stale tail
+	hello := write("hello", "hello")   // 5 bytes
+	wide := write("wide", "worldwide") // 9 bytes -> buffer grows
+	empty := write("empty", "")        // 0 bytes -> null, must not abort batch
+	small := write("small", "hi")      // 2 bytes -> reslice, no stale tail
 
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_datalink.ToType(),
