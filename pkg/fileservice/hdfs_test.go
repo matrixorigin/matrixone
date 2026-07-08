@@ -27,6 +27,7 @@ import (
 )
 
 const (
+	hdfsDefaultNamenodeAddr = "hdfs://hadoop-namenode.hadoop.svc.cluster.local:9820"
 	hdfsNamenodeAddrEnv     = "HDFS_NAMENODE_ADDR"
 	hdfsNamenodeDialTimeout = 5 * time.Second
 )
@@ -146,7 +147,7 @@ func getHDFSTestAddr(t *testing.T) string {
 
 	addr := os.Getenv(hdfsNamenodeAddrEnv)
 	if addr == "" {
-		t.Skipf("set %s to run HDFS integration test", hdfsNamenodeAddrEnv)
+		addr = hdfsDefaultNamenodeAddr
 	}
 
 	if !strings.HasPrefix(addr, "hdfs://") {
