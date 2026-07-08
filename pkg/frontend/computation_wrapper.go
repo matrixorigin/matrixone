@@ -461,7 +461,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 
-	// rebuild and recompile
+	// rebuild plan when schema changed
 	if change {
 		originPrepareStmt := &tree.PrepareStmt{
 			Name: tree.Identifier(prepareStmt.Name),
@@ -471,37 +471,35 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if err != nil {
 			return nil, nil, nil, "", err
 		}
-
-		if prepareStmt.compile != nil {
-			prepareStmt.compile.FreeOperator()
-			prepareStmt.compile.SetIsPrepare(false)
-			prepareStmt.compile.Release()
-			prepareStmt.compile = nil // set nil and recompile later
-		}
-
 		preparePlan = newPlan.GetDcl().GetPrepare()
-		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok {
-			//only DQL & DML will pre compile
-			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true)
-			if err != nil {
-				if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
-					return nil, nil, nil, "", err
-				}
-			}
-			// do not save ap query now()
-			if comp != nil && !comp.IsTpQuery() {
-				comp.SetIsPrepare(false)
-				comp.Release()
-				comp = nil
-			}
-			prepareStmt.compile = comp
-
-		}
 		prepareStmt.PreparePlan = newPlan
-
 		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
 	}
-
+	
+	// Always recreate the compile to avoid stale operator state (e.g. hashbuild ctr,
+	// dispatch channels) from previous executions when the plan is reused.
+	// See: https://github.com/matrixorigin/mo/issues/25526
+	if prepareStmt.compile != nil {
+		prepareStmt.compile.FreeOperator()
+		prepareStmt.compile.SetIsPrepare(false)
+		prepareStmt.compile.Release()
+		prepareStmt.compile = nil
+	}
+	if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok {
+		comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true)
+		if err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
+				return nil, nil, nil, "", err
+			}
+		}
+		// do not save ap query now()
+		if comp != nil && !comp.IsTpQuery() {
+			comp.SetIsPrepare(false)
+			comp.Release()
+			comp = nil
+		}
+		prepareStmt.compile = comp
+	}
 	numParams := len(preparePlan.ParamTypes)
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
