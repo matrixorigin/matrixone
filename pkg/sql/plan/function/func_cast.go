@@ -6487,7 +6487,7 @@ func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, ex
 		} else {
 			valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec), "["), "]")
 			shortenValueStr := shortenValueString(valueStr)
-			errStr = fmt.Sprintf("Can't cast '%s' from %v type to %v type.", shortenValueStr, vec.GetType(), typ)
+			errStr = fmt.Sprintf("Can't cast '%s' to %v type.", shortenValueStr, typ)
 		}
 	} else {
 		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.GetType(), typ)
@@ -6507,7 +6507,7 @@ func formatDataTruncationError(ctx context.Context, vec *vector.Vector, typ type
 		} else {
 			valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec), "["), "]")
 			shortenValueStr := shortenValueString(valueStr)
-			errStr = fmt.Sprintf("Can't cast '%s' from %v type to %v type.", shortenValueStr, vec.GetType(), typ)
+			errStr = fmt.Sprintf("Can't cast '%s' to %v type.", shortenValueStr, typ)
 		}
 	} else {
 		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.GetType(), typ)
