@@ -87,6 +87,34 @@ func TestSQLModeParserModes(t *testing.T) {
 		require.Equal(t, "concat", fn.Func.FunctionReference.(*tree.UnresolvedName).ColName())
 	})
 
+	t.Run("PIPES_AS_CONCAT has concat precedence, not or precedence", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(context.Background(), `select true or 'a'||'b'`, 1, "PIPES_AS_CONCAT")
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		orExpr, ok := firstSelectExpr(t, stmt).(*tree.OrExpr)
+		require.True(t, ok)
+		fn, ok := orExpr.Right.(*tree.FuncExpr)
+		require.True(t, ok)
+		require.Equal(t, "concat", fn.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+	})
+
+	t.Run("PIPES_AS_CONCAT binds between bit xor and unary", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(context.Background(), `select 1^2||-3`, 1, "PIPES_AS_CONCAT")
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		xorExpr, ok := firstSelectExpr(t, stmt).(*tree.BinaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.BIT_XOR, xorExpr.Op)
+		fn, ok := xorExpr.Right.(*tree.FuncExpr)
+		require.True(t, ok)
+		require.Equal(t, "concat", fn.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+		require.Len(t, fn.Exprs, 2)
+		_, ok = fn.Exprs[1].(*tree.UnaryExpr)
+		require.True(t, ok)
+	})
+
 	t.Run("MO default session mode keeps legacy pipes concat behavior", func(t *testing.T) {
 		sqlMode := SessionSQLModeForParser(moDefaultSQLMode)
 		require.Contains(t, sqlMode, "PIPES_AS_CONCAT")

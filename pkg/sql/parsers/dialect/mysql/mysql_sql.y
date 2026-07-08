@@ -351,7 +351,8 @@ func sqlTaskInt64(v any) int64 {
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
 %right <str> UNIQUE KEY
-%left <str> OR PIPE_CONCAT
+%left <str> OR
+%token <str> PIPE_CONCAT
 %left <str> XOR
 %left <str> AND
 %right <str> NOT '!'
@@ -364,6 +365,7 @@ func sqlTaskInt64(v any) int64 {
 %left <str> '+' '-'
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
+%left PIPE_CONCAT
 %right <str> '~' UNARY
 %nonassoc LOWER_THAN_COLLATE
 %left <str> COLLATE
@@ -10959,6 +10961,15 @@ bit_expr:
     {
         $$ = tree.NewBinaryExpr(tree.BIT_XOR, $1, $3)
     }
+|   bit_expr PIPE_CONCAT bit_expr
+    {
+        name := tree.NewUnresolvedColName("concat")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr("concat", 1),
+            Exprs: tree.Exprs{$1, $3},
+        }
+    }
 |   bit_expr '+' bit_expr %prec '+'
     {
         $$ = tree.NewBinaryExpr(tree.PLUS, $1, $3)
@@ -12661,15 +12672,6 @@ expression:
 |   expression OR expression %prec OR
     {
         $$ = tree.NewOrExpr($1, $3)
-    }
-|   expression PIPE_CONCAT expression %prec PIPE_CONCAT
-    {
-        name := tree.NewUnresolvedColName("concat")
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr("concat", 1),
-            Exprs: tree.Exprs{$1, $3},
-        }
     }
 |   expression XOR expression %prec XOR
     {
