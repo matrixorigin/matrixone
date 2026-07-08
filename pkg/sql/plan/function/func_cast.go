@@ -6496,19 +6496,23 @@ func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, ex
 }
 
 // formatDataTruncationError reports a data-too-long error (MySQL 1406 / SQLSTATE HY000)
-// for cast width violations, preserving the same diagnostic context as formatCastError
-// but with the correct MySQL error code (ER_DATA_TOO_LONG) instead of a generic internal
-// error.
+// for cast width violations. The diagnostic message mirrors formatCastError so existing
+// BVT result files stay compatible. The error code is ER_DATA_TOO_LONG (1406) instead of
+// a generic internal error.
 func formatDataTruncationError(ctx context.Context, vec *vector.Vector, typ types.Type, extraInfo string) error {
 	var errStr string
-	if vec.IsConst() && !vec.IsConstNull() {
-		valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec), "["), "]")
-		shortenValueStr := shortenValueString(valueStr)
-		errStr = fmt.Sprintf("'%s' from %v type to %v type", shortenValueStr, vec.GetType(), typ)
+	if vec.IsConst() {
+		if vec.IsConstNull() {
+			errStr = fmt.Sprintf("Can't cast 'NULL' as %v type.", typ)
+		} else {
+			valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec), "["), "]")
+			shortenValueStr := shortenValueString(valueStr)
+			errStr = fmt.Sprintf("Can't cast '%s' from %v type to %v type.", shortenValueStr, vec.GetType(), typ)
+		}
 	} else {
-		errStr = fmt.Sprintf("from %v type to %v type", vec.GetType(), typ)
+		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.GetType(), typ)
 	}
-	return moerr.NewDataTruncatedf(ctx, "String", "%s. %s", errStr, extraInfo)
+	return moerr.NewErrCastWidthExceeded(ctx, errStr+" "+extraInfo)
 }
 
 func explicitCastToBinary(toType types.Type, v []byte, null bool, to *vector.FunctionResult[types.Varlena]) error {
