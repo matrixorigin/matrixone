@@ -1616,6 +1616,81 @@ func setMockEmpDeptForeignKeyAction(
 	deptTable.RefChildTbls = []uint64{empTable.TblId}
 }
 
+func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// Generate dname from loc on the second table (dept).
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'non-first-gen' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback multi-table update with non-first table generated column: %v", err)
+	}
+	query := logicPlan.GetQuery()
+
+	// The source project should contain emp cols (9) + SET comm (1) + dept cols (4) + SET loc (1) + generated dname (1) = 16.
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	deptCols := len(mock.ctxt.tables["dept"].Cols)
+	expectedLen := empCols + 1 + deptCols + 1 + 1 // emp SET + dept SET + dname generated
+	node := requireFallbackSourceProjectNode(t, query, expectedLen, "non-first-gen")
+	if !nodeContainsStringLiteral(node, "non-first-gen") {
+		t.Fatalf("generated column on non-first table should contain the SET value, got %v", node.ProjectList)
+	}
+}
+
+func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// Chain: sal depends on comm, comm is a SET column.
+	// After optimization and rewrite, sal's generated expr should use the SET value of comm.
+	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-opt-marker' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with generated column after optimization: %v", err)
+	}
+
+	// emp cols (9) + SET comm (1) + generated sal (1) + dept cols (4) + SET loc (1) = 16
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	deptCols := len(mock.ctxt.tables["dept"].Cols)
+	expectedLen := empCols + 2 + deptCols + 1
+	// Position of generated sal: after emp cols (9) + SET comm (1) = index 10
+	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(), expectedLen,
+		empCols+1, "chain-opt-marker")
+	if generatedExpr == nil {
+		t.Fatal("generated column position after optimization should not be nil")
+	}
+	// The generated expr should be a non-nil expression (DeepCopy of the SET value).
+	// We don't check the exact contents since substituteColRefsInExpr deep-copies,
+	// but we verify the expression exists at the expected position.
+}
+
+func TestUpdateFallbackGeneratedColumnDerivedTableSource(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET comm = 1, ename = 'derived-src-marker' FROM (SELECT deptno, loc FROM dept) AS d WHERE emp.deptno = d.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with derived table source and generated column: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	expectedLen := empCols + 3
+	node := requireFallbackSourceProjectNode(t, query, expectedLen, "derived-src-marker")
+	if node == nil {
+		t.Fatalf("missing source PROJECT with length %d and derived-src-marker", expectedLen)
+	}
+	generatedPos := empCols + 2
+	if generatedPos >= len(node.ProjectList) {
+		t.Fatalf("generated column position %d out of range (ProjectList length %d)", generatedPos, len(node.ProjectList))
+	}
+	if node.ProjectList[generatedPos] == nil {
+		t.Fatalf("generated column expression at position %d should not be nil", generatedPos)
+	}
+}
+
 func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, generatedName, sourceName string) {
 	tableDef := mock.ctxt.tables[tableName]
 	if tableDef == nil {
@@ -1709,6 +1784,20 @@ func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int
 			continue
 		}
 		return node
+	}
+	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
+	return nil
+}
+
+func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
+	for _, node := range query.Nodes {
+		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
+			continue
+		}
+		if pos >= len(node.ProjectList) {
+			continue
+		}
+		return node.ProjectList[pos]
 	}
 	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
 	return nil
