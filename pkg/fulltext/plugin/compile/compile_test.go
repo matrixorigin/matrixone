@@ -280,8 +280,9 @@ func TestWandInitSQL(t *testing.T) {
 
 	var stmts []string
 	require.NoError(t, json.Unmarshal([]byte(js), &stmts))
-	require.GreaterOrEqual(t, len(stmts), 2) // >=1 postings insert + 1 build
-	require.Contains(t, stmts[len(stmts)-1], "fulltext_wand_create")
+	require.GreaterOrEqual(t, len(stmts), 3)                                     // >=1 postings insert + 1 build + 1 empty-postings
+	require.Contains(t, stmts[len(stmts)-2], "fulltext_wand_create")             // build the tag=0 base
+	require.Contains(t, stmts[len(stmts)-1], "DELETE FROM `db1`.`postings_tbl`") // then discard postings
 
 	// no WAND store def -> "" (non-retrieval / postings-only index)
 	js2, err := wandInitSQL(map[string]*plan.IndexDef{}, tableDef, indexDef, "db1", 1000)

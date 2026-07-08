@@ -133,7 +133,7 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 		// tail; the tag=0 bases + metadata are cleared by the create TVF.
 		cfg := wand.TableConfig{DbName: qryDatabase, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
 		clearSQLs := append([]string{
-			fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, indexDef.IndexTableName)),
+			emptyPostingsSQL(indexDef, qryDatabase), // WHERE TRUE — don't truncate the hidden table
 		}, wand.DeleteTailSqls(cfg)...)
 		for _, sql := range clearSQLs {
 			if err = ctx.RunSql(sql); err != nil {
@@ -149,6 +149,9 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 		if err != nil {
 			return err
 		}
+		// Empty the postings table once the WAND base is built from it: for a retrieval
+		// index the postings are only the build input, never read again (see emptyPostingsSQL).
+		buildSQLs = append(buildSQLs, emptyPostingsSQL(indexDef, qryDatabase))
 		for _, sql := range append(insertSQLs, buildSQLs...) {
 			if err = ctx.RunSql(sql); err != nil {
 				return err
@@ -185,9 +188,9 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 	// Clear first so this is an idempotent rebuild — a no-op DELETE on a fresh CREATE
 	// (empty table), a full re-tokenize on ALTER … REINDEX (forceSync). The ngram
 	// postings are maintained synchronously by the DML rewrite (no CDC), so clearing +
-	// re-inserting from the current source rows is a complete rebuild.
-	if err = ctx.RunSql(fmt.Sprintf("DELETE FROM %s",
-		sqlquote.QualifiedIdent(qryDatabase, indexDef.IndexTableName))); err != nil {
+	// re-inserting from the current source rows is a complete rebuild. WHERE TRUE keeps
+	// the hidden table object (a bare DELETE would truncate/recreate it).
+	if err = ctx.RunSql(emptyPostingsSQL(indexDef, qryDatabase)); err != nil {
 		return err
 	}
 	insertSQLs, err := genInsertSQL(originalTableDef, indexDef, qryDatabase)
@@ -223,6 +226,9 @@ func wandInitSQL(indexDefs map[string]*plan.IndexDef, originalTableDef *plan.Tab
 	if err != nil {
 		return "", err
 	}
+	// Empty the postings after the async build too (see emptyPostingsSQL) — the InitSQL runs
+	// genInsertSQL -> postings -> genWandBuildSQL -> tag=0, then discards the postings.
+	buildSQLs = append(buildSQLs, emptyPostingsSQL(indexDef, qryDatabase))
 	js, err := json.Marshal(append(insertSQLs, buildSQLs...))
 	if err != nil {
 		return "", err
@@ -414,6 +420,20 @@ func registerIdxcronUpdate(ctx compileplugin.CompileContext, indexDef *plan.Inde
 	}
 	return ctx.RegisterIdxcronUpdate(originalTableDef.TblId, qryDatabase,
 		originalTableDef.Name, indexDef.IndexName, actionFulltextReindex, metadata)
+}
+
+// emptyPostingsSQL empties the postings hidden table (all rows) while keeping the table object.
+// Used to clear before a rebuild AND — for a retrieval index — to discard the postings after
+// the WAND base is built from them (they are only the build input; search uses the WAND store,
+// CDC builds tail frames directly, and a rebuild/clone re-derives them from source, so keeping
+// them is dead weight).
+//
+// The `WHERE TRUE` is deliberate: a bare `DELETE FROM t` takes MO's truncate fast-path, which
+// DROPS + RECREATES the table object — wrong for a catalog-tracked hidden index table (it would
+// re-mint the object under the same name). WHERE TRUE forces a row-level delete that empties the
+// rows but keeps the table (and its schema) for the next build's genInsertSQL.
+func emptyPostingsSQL(indexDef *plan.IndexDef, qryDatabase string) string {
+	return fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, indexDef.IndexTableName))
 }
 
 // genInsertSQL is lifted from pkg/sql/compile/util.go:528
