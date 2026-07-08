@@ -36,7 +36,7 @@ select id from enum_idx07 where status='shipped';
 id
 1
 update enum_idx07 set status='paid' where id=1;
-Duplicate entry '2' for key 'status'
+Duplicate entry '2' for key '__mo_index_idx_col'
 select id, status, note from enum_idx07 order by id;
 id    status    note
 1    shipped    n1
