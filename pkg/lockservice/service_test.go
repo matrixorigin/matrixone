@@ -5463,12 +5463,14 @@ func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
 			default:
 			}
 
+			const postUnlockAcquireTimeout = 2 * time.Second
 			require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
 			select {
 			case err := <-lockErrC:
 				require.NoError(t, err)
-			case <-time.After(10 * time.Second):
-				require.FailNow(t, "txn2 did not acquire the lock after txn1 unlocked")
+			case <-time.After(postUnlockAcquireTimeout):
+				require.FailNowf(t, "txn2 did not acquire the lock promptly after txn1 unlocked",
+					"timeout: %s", postUnlockAcquireTimeout)
 			}
 			require.NoError(t, l.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
 		},
