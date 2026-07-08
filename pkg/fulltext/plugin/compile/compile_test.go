@@ -140,9 +140,16 @@ func TestRestoreInitSQL_MissingPostingsDef_Errors(t *testing.T) {
 func TestHandleReindex_NonRetrieval_NotSupported(t *testing.T) {
 	ctx := &stubCtx{qryDatabase: "db1", tableDef: &plan.TableDef{Name: "t1"}}
 	defs := map[string]*plan.IndexDef{"": {IndexName: "ftidx", IndexAlgoParams: ngramParams}}
+	// plain rebuild on a non-retrieval index: not supported
 	err := Hooks{}.HandleReindex(ctx, defs, false, false)
 	require.Error(t, err)
 	require.Contains(t, strings.ToLower(err.Error()), "not supported")
+	// MERGE (incremental compaction) on a non-retrieval index: not supported, and the
+	// message names MERGE so the user knows compaction is retrieval-only.
+	err = Hooks{}.HandleReindex(ctx, defs, false, true)
+	require.Error(t, err)
+	require.Contains(t, strings.ToLower(err.Error()), "not supported")
+	require.Contains(t, err.Error(), "MERGE")
 }
 
 func TestHandleReindex_MissingPostingsDef_Errors(t *testing.T) {

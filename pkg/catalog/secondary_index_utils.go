@@ -357,6 +357,14 @@ const IndexParamSessionVars = "session_vars"
 // The reserved IndexParamSessionVars key (a nested typed object) is skipped so
 // flat-string consumers stay unchanged; read it via IndexParamsSessionVars.
 func IndexParamsStringToMap(indexParams string) (map[string]string, error) {
+	// Empty algo params is a legitimate state (e.g. a plain ngram fulltext index) meaning
+	// "no params" — treat it as an empty map, not a JSON parse error. Mirrors the len==0
+	// guard in IndexParamsSessionVars. Without this, ALTER … REINDEX on such an index fails
+	// with "unexpected end of JSON input" before the plugin can report the real reason
+	// (e.g. fulltext MERGE/reindex is retrieval-only).
+	if len(indexParams) == 0 {
+		return map[string]string{}, nil
+	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(indexParams), &raw); err != nil {
 		return nil, err
