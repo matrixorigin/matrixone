@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"sort"
 	"sync"
 	"time"
 
@@ -50,22 +49,41 @@ func (c *Compile) scheduleQueryWorkers() (engine.Nodes, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !placement.Satisfied {
+		getQueryScheduleLogger().WarnWithConfig(
+			"query-schedule-unsatisfied-placement",
+			"query schedule cannot satisfy placement",
+			queryScheduleLogRateLimit,
+			c.querySchedulePlacementFields(placement)...)
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"query schedule cannot satisfy placement, reason %s, current CN policy %s",
+			placement.Reason,
+			placement.CurrentCNPolicy.String())
+	}
 	nodes := toEngineNodes(placement.Workers)
 	if c.execType == plan2.ExecTypeAP_MULTICN {
-		// Fixed CN order keeps downstream CNCNT/CNIDX assignment deterministic.
-		sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 		if placement.Reason == schedule.ReasonNoCandidateCN {
 			getQueryScheduleLogger().WarnWithConfig(
 				"query-schedule-no-candidate-cn",
 				"query schedule falls back to local CN",
 				queryScheduleLogRateLimit,
-				zap.String("reason", placement.Reason),
-				zap.String("local-address", c.addr),
-				zap.Int("worker-count", len(nodes)),
-				zap.Bool("is-internal", c.isInternal))
+				c.querySchedulePlacementFields(placement)...)
 		}
 	}
 	return nodes, nil
+}
+
+func (c *Compile) querySchedulePlacementFields(placement schedule.QueryDecision) []zap.Field {
+	currentCN := c.currentCNWorker()
+	return []zap.Field{
+		zap.String("reason", placement.Reason),
+		zap.String("current-cn-policy", placement.CurrentCNPolicy.String()),
+		zap.String("exec-type", queryExecTypeString(c.execType)),
+		zap.String("current-cn-id", currentCN.ID),
+		zap.String("current-cn-address", currentCN.Addr),
+		zap.Int("worker-count", len(placement.Workers)),
+		zap.Bool("is-internal", c.isInternal),
+	}
 }
 
 func (c *Compile) getCandidateCNs() (engine.Nodes, error) {
@@ -76,10 +94,11 @@ func (c *Compile) getCandidateCNs() (engine.Nodes, error) {
 }
 
 func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
-	localNode := getEngineNode(c)
+	currentCN := c.currentCNWorker()
 	req := schedule.QueryRequest{
-		ExecKind:    toScheduleExecKind(c.execType),
-		LocalWorker: toScheduleWorker(localNode),
+		ExecKind:        toScheduleExecKind(c.execType),
+		CurrentCN:       currentCN,
+		CurrentCNPolicy: c.currentCNPolicy(),
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return schedule.DecideQueryPlacement(req), nil
@@ -99,14 +118,28 @@ func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
 			queryScheduleLogRateLimit,
 			zap.Int("candidate-count", rawCandidateCount),
 			zap.Int("routable-count", len(req.Candidates)),
+			zap.String("current-cn-policy", req.CurrentCNPolicy.String()),
+			zap.String("exec-type", queryExecTypeString(c.execType)),
+			zap.String("current-cn-id", req.CurrentCN.ID),
+			zap.String("current-cn-address", req.CurrentCN.Addr),
 			zap.Bool("is-internal", c.isInternal))
 	}
-	req.RequireLocal = c.proc != nil && c.proc.Base.QueryClient != nil
-	if req.RequireLocal {
-		localNode.Id = c.proc.GetService()
-		req.LocalWorker = toScheduleWorker(localNode)
-	}
 	return schedule.DecideQueryPlacement(req), nil
+}
+
+func (c *Compile) currentCNWorker() schedule.Worker {
+	currentCN := getEngineNode(c)
+	if c.proc != nil {
+		currentCN.Id = c.proc.GetService()
+	}
+	return toScheduleWorker(currentCN)
+}
+
+func (c *Compile) currentCNPolicy() schedule.CurrentCNPolicy {
+	if c.proc != nil && c.proc.Base.QueryClient != nil {
+		return schedule.CurrentCNRequired
+	}
+	return schedule.CurrentCNAllowed
 }
 
 func toScheduleExecKind(execType plan2.ExecType) schedule.QueryExecKind {
@@ -117,6 +150,19 @@ func toScheduleExecKind(execType plan2.ExecType) schedule.QueryExecKind {
 		return schedule.QueryExecAPOneCN
 	default:
 		return schedule.QueryExecAPMultiCN
+	}
+}
+
+func queryExecTypeString(execType plan2.ExecType) string {
+	switch execType {
+	case plan2.ExecTypeTP:
+		return "tp"
+	case plan2.ExecTypeAP_ONECN:
+		return "ap-one-cn"
+	case plan2.ExecTypeAP_MULTICN:
+		return "ap-multi-cn"
+	default:
+		return "unknown"
 	}
 }
 
