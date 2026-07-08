@@ -73,4 +73,8 @@ func TestObjectInfoViewCommands(t *testing.T) {
 	c := PrepareCommand()
 	c.SetArgs([]string{"info", "--local", missing})
 	require.Error(t, c.Execute())
+
+	c2 := PrepareCommand()
+	c2.SetArgs([]string{"view", "--local", missing})
+	require.Error(t, c2.Execute())
 }

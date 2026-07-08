@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -74,6 +75,26 @@ func TestDedupeObjectStats(t *testing.T) {
 	stats := dedupeObjectStats(entries)
 	require.Len(t, stats, 2)
 	assert.NotEqual(t, stats[0].ObjectName().String(), stats[1].ObjectName().String())
+}
+
+func TestColumnSeqNumsAndAlignRowValues(t *testing.T) {
+	cols := []objecttool.ColInfo{
+		{Idx: 0, SeqNum: 2},
+		{Idx: 1, SeqNum: 4},
+	}
+	require.Equal(t, []uint16{2, 4}, columnSeqNums(cols))
+
+	values, nulls := alignRowValuesBySeqNums(cols, []uint16{4, 2, 6}, []string{"v2", "v4"}, []bool{false, true})
+	require.Equal(t, []string{"v4", "v2", ""}, values)
+	require.Equal(t, []bool{true, false, true}, nulls)
+
+	values, nulls = alignRowValuesBySeqNums(nil, []uint16{1}, []string{"x"}, []bool{false})
+	require.Equal(t, []string{"x"}, values)
+	require.Equal(t, []bool{false}, nulls)
+
+	values, nulls = alignRowValuesBySeqNums(cols, nil, []string{"x"}, []bool{false})
+	require.Equal(t, []string{"x"}, values)
+	require.Equal(t, []bool{false}, nulls)
 }
 
 func TestLogicalTableViewWidthsAndRows(t *testing.T) {

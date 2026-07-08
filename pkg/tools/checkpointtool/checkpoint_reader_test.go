@@ -16,13 +16,19 @@ package checkpointtool
 
 import (
 	"context"
+	"errors"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -111,4 +117,167 @@ func TestOpenWithKind(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, objectio.OfflineKindLocal, r.Kind())
 	require.NoError(t, r.Close())
+}
+
+func TestOpenWithFSOptions(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	r, err := OpenWithFS(ctx, fs, "/display",
+		WithKind(objectio.OfflineKindLocal2),
+		WithMPool(mp),
+		WithCloseFS(),
+	)
+	require.NoError(t, err)
+	require.Equal(t, objectio.OfflineKindLocal2, r.Kind())
+	require.Equal(t, "/display", r.Dir())
+	require.Equal(t, fs, r.FS())
+	require.Same(t, mp, r.mp)
+	require.NoError(t, r.Close())
+}
+
+func TestCheckpointReaderBasicAccessorsAndFork(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+
+	entry := &checkpoint.CheckpointEntry{}
+	reader := &CheckpointReader{
+		ctx:     ctx,
+		fs:      fs,
+		dir:     "/tmp/ckp",
+		kind:    objectio.OfflineKindLocal2,
+		entries: []*checkpoint.CheckpointEntry{entry},
+		mp:      mpool.MustNewZero(),
+	}
+
+	require.Equal(t, fs, reader.FS())
+	require.Equal(t, "/tmp/ckp", reader.Dir())
+	require.Equal(t, objectio.OfflineKindLocal2, reader.Kind())
+	require.Equal(t, []*checkpoint.CheckpointEntry{entry}, reader.Entries())
+
+	got, err := reader.GetEntry(0)
+	require.NoError(t, err)
+	require.Same(t, entry, got)
+	_, err = reader.GetEntry(-1)
+	require.Error(t, err)
+	_, err = reader.GetEntry(1)
+	require.Error(t, err)
+
+	fork := reader.Fork(nil)
+	require.NotSame(t, reader, fork)
+	require.Equal(t, reader.ctx, fork.ctx)
+	require.Equal(t, reader.fs, fork.fs)
+	require.Equal(t, reader.dir, fork.dir)
+	require.Equal(t, reader.kind, fork.kind)
+	require.Equal(t, reader.entries, fork.entries)
+	require.NotNil(t, fork.mp)
+
+	customCtx := context.WithValue(ctx, struct{}{}, "x")
+	fork = reader.Fork(customCtx)
+	require.Equal(t, customCtx, fork.ctx)
+}
+
+func TestCheckpointReaderTestHooksAndRangesToTables(t *testing.T) {
+	hookErr := errors.New("hook failed")
+	dataStats := testCheckpointObjectStats(t, 1)
+	tombStats := testCheckpointObjectStats(t, 2)
+	reader := &CheckpointReader{
+		ctx: context.Background(),
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: 7, AccountID: 3}}, nil
+		},
+		getObjectEntriesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry, tableID uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error) {
+			require.Equal(t, uint64(7), tableID)
+			return []*ObjectEntryInfo{{ObjectStats: dataStats}}, []*ObjectEntryInfo{{ObjectStats: tombStats}}, nil
+		},
+	}
+
+	tables, err := reader.GetTables(&checkpoint.CheckpointEntry{})
+	require.NoError(t, err)
+	require.Equal(t, []*TableInfo{{TableID: 7, AccountID: 3}}, tables)
+
+	data, tomb, err := reader.GetObjectEntries(&checkpoint.CheckpointEntry{}, 7)
+	require.NoError(t, err)
+	require.Len(t, data, 1)
+	require.Len(t, tomb, 1)
+	require.Equal(t, dataStats.ObjectName().String(), data[0].ObjectStats.ObjectName().String())
+	require.Equal(t, tombStats.ObjectName().String(), tomb[0].ObjectStats.ObjectName().String())
+
+	reader.getTablesForTest = func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+		return nil, hookErr
+	}
+	_, err = reader.GetTables(&checkpoint.CheckpointEntry{})
+	require.ErrorIs(t, err, hookErr)
+
+	ranges := []ckputil.TableRange{
+		{TableID: uint64(1)<<32 | 10, ObjectType: ckputil.ObjectType_Data, ObjectStats: dataStats},
+		{TableID: uint64(1)<<32 | 10, ObjectType: ckputil.ObjectType_Tombstone, ObjectStats: tombStats},
+		{TableID: uint64(2)<<32 | 20, ObjectType: ckputil.ObjectType_Data, ObjectStats: dataStats},
+	}
+	got := reader.rangesToTables(ranges)
+	require.Len(t, got, 2)
+	require.Equal(t, uint32(1), got[0].AccountID)
+	require.Equal(t, uint64(1)<<32|10, got[0].TableID)
+	require.Len(t, got[0].DataRanges, 1)
+	require.Len(t, got[0].TombRanges, 1)
+	require.Equal(t, uint32(2), got[1].AccountID)
+}
+
+func TestCheckpointReaderEmptyLocationBranches(t *testing.T) {
+	reader := &CheckpointReader{ctx: context.Background()}
+	entry := &checkpoint.CheckpointEntry{}
+
+	ranges, err := reader.GetTableRanges(entry)
+	require.NoError(t, err)
+	require.Nil(t, ranges)
+
+	accounts, err := reader.GetAccounts(entry)
+	require.NoError(t, err)
+	require.Empty(t, accounts)
+
+	tables, err := reader.GetTablesByAccount(entry, 1)
+	require.NoError(t, err)
+	require.Empty(t, tables)
+
+	data, tomb, err := reader.GetObjectEntries(entry, 42)
+	require.NoError(t, err)
+	require.Nil(t, data)
+	require.Nil(t, tomb)
+
+	dataByTable, tombByTable, err := reader.GetObjectEntriesForTables(entry, map[uint64]struct{}{42: struct{}{}})
+	require.NoError(t, err)
+	require.Nil(t, dataByTable)
+	require.Nil(t, tombByTable)
+}
+
+func TestCheckpointReaderSmallHelpers(t *testing.T) {
+	entries := []fileservice.DirEntry{
+		{Name: "dir", IsDir: true},
+		{Name: "file", IsDir: false},
+		{Name: "file2", IsDir: false},
+	}
+	require.Equal(t, 1, countDirs(entries))
+	require.Equal(t, 2, countFiles(entries))
+	require.Equal(t, []string{"account_id", "db_id", "table_id"}, checkpointRangeColumns(3))
+	require.Equal(t, []string{"account_id", "db_id", "table_id", "object_type", "id"}, checkpointRangeColumns(5))
+
+	require.False(t, isDataFileNotFound(nil))
+	require.True(t, isDataFileNotFound(moerr.NewFileNotFoundNoCtx("missing")))
+	require.True(t, isDataFileNotFound(os.ErrNotExist))
+	require.False(t, isDataFileNotFound(errors.New("other")))
+}
+
+func testCheckpointObjectStats(t *testing.T, idByte byte) objectio.ObjectStats {
+	t.Helper()
+	var objectID objectio.ObjectId
+	objectID[0] = idByte
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectNameWithObjectID(&objectID)))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, uint32(idByte)))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	return *stats
 }
