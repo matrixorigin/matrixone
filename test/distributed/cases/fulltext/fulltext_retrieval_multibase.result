@@ -1,7 +1,6 @@
 drop database if exists ft_multibase;
 create database ft_multibase;
 use ft_multibase;
-set fulltext_max_index_capacity = 2;
 create table t (id bigint primary key, txt text);
 insert into t values
 (1,'apple banana'),
@@ -10,7 +9,7 @@ insert into t values
 (4,'date apple'),
 (5,'elderberry fig'),
 (6,'fig grape');
-create fulltext index ft on t(txt) with parser retrieval;
+create fulltext index ft on t(txt) with parser retrieval max_index_capacity=2;
 select sleep(20);
 sleep(20)
 0

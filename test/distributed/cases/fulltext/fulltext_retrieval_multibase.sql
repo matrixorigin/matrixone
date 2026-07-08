@@ -1,4 +1,4 @@
--- WAND "retrieval" fulltext index with fulltext_max_index_capacity forcing MULTIPLE
+-- WAND "retrieval" fulltext index with the max_index_capacity param forcing MULTIPLE
 -- tag=0 base sub-indexes. capacity=2 over 6 docs => 3 capacity-bounded base
 -- sub-indexes (each its own index_id, all in the one hidden store). Queries whose
 -- matches SPAN sub-indexes (apple: docs 1 & 4; cherry: docs 2 & 3) verify the load
@@ -6,7 +6,6 @@
 drop database if exists ft_multibase;
 create database ft_multibase;
 use ft_multibase;
-set fulltext_max_index_capacity = 2;
 create table t (id bigint primary key, txt text);
 insert into t values
  (1,'apple banana'),
@@ -15,7 +14,7 @@ insert into t values
  (4,'date apple'),
  (5,'elderberry fig'),
  (6,'fig grape');
-create fulltext index ft on t(txt) with parser retrieval;
+create fulltext index ft on t(txt) with parser retrieval max_index_capacity=2;
 
 -- wait for the async (CDC/ISCP) build to split + persist the sub-indexes
 select sleep(20);

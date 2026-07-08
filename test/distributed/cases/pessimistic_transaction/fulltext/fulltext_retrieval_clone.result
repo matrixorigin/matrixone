@@ -1,10 +1,9 @@
 drop database if exists ft_clone;
 create database ft_clone;
 use ft_clone;
-set fulltext_max_index_capacity = 2;
 create table t (id bigint primary key, txt text);
 insert into t values (1,'apple banana'),(2,'banana cherry'),(3,'cherry date'),(4,'date apple');
-create fulltext index ft on t(txt) with parser retrieval;
+create fulltext index ft on t(txt) with parser retrieval max_index_capacity=2;
 select id from t where match(txt) against('apple' in retrieval mode) order by id;
 id
 1
