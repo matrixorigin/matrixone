@@ -152,6 +152,140 @@ func TestGetJobSpecsMissingJobFlushesPermanentErrorWithoutNilStatuses(t *testing
 	require.Equal(t, uint64(202), capturedStatuses[1].LSN)
 }
 
+func TestGetJobSpecsFlushesPermanentErrorForInvalidRows(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	oldFlushJobStatusOnIterationState := FlushJobStatusOnIterationState
+	defer func() {
+		ExecWithResult = oldExecWithResult
+		FlushJobStatusOnIterationState = oldFlushJobStatusOnIterationState
+	}()
+
+	testCases := []struct {
+		name    string
+		batches []iscpLogBatch
+	}{
+		{
+			name: "unexpected job",
+			batches: []iscpLogBatch{
+				{
+					jobNames:   []string{"index_idx02"},
+					jobIDs:     []uint64{2},
+					jobSpecs:   []string{mustMarshalJobSpec(t, "idx02")},
+					jobStatuss: []string{mustMarshalJobStatus(t, 22, JobStage_Running)},
+				},
+			},
+		},
+		{
+			name: "duplicate job",
+			batches: []iscpLogBatch{
+				{
+					jobNames:   []string{"index_idx01"},
+					jobIDs:     []uint64{1},
+					jobSpecs:   []string{mustMarshalJobSpec(t, "idx01")},
+					jobStatuss: []string{mustMarshalJobStatus(t, 11, JobStage_Running)},
+				},
+				{
+					jobNames:   []string{"index_idx01"},
+					jobIDs:     []uint64{1},
+					jobSpecs:   []string{mustMarshalJobSpec(t, "idx01")},
+					jobStatuss: []string{mustMarshalJobStatus(t, 12, JobStage_Running)},
+				},
+			},
+		},
+		{
+			name: "invalid job spec",
+			batches: []iscpLogBatch{
+				{
+					jobNames:   []string{"index_idx01"},
+					jobIDs:     []uint64{1},
+					jobSpecs:   []string{`"invalid-job-spec"`},
+					jobStatuss: []string{mustMarshalJobStatus(t, 11, JobStage_Running)},
+				},
+			},
+		},
+		{
+			name: "invalid job status",
+			batches: []iscpLogBatch{
+				{
+					jobNames:   []string{"index_idx01"},
+					jobIDs:     []uint64{1},
+					jobSpecs:   []string{mustMarshalJobSpec(t, "idx01")},
+					jobStatuss: []string{`"invalid-job-status"`},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, mp := newISCPLogResult(t, tc.batches)
+			defer func() {
+				require.Equal(t, int64(0), mp.CurrNB())
+				mpool.DeleteMPool(mp)
+			}()
+
+			ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+				return result, nil
+			}
+
+			var capturedStatuses []*JobStatus
+			FlushJobStatusOnIterationState = func(
+				_ context.Context,
+				_ string,
+				_ engine.Engine,
+				_ client.TxnClient,
+				_ uint32,
+				_ uint64,
+				_ []string,
+				_ []uint64,
+				_ []uint64,
+				jobStatuses []*JobStatus,
+				_ types.TS,
+				_ int8,
+				_ []uint64,
+			) error {
+				capturedStatuses = jobStatuses
+				return nil
+			}
+
+			jobSpecs, prevStatuses, err := GetJobSpecs(
+				context.Background(),
+				"",
+				nil,
+				nil,
+				nil,
+				0,
+				42,
+				[]string{"index_idx01"},
+				[]uint64{101},
+				types.TS{},
+				[]*JobStatus{nil},
+				[]uint64{1},
+			)
+			require.Error(t, err)
+			require.True(t, isPermanentError(err))
+			require.Nil(t, jobSpecs)
+			require.Nil(t, prevStatuses)
+			require.Len(t, capturedStatuses, 1)
+			require.NotNil(t, capturedStatuses[0])
+			require.Equal(t, uint64(101), capturedStatuses[0].LSN)
+		})
+	}
+}
+
+func TestNormalizeJobStatusesResizesAndFillsNilEntries(t *testing.T) {
+	statuses := normalizeJobStatuses(
+		[]*JobStatus{{Stage: JobStage_Running}},
+		[]uint64{10, 20},
+	)
+
+	require.Len(t, statuses, 2)
+	require.Equal(t, JobStage_Running, statuses[0].Stage)
+	require.Equal(t, uint64(10), statuses[0].LSN)
+	require.NotNil(t, statuses[1])
+	require.Equal(t, uint64(20), statuses[1].LSN)
+}
+
 func newISCPLogResult(t *testing.T, batches []iscpLogBatch) (executor.Result, *mpool.MPool) {
 	t.Helper()
 
