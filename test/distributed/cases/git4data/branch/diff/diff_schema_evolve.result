@@ -16,4 +16,100 @@ drop snapshot sp1;
 drop snapshot sp0;
 drop table t0;
 drop table t1;
+create table t0(a int, b int, primary key(a));
+insert into t0 values(1,1),(2,2);
+create snapshot sp0 for table test t0;
+data branch create table t1 from t0{snapshot="sp0"};
+alter table t1 add column c int default 0;
+alter table t1 add column d varchar(20) default 'x';
+insert into t1 values(3,3,30,'new');
+create snapshot sp1 for table test t1;
+data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
+diff t1 against t0    flag    a    b    c    d
+t1    INSERT    3    3    30    new
+drop snapshot sp1;
+drop snapshot sp0;
+drop table t0;
+drop table t1;
+create table t0(a int, b int, primary key(a));
+insert into t0 values(1,1),(2,2);
+create snapshot sp0 for table test t0;
+data branch create table t1 from t0{snapshot="sp0"};
+alter table t1 add column c int default 0;
+update t1 set b=99 where a=1;
+create snapshot sp1 for table test t1;
+data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
+diff t1 against t0    flag    a    b    c
+t1    UPDATE    1    99    0
+drop snapshot sp1;
+drop snapshot sp0;
+drop table t0;
+drop table t1;
+create table t0(a int, b int, primary key(a));
+insert into t0 values(1,1),(2,2);
+create snapshot sp0 for table test t0;
+data branch create table t1 from t0{snapshot="sp0"};
+alter table t1 add column c int default 0;
+update t1 set c=99 where a=1;
+create snapshot sp1 for table test t1;
+data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
+diff t1 against t0    flag    a    b    c
+drop snapshot sp1;
+drop snapshot sp0;
+drop table t0;
+drop table t1;
+create table t0(a int, b int, primary key(a));
+insert into t0 values(1,1),(2,2),(3,3);
+create snapshot sp0 for table test t0;
+data branch create table t1 from t0{snapshot="sp0"};
+alter table t1 add column c int default 0;
+delete from t1 where a=2;
+create snapshot sp1 for table test t1;
+data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
+diff t1 against t0    flag    a    b    c
+t1    DELETE    2    2    null
+drop snapshot sp1;
+drop snapshot sp0;
+drop table t0;
+drop table t1;
+create table t0(a int, b int, c int, primary key(a,b));
+insert into t0 values(1,1,10),(2,2,20);
+create snapshot sp0 for table test t0;
+data branch create table t1 from t0{snapshot="sp0"};
+alter table t1 add column d int default 0;
+insert into t1 values(3,3,30,300);
+create snapshot sp1 for table test t1;
+data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
+diff t1 against t0    flag    a    b    c    d
+t1    INSERT    3    3    30    300
+drop snapshot sp1;
+drop snapshot sp0;
+drop table t0;
+drop table t1;
+create table t0(a int, b int, primary key(a));
+insert into t0 values(1,1),(2,2);
+create snapshot sp0 for table test t0;
+create table t1(a int, b varchar(20), primary key(a));
+insert into t1 values(1,'1'),(2,'2');
+create snapshot sp1 for table test t1;
+data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
+-- @regex("schema compatibility check: column 'b' exists in both schemas but has different types", true)
+internal error: schema compatibility check: column 'b' exists in both schemas but has different types (target: 61, base: 22)
+drop snapshot sp1;
+drop snapshot sp0;
+drop table t0;
+drop table t1;
+create table t0(a int, b int, primary key(a));
+insert into t0 values(1,1),(2,2);
+create snapshot sp0 for table test t0;
+data branch create table t1 from t0{snapshot="sp0"};
+alter table t1 drop column a;
+create snapshot sp1 for table test t1;
+data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
+-- @regex("schema compatibility check: primary key column 'a' is not present in common columns", true)
+internal error: schema compatibility check: primary key column 'a' is not present in common columns
+drop snapshot sp1;
+drop snapshot sp0;
+drop table t0;
+drop table t1;
 drop database test;
