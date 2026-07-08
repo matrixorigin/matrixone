@@ -60,6 +60,16 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 
 	ctx := builder.ctxByNode[nodeID]
 
+	// OFFSET is not supported with a fulltext index. A correct LIMIT+OFFSET pushdown
+	// would have to be threaded through BOTH the retrieval (WAND top-K walk, which returns
+	// exactly `limit` rows so an OFFSET on the SORT would under-return) and the non-retrieval
+	// (fulltext_index_scan) paths — not worth it for a pattern nobody uses. Reject it loudly
+	// instead of silently returning a short page. The offset sits on the SORT (explicit
+	// ORDER BY) or on the scan (implicit score sort).
+	if (sortNode != nil && sortNode.Offset != nil) || scanNode.Offset != nil {
+		return -1, moerr.NewNotSupported(builder.GetContext(), "OFFSET is not supported with a fulltext index")
+	}
+
 	// check equal fulltext_match func and only compute once for equal function()
 	eqmap := builder.findEqualFullTextMatchFunc(projNode, scanNode, projids, filterids)
 

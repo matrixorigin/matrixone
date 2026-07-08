@@ -118,12 +118,12 @@ func (u *fulltextWandCompactState) end(tf *TableFunction, proc *process.Process)
 }
 
 func fulltextWandCompactPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
+	if len(arg.Args) != 4 {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "fulltext_wand_compact: expects 4 args (db, store, meta, capacity)")
+	}
 	var err error
 	st := &fulltextWandCompactState{}
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
-	if len(arg.Args) != 4 {
-		return nil, moerr.NewInvalidInput(proc.Ctx, "fulltext_wand_compact: expects 4 args (db, store, meta, capacity)")
-	}
 	return st, err
 }

@@ -107,7 +107,7 @@ const RebuildDeadPct = 30
 
 // ReindexOption picks the scheduled reindex mode (overriding the descriptor's fixed "MERGE"):
 // "MERGE" (incremental fold + tiered compaction) normally, or "" (full REBUILD) once the
-// dead-doc fraction — 1 - liveSourceRows/baseDocs — exceeds RebuildDeadRatio. Cheap: one
+// dead-doc fraction — 1 - liveSourceRows/baseDocs — exceeds RebuildDeadPct. Cheap: one
 // COUNT(*) on the source table + SUM(nrow) on the metadata table (no postings loaded).
 func (Hooks) ReindexOption(in idxcronplugin.UpdatableInput) (string, error) {
 	var metaTbl string

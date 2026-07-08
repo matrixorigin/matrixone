@@ -17,7 +17,7 @@ package idxcron
 import "testing"
 
 // reindexOptionForCounts fires a full REBUILD ("") once the dead-doc fraction
-// (1 - liveRows/baseDocs) exceeds RebuildDeadRatio (0.30), else MERGE.
+// (1 - liveRows/baseDocs) exceeds RebuildDeadPct (30), else MERGE.
 func TestReindexOptionForCounts(t *testing.T) {
 	cases := []struct {
 		live, base int64

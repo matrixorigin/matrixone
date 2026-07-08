@@ -102,8 +102,11 @@ func ComputeLiveness(segs []*WandModel, deletes map[any]int64) []Membership {
 
 	out := make([]Membership, len(segs))
 	for i, s := range segs {
-		allLive := true
-		allow := make([]bool, len(s.pks))
+		// Lazily allocate the allow-bitmap only when a dead ord appears — a fully-live
+		// segment (the common multi-base case with no pending deletes) keeps out[i]=nil and
+		// costs no O(doc-count) allocation. On the first dead ord, backfill the earlier ords
+		// (all live so far) so the bitmap stays ord-aligned.
+		var allow []bool
 		for ord, pk := range s.pks {
 			k := normalizeKey(pk)
 			live := owner[k] == s.Recency // this segment owns the live copy
@@ -112,14 +115,17 @@ func ComputeLiveness(segs []*WandModel, deletes map[any]int64) []Membership {
 					live = false // deleted after the latest insert
 				}
 			}
-			allow[ord] = live
-			if !live {
-				allLive = false
+			if !live && allow == nil {
+				allow = make([]bool, len(s.pks))
+				for j := 0; j < ord; j++ {
+					allow[j] = true
+				}
+			}
+			if allow != nil {
+				allow[ord] = live
 			}
 		}
-		if allLive {
-			out[i] = nil
-		} else {
+		if allow != nil {
 			out[i] = &ordAllowSet{allow: allow}
 		}
 	}

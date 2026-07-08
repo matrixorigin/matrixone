@@ -453,7 +453,7 @@ func runReindex(ctx context.Context,
 			if optioner, ok := p.Idxcron().(idxcronplugin.ReindexOptioner); ok {
 				opt, oerr := optioner.ReindexOption(upIn)
 				if oerr != nil {
-					err = oerr
+					err2 = oerr // closure's named return — NOT the outer err (clobbered by runTxn)
 					return
 				}
 				reindexOption = opt
