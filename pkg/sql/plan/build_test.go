@@ -825,6 +825,118 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestOnlyFullGroupByAllowsCorrelatedSubqueryOnGroupedColumn(t *testing.T) {
+	sqls := []string{
+		`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY n_name
+		ORDER BY n_name`,
+		`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) > 0`,
+		`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		ORDER BY (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name)`,
+		`
+		SELECT n.n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = n.n_name) AS c
+		FROM nation n
+		GROUP BY n.n_name`,
+		`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY 1`,
+		`
+		SELECT n_name AS name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY name`,
+		`
+		SELECT n_regionkey
+		FROM nation
+		GROUP BY n_regionkey
+		HAVING EXISTS (
+			SELECT n_name
+			FROM nation2
+			GROUP BY n_name
+			HAVING COUNT(*) > nation.n_regionkey
+		)`,
+	}
+
+	for _, sql := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T) {
+	sqls := []struct {
+		sql         string
+		errContains string
+	}{
+		{`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) AS c
+		FROM nation
+		GROUP BY n_name`, "nation.n_comment"},
+		{`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) > 0`, "nation.n_comment"},
+	}
+
+	for _, tt := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, tt.sql)
+		require.Error(t, err, tt.sql)
+		require.Contains(t, err.Error(), tt.errContains)
+	}
+}
+
+func TestOnlyFullGroupByPreservesCorrelatedAggregateNYI(t *testing.T) {
+	sqls := []string{
+		`
+		SELECT (SELECT COUNT(DISTINCT nation.n_comment))
+		FROM nation
+		GROUP BY n_name`,
+		`
+		SELECT n_name
+		FROM nation
+		WHERE (SELECT AVG(nation.n_regionkey) FROM nation2) = 1`,
+		`
+		SELECT n_name,
+		       (SELECT COUNT(nation.n_name) FROM nation2) AS c
+		FROM nation
+		GROUP BY n_name`,
+		`
+		SELECT n_regionkey
+		FROM nation
+		GROUP BY n_regionkey
+		HAVING EXISTS (
+			SELECT n_name
+			FROM nation2
+			GROUP BY n_name
+			HAVING SUM(nation.n_regionkey) > 0
+		)`,
+	}
+
+	for _, sql := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "correlated columns in aggregate function")
+	}
+}
+
 // test join table plan building
 func TestJoinTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
@@ -911,16 +1023,52 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"with qn (foo, bar) as (select 1 as col, 2 as coll union select 4, 5) select qn1.bar from qn qn1",
 		"select n_name, n_comment from nation union all select n_name, n_comment from nation2",
 		"select n_name from nation intersect all select n_name from nation2",
+		"(select n_name from nation for update) union all (select n_name from nation2 for update)",
+		"(select n_name from nation for update) union all (select n_name from nation2)",
+		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update",
+		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+
+	forUpdateUnionPlan, err := runOneStmt(mock, t, "(select n_name from nation for update) union all (select n_name from nation2 for update)")
+	require.NoError(t, err)
+	require.Equal(t, 2, countLockOpNodes(forUpdateUnionPlan))
+
+	forUpdateUnionOneBranchPlan, err := runOneStmt(mock, t, "(select n_name from nation for update) union all (select n_name from nation2)")
+	require.NoError(t, err)
+	require.Equal(t, 1, countLockOpNodes(forUpdateUnionOneBranchPlan))
+
+	cteOuterForUpdatePlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update")
+	require.NoError(t, err)
+	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdatePlan))
+
+	cteOuterForUpdateLimitPlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update")
+	require.NoError(t, err)
+	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdateLimitPlan))
 
 	// should error
 	sqls = []string{
 		"select 1 union select 2, 'a'",
 		"select n_name as a from nation union select n_comment from nation order by n_name",
 		"select n_name from nation minus all select n_name from nation2", // not support
+		"select n_name from nation union all select n_name from nation2 for update",
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func countLockOpNodes(logicPlan *Plan) int {
+	query := logicPlan.GetQuery()
+	if query == nil {
+		return 0
+	}
+
+	count := 0
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP {
+			count++
+		}
+	}
+	return count
 }
 
 // test CTE plan building
@@ -3274,6 +3422,26 @@ func TestReplaceCaptureDedupJoinDoesNotShuffle(t *testing.T) {
 	}
 
 	t.Fatal("expected REPLACE plan to contain a DEDUP JOIN with OldColCaptureList")
+}
+
+// A multi-column row subquery as a COUNT(DISTINCT ...) argument binds to an
+// Expr_Sub whose Typ.Id is T_tuple. The tuple-expansion guard in BindAggFunc
+// must not mistake it for a genuine Expr_List (GetList() returns nil there, so
+// the earlier code nil-deref panicked). It must instead reject the query with a
+// clear error rather than silently collapsing to the subquery's first column.
+func TestCountDistinctRowSubqueryRejected(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	var (
+		plan *Plan
+		err  error
+	)
+	require.NotPanics(t, func() {
+		plan, err = runOneStmt(mock, t,
+			"select count(distinct (select n_nationkey, n_regionkey from nation)) from nation")
+	})
+	require.Error(t, err)
+	require.Nil(t, plan)
+	require.Contains(t, err.Error(), "multi-column subquery")
 }
 
 func TestSubqueryInJoinOn(t *testing.T) {

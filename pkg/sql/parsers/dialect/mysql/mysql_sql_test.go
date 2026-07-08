@@ -97,7 +97,7 @@ func TestPositionFunctionSyntax(t *testing.T) {
 func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	stmt, err := ParseOne(
 		context.TODO(),
-		"create temporary table if not exists dst clone src to account acc",
+		"create temporary table if not exists dst clone src copy grants to account acc",
 		1,
 	)
 	require.NoError(t, err)
@@ -108,14 +108,30 @@ func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	require.True(t, cloneStmt.CreateTable.IfNotExists)
 	require.Equal(t, tree.Identifier("dst"), cloneStmt.CreateTable.Table.ObjectName)
 	require.Equal(t, tree.Identifier("src"), cloneStmt.SrcTable.ObjectName)
+	require.True(t, cloneStmt.CopyGrants)
 	require.NotNil(t, cloneStmt.ToAccountOpt)
 	require.Equal(t, tree.Identifier("acc"), cloneStmt.ToAccountOpt.AccountName)
 
 	require.Equal(
 		t,
-		"create temporary table if not exists `dst` clone `src` to account `acc`",
+		"create temporary table if not exists `dst` clone `src` copy grants to account `acc`",
 		tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()),
 	)
+}
+
+func TestCloneTableParseCopyGrantsWithoutToAccount(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create table dst clone src copy grants",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.True(t, cloneStmt.CopyGrants)
+	require.Nil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, "create table `dst` clone `src` copy grants", tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()))
 }
 
 func TestCloneTableParseFormattedMoTimestamp(t *testing.T) {
@@ -2037,6 +2053,10 @@ var (
 		}, {
 			input: "prepare stmt_name1 from select * from t1 where a > ? or abs(b) < ?",
 		}, {
+			input: "prepare stmt_name1 from replace into t1 values (?, ?)",
+		}, {
+			input: "prepare stmt_name1 from replace into t1 (a, b) select a, b from t2 where a > ?",
+		}, {
 			input:  "create account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
 			output: "create account if not exists nihao admin_name 'admin' identified by '******' open comment 'new account'",
 		}, {
@@ -3227,16 +3247,16 @@ var (
 			output: "create database if not exists ucl360_demo_v3 default character set utf8mb4 collate utf8mb4_0900_ai_ci encryption N",
 		}, {
 			input:  "alter table t1 algorithm = DEFAULT",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = DEFAULT",
 		}, {
 			input:  "alter table t1 algorithm = INSTANT",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = INSTANT",
 		}, {
 			input:  "alter table t1 algorithm = INPLACE",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = INPLACE",
 		}, {
 			input:  "alter table t1 algorithm = COPY",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = COPY",
 		}, {
 			input:  "alter table t1 default CHARACTER SET = a COLLATE = b",
 			output: "alter table t1 charset = a",
@@ -3260,16 +3280,16 @@ var (
 			output: "alter table t1 charset = FORCE",
 		}, {
 			input:  "alter table t1 LOCK = DEFAULT",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = DEFAULT",
 		}, {
 			input:  "alter table t1 LOCK = NONE",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = NONE",
 		}, {
 			input:  "alter table t1 LOCK = SHARED",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = SHARED",
 		}, {
 			input:  "alter table t1 LOCK = EXCLUSIVE",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = EXCLUSIVE",
 		}, {
 			input:  "alter table t1 WITHOUT VALIDATION",
 			output: "alter table t1 charset = WITHOUT",

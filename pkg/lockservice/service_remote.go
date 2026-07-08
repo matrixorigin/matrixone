@@ -47,6 +47,7 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_ValidateService:        defines.MORPCVersion2,
 	pb.Method_CannotCommit:           defines.MORPCVersion2,
 	pb.Method_GetActiveTxn:           defines.MORPCVersion2,
+	pb.Method_CheckActiveTxn:         defines.MORPCVersion2,
 	pb.Method_CheckOrphan:            defines.MORPCVersion2,
 	pb.Method_ResumeInvalidCN:        defines.MORPCVersion2,
 	pb.Method_AbortRemoteDeadlockTxn: defines.MORPCVersion2,
@@ -104,29 +105,49 @@ func (s *service) initRemote() {
 			req := acquireRequest()
 			defer releaseRequest(req)
 
-			req.Method = pb.Method_GetActiveTxn
-			req.GetActiveTxn.ServiceID = txn.CreatedOn
+			req.Method = pb.Method_CheckActiveTxn
+			req.CheckActiveTxn.ServiceID = txn.CreatedOn
+			req.CheckActiveTxn.Txn = txn.TxnID
 
 			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseInitRemote2)
 			defer cancel()
 
 			resp, err := s.remote.client.Send(ctx, req)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+					req = acquireRequest()
+					defer releaseRequest(req)
+
+					req.Method = pb.Method_GetActiveTxn
+					req.GetActiveTxn.ServiceID = txn.CreatedOn
+
+					resp, err = s.remote.client.Send(ctx, req)
+					if err != nil {
+						return false, moerr.AttachCause(ctx, err)
+					}
+					defer releaseResponse(resp)
+
+					if !resp.GetActiveTxn.Valid {
+						return false, nil
+					}
+
+					for _, v := range resp.GetActiveTxn.Txn {
+						if bytes.Equal(v, txn.TxnID) {
+							return true, nil
+						}
+					}
+					return false, nil
+				}
 				return false, moerr.AttachCause(ctx, err)
 			}
 			defer releaseResponse(resp)
 
 			// cn restarted
-			if !resp.GetActiveTxn.Valid {
+			if !resp.CheckActiveTxn.Valid {
 				return false, nil
 			}
 
-			for _, v := range resp.GetActiveTxn.Txn {
-				if bytes.Equal(v, txn.TxnID) {
-					return true, nil
-				}
-			}
-			return false, nil
+			return resp.CheckActiveTxn.Active, nil
 		},
 	)
 
@@ -177,6 +198,8 @@ func (s *service) initRemoteHandler() {
 		s.handleValidateService)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetActiveTxn,
 		s.handleGetActiveTxn)
+	s.remote.server.RegisterMethodHandler(pb.Method_CheckActiveTxn,
+		s.handleCheckActiveTxn)
 	s.remote.server.RegisterMethodHandler(pb.Method_AbortRemoteDeadlockTxn,
 		s.handleAbortRemoteDeadlockTxn)
 }
@@ -193,14 +216,32 @@ func (s *service) handleRemoteLock(
 		return
 	}
 
-	s.bindChangeMu.RLock()
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale
 		// lock table binding.
-		s.bindChangeMu.RUnlock()
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+
+	if s.option.beforeRemoteLockBindCheck != nil {
+		s.option.beforeRemoteLockBindCheck()
+	}
+
+	s.bindChangeMu.RLock()
+	bind := l.getBind()
+	current := s.tableGroups.get(bind.Group, bind.Table)
+	if current == nil {
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTableNotFound, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	if current.getBind().Changed(bind) {
+		newBind := current.getBind()
+		resp.NewBind = &newBind
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, nil, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
 	s.activeTxnHolder.keepRemoteActiveTxn(req.Lock.ServiceID)
@@ -229,7 +270,6 @@ func (s *service) handleRemoteLock(
 
 	var lockErr error
 	// it needs to inc table bind ref when set restart cn
-	bind := l.getBind()
 	h := txn.getHoldLocksLocked(bind.Group)
 	_, hasBind := h.tableBinds[bind.Table]
 	txn.lockTableBindTouched(bind)
@@ -249,7 +289,11 @@ func (s *service) handleRemoteLock(
 		ctx,
 		txn,
 		req.Lock.Rows,
-		LockOptions{LockOptions: req.Lock.Options, async: true},
+		LockOptions{
+			LockOptions:                req.Lock.Options,
+			async:                      true,
+			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
+		},
 		func(result pb.Result, err error) {
 			if err == nil {
 				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
@@ -275,7 +319,6 @@ func (s *service) handleForwardLock(
 		return
 	}
 
-	s.bindChangeMu.RLock()
 	l, err := s.getLockTable(
 		req.LockTable.Group,
 		req.LockTable.Table)
@@ -283,11 +326,25 @@ func (s *service) handleForwardLock(
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale
 		// lock table binding.
-		s.bindChangeMu.RUnlock()
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
 
+	s.bindChangeMu.RLock()
+	bind := l.getBind()
+	current := s.tableGroups.get(bind.Group, bind.Table)
+	if current == nil {
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTableNotFound, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	if current.getBind().Changed(bind) {
+		newBind := current.getBind()
+		resp.NewBind = &newBind
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, nil, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	s.activeTxnHolder.keepRemoteActiveTxn(req.Lock.ServiceID)
 	s.activeTxnHolder.keepRemoteLockBindActive(req.Lock.ServiceID, req.LockTable)
 	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
@@ -313,7 +370,6 @@ func (s *service) handleForwardLock(
 
 	var lockErr error
 	// it needs to inc table bind ref when set restart cn
-	bind := l.getBind()
 	h := txn.getHoldLocksLocked(bind.Group)
 	_, hasBind := h.tableBinds[bind.Table]
 	txn.lockTableBindTouched(bind)
@@ -333,7 +389,11 @@ func (s *service) handleForwardLock(
 		ctx,
 		txn,
 		req.Lock.Rows,
-		LockOptions{LockOptions: req.Lock.Options, async: true},
+		LockOptions{
+			LockOptions:                req.Lock.Options,
+			async:                      true,
+			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
+		},
 		func(result pb.Result, err error) {
 			if err == nil {
 				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
@@ -400,6 +460,22 @@ func (s *service) handleGetActiveTxn(
 	writeResponse(s.logger, cancel, resp, nil, cs)
 }
 
+func (s *service) handleCheckActiveTxn(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	resp.CheckActiveTxn.Valid = s.serviceID == req.CheckActiveTxn.ServiceID
+	if resp.CheckActiveTxn.Valid && s.cfg.TxnIterFunc != nil {
+		s.cfg.TxnIterFunc(func(txnID []byte) bool {
+			resp.CheckActiveTxn.Active = bytes.Equal(req.CheckActiveTxn.Txn, txnID)
+			return !resp.CheckActiveTxn.Active
+		})
+	}
+	writeResponse(s.logger, cancel, resp, nil, cs)
+}
+
 func (s *service) handleRemoteGetLock(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -436,15 +512,28 @@ func (s *service) handleRemoteGetLockHolder(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	s.bindChangeMu.RLock()
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil || l == nil {
-		s.bindChangeMu.RUnlock()
 		writeResponse(s.logger, cancel, resp, err, cs)
 		return
 	}
 
-	holder, found, err := l.getLockHolder(ctx, req.GetLockHolder.Row)
+	bind := l.getBind()
+	s.bindChangeMu.RLock()
+	current := s.tableGroups.get(bind.Group, bind.Table)
+	if current == nil {
+		s.bindChangeMu.RUnlock()
+		writeResponse(s.logger, cancel, resp, ErrLockTableNotFound, cs)
+		return
+	}
+	if current.getBind().Changed(bind) {
+		newBind := current.getBind()
+		resp.NewBind = &newBind
+		s.bindChangeMu.RUnlock()
+		writeResponse(s.logger, cancel, resp, nil, cs)
+		return
+	}
+	holder, found, err := current.getLockHolder(ctx, req.GetLockHolder.Row)
 	s.bindChangeMu.RUnlock()
 	if err == nil && found {
 		resp.GetLockHolder.Holder = holder
@@ -706,13 +795,18 @@ func (s *service) isValidLocalTxn(t []byte) bool {
 	return len(committing) != 0
 }
 
+type allocatorState struct {
+	id      string
+	version uint64
+}
+
 func getLockTableBind(
 	c Client,
 	group uint32,
 	tableID uint64,
 	originTableID uint64,
 	serviceID string,
-	sharding pb.Sharding) (pb.LockTable, error) {
+	sharding pb.Sharding) (pb.LockTable, allocatorState, error) {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseGetLockTableBind)
 	defer cancel()
 
@@ -728,11 +822,14 @@ func getLockTableBind(
 
 	resp, err := c.Send(ctx, req)
 	if err != nil {
-		return pb.LockTable{}, moerr.AttachCause(ctx, err)
+		return pb.LockTable{}, allocatorState{}, moerr.AttachCause(ctx, err)
 	}
 	defer releaseResponse(resp)
 	v := resp.GetBind.LockTable
-	return v, nil
+	return v, allocatorState{
+		id:      resp.GetBind.AllocatorID,
+		version: resp.GetBind.AllocatorVersion,
+	}, nil
 }
 
 type who struct {

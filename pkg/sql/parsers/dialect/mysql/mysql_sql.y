@@ -636,6 +636,7 @@ func sqlTaskInt64(v any) int64 {
 %type <str> alter_publication_db_name_opt
 %type <statement> branch_stmt
 %type <toAccountOpt> to_account_opt
+%type <boolVal> copy_grants_opt
 %type <conflictOpt> conflict_opt
 %type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
@@ -3299,6 +3300,7 @@ prepareable_stmt:
     create_stmt
 |   alter_stmt
 |   insert_stmt
+|   replace_stmt
 |   delete_stmt
 |   drop_stmt
 |   show_stmt
@@ -3937,9 +3939,7 @@ alter_option:
     }
 |   ALGORITHM equal_opt algorithm_type
     {
-        var checkType = $1
-        var enforce bool
-        $$ = tree.NewAlterOptionAlterCheck(checkType, enforce)
+        $$ = tree.NewAlterOptionAlgorithm($3)
     }
 |   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
     {
@@ -3967,7 +3967,7 @@ alter_option:
     }
 |   LOCK equal_opt lock_type
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewAlterOptionLock($3)
     }
 |   with_type VALIDATION
     {
@@ -9084,6 +9084,16 @@ to_account_opt:
     	}
     }
 
+copy_grants_opt:
+    /* empty */
+    {
+        $$ = false
+    }
+    | COPY GRANTS
+    {
+        $$ = true
+    }
+
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
@@ -9189,7 +9199,7 @@ create_table_stmt:
         t.SubscriptionOption = $6
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name to_account_opt
+|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name copy_grants_opt to_account_opt
     {
         t := tree.NewCloneTable()
         t.CreateTable.Temporary = $2
@@ -9198,7 +9208,8 @@ create_table_stmt:
         t.CreateTable.LikeTableName = *$7
         t.CreateTable.IsAsLike = true
         t.SrcTable = *$7
-        t.ToAccountOpt = $8
+        t.CopyGrants = $8
+        t.ToAccountOpt = $9
         $$ = t
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name FROM STRING ident PUBLICATION ident sync_interval_opt
@@ -11508,18 +11519,25 @@ mysql_cast_type:
                 Locale: &locale,
                 Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
                 DisplayWith: $2,
+                Scale: -1,
             },
         }
     }
 |   CHAR length_option_opt
     {
         locale := ""
+        oid := uint32(defines.MYSQL_TYPE_STRING)
+        familyString := $1
+        if $2 == -1 {
+            oid = uint32(defines.MYSQL_TYPE_VARCHAR)
+            familyString = "varchar"
+        }
         $$ = &tree.T{
             InternalType: tree.InternalType{
                 Family: tree.StringFamily,
-                FamilyString: $1,
+                FamilyString: familyString,
                 Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+                Oid:    oid,
                 DisplayWith: $2,
             },
         }
