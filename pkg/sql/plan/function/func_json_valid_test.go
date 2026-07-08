@@ -1043,6 +1043,42 @@ func TestJsonContains(t *testing.T) {
 		require.True(t, s, info)
 	})
 
+	t.Run("numeric exact equality", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains numeric exact equality",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`1`,
+						`9007199254740993`,
+						`[1]`,
+						`{"a":1}`,
+						`0`,
+						`18446744073709551615`,
+						`18446744073709551615`,
+					},
+					[]bool{false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`1.000000009`,
+						`9007199254740992.0`,
+						`[1.000000009]`,
+						`{"a":1.000000009}`,
+						`-0.0`,
+						`18446744073709551615.0`,
+						`18446744073709551614.0`,
+					},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 0, 0, 0, 1, 0, 0},
+				[]bool{false, false, false, false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
 	t.Run("typed json input", func(t *testing.T) {
 		tc := tcTemp{
 			info: "json_contains typed json input",

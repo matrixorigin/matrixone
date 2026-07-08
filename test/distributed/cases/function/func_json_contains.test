@@ -65,6 +65,17 @@ select json_contains('[1,2.0,3]', '[1.0,2,3.0]');
 select json_contains('{"a":1}', '{"a":1.0}');
 select json_contains('[1,2,3]', '[1.0,3.0]');
 select json_contains('{"a":[1,2,3]}', '[1.0,3.0]', '$.a');
+select json_contains('1', '1.000000009');
+select json_contains('9007199254740993', '9007199254740992.0');
+select json_contains('[1]', '[1.000000009]');
+select json_contains('{"a":1}', '{"a":1.000000009}');
+select json_contains('0', '-0.0');
+select json_contains('18446744073709551615', '18446744073709551615.0');
+select json_contains('18446744073709551615', '18446744073709551614.0');
+select json_contains('18446744073709551615', '18446744073709551615');
+select json_contains('[9007199254740993]', '[9007199254740992.0]');
+select json_contains('{"a":[9007199254740993]}', '9007199254740992.0', '$.a');
+select json_contains('-0', '0.0');
 
 -- scalar [0] autowrap for simple paths
 select json_contains('1', '1', '$[0]');

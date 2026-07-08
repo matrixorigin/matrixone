@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -350,12 +351,47 @@ func jsonContainsScalar(target, candidate bytejson.ByteJson) bool {
 	}
 
 	if isJsonNumericType(target.Type) && isJsonNumericType(candidate.Type) {
-		return bytejson.CompareByteJson(target, candidate) == 0
+		return jsonContainsNumericEqual(target, candidate)
 	}
 	if target.Type != candidate.Type {
 		return false
 	}
 	return bytejson.CompareByteJson(target, candidate) == 0
+}
+
+func jsonContainsNumericEqual(target, candidate bytejson.ByteJson) bool {
+	targetRat, ok := jsonContainsNumericRat(target)
+	if !ok {
+		return false
+	}
+	candidateRat, ok := jsonContainsNumericRat(candidate)
+	if !ok {
+		return false
+	}
+	return targetRat.Cmp(candidateRat) == 0
+}
+
+func jsonContainsNumericRat(bj bytejson.ByteJson) (*big.Rat, bool) {
+	switch bj.Type {
+	case bytejson.TpCodeInt64:
+		return big.NewRat(bj.GetInt64(), 1), true
+	case bytejson.TpCodeUint64:
+		return new(big.Rat).SetInt(new(big.Int).SetUint64(bj.GetUint64())), true
+	case bytejson.TpCodeFloat64:
+		r := new(big.Rat)
+		if _, ok := r.SetString(strconv.FormatFloat(bj.GetFloat64(), 'g', -1, 64)); !ok {
+			return nil, false
+		}
+		return r, true
+	case bytejson.TpCodeDecimal:
+		r := new(big.Rat)
+		if _, ok := r.SetString(string(bj.GetString())); !ok {
+			return nil, false
+		}
+		return r, true
+	default:
+		return nil, false
+	}
 }
 
 func isJsonNumericType(tp bytejson.TpCode) bool {
