@@ -154,3 +154,41 @@ select sum(distinct a),sum(distinct grp) from t1;
 insert into t1 values (null,null,'');
 select sum(distinct a),sum(distinct grp) from t1;
 drop table t1;
+
+
+drop table if exists t_bigint_sum_decimal128_state;
+create table t_bigint_sum_decimal128_state(id int, grp varchar(8), v bigint, u bigint unsigned);
+insert into t_bigint_sum_decimal128_state values
+  (1,'P',9223372036854775807,1),
+  (2,'P',1,18446744073709551615),
+  (3,'P',-2,3),
+  (4,'N',-9223372036854775807,4),
+  (5,'N',-2,5),
+  (6,'N',2,6);
+select 'plain_sum_int_pos' q, sum(v) v from t_bigint_sum_decimal128_state where grp = 'P';
+select 'plain_sum_int_neg' q, sum(v) v from t_bigint_sum_decimal128_state where grp = 'N';
+select 'plain_sum_uint_pos' q, sum(u) v from t_bigint_sum_decimal128_state where grp = 'P';
+select 'group_sum' q, grp, sum(v) sv, sum(u) su from t_bigint_sum_decimal128_state group by grp order by grp;
+select 'window_sum_partition' q, id, grp,
+  sum(v) over (partition by grp) sv,
+  sum(u) over (partition by grp) su
+from t_bigint_sum_decimal128_state
+order by grp, id;
+select 'window_sum_running' q, id, grp,
+  sum(v) over (
+    partition by grp
+    order by id
+    rows between unbounded preceding and current row
+  ) sv,
+  sum(u) over (
+    partition by grp
+    order by id
+    rows between unbounded preceding and current row
+  ) su
+from t_bigint_sum_decimal128_state
+order by grp, id;
+insert into t_bigint_sum_decimal128_state values
+  (7,'P',1,1),
+  (8,'N',-2,4);
+select 'group_sum_distinct' q, grp, sum(distinct v) sv, sum(distinct u) su from t_bigint_sum_decimal128_state group by grp order by grp;
+drop table t_bigint_sum_decimal128_state;
