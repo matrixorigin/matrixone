@@ -3994,13 +3994,59 @@ func normalizeExprForComparison(astExpr tree.Expr) {
 				if isGrouping {
 					for i := range funcExpr.Exprs {
 						funcExpr.Exprs[i] = unwrapParenExpr(funcExpr.Exprs[i])
-						if name, ok := funcExpr.Exprs[i].(*tree.UnresolvedName); ok &&
-							name.NumParts > 1 && !name.Star {
-							name.NumParts = 1
-						}
+						stripGroupingArgQualifiers(funcExpr.Exprs[i])
 					}
 				}
 			}
+			walk(value.Elem())
+			return
+		}
+		switch value.Kind() {
+		case reflect.Struct:
+			valueType := value.Type()
+			for i := 0; i < value.NumField(); i++ {
+				if valueType.Field(i).PkgPath == "" {
+					walk(value.Field(i))
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < value.Len(); i++ {
+				walk(value.Index(i))
+			}
+		}
+	}
+	walk(reflect.ValueOf(astExpr))
+}
+
+// stripGroupingArgQualifiers deeply walks an expression inside a GROUPING()
+// argument and strips table qualifiers from every UnresolvedName. This is
+// scoped to the GROUPING argument subtree only so that names outside
+// GROUPING() (e.g. t1.b vs t2.b in grouping(a) + t1.b vs grouping(a) + t2.b)
+// retain their qualifiers for correct DISTINCT expression matching.
+func stripGroupingArgQualifiers(astExpr tree.Expr) {
+	visited := make(map[uintptr]struct{})
+	var walk func(reflect.Value)
+	walk = func(value reflect.Value) {
+		if !value.IsValid() {
+			return
+		}
+		if value.Kind() == reflect.Interface {
+			if value.IsNil() {
+				return
+			}
+			walk(value.Elem())
+			return
+		}
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return
+			}
+			pointer := value.Pointer()
+			if _, ok := visited[pointer]; ok {
+				return
+			}
+			visited[pointer] = struct{}{}
+
 			if name, ok := value.Interface().(*tree.UnresolvedName); ok &&
 				name.NumParts > 1 && !name.Star {
 				name.NumParts = 1

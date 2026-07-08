@@ -928,6 +928,24 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctAcceptsEquivale
 	}
 }
 
+// For SELECT DISTINCT, qualifiers on names outside GROUPING() must be preserved
+// so that e.g. t1.b and t2.b are not matched as the same expression.
+func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctPreservesOuterQualifiers(t *testing.T) {
+	// t1.b vs t2.b — the ORDER BY expression is NOT the visible select-list
+	// expression, so DISTINCT must reject it.
+	sql := `select distinct grouping(a) + t1.b
+		from (select a, b from select_test.bind_select) as t1,
+		     (select b from select_test.bind_select) as t2
+		group by t1.a, t1.b, t2.b with rollup
+		order by grouping(a) + t2.b`
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+}
+
 // normalizeExprForComparison strips table qualifiers from GROUPING()
 // arguments so that GROUPING(t.a) normalizes to GROUPING(a) for comparison.
 func TestNormalizeExprForComparisonStripsTableQualifier(t *testing.T) {
