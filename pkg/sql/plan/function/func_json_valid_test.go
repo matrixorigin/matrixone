@@ -1023,6 +1023,71 @@ func TestJsonContains(t *testing.T) {
 		require.True(t, s, info)
 	})
 
+	t.Run("mysql json_no_table containment regressions", func(t *testing.T) {
+		notNulls := make([]bool, 21)
+		tc := tcTemp{
+			info: "json_contains mysql json_no_table containment regressions",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`[1,[2.0,3.0]]`,
+						`[1,2,[3,[4,5]],6,7]`,
+						`[1,3,5]`,
+						`[{"b":4,"a":7}]`,
+						`[{"b":4,"a":7},5]`,
+						`[{"b":4,"a":7},5.0]`,
+						`[null,1,[2,3],true,false]`,
+						`[null,1,[2,3],true,false]`,
+						`[true,false]`,
+						`[1,2]`,
+						`[1,2,[4]]`,
+						`[1,2,[4,5]]`,
+						`[1,2,[4,5]]`,
+						`[]`,
+						`[]`,
+						`[]`,
+						`[]`,
+						`[]`,
+						`{}`,
+						`{}`,
+						`{"a":1}`,
+					},
+					notNulls),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`[2.0]`,
+						`5`,
+						`[5,3,1,5]`,
+						`[{"a":7},{"b":4}]`,
+						`[5,{"a":7,"b":4}]`,
+						`[5,{"a":7.0E0,"b":4}]`,
+						`[null,1,[3],false]`,
+						`[null,1,[4],false]`,
+						`[[true]]`,
+						`[[1]]`,
+						`{"b":2}`,
+						`[1,2,3,4,5,6,7,8,9]`,
+						`[111111111111111111]`,
+						`{"a":1}`,
+						`[1,2,3,4,5]`,
+						`[1,2,3,4,{"a":1}]`,
+						`{"a":[1,2,3,4,5]}`,
+						`[]`,
+						`{}`,
+						`{"a":1}`,
+						`{"a":1,"b":2}`,
+					},
+					notNulls),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0},
+				notNulls),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
 	t.Run("numeric cross type", func(t *testing.T) {
 		tc := tcTemp{
 			info: "json_contains numeric cross type",
