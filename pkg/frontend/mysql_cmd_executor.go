@@ -1344,7 +1344,8 @@ func createPrepareStmt(
 	}
 
 	var comp *compile.Compile
-	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok {
+	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok &&
+		shouldCachePrepareCompile(preparePlan.GetDcl().GetPrepare().Plan) {
 		//only DQL & DML will pre compile
 		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true)
 		if err != nil {
