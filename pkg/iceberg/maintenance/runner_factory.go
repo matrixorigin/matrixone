@@ -143,7 +143,10 @@ func (r CatalogExpireSnapshotsRunner) RunMaintenance(ctx context.Context, req Re
 	if err != nil {
 		return Result{}, err
 	}
-	catalogReq, err := resolveMaintenanceCatalogRequestPrefix(ctx, client, api.CatalogRequest{Catalog: req.Catalog})
+	catalogReq, err := resolveMaintenanceCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+		Catalog:           req.Catalog,
+		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -183,7 +186,10 @@ func (r CatalogRewriteDataFilesRunner) RunMaintenance(ctx context.Context, req R
 	if err != nil {
 		return Result{}, err
 	}
-	catalogReq, err := resolveMaintenanceCatalogRequestPrefix(ctx, client, api.CatalogRequest{Catalog: req.Catalog})
+	catalogReq, err := resolveMaintenanceCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+		Catalog:           req.Catalog,
+		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -222,7 +228,10 @@ func (r CatalogRewriteManifestsRunner) RunMaintenance(ctx context.Context, req R
 	if err != nil {
 		return Result{}, err
 	}
-	catalogReq, err := resolveMaintenanceCatalogRequestPrefix(ctx, client, api.CatalogRequest{Catalog: req.Catalog})
+	catalogReq, err := resolveMaintenanceCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+		Catalog:           req.Catalog,
+		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
+	})
 	if err != nil {
 		return Result{}, err
 	}

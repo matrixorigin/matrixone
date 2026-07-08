@@ -120,6 +120,7 @@ func NewMaintenanceProcedureExecutor(store MaintenanceStore, opts MaintenancePro
 			Config:  opts.Config,
 			Account: opts.Account,
 		},
+		Access: MaintenanceCatalogAccessChecker{Store: store},
 		Dispatcher: maintenance.Dispatcher{
 			Runners: map[maintenance.Operation]maintenance.Runner{
 				maintenance.OperationRewriteDataFiles: rewriteDataFilesRunner,
@@ -137,6 +138,21 @@ func NewMaintenanceProcedureExecutor(store MaintenanceStore, opts MaintenancePro
 			Now:      opts.Now,
 		},
 	}
+}
+
+type MaintenanceCatalogAccessChecker struct {
+	Store MaintenanceStore
+}
+
+func (c MaintenanceCatalogAccessChecker) CheckMaintenanceCatalogAccess(ctx context.Context, req maintenance.ProcedureExecutionRequest, catalog maintenance.ProcedureCatalogResolution) (maintenance.ProcedureCatalogAccess, error) {
+	access, err := checkRuntimeCatalogAccess(ctx, c.Store, req.AccountID, catalog.Catalog, req.RoleID, req.UserID)
+	if err != nil {
+		return maintenance.ProcedureCatalogAccess{}, err
+	}
+	return maintenance.ProcedureCatalogAccess{
+		ExternalPrincipal: access.Decision.ExternalPrincipal,
+		ResidencyPolicies: append([]model.ResidencyPolicy(nil), access.ResidencyPolicies...),
+	}, nil
 }
 
 func NewMaintenanceProcedureExecutorFromInternalSQL(execSQL InternalSQLExecutorAdapter, opts MaintenanceProcedureExecutorOptions) maintenance.ProcedureExecutor {
@@ -181,7 +197,10 @@ func (r NativeRewriteManifestsProcedureRunner) RunMaintenance(ctx context.Contex
 	if err != nil {
 		return maintenance.Result{}, err
 	}
-	catalogReq, err := resolveRuntimeCatalogRequestPrefix(ctx, client, api.CatalogRequest{Catalog: req.Catalog})
+	catalogReq, err := resolveRuntimeCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+		Catalog:           req.Catalog,
+		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
+	})
 	if err != nil {
 		return maintenance.Result{}, err
 	}
@@ -199,10 +218,10 @@ func (r NativeRewriteManifestsProcedureRunner) RunMaintenance(ctx context.Contex
 		ObjectIOProvider:       r.ObjectIOProvider,
 		ScopeForLocation:       r.ScopeForLocation,
 		BuildFileService:       r.BuildFileService,
-		ResidencyPolicies:      r.ResidencyPolicies,
+		ResidencyPolicies:      mergeMaintenanceResidencyPolicies(r.ResidencyPolicies, req.ResidencyPolicies),
 		ResidencyPolicyLister:  r.ResidencyPolicyLister,
 		RequireResidencyPolicy: r.RequireResidencyPolicy,
-		Principal:              "matrixone-maintenance",
+		Principal:              firstNonEmpty(req.ExternalPrincipal, "matrixone-maintenance"),
 	})
 	if err != nil {
 		return maintenance.Result{}, err
@@ -265,7 +284,10 @@ func (r NativeRewriteDataFilesProcedureRunner) RunMaintenance(ctx context.Contex
 	if err != nil {
 		return maintenance.Result{}, err
 	}
-	catalogReq, err := resolveRuntimeCatalogRequestPrefix(ctx, client, api.CatalogRequest{Catalog: req.Catalog})
+	catalogReq, err := resolveRuntimeCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+		Catalog:           req.Catalog,
+		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
+	})
 	if err != nil {
 		return maintenance.Result{}, err
 	}
@@ -283,10 +305,10 @@ func (r NativeRewriteDataFilesProcedureRunner) RunMaintenance(ctx context.Contex
 		ObjectIOProvider:       r.ObjectIOProvider,
 		ScopeForLocation:       r.ScopeForLocation,
 		BuildFileService:       r.BuildFileService,
-		ResidencyPolicies:      r.ResidencyPolicies,
+		ResidencyPolicies:      mergeMaintenanceResidencyPolicies(r.ResidencyPolicies, req.ResidencyPolicies),
 		ResidencyPolicyLister:  r.ResidencyPolicyLister,
 		RequireResidencyPolicy: r.RequireResidencyPolicy,
-		Principal:              "matrixone-maintenance",
+		Principal:              firstNonEmpty(req.ExternalPrincipal, "matrixone-maintenance"),
 	})
 	if err != nil {
 		return maintenance.Result{}, err
@@ -488,4 +510,11 @@ func loadMaintenanceTableWithResponse(ctx context.Context, client api.CatalogCli
 func maintenanceResidencyPolicyLister(store MaintenanceStore) ResidencyPolicyLister {
 	lister, _ := store.(ResidencyPolicyLister)
 	return lister
+}
+
+func mergeMaintenanceResidencyPolicies(primary, checked []model.ResidencyPolicy) []model.ResidencyPolicy {
+	out := make([]model.ResidencyPolicy, 0, len(primary)+len(checked))
+	out = append(out, primary...)
+	out = append(out, checked...)
+	return out
 }

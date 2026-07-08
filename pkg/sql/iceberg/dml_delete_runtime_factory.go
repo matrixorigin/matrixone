@@ -111,6 +111,11 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
+	access, err := checkRuntimeCatalogAccess(ctx, f.opts.Store, req.AccountID, catalogModel, req.RoleID, req.UserID)
+	if err != nil {
+		return nil, err
+	}
+	req.ExternalPrincipal = access.Decision.ExternalPrincipal
 	catalogCaps, err := icebergcatalog.ParseCapabilitiesJSON(catalogModel.CapabilitiesJSON)
 	if err != nil {
 		return nil, api.ToMOErr(ctx, err)
@@ -121,7 +126,10 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 	}
 	namespace := dottedNamespace(req.Namespace)
 	rawTargetRef := firstNonEmpty(req.DMLScan.Ref, req.DefaultRef, model.DefaultRefMain)
-	catalogReq, targetRef, targetRefType, err := resolveRuntimeCatalogRequestPrefixForWriteRef(ctx, client, api.CatalogRequest{Catalog: catalogModel}, rawTargetRef, catalogCaps, f.opts.AllowTagMove)
+	catalogReq, targetRef, targetRefType, err := resolveRuntimeCatalogRequestPrefixForWriteRef(ctx, client, api.CatalogRequest{
+		Catalog:           catalogModel,
+		ExternalPrincipal: req.ExternalPrincipal,
+	}, rawTargetRef, catalogCaps, f.opts.AllowTagMove)
 	if err != nil {
 		return nil, api.ToMOErr(ctx, err)
 	}
@@ -358,6 +366,9 @@ func dmlRuntimeCoordinatorCacheKey(req icebergwrite.AppendRequest) string {
 	ref := strings.TrimSpace(firstNonEmpty(req.DMLScan.Ref, req.DefaultRef, model.DefaultRefMain))
 	return strings.Join([]string{
 		strconv.FormatUint(uint64(req.AccountID), 10),
+		strconv.FormatUint(req.RoleID, 10),
+		strconv.FormatUint(req.UserID, 10),
+		strings.TrimSpace(req.ExternalPrincipal),
 		strings.TrimSpace(req.Operation),
 		strings.TrimSpace(req.CatalogName),
 		strings.TrimSpace(req.Namespace),
@@ -407,7 +418,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) dmlWriteObjectIOContext(
 	baseScope := icebergio.ObjectScope{
 		AccountID: catalog.AccountID,
 		CatalogID: catalog.CatalogID,
-		Principal: "matrixone-dml",
+		Principal: firstNonEmpty(catalogReq.ExternalPrincipal, "matrixone-dml"),
 	}
 	scopeForLocation := f.opts.ScopeForLocation
 	if scopeForLocation == nil {

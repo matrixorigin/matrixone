@@ -16,6 +16,7 @@ package iceberg
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +52,7 @@ type DMLMergeCoordinator struct {
 	writeReq         icebergwrite.AppendRequest
 	deleteCollector  *DMLMatchedScanCollector
 	updateCollector  *DMLMatchedScanCollector
+	matchedRows      map[string]struct{}
 	replacementCols  []int
 	replacementAttrs []string
 	updateBats       []*batch.Batch
@@ -102,6 +104,7 @@ func (c *DMLMergeCoordinator) Begin(ctx context.Context, req icebergwrite.Append
 	}
 	c.deleteCollector = NewDMLMatchedScanCollector(collectorSpec)
 	c.updateCollector = NewDMLMatchedScanCollector(collectorSpec)
+	c.matchedRows = make(map[string]struct{})
 	return nil
 }
 
@@ -129,11 +132,17 @@ func (c *DMLMergeCoordinator) AppendWithProcess(proc *process.Process, bat *batc
 	defer cleanMergeSplitBatch(insertBatch, proc.Mp())
 
 	if deleteBatch != nil && deleteBatch.RowCount() > 0 {
+		if err := c.rejectDuplicateMatchedTargets(ctx, deleteBatch); err != nil {
+			return err
+		}
 		if err := c.deleteCollector.AddBatch(ctx, deleteBatch); err != nil {
 			return err
 		}
 	}
 	if updateBatch != nil && updateBatch.RowCount() > 0 {
+		if err := c.rejectDuplicateMatchedTargets(ctx, updateBatch); err != nil {
+			return err
+		}
 		if err := c.updateCollector.AddBatch(ctx, updateBatch); err != nil {
 			return err
 		}
@@ -159,6 +168,55 @@ func (c *DMLMergeCoordinator) AppendWithProcess(proc *process.Process, bat *batc
 		}
 		c.mp = proc.Mp()
 		c.insertBats = append(c.insertBats, cloned)
+	}
+	return nil
+}
+
+func (c *DMLMergeCoordinator) rejectDuplicateMatchedTargets(ctx context.Context, bat *batch.Batch) error {
+	if bat == nil || bat.RowCount() == 0 {
+		return nil
+	}
+	pathIdx, err := dmlBatchColumnIndexByNameOrError(
+		ctx,
+		bat,
+		api.DMLDataFilePathColumnName,
+		c.writeReq.DataFilePathColumnIndex,
+		"data file path",
+	)
+	if err != nil {
+		return err
+	}
+	ordinalIdx, err := dmlBatchColumnIndexByNameOrError(
+		ctx,
+		bat,
+		api.DMLRowOrdinalColumnName,
+		c.writeReq.RowOrdinalColumnIndex,
+		"row ordinal",
+	)
+	if err != nil {
+		return err
+	}
+	if c.matchedRows == nil {
+		c.matchedRows = make(map[string]struct{})
+	}
+	for row := 0; row < bat.RowCount(); row++ {
+		path, err := dmlStringValue(ctx, bat.Vecs[pathIdx], row)
+		if err != nil {
+			return err
+		}
+		path = strings.TrimSpace(path)
+		ordinal, err := dmlInt64Value(ctx, bat.Vecs[ordinalIdx], row)
+		if err != nil {
+			return err
+		}
+		key := path + "\x00" + strconv.FormatInt(ordinal, 10)
+		if _, exists := c.matchedRows[key]; exists {
+			return api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg MERGE matched multiple source rows for the same target row", map[string]string{
+				"path":        api.RedactPath(path),
+				"row_ordinal": strconv.FormatInt(ordinal, 10),
+			}))
+		}
+		c.matchedRows[key] = struct{}{}
 	}
 	return nil
 }

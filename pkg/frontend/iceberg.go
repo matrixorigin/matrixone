@@ -169,7 +169,10 @@ func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Drop
 	))
 }
 
-func handleShowIcebergCatalogs(ctx context.Context, ses *Session, _ *tree.ShowIcebergCatalogs) error {
+func handleShowIcebergCatalogs(ctx context.Context, ses *Session, stmt *tree.ShowIcebergCatalogs) error {
+	if stmt != nil && (stmt.Like != nil || stmt.Where != nil) {
+		return moerr.NewNotSupported(ctx, "SHOW ICEBERG CATALOGS with LIKE/WHERE")
+	}
 	sql := fmt.Sprintf(
 		"select name,type,uri,warehouse,auth_mode,version from mo_catalog.%s where account_id = %d order by name",
 		sqliceberg.TableCatalogs,
@@ -186,6 +189,9 @@ func handleShowIcebergCatalogs(ctx context.Context, ses *Session, _ *tree.ShowIc
 }
 
 func handleShowIcebergNamespaces(ctx context.Context, ses *Session, stmt *tree.ShowIcebergNamespaces) error {
+	if stmt != nil && (stmt.Like != nil || stmt.Where != nil) {
+		return moerr.NewNotSupported(ctx, "SHOW ICEBERG NAMESPACES with LIKE/WHERE")
+	}
 	accountID := ses.GetAccountId()
 	filter := ""
 	if stmt.Catalog != "" {
@@ -205,6 +211,9 @@ func handleShowIcebergNamespaces(ctx context.Context, ses *Session, stmt *tree.S
 }
 
 func handleShowIcebergTables(ctx context.Context, ses *Session, stmt *tree.ShowIcebergTables) error {
+	if stmt != nil && (stmt.Like != nil || stmt.Where != nil) {
+		return moerr.NewNotSupported(ctx, "SHOW ICEBERG TABLES with LIKE/WHERE")
+	}
 	accountID := ses.GetAccountId()
 	filters := make([]string, 0, 2)
 	if stmt.Catalog != "" {

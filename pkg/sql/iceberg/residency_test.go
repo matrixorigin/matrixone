@@ -187,20 +187,23 @@ func TestCatalogResidencyAllowsDistinctClusterPoliciesWithSameAccountLocalCatalo
 	}
 }
 
-func TestNormalizeResidencyPolicyStorageIdentityCanonicalizesCatalogURI(t *testing.T) {
+func TestNormalizeResidencyPolicyStorageIdentityCanonicalizesMatchingFields(t *testing.T) {
 	ctx := context.Background()
 	enabledPolicy := model.ResidencyPolicy{
 		ScopeType:         model.ResidencyScopeCluster,
 		AccountID:         0,
 		CatalogID:         1,
 		AllowedCatalogURI: "https://catalog.example.com/rest",
-		AllowedEndpoint:   "catalog.example.com",
-		AllowedRegion:     model.ResidencyWildcard,
-		AllowedBucket:     model.ResidencyWildcard,
+		AllowedEndpoint:   "s3.me-central-1.amazonaws.com",
+		AllowedRegion:     "me-central-1",
+		AllowedBucket:     "gold",
 		PolicyState:       model.ResidencyPolicyEnabled,
 	}
 	disabledVariant := enabledPolicy
 	disabledVariant.AllowedCatalogURI = "HTTPS://Catalog.Example.com/rest#disabled-by-equivalent-uri"
+	disabledVariant.AllowedEndpoint = "https://S3.ME-CENTRAL-1.AMAZONAWS.COM/"
+	disabledVariant.AllowedRegion = "ME-CENTRAL-1"
+	disabledVariant.AllowedBucket = " gold "
 	disabledVariant.PolicyState = model.ResidencyPolicyDisabled
 
 	enabledNormalized, err := NormalizeResidencyPolicyStorageIdentity(ctx, enabledPolicy)
@@ -211,18 +214,24 @@ func TestNormalizeResidencyPolicyStorageIdentityCanonicalizesCatalogURI(t *testi
 	if err != nil {
 		t.Fatalf("normalize disabled variant: %v", err)
 	}
-	if enabledNormalized.AllowedCatalogURI != disabledNormalized.AllowedCatalogURI {
-		t.Fatalf("equivalent catalog URIs must share storage identity: enabled=%q disabled=%q",
-			enabledNormalized.AllowedCatalogURI, disabledNormalized.AllowedCatalogURI)
+	if enabledNormalized.AllowedCatalogURI != disabledNormalized.AllowedCatalogURI ||
+		enabledNormalized.AllowedEndpoint != disabledNormalized.AllowedEndpoint ||
+		enabledNormalized.AllowedRegion != disabledNormalized.AllowedRegion ||
+		enabledNormalized.AllowedBucket != disabledNormalized.AllowedBucket {
+		t.Fatalf("equivalent residency policies must share storage identity:\n enabled=%+v\n disabled=%+v",
+			enabledNormalized, disabledNormalized)
 	}
 
-	err = CheckCatalogResidency(ctx, []model.ResidencyPolicy{disabledNormalized}, CatalogResidencyRequest{
+	err = CheckResidency(ctx, []model.ResidencyPolicy{disabledNormalized}, ResidencyRequest{
 		AccountID:  42,
 		CatalogID:  1,
 		CatalogURI: "https://catalog.example.com/rest",
+		Endpoint:   "s3.me-central-1.amazonaws.com",
+		Region:     "me-central-1",
+		Bucket:     "gold",
 	})
 	if err == nil || !strings.Contains(err.Error(), "no cluster residency policy configured") {
-		t.Fatalf("disabled equivalent URI upsert should deny after replacing enabled policy, got %v", err)
+		t.Fatalf("disabled equivalent policy upsert should deny after replacing enabled policy, got %v", err)
 	}
 }
 

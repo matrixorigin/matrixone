@@ -62,8 +62,12 @@ type TargetIdentifier struct {
 
 type Request struct {
 	AccountID           uint32
+	RoleID              uint64
+	UserID              uint64
 	CatalogID           uint64
 	Catalog             model.Catalog
+	ExternalPrincipal   string
+	ResidencyPolicies   []model.ResidencyPolicy
 	Namespace           string
 	Table               string
 	TargetRef           string

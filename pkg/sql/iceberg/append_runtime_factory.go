@@ -121,6 +121,11 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 	if err != nil {
 		return nil, err
 	}
+	access, err := checkRuntimeCatalogAccess(ctx, f.opts.Store, req.AccountID, catalogModel, req.RoleID, req.UserID)
+	if err != nil {
+		return nil, err
+	}
+	req.ExternalPrincipal = access.Decision.ExternalPrincipal
 	mapping, err := f.tableMapping(ctx, req, catalogModel)
 	if err != nil {
 		return nil, err
@@ -135,7 +140,10 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 	}
 	namespace := dottedNamespace(firstNonEmpty(mapping.Namespace, req.Namespace))
 	rawTargetRef := firstNonEmpty(req.DefaultRef, mapping.DefaultRef, model.DefaultRefMain)
-	catalogReq, targetRef, targetRefType, err := resolveRuntimeCatalogRequestPrefixForWriteRef(ctx, client, api.CatalogRequest{Catalog: catalogModel}, rawTargetRef, catalogCaps, f.opts.AllowTagMove)
+	catalogReq, targetRef, targetRefType, err := resolveRuntimeCatalogRequestPrefixForWriteRef(ctx, client, api.CatalogRequest{
+		Catalog:           catalogModel,
+		ExternalPrincipal: req.ExternalPrincipal,
+	}, rawTargetRef, catalogCaps, f.opts.AllowTagMove)
 	if err != nil {
 		return nil, api.ToMOErr(ctx, err)
 	}
@@ -515,6 +523,9 @@ func appendRuntimeCoordinatorCacheKey(req icebergwrite.AppendRequest) string {
 	ref := strings.TrimSpace(firstNonEmpty(req.DefaultRef, model.DefaultRefMain))
 	return strings.Join([]string{
 		strconv.FormatUint(uint64(req.AccountID), 10),
+		strconv.FormatUint(req.RoleID, 10),
+		strconv.FormatUint(req.UserID, 10),
+		strings.TrimSpace(req.ExternalPrincipal),
 		icebergwrite.OperationAppend,
 		strings.TrimSpace(req.CatalogName),
 		strings.TrimSpace(req.Namespace),
@@ -607,7 +618,7 @@ func (f AppendRuntimeCoordinatorFactory) objectIOContext(
 	baseScope := icebergio.ObjectScope{
 		AccountID: catalog.AccountID,
 		CatalogID: catalog.CatalogID,
-		Principal: "matrixone-append",
+		Principal: firstNonEmpty(catalogReq.ExternalPrincipal, "matrixone-append"),
 	}
 	scopeForLocation := f.opts.ScopeForLocation
 	if scopeForLocation == nil {

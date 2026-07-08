@@ -486,6 +486,16 @@ func rewriteIcebergMergeProjection(ctx CompilerContext, query *planpb.Query, cla
 	if shape.tableColumnCount <= 0 || metadataStart+1 >= len(preProjects) {
 		return moerr.NewInvalidInputf(ctx.GetContext(), "Iceberg MERGE projection shape is invalid: %s projects=%d", shape.String(), len(preProjects))
 	}
+	writeCols := icebergDMLWriteColumns(tableDef)
+	if len(writeCols) != shape.tableColumnCount {
+		return moerr.NewInvalidInputf(ctx.GetContext(), "Iceberg MERGE write column shape is invalid: columns=%d shape=%s", len(writeCols), shape.String())
+	}
+	if err := normalizeIcebergMergeClauseValueProjects(ctx, preProjects, shape, writeCols); err != nil {
+		return err
+	}
+	if err := normalizeIcebergMergeReachableClauseValueProjects(ctx, query, root.Children, shape, writeCols); err != nil {
+		return err
+	}
 	inputProjects := icebergProjectOutputRefs(preProjects)
 	dataFilePathExpr := DeepCopyExpr(inputProjects[metadataStart])
 	isUnmatchedExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "isnull", []*planpb.Expr{dataFilePathExpr})
@@ -494,7 +504,7 @@ func rewriteIcebergMergeProjection(ctx CompilerContext, query *planpb.Query, cla
 	}
 	finalProjects := make([]*planpb.Expr, 0, shape.tableColumnCount+2+1)
 	for idx := 0; idx < shape.tableColumnCount; idx++ {
-		expr, err := icebergMergeReplacementExpr(ctx, inputProjects, shape, isUnmatchedExpr, idx)
+		expr, err := icebergMergeReplacementExpr(ctx, inputProjects, shape, isUnmatchedExpr, writeCols[idx], idx)
 		if err != nil {
 			return err
 		}
@@ -526,6 +536,8 @@ func rewriteIcebergMergeProjection(ctx CompilerContext, query *planpb.Query, cla
 		}
 		preProjectID = int32(len(query.Nodes))
 		query.Nodes = append(query.Nodes, preProjectNode)
+	} else {
+		query.Nodes[preProjectID].ProjectList = preProjects
 	}
 	// finalProjects are built against the full MERGE select output, so the
 	// child PROJECT must first materialize preProjects before the compact
@@ -563,7 +575,78 @@ func icebergProjectOutputRefs(projects []*planpb.Expr) []*planpb.Expr {
 	return out
 }
 
-func icebergMergeReplacementExpr(ctx CompilerContext, projects []*planpb.Expr, shape icebergMergeProjectionShape, isUnmatchedExpr *planpb.Expr, colIdx int) (*planpb.Expr, error) {
+func normalizeIcebergMergeReachableClauseValueProjects(ctx CompilerContext, query *planpb.Query, roots []int32, shape icebergMergeProjectionShape, targetCols []*planpb.ColDef) error {
+	seen := make(map[int32]struct{})
+	var visit func(int32) error
+	visit = func(nodeID int32) error {
+		if nodeID < 0 || query == nil || int(nodeID) >= len(query.Nodes) {
+			return nil
+		}
+		if _, ok := seen[nodeID]; ok {
+			return nil
+		}
+		seen[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return nil
+		}
+		if node.NodeType == planpb.Node_PROJECT && len(node.ProjectList) >= shape.preMetadataCount {
+			if err := normalizeIcebergMergeClauseValueProjects(ctx, node.ProjectList, shape, targetCols); err != nil {
+				return err
+			}
+		}
+		for _, childID := range node.Children {
+			if err := visit(childID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, nodeID := range roots {
+		if err := visit(nodeID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeIcebergMergeClauseValueProjects(ctx CompilerContext, projects []*planpb.Expr, shape icebergMergeProjectionShape, targetCols []*planpb.ColDef) error {
+	for _, proj := range shape.matched {
+		if proj.clause == nil || proj.clause.Action != tree.MergeActionUpdate || proj.valueStart < 0 {
+			continue
+		}
+		for colIdx, col := range targetCols {
+			pos := proj.valueStart + colIdx
+			if pos < 0 || pos >= len(projects) {
+				return moerr.NewInvalidInputf(ctx.GetContext(), "Iceberg MERGE UPDATE value index is invalid: pos=%d projects=%d", pos, len(projects))
+			}
+			value, err := icebergMergeAssignmentValueExpr(ctx, projects[pos], col)
+			if err != nil {
+				return err
+			}
+			projects[pos] = value
+		}
+	}
+	for _, proj := range shape.notMatched {
+		if proj.valueStart < 0 {
+			continue
+		}
+		for colIdx, col := range targetCols {
+			pos := proj.valueStart + colIdx
+			if pos < 0 || pos >= len(projects) {
+				return moerr.NewInvalidInputf(ctx.GetContext(), "Iceberg MERGE INSERT value index is invalid: pos=%d projects=%d", pos, len(projects))
+			}
+			value, err := icebergMergeAssignmentValueExpr(ctx, projects[pos], col)
+			if err != nil {
+				return err
+			}
+			projects[pos] = value
+		}
+	}
+	return nil
+}
+
+func icebergMergeReplacementExpr(ctx CompilerContext, projects []*planpb.Expr, shape icebergMergeProjectionShape, isUnmatchedExpr *planpb.Expr, targetCol *planpb.ColDef, colIdx int) (*planpb.Expr, error) {
 	matchedValue := DeepCopyExpr(projects[shape.matchedDefaultStart+colIdx])
 	for idx := len(shape.matched) - 1; idx >= 0; idx-- {
 		proj := shape.matched[idx]
@@ -574,9 +657,13 @@ func icebergMergeReplacementExpr(ctx CompilerContext, projects []*planpb.Expr, s
 		if err != nil {
 			return nil, err
 		}
+		updateValue, err := icebergMergeAssignmentValueExpr(ctx, projects[proj.valueStart+colIdx], targetCol)
+		if err != nil {
+			return nil, err
+		}
 		matchedValue, err = BindFuncExprImplByPlanExpr(ctx.GetContext(), "if", []*planpb.Expr{
 			active,
-			DeepCopyExpr(projects[proj.valueStart+colIdx]),
+			updateValue,
 			matchedValue,
 		})
 		if err != nil {
@@ -593,9 +680,13 @@ func icebergMergeReplacementExpr(ctx CompilerContext, projects []*planpb.Expr, s
 		if err != nil {
 			return nil, err
 		}
+		clauseInsertValue, err := icebergMergeAssignmentValueExpr(ctx, projects[proj.valueStart+colIdx], targetCol)
+		if err != nil {
+			return nil, err
+		}
 		insertValue, err = BindFuncExprImplByPlanExpr(ctx.GetContext(), "if", []*planpb.Expr{
 			active,
-			DeepCopyExpr(projects[proj.valueStart+colIdx]),
+			clauseInsertValue,
 			insertValue,
 		})
 		if err != nil {
@@ -607,6 +698,21 @@ func icebergMergeReplacementExpr(ctx CompilerContext, projects []*planpb.Expr, s
 		insertValue,
 		matchedValue,
 	})
+}
+
+func icebergMergeAssignmentValueExpr(ctx CompilerContext, expr *planpb.Expr, targetCol *planpb.ColDef) (*planpb.Expr, error) {
+	if targetCol == nil {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "Iceberg MERGE assignment target column is missing")
+	}
+	value := DeepCopyExpr(expr)
+	var err error
+	if isDefaultValExpr(value) {
+		value, err = getDefaultExpr(ctx.GetContext(), targetCol)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return forceAssignmentCastExpr(ctx.GetContext(), value, targetCol.Typ)
 }
 
 func icebergMergeActionExpr(ctx CompilerContext, projects []*planpb.Expr, shape icebergMergeProjectionShape, isUnmatchedExpr *planpb.Expr) (*planpb.Expr, error) {

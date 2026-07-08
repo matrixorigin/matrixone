@@ -79,7 +79,14 @@ func NormalizeResidencyPolicyStorageIdentity(ctx context.Context, policy model.R
 	if err != nil {
 		return model.ResidencyPolicy{}, err
 	}
+	endpoint, err := NormalizeEndpoint(ctx, policy.AllowedEndpoint)
+	if err != nil {
+		return model.ResidencyPolicy{}, err
+	}
 	policy.AllowedCatalogURI = catalogURI
+	policy.AllowedEndpoint = endpoint
+	policy.AllowedRegion = strings.ToLower(strings.TrimSpace(policy.AllowedRegion))
+	policy.AllowedBucket = strings.TrimSpace(policy.AllowedBucket)
 	return policy, nil
 }
 

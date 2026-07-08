@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -61,11 +60,20 @@ func (e IcebergMaintenanceProcedureExecutor) ExecuteIcebergMaintenanceCall(ctx c
 	if ses == nil {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg builtin procedure execution requires a session")
 	}
-	return e.ExecuteParsedIcebergMaintenanceCall(ctx, ses.GetAccountId(), ses.GetStmtId().String(), call)
+	tenant := ses.GetTenantInfo()
+	var roleID, userID uint64
+	if tenant != nil {
+		roleID = uint64(tenant.GetDefaultRoleID())
+		userID = uint64(tenant.GetUserID())
+	}
+	return e.ExecuteParsedIcebergMaintenanceCall(ctx, ses.GetAccountId(), roleID, userID, ses.GetStmtId().String(), call)
 }
 
-func (e IcebergMaintenanceProcedureExecutor) ExecuteParsedIcebergMaintenanceCall(ctx context.Context, accountID uint32, statementID string, call IcebergBuiltinProcedureCall) ([]ExecResult, error) {
-	result, err := e.Executor.Execute(ctx, maintenance.ProcedureExecutionRequestFromParsed(accountID, statementID, call.Parsed))
+func (e IcebergMaintenanceProcedureExecutor) ExecuteParsedIcebergMaintenanceCall(ctx context.Context, accountID uint32, roleID uint64, userID uint64, statementID string, call IcebergBuiltinProcedureCall) ([]ExecResult, error) {
+	req := maintenance.ProcedureExecutionRequestFromParsed(accountID, statementID, call.Parsed)
+	req.RoleID = roleID
+	req.UserID = userID
+	result, err := e.Executor.Execute(ctx, req)
 	if err != nil {
 		return nil, api.ToMOErr(ctx, err)
 	}
@@ -154,7 +162,7 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 			scopeType = model.ResidencyScopeCluster
 		}
 	}
-	if scopeType == model.ResidencyScopeCluster && !tenant.IsSysTenant() && !icebergAllowPlainHTTPForLocalAccessSetup() {
+	if scopeType == model.ResidencyScopeCluster && !tenant.IsSysTenant() {
 		return nil, moerr.NewInvalidInput(ctx, "cluster Iceberg access registration requires moadmin role")
 	}
 	if scopeType != model.ResidencyScopeCluster && scopeType != model.ResidencyScopeAccount {
@@ -256,10 +264,10 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 		quoteIcebergSQLString(scopeType),
 		policyAccountID,
 		catalogID,
-		quoteIcebergSQLString(catalogURI),
-		quoteIcebergSQLString(endpoint),
-		quoteIcebergSQLString(region),
-		quoteIcebergSQLString(bucket),
+		quoteIcebergSQLString(policy.AllowedCatalogURI),
+		quoteIcebergSQLString(policy.AllowedEndpoint),
+		quoteIcebergSQLString(policy.AllowedRegion),
+		quoteIcebergSQLString(policy.AllowedBucket),
 		quoteIcebergSQLString(policyState),
 		tenant.GetUserID(),
 		quoteIcebergSQLString(policyState),
@@ -334,15 +342,6 @@ func firstNonEmptyIcebergAccessOption(opts map[string]string, keys ...string) st
 		}
 	}
 	return ""
-}
-
-func icebergAllowPlainHTTPForLocalAccessSetup() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MO_ICEBERG_ALLOW_PLAIN_HTTP"))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
 }
 
 func icebergMaintenanceCallExecutorFromRuntime(service string) (IcebergMaintenanceCallExecutor, bool) {

@@ -954,10 +954,13 @@ func constructIcebergInsert(proc *process.Process, node *plan.Node) (vm.Operator
 		operation = icebergwrite.OperationOverwrite
 	}
 	var accountID uint32
+	var roleID, userID uint64
 	if proc != nil {
 		if id, err := defines.GetAccountId(proc.Ctx); err == nil {
 			accountID = id
 		}
+		roleID = uint64(defines.GetRoleId(proc.Ctx))
+		userID = uint64(defines.GetUserId(proc.Ctx))
 	}
 	statementID := icebergWriteStatementID(proc)
 	arg := icebergwrite.NewArgument(icebergwrite.AppendRequest{
@@ -966,6 +969,8 @@ func constructIcebergInsert(proc *process.Process, node *plan.Node) (vm.Operator
 		Attrs:           attrs,
 		TableDef:        oldCtx.TableDef,
 		AccountID:       accountID,
+		RoleID:          roleID,
+		UserID:          userID,
 		StatementID:     statementID,
 		IdempotencyKey:  statementID,
 		CatalogName:     env.Catalog,

@@ -130,6 +130,22 @@ func TestIcebergMergePrivilegeDefinitionRequiresAllActions(t *testing.T) {
 	require.False(t, seenCompound[PrivilegeTypeDelete])
 }
 
+func TestShowIcebergRejectsParsedLikeWhereFilters(t *testing.T) {
+	ctx := context.Background()
+	if err := handleShowIcebergCatalogs(ctx, nil, &tree.ShowIcebergCatalogs{Where: &tree.Where{}}); err == nil ||
+		!strings.Contains(err.Error(), "LIKE/WHERE") {
+		t.Fatalf("expected SHOW ICEBERG CATALOGS WHERE rejection, got %v", err)
+	}
+	if err := handleShowIcebergNamespaces(ctx, nil, &tree.ShowIcebergNamespaces{Like: &tree.ComparisonExpr{}}); err == nil ||
+		!strings.Contains(err.Error(), "LIKE/WHERE") {
+		t.Fatalf("expected SHOW ICEBERG NAMESPACES LIKE rejection, got %v", err)
+	}
+	if err := handleShowIcebergTables(ctx, nil, &tree.ShowIcebergTables{Where: &tree.Where{}}); err == nil ||
+		!strings.Contains(err.Error(), "LIKE/WHERE") {
+		t.Fatalf("expected SHOW ICEBERG TABLES WHERE rejection, got %v", err)
+	}
+}
+
 func TestIcebergP1P2SystemTablesAreInitializedForNewTenants(t *testing.T) {
 	for _, table := range []struct {
 		name string

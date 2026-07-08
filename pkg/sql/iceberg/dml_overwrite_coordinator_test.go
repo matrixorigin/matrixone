@@ -45,6 +45,10 @@ func TestDMLOverwriteCoordinatorCollectsReplacementRowsAndAffectedFiles(t *testi
 		ObjectWriter: &recordingDMLDeleteObjectWriter{},
 		Scope:        dml.OverwritePartition,
 		Partition:    map[string]any{"region": "ksa"},
+		PartitionSpec: api.PartitionSpec{Fields: []api.PartitionField{{
+			Name:      "region",
+			Transform: "identity",
+		}}},
 		AffectedDataFiles: []api.DataFile{{
 			FilePath:    "s3://warehouse/gold/orders/data/a.parquet",
 			RecordCount: 10,
@@ -111,6 +115,10 @@ func TestDMLOverwriteCoordinatorSharesCommitAcrossScopes(t *testing.T) {
 		ObjectWriter: &recordingDMLDeleteObjectWriter{},
 		Scope:        dml.OverwritePartition,
 		Partition:    map[string]any{"region": "ksa"},
+		PartitionSpec: api.PartitionSpec{Fields: []api.PartitionField{{
+			Name:      "region",
+			Transform: "identity",
+		}}},
 		AffectedDataFiles: []api.DataFile{{
 			FilePath:    "s3://warehouse/gold/orders/data/a.parquet",
 			RecordCount: 10,
@@ -140,6 +148,28 @@ func TestDMLOverwriteCoordinatorSharesCommitAcrossScopes(t *testing.T) {
 
 	require.NoError(t, coord.Commit(context.Background()))
 	require.Len(t, committer.requests, 1)
+}
+
+func TestDMLOverwriteCoordinatorRejectsUnknownStaticPartitionFieldAtBegin(t *testing.T) {
+	coord := NewDMLOverwriteCoordinator(DMLOverwriteCoordinatorSpec{
+		Committer:    &recordingDMLOverwriteCommitter{},
+		Base:         dml.CommitBase{BaseSnapshotID: 30, IdempotencyKey: "stmt-1"},
+		Schema:       api.Schema{SchemaID: 9},
+		ObjectWriter: &recordingDMLDeleteObjectWriter{},
+		Scope:        dml.OverwritePartition,
+		Partition:    map[string]any{"typo_region": "ksa"},
+		PartitionSpec: api.PartitionSpec{Fields: []api.PartitionField{{
+			Name:      "region",
+			Transform: "identity",
+		}}},
+	})
+	err := coord.Begin(context.Background(), icebergwrite.AppendRequest{
+		Operation: icebergwrite.OperationOverwrite,
+		Table:     "orders",
+		Attrs:     []string{"id"},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "partition overwrite field is not present")
 }
 
 func TestDMLOverwriteCoordinatorRejectsInvalidLifecycle(t *testing.T) {

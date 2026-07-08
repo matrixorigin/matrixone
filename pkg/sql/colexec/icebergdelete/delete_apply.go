@@ -123,10 +123,11 @@ func (idx *EqualityIndex) MemoryBytes() int64 {
 }
 
 type ApplyState struct {
-	Position *PositionIndex
-	Equality *EqualityIndex
-	Options  Options
-	Profile  Profile
+	Position        *PositionIndex
+	Equality        *EqualityIndex
+	EqualityLayouts map[string]*EqualityIndex
+	Options         Options
+	Profile         Profile
 }
 
 func NewApplyState(opts Options) *ApplyState {
@@ -142,7 +143,11 @@ func (s *ApplyState) CheckMemory(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	s.Profile.MemoryBytes = s.Position.MemoryBytes() + s.Equality.MemoryBytes()
+	memoryBytes := s.Position.MemoryBytes() + s.Equality.MemoryBytes()
+	for _, idx := range s.EqualityLayouts {
+		memoryBytes += idx.MemoryBytes()
+	}
+	s.Profile.MemoryBytes = memoryBytes
 	if s.Options.MaxMemoryBytes <= 0 || s.Profile.MemoryBytes <= s.Options.MaxMemoryBytes {
 		return nil
 	}
@@ -156,6 +161,56 @@ func (s *ApplyState) CheckMemory(ctx context.Context) error {
 		"memory_bytes": fmt.Sprintf("%d", s.Profile.MemoryBytes),
 		"limit_bytes":  fmt.Sprintf("%d", s.Options.MaxMemoryBytes),
 	}))
+}
+
+func (s *ApplyState) AddEqualityKey(layout string, values ...any) {
+	if s == nil {
+		return
+	}
+	layout = strings.TrimSpace(layout)
+	if layout == "" {
+		s.Equality.AddKey(values...)
+		return
+	}
+	if s.EqualityLayouts == nil {
+		s.EqualityLayouts = make(map[string]*EqualityIndex)
+	}
+	idx := s.EqualityLayouts[layout]
+	if idx == nil {
+		idx = NewEqualityIndex()
+		s.EqualityLayouts[layout] = idx
+	}
+	idx.AddKey(values...)
+}
+
+func (s *ApplyState) ApplyEqualityMaskForLayout(ctx context.Context, layout string, rows [][]any) ([]bool, error) {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	if err := s.CheckMemory(ctx); err != nil {
+		return nil, err
+	}
+	keep := make([]bool, len(rows))
+	for i := range keep {
+		keep[i] = true
+	}
+	layout = strings.TrimSpace(layout)
+	var idx *EqualityIndex
+	if layout == "" {
+		idx = s.Equality
+	} else {
+		idx = s.EqualityLayouts[layout]
+	}
+	if idx == nil || len(idx.keys) == 0 {
+		return keep, nil
+	}
+	for i, row := range rows {
+		if idx.ShouldDelete(row...) {
+			s.Profile.EqualityRowsFiltered++
+			keep[i] = false
+		}
+	}
+	return keep, nil
 }
 
 func (s *ApplyState) ApplyPositionMask(ctx context.Context, dataFile string, startRowOrdinal int64, rowCount int) ([]bool, error) {

@@ -73,6 +73,41 @@ func TestEqualityDeleteMaskAndMemoryLimit(t *testing.T) {
 	}
 }
 
+func TestEqualityDeleteLayoutsAreIndependent(t *testing.T) {
+	state := NewApplyState(Options{MaxMemoryBytes: 4096})
+	state.AddEqualityKey("1", int64(10))
+	state.AddEqualityKey("1,2", int64(20), "ksa")
+
+	keepSingle, err := state.ApplyEqualityMaskForLayout(context.Background(), "1", [][]any{
+		{int64(10)},
+		{int64(20)},
+	})
+	if err != nil {
+		t.Fatalf("apply single-field equality layout: %v", err)
+	}
+	if keepSingle[0] || !keepSingle[1] {
+		t.Fatalf("single-field layout should delete only id=10, got %v", keepSingle)
+	}
+
+	keepComposite, err := state.ApplyEqualityMaskForLayout(context.Background(), "1,2", [][]any{
+		{int64(20), "ksa"},
+		{int64(20), "uae"},
+		{int64(10), "ksa"},
+	})
+	if err != nil {
+		t.Fatalf("apply composite equality layout: %v", err)
+	}
+	want := []bool{false, true, true}
+	for idx := range want {
+		if keepComposite[idx] != want[idx] {
+			t.Fatalf("composite row %d keep=%v want=%v mask=%v", idx, keepComposite[idx], want[idx], keepComposite)
+		}
+	}
+	if state.Profile.EqualityRowsFiltered != 2 {
+		t.Fatalf("unexpected equality profile: %+v", state.Profile)
+	}
+}
+
 func TestPositionDeleteMemoryLimit(t *testing.T) {
 	state := NewApplyState(Options{MaxMemoryBytes: 1})
 	state.Position.Add("data.parquet", 12)

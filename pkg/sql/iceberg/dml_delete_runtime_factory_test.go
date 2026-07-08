@@ -64,11 +64,13 @@ func TestDMLDeleteRuntimeFactoryLoadsTableAndBuildsCoordinator(t *testing.T) {
 	client := &icebergcatalog.MockClient{
 		GetConfigFunc: func(ctx context.Context, req api.GetConfigRequest) (*api.ConfigResponse, error) {
 			require.Equal(t, "s3://warehouse", req.Warehouse)
+			require.Equal(t, "test-principal", req.ExternalPrincipal)
 			return &api.ConfigResponse{Prefix: "main|s3://warehouse"}, nil
 		},
 		LoadTableFunc: func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
 			require.Equal(t, uint32(42), req.Catalog.AccountID)
 			require.Equal(t, "main|s3://warehouse", req.Prefix)
+			require.Equal(t, "test-principal", req.ExternalPrincipal)
 			require.Equal(t, api.Namespace{"sales"}, req.Namespace)
 			require.Equal(t, "orders", req.Table)
 			return &api.LoadTableResponse{
@@ -836,11 +838,55 @@ func requireDMLOverwriteCoordinator(t *testing.T, coord icebergwrite.Coordinator
 }
 
 type fakeDMLDeleteRuntimeStore struct {
-	catalog model.Catalog
+	catalog           model.Catalog
+	principalMaps     []model.PrincipalMap
+	residencyPolicies []model.ResidencyPolicy
 }
 
 func (s *fakeDMLDeleteRuntimeStore) GetCatalogByName(ctx context.Context, accountID uint32, name string) (model.Catalog, error) {
+	if strings.TrimSpace(s.catalog.URI) == "" {
+		s.catalog.URI = "https://catalog.example.com/rest"
+	}
+	if s.catalog.CatalogID == 0 {
+		s.catalog.CatalogID = 7
+	}
+	if s.catalog.AccountID == 0 {
+		s.catalog.AccountID = accountID
+	}
 	return s.catalog, nil
+}
+
+func (s *fakeDMLDeleteRuntimeStore) ListPrincipalMaps(ctx context.Context, accountID uint32, catalogID uint64) ([]model.PrincipalMap, error) {
+	if s.principalMaps != nil {
+		return append([]model.PrincipalMap(nil), s.principalMaps...), nil
+	}
+	return []model.PrincipalMap{{
+		AccountID:         accountID,
+		CatalogID:         catalogID,
+		MORoleID:          model.PrincipalUnspecifiedID,
+		MOUserID:          model.PrincipalUnspecifiedID,
+		ExternalPrincipal: "test-principal",
+	}}, nil
+}
+
+func (s *fakeDMLDeleteRuntimeStore) ListResidencyPolicies(ctx context.Context, accountID uint32, catalogID uint64) ([]model.ResidencyPolicy, error) {
+	if s.residencyPolicies != nil {
+		return append([]model.ResidencyPolicy(nil), s.residencyPolicies...), nil
+	}
+	catalogURI := strings.TrimSpace(s.catalog.URI)
+	if catalogURI == "" {
+		catalogURI = "https://catalog.example.com/rest"
+	}
+	return []model.ResidencyPolicy{{
+		ScopeType:         model.ResidencyScopeCluster,
+		AccountID:         0,
+		CatalogID:         catalogID,
+		AllowedCatalogURI: catalogURI,
+		AllowedEndpoint:   "catalog.example.com",
+		AllowedRegion:     model.ResidencyWildcard,
+		AllowedBucket:     model.ResidencyWildcard,
+		PolicyState:       model.ResidencyPolicyEnabled,
+	}}, nil
 }
 
 func (s *fakeDMLDeleteRuntimeStore) InsertPublishJob(ctx context.Context, job model.PublishJob) error {

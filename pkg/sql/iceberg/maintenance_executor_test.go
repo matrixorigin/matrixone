@@ -43,6 +43,13 @@ func TestMaintenanceProcedureExecutorRunsExpireSnapshots(t *testing.T) {
 			URI:              "https://catalog.example.com",
 			CapabilitiesJSON: `{"commit":true}`,
 		},
+		principalMaps: []model.PrincipalMap{{
+			AccountID:         7,
+			CatalogID:         42,
+			MORoleID:          11,
+			MOUserID:          22,
+			ExternalPrincipal: "maintenance-principal",
+		}},
 	}
 	var loadReq api.LoadTableRequest
 	var commitReq api.CommitRequest
@@ -78,6 +85,8 @@ func TestMaintenanceProcedureExecutorRunsExpireSnapshots(t *testing.T) {
 	requireNoErr(t, err)
 	result, err := executor.Execute(context.Background(), maintenance.ProcedureExecutionRequest{
 		AccountID:   7,
+		RoleID:      11,
+		UserID:      22,
 		StatementID: "stmt-1",
 		Parsed:      parsed,
 	})
@@ -90,6 +99,9 @@ func TestMaintenanceProcedureExecutorRunsExpireSnapshots(t *testing.T) {
 	}
 	if strings.Join(loadReq.Namespace, ".") != "sales" || loadReq.Table != "orders" || loadReq.Snapshots != "all" {
 		t.Fatalf("unexpected load request: %+v", loadReq)
+	}
+	if loadReq.ExternalPrincipal != "maintenance-principal" || commitReq.ExternalPrincipal != "maintenance-principal" {
+		t.Fatalf("maintenance catalog requests did not carry external principal: load=%q commit=%q", loadReq.ExternalPrincipal, commitReq.ExternalPrincipal)
 	}
 	if commitReq.TargetRef != "main" || commitReq.IdempotencyKey != "stmt-1" || len(commitReq.Updates) != 2 || commitReq.Updates[0].Type != "remove-snapshot" {
 		t.Fatalf("unexpected commit request: %+v", commitReq)
@@ -664,15 +676,59 @@ func (f *fakeMaintenanceCatalogFactory) NewClient(ctx context.Context, catalog m
 }
 
 type fakeMaintenanceStore struct {
-	catalog    model.Catalog
-	jobs       []model.MaintenanceJob
-	statuses   []string
-	categories []string
-	orphans    []model.OrphanFile
+	catalog           model.Catalog
+	principalMaps     []model.PrincipalMap
+	residencyPolicies []model.ResidencyPolicy
+	jobs              []model.MaintenanceJob
+	statuses          []string
+	categories        []string
+	orphans           []model.OrphanFile
 }
 
 func (s *fakeMaintenanceStore) GetCatalogByName(ctx context.Context, accountID uint32, name string) (model.Catalog, error) {
+	if strings.TrimSpace(s.catalog.URI) == "" {
+		s.catalog.URI = "https://catalog.example.com/rest"
+	}
+	if s.catalog.CatalogID == 0 {
+		s.catalog.CatalogID = 7
+	}
+	if s.catalog.AccountID == 0 {
+		s.catalog.AccountID = accountID
+	}
 	return s.catalog, nil
+}
+
+func (s *fakeMaintenanceStore) ListPrincipalMaps(ctx context.Context, accountID uint32, catalogID uint64) ([]model.PrincipalMap, error) {
+	if s.principalMaps != nil {
+		return append([]model.PrincipalMap(nil), s.principalMaps...), nil
+	}
+	return []model.PrincipalMap{{
+		AccountID:         accountID,
+		CatalogID:         catalogID,
+		MORoleID:          model.PrincipalUnspecifiedID,
+		MOUserID:          model.PrincipalUnspecifiedID,
+		ExternalPrincipal: "test-principal",
+	}}, nil
+}
+
+func (s *fakeMaintenanceStore) ListResidencyPolicies(ctx context.Context, accountID uint32, catalogID uint64) ([]model.ResidencyPolicy, error) {
+	if s.residencyPolicies != nil {
+		return append([]model.ResidencyPolicy(nil), s.residencyPolicies...), nil
+	}
+	catalogURI := strings.TrimSpace(s.catalog.URI)
+	if catalogURI == "" {
+		catalogURI = "https://catalog.example.com/rest"
+	}
+	return []model.ResidencyPolicy{{
+		ScopeType:         model.ResidencyScopeCluster,
+		AccountID:         0,
+		CatalogID:         catalogID,
+		AllowedCatalogURI: catalogURI,
+		AllowedEndpoint:   "catalog.example.com",
+		AllowedRegion:     model.ResidencyWildcard,
+		AllowedBucket:     model.ResidencyWildcard,
+		PolicyState:       model.ResidencyPolicyEnabled,
+	}}, nil
 }
 
 func (s *fakeMaintenanceStore) InsertMaintenanceJob(ctx context.Context, job model.MaintenanceJob) error {

@@ -380,6 +380,48 @@ func TestIcebergMergeMatchedUpdateAndNotMatchedInsertBuildsDMLWriteIntent(t *tes
 	}
 }
 
+func TestIcebergMergeDefaultValuesAreExpanded(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols[0].Default = &planpb.Default{
+		Expr: &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders"},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_I64Val{I64Val: 99},
+			}},
+		},
+	}
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when matched then update set id = default", 1)
+	if err != nil {
+		t.Fatalf("parse merge default: %v", err)
+	}
+	p, err := BuildPlan(ctx, stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg merge default plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil {
+		t.Fatalf("expected MERGE query")
+	}
+	foundDefaultValue := false
+	reachable := reachablePlanNodes(query)
+	for nodeIdx, node := range query.GetNodes() {
+		if !reachable[int32(nodeIdx)] {
+			continue
+		}
+		for _, expr := range node.GetProjectList() {
+			if icebergDMLExprContainsDefaultValue(expr) {
+				t.Fatalf("MERGE DEFAULT must be expanded before DML projection rewrite: steps=%v node=%d type=%s children=%v expr=%+v", query.GetSteps(), nodeIdx, node.GetNodeType(), node.GetChildren(), expr)
+			}
+			if icebergDMLExprContainsI64Literal(expr, 99) {
+				foundDefaultValue = true
+			}
+		}
+	}
+	if !foundDefaultValue {
+		t.Fatalf("expected expanded column default literal in MERGE projection")
+	}
+}
+
 func TestIcebergMergeEmbeddedFourColumnProjectionShape(t *testing.T) {
 	ctx := newIcebergTestCompilerContext(t, nil)
 	ctx.tables["gold_orders"].Cols = []*planpb.ColDef{
@@ -737,6 +779,27 @@ func planNodeOutputColumnCount(query *planpb.Query, nodeID int32) int {
 	return 0
 }
 
+func reachablePlanNodes(query *planpb.Query) map[int32]bool {
+	reachable := make(map[int32]bool)
+	if query == nil {
+		return reachable
+	}
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.GetNodes()) || reachable[nodeID] {
+			return
+		}
+		reachable[nodeID] = true
+		for _, childID := range query.GetNodes()[nodeID].GetChildren() {
+			visit(childID)
+		}
+	}
+	for _, stepID := range query.GetSteps() {
+		visit(stepID)
+	}
+	return reachable
+}
+
 func colRefPositions(expr *planpb.Expr) []int32 {
 	if expr == nil {
 		return nil
@@ -783,6 +846,41 @@ func icebergDMLExprContainsStringLiteral(expr *planpb.Expr, value string) bool {
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
 			if icebergDMLExprContainsStringLiteral(arg, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func icebergDMLExprContainsI64Literal(expr *planpb.Expr, value int64) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil && lit.GetI64Val() == value {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if icebergDMLExprContainsI64Literal(arg, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func icebergDMLExprContainsDefaultValue(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		_, ok := lit.GetValue().(*planpb.Literal_Defaultval)
+		return ok
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if icebergDMLExprContainsDefaultValue(arg) {
 				return true
 			}
 		}

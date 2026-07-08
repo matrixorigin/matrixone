@@ -142,10 +142,12 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 	client := &icebergcatalog.MockClient{
 		GetConfigFunc: func(ctx context.Context, req api.GetConfigRequest) (*api.ConfigResponse, error) {
 			require.Equal(t, "s3://warehouse", req.Warehouse)
+			require.Equal(t, "test-principal", req.ExternalPrincipal)
 			return &api.ConfigResponse{Prefix: "main|s3://warehouse"}, nil
 		},
 		LoadTableFunc: func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
 			require.Equal(t, "main|s3://warehouse", req.Prefix)
+			require.Equal(t, "test-principal", req.ExternalPrincipal)
 			require.Equal(t, api.Namespace{"writer"}, req.Namespace)
 			require.Equal(t, "gold_kpi", req.Table)
 			return &api.LoadTableResponse{
@@ -157,6 +159,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 		},
 		CommitTableFunc: func(ctx context.Context, req api.CommitRequest) (*api.CommitResult, error) {
 			commitReq = req
+			require.Equal(t, "test-principal", req.ExternalPrincipal)
 			return &api.CommitResult{
 				SnapshotID:           45,
 				CommitID:             "commit-45",
@@ -624,16 +627,60 @@ func appendRuntimeMemoryPath(location string) string {
 }
 
 type fakeAppendRuntimeStore struct {
-	catalog model.Catalog
-	mapping model.TableMapping
+	catalog           model.Catalog
+	mapping           model.TableMapping
+	principalMaps     []model.PrincipalMap
+	residencyPolicies []model.ResidencyPolicy
 }
 
 func (s *fakeAppendRuntimeStore) GetCatalogByName(ctx context.Context, accountID uint32, name string) (model.Catalog, error) {
+	if strings.TrimSpace(s.catalog.URI) == "" {
+		s.catalog.URI = "https://catalog.example.com/rest"
+	}
+	if s.catalog.CatalogID == 0 {
+		s.catalog.CatalogID = 7
+	}
+	if s.catalog.AccountID == 0 {
+		s.catalog.AccountID = accountID
+	}
 	return s.catalog, nil
 }
 
 func (s *fakeAppendRuntimeStore) GetTableMapping(ctx context.Context, accountID uint32, databaseID uint64, tableID uint64) (model.TableMapping, error) {
 	return s.mapping, nil
+}
+
+func (s *fakeAppendRuntimeStore) ListPrincipalMaps(ctx context.Context, accountID uint32, catalogID uint64) ([]model.PrincipalMap, error) {
+	if s.principalMaps != nil {
+		return append([]model.PrincipalMap(nil), s.principalMaps...), nil
+	}
+	return []model.PrincipalMap{{
+		AccountID:         accountID,
+		CatalogID:         catalogID,
+		MORoleID:          model.PrincipalUnspecifiedID,
+		MOUserID:          model.PrincipalUnspecifiedID,
+		ExternalPrincipal: "test-principal",
+	}}, nil
+}
+
+func (s *fakeAppendRuntimeStore) ListResidencyPolicies(ctx context.Context, accountID uint32, catalogID uint64) ([]model.ResidencyPolicy, error) {
+	if s.residencyPolicies != nil {
+		return append([]model.ResidencyPolicy(nil), s.residencyPolicies...), nil
+	}
+	catalogURI := strings.TrimSpace(s.catalog.URI)
+	if catalogURI == "" {
+		catalogURI = "https://catalog.example.com/rest"
+	}
+	return []model.ResidencyPolicy{{
+		ScopeType:         model.ResidencyScopeCluster,
+		AccountID:         0,
+		CatalogID:         catalogID,
+		AllowedCatalogURI: catalogURI,
+		AllowedEndpoint:   "catalog.example.com",
+		AllowedRegion:     model.ResidencyWildcard,
+		AllowedBucket:     model.ResidencyWildcard,
+		PolicyState:       model.ResidencyPolicyEnabled,
+	}}, nil
 }
 
 func (s *fakeAppendRuntimeStore) InsertPublishJob(ctx context.Context, job model.PublishJob) error {

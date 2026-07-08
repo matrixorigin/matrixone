@@ -17,6 +17,7 @@ package external
 import (
 	"context"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -127,12 +128,15 @@ func (external *External) applyIcebergDeletes(ctx context.Context, bat *batch.Ba
 				keep[i] = keep[i] && positionKeep[i]
 			}
 		}
-		equalityRows, err := icebergEqualityRows(param, bat)
-		if err != nil {
-			return err
-		}
-		if len(equalityRows) > 0 {
-			equalityKeep, err := state.ApplyEqualityMask(ctx, equalityRows)
+		for _, layout := range icebergEqualityLayouts(param.IcebergDeleteTasks) {
+			equalityRows, err := icebergEqualityRows(param, bat, layout.fieldIDs)
+			if err != nil {
+				return err
+			}
+			if len(equalityRows) == 0 {
+				continue
+			}
+			equalityKeep, err := state.ApplyEqualityMaskForLayout(ctx, layout.key, equalityRows)
 			if err != nil {
 				return err
 			}
@@ -234,7 +238,7 @@ func loadIcebergEqualityDeleteFile(proc *process.Process, param *ExternalParam, 
 			}
 			values[idx] = value
 		}
-		state.Equality.AddKey(values...)
+		state.AddEqualityKey(icebergEqualityLayoutKey(task.EqualityFieldIds), values...)
 		return state.CheckMemory(ctx)
 	})
 }
@@ -314,8 +318,9 @@ type equalityDeleteColumn struct {
 }
 
 func equalityDeleteColumns(ctx context.Context, file *parquet.File, task *pipeline.IcebergDeleteFileTask, mappings []*pipeline.IcebergColumnMapping) ([]equalityDeleteColumn, error) {
-	columns := make([]equalityDeleteColumn, 0, len(task.EqualityFieldIds))
-	for _, fieldID := range task.EqualityFieldIds {
+	fieldIDs := normalizedEqualityFieldIDs(task.EqualityFieldIds)
+	columns := make([]equalityDeleteColumn, 0, len(fieldIDs))
+	for _, fieldID := range fieldIDs {
 		mapping := icebergColumnMappingForField(mappings, fieldID)
 		if mapping == nil || mapping.MoType == nil {
 			return nil, icebergapi.ToMOErr(ctx, icebergapi.NewError(icebergapi.ErrMetadataInvalid, "Iceberg equality delete field is missing MO column mapping", map[string]string{
@@ -556,8 +561,12 @@ func unsupportedIcebergEqualityType(ctx context.Context, st parquet.Type, moType
 	}))
 }
 
-func icebergEqualityRows(param *ExternalParam, bat *batch.Batch) ([][]any, error) {
-	fieldIDs := icebergEqualityFieldIDs(param.IcebergDeleteTasks)
+type icebergEqualityLayout struct {
+	key      string
+	fieldIDs []int32
+}
+
+func icebergEqualityRows(param *ExternalParam, bat *batch.Batch, fieldIDs []int32) ([][]any, error) {
 	if len(fieldIDs) == 0 {
 		return nil, nil
 	}
@@ -589,25 +598,54 @@ func icebergEqualityRows(param *ExternalParam, bat *batch.Batch) ([][]any, error
 	return rows, nil
 }
 
-func icebergEqualityFieldIDs(tasks []*pipeline.IcebergDeleteFileTask) []int32 {
-	seen := make(map[int32]struct{})
-	out := make([]int32, 0)
+func icebergEqualityLayouts(tasks []*pipeline.IcebergDeleteFileTask) []icebergEqualityLayout {
+	seen := make(map[string]struct{})
+	out := make([]icebergEqualityLayout, 0)
 	for _, task := range tasks {
 		if task == nil || strings.ToLower(strings.TrimSpace(task.DeleteType)) != "equality" {
 			continue
 		}
-		for _, fieldID := range task.EqualityFieldIds {
-			if fieldID <= 0 {
-				continue
-			}
-			if _, ok := seen[fieldID]; ok {
-				continue
-			}
-			seen[fieldID] = struct{}{}
-			out = append(out, fieldID)
+		fieldIDs := normalizedEqualityFieldIDs(task.EqualityFieldIds)
+		if len(fieldIDs) == 0 {
+			continue
 		}
+		key := icebergEqualityLayoutKey(fieldIDs)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, icebergEqualityLayout{key: key, fieldIDs: fieldIDs})
 	}
 	return out
+}
+
+func normalizedEqualityFieldIDs(fieldIDs []int32) []int32 {
+	seen := make(map[int32]struct{}, len(fieldIDs))
+	out := make([]int32, 0, len(fieldIDs))
+	for _, fieldID := range fieldIDs {
+		if fieldID <= 0 {
+			continue
+		}
+		if _, ok := seen[fieldID]; ok {
+			continue
+		}
+		seen[fieldID] = struct{}{}
+		out = append(out, fieldID)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func icebergEqualityLayoutKey(fieldIDs []int32) string {
+	fieldIDs = normalizedEqualityFieldIDs(fieldIDs)
+	if len(fieldIDs) == 0 {
+		return ""
+	}
+	parts := make([]string, len(fieldIDs))
+	for idx, fieldID := range fieldIDs {
+		parts[idx] = int32String(fieldID)
+	}
+	return strings.Join(parts, ",")
 }
 
 func icebergMOColumnIndexForField(mappings []*pipeline.IcebergColumnMapping, fieldID int32) (int32, bool) {

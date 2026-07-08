@@ -213,7 +213,7 @@ func TestIcebergMaintenanceProcedureExecutorRunsDispatcher(t *testing.T) {
 			},
 		},
 	}
-	results, err := executor.ExecuteParsedIcebergMaintenanceCall(context.Background(), 7, "stmt-1", IcebergBuiltinProcedureCall{
+	results, err := executor.ExecuteParsedIcebergMaintenanceCall(context.Background(), 7, 11, 22, "stmt-1", IcebergBuiltinProcedureCall{
 		Name:   "iceberg_rewrite_manifests",
 		Target: "ksa_gold.sales.orders",
 		Parsed: parsed,
@@ -223,6 +223,9 @@ func TestIcebergMaintenanceProcedureExecutorRunsDispatcher(t *testing.T) {
 	}
 	if runnerReq.AccountID != 7 || runnerReq.CatalogID != 42 || runnerReq.IdempotencyKey != "stmt-1" {
 		t.Fatalf("unexpected runner request: %+v", runnerReq)
+	}
+	if runnerReq.RoleID != 11 || runnerReq.UserID != 22 {
+		t.Fatalf("expected role/user to be propagated, got %+v", runnerReq)
 	}
 	if len(results) != 1 {
 		t.Fatalf("expected one result set, got %d", len(results))

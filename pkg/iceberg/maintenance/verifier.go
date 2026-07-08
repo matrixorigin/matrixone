@@ -46,8 +46,11 @@ func (v CatalogFactoryCommitVerifier) VerifyCommittedMaintenance(ctx context.Con
 		return result, false, err
 	}
 	return (CatalogCommitVerifier{
-		Client:  client,
-		Catalog: api.CatalogRequest{Catalog: req.Catalog},
+		Client: client,
+		Catalog: api.CatalogRequest{
+			Catalog:           req.Catalog,
+			ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
+		},
 	}).VerifyCommittedMaintenance(ctx, req, plan, result)
 }
 

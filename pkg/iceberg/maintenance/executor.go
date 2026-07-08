@@ -26,6 +26,8 @@ import (
 
 type ProcedureExecutionRequest struct {
 	AccountID    uint32
+	RoleID       uint64
+	UserID       uint64
 	StatementID  string
 	AllowTagMove bool
 	Parsed       ParsedCall
@@ -43,6 +45,15 @@ type ProcedureCatalogResolver interface {
 
 type ProcedureAuthorizer interface {
 	AuthorizeMaintenanceProcedure(ctx context.Context, req ProcedureExecutionRequest, catalog ProcedureCatalogResolution) error
+}
+
+type ProcedureCatalogAccess struct {
+	ExternalPrincipal string
+	ResidencyPolicies []model.ResidencyPolicy
+}
+
+type ProcedureAccessChecker interface {
+	CheckMaintenanceCatalogAccess(ctx context.Context, req ProcedureExecutionRequest, catalog ProcedureCatalogResolution) (ProcedureCatalogAccess, error)
 }
 
 type FeatureAuthorizer struct {
@@ -80,6 +91,7 @@ func (a FeatureAuthorizer) AuthorizeMaintenanceProcedure(ctx context.Context, re
 type ProcedureExecutor struct {
 	Resolver   ProcedureCatalogResolver
 	Authorizer ProcedureAuthorizer
+	Access     ProcedureAccessChecker
 	Dispatcher Dispatcher
 }
 
@@ -107,14 +119,21 @@ func (e ProcedureExecutor) Execute(ctx context.Context, req ProcedureExecutionRe
 			return Result{}, err
 		}
 	}
-	dispatchReq, err := buildDispatchRequest(req, catalog)
+	access := ProcedureCatalogAccess{}
+	if e.Access != nil {
+		access, err = e.Access.CheckMaintenanceCatalogAccess(ctx, req, catalog)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	dispatchReq, err := buildDispatchRequest(req, catalog, access)
 	if err != nil {
 		return Result{}, err
 	}
 	return e.Dispatcher.Dispatch(ctx, dispatchReq)
 }
 
-func buildDispatchRequest(req ProcedureExecutionRequest, catalog ProcedureCatalogResolution) (Request, error) {
+func buildDispatchRequest(req ProcedureExecutionRequest, catalog ProcedureCatalogResolution, access ProcedureCatalogAccess) (Request, error) {
 	idempotencyKey := strings.TrimSpace(req.Parsed.Options["idempotency_key"])
 	jobID := strings.TrimSpace(req.Parsed.Options["job_id"])
 	if idempotencyKey == "" {
@@ -133,8 +152,12 @@ func buildDispatchRequest(req ProcedureExecutionRequest, catalog ProcedureCatalo
 	allowTagMove := req.AllowTagMove || boolOption(req.Parsed.Options, "allow_tag_move")
 	return Request{
 		AccountID:           req.AccountID,
+		RoleID:              req.RoleID,
+		UserID:              req.UserID,
 		CatalogID:           catalog.CatalogID,
 		Catalog:             catalog.Catalog,
+		ExternalPrincipal:   strings.TrimSpace(access.ExternalPrincipal),
+		ResidencyPolicies:   append([]model.ResidencyPolicy(nil), access.ResidencyPolicies...),
 		Namespace:           req.Parsed.TargetID.Namespace,
 		Table:               req.Parsed.TargetID.Table,
 		TargetRef:           targetRef,

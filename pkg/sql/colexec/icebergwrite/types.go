@@ -34,22 +34,25 @@ const (
 )
 
 type AppendRequest struct {
-	Ref             *plan.ObjectRef
-	TableDef        *plan.TableDef
-	Attrs           []string
-	AddAffectedRows bool
-	AccountID       uint32
-	StatementID     string
-	IdempotencyKey  string
-	ParallelID      int32
-	MaxParallel     int32
-	CatalogName     string
-	Namespace       string
-	Table           string
-	DefaultRef      string
-	ReadMode        string
-	WriteMode       string
-	Operation       string
+	Ref               *plan.ObjectRef
+	TableDef          *plan.TableDef
+	Attrs             []string
+	AddAffectedRows   bool
+	AccountID         uint32
+	RoleID            uint64
+	UserID            uint64
+	ExternalPrincipal string
+	StatementID       string
+	IdempotencyKey    string
+	ParallelID        int32
+	MaxParallel       int32
+	CatalogName       string
+	Namespace         string
+	Table             string
+	DefaultRef        string
+	ReadMode          string
+	WriteMode         string
+	Operation         string
 
 	// DataFilePathColumnIndex and RowOrdinalColumnIndex are populated for
 	// row-level DML sinks. Append INSERT leaves them at -1.
