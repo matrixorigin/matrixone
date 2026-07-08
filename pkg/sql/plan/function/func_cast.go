@@ -5135,12 +5135,31 @@ func isStrictNumericString(s string) bool {
 
 func integerStringForCast(s string, mode castMode) (string, error) {
 	switch mode {
-	case castImplicit, castExplicit:
+	case castImplicit:
 		integer := leadingSignedInteger(s)
 		if integer == "" {
 			return "", moerr.NewInvalidInputNoCtxf("%s is not an integer", s)
 		}
 		return integer, nil
+	case castExplicit:
+		// MySQL evaluates the full numeric value for explicit CAST
+		// (e.g. CAST('7e2' AS SIGNED) = 700).  Use leadingNumericString
+		// to capture scientific notation and decimal parts, then evaluate
+		// via decimal arithmetic and truncate to integer.
+		numeric := leadingNumericString(s)
+		if numeric == "" {
+			return "", moerr.NewInvalidInputNoCtxf("%s is not an integer", s)
+		}
+		numeric = strings.ReplaceAll(numeric, "E", "e")
+		decimal, scale, err := types.Parse128(numeric)
+		if err != nil {
+			return "", err
+		}
+		integer, err := decimal.Scale(-scale)
+		if err != nil {
+			return "", err
+		}
+		return integer.Format(0), nil
 	case castAssignment:
 		if !isStrictNumericString(s) {
 			return "", moerr.NewInvalidInputNoCtxf("%s is not a numeric string", s)
@@ -5423,7 +5442,19 @@ func strToUnsigned[T constraints.Unsigned](
 					if parseErr != nil {
 						return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), s)
 					}
-					val, tErr = strconv.ParseUint(strings.TrimPrefix(integer, "+"), 10, bitSize)
+					// MySQL allows CAST('-0' AS UNSIGNED) → 0, but
+					// strconv.ParseUint rejects leading '-'. Strip it
+					// and check the value is actually zero.
+					unsigned := strings.TrimPrefix(integer, "+")
+					if strings.HasPrefix(unsigned, "-") {
+						abs := unsigned[1:]
+						val, tErr = strconv.ParseUint(abs, 10, bitSize)
+						if tErr == nil && val != 0 {
+							tErr = strconv.ErrSyntax
+						}
+					} else {
+						val, tErr = strconv.ParseUint(unsigned, 10, bitSize)
+					}
 				}
 			}
 			if tErr != nil {

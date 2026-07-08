@@ -595,7 +595,7 @@ var predefinedFunids = map[int]int{
 	ST_POINT:                      539,
 	ST_POINT32:                    540,
 	CAST_STRICT:                   541,
-DATE_TRUNC:                    542,
+	DATE_TRUNC:                    542,
 	CAST_EXPLICIT:                 543,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.

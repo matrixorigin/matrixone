@@ -761,7 +761,7 @@ const (
 
 	// function `cast_strict`
 	CAST_STRICT = 541
-DATE_TRUNC  = 542
+	DATE_TRUNC  = 542
 	// function `cast_explicit`
 	CAST_EXPLICIT = 543
 

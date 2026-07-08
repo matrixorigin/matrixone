@@ -21,7 +21,8 @@ select cast('+0012' as unsigned) as r;
 ➤ r[-5,64,0]  𝄀
 12
 select CAST('10x' as unsigned integer);
-invalid argument cast to uint64, bad value 10x
+➤ cast(10x as integer unsigned)[-5,64,0]  𝄀
+10
 select cast('+123' as signed);
 ➤ cast(+123 as signed)[-5,64,0]  𝄀
 123
@@ -184,7 +185,8 @@ invalid argument cast to int, bad value x123
 select cast('abc' as signed);
 invalid argument cast to int, bad value abc
 select cast('1a' as signed);
-invalid argument cast to int, bad value 1a
+➤ cast(1a as signed)[-5,64,0]  𝄀
+1
 select cast('7e0' as double),
 cast('7e0' as float),
 cast('  +7e0' as double),
@@ -278,7 +280,7 @@ select CAST(0xfffffffffffffffe as signed);
 Data truncation: data out of range: data type int, 
 select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed), cast('7e2' as unsigned);
 ➤ cast(7e0 as signed)[-5,64,0]  ¦  cast(7e+2 as signed)[-5,64,0]  ¦  cast(1.5e0 as signed)[-5,64,0]  ¦  cast(7e2 as unsigned)[-5,64,0]  𝄀
-7  ¦  7  ¦  1  ¦  7
+7  ¦  700  ¦  1  ¦  700
 select cast('-10a' as signed integer);
 ➤ cast(-10a as integer)[-5,64,0]  𝄀
 -10
