@@ -608,7 +608,8 @@ func TestPrepareArithAllCallSites(t *testing.T) {
 		if q != nil && q.GetQuery() != nil {
 			for _, node := range q.GetQuery().Nodes {
 				for _, expr := range node.ProjectList {
-					c := countDoubleCasts(expr); assert.LessOrEqualf(t, c, 1,
+					c := countDoubleCasts(expr)
+					assert.LessOrEqualf(t, c, 1,
 						"%s should have ≤1 float64 cast (early return), got %d", sql, c)
 				}
 			}
