@@ -415,6 +415,23 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 	}
 
+	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok {
+		expr = &plan.Expr{
+			Typ: b.ctx.groups[groupPos].Typ,
+			Expr: &plan.Expr_Corr{
+				Corr: &plan.CorrColRef{
+					RelPos: b.ctx.groupTag,
+					ColPos: groupPos,
+					Depth:  depth,
+				},
+			},
+		}
+		if err != nil {
+			errutil.ReportError(b.GetContext(), err)
+		}
+		return
+	}
+
 	if isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
@@ -503,6 +520,36 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	return
+}
+
+func (b *baseBinder) correlatedGroupByColPos(depth int32, astName, table, col string) (int32, bool) {
+	if depth == 0 || b.ctx == nil || len(b.ctx.groupByAst) == 0 {
+		return 0, false
+	}
+	if pos, ok := b.ctx.groupByAst[astName]; ok && int(pos) < len(b.ctx.groups) {
+		return pos, true
+	}
+	if table != "" {
+		if pos, ok := b.ctx.groupByAst[table+"."+col]; ok && int(pos) < len(b.ctx.groups) {
+			return pos, true
+		}
+	}
+	return 0, false
+}
+
+func (b *baseBinder) corrColRefTargetsGroup(corr *plan.CorrColRef) bool {
+	if corr == nil {
+		return false
+	}
+	ctx := b.ctx
+	for depth := int32(0); depth < corr.Depth && ctx != nil; depth++ {
+		ctx = ctx.parent
+	}
+	return ctx != nil && ctx.groupTag > 0 && corr.RelPos == ctx.groupTag
+}
+
+func (b *baseBinder) corrColRefTargetsCurrentGroup(corr *plan.CorrColRef) bool {
+	return corr != nil && b.ctx != nil && b.ctx.groupTag > 0 && corr.RelPos == b.ctx.groupTag
 }
 
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
