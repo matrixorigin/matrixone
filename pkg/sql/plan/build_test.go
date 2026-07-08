@@ -1048,6 +1048,118 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestOnlyFullGroupByAllowsCorrelatedSubqueryOnGroupedColumn(t *testing.T) {
+	sqls := []string{
+		`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY n_name
+		ORDER BY n_name`,
+		`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) > 0`,
+		`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		ORDER BY (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name)`,
+		`
+		SELECT n.n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = n.n_name) AS c
+		FROM nation n
+		GROUP BY n.n_name`,
+		`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY 1`,
+		`
+		SELECT n_name AS name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY name`,
+		`
+		SELECT n_regionkey
+		FROM nation
+		GROUP BY n_regionkey
+		HAVING EXISTS (
+			SELECT n_name
+			FROM nation2
+			GROUP BY n_name
+			HAVING COUNT(*) > nation.n_regionkey
+		)`,
+	}
+
+	for _, sql := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T) {
+	sqls := []struct {
+		sql         string
+		errContains string
+	}{
+		{`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) AS c
+		FROM nation
+		GROUP BY n_name`, "nation.n_comment"},
+		{`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) > 0`, "nation.n_comment"},
+	}
+
+	for _, tt := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, tt.sql)
+		require.Error(t, err, tt.sql)
+		require.Contains(t, err.Error(), tt.errContains)
+	}
+}
+
+func TestOnlyFullGroupByPreservesCorrelatedAggregateNYI(t *testing.T) {
+	sqls := []string{
+		`
+		SELECT (SELECT COUNT(DISTINCT nation.n_comment))
+		FROM nation
+		GROUP BY n_name`,
+		`
+		SELECT n_name
+		FROM nation
+		WHERE (SELECT AVG(nation.n_regionkey) FROM nation2) = 1`,
+		`
+		SELECT n_name,
+		       (SELECT COUNT(nation.n_name) FROM nation2) AS c
+		FROM nation
+		GROUP BY n_name`,
+		`
+		SELECT n_regionkey
+		FROM nation
+		GROUP BY n_regionkey
+		HAVING EXISTS (
+			SELECT n_name
+			FROM nation2
+			GROUP BY n_name
+			HAVING SUM(nation.n_regionkey) > 0
+		)`,
+	}
+
+	for _, sql := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "correlated columns in aggregate function")
+	}
+}
+
 // test join table plan building
 func TestJoinTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
