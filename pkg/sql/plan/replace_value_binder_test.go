@@ -168,3 +168,100 @@ func TestReplaceValueBinder_DecimalPrecision(t *testing.T) {
 	require.False(t, lit.GetIsnull(), "decimal value should not be null")
 	require.NotNil(t, lit.GetDecimal128Val(), "decimal128 value should be populated")
 }
+
+// TestReplaceValueBinder_MixedCaseColumnNames verifies that quoted and
+// mixed-case column references on the RHS of REPLACE ... SET are correctly
+// resolved to DEFAULT(col). The parser uses lower=1 for all identifier
+// CStr instances, so ColName() (Compare()) always returns the lowercased
+// form; col.Name on the table-def side is also populated via ColName(), so
+// the Name2ColIndex key is lowercased as well. The two sides match and
+// mixed-case / quoted identifiers work without any extra fallback logic.
+func TestReplaceValueBinder_MixedCaseColumnNames(t *testing.T) {
+	ctx := context.Background()
+
+	// Simulate a table created with `CREATE TABLE t ("Camel" int default 5)`.
+	// MO normalises col.Name to lower case via ColName()→Compare(), so the
+	// Name2ColIndex key is "camel".
+	intTyp := plan.Type{Id: int32(types.T_int32)}
+	tableDef := &plan.TableDef{
+		Name: "t_set",
+		Cols: []*plan.ColDef{
+			{
+				Name: "id",
+				Typ:  intTyp,
+				Default: &plan.Default{NullAbility: true},
+			},
+			{
+				Name: "camel",
+				Typ:  intTyp,
+				Default: &plan.Default{
+					NullAbility: false,
+					Expr:        makePlan2Int64ConstExprWithType(5),
+				},
+			},
+		},
+		// MO DDL always stores lowercased col.Name as the key.
+		Name2ColIndex: map[string]int32{"id": 0, "camel": 1},
+	}
+	b := NewReplaceValueBinder(ctx, nil, nil, plan.Type{}, tableDef)
+
+	// NewUnresolvedColName("Camel") internally calls NewCStr("Camel", 1),
+	// which lowercases the Compare() form to "camel". This matches what the
+	// parser produces for both `Camel` and `camel` / "Camel" references.
+	colRef := tree.NewUnresolvedColName("Camel")
+	require.Equal(t, "camel", colRef.ColName(), "Compare() form must be lowercased")
+	require.Equal(t, "Camel", colRef.ColNameOrigin(), "Origin() preserves input case")
+
+	expr, err := b.BindColRef(colRef, 0, true)
+	require.NoError(t, err)
+	lit := expr.GetLit()
+	require.NotNil(t, lit)
+	require.Equal(t, int64(5), lit.GetI64Val(),
+		"mixed-case 'Camel' must resolve to DEFAULT(camel) == 5")
+
+	// Lower-case reference also resolves.
+	expr, err = b.BindColRef(tree.NewUnresolvedColName("camel"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), expr.GetLit().GetI64Val())
+
+	// Upper-case reference also resolves.
+	expr, err = b.BindColRef(tree.NewUnresolvedColName("CAMEL"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), expr.GetLit().GetI64Val())
+}
+
+// TestReplaceValueBinder_GeneratedColumnRef verifies that referencing a
+// generated column on the RHS of REPLACE ... SET is explicitly rejected.
+// Generated columns have no user-accessible DEFAULT value, so resolving
+// DEFAULT(col) would be semantically wrong.
+func TestReplaceValueBinder_GeneratedColumnRef(t *testing.T) {
+	ctx := context.Background()
+	intTyp := plan.Type{Id: int32(types.T_int32)}
+
+	// Table: id PK, a int DEFAULT 3, b int DEFAULT 7,
+	//        c int GENERATED ALWAYS AS (a + b)
+	// DDL stores generated columns with Default.Expr = nil.
+	tableDef := &plan.TableDef{
+		Name: "t",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: intTyp, Default: &plan.Default{NullAbility: false, Expr: makePlan2Int64ConstExprWithType(0)}},
+			{Name: "a", Typ: intTyp, Default: &plan.Default{NullAbility: false, Expr: makePlan2Int64ConstExprWithType(3)}},
+			{Name: "b", Typ: intTyp, Default: &plan.Default{NullAbility: false, Expr: makePlan2Int64ConstExprWithType(7)}},
+			{
+				Name:         "c",
+				Typ:          intTyp,
+				Default:      &plan.Default{NullAbility: true, Expr: nil},
+				GeneratedCol: &plan.GeneratedCol{Expr: &plan.Expr{}},
+			},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "a": 1, "b": 2, "c": 3},
+	}
+
+	b := NewReplaceValueBinder(ctx, nil, nil, plan.Type{}, tableDef)
+
+	// Referencing a generated column on the RHS must be rejected.
+	_, err := b.BindColRef(tree.NewUnresolvedColName("c"), 0, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "generated column")
+	require.Contains(t, err.Error(), "replace set value")
+}

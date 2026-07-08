@@ -256,6 +256,18 @@ replace into t_set_default2 set id = 1, a = b + 1;
 select * from t_set_default2 order by id;
 drop table t_set_default2;
 
+-- RHS column reference inside a function expression is also resolved to DEFAULT(col)
+drop table if exists t_set_func;
+create table t_set_func(id int primary key, dname varchar(50) default 'hello', suffix varchar(20) default '_mo');
+insert into t_set_func values (1, 'world', '_x');
+replace into t_set_func set id = 1, dname = upper(dname);
+select * from t_set_func order by id;
+replace into t_set_func set id = 2, dname = concat(dname, '_mo');
+select * from t_set_func order by id;
+replace into t_set_func set id = 3, dname = concat(upper(dname), suffix);
+select * from t_set_func order by id;
+drop table t_set_func;
+
 -- MySQL-compatible REPLACE syntax variants: TABLE source (with/without column list), LOW_PRIORITY, DELAYED
 drop table if exists t_replace_src;
 drop table if exists t_replace_dst;

@@ -54,6 +54,13 @@ func (b *ReplaceValueBinder) BindColRef(astExpr *tree.UnresolvedName, _ int32, _
 	if !ok {
 		return nil, moerr.NewInvalidInputf(b.GetContext(), "column '%s' does not exist", astExpr.ColNameOrigin())
 	}
+	// A generated column has no accessible DEFAULT value; resolving it as
+	// DEFAULT(col) would either silently return NULL or fail with a confusing
+	// error. Explicitly reject it, consistent with how INSERT blocks explicit
+	// values for generated columns.
+	if b.tableDef.Cols[colIdx].GeneratedCol != nil {
+		return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot reference generated column '%s' in replace set value", astExpr.ColNameOrigin())
+	}
 	return getDefaultExpr(b.GetContext(), b.tableDef.Cols[colIdx])
 }
 
