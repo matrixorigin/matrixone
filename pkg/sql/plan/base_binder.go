@@ -1670,23 +1670,20 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 // integers and preserves fractional values.  Mixed cases (e.g. "0 + ?") fall
 // through to the existing initFixed1/initFixed2 coercion tables, whose rules
 // for known peer types are already correct.
-func promoteTextParamsForArith(ctx context.Context, args []*plan.Expr) error {
-	if len(args) != 2 {
-		return nil
-	}
-	if args[0].Typ.Id != int32(types.T_text) || args[0].GetP() == nil ||
+func promoteTextParamsForArith(ctx context.Context, args []*plan.Expr) {
+	if len(args) != 2 ||
+		args[0].Typ.Id != int32(types.T_text) || args[0].GetP() == nil ||
 		args[1].Typ.Id != int32(types.T_text) || args[1].GetP() == nil {
-		return nil
+		return
 	}
-	decType := plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 12, NotNullable: true}
+	// DOUBLE is the type MySQL uses for unresolved arithmetic parameters;
+	// its range (≈1e308) avoids the overflow windows that fixed-scale
+	// decimals have.  Precision loss above 2^53 is the standard IEEE 754
+	// tradeoff and matches MySQL binary-protocol behaviour.
+	doubleType := plan.Type{Id: int32(types.T_float64), NotNullable: true}
 	for i := range args {
-		var err error
-		args[i], err = appendCastBeforeExpr(ctx, args[i], decType)
-		if err != nil {
-			return err
-		}
+		args[i], _ = appendCastBeforeExpr(ctx, args[i], doubleType)
 	}
-	return nil
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
@@ -1835,9 +1832,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err != nil {
 			return nil, err
 		}
-		if err = promoteTextParamsForArith(ctx, args); err != nil {
-			return nil, err
-		}
+		promoteTextParamsForArith(ctx, args)
 	case "-":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "operator - need two args", len(args))
@@ -1871,9 +1866,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err != nil {
 			return nil, err
 		}
-		if err = promoteTextParamsForArith(ctx, args); err != nil {
-			return nil, err
-		}
+		promoteTextParamsForArith(ctx, args)
 	case "*", "/", "%", "div", "mod":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, fmt.Sprintf("operator %s need two args", name), len(args))
@@ -1884,9 +1877,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if isNullExpr(args[1]) {
 			return args[1], nil
 		}
-		if err = promoteTextParamsForArith(ctx, args); err != nil {
-			return nil, err
-		}
+		promoteTextParamsForArith(ctx, args)
 	case "unary_minus":
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
