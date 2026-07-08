@@ -386,6 +386,34 @@ func NewObjectEntry(
 	return e
 }
 
+func NewCommittedObjectEntry(
+	table *TableEntry,
+	ts types.TS,
+	stats objectio.ObjectStats,
+	dataFactory ObjectDataFactory,
+	isTombstone bool,
+) *ObjectEntry {
+	e := &ObjectEntry{
+		table: table,
+		ObjectNode: ObjectNode{
+			SortHint:    table.GetDB().catalog.NextObject(),
+			IsTombstone: isTombstone,
+		},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: ts,
+		},
+		CreateNode:  txnbase.NewTxnMVCCNodeWithTS(ts),
+		ObjectState: ObjectState_Create_ApplyCommit,
+		ObjectMVCCNode: ObjectMVCCNode{
+			ObjectStats: stats,
+		},
+	}
+	if dataFactory != nil {
+		e.objData = dataFactory(e)
+	}
+	return e
+}
+
 func NewReplayObjectEntry() *ObjectEntry {
 	e := &ObjectEntry{}
 	return e

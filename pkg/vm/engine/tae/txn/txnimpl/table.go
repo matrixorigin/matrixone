@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 )
 
@@ -715,13 +716,33 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 		sorted,
 		false,
 	)
-	return tbl.createObject(
+	return tbl.createCommittedAppendableObject(
 		&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone},
 	)
 }
 
 func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	return tbl.createObject(opts)
+}
+
+func (tbl *txnTable) createCommittedAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	if !opts.Stats.GetAppendable() {
+		return nil, moerr.NewInternalErrorNoCtx("CreateObject outside txn only supports appendable object")
+	}
+	baseTxn, ok := tbl.store.txn.GetBase().(*txnbase.Txn)
+	if !ok || baseTxn.Mgr == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing txn manager for appendable object create")
+	}
+	var factory catalog.ObjectDataFactory
+	if tbl.store.catalog.DataFactory != nil {
+		factory = tbl.store.catalog.DataFactory.MakeObjectFactory()
+	}
+	var meta *catalog.ObjectEntry
+	if meta, err = tbl.entry.CreateCommittedObject(baseTxn.Mgr.Now(), opts, factory); err != nil {
+		return
+	}
+	obj = newObject(tbl, meta)
+	return
 }
 
 func (tbl *txnTable) createObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
@@ -1448,6 +1469,9 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
 		}
+		if isAppendableObjectCreateEntry(node) {
+			panic("appendable object create entry must not be committed through txn")
+		}
 		if err = node.PrepareCommit(); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
 				var buf bytes.Buffer
@@ -1476,6 +1500,9 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 			if tbl.txnEntries.IsDeleted(idx) {
 				continue
 			}
+			if isAppendableObjectCreateEntry(tbl.txnEntries.entries[idx]) {
+				panic("appendable object create entry must not be committed through txn")
+			}
 			if err = tbl.txnEntries.entries[idx].PrepareCommit(); err != nil {
 				break
 			}
@@ -1493,6 +1520,9 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
+		}
+		if isAppendableObjectCreateEntry(node) {
+			panic("appendable object create entry must not be committed through txn")
 		}
 		if err = node.ApplyCommit(tbl.store.txn.GetID()); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
@@ -1532,6 +1562,11 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 		csn++
 	}
 	return
+}
+
+func isAppendableObjectCreateEntry(entry txnif.TxnEntry) bool {
+	obj, ok := entry.(*catalog.ObjectEntry)
+	return ok && obj.ObjectState == catalog.ObjectState_Create_Active && obj.IsAppendable()
 }
 
 func (tbl *txnTable) ApplyRollback() (err error) {

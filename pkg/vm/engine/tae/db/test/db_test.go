@@ -1553,13 +1553,13 @@ func TestRollback1(t *testing.T) {
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
 	err = tableMeta.RecurLoop(processor)
 	assert.Nil(t, err)
-	assert.Equal(t, objCnt, 1)
+	assert.Equal(t, 1, objCnt)
 
 	assert.Nil(t, txn.Rollback(context.Background()))
 	objCnt = 0
 	err = tableMeta.RecurLoop(processor)
 	assert.Nil(t, err)
-	assert.Equal(t, objCnt, 0)
+	assert.Equal(t, 1, objCnt)
 
 	txn, rel = testutil.GetDefaultRelation(t, db, schema.Name)
 	obj, err := rel.CreateObject(false)
@@ -1569,7 +1569,7 @@ func TestRollback1(t *testing.T) {
 	objCnt = 0
 	err = tableMeta.RecurLoop(processor)
 	assert.Nil(t, err)
-	assert.Equal(t, objCnt, 1)
+	assert.Equal(t, 2, objCnt)
 
 	txn, rel = testutil.GetDefaultRelation(t, db, schema.Name)
 	_, err = rel.GetObject(objMeta.ID(), false)

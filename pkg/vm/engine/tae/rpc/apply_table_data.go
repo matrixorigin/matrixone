@@ -211,18 +211,19 @@ func (a *ApplyTableDataArg) Run() (err error) {
 			panic(fmt.Sprintf("invalid object type: %d", objTypes[i]))
 		}
 		stats := objectio.ObjectStats(idVec.GetBytesAt(i))
+		objectio.SetObjectStatsAppendable(&stats, false)
+		opt := &objectio.CreateObjOpt{
+			Stats:       &stats,
+			IsTombstone: isTombstone,
+		}
+		tableEntry := a.rel.GetMeta().(*catalog.TableEntry)
 		var obj handle.Object
-		if obj, err = a.rel.CreateNonAppendableObject(
-			isTombstone,
-			&objectio.CreateObjOpt{
-				Stats:       &stats,
-				IsTombstone: isTombstone,
-			},
-		); err != nil {
+		if obj, err = a.rel.CreateNonAppendableObject(isTombstone, opt); err != nil {
 			return
 		}
+		meta := obj.GetMeta().(*catalog.ObjectEntry)
 
-		schema := a.rel.GetMeta().(*catalog.TableEntry).GetLastestSchema(isTombstone)
+		schema := tableEntry.GetLastestSchema(isTombstone)
 
 		attrs := schema.AllNames()
 		attrs = append(attrs, objectio.TombstoneAttr_CommitTs_Attr)
@@ -235,7 +236,6 @@ func (a *ApplyTableDataArg) Run() (err error) {
 			}
 			defer objectRelease()
 			tnBat := containers.ToTNBatch(bat, a.mp)
-			meta := obj.GetMeta().(*catalog.ObjectEntry)
 			var anodes []txnif.TxnEntry
 			if anodes, err = meta.GetObjectData().ApplyDebugBatch(tnBat, a.txn); err != nil {
 				return

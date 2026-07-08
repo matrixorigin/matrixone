@@ -133,16 +133,25 @@ func (node *AppendNode) PrepareCommit() error {
 
 func (node *AppendNode) ApplyCommit(id string) error {
 	node.mvcc.Lock()
-	defer node.mvcc.Unlock()
 	if node.IsCommitted() {
+		node.mvcc.Unlock()
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
 	node.TxnMVCCNode.ApplyCommit(id)
+	minCommittedTS := node.mvcc.MinCommittedAppendTSLocked()
 	listener := node.mvcc.GetAppendListener()
-	if listener == nil {
-		return nil
+	var err error
+	if listener != nil {
+		err = listener(node)
 	}
-	return listener(node)
+	node.mvcc.Unlock()
+	if !minCommittedTS.IsEmpty() && node.mvcc.meta.IsAppendable() {
+		if updateErr := node.mvcc.meta.GetTable().UpdateObjectCreateTS(
+			node.mvcc.meta.ID(), node.mvcc.meta.IsTombstone, minCommittedTS); updateErr != nil {
+			return updateErr
+		}
+	}
+	return err
 }
 
 func (node *AppendNode) ApplyRollback() (err error) {

@@ -783,7 +783,7 @@ func TestObject1(t *testing.T) {
 		t.Log(iobj.String())
 		cnt++
 	}
-	assert.Equal(t, 2, cnt)
+	assert.Equal(t, 1, cnt)
 
 	txn3, _ := mgr.StartTxn(nil)
 	db, _ = txn3.GetDatabase(name)
@@ -830,15 +830,19 @@ func TestObject2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
+	err := txn1.Commit(context.Background())
+	assert.Nil(t, err)
+
+	txn2, _ := mgr.StartTxn(nil)
+	db, _ = txn2.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
 	it := rel.MakeObjectIt(false)
 	cnt := 0
 	for it.Next() {
 		cnt++
-		// iobj := it.GetObject()
 	}
 	assert.Equal(t, objCnt, cnt)
-	// err := txn1.Commit()
-	// assert.Nil(t, err)
+	assert.Nil(t, txn2.Commit(context.Background()))
 	t.Log(c.SimplePPString(common.PPL1))
 }
 
