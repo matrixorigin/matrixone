@@ -3870,6 +3870,22 @@ func prepareGroupingSetOrderByProjects(
 		}
 	}
 
+	// Validate positional ORDER BY references against the visible select list
+	// length, not the hidden-expanded projection list. Hidden grouping-set
+	// projections are internal and must not be addressable via ordinal.
+	visibleLen := len(selectList)
+	for _, order := range astOrderBy {
+		if numVal, ok := order.Expr.(*tree.NumVal); ok && numVal.Kind() == tree.Int {
+			colPos, _ := numVal.Int64()
+			if numVal.Negative() {
+				colPos = -colPos
+			}
+			if colPos < 1 || int(colPos) > visibleLen {
+				return nil, nil, moerr.NewSyntaxErrorf(builder.GetContext(), "ORDER BY position %v is not in select list", colPos)
+			}
+		}
+	}
+
 	for i, order := range astOrderBy {
 		orderCopy := *order
 		orderCopy.Expr = cloneTreeExpr(order.Expr)

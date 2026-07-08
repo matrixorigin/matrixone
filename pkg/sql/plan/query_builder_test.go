@@ -3697,3 +3697,82 @@ func TestBaseBinder_baseBindExpr(t *testing.T) {
 		})
 	}
 }
+
+// TestAppendGroupingSetOrderByProjectsOrdinalExceedsVisibleLen verifies that a
+// positional ORDER BY reference beyond the visible select list is rejected even
+// when hidden GROUPING() projections would make it valid in the expanded list.
+func TestAppendGroupingSetOrderByProjectsOrdinalExceedsVisibleLen(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select a, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by 3, grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	_, _, err = prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ORDER BY position 3 is not in select list")
+}
+
+// TestAppendGroupingSetOrderByProjectsOrdinalWithinVisibleLen verifies that a
+// positional ORDER BY reference within the visible select list is accepted.
+func TestAppendGroupingSetOrderByProjectsOrdinalWithinVisibleLen(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select a, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by 2, grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	require.NoError(t, err)
+	// visible: [a, count(*)] + hidden: [grouping(a)] = 3
+	require.Len(t, branchExprs, 3)
+
+	// First ORDER BY: ordinal 2 -> passes through
+	existingPos, ok := rewrittenOrderBy[0].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	pos, ok := existingPos.Int64()
+	require.True(t, ok)
+	require.Equal(t, int64(2), pos)
+
+	// Second ORDER BY: grouping(a) -> rewritten to hidden position 3
+	rewrittenPos, ok := rewrittenOrderBy[1].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	pos, ok = rewrittenPos.Int64()
+	require.True(t, ok)
+	require.Equal(t, int64(3), pos)
+}
+
+// TestAppendGroupingSetOrderByProjectsOrdinalOneWithinVisibleLen verifies that
+// ordinal 1 within a 2-column visible select list is accepted.
+func TestAppendGroupingSetOrderByProjectsOrdinalOneWithinVisibleLen(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select a, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by 1, grouping(a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	branchExprs, _, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	require.NoError(t, err)
+	require.Len(t, branchExprs, 3)
+}
