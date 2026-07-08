@@ -250,6 +250,11 @@ func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
 		_, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{makeJsonExpr(), makePlan2StringConstExprWithType("1")})
 		require.Error(t, err)
 	})
+
+	t.Run("non-binary ordering comparison is ignored", func(t *testing.T) {
+		err := adjustJsonOrderingDynamicParamType(ctx, ">", []*plan.Expr{makeJsonExpr()})
+		require.NoError(t, err)
+	})
 }
 
 func TestBindNameConstConstArgs(t *testing.T) {
