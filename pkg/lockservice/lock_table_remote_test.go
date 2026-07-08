@@ -266,6 +266,14 @@ func TestLockRemoteWithNotSentErrorSkipsRemoteTracking(t *testing.T) {
 			name: "connect timeout before write",
 			err:  moerr.NewRPCTimeoutNoCtx(),
 		},
+		{
+			name: "backend closed before lock success",
+			err:  moerr.NewBackendClosedNoCtx(),
+		},
+		{
+			name: "backend cannot connect before lock success",
+			err:  moerr.NewBackendCannotConnectNoCtx(),
+		},
 	}
 
 	for _, tt := range tests {
@@ -341,6 +349,8 @@ func TestLockRemoteWithNotSentErrorSkipsRemoteTracking(t *testing.T) {
 func TestShouldTrackRemoteLockOnSendError(t *testing.T) {
 	require.False(t, shouldTrackRemoteLockOnSendError(wrapLockRequestNotSentError(context.Canceled)))
 	require.False(t, shouldTrackRemoteLockOnSendError(moerr.NewRPCTimeoutNoCtx()))
+	require.False(t, shouldTrackRemoteLockOnSendError(moerr.NewBackendClosedNoCtx()))
+	require.False(t, shouldTrackRemoteLockOnSendError(moerr.NewBackendCannotConnectNoCtx()))
 	require.True(t, shouldTrackRemoteLockOnSendError(context.DeadlineExceeded))
 }
 
@@ -574,6 +584,48 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 		},
 		func(lt pb.LockTable) {},
 	)
+}
+
+func TestUnlockRemoteStopsRetryAfterDisconnectTimeout(t *testing.T) {
+	bind := pb.LockTable{
+		Group:       1,
+		Table:       2,
+		OriginTable: 2,
+		ServiceID:   "s1",
+		Valid:       true,
+	}
+	var unlocks int
+	client := lockTableTestClient{
+		send: func(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+			switch req.Method {
+			case pb.Method_Unlock:
+				unlocks++
+				return nil, moerr.NewBackendClosedNoCtx()
+			case pb.Method_GetBind:
+				return nil, moerr.NewBackendClosedNoCtx()
+			default:
+				return nil, moerr.NewInternalErrorNoCtx("unexpected request")
+			}
+		},
+	}
+	l := newRemoteLockTable(
+		"",
+		20*time.Millisecond,
+		bind,
+		client,
+		func(pb.LockTable) {},
+		getLogger(""),
+	)
+	defer l.close()
+
+	txnID := []byte("txn-unlock-disconnect")
+	txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+	defer reuse.Free(txn, nil)
+
+	start := time.Now()
+	l.unlock(txn, nil, timestamp.Timestamp{})
+	require.GreaterOrEqual(t, time.Since(start), l.removeLockTimeout)
+	require.GreaterOrEqual(t, unlocks, 1)
 }
 
 func TestRemoteBindRefreshRejectsSupersededAllocatorBind(t *testing.T) {

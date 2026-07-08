@@ -349,6 +349,7 @@ func (s *service) handleForwardLock(
 	txn.lockTableBindTouched(bind)
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	s.bindChangeMu.RUnlock()
+	defer txn.Unlock()
 	defer func() {
 		if s.isStatus(pb.Status_ServiceLockEnable) ||
 			lockErr != nil ||
@@ -374,7 +375,6 @@ func (s *service) handleForwardLock(
 					err = e
 				}
 			}
-			txn.Unlock()
 			lockErr = err
 			resp.Lock.Result = result
 			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)

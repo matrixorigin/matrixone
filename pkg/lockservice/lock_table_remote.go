@@ -227,6 +227,7 @@ func (l *remoteLockTable) unlock(
 		txn,
 		l.bind,
 	)
+	start := time.Now()
 	backoff := remoteRetryInitialBackoff
 	for {
 		err := l.doUnlock(txn, commitTS, mutations...)
@@ -248,10 +249,51 @@ func (l *remoteLockTable) unlock(
 		// that the current bind is valid, retry unlock.
 		if err := l.handleError(err, false); err == nil {
 			return
+		} else if l.remoteUnlockRetryTimedOut(start, err) {
+			if l.logger != nil {
+				l.logger.Warn("stop retrying remote unlock after timeout",
+					txnField(txn),
+					zap.String("bind", l.bind.DebugString()),
+					zap.Duration("timeout", l.removeLockTimeout),
+					zap.Error(err))
+			}
+			return
+		} else {
+			backoff = l.remoteUnlockRetryBackoff(start, backoff, err)
 		}
 		waitRemoteRetryBackoff(backoff)
 		backoff = nextRemoteRetryBackoff(backoff)
 	}
+}
+
+func (l *remoteLockTable) remoteUnlockRetryTimedOut(
+	start time.Time,
+	err error,
+) bool {
+	return l.removeLockTimeout > 0 &&
+		isRemoteUnlockRetryTimeoutError(err) &&
+		time.Since(start) >= l.removeLockTimeout
+}
+
+func (l *remoteLockTable) remoteUnlockRetryBackoff(
+	start time.Time,
+	backoff time.Duration,
+	err error,
+) time.Duration {
+	if l.removeLockTimeout <= 0 || !isRemoteUnlockRetryTimeoutError(err) {
+		return backoff
+	}
+	if maxBackoff := l.removeLockTimeout / 10; maxBackoff > 0 && backoff > maxBackoff {
+		backoff = maxBackoff
+	}
+	remaining := l.removeLockTimeout - time.Since(start)
+	if remaining <= 0 {
+		return 0
+	}
+	if backoff <= 0 || backoff > remaining {
+		return remaining
+	}
+	return backoff
 }
 
 func (l *remoteLockTable) getLock(
@@ -427,12 +469,22 @@ func retryRemoteLockError(err error) bool {
 	return false
 }
 
+func isRemoteUnlockRetryTimeoutError(err error) bool {
+	return retryRemoteLockError(err) ||
+		moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect)
+}
+
 func shouldTrackRemoteLockOnSendError(err error) bool {
 	var notSent *lockRequestNotSentError
 	if errors.As(err, &notSent) {
 		return false
 	}
-	return !moerr.IsMoErrCode(unwrapLockRequestNotSentError(err), moerr.ErrRPCTimeout)
+	err = unwrapLockRequestNotSentError(err)
+	return !moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) &&
+		!moerr.IsMoErrCode(err, moerr.ErrBackendClosed) &&
+		!moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect)
 }
 
 func unwrapLockRequestNotSentError(err error) error {

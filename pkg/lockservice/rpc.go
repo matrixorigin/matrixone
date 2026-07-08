@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -82,6 +83,11 @@ func wrapLockRequestNotSentError(err error) error {
 	return &lockRequestNotSentError{err: err}
 }
 
+func shouldWrapLockRequestNotSentError(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
 type ClientOption func(c *client)
 
 func WithMOCluster(cluster clusterservice.MOCluster) ClientOption {
@@ -130,7 +136,10 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 	}
 	f, err := c.AsyncSend(ctx, request)
 	if err != nil {
-		return nil, wrapLockRequestNotSentError(err)
+		if shouldWrapLockRequestNotSentError(err) {
+			return nil, wrapLockRequestNotSentError(err)
+		}
+		return nil, err
 	}
 	defer f.Close()
 
