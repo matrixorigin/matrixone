@@ -80,7 +80,7 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 // forceSync. The idxcron background reindex executor passes
 // forceSync=true so the build happens synchronously inside the txn
 // before the CDC task picks up forward changes. Mirrors IVF-FLAT.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, _ bool) error {
 	return h.handleCreate(ctx, indexDefs, forceSync)
 }
 

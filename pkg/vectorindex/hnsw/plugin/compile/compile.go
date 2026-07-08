@@ -171,7 +171,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 // HandleReindex: same code path as create, but honors forceSync so an
 // ALTER REINDEX … FORCE_SYNC (e.g. restore's RestoreTable) rebuilds an
 // always-async HNSW index synchronously instead of deferring to CDC.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, _ bool) error {
 	return h.handleCreate(ctx, indexDefs, forceSync)
 }
 

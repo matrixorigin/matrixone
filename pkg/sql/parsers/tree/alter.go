@@ -899,6 +899,7 @@ type AlterOptionAlterReIndex struct {
 	BitsPerCode              int64
 	Async                    bool
 	ForceSync                bool
+	Merge                    bool
 	AutoUpdate               bool
 	Day                      int64
 	Hour                     int64
@@ -931,6 +932,7 @@ func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOpti
 	a.BitsPerCode = option.BitsPerCode
 	a.Async = option.Async
 	a.ForceSync = option.ForceSync
+	a.Merge = option.Merge
 	a.AutoUpdate = option.AutoUpdate
 	a.Day = option.Day
 	a.Hour = option.Hour
@@ -998,6 +1000,9 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 			c.Format(ctx)
 		}
 		ctx.WriteString(")")
+	}
+	if node.Merge {
+		ctx.WriteString(" merge")
 	}
 	if node.ForceSync {
 		ctx.WriteString(" force_sync")

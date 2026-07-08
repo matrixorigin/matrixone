@@ -285,6 +285,13 @@ type SyncDescriptor struct {
 	// false for cuvs algorithms (CAGRA, IVF-PQ) which have no "lists"
 	// or training-sample concept — they always rebuild on cadence.
 	IdxcronListsAware bool
+
+	// IdxcronReindexOption is an extra REINDEX option keyword the executor
+	// inserts before FORCE_SYNC when building the cron-triggered ALTER —
+	// e.g. "MERGE" so fulltext retrieval runs incremental fold+tiered
+	// compaction instead of a full rebuild-from-source. Empty for the
+	// vector algorithms (plain rebuild); the executor omits it when unset.
+	IdxcronReindexOption string
 }
 
 // AlterTableCloneBehavior declares the per-hidden-table semantics

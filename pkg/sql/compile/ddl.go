@@ -1103,7 +1103,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if cctx == nil {
 						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					}
-					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync)
+					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync, tableAlterIndex.Merge)
 				}
 
 				if err != nil {

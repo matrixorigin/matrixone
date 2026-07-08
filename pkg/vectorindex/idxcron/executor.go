@@ -446,9 +446,8 @@ func runReindex(ctx context.Context,
 				return
 			}
 
-			// run alter table alter reindex in force synchronous mode to make sure to build index in single transaction
-			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` %s FORCE_SYNC",
-				task.DbName, task.TableName, task.IndexName, d.IdxcronAlgoToken)
+			// run alter table alter reindex in force synchronous mode to make sure to build index in single transaction.
+			sql := buildReindexSql(task.DbName, task.TableName, task.IndexName, d.IdxcronAlgoToken, d.IdxcronReindexOption)
 			logutil.Infof("[idxcron] reindex FIRING index=%s: %s", task.IndexName, sql)
 			res, err2 := runReindexSql(sqlproc, sql)
 			if err2 != nil {
@@ -527,6 +526,21 @@ var IndexUpdateTaskCronExpr = func() string {
 	}
 	return "0 0 * * * *" // run once an hour, beginning of hour
 }()
+
+// buildReindexSql assembles the cron-triggered reindex statement. algoToken is the
+// per-plugin keyword (SyncDescriptor.IdxcronAlgoToken, e.g. "IVFFLAT"/"FULLTEXT");
+// reindexOption is an optional extra keyword inserted before FORCE_SYNC
+// (SyncDescriptor.IdxcronReindexOption, e.g. "MERGE" so fulltext retrieval runs
+// incremental fold+tiered compaction), omitted when empty. FORCE_SYNC always runs the
+// rebuild synchronously inside the txn.
+func buildReindexSql(dbName, tableName, indexName, algoToken, reindexOption string) string {
+	reindexOpt := ""
+	if reindexOption != "" {
+		reindexOpt = " " + reindexOption
+	}
+	return fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` %s%s FORCE_SYNC",
+		dbName, tableName, indexName, algoToken, reindexOpt)
+}
 
 // idxcronFastIntervalSec — dev/test override (env MO_IDXCRON_INTERVAL_SEC, in seconds).
 // When > 0, runReindex uses it as the cadence interval AND bypasses the hour-of-day

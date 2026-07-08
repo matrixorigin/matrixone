@@ -75,7 +75,7 @@ func TestIvfflatHandleCreateIndex_LogLine(t *testing.T) {
 
 // TestIvfflatHandleReindex_LogLine — same shape via HandleReindex.
 func TestIvfflatHandleReindex_LogLine(t *testing.T) {
-	err := Hooks{}.HandleReindex(&stubCtx{}, map[string]*plan.IndexDef{}, false)
+	err := Hooks{}.HandleReindex(&stubCtx{}, map[string]*plan.IndexDef{}, false, false)
 	require.Error(t, err)
 }
 

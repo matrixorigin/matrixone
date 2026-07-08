@@ -234,20 +234,50 @@ func genWandBuildSQL(postingsDef, storeDef, metaDef *plan.IndexDef, qryDatabase 
 	return []string{sql}, nil
 }
 
-// HandleReindex rebuilds a retrieval index synchronously: it reuses handleCreate with
-// forceSync=true, which drops the CDC task, clears the old postings + tag=0 + tag=1, and
-// rebuilds the tag=0 base inline (max_index_capacity from the live resolver), then
-// re-registers CDC from now. Only the retrieval (WAND) parser has a rebuildable store; a
-// postings/ngram index has nothing to reindex.
-func (Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _ bool) error {
+// HandleReindex handles ALTER … REINDEX for a retrieval index in one of two modes.
+// Default (merge=false): a full rebuild — reuse handleCreate with forceSync=true, which
+// drops the CDC task, clears the old postings + tag=0 + tag=1, rebuilds the tag=0 base
+// inline (max_index_capacity from the live resolver), and re-registers CDC from now.
+// MERGE (merge=true): incremental compaction — fold the tag=1 CdcTail into the tag=0 base
+// and tiered-merge small subs over the already-built segments (no re-tokenize, bounded
+// memory, O(tail) write) via the standalone fulltext_wand_compact TVF; the CDC task and
+// the corpus are untouched. Only the retrieval (WAND) parser has a rebuildable/compactable
+// store; a postings/ngram index has nothing to reindex.
+func (Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _ bool, merge bool) error {
 	indexDef, ok := indexDefs[""]
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("fulltext postings index definition not found")
 	}
 	if catalog.GetIndexParser(indexDef.IndexAlgoParams) != "retrieval" {
+		if merge {
+			return moerr.NewNotSupportedNoCtx("ALTER ... REINDEX ... MERGE is only supported for retrieval fulltext indexes")
+		}
 		return moerr.NewNotSupportedNoCtx("ALTER ... REINDEX is only supported for retrieval fulltext indexes")
 	}
+	if merge {
+		return handleMergeCompact(ctx, indexDefs)
+	}
 	return handleCreate(ctx, indexDefs, true)
+}
+
+// handleMergeCompact runs the incremental fold + tiered merge over the retrieval index's
+// already-built segments via the standalone fulltext_wand_compact table function, in the
+// ALTER's transaction. It requires the alias (AS f) — the TVF is a FUNCTION_SCAN with no
+// driving table. The TVF evicts the search cache for the store on completion.
+func handleMergeCompact(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	storeDef, ok := indexDefs[catalog.FullTextIndex_TblType_Storage]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("fulltext retrieval storage index definition not found")
+	}
+	metaDef, ok := indexDefs[catalog.FullTextIndex_TblType_Metadata]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("fulltext retrieval metadata index definition not found")
+	}
+	sql := fmt.Sprintf("SELECT * FROM fulltext_wand_compact(%s, %s, %s) AS f",
+		sqlquote.String(ctx.QryDatabase()),
+		sqlquote.String(storeDef.IndexTableName),
+		sqlquote.String(metaDef.IndexTableName))
+	return ctx.RunSql(sql)
 }
 
 // RestoreInitSQL — a retrieval (WAND) index carries a compact tag=0 model that

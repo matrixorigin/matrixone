@@ -140,14 +140,14 @@ func TestRestoreInitSQL_MissingPostingsDef_Errors(t *testing.T) {
 func TestHandleReindex_NonRetrieval_NotSupported(t *testing.T) {
 	ctx := &stubCtx{qryDatabase: "db1", tableDef: &plan.TableDef{Name: "t1"}}
 	defs := map[string]*plan.IndexDef{"": {IndexName: "ftidx", IndexAlgoParams: ngramParams}}
-	err := Hooks{}.HandleReindex(ctx, defs, false)
+	err := Hooks{}.HandleReindex(ctx, defs, false, false)
 	require.Error(t, err)
 	require.Contains(t, strings.ToLower(err.Error()), "not supported")
 }
 
 func TestHandleReindex_MissingPostingsDef_Errors(t *testing.T) {
 	ctx := &stubCtx{qryDatabase: "db1", tableDef: &plan.TableDef{Name: "t1"}}
-	err := Hooks{}.HandleReindex(ctx, map[string]*plan.IndexDef{}, false)
+	err := Hooks{}.HandleReindex(ctx, map[string]*plan.IndexDef{}, false, false)
 	require.Error(t, err)
 }
 

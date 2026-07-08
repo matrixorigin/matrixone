@@ -820,3 +820,17 @@ func TestCmdSqlError(t *testing.T) {
 	}
 
 }
+
+// buildReindexSql inserts the plugin's IdxcronReindexOption (e.g. "MERGE") before
+// FORCE_SYNC for fulltext retrieval, and omits it for the vector algorithms — so the
+// cron fires incremental fold+tiered compaction for fulltext but a plain rebuild for IVF/HNSW.
+func TestBuildReindexSql(t *testing.T) {
+	// fulltext retrieval: FULLTEXT + MERGE + FORCE_SYNC
+	require.Equal(t,
+		"ALTER TABLE `db`.`t` ALTER REINDEX `ft` FULLTEXT MERGE FORCE_SYNC",
+		buildReindexSql("db", "t", "ft", "FULLTEXT", "MERGE"))
+	// vector algo: no option keyword, just the algo token + FORCE_SYNC
+	require.Equal(t,
+		"ALTER TABLE `db`.`t` ALTER REINDEX `idx` IVFFLAT FORCE_SYNC",
+		buildReindexSql("db", "t", "idx", "IVFFLAT", ""))
+}

@@ -125,10 +125,13 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 		UsesCDC:    true,
 		SinkerType: catalogplugin.SinkerType_IndexSync,
 		// Declares the cron action; the executor builds
-		// `ALTER TABLE … ALTER REINDEX … FULLTEXT FORCE_SYNC` from IdxcronAlgoToken.
+		// `ALTER TABLE … ALTER REINDEX … FULLTEXT MERGE FORCE_SYNC` from IdxcronAlgoToken
+		// + IdxcronReindexOption. MERGE runs incremental fold+tiered compaction (bounded
+		// memory, no re-tokenize) instead of a full rebuild-from-source on every cadence.
 		// Only retrieval indexes actually register a task (see compile hook).
-		IdxcronAction:    ActionFulltextReindex,
-		IdxcronAlgoToken: "FULLTEXT",
+		IdxcronAction:        ActionFulltextReindex,
+		IdxcronAlgoToken:     "FULLTEXT",
+		IdxcronReindexOption: "MERGE",
 	}
 }
 

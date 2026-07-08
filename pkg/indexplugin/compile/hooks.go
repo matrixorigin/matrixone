@@ -155,8 +155,11 @@ type Hooks interface {
 
 	// HandleReindex is the ALTER … REINDEX path. forceSync mirrors the
 	// existing IVF-FLAT semantics (run synchronously inside the txn) and is
-	// ignored by algorithms that do not support it.
-	HandleReindex(ctx CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error
+	// ignored by algorithms that do not support it. merge requests incremental
+	// compaction (fold + tiered merge of already-built segments) instead of a
+	// full rebuild-from-source; only the fulltext retrieval index honors it,
+	// every other algorithm ignores it and rebuilds.
+	HandleReindex(ctx CompileContext, indexDefs map[string]*plan.IndexDef, forceSync, merge bool) error
 
 	// RestoreInitSQL returns (startFromNow, initSQL) for the restored index's
 	// CDC. initSQL rebuilds the index from the cloned rows — run post-commit by

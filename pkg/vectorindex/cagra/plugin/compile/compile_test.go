@@ -375,7 +375,7 @@ func TestCagraHandleCreateIndex_AsyncFalseExplicit(t *testing.T) {
 func TestCagraHandleCreateIndex_BackgroundReentry(t *testing.T) {
 	ctx := newHandleCtx(true)
 	ctx.stubCompileContext.isFrontend = false
-	err := Hooks{}.HandleReindex(ctx, cagraIndexDefs(), true)
+	err := Hooks{}.HandleReindex(ctx, cagraIndexDefs(), true, false)
 	require.NoError(t, err)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called, "background re-entry still drives the CDC task")
 	require.False(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "background re-entry must NOT rewrite mo_index_update")
@@ -385,7 +385,7 @@ func TestCagraHandleReindex_DelegatesToCreate(t *testing.T) {
 	// HandleReindex is a thin pass-through to handleCreate; honors
 	// the forceSync arg directly (unlike HandleCreateIndex, which
 	// now reads catalog.IsIndexAsync).
-	err := Hooks{}.HandleReindex(newHandleCtx(true), cagraIndexDefs(), false)
+	err := Hooks{}.HandleReindex(newHandleCtx(true), cagraIndexDefs(), false, false)
 	require.NoError(t, err)
 }
 

@@ -3736,13 +3736,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			alterTableReIndex := new(plan.AlterTableAlterReIndex)
 			constraintName := string(opt.Name)
 			alterTableReIndex.IndexName = constraintName
-			// ForceSync (sync vs async rebuild) is the only build-time flag the
-			// plan node carries. The shared index_option_list grammar already
+			// ForceSync (sync vs async rebuild) and Merge (incremental compaction
+			// vs full rebuild — fulltext retrieval only) are the build-time flags
+			// the plan node carries. The shared index_option_list grammar already
 			// restricts the algo (REINDEX rules cover only ivfflat/hnsw/ivfpq/
-			// cagra) and validates option values (> 0); the per-index option
+			// cagra/fulltext) and validates option values (> 0); the per-index option
 			// merge + reject happens at compile in Compile.ValidateReindexParams,
 			// reading the options straight off the parse tree.
 			alterTableReIndex.ForceSync = opt.ForceSync
+			alterTableReIndex.Merge = opt.Merge
 
 			name_not_found := true
 			// check index
