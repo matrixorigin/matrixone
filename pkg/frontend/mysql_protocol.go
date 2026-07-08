@@ -1009,7 +1009,10 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				case 0:
 					val = "0d 00:00:00"
 				case 8, 12:
-					pos, val = mp.readTime(data, pos, length)
+					pos, val, ok = mp.readTime(data, pos, length)
+					if !ok {
+						return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+					}
 				default:
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
@@ -1073,16 +1076,26 @@ func (mp *MysqlProtocolImpl) readDate(data []byte, pos int) (int, string) {
 	return pos, fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 }
 
-func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, len uint8) (int, string) {
+func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, length uint8) (int, string, bool) {
 	var retStr string
+	if pos >= len(data) {
+		return 0, "", false
+	}
 	negate := data[pos]
 	pos++
 	if negate == 1 {
 		retStr += "-"
 	}
-	day, pos, _ := mp.io.ReadUint32(data, pos)
+	day, tmpPos, ok := mp.io.ReadUint32(data, pos)
+	if !ok {
+		return 0, "", false
+	}
+	pos = tmpPos
 	if day > 0 {
 		retStr += fmt.Sprintf("%dd ", day)
+	}
+	if pos+3 > len(data) { //nolint:typecheck
+		return 0, "", false
 	}
 	hour := data[pos]
 	pos++
@@ -1091,14 +1104,19 @@ func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, len uint8) (int, str
 	second := data[pos]
 	pos++
 
-	if len == 12 {
-		ms, _, _ := mp.io.ReadUint32(data, pos)
+	if length == 12 {
+		var ms uint32
+		ms, tmpPos, ok = mp.io.ReadUint32(data, pos)
+		if !ok {
+			return 0, "", false
+		}
+		pos = tmpPos
 		retStr += fmt.Sprintf("%02d:%02d:%02d.%06d", hour, minute, second, ms)
 	} else {
 		retStr += fmt.Sprintf("%02d:%02d:%02d", hour, minute, second)
 	}
 
-	return pos, retStr
+	return pos, retStr, true
 }
 
 func (mp *MysqlProtocolImpl) readDateTime(data []byte, pos int) (int, string) {
@@ -3675,7 +3693,7 @@ func (mp *MysqlProtocolImpl) appendTime(t types.Time) error {
 			if err != nil {
 				return err
 			}
-			err = mp.appendUint64(msec)
+			err = mp.appendUint32(uint32(msec))
 			if err != nil {
 				return err
 			}

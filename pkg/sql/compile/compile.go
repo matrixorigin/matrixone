@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,9 +28,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -89,7 +86,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
@@ -603,12 +599,15 @@ func (c *Compile) runOnce() (err error) {
 	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		// Filter out pre-check SQLs (already executed before the main operation)
+		// Filter out pre-check SQLs (already executed before the main operation).
+		// The modern INSERT path enforces child→parent existence in-plan now, so the
+		// remaining DetectSqls are self-referencing FK checks (plain 1452 message).
 		var postCheckSqls []string
 		for _, sql := range query.DetectSqls {
-			if !strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
-				postCheckSqls = append(postCheckSqls, sql)
+			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+				continue
 			}
+			postCheckSqls = append(postCheckSqls, sql)
 		}
 		err = detectFkSelfRefer(c, postCheckSqls)
 	}
@@ -824,66 +823,6 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 // 	return attachedScope, nil
 // }
 
-func isAvailable(client morpc.RPCClient, addr string) bool {
-	_, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
-		return false
-	}
-	logutil.Debugf("ping %s start", addr)
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 500*time.Millisecond, moerr.CauseIsAvailable)
-	defer cancel()
-	err = client.Ping(ctx, addr)
-	if err != nil {
-		err = moerr.AttachCause(ctx, err)
-		// ping failed
-		logutil.Debugf("ping %s err %+v\n", addr, err)
-		return false
-	}
-	return true
-}
-
-func (c *Compile) removeUnavailableCN() {
-	client := cnclient.GetPipelineClient(
-		c.proc.GetService(),
-	)
-	if client == nil {
-		return
-	}
-	i := 0
-	for _, cn := range c.cnList {
-		if isSameCN(c.addr, cn.Addr) || isAvailable(client.Raw(), cn.Addr) {
-			c.cnList[i] = cn
-			i++
-		}
-	}
-	c.cnList = c.cnList[:i]
-}
-
-// getCNList gets the CN list from engine.Nodes() method. It will
-// ensure the current CN is included in the result.
-func (c *Compile) getCNList() (engine.Nodes, error) {
-	cnList, err := c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
-	if err != nil {
-		return nil, err
-	}
-
-	// We should always make sure the current CN is contained in the cn list.
-	if c.proc == nil || c.proc.Base.QueryClient == nil {
-		return cnList, nil
-	}
-	cnID := c.proc.GetService()
-	for _, node := range cnList {
-		if node.Id == cnID {
-			return cnList, nil
-		}
-	}
-	n := getEngineNode(c)
-	n.Id = cnID
-	cnList = append(cnList, n)
-	return cnList, nil
-}
-
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
 
@@ -894,17 +833,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
 
-	n := getEngineNode(c)
-	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
-		c.cnList = engine.Nodes{n}
-	} else {
-		c.cnList, err = c.getCNList()
-		if err != nil {
-			return nil, err
-		}
-		c.removeUnavailableCN()
-		// sort by addr to get fixed order of CN list
-		sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
+	c.cnList, err = c.scheduleQueryWorkers()
+	if err != nil {
+		return nil, err
 	}
 
 	if c.isPrepare && !c.IsTpQuery() {
@@ -960,17 +891,13 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 
 	if n.NodeType == plan.Node_SINK_SCAN || n.NodeType == plan.Node_RECURSIVE_SCAN || n.NodeType == plan.Node_RECURSIVE_CTE {
 		for _, s := range n.SourceStep {
-			var wr *process.WaitRegister
+			var edge *process.PipelineEdge
 			if c.anal.qry.LoadTag {
-				wr = &process.WaitRegister{
-					Ch2: make(chan process.PipelineSignal, c.ncpu),
-				}
+				edge = process.NewPipelineEdge(int(c.ncpu), 0)
 			} else {
-				wr = &process.WaitRegister{
-					Ch2: make(chan process.PipelineSignal, 1),
-				}
+				edge = process.NewPipelineEdge(1, 0)
 			}
-			c.appendStepRegs(s, nodeId, wr)
+			c.appendStepRegs(s, nodeId, edge)
 		}
 	}
 	return nil
@@ -1280,18 +1207,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		node.NotCacheable = true
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		return c.compileDelete(node, ss)
-	case plan.Node_ON_DUPLICATE_KEY:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
-		if err != nil {
-			return nil, err
-		}
-
-		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss, err = c.compileOnduplicateKey(node, ss)
-		if err != nil {
-			return nil, err
-		}
-		return ss, nil
 	case plan.Node_FUZZY_FILTER:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -1903,14 +1818,14 @@ func (c *Compile) compileExternScan(node *plan.Node) ([]*Scope, error) {
 	if param.ExternType == int32(plan.ExternType_LOAD) &&
 		param.Format == tree.PARQUET &&
 		param.Parallel {
-		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(param, fileList, fileSize)
+		rowGroups, footerStats, err := c.readLoadParquetRowGroupMetadata(node, param, fileList, fileSize)
 		if err != nil {
 			return nil, err
 		}
 		logutil.Debugf("parquet load footer metadata: files=%d row_groups=%d rows=%d read_calls=%d read_bytes=%d duration=%s",
 			footerStats.Files, footerStats.RowGroups, footerStats.Rows,
 			footerStats.ReadCalls, footerStats.ReadBytes, footerStats.Duration)
-		if footerStats.RowGroups > len(fileList) {
+		if footerStats.RowGroups > parquetRowGroupFileCount(rowGroups) {
 			return c.compileExternScanParquetRowGroupFanout(node, param, fileList, fileSize, rowGroups, strictSqlMode)
 		}
 		if len(fileList) > 1 {
@@ -2132,6 +2047,7 @@ func (c *Compile) compileExternScanParquetRowGroupFanout(
 }
 
 func (c *Compile) readLoadParquetRowGroupMetadata(
+	node *plan.Node,
 	param *tree.ExternParam,
 	fileList []string,
 	fileSize []int64,
@@ -2183,6 +2099,12 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 		if err != nil {
 			return nil, stats, moerr.ConvertGoError(ctx, err)
 		}
+		if f.NumRows() == 0 {
+			if err := validateEmptyParquetLoadFile(ctx, node, param, f); err != nil {
+				return nil, stats, err
+			}
+			continue
+		}
 		rowGroups := f.RowGroups()
 		stats.RowGroups += len(rowGroups)
 		totalRows := f.NumRows()
@@ -2199,6 +2121,55 @@ func (c *Compile) readLoadParquetRowGroupMetadata(
 	}
 	stats.Duration = time.Since(start)
 	return metas, stats, nil
+}
+
+func validateEmptyParquetLoadFile(ctx context.Context, node *plan.Node, param *tree.ExternParam, f *parquet.File) error {
+	if param == nil || f == nil {
+		return nil
+	}
+	attrs := buildExternalAttrs(node)
+	if param.ExternType == int32(plan.ExternType_LOAD) &&
+		externalColumnListLen(node) > int32(len(attrs)) {
+		return moerr.NewNYI(ctx, "parquet load with @variables in column list")
+	}
+	if param.HivePartitioning {
+		return nil
+	}
+	parquetColCnt := len(f.Root().Columns())
+	tableColCnt := getCompileParquetExpectedColCnt(param, attrs)
+	if parquetColCnt != tableColCnt {
+		return moerr.NewInvalidInputf(ctx,
+			"column count mismatch: parquet file has %d columns, but table has %d columns",
+			parquetColCnt, tableColCnt)
+	}
+	return nil
+}
+
+func getCompileParquetExpectedColCnt(param *tree.ExternParam, attrs []plan.ExternAttr) int {
+	cnt := 0
+	for _, attr := range attrs {
+		if catalog.ContainExternalHidenCol(attr.ColName) {
+			continue
+		}
+		if compileParquetIsHivePartitionCol(param, attr.ColName) {
+			continue
+		}
+		cnt++
+	}
+	return cnt
+}
+
+func compileParquetIsHivePartitionCol(param *tree.ExternParam, colName string) bool {
+	if param == nil || !param.HivePartitioning {
+		return false
+	}
+	lower := strings.ToLower(colName)
+	for _, pc := range param.HivePartitionCols {
+		if pc == lower {
+			return true
+		}
+	}
+	return false
 }
 
 type compileParquetFooterReaderAt struct {
@@ -2248,6 +2219,14 @@ func estimateParquetRowGroupBytes(fileSize, totalRows, rowGroupRows int64, rowGr
 		}
 	}
 	return 1
+}
+
+func parquetRowGroupFileCount(rowGroups []parquetRowGroupMeta) int {
+	files := make(map[int32]struct{})
+	for _, meta := range rowGroups {
+		files[meta.fileIndex] = struct{}{}
+	}
+	return len(files)
 }
 
 func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
@@ -3464,8 +3443,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 			bs := newScope(Remote)
 			bs.NodeInfo = engine.Node{Addr: tmp[0].NodeInfo.Addr, Mcpu: 1}
 			bs.Proc = c.proc.NewNoContextChildProc(0)
-			w := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 10)}
-			bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
+			edge := process.NewPipelineEdge(10, 0)
+			bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge)
 
 			mergeOp := merge.NewArgument()
 			c.hasMergeOp = true
@@ -3487,8 +3466,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		bs := newScope(Remote)
 		bs.NodeInfo = engine.Node{Addr: rs[i].NodeInfo.Addr, Mcpu: 1}
 		bs.Proc = c.proc.NewNoContextChildProc(0)
-		w := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 10)}
-		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
+		edge := process.NewPipelineEdge(10, 0)
+		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge)
 
 		mergeOp := merge.NewArgument()
 		c.hasMergeOp = true
@@ -4035,7 +4014,7 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
-				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+				rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 			}
 		}
 		shuffleGroups = append(shuffleGroups, scopes...)
@@ -4151,6 +4130,17 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
 
 	if !toWriteS3 {
+		// A non-S3 INSERT can still drive a cross-CN shuffle join: toWriteS3 is decided by the
+		// INSERT *output* row count, while shuffle is decided by the JOIN *input* table size and
+		// CN count -- independent decisions. A large shuffle join with a highly selective filter
+		// can produce few output rows (non-S3) yet still shuffle across CNs. So group the same-CN
+		// shuffle buckets (with their nested cross-CN dispatch) into one per-CN send unit *before*
+		// attaching Insert. This (a) keeps the dispatch in the same tree as all its local buckets
+		// so it is sent to its own CN instead of being converted to local on the coordinator and
+		// hanging (issue #24919), and (b) puts Insert on the per-CN container's RootOp chain
+		// (Insert -> Merge), so affectedRows() -- which walks the RootOp chain -- still counts it.
+		// Noop when ss carries no cross-CN shuffle dispatch.
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		currentFirstFlag := c.anal.isFirst
 		// Not write S3
 		for i := range ss {
@@ -4171,10 +4161,16 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		// todo : pipelines with sink scan ,must refactor this in the future
 		currentFirstFlag := c.anal.isFirst
 		c.anal.isFirst = false
+		// dataScope merges the buckets, but dataScope.MergeRun still sends each bucket as an
+		// individual RemoteRun unit, so a cross-CN shuffle dispatch here would hit the same
+		// convert-to-local hang. Group same-CN buckets into one per-CN send unit first (issue #24919).
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		dataScope := c.newMergeScope(ss)
 		if c.anal.qry.LoadTag {
 			// reset the channel buffer of sink for load
-			dataScope.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, dataScope.NodeInfo.Mcpu)
+			dataScope.Proc.Reg.MergeReceivers[0].ResetForReuse(
+				dataScope.NodeInfo.Mcpu,
+				dataScope.Proc.Reg.MergeReceivers[0].NilBatchCnt)
 		}
 		parallelSize := c.getParallelSizeForExternalScan(node, c.ncpu)
 		scopes := make([]*Scope, 0, parallelSize)
@@ -4188,7 +4184,7 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			scopes[i].Proc = c.proc.NewNoContextChildProc(1)
 			if c.anal.qry.LoadTag {
 				for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
-					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+					rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 				}
 			}
 		}
@@ -4238,6 +4234,11 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		ss[i].setRootOperator(insertArg)
 	}
 	currentFirstFlag = false
+	// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
+	// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
+	// to and executed at its own CN instead of being converted to local on the coordinator
+	// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+	ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 	rs := c.newMergeScope(ss)
 	rs.Magic = MergeInsert
 	mergeInsertArg := constructMergeblock(c.e, node)
@@ -4287,6 +4288,11 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 			ss[i].setRootOperator(multiUpdateArg)
 		}
 
+		// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
+		// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
+		// to and executed at its own CN instead of being converted to local on the coordinator
+		// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		rs := ss[0]
 		if len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1 {
 			rs = c.newMergeScope(ss)
@@ -4301,6 +4307,8 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		ss = []*Scope{rs}
 	} else {
 		if !c.IsTpQuery() {
+			// keep a cross-CN shuffle dispatch in the same send unit as all its local buckets (issue #24919).
+			ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 			rs := c.newMergeScope(ss)
 			ss = []*Scope{rs}
 		}
@@ -4312,6 +4320,7 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		ss[0].setRootOperator(multiUpdateArg)
 	}
 	c.anal.isFirst = false
+
 	return ss, nil
 }
 
@@ -4528,18 +4537,6 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 	ss = []*Scope{rs}
 	return ss, nil
 }
-func (c *Compile) compileOnduplicateKey(node *plan.Node, ss []*Scope) ([]*Scope, error) {
-	rs := c.newMergeScope(ss)
-
-	currentFirstFlag := c.anal.isFirst
-	arg := constructOnduplicateKey(node, c.e)
-	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-	rs.setRootOperator(arg)
-	c.anal.isFirst = false
-
-	ss = []*Scope{rs}
-	return ss, nil
-}
 
 // DeleteMergeScope need to assure this:
 // one block can be only deleted by one and the same
@@ -4608,12 +4605,11 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 
 	j := 0
 	for i := range ss {
+		nilBatchCnt := 1
 		if isSameCN(rs.NodeInfo.Addr, ss[i].NodeInfo.Addr) {
-			rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = ss[i].NodeInfo.Mcpu
-		} else {
-			rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = 1
+			nilBatchCnt = ss[i].NodeInfo.Mcpu
 		}
-		rs.Proc.Reg.MergeReceivers[j].Ch2 = make(chan process.PipelineSignal, ss[i].NodeInfo.Mcpu)
+		rs.Proc.Reg.MergeReceivers[j].ResetForReuse(ss[i].NodeInfo.Mcpu, nilBatchCnt)
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
@@ -4640,7 +4636,11 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	rs.NodeInfo.Mcpu = 1 // merge scope is single parallel by default
 	rs.PreScopes = ss
 	rs.Proc = c.proc.NewNoContextChildProc(1)
-	rs.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, len(ss))
+	nilBatchCnt := 0
+	for i := range ss {
+		nilBatchCnt += ss[i].NodeInfo.Mcpu
+	}
+	rs.Proc.Reg.MergeReceivers[0].ResetForReuse(len(ss), nilBatchCnt)
 
 	// waring: `Merge` operator` is not used as an input/output analyze,
 	// and `Merge` operator cannot play the role of IsFirst/IsLast
@@ -4649,8 +4649,6 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	rs.setRootOperator(mergeOp)
 	for i := range ss {
-		rs.Proc.Reg.MergeReceivers[0].NilBatchCnt += ss[i].NodeInfo.Mcpu
-
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[0])
@@ -4718,10 +4716,74 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 	rs := c.mergeScopesByCN(ss)
 	for i := range rs {
 		for _, rr := range rs[i].Proc.Reg.MergeReceivers {
-			rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+			rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 		}
 	}
 	return rs
+}
+
+// scopeTreeHasCrossCNDispatch reports whether the scope tree rooted at s contains a
+// dispatch operator that sends to remote (cross-CN) receivers. A non-empty RemoteRegs is
+// the signature of a cross-CN shuffle dispatch (see constructDispatchLocalAndRemote).
+//
+// Precondition: it only inspects each scope's RootOp, assuming a shuffle dispatch is always
+// the root operator of its scope (constructDispatch results are attached via setRootOperator
+// with IsEnd=true, so nothing is appended on top of them). A dispatch nested as a child of
+// another operator would be missed -- which does not happen for shuffle dispatches today.
+//
+// Scope of the check (intentionally narrower than checkPipelineStandaloneExecutableAtRemote,
+// which rejects out-of-tree dispatch *and* out-of-tree connector targets): this gate only
+// looks for a cross-CN dispatch, because per-CN grouping only reorganizes the same-CN shuffle
+// dispatch together with its dop buckets. A scope tree that crosses CNs solely via a connector
+// is not the shuffle-bucket pattern grouping addresses and is intentionally left untouched.
+func scopeTreeHasCrossCNDispatch(s *Scope) bool {
+	if d, ok := s.RootOp.(*dispatch.Dispatch); ok && len(d.RemoteRegs) > 0 {
+		return true
+	}
+	for _, pre := range s.PreScopes {
+		if scopeTreeHasCrossCNDispatch(pre) {
+			return true
+		}
+	}
+	return false
+}
+
+// groupShuffleBucketsByCNIfNeeded groups the same-CN shuffle buckets (together with the
+// shuffle dispatch nested under them) into one per-CN send unit, so a cross-CN shuffle
+// dispatch always travels in the same pipeline tree as all of its dop local buckets.
+//
+// Background (issue #24919): newShuffleJoinScopeList leaves a CN's dop join buckets in
+// separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
+// When the consumer (here compileInsert) sends each bucket individually, RemoteRun ->
+// checkPipelineStandaloneExecutableAtRemote sees the dispatch.LocalRegs pointing to the
+// sibling out-of-tree buckets, converts the pipeline to local on the coordinator, and the
+// dispatch then runs on the coordinator instead of its compile-time CN -- mispaired with
+// the cross-CN receiver's FromAddr -> the remote receiver's GetProcByUuid spins / merge
+// WaitingEnd waits forever -> hang. Regrouping by CN keeps all of a CN's buckets in one
+// tree, so the whole group is really executed at the remote CN and the pairing is correct.
+//
+// It is a no-op unless we are multi-CN and ss actually carries a cross-CN shuffle dispatch,
+// so single-CN and non-shuffle inserts are completely unaffected.
+//
+// Operator-chain note: callers attach their own root operator to each bucket first (e.g.
+// the insert / multiUpdate operator). mergeScopesByCN (via newMergeScopeByCN ->
+// doSetRootOperator) appends a connector *on top of* that existing root using AppendChild
+// semantics, so the caller's operator is preserved as the connector's child, not replaced.
+func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
+	if len(c.cnList) <= 1 || len(ss) <= len(c.cnList) {
+		return ss
+	}
+	hasCrossCNDispatch := false
+	for _, s := range ss {
+		if scopeTreeHasCrossCNDispatch(s) {
+			hasCrossCNDispatch = true
+			break
+		}
+	}
+	if !hasCrossCNDispatch {
+		return ss
+	}
+	return c.mergeScopesByCN(ss)
 }
 
 func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
@@ -4788,10 +4850,10 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 
 				probes[i].PreScopes = []*Scope{builds[i]}
 				for _, rr := range probes[i].Proc.Reg.MergeReceivers {
-					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+					rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 				}
 				for _, rr := range builds[i].Proc.Reg.MergeReceivers {
-					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+					rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 				}
 			}
 			shuffleProbes = append(shuffleProbes, probes...)
@@ -4804,7 +4866,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 			buildscope.NodeInfo = shuffleProbes[i].NodeInfo
 			buildscope.Proc = c.proc.NewNoContextChildProc(lenRight)
 			for _, rr := range buildscope.Proc.Reg.MergeReceivers {
-				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+				rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 			}
 			shuffleBuilds = append(shuffleBuilds, buildscope)
 			prescopes := shuffleProbes[i].PreScopes
@@ -5057,98 +5119,6 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	}
 
 	return rel, db, ctx, nil
-}
-
-func shouldScanOnCurrentCN(c *Compile, node *plan.Node, forceSingle bool) bool {
-	if len(c.cnList) == 1 ||
-		node.Stats.ForceOneCN ||
-		forceSingle {
-		return true
-	}
-
-	if !plan2.GetForceScanOnMultiCN() &&
-		node.Stats.BlockNum <= int32(plan2.BlockThresholdForOneCN) {
-		return true
-	}
-
-	return false
-}
-
-func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
-	rel, _, _, err := c.handleDbRelContext(node, false)
-	if err != nil {
-		return nil, err
-	}
-
-	forceSingle := false
-	if len(node.AggList) > 0 {
-		partialResults, _, _ := checkAggOptimize(node)
-		if partialResults != nil {
-			forceSingle = true
-		} else if node.Stats != nil && node.Stats.ForceOneCN {
-			// ForceOneCN is already set by CalcNodeDOP for distinct aggregation
-			// Use it directly instead of checking again
-			forceSingle = true
-		} else {
-			// Fallback: Check if any aggregation function uses distinct flag
-			// This is defensive programming in case CalcNodeDOP didn't set ForceOneCN
-			for _, agg := range node.AggList {
-				if f, ok := agg.Expr.(*plan.Expr_F); ok {
-					if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
-						forceSingle = true
-						break
-					}
-				}
-			}
-		}
-	}
-	//if len(n.OrderBy) > 0 {
-	//	forceSingle = true
-	//}
-
-	if node.NodeType == plan.Node_TABLE_CLONE {
-		forceSingle = true
-	}
-
-	var engNodes engine.Nodes
-	// scan on current CN
-	if shouldScanOnCurrentCN(c, node, forceSingle) {
-		mcpu := node.Stats.Dop
-		if forceSingle {
-			mcpu = 1
-		}
-		engNodes = append(engNodes, engine.Node{
-			Addr:  c.addr,
-			Mcpu:  int(mcpu),
-			CNCNT: 1,
-		})
-		return engNodes, nil
-	}
-
-	// scan on multi CN
-	for i := range c.cnList {
-		mcpu := max(c.cnList[i].Mcpu, 1)
-		if node.Stats.Dop > 0 {
-			mcpu = min(mcpu, int(node.Stats.Dop))
-		}
-		engNode := engine.Node{
-			Id:    c.cnList[i].Id,
-			Addr:  c.cnList[i].Addr,
-			Mcpu:  mcpu,
-			CNCNT: int32(len(c.cnList)),
-			CNIDX: int32(i),
-		}
-		if engNode.Addr != c.addr {
-			uncommittedTombs, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones)
-			if err != nil {
-				return nil, err
-			}
-			engNode.Data = readutil.BuildEmptyRelData()
-			engNode.Data.AttachTombstones(uncommittedTombs)
-		}
-		engNodes = append(engNodes, engNode)
-	}
-	return engNodes, nil
 }
 
 func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
@@ -5510,12 +5480,12 @@ func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {
-		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'; treating as same-CN", addr)
 		return true
 	}
 	parts2 := strings.Split(currentCNAddr, ":")
 	if len(parts2) != 2 {
-		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
+		logutil.Warnf("compileScope received a malformed current-cn address '%s', expected 'ip:port'; treating as same-CN", currentCNAddr)
 		return true
 	}
 	return parts1[0] == parts2[0] && parts1[1] == parts2[1]

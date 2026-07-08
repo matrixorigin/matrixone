@@ -1324,8 +1324,11 @@ func (tbl *txnTable) rangesOnePart(
 
 // Parameters:
 //   - txnOffset: Transaction writes offset used to specify the starting position for reading data.
-//   - fromSnapshot: Boolean indicating if the data is from a snapshot.
-func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
+//   - typ: Transaction write entry type to collect object stats from.
+func (tbl *txnTable) collectUnCommittedObjStats(
+	txnOffset int,
+	typ int,
+) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
 	var unCommittedObjects []objectio.ObjectStats
 	unCommittedObjNames := make(map[objectio.ObjectNameShort]struct{})
 
@@ -1338,23 +1341,35 @@ func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.Objec
 		txnOffset,
 		func(entry Entry) {
 			stats := objectio.ObjectStats{}
-			if entry.typ != INSERT ||
+			if entry.typ != typ ||
 				entry.bat == nil ||
-				len(entry.bat.Attrs) < 2 ||
-				entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+				entry.bat.IsEmpty() {
 				return
 			}
-			if entry.bat.IsEmpty() {
+
+			// Data and tombstone write batches do not have to place object stats
+			// at the same column offset.
+			statsIdx := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats)
+			if statsIdx == -1 {
 				return
 			}
-			for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
-				stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+
+			for i := 0; i < entry.bat.Vecs[statsIdx].Length(); i++ {
+				stats.UnMarshal(entry.bat.Vecs[statsIdx].GetBytesAt(i))
 				unCommittedObjects = append(unCommittedObjects, stats)
 				unCommittedObjNames[*stats.ObjectShortName()] = struct{}{}
 			}
 		})
 
 	return unCommittedObjects, unCommittedObjNames
+}
+
+func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
+	return tbl.collectUnCommittedObjStats(txnOffset, INSERT)
+}
+
+func (tbl *txnTable) collectUnCommittedTombstoneObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
+	return tbl.collectUnCommittedObjStats(txnOffset, DELETE)
 }
 
 // the return defs has no rowid column
@@ -2484,8 +2499,22 @@ func (tbl *txnTable) getPartitionState(
 			return nil, err
 		}
 
-	} else if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
-		return
+	} else {
+		var ok bool
+		ps, ok, err = eng.PushClient().waitCanServeTableSnapshot(
+			ctx,
+			uint64(tbl.accountId),
+			tbl.db.databaseId,
+			tbl.tableId,
+			ps,
+			tbl.db.op.SnapshotTS(),
+		)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return
+		}
 	}
 
 	//Try to create a snapshot partition state for the table through consume the history checkpoints.

@@ -221,6 +221,45 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.NotNil(t, compile.fill, "fill callback should be set")
 }
 
+func TestHandlePipelineMessage_ReleasesCompileOnDecodeError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	mockEngine := mock_frontend.NewMockEngine(ctrl)
+	messageCenter := &message.MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*message.MessageBoard),
+		RwMutex:       &sync.Mutex{},
+	}
+	mockEngine.EXPECT().GetMessageCenter().Return(messageCenter).AnyTimes()
+
+	testTxnID := make([]byte, 16)
+	copy(testTxnID, "decode-error-txn")
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{ID: testTxnID}).AnyTimes()
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:    ctx,
+		connectionCtx: ctx,
+		messageTyp:    pipeline.Method_PipelineMessage,
+		cnInformation: cnInformation{
+			cnAddr:      "test-addr",
+			storeEngine: mockEngine,
+		},
+		procBuildHelper: processHelper{
+			id:          "test-proc-id",
+			accountId:   catalog.System_Account,
+			unixTime:    time.Now().Unix(),
+			txnOperator: txnOperator,
+		},
+		scopeData: []byte{0xff},
+	}
+
+	err := handlePipelineMessage(receiver)
+	require.Error(t, err)
+	require.Empty(t, messageCenter.StmtIDToBoard, "compile cleanup should unregister the remote message board on decode errors")
+}
+
 // TestGenerateProcessHelper_WithSnapshot tests process helper generation from snapshot.
 //
 // Test quality criteria:
@@ -265,4 +304,69 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
+}
+
+// TestCnServerMessageHandlerWaitObservesMessageCtxCancellation verifies that the
+// post-handling wait returns when the message context is cancelled (a killed
+// query), even though the TCP connection context is still open. Before the fix
+// this wait only observed connectionCtx, so a killed query could leave the
+// handler blocked forever waiting for the connection to close (issue #25025).
+func TestCnServerMessageHandlerWaitObservesMessageCtxCancellation(t *testing.T) {
+	messageCtx, cancelMessage := context.WithCancel(context.Background())
+	receiver := &messageReceiverOnServer{
+		connectionCtx: context.Background(), // never closed
+		messageCtx:    messageCtx,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		receiver.waitUntilDisconnectedOrCancelled()
+		close(done)
+	}()
+
+	// It must not return while neither context is done.
+	select {
+	case <-done:
+		t.Fatal("wait returned before connection close or message cancellation")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancelMessage()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wait did not observe messageCtx cancellation")
+	}
+}
+
+// TestCnServerMessageHandlerWaitObservesConnectionClose verifies the original
+// behavior is preserved: the wait still returns when the client connection is
+// closed.
+func TestCnServerMessageHandlerWaitObservesConnectionClose(t *testing.T) {
+	connectionCtx, closeConnection := context.WithCancel(context.Background())
+	receiver := &messageReceiverOnServer{
+		connectionCtx: connectionCtx,
+		messageCtx:    context.Background(), // never cancelled
+	}
+
+	done := make(chan struct{})
+	go func() {
+		receiver.waitUntilDisconnectedOrCancelled()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("wait returned before connection close or message cancellation")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	closeConnection()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wait did not observe connection close")
+	}
 }
