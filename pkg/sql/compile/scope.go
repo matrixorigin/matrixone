@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -801,6 +802,18 @@ type notifyMessageResult struct {
 	err    error
 }
 
+const notifyMessageRetryInterval = 200 * time.Millisecond
+
+var notifyMessageWaitRegistrationTimeout = waitRegistrationTimeout
+
+type notifyMessageSenderFactory func(
+	ctx context.Context,
+	sid string,
+	toAddr string,
+	mp *mpool.MPool,
+	analyzeModule *AnalyzeModule,
+) (*messageSenderOnClient, error)
+
 // clean do final work for a notifyMessageResult.
 func (r *notifyMessageResult) clean(proc *process.Process) {
 	if r.sender != nil {
@@ -814,6 +827,14 @@ func (r *notifyMessageResult) clean(proc *process.Process) {
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
 // and keep receiving the data until the query was done or data is ended.
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
+	s.sendNotifyMessageWithFactory(wg, resultChan, newMessageSenderOnClient)
+}
+
+func (s *Scope) sendNotifyMessageWithFactory(
+	wg *sync.WaitGroup,
+	resultChan chan notifyMessageResult,
+	newSender notifyMessageSenderFactory,
+) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
@@ -837,34 +858,54 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 
 		errSubmit := ants.Submit(
 			func() {
+				deadline := time.NewTimer(notifyMessageWaitRegistrationTimeout)
+				defer deadline.Stop()
 
-				sender, err := newMessageSenderOnClient(
-					s.Proc.Ctx,
-					s.Proc.GetService(),
-					fromAddr,
-					s.Proc.Mp(),
-					nil,
-				)
-				if err != nil {
-					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
-					return
+				for {
+					sender, err := newSender(
+						s.Proc.Ctx,
+						s.Proc.GetService(),
+						fromAddr,
+						s.Proc.Mp(),
+						nil,
+					)
+					if err != nil {
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						return
+					}
+
+					message := cnclient.AcquireMessage()
+					message.SetID(sender.streamSender.ID())
+					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
+					message.NeedNotReply = false
+					message.Uuid = uuid
+
+					if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
+						closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+						return
+					}
+					sender.safeToClose = false
+					sender.alreadyClose = false
+
+					err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
+					if !isRemoteDispatchNotRegisteredYetError(err) {
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+						return
+					}
+					sender.close()
+
+					select {
+					case <-s.Proc.Ctx.Done():
+						closeWithError(s.Proc.Ctx.Err(), s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						return
+					case <-deadline.C:
+						err = moerr.NewInternalErrorf(s.Proc.Ctx,
+							"dispatch process not registered within %s, remote CN may have failed", notifyMessageWaitRegistrationTimeout)
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						return
+					case <-time.After(notifyMessageRetryInterval):
+					}
 				}
-
-				message := cnclient.AcquireMessage()
-				message.SetID(sender.streamSender.ID())
-				message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
-				message.NeedNotReply = false
-				message.Uuid = uuid
-
-				if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
-					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
-					return
-				}
-				sender.safeToClose = false
-				sender.alreadyClose = false
-
-				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
-				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
 
