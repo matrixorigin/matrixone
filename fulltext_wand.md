@@ -596,7 +596,10 @@ is retained only as a schema-change / corruption-recovery fallback).
     **accepted**: tiered merge reclaims the actual doc space, REBUILD clears tombstones when a
     clean slate is wanted, and the residual set is bounded by distinct deleted-and-not-reinserted
     PKs (a slow, never-wrong leak). A global-liveness GC pass to drop tombstones incrementally was
-    considered and deemed not worth the complexity — tiered merge + REBUILD is sufficient.
+    considered and **rejected**: it must load EVERY base sub at once (only a whole-base view can
+    prove a pk absent everywhere) = O(corpus) resident, run routinely — i.e. exactly the OOM the
+    fold + tiered design exists to avoid. REBUILD has the same whole-corpus cost but is a rare,
+    deliberate op, so it's the accepted escape hatch; routine tombstone GC is not worth an OOM risk.
 
 ### Cost model (why this is needed)
 Measured on a live 100k-doc empty-table→CDC run (2026-07-02) and generalized:
