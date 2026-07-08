@@ -275,6 +275,17 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 	}
 }
 
+// cleanBucketState releases per-bucket state before advancing to the next
+// spill bucket. This prevents stale JoinMap / capture state from leaking
+// across bucket boundaries.
+func (ctr *container) cleanBucketState(proc *process.Process) {
+	ctr.cleanCaptured(proc)
+	ctr.cleanHashMap()
+	ctr.batches = nil
+	ctr.batchRowCount = 0
+	ctr.matched = nil
+}
+
 func (ctr *container) cleanHashMap() {
 	ctr.cachedItr = nil
 	if ctr.mp != nil {

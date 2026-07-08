@@ -292,11 +292,12 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 					return ctr.eqCondVecs, nil
 				},
 			); err != nil {
+				engine.Cleanup(proc)
 				return err
 			}
 			ctr.spillEngine = engine
 			ctr.mp = nil
-			return err
+			return nil
 		}
 	}
 

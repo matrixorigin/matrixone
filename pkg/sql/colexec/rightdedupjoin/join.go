@@ -131,6 +131,9 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 			return result, nil
 		case Finalize:
 			if ctr.spillEngine != nil {
+				// Clear previous bucket state before advancing.
+				ctr.cleanHashMap()
+				ctr.matched = nil
 				ok, bktErr := ctr.spillEngine.AdvanceToNextBucket(proc, analyzer,
 					func(jm *message.JoinMap, res spillutil.BucketResult) {
 						if res == spillutil.BucketReady {
@@ -203,7 +206,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 		// Handle spilled build side.
 		if ctr.mp.IsSpilled() {
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
-				BuildKeyExprs:           rightDedupJoin.Conditions[0],
+				BuildKeyExprs:           rightDedupJoin.Conditions[1],
 				SpillThreshold:          rightDedupJoin.SpillThreshold,
 				NeedsProbeForEmptyBuild: true,
 			})
@@ -219,6 +222,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 					return ctr.vecs, nil
 				},
 			); err != nil {
+				engine.Cleanup(proc)
 				return err
 			}
 			ctr.spillEngine = engine

@@ -180,6 +180,8 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if dedupJoin.ctr.lastPos >= len(dedupJoin.ctr.buf) {
 				if ctr.spillEngine != nil {
+					// Clear previous bucket state before advancing.
+					ctr.cleanBucketState(proc)
 					ok, bktErr := ctr.spillEngine.AdvanceToNextBucket(proc, analyzer,
 						func(jm *message.JoinMap, res spillutil.BucketResult) {
 							if res == spillutil.BucketReady {
@@ -196,6 +198,16 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 						})
 					if bktErr != nil {
 						return result, bktErr
+					}
+					if ok && ctr.mp != nil {
+						// BucketReady: init capture buffers for REPLACE spill path.
+						if ctr.batchRowCount > 0 && len(dedupJoin.OldColCapturePlaceholderIdxList) > 0 {
+							if err := ctr.initCaptureBuffers(dedupJoin, proc); err != nil {
+								return result, err
+							}
+						}
+						ctr.state = Probe
+						continue
 					}
 					if ok {
 						ctr.state = Probe
@@ -230,7 +242,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 		if ctr.mp.IsSpilled() {
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
-				BuildKeyExprs:           dedupJoin.Conditions[0],
+				BuildKeyExprs:           dedupJoin.Conditions[1],
 				SpillThreshold:          dedupJoin.SpillThreshold,
 				NeedsProbeForEmptyBuild: true,
 			})
@@ -246,6 +258,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 					return ctr.vecs, nil
 				},
 			); err != nil {
+				engine.Cleanup(proc)
 				return err
 			}
 			ctr.spillEngine = engine
@@ -349,7 +362,10 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				freeCapturedVecs(msg.capturedVecs, proc)
 			}
 		}
-		close(ap.Channel)
+		// Only close the channel on the last spill bucket (or non-spill).
+		if ctr.spillEngine == nil || !ctr.spillEngine.HasMoreBuckets() {
+			close(ap.Channel)
+		}
 	}
 	if ap.OnDuplicateAction != plan.Node_UPDATE || ctr.mp.HashOnUnique() {
 		if ctr.matched.Count() == 0 {
