@@ -1,0 +1,113 @@
+drop database if exists date_trunc_db;
+create database date_trunc_db;
+use date_trunc_db;
+set time_zone = '+00:00';
+select date_trunc('year', cast('2024-05-16 12:34:56.123456' as datetime));
+date_trunc(year, cast(2024-05-16 12:34:56.123456 as datetime))
+2024-01-01 00:00:00
+select date_trunc('quarter', cast('2024-05-16 12:34:56.123456' as datetime));
+date_trunc(quarter, cast(2024-05-16 12:34:56.123456 as datetime))
+2024-04-01 00:00:00
+select date_trunc('month', cast('2024-05-16 12:34:56.123456' as datetime));
+date_trunc(month, cast(2024-05-16 12:34:56.123456 as datetime))
+2024-05-01 00:00:00
+select date_trunc('week', cast('2024-05-19 12:34:56.123456' as datetime));
+date_trunc(week, cast(2024-05-19 12:34:56.123456 as datetime))
+2024-05-13 00:00:00
+select date_trunc('day', cast('2024-05-16 12:34:56.123456' as datetime));
+date_trunc(day, cast(2024-05-16 12:34:56.123456 as datetime))
+2024-05-16 00:00:00
+select date_trunc('hour', cast('2024-05-16 12:34:56.123456' as datetime));
+date_trunc(hour, cast(2024-05-16 12:34:56.123456 as datetime))
+2024-05-16 12:00:00
+select date_trunc('minute', cast('2024-05-16 12:34:56.123456' as datetime));
+date_trunc(minute, cast(2024-05-16 12:34:56.123456 as datetime))
+2024-05-16 12:34:00
+select date_trunc('second', cast('2024-05-16 12:34:56.123456' as datetime));
+date_trunc(second, cast(2024-05-16 12:34:56.123456 as datetime))
+2024-05-16 12:34:56
+select date_trunc('year', cast('2024-05-16 12:34:56.123456' as timestamp)) as ts_year;
+ts_year
+2024-01-01 00:00:00
+select date_trunc('quarter', cast('2024-05-16 12:34:56.123456' as timestamp)) as ts_quarter;
+ts_quarter
+2024-04-01 00:00:00
+select date_trunc('month', cast('2024-05-16 12:34:56.123456' as timestamp)) as ts_month;
+ts_month
+2024-05-01 00:00:00
+select date_trunc('week', cast('2024-05-19 12:34:56.123456' as timestamp)) as ts_week;
+ts_week
+2024-05-13 00:00:00
+select date_trunc('day', cast('2024-05-16 12:34:56.123456' as timestamp)) as ts_day;
+ts_day
+2024-05-16 00:00:00
+select date_trunc('hour', cast('2024-05-16 12:34:56.123456' as timestamp)) as ts_hour;
+ts_hour
+2024-05-16 12:00:00
+select date_trunc('minute', cast('2024-05-16 12:34:56.123456' as timestamp)) as ts_minute;
+ts_minute
+2024-05-16 12:34:00
+select date_trunc('second', cast('2024-05-16 12:34:56.123456' as timestamp)) as ts_second;
+ts_second
+2024-05-16 12:34:56
+select date_trunc('YEAR', cast('2024-05-16 12:34:56.123456' as timestamp)) as ts_upper_year;
+ts_upper_year
+2024-01-01 00:00:00
+select date_trunc('Hour', cast('2024-05-16 12:34:56.123456' as timestamp)) as ts_mixed_hour;
+ts_mixed_hour
+2024-05-16 12:00:00
+select date_trunc('week', cast('2025-01-01 12:34:56.123456' as timestamp)) as ts_week_year_boundary;
+ts_week_year_boundary
+2024-12-30 00:00:00
+select date_trunc('year', cast('2024-05-16' as date)) as d_year;
+d_year
+2024-01-01
+select date_trunc('quarter', cast('2024-05-16' as date)) as d_quarter;
+d_quarter
+2024-04-01
+select date_trunc('month', cast('2024-05-16' as date));
+date_trunc(month, cast(2024-05-16 as date))
+2024-05-01
+select date_trunc('week', cast('2025-01-01' as date)) as d_week_year_boundary;
+d_week_year_boundary
+2024-12-30
+select date_trunc('day', cast('2024-05-16' as date)) as d_day;
+d_day
+2024-05-16
+select date_trunc('hour', cast(null as timestamp)) as ts_null;
+ts_null
+null
+select date_trunc('hour', null) as null_dt;
+null_dt
+null
+select date_trunc(null, cast('2024-05-16 12:34:56.123456' as datetime)) as unit_null_dt;
+unit_null_dt
+null
+select date_trunc('hour', cast('2024-05-16' as date));
+invalid input: unsupported unit 'hour' for date_trunc on DATE type
+select date_trunc('minute', cast('2024-05-16' as date));
+invalid input: unsupported unit 'minute' for date_trunc on DATE type
+select date_trunc('second', cast('2024-05-16' as date));
+invalid input: unsupported unit 'second' for date_trunc on DATE type
+select date_trunc('bogus', cast('2024-05-16 12:34:56' as datetime));
+invalid input: unsupported unit 'bogus' for date_trunc
+select date_trunc('bogus', cast('2024-05-16 12:34:56' as timestamp));
+invalid input: unsupported unit 'bogus' for date_trunc
+select date_trunc('day', '2024-05-16 12:34:56');
+invalid argument function date_trunc, bad value [VARCHAR VARCHAR]
+select date_trunc('day', 1);
+invalid argument function date_trunc, bad value [VARCHAR BIGINT]
+select date_trunc('day');
+invalid argument function date_trunc, bad value [VARCHAR]
+select date_trunc('day', cast('2024-05-16 12:34:56' as datetime), cast('2024-05-16 12:34:56' as datetime));
+invalid argument function date_trunc, bad value [VARCHAR DATETIME DATETIME]
+create table date_trunc_readings(d date, dt datetime, ts timestamp, value int);
+insert into date_trunc_readings values ('2024-05-16', '2024-05-16 12:01:00', '2024-05-16 12:01:00', 1), ('2024-05-16', '2024-05-16 12:45:00', '2024-05-16 12:45:00', 2), ('2024-05-16', '2024-05-16 13:01:00', '2024-05-16 13:01:00', 3);
+select date_trunc('month', d), date_trunc('day', dt), date_trunc('hour', ts) from date_trunc_readings order by value limit 1;
+date_trunc(month, d)    date_trunc(day, dt)    date_trunc(hour, ts)
+2024-05-01    2024-05-16 00:00:00    2024-05-16 12:00:00
+select date_trunc('hour', ts) as bucket, sum(value) as total from date_trunc_readings group by bucket order by bucket;
+bucket    total
+2024-05-16 12:00:00    3
+2024-05-16 13:00:00    3
+drop database date_trunc_db;

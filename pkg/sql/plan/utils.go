@@ -1488,7 +1488,10 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 		defer vec.Free(proc.Mp())
 
-		vec.InplaceSortAndCompact()
+		// Nullable IN-lists must keep their null bitmap aligned with values.
+		if !vec.IsConstNull() && !vec.GetNulls().Any() {
+			vec.InplaceSortAndCompact()
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err
@@ -3264,7 +3267,8 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			if err != nil {
 				return err
 			}
-			if !vec.IsConstNull() {
+			// Nullable folded lists must keep their null bitmap aligned with values.
+			if !vec.IsConstNull() && !vec.GetNulls().Any() {
 				vec.InplaceSortAndCompact()
 			}
 			data, err = vec.MarshalBinary()
