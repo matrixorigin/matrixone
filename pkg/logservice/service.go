@@ -134,7 +134,20 @@ func NewService(
 	if err := store.loadMetadata(); err != nil {
 		return nil, err
 	}
-	if err := store.startReplicas(); err != nil {
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	if shutdownC != nil {
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			select {
+			case <-shutdownC:
+				cancelStart()
+			case <-done:
+			}
+		}()
+	}
+	defer cancelStart()
+	if err := store.startReplicas(startCtx); err != nil {
 		return nil, err
 	}
 	pool := &sync.Pool{}
@@ -362,7 +375,11 @@ func getResponse(req pb.Request) pb.Response {
 
 func (s *Service) handleGetShardInfo(ctx context.Context, req pb.Request) pb.Response {
 	resp := getResponse(req)
-	if result, ok := s.getShardInfo(req.LogRequest.ShardID); !ok {
+	if result, ok := s.getShardInfo(
+		ctx,
+		req.LogRequest.ShardID,
+		req.LogRequest.IncludeExpiredReplicaAddresses,
+	); !ok {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(dragonboat.ErrShardNotFound)
 	} else {
 		resp.ShardInfo = &result

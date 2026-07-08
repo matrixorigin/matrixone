@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -168,7 +169,7 @@ func (s *HnswSearch[T]) Destroy() {
 // load metadata from database
 func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*HnswModel[T], error) {
 
-	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY timestamp ASC", dbname, metatbl)
+	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return nil, err
@@ -243,6 +244,30 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 }
 
 // check config and update some parameters such as ef_search
+func (s *HnswSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	keys, dists, err := s.Search(proc, query, rt)
+	if err != nil {
+		return err
+	}
+	if keys == nil {
+		return nil
+	}
+	switch ks := keys.(type) {
+	case []int64:
+		copy(outKeys, ks)
+	case []any:
+		for i, k := range ks {
+			outKeys[i] = k.(int64)
+		}
+	default:
+		return moerr.NewInternalErrorNoCtx("HnswSearch: unknown keys type")
+	}
+	for i, d := range dists {
+		outDists[i] = float32(d)
+	}
+	return nil
+}
+
 func (s *HnswSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }

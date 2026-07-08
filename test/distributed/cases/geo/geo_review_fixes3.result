@@ -1,0 +1,28 @@
+drop database if exists geo_review3;
+create database geo_review3;
+use geo_review3;
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 0) as area_planar;
+area_planar
+1.0
+select st_length(st_geomfromtext('LINESTRING(0 0,3 4)'), 0) as len_planar;
+len_planar
+5.0
+select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(3 4)'), 0) as dist_planar;
+dist_planar
+5.0
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 4326) > 0 as area_geodetic_ok;
+area_geodetic_ok
+1
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 3857);
+invalid input: unsupported SRID 3857 for spatial computation; only 0 and 4326 are supported
+select st_length(st_geomfromtext('LINESTRING(0 0,3 4)'), 3857);
+invalid input: unsupported SRID 3857 for spatial computation; only 0 and 4326 are supported
+select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(3 4)'), 3857);
+invalid input: unsupported SRID 3857 for spatial computation; only 0 and 4326 are supported
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))', 3857));
+invalid input: unsupported SRID 3857 for spatial computation; only 0 and 4326 are supported
+select st_length(st_geomfromtext('LINESTRING(0 0,3 4)', 3857));
+invalid input: unsupported SRID 3857 for spatial computation; only 0 and 4326 are supported
+select st_distance(st_geomfromtext('POINT(0 0)', 3857), st_geomfromtext('POINT(3 4)', 3857));
+invalid input: unsupported SRID 3857 for spatial computation; only 0 and 4326 are supported
+drop database geo_review3;

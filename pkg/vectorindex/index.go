@@ -155,6 +155,11 @@ func (h *SearchResultSafeHeap) Pop() SearchResultIf {
 	return x
 }
 
+// HeapKeyType is the constraint for keys stored in FastMaxHeap.
+type HeapKeyType interface {
+	int64 | uint32 | int32
+}
+
 // FastMaxHeap is a highly optimized, generic bounded max-heap designed specifically for
 // vector search Top-K operations.
 //
@@ -168,8 +173,8 @@ func (h *SearchResultSafeHeap) Pop() SearchResultIf {
 //     allocations inside tight loops.
 //  4. Bounded Logic: Natively handles "Limit/K" bounded sizing directly during the push step,
 //     reducing structural overhead.
-type FastMaxHeap[T types.RealNumbers] struct {
-	keys      []int64
+type FastMaxHeap[T types.RealNumbers, K HeapKeyType] struct {
+	keys      []K
 	distances []T
 	size      int
 	limit     int
@@ -177,8 +182,8 @@ type FastMaxHeap[T types.RealNumbers] struct {
 
 // NewFastMaxHeap initializes the FastMaxHeap using caller-provided buffer slices
 // to guarantee zero-allocation operations during tight query loops.
-func NewFastMaxHeap[T types.RealNumbers](limit int, keysBuf []int64, distsBuf []T) *FastMaxHeap[T] {
-	return &FastMaxHeap[T]{
+func NewFastMaxHeap[T types.RealNumbers, K HeapKeyType](limit int, keysBuf []K, distsBuf []T) *FastMaxHeap[T, K] {
+	return &FastMaxHeap[T, K]{
 		keys:      keysBuf,
 		distances: distsBuf,
 		size:      0,
@@ -186,7 +191,7 @@ func NewFastMaxHeap[T types.RealNumbers](limit int, keysBuf []int64, distsBuf []
 	}
 }
 
-func (h *FastMaxHeap[T]) siftUp(j int) {
+func (h *FastMaxHeap[T, K]) siftUp(j int) {
 	for {
 		i := (j - 1) / 2 // parent
 		if i == j || h.distances[j] <= h.distances[i] {
@@ -198,7 +203,7 @@ func (h *FastMaxHeap[T]) siftUp(j int) {
 	}
 }
 
-func (h *FastMaxHeap[T]) siftDown(i0, n int) {
+func (h *FastMaxHeap[T, K]) siftDown(i0, n int) {
 	i := i0
 	for {
 		j1 := 2*i + 1
@@ -220,7 +225,7 @@ func (h *FastMaxHeap[T]) siftDown(i0, n int) {
 
 // Push inserts a new element into the max-heap. If the heap is at its limit,
 // it replaces the maximum (root) element if the new distance is smaller.
-func (h *FastMaxHeap[T]) Push(key int64, dist T) {
+func (h *FastMaxHeap[T, K]) Push(key K, dist T) {
 	if h.size < h.limit {
 		h.distances[h.size] = dist
 		h.keys[h.size] = key
@@ -234,9 +239,10 @@ func (h *FastMaxHeap[T]) Push(key int64, dist T) {
 }
 
 // Pop extracts the element with the largest distance from the max-heap.
-func (h *FastMaxHeap[T]) Pop() (int64, T, bool) {
+func (h *FastMaxHeap[T, K]) Pop() (K, T, bool) {
 	if h.size == 0 {
-		return -1, 0, false
+		var zero K
+		return zero, 0, false
 	}
 	h.size--
 	key := h.keys[0]
@@ -250,25 +256,25 @@ func (h *FastMaxHeap[T]) Pop() (int64, T, bool) {
 }
 
 // Thread-safe wrapper for FastMaxHeap
-type FastMaxHeapSafe[T types.RealNumbers] struct {
+type FastMaxHeapSafe[T types.RealNumbers, K HeapKeyType] struct {
 	mutex sync.Mutex
-	heap  *FastMaxHeap[T]
+	heap  *FastMaxHeap[T, K]
 }
 
 // NewFastMaxHeapSafe creates a thread-safe FastMaxHeap
-func NewFastMaxHeapSafe[T types.RealNumbers](limit int, keysBuf []int64, distsBuf []T) *FastMaxHeapSafe[T] {
-	return &FastMaxHeapSafe[T]{
-		heap: NewFastMaxHeap(limit, keysBuf, distsBuf),
+func NewFastMaxHeapSafe[T types.RealNumbers, K HeapKeyType](limit int, keysBuf []K, distsBuf []T) *FastMaxHeapSafe[T, K] {
+	return &FastMaxHeapSafe[T, K]{
+		heap: NewFastMaxHeap[T, K](limit, keysBuf, distsBuf),
 	}
 }
 
-func (s *FastMaxHeapSafe[T]) Push(key int64, dist T) {
+func (s *FastMaxHeapSafe[T, K]) Push(key K, dist T) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.heap.Push(key, dist)
 }
 
-func (s *FastMaxHeapSafe[T]) Pop() (int64, T, bool) {
+func (s *FastMaxHeapSafe[T, K]) Pop() (K, T, bool) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	return s.heap.Pop()

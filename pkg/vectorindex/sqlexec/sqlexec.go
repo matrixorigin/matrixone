@@ -76,10 +76,10 @@ type SqlProcess struct {
 
 	// Optional RuntimeFilterSpec
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-	// Optional BloomFilter bytes for ivf entries scan.
-	IvfBloomFilter []byte
-	// Optional BloomFilter bytes for fulltext index scan.
-	FulltextBloomFilter []byte
+	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the ivf entries scan.
+	IvfMembershipFilter []byte
+	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the fulltext index scan.
+	FulltextMembershipFilter []byte
 	// Optional exact primary-key filter list (SQL literals, comma-separated).
 	// When set, ivf_search uses it to build "pk IN (...)" and skip centroid filtering.
 	ExactPkFilter string
@@ -131,12 +131,12 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 
 		//-------------------------------------------------------
 		topContext := proc.GetTopContext()
-		// Attach optional BloomFilter to context for internal executor.
-		if len(sqlproc.IvfBloomFilter) > 0 {
-			topContext = context.WithValue(topContext, defines.IvfBloomFilter{}, sqlproc.IvfBloomFilter)
+		// Attach optional membership filter payload to context for internal executor.
+		if len(sqlproc.IvfMembershipFilter) > 0 {
+			topContext = context.WithValue(topContext, defines.IvfMembershipFilter{}, sqlproc.IvfMembershipFilter)
 		}
-		if len(sqlproc.FulltextBloomFilter) > 0 {
-			topContext = context.WithValue(topContext, defines.FulltextBloomFilter{}, sqlproc.FulltextBloomFilter)
+		if len(sqlproc.FulltextMembershipFilter) > 0 {
+			topContext = context.WithValue(topContext, defines.FulltextMembershipFilter{}, sqlproc.FulltextMembershipFilter)
 		}
 		// Attach optional DistRange to context for internal executor.
 		if sqlproc.IndexReaderParam != nil {
@@ -158,6 +158,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+			WithFrontend(proc.Base.IsFrontend).
 			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 		return exec.Exec(topContext, sql, opts)
 	} else {
@@ -171,6 +172,8 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 		accountId := sqlctx.AccountId
 
 		exec := v.(executor.SQLExecutor)
+		// SqlCtx is the background entry point (no frontend session) —
+		// inherits the default IsFrontend=false (i.e. background).
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -201,12 +204,12 @@ func RunStreamingSql(
 		}
 
 		//-------------------------------------------------------
-		// Attach optional BloomFilter to context for internal executor.
-		if len(sqlproc.IvfBloomFilter) > 0 {
-			ctx = context.WithValue(ctx, defines.IvfBloomFilter{}, sqlproc.IvfBloomFilter)
+		// Attach optional membership filter payload to context for internal executor.
+		if len(sqlproc.IvfMembershipFilter) > 0 {
+			ctx = context.WithValue(ctx, defines.IvfMembershipFilter{}, sqlproc.IvfMembershipFilter)
 		}
-		if len(sqlproc.FulltextBloomFilter) > 0 {
-			ctx = context.WithValue(ctx, defines.FulltextBloomFilter{}, sqlproc.FulltextBloomFilter)
+		if len(sqlproc.FulltextMembershipFilter) > 0 {
+			ctx = context.WithValue(ctx, defines.FulltextMembershipFilter{}, sqlproc.FulltextMembershipFilter)
 		}
 		accountId, err := defines.GetAccountId(proc.Ctx)
 		if err != nil {
@@ -224,6 +227,7 @@ func RunStreamingSql(
 			WithAccountID(accountId).
 			WithStreaming(stream_chan, error_chan).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+			WithFrontend(proc.Base.IsFrontend).
 			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 		return exec.Exec(ctx, sql, opts)
 	} else {
@@ -238,6 +242,8 @@ func RunStreamingSql(
 		accountId := sqlctx.AccountId
 
 		exec := v.(executor.SQLExecutor)
+		// SqlCtx is the background entry point (no frontend session) —
+		// inherits the default IsFrontend=false (i.e. background).
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
@@ -280,7 +286,8 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			WithDatabase(proc.GetSessionInfo().Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
-			WithResolveVariableFunc(proc.GetResolveVariableFunc())
+			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+			WithFrontend(proc.Base.IsFrontend)
 		return exec.ExecTxn(topContext, execFunc, opts)
 	} else {
 
@@ -293,6 +300,8 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 		accountId := sqlctx.AccountId
 
 		exec := v.(executor.SQLExecutor)
+		// SqlCtx is the background entry point (no frontend session) —
+		// inherits the default IsFrontend=false (i.e. background).
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode

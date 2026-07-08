@@ -30,6 +30,9 @@ func TestFillDefault(t *testing.T) {
 	require.NotEqual(t, 0, c.RebalanceTolerance)
 	require.Less(t, c.RebalanceTolerance, float64(1))
 	require.NotEqual(t, 0, c.Cluster.RefreshInterval.Duration)
+	require.Equal(t, defaultCNHealthCheckBaseCooldown, c.CNHealthCheckBaseCooldown.Duration)
+	require.Equal(t, defaultCNHealthCheckMaxCooldown, c.CNHealthCheckMaxCooldown.Duration)
+	require.Equal(t, defaultCNHealthFailThreshold, c.CNHealthCheckFailThreshold)
 }
 
 func TestValidate(t *testing.T) {

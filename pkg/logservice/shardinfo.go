@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -33,6 +34,12 @@ type ShardInfo struct {
 	ReplicaID uint64
 	// Replicas is a map of replica ID to their service addresses
 	Replicas map[uint64]string
+}
+
+const getShardInfoCheckerStateTimeout = 100 * time.Millisecond
+
+var getCheckerStateForShardInfo = func(ctx context.Context, l *store) (*pb.CheckerState, error) {
+	return l.getCheckerStateWithContext(ctx)
 }
 
 // GetShardInfo is to be invoked when querying ShardInfo on a Log Service node.
@@ -51,7 +58,7 @@ func GetShardInfo(
 	address string,
 	shardID uint64,
 ) (ShardInfo, bool, error) {
-	si, ok, err := queryShardInfoRawFn(sid, address, shardID)
+	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID, false)
 	if err != nil || !ok {
 		return ShardInfo{}, false, err
 	}
@@ -83,11 +90,12 @@ var queryShardInfoRawFn = queryShardInfoRaw
 // zombie self-check needs, because the scenario that produces zombies is
 // exactly the one where HAKeeper has no leader.
 func getShardMembership(
+	ctx context.Context,
 	sid string,
 	address string,
 	shardID uint64,
 ) (map[uint64]string, bool, error) {
-	si, ok, err := queryShardInfoRawFn(sid, address, shardID)
+	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID, true)
 	if err != nil || !ok {
 		return nil, false, err
 	}
@@ -102,15 +110,17 @@ func getShardMembership(
 // without applying the leader-known filter. ok=false means the queried peer
 // has no record of the shard in its gossip registry.
 func queryShardInfoRaw(
+	ctx context.Context,
 	sid string,
 	address string,
 	shardID uint64,
+	includeExpiredReplicaAddresses bool,
 ) (pb.ShardInfoQueryResult, bool, error) {
 	respPool := &sync.Pool{}
 	respPool.New = func() interface{} {
 		return &RPCResponse{pool: respPool}
 	}
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.CauseGetShardInfo)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second, moerr.CauseGetShardInfo)
 	defer cancel()
 	cc, err := getRPCClient(
 		ctx,
@@ -135,7 +145,8 @@ func queryShardInfoRaw(
 	req := pb.Request{
 		Method: pb.GET_SHARD_INFO,
 		LogRequest: pb.LogRequest{
-			ShardID: shardID,
+			ShardID:                        shardID,
+			IncludeExpiredReplicaAddresses: includeExpiredReplicaAddresses,
 		},
 	}
 	rpcReq := &RPCRequest{
@@ -167,7 +178,11 @@ func queryShardInfoRaw(
 	return si, true, nil
 }
 
-func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
+func (s *Service) getShardInfo(
+	ctx context.Context,
+	shardID uint64,
+	includeExpiredReplicaAddresses bool,
+) (pb.ShardInfoQueryResult, bool) {
 	r, ok := s.store.nh.GetNodeHostRegistry()
 	if !ok {
 		panic(moerr.NewInvalidStateNoCtx("gossip registry not enabled"))
@@ -183,12 +198,18 @@ func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
 		Term:     shard.Term,
 		Replicas: make(map[uint64]pb.ReplicaInfo),
 	}
+	expiredState := s.getExpiredLogStoreState(ctx, includeExpiredReplicaAddresses)
 	for nodeID, uuid := range shard.Nodes {
 		replica := pb.ReplicaInfo{UUID: uuid}
 		if data, ok := r.GetMeta(uuid); ok {
 			var md storeMeta
 			md.unmarshal(data)
-			replica.ServiceAddress = md.serviceAddress
+			replica.ServiceAddress = s.filterExpiredReplicaAddress(
+				md.serviceAddress,
+				uuid,
+				includeExpiredReplicaAddresses,
+				expiredState,
+			)
 		}
 		// Record every membership entry from the authoritative shard view,
 		// even when gossip has not yet carried that node's metadata. The
@@ -201,4 +222,48 @@ func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
 		result.Replicas[nodeID] = replica
 	}
 	return result, true
+}
+
+func (s *Service) filterExpiredReplicaAddress(
+	address string,
+	uuid string,
+	includeExpiredReplicaAddresses bool,
+	state *pb.CheckerState,
+) string {
+	if includeExpiredReplicaAddresses ||
+		!isExpiredLogStoreInState(s.cfg.GetHAKeeperConfig(), state, uuid) {
+		return address
+	}
+	return ""
+}
+
+func (s *Service) getExpiredLogStoreState(
+	ctx context.Context,
+	includeExpiredReplicaAddresses bool,
+) *pb.CheckerState {
+	if includeExpiredReplicaAddresses {
+		return nil
+	}
+	ctx, cancel := context.WithTimeoutCause(
+		ctx,
+		getShardInfoCheckerStateTimeout,
+		moerr.CauseGetCheckerState,
+	)
+	defer cancel()
+	state, err := getCheckerStateForShardInfo(ctx, s.store)
+	if err != nil {
+		return nil
+	}
+	return state
+}
+
+func isExpiredLogStoreInState(cfg hakeeper.Config, state *pb.CheckerState, uuid string) bool {
+	if state == nil || state.Tick == 0 {
+		return false
+	}
+	storeInfo, ok := state.LogState.Stores[uuid]
+	if !ok {
+		return false
+	}
+	return cfg.LogStoreExpired(storeInfo.Tick, state.Tick)
 }

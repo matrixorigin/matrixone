@@ -223,6 +223,13 @@ func getAccessInfo(ctx context.Context) (uint32, uint32, uint32, error) {
 	return accountId, userId, roleId, nil
 }
 
+func getDDLOwnerRoleId(ctx context.Context) uint32 {
+	if ownerRoleId, ok := defines.GetDDLOwnerRoleId(ctx); ok {
+		return ownerRoleId
+	}
+	return defines.GetRoleId(ctx)
+}
+
 func genDatabaseKey(id uint32, name string) databaseKey {
 	return databaseKey{
 		name:      name,

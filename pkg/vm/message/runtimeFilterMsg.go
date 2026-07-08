@@ -22,13 +22,13 @@ import (
 )
 
 const (
-	RuntimeFilter_IN          = 0
-	RuntimeFilter_BITMAP      = 1
-	RuntimeFilter_MIN_MAX     = 2
-	RuntimeFilter_BINARY_FUSE = 3
-	RuntimeFilter_BLOOMFILTER = 4
-	RuntimeFilter_PASS        = 100
-	RuntimeFilter_DROP        = 101
+	RuntimeFilter_IN             = 0
+	RuntimeFilter_BITMAP         = 1
+	RuntimeFilter_MIN_MAX        = 2
+	RuntimeFilter_BINARY_FUSE    = 3
+	RuntimeFilter_UNIQUEJOINKEYS = 4
+	RuntimeFilter_PASS           = 100
+	RuntimeFilter_DROP           = 101
 )
 
 var _ Message = new(RuntimeFilterMessage)

@@ -1001,7 +1001,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_date, types.T_timestamp,
-		types.T_decimal128, types.T_varchar, types.T_uuid,
+		types.T_decimal128, types.T_decimal256, types.T_varchar, types.T_uuid,
 		types.T_char, types.T_json, types.T_binary,
 	}
 
@@ -1252,6 +1252,20 @@ func TestConstructBlockPKFilter(t *testing.T) {
 					llb = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(lb), B64_127: uint64(lb)})
 					uub = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(ub), B64_127: uint64(ub)})
 
+				case types.T_decimal256:
+					if needVec(op) {
+						for x := lb; x <= ub; x++ {
+							xx := types.Decimal256{B0_63: uint64(x)}
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeDecimal256(&xx), false, mp)
+							} else {
+								vector.AppendFixed(vec, xx, false, mp)
+							}
+						}
+					}
+					llb = types.EncodeDecimal256(&types.Decimal256{B0_63: uint64(lb), B64_127: uint64(lb)})
+					uub = types.EncodeDecimal256(&types.Decimal256{B0_63: uint64(ub), B64_127: uint64(ub)})
+
 				case types.T_uuid:
 					if needVec(op) {
 						for x := lb; x <= ub; x++ {
@@ -1426,6 +1440,19 @@ func TestConstructBlockPKFilter(t *testing.T) {
 
 						if opOnBinary(op) {
 							vector.AppendBytes(inputVec, types.EncodeDecimal128(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+
+					inputVec.InplaceSort()
+
+				case types.T_decimal256:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := types.Decimal256{B0_63: uint64(x)}
+
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeDecimal256(&xx), false, mp)
 						} else {
 							vector.AppendFixed(inputVec, xx, false, mp)
 						}
@@ -1732,7 +1759,7 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 
 		types.T_varchar, types.T_binary, types.T_json,
 
-		types.T_decimal128,
+		types.T_decimal128, types.T_decimal256,
 	}
 
 	checkFunc := func(mm map[float64]struct{}, ty types.T, retV *vector.Vector, msg string) {
@@ -1812,6 +1839,12 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 
 		case types.T_decimal128:
 			cols := vector.MustFixedColWithTypeCheck[types.Decimal128](retV)
+			for i := range cols {
+				_, ok := mm[float64(cols[i].B0_63)]
+				require.True(t, ok, msg)
+			}
+		case types.T_decimal256:
+			cols := vector.MustFixedColWithTypeCheck[types.Decimal256](retV)
 			for i := range cols {
 				_, ok := mm[float64(cols[i].B0_63)]
 				require.True(t, ok, msg)
@@ -1956,6 +1989,15 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 
 				for i := range lvals {
 					vector.AppendFixed(lvec, types.Decimal128{B0_63: uint64(lvals[i])}, false, mp)
+				}
+
+			case types.T_decimal256:
+				for i := range rvals {
+					vector.AppendFixed(rvec, types.Decimal256{B0_63: uint64(rvals[i])}, false, mp)
+				}
+
+				for i := range lvals {
+					vector.AppendFixed(lvec, types.Decimal256{B0_63: uint64(lvals[i])}, false, mp)
 				}
 
 			case types.T_varchar, types.T_json, types.T_binary:

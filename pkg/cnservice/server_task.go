@@ -209,6 +209,10 @@ func (s *service) startTaskRunner() {
 		return
 	}
 
+	ieFactory := func() ie.InternalExecutor {
+		return frontend.NewInternalExecutor(s.cfg.UUID)
+	}
+
 	s.task.runner = taskservice.NewTaskRunner(s.cfg.UUID,
 		ts,
 		s.canClaimDaemonTask,
@@ -229,6 +233,9 @@ func (s *service) startTaskRunner() {
 				return client
 			}),
 		taskservice.WithCnUUID(s.cfg.UUID),
+		taskservice.WithRunnerPauseTaskCompleted(
+			frontend.CDCPauseTaskCompleteHook(ieFactory),
+		),
 	)
 
 	s.registerExecutorsLocked()

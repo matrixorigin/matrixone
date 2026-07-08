@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/big"
 	"runtime"
 	"strconv"
 	"strings"
@@ -79,13 +80,25 @@ func handleBranchPick(
 	ses *Session,
 	stmt *tree.DataBranchPick,
 ) (err error) {
-	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
-		return moerr.NewInternalError(execCtx.reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+	if err = validateDataBranchPickOptions(execCtx.reqCtx, ses, stmt); err != nil {
+		return err
 	}
 	if stmt.ConflictOpt == nil {
 		stmt.ConflictOpt = &tree.ConflictOpt{
 			Opt: tree.CONFLICT_FAIL,
 		}
+	}
+
+	return diffMergeAgency(ses, execCtx, stmt)
+}
+
+func validateDataBranchPickOptions(
+	ctx context.Context,
+	ses *Session,
+	stmt *tree.DataBranchPick,
+) error {
+	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+		return moerr.NewInternalError(ctx, "DATA BRANCH PICK is not supported in explicit transactions")
 	}
 
 	hasBetween := stmt.BetweenFrom != "" && stmt.BetweenTo != ""
@@ -101,78 +114,7 @@ func handleBranchPick(
 		return moerr.NewInvalidInputNoCtx(
 			"destination snapshot option is not supported for DATA BRANCH PICK")
 	}
-	if err = authenticatePickTablePrivileges(execCtx.reqCtx, ses, stmt); err != nil {
-		return err
-	}
 
-	return diffMergeAgency(ses, execCtx, stmt)
-}
-
-func authenticatePickTablePrivileges(ctx context.Context, ses *Session, stmt *tree.DataBranchPick) error {
-	if stmt == nil || getPu(ses.GetService()).SV.SkipCheckPrivilege || ses.skipAuthForSpecialUser() || ses.GetTenantInfo() == nil {
-		return nil
-	}
-
-	srcDB, srcTbl, err := resolvePickPrivilegeTableName(ses, stmt.SrcTable)
-	if err != nil {
-		return err
-	}
-	dstDB, dstTbl, err := resolvePickPrivilegeTableName(ses, stmt.DstTable)
-	if err != nil {
-		return err
-	}
-
-	if err = requirePickTablePrivilege(ctx, ses, srcDB, srcTbl, clusterTableSelect); err != nil {
-		return err
-	}
-	return requirePickTablePrivilege(ctx, ses, dstDB, dstTbl, clusterTableModify)
-}
-
-func resolvePickPrivilegeTableName(ses *Session, name tree.TableName) (string, string, error) {
-	dbName := name.SchemaName.String()
-	if dbName == "" {
-		dbName = ses.GetDatabaseName()
-	}
-	tableName := name.ObjectName.String()
-	if dbName == "" || tableName == "" {
-		return "", "", moerr.NewInternalErrorNoCtx("the base or target database cannot be empty")
-	}
-	return dbName, tableName, nil
-}
-
-func requirePickTablePrivilege(
-	ctx context.Context,
-	ses *Session,
-	dbName string,
-	tableName string,
-	clusterOp clusterTableOperationType,
-) error {
-	buildEntry := func(typ PrivilegeType) privilegeEntry {
-		entry := privilegeEntriesMap[typ]
-		entry.databaseName = dbName
-		entry.tableName = tableName
-		return entry
-	}
-
-	priv := &privilege{
-		kind:    privilegeKindGeneral,
-		objType: objectTypeTable,
-		entries: []privilegeEntry{
-			buildEntry(PrivilegeTypeTableAll),
-			buildEntry(PrivilegeTypeTableOwnership),
-		},
-		writeDatabaseAndTableDirectly: true,
-		isClusterTable:                isClusterTable(dbName, tableName),
-		clusterTableOperation:         clusterOp,
-	}
-
-	ok, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
-	}
 	return nil
 }
 
@@ -228,23 +170,15 @@ func pickMergeDiffs(
 		skipSet = make(map[string]struct{})
 	}
 
-	appender := sqlValuesAppender{
-		ctx:             ctx,
-		ses:             ses,
-		bh:              bh,
-		tblStuff:        tblStuff,
-		deleteByFullRow: tblStuff.def.pkKind == fakeKind,
-		pkInfo:          newPKBatchInfo(ctx, ses, tblStuff),
-		deleteCnt:       &deleteCnt,
-		deleteBuf:       deleteFromVals,
-		insertCnt:       &insertCnt,
-		insertBuf:       insertIntoVals,
-	}
-	if err = initPKTables(ctx, ses, bh, appender.pkInfo, appender.writeFile); err != nil {
+	appender := newSQLValuesAppender(
+		ctx, ses, bh, tblStuff, dataBranchApplyModeOnlinePKOnly,
+		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
+	)
+	if err = initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
 		return err
 	}
 	defer func() {
-		if err2 := dropPKTables(ctx, ses, bh, appender.pkInfo, appender.writeFile); err2 != nil && err == nil {
+		if err2 := dropApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err2 != nil && err == nil {
 			err = err2
 		}
 	}()
@@ -365,63 +299,15 @@ func appendPickedBatchRows(
 			}
 		}
 
-		// Row is in KEYS set and passed conflict checks — extract all visible column values.
-		for _, colIdx := range tblStuff.def.visibleIdxes {
-			vec := wrapped.batch.Vecs[colIdx]
-			if rowIdx >= vec.Length() {
-				return moerr.NewInternalErrorNoCtxf(
-					"data branch pick batch shape mismatch: row=%d batchRows=%d col=%d vecLen=%d",
-					rowIdx, wrapped.batch.RowCount(), colIdx, vec.Length(),
-				)
-			}
-			if vec.GetNulls().Contains(uint64(rowIdx)) {
-				row[colIdx] = nil
-				continue
-			}
-
-			switch vec.GetType().Oid {
-			case types.T_datetime, types.T_timestamp, types.T_decimal64,
-				types.T_decimal128, types.T_time:
-				row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
-			default:
-				if err = extractRowFromVector(
-					ctx, ses, vec, colIdx, row, rowIdx, false,
-				); err != nil {
-					return
-				}
-			}
+		if err = extractDataBranchApplyRow(
+			ctx, ses, tblStuff, wrapped.batch, rowIdx, appender.extraColIdxesForRow(wrapped.kind), row,
+			"data branch pick batch shape mismatch",
+		); err != nil {
+			return
 		}
-
-		tmpValsBuffer.Reset()
-		if wrapped.kind == diffDelete {
-			if appender.deleteByFullRow {
-				if err = writeDeleteRowSQLFull(ctx, ses, tblStuff, row, tmpValsBuffer); err != nil {
-					return
-				}
-			} else if appender.pkInfo != nil {
-				if err = writeDeleteRowValuesAsTuple(ses, tblStuff, row, tmpValsBuffer); err != nil {
-					return
-				}
-			} else {
-				if err = writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
-					return
-				}
-			}
-		} else {
-			pickInsertIdxes := tblStuff.def.visibleIdxes
-			if len(tblStuff.def.tarOnlyIdxes) > 0 {
-				pickInsertIdxes = tblStuff.def.commonIdxes
-			}
-			if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer, pickInsertIdxes); err != nil {
-				return
-			}
-		}
-
-		if tmpValsBuffer.Len() == 0 {
-			continue
-		}
-
-		if err = appender.appendRow(wrapped.kind, tmpValsBuffer.Bytes()); err != nil {
+		if err = appendDataBranchApplyRowAsSQLValues(
+			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
+		); err != nil {
 			return
 		}
 	}
@@ -460,8 +346,8 @@ func extractPKAsString(
 // extractPKVal extracts the Go value from a vector at the given row index.
 func extractPKVal(vec *vector.Vector, rowIdx int) any {
 	switch vec.GetType().Oid {
-	case types.T_datetime, types.T_timestamp, types.T_decimal64,
-		types.T_decimal128, types.T_time:
+	case types.T_datetime, types.T_timestamp, types.T_year, types.T_decimal64,
+		types.T_decimal128, types.T_decimal256, types.T_time:
 		return types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
 	case types.T_bool:
 		return vector.GetFixedAtNoTypeCheck[bool](vec, rowIdx)
@@ -728,6 +614,10 @@ func formatPickKeyVectorValueAsString(ses *Session, vec *vector.Vector, rowIdx i
 		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIdx).Format(vec.GetType().Scale), nil
 	case types.T_decimal128:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIdx).Format(vec.GetType().Scale), nil
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, rowIdx).Format(vec.GetType().Scale), nil
+	case types.T_year:
+		return vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIdx).String(), nil
 	case types.T_date:
 		return vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx).String(), nil
 	case types.T_datetime:
@@ -820,7 +710,7 @@ func materializeSubqueryUnified(
 	// Compose the subquery SQL: wrap the user's SELECT with ORDER BY for
 	// streaming sorted results.  For composite PKs we ORDER BY all component
 	// columns so that serial()-encoded keys arrive in ascending byte order.
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
 	stmt.Keys.Select.Format(fmtCtx)
 	subquerySQL := fmtCtx.String()
 
@@ -1250,9 +1140,49 @@ func numericGap(a, b []byte, pkType types.Type) float64 {
 		va := types.Decimal128ToFloat64(types.DecodeDecimal128(a), pkType.Scale)
 		vb := types.Decimal128ToFloat64(types.DecodeDecimal128(b), pkType.Scale)
 		return math.Abs(vb - va)
+	case types.T_decimal256:
+		return decimal256AbsGap(
+			types.DecodeDecimal256(a),
+			types.DecodeDecimal256(b),
+			pkType.Scale,
+		)
 	default:
 		return 0
 	}
+}
+
+func decimal256AbsGap(a, b types.Decimal256, scale int32) float64 {
+	ai := decimal256ToBigInt(a)
+	bi := decimal256ToBigInt(b)
+	diff := new(big.Int).Sub(bi, ai)
+	diff.Abs(diff)
+
+	f := new(big.Float).SetPrec(256).SetInt(diff)
+	if scale > 0 {
+		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
+		f.Quo(f, new(big.Float).SetPrec(256).SetInt(divisor))
+	}
+	v, _ := f.Float64()
+	return v
+}
+
+func decimal256ToBigInt(x types.Decimal256) *big.Int {
+	negative := x.Sign()
+	if negative {
+		x = x.Minus()
+	}
+
+	n := new(big.Int).SetUint64(x.B192_255)
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B128_191))
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B64_127))
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B0_63))
+	if negative {
+		n.Neg(n)
+	}
+	return n
 }
 
 func isNumericType(oid types.T) bool {
@@ -1260,7 +1190,7 @@ func isNumericType(oid types.T) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128:
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false
@@ -1384,6 +1314,12 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, t
 			return err
 		}
 		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_decimal256:
+		v, err := types.ParseDecimal256(s, pkType.Width, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_date:
 		v, err := types.ParseDateCast(s)
 		if err != nil {
@@ -1404,6 +1340,12 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, t
 		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_time:
 		v, err := types.ParseTime(s, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_year:
+		v, err := types.ParseMoYear(s)
 		if err != nil {
 			return err
 		}
@@ -1454,6 +1396,12 @@ func appendStrValToVec(vec *vector.Vector, s string, pkType types.Type, tz *time
 		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_time:
 		v, err := types.ParseTime(s, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_year:
+		v, err := types.ParseMoYear(s)
 		if err != nil {
 			return err
 		}

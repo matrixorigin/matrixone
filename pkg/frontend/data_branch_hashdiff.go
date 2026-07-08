@@ -144,10 +144,19 @@ func handleDelsOnLCA(
 			}
 		}
 
+		selectCols := make([]string, len(tblStuff.def.colNames)+1)
+		selectCols[0] = "pks.__idx_"
+		for i, colName := range tblStuff.def.colNames {
+			selectCols[i+1] = fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
+		}
+
 		sqlBuf.Reset()
 		sqlBuf.WriteString(fmt.Sprintf(
-			"select pks.__idx_, lca.* from %s.%s%s as lca ",
-			lcaTblDef.DbName, lcaTblDef.Name, mots),
+			"select %s from %s.%s%s as lca ",
+			strings.Join(selectCols, ", "),
+			quoteIdentifierForSQL(lcaTblDef.DbName),
+			quoteIdentifierForSQL(lcaTblDef.Name),
+			mots),
 		)
 		sqlBuf.WriteString(fmt.Sprintf(
 			"right join (values %s) as pks(__idx_,%s) on ",
@@ -252,8 +261,6 @@ func handleDelsOnLCA(
 
 	dBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 
-	endIdx := dBat.VectorCount() - 1
-
 	sels := make([]int64, 0, 100)
 	joinedRows := 0
 	lcaHitRows := 0
@@ -275,17 +282,6 @@ func handleDelsOnLCA(
 				}
 			}
 
-			// For composite/fake PK tables, the hidden PK column (__cpkey__
-			// or __mo_fake_pk_col) may not be returned by SQL "select *".
-			// Fill it from the tombstone batch when the loop above didn't
-			// cover endIdx.  The reader fallback returns ALL columns so the
-			// loop already fills endIdx — skip the extra append to avoid
-			// doubling Vecs[endIdx].Length() vs RowCount().
-			if tblStuff.def.pkKind != normalKind && len(cols)-2 < endIdx {
-				if err = dBat.Vecs[endIdx].UnionOne(tBat.Vecs[0], int64(i), ses.proc.Mp()); err != nil {
-					return false
-				}
-			}
 		}
 
 		dBat.SetRowCount(dBat.Vecs[0].Length())
@@ -1179,6 +1175,38 @@ func compareRowInWrappedBatches(
 	return 0, nil
 }
 
+func compareTupleWithBatchRow(
+	tblStuff tableStuff,
+	tuple types.Tuple,
+	bat *batch.Batch,
+	rowIdx int,
+	skipPKCols bool,
+) (int, error) {
+	for _, colIdx := range tblStuff.def.visibleIdxes {
+		if skipPKCols && slices.Index(tblStuff.def.pkColIdxes, colIdx) != -1 {
+			continue
+		}
+		if colIdx < 0 || colIdx >= bat.VectorCount() {
+			return 0, moerr.NewInternalErrorNoCtxf(
+				"column index %d out of range for batch width %d",
+				colIdx, bat.VectorCount(),
+			)
+		}
+		val, err := getTupleColumnValue(tuple, tblStuff, colIdx)
+		if err != nil {
+			return 0, err
+		}
+		cmp, err := compareTupleValueWithVector(val, bat.Vecs[colIdx], rowIdx)
+		if err != nil {
+			return 0, err
+		}
+		if cmp != 0 {
+			return cmp, nil
+		}
+	}
+	return 0, nil
+}
+
 func findDeleteAndUpdateBat(
 	ctx context.Context, ses *Session, bh BackgroundExec,
 	tblStuff tableStuff, tblName string, side int, tmpCh chan batchWithKind, branchTS types.TS,
@@ -1292,6 +1320,22 @@ func findDeleteAndUpdateBat(
 					[]*vector.Vector{dBat.Vecs[tblStuff.def.pkColIdx]}, false,
 					func(idx int, _ []byte, row []byte) error {
 						seen[idx] = true
+
+						if tuple, _, err2 = dataHashmap.DecodeRow(row); err2 != nil {
+							return err2
+						}
+
+						var cmp int
+						skipPKCols := tblStuff.def.pkKind != fakeKind
+						if cmp, err2 = compareTupleWithBatchRow(
+							tblStuff, tuple, dBat, idx, skipPKCols,
+						); err2 != nil {
+							return err2
+						}
+						if cmp == 0 {
+							return nil
+						}
+
 						// delete on lca and insert into tar ==> update
 						if updateBat == nil {
 							updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
@@ -1299,17 +1343,11 @@ func findDeleteAndUpdateBat(
 						if expandUpdate && updateDeleteBat == nil {
 							updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 						}
-
-						if tuple, _, err2 = dataHashmap.DecodeRow(row); err2 != nil {
-							return err2
-						}
-
 						if expandUpdate {
 							if err2 = updateDeleteBat.UnionOne(dBat, int64(idx), ses.proc.Mp()); err2 != nil {
 								return err2
 							}
 						}
-
 						if err2 = appendTupleToBat(ses, updateBat, tuple, tblStuff); err2 != nil {
 							return err2
 						}
@@ -1351,17 +1389,15 @@ func findDeleteAndUpdateBat(
 				if updateBat != nil {
 					updateBat.SetRowCount(updateBat.Vecs[0].Length())
 					if expandUpdate {
-						if updateDeleteBat != nil {
-							updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
-							if err2 = send(batchWithKind{
-								name:       tblName,
-								side:       side,
-								fromUpdate: true,
-								batch:      updateDeleteBat,
-								kind:       diffDelete,
-							}); err2 != nil {
-								return err2
-							}
+						updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
+						if err2 = send(batchWithKind{
+							name:       tblName,
+							side:       side,
+							fromUpdate: true,
+							batch:      updateDeleteBat,
+							kind:       diffDelete,
+						}); err2 != nil {
+							return err2
 						}
 						if err2 = send(batchWithKind{
 							name:  tblName,
@@ -1489,9 +1525,9 @@ func getTupleColumnValue(tuple types.Tuple, tblStuff tableStuff, colIdx int) (an
 	}
 	switch len(tuple) {
 	case totalColCnt, totalColCnt + 1:
-		return tuple[colIdx], nil
+		return normalizeTupleColumnValue(tuple[colIdx], tblStuff.def.colTypes[colIdx])
 	case totalColCnt + 2:
-		return tuple[colIdx+1], nil
+		return normalizeTupleColumnValue(tuple[colIdx+1], tblStuff.def.colTypes[colIdx])
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf(
 			"unexpected tuple width %d for table %s with %d visible columns",
@@ -1587,19 +1623,53 @@ func validateLeadingRowID(side, tableName string, isTombstone bool, bat *batch.B
 }
 
 func appendTupleValueToVector(vec *vector.Vector, val any, mp *mpool.MPool) error {
+	val, err := normalizeTupleColumnValue(val, *vec.GetType())
+	if err != nil {
+		return err
+	}
 	if val == nil {
 		return vector.AppendNull(vec, mp)
 	}
 	if raw, ok := val.([]byte); ok {
-		if !vec.GetType().IsVarlen() {
-			return moerr.NewInternalErrorNoCtxf(
-				"unexpected byte slice for fixed-width column type %s",
-				vec.GetType().String(),
-			)
-		}
 		return vector.AppendBytes(vec, raw, false, mp)
 	}
 	return vector.AppendAny(vec, val, false, mp)
+}
+
+func normalizeTupleColumnValue(val any, typ types.Type) (any, error) {
+	if val == nil {
+		return nil, nil
+	}
+	raw, ok := val.([]byte)
+	if !ok {
+		return val, nil
+	}
+	if typ.IsVarlen() {
+		return raw, nil
+	}
+	fixedLen := typ.Oid.FixedLength()
+	if fixedLen < 0 || len(raw) != fixedLen {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"unexpected byte slice for fixed-width column type %s",
+			typ.String(),
+		)
+	}
+	switch typ.Oid {
+	case types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_uuid, types.T_TS, types.T_Rowid, types.T_Blockid,
+		types.T_enum:
+		return types.DecodeValue(raw, typ.Oid), nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"unexpected byte slice for fixed-width column type %s",
+			typ.String(),
+		)
+	}
 }
 
 func checkConflictAndAppendToBat(
@@ -1662,6 +1732,14 @@ func diffDataHelper(
 
 	// if no pk, we cannot use the fake pk to probe.
 	// must probe with full columns
+	var migratedHashmaps []databranchutils.BranchHashmap
+	defer func() {
+		for _, h := range migratedHashmaps {
+			if closeErr := h.Close(); err == nil && closeErr != nil {
+				err = closeErr
+			}
+		}
+	}()
 
 	if tblStuff.def.pkKind == fakeKind {
 		var (
@@ -1669,21 +1747,17 @@ func diffDataHelper(
 			newHashmap databranchutils.BranchHashmap
 		)
 
-		if newHashmap, err = baseDataHashmap.Migrate(keyIdxes, -1); err != nil {
-			return err
-		}
-		if err = baseDataHashmap.Close(); err != nil {
+		if newHashmap, err = migrateAndCloseSourceHashmap(baseDataHashmap, keyIdxes, -1); err != nil {
 			return err
 		}
 		baseDataHashmap = newHashmap
+		migratedHashmaps = append(migratedHashmaps, baseDataHashmap)
 
-		if newHashmap, err = tarDataHashmap.Migrate(keyIdxes, -1); err != nil {
-			return err
-		}
-		if err = tarDataHashmap.Close(); err != nil {
+		if newHashmap, err = migrateAndCloseSourceHashmap(tarDataHashmap, keyIdxes, -1); err != nil {
 			return err
 		}
 		tarDataHashmap = newHashmap
+		migratedHashmaps = append(migratedHashmaps, tarDataHashmap)
 	}
 
 	if err = tarDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
@@ -1900,6 +1974,23 @@ func diffDataHelper(
 
 	return nil
 }
+
+func migrateAndCloseSourceHashmap(
+	source databranchutils.BranchHashmap,
+	keyIdxes []int,
+	parallelism int,
+) (databranchutils.BranchHashmap, error) {
+	newHashmap, err := source.Migrate(keyIdxes, parallelism)
+	if err != nil {
+		return nil, err
+	}
+	if err = source.Close(); err != nil {
+		_ = newHashmap.Close()
+		return nil, err
+	}
+	return newHashmap, nil
+}
+
 func buildHashmapForTable(
 	ctx context.Context,
 	mp *mpool.MPool,

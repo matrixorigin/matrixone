@@ -77,6 +77,7 @@ import (
 const (
 	rssCacheFamilyEvictTimeout   = 10 * time.Second
 	rssCacheAdmissionPressureTTL = 2 * time.Minute
+	rssCachePressureTargetOwner  = "cn-rss"
 )
 
 var (
@@ -85,13 +86,22 @@ var (
 
 func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
 	return func(ctx context.Context, targetPercent int64) {
-		pressureUntil := time.Now().Add(rssCacheAdmissionPressureTTL)
-		fileservice.SetMemoryCachePressureTargetPercent(targetPercent, pressureUntil)
-
 		memoryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseRSSCacheEvict)
 		defer cancel()
 		evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
 	}
+}
+
+func setRSSCachePressureTarget(targetPercent int64) {
+	fileservice.SetMemoryCachePressureTargetPercentByOwner(
+		rssCachePressureTargetOwner,
+		targetPercent,
+		time.Now().Add(rssCacheAdmissionPressureTTL),
+	)
+}
+
+func clearRSSCachePressureTarget() {
+	fileservice.ClearMemoryCachePressureTargetByOwner(rssCachePressureTargetOwner)
 }
 
 func NewService(
@@ -224,6 +234,10 @@ func NewService(
 		90.0/100.0,
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
 		rscthrottler.WithRSSScavenging(),
+		rscthrottler.WithRSSCachePressureTarget(
+			setRSSCachePressureTarget,
+			clearRSSCachePressureTarget,
+		),
 		rscthrottler.WithRSSCacheEvictor(makeRSSCacheEvictor(rssCacheFamilyEvictTimeout)),
 	)
 

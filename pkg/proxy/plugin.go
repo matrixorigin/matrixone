@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plugin"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -40,6 +41,72 @@ func newPluginRouter(sid string, r Router, p Plugin) *pluginRouter {
 		Router: r,
 		plugin: p,
 	}
+}
+
+// ConnectRouteSelected preserves Route-selected session semantics (notably CN
+// health accounting) when the router is wrapped by a plugin router.
+func (r *pluginRouter) ConnectRouteSelected(
+	cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
+) (ServerConn, []byte, error) {
+	if rr, ok := r.Router.(routeSelectedConnector); ok {
+		return rr.ConnectRouteSelected(cn, handshakeResp, t)
+	}
+	return r.Router.Connect(cn, handshakeResp, t)
+}
+
+// RouteForTransfer preserves plugin routing semantics for session transfer /
+// migration, but intentionally bypasses the breaker/probe gate: transfer
+// traffic must not consume a recovery probe that belongs to new-session
+// routing.
+func (r *pluginRouter) RouteForTransfer(
+	ctx context.Context, sid string, ci clientInfo, filter func(string) bool,
+) (*CNServer, error) {
+	re, err := r.plugin.RecommendCN(ctx, ci)
+	if err != nil {
+		return nil, err
+	}
+	if re.Updated {
+		if rr, ok := r.Router.(RefreshableRouter); ok {
+			rr.Refresh(false)
+		}
+	}
+	switch re.Action {
+	case plugin.Select:
+		if re.CN == nil {
+			return nil, moerr.NewInternalErrorNoCtx("no CN server selected")
+		}
+		if filter != nil && filter(re.CN.SQLAddress) {
+			if rr, ok := r.Router.(transferRouter); ok {
+				return rr.RouteForTransfer(ctx, sid, ci, filter)
+			}
+			return r.Router.Route(ctx, sid, ci, filter)
+		}
+		v2.ProxyConnectSelectCounter.Inc()
+		return &CNServer{
+			reqLabel: ci.labelInfo,
+			cnLabel:  re.CN.Labels,
+			uuid:     re.CN.ServiceID,
+			addr:     re.CN.SQLAddress,
+			hash:     ci.hash,
+		}, nil
+	case plugin.Reject:
+		v2.ProxyConnectRejectCounter.Inc()
+		return nil, withCode(moerr.NewInfoNoCtx(re.Message), codeAuthFailed)
+	case plugin.Bypass:
+		if rr, ok := r.Router.(transferRouter); ok {
+			return rr.RouteForTransfer(ctx, r.sid, ci, filter)
+		}
+		return r.Router.Route(ctx, r.sid, ci, filter)
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unknown recommended action %d", re.Action)
+	}
+}
+
+func (r *pluginRouter) CanReuseCachedCN(cn *CNServer) bool {
+	if rr, ok := r.Router.(cacheReuseChecker); ok {
+		return rr.CanReuseCachedCN(cn)
+	}
+	return true
 }
 
 // Route implements Router.Route.
@@ -66,13 +133,49 @@ func (r *pluginRouter) Route(
 			return r.Router.Route(ctx, sid, ci, filter)
 		}
 		v2.ProxyConnectSelectCounter.Inc()
-		return &CNServer{
+		cn := &CNServer{
 			reqLabel: ci.labelInfo,
 			cnLabel:  re.CN.Labels,
 			uuid:     re.CN.ServiceID,
 			addr:     re.CN.SQLAddress,
 			hash:     ci.hash,
-		}, nil
+		}
+		// In plugin mode, a plugin-selected CN must still honor the same
+		// breaker/probe gate as normal routing: a CN in active cooldown should
+		// be skipped, an expired breaker should get at most one half-open
+		// probe, and an all-unhealthy candidate set should fast-fail with the
+		// busy error. Otherwise every fresh session would keep hitting the same
+		// known-bad plugin-selected CN until Connect times out.
+		if rr, ok := r.Router.(*router); ok && rr.health != nil {
+			candidates, allBusy := rr.health.pick([]*CNServer{cn})
+			if allBusy {
+				// The plugin-selected CN is still in active cooldown. Fall back
+				// to the delegated router and exclude this CN so another healthy
+				// peer (if any) can still be chosen.
+				prevFilter := filter
+				filter = func(addr string) bool {
+					if addr == re.CN.SQLAddress {
+						return true
+					}
+					return prevFilter != nil && prevFilter(addr)
+				}
+				cn, err := r.Router.Route(ctx, sid, ci, filter)
+				// If excluding the selected CN leaves no candidates, preserve the
+				// breaker semantics: the reason this plugin-selected path failed
+				// is that its chosen CN is cooling down, not that the cluster has
+				// no CNs at all.
+				if err != nil && moerr.IsSameMoErr(err, noCNServerErr) {
+					return nil, allCNServersBusyErr
+				}
+				return cn, err
+			}
+			// pick's invariant guarantees non-empty candidates when !allBusy.
+			if len(candidates) > 0 {
+				candidates[0].hash = ci.hash
+				return candidates[0], nil
+			}
+		}
+		return cn, nil
 	case plugin.Reject:
 		v2.ProxyConnectRejectCounter.Inc()
 		return nil, withCode(moerr.NewInfoNoCtx(re.Message),

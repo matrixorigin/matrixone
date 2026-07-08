@@ -22,11 +22,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
+// gpuMode is accepted-but-ignored in non-gpu builds — CPU is the only
+// option here. The signature matches the gpu.go version so callers
+// pass the flag uniformly regardless of build tag.
 func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint,
-	nthread uint) (cache.VectorIndexSearchIf, error) {
+	nthread uint,
+	_ bool) (cache.VectorIndexSearchIf, error) {
 
 	return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
+}
+
+func NewAdhocBruteForceIndex[T types.RealNumbers](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint,
+	_ bool) (cache.VectorIndexSearchIf, error) {
+
+	return NewUsearchBruteForceIndex[T](dataset, dimension, m, elemsz)
+}
+
+func NewAdhocBruteForceIndexFlattened[T types.RealNumbers](dataset []T,
+	count uint,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint,
+	_ bool) (cache.VectorIndexSearchIf, error) {
+
+	return NewUsearchBruteForceIndexFlattened[T](dataset, count, dimension, m, elemsz)
 }

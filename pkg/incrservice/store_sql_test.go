@@ -138,12 +138,22 @@ func (tls *testLockService) GetWaitingList(ctx context.Context, txnID []byte) (b
 	panic("implement me")
 }
 
+func (tls *testLockService) GetLockHolder(ctx context.Context, tableID uint64, row []byte, options lock.LockOptions) (lock.WaitTxn, bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (tls *testLockService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lock.LockTable) bool) {
 	//TODO implement me
 	panic("implement me")
 }
 
 func (tls *testLockService) GetLockTableBind(group uint32, tableID uint64) (lock.LockTable, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tls *testLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -214,6 +224,10 @@ func (tTxnOp *testTxnOperator) SnapshotTS() timestamp.Timestamp {
 	return tTxnOp.snapshotTS
 }
 
+func (tTxnOp *testTxnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	tTxnOp.snapshotTS = ts
+}
+
 func (tTxnOp *testTxnOperator) CreateTS() timestamp.Timestamp {
 	//TODO implement me
 	panic("implement me")
@@ -262,6 +276,10 @@ func (tTxnOp *testTxnOperator) AddLockTable(locktable lock.LockTable) error {
 func (tTxnOp *testTxnOperator) HasLockTable(table uint64) bool {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (tTxnOp *testTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	return nil
 }
 
 func (tTxnOp *testTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {

@@ -479,7 +479,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 				value := addEscapeToString(vec.GetBytesAt(i), closeby)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
-			case types.T_geometry:
+			case types.T_geometry, types.T_geometry32:
 				text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
 				if err != nil {
 					sendByte(&BatchByte{err: err})
@@ -1205,7 +1205,7 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return base64.StdEncoding.EncodeToString(vec.GetBytesAt(i)), nil
 	case types.T_datalink:
 		return string(vec.GetBytesAt(i)), nil
-	case types.T_geometry:
+	case types.T_geometry, types.T_geometry32:
 		return planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
 	case types.T_array_float32:
 		return types.BytesToArray[float32](vec.GetBytesAt(i)), nil

@@ -23,6 +23,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -368,6 +370,61 @@ func TestHandleSQLTaskEdges(t *testing.T) {
 	require.Error(t, handleDropSQLTask(ctx, ses, &tree.DropSQLTask{
 		Name: tree.Identifier("missing"),
 	}))
+}
+
+func TestHandleSQLTaskMutationsSyncCommitTimestamp(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses, ts, _ := newSQLTaskHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	defer func() {
+		require.NoError(t, ts.Close())
+	}()
+
+	mockQC := newMockQueryClient()
+	mockTC := &mockTxnClient{}
+	ses.proc.Base.QueryClient = mockQC
+	ses.proc.Base.TxnClient = mockTC
+
+	mockMC := &mockMOCluster{
+		cnServices: []metadata.CNService{
+			{QueryAddress: "cn1:6001"},
+			{QueryAddress: "cn2:6001"},
+			{QueryAddress: "cn3:6001"},
+		},
+	}
+	runtime.SetupServiceBasedRuntime("test-service", runtime.DefaultRuntime())
+	runtime.ServiceRuntime("test-service").SetGlobalVariables(runtime.ClusterService, mockMC)
+
+	ts1 := newTestTimestamp(100, 1)
+	ts2 := newTestTimestamp(100, 2)
+	ts3 := newTestTimestamp(99, 100)
+	mockQC.cnResponses["cn1:6001"] = &querypb.Response{GetCommit: &querypb.GetCommitResponse{CurrentCommitTS: ts1}}
+	mockQC.cnResponses["cn2:6001"] = &querypb.Response{GetCommit: &querypb.GetCommitResponse{CurrentCommitTS: ts2}}
+	mockQC.cnResponses["cn3:6001"] = &querypb.Response{GetCommit: &querypb.GetCommitResponse{CurrentCommitTS: ts3}}
+
+	ctx := context.Background()
+	require.NoError(t, handleCreateSQLTask(ctx, ses, &tree.CreateSQLTask{
+		Name:    tree.Identifier("task_sync_commit"),
+		SQLBody: "",
+	}))
+	require.True(t, mockTC.syncCalled)
+	require.Equal(t, ts2, mockTC.syncCalledWith)
+	require.Equal(t, 3, mockQC.sendCalls)
+	require.Equal(t, 3, mockQC.releaseCalls)
+
+	mockTC.syncCalled = false
+	mockTC.syncCalledWith = newTestTimestamp(0, 0)
+	mockQC.sendCalls = 0
+	mockQC.releaseCalls = 0
+	mockQC.newReqCalls = 0
+
+	require.NoError(t, handleExecuteSQLTask(ctx, ses, &tree.ExecuteSQLTask{Name: tree.Identifier("task_sync_commit")}))
+	require.True(t, mockTC.syncCalled)
+	require.Equal(t, ts2, mockTC.syncCalledWith)
+	require.Equal(t, 3, mockQC.sendCalls)
+	require.Equal(t, 3, mockQC.releaseCalls)
 }
 
 func TestExecInFrontendSQLTaskStatements(t *testing.T) {

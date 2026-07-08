@@ -53,4 +53,27 @@ grant all on table db1.t2 to role1;
 select * from db1.t2;
 -- @session
 drop account default_1;
+
+create account ddl_orphan_owner ADMIN_NAME admin IDENTIFIED BY '111111';
+-- @session:id=10&user=ddl_orphan_owner:admin&password=111111
+create role owner_r;
+grant connect,create database on account * to owner_r;
+create user owner_u identified by '123456' default role owner_r;
+create role dropper_r;
+grant connect,drop database on account * to dropper_r;
+create user dropper_u identified by '123456' default role dropper_r;
+-- @session
+-- @session:id=11&user=ddl_orphan_owner:owner_u:owner_r&password=123456
+create database orphan_db;
+create table orphan_db.orphan_t(a int);
+-- @session
+-- @session:id=10&user=ddl_orphan_owner:admin&password=111111
+grant drop table on database orphan_db to dropper_r;
+drop role owner_r;
+-- @session
+-- @session:id=12&user=ddl_orphan_owner:dropper_u:dropper_r&password=123456
+drop table orphan_db.orphan_t;
+drop database orphan_db;
+-- @session
+drop account ddl_orphan_owner;
 set global enable_privilege_cache = on;

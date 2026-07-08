@@ -475,16 +475,22 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 	defer wrapSizeMismatchErr(&err)
 
 	options := normalizeParallelOption(opt)
-	if sizeHint != nil && *sizeHint < minMultipartPartSize {
-		return a.Write(ctx, key, r, sizeHint, options.Expire)
-	}
 	if sizeHint != nil {
+		r = &exactSizeReader{
+			R:        r,
+			Expected: *sizeHint,
+			Key:      key,
+		}
+		if *sizeHint < minMultipartPartSize {
+			return a.Write(ctx, key, r, sizeHint, options.Expire)
+		}
 		expectedParts := (*sizeHint + options.PartSize - 1) / options.PartSize
 		if expectedParts > maxMultipartParts {
 			return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", expectedParts)
 		}
 	}
 
+	parentCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -543,7 +549,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 
 	defer func() {
 		if err != nil {
-			_, abortErr := a.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+			_, abortErr := a.client.AbortMultipartUpload(context.WithoutCancel(parentCtx), &s3.AbortMultipartUploadInput{
 				Bucket:   ptrTo(a.bucket),
 				Key:      ptrTo(key),
 				UploadId: output.UploadId,

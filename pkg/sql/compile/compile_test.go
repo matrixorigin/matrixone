@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -109,6 +108,12 @@ func (w *Ws) RollbackLastStatement(ctx context.Context) error {
 
 func (w *Ws) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	return nil, nil
+}
+
+func (w *Ws) FinalizeCommit(ctx context.Context) {
+}
+
+func (w *Ws) FinalizeCommitWithUnknownResult(ctx context.Context) {
 }
 
 func (w *Ws) Rollback(ctx context.Context) error {
@@ -378,6 +383,7 @@ func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.Tx
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -397,6 +403,7 @@ func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnCl
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -432,50 +439,6 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 func GetFilePath() string {
 	dir, _ := os.Getwd()
 	return dir
-}
-
-// mockRPCClient is a test implementation of morpc.RPCClient for testing.
-type mockRPCClient struct {
-	pingErr error
-}
-
-func (m *mockRPCClient) Ping(ctx context.Context, backend string) error {
-	return m.pingErr
-}
-
-func (m *mockRPCClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) NewStream(ctx context.Context, backend string, lock bool) (morpc.Stream, error) {
-	return nil, nil
-}
-
-func (m *mockRPCClient) Close() error {
-	return nil
-}
-
-func (m *mockRPCClient) CloseBackend() error {
-	return nil
-}
-
-// TestIsAvailable tests CN availability check.
-//
-// Test quality criteria:
-// 1. No randomness: Fixed RPC client behavior
-// 2. Fast execution: Mocked Ping that returns immediately (no sleep)
-// 3. Meaningful: Tests availability check logic with both success and failure cases
-// 4. Realistic: Tests real scenario where CN ping can succeed or fail
-func TestIsAvailable(t *testing.T) {
-	// Test case 1: Ping fails - should return false
-	mockClient := &mockRPCClient{pingErr: moerr.NewInternalErrorNoCtx("connection failed")}
-	ret := isAvailable(mockClient, "127.0.0.1:6001")
-	assert.False(t, ret, "should return false when ping fails")
-
-	// Test case 2: Ping succeeds - should return true
-	mockClient = &mockRPCClient{pingErr: nil}
-	ret = isAvailable(mockClient, "127.0.0.1:6002")
-	assert.True(t, ret, "should return true when ping succeeds")
 }
 
 func TestDebugLogFor19288(t *testing.T) {

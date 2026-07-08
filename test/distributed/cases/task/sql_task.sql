@@ -13,6 +13,7 @@ drop task if exists sql_task_build_silver;
 drop task if exists sql_task_build_gold;
 drop task if exists sql_task_validate;
 drop task if exists sql_task_literal;
+drop task if exists sql_task_literal_preserve;
 
 create table scheduled_events(
     marker varchar(32) not null,
@@ -35,6 +36,8 @@ create table literal_source(pump int primary key, engine_rpm int, pump_rate int,
 create table literal_classified(pump int primary key, state_label varchar(32));
 create table literal_matched(label varchar(32));
 create table literal_quotes(label varchar(32));
+create table literal_status_source(id int primary key, status varchar(16), rpm int, rate int);
+create table literal_status_target(id int primary key, state_label varchar(32));
 
 create task sql_task_cron schedule '0 0 0 1 1 *' timezone 'UTC' as begin insert into scheduled_events(marker) values ('cron'); end;
 
@@ -47,6 +50,7 @@ select count(*) from manual_events;
 alter task sql_task_cron set schedule '0 0 0 1 1 *' timezone 'UTC';
 execute task sql_task_cron;
 select count(*) from scheduled_events;
+select sleep(1);
 select status from mo_task.sql_task_run where task_name = 'sql_task_cron' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 
 execute task sql_task_manual;
@@ -61,6 +65,7 @@ alter task sql_task_cron suspend;
 alter task sql_task_cron resume;
 execute task sql_task_cron;
 select count(*) from scheduled_events;
+select sleep(1);
 select status from mo_task.sql_task_run where task_name = 'sql_task_cron' order by run_id desc limit 2;
 
 create task sql_task_gate when (exists(select 1 from gate_source where id = 1)) as begin insert into gate_sink select 'gate-ok' where not exists (select 1 from gate_sink where tag = 'gate-ok'); end;
@@ -161,6 +166,27 @@ select label, hex(label) from literal_quotes;
 select status from mo_task.sql_task_run where task_name = 'sql_task_literal' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 select rows_affected from mo_task.sql_task_run where task_name = 'sql_task_literal' and trigger_type = 'MANUAL' order by run_id desc limit 1;
 
+insert into literal_status_source values
+    (1, 'SUCCESS', 850, 12),
+    (2, 'SUCCESS', 700, 0),
+    (3, 'SUCCESS', 500, 0),
+    (4, 'FAILED', 900, 10),
+    (5, 'SUCCESS', null, 0);
+
+create task sql_task_literal_preserve when (exists(select 1 from literal_status_source where status = 'SUCCESS')) as begin insert into literal_status_target select id, case when rpm >= 800 and rate > 0 then 'PUMPING' when rpm >= 600 then 'IDLE' when rpm < 600 then 'OFF' else 'UNKNOWN' end as state_label from literal_status_source where status = 'SUCCESS'; end;
+
+select instr(gate_condition, '''SUCCESS''') > 0 as gate_success_literal,
+       instr(sql_body, '''PUMPING''') > 0 as pumping_literal,
+       instr(sql_body, '''IDLE''') > 0 as idle_literal,
+       instr(sql_body, '''OFF''') > 0 as off_literal,
+       instr(sql_body, '''UNKNOWN''') > 0 as unknown_literal
+from mo_task.sql_task
+where task_name = 'sql_task_literal_preserve';
+execute task sql_task_literal_preserve;
+select state_label, count(*), hex(state_label) from literal_status_target group by state_label order by state_label;
+select status from mo_task.sql_task_run where task_name = 'sql_task_literal_preserve' and trigger_type = 'MANUAL' order by run_id desc limit 1;
+select rows_affected from mo_task.sql_task_run where task_name = 'sql_task_literal_preserve' and trigger_type = 'MANUAL' order by run_id desc limit 1;
+
 drop account if exists sql_task_tenant;
 create account sql_task_tenant admin_name 'admin' identified by '111';
 
@@ -185,6 +211,7 @@ drop task if exists sql_task_validate;
 drop task if exists sql_task_build_gold;
 drop task if exists sql_task_build_silver;
 drop task if exists sql_task_literal;
+drop task if exists sql_task_literal_preserve;
 drop task if exists sql_task_overlap;
 drop task if exists sql_task_retry;
 drop task if exists sql_task_timeout;

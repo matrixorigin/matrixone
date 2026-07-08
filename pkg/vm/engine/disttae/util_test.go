@@ -145,26 +145,26 @@ func TestTombstonePKExistsInRange(t *testing.T) {
 	// Case 1: search for PK=200, should find it
 	keys1 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys1, 200, false, proc.GetMPool()))
-	changed, err := tombstonePKExistsInRange(ctx, pState, from, keys1, int32Type, fs)
+	changed, _, err := tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys1, int32Type, fs)
 	require.NoError(t, err)
 	require.True(t, changed)
 
 	// Case 2: search for PK=999, should not find it
 	keys2 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys2, 999, false, proc.GetMPool()))
-	changed, err = tombstonePKExistsInRange(ctx, pState, from, keys2, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys2, int32Type, fs)
 	require.NoError(t, err)
 	require.False(t, changed)
 
 	// Case 3: search for PK=500, should find it in second tombstone
 	keys3 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys3, 500, false, proc.GetMPool()))
-	changed, err = tombstonePKExistsInRange(ctx, pState, from, keys3, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys3, int32Type, fs)
 	require.NoError(t, err)
 	require.True(t, changed)
 
 	// Case 4: no tombstone objects changed after from=25
-	changed, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), keys1, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), types.MaxTs(), keys1, int32Type, fs)
 	require.NoError(t, err)
 	require.False(t, changed)
 }

@@ -61,6 +61,10 @@ func NewDivByZeroNoCtx() *Error {
 	return newError(Context(), ErrDivByZero)
 }
 
+func NewRegexpIllegalArgumentNoCtx() *Error {
+	return newError(Context(), ErrRegexpIllegalArgument)
+}
+
 func NewOutOfRangeNoCtxf(typ string, format string, args ...any) *Error {
 	return newError(Context(), ErrOutOfRange, typ, fmt.Sprintf(format, args...))
 }
@@ -428,6 +432,10 @@ func NewLockTableNotFoundNoCtx() *Error {
 
 func NewLockConflictNoCtx() *Error {
 	return newError(Context(), ErrLockConflict)
+}
+
+func NewRemoteLockWaitTimeoutNoCtx() *Error {
+	return newError(Context(), ErrRemoteLockWaitTimeout)
 }
 
 func NewLockNeedUpgradeNoCtx() *Error {

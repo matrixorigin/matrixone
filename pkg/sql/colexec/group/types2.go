@@ -238,6 +238,13 @@ func (ctr *container) free() {
 		ctr.spillGbBatch.Clean(ctr.mp)
 		ctr.spillGbBatch = nil
 	}
+	ctr.spillBuf = nil
+	ctr.spillReader = nil
+	ctr.spillHashCodes = nil
+	ctr.spillChunkFlags = nil
+	ctr.spillFlagFlat = nil
+	ctr.spillNonEmptyBuckets = nil
+	ctr.spillBucketRowIds = nil
 
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil

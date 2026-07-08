@@ -92,6 +92,11 @@ func (tTxnOp *testTxnOperator) SnapshotTS() timestamp.Timestamp {
 	panic("implement me")
 }
 
+func (tTxnOp *testTxnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (tTxnOp *testTxnOperator) CreateTS() timestamp.Timestamp {
 	//TODO implement me
 	panic("implement me")
@@ -140,6 +145,10 @@ func (tTxnOp *testTxnOperator) AddLockTable(locktable lock.LockTable) error {
 func (tTxnOp *testTxnOperator) HasLockTable(table uint64) bool {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (tTxnOp *testTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	return nil
 }
 
 func (tTxnOp *testTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {

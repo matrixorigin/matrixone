@@ -160,12 +160,20 @@ func initRelAndReader(
 					return err
 				}
 
+				// A multi-table index (e.g. ivfflat: metadata/centroids/entries,
+				// hnsw: metadata/storage) has several IndexDefs that share one
+				// IndexName but differ by IndexAlgoTableType. Keying by IndexName
+				// alone collides, so only the last hidden table would survive in
+				// the map and be cloned. Disambiguate by IndexAlgoTableType; the
+				// (IndexName, IndexAlgoTableType) pair matches src<->dst.
+				key := pName + "." + idx.IndexName + "." + idx.IndexAlgoTableType
+
 				if idxReaderMap != nil {
-					idxReaderMap[pName+"."+idx.IndexName] = tmpReader
+					idxReaderMap[key] = tmpReader
 				}
 
 				if idxRelMap != nil {
-					idxRelMap[pName+"."+idx.IndexName] = tmpRel
+					idxRelMap[key] = tmpRel
 				}
 			}
 		}
@@ -187,14 +195,20 @@ func initRelAndReader(
 				return err
 			}
 
+			// See the partitioned branch above: a multi-table index shares one
+			// IndexName across its hidden tables (ivfflat metadata/centroids/
+			// entries), so key by (IndexName, IndexAlgoTableType) to avoid the
+			// collision that would clone only the last hidden table.
+			key := idx.IndexName + "." + idx.IndexAlgoTableType
+
 			if idxReaderMap != nil {
-				if idxReaderMap[idx.IndexName], err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
+				if idxReaderMap[key], err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
 					return err
 				}
 			}
 
 			if idxRelMap != nil {
-				idxRelMap[idx.IndexName] = tmpRel
+				idxRelMap[key] = tmpRel
 			}
 		}
 	}

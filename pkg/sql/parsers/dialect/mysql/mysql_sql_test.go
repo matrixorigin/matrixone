@@ -83,6 +83,85 @@ func TestOriginSQL(t *testing.T) {
 	}
 }
 
+func TestPositionFunctionSyntax(t *testing.T) {
+	tests := []string{
+		"select position('y' in 'xyz')",
+		"select position(substr in str) from t1",
+	}
+	for _, sql := range tests {
+		_, err := ParseOne(context.TODO(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create temporary table if not exists dst clone src copy grants to account acc",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.True(t, cloneStmt.CreateTable.Temporary)
+	require.True(t, cloneStmt.CreateTable.IfNotExists)
+	require.Equal(t, tree.Identifier("dst"), cloneStmt.CreateTable.Table.ObjectName)
+	require.Equal(t, tree.Identifier("src"), cloneStmt.SrcTable.ObjectName)
+	require.True(t, cloneStmt.CopyGrants)
+	require.NotNil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, tree.Identifier("acc"), cloneStmt.ToAccountOpt.AccountName)
+
+	require.Equal(
+		t,
+		"create temporary table if not exists `dst` clone `src` copy grants to account `acc`",
+		tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()),
+	)
+}
+
+func TestCloneTableParseCopyGrantsWithoutToAccount(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create table dst clone src copy grants",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.True(t, cloneStmt.CopyGrants)
+	require.Nil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, "create table `dst` clone `src` copy grants", tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()))
+}
+
+func TestCloneTableParseFormattedMoTimestamp(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create table dst clone src{MO_TS = 123}",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.NotNil(t, cloneStmt.SrcTable.AtTsExpr)
+	require.Equal(t, tree.ATMOTIMESTAMP, cloneStmt.SrcTable.AtTsExpr.Type)
+}
+
+func TestDataBranchCreateTableParsesWithLeadingComment(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"/* cloud_user */\n  data branch create table dst from src",
+		1,
+	)
+	require.NoError(t, err)
+
+	branchStmt, ok := stmt.(*tree.DataBranchCreateTable)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("dst"), branchStmt.CreateTable.Table.ObjectName)
+	require.Equal(t, tree.Identifier("src"), branchStmt.SrcTable.ObjectName)
+}
+
 func TestDataBranchDiffOutputModes(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
 	require.NoError(t, err)
@@ -244,6 +323,47 @@ var (
 		input:  "alter table t1 alter reindex idx1 IVFFLAT force_sync",
 		output: "alter table t1 alter reindex idx1 ivfflat force_sync",
 	}, {
+		input:  "alter table t1 alter reindex idx1 IVFPQ force_sync",
+		output: "alter table t1 alter reindex idx1 ivfpq force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 IVFPQ lists = 4 force_sync",
+		output: "alter table t1 alter reindex idx1 ivfpq lists = 4 force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 CAGRA",
+		output: "alter table t1 alter reindex idx1 cagra",
+	}, {
+		input:  "alter table t1 alter reindex idx1 CAGRA force_sync",
+		output: "alter table t1 alter reindex idx1 cagra force_sync",
+	}, {
+		// The REINDEX rule shares index_option_list with CREATE INDEX, so the
+		// AST node carries the full option set and Format now reproduces it
+		// (lowercase) for a lossless round-trip — the graph-degree options are
+		// emitted, not dropped. force_sync is emitted last.
+		input:  "alter table t1 alter reindex idx1 CAGRA intermediate_graph_degree = 8 graph_degree = 4 force_sync",
+		output: "alter table t1 alter reindex idx1 cagra intermediate_graph_degree = 8 graph_degree = 4 force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 HNSW",
+		output: "alter table t1 alter reindex idx1 hnsw",
+	}, {
+		// HNSW's REINDEX rule now takes an index_option_list (mysql_sql.y:
+		// REINDEX ident HNSW index_option_list) so restore's RestoreInitSQL
+		// can carry FORCE_SYNC, matching cagra/ivfpq/ivfflat.
+		input:  "alter table t1 alter reindex idx1 HNSW force_sync",
+		output: "alter table t1 alter reindex idx1 hnsw force_sync",
+	}, {
+		// Lossless round-trip of the per-index build options merged on reindex.
+		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 4 kmeans_train_percent = 80 kmeans_max_iteration = 50",
+		output: "alter table t1 alter reindex idx1 ivfflat lists = 4 kmeans_train_percent = 80 kmeans_max_iteration = 50",
+	}, {
+		input:  "alter table t1 alter reindex idx1 HNSW m = 32 ef_construction = 128 ef_search = 100 max_index_capacity = 100000",
+		output: "alter table t1 alter reindex idx1 hnsw m = 32 ef_construction = 128 ef_search = 100 max_index_capacity = 100000",
+	}, {
+		// String options must round-trip quoted (the grammar takes a STRING);
+		// op_type itself is rejected at compile for reindex, but Format stays
+		// re-parseable. (Parses, formats, re-parses to the same tree.)
+		input:  "alter table t1 alter reindex idx1 IVFFLAT op_type 'vector_l2_ops'",
+		output: "alter table t1 alter reindex idx1 ivfflat op_type 'vector_l2_ops'",
+	}, {
 		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = true day = 33 hour = 12",
 		output: "alter table t1 alter index idx1 ivfflat auto_update = true day = 33 hour = 12",
 	}, {
@@ -382,6 +502,14 @@ var (
 	}, {
 		input:  "CREATE TABLE new_t1 LIKE test.t1",
 		output: "create table new_t1 like test.t1",
+	}, {
+		// issue #25119: the IF NOT EXISTS clause must be preserved for the
+		// CREATE TABLE ... LIKE form (it was previously dropped by the parser).
+		input:  "CREATE TABLE IF NOT EXISTS new_t1 LIKE t1",
+		output: "create table if not exists new_t1 like t1",
+	}, {
+		input:  "CREATE TEMPORARY TABLE IF NOT EXISTS new_t1 LIKE t1",
+		output: "create temporary table if not exists new_t1 like t1",
 	}, {
 		input: "show privileges",
 	}, {
@@ -590,6 +718,16 @@ var (
 			input:  "select CAST('10 ' as unsigned integer);",
 			output: "select cast(10  as integer unsigned)",
 		}, {
+			// issue #25131: `cast(<col> as unsigned)` must render a stable
+			// target type. A preceding column reference must not leak into the
+			// cast's target type (previously rendered "as <col> unsigned"),
+			// otherwise GROUP BY / ORDER BY fail to match the same expression.
+			input:  "select cast(vgpos as unsigned) from t group by cast(vgpos as unsigned) order by cast(vgpos as unsigned)",
+			output: "select cast(vgpos as unsigned) from t group by cast(vgpos as unsigned) order by cast(vgpos as unsigned)",
+		}, {
+			input:  "select cast(vgpos as signed) from t group by cast(vgpos as signed)",
+			output: "select cast(vgpos as signed) from t group by cast(vgpos as signed)",
+		}, {
 			input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
 			output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
 		}, {
@@ -790,6 +928,27 @@ var (
 		}, {
 			input:  "replace into t1 values (date_add(NULL, INTERVAL 1 DAY));",
 			output: "replace into t1 values (date_add(null, INTERVAL 1 day))",
+		}, {
+			input:  "replace into t_table_dst table t_table_src;",
+			output: "replace into t_table_dst select * from t_table_src",
+		}, {
+			input:  "replace into t_table_dst (id, v) table t_table_src;",
+			output: "replace into t_table_dst (id, v) select * from t_table_src",
+		}, {
+			input:  "replace into t_table_dst table t_table_src order by id desc limit 1;",
+			output: "replace into t_table_dst select * from t_table_src order by id desc limit 1",
+		}, {
+			input:  "replace into t_table_dst (id, v) table t_table_src order by id limit 1 offset 1;",
+			output: "replace into t_table_dst (id, v) select * from t_table_src order by id limit 1 offset 1",
+		}, {
+			input:  "replace low_priority into t_mod values(1, 20);",
+			output: "replace into t_mod values (1, 20)",
+		}, {
+			input:  "replace delayed into t_mod values(1, 30);",
+			output: "replace into t_mod values (1, 30)",
+		}, {
+			input:  "replace low_priority into t_table_dst table t_table_src;",
+			output: "replace into t_table_dst select * from t_table_src",
 		}, {
 			input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
 			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL 1 second) as 1 second later",
@@ -1703,6 +1862,15 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' async",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ASYNC ",
 		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 30",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
+		}, {
+			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
+			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",
+		}, {
+			input:  "create index idx using ivfpq on A (a) LISTS 8 kmeans_train_percent 7 max_index_capacity 2000",
+			output: "create index idx using ivfpq on a (a) LISTS 8 KMEANS_TRAIN_PERCENT 7 MAX_INDEX_CAPACITY 2000 ",
+		}, {
 			input: "create index idx1 on a (a)",
 		}, {
 			input:  "create index idx using master on A (a,b,c)",
@@ -1884,6 +2052,10 @@ var (
 			output: "prepare stmt_name1 from select * from t1",
 		}, {
 			input: "prepare stmt_name1 from select * from t1 where a > ? or abs(b) < ?",
+		}, {
+			input: "prepare stmt_name1 from replace into t1 values (?, ?)",
+		}, {
+			input: "prepare stmt_name1 from replace into t1 (a, b) select a, b from t2 where a > ?",
 		}, {
 			input:  "create account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
 			output: "create account if not exists nihao admin_name 'admin' identified by '******' open comment 'new account'",
@@ -2845,6 +3017,10 @@ var (
 			input: `show cdc all;`,
 		},
 		{
+			input:  `show cdc;`,
+			output: `show cdc all;`,
+		},
+		{
 			input: `show cdc task t1;`,
 		},
 		{
@@ -2852,6 +3028,21 @@ var (
 		},
 		{
 			input: `drop cdc task t1;`,
+		},
+		{
+			input: `drop cdc task internal;`,
+		},
+		{
+			input:  `drop cdc t1;`,
+			output: `drop cdc task t1;`,
+		},
+		{
+			input:  `drop cdc internal;`,
+			output: `drop cdc task internal;`,
+		},
+		{
+			input:  `drop cdc if exists t1;`,
+			output: `drop cdc if exists task t1;`,
 		},
 		{
 			input: `pause cdc all;`,
@@ -3056,16 +3247,16 @@ var (
 			output: "create database if not exists ucl360_demo_v3 default character set utf8mb4 collate utf8mb4_0900_ai_ci encryption N",
 		}, {
 			input:  "alter table t1 algorithm = DEFAULT",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = DEFAULT",
 		}, {
 			input:  "alter table t1 algorithm = INSTANT",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = INSTANT",
 		}, {
 			input:  "alter table t1 algorithm = INPLACE",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = INPLACE",
 		}, {
 			input:  "alter table t1 algorithm = COPY",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = COPY",
 		}, {
 			input:  "alter table t1 default CHARACTER SET = a COLLATE = b",
 			output: "alter table t1 charset = a",
@@ -3089,16 +3280,16 @@ var (
 			output: "alter table t1 charset = FORCE",
 		}, {
 			input:  "alter table t1 LOCK = DEFAULT",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = DEFAULT",
 		}, {
 			input:  "alter table t1 LOCK = NONE",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = NONE",
 		}, {
 			input:  "alter table t1 LOCK = SHARED",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = SHARED",
 		}, {
 			input:  "alter table t1 LOCK = EXCLUSIVE",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = EXCLUSIVE",
 		}, {
 			input:  "alter table t1 WITHOUT VALIDATION",
 			output: "alter table t1 charset = WITHOUT",
@@ -3125,7 +3316,7 @@ var (
 			output: "create view t2 as select * from t1",
 		}, {
 			input:  "insert into t1 values(_binary 0x123)",
-			output: "insert into t1 values (123)",
+			output: "insert into t1 values (0x123)",
 		}, {
 			input:  "backup '123' filesystem '/home/abc' parallelism '1'",
 			output: "backup 123 filesystem /home/abc parallelism 1",
@@ -3200,6 +3391,10 @@ var (
 		{
 			input:  "create table t1(a vecf32(3), b vecf64(3), c int)",
 			output: "create table t1 (a vecf32(3), b vecf64(3), c int)",
+		},
+		{
+			input:  "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
+			output: "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
 		},
 		{
 			input:  "alter table tbl1 drop constraint fk_name",
@@ -3297,8 +3492,16 @@ var (
 			output: "restore database db01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
 		{
+			input:  "restore account acc01 database db01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore account acc01 database db01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
 			input:  "restore database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
 			output: "restore database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore account acc01 database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore account acc01 database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
 		{
 			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00'",
@@ -3480,6 +3683,30 @@ var (
 		{
 			input:  "select get_format(timestamp, 'ISO')",
 			output: "select get_format(TIMESTAMP, ISO)",
+		},
+		{
+			input:  "create index idx using cagra on A (a) intermediate_graph_degree = 4 graph_degree = 100 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'F16' DISTRIBUTION_MODE 'SINGLE_GPU' itopk_size = 512",
+			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INTERMEDIATE_GRAPH_DEGREE 4 GRAPH_DEGREE 100 QUANTIZATION F16 DISTRIBUTION_MODE SINGLE_GPU ITOPK_SIZE 512 ",
+		},
+		{
+			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'INT8' M 4",
+			output: "create index idx using ivfpq on a (a) LISTS 4 M 4 OP_TYPE VECTOR_L2_OPS QUANTIZATION INT8 BITS_PER_CODE 8 ",
+		},
+		{
+			input:  "create index idx using cagra on A (a) INCLUDE (price)",
+			output: "create index idx using cagra on a (a) INCLUDE (price) ",
+		},
+		{
+			input:  "create index idx using cagra on A (a) INCLUDE (price, category_id)",
+			output: "create index idx using cagra on a (a) INCLUDE (price, category_id) ",
+		},
+		{
+			input:  "create index idx using cagra on A (a) OP_TYPE 'VECTOR_L2_OPS' INCLUDE (price, category_id)",
+			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INCLUDE (price, category_id) ",
+		},
+		{
+			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price)",
+			output: "create index idx using ivfpq on a (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price) ",
 		},
 	}
 )
@@ -3804,6 +4031,10 @@ var (
 		},
 		{
 			input: "ALTER TABLE t1 ADD PARTITION (PARTITION p5 VALUES IN (15, 17)",
+		},
+		{
+			// MySQL REPLACE does not allow HIGH_PRIORITY (only LOW_PRIORITY | DELAYED).
+			input: "replace high_priority into t_mod values (1, 40)",
 		},
 	}
 )

@@ -363,6 +363,10 @@ func (o *testOperator) SnapshotTS() timestamp.Timestamp {
 	panic("should not call")
 }
 
+func (o *testOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	panic("should not call")
+}
+
 func (o *testOperator) CreateTS() timestamp.Timestamp {
 	panic("should not call")
 }
@@ -385,6 +389,10 @@ func (o *testOperator) AddLockTable(lock.LockTable) error {
 
 func (o *testOperator) HasLockTable(table uint64) bool {
 	return true
+}
+
+func (o *testOperator) CheckLockTableBinds(ctx context.Context) error {
+	return nil
 }
 
 func (o *testOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {

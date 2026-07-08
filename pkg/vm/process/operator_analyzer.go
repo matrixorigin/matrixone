@@ -56,6 +56,7 @@ type Analyzer interface {
 	AddFileServiceCacheInfo(counter *perfcounter.CounterSet)
 	AddDiskIO(counter *perfcounter.CounterSet)
 	AddReadSizeInfo(counter *perfcounter.CounterSet)
+	AddParquetProfile(stats ParquetProfileStats)
 
 	GetOpCounterSet() *perfcounter.CounterSet
 	GetOpStats() *OperatorStats
@@ -64,6 +65,36 @@ type Analyzer interface {
 	ScanBytes(*batch.Batch)
 
 	Reset()
+}
+
+type ParquetProfileStats struct {
+	Files          int64
+	RowGroups      int64
+	RowsRead       int64
+	BytesRead      int64
+	PrefetchBytes  int64
+	OpenTime       int64
+	ReadPageTime   int64
+	MapTime        int64
+	RowModeTime    int64
+	PeakBatchBytes int64
+}
+
+func (stats ParquetProfileStats) Empty() bool {
+	return stats == ParquetProfileStats{}
+}
+
+func (stats *ParquetProfileStats) Add(delta ParquetProfileStats) {
+	stats.Files += delta.Files
+	stats.RowGroups += delta.RowGroups
+	stats.RowsRead += delta.RowsRead
+	stats.BytesRead += delta.BytesRead
+	stats.PrefetchBytes += delta.PrefetchBytes
+	stats.OpenTime += delta.OpenTime
+	stats.ReadPageTime += delta.ReadPageTime
+	stats.MapTime += delta.MapTime
+	stats.RowModeTime += delta.RowModeTime
+	stats.PeakBatchBytes = max(stats.PeakBatchBytes, delta.PeakBatchBytes)
 }
 
 // Operator Resource operatorAnalyzer
@@ -332,6 +363,23 @@ func (opAlyzr *operatorAnalyzer) AddReadSizeInfo(counter *perfcounter.CounterSet
 	opAlyzr.opStats.DiskReadSize += counter.FileService.DiskReadSize.Load()
 }
 
+func (opAlyzr *operatorAnalyzer) AddParquetProfile(stats ParquetProfileStats) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.AddParquetProfile: operatorAnalyzer.opStats is nil")
+	}
+
+	opAlyzr.opStats.ParquetFiles += stats.Files
+	opAlyzr.opStats.ParquetRowGroups += stats.RowGroups
+	opAlyzr.opStats.ParquetRowsRead += stats.RowsRead
+	opAlyzr.opStats.ParquetBytesRead += stats.BytesRead
+	opAlyzr.opStats.ParquetPrefetchBytes += stats.PrefetchBytes
+	opAlyzr.opStats.ParquetOpenTime += stats.OpenTime
+	opAlyzr.opStats.ParquetReadPageTime += stats.ReadPageTime
+	opAlyzr.opStats.ParquetMapTime += stats.MapTime
+	opAlyzr.opStats.ParquetRowModeTime += stats.RowModeTime
+	opAlyzr.opStats.ParquetPeakBatchBytes = max(opAlyzr.opStats.ParquetPeakBatchBytes, stats.PeakBatchBytes)
+}
+
 func (opAlyzr *operatorAnalyzer) GetOpStats() *OperatorStats {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.GetOpStats(): operatorAnalyzer.opStats is nil")
@@ -377,6 +425,17 @@ type OperatorStats struct {
 	CacheDiskHit    int64 `json:"CacheDiskHit,omitempty"`
 	CacheRemoteRead int64 `json:"CacheRemoteRead,omitempty"`
 	CacheRemoteHit  int64 `json:"CacheRemoteHit,omitempty"`
+
+	ParquetFiles          int64 `json:"ParquetFiles,omitempty"`
+	ParquetRowGroups      int64 `json:"ParquetRowGroups,omitempty"`
+	ParquetRowsRead       int64 `json:"ParquetRowsRead,omitempty"`
+	ParquetBytesRead      int64 `json:"ParquetBytesRead,omitempty"`
+	ParquetPrefetchBytes  int64 `json:"ParquetPrefetchBytes,omitempty"`
+	ParquetOpenTime       int64 `json:"ParquetOpenTime,omitempty"`
+	ParquetReadPageTime   int64 `json:"ParquetReadPageTime,omitempty"`
+	ParquetMapTime        int64 `json:"ParquetMapTime,omitempty"`
+	ParquetRowModeTime    int64 `json:"ParquetRowModeTime,omitempty"`
+	ParquetPeakBatchBytes int64 `json:"ParquetPeakBatchBytes,omitempty"`
 
 	OperatorMetrics map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
 
@@ -498,6 +557,36 @@ func (ps *OperatorStats) String() string {
 	}
 	if ps.CacheRemoteHit > 0 {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRemoteHit:%d ", ps.CacheRemoteHit))
+	}
+	if ps.ParquetFiles > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetFiles:%d ", ps.ParquetFiles))
+	}
+	if ps.ParquetRowGroups > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetRowGroups:%d ", ps.ParquetRowGroups))
+	}
+	if ps.ParquetRowsRead > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetRowsRead:%d ", ps.ParquetRowsRead))
+	}
+	if ps.ParquetBytesRead > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetBytesRead:%dbytes ", ps.ParquetBytesRead))
+	}
+	if ps.ParquetPrefetchBytes > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetPrefetchBytes:%dbytes ", ps.ParquetPrefetchBytes))
+	}
+	if ps.ParquetOpenTime > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetOpenTime:%dns ", ps.ParquetOpenTime))
+	}
+	if ps.ParquetReadPageTime > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetReadPageTime:%dns ", ps.ParquetReadPageTime))
+	}
+	if ps.ParquetMapTime > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetMapTime:%dns ", ps.ParquetMapTime))
+	}
+	if ps.ParquetRowModeTime > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetRowModeTime:%dns ", ps.ParquetRowModeTime))
+	}
+	if ps.ParquetPeakBatchBytes > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetPeakBatchBytes:%dbytes ", ps.ParquetPeakBatchBytes))
 	}
 
 	// Join and append S3 stats if any

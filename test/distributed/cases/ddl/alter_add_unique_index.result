@@ -29,7 +29,7 @@ SELECT COUNT(*) FROM t1;
 COUNT(*)
 2
 ALTER TABLE t1 ADD UNIQUE KEY `unique_decimal_date_key`(col1, col2) COMMENT 'Unique constraint for DECIMAL and DATE';
-Duplicate entry '(1055,2023-04-01 00:00:00)' for key '__mo_index_idx_col'
+Duplicate entry '(10.55,2023-04-01 00:00:00)' for key '__mo_index_idx_col'
 SHOW INDEX FROM t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 SELECT COUNT(*) FROM t1;

@@ -16,7 +16,6 @@ package tree
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -73,11 +72,17 @@ type ToAccountOpt struct {
 	AccountName Identifier
 }
 
+func (node *ToAccountOpt) Format(ctx *FmtCtx) {
+	ctx.WriteString("to account ")
+	ctx.WriteIdentifier(node.AccountName)
+}
+
 type CloneTable struct {
 	statementImpl
 
 	SrcTable    TableName
 	CreateTable CreateTable
+	CopyGrants  bool
 
 	IsRestore     bool
 	IsRestoreByTS bool
@@ -101,8 +106,25 @@ func (node *CloneTable) FlipStmtKind() {
 }
 
 func (node *CloneTable) Format(ctx *FmtCtx) {
-	ctx.WriteString("clone table: ")
-	node.CreateTable.Format(ctx)
+	ctx.WriteString("create")
+	if node.CreateTable.Temporary {
+		ctx.WriteString(" temporary")
+	}
+	ctx.WriteString(" table")
+	if node.CreateTable.IfNotExists {
+		ctx.WriteString(" if not exists")
+	}
+	ctx.WriteByte(' ')
+	node.CreateTable.Table.Format(ctx)
+	ctx.WriteString(" clone ")
+	node.SrcTable.Format(ctx)
+	if node.CopyGrants {
+		ctx.WriteString(" copy grants")
+	}
+	if node.ToAccountOpt != nil {
+		ctx.WriteByte(' ')
+		node.ToAccountOpt.Format(ctx)
+	}
 }
 
 func (node *CloneTable) GetStatementType() string { return "CREATE TABLE CLONE" }
@@ -150,9 +172,17 @@ func (node *CloneDatabase) StmtKind() StmtKind {
 }
 
 func (node *CloneDatabase) Format(ctx *FmtCtx) {
-	ctx.WriteString(fmt.Sprintf(
-		"create database %s clone %s",
-		node.SrcDatabase.String(), node.DstDatabase.String()))
+	ctx.WriteString("create database ")
+	ctx.WriteIdentifier(node.DstDatabase)
+	ctx.WriteString(" clone ")
+	ctx.WriteIdentifier(node.SrcDatabase)
+	if node.AtTsExpr != nil {
+		node.AtTsExpr.Format(ctx)
+	}
+	if node.ToAccountOpt != nil {
+		ctx.WriteByte(' ')
+		node.ToAccountOpt.Format(ctx)
+	}
 }
 
 func NewCloneDatabase() *CloneDatabase {

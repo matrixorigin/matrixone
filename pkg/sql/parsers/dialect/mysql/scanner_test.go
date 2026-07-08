@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
@@ -157,6 +158,36 @@ func TestString(t *testing.T) {
 		id, got := NewScanner(dialect.MYSQL, tcase.in).Scan()
 		if tcase.id != id || string(got) != tcase.want {
 			t.Errorf("Scan(%q) = (%s, %q), want (%s, %q)", tcase.in, tokenName(id), got, tokenName(tcase.id), tcase.want)
+		}
+	}
+}
+
+// TestSqlquoteStringRoundTrip proves sqlquote.String produces literals this
+// scanner reads back UNCHANGED — the property the AUTO_UPDATE / REINDEX catalog
+// writes depend on. Backslash-bearing values (Windows paths, trailing backslash)
+// are exactly the cases plain quote-doubling corrupts; compare the
+// 'C:\Program Files(x86)' -> "C:Program Files(x86)" case in TestString above.
+func TestSqlquoteStringRoundTrip(t *testing.T) {
+	for _, v := range []string{
+		"abc",
+		"",
+		"a'b",
+		`a\b`,
+		`C:\Program Files`,
+		`a\\b`,
+		`x\`, // trailing backslash would otherwise swallow the closing quote
+		`'`,
+		`\`,
+		`\n`, // literal backslash-n, must NOT decode to a newline
+		`{"k":"v's","p":"a\b"}`,
+		"tab\tnl\nq'bs\\x", // literal control chars pass through; quote + backslash escaped
+		`维度\x'y`,           // multibyte UTF-8 alongside backslash + quote (byte-level escape must not corrupt it)
+	} {
+		lit := sqlquote.String(v)
+		id, got := NewScanner(dialect.MYSQL, lit).Scan()
+		if id != STRING || string(got) != v {
+			t.Errorf("round-trip %q via %q: Scan() = (%s, %q), want (STRING, %q)",
+				v, lit, tokenName(id), got, v)
 		}
 	}
 }

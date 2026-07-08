@@ -170,6 +170,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		case pb.Method_Lock,
 			pb.Method_Unlock,
 			pb.Method_GetTxnLock,
+			pb.Method_GetLockHolder,
 			pb.Method_KeepRemoteLock:
 			sid = getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
 			c.cluster.GetCNServiceWithoutWorkingState(
@@ -196,6 +197,14 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_GetActiveTxn:
 			sid = getUUIDFromServiceIdentifier(request.GetActiveTxn.ServiceID)
+			c.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		case pb.Method_CheckActiveTxn:
+			sid = getUUIDFromServiceIdentifier(request.CheckActiveTxn.ServiceID)
 			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
@@ -388,7 +397,8 @@ func (s *server) onMessage(
 	}
 
 	c := s.requests
-	if req.Method == pb.Method_GetActiveTxn {
+	if req.Method == pb.Method_GetActiveTxn ||
+		req.Method == pb.Method_CheckActiveTxn {
 		c = s.getActiveTxnRequests
 	}
 	c <- requestCtx{
