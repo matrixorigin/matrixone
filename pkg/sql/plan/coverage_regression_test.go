@@ -58,7 +58,7 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeOffsetCompensationUsesCompensat
 	require.Equal(t, uint64(15), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 }
 
-func TestApplyIndicesForSortUsingIvfflat_DistRangeOnlyFilterDoesNotCompensateOffset(t *testing.T) {
+func TestApplyIndicesForSortUsingIvfflat_DistRangeOnlyFilterCompensatesOffset(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 2, 4)
@@ -87,8 +87,8 @@ func TestApplyIndicesForSortUsingIvfflat_DistRangeOnlyFilterDoesNotCompensateOff
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Equal(t, uint64(2), tableFuncNode.Limit.GetLit().GetU64Val())
-	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(3), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.NotNil(t, tableFuncNode.IndexReaderParam.GetDistRange())
 	require.NotNil(t, tableFuncNode.IndexReaderParam.GetDistRange().GetUpperBound())
 }

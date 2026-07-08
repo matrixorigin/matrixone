@@ -152,3 +152,75 @@ func TestBuildIvfFlatSecondaryIndexDef_RejectsTooManyIncludeColumns(t *testing.T
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "supports at most 10 columns")
 }
+
+func TestBuildIvfFlatSecondaryIndexDef_RejectsInvalidIncludeColumns(t *testing.T) {
+	tests := []struct {
+		name        string
+		includeCols []string
+		colMap      map[string]*ColDef
+		errContains string
+	}{
+		{
+			name:        "missing column",
+			includeCols: []string{"missing"},
+			colMap: map[string]*ColDef{
+				"id":        makeTestColDef("id", types.T_int64),
+				"embedding": makeTestColDef("embedding", types.T_array_float32),
+			},
+			errContains: "not exist",
+		},
+		{
+			name:        "indexed vector column",
+			includeCols: []string{"embedding"},
+			colMap: map[string]*ColDef{
+				"id":        makeTestColDef("id", types.T_int64),
+				"embedding": makeTestColDef("embedding", types.T_array_float32),
+			},
+			errContains: "indexed vector column",
+		},
+		{
+			name:        "primary key",
+			includeCols: []string{"id"},
+			colMap: map[string]*ColDef{
+				"id":        makeTestColDef("id", types.T_int64),
+				"embedding": makeTestColDef("embedding", types.T_array_float32),
+			},
+			errContains: "primary key",
+		},
+		{
+			name:        "duplicate",
+			includeCols: []string{"title", "title"},
+			colMap: map[string]*ColDef{
+				"id":        makeTestColDef("id", types.T_int64),
+				"embedding": makeTestColDef("embedding", types.T_array_float32),
+				"title":     makeTestColDef("title", types.T_varchar),
+			},
+			errContains: "duplicate",
+		},
+		{
+			name:        "unsupported type",
+			includeCols: []string{"other_vec"},
+			colMap: map[string]*ColDef{
+				"id":        makeTestColDef("id", types.T_int64),
+				"embedding": makeTestColDef("embedding", types.T_array_float32),
+				"other_vec": makeTestColDef("other_vec", types.T_array_float32),
+			},
+			errContains: "unsupported type",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockOptimizer(false).CurrentContext()
+			_, _, err := ivfflatplan.Hooks{}.BuildSecondaryIndexDefs(
+				ctx,
+				makeIvfIndexWithInclude("embedding", tc.includeCols...),
+				tc.colMap,
+				nil,
+				"id",
+			)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.errContains)
+		})
+	}
+}

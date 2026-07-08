@@ -311,7 +311,11 @@ func ConstructCreateTableSQL(
 					indexStr += paramList
 					rewriteIndexStr += paramList
 				}
-				includeList := indexIncludeColumnsToString(indexdef.IncludedColumns, colNameToOriginName)
+				includedColumns, err := indexDefIncludedColumns(indexdef)
+				if err != nil {
+					return "", nil, err
+				}
+				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
 				indexStr += includeList
 				rewriteIndexStr += includeList
 				if indexStr != rewriteIndexStr {

@@ -4377,7 +4377,11 @@ func indexNeedsRewriteForUpdate(tableDef *TableDef, indexdef *IndexDef, updateCo
 		return false, nil
 	}
 
-	for _, colName := range indexdef.IncludedColumns {
+	includedColumns, err := indexDefIncludedColumns(indexdef)
+	if err != nil {
+		return false, err
+	}
+	for _, colName := range includedColumns {
 		resolvedColName := catalog.ResolveAlias(colName)
 		if _, ok := posMap[resolvedColName]; ok && columnUpdated(resolvedColName) {
 			return true, nil

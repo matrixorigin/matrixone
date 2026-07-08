@@ -1169,7 +1169,7 @@ func collectIrregularIndexUpdateCols(tableDef *plan.TableDef) (bool, map[string]
 		for _, part := range idxDef.Parts {
 			irregularIndexCols[catalog.ResolveAlias(part)] = true
 		}
-		for _, colName := range idxDef.IncludedColumns {
+		for _, colName := range indexDefIncludedColumnsBestEffort(idxDef) {
 			irregularIndexCols[catalog.ResolveAlias(colName)] = true
 		}
 	}

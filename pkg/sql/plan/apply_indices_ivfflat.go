@@ -1279,7 +1279,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 
 	newFilterList, distRange := builder.getDistRangeFromFilters(scanNode.FilterList, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
-	includeColumns := getVectorIndexIncludedColumns(multiTableIndex)
+	includeColumns, err := getVectorIndexIncludedColumns(multiTableIndex)
+	if err != nil {
+		return 0, err
+	}
 	includeAwareColumns := includeColumns
 	if vecCtx.rankOption != nil {
 		switch vecCtx.rankOption.Mode {
@@ -1307,7 +1310,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		remainingFilters = append(remainingFilters, expr)
 	}
 	canIndexOnly := canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
-	needsOffsetCompensation := len(newFilterList) > 0
 	tableFuncIncludeColumns := make([]string, 0, len(includeAwareColumns))
 	if canIndexOnly {
 		for _, col := range includeAwareColumns {
@@ -1349,10 +1351,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	tblCfgStr := string(tblCfgBytes)
 
 	// The IVF reader must fetch enough candidates for the outer sort window.
-	// When filter compensation is required, OFFSET rows also have to survive
-	// the index scan so the final sort can discard them correctly.
+	// OFFSET rows also have to survive the index scan so the final sort can
+	// discard them correctly; filter pressure adds over-fetch on top of this
+	// base LIMIT+OFFSET candidate budget below.
 	outerResultNeedExpr := DeepCopyExpr(limit)
-	if outerResultNeedExpr != nil && sortNode.Offset != nil && needsOffsetCompensation {
+	if outerResultNeedExpr != nil && sortNode.Offset != nil {
 		outerResultNeedExpr, err = bindFuncExprAndConstFold(
 			builder.GetContext(),
 			builder.compCtx.GetProcess(),
