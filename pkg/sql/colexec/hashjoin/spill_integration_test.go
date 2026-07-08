@@ -23,9 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -198,6 +201,48 @@ func TestGetSpilledInputBatchNoBuckets(t *testing.T) {
 	result, err := hashJoin.getSpilledInputBatch(proc, process.NewAnalyzer(0, false, false, "test"))
 	require.NoError(t, err)
 	require.Nil(t, result.Batch)
+}
+
+// TestEmptyProbeDoesNotPanic verifies that emptyProbe handles empty build
+// (ctr.mp == nil) without panicking. This is the path taken when a spill
+// bucket returns BucketEmptyBuild for outer joins.
+func TestEmptyProbeDoesNotPanic(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	hashJoin := &HashJoin{
+		JoinType:   plan.Node_LEFT,
+		ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		LeftTypes:  []types.Type{types.T_int32.ToType()},
+		RightTypes: []types.Type{types.T_int32.ToType()},
+	}
+	ctr := &hashJoin.ctr
+
+	// Properly initialize resBat.
+	ctr.resBat = batch.NewWithSize(len(hashJoin.ResultCols))
+	for i, rp := range hashJoin.ResultCols {
+		if rp.Rel == 0 {
+			ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.LeftTypes[rp.Pos])
+		} else {
+			ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.RightTypes[rp.Pos])
+		}
+	}
+
+	// Set up leftBat with some rows.
+	ctr.leftBat = batch.NewWithSize(1)
+	ctr.leftBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	ctr.leftBat.SetRowCount(3)
+
+	// mp is nil (empty build) — emptyProbe must handle this.
+	ctr.mp = nil
+
+	var result vm.CallResult
+	require.NotPanics(t, func() {
+		err := ctr.emptyProbe(hashJoin, proc, &result)
+		require.NoError(t, err)
+		require.NotNil(t, result.Batch)
+		require.Equal(t, 3, result.Batch.RowCount())
+	}, "emptyProbe with nil mp must not panic and must emit all probe rows")
 }
 
 // TestCleanupSpillEngine verifies that engine cleanup closes all file descriptors.

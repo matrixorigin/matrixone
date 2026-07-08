@@ -105,6 +105,51 @@ insert into t_dedup_spill select *, 0 from generate_series(100000, 200000) g
 on duplicate key update val = val + 1;
 select count(*) from t_dedup_spill;
 drop table if exists t_dedup_spill;
+
+-- LEFT JOIN spill with non-overlapping build/probe keys:
+-- exercises outer-join spill path (BucketEmptyBuild for some buckets).
+drop table if exists t_left_build;
+drop table if exists t_left_probe;
+create table t_left_build(c1 int not null, c2 int not null) cluster by c1;
+create table t_left_probe(c1 int not null, c2 int not null) cluster by c1;
+insert into t_left_build select *, 1 from generate_series(1, 500000) g;
+insert into t_left_probe select *, 1 from generate_series(500001, 1000000) g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t_left_build');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t_left_probe');
+select Sleep(1);
+set @@join_spill_mem = 1000;
+select count(*) from t_left_probe left join t_left_build on t_left_probe.c1=t_left_build.c1;
+drop table if exists t_left_build;
+drop table if exists t_left_probe;
+
+-- RIGHT JOIN spill: exercises NeedsProbeForEmptyBuild + RIGHT path.
+drop table if exists t_right_build;
+drop table if exists t_right_probe;
+create table t_right_build(c1 int not null, c2 int not null) cluster by c1;
+create table t_right_probe(c1 int not null, c2 int not null) cluster by c1;
+insert into t_right_build select *, 1 from generate_series(1, 500000) g;
+insert into t_right_probe select *, 1 from generate_series(500001, 1000000) g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t_right_build');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t_right_probe');
+select Sleep(1);
+select count(*) from t_right_build right join t_right_probe on t_right_build.c1=t_right_probe.c1;
+drop table if exists t_right_build;
+drop table if exists t_right_probe;
+
+-- Dedup join spill with empty target table:
+-- exercises dedup spill with no pre-existing rows.
+drop table if exists t_dedup_empty;
+create table t_dedup_empty (id int not null, val int) cluster by id;
+set @@join_spill_mem = 1000;
+insert into t_dedup_empty select *, 0 from generate_series(1, 200000) g
+on duplicate key update val = val + 1;
+select count(*) from t_dedup_empty;
+drop table if exists t_dedup_empty;
+
 drop database if exists d1;
 drop database if exists test;
 create database test;
