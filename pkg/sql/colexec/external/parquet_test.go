@@ -691,6 +691,106 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.Equal(t, []types.Decimal128{want0, want1, want2}, vector.MustFixedColWithTypeCheck[types.Decimal128](vecDec))
 	})
 
+	t.Run("rounded numeric to integer widths", func(t *testing.T) {
+		fSigned, pageSigned := writeDictAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Value{
+			parquet.DoubleValue(1.5),
+			parquet.DoubleValue(-2.5),
+		})
+		colSigned := fSigned.Root().Column("c")
+		var h ParquetHandler
+
+		vecInt8 := vector.NewVec(types.T_int8.ToType())
+		mp := h.getMapper(colSigned, plan.Type{Id: int32(types.T_int8), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(pageSigned, proc, vecInt8))
+		require.Equal(t, []int8{2, -3}, vector.MustFixedColWithTypeCheck[int8](vecInt8))
+
+		vecInt16 := vector.NewVec(types.T_int16.ToType())
+		mp = h.getMapper(colSigned, plan.Type{Id: int32(types.T_int16), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(pageSigned, proc, vecInt16))
+		require.Equal(t, []int16{2, -3}, vector.MustFixedColWithTypeCheck[int16](vecInt16))
+
+		vecInt32 := vector.NewVec(types.T_int32.ToType())
+		mp = h.getMapper(colSigned, plan.Type{Id: int32(types.T_int32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(pageSigned, proc, vecInt32))
+		require.Equal(t, []int32{2, -3}, vector.MustFixedColWithTypeCheck[int32](vecInt32))
+
+		vecInt64 := vector.NewVec(types.T_int64.ToType())
+		mp = h.getMapper(colSigned, plan.Type{Id: int32(types.T_int64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(pageSigned, proc, vecInt64))
+		require.Equal(t, []int64{2, -3}, vector.MustFixedColWithTypeCheck[int64](vecInt64))
+
+		fUnsigned, pageUnsigned := writeDictAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Value{
+			parquet.FloatValue(1.4),
+			parquet.FloatValue(1.5),
+		})
+		colUnsigned := fUnsigned.Root().Column("c")
+
+		vecUint8 := vector.NewVec(types.T_uint8.ToType())
+		mp = h.getMapper(colUnsigned, plan.Type{Id: int32(types.T_uint8), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(pageUnsigned, proc, vecUint8))
+		require.Equal(t, []uint8{1, 2}, vector.MustFixedColWithTypeCheck[uint8](vecUint8))
+
+		vecUint16 := vector.NewVec(types.T_uint16.ToType())
+		mp = h.getMapper(colUnsigned, plan.Type{Id: int32(types.T_uint16), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(pageUnsigned, proc, vecUint16))
+		require.Equal(t, []uint16{1, 2}, vector.MustFixedColWithTypeCheck[uint16](vecUint16))
+
+		vecUint32 := vector.NewVec(types.T_uint32.ToType())
+		mp = h.getMapper(colUnsigned, plan.Type{Id: int32(types.T_uint32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(pageUnsigned, proc, vecUint32))
+		require.Equal(t, []uint32{1, 2}, vector.MustFixedColWithTypeCheck[uint32](vecUint32))
+
+		vecUint64 := vector.NewVec(types.T_uint64.ToType())
+		mp = h.getMapper(colUnsigned, plan.Type{Id: int32(types.T_uint64), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(pageUnsigned, proc, vecUint64))
+		require.Equal(t, []uint64{1, 2}, vector.MustFixedColWithTypeCheck[uint64](vecUint64))
+
+		fDecimal, pageDecimal := writeDictAndGetPage(t, parquet.Decimal(2, 9, parquet.Int32Type), []parquet.Value{
+			parquet.Int32Value(12345),
+		})
+		mp = h.getMapper(fDecimal.Root().Column("c"), plan.Type{Id: int32(types.T_int16), NotNullable: true})
+		require.NotNil(t, mp)
+		vecDecInt := vector.NewVec(types.T_int16.ToType())
+		require.NoError(t, mp.mapping(pageDecimal, proc, vecDecInt))
+		require.Equal(t, []int16{123}, vector.MustFixedColWithTypeCheck[int16](vecDecInt))
+	})
+
+	t.Run("rounded numeric to integer rejects invalid values", func(t *testing.T) {
+		var h ParquetHandler
+
+		fSignedOverflow, pageSignedOverflow := writeDictAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Value{
+			parquet.FloatValue(128),
+		})
+		mp := h.getMapper(fSignedOverflow.Root().Column("c"), plan.Type{Id: int32(types.T_int8), NotNullable: true})
+		require.NotNil(t, mp)
+		vecInt8 := vector.NewVec(types.T_int8.ToType())
+		require.ErrorContains(t, mp.mapping(pageSignedOverflow, proc, vecInt8), "overflows TINYINT")
+
+		fNegativeUnsigned, pageNegativeUnsigned := writeDictAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Value{
+			parquet.DoubleValue(-1),
+		})
+		mp = h.getMapper(fNegativeUnsigned.Root().Column("c"), plan.Type{Id: int32(types.T_uint8), NotNullable: true})
+		require.NotNil(t, mp)
+		vecUint8 := vector.NewVec(types.T_uint8.ToType())
+		require.ErrorContains(t, mp.mapping(pageNegativeUnsigned, proc, vecUint8), "overflows unsigned integer")
+
+		fUnsignedOverflow, pageUnsignedOverflow := writeDictAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Value{
+			parquet.DoubleValue(256),
+		})
+		mp = h.getMapper(fUnsignedOverflow.Root().Column("c"), plan.Type{Id: int32(types.T_uint8), NotNullable: true})
+		require.NotNil(t, mp)
+		vecUint8Overflow := vector.NewVec(types.T_uint8.ToType())
+		require.ErrorContains(t, mp.mapping(pageUnsignedOverflow, proc, vecUint8Overflow), "overflows TINYINT UNSIGNED")
+	})
+
 	t.Run("decimal int32 to int64 and json", func(t *testing.T) {
 		f, page := writeDictAndGetPage(t, parquet.Decimal(2, 9, parquet.Int32Type), []parquet.Value{
 			parquet.Int32Value(12345),
@@ -1089,6 +1189,35 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		wantTime, err := types.ParseTime("12:30:45.123456", 6)
 		require.NoError(t, err)
 		require.Equal(t, []types.Time{wantTime}, vector.MustFixedColWithTypeCheck[types.Time](vecTime))
+	})
+
+	t.Run("time logical to datetime", func(t *testing.T) {
+		wantTime, err := types.ParseTime("12:30:45.123456", 6)
+		require.NoError(t, err)
+		row := parquet.Row{parquet.Int64Value(int64(wantTime)).Level(0, 0, 0)}
+		f, page := writeColumnAndGetPage(t, parquet.Time(parquet.Microsecond), []parquet.Row{row})
+
+		vec := vector.NewVec(types.New(types.T_datetime, 0, 6))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_datetime), Scale: 6, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []types.Datetime{wantTime.ToDatetime(6)}, vector.MustFixedColWithTypeCheck[types.Datetime](vec))
+	})
+
+	t.Run("time logical dictionary to datetime", func(t *testing.T) {
+		wantTime, err := types.ParseTime("01:02:03.000000", 6)
+		require.NoError(t, err)
+		f, page := writeDictAndGetPage(t, parquet.Encoded(parquet.Time(parquet.Microsecond), &parquet.RLEDictionary), []parquet.Value{
+			parquet.Int64Value(int64(wantTime)),
+		})
+
+		vec := vector.NewVec(types.New(types.T_datetime, 0, 6))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_datetime), Scale: 6, NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []types.Datetime{wantTime.ToDatetime(6)}, vector.MustFixedColWithTypeCheck[types.Datetime](vec))
 	})
 }
 
