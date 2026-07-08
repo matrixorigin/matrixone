@@ -65,6 +65,44 @@ func TestObjectList(t *testing.T) {
 	t.Log(ll.getNodes(entry1.ID(), false))
 }
 
+func TestObjectListUpdateCreateTSWithDeleteEntry(t *testing.T) {
+	ll := NewObjectList(false)
+	nobjid := objectio.NewObjectid()
+	createTS := types.BuildTS(10, 0)
+	deleteTS := types.BuildTS(20, 0)
+	updatedCreateTS := types.BuildTS(5, 0)
+	createEntry := &ObjectEntry{
+		ObjectNode: ObjectNode{SortHint: 1},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: createTS,
+		},
+		ObjectMVCCNode: ObjectMVCCNode{ObjectStats: *objectio.NewObjectStatsWithObjectID(&nobjid, true, false, false)},
+		CreateNode:     txnbase.NewTxnMVCCNodeWithTS(createTS),
+		ObjectState:    ObjectState_Create_ApplyCommit,
+	}
+	deleteEntry := createEntry.Clone()
+	deleteEntry.DeletedAt = deleteTS
+	deleteEntry.DeleteNode = txnbase.NewTxnMVCCNodeWithTS(deleteTS)
+	deleteEntry.ObjectState = ObjectState_Delete_ApplyCommit
+	updatedCreateEntry := createEntry.Clone()
+	updatedCreateEntry.nextVersion = deleteEntry
+	deleteEntry.prevVersion = updatedCreateEntry
+
+	ll.modify(nil, deleteEntry, updatedCreateEntry)
+	updated, err := ll.UpdateCreateTS(createEntry.ID(), updatedCreateTS)
+	require.NoError(t, err)
+	require.True(t, updated.IsDEntry())
+
+	nodes := ll.GetAllNodes(createEntry.ID())
+	require.Len(t, nodes, 2)
+	require.Equal(t, updatedCreateTS, nodes[0].CreatedAt)
+	require.Equal(t, updatedCreateTS, nodes[0].CreateNode.GetPrepare())
+	require.Equal(t, updatedCreateTS, nodes[1].CreatedAt)
+	require.Equal(t, updatedCreateTS, nodes[1].CreateNode.GetPrepare())
+	require.Same(t, nodes[0].prevVersion, nodes[1])
+	require.Same(t, nodes[1].nextVersion, nodes[0])
+}
+
 func TestGetSoftdeleteObjects(t *testing.T) {
 	db := MockDBEntryWithAccInfo(0, 0)
 	tbl := MockTableEntryWithDB(db, 1)

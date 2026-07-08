@@ -133,8 +133,8 @@ func (node *AppendNode) PrepareCommit() error {
 
 func (node *AppendNode) ApplyCommit(id string) error {
 	node.mvcc.Lock()
+	defer node.mvcc.Unlock()
 	if node.IsCommitted() {
-		node.mvcc.Unlock()
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
 	node.TxnMVCCNode.ApplyCommit(id)
@@ -143,7 +143,6 @@ func (node *AppendNode) ApplyCommit(id string) error {
 	if listener != nil {
 		err = listener(node)
 	}
-	node.mvcc.Unlock()
 	return err
 }
 

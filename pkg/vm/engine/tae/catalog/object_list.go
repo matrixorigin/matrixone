@@ -329,14 +329,24 @@ func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*Object
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	oldNode := nodes[0]
-	if oldNode.IsDEntry() {
-		return oldNode, nil
-	}
 	newNode := oldNode.Clone()
-	newNode.CreatedAt = ts
-	newNode.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
-	newTree.Delete(oldNode)
-	newTree.Set(newNode)
+	if oldNode.IsDEntry() {
+		newPrev := oldNode.prevVersion.Clone()
+		newPrev.CreatedAt = ts
+		newPrev.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
+		newPrev.nextVersion = newNode
+		newNode.CreatedAt = ts
+		newNode.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
+		newNode.prevVersion = newPrev
+		newTree.Delete(oldNode)
+		newTree.Set(newNode)
+		newTree.Set(newPrev)
+	} else {
+		newNode.CreatedAt = ts
+		newNode.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
+		newTree.Delete(oldNode)
+		newTree.Set(newNode)
+	}
 	maxTS := newNode.CreatedAt
 	if maxTS.LT(&newNode.DeletedAt) {
 		maxTS = newNode.DeletedAt
