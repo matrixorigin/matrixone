@@ -42,3 +42,40 @@ id    status    note
 1    shipped    n1
 2    paid    n2
 drop table enum_idx07;
+drop table if exists enum_idx08;
+create table enum_idx08 (id int primary key, status enum('new','paid','shipped'), note varchar(20), unique key uk_note_status(note, status));
+insert into enum_idx08 values (1,'new','n1'),(2,'paid','n2');
+update enum_idx08 set status='shipped', note='updated' where id=1;
+select id, status, note from enum_idx08 order by id;
+id    status    note
+1    shipped    updated
+2    paid    n2
+select id from enum_idx08 where status='new';
+id
+select id from enum_idx08 where status='shipped';
+id
+1
+drop table enum_idx08;
+drop table if exists set_idx01;
+create table set_idx01 (id int primary key, opts set('a','b','c'), key idx_opts(opts));
+insert into set_idx01 values (1,'a'),(2,'b');
+update set_idx01 set opts='c' where id=1;
+select id, opts from set_idx01 order by id;
+id    opts
+1    c
+2    b
+select id from set_idx01 where opts='a';
+id
+select id from set_idx01 where opts='c' order by id;
+id
+1
+drop table set_idx01;
+drop table if exists set_idx02;
+create table set_idx02 (id int primary key, opts set('a','b','c'), note varchar(20), key idx_note_opts(note, opts));
+insert into set_idx02 values (1,'a','n1'),(2,'b','n2');
+update set_idx02 set opts='c', note='updated' where id=1;
+select id, opts, note from set_idx02 order by id;
+id    opts    note
+1    c    updated
+2    b    n2
+drop table set_idx02;

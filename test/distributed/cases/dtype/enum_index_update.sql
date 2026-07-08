@@ -28,3 +28,34 @@ select id from enum_idx07 where status='shipped';
 update enum_idx07 set status='paid' where id=1;
 select id, status, note from enum_idx07 order by id;
 drop table enum_idx07;
+
+-- update enum column with composite unique index
+drop table if exists enum_idx08;
+create table enum_idx08 (id int primary key, status enum('new','paid','shipped'), note varchar(20), unique key uk_note_status(note, status));
+insert into enum_idx08 values (1,'new','n1'),(2,'paid','n2');
+update enum_idx08 set status='shipped', note='updated' where id=1;
+select id, status, note from enum_idx08 order by id;
+select id from enum_idx08 where status='new';
+select id from enum_idx08 where status='shipped';
+drop table enum_idx08;
+
+-- update set column with single-column secondary index
+drop table if exists set_idx01;
+create table set_idx01 (id int primary key, opts set('a','b','c'), key idx_opts(opts));
+insert into set_idx01 values (1,'a'),(2,'b');
+update set_idx01 set opts='c' where id=1;
+select id, opts from set_idx01 order by id;
+select id from set_idx01 where opts='a';
+select id from set_idx01 where opts='c' order by id;
+drop table set_idx01;
+
+-- update set column with composite secondary index
+drop table if exists set_idx02;
+create table set_idx02 (id int primary key, opts set('a','b','c'), note varchar(20), key idx_note_opts(note, opts));
+insert into set_idx02 values (1,'a','n1'),(2,'b','n2');
+update set_idx02 set opts='c', note='updated' where id=1;
+select id, opts, note from set_idx02 order by id;
+drop table set_idx02;
+
+-- update set column with single-column unique index (SET not allowed in unique key, verify error)
+-- create table set_idx03 (id int primary key, opts set('a','b','c'), unique key uk_opts(opts));

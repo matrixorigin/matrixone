@@ -105,7 +105,10 @@ func TestIndexTableKeyTypeForSinglePart(t *testing.T) {
 		require.Equal(t, "new,paid,shipped", got.Enumvalues)
 	})
 
-	t.Run("set preserves enumvalues", func(t *testing.T) {
+	// SET columns are rejected for UNIQUE indexes (checkIndexColumnSupportability),
+	// so indexTableKeyTypeForSinglePart is unreachable for SET in practice.
+	// This test only guards against accidental regressions in the helper itself.
+	t.Run("set preserves enumvalues (defensive, unreachable path)", func(t *testing.T) {
 		col := &ColDef{Typ: Type{Id: int32(types.T_uint64), Enumvalues: "a,b,c"}}
 		got := indexTableKeyTypeForSinglePart(col, keyPartWithLength("s", 0))
 		require.Equal(t, int32(types.T_uint64), got.Id)
