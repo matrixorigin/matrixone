@@ -1532,7 +1532,7 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 	hasRemote := false
 
 	for _, s := range target {
-		if !isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
+		if !sameExecutionNode(s.NodeInfo, source.NodeInfo) {
 			hasRemote = true
 			break
 		}
@@ -1542,7 +1542,7 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 	}
 
 	for i, s := range target {
-		if isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
+		if sameExecutionNode(s.NodeInfo, source.NodeInfo) {
 			// Local reg.
 			// Put them into arg.LocalRegs
 			s.Proc.Reg.MergeReceivers[idx].SetNilBatchCntForReuse(source.NodeInfo.Mcpu)
