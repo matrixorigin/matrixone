@@ -37,7 +37,7 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 
 	stats := toScheduleScanStats(node)
 	scanPlacement := schedule.DecideScanPlacement(schedule.ScanRequest{
-		QueryWorkers:         toScheduledQueryWorkers(c.cnList),
+		QueryWorkers:         c.scheduledQueryWorkers(),
 		CurrentCN:            c.currentCNWorker(),
 		QueryPlacementReason: c.queryPlacement.Reason,
 		Stats:                stats,
@@ -96,7 +96,7 @@ func (c *Compile) localScanNodes(
 		}}, nil
 	}
 
-	engNode := toEngineNode(workers[0])
+	engNode := c.materializeScheduledWorker(workers[0])
 	engNode.Mcpu = normalizeMcpu(mcpu)
 	engNode.CNCNT = 1
 	engNode.CNIDX = 0
@@ -130,13 +130,10 @@ func (c *Compile) materializeScanNodes(
 		if stats != nil && stats.Dop > 0 {
 			mcpu = min(mcpu, int(stats.Dop))
 		}
-		engNode := engine.Node{
-			Id:    workers[i].ID,
-			Addr:  workers[i].Addr,
-			Mcpu:  mcpu,
-			CNCNT: int32(len(workers)),
-			CNIDX: int32(i),
-		}
+		engNode := c.materializeScheduledWorker(workers[i])
+		engNode.Mcpu = mcpu
+		engNode.CNCNT = int32(len(workers))
+		engNode.CNIDX = int32(i)
 		if engNode.Addr != c.addr {
 			if err := remoteTombstones.attach(&engNode); err != nil {
 				return nil, err
@@ -178,27 +175,6 @@ func toScheduleScanStats(node *plan.Node) *schedule.ScanStats {
 		Dop:        node.Stats.Dop,
 		ForceOneCN: node.Stats.ForceOneCN,
 	}
-}
-
-// toScheduledQueryWorkers converts already-scheduled query workers into scan
-// workers. Unlike candidate discovery, a worker with only local identity and no
-// remote route is still a valid single-CN execution target and must be kept.
-func toScheduledQueryWorkers(nodes engine.Nodes) schedule.Workers {
-	if len(nodes) == 0 {
-		return nil
-	}
-	workers := make(schedule.Workers, 0, len(nodes))
-	for _, node := range nodes {
-		worker := toScheduleWorker(node)
-		if worker.ID == "" && worker.Addr == "" {
-			continue
-		}
-		workers = append(workers, worker)
-	}
-	if len(workers) == 0 {
-		return nil
-	}
-	return workers
 }
 
 func (c *Compile) maybeLogScanPlacement(

@@ -210,6 +210,9 @@ func (s *Scope) ipAddrMatch(local string) bool {
 	if len(s.NodeInfo.Addr) == 0 {
 		return true
 	}
+	if len(local) == 0 {
+		return false
+	}
 	return isSameCN(s.NodeInfo.Addr, local)
 }
 

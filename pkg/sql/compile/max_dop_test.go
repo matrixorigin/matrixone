@@ -66,6 +66,36 @@ func TestToScheduledQueryWorkersKeepsLocalIdentityWithoutRoute(t *testing.T) {
 	}, workers)
 }
 
+func TestToScheduledQueryWorkersKeepsLocalSentinel(t *testing.T) {
+	workers := toScheduledQueryWorkers(engine.Nodes{
+		{Mcpu: 1},
+		{},
+	})
+
+	require.Equal(t, schedule.Workers{{Mcpu: 1}}, workers)
+}
+
+func TestScheduledQueryWorkersDoesNotMaterializeLocalRoute(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-local", Mcpu: 4},
+	}
+
+	require.Equal(t, schedule.Workers{{ID: "cn-local", Mcpu: 4}}, c.scheduledQueryWorkers())
+}
+
+func TestMaterializeScheduledWorkerUsesLocalRouteAtExecutionBoundary(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+
+	node := c.materializeScheduledWorker(schedule.Worker{ID: "cn-local", Mcpu: 4})
+	require.Equal(t, engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 4}, node)
+
+	remote := c.materializeScheduledWorker(schedule.Worker{ID: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8})
+	require.Equal(t, engine.Node{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8}, remote)
+}
+
 func TestShouldWarnScanPlacement(t *testing.T) {
 	for _, reason := range []string{
 		schedule.ReasonScanNoWorkers,
@@ -111,6 +141,44 @@ func TestSingleWorkerStageNodeFallsBackToCurrentCNForMultiCNQuery(t *testing.T) 
 	require.Equal(t, "cn-local:6001", node.Addr)
 }
 
+func TestQueryWorkerStageNodesKeepsScheduledWorkers(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-local", Mcpu: 0},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+
+	nodes := c.queryWorkerStageNodes()
+	require.Equal(t, engine.Nodes{
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}, nodes)
+}
+
+func TestQueryWorkerStageNodesCanonicalizesCurrentCNAddress(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.cnList = engine.Nodes{
+		{Addr: "cn-remote:6001", Mcpu: 8},
+		{Id: "cn-local", Mcpu: 4},
+	}
+
+	nodes := c.queryWorkerStageNodes()
+	require.Equal(t, engine.Nodes{
+		{Addr: "cn-remote:6001", Mcpu: 8},
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 4},
+	}, nodes)
+}
+
+func TestQueryWorkerStageNodesKeepsLocalSentinel(t *testing.T) {
+	c := NewMockCompile(t)
+	c.cnList = engine.Nodes{{Mcpu: 1}}
+
+	nodes := c.queryWorkerStageNodes()
+	require.Equal(t, engine.Nodes{{Mcpu: 1}}, nodes)
+}
+
 func TestNewScopeListOnSingleWorkerStageKeepsRemoteSingleWorker(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
@@ -126,6 +194,85 @@ func TestNewScopeListOnSingleWorkerStageKeepsRemoteSingleWorker(t *testing.T) {
 		require.Equal(t, "cn-remote:6001", s.NodeInfo.Addr)
 		require.Equal(t, 1, s.NodeInfo.Mcpu)
 	}
+}
+
+func TestScopeNodeWithMcpuKeepsWorkerIdentity(t *testing.T) {
+	node := scopeNodeWithMcpu(engine.Node{
+		Id:   "cn-1",
+		Addr: "cn-1:6001",
+		Mcpu: 8,
+	}, 0)
+
+	require.Equal(t, "cn-1", node.Id)
+	require.Equal(t, "cn-1:6001", node.Addr)
+	require.Equal(t, 1, node.Mcpu)
+}
+
+func TestConstructScopeForExternalNodeKeepsWorkerIdentity(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	scope := c.constructScopeForExternalNode(engine.Node{
+		Id:   "remote",
+		Addr: "remote:6001",
+		Mcpu: 8,
+	}, true)
+
+	require.Equal(t, "remote", scope.NodeInfo.Id)
+	require.Equal(t, "remote:6001", scope.NodeInfo.Addr)
+	require.Equal(t, 1, scope.NodeInfo.Mcpu)
+}
+
+func TestSameExecutionNodeUsesIdentityAndDoesNotMatchEmptyAddressToRemote(t *testing.T) {
+	require.True(t, sameExecutionNode(
+		engine.Node{Id: "cn-local", Mcpu: 1},
+		engine.Node{Id: "cn-local", Addr: "stale:6001", Mcpu: 1},
+	))
+	require.False(t, sameExecutionNode(
+		engine.Node{Id: "cn-local", Mcpu: 1},
+		engine.Node{Id: "cn-remote", Addr: "remote:6001", Mcpu: 1},
+	))
+	require.False(t, sameExecutionNode(
+		engine.Node{Mcpu: 1},
+		engine.Node{Addr: "remote:6001", Mcpu: 1},
+	))
+}
+
+func TestMergeScopesByStageNodesUsesExecutionIdentity(t *testing.T) {
+	c := NewMockCompile(t)
+	c.anal = &AnalyzeModule{}
+	local := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Id: "cn-local", Mcpu: 1},
+		Proc:     c.proc.NewNoContextChildProc(0),
+	}
+	remote := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Id: "cn-remote", Addr: "remote:6001", Mcpu: 1},
+		Proc:     c.proc.NewNoContextChildProc(0),
+	}
+
+	grouped := c.mergeScopesByStageNodes([]*Scope{local, remote}, engine.Nodes{
+		{Id: "cn-local", Mcpu: 1},
+		{Id: "cn-remote", Addr: "remote:6001", Mcpu: 1},
+	})
+
+	require.Len(t, grouped, 2)
+	require.Equal(t, "cn-local", grouped[0].NodeInfo.Id)
+	require.Len(t, grouped[0].PreScopes, 1)
+	require.Equal(t, "cn-local", grouped[0].PreScopes[0].NodeInfo.Id)
+	require.Equal(t, "cn-remote", grouped[1].NodeInfo.Id)
+	require.Len(t, grouped[1].PreScopes, 1)
+	require.Equal(t, "cn-remote", grouped[1].PreScopes[0].NodeInfo.Id)
+}
+
+func TestScopeIpAddrMatchDoesNotTreatEmptyLocalAddressAsRemoteMatch(t *testing.T) {
+	scope := &Scope{NodeInfo: engine.Node{Addr: "remote:6001"}}
+	require.False(t, scope.ipAddrMatch(""))
+
+	scope.NodeInfo.Addr = ""
+	require.True(t, scope.ipAddrMatch(""))
 }
 
 func TestGenerateNodesRespectsNodeDOPOnMultiCN(t *testing.T) {

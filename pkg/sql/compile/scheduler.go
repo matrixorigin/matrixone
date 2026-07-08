@@ -61,7 +61,7 @@ func (c *Compile) scheduleQueryWorkers() (engine.Nodes, error) {
 			placement.Reason,
 			placement.CurrentCNPolicy.String())
 	}
-	nodes := toEngineNodes(placement.Workers)
+	nodes := c.materializeScheduledWorkers(placement.Workers)
 	if c.execType == plan2.ExecTypeAP_MULTICN {
 		if placement.Reason == schedule.ReasonNoCandidateCN {
 			getQueryScheduleLogger().WarnWithConfig(
@@ -70,6 +70,9 @@ func (c *Compile) scheduleQueryWorkers() (engine.Nodes, error) {
 				queryScheduleLogRateLimit,
 				c.querySchedulePlacementFields(placement)...)
 		}
+	}
+	if err := c.validateScheduledQueryRoutes(nodes, placement); err != nil {
+		return nil, err
 	}
 	return nodes, nil
 }
@@ -85,6 +88,28 @@ func (c *Compile) querySchedulePlacementFields(placement schedule.QueryDecision)
 		zap.Int("worker-count", len(placement.Workers)),
 		zap.Bool("is-internal", c.isInternal),
 	}
+}
+
+func (c *Compile) validateScheduledQueryRoutes(nodes engine.Nodes, placement schedule.QueryDecision) error {
+	if c.execType != plan2.ExecTypeAP_MULTICN || len(nodes) <= 1 {
+		return nil
+	}
+	for _, node := range nodes {
+		if node.Addr != "" {
+			continue
+		}
+		getQueryScheduleLogger().WarnWithConfig(
+			"query-schedule-unroutable-selected-worker",
+			"query schedule selected a worker without route for multi-CN execution",
+			queryScheduleLogRateLimit,
+			append(c.querySchedulePlacementFields(placement),
+				zap.String("worker-id", node.Id),
+				zap.Int("worker-mcpu", node.Mcpu))...)
+		return moerr.NewInternalErrorNoCtxf(
+			"query schedule selected worker %s without address for multi-CN execution",
+			node.Id)
+	}
+	return nil
 }
 
 func (c *Compile) getCandidateCNs() (engine.Nodes, error) {
@@ -196,6 +221,31 @@ func toScheduleCandidateWorkers(nodes engine.Nodes) schedule.Workers {
 	return workers
 }
 
+// toScheduledQueryWorkers converts already-scheduled query workers into stage
+// or scan workers. Unlike candidate discovery, a worker with only local identity
+// and no remote route is still a valid single-CN execution target and must be kept.
+func toScheduledQueryWorkers(nodes engine.Nodes) schedule.Workers {
+	if len(nodes) == 0 {
+		return nil
+	}
+	workers := make(schedule.Workers, 0, len(nodes))
+	for _, node := range nodes {
+		if node.Id == "" && node.Addr == "" && node.Mcpu == 0 {
+			continue
+		}
+		worker := toScheduleWorker(node)
+		workers = append(workers, worker)
+	}
+	if len(workers) == 0 {
+		return nil
+	}
+	return workers
+}
+
+func (c *Compile) scheduledQueryWorkers() schedule.Workers {
+	return toScheduledQueryWorkers(c.cnList)
+}
+
 func toEngineNode(worker schedule.Worker) engine.Node {
 	return engine.Node{
 		Id:   worker.ID,
@@ -204,15 +254,30 @@ func toEngineNode(worker schedule.Worker) engine.Node {
 	}
 }
 
-func toEngineNodes(workers schedule.Workers) engine.Nodes {
+func (c *Compile) materializeScheduledWorker(worker schedule.Worker) engine.Node {
+	node := toEngineNode(worker)
+	if node.Addr == "" && c.canUseLocalExecutionRoute(worker) {
+		node.Addr = c.addr
+	}
+	return node
+}
+
+func (c *Compile) materializeScheduledWorkers(workers schedule.Workers) engine.Nodes {
 	if len(workers) == 0 {
 		return nil
 	}
 	nodes := make(engine.Nodes, 0, len(workers))
 	for _, worker := range workers {
-		nodes = append(nodes, toEngineNode(worker))
+		nodes = append(nodes, c.materializeScheduledWorker(worker))
 	}
 	return nodes
+}
+
+func (c *Compile) canUseLocalExecutionRoute(worker schedule.Worker) bool {
+	// At this materialization boundary, an empty Addr in already-scheduled
+	// workers can only represent the local current CN: candidate discovery drops
+	// unroutable remote workers, and multi-CN query output is route-validated.
+	return c.addr != "" && worker.Addr == ""
 }
 
 func normalizeMcpu(mcpu int) int {
