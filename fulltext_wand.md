@@ -590,6 +590,13 @@ is retained only as a schema-change / corruption-recovery fallback).
     → rebuild; MERGE on ngram → NotSupported). idxcron fires it via
     `SyncDescriptor.IdxcronReindexOption="MERGE"` → executor builds `… FULLTEXT MERGE FORCE_SYNC`.
     Verified live end-to-end.
+  - **idxcron MERGE-vs-REBUILD by dead fraction — DONE (`e1297bfb9`).** Scheduled compaction is
+    MERGE (incremental) normally, but fires a full REBUILD once the base is `> RebuildDeadPct` (30,
+    hardcoded) dead. Dead fraction is estimated cheaply as `1 - COUNT(*)_source / SUM(metadata.nrow)`
+    (source live rows vs docs physically in the base — no postings loaded). A rebuild reclaims all
+    dead docs + tombstones at once; reclaiming incrementally would need a global merge = O(corpus)
+    resident (OOM), so REBUILD is the reclaim path. Wired via a new OPTIONAL `ReindexOptioner` idxcron
+    hook (type-asserted; only fulltext implements it — the vector plugins keep their static option).
   - **Tombstone GC — WON'T DO (decided 2026-07-08).** A delete tombstone for a genuinely-removed
     doc persists in the tail until a REBUILD (fold consolidates N→1; an updated pk's tombstone is
     resolved by its re-insert; tiered merge reclaims the docs but not the tombstones). This is
@@ -667,7 +674,7 @@ split into capacity-bounded sub-indexes, not one monolith.
 Compaction has **two phases**, both merging already-built segments (no re-tokenize) via
 `Merge(id, segs…)` (`wand.go:197`) + `ComputeLiveness`, output re-split to stay ≤
 `max_index_capacity` (`compact.go` `Split`), all in **one transaction**. Every base sub
-carries a recency key (`metadata.chunk_id`): **0** for a full build (oldest), **K** for a
+carries a recency key (`metadata.recency`): **0** for a full build (oldest), **K** for a
 folded/merged base; the tail starts at **1**.
 
 **2-fold — DONE (`523d7daa2`), O(tail), memory-bounded.** Loads ONLY the threshold-bounded
