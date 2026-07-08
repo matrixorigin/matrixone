@@ -74,6 +74,15 @@ func ValidateResidencyPolicy(ctx context.Context, policy model.ResidencyPolicy) 
 	return nil
 }
 
+func NormalizeResidencyPolicyStorageIdentity(ctx context.Context, policy model.ResidencyPolicy) (model.ResidencyPolicy, error) {
+	catalogURI, err := NormalizeCatalogURI(ctx, policy.AllowedCatalogURI)
+	if err != nil {
+		return model.ResidencyPolicy{}, err
+	}
+	policy.AllowedCatalogURI = catalogURI
+	return policy, nil
+}
+
 func ValidateResidencyPolicyPrivilege(ctx context.Context, actorAccountID uint32, isClusterAdmin bool, policy model.ResidencyPolicy) error {
 	if err := ValidateResidencyPolicy(ctx, policy); err != nil {
 		return err

@@ -187,6 +187,45 @@ func TestCatalogResidencyAllowsDistinctClusterPoliciesWithSameAccountLocalCatalo
 	}
 }
 
+func TestNormalizeResidencyPolicyStorageIdentityCanonicalizesCatalogURI(t *testing.T) {
+	ctx := context.Background()
+	enabledPolicy := model.ResidencyPolicy{
+		ScopeType:         model.ResidencyScopeCluster,
+		AccountID:         0,
+		CatalogID:         1,
+		AllowedCatalogURI: "https://catalog.example.com/rest",
+		AllowedEndpoint:   "catalog.example.com",
+		AllowedRegion:     model.ResidencyWildcard,
+		AllowedBucket:     model.ResidencyWildcard,
+		PolicyState:       model.ResidencyPolicyEnabled,
+	}
+	disabledVariant := enabledPolicy
+	disabledVariant.AllowedCatalogURI = "HTTPS://Catalog.Example.com/rest#disabled-by-equivalent-uri"
+	disabledVariant.PolicyState = model.ResidencyPolicyDisabled
+
+	enabledNormalized, err := NormalizeResidencyPolicyStorageIdentity(ctx, enabledPolicy)
+	if err != nil {
+		t.Fatalf("normalize enabled policy: %v", err)
+	}
+	disabledNormalized, err := NormalizeResidencyPolicyStorageIdentity(ctx, disabledVariant)
+	if err != nil {
+		t.Fatalf("normalize disabled variant: %v", err)
+	}
+	if enabledNormalized.AllowedCatalogURI != disabledNormalized.AllowedCatalogURI {
+		t.Fatalf("equivalent catalog URIs must share storage identity: enabled=%q disabled=%q",
+			enabledNormalized.AllowedCatalogURI, disabledNormalized.AllowedCatalogURI)
+	}
+
+	err = CheckCatalogResidency(ctx, []model.ResidencyPolicy{disabledNormalized}, CatalogResidencyRequest{
+		AccountID:  42,
+		CatalogID:  1,
+		CatalogURI: "https://catalog.example.com/rest",
+	})
+	if err == nil || !strings.Contains(err.Error(), "no cluster residency policy configured") {
+		t.Fatalf("disabled equivalent URI upsert should deny after replacing enabled policy, got %v", err)
+	}
+}
+
 func TestObjectResidencyDoesNotShareAccountLocalCatalogIDAcrossURIs(t *testing.T) {
 	ctx := context.Background()
 	policies := []model.ResidencyPolicy{{
