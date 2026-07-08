@@ -31,6 +31,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -862,6 +863,202 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 
 	require.Equal(t, 3, windowCount)
 	require.Equal(t, 1, windowAfterUnionCount)
+}
+
+func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
+	stmt := mustParseRollupWindowSelect(t, `
+		select
+			l_returnflag as flag,
+			l_linestatus as status,
+			sum(l_quantity) as total_qty,
+			row_number() over (order by sum(l_quantity) desc) as rn
+		from lineitem
+		group by l_returnflag, l_linestatus with rollup
+		having sum(l_quantity) > 0
+		order by sum(l_quantity) desc
+		limit 10`)
+	clause := stmt.Select.(*tree.SelectClause)
+	expandRollupGroupByForTest(clause.GroupBy)
+
+	rewritten, ok := rewriteRollupWindowSelect(clause, stmt.OrderBy, stmt.Limit, stmt.RankOption)
+	require.True(t, ok)
+	require.NotNil(t, rewritten)
+	require.True(t, clause.Having.RollupHaving)
+	require.NotNil(t, rewritten.Limit)
+	require.Len(t, rewritten.OrderBy, 1)
+	require.Contains(t, tree.String(rewritten, dialect.MYSQL), "__mo_rollup_window")
+	require.Contains(t, tree.String(rewritten, dialect.MYSQL), "total_qty")
+
+	innerExprs, outerExprs, exprAliases, ok := buildRollupWindowSelectExprs(clause.Exprs)
+	require.True(t, ok)
+	require.Len(t, innerExprs, 3)
+	require.Len(t, outerExprs, 4)
+
+	alias, ok := lookupRollupWindowExprAlias(exprAliases, tree.NewUnresolvedColName("l_returnflag"))
+	require.True(t, ok)
+	require.Equal(t, "flag", alias)
+	alias, ok = lookupRollupWindowExprAlias(exprAliases, tree.NewUnresolvedColName("total_qty"))
+	require.True(t, ok)
+	require.Equal(t, "total_qty", alias)
+}
+
+func TestRewriteRollupWindowSelectGuards(t *testing.T) {
+	_, ok := rewriteRollupWindowSelect(nil, nil, nil, nil)
+	require.False(t, ok)
+
+	noGroup := mustParseRollupWindowSelect(t, "select a, row_number() over () from t")
+	_, ok = rewriteRollupWindowSelect(noGroup.Select.(*tree.SelectClause), noGroup.OrderBy, noGroup.Limit, noGroup.RankOption)
+	require.False(t, ok)
+
+	distinct := mustParseRollupWindowSelect(t, "select distinct a, row_number() over () from t group by a, b with rollup")
+	_, ok = rewriteRollupWindowSelect(distinct.Select.(*tree.SelectClause), distinct.OrderBy, distinct.Limit, distinct.RankOption)
+	require.False(t, ok)
+
+	havingWindow := mustParseRollupWindowSelect(t, "select a, b, row_number() over () from t group by a, b with rollup having row_number() over () > 0")
+	_, ok = rewriteRollupWindowSelect(havingWindow.Select.(*tree.SelectClause), havingWindow.OrderBy, havingWindow.Limit, havingWindow.RankOption)
+	require.False(t, ok)
+
+	oneGroup := mustParseRollupWindowSelect(t, "select a, row_number() over () from t group by a")
+	_, ok = rewriteRollupWindowSelect(oneGroup.Select.(*tree.SelectClause), oneGroup.OrderBy, oneGroup.Limit, oneGroup.RankOption)
+	require.False(t, ok)
+
+	emptyExprs := &tree.SelectClause{Exprs: nil}
+	_, _, _, ok = buildRollupWindowSelectExprs(emptyExprs.Exprs)
+	require.False(t, ok)
+
+	noWindow := mustParseRollupWindowSelect(t, "select a from t")
+	_, _, _, ok = buildRollupWindowSelectExprs(noWindow.Select.(*tree.SelectClause).Exprs)
+	require.False(t, ok)
+
+	unsupportedInnerExpr := mustParseRollupWindowSelect(t, "select a + b, row_number() over () from t")
+	_, _, _, ok = buildRollupWindowSelectExprs(unsupportedInnerExpr.Select.(*tree.SelectClause).Exprs)
+	require.False(t, ok)
+
+	duplicateAlias := mustParseRollupWindowSelect(t, "select a as x, b as x, row_number() over () from t")
+	_, _, _, ok = buildRollupWindowSelectExprs(duplicateAlias.Select.(*tree.SelectClause).Exprs)
+	require.False(t, ok)
+}
+
+func TestRewriteRollupWindowExprSupportedShapes(t *testing.T) {
+	exprAliases := rollupWindowAliasMap(
+		"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+	)
+
+	complexExpr := mustParseRollupWindowExpr(t, `
+		case a
+			when 1 then not (
+				((b + -c) > cast(d as signed)) and (e like f escape g)
+				xor h = i
+				or (j, k) = (l, m)
+			)
+			else 'fallback'
+		end`)
+	rewritten, ok := rewriteRollupWindowExpr(complexExpr, exprAliases)
+	require.True(t, ok)
+	rewrittenSQL := tree.String(rewritten, dialect.MYSQL)
+	require.Contains(t, rewrittenSQL, "a_alias")
+	require.Contains(t, rewrittenSQL, "m_alias")
+
+	windowExpr := mustParseRollupWindowExpr(t, `
+		sum(a) over (
+			partition by b
+			order by c
+			rows between 1 preceding and 2 following
+		)`)
+	rewritten, ok = rewriteRollupWindowExpr(windowExpr, exprAliases)
+	require.True(t, ok)
+	rewrittenSQL = tree.String(rewritten, dialect.MYSQL)
+	require.Contains(t, rewrittenSQL, "a_alias")
+	require.Contains(t, rewrittenSQL, "partition by b_alias")
+	require.Contains(t, rewrittenSQL, "order by c_alias")
+
+	funcOrderExpr := mustParseRollupWindowExpr(t, "group_concat(a order by b)")
+	rewritten, ok = rewriteRollupWindowExpr(funcOrderExpr, exprAliases)
+	require.True(t, ok)
+	require.Contains(t, tree.String(rewritten, dialect.MYSQL), "b_alias")
+
+	tupleExprs, ok := rewriteRollupWindowExprs(tree.Exprs{tree.NewUnresolvedColName("a"), tree.NewUnresolvedColName("b")}, exprAliases)
+	require.True(t, ok)
+	require.Len(t, tupleExprs, 2)
+
+	emptyExprs, ok := rewriteRollupWindowExprs(nil, exprAliases)
+	require.True(t, ok)
+	require.Nil(t, emptyExprs)
+
+	_, ok = rewriteRollupWindowExpr(tree.NewUnresolvedColName("missing"), exprAliases)
+	require.False(t, ok)
+
+	_, ok = rewriteRollupWindowOrderByStrict(tree.OrderBy{{Expr: tree.NewUnresolvedColName("missing")}}, exprAliases)
+	require.False(t, ok)
+
+	orderBy := rewriteRollupWindowOrderBy(tree.OrderBy{{Expr: tree.NewUnresolvedColName("missing")}}, exprAliases)
+	require.Len(t, orderBy, 1)
+	require.Equal(t, "missing", tree.String(orderBy[0].Expr, dialect.MYSQL))
+}
+
+func TestRollupWindowExprContainsWindowRecursiveShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		expr string
+	}{
+		{name: "func args", expr: "coalesce(sum(a) over (), b)"},
+		{name: "func order by", expr: "group_concat(a order by sum(b) over ())"},
+		{name: "binary", expr: "a + sum(b) over ()"},
+		{name: "unary", expr: "-sum(a) over ()"},
+		{name: "comparison", expr: "sum(a) over () > 0"},
+		{name: "and", expr: "sum(a) over () and b"},
+		{name: "xor", expr: "a xor sum(b) over ()"},
+		{name: "or", expr: "a or sum(b) over ()"},
+		{name: "not", expr: "not sum(a) over ()"},
+		{name: "paren", expr: "(sum(a) over ())"},
+		{name: "cast", expr: "cast(sum(a) over () as signed)"},
+		{name: "tuple", expr: "(a, sum(b) over ())"},
+		{name: "case expr", expr: "case sum(a) over () when 1 then b else c end"},
+		{name: "case when", expr: "case when a then sum(b) over () else c end"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, rollupWindowExprContainsWindow(mustParseRollupWindowExpr(t, tc.expr)))
+		})
+	}
+
+	require.False(t, rollupWindowExprContainsWindow(mustParseRollupWindowExpr(t, "case when a then b else c end")))
+}
+
+func mustParseRollupWindowSelect(t *testing.T, sql string) *tree.Select {
+	t.Helper()
+	stmts, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	stmt, ok := stmts[0].(*tree.Select)
+	require.True(t, ok)
+	return stmt
+}
+
+func mustParseRollupWindowExpr(t *testing.T, expr string) tree.Expr {
+	t.Helper()
+	stmt := mustParseRollupWindowSelect(t, "select "+expr)
+	clause, ok := stmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, clause.Exprs, 1)
+	return clause.Exprs[0].Expr
+}
+
+func rollupWindowAliasMap(cols ...string) map[string]string {
+	exprAliases := make(map[string]string)
+	for _, col := range cols {
+		addRollupWindowExprAlias(exprAliases, tree.NewUnresolvedColName(col), col+"_alias")
+	}
+	return exprAliases
+}
+
+func expandRollupGroupByForTest(groupBy *tree.GroupByClause) {
+	if groupBy == nil || !groupBy.Rollup || len(groupBy.GroupByExprsList) == 0 {
+		return
+	}
+	for i := len(groupBy.GroupByExprsList[0]) - 1; i > 0; i-- {
+		groupBy.GroupByExprsList = append(groupBy.GroupByExprsList, groupBy.GroupByExprsList[0][0:i])
+	}
+	groupBy.GroupByExprsList = append(groupBy.GroupByExprsList, nil)
 }
 
 func TestOnlyFullGroupByAllowsCorrelatedSubqueryOnGroupedColumn(t *testing.T) {
