@@ -18,8 +18,17 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"net"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
+	"time"
+)
+
+const (
+	hdfsNamenodeAddrEnv     = "HDFS_NAMENODE_ADDR"
+	hdfsNamenodeDialTimeout = 5 * time.Second
 )
 
 func TestHDFS(t *testing.T) {
@@ -29,14 +38,16 @@ func TestHDFS(t *testing.T) {
 		Path string
 	}
 
+	addr := getHDFSTestAddr(t)
+
 	cases := []Case{
 		{
-			Addr: "hdfs://hadoop-namenode.hadoop.svc.cluster.local:9820",
+			Addr: addr,
 			User: "root",
 			Path: "user/root/mo-test/",
 		},
 		{
-			Addr: "hdfs://hadoop-namenode.hadoop.svc.cluster.local:9820",
+			Addr: addr,
 			User: "runner",
 			Path: "user/runner/mo-test/",
 		},
@@ -128,4 +139,35 @@ func TestHDFS(t *testing.T) {
 		})
 	}
 
+}
+
+func getHDFSTestAddr(t *testing.T) string {
+	t.Helper()
+
+	addr := os.Getenv(hdfsNamenodeAddrEnv)
+	if addr == "" {
+		t.Skipf("set %s to run HDFS integration test", hdfsNamenodeAddrEnv)
+	}
+
+	if !strings.HasPrefix(addr, "hdfs://") {
+		addr = "hdfs://" + addr
+	}
+
+	u, err := url.Parse(addr)
+	if err != nil {
+		t.Fatalf("invalid %s: %v", hdfsNamenodeAddrEnv, err)
+	}
+	if u.Host == "" {
+		t.Fatalf("invalid %s: missing namenode host", hdfsNamenodeAddrEnv)
+	}
+
+	conn, err := net.DialTimeout("tcp", u.Host, hdfsNamenodeDialTimeout)
+	if err != nil {
+		t.Skipf("HDFS namenode %q is unavailable: %v", u.Host, err)
+	}
+	if conn != nil {
+		_ = conn.Close()
+	}
+
+	return addr
 }
