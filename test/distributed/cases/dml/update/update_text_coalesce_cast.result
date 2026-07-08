@@ -59,11 +59,11 @@ select length(g) from t_gen order by id;
 length(g)
 1
 insert into t_gen(id, t) values (2, 'ab');
-internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
+Invalid default value for 'ab'
 update t_gen set t = 'cd' where id = 1;
-internal error: Can't cast 'cd' to VARCHAR type. Src length 2 is larger than Dest length 1
+Invalid default value for 'cd'
 replace into t_gen(id, t) values (1, 'ef');
-internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
+Invalid default value for 'ef'
 select length(g) from t_gen order by id;
 length(g)
 1
