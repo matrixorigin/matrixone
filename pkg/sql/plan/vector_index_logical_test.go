@@ -52,9 +52,12 @@ func TestCollectVectorIndexesKeepsIvfFlatIncludeMetadata(t *testing.T) {
 	multi, ok := indexes["idx_vec"]
 	require.True(t, ok)
 	require.Equal(t, catalog.MoIndexIvfFlatAlgo.ToString(), multi.IndexAlgo)
-	require.Equal(t, []string{"title", "category"}, getVectorIndexIncludedColumns(multi))
+	includedColumns, err := getVectorIndexIncludedColumns(multi)
+	require.NoError(t, err)
+	require.Equal(t, []string{"title", "category"}, includedColumns)
 
-	included := getVectorIndexIncludedColumns(multi)
+	included, err := getVectorIndexIncludedColumns(multi)
+	require.NoError(t, err)
 	included[0] = "mutated"
 	require.Equal(t, []string{"title", "category"}, entriesDef.IncludedColumns)
 }
@@ -83,7 +86,28 @@ func TestGetVectorIndexIncludedColumnsFallsBackAcrossIvfFlatSubDefs(t *testing.T
 		},
 	}
 
-	require.Equal(t, []string{"title"}, getVectorIndexIncludedColumns(multi))
+	includedColumns, err := getVectorIndexIncludedColumns(multi)
+	require.NoError(t, err)
+	require.Equal(t, []string{"title"}, includedColumns)
+}
+
+func TestGetVectorIndexIncludedColumnsFallsBackToLegacyAlgoParams(t *testing.T) {
+	multi := &MultiTableIndex{
+		IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexDefs: map[string]*planpb.IndexDef{
+			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+				IndexName:          "idx_vec",
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+				IndexAlgoParams:    `{"op_type":"vector_l2_ops","included_columns":"title,category"}`,
+				Parts:              []string{"embedding"},
+			},
+		},
+	}
+
+	includedColumns, err := getVectorIndexIncludedColumns(multi)
+	require.NoError(t, err)
+	require.Equal(t, []string{"title", "category"}, includedColumns)
 }
 
 func TestGetVectorIndexIncludedColumnsIsIvfFlatOnly(t *testing.T) {
@@ -95,5 +119,7 @@ func TestGetVectorIndexIncludedColumnsIsIvfFlatOnly(t *testing.T) {
 		},
 	}
 
-	require.Nil(t, getVectorIndexIncludedColumns(multi))
+	includedColumns, err := getVectorIndexIncludedColumns(multi)
+	require.NoError(t, err)
+	require.Nil(t, includedColumns)
 }

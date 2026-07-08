@@ -1487,9 +1487,18 @@ func validateVectorIndexDefGroup(ctx context.Context, indexName string, multiTab
 			!slices.Equal(reference.Parts, indexDef.Parts) {
 			return moerr.NewInternalErrorf(ctx, "inconsistent vector index metadata for index %s", indexName)
 		}
-		if catalog.ToLower(reference.IndexAlgo) == catalog.MoIndexIvfFlatAlgo.ToString() &&
-			!slices.Equal(reference.IncludedColumns, indexDef.IncludedColumns) {
-			return moerr.NewInternalErrorf(ctx, "inconsistent IVF-FLAT INCLUDE metadata for index %s", indexName)
+		if catalog.ToLower(reference.IndexAlgo) == catalog.MoIndexIvfFlatAlgo.ToString() {
+			referenceIncludedColumns, err := indexDefIncludedColumns(reference)
+			if err != nil {
+				return err
+			}
+			includedColumns, err := indexDefIncludedColumns(indexDef)
+			if err != nil {
+				return err
+			}
+			if !slices.Equal(referenceIncludedColumns, includedColumns) {
+				return moerr.NewInternalErrorf(ctx, "inconsistent IVF-FLAT INCLUDE metadata for index %s", indexName)
+			}
 		}
 	}
 	if reference != nil {
@@ -1498,20 +1507,24 @@ func validateVectorIndexDefGroup(ctx context.Context, indexName string, multiTab
 	return nil
 }
 
-func getVectorIndexIncludedColumns(multiTableIndex *MultiTableIndex) []string {
+func getVectorIndexIncludedColumns(multiTableIndex *MultiTableIndex) ([]string, error) {
 	if multiTableIndex == nil || catalog.ToLower(multiTableIndex.IndexAlgo) != catalog.MoIndexIvfFlatAlgo.ToString() {
-		return nil
+		return nil, nil
 	}
 	for _, tableType := range []string{
 		catalog.SystemSI_IVFFLAT_TblType_Entries,
 		catalog.SystemSI_IVFFLAT_TblType_Metadata,
 		catalog.SystemSI_IVFFLAT_TblType_Centroids,
 	} {
-		if indexDef := multiTableIndex.IndexDefs[tableType]; indexDef != nil && len(indexDef.IncludedColumns) > 0 {
-			return slices.Clone(indexDef.IncludedColumns)
+		includedColumns, err := indexDefIncludedColumns(multiTableIndex.IndexDefs[tableType])
+		if err != nil {
+			return nil, err
+		}
+		if len(includedColumns) > 0 {
+			return includedColumns, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {

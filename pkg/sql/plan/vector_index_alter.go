@@ -36,19 +36,23 @@ func indexDependsOnColumn(indexDef *planpb.IndexDef, colName string) (bool, erro
 		}
 	}
 
-	return includedColumnAffected(indexDef, colName), nil
+	return includedColumnAffected(indexDef, colName)
 }
 
-func includedColumnAffected(indexDef *planpb.IndexDef, colName string) bool {
+func includedColumnAffected(indexDef *planpb.IndexDef, colName string) (bool, error) {
 	if indexDef == nil {
-		return false
+		return false, nil
 	}
-	for _, includeCol := range indexDef.IncludedColumns {
+	includedColumns, err := indexDefIncludedColumns(indexDef)
+	if err != nil {
+		return false, err
+	}
+	for _, includeCol := range includedColumns {
 		if catalog.ResolveAlias(includeCol) == colName {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func renameIncludedColumnsForAlgo(tableDef *planpb.TableDef, algo, oldColName, newColName string, syncAlgoParams bool) ([]string, error) {
@@ -65,7 +69,11 @@ func renameIncludedColumnsForAlgo(tableDef *planpb.TableDef, algo, oldColName, n
 		if indexDef == nil || !strings.EqualFold(indexDef.IndexAlgo, algo) {
 			continue
 		}
-		newIncludedColumns, changed := rewriteIncludedColumnNames(indexDef.IncludedColumns, oldColName, newColName)
+		includedColumns, err := indexDefIncludedColumns(indexDef)
+		if err != nil {
+			return nil, err
+		}
+		newIncludedColumns, changed := rewriteIncludedColumnNames(includedColumns, oldColName, newColName)
 		if !changed {
 			continue
 		}

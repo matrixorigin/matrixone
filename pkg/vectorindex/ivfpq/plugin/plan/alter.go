@@ -23,7 +23,7 @@ import (
 var _ planplugin.AlterColumnHooks = Hooks{}
 
 func (Hooks) HandleAlterDropColumn(_ *planpb.TableDef, indexDef *planpb.IndexDef, colName string) (bool, error) {
-	return planplugin.IncludedColumnAffected(indexDef, colName), nil
+	return planplugin.IncludedColumnAffected(indexDef, colName)
 }
 
 func (Hooks) HandleAlterRenameColumn(tableDef *planpb.TableDef, oldColName, newColName string) ([]string, error) {

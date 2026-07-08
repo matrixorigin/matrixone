@@ -325,7 +325,7 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeDoesNotAutoUseIncludePushdown(t 
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 }
 
-func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersKeepsCandidateLimit(t *testing.T) {
+func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersAddsOffsetToCandidateLimit(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "pre", 0, 2, 3)
@@ -341,8 +341,8 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersKeepsCandidateLimi
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Equal(t, uint64(2), tableFuncNode.Limit.GetLit().GetU64Val())
-	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(3), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 }
 
@@ -483,6 +483,28 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffset
 	require.Len(t, tableFuncNode.TblFuncExprList, 5)
 	assert.Contains(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval(), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category")
 	assert.Equal(t, uint64(25), tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
+	assert.Equal(t, uint64(10), tableFuncNode.TblFuncExprList[4].GetLit().GetU64Val())
+}
+
+func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutFiltersAddsOffsetToCandidateLimit(t *testing.T) {
+	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+
+	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "include", 0, 2, 3)
+	vecCtx.sortNode.Offset = makePlan2Uint64ConstExprWithType(1)
+
+	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
+	require.NoError(t, err)
+
+	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+	require.Equal(t, plan.Node_SORT, sortNode.NodeType)
+
+	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
+	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
+	require.Equal(t, uint64(3), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Len(t, tableFuncNode.TblFuncExprList, 5)
+	assert.Empty(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval())
+	assert.Equal(t, uint64(3), tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
 	assert.Equal(t, uint64(10), tableFuncNode.TblFuncExprList[4].GetLit().GetU64Val())
 }
 

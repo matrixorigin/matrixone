@@ -15,17 +15,25 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	"slices"
+
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-var _ planplugin.AlterColumnHooks = Hooks{}
-
-func (Hooks) HandleAlterDropColumn(_ *planpb.TableDef, indexDef *planpb.IndexDef, colName string) (bool, error) {
-	return planplugin.IncludedColumnAffected(indexDef, colName)
+func indexDefIncludedColumns(indexDef *planpb.IndexDef) ([]string, error) {
+	if indexDef == nil {
+		return nil, nil
+	}
+	if len(indexDef.IncludedColumns) > 0 {
+		return slices.Clone(indexDef.IncludedColumns), nil
+	}
+	return parseIncludedColumnsFromParams(indexDef.IndexAlgoParams)
 }
 
-func (Hooks) HandleAlterRenameColumn(tableDef *planpb.TableDef, oldColName, newColName string) ([]string, error) {
-	return planplugin.RenameIncludedColumnsForAlgo(tableDef, catalog.MoIndexCagraAlgo.ToString(), oldColName, newColName, true)
+func indexDefIncludedColumnsBestEffort(indexDef *planpb.IndexDef) []string {
+	cols, err := indexDefIncludedColumns(indexDef)
+	if err != nil {
+		return nil
+	}
+	return cols
 }

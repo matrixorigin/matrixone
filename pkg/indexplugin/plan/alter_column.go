@@ -28,6 +28,6 @@ type RenameColumnRebuildHook interface {
 }
 
 var (
-	IncludedColumnAffected       func(indexDef *planpb.IndexDef, colName string) bool
+	IncludedColumnAffected       func(indexDef *planpb.IndexDef, colName string) (bool, error)
 	RenameIncludedColumnsForAlgo func(tableDef *planpb.TableDef, algo, oldColName, newColName string, syncAlgoParams bool) ([]string, error)
 )

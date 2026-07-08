@@ -132,6 +132,37 @@ func TestRenameIncludedColumnsForAlgoSyncsAlgoParams(t *testing.T) {
 	}
 }
 
+func TestRenameIncludedColumnsForAlgoFallsBackToLegacyAlgoParams(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		TblId: 42,
+		Indexes: []*planpb.IndexDef{
+			{
+				IndexName:       "idx_gpu",
+				IndexAlgo:       catalog.MoIndexCagraAlgo.ToString(),
+				IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"title,category"}`,
+			},
+			{
+				IndexName:       "idx_gpu",
+				IndexAlgo:       catalog.MoIndexCagraAlgo.ToString(),
+				IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"title,category"}`,
+			},
+		},
+	}
+
+	sqls, err := renameIncludedColumnsForAlgo(tableDef, catalog.MoIndexCagraAlgo.ToString(), "title", "headline", true)
+	require.NoError(t, err)
+	require.Len(t, sqls, 1)
+	require.Contains(t, sqls[0], `included_columns = '["headline","category"]'`)
+	require.Contains(t, sqls[0], `algo_params = '{"included_columns":"headline,category","op_type":"vector_l2_ops"}'`)
+
+	for _, indexDef := range tableDef.Indexes {
+		require.Equal(t, []string{"headline", "category"}, indexDef.IncludedColumns)
+		params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+		require.NoError(t, err)
+		require.Equal(t, "headline,category", params[catalog.IncludedColumns])
+	}
+}
+
 func TestResolveAlterTableAlgorithmCopiesIvfIncludeRename(t *testing.T) {
 	tableDef := &planpb.TableDef{
 		Indexes: []*planpb.IndexDef{
@@ -180,4 +211,19 @@ func TestCollectAffectedIndexNamesForAlterIncludesIvfIncludeColumns(t *testing.T
 	names, err := collectAffectedIndexNamesForAlter(indexes, []string{"title", "note"})
 	require.NoError(t, err)
 	require.Equal(t, []string{"idx_ivf", "idx_note"}, names)
+}
+
+func TestCollectAffectedIndexNamesForAlterUsesLegacyIncludeParams(t *testing.T) {
+	indexes := []*planpb.IndexDef{
+		{
+			IndexName:       "idx_gpu",
+			IndexAlgo:       catalog.MoIndexCagraAlgo.ToString(),
+			Parts:           []string{"embedding"},
+			IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"title,category"}`,
+		},
+	}
+
+	names, err := collectAffectedIndexNamesForAlter(indexes, []string{"category"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"idx_gpu"}, names)
 }
