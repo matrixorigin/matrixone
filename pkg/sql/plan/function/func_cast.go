@@ -6495,10 +6495,10 @@ func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, ex
 	return moerr.NewInternalError(ctx, errStr+" "+extraInfo)
 }
 
-// formatDataTruncationError reports a data-too-long error (MySQL 1406 / SQLSTATE HY000)
-// for cast width violations. The diagnostic message mirrors formatCastError so existing
-// BVT result files stay compatible. The error code is ER_DATA_TOO_LONG (1406) instead of
-// a generic internal error.
+// formatDataTruncationError reports an error for cast width violations with the
+// same diagnostic message format as formatCastError ("internal error: Can't cast...").
+// Uses ErrCastWidthExceeded (ER_UNKNOWN_ERROR) to avoid JDBC's DataTruncation wrapper
+// that would prepend "Data truncation: " to the message (breaking BVT result matching).
 func formatDataTruncationError(ctx context.Context, vec *vector.Vector, typ types.Type, extraInfo string) error {
 	var errStr string
 	if vec.IsConst() {
