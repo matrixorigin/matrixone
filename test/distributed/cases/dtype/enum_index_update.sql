@@ -1,0 +1,30 @@
+-- update enum column with single-column secondary index
+drop table if exists enum_idx05;
+create table enum_idx05 (id int primary key, status enum('new','paid','shipped'), key idx_status(status));
+insert into enum_idx05 values (1,'new'),(2,'paid');
+update enum_idx05 set status='paid' where id=1;
+select id, status from enum_idx05 order by id;
+select id from enum_idx05 where status='new';
+select id from enum_idx05 where status='paid' order by id;
+drop table enum_idx05;
+
+-- update enum column with composite secondary index
+drop table if exists enum_idx06;
+create table enum_idx06 (id int primary key, status enum('new','paid','shipped'), note varchar(20), key idx_note_status(note, status));
+insert into enum_idx06 values (1,'new','n1'),(2,'paid','n2');
+update enum_idx06 set status='paid', note='updated' where id=1;
+select id, status, note from enum_idx06 order by id;
+drop table enum_idx06;
+
+-- update enum column with single-column unique index
+drop table if exists enum_idx07;
+create table enum_idx07 (id int primary key, status enum('new','paid','shipped'), note varchar(20), unique key uk_status(status));
+insert into enum_idx07 values (1,'new','n1'),(2,'paid','n2');
+update enum_idx07 set status='shipped' where id=1;
+select id, status, note from enum_idx07 order by id;
+select id from enum_idx07 where status='new';
+select id from enum_idx07 where status='shipped';
+-- unique conflict is properly raised
+update enum_idx07 set status='paid' where id=1;
+select id, status, note from enum_idx07 order by id;
+drop table enum_idx07;
