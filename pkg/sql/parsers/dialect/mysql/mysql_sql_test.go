@@ -87,6 +87,19 @@ func TestSQLModeParserModes(t *testing.T) {
 		require.Equal(t, "concat", fn.Func.FunctionReference.(*tree.UnresolvedName).ColName())
 	})
 
+	t.Run("default pipes preserve logical OR precedence in comparisons", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(context.Background(), `select id < 4 || id > 5`, 1, "")
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		orExpr, ok := firstSelectExpr(t, stmt).(*tree.OrExpr)
+		require.True(t, ok)
+		_, ok = orExpr.Left.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		_, ok = orExpr.Right.(*tree.ComparisonExpr)
+		require.True(t, ok)
+	})
+
 	t.Run("PIPES_AS_CONCAT has concat precedence, not or precedence", func(t *testing.T) {
 		stmt, err := ParseOneWithSQLMode(context.Background(), `select true or 'a'||'b'`, 1, "PIPES_AS_CONCAT")
 		require.NoError(t, err)
@@ -115,16 +128,17 @@ func TestSQLModeParserModes(t *testing.T) {
 		require.True(t, ok)
 	})
 
-	t.Run("MO default session mode keeps legacy pipes concat behavior", func(t *testing.T) {
-		sqlMode := SessionSQLModeForParser(moDefaultSQLMode)
-		require.Contains(t, sqlMode, "PIPES_AS_CONCAT")
+	t.Run("session parser mode does not inject PIPES_AS_CONCAT", func(t *testing.T) {
+		sqlMode := SessionSQLModeForParser("ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES")
+		require.NotContains(t, sqlMode, "PIPES_AS_CONCAT")
 
 		stmt, err := ParseOneWithSQLMode(context.Background(), `select 'a'||'b'`, 1, sqlMode)
 		require.NoError(t, err)
 		defer stmt.Free()
-		fn, ok := firstSelectExpr(t, stmt).(*tree.FuncExpr)
+		orExpr, ok := firstSelectExpr(t, stmt).(*tree.OrExpr)
 		require.True(t, ok)
-		require.Equal(t, "concat", fn.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+		require.NotNil(t, orExpr.Left)
+		require.NotNil(t, orExpr.Right)
 	})
 
 	t.Run("NO_BACKSLASH_ESCAPES keeps backslash as ordinary character", func(t *testing.T) {

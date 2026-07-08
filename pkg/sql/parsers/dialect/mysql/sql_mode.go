@@ -16,8 +16,6 @@ package mysql
 
 import "strings"
 
-const moDefaultSQLMode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES"
-
 type SQLModeFlag uint8
 
 const (
@@ -49,33 +47,9 @@ func ParseSQLModeFlags(mode string) SQLModeFlags {
 }
 
 func SessionSQLModeForParser(mode string) string {
-	if isMODefaultSQLMode(mode) {
-		return mode + ",PIPES_AS_CONCAT"
-	}
 	return mode
 }
 
 func (flags SQLModeFlags) Has(flag SQLModeFlag) bool {
 	return flags&SQLModeFlags(flag) != 0
-}
-
-func isMODefaultSQLMode(mode string) bool {
-	modeParts := strings.Split(mode, ",")
-	defaultParts := strings.Split(moDefaultSQLMode, ",")
-	if len(modeParts) != len(defaultParts) {
-		return false
-	}
-
-	seen := make(map[string]struct{}, len(defaultParts))
-	for _, part := range defaultParts {
-		seen[strings.ToUpper(strings.TrimSpace(part))] = struct{}{}
-	}
-	for _, part := range modeParts {
-		normalized := strings.ToUpper(strings.TrimSpace(part))
-		if _, ok := seen[normalized]; !ok {
-			return false
-		}
-		delete(seen, normalized)
-	}
-	return len(seen) == 0
 }
