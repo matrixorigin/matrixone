@@ -575,12 +575,16 @@ is retained only as a schema-change / corruption-recovery fallback).
     rounds of updates+deletes coalesce 4 subs → 1, newest version always wins, stale/deleted docs
     gone. **Known limitation:** delete tombstones persist in the tail until a full merge (bounded
     by distinct deleted pks).
-  - **`MERGE` command wiring — TODO.** idxcron currently fires a full `FORCE_SYNC` REBUILD
-    (O(N) re-tokenize). To make it fire the fold instead: grammar `MERGE` keyword in the
-    REINDEX fulltext option (goyacc regen) + `AlterTableAlterReIndex.Merge` proto (`make pb`)
-    + `HandleReindex` merge flag → run the `fulltext_wand_compact` TVF + `SyncDescriptor`
-    `IdxcronReindexOption="MERGE"`. Until then the fold is reachable manually via
-    `SELECT * FROM fulltext_wand_compact('db','store','meta') AS f`.
+  - **`MERGE` command wiring — DONE (commit `0fa41c7f6`).** `ALTER … REINDEX … FULLTEXT MERGE`
+    runs the fold+tiered compaction (`fulltext_wand_compact` TVF, in the ALTER txn); plain
+    `ALTER … FULLTEXT` stays a full REBUILD. Grammar `MERGE` keyword (reused MERGE-INTO token) →
+    `tree.IndexOption.Merge` → `AlterTableAlterReIndex.merge` proto (field 6, hand-added mirroring
+    `force_sync`) → `Hooks.HandleReindex(…, merge bool)` (fulltext honors it, vector algos ignore
+    → rebuild; MERGE on ngram → NotSupported). idxcron fires it via
+    `SyncDescriptor.IdxcronReindexOption="MERGE"` → executor builds `… FULLTEXT MERGE FORCE_SYNC`.
+    Verified live end-to-end.
+  - **Tombstone GC — TODO.** Delete frames persist in the tail until a global merge (see the
+    fold/tiered known limitations); a periodic full or global-liveness pass reclaims them.
 
 ### Cost model (why this is needed)
 Measured on a live 100k-doc empty-table→CDC run (2026-07-02) and generalized:
@@ -745,10 +749,11 @@ read side.
   `fulltext_max_index_capacity` + **tag=0 create-build capping (DONE 2026-07-07,
   `a0573840d`)**. Remaining: cross-invocation top-up (blocked on item 2's live-filter
   primitive).
-- **2 — recency foundation + O(tail) fold + tiered merge DONE** (`0c72710e2`, `523d7daa2`,
-  `21b189e69`); its live-filter/dedup primitive also unblocks item 1's top-up. **Remaining:**
-  `MERGE` command wiring (idxcron → the fold+tiered `fulltext_wand_compact` TVF instead of a
-  full REBUILD) + tombstone GC.
+- **2 — recency foundation + O(tail) fold + tiered merge + MERGE command wiring DONE**
+  (`0c72710e2`, `523d7daa2`, `21b189e69`, `0fa41c7f6`); idxcron now fires
+  `ALTER … FULLTEXT MERGE FORCE_SYNC` → the bounded-memory `fulltext_wand_compact` TVF instead
+  of a full REBUILD. Its live-filter/dedup primitive also unblocks item 1's top-up.
+  **Remaining:** tombstone GC (delete frames persist until a global merge).
 
 ## Verification
 - **Unit**: (1) `tokenize → postings → fulltext_wand_create` round-trip builds a loadable WAND index. (2) **Differential**: `fulltext_wand_search` top-K vs a brute-force reference (`Σ tf·idf²` over all docs + full sort) on randomized corpora → assert identical top-K and scores (the WAND-correctness gold test). (3) Parser/mode parse tests in `pkg/sql/parsers/dialect/mysql/mysql_sql_test.go` (`IN RETRIEVAL MODE`, default-on-retrieval-parser).
