@@ -83,6 +83,8 @@ type TxnClient interface {
 	CNBasedConsistencyEnabled() bool
 	// IterTxns iter all txns
 	IterTxns(func(TxnOverview) bool)
+	// IterTxnIDs iter all active and waiting txn IDs without building txn overviews.
+	IterTxnIDs(func([]byte) bool)
 	// GetState returns the current state of txn client.
 	GetState() TxnState
 }

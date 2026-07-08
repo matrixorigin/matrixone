@@ -249,6 +249,18 @@ func (mr *MockTxnClientMockRecorder) GetSyncLatestCommitTSTimes() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSyncLatestCommitTSTimes", reflect.TypeOf((*MockTxnClient)(nil).GetSyncLatestCommitTSTimes))
 }
 
+// IterTxnIDs mocks base method.
+func (m *MockTxnClient) IterTxnIDs(arg0 func([]byte) bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "IterTxnIDs", arg0)
+}
+
+// IterTxnIDs indicates an expected call of IterTxnIDs.
+func (mr *MockTxnClientMockRecorder) IterTxnIDs(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IterTxnIDs", reflect.TypeOf((*MockTxnClient)(nil).IterTxnIDs), arg0)
+}
+
 // IterTxns mocks base method.
 func (m *MockTxnClient) IterTxns(arg0 func(client.TxnOverview) bool) {
 	m.ctrl.T.Helper()

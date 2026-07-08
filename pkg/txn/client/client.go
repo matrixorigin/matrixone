@@ -800,6 +800,36 @@ func (client *txnClient) IterTxns(fn func(TxnOverview) bool) {
 	}
 }
 
+func (client *txnClient) IterTxnIDs(fn func([]byte) bool) {
+	for i := range client.activeTxns {
+		shard := &client.activeTxns[i]
+		shard.RLock()
+		ids := make([][]byte, 0, len(shard.txns))
+		for txnID := range shard.txns {
+			ids = append(ids, []byte(txnID))
+		}
+		shard.RUnlock()
+
+		for _, txnID := range ids {
+			if !fn(txnID) {
+				return
+			}
+		}
+	}
+
+	client.mu.RLock()
+	waitActiveTxnIDs := make([][]byte, 0, len(client.mu.waitActiveTxns))
+	for _, op := range client.mu.waitActiveTxns {
+		waitActiveTxnIDs = append(waitActiveTxnIDs, append([]byte(nil), op.reset.txnID...))
+	}
+	client.mu.RUnlock()
+	for _, txnID := range waitActiveTxnIDs {
+		if !fn(txnID) {
+			return
+		}
+	}
+}
+
 func (client *txnClient) getAllTxnOperators() []*txnOperator {
 	// Collect from sharded map
 	ops := client.collectActiveTxns()
