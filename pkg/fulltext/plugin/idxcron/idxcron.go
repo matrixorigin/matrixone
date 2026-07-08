@@ -27,9 +27,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext/wand"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 // TailChunkThreshold gates the scheduled rebuild on tag=1 CdcTail growth: fire only
@@ -51,6 +54,7 @@ var TailChunkThreshold = func() int64 {
 type Hooks struct{}
 
 var _ idxcronplugin.Hooks = Hooks{}
+var _ idxcronplugin.ReindexOptioner = Hooks{}
 
 // Updatable fires the scheduled reindex when the tag=1 CdcTail has grown past
 // TailChunkThreshold. The framework has already applied the auto_update / hour /
@@ -92,4 +96,86 @@ func (Hooks) Updatable(in idxcronplugin.UpdatableInput) (bool, string, error) {
 		return false, fmt.Sprintf("tag=1 tail chunks %d < threshold %d", count, TailChunkThreshold), nil
 	}
 	return true, "", nil
+}
+
+// RebuildDeadPct: when the percentage of dead (deleted-but-not-yet-reclaimed) docs in the
+// base exceeds this, the scheduled compaction fires a full REBUILD instead of an incremental
+// MERGE — a rebuild reclaims all dead docs AND their tombstones at once, cheaper net than
+// folding forever. Hardcoded 30: the alternative (a global merge to reclaim incrementally)
+// would load the whole base = O(corpus) resident = OOM, so REBUILD is the accepted reclaim path.
+const RebuildDeadPct = 30
+
+// ReindexOption picks the scheduled reindex mode (overriding the descriptor's fixed "MERGE"):
+// "MERGE" (incremental fold + tiered compaction) normally, or "" (full REBUILD) once the
+// dead-doc fraction — 1 - liveSourceRows/baseDocs — exceeds RebuildDeadRatio. Cheap: one
+// COUNT(*) on the source table + SUM(nrow) on the metadata table (no postings loaded).
+func (Hooks) ReindexOption(in idxcronplugin.UpdatableInput) (string, error) {
+	var metaTbl string
+	for _, idx := range in.TableDef.Indexes {
+		if idx.IndexName == in.IndexName &&
+			idx.IndexAlgoTableType == catalog.FullTextIndex_TblType_Metadata {
+			metaTbl = idx.IndexTableName
+			break
+		}
+	}
+	if metaTbl == "" {
+		return "MERGE", nil // not a retrieval index / no metadata table — MERGE is a harmless default
+	}
+	cfg := wand.TableConfig{DbName: in.TableDef.DbName, MetadataTable: metaTbl}
+	baseDocs, err := wand.SumBaseNrow(in.Sqlproc, cfg)
+	if err != nil {
+		return "", err
+	}
+	if baseDocs == 0 {
+		return "MERGE", nil // no tag=0 base yet (corpus still in the tail) — fold it in
+	}
+	liveRows, err := countSourceRows(in.Sqlproc, in.TableDef.DbName, in.TableDef.Name)
+	if err != nil {
+		return "", err
+	}
+	opt := reindexOptionForCounts(liveRows, baseDocs)
+	deadPct := int64(0)
+	if baseDocs > 0 {
+		deadPct = 100 - liveRows*100/baseDocs
+	}
+	logutil.Infof("[idxcron][wand] ReindexOption index=%s: liveRows=%d baseDocs=%d dead=%d%% threshold=%d%% -> %s",
+		in.IndexName, liveRows, baseDocs, deadPct, RebuildDeadPct, optLabel(opt))
+	return opt, nil
+}
+
+// reindexOptionForCounts is the pure decision: "" (full REBUILD) once the dead-doc percentage
+// exceeds RebuildDeadPct, else "MERGE" (incremental). Integer arithmetic so the boundary is
+// exact (dead% > 30 ⟺ live% < 70 ⟺ liveRows*100 < baseDocs*(100-30)); float 1-live/base tips
+// at the exact boundary due to rounding.
+func reindexOptionForCounts(liveRows, baseDocs int64) string {
+	if baseDocs <= 0 {
+		return "MERGE"
+	}
+	if liveRows*100 < baseDocs*(100-RebuildDeadPct) {
+		return "" // dead % > RebuildDeadPct → full REBUILD
+	}
+	return "MERGE"
+}
+
+func optLabel(opt string) string {
+	if opt == "" {
+		return "REBUILD"
+	}
+	return opt
+}
+
+// countSourceRows returns the source table's live row count (= live docs, since a DELETE
+// removes the source row). Compared to SumBaseNrow to estimate the base's dead-doc fraction.
+func countSourceRows(sqlproc *sqlexec.SqlProcess, db, table string) (int64, error) {
+	res, err := sqlexec.RunSql(sqlproc, fmt.Sprintf("SELECT COUNT(*) FROM %s", sqlquote.QualifiedIdent(db, table)))
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+	for _, bat := range res.Batches {
+		if bat != nil && bat.RowCount() > 0 {
+			return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0), nil
+		}
+	}
+	return 0, nil
 }

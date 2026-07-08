@@ -428,7 +428,7 @@ func runReindex(ctx context.Context,
 				return
 			}
 
-			ok, reason2, err2 := p.Idxcron().Updatable(idxcronplugin.UpdatableInput{
+			upIn := idxcronplugin.UpdatableInput{
 				Sqlproc:      sqlproc,
 				TableDef:     tableDef,
 				IndexName:    task.IndexName,
@@ -436,7 +436,8 @@ func runReindex(ctx context.Context,
 				CreatedAt:    task.CreatedAt,
 				LastUpdateAt: task.LastUpdateAt,
 				Interval:     interval,
-			})
+			}
+			ok, reason2, err2 := p.Idxcron().Updatable(upIn)
 			if err2 != nil {
 				return
 			}
@@ -446,8 +447,20 @@ func runReindex(ctx context.Context,
 				return
 			}
 
+			// The reindex option is the descriptor's fixed value unless the plugin implements
+			// ReindexOptioner and picks one per fire (fulltext: MERGE vs REBUILD by dead fraction).
+			reindexOption := d.IdxcronReindexOption
+			if optioner, ok := p.Idxcron().(idxcronplugin.ReindexOptioner); ok {
+				opt, oerr := optioner.ReindexOption(upIn)
+				if oerr != nil {
+					err = oerr
+					return
+				}
+				reindexOption = opt
+			}
+
 			// run alter table alter reindex in force synchronous mode to make sure to build index in single transaction.
-			sql := buildReindexSql(task.DbName, task.TableName, task.IndexName, d.IdxcronAlgoToken, d.IdxcronReindexOption)
+			sql := buildReindexSql(task.DbName, task.TableName, task.IndexName, d.IdxcronAlgoToken, reindexOption)
 			logutil.Infof("[idxcron] reindex FIRING index=%s: %s", task.IndexName, sql)
 			res, err2 := runReindexSql(sqlproc, sql)
 			if err2 != nil {

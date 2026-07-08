@@ -200,6 +200,27 @@ func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 	return 0, nil
 }
 
+// SumBaseNrow returns SUM(metadata.nrow) — docs physically present in the tag=0 base subs
+// (live + deleted-but-not-yet-reclaimed). A cheap metadata aggregate (no postings loaded);
+// idxcron compares it to the source table's live row count to estimate the dead-doc fraction
+// and decide MERGE (incremental) vs REBUILD (full reclaim).
+func SumBaseNrow(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
+	sql := fmt.Sprintf("SELECT COALESCE(SUM(%s), 0) FROM %s",
+		catalog.FullTextIndex_TblCol_Metadata_Nrow, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	res, err := sqlexec.RunSql(sqlproc, sql)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+	for _, bat := range res.Batches {
+		if bat == nil || bat.RowCount() == 0 {
+			continue
+		}
+		return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0), nil
+	}
+	return 0, nil
+}
+
 // LoadAllBases loads every tag=0 base sub-index listed in the metadata table. The
 // metadata table is per-fulltext-index, so every row names one of this index's bases
 // (mirrors HNSW's LoadMetadata). Returns nil when no base was built (empty-table create
