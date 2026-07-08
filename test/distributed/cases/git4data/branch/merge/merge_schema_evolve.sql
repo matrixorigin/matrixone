@@ -42,7 +42,7 @@ update t1 set b=99, c=10 where a=1;
 insert into t1 values(4,4,40);
 create snapshot sp1 for table test t1;
 
-data branch merge t1 into t0;
+data branch merge t1 into t0 when conflict accept;
 
 -- t0: a=1 b updated to 99, a=4 inserted
 select * from t0 order by a;
@@ -90,7 +90,7 @@ update t1 set c=99 where a=1 and b=1;
 insert into t1 values(3,3,30,300);
 create snapshot sp1 for table test t1;
 
-data branch merge t1 into t0;
+data branch merge t1 into t0 when conflict accept;
 
 -- t0: (1,1) c updated to 99, (3,3) inserted, d is not written
 select * from t0 order by a;

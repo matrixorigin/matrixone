@@ -1524,9 +1524,9 @@ func getTupleColumnValue(tuple types.Tuple, tblStuff tableStuff, colIdx int) (an
 		)
 	}
 	switch len(tuple) {
-	case totalColCnt, totalColCnt + 1:
+	case totalColCnt:
 		return normalizeTupleColumnValue(tuple[colIdx], tblStuff.def.colTypes[colIdx])
-	case totalColCnt + 2:
+	case totalColCnt + 1, totalColCnt + 2:
 		return normalizeTupleColumnValue(tuple[colIdx+1], tblStuff.def.colTypes[colIdx])
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf(
