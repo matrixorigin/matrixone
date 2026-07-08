@@ -705,10 +705,11 @@ Two correctness constraints, both enforced by `selectMergeRun` + the delete re-a
    sits between the doc's old recency and the run max; the merge re-applies the tail delete
    map so it stays dead. The tail itself is untouched (its frames still shadow non-merged subs).
 
-*Tombstone reclamation* is deferred: a delete frame persists in the tail even after its doc is
-fully merged out of every base, because neither the fold nor a partial tiered run has the global
-pk knowledge to prove it redundant. Bounded by distinct-deleted-pks (the fold re-frames them into
-one frame); a future full/global merge drops them.
+*Tombstone reclamation* is intentionally NOT done incrementally (decided WON'T DO — see the Item 2
+status block): a delete frame persists in the tail even after its doc is merged out of every base,
+because neither the fold nor a partial tiered run has the global pk knowledge to prove it redundant.
+It's bounded by distinct-deleted-pks (the fold re-frames them into one frame) and never wrong, so a
+REBUILD is the accepted way to clear it — a dedicated global/GC pass was judged not worth it.
 
 - **Large-scale successor: watermark + lazy GC.** When a single compaction txn gets too
   big/contended vs. live ISCP (≈ the 50 GB base case), split it: write the new sealed
