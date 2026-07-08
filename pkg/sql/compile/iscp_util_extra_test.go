@@ -99,14 +99,18 @@ func TestCoverage_checkValidIndexUpdateByIndexdef(t *testing.T) {
 		assert.False(t, valid)
 	})
 
-	t.Run("fulltext returns false", func(t *testing.T) {
+	t.Run("fulltext returns true", func(t *testing.T) {
+		// fulltext participates in scheduled reindex (SyncDescriptor.IdxcronAction =
+		// ActionFulltextReindex, for the WAND retrieval-index MERGE compaction), so an
+		// index-update by its indexdef is valid — same as ivfflat/ivfpq/cagra. Only hnsw
+		// (no idxcron action) returns false.
 		idx := &plan.IndexDef{
 			TableExist: true,
 			IndexAlgo:  "fulltext",
 		}
 		valid, err := checkValidIndexUpdateByIndexdef(idx)
 		require.Nil(t, err)
-		assert.False(t, valid)
+		assert.True(t, valid)
 	})
 
 	t.Run("empty algo returns false", func(t *testing.T) {

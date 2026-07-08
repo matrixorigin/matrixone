@@ -9,20 +9,16 @@ id
 1
 4
 create table t2 clone t;
-select sleep(30);
-sleep(30)
-0
-select id from t2 where match(txt) against('apple' in retrieval mode) order by id;
-id
-1
-4
 insert into t2 values (5,'apple mango');
-select sleep(30);
-sleep(30)
+select sleep(60);
+sleep(60)
 0
 select id from t2 where match(txt) against('apple' in retrieval mode) order by id;
 id
 1
 4
+5
+select id from t2 where match(txt) against('mango' in retrieval mode) order by id;
+id
 5
 drop database ft_clone;
