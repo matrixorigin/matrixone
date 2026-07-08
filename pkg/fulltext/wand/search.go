@@ -265,23 +265,34 @@ func searchSegmentsLiveStats(segs []*WandModel, terms []string, limit int, allow
 		return nil
 	}
 
-	// Query terms are tokenized words; dedup → weight. Resolution of a word to a
-	// segment's word-id is done PER SEGMENT (here and in searchInto): an
-	// out-of-jieba-dict "overflow" word gets a per-segment id, so a query word can
-	// be absent from one segment (e.g. the compacted base) yet present in a later
-	// CDC-delta segment, and independently-built segments may assign it different
-	// overflow ids. Resolving once against a single segment would drop or mis-map
-	// such a word (in-dict words resolve to a stable global id, unaffected).
-	weights := make(map[string]float64, len(terms))
-	for _, t := range terms {
-		weights[t]++
-	}
+	weights, gdf := queryWeights(segs, terms)
 	if len(weights) == 0 {
 		return nil
 	}
 
-	// Corpus-global df per query word (each segment resolves the word to its own
-	// id, so both in-dict and overflow words are summed correctly).
+	h := newTopK(limit)
+	for i, s := range segs {
+		segAllow := allow
+		if i < len(live) {
+			segAllow = andAllow(allow, live[i])
+		}
+		s.searchInto(h, weights, gN, gAvgDocLen, gdf, segAllow)
+	}
+	return h.sorted()
+}
+
+// queryWeights builds the dedup'd query-term weights and the corpus-global df per
+// word. Resolution of a word to a segment's word-id is done PER SEGMENT: an
+// out-of-jieba-dict "overflow" word gets a per-segment id, so a query word can be
+// absent from one segment (e.g. the compacted base) yet present in a later
+// CDC-delta segment, and independently-built segments may assign it different
+// overflow ids. Resolving once against a single segment would drop or mis-map such
+// a word (in-dict words resolve to a stable global id, unaffected).
+func queryWeights(segs []*WandModel, terms []string) (map[string]float64, map[string]int) {
+	weights := make(map[string]float64, len(terms))
+	for _, t := range terms {
+		weights[t]++
+	}
 	gdf := make(map[string]int, len(weights))
 	for w := range weights {
 		df := 0
@@ -294,16 +305,134 @@ func searchSegmentsLiveStats(segs []*WandModel, terms []string, limit int, allow
 		}
 		gdf[w] = df
 	}
+	return weights, gdf
+}
 
-	h := newTopK(limit)
+// streamBatch is the max rows a streamSink buffers before flushing to emit.
+const streamBatch = 8192
+
+// streamSink batches (pk, score) results and flushes them to emit in bounded
+// chunks, so a no-LIMIT retrieval query returns every matching doc without ever
+// materializing them all. On an emit error it records it and stops (the walk
+// checks stopped and bails), so a cancelled consumer terminates the walk promptly.
+type streamSink struct {
+	emit    func(keys []any, distances []float64) error
+	keys    []any
+	scores  []float64
+	err     error
+	stopped bool
+}
+
+func (s *streamSink) push(pk any, score float64) {
+	if s.stopped {
+		return
+	}
+	s.keys = append(s.keys, pk)
+	s.scores = append(s.scores, score)
+	if len(s.keys) >= streamBatch {
+		s.flush()
+	}
+}
+
+func (s *streamSink) flush() {
+	if s.stopped || len(s.keys) == 0 {
+		return
+	}
+	if e := s.emit(s.keys, s.scores); e != nil {
+		s.err = e
+		s.stopped = true
+		return
+	}
+	// Hand ownership of the batch to emit; the next batch reallocates on append.
+	s.keys = nil
+	s.scores = nil
+}
+
+// streamInto does a plain document-at-a-time OR merge over one segment: it visits
+// every matching doc in ord order, scores it (BM25 over the query terms present),
+// and pushes it to the sink — no top-K heap, no WAND pruning. The no-LIMIT case
+// wants every match; ranking is done by the upstream ORDER BY score node.
+func (m *WandModel) streamInto(sink *streamSink, weights map[string]float64, gN int64, gAvgDocLen float64, gdf map[string]int, allow Membership) {
+	cursors := make([]*cursor, 0, len(weights))
+	for word, w := range weights {
+		id, ok, err := m.resolveWordID(word)
+		if err != nil || !ok {
+			continue
+		}
+		tp, ok := m.terms[id]
+		if !ok {
+			continue
+		}
+		df := gdf[word]
+		if df <= 0 {
+			df = len(tp.docIDs)
+		}
+		idf := log10(float64(gN) / float64(df))
+		idfSq := idf * idf
+		cursors = append(cursors, &cursor{
+			tp:        tp,
+			idfSq:     idfSq,
+			weight:    w,
+			maxScore:  w * idfSq * bm25Factor(float64(tp.maxTf), tp.minDl, gAvgDocLen),
+			docLen:    m.docLen,
+			avgDocLen: gAvgDocLen,
+		})
+	}
+	if len(cursors) == 0 {
+		return
+	}
+	for !sink.stopped {
+		minDoc := ordEnd
+		for _, c := range cursors {
+			if d := c.curDoc(); d < minDoc {
+				minDoc = d
+			}
+		}
+		if minDoc == ordEnd {
+			break
+		}
+		if allow == nil || allow.Contains(minDoc) {
+			score := 0.0
+			for _, c := range cursors {
+				if c.curDoc() == minDoc {
+					score += c.score()
+				}
+			}
+			sink.push(m.PkAt(minDoc), score)
+		}
+		for _, c := range cursors {
+			if c.curDoc() == minDoc {
+				c.advance()
+			}
+		}
+	}
+}
+
+// streamSegmentsLiveStats is the no-LIMIT streaming counterpart of
+// searchSegmentsLiveStats: it walks every segment with liveness + the optional
+// WHERE prefilter and emits all matching (pk, score) rows in bounded batches via
+// emit, with no top-K heap and no internal sort.
+func streamSegmentsLiveStats(segs []*WandModel, terms []string, emit func(keys []any, distances []float64) error, allow Membership, live []Membership, gN int64, gAvgDocLen float64) error {
+	if len(terms) == 0 || len(segs) == 0 || gN <= 0 {
+		return nil
+	}
+	weights, gdf := queryWeights(segs, terms)
+	if len(weights) == 0 {
+		return nil
+	}
+	sink := &streamSink{emit: emit}
 	for i, s := range segs {
 		segAllow := allow
 		if i < len(live) {
 			segAllow = andAllow(allow, live[i])
 		}
-		s.searchInto(h, weights, gN, gAvgDocLen, gdf, segAllow)
+		s.streamInto(sink, weights, gN, gAvgDocLen, gdf, segAllow)
+		if sink.stopped {
+			return sink.err
+		}
 	}
-	return h.sorted()
+	sink.flush() // final partial batch
+	return sink.err
 }
 
 // searchSegsLive is a standalone convenience that computes per-segment liveness

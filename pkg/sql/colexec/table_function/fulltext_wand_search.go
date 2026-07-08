@@ -15,7 +15,7 @@
 package table_function
 
 import (
-	"math"
+	"context"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -46,25 +46,96 @@ type fulltextWandSearchState struct {
 	distances   []float64
 	filterBytes []byte // serialized docfilter membership (WHERE-clause prefilter), if any
 	batch       *batch.Batch
+
+	// Streaming no-LIMIT path (u.limit == 0): rather than materialize every matching
+	// doc, a producer goroutine runs the WAND search with an Emit callback that hands
+	// bounded batches to streamCh; call() drains one batch per invocation and the
+	// upstream ORDER BY score node ranks them. cancel stops the producer (and releases
+	// the cache read-lock it holds) if the consumer aborts early.
+	streaming bool
+	streamCh  chan wandStreamBatch
+	errCh     chan error
+	cancel    context.CancelFunc
+	done      bool
+}
+
+// wandStreamBatch is one emitted batch (<= streamBatch rows); the producer hands
+// ownership to the consumer, so the slices are not reused.
+type wandStreamBatch struct {
+	keys      []any
+	distances []float64
 }
 
 func (u *fulltextWandSearchState) end(tf *TableFunction, proc *process.Process) error { return nil }
 
 func (u *fulltextWandSearchState) reset(tf *TableFunction, proc *process.Process) {
+	u.stopStream()
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
+	u.offset = 0
+	u.keys = nil
+	u.distances = nil
+	u.filterBytes = nil
+	u.streaming = false
+	u.errCh = nil
+	u.done = false
+}
+
+// stopStream cancels the producer goroutine (if streaming) and drains streamCh
+// until the producer closes it, so no goroutine — nor the cache read-lock it holds
+// — leaks past this query. Idempotent; a no-op when not streaming.
+func (u *fulltextWandSearchState) stopStream() {
+	if u.cancel == nil {
+		return
+	}
+	u.cancel() // unblocks the producer's Emit (its select sees ctx.Done())
+	if u.streamCh != nil {
+		for range u.streamCh { // drain to the producer's close()
+		}
+	}
+	u.cancel = nil
+	u.streamCh = nil
 }
 
 func (u *fulltextWandSearchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
 	u.batch.CleanOnlyData()
-
-	nkeys := len(u.keys)
-	n := 0
 	// The projection may request only doc_id (1 column, e.g. COUNT(*) or a bare
 	// WHERE match) or doc_id+score (2 columns) — mirror fulltext_index_scan and
 	// only emit score when the batch has it.
 	withScore := u.batch.VectorCount() > 1
+
+	if u.streaming {
+		if u.done {
+			return vm.CancelResult, nil
+		}
+		select {
+		case b, ok := <-u.streamCh:
+			if !ok {
+				// producer finished; surface any search error. errCh is sent before
+				// the channel is closed, so it is ready here.
+				u.done = true
+				u.cancel = nil
+				if e := <-u.errCh; e != nil {
+					return vm.CancelResult, e
+				}
+				return vm.CancelResult, nil
+			}
+			for i := range b.keys {
+				vector.AppendAny(u.batch.Vecs[0], b.keys[i], false, proc.Mp())
+				if withScore {
+					vector.AppendFixed[float64](u.batch.Vecs[1], b.distances[i], false, proc.Mp())
+				}
+			}
+			u.batch.SetRowCount(len(b.keys))
+			return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
+		case <-proc.Ctx.Done():
+			return vm.CancelResult, proc.Ctx.Err()
+		}
+	}
+
+	nkeys := len(u.keys)
+	n := 0
 	for i := u.offset; i < nkeys && n < 8192; i++ {
 		vector.AppendAny(u.batch.Vecs[0], u.keys[i], false, proc.Mp())
 		if withScore {
@@ -82,6 +153,7 @@ func (u *fulltextWandSearchState) call(tf *TableFunction, proc *process.Process)
 }
 
 func (u *fulltextWandSearchState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
+	u.stopStream()
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
@@ -137,9 +209,12 @@ func (u *fulltextWandSearchState) start(tf *TableFunction, proc *process.Process
 		u.inited = true
 	}
 
+	u.stopStream()
 	u.offset = 0
 	u.keys = nil
 	u.distances = nil
+	u.streaming = false
+	u.done = false
 	u.batch.CleanOnlyData()
 
 	patVec := tf.ctr.argVecs[1]
@@ -180,17 +255,39 @@ func (u *fulltextWandSearchState) start(tf *TableFunction, proc *process.Process
 
 	veccache.Cache.Once()
 
-	// limit 0 ("no pushed limit") means return all matches; a SORT above the
-	// join bounds the final top-K. Use a large K so the WAND walk emits every
-	// matching doc.
-	limit := u.limit
-	if limit == 0 {
-		limit = math.MaxInt32
+	algo := wand.NewWandSearch(u.tblcfg)
+	q := wand.WandQuery{Terms: terms, FilterBytes: u.filterBytes}
+
+	if u.limit == 0 {
+		// No pushed LIMIT: STREAM every matching doc in bounded batches (no top-K
+		// heap, no materialization of the whole result set). A producer goroutine runs
+		// the search with an Emit callback that hands batches to streamCh; call() drains
+		// one per invocation and the upstream ORDER BY score node ranks. cancel/ctx let
+		// reset()/free() stop the producer and release the cache read-lock it holds.
+		u.streaming = true
+		u.streamCh = make(chan wandStreamBatch, 4)
+		u.errCh = make(chan error, 1)
+		ctx, cancel := context.WithCancel(proc.Ctx)
+		u.cancel = cancel
+		rt := vectorindex.RuntimeConfig{Emit: func(keys []any, dists []float64) error {
+			select {
+			case u.streamCh <- wandStreamBatch{keys: keys, distances: dists}:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}}
+		sp := sqlexec.NewSqlProcess(proc)
+		go func() {
+			_, _, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, algo, q, rt)
+			u.errCh <- serr // buffered(1): send before close so call() reads it after drain
+			close(u.streamCh)
+		}()
+		return nil
 	}
 
-	algo := wand.NewWandSearch(u.tblcfg)
-	rt := vectorindex.RuntimeConfig{Limit: uint(limit)}
-	q := wand.WandQuery{Terms: terms, FilterBytes: u.filterBytes}
+	// With a pushed LIMIT: WAND top-K, returned all at once (bounded by the LIMIT).
+	rt := vectorindex.RuntimeConfig{Limit: uint(u.limit)}
 	keys, dists, err := veccache.Cache.Search(sqlexec.NewSqlProcess(proc), u.tblcfg.IndexTable, algo, q, rt)
 	if err != nil {
 		return err

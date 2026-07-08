@@ -193,6 +193,18 @@ func (s *WandSearch) Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.
 			live[i] = andAllow(mkAllow(seg), base)
 		}
 	}
+	// STREAMING no-LIMIT path: when the caller passes an Emit callback (the TVF
+	// does this only for a query with no pushed LIMIT), yield every matching doc in
+	// bounded batches — no top-K heap, no internal sort. Ranking is done by the
+	// upstream ORDER BY score node. Results are handed off through Emit, so return
+	// empty keys/distances.
+	if rt.Emit != nil {
+		if e := streamSegmentsLiveStats(s.segs, q.Terms, rt.Emit, nil, live, s.gN, s.gAvgDocLen); e != nil {
+			return nil, nil, e
+		}
+		return []any{}, []float64{}, nil
+	}
+
 	res := searchSegmentsLiveStats(s.segs, q.Terms, limit, nil, live, s.gN, s.gAvgDocLen)
 	keysOut := make([]any, len(res))
 	dist := make([]float64, len(res))
