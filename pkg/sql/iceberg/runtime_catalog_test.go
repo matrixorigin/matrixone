@@ -60,3 +60,45 @@ func TestResolveRuntimeCatalogRequestPrefixForWriteRefRejectsTag(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "read-only"), err.Error())
 }
+
+func TestResolveRuntimeCatalogRequestPrefixEdges(t *testing.T) {
+	req := api.CatalogRequest{Prefix: " already-set "}
+	resolved, err := resolveRuntimeCatalogRequestPrefix(context.Background(), nil, req)
+	require.NoError(t, err)
+	require.Equal(t, req, resolved)
+
+	called := false
+	client := &catalog.MockClient{
+		GetConfigFunc: func(ctx context.Context, req api.GetConfigRequest) (*api.ConfigResponse, error) {
+			called = true
+			return &api.ConfigResponse{Prefix: " branch | s3://warehouse "}, nil
+		},
+	}
+	resolved, err = resolveRuntimeCatalogRequestPrefix(context.Background(), client, api.CatalogRequest{
+		Catalog: model.Catalog{Warehouse: "s3://warehouse"},
+	})
+	require.NoError(t, err)
+	require.True(t, called)
+	require.Equal(t, "branch | s3://warehouse", resolved.Prefix)
+}
+
+func TestRuntimeNessiePrefixHelpersRejectNoopInputs(t *testing.T) {
+	require.False(t, isRuntimeNessieCatalogConfig(nil))
+	require.True(t, isRuntimeNessieCatalogConfig(&api.ConfigResponse{
+		Defaults: map[string]string{" nessie.is-nessie-catalog ": " TRUE "},
+	}))
+
+	for _, tc := range []struct {
+		prefix string
+		ref    string
+	}{
+		{prefix: "main|s3://warehouse", ref: ""},
+		{prefix: "main|s3://warehouse", ref: model.DefaultRefMain},
+		{prefix: "s3://warehouse", ref: "branch_a"},
+		{prefix: "main| ", ref: "branch_a"},
+	} {
+		rewritten, ok := rewriteRuntimeNessiePrefix(tc.prefix, tc.ref)
+		require.False(t, ok)
+		require.Equal(t, tc.prefix, rewritten)
+	}
+}
