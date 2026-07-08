@@ -64,7 +64,7 @@
 /pkg/common/async @XuPeng-SH
 /pkg/common/bitmap @aunjgr @XuPeng-SH
 /pkg/common/hashmap @aunjgr
-/pkg/common/moerr @xzxiong @XuPeng-SH
+/pkg/common/moerr @XuPeng-SH
 /pkg/common/morpc @XuPeng-SH
 /pkg/common/moprobe @fengttt
 /pkg/common/stopper @XuPeng-SH
