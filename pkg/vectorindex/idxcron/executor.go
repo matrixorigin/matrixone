@@ -467,17 +467,23 @@ func runReindex(ctx context.Context,
 
 func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 
-	logutil.Infof("IndexUpdateTaskExecutor START")
 	currentHour := time.Now().Hour()
+	// tick-level trace: one line per cron fire, echoing the schedule + fast-mode overrides
+	// so a short-interval test deploy can confirm the executor is actually ticking (and how
+	// often) before the per-index eval/skip/FIRING lines below.
+	logutil.Infof("[idxcron] tick START currentHour=%d cronExpr=%q fastIntervalSec=%d",
+		currentHour, IndexUpdateTaskCronExpr, idxcronFastIntervalSec)
 
+	var fired, skipped int
 	defer func() {
-		logutil.Infof("IndexUpdateTaskExecutor END")
+		logutil.Infof("[idxcron] tick END fired=%d skipped=%d err=%v", fired, skipped, err)
 	}()
 
 	tasks, err := getTasks(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID)
 	if err != nil {
 		return err
 	}
+	logutil.Infof("[idxcron] tick: %d index-update task(s) to evaluate", len(tasks))
 
 	// do the maintenance such as ivfflat re-index, fulltext batch_delete
 	for _, t := range tasks {
@@ -500,8 +506,12 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 			updated, reason, err2 = runReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t, currentHour, p)
 		}
 
+		if updated {
+			fired++
+		}
 		if !updated && reason == Reason_Skipped {
 			// skip save Status when update was skipped
+			skipped++
 			continue
 		}
 
