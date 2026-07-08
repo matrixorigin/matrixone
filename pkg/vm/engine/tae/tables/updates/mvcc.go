@@ -187,26 +187,6 @@ func (n *AppendMVCCHandle) GetCommitTSVecInRange(start, end types.TS, mp *mpool.
 	return commitTSVec
 }
 
-func (n *AppendMVCCHandle) MinCommittedAppendTSLocked() types.TS {
-	var minTS types.TS
-	n.appends.ForEach(
-		func(node *AppendNode) bool {
-			if !node.IsCommitted() || node.IsAborted() {
-				return true
-			}
-			commitTS := node.GetCommitTS()
-			if commitTS.IsEmpty() || commitTS.Equal(&txnif.UncommitTS) {
-				return true
-			}
-			if minTS.IsEmpty() || commitTS.LT(&minTS) {
-				minTS = commitTS
-			}
-			return true
-		},
-		true)
-	return minTS
-}
-
 // it is used to get the visible max row for a txn
 // maxrow: is the max row that the txn can see
 // visible: is true if the txn can see any row

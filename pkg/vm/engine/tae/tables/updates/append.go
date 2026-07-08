@@ -138,19 +138,12 @@ func (node *AppendNode) ApplyCommit(id string) error {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
 	node.TxnMVCCNode.ApplyCommit(id)
-	minCommittedTS := node.mvcc.MinCommittedAppendTSLocked()
 	listener := node.mvcc.GetAppendListener()
 	var err error
 	if listener != nil {
 		err = listener(node)
 	}
 	node.mvcc.Unlock()
-	if !minCommittedTS.IsEmpty() && node.mvcc.meta.IsAppendable() {
-		if updateErr := node.mvcc.meta.GetTable().UpdateObjectCreateTS(
-			node.mvcc.meta.ID(), node.mvcc.meta.IsTombstone, minCommittedTS); updateErr != nil {
-			return updateErr
-		}
-	}
 	return err
 }
 
