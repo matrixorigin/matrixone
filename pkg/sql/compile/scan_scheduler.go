@@ -36,7 +36,7 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 
 	stats := toScheduleScanStats(node)
 	scanPlacement := schedule.DecideScanPlacement(schedule.ScanRequest{
-		QueryWorkers:        toScheduleWorkers(c.cnList),
+		QueryWorkers:        toScheduleScanWorkers(c.cnList),
 		Stats:               stats,
 		ForceSingle:         forceSingle,
 		ForceMultiCN:        plan2.GetForceScanOnMultiCN() || plan2.IsIvfSearchEntriesInternalScan(node),
@@ -150,4 +150,22 @@ func toScheduleScanStats(node *plan.Node) *schedule.ScanStats {
 		Dop:        node.Stats.Dop,
 		ForceOneCN: node.Stats.ForceOneCN,
 	}
+}
+
+func toScheduleScanWorkers(nodes engine.Nodes) schedule.Workers {
+	if len(nodes) == 0 {
+		return nil
+	}
+	workers := make(schedule.Workers, 0, len(nodes))
+	for _, node := range nodes {
+		worker := toScheduleWorker(node)
+		if worker.ID == "" && worker.Addr == "" {
+			continue
+		}
+		workers = append(workers, worker)
+	}
+	if len(workers) == 0 {
+		return nil
+	}
+	return workers
 }
