@@ -482,9 +482,11 @@ func shouldTrackRemoteLockOnSendError(err error) bool {
 		return false
 	}
 	err = unwrapLockRequestNotSentError(err)
-	return !moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) &&
-		!moerr.IsMoErrCode(err, moerr.ErrBackendClosed) &&
-		!moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect)
+	// A bare backend/connection error does not prove the request stayed local:
+	// morpc can report it after the lock request has already been written and
+	// the future is waiting for a response. Only explicit not-sent markers and
+	// connect-timeout failures skip bookkeeping.
+	return !moerr.IsMoErrCode(err, moerr.ErrRPCTimeout)
 }
 
 func unwrapLockRequestNotSentError(err error) error {

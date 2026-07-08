@@ -267,12 +267,12 @@ func TestLockRemoteWithNotSentErrorSkipsRemoteTracking(t *testing.T) {
 			err:  moerr.NewRPCTimeoutNoCtx(),
 		},
 		{
-			name: "backend closed before lock success",
-			err:  moerr.NewBackendClosedNoCtx(),
+			name: "marked backend closed before write",
+			err:  wrapLockRequestNotSentError(moerr.NewBackendClosedNoCtx()),
 		},
 		{
-			name: "backend cannot connect before lock success",
-			err:  moerr.NewBackendCannotConnectNoCtx(),
+			name: "marked backend cannot connect before write",
+			err:  wrapLockRequestNotSentError(moerr.NewBackendCannotConnectNoCtx()),
 		},
 	}
 
@@ -346,11 +346,83 @@ func TestLockRemoteWithNotSentErrorSkipsRemoteTracking(t *testing.T) {
 	}
 }
 
+func TestLockRemoteWithResponseDisconnectTracksForUnlock(t *testing.T) {
+	bind := pb.LockTable{
+		Group:       1,
+		Table:       2,
+		OriginTable: 2,
+		ServiceID:   "s1",
+		Valid:       true,
+	}
+	lockCalled := false
+	unlockCalled := false
+	client := lockTableTestClient{
+		send: func(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+			switch req.Method {
+			case pb.Method_Lock:
+				lockCalled = true
+				return nil, moerr.NewBackendClosedNoCtx()
+			case pb.Method_GetBind:
+				resp := acquireResponse()
+				resp.Method = req.Method
+				resp.GetBind.LockTable = bind
+				return resp, nil
+			case pb.Method_Unlock:
+				unlockCalled = true
+				resp := acquireResponse()
+				resp.Method = req.Method
+				return resp, nil
+			default:
+				return nil, moerr.NewInternalErrorNoCtx("unexpected request")
+			}
+		},
+	}
+	l := newRemoteLockTable(
+		"",
+		time.Second,
+		bind,
+		client,
+		func(pb.LockTable) {},
+		getLogger(""),
+	)
+	defer l.close()
+
+	txnID := []byte("txn-response-disconnect")
+	txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+	closed := false
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	txn.Lock()
+	defer func() {
+		txn.Unlock()
+		if !closed {
+			reuse.Free(txn, nil)
+		}
+	}()
+
+	l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
+		require.Error(t, err)
+	})
+	require.True(t, lockCalled)
+	holder := txn.getHoldLocksLocked(l.bind.Group)
+	require.Contains(t, holder.tableKeys, l.bind.Table)
+	require.Contains(t, holder.tableBinds, l.bind.Table)
+
+	require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+		return l, nil
+	}, l.logger))
+	closed = true
+	require.True(t, unlockCalled)
+}
+
 func TestShouldTrackRemoteLockOnSendError(t *testing.T) {
 	require.False(t, shouldTrackRemoteLockOnSendError(wrapLockRequestNotSentError(context.Canceled)))
 	require.False(t, shouldTrackRemoteLockOnSendError(moerr.NewRPCTimeoutNoCtx()))
-	require.False(t, shouldTrackRemoteLockOnSendError(moerr.NewBackendClosedNoCtx()))
-	require.False(t, shouldTrackRemoteLockOnSendError(moerr.NewBackendCannotConnectNoCtx()))
+	require.False(t, shouldTrackRemoteLockOnSendError(wrapLockRequestNotSentError(moerr.NewBackendClosedNoCtx())))
+	require.False(t, shouldTrackRemoteLockOnSendError(wrapLockRequestNotSentError(moerr.NewBackendCannotConnectNoCtx())))
+	require.True(t, shouldTrackRemoteLockOnSendError(moerr.NewBackendClosedNoCtx()))
+	require.True(t, shouldTrackRemoteLockOnSendError(moerr.NewBackendCannotConnectNoCtx()))
 	require.True(t, shouldTrackRemoteLockOnSendError(context.DeadlineExceeded))
 }
 
