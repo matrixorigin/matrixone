@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
@@ -52,6 +53,81 @@ func TestForceSingleScanDistinctAgg(t *testing.T) {
 	require.True(t, forceSingleScan(node))
 }
 
+func TestToScheduledQueryWorkersKeepsLocalIdentityWithoutRoute(t *testing.T) {
+	workers := toScheduledQueryWorkers(engine.Nodes{
+		{Id: "cn-local", Mcpu: 4},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+		{},
+	})
+
+	require.Equal(t, schedule.Workers{
+		{ID: "cn-local", Mcpu: 4},
+		{ID: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}, workers)
+}
+
+func TestShouldWarnScanPlacement(t *testing.T) {
+	for _, reason := range []string{
+		schedule.ReasonScanNoWorkers,
+		schedule.ReasonScanMissingStats,
+		schedule.ReasonScanSingleWorker,
+		schedule.ReasonScanQueryLocalExec,
+		schedule.ReasonScanQueryFallbackCN,
+	} {
+		require.True(t, shouldWarnScanPlacement(reason), reason)
+	}
+
+	for _, reason := range []string{
+		schedule.ReasonScanSmallBlocks,
+		schedule.ReasonScanForceOneCN,
+		schedule.ReasonScanForceSingle,
+		schedule.ReasonScanMultiCN,
+	} {
+		require.False(t, shouldWarnScanPlacement(reason), reason)
+	}
+}
+
+func TestSingleWorkerStageNodePrefersSingleScheduledWorker(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+
+	node := c.singleWorkerStageNode()
+	require.Equal(t, "cn-remote", node.Id)
+	require.Equal(t, "cn-remote:6001", node.Addr)
+}
+
+func TestSingleWorkerStageNodeFallsBackToCurrentCNForMultiCNQuery(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-a", Addr: "cn-a:6001", Mcpu: 4},
+		{Id: "cn-b", Addr: "cn-b:6001", Mcpu: 4},
+	}
+
+	node := c.singleWorkerStageNode()
+	require.Equal(t, "cn-local:6001", node.Addr)
+}
+
+func TestNewScopeListOnSingleWorkerStageKeepsRemoteSingleWorker(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.anal = &AnalyzeModule{}
+	c.cnList = engine.Nodes{
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+
+	scopes := c.newScopeListOnSingleWorkerStage(2, 2)
+	require.Len(t, scopes, 2)
+	for _, s := range scopes {
+		require.Equal(t, "cn-remote", s.NodeInfo.Id)
+		require.Equal(t, "cn-remote:6001", s.NodeInfo.Addr)
+		require.Equal(t, 1, s.NodeInfo.Mcpu)
+	}
+}
+
 func TestGenerateNodesRespectsNodeDOPOnMultiCN(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
@@ -81,6 +157,46 @@ func TestGenerateNodesRespectsNodeDOPOnMultiCN(t *testing.T) {
 	require.Len(t, nodes, 2)
 	require.Equal(t, 2, nodes[0].Mcpu)
 	require.Equal(t, 2, nodes[1].Mcpu)
+}
+
+func TestGenerateNodesKeepsScheduledLocalWorkerWithoutAddress(t *testing.T) {
+	c := NewMockCompile(t)
+	c.e = newStubEngineForGenerateNodes("testdb", "t")
+	c.cnList = engine.Nodes{
+		{Id: "cn-local", Mcpu: 8},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 12},
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "t",
+		},
+		TableDef: &plan.TableDef{
+			Name: "t",
+		},
+		Stats: &plan.Stats{
+			BlockNum: int32(plan2.BlockThresholdForOneCN + 1),
+			Dop:      4,
+		},
+	}
+
+	nodes, err := c.generateNodes(node)
+	require.NoError(t, err)
+	require.Len(t, nodes, 2)
+	require.Equal(t, "cn-local", nodes[0].Id)
+	require.Empty(t, nodes[0].Addr)
+	require.Equal(t, 4, nodes[0].Mcpu)
+	require.Equal(t, int32(2), nodes[0].CNCNT)
+	require.Equal(t, int32(0), nodes[0].CNIDX)
+	require.Nil(t, nodes[0].Data)
+	require.Equal(t, "cn-remote", nodes[1].Id)
+	require.Equal(t, "cn-remote:6001", nodes[1].Addr)
+	require.Equal(t, 4, nodes[1].Mcpu)
+	require.Equal(t, int32(2), nodes[1].CNCNT)
+	require.Equal(t, int32(1), nodes[1].CNIDX)
+	require.NotNil(t, nodes[1].Data)
 }
 
 func TestGenerateNodesCapsByCNMcpuWhenDOPIsLarger(t *testing.T) {
@@ -223,6 +339,7 @@ func TestGenerateNodesKeepsSmallNonIvfScanOnCurrentCN(t *testing.T) {
 	nodes, err := c.generateNodes(node)
 	require.NoError(t, err)
 	require.Equal(t, engine.Nodes{{
+		Id:    "cn1",
 		Addr:  "cn-local:6001",
 		Mcpu:  4,
 		CNCNT: 1,
@@ -258,6 +375,46 @@ func TestGenerateNodesKeepsLargeScanOnCurrentCNWhenNoWorkers(t *testing.T) {
 	}}, nodes)
 }
 
+func TestGenerateNodesKeepsSingleRemoteQueryWorkerForLocalOnlyScan(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.e = newStubEngineForGenerateNodes("testdb", "t")
+	c.cnList = engine.Nodes{
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+	c.queryPlacement = schedule.QueryDecision{
+		ExecKind:  schedule.QueryExecAPMultiCN,
+		Workers:   schedule.Workers{{ID: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8}},
+		Reason:    schedule.ReasonMultiCN,
+		Satisfied: true,
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "t",
+		},
+		TableDef: &plan.TableDef{
+			Name: "t",
+		},
+		Stats: &plan.Stats{
+			BlockNum: int32(plan2.BlockThresholdForOneCN + 1),
+			Dop:      4,
+		},
+	}
+
+	nodes, err := c.generateNodes(node)
+	require.NoError(t, err)
+	require.Len(t, nodes, 1)
+	require.Equal(t, "cn-remote", nodes[0].Id)
+	require.Equal(t, "cn-remote:6001", nodes[0].Addr)
+	require.Equal(t, 4, nodes[0].Mcpu)
+	require.Equal(t, int32(1), nodes[0].CNCNT)
+	require.Equal(t, int32(0), nodes[0].CNIDX)
+	require.NotNil(t, nodes[0].Data)
+}
+
 func TestGenerateNodesKeepsLocalScanMcpuAtLeastOne(t *testing.T) {
 	for _, dop := range []int32{0, -2} {
 		c := NewMockCompile(t)
@@ -286,6 +443,7 @@ func TestGenerateNodesKeepsLocalScanMcpuAtLeastOne(t *testing.T) {
 		nodes, err := c.generateNodes(node)
 		require.NoError(t, err)
 		require.Equal(t, engine.Nodes{{
+			Id:    "cn-local",
 			Addr:  "cn-local:6001",
 			Mcpu:  1,
 			CNCNT: 1,
@@ -321,6 +479,7 @@ func TestGenerateNodesKeepsForceOneCNOnCurrentCN(t *testing.T) {
 	nodes, err := c.generateNodes(node)
 	require.NoError(t, err)
 	require.Equal(t, engine.Nodes{{
+		Id:    "cn1",
 		Addr:  "cn-local:6001",
 		Mcpu:  6,
 		CNCNT: 1,
@@ -354,6 +513,7 @@ func TestGenerateNodesKeepsTableCloneOnCurrentCN(t *testing.T) {
 	nodes, err := c.generateNodes(node)
 	require.NoError(t, err)
 	require.Equal(t, engine.Nodes{{
+		Id:    "cn-local",
 		Addr:  "cn-local:6001",
 		Mcpu:  1,
 		CNCNT: 1,

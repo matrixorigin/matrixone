@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -283,7 +284,8 @@ type Compile struct {
 
 	MessageBoard *message.MessageBoard
 
-	cnList engine.Nodes
+	cnList         engine.Nodes
+	queryPlacement schedule.QueryDecision
 	// ast
 	stmt tree.Statement
 

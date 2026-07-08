@@ -75,6 +75,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -264,6 +265,7 @@ func (c *Compile) clear() {
 	c.proc = nil
 
 	c.cnList = c.cnList[:0]
+	c.queryPlacement = schedule.QueryDecision{}
 	c.stmt = nil
 	c.startAt = time.Time{}
 	c.needLockMeta = false
@@ -3040,7 +3042,7 @@ func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) [
 }
 
 func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newScopeListOnCurrentCN(2, 1)
+	rs := c.newScopeListOnSingleWorkerStage(2, 1)
 	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
 
 	connectLeftArg := connector.NewArgument().WithReg(rs[0].Proc.Reg.MergeReceivers[0])
@@ -3082,7 +3084,7 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(left, right, nodeType)
 	}
-	rs := c.newScopeListOnCurrentCN(2, int(node.Stats.Dop))
+	rs := c.newScopeListOnSingleWorkerStage(2, int(node.Stats.Dop))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, node)
 
 	c.hasMergeOp = true
@@ -4011,7 +4013,7 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 	shuffleGroups := make([]*Scope, 0, len(c.cnList))
 	dop := int(node.Stats.Dop)
 	for _, cn := range c.cnList {
-		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
+		scopes := c.newScopeListWithNode(dop, len(inputSS), cn)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
 				rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
@@ -4620,13 +4622,23 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	return rs
 }
 
-// newScopeListOnCurrentCN traverse the cnList and only generate Scope list for the current CN node
-// waing: newScopeListOnCurrentCN result is only used to build Scope and add one merge operator.
+// newScopeListOnSingleWorkerStage builds a single-worker stage. If query
+// placement already collapsed to one worker, inherit that worker; otherwise
+// keep the legacy current-CN coordinator for multi-CN stages.
+//
+// waing: newScopeListOnSingleWorkerStage result is only used to build Scope and add one merge operator.
 // If other operators are added, please let @qingxinhome know
-func (c *Compile) newScopeListOnCurrentCN(childrenCount int, mcpu int) []*Scope {
-	node := getEngineNode(c)
-	ss := c.newScopeListWithNode(mcpu, childrenCount, node.Addr)
+func (c *Compile) newScopeListOnSingleWorkerStage(childrenCount int, mcpu int) []*Scope {
+	node := c.singleWorkerStageNode()
+	ss := c.newScopeListWithNode(mcpu, childrenCount, node)
 	return ss
+}
+
+func (c *Compile) singleWorkerStageNode() engine.Node {
+	if len(c.cnList) == 1 {
+		return c.cnList[0]
+	}
+	return getEngineNode(c)
 }
 
 // all scopes in ss are on the same CN
@@ -4661,12 +4673,13 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 
 // waing: newScopeListWithNode only used to build Scope with cpuNum and add one merge operator.
 // If other operators are added, please let @qingxinhome know
-func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*Scope {
+func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, node engine.Node) []*Scope {
 	ss := make([]*Scope, mcpu)
 	for i := range ss {
 		ss[i] = newScope(Remote)
 		ss[i].Magic = Remote
-		ss[i].NodeInfo.Addr = addr
+		ss[i].NodeInfo.Id = node.Id
+		ss[i].NodeInfo.Addr = node.Addr
 		ss[i].NodeInfo.Mcpu = 1 // ss is already the mcpu length so we don't need to parallel it
 		ss[i].Proc = c.proc.NewNoContextChildProc(childrenCount)
 
