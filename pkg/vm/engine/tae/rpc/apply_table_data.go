@@ -211,15 +211,28 @@ func (a *ApplyTableDataArg) Run() (err error) {
 			panic(fmt.Sprintf("invalid object type: %d", objTypes[i]))
 		}
 		stats := objectio.ObjectStats(idVec.GetBytesAt(i))
-		objectio.SetObjectStatsAppendable(&stats, false)
 		opt := &objectio.CreateObjOpt{
 			Stats:       &stats,
 			IsTombstone: isTombstone,
 		}
 		tableEntry := a.rel.GetMeta().(*catalog.TableEntry)
 		var obj handle.Object
-		if obj, err = a.rel.CreateNonAppendableObject(isTombstone, opt); err != nil {
-			return
+		if stats.GetAppendable() {
+			if stats.Rows() > 0 {
+				err = moerr.NewInternalErrorNoCtxf(
+					"appendable object %s has non-empty row count %d",
+					stats.ObjectName().String(),
+					stats.Rows(),
+				)
+				return
+			}
+			if obj, err = a.rel.CreateObjectWithOpt(isTombstone, opt); err != nil {
+				return
+			}
+		} else {
+			if obj, err = a.rel.CreateNonAppendableObject(isTombstone, opt); err != nil {
+				return
+			}
 		}
 		meta := obj.GetMeta().(*catalog.ObjectEntry)
 

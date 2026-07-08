@@ -721,6 +721,10 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 	)
 }
 
+func (tbl *txnTable) CreateObjectWithOpt(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	return tbl.createCommittedAppendableObject(opts)
+}
+
 func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	return tbl.createObject(opts)
 }

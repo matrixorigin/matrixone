@@ -78,14 +78,6 @@ func WithAppendable() ObjectStatsOptions {
 	}
 }
 
-func SetObjectStatsAppendable(stats *ObjectStats, appendable bool) {
-	if appendable {
-		stats[reservedOffset] |= ObjectFlag_Appendable
-		return
-	}
-	stats[reservedOffset] &^= ObjectFlag_Appendable
-}
-
 func NewObjectStats() *ObjectStats {
 	return new(ObjectStats)
 }

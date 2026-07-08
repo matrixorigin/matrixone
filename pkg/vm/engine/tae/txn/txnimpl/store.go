@@ -706,6 +706,17 @@ func (store *txnStore) CreateObject(dbId, tid uint64, isTombstone bool) (obj han
 	return db.CreateObject(tid, isTombstone)
 }
 
+func (store *txnStore) CreateObjectWithOpt(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	if err = store.WantWrite("CreateObjectWithOpt"); err != nil {
+		return
+	}
+	var db *txnDB
+	if db, err = store.getOrSetDB(dbId); err != nil {
+		return
+	}
+	return db.CreateObjectWithOpt(tid, opt, isTombstone)
+}
+
 func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	if err = store.WantWrite("CreateNonAppendableObject"); err != nil {
 		return
