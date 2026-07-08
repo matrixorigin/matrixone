@@ -28,10 +28,55 @@ SELECT JSON_REMOVE('["a","b","c","d"]', '$[1]', '$[1]') AS result;
 SELECT JSON_REMOVE('{"a":1,"b":2,"c":3}', '$.a', '$.c') AS result;
 ➤ result[-1,2147483647,0]  𝄀
 {"b": 2}
+SELECT JSON_REMOVE('[1,2,3]', '$[0]') AS result;
+➤ result[-1,2147483647,0]  𝄀
+[2, 3]
+SELECT JSON_REMOVE('[1,2,3]', '$[1]') AS result;
+➤ result[-1,2147483647,0]  𝄀
+[1, 3]
+SELECT JSON_REMOVE('[1,2,3]', '$[2]') AS result;
+➤ result[-1,2147483647,0]  𝄀
+[1, 2]
+SELECT JSON_REMOVE('[1,2,3]', '$[3]') AS result;
+➤ result[-1,2147483647,0]  𝄀
+[1, 2, 3]
+SELECT JSON_REMOVE('[{"a":true},{"b":false},{"c":null},{"a":null}]', '$[0].a', '$[2].c') AS result;
+➤ result[-1,2147483647,0]  𝄀
+[{}, {"b": false}, {}, {"a": null}]
+SELECT JSON_REMOVE('{"a":"foo","b":[true,{"c":123}]}', '$.b[1]') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": "foo", "b": [true]}
+SELECT JSON_REMOVE('{"a":"foo","b":[true,{"c":123,"d":456}]}', '$.b[1].c') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": "foo", "b": [true, {"d": 456}]}
+SELECT JSON_REMOVE('{"a":"foo","b":[true,{"c":123,"d":456}]}', '$.b[1].e') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": "foo", "b": [true, {"c": 123, "d": 456}]}
+SELECT JSON_REMOVE('{"a":{"b":1,"c":2}}', '$[0][0].a[0][0].b') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": {"c": 2}}
+SELECT JSON_REMOVE('[{"a":[{"b":1,"c":2},123]},456]', '$[0][0].a[0][0].b') AS result;
+➤ result[-1,2147483647,0]  𝄀
+[{"a": [{"c": 2}, 123]}, 456]
+SELECT JSON_REMOVE('123', '$.a') AS result;
+➤ result[-1,2147483647,0]  𝄀
+123
+SELECT JSON_REMOVE('null', '$[0]') AS result;
+➤ result[-1,2147483647,0]  𝄀
+null
+SELECT JSON_REMOVE('{"*":1,"a":2}', '$."*"') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": 2}
+SELECT JSON_REMOVE('{"last-updated":"x","a":1}', '$."last-updated"') AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": 1}
 SELECT JSON_REMOVE(NULL, '$.a') AS result;
 ➤ result[-1,2147483647,0]  𝄀
 null
 SELECT JSON_REMOVE('{"a":1}', NULL) AS result;
+➤ result[-1,2147483647,0]  𝄀
+null
+SELECT JSON_REMOVE('[1,{"a":true,"b":false,"c":null},5]', '$[1]', NULL) AS result;
 ➤ result[-1,2147483647,0]  𝄀
 null
 SELECT JSON_REMOVE('{"a":1}', '$') AS result;
@@ -40,6 +85,27 @@ SELECT JSON_REMOVE('{"a":1}', '$.*') AS result;
 invalid argument json_remove, bad value invalid path expression
 SELECT JSON_REMOVE('{"a":1}', '$**.a') AS result;
 invalid argument json_remove, bad value invalid path expression
+SELECT JSON_REMOVE('[1,2,3]', '$[*]') AS result;
+invalid argument json_remove, bad value invalid path expression
+SELECT JSON_REMOVE('[1,2,3]', '$[2]', '$[*]') AS result;
+invalid argument json_remove, bad value invalid path expression
+SELECT JSON_REMOVE('[1,2,3]', '$[2]', '$**[2]') AS result;
+invalid argument json_remove, bad value invalid path expression
+DROP TABLE IF EXISTS json_remove_paths;
+CREATE TABLE json_remove_paths (
+j JSON,
+p VARCHAR(20)
+);
+INSERT INTO json_remove_paths (j, p) VALUES
+('{"a":1,"b":2,"c":3}', '$.a'),
+('{"a":1,"b":2,"c":3}', '$.b'),
+('{"a":1,"b":2,"c":3}', '$.c');
+SELECT j, p, JSON_REMOVE(j, p) AS result FROM json_remove_paths ORDER BY p;
+➤ j[-1,2147483647,0]  ¦  p[12,-1,0]  ¦  result[-1,2147483647,0]  𝄀
+{"a": 1, "b": 2, "c": 3}  ¦  $.a  ¦  {"b": 2, "c": 3}  𝄀
+{"a": 1, "b": 2, "c": 3}  ¦  $.b  ¦  {"a": 1, "c": 3}  𝄀
+{"a": 1, "b": 2, "c": 3}  ¦  $.c  ¦  {"a": 1, "b": 2}
+DROP TABLE json_remove_paths;
 DROP TABLE IF EXISTS json_remove_users;
 CREATE TABLE json_remove_users (
 id INT PRIMARY KEY,

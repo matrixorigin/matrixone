@@ -92,6 +92,12 @@ func TestRemove(t *testing.T) {
 			want:  `{"a": {"c": 2}, "d": 3}`,
 		},
 		{
+			name:  "quoted star is object key",
+			input: `{"*":1,"a":2}`,
+			paths: []string{`$."*"`},
+			want:  `{"a": 2}`,
+		},
+		{
 			name:  "missing path is noop",
 			input: `{"a":1}`,
 			paths: []string{"$.b", "$.a.b", "$[1]"},

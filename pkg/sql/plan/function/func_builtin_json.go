@@ -717,7 +717,7 @@ func jsonRemoveCheckFn(overloads []overload, inputs []types.Type) checkResult {
 		if i == 0 {
 			if input.Oid == types.T_json || input.Oid.IsMySQLString() {
 				ts[i] = input
-			} else if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
+			} else if input.Oid == types.T_any {
 				ts[i] = types.T_varchar.ToType()
 				allMatch = false
 			} else {
@@ -730,7 +730,7 @@ func jsonRemoveCheckFn(overloads []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		} else if input.Oid.IsMySQLString() {
 			ts[i] = input
-		} else if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
+		} else if input.Oid == types.T_any {
 			ts[i] = types.T_varchar.ToType()
 			allMatch = false
 		} else {
@@ -819,14 +819,8 @@ rowLoop:
 		if err != nil {
 			return err
 		}
-		if out.IsNull() {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			if err = rs.AppendByteJson(out, false); err != nil {
-				return err
-			}
+		if err = rs.AppendByteJson(out, false); err != nil {
+			return err
 		}
 	}
 	return nil
