@@ -672,14 +672,16 @@ func TestCannotHungWithUnstableNetwork(t *testing.T) {
 			const iterations = 32
 
 			type workerResult struct {
-				idx        int
-				completed  int
-				lockErrors int64
-				err        error
+				idx           int
+				completed     int
+				lockSuccesses int64
+				lockErrors    int64
+				err           error
 			}
 
 			var wg sync.WaitGroup
 			progress := make([]atomic.Int64, workers)
+			lockSuccesses := make([]atomic.Int64, workers)
 			lockErrors := make([]atomic.Int64, workers)
 			results := make(chan workerResult, workers)
 			fn := func(s *service, idx int) {
@@ -697,6 +699,9 @@ func TestCannotHungWithUnstableNetwork(t *testing.T) {
 					if err != nil {
 						result.lockErrors++
 						lockErrors[idx].Add(1)
+					} else {
+						result.lockSuccesses++
+						lockSuccesses[idx].Add(1)
 					}
 
 					ctx, cancel = context.WithTimeout(context.Background(), time.Second*5)
@@ -726,8 +731,9 @@ func TestCannotHungWithUnstableNetwork(t *testing.T) {
 			select {
 			case <-doneC:
 			case <-time.After(time.Second * 20):
-				t.Errorf("unstable-network lock workers did not finish: progress=[%d,%d,%d], lockErrors=[%d,%d,%d]",
+				t.Errorf("unstable-network lock workers did not finish: progress=[%d,%d,%d], lockSuccesses=[%d,%d,%d], lockErrors=[%d,%d,%d]",
 					progress[0].Load(), progress[1].Load(), progress[2].Load(),
+					lockSuccesses[0].Load(), lockSuccesses[1].Load(), lockSuccesses[2].Load(),
 					lockErrors[0].Load(), lockErrors[1].Load(), lockErrors[2].Load())
 				return
 			}
@@ -737,6 +743,8 @@ func TestCannotHungWithUnstableNetwork(t *testing.T) {
 				require.NoErrorf(t, result.err, "worker %d stopped after %d/%d iterations with %d lock errors",
 					result.idx, result.completed, iterations, result.lockErrors)
 				require.Equalf(t, iterations, result.completed, "worker %d did not complete all iterations", result.idx)
+				require.Positivef(t, result.lockSuccesses, "worker %d never acquired a lock successfully; completed=%d/%d, lockErrors=%d",
+					result.idx, result.completed, iterations, result.lockErrors)
 			}
 		},
 		func(c *Config) {
