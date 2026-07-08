@@ -22,43 +22,22 @@ import (
 )
 
 func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
-	makePlan := func(stmtType plan.Query_StatementType, fk *plan.ForeignKeyDef) *plan.Plan {
+	makePlan := func(stmtType plan.Query_StatementType, hasForeignKeyAction bool) *plan.Plan {
 		return &plan.Plan{
 			Plan: &plan.Plan_Query{
 				Query: &plan.Query{
-					StmtType: stmtType,
-					Nodes: []*plan.Node{
-						{
-							NodeType: plan.Node_MULTI_UPDATE,
-							UpdateCtxList: []*plan.UpdateCtx{
-								{
-									TableDef: &plan.TableDef{
-										Fkeys: []*plan.ForeignKeyDef{fk},
-									},
-								},
-							},
-						},
-					},
+					StmtType:            stmtType,
+					HasForeignKeyAction: hasForeignKeyAction,
 				},
 			},
 		}
 	}
 
-	require.True(t, shouldCachePrepareCompile(makePlan(plan.Query_SELECT, &plan.ForeignKeyDef{
-		OnDelete: plan.ForeignKeyDef_SET_NULL,
-		OnUpdate: plan.ForeignKeyDef_CASCADE,
-	})))
-	require.True(t, shouldCachePrepareCompile(makePlan(plan.Query_DELETE, &plan.ForeignKeyDef{
-		OnDelete: plan.ForeignKeyDef_RESTRICT,
-	})))
-	require.True(t, shouldCachePrepareCompile(makePlan(plan.Query_UPDATE, &plan.ForeignKeyDef{
-		OnUpdate: plan.ForeignKeyDef_NO_ACTION,
-	})))
+	require.True(t, shouldCachePrepareCompile(nil))
+	require.True(t, shouldCachePrepareCompile(&plan.Plan{}))
+	require.True(t, shouldCachePrepareCompile(makePlan(plan.Query_UPDATE, false)))
+	require.True(t, shouldCachePrepareCompile(makePlan(plan.Query_DELETE, false)))
 
-	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_DELETE, &plan.ForeignKeyDef{
-		OnDelete: plan.ForeignKeyDef_SET_NULL,
-	})))
-	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_UPDATE, &plan.ForeignKeyDef{
-		OnUpdate: plan.ForeignKeyDef_CASCADE,
-	})))
+	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_UPDATE, true)))
+	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_DELETE, true)))
 }

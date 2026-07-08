@@ -8320,7 +8320,9 @@ type Query struct {
 	DetectSqls        []string `protobuf:"bytes,8,rep,name=detectSqls,proto3" json:"detectSqls,omitempty"`
 	BackgroundQueries []*Query `protobuf:"bytes,9,rep,name=background_queries,json=backgroundQueries,proto3" json:"background_queries,omitempty"`
 	// run time config that can change query behaviors
-	MaxDop               int64    `protobuf:"varint,10,opt,name=maxDop,proto3" json:"maxDop,omitempty"`
+	MaxDop int64 `protobuf:"varint,10,opt,name=maxDop,proto3" json:"maxDop,omitempty"`
+	// True when the planner generated recursive FK side-effect DML for this query.
+	HasForeignKeyAction  bool     `protobuf:"varint,11,opt,name=has_foreign_key_action,json=hasForeignKeyAction,proto3" json:"has_foreign_key_action,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -8427,6 +8429,13 @@ func (m *Query) GetMaxDop() int64 {
 		return m.MaxDop
 	}
 	return 0
+}
+
+func (m *Query) GetHasForeignKeyAction() bool {
+	if m != nil {
+		return m.HasForeignKeyAction
+	}
+	return false
 }
 
 type TransationControl struct {
@@ -21291,6 +21300,16 @@ func (m *Query) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.HasForeignKeyAction {
+		i--
+		if m.HasForeignKeyAction {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x58
+	}
 	if m.MaxDop != 0 {
 		i = encodeVarintPlan(dAtA, i, uint64(m.MaxDop))
 		i--
@@ -29229,6 +29248,9 @@ func (m *Query) ProtoSize() (n int) {
 	}
 	if m.MaxDop != 0 {
 		n += 1 + sovPlan(uint64(m.MaxDop))
+	}
+	if m.HasForeignKeyAction {
+		n += 2
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -49154,6 +49176,26 @@ func (m *Query) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field HasForeignKeyAction", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.HasForeignKeyAction = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])

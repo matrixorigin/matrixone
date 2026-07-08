@@ -1117,6 +1117,9 @@ message Query {
 
   // run time config that can change query behaviors
   int64 maxDop = 10;
+
+  // True when the planner generated recursive FK side-effect DML for this query.
+  bool has_foreign_key_action = 11;
 }
 
 message TransationControl {

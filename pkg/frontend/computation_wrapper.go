@@ -544,44 +544,7 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	if query == nil {
 		return true
 	}
-	switch query.GetStmtType() {
-	case plan.Query_UPDATE, plan.Query_DELETE:
-	default:
-		return true
-	}
-	for _, node := range query.GetNodes() {
-		if hasTriggeredForeignKeyAction(node.GetTableDef(), query.GetStmtType()) {
-			return false
-		}
-		for _, updateCtx := range node.GetUpdateCtxList() {
-			if hasTriggeredForeignKeyAction(updateCtx.GetTableDef(), query.GetStmtType()) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func hasTriggeredForeignKeyAction(tableDef *plan.TableDef, stmtType plan.Query_StatementType) bool {
-	if tableDef == nil {
-		return false
-	}
-	for _, fk := range tableDef.GetFkeys() {
-		var action plan.ForeignKeyDef_RefAction
-		switch stmtType {
-		case plan.Query_UPDATE:
-			action = fk.GetOnUpdate()
-		case plan.Query_DELETE:
-			action = fk.GetOnDelete()
-		default:
-			continue
-		}
-		switch action {
-		case plan.ForeignKeyDef_CASCADE, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_SET_DEFAULT:
-			return true
-		}
-	}
-	return false
+	return !query.GetHasForeignKeyAction()
 }
 
 func createCompile(
