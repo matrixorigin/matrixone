@@ -360,6 +360,8 @@ func TestNewTypedByteJson(t *testing.T) {
 func TestJsonContainsNumericEqualDecimalAndFloat(t *testing.T) {
 	scientificFloat, err := bytejson.CreateByteJSON(1e20)
 	require.NoError(t, err)
+	fractionalFloat, err := bytejson.CreateByteJSON(0.1)
+	require.NoError(t, err)
 
 	tests := []struct {
 		name      string
@@ -384,6 +386,12 @@ func TestJsonContainsNumericEqualDecimalAndFloat(t *testing.T) {
 			target:    newTypedByteJson(bytejson.TpCodeDecimal, "100000000000000000001"),
 			candidate: scientificFloat,
 			expect:    false,
+		},
+		{
+			name:      "decimal equals fractional float",
+			target:    newTypedByteJson(bytejson.TpCodeDecimal, "0.1"),
+			candidate: fractionalFloat,
+			expect:    true,
 		},
 	}
 

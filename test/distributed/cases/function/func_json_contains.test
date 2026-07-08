@@ -78,6 +78,8 @@ select json_contains('{"a":[9007199254740993]}', '9007199254740992.0', '$.a');
 select json_contains('-0', '0.0');
 select json_contains(json_object('a', cast(1.00 as decimal(6,2))), '1.0', '$.a');
 select json_contains(json_object('a', cast(1.00 as decimal(6,2))), '1.000000009', '$.a');
+select json_contains(json_object('a', cast(0.1 as decimal(10,1))), '0.1', '$.a');
+select json_contains(json_object('a', cast(1.23 as decimal(10,2))), '1.230000001', '$.a');
 select json_contains(json_object('a', cast(100000000000000000000 as decimal(21,0))), '1e20', '$.a');
 select json_contains(json_array(cast(100000000000000000001 as decimal(21,0))), '1e20');
 

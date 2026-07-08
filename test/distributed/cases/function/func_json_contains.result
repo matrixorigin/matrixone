@@ -187,6 +187,12 @@ select json_contains(json_object('a', cast(1.00 as decimal(6,2))), '1.0', '$.a')
 select json_contains(json_object('a', cast(1.00 as decimal(6,2))), '1.000000009', '$.a');
 ➤ json_contains(json_object(a, cast(1.00 as decimal(6, 2))), 1.000000009, $.a)[-5,64,0]  𝄀
 0
+select json_contains(json_object('a', cast(0.1 as decimal(10,1))), '0.1', '$.a');
+➤ json_contains(json_object(a, cast(0.1 as decimal(10, 1))), 0.1, $.a)[-5,64,0]  𝄀
+1
+select json_contains(json_object('a', cast(1.23 as decimal(10,2))), '1.230000001', '$.a');
+➤ json_contains(json_object(a, cast(1.23 as decimal(10, 2))), 1.230000001, $.a)[-5,64,0]  𝄀
+0
 select json_contains(json_object('a', cast(100000000000000000000 as decimal(21,0))), '1e20', '$.a');
 ➤ json_contains(json_object(a, cast(100000000000000000000 as decimal(21))), 1e20, $.a)[-5,64,0]  𝄀
 1

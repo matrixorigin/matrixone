@@ -21,7 +21,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -374,6 +373,11 @@ func jsonContainsNumericEqual(target, candidate bytejson.ByteJson) bool {
 	}
 }
 
+type jsonContainsDecimalValue struct {
+	value types.Decimal256
+	scale int32
+}
+
 func jsonContainsInt64NumericEqual(target int64, candidate bytejson.ByteJson) bool {
 	switch candidate.Type {
 	case bytejson.TpCodeInt64:
@@ -383,7 +387,7 @@ func jsonContainsInt64NumericEqual(target int64, candidate bytejson.ByteJson) bo
 	case bytejson.TpCodeFloat64:
 		return jsonContainsFloat64Int64Equal(candidate.GetFloat64(), target)
 	case bytejson.TpCodeDecimal:
-		return jsonContainsRatEqual(big.NewRat(target, 1), candidate)
+		return jsonContainsDecimalValueEqual(jsonContainsDecimalFromInt64(target), candidate)
 	default:
 		return false
 	}
@@ -399,8 +403,7 @@ func jsonContainsUint64NumericEqual(target uint64, candidate bytejson.ByteJson) 
 	case bytejson.TpCodeFloat64:
 		return jsonContainsFloat64Uint64Equal(candidate.GetFloat64(), target)
 	case bytejson.TpCodeDecimal:
-		targetRat := new(big.Rat).SetInt(new(big.Int).SetUint64(target))
-		return jsonContainsRatEqual(targetRat, candidate)
+		return jsonContainsDecimalValueEqual(jsonContainsDecimalFromUint64(target), candidate)
 	default:
 		return false
 	}
@@ -422,20 +425,20 @@ func jsonContainsFloat64NumericEqual(target float64, candidate bytejson.ByteJson
 }
 
 func jsonContainsDecimalNumericEqual(target, candidate bytejson.ByteJson) bool {
+	targetDecimal, ok := jsonContainsByteJsonDecimalValue(target)
+	if !ok {
+		return false
+	}
+
 	switch candidate.Type {
 	case bytejson.TpCodeInt64:
-		return jsonContainsRatEqual(big.NewRat(candidate.GetInt64(), 1), target)
+		return jsonContainsCompareDecimalValues(targetDecimal, jsonContainsDecimalFromInt64(candidate.GetInt64())) == 0
 	case bytejson.TpCodeUint64:
-		candidateRat := new(big.Rat).SetInt(new(big.Int).SetUint64(candidate.GetUint64()))
-		return jsonContainsRatEqual(candidateRat, target)
+		return jsonContainsCompareDecimalValues(targetDecimal, jsonContainsDecimalFromUint64(candidate.GetUint64())) == 0
 	case bytejson.TpCodeFloat64:
 		return jsonContainsFloat64DecimalEqual(candidate.GetFloat64(), target)
 	case bytejson.TpCodeDecimal:
-		targetRat, ok := jsonContainsDecimalRat(target)
-		if !ok {
-			return false
-		}
-		return jsonContainsRatEqual(targetRat, candidate)
+		return jsonContainsDecimalValueEqual(targetDecimal, candidate)
 	default:
 		return false
 	}
@@ -445,55 +448,81 @@ func jsonContainsFloat64Int64Equal(f float64, i int64) bool {
 	if f != float64(i) {
 		return false
 	}
-	return jsonContainsFloat64RatEqual(f, big.NewRat(i, 1))
+	return jsonContainsFloat64DecimalValueEqual(f, jsonContainsDecimalFromInt64(i))
 }
 
 func jsonContainsFloat64Uint64Equal(f float64, u uint64) bool {
 	if f != float64(u) {
 		return false
 	}
-	uRat := new(big.Rat).SetInt(new(big.Int).SetUint64(u))
-	return jsonContainsFloat64RatEqual(f, uRat)
+	return jsonContainsFloat64DecimalValueEqual(f, jsonContainsDecimalFromUint64(u))
 }
 
 func jsonContainsFloat64DecimalEqual(f float64, decimal bytejson.ByteJson) bool {
-	decimalRat, ok := jsonContainsDecimalRat(decimal)
+	decimalValue, ok := jsonContainsByteJsonDecimalValue(decimal)
 	if !ok {
 		return false
 	}
-	return jsonContainsFloat64RatEqual(f, decimalRat)
+	return jsonContainsFloat64DecimalValueEqual(f, decimalValue)
 }
 
-func jsonContainsFloat64RatEqual(f float64, expected *big.Rat) bool {
-	fRat, ok := jsonContainsFloat64DecimalRat(f)
+func jsonContainsFloat64DecimalValueEqual(f float64, expected jsonContainsDecimalValue) bool {
+	floatValue, ok := jsonContainsFloat64DecimalValue(f)
 	if !ok {
 		return false
 	}
-	return fRat.Cmp(expected) == 0
+	return jsonContainsCompareDecimalValues(floatValue, expected) == 0
 }
 
-func jsonContainsRatEqual(target *big.Rat, candidate bytejson.ByteJson) bool {
-	candidateRat, ok := jsonContainsDecimalRat(candidate)
+func jsonContainsDecimalValueEqual(target jsonContainsDecimalValue, candidate bytejson.ByteJson) bool {
+	candidateValue, ok := jsonContainsByteJsonDecimalValue(candidate)
 	if !ok {
 		return false
 	}
-	return target.Cmp(candidateRat) == 0
+	return jsonContainsCompareDecimalValues(target, candidateValue) == 0
 }
 
-func jsonContainsDecimalRat(bj bytejson.ByteJson) (*big.Rat, bool) {
-	r := new(big.Rat)
-	if _, ok := r.SetString(string(bj.GetString())); !ok {
-		return nil, false
-	}
-	return r, true
+func jsonContainsByteJsonDecimalValue(bj bytejson.ByteJson) (jsonContainsDecimalValue, bool) {
+	return jsonContainsParseDecimalString(string(bj.GetString()))
 }
 
-func jsonContainsFloat64DecimalRat(f float64) (*big.Rat, bool) {
-	r := new(big.Rat).SetFloat64(f)
-	if r == nil {
-		return nil, false
+func jsonContainsFloat64DecimalValue(f float64) (jsonContainsDecimalValue, bool) {
+	return jsonContainsParseDecimalString(strconv.FormatFloat(f, 'g', -1, 64))
+}
+
+func jsonContainsParseDecimalString(s string) (jsonContainsDecimalValue, bool) {
+	value, scale, err := types.Parse256(s)
+	if err != nil {
+		return jsonContainsDecimalValue{}, false
 	}
-	return r, true
+	return jsonContainsDecimalValue{value: value, scale: scale}, true
+}
+
+func jsonContainsDecimalFromInt64(v int64) jsonContainsDecimalValue {
+	return jsonContainsDecimalValue{value: types.Decimal256FromInt64(v)}
+}
+
+func jsonContainsDecimalFromUint64(v uint64) jsonContainsDecimalValue {
+	return jsonContainsDecimalValue{value: types.Decimal256{B0_63: v}}
+}
+
+func jsonContainsCompareDecimalValues(left, right jsonContainsDecimalValue) int {
+	if left.scale < right.scale {
+		scaled, err := left.value.Scale(right.scale - left.scale)
+		if err != nil {
+			return 1
+		}
+		left.value = scaled
+		left.scale = right.scale
+	} else if left.scale > right.scale {
+		scaled, err := right.value.Scale(left.scale - right.scale)
+		if err != nil {
+			return -1
+		}
+		right.value = scaled
+		right.scale = left.scale
+	}
+	return types.CompareDecimal256(left.value, right.value)
 }
 
 func isJsonNumericType(tp bytejson.TpCode) bool {
