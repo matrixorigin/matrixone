@@ -90,14 +90,14 @@ func TestBuildTailFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	// delete frame @5 (first), one insert segment @6; next free chunk_id = 7.
-	if next != 7 || len(frames) != 2 || frames[0].ChunkId != 5 || frames[1].ChunkId != 6 {
+	if next != 7 || len(frames) != 2 || frames[0].Recency != 5 || frames[1].Recency != 6 {
 		t.Fatalf("frame layout wrong: next=%d frames=%d ids=%v", next, len(frames),
-			[]int64{frames[0].ChunkId, frames[1].ChunkId})
+			[]int64{frames[0].Recency, frames[1].Recency})
 	}
 
 	// Assemble the tail alongside a base segment that holds pk 3 → the tail's
 	// delete (chunk 5 > base -1) drops it; the new docs 1,2 are searchable.
-	base := buildSeg(t, baseChunkId, map[int64][]string{3: {"x"}})
+	base := buildSeg(t, baseRecency, map[int64][]string{3: {"x"}})
 	defer base.Free()
 	tailSegs, deletes, err := AssembleFrames(frames)
 	if err != nil {

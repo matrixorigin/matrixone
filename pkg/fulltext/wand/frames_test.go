@@ -49,7 +49,7 @@ func TestWandFrameSplitReassemble(t *testing.T) {
 	}
 	for _, ch := range chunks {
 		if len(ch.Data) > vectorindex.MaxChunkSize {
-			t.Fatalf("chunk %d exceeds MaxChunkSize (%d)", ch.ChunkId, len(ch.Data))
+			t.Fatalf("chunk %d exceeds MaxChunkSize (%d)", ch.Recency, len(ch.Data))
 		}
 	}
 
@@ -60,11 +60,11 @@ func TestWandFrameSplitReassemble(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("want 2 reassembled frames, got %d", len(frames))
 	}
-	if frames[0].ChunkId != 0 || !bytes.Equal(frames[0].Data, f1) {
-		t.Fatalf("frame 0: chunk_id=%d len=%d/%d bytesEqual=%v", frames[0].ChunkId, len(frames[0].Data), len(f1), bytes.Equal(frames[0].Data, f1))
+	if frames[0].Recency != 0 || !bytes.Equal(frames[0].Data, f1) {
+		t.Fatalf("frame 0: chunk_id=%d len=%d/%d bytesEqual=%v", frames[0].Recency, len(frames[0].Data), len(f1), bytes.Equal(frames[0].Data, f1))
 	}
-	if frames[1].ChunkId != 3 || !bytes.Equal(frames[1].Data, f2) {
-		t.Fatalf("frame 1: chunk_id=%d (want 3)", frames[1].ChunkId)
+	if frames[1].Recency != 3 || !bytes.Equal(frames[1].Data, f2) {
+		t.Fatalf("frame 1: chunk_id=%d (want 3)", frames[1].Recency)
 	}
 }
 
@@ -75,11 +75,11 @@ func TestWandFrameSplitReassemble(t *testing.T) {
 func TestOrderTailChunks(t *testing.T) {
 	// chunk_ids 5..9 (a post-compaction min>0 run), delivered shuffled.
 	shuffled := []TailChunk{
-		{ChunkId: 7, Data: []byte{7}},
-		{ChunkId: 5, Data: []byte{5}},
-		{ChunkId: 9, Data: []byte{9}},
-		{ChunkId: 6, Data: []byte{6}},
-		{ChunkId: 8, Data: []byte{8}},
+		{Recency: 7, Data: []byte{7}},
+		{Recency: 5, Data: []byte{5}},
+		{Recency: 9, Data: []byte{9}},
+		{Recency: 6, Data: []byte{6}},
+		{Recency: 8, Data: []byte{8}},
 	}
 	ordered, err := orderTailChunks(shuffled)
 	if err != nil {
@@ -89,8 +89,8 @@ func TestOrderTailChunks(t *testing.T) {
 		t.Fatalf("want 5, got %d", len(ordered))
 	}
 	for i, c := range ordered {
-		if c.ChunkId != int64(5+i) || c.Data[0] != byte(5+i) {
-			t.Fatalf("position %d: chunk_id=%d data=%v (want %d)", i, c.ChunkId, c.Data, 5+i)
+		if c.Recency != int64(5+i) || c.Data[0] != byte(5+i) {
+			t.Fatalf("position %d: chunk_id=%d data=%v (want %d)", i, c.Recency, c.Data, 5+i)
 		}
 	}
 
@@ -100,7 +100,7 @@ func TestOrderTailChunks(t *testing.T) {
 	}
 
 	// a gap (missing chunk_id 7) → error, not a wrong assembly.
-	gap := []TailChunk{{ChunkId: 5, Data: []byte{5}}, {ChunkId: 6, Data: []byte{6}}, {ChunkId: 8, Data: []byte{8}}}
+	gap := []TailChunk{{Recency: 5, Data: []byte{5}}, {Recency: 6, Data: []byte{6}}, {Recency: 8, Data: []byte{8}}}
 	if _, err := orderTailChunks(gap); err == nil {
 		t.Fatal("expected a gap in chunk_ids to be rejected")
 	}
@@ -133,9 +133,9 @@ func TestWandTailFrames(t *testing.T) {
 
 	// Frames in chunk_id order: segA@1, segB@2, delete(6)@3.
 	frames := []TailFrame{
-		{ChunkId: 1, Data: fa},
-		{ChunkId: 2, Data: fb},
-		{ChunkId: 3, Data: fd},
+		{Recency: 1, Data: fa},
+		{Recency: 2, Data: fb},
+		{Recency: 3, Data: fd},
 	}
 	segs, deletes, err := AssembleFrames(frames)
 	if err != nil {
@@ -147,8 +147,8 @@ func TestWandTailFrames(t *testing.T) {
 		t.Fatalf("want 2 assembled segments, got %d", len(segs))
 	}
 	// chunk_id is assigned from the frame position, not persisted in the blob.
-	if segs[0].ChunkId != 1 || segs[1].ChunkId != 2 {
-		t.Fatalf("segment chunk_ids not set from frames: %d, %d", segs[0].ChunkId, segs[1].ChunkId)
+	if segs[0].Recency != 1 || segs[1].Recency != 2 {
+		t.Fatalf("segment chunk_ids not set from frames: %d, %d", segs[0].Recency, segs[1].Recency)
 	}
 	if deletes[normalizeKey(int64(6))] != 3 {
 		t.Fatalf("delete fold wrong: want {6:3}, got %v", deletes)
@@ -215,8 +215,8 @@ func TestAssembleFramesAtStreaming(t *testing.T) {
 	if len(segs) != 1 {
 		t.Fatalf("want 1 segment, got %d", len(segs))
 	}
-	if segs[0].N != 6000 || segs[0].ChunkId != firstSlot[0] {
-		t.Fatalf("segment: N=%d ChunkId=%d (want 6000, %d)", segs[0].N, segs[0].ChunkId, firstSlot[0])
+	if segs[0].N != 6000 || segs[0].Recency != firstSlot[0] {
+		t.Fatalf("segment: N=%d ChunkId=%d (want 6000, %d)", segs[0].N, segs[0].Recency, firstSlot[0])
 	}
 	if deletes[normalizeKey(int64(6))] != firstSlot[1] {
 		t.Fatalf("delete fold: %v (want {6:%d})", deletes, firstSlot[1])
@@ -237,7 +237,7 @@ func TestWandTailFramesBadDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	fd[len(fd)-20] ^= 0xff // corrupt inside the framed payload/crc region
-	if _, _, err := AssembleFrames([]TailFrame{{ChunkId: 1, Data: fd}}); err == nil {
+	if _, _, err := AssembleFrames([]TailFrame{{Recency: 1, Data: fd}}); err == nil {
 		t.Fatal("expected AssembleFrames to reject a corrupt frame")
 	}
 }
@@ -248,7 +248,7 @@ func TestWandTailFramesBadDispatch(t *testing.T) {
 // liveness (base < tail so tail wins) and that a per-segment WHERE prefilter is
 // applied against each segment's own pks (no cross-segment ord confusion).
 func TestWandSearchSegsLive(t *testing.T) {
-	base := buildSeg(t, baseChunkId, map[int64][]string{1: {"x"}, 2: {"x"}, 3: {"x"}})
+	base := buildSeg(t, baseRecency, map[int64][]string{1: {"x"}, 2: {"x"}, 3: {"x"}})
 	tail := buildSeg(t, 2, map[int64][]string{2: {"x"}, 4: {"x"}}) // pk 2 updated, 4 new
 	defer base.Free()
 	defer tail.Free()

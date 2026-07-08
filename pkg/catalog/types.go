@@ -431,10 +431,12 @@ const (
 	FullTextIndex_TblCol_Metadata_Timestamp = "timestamp"
 	FullTextIndex_TblCol_Metadata_Checksum  = "checksum"
 	FullTextIndex_TblCol_Metadata_Filesize  = "filesize"
-	// Chunk_Id is the tag=0 base sub-index's recency key (0 for a full-build base
-	// = oldest; K = max folded tail chunk_id for a compacted base). ComputeLiveness
-	// dedups bases + tail uniformly by this; NextTailChunkId reads MAX over it too.
-	FullTextIndex_TblCol_Metadata_Chunk_Id = "chunk_id"
+	// Recency is the tag=0 base sub-index's recency key (0 for a full-build base = oldest;
+	// K = max folded tail chunk_id for a compacted base). ComputeLiveness dedups bases +
+	// tail uniformly by this; NextTailChunkId reads MAX over it too. Named distinctly from
+	// the storage table's chunk_id (a physical chunk position within a sub's blob), which
+	// is a different concept that happened to share the column name.
+	FullTextIndex_TblCol_Metadata_Recency = "recency"
 	// Nrow is the sub-index's live doc count. Tiered merge reads it (without loading the
 	// sub) to skip subs already at max_index_capacity — a "full" sub is optimal and is
 	// never re-merged, so a MERGE over a pure-insert tail never rewrites the full base.

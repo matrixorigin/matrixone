@@ -56,7 +56,7 @@ func FrameDeletes(pkType int32, recs []DeleteRecord) ([]byte, error) {
 
 // TailFrame is one tag=1 CdcTail entry: the framed bytes carried at its chunk_id.
 type TailFrame struct {
-	ChunkId int64
+	Recency int64
 	Data    []byte
 }
 
@@ -68,7 +68,7 @@ type TailFrame struct {
 // framing/decode error the partially-built segments are freed before returning.
 func AssembleFrames(frames []TailFrame) (segs []*WandModel, deletes map[any]int64, err error) {
 	for _, f := range frames {
-		segs, deletes, _, err = applyTailFrame(f.Data, f.ChunkId, segs, deletes)
+		segs, deletes, _, err = applyTailFrame(f.Data, f.Recency, segs, deletes)
 		if err != nil {
 			freeSegs(segs)
 			return nil, nil, err
@@ -97,7 +97,7 @@ func applyTailFrame(data []byte, chunkId int64, segs []*WandModel, deletes map[a
 		if derr != nil {
 			return segs, deletes, 0, derr
 		}
-		m.ChunkId = chunkId
+		m.Recency = chunkId
 		segs = append(segs, m)
 		return segs, deletes, m.PkType, nil
 	case nDeletes > 0:
@@ -163,7 +163,7 @@ func freeSegs(segs []*WandModel) {
 // of a frame). A frame larger than the store's data column is split across
 // several consecutive chunks; the load path reassembles them.
 type TailChunk struct {
-	ChunkId int64
+	Recency int64
 	Data    []byte
 }
 
@@ -179,7 +179,7 @@ func splitFrameChunks(startChunkId int64, framed []byte) []TailChunk {
 		if end > len(framed) {
 			end = len(framed)
 		}
-		out = append(out, TailChunk{ChunkId: cid, Data: framed[off:end]})
+		out = append(out, TailChunk{Recency: cid, Data: framed[off:end]})
 		cid++
 	}
 	return out
@@ -199,13 +199,13 @@ func orderTailChunks(chunks []TailChunk) ([]TailChunk, error) {
 	if len(chunks) == 0 {
 		return nil, nil
 	}
-	minC, maxC := chunks[0].ChunkId, chunks[0].ChunkId
+	minC, maxC := chunks[0].Recency, chunks[0].Recency
 	for _, c := range chunks[1:] {
-		if c.ChunkId < minC {
-			minC = c.ChunkId
+		if c.Recency < minC {
+			minC = c.Recency
 		}
-		if c.ChunkId > maxC {
-			maxC = c.ChunkId
+		if c.Recency > maxC {
+			maxC = c.Recency
 		}
 	}
 	span := maxC - minC + 1
@@ -216,7 +216,7 @@ func orderTailChunks(chunks []TailChunk) ([]TailChunk, error) {
 	}
 	ordered := make([]TailChunk, span)
 	for _, c := range chunks {
-		ordered[c.ChunkId-minC] = c
+		ordered[c.Recency-minC] = c
 	}
 	return ordered, nil
 }
@@ -234,7 +234,7 @@ func reassembleFrames(chunks []TailChunk) ([]TailFrame, error) {
 		if err != nil {
 			return nil, err
 		}
-		firstChunkId := chunks[i].ChunkId
+		firstChunkId := chunks[i].Recency
 		buf := make([]byte, 0, total)
 		for len(buf) < total && i < len(chunks) {
 			buf = append(buf, chunks[i].Data...)
@@ -243,7 +243,7 @@ func reassembleFrames(chunks []TailChunk) ([]TailFrame, error) {
 		if len(buf) < total {
 			return nil, moerr.NewInternalErrorNoCtx("wand tail: truncated frame (missing chunk rows)")
 		}
-		frames = append(frames, TailFrame{ChunkId: firstChunkId, Data: buf[:total]})
+		frames = append(frames, TailFrame{Recency: firstChunkId, Data: buf[:total]})
 	}
 	return frames, nil
 }

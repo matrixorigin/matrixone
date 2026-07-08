@@ -90,14 +90,14 @@ type WandModel struct {
 	PkType    int32   // types.T of the source primary key, for output decode + membership
 	AvgDocLen float64 // average doc length (derived from DocLen), for BM25
 
-	// ChunkId is the segment's append position in the single tag=1 CdcTail log —
-	// the recency key for CDC delta segments, assigned at load from the frame's
-	// chunk_id (NOT an ISCP LSN; see fulltext_wand.md "single CdcTail log,
-	// chunk_id-ordered"). When the same pk lands in multiple segments (UPDATE /
-	// reinsert), only the highest-ChunkId copy is live (see ComputeLiveness). 0
-	// for the tag=0 base or for disjoint FinishSegments partitions (whose pks
-	// never collide), where dedup is a no-op.
-	ChunkId int64
+	// Recency is the segment's ordering key for liveness. For a tag=1 CdcTail delta it is
+	// the frame's append position (storage chunk_id, NOT an ISCP LSN; see fulltext_wand.md
+	// "single CdcTail log, chunk_id-ordered"); for a tag=0 base sub it is metadata.recency
+	// (0 = full-build/oldest, K = folded). When the same pk lands in multiple segments
+	// (UPDATE / reinsert / a stale base copy), only the highest-Recency copy is live (see
+	// ComputeLiveness). Named distinctly from the storage table's chunk_id (a physical
+	// chunk position within a blob), which is an unrelated concept.
+	Recency int64
 
 	pks      []any                   // ord -> original pk value (for output via AppendAny)
 	docLen   []int32                 // ord -> document length (token count), for BM25

@@ -27,10 +27,10 @@ import (
 
 const testPkType = int32(types.T_int64)
 
-// baseChunkId — the recency of a full-build base in tests: 0 (oldest; the tail
+// baseRecency — the recency of a full-build base in tests: 0 (oldest; the tail
 // starts at 1 under option (ii)). Production reads each base's recency from
 // metadata.chunk_id; these liveness tests just need base < tail.
-const baseChunkId int64 = 0
+const baseRecency int64 = 0
 
 // corpus mirrors what was fed to the Builder, for the brute-force reference.
 type corpus struct {
@@ -312,7 +312,7 @@ func buildSeg(t *testing.T, chunkId int64, docs map[int64][]string) *WandModel {
 		}
 	}
 	m := b.Finish()
-	m.ChunkId = chunkId
+	m.Recency = chunkId
 	return m
 }
 
@@ -411,7 +411,7 @@ func TestWandLiveness(t *testing.T) {
 
 	// 6. No tag=0 base (Bug 2): an index created on an empty table has no
 	// compacted-main segment — its corpus is entirely tag=1 CDC deltas (chunk_id
-	// >= 0, never the baseChunkId -1). Liveness/search must work with tail-only
+	// >= 0, never the baseRecency -1). Liveness/search must work with tail-only
 	// segments: dedup across deltas and honor a delete, with no base present.
 	t.Run("no_base_tail_only", func(t *testing.T) {
 		segs := []*WandModel{
@@ -439,7 +439,7 @@ func TestWandLiveness(t *testing.T) {
 // the per-query filter-combine never mutates the cached liveness slice (a later
 // unfiltered query still matches the recompute oracle).
 func TestWandSearchCachedLivenessStats(t *testing.T) {
-	base := buildSeg(t, baseChunkId, map[int64][]string{1: {"x"}, 2: {"x"}, 3: {"x"}})
+	base := buildSeg(t, baseRecency, map[int64][]string{1: {"x"}, 2: {"x"}, 3: {"x"}})
 	tail := buildSeg(t, 2, map[int64][]string{2: {"x"}, 4: {"x"}}) // 2 updated, 4 new
 	defer base.Free()
 	defer tail.Free()

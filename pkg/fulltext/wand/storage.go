@@ -96,8 +96,8 @@ func (m *WandModel) ToInsertSqls(cfg TableConfig, ts int64, tag int) (sqls []str
 		metaTbl,
 		catalog.FullTextIndex_TblCol_Metadata_Index_Id, catalog.FullTextIndex_TblCol_Metadata_Timestamp,
 		catalog.FullTextIndex_TblCol_Metadata_Checksum, catalog.FullTextIndex_TblCol_Metadata_Filesize,
-		catalog.FullTextIndex_TblCol_Metadata_Chunk_Id, catalog.FullTextIndex_TblCol_Metadata_Nrow,
-		sqlquote.String(m.Id), ts, sqlquote.String(checksum), filesize, m.ChunkId, m.N))
+		catalog.FullTextIndex_TblCol_Metadata_Recency, catalog.FullTextIndex_TblCol_Metadata_Nrow,
+		sqlquote.String(m.Id), ts, sqlquote.String(checksum), filesize, m.Recency, m.N))
 	sqls = append(sqls, FileChunkInsertSqls(cfg, m.Id, 0, path, int(filesize), tag)...)
 	return sqls, cleanup, nil
 }
@@ -119,7 +119,7 @@ func DeleteSqls(cfg TableConfig, id string) []string {
 func readMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (checksum string, filesize int64, chunkId int64, found bool, err error) {
 	metaSQL := fmt.Sprintf("SELECT %s, %s, %s FROM %s WHERE %s = %s",
 		catalog.FullTextIndex_TblCol_Metadata_Checksum, catalog.FullTextIndex_TblCol_Metadata_Filesize,
-		catalog.FullTextIndex_TblCol_Metadata_Chunk_Id,
+		catalog.FullTextIndex_TblCol_Metadata_Recency,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
 		catalog.FullTextIndex_TblCol_Metadata_Index_Id, sqlquote.String(id))
 	mres, err := sqlexec.RunSql(sqlproc, metaSQL)
@@ -204,7 +204,7 @@ func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 // metadata table is per-fulltext-index, so every row names one of this index's bases
 // (mirrors HNSW's LoadMetadata). Returns nil when no base was built (empty-table create
 // → CDC-only index). Bases are pk-disjoint, so the caller assigns them one shared
-// baseChunkId. On any error the partially-loaded bases are freed.
+// baseRecency. On any error the partially-loaded bases are freed.
 func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*WandModel, error) {
 	idSQL := fmt.Sprintf("SELECT %s FROM %s",
 		catalog.FullTextIndex_TblCol_Metadata_Index_Id,
@@ -292,7 +292,7 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 	// The base's recency key comes from SQL (metadata.chunk_id): 0 = oldest
 	// full-build base; K = the folded tail chunk_id for a compacted base. Query
 	// ComputeLiveness dedups bases + tail uniformly by this.
-	m.ChunkId = chunkId
+	m.Recency = chunkId
 	return m, nil
 }
 

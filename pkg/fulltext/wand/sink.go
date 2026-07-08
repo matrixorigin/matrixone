@@ -216,7 +216,7 @@ func BuildTailFrames(cdc *WandCdc, capacity int64, startChunkId int64, tokenize 
 		if err != nil {
 			return nil, 0, err
 		}
-		frames = append(frames, TailFrame{ChunkId: chunkId, Data: frame})
+		frames = append(frames, TailFrame{Recency: chunkId, Data: frame})
 		chunkId += frameChunkCount(len(frame))
 	}
 	for _, seg := range b.FinishSegments(capacity) {
@@ -229,7 +229,7 @@ func BuildTailFrames(cdc *WandCdc, capacity int64, startChunkId int64, tokenize 
 		if err != nil {
 			return nil, 0, err
 		}
-		frames = append(frames, TailFrame{ChunkId: chunkId, Data: frame})
+		frames = append(frames, TailFrame{Recency: chunkId, Data: frame})
 		chunkId += frameChunkCount(len(frame))
 	}
 	return frames, chunkId, nil
@@ -248,7 +248,7 @@ func NextTailChunkIdSql(cfg TableConfig) string {
 		catalog.FullTextIndex_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
 		catalog.FullTextIndex_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
 	baseMax := fmt.Sprintf("COALESCE((SELECT MAX(%s) FROM %s), 0)",
-		catalog.FullTextIndex_TblCol_Metadata_Chunk_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+		catalog.FullTextIndex_TblCol_Metadata_Recency, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
 	return fmt.Sprintf("SELECT GREATEST(%s, %s) + 1", tailMax, baseMax)
 }
 

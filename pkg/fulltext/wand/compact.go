@@ -209,7 +209,7 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 		merged := Merge(uid, filtered...)
 		segs = merged.Split(capacity)
 		for _, s := range segs {
-			s.ChunkId = k
+			s.Recency = k
 		}
 	}
 
@@ -359,10 +359,10 @@ func (m baseSubMeta) full(capacity int64) bool { return capacity > 0 && m.nrow >
 // the tiered merge scans for an adjacent, recency-contiguous run.
 func listBaseSubsByRecency(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]baseSubMeta, error) {
 	sql := fmt.Sprintf("SELECT %s, %s, %s, %s FROM %s ORDER BY %s ASC, %s ASC",
-		catalog.FullTextIndex_TblCol_Metadata_Index_Id, catalog.FullTextIndex_TblCol_Metadata_Chunk_Id,
+		catalog.FullTextIndex_TblCol_Metadata_Index_Id, catalog.FullTextIndex_TblCol_Metadata_Recency,
 		catalog.FullTextIndex_TblCol_Metadata_Filesize, catalog.FullTextIndex_TblCol_Metadata_Nrow,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
-		catalog.FullTextIndex_TblCol_Metadata_Chunk_Id, catalog.FullTextIndex_TblCol_Metadata_Index_Id)
+		catalog.FullTextIndex_TblCol_Metadata_Recency, catalog.FullTextIndex_TblCol_Metadata_Index_Id)
 	res, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {
 		return nil, err
@@ -472,7 +472,7 @@ func TieredMergeBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int
 	if len(filtered) > 0 {
 		out = Merge(uid, filtered...).Split(capacity)
 		for _, s := range out {
-			s.ChunkId = maxRecency
+			s.Recency = maxRecency
 		}
 	}
 

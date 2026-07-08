@@ -94,8 +94,8 @@ func ComputeLiveness(segs []*WandModel, deletes map[any]int64) []Membership {
 	for _, s := range segs {
 		for _, pk := range s.pks {
 			k := normalizeKey(pk)
-			if cur, ok := owner[k]; !ok || s.ChunkId >= cur {
-				owner[k] = s.ChunkId
+			if cur, ok := owner[k]; !ok || s.Recency >= cur {
+				owner[k] = s.Recency
 			}
 		}
 	}
@@ -106,9 +106,9 @@ func ComputeLiveness(segs []*WandModel, deletes map[any]int64) []Membership {
 		allow := make([]bool, len(s.pks))
 		for ord, pk := range s.pks {
 			k := normalizeKey(pk)
-			live := owner[k] == s.ChunkId // this segment owns the live copy
+			live := owner[k] == s.Recency // this segment owns the live copy
 			if live && deletes != nil {
-				if dl, ok := deletes[k]; ok && dl > s.ChunkId {
+				if dl, ok := deletes[k]; ok && dl > s.Recency {
 					live = false // deleted after the latest insert
 				}
 			}
