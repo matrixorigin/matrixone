@@ -24,7 +24,6 @@ const (
 	ReasonPreferredCurrentCN       = "preferred-current-cn"
 	ReasonExcludedCurrentCN        = "excluded-current-cn"
 	ReasonCurrentCNMissingIdentity = "current-cn-missing-identity"
-	ReasonCurrentCNUnavailable     = "current-cn-unavailable"
 	ReasonInvalidCurrentCNPolicy   = "invalid-current-cn-policy"
 )
 
@@ -102,18 +101,12 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	if len(workers) == 0 {
 		workers = ensureCurrentWorker(workers, req.CurrentCN)
 		reason = ReasonNoCandidateCN
-		if req.CurrentCNPolicy == CurrentCNRequired && len(workers) == 0 {
-			return queryDecision(req, workers, ReasonCurrentCNUnavailable, false)
-		}
 		return queryDecision(req, workers, reason, len(workers) > 0)
 	}
 
 	switch req.CurrentCNPolicy {
 	case CurrentCNRequired:
 		workers = ensureCurrentWorker(workers, req.CurrentCN)
-		if !containsWorker(workers, req.CurrentCN) {
-			return queryDecision(req, workers, ReasonCurrentCNUnavailable, false)
-		}
 		reason = ReasonRequiredCurrentCN
 	case CurrentCNPreferred:
 		if preferredWorkers, ok := preferCurrentWorker(workers, req.CurrentCN); ok {
