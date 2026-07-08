@@ -825,6 +825,45 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sql := `
+		select
+			l_returnflag,
+			l_linestatus,
+			sum(l_quantity) as total_qty,
+			row_number() over (order by sum(l_quantity) desc, l_returnflag, l_linestatus) as row_num,
+			rank() over (order by sum(l_quantity) desc) as rank_num,
+			dense_rank() over (order by sum(l_quantity) desc) as dense_rank_num
+		from
+			lineitem
+		group by
+			l_returnflag,
+			l_linestatus with rollup
+		order by total_qty desc, l_returnflag, l_linestatus`
+
+	logicPlan, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	windowCount := 0
+	windowAfterUnionCount := 0
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_WINDOW {
+			windowCount++
+			require.Len(t, node.Children, 1)
+			if query.Nodes[node.Children[0]].NodeType == plan.Node_UNION_ALL {
+				windowAfterUnionCount++
+			}
+		}
+	}
+
+	require.Equal(t, 3, windowCount)
+	require.Equal(t, 1, windowAfterUnionCount)
+}
+
 func TestOnlyFullGroupByAllowsCorrelatedSubqueryOnGroupedColumn(t *testing.T) {
 	sqls := []string{
 		`
