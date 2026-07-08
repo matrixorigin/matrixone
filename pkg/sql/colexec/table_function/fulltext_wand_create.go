@@ -75,14 +75,17 @@ func (u *fulltextWandCreateState) end(tf *TableFunction, proc *process.Process) 
 	}
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	// max_index_capacity was snapshotted into algo_params.session_vars at CREATE and
-	// re-applied by the ISCP overlay, so read it back through the resolver (mirrors
-	// HNSW's hnsw_max_index_capacity). Unresolved / 0 => a single unbounded base.
-	capacity := int64(0)
-	if rf := sqlproc.GetResolveVariableFunc(); rf != nil {
-		if v, verr := rf("fulltext_max_index_capacity", true, false); verr == nil {
-			if c, ok := v.(int64); ok {
-				capacity = c
+	// Capacity is carried in the cfg by the compile layer (resolved from the index's immutable
+	// max_index_capacity flat param), so the base splits at the same value every compaction
+	// later reads. Fall back to the resolver only for an index built before the flat param
+	// existed (cfg.Capacity == 0). Unresolved / 0 => a single unbounded base.
+	capacity := u.tblcfg.Capacity
+	if capacity == 0 {
+		if rf := sqlproc.GetResolveVariableFunc(); rf != nil {
+			if v, verr := rf("fulltext_max_index_capacity", true, false); verr == nil {
+				if c, ok := v.(int64); ok {
+					capacity = c
+				}
 			}
 		}
 	}

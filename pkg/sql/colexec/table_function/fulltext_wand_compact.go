@@ -15,6 +15,8 @@
 package table_function
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,9 +37,10 @@ import (
 // the statement's transaction. Reached from idxcron / ALTER … REINDEX … FULLTEXT
 // MERGE. Its output is a single discarded status row (mirrors fulltext_wand_create).
 type fulltextWandCompactState struct {
-	inited bool
-	tblcfg wand.TableConfig
-	batch  *batch.Batch
+	inited   bool
+	tblcfg   wand.TableConfig
+	capacity int64
+	batch    *batch.Batch
 }
 
 func (u *fulltextWandCompactState) reset(tf *TableFunction, proc *process.Process) {
@@ -59,16 +62,19 @@ func (u *fulltextWandCompactState) free(tf *TableFunction, proc *process.Process
 	}
 }
 
-// start reads the three varchar args once — [0]=db, [1]=store table, [2]=metadata
-// table — into the TableConfig the compaction runs against.
+// start reads the four varchar args once — [0]=db, [1]=store table, [2]=metadata
+// table, [3]=max_index_capacity — into the TableConfig + capacity the compaction runs
+// against. Capacity is passed explicitly (resolved by the compile layer from the index's
+// persisted algo_params) rather than resolved here, so a manual MERGE and the background
+// idxcron MERGE always use the SAME build-time capacity regardless of session.
 func (u *fulltextWandCompactState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	if u.inited {
 		return nil
 	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		v := tf.ctr.argVecs[i]
 		if v.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, "fulltext_wand_compact: args (db, store, meta) must be strings")
+			return moerr.NewInvalidInput(proc.Ctx, "fulltext_wand_compact: args (db, store, meta, capacity) must be strings")
 		}
 		if !v.IsConst() {
 			return moerr.NewInternalError(proc.Ctx, "fulltext_wand_compact: args must be string constants")
@@ -82,6 +88,11 @@ func (u *fulltextWandCompactState) start(tf *TableFunction, proc *process.Proces
 	if u.tblcfg.DbName == "" || u.tblcfg.IndexTable == "" || u.tblcfg.MetadataTable == "" {
 		return moerr.NewInternalError(proc.Ctx, "fulltext_wand_compact: db/store/meta must be non-empty")
 	}
+	cap, err := strconv.ParseInt(tf.ctr.argVecs[3].UnsafeGetStringAt(0), 10, 64)
+	if err != nil {
+		return moerr.NewInvalidInput(proc.Ctx, "fulltext_wand_compact: capacity must be an integer")
+	}
+	u.capacity = cap
 	u.batch = tf.createResultBatch()
 	u.inited = true
 	return nil
@@ -94,19 +105,10 @@ func (u *fulltextWandCompactState) end(tf *TableFunction, proc *process.Process)
 	}
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	// max_index_capacity via the resolver — the live session var for a manual MERGE,
-	// or the captured session_vars overlay for the background idxcron reindex (same
-	// path as fulltext_wand_create). Unresolved / 0 => a single unbounded base.
-	capacity := int64(0)
-	if rf := sqlproc.GetResolveVariableFunc(); rf != nil {
-		if v, verr := rf("fulltext_max_index_capacity", true, false); verr == nil {
-			if c, ok := v.(int64); ok {
-				capacity = c
-			}
-		}
-	}
-
-	if _, err := wand.CompactSegments(sqlproc, u.tblcfg, capacity); err != nil {
+	// capacity was resolved by the compile layer from the index's persisted algo_params
+	// (the immutable max_index_capacity flat param) and passed in as arg[3], so fold-split
+	// and tiered-merge fullness always match what the base was built with.
+	if _, err := wand.CompactSegments(sqlproc, u.tblcfg, u.capacity); err != nil {
 		return err
 	}
 	// The tag=0 base changed — evict any cached search index so the next query
@@ -120,8 +122,8 @@ func fulltextWandCompactPrepare(proc *process.Process, arg *TableFunction) (tvfS
 	st := &fulltextWandCompactState{}
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
-	if len(arg.Args) != 3 {
-		return nil, moerr.NewInvalidInput(proc.Ctx, "fulltext_wand_compact: expects 3 args (db, store, meta)")
+	if len(arg.Args) != 4 {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "fulltext_wand_compact: expects 4 args (db, store, meta, capacity)")
 	}
 	return st, err
 }

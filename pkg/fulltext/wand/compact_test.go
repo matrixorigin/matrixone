@@ -89,48 +89,62 @@ func TestWandSplit_NoOpUnderCapacity(t *testing.T) {
 	require.Equal(t, []*WandModel{m}, m.Split(100))
 }
 
-// selectMergeRun picks the first maximal run of ADJACENT small subs (≥2), capped at
-// mergeFactor / maxMergeBytes. Adjacency is the correctness property (no skipped
-// middle sub), verified here across large/small interleavings and the caps.
+// selectMergeRun picks the first maximal run of ADJACENT under-capacity subs (≥2), capped
+// at mergeFactor / maxMergeBytes. Fullness is by doc count vs capacity (a full sub is never
+// a candidate) and adjacency is the correctness property (no skipped middle sub) — both
+// verified here across full/under-cap interleavings and the caps.
 func TestSelectMergeRun(t *testing.T) {
-	sm := int64(1)             // a "small" sub
-	lg := int64(smallSubBytes) // a "large" sub (not < smallSubBytes ⇒ never in a run)
-	mk := func(sizes ...int64) []baseSubMeta {
-		metas := make([]baseSubMeta, len(sizes))
-		for i, s := range sizes {
-			metas[i] = baseSubMeta{id: fmt.Sprintf("s%d", i), recency: int64(i), filesize: s}
+	const capacity = int64(100)
+	// mk builds subs from doc counts; tiny filesize so the byte budget never binds here.
+	mk := func(nrows ...int64) []baseSubMeta {
+		metas := make([]baseSubMeta, len(nrows))
+		for i, n := range nrows {
+			metas[i] = baseSubMeta{id: fmt.Sprintf("s%d", i), recency: int64(i), nrow: n, filesize: 1}
 		}
 		return metas
 	}
+	un, fl := int64(10), capacity // under-capacity vs full (nrow >= capacity)
 	check := func(name string, metas []baseSubMeta, wantLo, wantHi int) {
-		lo, hi := selectMergeRun(metas)
+		lo, hi := selectMergeRun(metas, capacity)
 		require.Equal(t, [2]int{wantLo, wantHi}, [2]int{lo, hi}, name)
 	}
 
 	check("empty", nil, 0, 0)
-	check("single small", mk(sm), 0, 0)
-	check("all large", mk(lg, lg, lg), 0, 0)
-	check("two small", mk(sm, sm), 0, 2)
-	check("large then run", mk(lg, sm, sm), 1, 3)
-	check("run then large", mk(sm, sm, lg), 0, 2)
-	// first small is alone (followed by large); the real run is the trailing pair.
-	check("lone small, then large, then run", mk(sm, lg, sm, sm), 2, 4)
+	check("single under-cap", mk(un), 0, 0)
+	check("all full", mk(fl, fl, fl), 0, 0)
+	check("two under-cap", mk(un, un), 0, 2)
+	check("full then run", mk(fl, un, un), 1, 3)
+	check("run then full", mk(un, un, fl), 0, 2)
+	// first under-cap is alone (followed by a full sub); the real run is the trailing pair.
+	check("lone under-cap, full, run", mk(un, fl, un, un), 2, 4)
 
-	// mergeFactor cap: 10 small ⇒ first mergeFactor of them.
-	ten := mk(sm, sm, sm, sm, sm, sm, sm, sm, sm, sm)
-	check("mergeFactor cap", ten, 0, mergeFactor)
-
-	// byte-budget cap: subs at ~half smallSubBytes ⇒ maxMergeBytes/(smallSubBytes/2) = 2*mergeFactor
-	// would fit by count, but maxMergeBytes caps the run to mergeFactor*2 of them... actually each
-	// is < smallSubBytes so count-cap (mergeFactor) binds first here.
-	half := int64(smallSubBytes / 2)
-	budget := mk(half, half, half, half, half, half, half, half, half, half)
-	lo, hi := selectMergeRun(budget)
-	require.Equal(t, 0, lo)
-	require.LessOrEqual(t, hi-lo, mergeFactor, "run never exceeds mergeFactor")
-	var sum int64
-	for _, m := range budget[lo:hi] {
-		sum += m.filesize
+	// mergeFactor cap: 10 under-cap ⇒ first mergeFactor of them.
+	ten := make([]int64, 10)
+	for i := range ten {
+		ten[i] = un
 	}
-	require.LessOrEqual(t, sum, int64(maxMergeBytes), "run never exceeds the byte budget")
+	check("mergeFactor cap", mk(ten...), 0, mergeFactor)
+
+	// byte-budget cap: under-cap subs but each > half maxMergeBytes ⇒ no adjacent pair fits.
+	big := int64(maxMergeBytes/2 + 1)
+	metas := []baseSubMeta{
+		{id: "b0", recency: 0, nrow: un, filesize: big},
+		{id: "b1", recency: 1, nrow: un, filesize: big},
+	}
+	lo, hi := selectMergeRun(metas, capacity)
+	require.Equal(t, [2]int{0, 0}, [2]int{lo, hi}, "each pair exceeds the byte budget ⇒ no run")
+
+	// capacity <= 0 (unlimited): nothing is ever full, so even large-nrow subs coalesce.
+	check2 := func(name string, metas []baseSubMeta, wantLo, wantHi int) {
+		lo, hi := selectMergeRun(metas, 0)
+		require.Equal(t, [2]int{wantLo, wantHi}, [2]int{lo, hi}, name)
+	}
+	check2("unlimited coalesces all", mk(fl, fl, fl), 0, mergeFactorMin(3))
+}
+
+func mergeFactorMin(n int) int {
+	if n < mergeFactor {
+		return n
+	}
+	return mergeFactor
 }

@@ -24,12 +24,14 @@ package compile
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/fulltext/wand"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -97,6 +99,16 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 	retrieval := catalog.GetIndexParser(indexDef.IndexAlgoParams) == "retrieval"
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
 
+	// Resolve the base-build capacity from the index's persisted algo_params (the immutable
+	// max_index_capacity flat param) so the create build splits at the SAME value every later
+	// compaction reads — carried to the build TVF via cfg.Capacity (not the live session var).
+	var buildCapacity int64
+	if retrieval {
+		if buildCapacity, err = resolveWandCapacity(indexDef.IndexAlgoParams, ctx.ResolveVariable); err != nil {
+			return err
+		}
+	}
+
 	// 3a. retrieval SYNC build (the default, or ALTER REINDEX forceSync). Build the
 	// postings + the tag=0 WAND base INLINE in this txn so genWandBuildSQL's
 	// fulltext_wand_create reads fulltext_max_index_capacity straight from the live
@@ -133,7 +145,7 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 		if err != nil {
 			return err
 		}
-		buildSQLs, err := genWandBuildSQL(indexDef, storeDef, metaDef, qryDatabase)
+		buildSQLs, err := genWandBuildSQL(indexDef, storeDef, metaDef, qryDatabase, buildCapacity)
 		if err != nil {
 			return err
 		}
@@ -155,7 +167,7 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 	// overlay). CREATE-only: a REINDEX (forceSync) always takes a sync (re)build — 3a for
 	// retrieval, 3c for non-retrieval — never re-registers CDC here.
 	if !forceSync && (async || retrieval) {
-		initSQL, err := wandInitSQL(indexDefs, originalTableDef, indexDef, qryDatabase)
+		initSQL, err := wandInitSQL(indexDefs, originalTableDef, indexDef, qryDatabase, buildCapacity)
 		if err != nil {
 			return err
 		}
@@ -194,7 +206,7 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 // task start — that populates a retrieval index's postings and then builds the
 // tag=0 WAND store from them (genInsertSQL -> postings, genWandBuildSQL ->
 // tag=0). Returns "" for a non-retrieval index (which has no WAND store).
-func wandInitSQL(indexDefs map[string]*plan.IndexDef, originalTableDef *plan.TableDef, indexDef *plan.IndexDef, qryDatabase string) (string, error) {
+func wandInitSQL(indexDefs map[string]*plan.IndexDef, originalTableDef *plan.TableDef, indexDef *plan.IndexDef, qryDatabase string, capacity int64) (string, error) {
 	storeDef, ok := indexDefs[catalog.FullTextIndex_TblType_Storage]
 	if !ok {
 		return "", nil
@@ -207,7 +219,7 @@ func wandInitSQL(indexDefs map[string]*plan.IndexDef, originalTableDef *plan.Tab
 	if err != nil {
 		return "", err
 	}
-	buildSQLs, err := genWandBuildSQL(indexDef, storeDef, metaDef, qryDatabase)
+	buildSQLs, err := genWandBuildSQL(indexDef, storeDef, metaDef, qryDatabase, capacity)
 	if err != nil {
 		return "", err
 	}
@@ -222,12 +234,13 @@ func wandInitSQL(indexDefs map[string]*plan.IndexDef, originalTableDef *plan.Tab
 // hidden table: SELECT over the postings table CROSS APPLY fulltext_wand_create,
 // which reads (word, doc_id) rows, sums tf, serializes the index, and INSERTs
 // the chunk + metadata rows in its end(). Mirrors HNSW genBuildSQL.
-func genWandBuildSQL(postingsDef, storeDef, metaDef *plan.IndexDef, qryDatabase string) ([]string, error) {
+func genWandBuildSQL(postingsDef, storeDef, metaDef *plan.IndexDef, qryDatabase string, capacity int64) ([]string, error) {
 	const srcAlias = "p"
 	cfg := wand.TableConfig{
 		DbName:        qryDatabase,
 		IndexTable:    storeDef.IndexTableName,
 		MetadataTable: metaDef.IndexTableName,
+		Capacity:      capacity,
 	}
 	cfgbytes, err := json.Marshal(cfg)
 	if err != nil {
@@ -276,6 +289,10 @@ func (Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[strin
 // ALTER's transaction. It requires the alias (AS f) — the TVF is a FUNCTION_SCAN with no
 // driving table. The TVF evicts the search cache for the store on completion.
 func handleMergeCompact(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	postingsDef, ok := indexDefs[""]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("fulltext postings index definition not found")
+	}
 	storeDef, ok := indexDefs[catalog.FullTextIndex_TblType_Storage]
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("fulltext retrieval storage index definition not found")
@@ -284,11 +301,34 @@ func handleMergeCompact(ctx compileplugin.CompileContext, indexDefs map[string]*
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("fulltext retrieval metadata index definition not found")
 	}
-	sql := fmt.Sprintf("SELECT * FROM fulltext_wand_compact(%s, %s, %s) AS f",
+	// Resolve capacity from the index's PERSISTED algo_params (the immutable
+	// max_index_capacity flat param, pinned at CREATE) and pass it to the TVF, so a manual
+	// MERGE never depends on the triggering session's fulltext_max_index_capacity — which
+	// could differ from the build value and make the tiered merge mis-judge full base subs.
+	capacity, err := resolveWandCapacity(postingsDef.IndexAlgoParams, ctx.ResolveVariable)
+	if err != nil {
+		return err
+	}
+	sql := fmt.Sprintf("SELECT * FROM fulltext_wand_compact(%s, %s, %s, %s) AS f",
 		sqlquote.String(ctx.QryDatabase()),
 		sqlquote.String(storeDef.IndexTableName),
-		sqlquote.String(metaDef.IndexTableName))
+		sqlquote.String(metaDef.IndexTableName),
+		sqlquote.String(strconv.FormatInt(capacity, 10)))
 	return ctx.RunSql(sql)
+}
+
+// resolveWandCapacity returns the effective max_index_capacity for a retrieval index:
+// the immutable flat param pinned in algo_params at CREATE (MAX_INDEX_CAPACITY option >
+// fulltext_max_index_capacity session var > 1M default). Every op — build split, fold
+// split, tiered-merge fullness — resolves it the same way so they always agree, no matter
+// which session triggers the op.
+func resolveWandCapacity(algoParams string, resolve func(string, bool, bool) (any, error)) (int64, error) {
+	flat, err := catalog.IndexParamsStringToMap(algoParams)
+	if err != nil {
+		return 0, err
+	}
+	return indexplugin.AlgoParamInt(flat[catalog.IndexAlgoParamMaxIndexCapacity],
+		resolve, "fulltext_max_index_capacity", 1000000)
 }
 
 // RestoreInitSQL — a retrieval (WAND) index carries a compact tag=0 model that

@@ -244,7 +244,7 @@ func TestGenWandBuildSQL(t *testing.T) {
 	storeDef := &plan.IndexDef{IndexTableName: "store_tbl"}
 	metaDef := &plan.IndexDef{IndexTableName: "meta_tbl"}
 
-	sqls, err := genWandBuildSQL(postingsDef, storeDef, metaDef, "db1")
+	sqls, err := genWandBuildSQL(postingsDef, storeDef, metaDef, "db1", 1000)
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
 	sql := sqls[0]
@@ -275,7 +275,7 @@ func TestWandInitSQL(t *testing.T) {
 		catalog.FullTextIndex_TblType_Storage:  {IndexTableName: "store_tbl"},
 		catalog.FullTextIndex_TblType_Metadata: {IndexTableName: "meta_tbl"},
 	}
-	js, err := wandInitSQL(defs, tableDef, indexDef, "db1")
+	js, err := wandInitSQL(defs, tableDef, indexDef, "db1", 1000)
 	require.NoError(t, err)
 
 	var stmts []string
@@ -284,7 +284,7 @@ func TestWandInitSQL(t *testing.T) {
 	require.Contains(t, stmts[len(stmts)-1], "fulltext_wand_create")
 
 	// no WAND store def -> "" (non-retrieval / postings-only index)
-	js2, err := wandInitSQL(map[string]*plan.IndexDef{}, tableDef, indexDef, "db1")
+	js2, err := wandInitSQL(map[string]*plan.IndexDef{}, tableDef, indexDef, "db1", 1000)
 	require.NoError(t, err)
 	require.Equal(t, "", js2)
 }

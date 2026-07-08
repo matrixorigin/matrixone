@@ -435,6 +435,10 @@ const (
 	// = oldest; K = max folded tail chunk_id for a compacted base). ComputeLiveness
 	// dedups bases + tail uniformly by this; NextTailChunkId reads MAX over it too.
 	FullTextIndex_TblCol_Metadata_Chunk_Id = "chunk_id"
+	// Nrow is the sub-index's live doc count. Tiered merge reads it (without loading the
+	// sub) to skip subs already at max_index_capacity — a "full" sub is optimal and is
+	// never re-merged, so a MERGE over a pure-insert tail never rewrites the full base.
+	FullTextIndex_TblCol_Metadata_Nrow = "nrow"
 
 	/************ 4. HNSW Index *************/
 

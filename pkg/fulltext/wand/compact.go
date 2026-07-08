@@ -331,31 +331,37 @@ func nextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 	return 0, nil
 }
 
-// Tiered-merge tuning. A base sub below smallSubBytes is a "small" merge candidate
-// (typically a fold sub — one tail's worth); full-build/large subs sit above it and
-// are left alone. A merge run coalesces up to mergeFactor adjacent small subs, capped
-// at maxMergeBytes of resident postings, so tiered-merge memory stays bounded.
+// Tiered-merge tuning. A merge run coalesces up to mergeFactor adjacent UNDER-CAPACITY
+// subs, capped at maxMergeBytes of resident postings so memory stays bounded. Fullness is
+// judged by doc count vs max_index_capacity (not bytes): a sub already at capacity is
+// optimal and is never re-merged.
 const (
 	mergeFactor   = 8
 	maxMergeBytes = 128 << 20 // 128 MiB resident per merge pass
-	smallSubBytes = maxMergeBytes / mergeFactor
 )
 
-// baseSubMeta is a tag=0 base sub-index's metadata row (id + recency + serialized size),
-// used by the tiered merge to pick a batch without loading any postings.
+// baseSubMeta is a tag=0 base sub-index's metadata row (id + recency + serialized size +
+// live doc count), used by the tiered merge to pick a batch without loading any postings.
 type baseSubMeta struct {
 	id       string
 	recency  int64
 	filesize int64
+	nrow     int64
 }
+
+// full reports whether the sub is at max_index_capacity — a full sub is never a merge
+// candidate, so a MERGE over a pure-insert tail never rewrites the full base. capacity <= 0
+// means "unlimited" (no cap), so nothing is ever full and all subs coalesce.
+func (m baseSubMeta) full(capacity int64) bool { return capacity > 0 && m.nrow >= capacity }
 
 // listBaseSubsByRecency returns the tag=0 base subs ordered by recency (metadata.chunk_id
 // ASC, then index_id for a stable order among a fold's capacity-split siblings) — the order
 // the tiered merge scans for an adjacent, recency-contiguous run.
 func listBaseSubsByRecency(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]baseSubMeta, error) {
-	sql := fmt.Sprintf("SELECT %s, %s, %s FROM %s ORDER BY %s ASC, %s ASC",
+	sql := fmt.Sprintf("SELECT %s, %s, %s, %s FROM %s ORDER BY %s ASC, %s ASC",
 		catalog.FullTextIndex_TblCol_Metadata_Index_Id, catalog.FullTextIndex_TblCol_Metadata_Chunk_Id,
-		catalog.FullTextIndex_TblCol_Metadata_Filesize, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+		catalog.FullTextIndex_TblCol_Metadata_Filesize, catalog.FullTextIndex_TblCol_Metadata_Nrow,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
 		catalog.FullTextIndex_TblCol_Metadata_Chunk_Id, catalog.FullTextIndex_TblCol_Metadata_Index_Id)
 	res, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {
@@ -372,35 +378,40 @@ func listBaseSubsByRecency(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]base
 				id:       bat.Vecs[0].GetStringAt(i),
 				recency:  vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], i),
 				filesize: vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[2], i),
+				nrow:     vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[3], i),
 			})
 		}
 	}
 	return metas, nil
 }
 
-// selectMergeRun finds the first maximal run of ADJACENT small subs (in recency order)
-// worth merging — capped at mergeFactor subs and maxMergeBytes. It returns [lo,hi) with
-// hi-lo ≥ 2, or lo==hi when no run qualifies. Adjacency in the recency-sorted list is a
-// correctness requirement, not a heuristic: merging emits one sub at the run's MAX recency,
-// so a doc from a lower-recency member is "promoted". Because the run skips no sub whose
-// recency lies inside its range, the newest copy of every pk in that range is in the run
-// (its promoted copy is the true-newest); every excluded sub is strictly older (correctly
-// shadowed by the merged max) or strictly newer (correctly shadows it). A non-adjacent
-// pick could leapfrog an excluded middle sub holding a newer copy → stale result.
-func selectMergeRun(metas []baseSubMeta) (lo, hi int) {
+// selectMergeRun finds the first maximal run of ADJACENT under-capacity subs (in recency
+// order) worth merging — capped at mergeFactor subs and maxMergeBytes. It returns [lo,hi)
+// with hi-lo ≥ 2, or lo==hi when no run qualifies. A sub already at max_index_capacity is
+// full (never a candidate), so a full base is never re-merged.
+//
+// Adjacency in the recency-sorted list is a correctness requirement, not a heuristic:
+// merging emits one sub at the run's MAX recency, so a doc from a lower-recency member is
+// "promoted". Because the run skips no sub whose recency lies inside its range, the newest
+// copy of every pk in that range is in the run (its promoted copy is the true-newest); every
+// excluded sub is strictly older (correctly shadowed by the merged max) or strictly newer
+// (correctly shadows it). A non-adjacent pick could leapfrog an excluded middle sub holding
+// a newer copy → stale result. (Full subs excluded from a run are always at the run's
+// boundary, never interior — a full sub ends the run — so contiguity holds.)
+func selectMergeRun(metas []baseSubMeta, capacity int64) (lo, hi int) {
 	for i := 0; i < len(metas); {
 		j, sum := i, int64(0)
 		for j < len(metas) && j-i < mergeFactor &&
-			metas[j].filesize < smallSubBytes && sum+metas[j].filesize <= maxMergeBytes {
+			!metas[j].full(capacity) && sum+metas[j].filesize <= maxMergeBytes {
 			sum += metas[j].filesize
 			j++
 		}
 		if j-i >= 2 {
 			return i, j
 		}
-		if j > i { // a single small sub then a large/over-budget one: resume at that sub
+		if j > i { // a single under-capacity sub then a full/over-budget one: resume there
 			i = j
-		} else { // metas[i] itself is large: skip it
+		} else { // metas[i] itself is full: skip it
 			i++
 		}
 	}
@@ -419,7 +430,7 @@ func TieredMergeBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int
 	if err != nil {
 		return 0, err
 	}
-	lo, hi := selectMergeRun(metas)
+	lo, hi := selectMergeRun(metas, capacity)
 	if hi-lo < 2 {
 		return 0, nil // no adjacent small run worth merging
 	}

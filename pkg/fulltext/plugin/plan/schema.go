@@ -64,6 +64,14 @@ func buildFullTextParams(idx *tree.FullTextIndex) (string, error) {
 		if idx.IndexOption.Hour > 0 {
 			res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
 		}
+		// Explicit MAX_INDEX_CAPACITY option → a persistent flat algo-param (retrieval only;
+		// ngram ignores capacity). The CREATE capture site below resolves the effective value
+		// (this option > fulltext_max_index_capacity session var > default) and rewrites it, so
+		// every op — build split, fold split, tiered-merge fullness — reads one immutable value
+		// instead of a per-session var.
+		if idx.IndexOption.MaxIndexCapacity > 0 {
+			res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
+		}
 	}
 	if len(res) == 0 {
 		return "", nil
@@ -179,22 +187,32 @@ func (Hooks) BuildFullTextIndexDefs(
 	// which take indexDef.IndexAlgoParams below.
 	if ctx != nil && catalog.GetIndexParser(indexDef.IndexAlgoParams) == "retrieval" {
 		if p, ok := indexplugin.Get(catalog.MOIndexFullTextAlgo.ToString()); ok {
-			if names := p.Catalog().BuildSessionVars(); len(names) > 0 {
-				sv, cerr := compileplugin.CaptureVars(ctx.ResolveVariable, names)
-				if cerr != nil {
-					return nil, nil, cerr
+			flat := map[string]string{}
+			if indexDef.IndexAlgoParams != "" {
+				if flat, err = catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams); err != nil {
+					return nil, nil, err
 				}
-				if len(sv) > 0 {
-					flat := map[string]string{}
-					if indexDef.IndexAlgoParams != "" {
-						if flat, err = catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams); err != nil {
-							return nil, nil, err
-						}
-					}
-					if indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonStringWithSessionVars(flat, sv); err != nil {
-						return nil, nil, err
-					}
-				}
+			}
+			// Pin max_index_capacity as an immutable flat algo-param: resolve it ONCE here
+			// (explicit MAX_INDEX_CAPACITY option > fulltext_max_index_capacity session var >
+			// 1M system default) so every later op — build split, fold split, tiered-merge
+			// fullness — reads the same value, independent of the session that triggers the op.
+			// A session var alone does not persist: a MERGE from another connection would
+			// resolve a different capacity and mis-judge which base subs are full.
+			capacity, cerr := indexplugin.AlgoParamInt(flat[catalog.IndexAlgoParamMaxIndexCapacity],
+				ctx.ResolveVariable, "fulltext_max_index_capacity", 1000000)
+			if cerr != nil {
+				return nil, nil, cerr
+			}
+			flat[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(capacity, 10)
+			// Keep the session_vars snapshot too (back-compat for the ISCP overlay / readers
+			// that still resolve through it); the flat param above now takes precedence.
+			sv, cerr := compileplugin.CaptureVars(ctx.ResolveVariable, p.Catalog().BuildSessionVars())
+			if cerr != nil {
+				return nil, nil, cerr
+			}
+			if indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonStringWithSessionVars(flat, sv); err != nil {
+				return nil, nil, err
 			}
 		}
 	}
@@ -365,6 +383,7 @@ func buildWandHiddenDefs(ctx planplugin.CompilerContext, indexName string, index
 			{Name: catalog.FullTextIndex_TblCol_Metadata_Checksum, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, Default: &plan.Default{}},
 			{Name: catalog.FullTextIndex_TblCol_Metadata_Filesize, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
 			{Name: catalog.FullTextIndex_TblCol_Metadata_Chunk_Id, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+			{Name: catalog.FullTextIndex_TblCol_Metadata_Nrow, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
 		},
 	}
 	metaTbl.Pkey = &plan.PrimaryKeyDef{

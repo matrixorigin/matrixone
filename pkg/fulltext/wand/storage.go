@@ -40,6 +40,11 @@ type TableConfig struct {
 	IndexTable    string `json:"index"`    // chunk store (FullTextIndex_TblType_Storage)
 	MetadataTable string `json:"metadata"` // metadata (FullTextIndex_TblType_Metadata)
 	PKey          string `json:"pkey"`
+	// Capacity is max_index_capacity, resolved by the compile layer from the index's
+	// persisted algo_params (the immutable flat param) and carried to the create-build TVF
+	// so the base is split at the same value every compaction later reads. 0 ⇒ unset (the
+	// TVF falls back to the resolver, for older indexes without the flat param).
+	Capacity int64 `json:"capacity,omitempty"`
 }
 
 // SubIndexId is the index_id for the i-th tag=0 base sub-index of a build identified by
@@ -87,12 +92,12 @@ func (m *WandModel) ToInsertSqls(cfg TableConfig, ts int64, tag int) (sqls []str
 	}
 
 	metaTbl := sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)
-	sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d)",
+	sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d)",
 		metaTbl,
 		catalog.FullTextIndex_TblCol_Metadata_Index_Id, catalog.FullTextIndex_TblCol_Metadata_Timestamp,
 		catalog.FullTextIndex_TblCol_Metadata_Checksum, catalog.FullTextIndex_TblCol_Metadata_Filesize,
-		catalog.FullTextIndex_TblCol_Metadata_Chunk_Id,
-		sqlquote.String(m.Id), ts, sqlquote.String(checksum), filesize, m.ChunkId))
+		catalog.FullTextIndex_TblCol_Metadata_Chunk_Id, catalog.FullTextIndex_TblCol_Metadata_Nrow,
+		sqlquote.String(m.Id), ts, sqlquote.String(checksum), filesize, m.ChunkId, m.N))
 	sqls = append(sqls, FileChunkInsertSqls(cfg, m.Id, 0, path, int(filesize), tag)...)
 	return sqls, cleanup, nil
 }
