@@ -9629,7 +9629,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_datetime, 0, parameters[2].Scale)
+					return types.New(types.T_datetime, 0, normalizeStrToDateScale(parameters[2].Scale))
 				},
 
 				newOp: func() executeLogicOfOverload {
@@ -9653,7 +9653,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_time},
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_time, 0, parameters[2].Scale)
+					return types.New(types.T_time, 0, normalizeStrToDateScale(parameters[2].Scale))
 				},
 
 				newOp: func() executeLogicOfOverload {
