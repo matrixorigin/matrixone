@@ -152,3 +152,78 @@ func TestEncodedObjectScopeRemoteVerification(t *testing.T) {
 		t.Fatalf("expected tampered encoded scope to be denied, got %v", err)
 	}
 }
+
+func TestObjectScopeValidationRejectsBadKeysAndEndpoints(t *testing.T) {
+	ctx := context.Background()
+	scope := ObjectScope{
+		AccountID: 1,
+		CatalogID: 2,
+		Endpoint:  "s3.me-central-1.amazonaws.com",
+		Region:    "me-central-1",
+		Bucket:    "warehouse",
+		Principal: "external",
+	}
+	if _, err := SignObjectScope(ctx, scope, ObjectScopeSigningKey{KeyID: "", Secret: []byte("secret"), TTL: time.Minute}, time.Now()); err == nil {
+		t.Fatalf("expected missing key id to fail")
+	}
+	if _, err := SignObjectScope(ctx, scope, ObjectScopeSigningKey{KeyID: "key", Secret: nil, TTL: time.Minute}, time.Now()); err == nil {
+		t.Fatalf("expected missing secret to fail")
+	}
+	if _, err := SignObjectScope(ctx, scope, ObjectScopeSigningKey{KeyID: "key", Secret: []byte("secret"), TTL: 0}, time.Now()); err == nil {
+		t.Fatalf("expected non-positive ttl to fail")
+	}
+
+	key := ObjectScopeSigningKey{KeyID: "key", Secret: []byte("secret"), TTL: time.Minute}
+	for _, endpoint := range []string{
+		"",
+		"https://s3.me-central-1.amazonaws.com:9000",
+		"https://s3.me-central-1.amazonaws.com/path",
+		"https://s3.me-central-1.amazonaws.com?query=1",
+		"s3.me-central-1.amazonaws.com/path",
+		"127.0.0.1",
+	} {
+		bad := scope
+		bad.Endpoint = endpoint
+		if _, err := SignObjectScope(ctx, bad, key, time.Now()); err == nil {
+			t.Fatalf("expected endpoint %q to fail", endpoint)
+		}
+	}
+
+	invalid := scope
+	invalid.CatalogID = 0
+	if _, err := SignObjectScope(ctx, invalid, key, time.Now()); err == nil {
+		t.Fatalf("expected missing catalog id to fail")
+	}
+	invalid = scope
+	invalid.Region = ""
+	if _, err := SignObjectScope(ctx, invalid, key, time.Now()); err == nil {
+		t.Fatalf("expected missing region to fail")
+	}
+}
+
+func TestObjectScopeSignatureMetadataMismatch(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 17, 8, 0, 0, 0, time.UTC)
+	key := ObjectScopeSigningKey{KeyID: "key", Secret: []byte("secret"), TTL: time.Minute}
+	scope := ObjectScope{
+		AccountID: 1,
+		CatalogID: 2,
+		Endpoint:  "s3.me-central-1.amazonaws.com",
+		Region:    "me-central-1",
+		Bucket:    "warehouse",
+		Principal: "external",
+	}
+	signed, err := SignObjectScope(ctx, scope, key, now)
+	if err != nil {
+		t.Fatalf("sign scope: %v", err)
+	}
+	signed.Signature.Algorithm = "other"
+	if err := VerifyObjectScopeSignature(ctx, signed, key, now); err == nil || !strings.Contains(err.Error(), "ICEBERG_REMOTE_SIGNING_DENIED") {
+		t.Fatalf("expected algorithm mismatch denial, got %v", err)
+	}
+	signed.Signature.Algorithm = ObjectScopeSignatureAlgorithm
+	signed.Signature.KeyID = "other"
+	if err := VerifyObjectScopeSignature(ctx, signed, key, now); err == nil || !strings.Contains(err.Error(), "ICEBERG_REMOTE_SIGNING_DENIED") {
+		t.Fatalf("expected key id mismatch denial, got %v", err)
+	}
+}

@@ -256,6 +256,16 @@ func TestWriteRuntimeCoordinatorFactoryDispatchesAppendAndDML(t *testing.T) {
 	got, err = factory.NewCoordinator(ctx, icebergwrite.AppendRequest{Operation: icebergwrite.OperationDelete})
 	require.NoError(t, err)
 	require.Same(t, dmlCoord, got)
+	got, err = (WriteRuntimeCoordinatorFactory{}).NewCoordinator(ctx, icebergwrite.AppendRequest{Operation: icebergwrite.OperationAppend})
+	require.NoError(t, err)
+	require.Nil(t, got)
+	got, err = (WriteRuntimeCoordinatorFactory{}).NewCoordinator(ctx, icebergwrite.AppendRequest{Operation: icebergwrite.OperationMerge})
+	require.NoError(t, err)
+	require.Nil(t, got)
+	got, err = factory.NewCoordinator(ctx, icebergwrite.AppendRequest{Operation: "unknown"})
+	require.Error(t, err)
+	require.Nil(t, got)
+	require.Contains(t, err.Error(), string(api.ErrUnsupportedFeature))
 }
 
 func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {

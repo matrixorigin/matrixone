@@ -222,3 +222,56 @@ func TestBuildS3RemoteSigningRequestURIEscapesPathSegments(t *testing.T) {
 		t.Fatalf("remote signing URI leaked unescaped path segment, got %q", uri)
 	}
 }
+
+func TestBuildS3RemoteSigningRequestURIVirtualHostedAndValidation(t *testing.T) {
+	uri, region, err := BuildS3RemoteSigningRequestURI(context.Background(),
+		"s3://warehouse/sales/orders/data.parquet",
+		map[string]string{
+			"s3.endpoint":   "https://s3.me-central-1.amazonaws.com/base",
+			"s3.region":     "me-central-1",
+			"s3.is-minio":   "false",
+			"unused_config": "ignored",
+		},
+	)
+	if err != nil {
+		t.Fatalf("build virtual-hosted remote signing uri: %v", err)
+	}
+	if region != "me-central-1" || !strings.HasPrefix(uri, "https://warehouse.s3.me-central-1.amazonaws.com/base/sales/orders/data.parquet") {
+		t.Fatalf("unexpected virtual-hosted uri=%q region=%q", uri, region)
+	}
+
+	for _, tc := range []struct {
+		location string
+		config   map[string]string
+	}{
+		{"", map[string]string{"s3.endpoint": "s3.example.com", "s3.region": "us-east-1"}},
+		{"s3://warehouse", map[string]string{"s3.endpoint": "s3.example.com", "s3.region": "us-east-1"}},
+		{"s3://warehouse/data.parquet", map[string]string{"s3.region": "us-east-1"}},
+		{"s3://warehouse/data.parquet", map[string]string{"s3.endpoint": "s3.example.com"}},
+		{"s3://warehouse/data.parquet", map[string]string{"s3.endpoint": "://bad", "s3.region": "us-east-1"}},
+	} {
+		if _, _, err := BuildS3RemoteSigningRequestURI(context.Background(), tc.location, tc.config); err == nil {
+			t.Fatalf("expected remote signing validation error for location=%q config=%+v", tc.location, tc.config)
+		}
+	}
+}
+
+func TestRemoteSigningPathStyleDetection(t *testing.T) {
+	cases := []struct {
+		host string
+		cfg  map[string]string
+		want bool
+	}{
+		{"localhost", nil, true},
+		{"127.0.0.1:9000", nil, true},
+		{"[::1]:9000", nil, true},
+		{"s3.example.com", map[string]string{"s3.path-style-access": "true"}, true},
+		{"s3.example.com", map[string]string{"s3.is-minio": "yes"}, true},
+		{"s3.example.com", nil, false},
+	}
+	for _, tc := range cases {
+		if got := remoteSigningUsePathStyle(tc.host, tc.cfg); got != tc.want {
+			t.Fatalf("remoteSigningUsePathStyle(%q,%+v)=%v want %v", tc.host, tc.cfg, got, tc.want)
+		}
+	}
+}

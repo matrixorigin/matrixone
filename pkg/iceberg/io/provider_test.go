@@ -419,6 +419,38 @@ func TestProviderObjectWriterWritesThroughFileService(t *testing.T) {
 	}
 }
 
+func TestProviderObjectWriterWriteManifestObject(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("iceberg-manifest-writer", fileservice.DisabledCacheConfig, nil)
+	if err != nil {
+		t.Fatalf("new memory fs: %v", err)
+	}
+	writer := ProviderObjectWriter{
+		Provider: ScopedProvider{FileService: fs},
+		ScopeForLocation: func(location string) ObjectScope {
+			return ObjectScope{
+				AccountID:       1,
+				CatalogID:       2,
+				StorageLocation: strings.TrimPrefix(location, "s3://warehouse/"),
+				Endpoint:        "s3.me-central-1.amazonaws.com",
+				Region:          "me-central-1",
+				Bucket:          "warehouse",
+				Principal:       "external",
+			}
+		},
+	}
+	if err := writer.WriteManifestObject(ctx, "s3://warehouse/sales/orders/metadata/snap.avro", []byte("manifest-list")); err != nil {
+		t.Fatalf("write manifest object: %v", err)
+	}
+	vec := fileservice.IOVector{FilePath: "sales/orders/metadata/snap.avro", Entries: []fileservice.IOEntry{{Offset: 0, Size: -1}}}
+	if err := fs.Read(ctx, &vec); err != nil {
+		t.Fatalf("read manifest object: %v", err)
+	}
+	if string(vec.Entries[0].Data) != "manifest-list" {
+		t.Fatalf("unexpected manifest payload: %q", vec.Entries[0].Data)
+	}
+}
+
 func TestProviderObjectWriterValidation(t *testing.T) {
 	ctx := context.Background()
 	if err := (ProviderObjectWriter{}).WriteObject(ctx, "path", []byte("x")); err == nil || !strings.Contains(err.Error(), "ICEBERG_OBJECT_IO") {
@@ -633,6 +665,63 @@ func TestVendedCredentialProviderCredentialCoverageAndExpiry(t *testing.T) {
 	provider.Credentials[0].ExpiresAt = now.Add(10 * time.Minute)
 	if _, _, err := provider.Resolve(ctx, scope); err == nil || !strings.Contains(err.Error(), "ICEBERG_CONFIG_INVALID") {
 		t.Fatalf("expected uncovered storage location to fail, got %v", err)
+	}
+}
+
+func TestProviderRefreshAndRedactionHelpers(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	scope := ObjectScope{
+		AccountID:           1,
+		CatalogID:           2,
+		StorageLocation:     "s3://warehouse/sales/orders/data.parquet?X-Amz-Signature=secret",
+		CredentialExpiresAt: now.Add(10 * time.Minute),
+		Endpoint:            "s3.me-central-1.amazonaws.com",
+		Region:              "me-central-1",
+		Bucket:              "warehouse",
+		Principal:           "external",
+	}
+	for label, provider := range map[string]ObjectIOProvider{
+		"scoped": ScopedProvider{},
+		"vended": VendedCredentialProvider{},
+		"remote": RemoteSigningProvider{},
+	} {
+		redacted := provider.RedactPath(scope.StorageLocation)
+		if strings.Contains(redacted, "warehouse") || strings.Contains(redacted, "secret") {
+			t.Fatalf("%s redaction leaked path: %q", label, redacted)
+		}
+	}
+
+	if _, err := (ScopedProvider{}).Refresh(ctx, scope); err == nil || !strings.Contains(err.Error(), "ICEBERG_CREDENTIAL_EXPIRED") {
+		t.Fatalf("expected missing scoped refresh func error, got %v", err)
+	}
+	if _, err := (VendedCredentialProvider{}).Refresh(ctx, scope); err == nil || !strings.Contains(err.Error(), "ICEBERG_CREDENTIAL_EXPIRED") {
+		t.Fatalf("expected missing vended refresh func error, got %v", err)
+	}
+	refreshed, err := (VendedCredentialProvider{
+		Now:    func() time.Time { return now },
+		MinTTL: time.Minute,
+		RefreshFunc: func(ctx context.Context, scope ObjectScope) (ObjectScope, error) {
+			scope.CredentialID = "fresh"
+			scope.CredentialExpiresAt = now.Add(30 * time.Minute)
+			return scope, nil
+		},
+	}).Refresh(ctx, scope)
+	if err != nil {
+		t.Fatalf("refresh vended credential: %v", err)
+	}
+	if refreshed.CredentialID != "fresh" {
+		t.Fatalf("refresh did not return updated scope: %+v", refreshed)
+	}
+	if _, err := (RemoteSigningProvider{}).Refresh(ctx, scope); err == nil || !strings.Contains(err.Error(), "ICEBERG_REMOTE_SIGNING_DENIED") {
+		t.Fatalf("expected remote signing refresh without signer to fail, got %v", err)
+	}
+	refreshed, err = (RemoteSigningProvider{Signer: &fakeRemoteSigner{}}).Refresh(ctx, scope)
+	if err != nil {
+		t.Fatalf("remote signing refresh should canonicalize scope: %v", err)
+	}
+	if refreshed.Endpoint != "s3.me-central-1.amazonaws.com" || refreshed.Region != "me-central-1" {
+		t.Fatalf("remote signing refresh did not canonicalize scope: %+v", refreshed)
 	}
 }
 

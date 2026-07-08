@@ -159,6 +159,54 @@ func TestCatalogFactoryCommitVerifierCreatesClientForResolvedCatalog(t *testing.
 	require.Equal(t, "ksa_gold", factory.catalog.Name)
 }
 
+func TestCatalogCommitVerifierValidationEdges(t *testing.T) {
+	result, ok, err := (CatalogCommitVerifier{}).VerifyCommittedMaintenance(context.Background(), Request{
+		Operation: OperationRewriteManifests,
+	}, maintenanceCommitPlan(), api.CommitResult{SnapshotID: 4})
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Equal(t, int64(4), result.SnapshotID)
+	require.Contains(t, err.Error(), string(api.ErrConfigInvalid))
+
+	result, ok, err = (CatalogCommitVerifier{Client: &catalog.MockClient{}}).VerifyCommittedMaintenance(context.Background(), Request{
+		Operation: OperationRewriteManifests,
+		Namespace: "sales",
+		Table:     "orders",
+	}, maintenanceCommitPlan(), api.CommitResult{SnapshotID: 0, CommitID: "unknown"})
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, "unknown", result.CommitID)
+}
+
+func TestCatalogFactoryCommitVerifierValidationEdges(t *testing.T) {
+	req := Request{
+		Operation: OperationRewriteManifests,
+		Catalog:   model.Catalog{AccountID: 7, CatalogID: 42, Name: "ksa_gold"},
+		Namespace: "sales",
+		Table:     "orders",
+	}
+	_, ok, err := (CatalogFactoryCommitVerifier{}).VerifyCommittedMaintenance(context.Background(), req, maintenanceCommitPlan(), api.CommitResult{SnapshotID: 4})
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Contains(t, err.Error(), string(api.ErrConfigInvalid))
+
+	req.Catalog.CatalogID = 0
+	_, ok, err = (CatalogFactoryCommitVerifier{
+		CatalogFactory: &verifierCatalogFactory{client: &catalog.MockClient{}},
+	}).VerifyCommittedMaintenance(context.Background(), req, maintenanceCommitPlan(), api.CommitResult{SnapshotID: 4})
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Contains(t, err.Error(), "resolved catalog")
+
+	req.Catalog.CatalogID = 42
+	_, ok, err = (CatalogFactoryCommitVerifier{
+		CatalogFactory: &verifierCatalogFactory{err: api.NewError(api.ErrCatalogUnavailable, "catalog unavailable", nil)},
+	}).VerifyCommittedMaintenance(context.Background(), req, maintenanceCommitPlan(), api.CommitResult{SnapshotID: 4})
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Contains(t, err.Error(), string(api.ErrCatalogUnavailable))
+}
+
 type verifierCatalogFactory struct {
 	catalog model.Catalog
 	client  api.CatalogClient

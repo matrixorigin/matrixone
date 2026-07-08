@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 )
 
@@ -53,6 +54,20 @@ func TestMaintenanceCatalogResolverRejectsInvalidCapabilities(t *testing.T) {
 	}).ResolveMaintenanceCatalog(context.Background(), 7, "ksa_gold")
 	if err == nil {
 		t.Fatalf("expected invalid capabilities error")
+	}
+}
+
+func TestMaintenanceCatalogResolverValidationEdges(t *testing.T) {
+	_, err := (MaintenanceCatalogResolver{}).ResolveMaintenanceCatalog(context.Background(), 7, "ksa_gold")
+	if err == nil {
+		t.Fatalf("expected missing DAO error")
+	}
+	sentinel := api.NewError(api.ErrCatalogUnavailable, "catalog lookup failed", nil)
+	_, err = (MaintenanceCatalogResolver{
+		DAO: fakeCatalogByNameGetter{err: sentinel},
+	}).ResolveMaintenanceCatalog(context.Background(), 7, "ksa_gold")
+	if err != sentinel {
+		t.Fatalf("expected DAO error, got %v", err)
 	}
 }
 

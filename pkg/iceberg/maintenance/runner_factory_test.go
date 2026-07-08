@@ -183,6 +183,64 @@ func TestCatalogRewriteManifestsRunnerResolvesConfigPrefix(t *testing.T) {
 	require.Equal(t, "main", commitReq.Prefix)
 }
 
+func TestCatalogRunnerFactoriesRequireFactoryAndResolvedCatalog(t *testing.T) {
+	ctx := context.Background()
+	req := Request{
+		Operation: OperationRewriteManifests,
+		Catalog:   model.Catalog{},
+		Namespace: "sales",
+		Table:     "orders",
+	}
+	runners := []struct {
+		name string
+		run  func(context.Context, Request) (Result, error)
+	}{
+		{"expire", CatalogExpireSnapshotsRunner{}.RunMaintenance},
+		{"rewrite-data-files", CatalogRewriteDataFilesRunner{}.RunMaintenance},
+		{"rewrite-manifests", CatalogRewriteManifestsRunner{}.RunMaintenance},
+	}
+	for _, tc := range runners {
+		_, err := tc.run(ctx, req)
+		require.Error(t, err, tc.name)
+		require.Contains(t, err.Error(), string(api.ErrConfigInvalid))
+	}
+
+	factory := maintenanceCatalogFactoryFunc(func(ctx context.Context, catalog model.Catalog) (api.CatalogClient, error) {
+		return nil, api.NewError(api.ErrCatalogUnavailable, "catalog down", nil)
+	})
+	_, err := (CatalogRewriteDataFilesRunner{CatalogFactory: factory}).RunMaintenance(ctx, Request{
+		Operation: OperationRewriteDataFiles,
+		Catalog:   model.Catalog{AccountID: 7, CatalogID: 42, Name: "ksa_gold"},
+		Namespace: "sales",
+		Table:     "orders",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrCatalogUnavailable))
+}
+
+func TestResolveMaintenanceCatalogRequestPrefixSkipsWhenAlreadySetOrClientMissing(t *testing.T) {
+	ctx := context.Background()
+	req := api.CatalogRequest{Prefix: "explicit", Catalog: model.Catalog{Warehouse: "warehouse"}}
+	got, err := resolveMaintenanceCatalogRequestPrefix(ctx, nil, req)
+	require.NoError(t, err)
+	require.Equal(t, "explicit", got.Prefix)
+
+	client := &catalog.MockClient{GetConfigFunc: func(ctx context.Context, req api.GetConfigRequest) (*api.ConfigResponse, error) {
+		t.Fatalf("GetConfig should not be called when prefix is already set")
+		return nil, nil
+	}}
+	got, err = resolveMaintenanceCatalogRequestPrefix(ctx, client, req)
+	require.NoError(t, err)
+	require.Equal(t, "explicit", got.Prefix)
+
+	errClient := &catalog.MockClient{GetConfigFunc: func(ctx context.Context, req api.GetConfigRequest) (*api.ConfigResponse, error) {
+		return nil, api.NewError(api.ErrCatalogUnavailable, "config unavailable", nil)
+	}}
+	_, err = resolveMaintenanceCatalogRequestPrefix(ctx, errClient, api.CatalogRequest{Catalog: model.Catalog{Warehouse: "warehouse"}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrCatalogUnavailable))
+}
+
 func TestNativeRewriteManifestsRunnerMaterializesWritesAndCommits(t *testing.T) {
 	oldManifestPath := "s3://warehouse/orders/metadata/old-manifest.avro"
 	oldManifestListPath := "s3://warehouse/orders/metadata/snap-4.avro"
