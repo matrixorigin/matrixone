@@ -187,8 +187,8 @@ func TestReplaceValueBinder_MixedCaseColumnNames(t *testing.T) {
 		Name: "t_set",
 		Cols: []*plan.ColDef{
 			{
-				Name: "id",
-				Typ:  intTyp,
+				Name:    "id",
+				Typ:     intTyp,
 				Default: &plan.Default{NullAbility: true},
 			},
 			{
