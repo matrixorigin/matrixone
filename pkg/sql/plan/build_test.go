@@ -400,8 +400,8 @@ func findParamAddFunc(p *Plan) *plan.Function {
 // must succeed. Before the fix, both params were bound as T_text, and the "+"
 // function resolver rejected [TEXT TEXT] during COM_STMT_PREPARE. The binder now
 // detects two T_text ParamRef arguments to an arithmetic operator and promotes
-// each to float64 via an implicit cast, so the plan contains
-// cast(?, float64) + cast(?, float64).
+// each to Decimal128 via an implicit cast, so the plan contains
+// cast(?, decimal128) + cast(?, decimal128).
 func TestPrepareArithmeticParams(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
@@ -416,7 +416,7 @@ func TestPrepareArithmeticParams(t *testing.T) {
 		assert.Len(t, refs, 2)
 		positions := []int32{}
 		for _, ref := range refs {
-			// ParamRefs remain T_text; the binder inserts cast(T_text→float64)
+			// ParamRefs remain T_text; the binder inserts cast(T_text→decimal128)
 			// before the function type check rather than changing the param type.
 			assert.Equalf(t, int32(types.T_text), ref.Typ.Id,
 				"param ref should keep T_text type before execute supplies real values")
@@ -459,7 +459,7 @@ func TestPrepareArithOpsAllOperators(t *testing.T) {
 }
 
 // TestPrepareArithPlan verifies that dual-param arithmetic (the only case
-// promoteTextParamsForArith triggers) casts both params to DOUBLE.
+// promoteTextParamsForArith triggers) casts both params to Decimal128.
 // Mixed cases (e.g. "0 + ?") fall through to the existing initFixed1 rules
 // and are verified by TestPrepareArithMixedPreservesExactType.
 func TestPrepareArithPlan(t *testing.T) {
@@ -467,9 +467,9 @@ func TestPrepareArithPlan(t *testing.T) {
 
 	tests := []struct {
 		sql       string
-		wantCasts int // expected number of cast(param, float64) wrappers
+		wantCasts int // expected number of cast(param, decimal128) wrappers
 	}{
-		// Dual param: both promoted to DOUBLE.
+		// Dual param: both promoted to Decimal128.
 		{"prepare s1 from select ? + ?", 2},
 		{"prepare s1 from select ? - ?", 2},
 		{"prepare s1 from select ? * ?", 2},
@@ -489,32 +489,32 @@ func TestPrepareArithPlan(t *testing.T) {
 		castCount := 0
 		for _, node := range q.GetQuery().Nodes {
 			for _, expr := range node.ProjectList {
-				castCount += countDoubleCasts(expr)
+				castCount += countDecimal128Casts(expr)
 			}
 		}
 		assert.Equalf(t, tc.wantCasts, castCount,
-			"%s should have %d cast(arg, float64)", tc.sql, tc.wantCasts)
+			"%s should have %d cast(arg, decimal128)", tc.sql, tc.wantCasts)
 	}
 }
 
-// countDoubleCasts counts cast(arg, T_float64) wrappers in expr.
-func countDoubleCasts(expr *plan.Expr) int {
+// countDecimal128Casts counts cast(arg, T_decimal128) wrappers in expr.
+func countDecimal128Casts(expr *plan.Expr) int {
 	if expr == nil {
 		return 0
 	}
 	n := 0
 	if f := expr.GetF(); f != nil {
 		if f.Func.GetObjName() == "cast" && len(f.Args) >= 2 &&
-			f.Args[1].Typ.Id == int32(types.T_float64) {
+			f.Args[1].Typ.Id == int32(types.T_decimal128) {
 			n++
 		}
 		for _, arg := range f.Args {
-			n += countDoubleCasts(arg)
+			n += countDecimal128Casts(arg)
 		}
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			n += countDoubleCasts(item)
+			n += countDecimal128Casts(item)
 		}
 	}
 	return n
@@ -529,7 +529,7 @@ func TestPrepareArithMixedPreservesExactType(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	// Mixed cases: promoteTextParamsForArith only fires for dual params,
-	// so there should be at most 1 float64 cast (from the existing
+	// so there should be at most 1 decimal128 cast (from the existing
 	// initFixed1 rules when one peer is decimal/float), never 2.
 	tests := []string{
 		"prepare s1 from select ? + 5",
@@ -547,9 +547,9 @@ func TestPrepareArithMixedPreservesExactType(t *testing.T) {
 		}
 		for _, node := range q.GetQuery().Nodes {
 			for _, expr := range node.ProjectList {
-				c := countDoubleCasts(expr)
+				c := countDecimal128Casts(expr)
 				assert.LessOrEqualf(t, c, 1,
-					"%s should have ≤1 float64 cast, got %d", sql, c)
+					"%s should have ≤1 decimal128 cast, got %d", sql, c)
 			}
 		}
 	}
@@ -575,17 +575,17 @@ func TestPrepareArithAllCallSites(t *testing.T) {
 	for _, sql := range dualTests {
 		logicPlan, err := runOneStmt(mock, t, sql)
 		assert.NoErrorf(t, err, "%s should succeed", sql)
-		// Verify float64 casts exist (promotion fired).
+		// Verify decimal128 casts exist (promotion fired).
 		q := resolveQueryPlan(logicPlan)
 		assert.NotNil(t, q)
 		if q != nil && q.GetQuery() != nil {
 			total := 0
 			for _, node := range q.GetQuery().Nodes {
 				for _, expr := range node.ProjectList {
-					total += countDoubleCasts(expr)
+					total += countDecimal128Casts(expr)
 				}
 			}
-			assert.Equalf(t, 2, total, "%s should have 2 float64 casts", sql)
+			assert.Equalf(t, 2, total, "%s should have 2 decimal128 casts", sql)
 		}
 	}
 
@@ -608,9 +608,9 @@ func TestPrepareArithAllCallSites(t *testing.T) {
 		if q != nil && q.GetQuery() != nil {
 			for _, node := range q.GetQuery().Nodes {
 				for _, expr := range node.ProjectList {
-					c := countDoubleCasts(expr)
+					c := countDecimal128Casts(expr)
 					assert.LessOrEqualf(t, c, 1,
-						"%s should have ≤1 float64 cast (early return), got %d", sql, c)
+						"%s should have ≤1 decimal128 cast (early return), got %d", sql, c)
 				}
 			}
 		}

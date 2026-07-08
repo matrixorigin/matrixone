@@ -1665,24 +1665,31 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 }
 
 // promoteTextParamsForArith promotes each T_text prepared-statement parameter
-// reference to Decimal128(38,12) when BOTH operands are unresolved ParamRefs
-// (e.g. "? + ?").  Decimal128 avoids float64's 2^53 precision ceiling for
-// integers and preserves fractional values.  Mixed cases (e.g. "0 + ?") fall
-// through to the existing initFixed1/initFixed2 coercion tables, whose rules
-// for known peer types are already correct.
+// reference to Decimal128 when BOTH operands are unresolved ParamRefs
+// (e.g. "? + ?").  Decimal128 preserves exact integer semantics for values up
+// to 10^38, avoiding float64's 2^53 precision ceiling.  Division and modulo
+// therefore stay on the exact decimal path rather than collapsing to float64
+// arithmetic.  Mixed cases (e.g. "0 + ?") fall through to the existing
+// initFixed1/initFixed2 coercion tables, whose rules for known peer types are
+// already correct.
 func promoteTextParamsForArith(ctx context.Context, args []*plan.Expr) {
 	if len(args) != 2 ||
 		args[0].Typ.Id != int32(types.T_text) || args[0].GetP() == nil ||
 		args[1].Typ.Id != int32(types.T_text) || args[1].GetP() == nil {
 		return
 	}
-	// DOUBLE is the type MySQL uses for unresolved arithmetic parameters;
-	// its range (≈1e308) avoids the overflow windows that fixed-scale
-	// decimals have.  Precision loss above 2^53 is the standard IEEE 754
-	// tradeoff and matches MySQL binary-protocol behaviour.
-	doubleType := plan.Type{Id: int32(types.T_float64), NotNullable: true}
+	// Use Decimal128(38,12): scale 12 preserves fractional values for
+	// division, while integer precision up to 10^26 covers the full
+	// uint64 range (max ≈ 1.8×10^19).  This avoids the silent precision
+	// loss that float64 would introduce above 2^53.
+	decType := plan.Type{
+		Id:          int32(types.T_decimal128),
+		Width:       38,
+		Scale:       12,
+		NotNullable: true,
+	}
 	for i := range args {
-		args[i], _ = appendCastBeforeExpr(ctx, args[i], doubleType)
+		args[i], _ = appendCastBeforeExpr(ctx, args[i], decType)
 	}
 }
 
