@@ -1673,7 +1673,7 @@ func filterExistingIndexDDLs(createDDL string, indexDDLs []string) []string {
 
 func generatedIndexDDLName(indexDDL string) string {
 	upper := strings.ToUpper(indexDDL)
-	for _, marker := range []string{" ADD FULLTEXT KEY ", " ADD FULLTEXT INDEX ", " ADD UNIQUE KEY ", " ADD KEY ", " ADD INDEX "} {
+	for _, marker := range []string{" ADD FULLTEXT KEY ", " ADD FULLTEXT INDEX ", " ADD FULLTEXT ", " ADD UNIQUE KEY ", " ADD KEY ", " ADD INDEX "} {
 		i := strings.Index(upper, marker)
 		if i < 0 {
 			continue
@@ -1689,7 +1689,7 @@ func generatedIndexDDLName(indexDDL string) string {
 func createTableHasIndex(createDDL string, name string) bool {
 	quoted := quoteSQLIdent(name)
 	upper := strings.ToUpper(createDDL)
-	for _, marker := range []string{"KEY " + quoted, "INDEX " + quoted, "CONSTRAINT " + quoted} {
+	for _, marker := range []string{"FULLTEXT " + quoted, "KEY " + quoted, "INDEX " + quoted, "CONSTRAINT " + quoted} {
 		if strings.Contains(upper, strings.ToUpper(marker)) {
 			return true
 		}

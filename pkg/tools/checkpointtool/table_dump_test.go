@@ -1297,6 +1297,108 @@ func TestRenderCreateTableDDLFromSchema_AutoIncrementSkipsDefaultNull(t *testing
 	assert.NotContains(t, ddl, "AUTO_INCREMENT DEFAULT NULL")
 }
 
+func TestRenderCreateTableDDLFromSchema_FullTextParserAndAnonymousName(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "fulltext_test",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, NotNull: true},
+			{Name: "content", SQLType: "TEXT", Position: 2},
+			{Name: "question", SQLType: "TEXT", Position: 3},
+		},
+		UniqueKeys: []TableUniqueKey{
+			{
+				Columns:    []string{"content"},
+				Algo:       catalog.MOIndexFullTextAlgo.ToString(),
+				AlgoParams: `{"parser":"ngram"}`,
+			},
+			{
+				Name:       "idx_ft_question",
+				Columns:    []string{"question"},
+				Algo:       catalog.MOIndexFullTextAlgo.ToString(),
+				AlgoParams: `{"parser":"ngram"}`,
+			},
+		},
+	})
+
+	assert.Contains(t, ddl, "FULLTEXT (`content`) WITH PARSER ngram")
+	assert.Contains(t, ddl, "FULLTEXT `idx_ft_question`(`question`) WITH PARSER ngram")
+	assert.NotContains(t, ddl, "FULLTEXT KEY")
+	assert.NotContains(t, ddl, "FULLTEXT `content`")
+}
+
+func TestRenderCreateTableDDLFromSchema_PreservesIndexOrder(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "file_working",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, NotNull: true},
+			{Name: "source_file_path", SQLType: "VARCHAR(256)", Position: 2},
+			{Name: "sink_file_path", SQLType: "VARCHAR(256)", Position: 3},
+			{Name: "hash", SQLType: "VARCHAR(128)", Position: 4},
+			{Name: "dup_file_path", SQLType: "VARCHAR(256)", Position: 5},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueKeys: []TableUniqueKey{
+			{Name: "source_file_path", Columns: []string{"source_file_path"}},
+			{Name: "sink_file_path", Columns: []string{"sink_file_path"}},
+			{Name: "hash", Columns: []string{"hash"}},
+			{Name: "dup_file_path", Columns: []string{"dup_file_path"}},
+		},
+	})
+
+	sourceIdx := strings.Index(ddl, "KEY `source_file_path`")
+	sinkIdx := strings.Index(ddl, "KEY `sink_file_path`")
+	hashIdx := strings.Index(ddl, "KEY `hash`")
+	dupIdx := strings.Index(ddl, "KEY `dup_file_path`")
+	require.NotEqual(t, -1, sourceIdx)
+	require.NotEqual(t, -1, sinkIdx)
+	require.NotEqual(t, -1, hashIdx)
+	require.NotEqual(t, -1, dupIdx)
+	assert.True(t, sourceIdx < sinkIdx && sinkIdx < hashIdx && hashIdx < dupIdx, ddl)
+}
+
+func TestBuildCreateIndexStatementsFromMoIndexes_FullTextParserAndCatalogOrder(t *testing.T) {
+	headers := append([]string{"object", "block", "row"}, moIndexesHeaders...)
+	row := func(id, name, indexType, algo, params, col, ordinal string) []string {
+		data := make([]string, len(moIndexesHeaders))
+		set := func(header, value string) {
+			for i, h := range moIndexesHeaders {
+				if h == header {
+					data[i] = value
+					return
+				}
+			}
+			t.Fatalf("missing mo_indexes header %s", header)
+		}
+		set("id", id)
+		set("table_id", "42")
+		set("name", name)
+		set("type", indexType)
+		set(catalog.IndexAlgoName, algo)
+		set(catalog.IndexAlgoParams, params)
+		set("column_name", col)
+		set("ordinal_position", ordinal)
+		return append([]string{"obj1", "0", id}, data...)
+	}
+
+	got, err := buildCreateIndexStatementsFromMoIndexes(&LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("4", "source_file_path", "INDEX", "", "", "source_file_path", "1"),
+			row("2", "hash", "INDEX", "", "", "hash", "1"),
+			row("3", "sink_file_path", "INDEX", "", "", "sink_file_path", "1"),
+			row("1", "idx_ft_question", "FULLTEXT", catalog.MOIndexFullTextAlgo.ToString(), `{"parser":"ngram"}`, "question", "1"),
+		},
+	}, 42, "ca_comprehensive_dataset")
+
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"ALTER TABLE `ca_comprehensive_dataset` ADD FULLTEXT `idx_ft_question`(`question`) WITH PARSER ngram;",
+		"ALTER TABLE `ca_comprehensive_dataset` ADD KEY `hash`(`hash`);",
+		"ALTER TABLE `ca_comprehensive_dataset` ADD KEY `sink_file_path`(`sink_file_path`);",
+		"ALTER TABLE `ca_comprehensive_dataset` ADD KEY `source_file_path`(`source_file_path`);",
+	}, got)
+}
+
 func TestDecodeMoColumnEncodedSQLType_TemporalScale(t *testing.T) {
 	sqlType, ok := decodeMoColumnEncodedSQLType(encodedSQLType(t, types.New(types.T_time, 0, 6)))
 	require.True(t, ok)
@@ -1636,7 +1738,7 @@ func TestBuildCreateIndexStatementsFromMoIndexes_FullText(t *testing.T) {
 	stmts, err := buildCreateIndexStatementsFromMoIndexes(view, 272535, "t_fulltext")
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"ALTER TABLE `t_fulltext` ADD FULLTEXT KEY `idx_doc`(`doc`);",
+		"ALTER TABLE `t_fulltext` ADD FULLTEXT `idx_doc`(`doc`);",
 	}, stmts)
 }
 

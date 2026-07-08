@@ -528,6 +528,19 @@ func TestFilterExistingIndexDDLsFullText(t *testing.T) {
 	assert.Empty(t, filterExistingIndexDDLs(createDDL, indexDDLs))
 }
 
+func TestFilterExistingIndexDDLsFullTextWithoutKeyKeyword(t *testing.T) {
+	createDDL := "CREATE TABLE `ckp_constraints`.`t_fulltext` (\n" +
+		"  `id` BIGINT NOT NULL,\n" +
+		"  `doc` TEXT DEFAULT NULL,\n" +
+		"  FULLTEXT `idx_doc`(`doc`) WITH PARSER ngram\n" +
+		")"
+	indexDDLs := []string{
+		"ALTER TABLE `t_fulltext` ADD FULLTEXT `idx_doc`(`doc`) WITH PARSER ngram;",
+	}
+
+	assert.Empty(t, filterExistingIndexDDLs(createDDL, indexDDLs))
+}
+
 func TestMergeCreateTableIndexDDLsSingleLine(t *testing.T) {
 	createDDL := "CREATE TABLE `ann`.`items_sift` (id int primary key, embedding vecf32(128))"
 	indexDDLs := []string{

@@ -247,6 +247,8 @@ type indexDDLInfo struct {
 	algoParams string
 	comment    string
 	columns    map[string]indexDDLColumn
+	order      int
+	catalogID  uint64
 }
 
 type CSVExportOption func(*CSVExportOptions)
@@ -526,8 +528,12 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		} else if key.Unique {
 			sb.WriteString("UNIQUE ")
 		}
-		sb.WriteString("KEY ")
-		sb.WriteString(quoteDDLIdent(key.Name))
+		if !fullText || key.Name != "" {
+			if !fullText {
+				sb.WriteString("KEY ")
+			}
+			sb.WriteString(quoteDDLIdent(key.Name))
+		}
 		if !fullText {
 			appendIndexAlgorithmDDL(&sb, key.Algo)
 		}
@@ -539,7 +545,7 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 			sb.WriteString(quoteDDLIdent(col))
 		}
 		sb.WriteString(")")
-		if err := appendIndexTrailingOptionsDDL(&sb, key.AlgoParams, key.Comment); err != nil {
+		if err := appendIndexTrailingOptionsDDL(&sb, fullText, key.AlgoParams, key.Comment); err != nil {
 			ckpDebugSchemaf("mo_tables constraint index options skipped index=%s algo=%q params=%q err=%v", key.Name, key.Algo, key.AlgoParams, err)
 		}
 		if i < len(uniqueKeys)-1 || len(foreignKeys) > 0 {
@@ -778,7 +784,7 @@ func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
 			continue
 		}
 		name := strings.TrimSpace(key.Name)
-		if name == "" {
+		if name == "" && !isFullTextKey(key) {
 			name = cols[0]
 		}
 		signature := strconv.FormatBool(key.Unique) + "\x00" + strings.ToLower(name) + "\x00" + strings.ToLower(strings.Join(cols, "\x00"))
@@ -795,12 +801,6 @@ func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
 			Comment:    strings.TrimSpace(key.Comment),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
-		}
-		return strings.Join(out[i].Columns, "\x00") < strings.Join(out[j].Columns, "\x00")
-	})
 	return out
 }
 
@@ -4206,6 +4206,7 @@ func buildCreateIndexStatementsFromMoIndexes(
 		return nil, nil
 	}
 	tableIDCol := view.columnDataIndex("table_id")
+	idCol := view.columnDataIndex("id")
 	nameCol := view.columnDataIndex("name")
 	typeCol := view.columnDataIndex("type")
 	algoCol := view.columnDataIndex(catalog.IndexAlgoName)
@@ -4230,42 +4231,50 @@ func buildCreateIndexStatementsFromMoIndexes(
 	tableIDStr := strconv.FormatUint(tableID, 10)
 	matchedRows := 0
 	hiddenRows := 0
+	dataOffset := logicalViewDataOffset(view)
 	for _, row := range view.Rows {
-		if tableIDCol >= len(row) || row[tableIDCol] != tableIDStr {
+		if len(row) < dataOffset {
+			continue
+		}
+		dataRow := row[dataOffset:]
+		if tableIDCol >= len(dataRow) || dataRow[tableIDCol] != tableIDStr {
 			continue
 		}
 		matchedRows++
-		if hiddenCol >= 0 && hiddenCol < len(row) && isTruthyCatalogValue(row[hiddenCol]) {
+		if hiddenCol >= 0 && hiddenCol < len(dataRow) && isTruthyCatalogValue(dataRow[hiddenCol]) {
 			hiddenRows++
 		}
-		if nameCol >= len(row) || columnNameCol >= len(row) {
+		if nameCol >= len(dataRow) || columnNameCol >= len(dataRow) {
 			continue
 		}
-		name := row[nameCol]
-		colName := row[columnNameCol]
+		name := dataRow[nameCol]
+		colName := dataRow[columnNameCol]
 		if name == "" || strings.EqualFold(name, "PRIMARY") || colName == "" || catalog.IsAlias(colName) {
 			continue
 		}
 		info := byName[name]
 		if info == nil {
-			info = &indexDDLInfo{name: name, columns: make(map[string]indexDDLColumn)}
+			info = &indexDDLInfo{name: name, columns: make(map[string]indexDDLColumn), order: len(byName)}
 			byName[name] = info
 		}
-		if typeCol >= 0 && typeCol < len(row) && info.indexType == "" {
-			info.indexType = row[typeCol]
+		if idCol >= 0 && idCol < len(dataRow) && info.catalogID == 0 {
+			info.catalogID, _ = strconv.ParseUint(strings.TrimSpace(dataRow[idCol]), 10, 64)
 		}
-		if algoCol >= 0 && algoCol < len(row) && info.algo == "" {
-			info.algo = row[algoCol]
+		if typeCol >= 0 && typeCol < len(dataRow) && info.indexType == "" {
+			info.indexType = dataRow[typeCol]
 		}
-		if paramsCol >= 0 && paramsCol < len(row) && info.algoParams == "" {
-			info.algoParams = row[paramsCol]
+		if algoCol >= 0 && algoCol < len(dataRow) && info.algo == "" {
+			info.algo = dataRow[algoCol]
 		}
-		if commentCol >= 0 && commentCol < len(row) && info.comment == "" {
-			info.comment = row[commentCol]
+		if paramsCol >= 0 && paramsCol < len(dataRow) && info.algoParams == "" {
+			info.algoParams = dataRow[paramsCol]
+		}
+		if commentCol >= 0 && commentCol < len(dataRow) && info.comment == "" {
+			info.comment = dataRow[commentCol]
 		}
 		ordinal := len(info.columns) + 1
-		if ordinalCol >= 0 && ordinalCol < len(row) {
-			if parsed, err := strconv.Atoi(row[ordinalCol]); err == nil {
+		if ordinalCol >= 0 && ordinalCol < len(dataRow) {
+			if parsed, err := strconv.Atoi(dataRow[ordinalCol]); err == nil {
 				ordinal = parsed
 			}
 		}
@@ -4280,7 +4289,20 @@ func buildCreateIndexStatementsFromMoIndexes(
 			names = append(names, name)
 		}
 	}
-	sort.Strings(names)
+	sort.Slice(names, func(i, j int) bool {
+		left := byName[names[i]]
+		right := byName[names[j]]
+		if left.catalogID != 0 && right.catalogID != 0 && left.catalogID != right.catalogID {
+			return left.catalogID < right.catalogID
+		}
+		if left.catalogID != right.catalogID {
+			return left.catalogID != 0
+		}
+		if left.order != right.order {
+			return left.order < right.order
+		}
+		return names[i] < names[j]
+	})
 
 	statements := make([]string, 0, len(names))
 	for _, name := range names {
@@ -4643,8 +4665,12 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 	} else if strings.EqualFold(info.indexType, "UNIQUE") {
 		sb.WriteString("UNIQUE ")
 	}
-	sb.WriteString("KEY ")
-	sb.WriteString(quoteDDLIdent(info.name))
+	if !fullText || info.name != "" {
+		if !fullText {
+			sb.WriteString("KEY ")
+		}
+		sb.WriteString(quoteDDLIdent(info.name))
+	}
 	if !fullText {
 		appendIndexAlgorithmDDL(&sb, info.algo)
 	}
@@ -4656,7 +4682,7 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 		sb.WriteString(quoteDDLIdent(col.name))
 	}
 	sb.WriteString(")")
-	if err := appendIndexTrailingOptionsDDL(&sb, info.algoParams, info.comment); err != nil {
+	if err := appendIndexTrailingOptionsDDL(&sb, fullText, info.algoParams, info.comment); err != nil {
 		return "", err
 	}
 	sb.WriteString(";")
@@ -4682,8 +4708,16 @@ func appendIndexAlgorithmDDL(sb *strings.Builder, algo string) {
 	}
 }
 
-func appendIndexTrailingOptionsDDL(sb *strings.Builder, algoParams, comment string) error {
+func appendIndexTrailingOptionsDDL(sb *strings.Builder, fullText bool, algoParams, comment string) error {
 	if strings.TrimSpace(algoParams) != "" {
+		if fullText {
+			if params, err := catalog.IndexParamsStringToMap(algoParams); err != nil {
+				return err
+			} else if parser := strings.TrimSpace(params["parser"]); parser != "" {
+				sb.WriteString(" WITH PARSER ")
+				sb.WriteString(parser)
+			}
+		}
 		params, err := catalog.IndexParamsToStringList(algoParams)
 		if err != nil {
 			return err
@@ -4729,7 +4763,7 @@ func decodeUniqueKeysFromMoTablesConstraint(raw string) (keys []TableUniqueKey) 
 				continue
 			}
 			name := index.IndexName
-			if name == "" {
+			if name == "" && !catalog.IsFullTextIndexAlgo(index.IndexAlgo) {
 				name = cols[0]
 			}
 			keys = append(keys, TableUniqueKey{
