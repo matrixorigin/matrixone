@@ -75,7 +75,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
-	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -87,7 +86,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
@@ -825,83 +823,6 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 // 	return attachedScope, nil
 // }
 
-func (c *Compile) getCandidateCNs() (engine.Nodes, error) {
-	return c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
-}
-
-func (c *Compile) decideQueryPlacement(execType plan2.ExecType) (schedule.QueryDecision, error) {
-	localNode := getEngineNode(c)
-	req := schedule.QueryRequest{
-		ExecKind:    toScheduleExecKind(execType),
-		LocalWorker: toScheduleWorker(localNode),
-	}
-	if execType != plan2.ExecTypeAP_MULTICN {
-		return schedule.DecideQueryPlacement(req), nil
-	}
-
-	candidates, err := c.getCandidateCNs()
-	if err != nil {
-		return schedule.QueryDecision{}, err
-	}
-
-	req.Candidates = toScheduleWorkers(candidates)
-	req.RequireLocal = c.proc != nil && c.proc.Base.QueryClient != nil
-	if req.RequireLocal {
-		localNode.Id = c.proc.GetService()
-		req.LocalWorker = toScheduleWorker(localNode)
-	}
-	return schedule.DecideQueryPlacement(req), nil
-}
-
-func toScheduleExecKind(execType plan2.ExecType) schedule.QueryExecKind {
-	switch execType {
-	case plan2.ExecTypeTP:
-		return schedule.QueryExecTP
-	case plan2.ExecTypeAP_ONECN:
-		return schedule.QueryExecAPOneCN
-	default:
-		return schedule.QueryExecAPMultiCN
-	}
-}
-
-func toScheduleWorker(node engine.Node) schedule.Worker {
-	return schedule.Worker{
-		ID:   node.Id,
-		Addr: node.Addr,
-		Mcpu: node.Mcpu,
-	}
-}
-
-func toScheduleWorkers(nodes engine.Nodes) schedule.Workers {
-	if len(nodes) == 0 {
-		return nil
-	}
-	workers := make(schedule.Workers, 0, len(nodes))
-	for _, node := range nodes {
-		workers = append(workers, toScheduleWorker(node))
-	}
-	return workers
-}
-
-func toEngineNode(worker schedule.Worker) engine.Node {
-	return engine.Node{
-		Id:   worker.ID,
-		Addr: worker.Addr,
-		Mcpu: worker.Mcpu,
-	}
-}
-
-func toEngineNodes(workers schedule.Workers) engine.Nodes {
-	if len(workers) == 0 {
-		return nil
-	}
-	nodes := make(engine.Nodes, 0, len(workers))
-	for _, worker := range workers {
-		nodes = append(nodes, toEngineNode(worker))
-	}
-	return nodes
-}
-
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
 
@@ -912,14 +833,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
 
-	placement, err := c.decideQueryPlacement(c.execType)
+	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
 		return nil, err
-	}
-	c.cnList = toEngineNodes(placement.Workers)
-	if c.execType == plan2.ExecTypeAP_MULTICN {
-		// sort by addr to get fixed order of CN list
-		sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
 	}
 
 	if c.isPrepare && !c.IsTpQuery() {
@@ -5203,129 +5119,6 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	}
 
 	return rel, db, ctx, nil
-}
-
-func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
-	rel, _, _, err := c.handleDbRelContext(node, false)
-	if err != nil {
-		return nil, err
-	}
-
-	forceSingle := false
-	if len(node.AggList) > 0 {
-		partialResults, _, _ := checkAggOptimize(node)
-		if partialResults != nil {
-			forceSingle = true
-		} else if node.Stats != nil && node.Stats.ForceOneCN {
-			// ForceOneCN is already set by CalcNodeDOP for distinct aggregation
-			// Use it directly instead of checking again
-			forceSingle = true
-		} else {
-			// Fallback: Check if any aggregation function uses distinct flag
-			// This is defensive programming in case CalcNodeDOP didn't set ForceOneCN
-			for _, agg := range node.AggList {
-				if f, ok := agg.Expr.(*plan.Expr_F); ok {
-					if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
-						forceSingle = true
-						break
-					}
-				}
-			}
-		}
-	}
-	//if len(n.OrderBy) > 0 {
-	//	forceSingle = true
-	//}
-
-	if node.NodeType == plan.Node_TABLE_CLONE {
-		forceSingle = true
-	}
-
-	var engNodes engine.Nodes
-	stats := toScheduleScanStats(node)
-	scanPlacement := schedule.DecideScanPlacement(schedule.ScanRequest{
-		QueryWorkers:        toScheduleWorkers(c.cnList),
-		Stats:               stats,
-		ForceSingle:         forceSingle,
-		ForceMultiCN:        plan2.GetForceScanOnMultiCN() || plan2.IsIvfSearchEntriesInternalScan(node),
-		OneCNBlockThreshold: int32(plan2.BlockThresholdForOneCN),
-	})
-	if scanPlacement.LocalOnly {
-		mcpu := int32(1)
-		if stats != nil {
-			mcpu = stats.Dop
-		}
-		if forceSingle {
-			mcpu = 1
-		}
-		engNodes = append(engNodes, engine.Node{
-			Addr:  c.addr,
-			Mcpu:  int(mcpu),
-			CNCNT: 1,
-		})
-		return engNodes, nil
-	}
-
-	// scan on multi CN
-	scanWorkers := scanPlacement.Workers
-	remoteTombstones := remoteScanTombstoneAttacher{
-		c:    c,
-		node: node,
-		rel:  rel,
-	}
-	for i := range scanWorkers {
-		mcpu := max(scanWorkers[i].Mcpu, 1)
-		if stats != nil && stats.Dop > 0 {
-			mcpu = min(mcpu, int(stats.Dop))
-		}
-		engNode := engine.Node{
-			Id:    scanWorkers[i].ID,
-			Addr:  scanWorkers[i].Addr,
-			Mcpu:  mcpu,
-			CNCNT: int32(len(scanWorkers)),
-			CNIDX: int32(i),
-		}
-		if engNode.Addr != c.addr {
-			if err := remoteTombstones.attach(&engNode); err != nil {
-				return nil, err
-			}
-		}
-		engNodes = append(engNodes, engNode)
-	}
-	return engNodes, nil
-}
-
-type remoteScanTombstoneAttacher struct {
-	c          *Compile
-	node       *plan.Node
-	rel        engine.Relation
-	collected  bool
-	tombstones engine.Tombstoner
-}
-
-func (a *remoteScanTombstoneAttacher) attach(node *engine.Node) error {
-	if !a.collected {
-		tombstones, err := collectTombstones(a.c, a.node, a.rel, engine.Policy_CollectAllTombstones)
-		if err != nil {
-			return err
-		}
-		a.tombstones = tombstones
-		a.collected = true
-	}
-	node.Data = readutil.BuildEmptyRelData()
-	_ = node.Data.AttachTombstones(a.tombstones)
-	return nil
-}
-
-func toScheduleScanStats(node *plan.Node) *schedule.ScanStats {
-	if node == nil || node.Stats == nil {
-		return nil
-	}
-	return &schedule.ScanStats{
-		BlockNum:   node.Stats.BlockNum,
-		Dop:        node.Stats.Dop,
-		ForceOneCN: node.Stats.ForceOneCN,
-	}
 }
 
 func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {

@@ -72,6 +72,10 @@ func (s *StorageTxnClient) IterTxns(func(client.TxnOverview) bool) {
 	panic("unimplemented")
 }
 
+func (s *StorageTxnClient) IterTxnIDs(func([]byte) bool) {
+	panic("unimplemented")
+}
+
 func (*StorageTxnClient) NewWithSnapshot(snapshot txn.CNTxnSnapshot) (client.TxnOperator, error) {
 	panic("unimplemented")
 }
