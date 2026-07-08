@@ -23,4 +23,12 @@ id
 1
 4
 6
+alter table t alter reindex ft fulltext max_index_capacity=3;
+select id from t where match(txt) against('apple' in retrieval mode) order by id;
+id
+1
+4
+6
+alter table t alter reindex ft fulltext lists=5;
+not supported: ALTER REINDEX option "lists" on a fulltext index
 drop database ft_reindex;

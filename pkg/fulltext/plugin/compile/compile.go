@@ -356,9 +356,16 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 		ctx.QryDatabase(), ctx.OriginalTableDef().Name, indexDef.IndexName), nil
 }
 
-// ValidateReindexParams — no-op; fulltext has no reindex-time params.
-func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	return old, nil
+// ValidateReindexParams accepts a new max_index_capacity on ALTER … REINDEX and merges it
+// into algo_params, so the rebuild repartitions the tag=0 base at the new value and every
+// later op (fold split, tiered-merge fullness) reads it — the one way to change an index's
+// otherwise-immutable capacity after CREATE. Any other REINDEX option is rejected (fulltext
+// honors no others). Omitted ⇒ the stored value is kept (e.g. the idxcron-issued rebuild,
+// which carries no options).
+func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	return compileplugin.MergeReindexParams(old, alter, "fulltext",
+		catalog.IndexAlgoParamMaxIndexCapacity,
+	)
 }
 
 // HandleDropIndex — a retrieval (WAND) index caches a WandSearch keyed by its

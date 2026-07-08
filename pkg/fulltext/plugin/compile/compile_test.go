@@ -313,3 +313,29 @@ func TestHandleDropIndex_NonRetrieval_NoOp(t *testing.T) {
 	defs := map[string]*plan.IndexDef{"": {IndexName: "ftidx", IndexAlgoParams: ngramParams}}
 	require.NoError(t, Hooks{}.HandleDropIndex(&stubCtx{}, defs))
 }
+
+// ValidateReindexParams accepts a new max_index_capacity on ALTER … REINDEX (merged so the
+// rebuild repartitions the base), rejects any other option, and keeps the stored value when
+// the statement carries none (e.g. the idxcron rebuild).
+func TestValidateReindexParams_MaxIndexCapacity(t *testing.T) {
+	old := map[string]string{
+		catalog.IndexAlgoParamParser:           "retrieval",
+		catalog.IndexAlgoParamMaxIndexCapacity: "2",
+	}
+	// accept: max_index_capacity is merged
+	got, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.IndexAlgoParamMaxIndexCapacity: "8"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "8", got[catalog.IndexAlgoParamMaxIndexCapacity])
+	// reject: any other REINDEX option
+	_, err = Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.IndexAlgoParamLists: "5"},
+	})
+	require.Error(t, err)
+	require.Contains(t, strings.ToLower(err.Error()), "not supported")
+	// omitted: the stored value is kept
+	got, err = Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{})
+	require.NoError(t, err)
+	require.Equal(t, "2", got[catalog.IndexAlgoParamMaxIndexCapacity])
+}

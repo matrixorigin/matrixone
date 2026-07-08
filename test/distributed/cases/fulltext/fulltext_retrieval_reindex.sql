@@ -17,4 +17,10 @@ select id from t where match(txt) against('apple' in retrieval mode) order by id
 -- reindex: rebuild tag=0 from all current rows (tail folded in), results unchanged
 alter table t alter reindex ft fulltext;
 select id from t where match(txt) against('apple' in retrieval mode) order by id;
+-- reindex can change max_index_capacity: rebuild repartitions the base at the new value
+-- (persisted in algo_params); search results unchanged
+alter table t alter reindex ft fulltext max_index_capacity=3;
+select id from t where match(txt) against('apple' in retrieval mode) order by id;
+-- a non-fulltext reindex option is rejected
+alter table t alter reindex ft fulltext lists=5;
 drop database ft_reindex;
