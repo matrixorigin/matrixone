@@ -62,7 +62,11 @@ type FeatureAuthorizer struct {
 }
 
 func (a FeatureAuthorizer) AuthorizeMaintenanceProcedure(ctx context.Context, req ProcedureExecutionRequest, catalog ProcedureCatalogResolution) error {
-	cfg := a.Config.EffectiveForAccount(a.Account)
+	account := a.Account
+	if account.AccountID == 0 {
+		account.AccountID = req.AccountID
+	}
+	cfg := a.Config.EffectiveForAccount(account)
 	if !cfg.Enable {
 		return api.NewError(api.ErrFeatureDisabled, "Iceberg connector is disabled for this account", map[string]string{
 			"account_id": accountIDString(req.AccountID),

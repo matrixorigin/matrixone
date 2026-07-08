@@ -397,6 +397,7 @@ func TestCompileIcebergScanPassesPlanningTimeoutFromParameterUnit(t *testing.T) 
 
 	var params config.FrontendParameters
 	params.SetDefaultValues()
+	params.Iceberg.Enable = true
 	params.Iceberg.PlanningTimeout = toml.Duration{Duration: 7 * time.Second}
 	pu := config.NewParameterUnit(&params, nil, nil, nil)
 	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
@@ -432,6 +433,7 @@ func setIcebergConfigForTest(t *testing.T, c *Compile, mutate func(*config.Icebe
 	t.Helper()
 	var params config.FrontendParameters
 	params.SetDefaultValues()
+	params.Iceberg.Enable = true
 	if mutate != nil {
 		mutate(&params.Iceberg)
 	}

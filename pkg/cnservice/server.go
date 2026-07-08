@@ -334,7 +334,7 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 		s.sqlExecutor,
 		sqliceberg.MaintenanceProcedureExecutorOptions{
 			Config:                    cfg,
-			Account:                   icebergapi.AccountConfig{Enable: true},
+			Account:                   sqliceberg.AccountConfigForFeatureGate(cfg, 0),
 			CatalogFactory:            catalogFactory,
 			CommitVerifier:            icebergmaintenance.CatalogFactoryCommitVerifier{CatalogFactory: catalogFactory},
 			OrphanTTL:                 cfg.Write.OrphanTTL,
@@ -353,6 +353,7 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 		s.sqlExecutor,
 		sqliceberg.DMLDeleteRuntimeCoordinatorFactoryOptions{
 			Config:           cfg,
+			Account:          sqliceberg.AccountConfigForFeatureGate(cfg, 0),
 			CatalogFactory:   catalogFactory,
 			CacheInvalidator: cacheInvalidator,
 		},
@@ -361,6 +362,7 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 		s.sqlExecutor,
 		sqliceberg.AppendRuntimeCoordinatorFactoryOptions{
 			Config:           cfg,
+			Account:          sqliceberg.AccountConfigForFeatureGate(cfg, 0),
 			CatalogFactory:   catalogFactory,
 			CacheInvalidator: cacheInvalidator,
 		},

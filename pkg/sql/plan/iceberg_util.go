@@ -18,6 +18,9 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moconfig "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 )
 
@@ -30,4 +33,21 @@ func IsIcebergTableDef(ctx context.Context, tableDef *TableDef) (bool, error) {
 		return false, err
 	}
 	return found, nil
+}
+
+func ensureIcebergTableSurfaceEnabled(ctx context.Context, surface string) error {
+	value := ctx.Value(moconfig.ParameterUnitKey)
+	pu, _ := value.(*moconfig.ParameterUnit)
+	if pu == nil || pu.SV == nil {
+		return nil
+	}
+	cfg, err := icebergapi.NewConfigFromParameters(ctx, pu.SV.Iceberg)
+	if err != nil {
+		return err
+	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	return sqliceberg.EnsureFeatureEnabled(ctx, cfg, accountID, surface)
 }

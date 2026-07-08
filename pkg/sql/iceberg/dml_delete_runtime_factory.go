@@ -48,6 +48,7 @@ type DMLDeleteRuntimeCoordinatorFactoryOptions struct {
 	Store                  DMLDeleteRuntimeCoordinatorStore
 	CatalogFactory         icebergcatalog.ClientFactory
 	Config                 api.Config
+	Account                api.AccountConfig
 	Now                    func() time.Time
 	SnapshotID             DMLDeleteSnapshotIDFunc
 	CommitVerifier         dml.CommitVerifier
@@ -227,9 +228,11 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 		scope := overwriteScopeOrDefault(dml.OverwriteScope(req.DMLScan.OverwriteScope))
 		affectedFiles := append([]api.DataFile(nil), req.DMLScan.DataFiles...)
 		if scope == dml.OverwritePartition {
-			if err := validateOverwritePartitionKeys(ctx, req.DMLScan.OverwritePartition, partitionSpec, req.Table); err != nil {
+			partition, err := canonicalizeOverwritePartition(ctx, req.DMLScan.OverwritePartition, partitionSpec, req.Table)
+			if err != nil {
 				return nil, err
 			}
+			req.DMLScan.OverwritePartition = partition
 			var filterErr error
 			affectedFiles, filterErr = filterOverwritePartitionDataFiles(ctx, affectedFiles, req.DMLScan.OverwritePartition, req.Table)
 			if filterErr != nil {
@@ -533,7 +536,11 @@ func (f DMLDeleteRuntimeCoordinatorFactory) validateRuntimeRequest(ctx context.C
 }
 
 func (f DMLDeleteRuntimeCoordinatorFactory) effectiveConfig(accountID uint32) api.Config {
-	return f.opts.Config.EffectiveForAccount(api.AccountConfig{AccountID: accountID, Enable: true})
+	account := f.opts.Account
+	if account.AccountID == 0 {
+		account.AccountID = accountID
+	}
+	return f.opts.Config.EffectiveForAccount(account)
 }
 
 func (f DMLDeleteRuntimeCoordinatorFactory) requireResidencyPolicy() bool {

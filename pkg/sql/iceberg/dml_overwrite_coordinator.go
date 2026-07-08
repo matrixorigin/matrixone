@@ -84,9 +84,11 @@ func (c *DMLOverwriteCoordinator) Begin(ctx context.Context, req icebergwrite.Ap
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML overwrite coordinator requires an object writer", nil))
 	}
 	if c.spec.Scope == dml.OverwritePartition {
-		if err := validateOverwritePartitionKeys(ctx, c.spec.Partition, c.spec.PartitionSpec, req.Table); err != nil {
+		partition, err := canonicalizeOverwritePartition(ctx, c.spec.Partition, c.spec.PartitionSpec, req.Table)
+		if err != nil {
 			return err
 		}
+		c.spec.Partition = partition
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

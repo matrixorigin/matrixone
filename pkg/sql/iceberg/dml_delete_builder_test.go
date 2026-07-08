@@ -512,6 +512,38 @@ func TestBuildDMLOverwriteActionStreamFiltersAffectedScanPlanByPartition(t *test
 	}
 }
 
+func TestBuildDMLOverwriteActionStreamCanonicalizesPartitionFieldCase(t *testing.T) {
+	stream, err := BuildDMLOverwriteActionStream(context.Background(), DMLOverwriteActionStreamRequest{
+		Base: dml.CommitBase{
+			Namespace:      api.Namespace{"sales"},
+			Table:          "orders",
+			StatementID:    "overwrite-partition-case",
+			IdempotencyKey: "idem-overwrite-partition-case",
+			BaseSnapshotID: 10,
+		},
+		Scope:     dml.OverwritePartition,
+		Partition: map[string]any{"region": "ksa"},
+		PartitionSpec: api.PartitionSpec{SpecID: 7, Fields: []api.PartitionField{{
+			Name: "Region",
+		}}},
+		AffectedScanPlan: &api.IcebergScanPlan{
+			DataTasks: []api.DataFileTask{
+				{DataFile: api.DataFile{FilePath: "s3://warehouse/gold/orders/data/ksa-a.parquet", Partition: map[string]any{"Region": "ksa"}, SpecID: 7}},
+				{DataFile: api.DataFile{FilePath: "s3://warehouse/gold/orders/data/uae-a.parquet", Partition: map[string]any{"Region": "uae"}, SpecID: 7}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build case-insensitive partition overwrite stream: %v", err)
+	}
+	if stream.Profile.DeletedDataFiles != 1 || len(stream.Actions) != 1 {
+		t.Fatalf("expected one canonical partition delete, got actions=%+v profile=%+v", stream.Actions, stream.Profile)
+	}
+	if stream.Actions[0].ReplacedFile.FilePath != "s3://warehouse/gold/orders/data/ksa-a.parquet" {
+		t.Fatalf("unexpected partition overwrite action: %+v", stream.Actions[0])
+	}
+}
+
 func TestBuildDMLOverwriteActionStreamRejectsPartitionScopeWithoutTuple(t *testing.T) {
 	_, err := BuildDMLOverwriteActionStream(context.Background(), DMLOverwriteActionStreamRequest{
 		Base: dml.CommitBase{

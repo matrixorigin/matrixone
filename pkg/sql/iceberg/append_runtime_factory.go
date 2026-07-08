@@ -55,6 +55,7 @@ type AppendRuntimeCoordinatorFactoryOptions struct {
 	Store                  AppendRuntimeCoordinatorStore
 	CatalogFactory         icebergcatalog.ClientFactory
 	Config                 api.Config
+	Account                api.AccountConfig
 	Now                    func() time.Time
 	SnapshotID             AppendRuntimeSnapshotIDFunc
 	CommitVerifier         icebergwritecore.CommitVerifier
@@ -724,7 +725,11 @@ func filterS3AccessCredentials(credentials []api.StorageCredential) []api.Storag
 }
 
 func (f AppendRuntimeCoordinatorFactory) effectiveConfig(accountID uint32) api.Config {
-	return f.opts.Config.EffectiveForAccount(api.AccountConfig{AccountID: accountID, Enable: true})
+	account := f.opts.Account
+	if account.AccountID == 0 {
+		account.AccountID = accountID
+	}
+	return f.opts.Config.EffectiveForAccount(account)
 }
 
 func (f AppendRuntimeCoordinatorFactory) now() time.Time {

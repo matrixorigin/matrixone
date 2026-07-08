@@ -286,9 +286,11 @@ func BuildDMLOverwriteActionStream(ctx context.Context, req DMLOverwriteActionSt
 	}
 	req.Base = base
 	if req.Scope == dml.OverwritePartition {
-		if err := validateOverwritePartitionKeys(ctx, req.Partition, req.PartitionSpec, req.Base.Table); err != nil {
+		partition, err := canonicalizeOverwritePartition(ctx, req.Partition, req.PartitionSpec, req.Base.Table)
+		if err != nil {
 			return nil, err
 		}
+		req.Partition = partition
 	}
 	affectedDataFiles := append([]api.DataFile(nil), req.AffectedDataFiles...)
 	if len(affectedDataFiles) == 0 && req.AffectedScanPlan != nil {
@@ -578,33 +580,47 @@ func filterOverwritePartitionDataFiles(ctx context.Context, files []api.DataFile
 }
 
 func validateOverwritePartitionKeys(ctx context.Context, partition map[string]any, spec api.PartitionSpec, table string) error {
+	_, err := canonicalizeOverwritePartition(ctx, partition, spec, table)
+	return err
+}
+
+func canonicalizeOverwritePartition(ctx context.Context, partition map[string]any, spec api.PartitionSpec, table string) (map[string]any, error) {
 	if len(partition) == 0 {
-		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg partition overwrite requires an explicit partition tuple", map[string]string{
+		return nil, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg partition overwrite requires an explicit partition tuple", map[string]string{
 			"table": table,
 		}))
 	}
-	allowed := make(map[string]struct{}, len(spec.Fields))
+	allowed := make(map[string]string, len(spec.Fields))
 	for _, field := range spec.Fields {
-		name := strings.ToLower(strings.TrimSpace(field.Name))
+		name := strings.TrimSpace(field.Name)
 		if name != "" {
-			allowed[name] = struct{}{}
+			allowed[strings.ToLower(name)] = name
 		}
 	}
 	if len(allowed) == 0 {
-		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg partition overwrite requires a partitioned Iceberg table", map[string]string{
+		return nil, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg partition overwrite requires a partitioned Iceberg table", map[string]string{
 			"table": table,
 		}))
 	}
+	canonical := make(map[string]any, len(partition))
 	for key := range partition {
 		normalized := strings.ToLower(strings.TrimSpace(key))
-		if _, ok := allowed[normalized]; !ok {
-			return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg partition overwrite field is not present in the target partition spec", map[string]string{
+		canonicalKey, ok := allowed[normalized]
+		if !ok {
+			return nil, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg partition overwrite field is not present in the target partition spec", map[string]string{
 				"table":           table,
 				"partition_field": key,
 			}))
 		}
+		if _, exists := canonical[canonicalKey]; exists {
+			return nil, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "duplicate Iceberg partition overwrite field after canonicalization", map[string]string{
+				"table":           table,
+				"partition_field": key,
+			}))
+		}
+		canonical[canonicalKey] = partition[key]
 	}
-	return nil
+	return canonical, nil
 }
 
 func dmlPartitionContains(filePartition, target map[string]any) bool {
@@ -612,12 +628,26 @@ func dmlPartitionContains(filePartition, target map[string]any) bool {
 		return false
 	}
 	for key, want := range target {
-		got, ok := filePartition[key]
+		got, ok := lookupDMLPartitionValue(filePartition, key)
 		if !ok || !dmlPartitionValueEqual(got, want) {
 			return false
 		}
 	}
 	return true
+}
+
+func lookupDMLPartitionValue(partition map[string]any, key string) (any, bool) {
+	got, ok := partition[key]
+	if ok {
+		return got, true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	for candidate, value := range partition {
+		if strings.ToLower(strings.TrimSpace(candidate)) == normalized {
+			return value, true
+		}
+	}
+	return nil, false
 }
 
 func dmlPartitionValueEqual(left, right any) bool {

@@ -161,6 +161,8 @@ func TestIcebergKeywordsRemainIdentifiers(t *testing.T) {
 		"create table t1 (ref int, catalog varchar(10), namespace int, iceberg int, catalogs int, namespaces int, overwrite int)",
 		"select ref, catalog, namespace, overwrite from t1",
 		"select a from t1 as ref",
+		"set password for iceberg = 'ppp'",
+		"show grants for iceberg",
 	} {
 		_, err := ParseOne(ctx, sql, 1)
 		require.NoError(t, err, sql)

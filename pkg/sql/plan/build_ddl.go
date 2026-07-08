@@ -1022,6 +1022,9 @@ func buildCreateTable(
 
 	// After handleTableOptions, so begin the partitions processing depend on TableDef
 	if stmt.IcebergParam != nil {
+		if err := ensureIcebergTableSurfaceEnabled(ctx.GetContext(), "CREATE EXTERNAL TABLE ENGINE=ICEBERG"); err != nil {
+			return nil, err
+		}
 		spec, err := sqliceberg.ParseTableMappingSpec(ctx.GetContext(), stmt.IcebergParam)
 		if err != nil {
 			return nil, err

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -58,6 +59,13 @@ func (c *Compile) compileIcebergScanWithAccessForPlanNode(planNodeID int32, node
 	if cfg, ok, cfgErr := c.icebergConfig(ctx); cfgErr != nil {
 		return nil, cfgErr
 	} else if ok {
+		accountID, err := defines.GetAccountId(ctx)
+		if err != nil {
+			accountID = 0
+		}
+		if err := sqliceberg.EnsureFeatureEnabled(ctx, cfg, accountID, "Iceberg scan"); err != nil {
+			return nil, err
+		}
 		req.DeleteMaxMemoryBytes = cfg.Write.DeleteMaxMemory
 		req.EnableDeleteSpill = cfg.Write.EnableDeleteSpill
 	}

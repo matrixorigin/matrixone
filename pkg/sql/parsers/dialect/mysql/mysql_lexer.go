@@ -230,10 +230,15 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		snapshot := *l.scanner
 		nextTyp, nextStr := l.scanner.Scan()
 		if nextTyp == ICEBERG {
-			l.lastToken = FOR_ICEBERG
-			lval.str = str + " " + nextStr
-			l.scanner.LastToken = lval.str
-			return FOR_ICEBERG
+			afterIceberg := *l.scanner
+			afterTyp, _ := l.scanner.Scan()
+			if afterTyp == SNAPSHOT || afterTyp == TIMESTAMP || afterTyp == REF {
+				l.lastToken = FOR_ICEBERG
+				lval.str = str + " " + nextStr
+				l.scanner.LastToken = lval.str
+				*l.scanner = afterIceberg
+				return FOR_ICEBERG
+			}
 		}
 		*l.scanner = snapshot
 	}

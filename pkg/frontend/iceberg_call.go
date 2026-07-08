@@ -123,6 +123,11 @@ func parseIcebergBuiltinCall(ctx context.Context, call *tree.CallStmt) (IcebergB
 }
 
 func executeIcebergBuiltinCall(ctx context.Context, ses FeSession, call IcebergBuiltinProcedureCall) ([]ExecResult, error) {
+	if ses != nil {
+		if err := ensureIcebergFeatureEnabledForSession(ctx, ses, call.Name); err != nil {
+			return nil, err
+		}
+	}
 	if strings.EqualFold(call.Name, icebergRegisterAccessProcedure) {
 		return executeIcebergRegisterAccessCall(ctx, ses, call)
 	}

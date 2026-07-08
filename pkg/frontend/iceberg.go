@@ -21,13 +21,18 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moconfig "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func handleCreateIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.CreateIcebergCatalog) error {
+	if err := ensureIcebergFeatureEnabledForSession(ctx, ses, "CREATE ICEBERG CATALOG"); err != nil {
+		return err
+	}
 	opts, err := icebergOptionsToMap(ctx, stmt.Options)
 	if err != nil {
 		return err
@@ -89,6 +94,9 @@ func handleCreateIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Cr
 }
 
 func handleAlterIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.AlterIcebergCatalog) error {
+	if err := ensureIcebergFeatureEnabledForSession(ctx, ses, "ALTER ICEBERG CATALOG"); err != nil {
+		return err
+	}
 	opts, err := icebergOptionsToMap(ctx, stmt.Options)
 	if err != nil {
 		return err
@@ -140,6 +148,9 @@ func handleAlterIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Alt
 }
 
 func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.DropIcebergCatalog) error {
+	if err := ensureIcebergFeatureEnabledForSession(ctx, ses, "DROP ICEBERG CATALOG"); err != nil {
+		return err
+	}
 	accountID := ses.GetAccountId()
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -161,6 +172,13 @@ func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Drop
 	if inUse {
 		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s is still used by table mappings", catalogName)
 	}
+	hasOrphans, err := icebergCatalogHasOrphanMetadata(ctx, bh, accountID, catalogID)
+	if err != nil {
+		return err
+	}
+	if hasOrphans {
+		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s still has orphan-cleanup metadata", catalogName)
+	}
 	return bh.Exec(ctx, fmt.Sprintf(
 		"delete from mo_catalog.%s where account_id = %d and catalog_id = %d",
 		sqliceberg.TableCatalogs,
@@ -172,6 +190,9 @@ func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Drop
 func handleShowIcebergCatalogs(ctx context.Context, ses *Session, stmt *tree.ShowIcebergCatalogs) error {
 	if stmt != nil && (stmt.Like != nil || stmt.Where != nil) {
 		return moerr.NewNotSupported(ctx, "SHOW ICEBERG CATALOGS with LIKE/WHERE")
+	}
+	if err := ensureIcebergFeatureEnabledForSession(ctx, ses, "SHOW ICEBERG CATALOGS"); err != nil {
+		return err
 	}
 	sql := fmt.Sprintf(
 		"select name,type,uri,warehouse,auth_mode,version from mo_catalog.%s where account_id = %d order by name",
@@ -191,6 +212,9 @@ func handleShowIcebergCatalogs(ctx context.Context, ses *Session, stmt *tree.Sho
 func handleShowIcebergNamespaces(ctx context.Context, ses *Session, stmt *tree.ShowIcebergNamespaces) error {
 	if stmt != nil && (stmt.Like != nil || stmt.Where != nil) {
 		return moerr.NewNotSupported(ctx, "SHOW ICEBERG NAMESPACES with LIKE/WHERE")
+	}
+	if err := ensureIcebergFeatureEnabledForSession(ctx, ses, "SHOW ICEBERG NAMESPACES"); err != nil {
+		return err
 	}
 	accountID := ses.GetAccountId()
 	filter := ""
@@ -213,6 +237,9 @@ func handleShowIcebergNamespaces(ctx context.Context, ses *Session, stmt *tree.S
 func handleShowIcebergTables(ctx context.Context, ses *Session, stmt *tree.ShowIcebergTables) error {
 	if stmt != nil && (stmt.Like != nil || stmt.Where != nil) {
 		return moerr.NewNotSupported(ctx, "SHOW ICEBERG TABLES with LIKE/WHERE")
+	}
+	if err := ensureIcebergFeatureEnabledForSession(ctx, ses, "SHOW ICEBERG TABLES"); err != nil {
+		return err
 	}
 	accountID := ses.GetAccountId()
 	filters := make([]string, 0, 2)
@@ -381,8 +408,57 @@ func icebergCatalogHasMappings(ctx context.Context, bh BackgroundExec, accountID
 	return count > 0, nil
 }
 
+func icebergCatalogHasOrphanMetadata(ctx context.Context, bh BackgroundExec, accountID uint32, catalogID uint64) (bool, error) {
+	sql := fmt.Sprintf(
+		"select count(*) from mo_catalog.%s where account_id = %d and catalog_id = %d and cleanup_status <> %s",
+		sqliceberg.TableOrphanFiles,
+		accountID,
+		catalogID,
+		quoteIcebergSQLString(sqliceberg.OrphanCleanupStatusDeleted),
+	)
+	results, err := ExeSqlInBgSes(ctx, bh, sql)
+	if err != nil {
+		return false, err
+	}
+	if !execResultArrayHasData(results) {
+		return false, nil
+	}
+	count, err := results[0].GetUint64(ctx, 0, 0)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func quoteIcebergSQLString(value string) string {
 	value = strings.ReplaceAll(value, `\`, `\\`)
 	value = strings.ReplaceAll(value, "'", "''")
 	return "'" + value + "'"
+}
+
+func ensureIcebergFeatureEnabledForSession(ctx context.Context, ses interface {
+	GetService() string
+	GetAccountId() uint32
+}, surface string) error {
+	if ses == nil {
+		return moerr.NewInvalidInput(ctx, surface+" requires a session")
+	}
+	pu := icebergParameterUnitForService(ses.GetService())
+	if pu == nil || pu.SV == nil {
+		return nil
+	}
+	cfg, err := icebergapi.NewConfigFromParameters(ctx, pu.SV.Iceberg)
+	if err != nil {
+		return err
+	}
+	return sqliceberg.EnsureFeatureEnabled(ctx, cfg, ses.GetAccountId(), surface)
+}
+
+func icebergParameterUnitForService(service string) (pu *moconfig.ParameterUnit) {
+	defer func() {
+		if recover() != nil {
+			pu = nil
+		}
+	}()
+	return getPu(service)
 }
