@@ -30,8 +30,7 @@ var _ vm.Operator = new(Connector)
 type Connector struct {
 	ctr container
 
-	Reg          *process.WaitRegister
-	cleanupSpool *pSpool.PipelineSpool
+	Reg *process.WaitRegister
 	vm.OperatorBase
 }
 
@@ -80,100 +79,15 @@ func (connector *Connector) Release() {
 }
 
 func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	newDirectSignal := func() process.PipelineSignal {
-		if proc == nil {
-			return process.NewPipelineSignalToDirectly(nil, err, nil)
-		}
-		return process.NewPipelineSignalToDirectly(nil, err, proc.Mp())
-	}
-
 	if connector.ctr.sp != nil {
-		sp := connector.ctr.sp
-		sendCtx, cancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-		queryDone, sendErr := sp.SendBatch(sendCtx, pSpool.SendToAllLocal, nil, err)
-		cancel()
+		_, _ = connector.ctr.sp.SendBatch(context.TODO(), pSpool.SendToAllLocal, nil, err)
+		connector.Reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(connector.ctr.sp, 0)
 
-		terminalSignal := newDirectSignal()
-		terminalSignalName := "direct"
-		if sendErr == nil && !queryDone {
-			terminalSignal = process.NewPipelineSignalToGetFromSpool(sp, 0)
-			terminalSignalName = "spool"
-		} else {
-			process.WarnPipelineCleanupf(
-				proc,
-				"connector_cleanup_enqueue_terminal_spool",
-				"connector cleanup timed out enqueueing terminal spool message: timeout=%s query_done=%t err=%v",
-				process.PipelineSignalSendTimeout,
-				queryDone,
-				sendErr)
-		}
-
-		sentTerminalSignal := process.SendPipelineSignalWithTimeout(connector.Reg, terminalSignal, process.PipelineSignalSendTimeout)
-		if !sentTerminalSignal {
-			chLen, chCap := process.WaitRegisterChannelState(connector.Reg)
-			process.WarnPipelineCleanupf(
-				proc,
-				"connector_cleanup_send_terminal_signal",
-				"connector cleanup timed out sending terminal %s signal: timeout=%s channel_len=%d channel_cap=%d pipeline_failed=%t err=%v",
-				terminalSignalName,
-				process.PipelineSignalSendTimeout,
-				chLen,
-				chCap,
-				pipelineFailed,
-				err)
-		}
-
-		spoolClosed := false
-		if terminalSignalName == "spool" && sentTerminalSignal {
-			spoolClosed = sp.CloseWithTimeout(process.PipelineSignalSendTimeout)
-			if !spoolClosed {
-				process.WarnPipelineCleanupf(
-					proc,
-					"connector_cleanup_close_spool",
-					"connector cleanup timed out closing pipeline spool: timeout=%s pipeline_failed=%t err=%v",
-					process.PipelineSignalSendTimeout,
-					pipelineFailed,
-					err)
-			}
-		} else {
-			process.WarnPipelineCleanupf(
-				proc,
-				"connector_cleanup_skip_spool_close",
-				"connector cleanup skipped waiting for pipeline spool close after terminal %s signal delivery failed or fell back: delivered=%t pipeline_failed=%t err=%v",
-				terminalSignalName,
-				sentTerminalSignal,
-				pipelineFailed,
-				err)
-		}
-		if !spoolClosed {
-			connector.cleanupSpool = sp
-		}
+		connector.ctr.sp.Close()
 		connector.ctr.sp = nil
 	} else {
-		if !process.SendPipelineSignalWithTimeout(
-			connector.Reg,
-			newDirectSignal(),
-			process.PipelineSignalSendTimeout) {
-			chLen, chCap := process.WaitRegisterChannelState(connector.Reg)
-			process.WarnPipelineCleanupf(
-				proc,
-				"connector_cleanup_send_terminal_signal",
-				"connector cleanup timed out sending terminal direct signal: timeout=%s channel_len=%d channel_cap=%d pipeline_failed=%t err=%v",
-				process.PipelineSignalSendTimeout,
-				chLen,
-				chCap,
-				pipelineFailed,
-				err)
-		}
+		connector.Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, proc.Mp())
 	}
-}
-
-func (connector *Connector) CleanupDeferredSpool() {
-	if connector.cleanupSpool == nil {
-		return
-	}
-	connector.cleanupSpool.ForceCleanup()
-	connector.cleanupSpool = nil
 }
 
 func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err error) {
