@@ -292,6 +292,172 @@ func TestExternalTableFilepathValueRange(t *testing.T) {
 	assert.Equal(t, "CREATE EXTERNAL TABLE t (id INT) INFILE {'format'='csv', 'filepath'='/new.csv'}", ddl[:start]+quoteSQLString("/new.csv")+ddl[end:])
 }
 
+func TestExternalParamOptionsAndS3Rendering(t *testing.T) {
+	param := tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Option: []string{
+				"filepath", "data/part.csv",
+				"format", "JSONLINE",
+				"compression", "gzip",
+				"jsondata", "OBJECT",
+				"hive_partitioning", "true",
+				"hive_partition_columns", "dt,region",
+				"endpoint", "https://s3.example",
+				"region", "us-west-2",
+				"access_key_id", "ak",
+				"secret_access_key", "sk",
+				"bucket", "bucket-a",
+				"provider", "minio",
+				"role_arn", "role",
+				"external_id", "external",
+			},
+			Tail: &tree.TailParameter{
+				Fields: &tree.Fields{
+					Terminated: &tree.Terminated{Value: "|"},
+					EscapedBy:  &tree.EscapedBy{Value: '\t'},
+				},
+				Lines: &tree.Lines{
+					StartingBy:   "#",
+					TerminatedBy: &tree.Terminated{Value: "\r\n"},
+				},
+				IgnoredLines: 2,
+			},
+		},
+	}
+
+	applyExternalParamOptions(&param)
+
+	require.NotNil(t, param.S3Param)
+	assert.Equal(t, "jsonline", param.Format)
+	assert.Equal(t, "object", param.JsonData)
+	assert.True(t, param.HivePartitioning)
+	assert.Equal(t, []string{"dt", "region"}, param.HivePartitionCols)
+
+	clause := renderExternalParamClause(&param)
+	for _, want := range []string{
+		"URL s3option",
+		"'endpoint'='https://s3.example'",
+		"'bucket'='bucket-a'",
+		"'provider'='minio'",
+		"'role_arn'='role'",
+		"'external_id'='external'",
+		"'jsondata'='object'",
+		`FIELDS TERMINATED BY '|' ESCAPED BY '\\t'`,
+		`LINES STARTING BY '#' TERMINATED BY '\\r\\n'`,
+		"IGNORE 2 LINES",
+	} {
+		assert.Contains(t, clause, want)
+	}
+}
+
+func TestExternalParamDefaultsAndDecodeErrors(t *testing.T) {
+	param := tree.ExternParam{}
+	applyExternalParamOptions(&param)
+	assert.Equal(t, "auto", param.CompressType)
+	assert.Equal(t, "csv", param.Format)
+	assert.Contains(t, renderExternalParamClause(&param), "INFILE")
+
+	_, err := renderExternalCreateTableDDLFromParamJSON(
+		checkpointtool.TableCatalogEntry{TableID: 7, DatabaseName: "db", TableName: "ext"},
+		&checkpointtool.TableSchema{CreateSQL: "{bad json"},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode external table parameter JSON")
+}
+
+func TestSQLValueAndIdentifierHelpers(t *testing.T) {
+	value, end, ok := readSQLStringOrBareValue(`'a''b\\c' tail`, 0)
+	require.True(t, ok)
+	assert.Equal(t, `a'b\c`, value)
+	assert.Equal(t, len(`'a''b\\c'`), end)
+
+	value, end, ok = readSQLStringOrBareValue(`"quoted value", next`, 0)
+	require.True(t, ok)
+	assert.Equal(t, "quoted value", value)
+	assert.Equal(t, len(`"quoted value"`), end)
+
+	value, end, ok = readSQLStringOrBareValue("bare_value, next", 0)
+	require.True(t, ok)
+	assert.Equal(t, "bare_value", value)
+	assert.Equal(t, len("bare_value"), end)
+
+	_, _, ok = readSQLStringOrBareValue("'unterminated", 0)
+	assert.False(t, ok)
+	_, _, ok = readSQLStringOrBareValue("", 0)
+	assert.False(t, ok)
+
+	value, _, _, ok = externalTableFilepathValueRange("INFILE {'notfilepathx'='bad', filepath=data.csv}")
+	require.True(t, ok)
+	assert.Equal(t, "data.csv", value)
+	_, _, _, ok = externalTableFilepathValueRange("INFILE {'file_path'='bad'}")
+	assert.False(t, ok)
+
+	assert.Equal(t, "orders`2024", ddlTableName("CREATE TABLE `db`.`orders``2024` (id int)", 42))
+	assert.Equal(t, "42", ddlTableName("SELECT 1", 42))
+	unquoted, ok := unquoteSQLIdent(" `a``b` ")
+	require.True(t, ok)
+	assert.Equal(t, "a`b", unquoted)
+	unquoted, ok = unquoteSQLIdent("plain")
+	assert.False(t, ok)
+	assert.Equal(t, "plain", unquoted)
+}
+
+func TestAlterTableAddClauseVariants(t *testing.T) {
+	tests := []struct {
+		sql  string
+		want string
+		ok   bool
+	}{
+		{sql: "ALTER TABLE `db`.`t` ADD UNIQUE KEY `uk` (`c`);", want: "UNIQUE KEY `uk` (`c`)", ok: true},
+		{sql: "alter table t add index idx_c(c)", want: "index idx_c(c)", ok: true},
+		{sql: "ALTER TABLE t ADD FULLTEXT KEY ft(doc);", want: "FULLTEXT KEY ft(doc)", ok: true},
+		{sql: "ALTER TABLE t DROP KEY idx_c", ok: false},
+		{sql: "ALTER TABLE ADD KEY bad", ok: false},
+		{sql: "CREATE INDEX idx ON t(c)", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.sql, func(t *testing.T) {
+			got, ok := alterTableAddClause(tt.sql)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestPathAndCommandValidationHelpers(t *testing.T) {
+	table := checkpointtool.TableCatalogEntry{
+		AccountID:    9,
+		DatabaseID:   10,
+		TableID:      11,
+		DatabaseName: "db",
+		TableName:    "bad/name table",
+	}
+
+	assert.Equal(t, "_", safePathPart("   "))
+	assert.Equal(t, "bad_name_table", safePathPart(table.TableName))
+	assert.Equal(t, "prefix/dir/file.csv", outputS3ObjectKey("/prefix/", "/dir/file.csv"))
+	assert.Equal(t, "dir/file.csv", outputS3ObjectKey("", "/dir/file.csv"))
+	assert.Equal(t, "out/account_9/db_10/bad_name_table_11.csv", tableCSVPath("out", table))
+	assert.Equal(t, "out/external_sources/account_9/db_10/bad_name_table_11_bad_name_table.data", externalSourcePath("out", table, "/"))
+
+	showCmd := showCreateTableCommand(&toolfs.StorageOptions{})
+	showCmd.SilenceUsage = true
+	showCmd.SilenceErrors = true
+	showCmd.SetOut(&bytes.Buffer{})
+	showCmd.SetErr(&bytes.Buffer{})
+	require.ErrorContains(t, showCmd.Execute(), "--table-id is required")
+
+	rootCmd := PrepareCommand()
+	rootCmd.SilenceUsage = true
+	rootCmd.SilenceErrors = true
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{"--local", "--local2"})
+	require.Error(t, rootCmd.Execute())
+}
+
 func TestFilterExistingIndexDDLs(t *testing.T) {
 	createDDL := "CREATE TABLE `items_gist` (\n" +
 		"  `id` int NOT NULL,\n" +
@@ -515,6 +681,89 @@ func TestDumpOutputLocalAndRemoteHelpers(t *testing.T) {
 		require.NoError(t, out.MkdirAll(filepath.Join(t.TempDir(), "not-created")))
 		out.Close(ctx)
 	})
+}
+
+func TestParseTSAndAllDigits(t *testing.T) {
+	ts, err := parseTS("123:4")
+	require.NoError(t, err)
+	assert.Equal(t, types.BuildTS(123, 4), ts)
+
+	ts, err = parseTS("123-5")
+	require.NoError(t, err)
+	assert.Equal(t, types.BuildTS(123, 5), ts)
+
+	ts, err = parseTS("2024-01-02T03:04:05Z")
+	require.NoError(t, err)
+	assert.False(t, ts.IsEmpty())
+
+	ts, err = parseTS("2024-01-02 03:04:05")
+	require.NoError(t, err)
+	assert.False(t, ts.IsEmpty())
+
+	_, err = parseTS("123:not-a-logical")
+	require.Error(t, err)
+	_, err = parseTS("bad timestamp")
+	require.Error(t, err)
+	_, err = parseTS("123:42949672960")
+	require.Error(t, err)
+
+	assert.True(t, allDigits("0123456789"))
+	assert.False(t, allDigits(""))
+	assert.False(t, allDigits("12a"))
+}
+
+func TestDumpCommandValidationErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "missing selector",
+			args: nil,
+			want: "--table-id",
+		},
+		{
+			name: "no-load without load-script",
+			args: []string{"--table-id=1", "--no-load"},
+			want: "--no-load requires --load-script",
+		},
+		{
+			name: "table id with database id",
+			args: []string{"--table-id=1", "--database-id=2"},
+			want: "--table-id cannot be combined",
+		},
+		{
+			name: "batch output without load script",
+			args: []string{"--database-id=2", "--output=out.csv"},
+			want: "--output cannot be used",
+		},
+		{
+			name: "load script requires output",
+			args: []string{"--table-id=1", "--load-script"},
+			want: "--output/-o directory is required",
+		},
+		{
+			name: "batch dump requires output dir",
+			args: []string{"--database-id=2"},
+			want: "--output-dir is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var storage toolfs.StorageOptions
+			cmd := dumpCommand(&storage)
+			cmd.SilenceUsage = true
+			cmd.SilenceErrors = true
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs(tt.args)
+			err := cmd.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
 }
 
 func TestLoadDataPathResolverLocal(t *testing.T) {

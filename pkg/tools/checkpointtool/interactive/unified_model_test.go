@@ -93,6 +93,72 @@ func TestUnifiedModelOpenObjectMessageTracksRange(t *testing.T) {
 	assert.Nil(t, model.GetRangeToOpen())
 }
 
+func TestUnifiedModelUpdateNavigationBranches(t *testing.T) {
+	model := NewUnifiedModel(&checkpointtool.CheckpointReader{})
+
+	updated, cmd := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	require.Same(t, model, updated)
+	require.Nil(t, cmd)
+
+	updated, cmd = model.Update(selectCheckpointMsg{idx: -1})
+	require.Same(t, model, updated)
+	require.Nil(t, cmd)
+	require.Len(t, model.pageStack, 1)
+
+	updated, cmd = model.Update(goBackMsg{})
+	require.Same(t, model, updated)
+	require.Nil(t, cmd)
+	require.Empty(t, model.pageStack)
+	assert.Equal(t, ViewModeList, model.state.Mode())
+
+	updated, cmd = model.Update(goBackMsg{})
+	require.Same(t, model, updated)
+	require.Nil(t, cmd)
+	require.Empty(t, model.pageStack)
+
+	model.state.logicalView = &checkpointtool.LogicalTableView{
+		Headers: []string{"object", "block", "row"},
+	}
+	updated, cmd = model.Update(openLogicalTableMsg{})
+	require.Same(t, model, updated)
+	require.Nil(t, cmd)
+	require.Len(t, model.pageStack, 1)
+	assert.Contains(t, model.View(), "Logical Table View")
+}
+
+func TestUnifiedModelOpenObjectMessageTracksTombstoneRange(t *testing.T) {
+	model := NewUnifiedModel(&checkpointtool.CheckpointReader{})
+	dataStats := testObjectStats(t, 8, 10, 1, 100, 200)
+	tombStats := testObjectStats(t, 9, 3, 1, 50, 100)
+	dataRange := ckputil.TableRange{
+		TableID:     42,
+		ObjectType:  ckputil.ObjectType_Data,
+		ObjectStats: dataStats,
+	}
+	tombRange := ckputil.TableRange{
+		TableID:     43,
+		ObjectType:  ckputil.ObjectType_Tombstone,
+		ObjectStats: tombStats,
+	}
+	model.state.dataEntries = []*checkpointtool.ObjectEntryInfo{{ObjectStats: dataStats, Range: dataRange}}
+	model.state.tombEntries = []*checkpointtool.ObjectEntryInfo{{ObjectStats: tombStats, Range: tombRange}}
+	model.currentPage = model.createTableDetailPage()
+	model.currentPage.Refresh()
+
+	updatedPage, cmd := model.currentPage.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model.currentPage = updatedPage
+	require.Nil(t, cmd)
+	require.Equal(t, 1, model.currentPage.GetCursor())
+
+	updated, cmd := model.Update(openObjectMsg{path: "tomb"})
+	require.Same(t, model, updated)
+	require.NotNil(t, cmd)
+	assert.Equal(t, "tomb", model.GetObjectToOpen())
+	require.NotNil(t, model.GetRangeToOpen())
+	assert.Equal(t, ckputil.ObjectType_Tombstone, model.GetRangeToOpen().ObjectType)
+	assert.Equal(t, uint64(43), model.GetRangeToOpen().TableID)
+}
+
 func TestUnifiedModelCreatesPages(t *testing.T) {
 	model := NewUnifiedModel(&checkpointtool.CheckpointReader{})
 	model.state.logicalView = &checkpointtool.LogicalTableView{

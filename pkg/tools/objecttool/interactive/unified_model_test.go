@@ -98,6 +98,25 @@ func TestObjectUnifiedModelUpdateAndCommandMode(t *testing.T) {
 	require.False(t, model.cmdMode)
 	require.Equal(t, int64(1), model.state.GlobalRowOffset())
 
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(":")})
+	require.Nil(t, cmd)
+	model = updated.(*ObjectUnifiedModel)
+	updated, cmd = model.handleCommandMode(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	require.Nil(t, cmd)
+	model = updated.(*ObjectUnifiedModel)
+	require.Empty(t, model.cmdInput)
+	updated, cmd = model.handleCommandMode(tea.KeyMsg{Type: tea.KeyLeft})
+	require.Nil(t, cmd)
+	model = updated.(*ObjectUnifiedModel)
+	require.Empty(t, model.cmdInput)
+	updated, cmd = model.handleCommandMode(tea.KeyMsg{Type: tea.KeyEsc})
+	require.Nil(t, cmd)
+	model = updated.(*ObjectUnifiedModel)
+	require.False(t, model.cmdMode)
+
+	_, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	require.NotNil(t, cmd)
+
 	model.state.objectToOpen = "nested.obj"
 	require.Equal(t, dir+"/nested.obj", model.GetObjectToOpen())
 	model.ClearObjectToOpen()
@@ -141,6 +160,55 @@ func TestRunUnifiedWithFSSuccessQuitsFromInput(t *testing.T) {
 		EndRow:   1,
 	}))
 	require.NoError(t, RunUnified(ctx, objectPath, nil))
+}
+
+func TestRunUnifiedWithReaderOpensNestedObject(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	objectPath := createTestObjectFileWithRowsAndCols(t, dir, "root.obj", 2, 2)
+
+	reader, err := objecttool.Open(ctx, objectPath)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	oldNewObjectProgram := newObjectProgram
+	t.Cleanup(func() { newObjectProgram = oldNewObjectProgram })
+	opened := 0
+	newObjectProgram = func(m tea.Model) *tea.Program {
+		if opened == 0 {
+			m.(*ObjectUnifiedModel).state.objectToOpen = "nested.obj"
+		}
+		return tea.NewProgram(m, tea.WithInput(strings.NewReader("q")), tea.WithOutput(io.Discard))
+	}
+
+	err = runUnifiedWithReader(ctx, reader, nil, func(path string) error {
+		opened++
+		require.Equal(t, "nested.obj", path)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, opened)
+}
+
+func TestRunUnifiedWithReaderNestedOpenError(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	objectPath := createTestObjectFileWithRowsAndCols(t, dir, "root.obj", 2, 2)
+
+	reader, err := objecttool.Open(ctx, objectPath)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	oldNewObjectProgram := newObjectProgram
+	t.Cleanup(func() { newObjectProgram = oldNewObjectProgram })
+	newObjectProgram = func(m tea.Model) *tea.Program {
+		m.(*ObjectUnifiedModel).state.objectToOpen = "nested.obj"
+		return tea.NewProgram(m, tea.WithInput(strings.NewReader("q")), tea.WithOutput(io.Discard))
+	}
+
+	require.Error(t, runUnifiedWithReader(ctx, reader, nil, func(string) error {
+		return os.ErrNotExist
+	}))
 }
 
 func TestStateColumnsForMetadataAndExpandedData(t *testing.T) {

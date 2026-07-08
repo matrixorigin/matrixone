@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
+	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -140,6 +141,192 @@ func encodedPrimaryKeyConstraint(t *testing.T, names ...string) engine.Constrain
 			Names:       names,
 		},
 	}
+}
+
+func TestCSVProjectionAndOrderingHelpers(t *testing.T) {
+	assert.Equal(t, []string{"b", "", "a"}, projectCSVRow([]string{"a", "b"}, []int{1, 3, 0}))
+	assert.Equal(t, []bool{true, false, false}, projectCSVNulls([]bool{false, true}, []int{1, 2, 0}))
+
+	rows := []exportedCSVRow{
+		{values: []string{"b", "1"}},
+		{values: []string{"a", "2"}},
+		{values: []string{"a"}},
+	}
+	sortCSVRowsLexical(rows)
+	assert.Equal(t, [][]string{{"a"}, {"a", "2"}, {"b", "1"}}, [][]string{rows[0].values, rows[1].values, rows[2].values})
+
+	cols := []objecttool.ColInfo{
+		{SeqNum: 4, Type: types.T_int64.ToType()},
+		{SeqNum: 9, Type: types.T_varchar.ToType()},
+	}
+	assert.Equal(t, []int{1, 7, 0}, dataIndexesForSeqNums(cols, []int{9, 7, 4}))
+
+	projected := buildProjectedTypes(cols, []int{1, -1, 0})
+	require.Len(t, projected, 3)
+	assert.Equal(t, types.T_varchar, projected[0].Oid)
+	assert.Equal(t, types.T_any, projected[1].Oid)
+	assert.Equal(t, types.T_int64, projected[2].Oid)
+}
+
+func TestCSVScalarFormattingAndSQLTypeMapping(t *testing.T) {
+	var buf bytes.Buffer
+	appendCSVInt(&buf, -12)
+	buf.WriteByte(',')
+	appendCSVUint(&buf, 34)
+	buf.WriteByte(',')
+	appendCSVFloat(&buf, 1.25, 64)
+	buf.WriteByte(',')
+	appendZeroPaddedInt(&buf, 7, 3)
+	assert.Equal(t, "-12,34,1.25,007", buf.String())
+
+	buf.Reset()
+	appendEscapedSQLLoadString(&buf, `a"b\c`, '"')
+	assert.Equal(t, `a""b\\c`, buf.String())
+
+	buf.Reset()
+	appendEscapedSQLLoadBytes(&buf, []byte{0, '\b', '\n', '\r', '\t', 0x1a, '\\', '"'}, '"')
+	assert.Equal(t, `\0\b\n\r\t\Z\\""`, buf.String())
+
+	tests := []struct {
+		sql string
+		oid types.T
+	}{
+		{sql: "varchar(10)", oid: types.T_varchar},
+		{sql: "json", oid: types.T_json},
+		{sql: "geometry", oid: types.T_geometry},
+		{sql: "decimal(10,2)", oid: types.T_decimal128},
+		{sql: "timestamp(6)", oid: types.T_timestamp},
+		{sql: "datetime", oid: types.T_datetime},
+		{sql: "time", oid: types.T_time},
+		{sql: "date", oid: types.T_date},
+		{sql: "double", oid: types.T_float64},
+		{sql: "float", oid: types.T_float32},
+		{sql: "bool", oid: types.T_bool},
+		{sql: "bigint unsigned", oid: types.T_int64},
+		{sql: "int", oid: types.T_int32},
+		{sql: "unknown", oid: types.T_any},
+	}
+	for _, tt := range tests {
+		t.Run(tt.sql, func(t *testing.T) {
+			assert.Equal(t, tt.oid, sqlTypeStringToType(tt.sql).Oid)
+		})
+	}
+}
+
+func TestCatalogMergeHelpers(t *testing.T) {
+	baseDBs := []TableCatalogEntry{{AccountID: 1, DatabaseID: 10, DatabaseName: "db"}}
+	mergedDBs := mergeCatalogDatabaseEntries(baseDBs, []TableCatalogEntry{
+		{AccountID: 1, DatabaseID: 10, DatabaseName: "DB"},
+		{AccountID: 2, DatabaseID: 20, DatabaseName: "extra"},
+	})
+	require.Len(t, mergedDBs, 2)
+	assert.Equal(t, uint64(20), mergedDBs[1].DatabaseID)
+	assert.Equal(t, baseDBs[0], mergedDBs[0])
+
+	baseTables := []TableCatalogEntry{{TableID: 1, TableName: "bad name"}}
+	mergedTables := mergeCatalogTableEntries(baseTables, []TableCatalogEntry{
+		{TableID: 1, DatabaseID: 7, DatabaseName: "db", TableName: "good_name", RelKind: "r"},
+		{TableID: 2, DatabaseID: 8, DatabaseName: "db2", TableName: "other", RelKind: "v"},
+	})
+	require.Len(t, mergedTables, 2)
+	assert.Equal(t, "good_name", mergedTables[0].TableName)
+	assert.Equal(t, uint64(7), mergedTables[0].DatabaseID)
+	assert.Equal(t, uint64(2), mergedTables[1].TableID)
+
+	assert.True(t, betterCatalogTableEntry(
+		TableCatalogEntry{TableID: 3, DatabaseID: 9, DatabaseName: "db", TableName: "t", RelKind: "e"},
+		TableCatalogEntry{TableID: 3},
+	))
+	assert.False(t, betterCatalogTableEntry(
+		TableCatalogEntry{TableID: 3},
+		TableCatalogEntry{TableID: 3, DatabaseID: 9, DatabaseName: "db", TableName: "t", RelKind: "e"},
+	))
+}
+
+func TestCatalogRowsAndHeaderHelpers(t *testing.T) {
+	tableRecords := buildCatalogTablesFromCSVRecords(
+		[]string{"rel_id", "relname", "reldatabase", "reldatabase_id", "relkind", "account_id"},
+		[][]string{
+			{"11", "tbl", "db", "22", "r", "3"},
+			{"11", "duplicate", "db", "22", "r", "3"},
+			{"0", "bad", "db", "22", "r", "3"},
+			{"12", "bad name", "db", "22", "r", "3"},
+			{"13", "tbl2", "db2", "bad", "invalid", "bad"},
+		},
+	)
+	require.Len(t, tableRecords, 1)
+	assert.Equal(t, TableCatalogEntry{
+		TableID:      11,
+		AccountID:    3,
+		DatabaseID:   22,
+		DatabaseName: "db",
+		TableName:    "tbl",
+		RelKind:      "r",
+	}, tableRecords[0])
+
+	dbView := &LogicalTableView{
+		Headers: []string{"dat_id", "datname", "account_id"},
+		Rows: [][]string{
+			{"31", "db", "4"},
+			{"31", "db", "4"},
+			{"bad", "db_bad", "4"},
+			{"32", "bad name", "4"},
+			{"33", "db2", "bad"},
+		},
+	}
+	dbRecords := buildCatalogDatabasesFromMoDatabaseRows(dbView)
+	require.Len(t, dbRecords, 2)
+	assert.Equal(t, TableCatalogEntry{AccountID: 4, DatabaseID: 31, DatabaseName: "db"}, dbRecords[0])
+	assert.Equal(t, TableCatalogEntry{AccountID: 0, DatabaseID: 33, DatabaseName: "db2"}, dbRecords[1])
+
+	view := &LogicalTableView{
+		Headers:    []string{"object", "block", "row", "col_0", "col_1"},
+		ColSeqNums: []uint16{0, 1},
+	}
+	applyCatalogColumnHeaders(view, moTablesID)
+	assert.Equal(t, catalog.MoTablesSchema[0], view.Headers[logicalViewMetaCols])
+	assert.Equal(t, catalog.MoTablesSchema[1], view.Headers[logicalViewMetaCols+1])
+
+	seqView := &LogicalTableView{
+		Headers:    []string{"object", "block", "row", "col_0", "col_1"},
+		ColSeqNums: []uint16{1, 0},
+	}
+	applyCatalogHeadersBySeqNums(seqView, []string{"first", "second"})
+	assert.Equal(t, []string{"object", "block", "row", "second", "first"}, seqView.Headers)
+
+	fallbackView := &LogicalTableView{Headers: []string{"a"}}
+	applyCatalogHeadersBySeqNums(fallbackView, []string{"x", "y"})
+	assert.Equal(t, []string{"object", "block", "row", "x", "y"}, fallbackView.Headers)
+}
+
+func TestMoColumnExpressionDecoders(t *testing.T) {
+	assert.Empty(t, decodeMoColumnDefault(""))
+	assert.Equal(t, "42", decodeMoColumnDefault(encodedDefault(t, " 42 ", true)))
+	assert.Equal(t, "current_timestamp()", decodeMoColumnDefault(" current_timestamp() "))
+	assert.Empty(t, decodeMoColumnDefault(string([]byte{0xff})))
+
+	onUpdate, err := types.Encode(&plan.OnUpdate{OriginString: " now() "})
+	require.NoError(t, err)
+	assert.Equal(t, "now()", decodeMoColumnOnUpdate(string(onUpdate)))
+	assert.Equal(t, "now()", decodeMoColumnOnUpdate(" now() "))
+	assert.Empty(t, decodeMoColumnOnUpdate(string([]byte{0xff})))
+
+	generated, err := types.Encode(&plan.GeneratedCol{OriginString: " a + b ", IsStored: true})
+	require.NoError(t, err)
+	expr, stored := decodeMoColumnGenerated(string(generated))
+	assert.Equal(t, "a + b", expr)
+	assert.True(t, stored)
+
+	expr, stored = decodeMoColumnGenerated(" a + b ")
+	assert.Equal(t, "a + b", expr)
+	assert.False(t, stored)
+	expr, stored = decodeMoColumnGenerated(string([]byte{0xff}))
+	assert.Empty(t, expr)
+	assert.False(t, stored)
+
+	assert.True(t, isPrintableDDLExpression(""))
+	assert.True(t, isPrintableDDLExpression(" a +\n b "))
+	assert.False(t, isPrintableDDLExpression(string([]byte{0xff})))
 }
 
 // TestWriteCSV_empty tests writing an empty logical view to CSV.
