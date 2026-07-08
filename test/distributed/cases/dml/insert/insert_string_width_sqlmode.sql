@@ -92,7 +92,17 @@ insert into p values (1, 'xx') on duplicate key update c = 'abcd';
 select id, c, char_length(c) from p;
 
 -- ============================================================
--- (6) DDL column DEFAULT length check is NOT relaxed by sql_mode (MySQL: DDL-layer)
+-- (6) INSERT IGNORE truncates over-long PK value, then ignores duplicate
+-- ============================================================
+create table pkv (c varchar(3) primary key);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into pkv values ('abc');
+insert ignore into pkv values ('abcd');
+select c, char_length(c) from pkv;
+drop table pkv;
+
+-- ============================================================
+-- (7) DDL column DEFAULT length check is NOT relaxed by sql_mode (MySQL: DDL-layer)
 -- ============================================================
 set session sql_mode = '';
 create table d (c varchar(3) default 'abcd');

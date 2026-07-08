@@ -78,6 +78,14 @@ insert into p values (1, 'xx') on duplicate key update c = 'abcd';
 select id, c, char_length(c) from p;
 ➤ id[4,32,0]  ¦  c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
 1  ¦  abc  ¦  3
+create table pkv (c varchar(3) primary key);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into pkv values ('abc');
+insert ignore into pkv values ('abcd');
+select c, char_length(c) from pkv;
+➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+abc  ¦  3
+drop table pkv;
 set session sql_mode = '';
 create table d (c varchar(3) default 'abcd');
 Invalid default value for 'abcd'
