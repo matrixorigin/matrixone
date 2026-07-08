@@ -590,8 +590,13 @@ is retained only as a schema-change / corruption-recovery fallback).
     → rebuild; MERGE on ngram → NotSupported). idxcron fires it via
     `SyncDescriptor.IdxcronReindexOption="MERGE"` → executor builds `… FULLTEXT MERGE FORCE_SYNC`.
     Verified live end-to-end.
-  - **Tombstone GC — TODO.** Delete frames persist in the tail until a global merge (see the
-    fold/tiered known limitations); a periodic full or global-liveness pass reclaims them.
+  - **Tombstone GC — WON'T DO (decided 2026-07-08).** A delete tombstone for a genuinely-removed
+    doc persists in the tail until a REBUILD (fold consolidates N→1; an updated pk's tombstone is
+    resolved by its re-insert; tiered merge reclaims the docs but not the tombstones). This is
+    **accepted**: tiered merge reclaims the actual doc space, REBUILD clears tombstones when a
+    clean slate is wanted, and the residual set is bounded by distinct deleted-and-not-reinserted
+    PKs (a slow, never-wrong leak). A global-liveness GC pass to drop tombstones incrementally was
+    considered and deemed not worth the complexity — tiered merge + REBUILD is sufficient.
 
 ### Cost model (why this is needed)
 Measured on a live 100k-doc empty-table→CDC run (2026-07-02) and generalized:
@@ -760,7 +765,8 @@ read side.
   (`0c72710e2`, `523d7daa2`, `21b189e69`, `0fa41c7f6`); idxcron now fires
   `ALTER … FULLTEXT MERGE FORCE_SYNC` → the bounded-memory `fulltext_wand_compact` TVF instead
   of a full REBUILD. Its live-filter/dedup primitive also unblocks item 1's top-up.
-  **Remaining:** tombstone GC (delete frames persist until a global merge).
+  **Remaining:** none — tombstone GC was considered and decided WON'T DO (tiered merge + REBUILD
+  is sufficient; see the Item 2 status block).
 
 ## Verification
 - **Unit**: (1) `tokenize → postings → fulltext_wand_create` round-trip builds a loadable WAND index. (2) **Differential**: `fulltext_wand_search` top-K vs a brute-force reference (`Σ tf·idf²` over all docs + full sort) on randomized corpora → assert identical top-K and scores (the WAND-correctness gold test). (3) Parser/mode parse tests in `pkg/sql/parsers/dialect/mysql/mysql_sql_test.go` (`IN RETRIEVAL MODE`, default-on-retrieval-parser).
