@@ -83,6 +83,46 @@ func TestGenerateNodesRespectsNodeDOPOnMultiCN(t *testing.T) {
 	require.Equal(t, 2, nodes[1].Mcpu)
 }
 
+func TestGenerateNodesKeepsScheduledLocalWorkerWithoutAddress(t *testing.T) {
+	c := NewMockCompile(t)
+	c.e = newStubEngineForGenerateNodes("testdb", "t")
+	c.cnList = engine.Nodes{
+		{Id: "cn-local", Mcpu: 8},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 12},
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "t",
+		},
+		TableDef: &plan.TableDef{
+			Name: "t",
+		},
+		Stats: &plan.Stats{
+			BlockNum: int32(plan2.BlockThresholdForOneCN + 1),
+			Dop:      4,
+		},
+	}
+
+	nodes, err := c.generateNodes(node)
+	require.NoError(t, err)
+	require.Len(t, nodes, 2)
+	require.Equal(t, "cn-local", nodes[0].Id)
+	require.Empty(t, nodes[0].Addr)
+	require.Equal(t, 4, nodes[0].Mcpu)
+	require.Equal(t, int32(2), nodes[0].CNCNT)
+	require.Equal(t, int32(0), nodes[0].CNIDX)
+	require.Nil(t, nodes[0].Data)
+	require.Equal(t, "cn-remote", nodes[1].Id)
+	require.Equal(t, "cn-remote:6001", nodes[1].Addr)
+	require.Equal(t, 4, nodes[1].Mcpu)
+	require.Equal(t, int32(2), nodes[1].CNCNT)
+	require.Equal(t, int32(1), nodes[1].CNIDX)
+	require.NotNil(t, nodes[1].Data)
+}
+
 func TestGenerateNodesCapsByCNMcpuWhenDOPIsLarger(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
