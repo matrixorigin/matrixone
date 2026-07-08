@@ -2562,6 +2562,18 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}
 		bytes, _ := hex.DecodeString(s)
 		return returnHexNumExpr(string(bytes), true)
+	case tree.P_ScoreBinaryHexnum:
+		s := astExpr.String()[2:]
+		if len(s)%2 != 0 {
+			s = string('0') + s
+		}
+		bytes, _ := hex.DecodeString(s)
+		isBin := true
+		if !typ.IsEmpty() {
+			target := types.T(typ.Id)
+			isBin = !(target.IsInteger() || target.IsFloat() || target.IsDecimal())
+		}
+		return returnHexNumExpr(string(bytes), isBin)
 	case tree.P_ScoreBinary:
 		return returnHexNumExpr(astExpr.String(), true)
 	case tree.P_bit:

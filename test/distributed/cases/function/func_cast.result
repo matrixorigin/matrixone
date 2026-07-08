@@ -265,6 +265,24 @@ select hex(convert(12345, binary(3))) as r, length(convert(12345, binary(3))) as
 select CAST(0xb3 as signed);
 ➤ cast(0xb3 as signed)[-5,64,0]  𝄀
 179
+select X'3132', _binary X'3132', cast(X'3132' as unsigned), cast(_binary X'3132' as unsigned);
+➤ 0x3132[12,-1,0]  ¦  0x3132[12,-1,0]  ¦  cast(0x3132 as unsigned)[-5,64,0]  ¦  cast(0x3132 as unsigned)[-5,64,0]  𝄀
+12  ¦  12  ¦  12594  ¦  12594
+select cast(X'3132' as decimal(6,0)), cast(_binary X'3132' as decimal(6,0));
+➤ cast(0x3132 as decimal(6))[3,6,0]  ¦  cast(0x3132 as decimal(6))[3,6,0]  𝄀
+12594  ¦  12594
+select cast(X'312E35' as double), cast(_binary X'312E35' as double);
+➤ cast(0x312E35 as double)[8,54,0]  ¦  cast(0x312E35 as double)[8,54,0]  𝄀
+3223093.0  ¦  3223093.0
+select (_binary X'31' | X'31');
+➤ 0x31 | 0x31[-5,64,0]  𝄀
+49
+select (_binary X'31' | X'31') + 0;
+➤ (0x31 | 0x31) + 0[-5,64,0]  𝄀
+1
+select 1.0 * (_binary X'312E35' | X'312E35');
+➤ 1.0 * (0x312E35 | 0x312E35)[3,38,1]  𝄀
+3223093.0
 SELECT CAST(X'' AS SIGNED);
 invalid argument cast to int, bad value []
 SELECT CAST(X'11111111111111111111111111' AS SIGNED);
@@ -367,11 +385,11 @@ drop table t1;
 CREATE TABLE t1 (v varchar(10), tt char(255), t char(255),mt char(255), lt char(255));
 INSERT INTO t1 VALUES ('1.01', '2.02', '3.03', '4.04', '5.05');
 SELECT CAST(v AS DECIMAL), CAST(tt AS DECIMAL), CAST(t AS DECIMAL), CAST(mt AS DECIMAL), CAST(lt AS DECIMAL) from t1;
-➤ cast(v as decimal(38))[3,39,0]  ¦  cast(tt as decimal(38))[3,39,0]  ¦  cast(t as decimal(38))[3,39,0]  ¦  cast(mt as decimal(38))[3,39,0]  ¦  cast(lt as decimal(38))[3,39,0]  𝄀
+➤ cast(v as decimal(38))[3,38,0]  ¦  cast(tt as decimal(38))[3,38,0]  ¦  cast(t as decimal(38))[3,38,0]  ¦  cast(mt as decimal(38))[3,38,0]  ¦  cast(lt as decimal(38))[3,38,0]  𝄀
 1  ¦  2  ¦  3  ¦  4  ¦  5
 DROP TABLE t1;
 select cast(NULL as decimal(6)) as t1;
-➤ t1[3,7,0]  𝄀
+➤ t1[3,6,0]  𝄀
 null
 CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL), ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');

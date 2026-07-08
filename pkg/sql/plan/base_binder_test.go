@@ -96,6 +96,39 @@ func TestBindSerialFunctionMapsExprListItems(t *testing.T) {
 	}
 }
 
+func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T) {
+	binder := &baseBinder{sysCtx: context.Background()}
+	hex := tree.NewNumVal("0x3132", "0x3132", false, tree.P_ScoreBinaryHexnum)
+
+	rawExpr, err := binder.bindNumVal(hex, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, "12", rawExpr.GetLit().GetSval())
+	require.True(t, rawExpr.GetLit().GetIsBin())
+
+	testCases := []struct {
+		name  string
+		typ   plan.Type
+		isBin bool
+	}{
+		{name: "integer numeric cast parses text", typ: plan.Type{Id: int32(types.T_uint64)}, isBin: false},
+		{name: "decimal numeric cast parses text", typ: plan.Type{Id: int32(types.T_decimal128)}, isBin: false},
+		{name: "float numeric cast parses text", typ: plan.Type{Id: int32(types.T_float64)}, isBin: false},
+		{name: "binary cast keeps binary bytes", typ: plan.Type{Id: int32(types.T_binary)}, isBin: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			castExpr, err := binder.bindNumVal(hex, tc.typ)
+			require.NoError(t, err)
+			castFunc := castExpr.GetF()
+			require.NotNil(t, castFunc)
+			require.Len(t, castFunc.Args, 2)
+			require.Equal(t, "12", castFunc.Args[0].GetLit().GetSval())
+			require.Equal(t, tc.isBin, castFunc.Args[0].GetLit().GetIsBin())
+		})
+	}
+}
+
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 

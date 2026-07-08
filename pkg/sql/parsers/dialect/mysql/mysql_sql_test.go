@@ -94,6 +94,25 @@ func TestPositionFunctionSyntax(t *testing.T) {
 	}
 }
 
+func TestBinaryIntroducedHexLiteralHasDistinctType(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "select X'3132', _binary X'3132'", 1)
+	require.NoError(t, err)
+
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, clause.Exprs, 2)
+
+	plainHex, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, tree.P_hexnum, plainHex.ValType)
+
+	binaryHex, ok := clause.Exprs[1].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, tree.P_ScoreBinaryHexnum, binaryHex.ValType)
+}
+
 func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	stmt, err := ParseOne(
 		context.TODO(),
