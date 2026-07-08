@@ -4832,10 +4832,6 @@ func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
 	return c.mergeScopesByStageNodes(ss, stageNodes)
 }
 
-func (c *Compile) mergeScopesByCN(ss []*Scope) []*Scope {
-	return c.mergeScopesByStageNodes(ss, c.queryWorkerStageNodes())
-}
-
 func (c *Compile) mergeScopesByStageNodes(ss []*Scope, stageNodes engine.Nodes) []*Scope {
 	rs := make([]*Scope, 0, len(stageNodes))
 	for i := range stageNodes {
