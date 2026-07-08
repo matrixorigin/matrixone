@@ -246,7 +246,7 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 		return nil, err
 	}
 	if err := bh.Exec(ctx, fmt.Sprintf(
-		"insert into mo_catalog.%s(scope_type,account_id,catalog_id,allowed_catalog_uri,allowed_endpoint,allowed_region,allowed_bucket,policy_state,created_by,version) values (%s,%d,%d,%s,%s,%s,%s,%s,%d,1) on duplicate key update allowed_catalog_uri = %s, policy_state = %s, updated_at = utc_timestamp, version = version + 1",
+		"insert into mo_catalog.%s(scope_type,account_id,catalog_id,allowed_catalog_uri,allowed_endpoint,allowed_region,allowed_bucket,policy_state,created_by,version) values (%s,%d,%d,%s,%s,%s,%s,%s,%d,1) on duplicate key update policy_state = %s, updated_at = utc_timestamp, version = version + 1",
 		sqliceberg.TableResidencyPolicy,
 		quoteIcebergSQLString(scopeType),
 		policyAccountID,
@@ -257,7 +257,6 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 		quoteIcebergSQLString(bucket),
 		quoteIcebergSQLString(policyState),
 		tenant.GetUserID(),
-		quoteIcebergSQLString(catalogURI),
 		quoteIcebergSQLString(policyState),
 	)); err != nil {
 		return nil, err

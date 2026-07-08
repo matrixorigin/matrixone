@@ -153,6 +153,40 @@ func TestCatalogResidencyDoesNotShareAccountLocalCatalogIDAcrossURIs(t *testing.
 	}
 }
 
+func TestCatalogResidencyAllowsDistinctClusterPoliciesWithSameAccountLocalCatalogID(t *testing.T) {
+	ctx := context.Background()
+	policies := []model.ResidencyPolicy{
+		{
+			ScopeType:         model.ResidencyScopeCluster,
+			AccountID:         0,
+			CatalogID:         1,
+			AllowedCatalogURI: "https://catalog-a.example.com/rest",
+			AllowedEndpoint:   "catalog-a.example.com",
+			AllowedRegion:     model.ResidencyWildcard,
+			AllowedBucket:     model.ResidencyWildcard,
+			PolicyState:       model.ResidencyPolicyEnabled,
+		},
+		{
+			ScopeType:         model.ResidencyScopeCluster,
+			AccountID:         0,
+			CatalogID:         1,
+			AllowedCatalogURI: "https://catalog-b.example.com/rest",
+			AllowedEndpoint:   "catalog-b.example.com",
+			AllowedRegion:     model.ResidencyWildcard,
+			AllowedBucket:     model.ResidencyWildcard,
+			PolicyState:       model.ResidencyPolicyEnabled,
+		},
+	}
+	for _, req := range []CatalogResidencyRequest{
+		{AccountID: 11, CatalogID: 1, CatalogURI: "https://catalog-a.example.com/rest"},
+		{AccountID: 22, CatalogID: 1, CatalogURI: "https://catalog-b.example.com/rest"},
+	} {
+		if err := CheckCatalogResidency(ctx, policies, req); err != nil {
+			t.Fatalf("cluster residency policy should be isolated by catalog URI for request %+v: %v", req, err)
+		}
+	}
+}
+
 func TestObjectResidencyDoesNotShareAccountLocalCatalogIDAcrossURIs(t *testing.T) {
 	ctx := context.Background()
 	policies := []model.ResidencyPolicy{{

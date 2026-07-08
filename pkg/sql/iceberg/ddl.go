@@ -63,7 +63,7 @@ const ResidencyPolicyDDL = `create table mo_catalog.mo_iceberg_residency_policy 
 	scope_type varchar(16) not null,
 	account_id int unsigned not null,
 	catalog_id bigint unsigned not null,
-	allowed_catalog_uri text not null,
+	allowed_catalog_uri varchar(2048) not null,
 	allowed_endpoint varchar(1024) not null,
 	allowed_region varchar(128) not null,
 	allowed_bucket varchar(1024) not null,
@@ -72,7 +72,7 @@ const ResidencyPolicyDDL = `create table mo_catalog.mo_iceberg_residency_policy 
 	created_at timestamp not null default utc_timestamp,
 	updated_at timestamp not null default utc_timestamp,
 	version bigint unsigned not null default 1,
-	primary key(scope_type, account_id, catalog_id, allowed_endpoint, allowed_region, allowed_bucket)
+	primary key(scope_type, account_id, catalog_id, allowed_catalog_uri, allowed_endpoint, allowed_region, allowed_bucket)
 )`
 
 const TablesDDL = `create table mo_catalog.mo_iceberg_tables (
