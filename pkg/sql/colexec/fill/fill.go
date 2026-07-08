@@ -723,7 +723,7 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 	case types.T_decimal64:
 		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j))
 	case types.T_decimal128:
-		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal128](w, j))
+		err = setDecimal128Value(v, w, i, j)
 	case types.T_uuid:
 		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Uuid](w, j))
 	case types.T_TS:
@@ -738,4 +738,57 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))
 	}
 	return err
+}
+
+func setDecimal128Value(v, w *vector.Vector, i, j int) error {
+	if v.GetType().Oid == w.GetType().Oid && v.GetType().Scale == w.GetType().Scale {
+		return vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal128](w, j))
+	}
+
+	var (
+		value types.Decimal128
+		err   error
+	)
+	targetScale := v.GetType().Scale
+	switch w.GetType().Oid {
+	case types.T_int8:
+		value = types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[int8](w, j)))
+	case types.T_int16:
+		value = types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[int16](w, j)))
+	case types.T_int32:
+		value = types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[int32](w, j)))
+	case types.T_int64:
+		value = types.Decimal128FromInt64(vector.GetFixedAtNoTypeCheck[int64](w, j))
+	case types.T_uint8:
+		value = types.Decimal128{B0_63: uint64(vector.GetFixedAtNoTypeCheck[uint8](w, j))}
+	case types.T_uint16:
+		value = types.Decimal128{B0_63: uint64(vector.GetFixedAtNoTypeCheck[uint16](w, j))}
+	case types.T_uint32:
+		value = types.Decimal128{B0_63: uint64(vector.GetFixedAtNoTypeCheck[uint32](w, j))}
+	case types.T_uint64:
+		value = types.Decimal128{B0_63: vector.GetFixedAtNoTypeCheck[uint64](w, j)}
+	case types.T_float32:
+		value, err = types.Decimal128FromFloat64(float64(vector.GetFixedAtNoTypeCheck[float32](w, j)), v.GetType().Width, targetScale)
+	case types.T_float64:
+		value, err = types.Decimal128FromFloat64(vector.GetFixedAtNoTypeCheck[float64](w, j), v.GetType().Width, targetScale)
+	case types.T_decimal64:
+		value = types.Decimal128FromDecimal64(vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j), w.GetType().Scale)
+		value, err = value.Scale(targetScale - w.GetType().Scale)
+	case types.T_decimal128:
+		value = vector.GetFixedAtNoTypeCheck[types.Decimal128](w, j)
+		value, err = value.Scale(targetScale - w.GetType().Scale)
+	default:
+		return fmt.Errorf("cannot set decimal128 fill value from %s", w.GetType())
+	}
+	if err != nil {
+		return err
+	}
+	if w.GetType().Oid != types.T_float32 && w.GetType().Oid != types.T_float64 &&
+		w.GetType().Oid != types.T_decimal64 && w.GetType().Oid != types.T_decimal128 {
+		value, err = value.Scale(targetScale)
+		if err != nil {
+			return err
+		}
+	}
+	return vector.SetFixedAtNoTypeCheck(v, i, value)
 }

@@ -736,6 +736,43 @@ func Test_setValue(t *testing.T) {
 		require.Equal(t, dec128, vector.MustFixedColWithTypeCheck[types.Decimal128](v1)[0])
 	}
 
+	// decimal128 target with int64 fill value
+	{
+		targetType := types.T_decimal128.ToTypeWithScale(2)
+		v1 := vector.NewVec(targetType)
+		v2 := vector.NewVec(types.T_int64.ToType())
+		err := vector.AppendFixed(v2, int64(1), false, proc.Mp())
+		require.NoError(t, err)
+		err = vector.AppendFixed(v1, types.Decimal128{}, true, proc.Mp()) // Pre-allocate null target slot
+		require.NoError(t, err)
+		err = setValue(v1, v2, 0, 0, proc)
+		require.NoError(t, err)
+		expected, err := types.Decimal128FromInt64(1).Scale(2)
+		require.NoError(t, err)
+		require.False(t, v1.IsNull(0))
+		require.Equal(t, expected, vector.MustFixedColWithTypeCheck[types.Decimal128](v1)[0])
+	}
+
+	// decimal128 target with different-scale decimal128 fill value
+	{
+		targetType := types.T_decimal128.ToTypeWithScale(4)
+		sourceType := types.T_decimal128.ToTypeWithScale(2)
+		v1 := vector.NewVec(targetType)
+		v2 := vector.NewVec(sourceType)
+		source, err := types.ParseDecimal128("1.23", sourceType.Width, sourceType.Scale)
+		require.NoError(t, err)
+		err = vector.AppendFixed(v2, source, false, proc.Mp())
+		require.NoError(t, err)
+		err = vector.AppendFixed(v1, types.Decimal128{}, true, proc.Mp()) // Pre-allocate null target slot
+		require.NoError(t, err)
+		err = setValue(v1, v2, 0, 0, proc)
+		require.NoError(t, err)
+		expected, err := types.ParseDecimal128("1.2300", targetType.Width, targetType.Scale)
+		require.NoError(t, err)
+		require.False(t, v1.IsNull(0))
+		require.Equal(t, expected, vector.MustFixedColWithTypeCheck[types.Decimal128](v1)[0])
+	}
+
 	// uuid
 	{
 		v1 := vector.NewVec(types.T_uuid.ToType())
