@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
@@ -83,6 +84,7 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            ctx.GetRootSql(),
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SQLMode:         parserSQLModeFromContext(ctx),
 		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
@@ -122,6 +124,17 @@ func getViewSecurityTypeFromContext(ctx CompilerContext) string {
 	}
 	// Default to DEFINER to match SQL SECURITY behavior.
 	return "DEFINER"
+}
+
+func parserSQLModeFromContext(ctx CompilerContext) *string {
+	sqlMode := ""
+	val, err := ctx.ResolveVariable("sql_mode", true, false)
+	if err == nil {
+		if s, ok := val.(string); ok {
+			sqlMode = mysql.SessionSQLModeForParser(s)
+		}
+	}
+	return &sqlMode
 }
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -175,6 +188,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            viewSql,
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SQLMode:         parserSQLModeFromContext(ctx),
 		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
