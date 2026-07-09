@@ -721,11 +721,10 @@ const (
 	// merged from upstream/main (renumbered to avoid colliding with the GIS block above)
 	CAST_JSON_TO_ARRAY = 513
 
-	BIT_COUNT   = 514
-	IS_UUID     = 515
-	UUID_TO_BIN = 516
-	BIN_TO_UUID = 517
-
+	BIT_COUNT         = 514
+	IS_UUID           = 515
+	UUID_TO_BIN       = 516
+	BIN_TO_UUID       = 517
 	NAME_CONST        = 518
 	GET_LOCK          = 519
 	RELEASE_LOCK      = 520
@@ -761,11 +760,13 @@ const (
 	ST_POINT32 = 540
 
 	// function `cast_strict`
-	CAST_STRICT = 541
+	CAST_STRICT   = 541
+	DATE_TRUNC    = 542
+	JSON_CONTAINS = 543
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 542
+	FUNCTION_END_NUMBER = 544
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1047,6 +1048,7 @@ var functionIdRegister = map[string]int32{
 	"json_type":                      JSON_TYPE,
 	"json_valid":                     JSON_VALID,
 	"json_length":                    JSON_LENGTH,
+	"json_contains":                  JSON_CONTAINS,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
 	"json_schema_valid":              JSON_SCHEMA_VALID,
@@ -1353,4 +1355,7 @@ var functionIdRegister = map[string]int32{
 
 	// fault inject function
 	"fault_inject": FAULT_INJECT,
+
+	// date_trunc function
+	"date_trunc": DATE_TRUNC,
 }

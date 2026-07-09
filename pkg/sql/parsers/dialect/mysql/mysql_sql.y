@@ -3300,6 +3300,7 @@ prepareable_stmt:
     create_stmt
 |   alter_stmt
 |   insert_stmt
+|   replace_stmt
 |   delete_stmt
 |   drop_stmt
 |   show_stmt
@@ -3938,9 +3939,7 @@ alter_option:
     }
 |   ALGORITHM equal_opt algorithm_type
     {
-        var checkType = $1
-        var enforce bool
-        $$ = tree.NewAlterOptionAlterCheck(checkType, enforce)
+        $$ = tree.NewAlterOptionAlgorithm($3)
     }
 |   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
     {
@@ -3968,7 +3967,7 @@ alter_option:
     }
 |   LOCK equal_opt lock_type
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewAlterOptionLock($3)
     }
 |   with_type VALIDATION
     {
