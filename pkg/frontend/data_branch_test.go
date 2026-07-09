@@ -49,11 +49,11 @@ func TestDataBranchUserVisibleColumn(t *testing.T) {
 func TestDataBranchFakePKColIdxesUseOnlyVisibleColumns(t *testing.T) {
 	tblDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
 			{Name: "tenant"},
 			{Name: "__mo_cbkey_006tenant003seq", Hidden: true},
 			{Name: "payload"},
 			{Name: catalog.FakePrimaryKeyColName, Hidden: true},
-			{Name: catalog.Row_ID, Hidden: true},
 		},
 	}
 	require.Equal(t, []int{0, 2}, dataBranchFakePKColIdxes(tblDef))
@@ -893,6 +893,39 @@ func TestCheckSchemaCompatibility_ExtraColumnOnTarget(t *testing.T) {
 			PkeyColName: "a",
 		},
 		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{2}, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_ReturnsDataBatchIndexes(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
 			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
 			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
 		},
