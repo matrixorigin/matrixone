@@ -76,8 +76,9 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 	if !ok {
 		return false, "", moerr.NewInternalErrorNoCtx("ivfflat metadata index definition not found")
 	}
-	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` ivfflat FORCE_SYNC",
-		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s ivfflat FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(metaDef.IndexName)), nil
 }
 
 // ValidateReindexParams handles the IVF-FLAT `lists` update at ALTER
@@ -226,8 +227,9 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 // (pkg/sql/compile/ddl_index_algo.go:199).
 func indexColCount(ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
-	sql := fmt.Sprintf("select count(`%s`) from `%s`.`%s`;",
-		indexDef.Parts[0], qryDatabase, originalTableDef.Name)
+	sql := fmt.Sprintf("select count(%s) from %s;",
+		sqlquote.Ident(indexDef.Parts[0]),
+		sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name))
 	rs, err := ctx.RunSqlWithResult(sql)
 	if err != nil {
 		return 0, err
@@ -251,14 +253,13 @@ func indexColCount(ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
 // ivfIndexMetaTable is lifted from Scope.handleIvfIndexMetaTable
 // (pkg/sql/compile/ddl_index_algo.go:221).
 func ivfIndexMetaTable(ctx compileplugin.CompileContext, indexDef *plan.IndexDef, qryDatabase string) error {
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '0')"+
-		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS BIGINT) + 1) AS CHAR);",
-		qryDatabase,
-		indexDef.IndexTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+	insertSQL := fmt.Sprintf("insert into %s (%s, %s) values('version', '0')"+
+		"ON DUPLICATE KEY UPDATE %s = CAST( (CAST(%s AS BIGINT) + 1) AS CHAR);",
+		sqlquote.QualifiedIdent(qryDatabase, indexDef.IndexTableName),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_key),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_val),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_val),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_val),
 	)
 	return ctx.RunSql(insertSQL)
 }
@@ -301,19 +302,17 @@ func ivfIndexCentroidsTable(
 		// not enough rows: seed centroids with a single NULL placeholder.
 		// Re-running ALTER REINDEX once the table is populated upgrades
 		// the centroid quality.
-		sql = fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
+		sql = fmt.Sprintf("INSERT INTO %s (%s, %s, %s) "+
 			"SELECT "+
-			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
+			"(SELECT CAST(%s AS BIGINT) FROM %s WHERE %s = 'version'), "+
 			"1, NULL;",
-			qryDatabase,
-			indexDef.IndexTableName,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-			qryDatabase,
-			metadataTableName,
-			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+			sqlquote.QualifiedIdent(qryDatabase, indexDef.IndexTableName),
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_version),
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_id),
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid),
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_val),
+			sqlquote.QualifiedIdent(qryDatabase, metadataTableName),
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_key),
 		)
 	} else {
 		threads, err := ctx.ResolveVariable("ivf_threads_build", true, false)
@@ -412,17 +411,17 @@ func ivfIndexEntriesTable(
 	var originalTblPkColsCommaSeparated, originalTblPkColMaySerial string
 	srcAlias := "src"
 	centroidsAlias := "centroids_cur"
-	srcTableRef := fmt.Sprintf("`%s`.`%s`", qryDatabase, originalTableDef.Name)
+	srcTableRef := sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name)
 	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		for i, part := range originalTableDef.Pkey.Names {
 			if i > 0 {
 				originalTblPkColsCommaSeparated += ","
 			}
-			originalTblPkColsCommaSeparated += fmt.Sprintf("`%s`.`%s`", srcAlias, part)
+			originalTblPkColsCommaSeparated += sqlquote.QualifiedIdent(srcAlias, part)
 		}
 		originalTblPkColMaySerial = fmt.Sprintf("serial(%s)", originalTblPkColsCommaSeparated)
 	} else {
-		originalTblPkColsCommaSeparated = fmt.Sprintf("`%s`.`%s`", srcAlias, originalTableDef.Pkey.PkeyColName)
+		originalTblPkColsCommaSeparated = sqlquote.QualifiedIdent(srcAlias, originalTableDef.Pkey.PkeyColName)
 		originalTblPkColMaySerial = originalTblPkColsCommaSeparated
 	}
 
@@ -433,48 +432,45 @@ func ivfIndexEntriesTable(
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
 	}
 	selectCols := []string{
-		fmt.Sprintf("`%s`.`%s`", centroidsAlias, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version),
-		fmt.Sprintf("`%s`.`%s`", centroidsAlias, catalog.SystemSI_IVFFLAT_TblCol_Centroids_id),
+		sqlquote.QualifiedIdent(centroidsAlias, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version),
+		sqlquote.QualifiedIdent(centroidsAlias, catalog.SystemSI_IVFFLAT_TblCol_Centroids_id),
 		originalTblPkColMaySerial,
-		fmt.Sprintf("`%s`.`%s`", srcAlias, indexDef.Parts[0]),
+		sqlquote.QualifiedIdent(srcAlias, indexDef.Parts[0]),
 	}
 	for _, includeCol := range includeCols {
 		insertCols = append(insertCols, catalog.SystemSI_IVFFLAT_IncludeColPrefix+includeCol)
-		selectCols = append(selectCols, fmt.Sprintf("`%s`.`%s`", srcAlias, includeCol))
+		selectCols = append(selectCols, sqlquote.QualifiedIdent(srcAlias, includeCol))
 	}
 
-	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) ",
-		qryDatabase,
-		indexDef.IndexTableName,
+	insertSQL := fmt.Sprintf("INSERT INTO %s (%s) ",
+		sqlquote.QualifiedIdent(qryDatabase, indexDef.IndexTableName),
 		joinQuotedIdentifiers(insertCols),
 	)
 
 	centroidsTableForCurrentVersionSql := fmt.Sprintf("(select * from "+
-		"`%s`.`%s` where `%s` = "+
-		"(select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version'))  as `%s`",
-		qryDatabase,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		centroidsAlias,
+		"%s where %s = "+
+		"(select CAST(%s as BIGINT) from %s where %s = 'version')) as %s",
+		sqlquote.QualifiedIdent(qryDatabase, centroidsTableName),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_version),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_val),
+		sqlquote.QualifiedIdent(qryDatabase, metadataTableName),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_key),
+		sqlquote.Ident(centroidsAlias),
 	)
 
 	indexColumnName := indexDef.Parts[0]
 	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
 		"SELECT %s"+
-		" FROM %s AS `%s` CENTROIDX ('%s') join %s "+
-		" using (`%s`, `%s`) ",
+		" FROM %s AS %s CENTROIDX (%s) join %s "+
+		" using (%s, %s) ",
 		insertSQL,
 		strings.Join(selectCols, ", "),
 		srcTableRef,
-		srcAlias,
-		optype,
+		sqlquote.Ident(srcAlias),
+		sqlquote.String(optype),
 		centroidsTableForCurrentVersionSql,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-		indexColumnName,
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid),
+		sqlquote.Ident(indexColumnName),
 	)
 
 	if err = logTimestamp(ctx, qryDatabase, metadataTableName, "mapping_start"); err != nil {
@@ -489,7 +485,7 @@ func ivfIndexEntriesTable(
 func joinQuotedIdentifiers(cols []string) string {
 	quoted := make([]string, len(cols))
 	for i, col := range cols {
-		quoted[i] = fmt.Sprintf("`%s`", col)
+		quoted[i] = sqlquote.Ident(col)
 	}
 	return strings.Join(quoted, ", ")
 }
@@ -526,15 +522,14 @@ func registerIdxcronUpdate(
 // logTimestamp is lifted from Scope.logTimestamp
 // (pkg/sql/compile/ddl_index_algo.go:531).
 func logTimestamp(ctx compileplugin.CompileContext, qryDatabase, metadataTableName, metric string) error {
-	return ctx.RunSql(fmt.Sprintf("INSERT INTO `%s`.`%s` (%s, %s) "+
+	return ctx.RunSql(fmt.Sprintf("INSERT INTO %s (%s, %s) "+
 		" VALUES ('%s', NOW()) "+
 		" ON DUPLICATE KEY UPDATE %s = NOW();",
-		qryDatabase,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		metric,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		sqlquote.QualifiedIdent(qryDatabase, metadataTableName),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_key),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_val),
+		sqlquote.EscapeString(metric),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_val),
 	))
 }
 
@@ -544,17 +539,21 @@ func ivfIndexDeleteOldEntries(
 	ctx compileplugin.CompileContext,
 	metadataTableName, centroidsTableName, entriesTableName, qryDatabase string,
 ) error {
-	pruneCentroids := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
-		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
-		qryDatabase, centroidsTableName, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, qryDatabase, metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	pruneCentroids := fmt.Sprintf("DELETE FROM %s WHERE %s < "+
+		"(SELECT CAST(%s AS BIGINT) FROM %s WHERE %s = 'version');",
+		sqlquote.QualifiedIdent(qryDatabase, centroidsTableName),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_version),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_val),
+		sqlquote.QualifiedIdent(qryDatabase, metadataTableName),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_key),
 	)
-	pruneEntries := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` < "+
-		"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version');",
-		qryDatabase, entriesTableName, catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, qryDatabase, metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	pruneEntries := fmt.Sprintf("DELETE FROM %s WHERE %s < "+
+		"(SELECT CAST(%s AS BIGINT) FROM %s WHERE %s = 'version');",
+		sqlquote.QualifiedIdent(qryDatabase, entriesTableName),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_val),
+		sqlquote.QualifiedIdent(qryDatabase, metadataTableName),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Metadata_key),
 	)
 	if err := logTimestamp(ctx, qryDatabase, metadataTableName, "pruning_start"); err != nil {
 		return err

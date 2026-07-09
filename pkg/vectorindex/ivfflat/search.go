@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -66,11 +67,11 @@ func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg
 	defer logutil.Infof("IVFFLAT END: Load Centroids")
 	// load centroids
 	sql := fmt.Sprintf(
-		"SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-		tblcfg.DbName, tblcfg.IndexTable,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		"SELECT %s, %s FROM %s WHERE %s = %d",
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_id),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid),
+		sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_version),
 		idxcfg.Ivfflat.Version,
 	)
 
@@ -344,41 +345,40 @@ func buildSearchRoundSQL[T types.RealNumbers](
 	var distExpr string
 	switch any(query).(type) {
 	case []float32:
-		distExpr = fmt.Sprintf("%s(`%s`, vecf32_from_base64('%s')) as vec_dist",
+		distExpr = fmt.Sprintf("%s(%s, vecf32_from_base64('%s')) as vec_dist",
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
 			queryB64,
 		)
 	case []float64:
-		distExpr = fmt.Sprintf("%s(`%s`, vecf64_from_base64('%s')) as vec_dist",
+		distExpr = fmt.Sprintf("%s(%s, vecf64_from_base64('%s')) as vec_dist",
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
 			queryB64,
 		)
 	default:
-		distExpr = fmt.Sprintf("%s(`%s`, '%s') as vec_dist",
+		distExpr = fmt.Sprintf("%s(%s, '%s') as vec_dist",
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
 			types.ArrayToString(query),
 		)
 	}
 
 	selectCols := []string{
-		fmt.Sprintf("`%s`", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
 		distExpr,
 	}
 	for _, col := range includeCols {
-		selectCols = append(selectCols, fmt.Sprintf("`%s%s`", catalog.SystemSI_IVFFLAT_IncludeColPrefix, col))
+		selectCols = append(selectCols, sqlquote.Ident(catalog.SystemSI_IVFFLAT_IncludeColPrefix+col))
 	}
 
 	sql := fmt.Sprintf(
-		"SELECT %s FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+		"SELECT %s FROM %s WHERE %s = %d AND %s IN (%s)",
 		strings.Join(selectCols, ", "),
-		tblcfg.DbName,
-		tblcfg.EntriesTable,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.EntriesTable),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version),
 		version,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_id),
 		strings.Join(inValues, ","),
 	)
 	if pushdownFilterSQL != "" {
@@ -405,41 +405,40 @@ func buildExactSearchSQL[T types.RealNumbers](
 	var distExpr string
 	switch any(query).(type) {
 	case []float32:
-		distExpr = fmt.Sprintf("%s(`%s`, vecf32_from_base64('%s')) as vec_dist",
+		distExpr = fmt.Sprintf("%s(%s, vecf32_from_base64('%s')) as vec_dist",
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
 			queryB64,
 		)
 	case []float64:
-		distExpr = fmt.Sprintf("%s(`%s`, vecf64_from_base64('%s')) as vec_dist",
+		distExpr = fmt.Sprintf("%s(%s, vecf64_from_base64('%s')) as vec_dist",
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
 			queryB64,
 		)
 	default:
-		distExpr = fmt.Sprintf("%s(`%s`, '%s') as vec_dist",
+		distExpr = fmt.Sprintf("%s(%s, '%s') as vec_dist",
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
 			types.ArrayToString(query),
 		)
 	}
 
 	selectCols := []string{
-		fmt.Sprintf("`%s`", catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
 		distExpr,
 	}
 	for _, col := range includeCols {
-		selectCols = append(selectCols, fmt.Sprintf("`%s%s`", catalog.SystemSI_IVFFLAT_IncludeColPrefix, col))
+		selectCols = append(selectCols, sqlquote.Ident(catalog.SystemSI_IVFFLAT_IncludeColPrefix+col))
 	}
 
 	sql := fmt.Sprintf(
-		"SELECT %s FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+		"SELECT %s FROM %s WHERE %s = %d AND %s IN (%s)",
 		strings.Join(selectCols, ", "),
-		tblcfg.DbName,
-		tblcfg.EntriesTable,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.EntriesTable),
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version),
 		version,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
 		exactPkFilter,
 	)
 	if pushdownFilterSQL != "" {
@@ -748,30 +747,30 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		// a plain filtered read that returns the full candidate set; the downstream
 		// Node_SORT + LIMIT k does the ranking and truncation.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+			"SELECT %s, %s(%s, %s('%s')) as vec_dist FROM %s WHERE %s = %d AND %s IN (%s)",
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
 			vecFromB64Fn,
 			queryB64,
-			tblcfg.DbName, tblcfg.EntriesTable,
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+			sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.EntriesTable),
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version),
 			idx.Version,
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
 			sqlproc.ExactPkFilter,
 		)
 	} else {
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+			"SELECT %s, %s(%s, %s('%s')) as vec_dist FROM %s WHERE %s = %d AND %s IN (%s) ORDER BY vec_dist LIMIT %d",
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
 			vecFromB64Fn,
 			queryB64,
-			tblcfg.DbName, tblcfg.EntriesTable,
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+			sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.EntriesTable),
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version),
 			idx.Version,
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_id),
 			instr,
 			rt.Limit,
 		)

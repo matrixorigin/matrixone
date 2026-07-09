@@ -22,6 +22,7 @@ import (
 
 var _ planplugin.AlterColumnHooks = Hooks{}
 var _ planplugin.RenameColumnRebuildHook = Hooks{}
+var _ planplugin.UpdateColumnRewriteHook = Hooks{}
 
 func (Hooks) HandleAlterDropColumn(_ *planpb.TableDef, indexDef *planpb.IndexDef, colName string) (bool, error) {
 	return planplugin.IncludedColumnAffected(indexDef, colName)
@@ -33,4 +34,8 @@ func (Hooks) HandleAlterRenameColumn(tableDef *planpb.TableDef, oldColName, newC
 
 func (Hooks) RenameColumnRequiresIndexRebuild(_ *planpb.TableDef, indexDef *planpb.IndexDef, oldColName string) (bool, error) {
 	return planplugin.IncludedColumnAffected(indexDef, oldColName)
+}
+
+func (Hooks) UpdateColumnRequiresIndexRewrite(_ *planpb.TableDef, indexDef *planpb.IndexDef, colName string) (bool, error) {
+	return planplugin.IncludedColumnAffected(indexDef, colName)
 }

@@ -30,6 +30,8 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -4373,17 +4375,23 @@ func indexNeedsRewriteForUpdate(tableDef *TableDef, indexdef *IndexDef, updateCo
 		}
 	}
 
-	if !catalog.IsIvfIndexAlgo(indexdef.IndexAlgo) {
+	p, ok := indexplugin.Get(indexdef.IndexAlgo)
+	if !ok {
 		return false, nil
 	}
-
-	includedColumns, err := indexDefIncludedColumns(indexdef)
-	if err != nil {
-		return false, err
+	rewriteHook, ok := p.Plan().(planplugin.UpdateColumnRewriteHook)
+	if !ok {
+		return false, nil
 	}
-	for _, colName := range includedColumns {
-		resolvedColName := catalog.ResolveAlias(colName)
-		if _, ok := posMap[resolvedColName]; ok && columnUpdated(resolvedColName) {
+	for colName := range posMap {
+		if !columnUpdated(colName) {
+			continue
+		}
+		needsRewrite, err := rewriteHook.UpdateColumnRequiresIndexRewrite(tableDef, indexdef, colName)
+		if err != nil {
+			return false, err
+		}
+		if needsRewrite {
 			return true, nil
 		}
 	}
