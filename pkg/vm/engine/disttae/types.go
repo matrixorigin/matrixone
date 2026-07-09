@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
+	"github.com/petermattis/goid"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -320,9 +321,55 @@ func (txn *Transaction) String() string {
 	return fmt.Sprintf("writes %v", txn.writes)
 }
 
+// ownedMutex is a sync.Mutex that additionally tracks the goroutine id of
+// its current holder. Some paths hold the transaction lock and then reenter
+// lock-acquiring methods on the same goroutine (e.g. dumpBatchLocked ->
+// getTable -> internal SQL -> NewCompile -> UpdateSnapshotWriteOffset, see
+// issue #25557). Go's sync.Mutex is non-reentrant and cannot express lock
+// ownership, so such reentry self-deadlocks. ownedMutex lets those methods
+// reliably distinguish "this goroutine already holds the lock" (direct access
+// is safe, it is serialized by the held lock) from "another goroutine holds
+// the lock" (must block on Lock() as usual).
+type ownedMutex struct {
+	sync.Mutex
+	// owner is the goid of the holder, 0 if unheld. It is only written by
+	// the lock holder: set right after Lock() returns and cleared right
+	// before Unlock(), so it can only equal the caller's goid if the caller
+	// itself acquired the lock and has not released it yet.
+	owner atomic.Int64
+}
+
+func (m *ownedMutex) Lock() {
+	m.Mutex.Lock()
+	m.owner.Store(goid.Get())
+}
+
+func (m *ownedMutex) TryLock() bool {
+	if m.Mutex.TryLock() {
+		m.owner.Store(goid.Get())
+		return true
+	}
+	return false
+}
+
+func (m *ownedMutex) Unlock() {
+	m.owner.Store(0)
+	m.Mutex.Unlock()
+}
+
+// heldByCurrentGoroutine reports whether the calling goroutine holds the mutex.
+// If goid.Get() cannot identify goroutines on this toolchain it returns 0 for
+// every goroutine; requiring a non-zero id makes that degrade to "never held"
+// (plain blocking Lock) instead of silently letting non-holders bypass the
+// mutex. TestOwnedMutex asserts goid support so CI catches such a degradation.
+func (m *ownedMutex) heldByCurrentGoroutine() bool {
+	id := goid.Get()
+	return id != 0 && m.owner.Load() == id
+}
+
 // Transaction represents a transaction
 type Transaction struct {
-	sync.Mutex
+	ownedMutex
 	engine *Engine
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly atomic.Bool

@@ -1018,6 +1018,16 @@ func (txn *Transaction) getTable(
 	dbName string,
 	tbName string,
 ) (engine.Relation, error) {
+	if objectio.SimpleInjected(objectio.FJ_CNReenterSnapshotOffsetOnGetTable) {
+		// Test-only fault: deterministically simulate the internal-SQL leg
+		// of the issue #25557 deadlock (getTable -> Engine.Database ->
+		// loadDatabaseFromStorage -> execReadSql -> NewCompile ->
+		// UpdateSnapshotWriteOffset) without requiring a catalog cache miss.
+		txn.UpdateSnapshotWriteOffset()
+		return nil, moerr.NewInternalErrorNoCtx(
+			"fault injection: reenter snapshot write offset on getTable")
+	}
+
 	var txnOp client.TxnOperator
 	if txn.proc != nil {
 		txnOp = txn.proc.GetTxnOperator()
@@ -2096,30 +2106,26 @@ func (txn *Transaction) clearTableCache() {
 }
 
 func (txn *Transaction) GetSnapshotWriteOffset() int {
-	if txn.TryLock() {
-		defer txn.Unlock()
+	if txn.heldByCurrentGoroutine() {
+		// Reentrant call: this goroutine already holds txn.Lock() (e.g.
+		// dumpBatchLocked -> getTable -> internal SQL -> NewCompile, see
+		// issue #25557), so locking again would self-deadlock. Direct
+		// access is serialized by the lock this goroutine holds.
 		return txn.snapshotWriteOffset
 	}
-	// TryLock failed: the lock is already held. This is either a reentrant
-	// call from within dumpBatch/IncrStatementID (the current goroutine
-	// already holds txn.Lock(), so reading snapshotWriteOffset is safe),
-	// or another goroutine briefly holds the lock — returning the current
-	// value is acceptable for snapshot semantics.
+	txn.Lock()
+	defer txn.Unlock()
 	return txn.snapshotWriteOffset
 }
 
 func (txn *Transaction) UpdateSnapshotWriteOffset() {
-	if txn.TryLock() {
-		defer txn.Unlock()
+	if txn.heldByCurrentGoroutine() {
+		// See GetSnapshotWriteOffset for why direct access is safe here.
 		txn.snapshotWriteOffset = len(txn.writes)
 		return
 	}
-	// TryLock failed: the lock is already held. This is either a reentrant
-	// call from within dumpBatch/IncrStatementID (the current goroutine
-	// already holds txn.Lock(), so updating snapshotWriteOffset is safe),
-	// or another goroutine briefly holds the lock — skipping the update is
-	// safe because the lock holder isn't adding new writes, and the offset
-	// will be captured correctly by the next compile after the lock is released.
+	txn.Lock()
+	defer txn.Unlock()
 	txn.snapshotWriteOffset = len(txn.writes)
 }
 
