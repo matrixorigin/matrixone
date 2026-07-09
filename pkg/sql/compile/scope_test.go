@@ -481,6 +481,82 @@ func TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr(t *testing.T) {
 		"all merge scopes are on the current CN so LocalRegs must cover every merge scope")
 }
 
+func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	source := &Scope{NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 2}}
+	localTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+	remoteTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+
+	arg, err := constructLocalDispatchFromScopes(0, []*Scope{localTarget}, source)
+	require.NoError(t, err)
+	require.Len(t, arg.LocalRegs, 1)
+	require.Empty(t, arg.RemoteRegs)
+	require.Equal(t, []int{0}, arg.ShuffleRegIdxLocal)
+
+	_, err = constructLocalDispatchFromScopes(0, []*Scope{localTarget, remoteTarget}, source)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "different CN")
+	require.Empty(t, remoteTarget.RemoteReceivRegInfos)
+}
+
+func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	source := &Scope{NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 2}}
+	validTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+
+	tests := []struct {
+		name    string
+		idx     int
+		targets []*Scope
+		source  *Scope
+		errText string
+	}{
+		{
+			name:    "nil source",
+			targets: []*Scope{validTarget},
+			errText: "source scope is nil",
+		},
+		{
+			name:    "nil target",
+			source:  source,
+			targets: []*Scope{nil},
+			errText: "target scope 0 is nil",
+		},
+		{
+			name:   "target without process",
+			source: source,
+			targets: []*Scope{{
+				NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+			}},
+			errText: "target scope 0 has no process",
+		},
+		{
+			name:    "merge receiver index out of range",
+			idx:     1,
+			source:  source,
+			targets: []*Scope{validTarget},
+			errText: "has no merge receiver at index 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := constructLocalDispatchFromScopes(tt.idx, tt.targets, tt.source)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.errText)
+		})
+	}
+}
+
 func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}

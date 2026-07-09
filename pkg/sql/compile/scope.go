@@ -397,6 +397,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
+	if err := validateRemoteRunAddress(s.NodeInfo.Addr, c.addr); err != nil {
+		return err
+	}
 	if s.ipAddrMatch(c.addr) {
 		return s.MergeRun(c)
 	}
@@ -436,6 +439,16 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		sender.close()
 	}
 	return runErr
+}
+
+func validateRemoteRunAddress(scopeAddr, localAddr string) error {
+	if scopeAddr == "" {
+		return nil
+	}
+	if malformedExecutionAddr(scopeAddr) && scopeAddr != localAddr {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q", scopeAddr)
+	}
+	return nil
 }
 
 // ParallelRun run a pipeline in parallel.

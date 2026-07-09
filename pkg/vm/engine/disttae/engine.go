@@ -830,9 +830,10 @@ func (e *Engine) Nodes(
 				nodes = append(nodes, engine.Node{
 					// should use c.CPUTotal to set Mcpu for the compile and pipeline.
 					// ref: https://github.com/matrixorigin/matrixone/issues/17935
-					Mcpu: ncpu,
-					Id:   c.ServiceID,
-					Addr: c.PipelineServiceAddress,
+					Mcpu:      ncpu,
+					Id:        c.ServiceID,
+					Addr:      c.PipelineServiceAddress,
+					WorkState: c.WorkState,
 				})
 			}
 			return true
@@ -850,9 +851,10 @@ func (e *Engine) Nodes(
 			func(s *metadata.CNService) {
 				if s.CommitID == version.CommitID {
 					nodes = append(nodes, engine.Node{
-						Mcpu: ncpu,
-						Id:   s.ServiceID,
-						Addr: s.PipelineServiceAddress,
+						Mcpu:      ncpu,
+						Id:        s.ServiceID,
+						Addr:      s.PipelineServiceAddress,
+						WorkState: s.WorkState,
 					})
 				}
 			},
@@ -865,9 +867,10 @@ func (e *Engine) Nodes(
 			func(s *metadata.CNService) {
 				if s.CommitID == version.CommitID {
 					nodes = append(nodes, engine.Node{
-						Mcpu: ncpu,
-						Id:   s.ServiceID,
-						Addr: s.PipelineServiceAddress,
+						Mcpu:      ncpu,
+						Id:        s.ServiceID,
+						Addr:      s.PipelineServiceAddress,
+						WorkState: s.WorkState,
 					})
 				}
 			},

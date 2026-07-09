@@ -217,6 +217,10 @@ func TestEngineNodesUsesClusterServiceWorkingState(t *testing.T) {
 			"working-pipeline",
 			"unknown-pipeline",
 		}, nodeAddresses(nodes))
+		require.Equal(t, map[string]metadata.WorkState{
+			"working-pipeline": metadata.WorkState_Working,
+			"unknown-pipeline": metadata.WorkState_Unknown,
+		}, nodeWorkStates(nodes))
 	})
 
 	t.Run("common tenant label route", func(t *testing.T) {
@@ -311,6 +315,14 @@ func nodeAddresses(nodes []engine.Node) []string {
 		addrs = append(addrs, node.Addr)
 	}
 	return addrs
+}
+
+func nodeWorkStates(nodes []engine.Node) map[string]metadata.WorkState {
+	states := make(map[string]metadata.WorkState, len(nodes))
+	for _, node := range nodes {
+		states[node.Addr] = node.WorkState
+	}
+	return states
 }
 
 func TestFilterDeleteDatabaseRelationsSkipsAlreadyDeletedRelation(t *testing.T) {

@@ -203,9 +203,9 @@ type Scope struct {
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 }
 
-// ipAddrMatch return true if the node-addr of the scope matches to local address.
-//
-// once node-addr is just empty, it means local.
+// ipAddrMatch returns true if the scope should run on the local CN. Historically
+// an empty scope address means local; non-empty malformed addresses must not be
+// silently treated as local.
 func (s *Scope) ipAddrMatch(local string) bool {
 	if len(s.NodeInfo.Addr) == 0 {
 		return true
@@ -213,7 +213,7 @@ func (s *Scope) ipAddrMatch(local string) bool {
 	if len(local) == 0 {
 		return false
 	}
-	return isSameCN(s.NodeInfo.Addr, local)
+	return sameExecutionAddr(s.NodeInfo.Addr, local)
 }
 
 // holdAnyCannotRemoteOperator returns error message
@@ -289,6 +289,7 @@ type Compile struct {
 
 	cnList         engine.Nodes
 	queryPlacement schedule.QueryDecision
+	scheduleTrace  schedulingTrace
 	// ast
 	stmt tree.Statement
 

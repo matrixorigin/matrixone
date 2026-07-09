@@ -1512,8 +1512,48 @@ func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*pro
 	return arg
 }
 
-// This function do not setting funcId.
-// PLEASE SETTING FuncId AFTER YOU CALL IT.
+// constructLocalDispatchFromScopes builds a dispatch whose receivers must all be
+// on the source scope's execution node. Use it for local-only dispatch FuncIds;
+// mixed local/remote registrations belong in constructDispatchLocalAndRemote.
+func constructLocalDispatchFromScopes(idx int, target []*Scope, source *Scope) (*dispatch.Dispatch, error) {
+	if source == nil {
+		return nil, moerr.NewInternalErrorNoCtx("local dispatch source scope is nil")
+	}
+	arg := dispatch.NewArgument()
+	arg.LocalRegs = make([]*process.WaitRegister, 0, len(target))
+	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0)
+	arg.ShuffleRegIdxLocal = make([]int, 0, len(target))
+	arg.ShuffleRegIdxRemote = make([]int, 0)
+
+	for i, s := range target {
+		if s == nil {
+			return nil, moerr.NewInternalErrorNoCtxf("local dispatch target scope %d is nil", i)
+		}
+		if !sameExecutionNode(s.NodeInfo, source.NodeInfo) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"local dispatch target scope %d is on a different CN, source id %q addr %q target id %q addr %q",
+				i, source.NodeInfo.Id, source.NodeInfo.Addr, s.NodeInfo.Id, s.NodeInfo.Addr)
+		}
+		if s.Proc == nil {
+			return nil, moerr.NewInternalErrorNoCtxf("local dispatch target scope %d has no process", i)
+		}
+		if idx < 0 || idx >= len(s.Proc.Reg.MergeReceivers) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"local dispatch target scope %d has no merge receiver at index %d", i, idx)
+		}
+		s.Proc.Reg.MergeReceivers[idx].SetNilBatchCntForReuse(source.NodeInfo.Mcpu)
+		arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
+		arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
+	}
+	return arg, nil
+}
+
+// constructDispatchLocalAndRemote wires local and remote receivers. It may
+// populate RemoteRegs, so callers must not assign local-only FuncIds unless
+// hasRemote is false. Non-shuffle callers use hasRemote to choose SendToAllFunc
+// vs SendToAllLocalFunc; shuffle callers may use ShuffleToAllFunc for either
+// local-only or mixed registrations. For guaranteed local-only dispatch, prefer
+// constructLocalDispatchFromScopes.
 func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (bool, *dispatch.Dispatch) {
 	arg := dispatch.NewArgument()
 	scopeLen := len(target)

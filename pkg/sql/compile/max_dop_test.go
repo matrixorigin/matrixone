@@ -273,6 +273,20 @@ func TestScopeIpAddrMatchDoesNotTreatEmptyLocalAddressAsRemoteMatch(t *testing.T
 
 	scope.NodeInfo.Addr = ""
 	require.True(t, scope.ipAddrMatch(""))
+
+	scope.NodeInfo.Addr = "malformed-remote-address"
+	require.False(t, scope.ipAddrMatch("local:6001"))
+}
+
+func TestValidateRemoteRunAddressRejectsMalformedRemote(t *testing.T) {
+	require.NoError(t, validateRemoteRunAddress("", "local:6001"))
+	require.NoError(t, validateRemoteRunAddress("remote:6001", "local:6001"))
+	require.NoError(t, validateRemoteRunAddress("local:6001", "local:6001"))
+	require.NoError(t, validateRemoteRunAddress("local", "local"))
+
+	err := validateRemoteRunAddress("malformed-remote-address", "local:6001")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "malformed remote CN address")
 }
 
 func TestGenerateNodesRespectsNodeDOPOnMultiCN(t *testing.T) {
