@@ -258,6 +258,8 @@ func (txn *Transaction) WriteBatch(
 func (txn *Transaction) dumpBatch(ctx context.Context, offset int) error {
 	txn.Lock()
 	defer txn.Unlock()
+	txn.inDumpBatch.Store(true)
+	defer txn.inDumpBatch.Store(false)
 	return txn.dumpBatchLocked(ctx, offset)
 }
 
@@ -2325,12 +2327,20 @@ func (txn *Transaction) clearTableCache() {
 }
 
 func (txn *Transaction) GetSnapshotWriteOffset() int {
+	if txn.inDumpBatch.Load() {
+		return txn.snapshotWriteOffset
+	}
 	txn.Lock()
 	defer txn.Unlock()
 	return txn.snapshotWriteOffset
 }
 
 func (txn *Transaction) UpdateSnapshotWriteOffset() {
+	if txn.inDumpBatch.Load() {
+		txn.snapshotWriteOffset = len(txn.writes)
+		txn.adjustWriteOffset = txn.snapshotWriteOffset
+		return
+	}
 	txn.Lock()
 	defer txn.Unlock()
 	txn.snapshotWriteOffset = len(txn.writes)

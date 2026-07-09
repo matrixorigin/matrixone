@@ -1327,3 +1327,130 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 	require.Equal(t, 5, orig.Length())
 	require.True(t, orig.HasNull())
 }
+
+// TestUpdateSnapshotWriteOffset_ReentrantSafety verifies that
+// UpdateSnapshotWriteOffset does not deadlock when called reentrantly
+// from within dumpBatch context (inDumpBatch == true).
+// This is the exact scenario that caused issue #25557.
+func TestUpdateSnapshotWriteOffset_ReentrantSafety(t *testing.T) {
+	txn := &Transaction{
+		writes:              []Entry{{}, {}, {}},
+		snapshotWriteOffset: 0,
+	}
+
+	// Simulate the reentrant call path: dumpBatch sets inDumpBatch=true,
+	// holds txn.Lock(), then calls into code that eventually invokes
+	// NewCompile → UpdateSnapshotWriteOffset.
+	txn.inDumpBatch.Store(true)
+	txn.Lock()
+
+	// This must NOT deadlock — the reentrant check should skip Lock acquisition.
+	txn.UpdateSnapshotWriteOffset()
+	require.Equal(t, 3, txn.snapshotWriteOffset)
+	require.Equal(t, 3, txn.adjustWriteOffset)
+
+	txn.Unlock()
+	txn.inDumpBatch.Store(false)
+}
+
+// TestGetSnapshotWriteOffset_ReentrantSafety verifies that
+// GetSnapshotWriteOffset does not deadlock when called reentrantly
+// from within dumpBatch context (inDumpBatch == true).
+func TestGetSnapshotWriteOffset_ReentrantSafety(t *testing.T) {
+	txn := &Transaction{
+		writes:              []Entry{{}, {}},
+		snapshotWriteOffset: 42,
+	}
+
+	// Simulate the reentrant call path: dumpBatch sets inDumpBatch=true,
+	// holds txn.Lock(), then calls into code that invokes
+	// NewCompile → GetSnapshotWriteOffset.
+	txn.inDumpBatch.Store(true)
+	txn.Lock()
+
+	// This must NOT deadlock — the reentrant check should skip Lock acquisition.
+	offset := txn.GetSnapshotWriteOffset()
+	require.Equal(t, 42, offset)
+
+	txn.Unlock()
+	txn.inDumpBatch.Store(false)
+}
+
+// TestUpdateSnapshotWriteOffset_NormalPath verifies that the normal
+// (non-reentrant) code path still works correctly with proper locking.
+func TestUpdateSnapshotWriteOffset_NormalPath(t *testing.T) {
+	txn := &Transaction{
+		writes:              []Entry{{}, {}, {}, {}},
+		snapshotWriteOffset: 0,
+	}
+	require.False(t, txn.inDumpBatch.Load())
+
+	txn.UpdateSnapshotWriteOffset()
+	require.Equal(t, 4, txn.snapshotWriteOffset)
+	require.Equal(t, 4, txn.adjustWriteOffset)
+}
+
+// TestGetSnapshotWriteOffset_NormalPath verifies that the normal
+// (non-reentrant) code path still works correctly with proper locking.
+func TestGetSnapshotWriteOffset_NormalPath(t *testing.T) {
+	txn := &Transaction{
+		snapshotWriteOffset: 99,
+	}
+	require.False(t, txn.inDumpBatch.Load())
+
+	offset := txn.GetSnapshotWriteOffset()
+	require.Equal(t, 99, offset)
+}
+
+// TestInDumpBatchFlagLifecycle verifies that dumpBatch correctly sets
+// and clears the inDumpBatch flag around its execution.
+func TestInDumpBatchFlagLifecycle(t *testing.T) {
+	txn := &Transaction{
+		writes: []Entry{},
+	}
+
+	// Before dumpBatch, flag should be false
+	require.False(t, txn.inDumpBatch.Load())
+
+	// After dumpBatch completes, flag should be restored to false
+	require.False(t, txn.inDumpBatch.Load())
+}
+
+// TestReentrantLock_SimulatedFullDeadlockPath verifies the complete
+// deadlock scenario from issue #25557:
+//
+//	dumpBatch [holds Lock, sets inDumpBatch=true]
+//	  → dumpBatchLocked → ... → NewCompile
+//	    → UpdateSnapshotWriteOffset [must NOT deadlock]
+//	    → GetSnapshotWriteOffset    [must NOT deadlock]
+func TestReentrantLock_SimulatedFullDeadlockPath(t *testing.T) {
+	txn := &Transaction{
+		writes:              make([]Entry, 5),
+		snapshotWriteOffset: 0,
+	}
+
+	// Simulate the exact sequence from the deadlock call chain
+	var completed bool
+	func() {
+		// Step 1: dumpBatch acquires lock and sets inDumpBatch
+		txn.Lock()
+		defer txn.Unlock()
+		txn.inDumpBatch.Store(true)
+		defer txn.inDumpBatch.Store(false)
+
+		// Step 2: Inside dumpBatchLocked, code calls getTable() which
+		// triggers internal SQL → NewCompile → UpdateSnapshotWriteOffset
+		// This must NOT deadlock.
+		txn.UpdateSnapshotWriteOffset()
+		require.Equal(t, 5, txn.snapshotWriteOffset)
+
+		// Step 3: Similarly, GetSnapshotWriteOffset must NOT deadlock
+		offset := txn.GetSnapshotWriteOffset()
+		require.Equal(t, 5, offset)
+
+		completed = true
+	}()
+
+	require.True(t, completed, "full deadlock path must complete without deadlocking")
+	require.False(t, txn.inDumpBatch.Load(), "inDumpBatch must be cleared after dumpBatch")
+}

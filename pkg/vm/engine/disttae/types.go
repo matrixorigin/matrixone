@@ -356,6 +356,10 @@ type Transaction struct {
 	engine *Engine
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly atomic.Bool
+	// inDumpBatch is set to true inside dumpBatch() while holding txn.Lock(),
+	// so UpdateSnapshotWriteOffset and GetSnapshotWriteOffset can detect
+	// reentrant calls and skip acquiring the lock to avoid deadlock.
+	inDumpBatch atomic.Bool
 	// db       *DB
 	// blockId starts at 0 and keeps incrementing,
 	// this is used to name the file on s3 and then give it to tae to use
