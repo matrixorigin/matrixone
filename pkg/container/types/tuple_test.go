@@ -1227,6 +1227,11 @@ func TestUnpackNthElement(t *testing.T) {
 		Decimal256{3, 4, 5, 6},
 		[]byte("hello"),
 		uuid,
+		// ENUM in a non-trailing position: extracting the element after it exercises
+		// UnpackNthElement's enum-skip (nested uint16Code byte), the path used by
+		// serial_extract's constant-index fast path.
+		Enum(2),
+		[]byte("world"),
 	}
 	p := NewPacker()
 	encodeBufToPacker(tuple, p)
