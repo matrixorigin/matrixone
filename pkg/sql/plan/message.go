@@ -90,7 +90,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 			Expr: scanHiddenKeyExpr,
 			Flag: node.OrderBy[0].Flag,
 		}
-		enableOrderedLimit = node.Offset == nil && node.RankOption == nil
+		enableOrderedLimit = node.Offset == nil && node.RankOption == nil && canPushRegularIndexOrderedLimit(scanNode)
 	}
 	if orderByCol.RelPos != scanNode.BindingTags[0] {
 		return
