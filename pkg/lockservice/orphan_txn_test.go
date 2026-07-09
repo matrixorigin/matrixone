@@ -1022,6 +1022,23 @@ func TestCanUnlockRemoteTxnWithNotifyOK(t *testing.T) {
 	require.Equal(t, fenceTS, actualFenceTS)
 }
 
+func TestCanUnlockRemoteTxnWithLocalTxn(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			require.FailNow(t, "local txn should not notify cannot commit")
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) { return true, nil },
+	).(*mapBasedTxnHolder)
+	canUnlock, fenceTS := hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s1"})
+	require.False(t, canUnlock)
+	require.True(t, fenceTS.IsEmpty())
+}
+
 func TestCanUnlockRemoteTxnWithNotifyFailed(t *testing.T) {
 	hold := newMapBasedTxnHandler(
 		"s1",
@@ -1035,6 +1052,14 @@ func TestCanUnlockRemoteTxnWithNotifyFailed(t *testing.T) {
 	).(*mapBasedTxnHolder)
 	canUnlock, _ := hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"})
 	require.False(t, canUnlock)
+}
+
+func TestEnsureFenceTSFallback(t *testing.T) {
+	input := timestamp.Timestamp{PhysicalTime: 10}
+	require.Equal(t, input, ensureFenceTS(input, nil))
+
+	fallback := ensureFenceTS(timestamp.Timestamp{}, nil)
+	require.False(t, fallback.IsEmpty())
 }
 
 func TestCanUnlockRemoteTxnWithNotifyFoundCommitting(t *testing.T) {
