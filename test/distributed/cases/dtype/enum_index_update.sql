@@ -40,6 +40,10 @@ select id, status, note from enum_idx08 order by id;
 -- they verify the old index key was deleted and the new one written, not just the main table
 select id from enum_idx08 where note='updated' and status='shipped';
 select id from enum_idx08 where note='n1' and status='new';
+-- composite unique conflict is properly raised; key name differs across exec modes, match prefix only
+-- @regex("Duplicate entry", true)
+update enum_idx08 set status='paid', note='n2' where id=1;
+select id, status, note from enum_idx08 order by id;
 drop table enum_idx08;
 
 -- update set column with single-column secondary index
