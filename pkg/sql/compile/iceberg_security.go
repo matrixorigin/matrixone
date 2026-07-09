@@ -131,24 +131,14 @@ func (c *Compile) validateIcebergRemoteFanoutPolicy(
 	}
 	credentialScopes := icebergRuntimeCredentialScopeCount(runtime)
 	hasObjectRef := runtime.objectIORef != ""
-	if credentialScopes == 0 && !hasObjectRef {
-		return nil
-	}
-	cfg, hasConfig, err := c.icebergConfig(ctx)
-	if err != nil {
-		return err
-	}
-	if hasConfig && cfg.Security.ProtectedCNToCN {
-		return nil
-	}
-	if credentialScopes == 0 && hasConfig && cfg.Write.EnableRemoteSign {
-		return nil
-	}
-	message := "Iceberg remote object IO reference fanout requires protected CN-to-CN transport or remote signing"
+	message := "Iceberg remote scan fanout is disabled until ObjectIO provider handoff is implemented"
 	if credentialScopes > 0 {
-		message = "Iceberg remote credential fanout requires protected CN-to-CN transport"
+		message = "Iceberg remote credential fanout is disabled until ObjectIO provider handoff is implemented"
+	} else if hasObjectRef {
+		message = "Iceberg remote object IO reference fanout is disabled until ObjectIO provider handoff is implemented"
 	}
 	return api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, message, map[string]string{
+		"has_object_io_ref": fmt.Sprintf("%t", hasObjectRef),
 		"credential_scopes": fmt.Sprintf("%d", credentialScopes),
 		"data_tasks":        fmt.Sprintf("%d", len(runtime.dataTasks)),
 		"remote_cns":        fmt.Sprintf("%d", icebergRemoteCNCount(shards, c.addr)),

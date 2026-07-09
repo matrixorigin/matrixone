@@ -22,6 +22,7 @@ import (
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,6 +69,70 @@ func TestIcebergCatalogStatementLoggingRedactsSecret(t *testing.T) {
 			require.False(t, strings.Contains(redacted, "raw-token"), redacted)
 		})
 	}
+}
+
+func TestIcebergCatalogDropBlocksAllCatalogScopedMetadata(t *testing.T) {
+	ctx := context.Background()
+	countByTable := map[string]uint64{
+		icebergsql.TableTables:          1,
+		icebergsql.TablePrincipalMap:    1,
+		icebergsql.TableResidencyPolicy: 1,
+		icebergsql.TableRefs:            1,
+		icebergsql.TablePublishJobs:     1,
+		icebergsql.TableOrphanFiles:     1,
+		icebergsql.TableMaintenanceJobs: 1,
+	}
+	seen := make(map[string]string)
+	stub := gostub.Stub(&ExeSqlInBgSes, func(_ context.Context, _ BackgroundExec, sql string) ([]ExecResult, error) {
+		for table, count := range countByTable {
+			if strings.Contains(sql, "mo_catalog."+table) {
+				seen[table] = sql
+				return []ExecResult{icebergCatalogCountResult{count: count}}, nil
+			}
+		}
+		t.Fatalf("unexpected dependency query: %s", sql)
+		return nil, nil
+	})
+	defer stub.Reset()
+
+	deps, err := icebergCatalogBlockingDependencies(ctx, nil, 42, 7)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{
+		"table mappings",
+		"principal mappings",
+		"residency policies",
+		"ref cache entries",
+		"publish jobs",
+		"orphan file metadata",
+		"maintenance jobs",
+	}, deps)
+	for table := range countByTable {
+		require.Contains(t, seen, table)
+		require.Contains(t, seen[table], "select count(*)")
+	}
+	require.Contains(t, seen[icebergsql.TablePrincipalMap], "account_id = 42 and catalog_id = 7")
+	require.Contains(t, seen[icebergsql.TableResidencyPolicy], "(scope_type = 'cluster' or account_id = 42) and catalog_id = 7")
+	require.Contains(t, seen[icebergsql.TablePublishJobs], "account_id = 42 and target_catalog_id = 7")
+	require.Contains(t, seen[icebergsql.TableOrphanFiles], "account_id = 42 and catalog_id = 7")
+}
+
+func TestIcebergCatalogDropAllowsIdReuseOnlyWhenNoScopedMetadataRemains(t *testing.T) {
+	ctx := context.Background()
+	queried := 0
+	stub := gostub.Stub(&ExeSqlInBgSes, func(_ context.Context, _ BackgroundExec, sql string) ([]ExecResult, error) {
+		queried++
+		if strings.Contains(sql, "mo_catalog."+icebergsql.TablePrincipalMap) ||
+			strings.Contains(sql, "mo_catalog."+icebergsql.TableResidencyPolicy) {
+			return []ExecResult{icebergCatalogCountResult{count: 0}}, nil
+		}
+		return []ExecResult{icebergCatalogCountResult{count: 0}}, nil
+	})
+	defer stub.Reset()
+
+	deps, err := icebergCatalogBlockingDependencies(ctx, nil, 42, 7)
+	require.NoError(t, err)
+	require.Empty(t, deps)
+	require.Equal(t, len(icebergCatalogDependencySpecs), queried)
 }
 
 func TestIcebergStatementsHavePrivilegeDefinitions(t *testing.T) {
@@ -128,6 +193,34 @@ func TestIcebergMergePrivilegeDefinitionRequiresAllActions(t *testing.T) {
 	require.True(t, seenCompound[PrivilegeTypeInsert])
 	require.True(t, seenCompound[PrivilegeTypeUpdate])
 	require.False(t, seenCompound[PrivilegeTypeDelete])
+}
+
+type icebergCatalogCountResult struct {
+	count uint64
+}
+
+func (r icebergCatalogCountResult) GetRowCount() uint64 {
+	return 1
+}
+
+func (r icebergCatalogCountResult) GetColumnCount() uint64 {
+	return 1
+}
+
+func (r icebergCatalogCountResult) GetString(context.Context, uint64, uint64) (string, error) {
+	return "", nil
+}
+
+func (r icebergCatalogCountResult) GetUint64(context.Context, uint64, uint64) (uint64, error) {
+	return r.count, nil
+}
+
+func (r icebergCatalogCountResult) GetInt64(context.Context, uint64, uint64) (int64, error) {
+	return int64(r.count), nil
+}
+
+func (r icebergCatalogCountResult) ColumnIsNull(context.Context, uint64, uint64) (bool, error) {
+	return false, nil
 }
 
 func TestShowIcebergRejectsParsedLikeWhereFilters(t *testing.T) {

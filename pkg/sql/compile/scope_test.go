@@ -1058,12 +1058,13 @@ func TestCompileExternScanIcebergFileFanout(t *testing.T) {
 
 	ss, err := testCompile.compileExternScanIcebergFileFanout(n, param, runtime, true)
 	require.NoError(t, err)
-	require.Len(t, ss, 3)
+	require.Len(t, ss, 1)
 	require.True(t, param.Parallel)
 
 	seen := make(map[string]bool)
 	for _, scope := range ss {
 		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		require.Equal(t, "cn1:6001", scope.NodeInfo.Addr)
 		require.Equal(t, 1, scope.NodeInfo.Mcpu)
 		require.True(t, scope.IsLoad)
 		ext, ok := scope.RootOp.(*external.External)
@@ -1092,11 +1093,7 @@ func TestCompileExternScanIcebergFileFanout(t *testing.T) {
 			deletePaths[task.DeleteFilePath] = true
 		}
 		require.True(t, deletePaths["warehouse/iceberg/orders/delete-all.parquet"])
-		if ext.Es.FileList[0] == dataTasks[0].FilePath {
-			require.True(t, deletePaths["warehouse/iceberg/orders/delete-0.parquet"])
-		} else {
-			require.False(t, deletePaths["warehouse/iceberg/orders/delete-0.parquet"])
-		}
+		require.True(t, deletePaths["warehouse/iceberg/orders/delete-0.parquet"])
 		require.False(t, deletePaths["warehouse/iceberg/orders/delete-other.parquet"])
 	}
 	require.Equal(t, map[string]bool{

@@ -412,10 +412,7 @@ func icebergMergeInsertExprMap(ctx CompilerContext, target icebergDeleteTarget, 
 		if _, ok := out[colKey]; ok {
 			continue
 		}
-		if col.Typ.NotNullable {
-			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Iceberg MERGE INSERT column list must include required target column %s", col.Name)
-		}
-		out[colKey] = tree.NewNumVal("", "", false, tree.P_null)
+		out[colKey] = tree.NewDefaultVal(nil)
 	}
 	return out, nil
 }

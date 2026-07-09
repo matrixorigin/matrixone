@@ -105,6 +105,50 @@ func TestObjectIORegistryResolveAndRelease(t *testing.T) {
 	}
 }
 
+func TestObjectIORegistryRefCannotResolveInIsolatedRemoteRegistry(t *testing.T) {
+	ctx := context.Background()
+	objectIORegistry.Lock()
+	coordinatorEntries := objectIORegistry.entries
+	objectIORegistry.entries = make(map[string]objectIORegistryEntry)
+	objectIORegistry.Unlock()
+	t.Cleanup(func() {
+		objectIORegistry.Lock()
+		objectIORegistry.entries = coordinatorEntries
+		objectIORegistry.Unlock()
+	})
+
+	fs, err := fileservice.NewMemoryFS("iceberg-registry-isolated", fileservice.DisabledCacheConfig, nil)
+	if err != nil {
+		t.Fatalf("new memory fs: %v", err)
+	}
+	ref, err := RegisterObjectIOProvider(ctx, ScopedProvider{FileService: fs}, func(location string) ObjectScope {
+		return ObjectScope{
+			AccountID:       42,
+			CatalogID:       7,
+			StorageLocation: location,
+			Endpoint:        "s3.me-central-1.amazonaws.com",
+			Region:          "me-central-1",
+			Bucket:          "warehouse",
+			Principal:       "ksa-analytics",
+		}
+	}, time.Minute)
+	if err != nil {
+		t.Fatalf("register object io provider: %v", err)
+	}
+	if _, _, err = ResolveObjectIORef(ctx, ref, "s3://warehouse/orders.parquet"); err != nil {
+		t.Fatalf("coordinator registry should resolve registered ref: %v", err)
+	}
+
+	objectIORegistry.Lock()
+	objectIORegistry.entries = make(map[string]objectIORegistryEntry)
+	objectIORegistry.Unlock()
+
+	_, _, err = ResolveObjectIORef(ctx, ref, "s3://warehouse/orders.parquet")
+	if err == nil || !strings.Contains(err.Error(), string(api.ErrObjectIO)) {
+		t.Fatalf("expected isolated remote registry to reject process-local ref, got %v", err)
+	}
+}
+
 func TestObjectIORegistryRetainedRefSurvivesSweep(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS("iceberg-registry-retained", fileservice.DisabledCacheConfig, nil)

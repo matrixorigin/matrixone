@@ -147,13 +147,19 @@ func handleAlterIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Alt
 	))
 }
 
-func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.DropIcebergCatalog) error {
+func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.DropIcebergCatalog) (err error) {
 	if err := ensureIcebergFeatureEnabledForSession(ctx, ses, "DROP ICEBERG CATALOG"); err != nil {
 		return err
 	}
 	accountID := ses.GetAccountId()
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
 	catalogName := string(stmt.Name)
 	catalogID, err := queryIcebergCatalogID(ctx, bh, accountID, catalogName)
 	if err != nil {
@@ -165,19 +171,12 @@ func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Drop
 		}
 		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s does not exist", catalogName)
 	}
-	inUse, err := icebergCatalogHasMappings(ctx, bh, accountID, catalogID)
+	dependencies, err := icebergCatalogBlockingDependencies(ctx, bh, accountID, catalogID)
 	if err != nil {
 		return err
 	}
-	if inUse {
-		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s is still used by table mappings", catalogName)
-	}
-	hasOrphans, err := icebergCatalogHasOrphanMetadata(ctx, bh, accountID, catalogID)
-	if err != nil {
-		return err
-	}
-	if hasOrphans {
-		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s still has orphan-cleanup metadata", catalogName)
+	if len(dependencies) > 0 {
+		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s still has dependent metadata: %s", catalogName, strings.Join(dependencies, ", "))
 	}
 	return bh.Exec(ctx, fmt.Sprintf(
 		"delete from mo_catalog.%s where account_id = %d and catalog_id = %d",
@@ -387,47 +386,88 @@ func nextIcebergCatalogID(ctx context.Context, bh BackgroundExec, accountID uint
 	return results[0].GetUint64(ctx, 0, 0)
 }
 
-func icebergCatalogHasMappings(ctx context.Context, bh BackgroundExec, accountID uint32, catalogID uint64) (bool, error) {
-	sql := fmt.Sprintf(
-		"select count(*) from mo_catalog.%s where account_id = %d and catalog_id = %d",
-		sqliceberg.TableTables,
-		accountID,
-		catalogID,
-	)
-	results, err := ExeSqlInBgSes(ctx, bh, sql)
-	if err != nil {
-		return false, err
-	}
-	if !execResultArrayHasData(results) {
-		return false, nil
-	}
-	count, err := results[0].GetUint64(ctx, 0, 0)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
+type icebergCatalogDependencySpec struct {
+	table       string
+	label       string
+	whereClause func(accountID uint32, catalogID uint64) string
 }
 
-func icebergCatalogHasOrphanMetadata(ctx context.Context, bh BackgroundExec, accountID uint32, catalogID uint64) (bool, error) {
-	sql := fmt.Sprintf(
-		"select count(*) from mo_catalog.%s where account_id = %d and catalog_id = %d and cleanup_status <> %s",
-		sqliceberg.TableOrphanFiles,
-		accountID,
-		catalogID,
-		quoteIcebergSQLString(sqliceberg.OrphanCleanupStatusDeleted),
-	)
-	results, err := ExeSqlInBgSes(ctx, bh, sql)
-	if err != nil {
-		return false, err
+var icebergCatalogDependencySpecs = []icebergCatalogDependencySpec{
+	{
+		table: sqliceberg.TableTables,
+		label: "table mappings",
+		whereClause: func(accountID uint32, catalogID uint64) string {
+			return fmt.Sprintf("account_id = %d and catalog_id = %d", accountID, catalogID)
+		},
+	},
+	{
+		table: sqliceberg.TablePrincipalMap,
+		label: "principal mappings",
+		whereClause: func(accountID uint32, catalogID uint64) string {
+			return fmt.Sprintf("account_id = %d and catalog_id = %d", accountID, catalogID)
+		},
+	},
+	{
+		table: sqliceberg.TableResidencyPolicy,
+		label: "residency policies",
+		whereClause: func(accountID uint32, catalogID uint64) string {
+			return fmt.Sprintf("(scope_type = 'cluster' or account_id = %d) and catalog_id = %d", accountID, catalogID)
+		},
+	},
+	{
+		table: sqliceberg.TableRefs,
+		label: "ref cache entries",
+		whereClause: func(accountID uint32, catalogID uint64) string {
+			return fmt.Sprintf("account_id = %d and catalog_id = %d", accountID, catalogID)
+		},
+	},
+	{
+		table: sqliceberg.TablePublishJobs,
+		label: "publish jobs",
+		whereClause: func(accountID uint32, catalogID uint64) string {
+			return fmt.Sprintf("account_id = %d and target_catalog_id = %d", accountID, catalogID)
+		},
+	},
+	{
+		table: sqliceberg.TableOrphanFiles,
+		label: "orphan file metadata",
+		whereClause: func(accountID uint32, catalogID uint64) string {
+			return fmt.Sprintf("account_id = %d and catalog_id = %d", accountID, catalogID)
+		},
+	},
+	{
+		table: sqliceberg.TableMaintenanceJobs,
+		label: "maintenance jobs",
+		whereClause: func(accountID uint32, catalogID uint64) string {
+			return fmt.Sprintf("account_id = %d and catalog_id = %d", accountID, catalogID)
+		},
+	},
+}
+
+func icebergCatalogBlockingDependencies(ctx context.Context, bh BackgroundExec, accountID uint32, catalogID uint64) ([]string, error) {
+	blocking := make([]string, 0)
+	for _, spec := range icebergCatalogDependencySpecs {
+		sql := fmt.Sprintf(
+			"select count(*) from mo_catalog.%s where %s",
+			spec.table,
+			spec.whereClause(accountID, catalogID),
+		)
+		results, err := ExeSqlInBgSes(ctx, bh, sql)
+		if err != nil {
+			return nil, err
+		}
+		if !execResultArrayHasData(results) {
+			continue
+		}
+		count, err := results[0].GetUint64(ctx, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		if count > 0 {
+			blocking = append(blocking, spec.label)
+		}
 	}
-	if !execResultArrayHasData(results) {
-		return false, nil
-	}
-	count, err := results[0].GetUint64(ctx, 0, 0)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
+	return blocking, nil
 }
 
 func quoteIcebergSQLString(value string) string {

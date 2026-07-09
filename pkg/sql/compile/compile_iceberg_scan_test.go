@@ -118,7 +118,7 @@ func TestCompileIcebergScanWithInjectedPlanner(t *testing.T) {
 	require.Equal(t, "audit_branch", planner.req.Snapshot.RefName)
 	require.Equal(t, []int{1}, planner.req.ProjectionIDs)
 	require.Empty(t, planner.req.PrunePredicates)
-	require.Len(t, scopes, 2)
+	require.Len(t, scopes, 1)
 	require.Equal(t, int32(2), node.Stats.BlockNum)
 	require.Equal(t, float64(300), node.Stats.Cost)
 	require.Equal(t, float64(99), node.Stats.Outcnt)
@@ -161,7 +161,7 @@ func TestCompileIcebergScanWithInjectedPlanner(t *testing.T) {
 	}, seen)
 }
 
-func TestCompileIcebergScanBlocksRemoteCredentialFanoutWithoutProtectedTransport(t *testing.T) {
+func TestCompileIcebergScanKeepsCredentialScopedTasksOnCurrentCN(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}}
 	testCompile.addr = "cn1:6001"
@@ -188,10 +188,14 @@ func TestCompileIcebergScanBlocksRemoteCredentialFanoutWithoutProtectedTransport
 			TbColToDataCol: map[string]int32{},
 		},
 	}
-	_, err := testCompile.compileIcebergScan(node, true)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), string(api.ErrRemoteSigningDenied))
-	require.Contains(t, err.Error(), "protected CN-to-CN transport")
+	scopes, err := testCompile.compileIcebergScan(node, true)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	require.Equal(t, "cn1:6001", scopes[0].NodeInfo.Addr)
+	ext := scopes[0].RootOp.(*external.External)
+	require.Len(t, ext.Es.IcebergDataTasks, 2)
+	require.Equal(t, "scope-0", ext.Es.IcebergDataTasks[0].CredentialScope)
+	require.Equal(t, "scope-1", ext.Es.IcebergDataTasks[1].CredentialScope)
 }
 
 func TestCompileIcebergScanUsesRuntimeRegisteredPlanner(t *testing.T) {
@@ -333,7 +337,7 @@ func TestCompileIcebergScanRejectsInvalidRuntimePlanner(t *testing.T) {
 	require.Contains(t, err.Error(), string(api.ErrConfigInvalid))
 }
 
-func TestIcebergRemoteFanoutPolicyAllowsObjectRefWithRemoteSigning(t *testing.T) {
+func TestIcebergRemoteFanoutPolicyBlocksObjectRefEvenWithRemoteSigning(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	setIcebergConfigForTest(t, testCompile, func(params *config.IcebergParameters) {
 		params.EnableRemoteSigning = true
@@ -347,7 +351,9 @@ func TestIcebergRemoteFanoutPolicyAllowsObjectRefWithRemoteSigning(t *testing.T)
 		{node: engine.Node{Addr: "cn1:6001"}},
 		{node: engine.Node{Addr: "cn2:6001"}},
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrRemoteSigningDenied))
+	require.Contains(t, err.Error(), "ObjectIO provider handoff")
 }
 
 func TestIcebergRemoteFanoutPolicyBlocksObjectRefWhenRemoteSigningDisabled(t *testing.T) {
@@ -363,7 +369,24 @@ func TestIcebergRemoteFanoutPolicyBlocksObjectRefWhenRemoteSigningDisabled(t *te
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), string(api.ErrRemoteSigningDenied))
-	require.Contains(t, err.Error(), "remote signing")
+	require.Contains(t, err.Error(), "ObjectIO provider handoff")
+}
+
+func TestIcebergRemoteFanoutPolicyBlocksObjectRefEvenWithProtectedCNToCN(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	enableProtectedIcebergCNToCNForTest(t, testCompile)
+	testCompile.addr = "cn1:6001"
+
+	err := testCompile.validateIcebergRemoteFanoutPolicy(nil, icebergExternalScanRuntime{
+		objectIORef: "protected-transport-object-ref",
+		dataTasks:   []*pipeline.IcebergDataFileTask{{FilePath: "warehouse/iceberg/orders/part-0.parquet"}},
+	}, []icebergDataFileScopeShard{
+		{node: engine.Node{Addr: "cn1:6001"}},
+		{node: engine.Node{Addr: "cn2:6001"}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrRemoteSigningDenied))
+	require.Contains(t, err.Error(), "ObjectIO provider handoff")
 }
 
 func TestIcebergRemoteFanoutPolicyBlocksCredentialScopeEvenWithRemoteSigning(t *testing.T) {

@@ -508,7 +508,7 @@ func TestIcebergMergeWithIcebergSourceAnnotatesOnlyTargetScan(t *testing.T) {
 	}
 }
 
-func TestIcebergMergeInsertColumnListFillsMissingNullableColumns(t *testing.T) {
+func TestIcebergMergeInsertColumnListMarksMissingColumnsAsDefault(t *testing.T) {
 	ctx := newIcebergTestCompilerContext(t, nil)
 	target := icebergDeleteTarget{
 		tableName: "accounts",
@@ -517,6 +517,7 @@ func TestIcebergMergeInsertColumnListFillsMissingNullableColumns(t *testing.T) {
 				{Name: "account_id", Typ: planpb.Type{NotNullable: true}},
 				{Name: "balance", Typ: planpb.Type{NotNullable: true}},
 				{Name: "region"},
+				{Name: "quota", Typ: planpb.Type{NotNullable: true}},
 			},
 		},
 	}
@@ -531,34 +532,93 @@ func TestIcebergMergeInsertColumnListFillsMissingNullableColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge insert map: %v", err)
 	}
-	if len(values) != 3 {
-		t.Fatalf("expected all target columns after nullable fill, got %+v", values)
+	if len(values) != 4 {
+		t.Fatalf("expected all target columns after default fill, got %+v", values)
 	}
-	if got := tree.String(values["region"], dialect.MYSQL); got != "null" {
-		t.Fatalf("expected missing nullable region to be NULL, got %s", got)
+	for _, col := range []string{"region", "quota"} {
+		if _, ok := values[col].(*tree.DefaultVal); !ok {
+			t.Fatalf("expected missing column %s to use DEFAULT sentinel, got %T %s", col, values[col], tree.String(values[col], dialect.MYSQL))
+		}
 	}
 }
 
-func TestIcebergMergeInsertColumnListRejectsMissingRequiredColumns(t *testing.T) {
+func TestIcebergMergeInsertColumnListExpandsOmittedColumnDefaults(t *testing.T) {
 	ctx := newIcebergTestCompilerContext(t, nil)
-	target := icebergDeleteTarget{
-		tableName: "accounts",
-		tableDef: &planpb.TableDef{
-			Cols: []*planpb.ColDef{
-				{Name: "account_id", Typ: planpb.Type{NotNullable: true}},
-				{Name: "balance", Typ: planpb.Type{NotNullable: true}},
+	ctx.tables["gold_orders"].Cols = []*planpb.ColDef{
+		{
+			Name: "id",
+			Typ:  planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders", NotNullable: true},
+			Default: &planpb.Default{
+				NullAbility: false,
 			},
 		},
-	}
-	_, err := icebergMergeInsertExprMap(ctx, target, target.tableDef.Cols, &tree.MergeClause{
-		Action:        tree.MergeActionInsert,
-		InsertColumns: tree.IdentifierList{"account_id"},
-		InsertValues: tree.Exprs{
-			tree.NewNumVal("1", "1", false, tree.P_int64),
+		{
+			Name: "region",
+			Typ:  planpb.Type{Id: int32(types.T_varchar), Width: 32, Table: "gold_orders"},
+			Default: &planpb.Default{
+				Expr:         makeStringConstExpr(planpb.Type{Id: int32(types.T_varchar), Width: 32, Table: "gold_orders"}, "me-central"),
+				OriginString: "me-central",
+				NullAbility:  true,
+			},
 		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "required target column balance") {
-		t.Fatalf("expected missing required column error, got %v", err)
+		{
+			Name: "quota",
+			Typ:  planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders", NotNullable: true},
+			Default: &planpb.Default{
+				Expr: &planpb.Expr{
+					Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders", NotNullable: true},
+					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+						Value: &planpb.Literal_I64Val{I64Val: 7},
+					}},
+				},
+				OriginString: "7",
+				NullAbility:  false,
+			},
+		},
+		{
+			Name:    "comment",
+			Typ:     planpb.Type{Id: int32(types.T_varchar), Width: 64, Table: "gold_orders"},
+			Default: &planpb.Default{NullAbility: true},
+		},
+	}
+
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when not matched then insert (id) values (s.id)", 1)
+	if err != nil {
+		t.Fatalf("parse merge insert defaults: %v", err)
+	}
+	p, err := BuildPlan(ctx, stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg merge insert defaults plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil {
+		t.Fatalf("expected MERGE query")
+	}
+	foundNullableDefault := false
+	foundNotNullDefault := false
+	foundNullableNull := false
+	reachable := reachablePlanNodes(query)
+	for nodeIdx, node := range query.GetNodes() {
+		if !reachable[int32(nodeIdx)] {
+			continue
+		}
+		for _, expr := range node.GetProjectList() {
+			if icebergDMLExprContainsDefaultValue(expr) {
+				t.Fatalf("MERGE omitted INSERT column DEFAULT must be expanded before DML projection rewrite: node=%d expr=%+v", nodeIdx, expr)
+			}
+			if icebergDMLExprContainsStringLiteral(expr, "me-central") {
+				foundNullableDefault = true
+			}
+			if icebergDMLExprContainsI64Literal(expr, 7) {
+				foundNotNullDefault = true
+			}
+			if icebergDMLExprContainsNullLiteral(expr) {
+				foundNullableNull = true
+			}
+		}
+	}
+	if !foundNullableDefault || !foundNotNullDefault || !foundNullableNull {
+		t.Fatalf("expected nullable default, NOT NULL default, and nullable NULL expansion, got nullableDefault=%v notNullDefault=%v nullableNull=%v", foundNullableDefault, foundNotNullDefault, foundNullableNull)
 	}
 }
 
@@ -863,6 +923,23 @@ func icebergDMLExprContainsI64Literal(expr *planpb.Expr, value int64) bool {
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
 			if icebergDMLExprContainsI64Literal(arg, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func icebergDMLExprContainsNullLiteral(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Isnull {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if icebergDMLExprContainsNullLiteral(arg) {
 				return true
 			}
 		}

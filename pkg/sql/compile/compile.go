@@ -2101,52 +2101,15 @@ func (c *Compile) compileExternScanIcebergFileFanout(
 ) ([]*Scope, error) {
 	runtime.dataTasks = compactIcebergDataTasks(runtime.dataTasks)
 	fileList, fileSize := icebergDataTaskFiles(runtime.dataTasks)
-	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
-	shards := splitIcebergDataFileShards(runtime.dataTasks, nodes)
-	if len(shards) <= 1 {
-		shardParam := new(tree.ExternParam)
-		*shardParam = *param
-		shardParam.Parallel = false
-		return c.compileExternScanIcebergShard(node, shardParam, runtime, icebergDataFileScopeShard{
-			node:      engine.Node{Addr: c.addr, Mcpu: 1},
-			fileList:  fileList,
-			fileSize:  fileSize,
-			dataTasks: runtime.dataTasks,
-		}, strictSqlMode)
-	}
-	if err := c.validateIcebergRemoteFanoutPolicy(param.Ctx, runtime, shards); err != nil {
-		return nil, err
-	}
-
-	ss := make([]*Scope, 0, len(shards))
-	currentFirstFlag := c.anal.isFirst
-	for i := range shards {
-		shard := shards[i]
-		shardParam := new(tree.ExternParam)
-		*shardParam = *param
-		shardParam.Parallel = false
-		shardRuntime := runtime
-		if i > 0 {
-			shardRuntime.planningStats = process.ParquetProfileStats{}
-		}
-
-		remote := param.ScanType == tree.S3 && len(c.cnList) > 0
-		scope := c.constructScopeForExternal(shard.node.Addr, remote)
-		scope.NodeInfo.Mcpu = 1
-		scope.IsLoad = true
-		op := constructExternal(
-			node, shardParam, c.proc.Ctx,
-			shard.fileList, shard.fileSize,
-			makeWholeFileOffsets(len(shard.fileList)),
-			strictSqlMode,
-		)
-		attachIcebergRuntimeToExternal(op, shardRuntime, shard.dataTasks)
-		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		scope.setRootOperator(op)
-		ss = append(ss, scope)
-	}
-	c.anal.isFirst = false
-	return ss, nil
+	shardParam := new(tree.ExternParam)
+	*shardParam = *param
+	shardParam.Parallel = false
+	return c.compileExternScanIcebergShard(node, shardParam, runtime, icebergDataFileScopeShard{
+		node:      engine.Node{Addr: c.addr, Mcpu: 1},
+		fileList:  fileList,
+		fileSize:  fileSize,
+		dataTasks: runtime.dataTasks,
+	}, strictSqlMode)
 }
 
 func (c *Compile) compileExternScanIcebergShard(
