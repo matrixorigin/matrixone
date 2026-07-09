@@ -83,7 +83,8 @@ data branch diff type_left against type_right;
 data branch create table rename_left from base;
 data branch create table rename_right from base;
 alter table rename_left rename column b to bb;
--- A rename on one branch keeps the renamed table queryable for diff.
+-- A one-sided rename removes base-visible column b from the target schema.
+-- @regex("schema compatibility check: base column 'b' is not present in target schema",true)
 data branch diff rename_left against rename_right;
 
 drop database br_schema_drift;

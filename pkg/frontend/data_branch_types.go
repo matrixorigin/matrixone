@@ -204,9 +204,10 @@ type tableStuff struct {
 		pkColIdxes   []int // expanded pk columns
 		pkKind       int
 
-		commonIdxes     []int // indices of common columns (target ordering)
-		tarOnlyIdxes    []int // indices of target-only columns (target ordering)
-		baseColToTarIdx []int // for base batch Vec[i+1], the target column index, or -1
+		commonIdxes        []int // indices of common columns (target data-batch ordering)
+		commonVisibleIdxes []int // visible subset of commonIdxes for SQL/output/apply
+		tarOnlyIdxes       []int // indices of target-only columns (target data-batch ordering)
+		baseColToTarIdx    []int // for base batch Vec[i+1], the target column index, or -1
 	}
 
 	worker               *ants.Pool

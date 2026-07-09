@@ -175,4 +175,64 @@ drop snapshot sp0;
 drop table t0;
 drop table t1;
 
+-- =====================================================
+-- Case 9: target-only column sits between common columns
+--   base:   [a, b]
+--   target: [a, c, b]
+-- =====================================================
+create table t0(a int, b int, primary key(a));
+insert into t0 values(1,1),(2,2),(3,3);
+create snapshot sp0 for table test t0;
+
+data branch create table t1 from t0{snapshot="sp0"};
+alter table t1 add column c int default 0 after a;
+update t1 set b=99 where a=1;
+update t1 set c=88 where a=2;
+insert into t1(a,c,b) values(4,40,4);
+create snapshot sp1 for table test t1;
+
+-- a=1 common column b changed; a=2 only target-only c changed; a=4 inserted.
+data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
+
+drop snapshot sp1;
+drop snapshot sp0;
+drop table t0;
+drop table t1;
+
+-- =====================================================
+-- Case 10: cluster-by hidden helper columns stay out of SQL/output columns
+-- =====================================================
+create table t0(a int, b int) cluster by(a,b);
+create snapshot sp0 for table test t0;
+
+data branch create table t1 from t0{snapshot="sp0"};
+alter table t1 add column c int default 0 after a;
+create snapshot sp1 for table test t1;
+
+data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
+
+drop snapshot sp1;
+drop snapshot sp0;
+drop table t0;
+drop table t1;
+
+-- =====================================================
+-- Case 11: base-only non-PK column is rejected
+-- =====================================================
+create table t0(a int, b int, primary key(a));
+insert into t0 values(1,1),(2,2);
+create snapshot sp0 for table test t0;
+
+data branch create table t1 from t0{snapshot="sp0"};
+alter table t1 drop column b;
+create snapshot sp1 for table test t1;
+
+-- @regex("schema compatibility check: base column 'b' is not present in target schema", true)
+data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
+
+drop snapshot sp1;
+drop snapshot sp0;
+drop table t0;
+drop table t1;
+
 drop database test;

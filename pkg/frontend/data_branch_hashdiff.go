@@ -1208,7 +1208,7 @@ func compareRowInWrappedBatches(
 	if len(compareIdxes) == 0 {
 		compareIdxes = tblStuff.def.visibleIdxes // backward compat when commonIdxes not set
 	}
-	for batchIdx, colIdx := range compareIdxes {
+	for _, colIdx := range compareIdxes {
 		if skipPKCols {
 			if slices.Index(tblStuff.def.pkColIdxes, colIdx) != -1 {
 				continue
@@ -1216,8 +1216,8 @@ func compareRowInWrappedBatches(
 		}
 
 		var (
-			vec1 = wrapped1.batch.Vecs[batchIdx]
-			vec2 = wrapped2.batch.Vecs[batchIdx]
+			vec1 = wrapped1.batch.Vecs[colIdx]
+			vec2 = wrapped2.batch.Vecs[colIdx]
 		)
 
 		if cmp, err := compareSingleValInVector(
@@ -1240,7 +1240,11 @@ func compareTupleWithBatchRow(
 	rowIdx int,
 	skipPKCols bool,
 ) (int, error) {
-	for _, colIdx := range tblStuff.def.visibleIdxes {
+	compareIdxes := tblStuff.def.commonIdxes
+	if len(compareIdxes) == 0 {
+		compareIdxes = tblStuff.def.visibleIdxes // backward compat when commonIdxes not set
+	}
+	for _, colIdx := range compareIdxes {
 		if skipPKCols && slices.Index(tblStuff.def.pkColIdxes, colIdx) != -1 {
 			continue
 		}
@@ -2450,12 +2454,9 @@ func buildHashmapForTable(
 	return
 }
 
-// projectBaseBatchToTarget projects a base-side data batch to match the
-// target column layout. It creates a new batch with the same number of
-// columns as target data batches (1 RowID + len(colNames)), copies the
-// RowID vector as-is, places each base physical column at its target
-// position using baseColToTarIdx, and fills target-only columns with
-// constant-NULL vectors.
+// projectBaseBatchToTarget projects a base-side data batch to match the target
+// column layout. Ownership of moved vectors is transferred to the returned
+// batch; any vectors left behind on baseBat are cleaned before returning.
 func projectBaseBatchToTarget(
 	baseBat *batch.Batch,
 	tblStuff *tableStuff,
@@ -2463,9 +2464,7 @@ func projectBaseBatchToTarget(
 ) *batch.Batch {
 	out := batch.NewWithSize(len(tblStuff.def.colNames) + 1)
 	out.Vecs[0] = baseBat.Vecs[0] // RowID
-	for i := range tblStuff.def.colNames {
-		out.Vecs[i+1] = vector.NewConstNull(tblStuff.def.colTypes[i], baseBat.RowCount(), mp)
-	}
+	baseBat.Vecs[0] = nil
 	baseColCount := baseBat.VectorCount() - 1 // subtract RowID
 	if baseColCount > len(tblStuff.def.baseColToTarIdx) {
 		baseColCount = len(tblStuff.def.baseColToTarIdx)
@@ -2474,8 +2473,15 @@ func projectBaseBatchToTarget(
 		tarColIdx := tblStuff.def.baseColToTarIdx[baseColIdx]
 		if tarColIdx >= 0 && tarColIdx < len(tblStuff.def.colNames) {
 			out.Vecs[tarColIdx+1] = baseBat.Vecs[baseColIdx+1]
+			baseBat.Vecs[baseColIdx+1] = nil
+		}
+	}
+	for i := range tblStuff.def.colNames {
+		if out.Vecs[i+1] == nil {
+			out.Vecs[i+1] = vector.NewConstNull(tblStuff.def.colTypes[i], baseBat.RowCount(), mp)
 		}
 	}
 	out.SetRowCount(baseBat.RowCount())
+	baseBat.Clean(mp)
 	return out
 }

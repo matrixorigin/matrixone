@@ -155,8 +155,12 @@ func newApplyBatchInfo(
 		deleteStageNames[i] = fmt.Sprintf("branch_apply_key_%d", i)
 	}
 
-	visibleNames := make([]string, len(tblStuff.def.visibleIdxes))
-	for i, idx := range tblStuff.def.visibleIdxes {
+	visibleIdxes := tblStuff.def.visibleIdxes
+	if len(tblStuff.def.tarOnlyIdxes) > 0 {
+		visibleIdxes = tblStuff.def.commonVisibleIdxes
+	}
+	visibleNames := make([]string, len(visibleIdxes))
+	for i, idx := range visibleIdxes {
 		visibleNames[i] = tblStuff.def.colNames[idx]
 	}
 
@@ -1528,7 +1532,11 @@ func appendDataBranchApplyRowAsSQLValues(
 			}
 		}
 	} else {
-		if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
+		insertIdxes := tblStuff.def.visibleIdxes
+		if len(tblStuff.def.tarOnlyIdxes) > 0 {
+			insertIdxes = tblStuff.def.commonVisibleIdxes
+		}
+		if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer, insertIdxes); err != nil {
 			return err
 		}
 	}
@@ -1889,13 +1897,14 @@ func writeInsertRowValues(
 	tblStuff tableStuff,
 	row []any,
 	buf *bytes.Buffer,
+	idxes []int,
 ) error {
 	buf.WriteString("(")
-	for i, idx := range tblStuff.def.visibleIdxes {
+	for i, idx := range idxes {
 		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
 			return err
 		}
-		if i != len(tblStuff.def.visibleIdxes)-1 {
+		if i != len(idxes)-1 {
 			buf.WriteString(",")
 		}
 	}
@@ -2188,13 +2197,17 @@ func flushSqlValues(
 	defer releaseBuffer(tblStuff.bufPool, sqlBuffer)
 
 	initInsertIntoBuf := func() {
+		insertIdxes := tblStuff.def.visibleIdxes
+		if len(tblStuff.def.tarOnlyIdxes) > 0 {
+			insertIdxes = tblStuff.def.commonVisibleIdxes
+		}
 		sqlBuffer.WriteString(fmt.Sprintf(
 			"insert into %s (%s) values ",
 			qualifiedTableName(
 				tblStuff.baseRel.GetTableDef(ctx).DbName,
 				tblStuff.baseRel.GetTableDef(ctx).Name,
 			),
-			strings.Join(quotedColumnNamesByIdxes(tblStuff, tblStuff.def.visibleIdxes), ","),
+			strings.Join(quotedColumnNamesByIdxes(tblStuff, insertIdxes), ","),
 		))
 	}
 
