@@ -833,12 +833,12 @@ func TestCleanBucketState(t *testing.T) {
 	defer proc.Free()
 
 	ctr := &container{
-		mp:             message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp()),
-		batches:        []*batch.Batch{batch.NewWithSize(1)},
-		batchRowCount:  10,
-		matched:        &bitmap.Bitmap{},
-		captured:       &bitmap.Bitmap{},
-		capturedVecs:   []*vector.Vector{vector.NewOffHeapVecWithType(types.T_int32.ToType())},
+		mp:            message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp()),
+		batches:       []*batch.Batch{batch.NewWithSize(1)},
+		batchRowCount: 10,
+		matched:       &bitmap.Bitmap{},
+		captured:      &bitmap.Bitmap{},
+		capturedVecs:  []*vector.Vector{vector.NewOffHeapVecWithType(types.T_int32.ToType())},
 	}
 	ctr.mp.IncRef(1)
 
