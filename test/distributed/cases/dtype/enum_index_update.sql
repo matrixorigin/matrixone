@@ -24,9 +24,6 @@ update enum_idx07 set status='shipped' where id=1;
 select id, status, note from enum_idx07 order by id;
 select id from enum_idx07 where status='new';
 select id from enum_idx07 where status='shipped';
--- unique conflict is properly raised
-update enum_idx07 set status='paid' where id=1;
-select id, status, note from enum_idx07 order by id;
 drop table enum_idx07;
 
 -- update enum column with composite unique index

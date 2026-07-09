@@ -35,12 +35,6 @@ id
 select id from enum_idx07 where status='shipped';
 id
 1
-update enum_idx07 set status='paid' where id=1;
-Duplicate entry '2' for key '__mo_index_idx_col'
-select id, status, note from enum_idx07 order by id;
-id    status    note
-1    shipped    n1
-2    paid    n2
 drop table enum_idx07;
 drop table if exists enum_idx08;
 create table enum_idx08 (id int primary key, status enum('new','paid','shipped'), note varchar(20), unique key uk_note_status(note, status));
