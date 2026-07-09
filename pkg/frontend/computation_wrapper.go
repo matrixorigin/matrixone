@@ -475,30 +475,35 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		prepareStmt.PreparePlan = newPlan
 		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
 	}
-	
-	// Always recreate the compile to avoid stale operator state (e.g. hashbuild ctr,
-	// dispatch channels) from previous executions when the plan is reused.
-	// See: https://github.com/matrixorigin/mo/issues/25526
+
+	// Recreate the cached compile on each execution to avoid stale operator state
+	// (e.g. hashbuild ctr, dispatch channels) from previous executions when the
+	// plan is reused. A nil cache means the statement is not eligible for
+	// prepare-time compile (e.g. AP query); recompiling would fail with
+	// ErrCantCompileForPrepare on every execution, so leave it to the regular
+	// compile path (isPrepare=false).
+	// See: https://github.com/matrixorigin/matrixone/issues/25526
 	if prepareStmt.compile != nil {
 		prepareStmt.compile.FreeOperator()
 		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
-	}
-	if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok {
-		comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true)
-		if err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
-				return nil, nil, nil, "", err
+
+		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok {
+			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true)
+			if err != nil {
+				if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
+					return nil, nil, nil, "", err
+				}
 			}
+			// do not save ap query now()
+			if comp != nil && !comp.IsTpQuery() {
+				comp.SetIsPrepare(false)
+				comp.Release()
+				comp = nil
+			}
+			prepareStmt.compile = comp
 		}
-		// do not save ap query now()
-		if comp != nil && !comp.IsTpQuery() {
-			comp.SetIsPrepare(false)
-			comp.Release()
-			comp = nil
-		}
-		prepareStmt.compile = comp
 	}
 	numParams := len(preparePlan.ParamTypes)
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
