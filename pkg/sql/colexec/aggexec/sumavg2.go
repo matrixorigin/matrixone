@@ -37,9 +37,8 @@ import (
 func AvgReturnType(typs []types.Type) types.Type {
 	switch typs[0].Oid {
 	case types.T_int64, types.T_uint64:
-		// Match MySQL's exact-value AVG scale rule: input scale +
-		// div_precision_increment. Integer inputs have scale 0, and MySQL's
-		// default div_precision_increment is 4, so AVG(bigint) keeps 4 digits.
+		//matrixone does define the default digits before. just let it same mysql now.
+		//4 digits.
 		return types.New(types.T_decimal128, 38, 4)
 	case types.T_decimal64:
 		s := int32(12)
