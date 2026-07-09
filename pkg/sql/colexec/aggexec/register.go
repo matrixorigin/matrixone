@@ -234,8 +234,6 @@ var (
 	AggIdOfAvgTwResult     = int64(-34)
 	AggIdOfHllAdd          = int64(-35)
 	AggIdOfHllMerge        = int64(-36)
-	AggIdOfSumCount        = int64(-37)
-	AggIdOfSumTwResult     = int64(-38)
 	groupConcatSep         = ","
 	getGroupConcatRet      = func(args ...types.Type) types.Type {
 		for _, p := range args {
@@ -246,8 +244,3 @@ var (
 		return types.T_text.ToType()
 	}
 )
-
-func init() {
-	specialAgg[AggIdOfSumCount] = true
-	specialAgg[AggIdOfSumTwResult] = true
-}

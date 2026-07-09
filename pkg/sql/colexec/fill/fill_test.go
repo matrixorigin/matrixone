@@ -1039,6 +1039,39 @@ func TestProcessValueFillsNullsWithConstantVector(t *testing.T) {
 	require.False(t, result.Batch.Vecs[0].IsNull(0))
 }
 
+func TestProcessValueFillsDecimal128NullsWithIntegerConstant(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	typ := types.T_decimal128.ToTypeWithScale(0)
+	decimalVec := vector.NewVec(typ)
+	require.NoError(t, vector.AppendFixed(decimalVec, types.Decimal128{}, true, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(decimalVec, types.Decimal128FromInt64(-2109048), false, proc.Mp()))
+
+	input := batch.NewWithSize(1)
+	input.SetVector(0, decimalVec)
+	input.SetRowCount(2)
+	defer input.Clean(proc.Mp())
+
+	fillValue := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(fillValue, int64(100), false, proc.Mp()))
+
+	arg := &Fill{ColLen: 1}
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	arg.ctr.valVecs = []*vector.Vector{fillValue}
+	defer arg.Free(proc, false, nil)
+
+	result, err := processValue(&arg.ctr, arg, proc, process.NewAnalyzer(0, false, false, "fill"))
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.NotNil(t, result.Batch)
+
+	values := vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[0])
+	require.Equal(t, types.Decimal128FromInt64(100), values[0])
+	require.Equal(t, types.Decimal128FromInt64(-2109048), values[1])
+	require.False(t, result.Batch.Vecs[0].IsNull(0))
+}
+
 func TestProcessPrevFillsFromPreviousValueAcrossBatches(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

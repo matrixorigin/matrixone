@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -110,7 +109,7 @@ func TestDupOperatorDispatchRecCTE(t *testing.T) {
 	}
 }
 
-func TestConstructTimeWindowUsesInternalSumCount(t *testing.T) {
+func TestConstructTimeWindowUsesRegularSumForCountCache(t *testing.T) {
 	arg := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_int64)},
 		Expr: &plan.Expr_Col{
@@ -131,7 +130,7 @@ func TestConstructTimeWindowUsesInternalSumCount(t *testing.T) {
 					F: &plan.Function{
 						Func: &plan.ObjectRef{
 							Obj:     function.AggSumOverloadID,
-							ObjName: "sum_count",
+							ObjName: "sum",
 						},
 						Args: []*plan.Expr{arg},
 					},
@@ -145,13 +144,13 @@ func TestConstructTimeWindowUsesInternalSumCount(t *testing.T) {
 
 	timeWin := constructTimeWindow(context.Background(), node, nil)
 	require.Len(t, timeWin.Aggs, 1)
-	require.Equal(t, aggexec.AggIdOfSumCount, timeWin.Aggs[0].GetAggID())
+	require.Equal(t, int64(function.AggSumOverloadID), timeWin.Aggs[0].GetAggID())
 	require.Equal(t, types.T_int64, timeWin.Types[0].Oid)
 }
 
-func TestConstructTimeWindowUsesInternalSumTwResult(t *testing.T) {
+func TestConstructTimeWindowUsesRegularSumForPartialSum(t *testing.T) {
 	arg := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_uint64)},
+		Typ: plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 0},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{RelPos: 0, ColPos: 1},
 		},
@@ -170,7 +169,7 @@ func TestConstructTimeWindowUsesInternalSumTwResult(t *testing.T) {
 					F: &plan.Function{
 						Func: &plan.ObjectRef{
 							Obj:     function.AggSumOverloadID,
-							ObjName: "sum_tw_result",
+							ObjName: "sum",
 						},
 						Args: []*plan.Expr{arg},
 					},
@@ -184,8 +183,8 @@ func TestConstructTimeWindowUsesInternalSumTwResult(t *testing.T) {
 
 	timeWin := constructTimeWindow(context.Background(), node, nil)
 	require.Len(t, timeWin.Aggs, 1)
-	require.Equal(t, aggexec.AggIdOfSumTwResult, timeWin.Aggs[0].GetAggID())
-	require.Equal(t, types.T_uint64, timeWin.Types[0].Oid)
+	require.Equal(t, int64(function.AggSumOverloadID), timeWin.Aggs[0].GetAggID())
+	require.Equal(t, types.T_decimal128, timeWin.Types[0].Oid)
 }
 
 func TestDupOperatorLoopJoinMarkPos(t *testing.T) {
