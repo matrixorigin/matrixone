@@ -1,3 +1,4 @@
+-- @bvt:issue#25368
 set global enable_privilege_cache = off;
 drop iceberg catalog if exists dist_iceberg_cat;
 create iceberg catalog dist_iceberg_cat with ('uri' = 'https://catalog.example.com/rest', 'type' = 'rest', 'warehouse' = 's3://warehouse', 'auth_mode' = 'none');
@@ -23,3 +24,4 @@ drop role if exists dist_iceberg_reader;
 drop iceberg catalog dist_iceberg_cat;
 show iceberg catalogs;
 set global enable_privilege_cache = on;
+-- @bvt:issue
