@@ -43,6 +43,18 @@ const exactPkFilterThreshold = 100
 
 var runSql = sqlexec.RunSql
 
+func ivfEntriesPartitionFilter(sqlproc *sqlexec.SqlProcess) string {
+	if sqlproc == nil || sqlproc.IndexReaderParam.GetPartitionCnCnt() <= 1 {
+		return ""
+	}
+	return fmt.Sprintf(
+		" AND mod(crc32(cast(`%s` as varchar)), %d) = %d",
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		sqlproc.IndexReaderParam.GetPartitionCnCnt(),
+		sqlproc.IndexReaderParam.GetPartitionCnIdx(),
+	)
+}
+
 // Ivf search index struct to hold the usearch index
 type IvfflatSearchIndex[T types.RealNumbers] struct {
 	Version   int64
@@ -268,6 +280,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	}
 
 	var sql string
+	partitionFilter := ivfEntriesPartitionFilter(sqlproc)
 	// Encode query vector as base64 of raw bytes — ~22x faster and ~48% smaller
 	// than text format [0.123, ...]. Uses vecf32_from_base64/vecf64_from_base64
 	// to decode back to the vector type inside the SQL engine.
@@ -294,7 +307,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		// a plain filtered read that returns the full candidate set; the downstream
 		// Node_SORT + LIMIT k does the ranking and truncation.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)%s",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
@@ -305,11 +318,12 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			idx.Version,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			sqlproc.ExactPkFilter,
+			partitionFilter,
 		)
 	} else {
 		// Standard centroid-based path with optional CBloomFilter pre-filtering.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
+			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)%s ORDER BY vec_dist LIMIT %d",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
@@ -320,6 +334,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			idx.Version,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 			instr,
+			partitionFilter,
 			rt.Limit,
 		)
 	}
