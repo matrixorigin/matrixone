@@ -27,6 +27,10 @@ type RenameColumnRebuildHook interface {
 	RenameColumnRequiresIndexRebuild(tableDef *planpb.TableDef, indexDef *planpb.IndexDef, oldColName string) (bool, error)
 }
 
+type UpdateColumnRewriteHook interface {
+	UpdateColumnRequiresIndexRewrite(tableDef *planpb.TableDef, indexDef *planpb.IndexDef, colName string) (bool, error)
+}
+
 var (
 	IncludedColumnAffected       func(indexDef *planpb.IndexDef, colName string) (bool, error)
 	RenameIncludedColumnsForAlgo func(tableDef *planpb.TableDef, algo, oldColName, newColName string, syncAlgoParams bool) ([]string, error)

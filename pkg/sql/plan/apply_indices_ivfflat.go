@@ -24,6 +24,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -770,8 +771,14 @@ func ivfFilterColumnToAST(col *plan.ColRef, scanNode *plan.Node) (tree.Expr, err
 	}
 
 	colExpr := tree.NewUnresolvedColName(mappedName)
-	colExpr.CStrParts[0] = tree.NewCStr("`"+mappedName+"`", 0)
+	colExpr.CStrParts[0] = tree.NewCStr(ivfQuotedIdentifierOrigin(mappedName), 0)
 	return colExpr, nil
+}
+
+func ivfQuotedIdentifierOrigin(name string) string {
+	// The IVF filter payload deparses with quoteString, not quoteIdentifier,
+	// so the CStr origin must already be a complete, escaped identifier.
+	return sqlquote.Ident(name)
 }
 
 func ivfLiteralToAST(lit *plan.Literal, typ plan.Type) (tree.Expr, error) {

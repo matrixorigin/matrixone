@@ -38,7 +38,6 @@ var (
 	// Keep backend send retries bounded so rollback/catalog RPCs fail in finite
 	// time instead of stretching broken explicit txns for hours.
 	defaultMaxWaitTimeOnRetryBackendSend = 30 * time.Second
-	minBackendAutoCreateWaitTimeout      = time.Millisecond
 )
 
 // WithSenderLocalDispatch set options for dispatch request to local to avoid rpc call
@@ -345,14 +344,14 @@ func getBackendRetryWaitDuration(retryState *backendRetryState) (time.Duration, 
 }
 
 func getBackendAutoCreateWaitTimeout() time.Duration {
-	if defaultMaxWaitTimeOnRetryBackendSend <= 0 {
-		// A non-positive sender retry budget means "fail fast". Do not borrow the
-		// regular retry interval here, or morpc's auto-create wait/backoff can add
-		// an extra retry tick before sender-side retry handling stops the request.
-		return minBackendAutoCreateWaitTimeout
-	}
 	if defaultWaitTimeOnRetryBackendSend <= 0 {
-		return defaultMaxWaitTimeOnRetryBackendSend
+		if defaultMaxWaitTimeOnRetryBackendSend > 0 {
+			return defaultMaxWaitTimeOnRetryBackendSend
+		}
+		return time.Millisecond
+	}
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 {
+		return defaultWaitTimeOnRetryBackendSend
 	}
 	if defaultWaitTimeOnRetryBackendSend < defaultMaxWaitTimeOnRetryBackendSend {
 		return defaultWaitTimeOnRetryBackendSend

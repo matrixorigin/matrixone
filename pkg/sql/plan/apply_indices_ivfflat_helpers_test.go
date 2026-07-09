@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -744,6 +745,15 @@ func TestIvfFilterColumnAndDistanceRangeHelpers(t *testing.T) {
 	includeExpr, err := ivfFilterColumnToAST(&ColRef{RelPos: scanTag, ColPos: 2, Name: "title"}, scanNode)
 	require.NoError(t, err)
 	assert.Contains(t, tree.StringWithOpts(includeExpr, dialect.MYSQL, tree.WithQuoteString(true)), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"title")
+
+	scanNode.TableDef.Cols[2].Name = "ti`tle"
+	includeExpr, err = ivfFilterColumnToAST(&ColRef{RelPos: scanTag, ColPos: 2, Name: "ti`tle"}, scanNode)
+	require.NoError(t, err)
+	assert.Equal(t,
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_IncludeColPrefix+"ti`tle"),
+		tree.StringWithOpts(includeExpr, dialect.MYSQL, tree.WithQuoteString(true)),
+	)
+	scanNode.TableDef.Cols[2].Name = "title"
 
 	ivfCtx := &ivfIndexContext{
 		partPos:         1,

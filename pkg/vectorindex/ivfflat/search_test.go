@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -301,6 +302,28 @@ func TestIvfSearchSQLIncludesRequestedColumnsAndPushdown(t *testing.T) {
 	require.Equal(t, uint(0), rt.SearchCursor.NextBucketOffset)
 	require.Equal(t, uint(1), rt.SearchCursor.CurrentBucketCount)
 	require.Equal(t, uint(1), rt.SearchCursor.Round)
+}
+
+func TestBuildSearchRoundSQLQuotesIdentifiers(t *testing.T) {
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	tblcfg := vectorindex.IndexTableConfig{
+		DbName:       "db`name",
+		EntriesTable: "entries`table",
+	}
+
+	sql := buildSearchRoundSQL(idxcfg, tblcfg, []float32{1, 2, 3}, []int64{4}, 7, []string{"payload`col"}, "", 5)
+
+	require.Contains(t, sql, sqlquote.QualifiedIdent("db`name", "entries`table"))
+	require.Contains(t, sql, sqlquote.Ident(catalog.SystemSI_IVFFLAT_IncludeColPrefix+"payload`col"))
+	require.Contains(t, sql, sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry))
+	require.NotContains(t, sql, "`db`name`")
+	require.NotContains(t, sql, "`"+catalog.SystemSI_IVFFLAT_IncludeColPrefix+"payload`col`")
+
+	exactSQL := buildExactSearchSQL(idxcfg, tblcfg, []float32{1, 2, 3}, 7, "11", []string{"payload`col"}, "")
+	require.Contains(t, exactSQL, sqlquote.QualifiedIdent("db`name", "entries`table"))
+	require.Contains(t, exactSQL, sqlquote.Ident(catalog.SystemSI_IVFFLAT_IncludeColPrefix+"payload`col"))
+	require.NotContains(t, exactSQL, "`db`name`")
 }
 
 func TestIvfSearchIncludeModePreservesNullFlagsAndPushesIsNullFilter(t *testing.T) {
