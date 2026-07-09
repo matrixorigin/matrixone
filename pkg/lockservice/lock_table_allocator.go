@@ -24,9 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"go.uber.org/zap"
 )
 
@@ -40,6 +42,7 @@ type lockTableAllocator struct {
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
 	keepBindTimeout time.Duration
+	clock           clock.Clock
 	address         string
 	server          Server
 	client          Client
@@ -77,6 +80,10 @@ func NewLockTableAllocator(
 	if err != nil {
 		panic(err)
 	}
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		rt = moruntime.DefaultRuntime()
+	}
 
 	logger := getLogger(service)
 	tag := "lockservice.allocator"
@@ -87,6 +94,7 @@ func NewLockTableAllocator(
 		stopper: stopper.NewStopper(tag,
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		keepBindTimeout: keepBindTimeout,
+		clock:           rt.Clock(),
 		client:          rpcClient,
 		version:         uint64(time.Now().UnixNano()),
 	}
@@ -952,6 +960,9 @@ func (l *lockTableAllocator) handleCannotCommit(
 	cs morpc.ClientSession) {
 	committingTxn := l.AddCannotCommit(req.CannotCommit.OrphanTxnList)
 	resp.CannotCommit.CommittingTxn = committingTxn
+	if l.clock != nil {
+		_, resp.CannotCommit.FenceTS = l.clock.Now()
+	}
 	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
