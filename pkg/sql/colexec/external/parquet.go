@@ -2556,7 +2556,10 @@ func parquetValueToBool(ctx context.Context, st parquet.Type, v parquet.Value) (
 }
 
 func parquetValueToRoundedInt64(ctx context.Context, st parquet.Type, v parquet.Value) (int64, error) {
-	if isDecimalLogicalType(st.LogicalType()) || st.Kind() == parquet.Float || st.Kind() == parquet.Double {
+	if isDecimalLogicalType(st.LogicalType()) {
+		return parquetDecimalValueToRoundedInt64(ctx, st, v)
+	}
+	if st.Kind() == parquet.Float || st.Kind() == parquet.Double {
 		val, err := parquetValueToFloat64(ctx, st, v)
 		if err != nil {
 			return 0, err
@@ -2567,7 +2570,10 @@ func parquetValueToRoundedInt64(ctx context.Context, st parquet.Type, v parquet.
 }
 
 func parquetValueToRoundedUint64(ctx context.Context, st parquet.Type, v parquet.Value) (uint64, error) {
-	if isDecimalLogicalType(st.LogicalType()) || st.Kind() == parquet.Float || st.Kind() == parquet.Double {
+	if isDecimalLogicalType(st.LogicalType()) {
+		return parquetDecimalValueToRoundedUint64(ctx, st, v)
+	}
+	if st.Kind() == parquet.Float || st.Kind() == parquet.Double {
 		val, err := parquetValueToFloat64(ctx, st, v)
 		if err != nil {
 			return 0, err
@@ -2601,6 +2607,74 @@ func roundParquetFloatToUint64(ctx context.Context, val float64) (uint64, error)
 		return 0, moerr.NewInvalidInputf(ctx, "parquet value %v overflows BIGINT UNSIGNED", val)
 	}
 	return uint64(rounded), nil
+}
+
+func parquetDecimalValueToRoundedInt64(ctx context.Context, st parquet.Type, v parquet.Value) (int64, error) {
+	rounded, err := parquetDecimalValueToRoundedBigInt(ctx, st, v)
+	if err != nil {
+		return 0, err
+	}
+	if rounded.Cmp(minInt64Big) < 0 || rounded.Cmp(maxInt64Big) > 0 {
+		return 0, moerr.NewInvalidInputf(ctx, "parquet value %s overflows BIGINT", rounded.String())
+	}
+	return rounded.Int64(), nil
+}
+
+func parquetDecimalValueToRoundedUint64(ctx context.Context, st parquet.Type, v parquet.Value) (uint64, error) {
+	rounded, err := parquetDecimalValueToRoundedBigInt(ctx, st, v)
+	if err != nil {
+		return 0, err
+	}
+	if rounded.Sign() < 0 {
+		return 0, moerr.NewInvalidInputf(ctx, "negative parquet value %s overflows unsigned integer", rounded.String())
+	}
+	if rounded.Cmp(maxUint64Big) > 0 {
+		return 0, moerr.NewInvalidInputf(ctx, "parquet value %s overflows BIGINT UNSIGNED", rounded.String())
+	}
+	return rounded.Uint64(), nil
+}
+
+func parquetDecimalValueToRoundedBigInt(ctx context.Context, st parquet.Type, v parquet.Value) (*big.Int, error) {
+	unscaled, err := parquetDecimalValueToBigInt(ctx, st, v)
+	if err != nil {
+		return nil, err
+	}
+	return roundScaledDecimalBigInt(unscaled, parquetDecimalScale(st)), nil
+}
+
+func parquetDecimalValueToBigInt(ctx context.Context, st parquet.Type, v parquet.Value) (*big.Int, error) {
+	switch st.Kind() {
+	case parquet.Int32:
+		return big.NewInt(int64(v.Int32())), nil
+	case parquet.Int64:
+		return big.NewInt(v.Int64()), nil
+	case parquet.ByteArray, parquet.FixedLenByteArray:
+		return decimalBytesToBigInt(v.ByteArray()), nil
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "unsupported parquet physical type %s for decimal integer conversion", st.Kind())
+	}
+}
+
+func roundScaledDecimalBigInt(unscaled *big.Int, scale int32) *big.Int {
+	if scale <= 0 {
+		return new(big.Int).Set(unscaled)
+	}
+
+	abs := new(big.Int).Abs(unscaled)
+	if int(scale) > len(abs.Text(10)) {
+		return big.NewInt(0)
+	}
+
+	divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
+	quotient, remainder := new(big.Int).QuoRem(abs, divisor, new(big.Int))
+
+	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(divisor) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if unscaled.Sign() < 0 {
+		quotient.Neg(quotient)
+	}
+	return quotient
 }
 
 func parquetValueToDecimalString(ctx context.Context, st parquet.Type, v parquet.Value) (string, error) {
@@ -2970,6 +3044,7 @@ func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process
 var (
 	maxInt64Big  = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 63), big.NewInt(1))
 	minInt64Big  = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63))
+	maxUint64Big = new(big.Int).SetUint64(math.MaxUint64)
 	maxInt128Big = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
 	minInt128Big = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 127))
 	maxInt256Big = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(1))
