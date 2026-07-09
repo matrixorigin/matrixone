@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -2113,16 +2114,16 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				ret = ExecTypeAP_ONECN
 			}
 		}
-		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
-			if IsIvfSearchEntriesInternalScan(node) {
-				execType := ExecTypeAP_MULTICN
-				if !canUseMultiCN {
-					execType = ExecTypeAP_ONECN
-				}
-				if execType > ret {
-					ret = execType
-				}
+		if IsIvfSearchEntriesInternalScan(node) {
+			execType := ExecTypeAP_MULTICN
+			if stats.GetForceOneCN() || !canUseMultiCN {
+				execType = ExecTypeAP_ONECN
 			}
+			if execType > ret {
+				ret = execType
+			}
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
 			// due to the inaccuracy of stats.Rowsize, currently only vector index tables are supported
 			if (node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
 				stats.Rowsize > RowSizeThreshold &&
@@ -2149,8 +2150,24 @@ func isIvfSearchEntriesTableScan(node *plan.Node) bool {
 		node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries
 }
 
+func isIvfSearchFunctionScan(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN {
+		return false
+	}
+	tblDef := node.GetTableDef()
+	if tblDef == nil || tblDef.GetTblFunc() == nil {
+		return false
+	}
+	return tblDef.GetTblFunc().GetName() == ivfflatplan.IVFFLATSearchFuncName
+}
+
 // IsIvfSearchEntriesInternalScan reports the internal entries table scan issued by ivf_search.
+// It recognizes both the FUNCTION_SCAN form produced by the production ivf_search planner
+// path and the legacy TABLE_SCAN form used by unit tests.
 func IsIvfSearchEntriesInternalScan(node *plan.Node) bool {
+	if isIvfSearchFunctionScan(node) {
+		return true
+	}
 	return isIvfSearchEntriesTableScan(node) && isIvfEntriesIndexReaderScan(node)
 }
 

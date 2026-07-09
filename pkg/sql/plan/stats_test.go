@@ -24,6 +24,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
@@ -318,7 +319,8 @@ func makeFunctionScanForStatsTest(funcName string, limit *planpb.Expr) *planpb.N
 		NodeType: planpb.Node_FUNCTION_SCAN,
 		Stats:    &planpb.Stats{},
 		TableDef: &planpb.TableDef{
-			TblFunc: &planpb.TableFunction{Name: funcName},
+			TableType: "func_table",
+			TblFunc:   &planpb.TableFunction{Name: funcName},
 		},
 		IndexReaderParam: &planpb.IndexReaderParam{Limit: limit},
 		Children:         []int32{0},
@@ -420,6 +422,46 @@ func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanMultiCNCappedForDDL
 	require.Equal(t, ExecTypeAP_ONECN, got)
 }
 
+func TestGetExecType_IvfSearchFunctionScanUsesMultiCNEvenWithTinyStats(t *testing.T) {
+	q := &planpb.Query{
+		Nodes: []*planpb.Node{
+			makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
+		},
+		Steps: []int32{0},
+	}
+
+	got := GetExecType(q, false, false)
+
+	require.Equal(t, ExecTypeAP_MULTICN, got)
+}
+
+func TestGetExecType_IvfSearchFunctionScanMultiCNCappedForDDL(t *testing.T) {
+	q := &planpb.Query{
+		Nodes: []*planpb.Node{
+			makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
+		},
+		Steps: []int32{0},
+	}
+
+	got := GetExecType(q, true, false)
+
+	require.Equal(t, ExecTypeAP_ONECN, got)
+}
+
+func TestGetExecType_IvfSearchFunctionScanRespectsForceOneCN(t *testing.T) {
+	q := &planpb.Query{
+		Nodes: []*planpb.Node{
+			makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
+		},
+		Steps: []int32{0},
+	}
+	q.Nodes[0].Stats.ForceOneCN = true
+
+	got := GetExecType(q, false, false)
+
+	require.Equal(t, ExecTypeAP_ONECN, got)
+}
+
 func TestGetExecType_IvfSearchEntries_MultiCNCappedForExprBasedShuffle(t *testing.T) {
 	q := makeQueryWithScanStats(
 		catalog.SystemSI_IVFFLAT_TblType_Entries,
@@ -513,7 +555,7 @@ func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanRequiresSearchShape
 }
 
 func TestGetExecType_IvfSearchEntries_FunctionScanDoesNotPromoteUnrelatedEntriesScan(t *testing.T) {
-	searchNode := makeFunctionScanForStatsTest("ivf_search", makeLimitExprForStatsTest())
+	searchNode := makeFunctionScanForStatsTest("generate_series", makeLimitExprForStatsTest())
 	q := makeQueryWithScanStats(
 		catalog.SystemSI_IVFFLAT_TblType_Entries,
 		1,
@@ -639,6 +681,15 @@ func TestIsIvfSearchEntriesInternalScan(t *testing.T) {
 			},
 			want: true,
 		},
+		{
+			name: "valid ivf search function scan",
+			node: makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
+			want: true,
+		},
+		{
+			name: "unrelated function scan",
+			node: makeFunctionScanForStatsTest("generate_series", makeLimitExprForStatsTest()),
+		},
 	}
 
 	for _, tt := range tests {
@@ -646,6 +697,24 @@ func TestIsIvfSearchEntriesInternalScan(t *testing.T) {
 			require.Equal(t, tt.want, IsIvfSearchEntriesInternalScan(tt.node))
 		})
 	}
+}
+
+func TestDeepCopyIndexReaderParamCopiesOrigFuncName(t *testing.T) {
+	oldParam := &planpb.IndexReaderParam{
+		OrigFuncName: "l2_distance",
+		Limit:        makeLimitExprForStatsTest(),
+		DistRange: &planpb.DistRange{
+			LowerBoundType: planpb.BoundType_EXCLUSIVE,
+			LowerBound:     makeLimitExprForStatsTest(),
+		},
+	}
+
+	got := DeepCopyIndexReaderParam(oldParam)
+
+	require.NotSame(t, oldParam, got)
+	require.Equal(t, oldParam.OrigFuncName, got.OrigFuncName)
+	require.NotSame(t, oldParam.Limit, got.Limit)
+	require.NotSame(t, oldParam.DistRange, got.DistRange)
 }
 
 // TestUpdateStatsInfo_Decimal64_NegativeValues tests that negative decimal64 values

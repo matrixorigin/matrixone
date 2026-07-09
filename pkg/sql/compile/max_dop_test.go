@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
@@ -402,6 +403,48 @@ func TestGenerateNodesUsesMultiCNForSmallIvfEntriesInternalScan(t *testing.T) {
 		},
 		IndexReaderParam: &plan.IndexReaderParam{
 			OrderBy: []*plan.OrderBySpec{{Expr: &plan.Expr{}}},
+			Limit: &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},
+				},
+			},
+		},
+	}
+
+	nodes, err := c.generateNodes(node)
+	require.NoError(t, err)
+	require.Len(t, nodes, 2)
+	require.Equal(t, int32(2), nodes[0].CNCNT)
+	require.Equal(t, int32(0), nodes[0].CNIDX)
+	require.Equal(t, int32(2), nodes[1].CNCNT)
+	require.Equal(t, int32(1), nodes[1].CNIDX)
+}
+
+func TestGenerateNodesUsesMultiCNForSmallIvfSearchFunctionScan(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.e = newStubEngineForGenerateNodes("testdb", "idx_entries")
+	c.cnList = engine.Nodes{
+		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4},
+		{Id: "cn2", Addr: "cn-local:6001", Mcpu: 4},
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "idx_entries",
+		},
+		TableDef: &plan.TableDef{
+			Name:      "idx_entries",
+			TableType: "func_table",
+			TblFunc:   &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+		},
+		Stats: &plan.Stats{
+			BlockNum: 1,
+			Dop:      1,
+		},
+		IndexReaderParam: &plan.IndexReaderParam{
 			Limit: &plan.Expr{
 				Expr: &plan.Expr_Lit{
 					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},
