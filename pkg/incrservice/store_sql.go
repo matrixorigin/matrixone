@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -42,7 +43,7 @@ func (c AutoColumn) getInsertSQL() string {
 		values(%d, '%s', %d, %d, %d)`,
 		incrTableName,
 		c.TableID,
-		c.ColName,
+		sqlquote.EscapeString(c.ColName),
 		c.ColIndex,
 		c.Offset,
 		c.Step)
@@ -106,7 +107,7 @@ func (s *sqlStore) Allocate(
 	fetchSQL := fmt.Sprintf(`select offset, step from %s where table_id = %d and col_name = '%s' for update`,
 		incrTableName,
 		tableID,
-		colName)
+		sqlquote.EscapeString(colName))
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp).
@@ -177,7 +178,7 @@ func (s *sqlStore) Allocate(
 					incrTableName,
 					next,
 					tableID,
-					colName,
+					sqlquote.EscapeString(colName),
 					current)
 				start = time.Now()
 				res, err = te.Exec(sql, executor.StatementOption{}.WithDisableLog())
@@ -296,7 +297,7 @@ func (s *sqlStore) UpdateMinValue(
 			incrTableName,
 			minValue,
 			tableID,
-			col,
+			sqlquote.EscapeString(col),
 			minValue),
 		opts)
 	if err != nil {
@@ -313,10 +314,6 @@ func (s *sqlStore) SetOffset(
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
-	if !isValidColumnName(colName) {
-		return moerr.NewInternalErrorf(ctx,
-			"incrservice: invalid column name: %s", colName)
-	}
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp)
@@ -333,7 +330,7 @@ func (s *sqlStore) SetOffset(
 		ctx,
 		fmt.Sprintf(
 			"update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
-			incrTableName, offset, tableID, colName, offset,
+			incrTableName, offset, tableID, sqlquote.EscapeString(colName), offset,
 		),
 		opts,
 	)
@@ -354,10 +351,6 @@ func (s *sqlStore) ForceSetOffset(
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
-	if !isValidColumnName(colName) {
-		return moerr.NewInternalErrorf(ctx,
-			"incrservice: invalid column name: %s", colName)
-	}
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp)
@@ -374,7 +367,7 @@ func (s *sqlStore) ForceSetOffset(
 		ctx,
 		fmt.Sprintf(
 			"update %s set offset = %d where table_id = %d and col_name = '%s'",
-			incrTableName, offset, tableID, colName,
+			incrTableName, offset, tableID, sqlquote.EscapeString(colName),
 		),
 		opts,
 	)
@@ -478,21 +471,4 @@ func (s *sqlStore) GetColumns(
 
 func (s *sqlStore) Close() {
 
-}
-
-// isValidColumnName checks that colName contains only alphanumeric characters
-// and underscores, preventing SQL injection in formatted queries.
-func isValidColumnName(name string) bool {
-	if len(name) == 0 {
-		return false
-	}
-	for i, r := range name {
-		if i == 0 && !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_') {
-			return false
-		}
-		if i > 0 && !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
-			return false
-		}
-	}
-	return true
 }

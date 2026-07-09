@@ -22,6 +22,8 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -384,6 +386,40 @@ func TestForceSetOffset(t *testing.T) {
 			require.Equal(t, uint64(100), store.caches[0][0].Offset)
 			store.Unlock()
 		})
+}
+
+func TestReloadAfterSetOffsetDropsStalePreAllocatedRange(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore()
+		cn1 := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		cn2 := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer cn1.Close()
+		defer cn2.Close()
+
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, cn1.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+
+		vecType := types.New(types.T_uint64, 0, 0)
+		input := newTestVector[uint64](1, vecType, nil, nil)
+		last, err := cn1.InsertValues(ctx, 0, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), last)
+
+		require.NoError(t, cn2.SetOffset(ctx, 0, def[0].ColName, 100, nil))
+		require.NoError(t, cn1.Reload(ctx, 0))
+
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		last, err = cn1.InsertValues(ctx, 0, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(101), last)
+	})
 }
 
 func TestMemStoreForceSetOffset(t *testing.T) {

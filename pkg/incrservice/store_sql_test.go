@@ -684,13 +684,14 @@ func TestSQLStoreSetOffset(t *testing.T) {
 	require.Contains(t, executedSQLs[1], "update mo_increment_columns set offset = 100")
 }
 
-func TestSQLStoreSetOffsetRejectsInvalidColumnName(t *testing.T) {
+func TestSQLStoreSetOffsetEscapesColumnNameLiteral(t *testing.T) {
 	ctx := context.TODO()
 	ctx = defines.AttachAccountId(ctx, 12)
 
+	var executedSQLs []string
 	sqlExecutor := executor.NewMemExecutor2(
 		func(sql string) (executor.Result, error) {
-			t.Fatalf("unexpected SQL execution: %s", sql)
+			executedSQLs = append(executedSQLs, sql)
 			return executor.Result{}, nil
 		},
 		nil,
@@ -700,7 +701,13 @@ func TestSQLStoreSetOffsetRejectsInvalidColumnName(t *testing.T) {
 		exec: sqlExecutor,
 	}
 
-	require.Error(t, s.SetOffset(ctx, 10, "bad`name", 99, nil))
+	require.NoError(t, s.SetOffset(ctx, 10, "1id", 99, nil))
+	require.NoError(t, s.SetOffset(ctx, 10, "auto'col\\x", 100, nil))
+	require.NoError(t, s.ForceSetOffset(ctx, 10, "auto'col\\x", 101, nil))
+	require.Len(t, executedSQLs, 3)
+	require.Contains(t, executedSQLs[0], "col_name = '1id'")
+	require.Contains(t, executedSQLs[1], `col_name = 'auto''col\\x'`)
+	require.Contains(t, executedSQLs[2], `col_name = 'auto''col\\x'`)
 }
 
 func TestSQLStoreSetOffsetReturnsExecError(t *testing.T) {
@@ -720,25 +727,4 @@ func TestSQLStoreSetOffsetReturnsExecError(t *testing.T) {
 	}
 
 	require.ErrorIs(t, s.SetOffset(ctx, 10, "auto_col", 99, nil), expected)
-}
-
-func TestIsValidColumnName(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{name: "empty", in: "", want: false},
-		{name: "letter", in: "auto_col1", want: true},
-		{name: "underscore", in: "_auto_col", want: true},
-		{name: "starts with digit", in: "1_auto_col", want: false},
-		{name: "contains backtick", in: "auto`col", want: false},
-		{name: "contains dash", in: "auto-col", want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, isValidColumnName(tt.in))
-		})
-	}
 }

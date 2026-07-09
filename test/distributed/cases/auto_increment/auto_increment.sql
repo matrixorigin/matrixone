@@ -453,3 +453,27 @@ select * from auto_increment_alter order by col1;
 insert into auto_increment_alter values();
 select * from auto_increment_alter order by col1;
 drop table auto_increment_alter;
+
+-- alter table auto_increment should not move below existing max value
+drop table if exists auto_increment_alter_max;
+create table auto_increment_alter_max(col1 int auto_increment primary key, col2 int);
+insert into auto_increment_alter_max values (1, 1), (200, 200);
+alter table auto_increment_alter_max AUTO_INCREMENT = 100;
+insert into auto_increment_alter_max(col2) values (201);
+select * from auto_increment_alter_max order by col1;
+alter table auto_increment_alter_max AUTO_INCREMENT = 200;
+insert into auto_increment_alter_max(col2) values (202);
+select * from auto_increment_alter_max order by col1;
+alter table auto_increment_alter_max AUTO_INCREMENT = 300;
+insert into auto_increment_alter_max(col2) values (300);
+select * from auto_increment_alter_max order by col1;
+drop table auto_increment_alter_max;
+
+-- alter table auto_increment should support quoted auto_increment column names
+drop table if exists auto_increment_alter_quoted;
+create table auto_increment_alter_quoted(`1id` int auto_increment primary key, col2 int);
+insert into auto_increment_alter_quoted(col2) values (1);
+alter table auto_increment_alter_quoted AUTO_INCREMENT = 10;
+insert into auto_increment_alter_quoted(col2) values (10);
+select * from auto_increment_alter_quoted order by `1id`;
+drop table auto_increment_alter_quoted;

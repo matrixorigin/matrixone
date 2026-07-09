@@ -25,10 +25,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -50,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -1111,16 +1115,28 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			sid := c.proc.GetService()
 			svc := incrservice.GetAutoIncrementService(sid)
 			for _, col := range autoCols {
+				offset, err := c.getAlterAutoIncrementOffset(qry.Database, qry.TableDef.Name, col.ColName, act.AlterAutoIncrement.NewOffset)
+				if err != nil {
+					return err
+				}
 				if err = svc.SetOffset(
 					c.proc.Ctx,
 					tid,
 					col.ColName,
-					act.AlterAutoIncrement.NewOffset,
+					offset,
 					c.proc.GetTxnOperator(),
 				); err != nil {
 					return err
 				}
 			}
+			c.proc.GetTxnOperator().AppendEventCallback(
+				client.ClosedEvent,
+				client.NewTxnEventCallback(func(ctx context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+					if !event.Committed() {
+						return nil
+					}
+					return c.reloadAutoIncrementCacheOnAllCN(ctx, tid)
+				}))
 		case *plan.AlterTable_Action_AlterName:
 			reqs = append(reqs, api.NewRenameTableReq(
 				did, tid,
@@ -6040,4 +6056,60 @@ func checkCCPRDbBeforeDrop(c *Compile, dbID uint64) (bool, error) {
 
 	// Task exists and is not dropped, deny deletion
 	return false, nil
+}
+
+func (c *Compile) getAlterAutoIncrementOffset(
+	dbName string,
+	tblName string,
+	colName string,
+	requestedOffset uint64,
+) (uint64, error) {
+	colIdent := sqlquote.Ident(colName)
+	sql := fmt.Sprintf(
+		"select cast(coalesce(max(case when %s > 0 then %s else 0 end), 0) as unsigned) from %s",
+		colIdent,
+		colIdent,
+		sqlquote.QualifiedIdent(dbName, tblName),
+	)
+	res, err := c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+
+	maxStored := uint64(0)
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 || len(cols) == 0 || cols[0].IsNull(0) {
+			return false
+		}
+		maxStored = executor.GetFixedRows[uint64](cols[0])[0]
+		return false
+	})
+	if maxStored > requestedOffset {
+		return maxStored, nil
+	}
+	return requestedOffset, nil
+}
+
+func (c *Compile) reloadAutoIncrementCacheOnAllCN(ctx context.Context, tableID uint64) error {
+	qc := c.proc.GetQueryClient()
+	if qc == nil {
+		return moerr.NewInternalError(ctx, "query client is not initialized")
+	}
+
+	var nodes []string
+	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(
+		clusterservice.NewSelectAll(),
+		func(s metadata.CNService) bool {
+			nodes = append(nodes, s.QueryAddress)
+			return true
+		})
+
+	genRequest := func() *querypb.Request {
+		req := qc.NewRequest(querypb.CmdMethod_ReloadAutoIncrementCache)
+		req.ReloadAutoIncrementCache = &querypb.ReloadAutoIncrementCacheRequest{TableID: tableID}
+		return req
+	}
+	handleValidResponse := func(_ string, _ *querypb.Response) {}
+	return queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, nil)
 }
