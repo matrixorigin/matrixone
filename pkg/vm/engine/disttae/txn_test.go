@@ -1390,6 +1390,13 @@ func TestSnapshotWriteOffset_ConcurrentAccess(t *testing.T) {
 // internal-SQL leg of the issue #25557 deadlock chain.
 func enableReenterSnapshotOffsetFault(t *testing.T) {
 	fault.Enable()
+	t.Cleanup(func() {
+		// Fault injection is a process-level global switch. Removing the
+		// fault point alone does not turn it off; subsequent tests would
+		// run with injection still active, causing order-dependent
+		// failures.
+		fault.Disable()
+	})
 	rmFault, err := objectio.SimpleInject(objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
 	require.NoError(t, err)
 	t.Cleanup(rmFault)
