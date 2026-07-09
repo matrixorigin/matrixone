@@ -213,6 +213,35 @@ func TestFill(t *testing.T) {
 	}
 }
 
+func TestProcessLinearDecimal128(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	typ := types.New(types.T_decimal128, 38, 0)
+	vec := vector.NewVec(typ)
+	defer vec.Free(proc.Mp())
+
+	left := types.Decimal128FromInt64(100)
+	right := types.Decimal128FromInt64(300)
+	require.NoError(t, vector.AppendFixed(vec, left, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal128{}, true, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(vec, right, false, proc.Mp()))
+
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vec)
+	bat.SetRowCount(3)
+
+	arg := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
+	ctr := &arg.ctr
+	ctr.bats = []*batch.Batch{bat}
+	ctr.doneIdx = make([]int, 1)
+	ctr.endBatch = make([]bool, 1)
+
+	require.NoError(t, processLinearCol(ctr, arg, proc, 0, nil))
+	require.False(t, vec.IsNull(1))
+	require.Equal(t, types.Decimal128FromInt64(200), vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 1))
+}
+
 func resetChildren(arg *Fill, m *mpool.MPool) {
 	bat1 := colexec.MakeMockBatchsWithNullVec1(m)
 	bat := colexec.MakeMockBatchsWithNullVec(m)

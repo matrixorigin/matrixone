@@ -280,7 +280,7 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 			return nil, err
 		}
 		obj.Obj = fGet.GetEncodedOverloadID()
-		obj.ObjName = "sum"
+		obj.ObjName = "sum_count"
 	case function.AVG_TW_CACHE:
 		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
 		fGet, err := function.GetFunctionByName(b.GetContext(), "avg_tw_result", []types.Type{typ})

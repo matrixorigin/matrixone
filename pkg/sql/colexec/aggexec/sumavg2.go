@@ -1043,6 +1043,23 @@ func newSumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | type
 	return &exec
 }
 
+func newSumCountExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
+	var exec sumAvgExec[int64, int64]
+	exec.mp = mp
+	exec.isSum = true
+	exec.ofCheck = int64OfCheck
+	exec.aggInfo = aggInfo{
+		aggId:      aggID,
+		isDistinct: isDistinct,
+		argTypes:   []types.Type{param},
+		retType:    types.T_int64.ToType(),
+		emptyNull:  true,
+		saveArg:    isDistinct,
+		stateTypes: []types.Type{types.T_int64.ToType()},
+	}
+	return &exec
+}
+
 func newSumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState](mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
 	var exec sumAvgDecExec[A, S]
 	exec.mp = mp

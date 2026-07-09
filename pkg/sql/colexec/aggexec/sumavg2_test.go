@@ -328,6 +328,33 @@ func TestSumAvgBigIntOverflowUsesDecimal128State(t *testing.T) {
 	}
 }
 
+func TestSumCountKeepsInt64Result(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	require.Equal(t, types.T_decimal128, SumReturnType([]types.Type{types.T_int64.ToType()}).Oid)
+
+	typ := types.T_int64.ToType()
+	vec := testutil.NewInt64Vector(3, typ, mp, false, nil, []int64{1, 2, 3})
+	defer vec.Free(mp)
+
+	exec, err := MakeAgg(mp, AggIdOfSumCount, false, typ)
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{vec}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	defer exec.Free()
+	for _, result := range results {
+		defer result.Free(mp)
+	}
+
+	require.Len(t, results, 1)
+	require.Equal(t, types.T_int64, results[0].GetType().Oid)
+	require.Equal(t, int64(6), vector.MustFixedColNoTypeCheck[int64](results[0])[0])
+}
+
 func TestSumAvgDistinctBigIntOverflowUsesDecimal128State(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

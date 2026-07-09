@@ -332,9 +332,22 @@ select _wstart, _wend, max(col2), min(col2) from sliding_window01 where ts > "20
 2023-08-01 00:40:00  ¦  2023-08-01 00:50:00  ¦  38.0  ¦  28.0  𝄀
 2023-08-01 00:45:00  ¦  2023-08-01 00:55:00  ¦  38.0  ¦  38.0
 select _wstart, _wend, count(col2), avg(col2) from sliding_window01 where ts > "2023-08-01 00:00:00.000" and ts < "2023-08-01 00:50:00.000" interval(ts, 10, minute) sliding(10, minute) fill(next);
-internal error: invalid int64 slice
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+2023-08-01 00:00:00  ¦  2023-08-01 00:10:00  ¦  1  ¦  26.0  𝄀
+2023-08-01 00:10:00  ¦  2023-08-01 00:20:00  ¦  1  ¦  28.0  𝄀
+2023-08-01 00:20:00  ¦  2023-08-01 00:30:00  ¦  2  ¦  28.5  𝄀
+2023-08-01 00:30:00  ¦  2023-08-01 00:40:00  ¦  0  ¦  33.0  𝄀
+2023-08-01 00:40:00  ¦  2023-08-01 00:50:00  ¦  2  ¦  33.0
 select _wstart, _wend, count(col2), avg(col2) from sliding_window01 where ts > "2023-08-01 00:00:00.000" and ts < "2023-08-01 00:50:00.000" interval(ts, 10, minute) sliding(6, minute) fill(value,1000);
-internal error: invalid int64 slice
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+2023-08-01 00:00:00  ¦  2023-08-01 00:10:00  ¦  1  ¦  26.0  𝄀
+2023-08-01 00:06:00  ¦  2023-08-01 00:16:00  ¦  1  ¦  28.0  𝄀
+2023-08-01 00:12:00  ¦  2023-08-01 00:22:00  ¦  2  ¦  29.0  𝄀
+2023-08-01 00:18:00  ¦  2023-08-01 00:28:00  ¦  2  ¦  28.5  𝄀
+2023-08-01 00:24:00  ¦  2023-08-01 00:34:00  ¦  1  ¦  27.0  𝄀
+2023-08-01 00:30:00  ¦  2023-08-01 00:40:00  ¦  0  ¦  1000.0  𝄀
+2023-08-01 00:36:00  ¦  2023-08-01 00:46:00  ¦  2  ¦  33.0  𝄀
+2023-08-01 00:42:00  ¦  2023-08-01 00:52:00  ¦  1  ¦  38.0
 select _wstart, _wend, sum(col2) from sliding_window01 where ts > "2023-08-01 00:00:00.000" and ts < "2023-08-01 00:50:00.000" interval(ts, 1, hour) sliding(10, minute) fill(none);
 ➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col2)[8,54,0]  𝄀
 2023-08-01 00:00:00  ¦  2023-08-01 01:00:00  ¦  177.0  𝄀
@@ -427,9 +440,21 @@ select * from sliding_window04;
 2023-08-01 00:01:07  ¦  0.0  𝄀
 2023-08-01 00:01:08  ¦  3.829839232142142E7
 select _wstart, _wend, count(col2), avg(col2) from sliding_window04 where ts >= "2023-08-01 00:01:00.000" and ts <= "2023-08-01 00:01:10.000" interval(ts, 1, second) sliding(1, second) fill(prev);
-internal error: invalid int64 slice
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+2023-08-01 00:01:01  ¦  2023-08-01 00:01:02  ¦  1  ¦  1.2143242132142314E8  𝄀
+2023-08-01 00:01:03  ¦  2023-08-01 00:01:04  ¦  0  ¦  1.2143242132142314E8  𝄀
+2023-08-01 00:01:04  ¦  2023-08-01 00:01:05  ¦  1  ¦  3.2151323321512513E7  𝄀
+2023-08-01 00:01:05  ¦  2023-08-01 00:01:06  ¦  1  ¦  -3.829843232143214E7  𝄀
+2023-08-01 00:01:06  ¦  2023-08-01 00:01:07  ¦  1  ¦  0.0  𝄀
+2023-08-01 00:01:07  ¦  2023-08-01 00:01:08  ¦  1  ¦  0.0  𝄀
+2023-08-01 00:01:08  ¦  2023-08-01 00:01:09  ¦  1  ¦  3.829839232142142E7
 select _wstart, _wend, count(col2), avg(col2) from sliding_window04 where ts >= "2023-08-01 00:01:00.000" and ts <= "2023-08-01 00:01:10.000" interval(ts, 2, second) sliding(2, second) fill(next);
-internal error: invalid int64 slice
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+2023-08-01 00:01:00  ¦  2023-08-01 00:01:02  ¦  1  ¦  1.2143242132142314E8  𝄀
+2023-08-01 00:01:02  ¦  2023-08-01 00:01:04  ¦  0  ¦  -3073554.4999598153  𝄀
+2023-08-01 00:01:04  ¦  2023-08-01 00:01:06  ¦  2  ¦  -3073554.4999598153  𝄀
+2023-08-01 00:01:06  ¦  2023-08-01 00:01:08  ¦  2  ¦  0.0  𝄀
+2023-08-01 00:01:08  ¦  2023-08-01 00:01:10  ¦  1  ¦  3.829839232142142E7
 drop table sliding_window04;
 drop table if exists sliding_window05;
 create table sliding_window05 (ts timestamp primary key , col2 int);
@@ -470,71 +495,7 @@ select _wstart, _wend, avg(col2) from sliding_window05 where ts >= '1997-01-13 0
 2021-11-07 00:00:00  ¦  2022-02-15 00:00:00  ¦  -3.28193471E8  𝄀
 2022-05-26 00:00:00  ¦  2022-09-03 00:00:00  ¦  -3281891.0
 select _wstart, _wend, sum(col2) from sliding_window05 where ts >= '1998-01-29 00:10:01.000' and ts <= '2022-07-17 00:04:12.000' interval(ts, 200, day) sliding(100, day) fill(linear);
-internal error: panic wrong type for FunctionResultWrapper: 
-github.com/matrixorigin/matrixone/pkg/container/vector.MustFunctionResult[...]
-	/mnt/fastdata/temp2/matrixone/pkg/container/vector/functionTools.go:593
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.decimalBatchArith[...]
-	/mnt/fastdata/temp2/matrixone/pkg/sql/plan/function/baseTemplate.go:385
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.plusFn
-	/mnt/fastdata/temp2/matrixone/pkg/sql/plan/function/arithmetic.go:295
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
-	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/evalExpression.go:639
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
-	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/evalExpression.go:606
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
-	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/evalExpression.go:606
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
-	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/evalExpression.go:606
-github.com/matrixorigin/matrixone/pkg/sql/colexec/fill.processLinearCol
-	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/fill/fill.go:451
-github.com/matrixorigin/matrixone/pkg/sql/colexec/fill.processLinear
-	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/fill/fill.go:601
-github.com/matrixorigin/matrixone/pkg/sql/colexec/fill.(*Fill).Call
-	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/fill/fill.go:118
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/mnt/fastdata/temp2/matrixone/pkg/vm/types.go:356
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/mnt/fastdata/temp2/matrixone/pkg/vm/types.go:367
-github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
-	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/projection/projection.go:62
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/mnt/fastdata/temp2/matrixone/pkg/vm/types.go:356
-github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/mnt/fastdata/temp2/matrixone/pkg/vm/types.go:367
-github.com/matrixorigin/matrixone/pkg/sql/colexec/output.(*Output).Call
-	/mnt/fastdata/temp2/matrixone/pkg/sql/colexec/output/output.go:58
-github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/mnt/fastdata/temp2/matrixone/pkg/vm/types.go:356
-github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
-	/mnt/fastdata/temp2/matrixone/pkg/vm/pipeline/pipeline.go:71
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
-	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/scope.go:172
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
-	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/scope.go:493
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
-	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/scope.go:349
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
-	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/compile.go:339
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce
-	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/compile.go:523
-github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
-	/mnt/fastdata/temp2/matrixone/pkg/sql/compile/compile2.go:257
-github.com/matrixorigin/matrixone/pkg/frontend.executeResultRowStmt
-	/mnt/fastdata/temp2/matrixone/pkg/frontend/result_row_stmt.go:87
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:3286
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:3134
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:3099
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:3043
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:2918
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
-	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:2898
-github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
-	/mnt/fastdata/temp2/matrixone/pkg/frontend/mysql_cmd_executor.go:3539
+internal error: invalid int64 slice
 drop table sliding_window05;
 drop table if exists temporary01;
 create temporary table temporary01 (ts timestamp primary key, col2 bigint);
@@ -818,7 +779,13 @@ select _wstart, _wend, sum(col3), count(col4) from temporary02 where ts >= '2023
 2023-11-01 00:01:00  ¦  2023-11-01 00:02:00  ¦  328903.32334  ¦  1  𝄀
 2023-11-01 00:13:00  ¦  2023-11-01 00:14:00  ¦  392432.4324  ¦  1
 select _wstart, _wend, sum(col3), count(col4) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 5, second) sliding(4, second) fill(value, 2190);
-internal error: invalid int64 slice
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col3)[8,54,0]  ¦  count(col4)[-5,64,0]  𝄀
+2023-11-01 00:00:00  ¦  2023-11-01 00:00:05  ¦  70533.58902  ¦  1  𝄀
+2023-11-01 00:00:04  ¦  2023-11-01 00:00:09  ¦  442468.54442339996  ¦  4  𝄀
+2023-11-01 00:00:08  ¦  2023-11-01 00:00:13  ¦  382.343  ¦  3  𝄀
+2023-11-01 00:00:12  ¦  2023-11-01 00:00:17  ¦  2190.0  ¦  1  𝄀
+2023-11-01 00:01:12  ¦  2023-11-01 00:01:17  ¦  328903.32334  ¦  1  𝄀
+2023-11-01 00:13:12  ¦  2023-11-01 00:13:17  ¦  392432.4324  ¦  1
 drop table temporary02;
 drop table if exists external01;
 create external table external01(ts timestamp,col1 tinyint default null,col2 smallint default null,col3 int default null,col4 bigint default null,col5 tinyint unsigned default null,col6 smallint unsigned default null,col7 int unsigned default null,col8 bigint unsigned default null,col9 float default null,col10 double default null)infile{"filepath"='$resources/external_table_file/time_window.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
@@ -828,11 +795,15 @@ select _wstart, _wend, max(col2), min(col3), avg(col4) from external01 where ts 
 2014-01-01 00:03:00  ¦  2014-01-01 00:06:00  ¦  31411  ¦  -1952462290  ¦  -3270483797782685655.5000  𝄀
 2014-01-01 00:12:00  ¦  2014-01-01 00:15:00  ¦  22609  ¦  -1679063036  ¦  3137296212355014671.7500
 select _wstart, _wend, count(col2), sum(col6), avg(col7) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 10, minute) sliding(5,minute);
-internal error: invalid int64 slice
+internal error: invalid uint64 slice
 select _wstart, _wend, count(col2), sum(col10) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 15, minute) sliding(10,minute);
-internal error: invalid int64 slice
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  sum(col10)[8,54,0]  𝄀
+2014-01-01 00:00:00  ¦  2014-01-01 00:15:00  ¦  10  ¦  48.22709999999999  𝄀
+2014-01-01 00:10:00  ¦  2014-01-01 00:25:00  ¦  4  ¦  16.676199999999998
 select _wstart, _wend, count(col2), sum(col10) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 15, minute) sliding(10,minute) fill(value,1000);
-internal error: invalid int64 slice
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  sum(col10)[8,54,0]  𝄀
+2014-01-01 00:00:00  ¦  2014-01-01 00:15:00  ¦  10  ¦  48.22709999999999  𝄀
+2014-01-01 00:10:00  ¦  2014-01-01 00:25:00  ¦  4  ¦  16.676199999999998
 drop table external01;
 drop table if exists tt1;
 create table tt1(ts timestamp primary key, a int);
