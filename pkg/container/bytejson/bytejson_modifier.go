@@ -28,7 +28,7 @@ type bytejsonModifier struct {
 }
 
 func (bm *bytejsonModifier) insert(path *Path, newBj ByteJson) (ByteJson, error) {
-	_, exists := bm.bj.querySimpleExist(path)
+	_, exists := bm.bj.querySimpleExist(path, false)
 	if exists {
 		// if path exists, return
 		return bm.bj, nil
@@ -42,7 +42,7 @@ func (bm *bytejsonModifier) insert(path *Path, newBj ByteJson) (ByteJson, error)
 }
 
 func (bm *bytejsonModifier) replace(path *Path, newBj ByteJson) (ByteJson, error) {
-	result, exists := bm.bj.querySimpleExist(path)
+	result, exists := bm.bj.querySimpleExist(path, false)
 	if !exists {
 		// if path not exists, return
 		return bm.bj, nil
@@ -54,7 +54,7 @@ func (bm *bytejsonModifier) replace(path *Path, newBj ByteJson) (ByteJson, error
 }
 
 func (bm *bytejsonModifier) set(path *Path, newBj ByteJson) (ByteJson, error) {
-	result, exists := bm.bj.querySimpleExist(path)
+	result, exists := bm.bj.querySimpleExist(path, false)
 	if exists {
 		// set
 		bm.modifyPtr = &result.Data[0]

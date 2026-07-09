@@ -444,14 +444,25 @@ func (bj ByteJson) Query(paths []*Path) ByteJson {
 }
 
 func (bj ByteJson) querySimple(path *Path) ByteJson {
-	val, ok := bj.querySimpleExist(path)
+	val, ok := bj.querySimpleExist(path, false)
 	if !ok {
 		return Null
 	}
 	return val
 }
 
-func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
+// QuerySimpleExist returns the value at a simple path and whether the path exists.
+func (bj ByteJson) QuerySimpleExist(path *Path) (ByteJson, bool) {
+	return bj.querySimpleExist(path, false)
+}
+
+// QuerySimpleContainPath returns the value at a simple path using JSON_CONTAINS
+// scalar-[0] autowrap semantics for scalar array-index access.
+func (bj ByteJson) QuerySimpleContainPath(path *Path) (ByteJson, bool) {
+	return bj.querySimpleExist(path, true)
+}
+
+func (bj ByteJson) querySimpleExist(path *Path, autowrapScalarIndex bool) (ByteJson, bool) {
 	cur := bj
 	// don't go through th step(), recursive call route.  We know
 	// we have a simple path, each step will bring us to ONE SINGLE next value.
@@ -490,6 +501,12 @@ func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
 				cur = cur.getArrayElem(idx)
 			}
 		} else {
+			if autowrapScalarIndex && sub.tp == subPathIdx {
+				idx, _, _ := sub.idx.genIndex(1)
+				if idx == 0 {
+					continue
+				}
+			}
 			return Null, false
 		}
 	}

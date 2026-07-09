@@ -42,8 +42,14 @@ type opBuiltInJsonExtract struct {
 	simple   bool
 }
 
+type opBuiltInJsonContains struct{}
+
 func newOpBuiltInJsonExtract() *opBuiltInJsonExtract {
 	return &opBuiltInJsonExtract{}
+}
+
+func newOpBuiltInJsonContains() *opBuiltInJsonContains {
+	return &opBuiltInJsonContains{}
 }
 
 // JSON_EXTRACT
@@ -69,6 +75,35 @@ func jsonExtractCheckFn(overloads []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithCast(0, ts)
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
+func jsonContainsCheckFn(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 2 && len(inputs) != 3 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	ts := make([]types.Type, 0, len(inputs))
+	allMatch := true
+	for i, input := range inputs {
+		if i < 2 && input.Oid == types.T_json {
+			ts = append(ts, input)
+			continue
+		}
+		if input.Oid.IsMySQLString() {
+			ts = append(ts, input)
+			continue
+		}
+		if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
+			ts = append(ts, types.T_varchar.ToType())
+			allMatch = false
+			continue
+		}
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if allMatch {
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithCast(0, ts)
 }
 
 func jsonLengthCheckFn(overloads []overload, inputs []types.Type) checkResult {
@@ -142,6 +177,361 @@ func computeStringSimple(json []byte, paths []*bytejson.Path) (bytejson.ByteJson
 		return bytejson.Null, err
 	}
 	return bj.QuerySimple(paths), nil
+}
+
+func (op *opBuiltInJsonContains) jsonContains(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	targetVec := parameters[0]
+	candidateVec := parameters[1]
+	targetWrapper := vector.GenerateFunctionStrParameter(targetVec)
+	candidateWrapper := vector.GenerateFunctionStrParameter(candidateVec)
+	rs := vector.MustFunctionResult[int64](result)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	var pathWrapper vector.FunctionParameterWrapper[types.Varlena]
+	hasPath := len(parameters) == 3
+	if hasPath {
+		pathWrapper = vector.GenerateFunctionStrParameter(parameters[2])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		targetBytes, targetNull := targetWrapper.GetStrValue(i)
+		candidateBytes, candidateNull := candidateWrapper.GetStrValue(i)
+		if targetNull || candidateNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		target, err := parseJsonContainsDocument(proc, targetVec, targetBytes)
+		if err != nil {
+			return err
+		}
+		candidate, err := parseJsonContainsDocument(proc, candidateVec, candidateBytes)
+		if err != nil {
+			return err
+		}
+
+		if hasPath {
+			pathBytes, pathNull := pathWrapper.GetStrValue(i)
+			if pathNull {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			path, err := types.ParseStringToPath(string(pathBytes))
+			if err != nil || !path.IsSimple() {
+				return moerr.NewInvalidArg(proc.Ctx, "json_contains", "invalid path expression")
+			}
+			var exists bool
+			target, exists = target.QuerySimpleContainPath(&path)
+			if !exists {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+
+		if jsonContainsValue(target, candidate) {
+			if err := rs.Append(1, false); err != nil {
+				return err
+			}
+		} else if err := rs.Append(0, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func parseJsonContainsDocument(proc *process.Process, v *vector.Vector, data []byte) (bytejson.ByteJson, error) {
+	if v.GetType().Oid == types.T_json {
+		return types.DecodeJson(data), nil
+	}
+
+	bj, err := types.ParseSliceToByteJson(data)
+	if err != nil {
+		return bytejson.Null, moerr.NewInvalidArg(proc.Ctx, "json_contains", "invalid JSON document")
+	}
+	return bj, nil
+}
+
+func jsonContainsValue(target, candidate bytejson.ByteJson) bool {
+	if target.Type == bytejson.TpCodeArray {
+		return jsonContainsArray(target, candidate)
+	}
+
+	switch candidate.Type {
+	case bytejson.TpCodeArray:
+		return false
+	case bytejson.TpCodeObject:
+		return jsonContainsObject(target, candidate)
+	default:
+		return jsonContainsScalar(target, candidate)
+	}
+}
+
+func jsonContainsArray(target, candidate bytejson.ByteJson) bool {
+	targetCnt := target.GetElemCnt()
+	if candidate.Type != bytejson.TpCodeArray {
+		for i := 0; i < targetCnt; i++ {
+			if jsonContainsValue(target.GetArrayElem(i), candidate) {
+				return true
+			}
+		}
+		return false
+	}
+
+	candidateCnt := candidate.GetElemCnt()
+	for i := 0; i < candidateCnt; i++ {
+		candidateElem := candidate.GetArrayElem(i)
+		found := false
+		for j := 0; j < targetCnt; j++ {
+			if jsonContainsValue(target.GetArrayElem(j), candidateElem) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func jsonContainsObject(target, candidate bytejson.ByteJson) bool {
+	if target.Type != bytejson.TpCodeObject {
+		return false
+	}
+
+	targetCnt := target.GetElemCnt()
+	candidateCnt := candidate.GetElemCnt()
+	for i := 0; i < candidateCnt; i++ {
+		candidateKey := candidate.GetObjectKey(i)
+		candidateVal := candidate.GetObjectVal(i)
+		found := false
+		for j := 0; j < targetCnt; j++ {
+			if !bytes.Equal(target.GetObjectKey(j), candidateKey) {
+				continue
+			}
+			if !jsonContainsValue(target.GetObjectVal(j), candidateVal) {
+				return false
+			}
+			found = true
+			break
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func jsonContainsScalar(target, candidate bytejson.ByteJson) bool {
+	if target.Type == bytejson.TpCodeArray || target.Type == bytejson.TpCodeObject ||
+		candidate.Type == bytejson.TpCodeArray || candidate.Type == bytejson.TpCodeObject {
+		return false
+	}
+
+	if isJsonNumericType(target.Type) && isJsonNumericType(candidate.Type) {
+		return jsonContainsNumericEqual(target, candidate)
+	}
+	if target.Type != candidate.Type {
+		return false
+	}
+	return bytejson.CompareByteJson(target, candidate) == 0
+}
+
+func jsonContainsNumericEqual(target, candidate bytejson.ByteJson) bool {
+	switch target.Type {
+	case bytejson.TpCodeInt64:
+		return jsonContainsInt64NumericEqual(target.GetInt64(), candidate)
+	case bytejson.TpCodeUint64:
+		return jsonContainsUint64NumericEqual(target.GetUint64(), candidate)
+	case bytejson.TpCodeFloat64:
+		return jsonContainsFloat64NumericEqual(target.GetFloat64(), candidate)
+	case bytejson.TpCodeDecimal:
+		return jsonContainsDecimalNumericEqual(target, candidate)
+	default:
+		return false
+	}
+}
+
+type jsonContainsDecimalValue struct {
+	value types.Decimal256
+	scale int32
+}
+
+func jsonContainsInt64NumericEqual(target int64, candidate bytejson.ByteJson) bool {
+	switch candidate.Type {
+	case bytejson.TpCodeInt64:
+		return target == candidate.GetInt64()
+	case bytejson.TpCodeUint64:
+		return target >= 0 && uint64(target) == candidate.GetUint64()
+	case bytejson.TpCodeFloat64:
+		return jsonContainsFloat64Int64Equal(candidate.GetFloat64(), target)
+	case bytejson.TpCodeDecimal:
+		return jsonContainsDecimalValueEqual(jsonContainsDecimalFromInt64(target), candidate)
+	default:
+		return false
+	}
+}
+
+func jsonContainsUint64NumericEqual(target uint64, candidate bytejson.ByteJson) bool {
+	switch candidate.Type {
+	case bytejson.TpCodeInt64:
+		candidateInt := candidate.GetInt64()
+		return candidateInt >= 0 && target == uint64(candidateInt)
+	case bytejson.TpCodeUint64:
+		return target == candidate.GetUint64()
+	case bytejson.TpCodeFloat64:
+		return jsonContainsFloat64Uint64Equal(candidate.GetFloat64(), target)
+	case bytejson.TpCodeDecimal:
+		return jsonContainsDecimalValueEqual(jsonContainsDecimalFromUint64(target), candidate)
+	default:
+		return false
+	}
+}
+
+func jsonContainsFloat64NumericEqual(target float64, candidate bytejson.ByteJson) bool {
+	switch candidate.Type {
+	case bytejson.TpCodeInt64:
+		return jsonContainsFloat64Int64Equal(target, candidate.GetInt64())
+	case bytejson.TpCodeUint64:
+		return jsonContainsFloat64Uint64Equal(target, candidate.GetUint64())
+	case bytejson.TpCodeFloat64:
+		return target == candidate.GetFloat64()
+	case bytejson.TpCodeDecimal:
+		return jsonContainsFloat64DecimalEqual(target, candidate)
+	default:
+		return false
+	}
+}
+
+func jsonContainsDecimalNumericEqual(target, candidate bytejson.ByteJson) bool {
+	targetDecimal, ok := jsonContainsByteJsonDecimalValue(target)
+	if !ok {
+		return false
+	}
+
+	switch candidate.Type {
+	case bytejson.TpCodeInt64:
+		return jsonContainsCompareDecimalValues(targetDecimal, jsonContainsDecimalFromInt64(candidate.GetInt64())) == 0
+	case bytejson.TpCodeUint64:
+		return jsonContainsCompareDecimalValues(targetDecimal, jsonContainsDecimalFromUint64(candidate.GetUint64())) == 0
+	case bytejson.TpCodeFloat64:
+		return jsonContainsFloat64DecimalEqual(candidate.GetFloat64(), target)
+	case bytejson.TpCodeDecimal:
+		return jsonContainsDecimalValueEqual(targetDecimal, candidate)
+	default:
+		return false
+	}
+}
+
+func jsonContainsFloat64Int64Equal(f float64, i int64) bool {
+	if f != float64(i) {
+		return false
+	}
+	return jsonContainsFloat64DecimalValueEqual(f, jsonContainsDecimalFromInt64(i))
+}
+
+func jsonContainsFloat64Uint64Equal(f float64, u uint64) bool {
+	if f != float64(u) {
+		return false
+	}
+	return jsonContainsFloat64DecimalValueEqual(f, jsonContainsDecimalFromUint64(u))
+}
+
+func jsonContainsFloat64DecimalEqual(f float64, decimal bytejson.ByteJson) bool {
+	decimalValue, ok := jsonContainsByteJsonDecimalValue(decimal)
+	if !ok {
+		return false
+	}
+	return jsonContainsFloat64DecimalValueEqual(f, decimalValue)
+}
+
+func jsonContainsFloat64DecimalValueEqual(f float64, expected jsonContainsDecimalValue) bool {
+	floatValue, ok := jsonContainsFloat64DecimalValue(f)
+	if !ok {
+		return false
+	}
+	return jsonContainsCompareDecimalValues(floatValue, expected) == 0
+}
+
+func jsonContainsDecimalValueEqual(target jsonContainsDecimalValue, candidate bytejson.ByteJson) bool {
+	candidateValue, ok := jsonContainsByteJsonDecimalValue(candidate)
+	if !ok {
+		return false
+	}
+	return jsonContainsCompareDecimalValues(target, candidateValue) == 0
+}
+
+func jsonContainsByteJsonDecimalValue(bj bytejson.ByteJson) (jsonContainsDecimalValue, bool) {
+	return jsonContainsParseDecimalString(string(bj.GetString()))
+}
+
+func jsonContainsFloat64DecimalValue(f float64) (jsonContainsDecimalValue, bool) {
+	return jsonContainsParseDecimalString(strconv.FormatFloat(f, 'g', -1, 64))
+}
+
+func jsonContainsParseDecimalString(s string) (jsonContainsDecimalValue, bool) {
+	value, scale, err := types.Parse256(s)
+	if err != nil {
+		return jsonContainsDecimalValue{}, false
+	}
+	return jsonContainsDecimalValue{value: value, scale: scale}, true
+}
+
+func jsonContainsDecimalFromInt64(v int64) jsonContainsDecimalValue {
+	return jsonContainsDecimalValue{value: types.Decimal256FromInt64(v)}
+}
+
+func jsonContainsDecimalFromUint64(v uint64) jsonContainsDecimalValue {
+	return jsonContainsDecimalValue{value: types.Decimal256{B0_63: v}}
+}
+
+func jsonContainsCompareDecimalValues(left, right jsonContainsDecimalValue) int {
+	if left.scale < right.scale {
+		scaled, err := left.value.Scale(right.scale - left.scale)
+		if err != nil {
+			return 1
+		}
+		left.value = scaled
+		left.scale = right.scale
+	} else if left.scale > right.scale {
+		scaled, err := right.value.Scale(left.scale - right.scale)
+		if err != nil {
+			return -1
+		}
+		right.value = scaled
+		right.scale = left.scale
+	}
+	return types.CompareDecimal256(left.value, right.value)
+}
+
+func isJsonNumericType(tp bytejson.TpCode) bool {
+	switch tp {
+	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeDecimal:
+		return true
+	default:
+		return false
+	}
 }
 
 func jsonLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
