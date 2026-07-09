@@ -400,8 +400,8 @@ func findParamAddFunc(p *Plan) *plan.Function {
 // must succeed. Before the fix, both params were bound as T_text, and the "+"
 // function resolver rejected [TEXT TEXT] during COM_STMT_PREPARE. The binder now
 // detects two T_text ParamRef arguments to an arithmetic operator and promotes
-// each to Decimal128 via an implicit cast, so the plan contains
-// cast(?, decimal128) + cast(?, decimal128).
+// each to DOUBLE via an implicit cast, so the plan contains
+// cast(?, float64) + cast(?, float64).
 func TestPrepareArithmeticParams(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
@@ -416,7 +416,7 @@ func TestPrepareArithmeticParams(t *testing.T) {
 		assert.Len(t, refs, 2)
 		positions := []int32{}
 		for _, ref := range refs {
-			// ParamRefs remain T_text; the binder inserts cast(T_text→decimal128)
+			// ParamRefs remain T_text; the binder inserts cast(T_text→float64)
 			// before the function type check rather than changing the param type.
 			assert.Equalf(t, int32(types.T_text), ref.Typ.Id,
 				"param ref should keep T_text type before execute supplies real values")
@@ -459,7 +459,7 @@ func TestPrepareArithOpsAllOperators(t *testing.T) {
 }
 
 // TestPrepareArithPlan verifies that dual-param arithmetic (the only case
-// promoteTextParamsForArith triggers) casts both params to Decimal128.
+// promoteTextParamsForArith triggers) casts both params to DOUBLE.
 // Mixed cases (e.g. "0 + ?") fall through to the existing initFixed1 rules
 // and are verified by TestPrepareArithMixedPreservesExactType.
 func TestPrepareArithPlan(t *testing.T) {
@@ -467,9 +467,9 @@ func TestPrepareArithPlan(t *testing.T) {
 
 	tests := []struct {
 		sql       string
-		wantCasts int // expected number of cast(param, decimal128) wrappers
+		wantCasts int // expected number of cast(param, float64) wrappers
 	}{
-		// Dual param: both promoted to Decimal128.
+		// Dual param: both promoted to DOUBLE.
 		{"prepare s1 from select ? + ?", 2},
 		{"prepare s1 from select ? - ?", 2},
 		{"prepare s1 from select ? * ?", 2},
@@ -489,32 +489,83 @@ func TestPrepareArithPlan(t *testing.T) {
 		castCount := 0
 		for _, node := range q.GetQuery().Nodes {
 			for _, expr := range node.ProjectList {
-				castCount += countDecimal128Casts(expr)
+				castCount += countDoubleCasts(expr)
 			}
 		}
 		assert.Equalf(t, tc.wantCasts, castCount,
-			"%s should have %d cast(arg, decimal128)", tc.sql, tc.wantCasts)
+			"%s should have %d cast(arg, float64)", tc.sql, tc.wantCasts)
 	}
 }
 
-// countDecimal128Casts counts cast(arg, T_decimal128) wrappers in expr.
-func countDecimal128Casts(expr *plan.Expr) int {
+// TestPrepareArithDualParamResultTypeIsDouble asserts the top-level result type
+// of a no-context dual-param arithmetic expression. Per MySQL 8.0's PREPARE
+// parameter-marker rules, when both operands are parameters with no
+// type-determining context the derived type is DOUBLE, so the projected result
+// metadata must be T_float64 for "+ - * / % mod". "div" is integer division and
+// stays T_int64 in both MySQL and MO, which this test also pins down.
+func TestPrepareArithDualParamResultTypeIsDouble(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	tests := []struct {
+		sql    string
+		wantId int32
+	}{
+		{"prepare s1 from select ? + ?", int32(types.T_float64)},
+		{"prepare s1 from select ? - ?", int32(types.T_float64)},
+		{"prepare s1 from select ? * ?", int32(types.T_float64)},
+		{"prepare s1 from select ? / ?", int32(types.T_float64)},
+		{"prepare s1 from select ? % ?", int32(types.T_float64)},
+		{"prepare s1 from select ? mod ?", int32(types.T_float64)},
+		{"prepare s1 from select ? div ?", int32(types.T_int64)},
+	}
+	for _, tc := range tests {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		assert.NoErrorf(t, err, "%s should succeed", tc.sql)
+
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		top := topArithFuncExpr(q)
+		if assert.NotNilf(t, top, "%s should project a top-level arithmetic function", tc.sql) {
+			assert.Equalf(t, tc.wantId, top.Typ.Id,
+				"%s top-level result type should be %d, got %d", tc.sql, tc.wantId, top.Typ.Id)
+		}
+	}
+}
+
+// topArithFuncExpr returns the first projected expression whose top-level
+// function is a binary arithmetic operator.
+func topArithFuncExpr(q *plan.Plan) *plan.Expr {
+	arithOps := map[string]bool{"+": true, "-": true, "*": true, "/": true, "%": true, "div": true, "mod": true}
+	for _, node := range q.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			if f := expr.GetF(); f != nil && arithOps[f.Func.GetObjName()] {
+				return expr
+			}
+		}
+	}
+	return nil
+}
+
+// countDoubleCasts counts cast(arg, T_float64) wrappers in expr.
+func countDoubleCasts(expr *plan.Expr) int {
 	if expr == nil {
 		return 0
 	}
 	n := 0
 	if f := expr.GetF(); f != nil {
 		if f.Func.GetObjName() == "cast" && len(f.Args) >= 2 &&
-			f.Args[1].Typ.Id == int32(types.T_decimal128) {
+			f.Args[1].Typ.Id == int32(types.T_float64) {
 			n++
 		}
 		for _, arg := range f.Args {
-			n += countDecimal128Casts(arg)
+			n += countDoubleCasts(arg)
 		}
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			n += countDecimal128Casts(item)
+			n += countDoubleCasts(item)
 		}
 	}
 	return n
@@ -529,7 +580,7 @@ func TestPrepareArithMixedPreservesExactType(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	// Mixed cases: promoteTextParamsForArith only fires for dual params,
-	// so there should be at most 1 decimal128 cast (from the existing
+	// so there should be at most 1 float64 cast (from the existing
 	// initFixed1 rules when one peer is decimal/float), never 2.
 	tests := []string{
 		"prepare s1 from select ? + 5",
@@ -547,9 +598,9 @@ func TestPrepareArithMixedPreservesExactType(t *testing.T) {
 		}
 		for _, node := range q.GetQuery().Nodes {
 			for _, expr := range node.ProjectList {
-				c := countDecimal128Casts(expr)
+				c := countDoubleCasts(expr)
 				assert.LessOrEqualf(t, c, 1,
-					"%s should have ≤1 decimal128 cast, got %d", sql, c)
+					"%s should have ≤1 float64 cast, got %d", sql, c)
 			}
 		}
 	}
@@ -575,17 +626,17 @@ func TestPrepareArithAllCallSites(t *testing.T) {
 	for _, sql := range dualTests {
 		logicPlan, err := runOneStmt(mock, t, sql)
 		assert.NoErrorf(t, err, "%s should succeed", sql)
-		// Verify decimal128 casts exist (promotion fired).
+		// Verify float64 casts exist (promotion fired).
 		q := resolveQueryPlan(logicPlan)
 		assert.NotNil(t, q)
 		if q != nil && q.GetQuery() != nil {
 			total := 0
 			for _, node := range q.GetQuery().Nodes {
 				for _, expr := range node.ProjectList {
-					total += countDecimal128Casts(expr)
+					total += countDoubleCasts(expr)
 				}
 			}
-			assert.Equalf(t, 2, total, "%s should have 2 decimal128 casts", sql)
+			assert.Equalf(t, 2, total, "%s should have 2 float64 casts", sql)
 		}
 	}
 
@@ -608,9 +659,9 @@ func TestPrepareArithAllCallSites(t *testing.T) {
 		if q != nil && q.GetQuery() != nil {
 			for _, node := range q.GetQuery().Nodes {
 				for _, expr := range node.ProjectList {
-					c := countDecimal128Casts(expr)
+					c := countDoubleCasts(expr)
 					assert.LessOrEqualf(t, c, 1,
-						"%s should have ≤1 decimal128 cast (early return), got %d", sql, c)
+						"%s should have ≤1 float64 cast (early return), got %d", sql, c)
 				}
 			}
 		}
