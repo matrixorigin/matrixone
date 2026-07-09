@@ -27,11 +27,6 @@ approx_count_distinct(a)    approx_count_distinct(b)
 analyze table t_analyze_01;
 approx_count_distinct(a)    approx_count_distinct(b)
 2    3
-analyze table t_analyze_01, t_analyze_02;
-approx_count_distinct(a)    approx_count_distinct(b)
-2    3
-approx_count_distinct(x)    approx_count_distinct(y)
-4    4
 analyze table t_analyze_nonexistent;
 no such table db_analyze_stmt.t_analyze_nonexistent
 check table t_analyze_01;

@@ -29,8 +29,9 @@ insert into t_analyze_02 values
 analyze table t_analyze_01(a, b);
 
 -- ANALYZE TABLE without column list (issue #23122 core case)
+-- Note: multi-table no-column form (analyze table t1, t2) is covered by
+-- parser tests; BVT framework does not support multi-result-set statements.
 analyze table t_analyze_01;
-analyze table t_analyze_01, t_analyze_02;
 
 -- ANALYZE TABLE without column list: non-existent table
 analyze table t_analyze_nonexistent;
