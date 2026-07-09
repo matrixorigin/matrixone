@@ -377,6 +377,26 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, "pk", restoredOp.PkName)
 	})
 
+	t.Run("TableFunction_IndexReaderParam", func(t *testing.T) {
+		op := &table_function.TableFunction{
+			FuncName: "ivf_search",
+			IndexReaderParam: &planpb.IndexReaderParam{
+				PartitionCnCnt: 2,
+				PartitionCnIdx: 1,
+			},
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, int32(2), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnCnt())
+		require.Equal(t, int32(1), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnIdx())
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*table_function.TableFunction)
+		require.Equal(t, int32(2), restoredOp.IndexReaderParam.GetPartitionCnCnt())
+		require.Equal(t, int32(1), restoredOp.IndexReaderParam.GetPartitionCnIdx())
+	})
+
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{

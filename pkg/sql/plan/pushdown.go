@@ -742,6 +742,8 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
 			scanNode.IndexReaderParam.OrigFuncName = readerParam.OrigFuncName
 			scanNode.IndexReaderParam.DistRange = readerParam.DistRange
+			scanNode.IndexReaderParam.PartitionCnCnt = readerParam.PartitionCnCnt
+			scanNode.IndexReaderParam.PartitionCnIdx = readerParam.PartitionCnIdx
 		}
 	}
 

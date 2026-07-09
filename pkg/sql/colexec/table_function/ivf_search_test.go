@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -62,6 +64,36 @@ var (
 		},
 	}
 )
+
+func TestIvfSearchCacheKeyUsesPartitionWhenPresent(t *testing.T) {
+	require.Equal(t, "idx_entries:7", ivfSearchCacheKey("idx_entries", 7, nil))
+	require.Equal(t, "idx_entries:7", ivfSearchCacheKey("idx_entries", 7, &plan.IndexReaderParam{
+		PartitionCnCnt: 1,
+		PartitionCnIdx: 0,
+	}))
+	require.Equal(t, "idx_entries:7:1/2", ivfSearchCacheKey("idx_entries", 7, &plan.IndexReaderParam{
+		PartitionCnCnt: 2,
+		PartitionCnIdx: 1,
+	}))
+}
+
+func TestIvfSearchDetectsRemoteRunContext(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	require.False(t, isRemoteRunContext(proc))
+
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	require.True(t, isRemoteRunContext(proc))
+}
+
+func TestIvfSearchSkipsBackgroundQueriesForRemoteOrPartitionedRun(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	require.True(t, shouldRecordIvfSearchBackgroundQueries(proc, nil))
+	require.True(t, shouldRecordIvfSearchBackgroundQueries(proc, &plan.IndexReaderParam{PartitionCnCnt: 1}))
+	require.False(t, shouldRecordIvfSearchBackgroundQueries(proc, &plan.IndexReaderParam{PartitionCnCnt: 2}))
+
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	require.False(t, shouldRecordIvfSearchBackgroundQueries(proc, nil))
+}
 
 func newIvfSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) ivfSearchTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", m)

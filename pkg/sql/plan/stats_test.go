@@ -701,8 +701,10 @@ func TestIsIvfSearchEntriesInternalScan(t *testing.T) {
 
 func TestDeepCopyIndexReaderParamCopiesOrigFuncName(t *testing.T) {
 	oldParam := &planpb.IndexReaderParam{
-		OrigFuncName: "l2_distance",
-		Limit:        makeLimitExprForStatsTest(),
+		OrigFuncName:   "l2_distance",
+		Limit:          makeLimitExprForStatsTest(),
+		PartitionCnCnt: 2,
+		PartitionCnIdx: 1,
 		DistRange: &planpb.DistRange{
 			LowerBoundType: planpb.BoundType_EXCLUSIVE,
 			LowerBound:     makeLimitExprForStatsTest(),
@@ -713,6 +715,8 @@ func TestDeepCopyIndexReaderParamCopiesOrigFuncName(t *testing.T) {
 
 	require.NotSame(t, oldParam, got)
 	require.Equal(t, oldParam.OrigFuncName, got.OrigFuncName)
+	require.Equal(t, oldParam.PartitionCnCnt, got.PartitionCnCnt)
+	require.Equal(t, oldParam.PartitionCnIdx, got.PartitionCnIdx)
 	require.NotSame(t, oldParam.Limit, got.Limit)
 	require.NotSame(t, oldParam.DistRange, got.DistRange)
 }

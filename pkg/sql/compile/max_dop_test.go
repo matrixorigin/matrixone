@@ -19,7 +19,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
@@ -460,6 +462,109 @@ func TestGenerateNodesUsesMultiCNForSmallIvfSearchFunctionScan(t *testing.T) {
 	require.Equal(t, int32(0), nodes[0].CNIDX)
 	require.Equal(t, int32(2), nodes[1].CNCNT)
 	require.Equal(t, int32(1), nodes[1].CNIDX)
+}
+
+func TestGenerateNodesKeepsPartitionedIvfEntriesScanOnCurrentCNShard(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.e = newStubEngineForGenerateNodes("testdb", "idx_entries")
+	c.cnList = engine.Nodes{
+		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4},
+		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 4},
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef: &plan.ObjectRef{
+			SchemaName: "testdb",
+			ObjName:    "idx_entries",
+		},
+		TableDef: &plan.TableDef{
+			Name:      "idx_entries",
+			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+		},
+		Stats: &plan.Stats{
+			BlockNum: 1,
+			Dop:      1,
+		},
+		IndexReaderParam: &plan.IndexReaderParam{
+			Limit: &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},
+				},
+			},
+			OrigFuncName:   "l2_distance",
+			PartitionCnCnt: 2,
+			PartitionCnIdx: 1,
+		},
+	}
+
+	nodes, err := c.generateNodes(node)
+	require.NoError(t, err)
+	require.Len(t, nodes, 1)
+	require.Equal(t, "cn-local:6001", nodes[0].Addr)
+	require.Equal(t, int32(2), nodes[0].CNCNT)
+	require.Equal(t, int32(1), nodes[0].CNIDX)
+}
+
+func TestCompileTableFunctionDispatchesIvfSearchToAllCNs(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{isFirst: true}
+	c.pn = &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{},
+		},
+	}
+	c.cnList = engine.Nodes{
+		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4, CNCNT: 2, CNIDX: 0},
+		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 4, CNCNT: 2, CNIDX: 1},
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		TableDef: &plan.TableDef{
+			Name:      "idx_entries",
+			TableType: "func_table",
+			Cols: []*plan.ColDef{
+				{Name: "pkid", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+			},
+			TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+		},
+		Stats: &plan.Stats{BlockNum: 1, Dop: 1},
+		IndexReaderParam: &plan.IndexReaderParam{
+			Limit: &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},
+				},
+			},
+		},
+	}
+
+	scopes, err := c.compileTableFunction(node, nil)
+	require.NoError(t, err)
+	require.Len(t, scopes, 2)
+	require.Equal(t, Remote, scopes[0].Magic)
+	require.Equal(t, "cn-local:6001", scopes[0].NodeInfo.Addr)
+	require.Equal(t, 1, scopes[0].NodeInfo.Mcpu)
+	require.Equal(t, int32(2), scopes[0].NodeInfo.CNCNT)
+	require.Equal(t, int32(0), scopes[0].NodeInfo.CNIDX)
+	require.Equal(t, Remote, scopes[1].Magic)
+	require.Equal(t, "cn-remote:6001", scopes[1].NodeInfo.Addr)
+	require.Equal(t, 1, scopes[1].NodeInfo.Mcpu)
+	require.Equal(t, int32(2), scopes[1].NodeInfo.CNCNT)
+	require.Equal(t, int32(1), scopes[1].NodeInfo.CNIDX)
+
+	op0, ok := scopes[0].RootOp.(*table_function.TableFunction)
+	require.True(t, ok)
+	require.Equal(t, int32(2), op0.IndexReaderParam.GetPartitionCnCnt())
+	require.Equal(t, int32(0), op0.IndexReaderParam.GetPartitionCnIdx())
+	op1, ok := scopes[1].RootOp.(*table_function.TableFunction)
+	require.True(t, ok)
+	require.Equal(t, int32(2), op1.IndexReaderParam.GetPartitionCnCnt())
+	require.Equal(t, int32(1), op1.IndexReaderParam.GetPartitionCnIdx())
 }
 
 func TestGenerateNodesKeepsForceOneCNIvfEntriesInternalScanOnCurrentCN(t *testing.T) {
