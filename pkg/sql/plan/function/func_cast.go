@@ -5135,17 +5135,11 @@ func isStrictNumericString(s string) bool {
 
 func integerStringForCast(s string, mode castMode) (string, error) {
 	switch mode {
-	case castImplicit:
-		integer := leadingSignedInteger(s)
-		if integer == "" {
-			return "", moerr.NewInvalidInputNoCtxf("%s is not an integer", s)
-		}
-		return integer, nil
-	case castExplicit:
-		// MySQL evaluates the full numeric value for explicit CAST
-		// (e.g. CAST('7e2' AS SIGNED) = 700).  Use leadingNumericString
-		// to capture scientific notation and decimal parts, then evaluate
-		// via decimal arithmetic and truncate to integer.
+	case castImplicit, castExplicit:
+		// Evaluate the full numeric value including scientific notation
+		// and decimal parts (e.g. '7e2' = 700, '1.5' truncated to 1),
+		// then truncate to integer.  This preserves 64-bit precision
+		// that float64 would lose above 2^53.
 		numeric := leadingNumericString(s)
 		if numeric == "" {
 			return "", moerr.NewInvalidInputNoCtxf("%s is not an integer", s)

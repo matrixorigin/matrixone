@@ -2854,7 +2854,7 @@ func TestBaseBinder_baseBindExpr(t *testing.T) {
 			},
 		},
 		{
-			name:      "Comparison: integer column and numeric string use numeric common type",
+			name:      "Comparison: integer column and numeric string preserve integer precision",
 			sql:       "a = '7e2'",
 			expectErr: false,
 			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
@@ -2862,7 +2862,9 @@ func TestBaseBinder_baseBindExpr(t *testing.T) {
 				require.Equal(t, "=", expr.GetF().GetFunc().GetObjName())
 				require.Len(t, expr.GetF().GetArgs(), 2)
 				for _, arg := range expr.GetF().GetArgs() {
-					require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+					// Integer + string comparisons stay on the integer type
+					// to preserve 64-bit precision above 2^53.
+					require.Equal(t, int32(types.T_int64), arg.Typ.Id)
 				}
 			},
 		},

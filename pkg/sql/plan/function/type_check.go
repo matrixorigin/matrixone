@@ -99,16 +99,18 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 
 func comparisonTypeCastRule(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	if (s1.IsNumeric() && s2.Oid.IsMySQLString()) || (s2.IsNumeric() && s1.Oid.IsMySQLString()) {
-		// MySQL coerces numeric-string comparisons through DOUBLE to
-		// handle scientific notation and fractional strings correctly
-		// (e.g. int_col = '1.1' compares as 1.0 != 1.1).
-		// Decimal comparisons fall through to fixedTypeCastRule1 to
-		// preserve exact decimal semantics.
+		// Floating-point comparisons route through DOUBLE to handle
+		// scientific notation and fractional strings correctly.
+		// Integer comparisons fall through to fixedTypeCastRule1 to
+		// preserve exact precision — coercing int→double loses the
+		// 53-bit mantissa and collapses distinct integer-like strings
+		// above 2^53 into a single float64 value.
+		// Decimal comparisons also fall through to their existing rules.
 		numeric := s1
 		if s2.IsNumeric() {
 			numeric = s2
 		}
-		if numeric.Oid.IsInteger() || numeric.Oid.IsFloat() {
+		if numeric.Oid.IsFloat() {
 			return true, types.T_float64.ToType(), types.T_float64.ToType()
 		}
 	}
