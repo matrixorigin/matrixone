@@ -58,12 +58,13 @@ const (
 	ErrWarnDataTruncated uint16 = 201
 
 	// Group 1: Internal errors
-	ErrStart            uint16 = 20100
-	ErrInternal         uint16 = 20101
-	ErrNYI              uint16 = 20102
-	ErrOOM              uint16 = 20103
-	ErrQueryInterrupted uint16 = 20104
-	ErrNotSupported     uint16 = 20105
+	ErrStart                       uint16 = 20100
+	ErrInternal                    uint16 = 20101
+	ErrNYI                         uint16 = 20102
+	ErrOOM                         uint16 = 20103
+	ErrQueryInterrupted            uint16 = 20104
+	ErrNotSupported                uint16 = 20105
+	ErrRemoteDispatchNotRegistered uint16 = 20106
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -370,12 +371,13 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWarnDataTruncated: {WARN_DATA_TRUNCATED, []string{MySQLDefaultSqlState}, "warning: data truncated"},
 
 	// Group 1: Internal errors
-	ErrStart:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: error code start"},
-	ErrInternal:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: %s"},
-	ErrNYI:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s is not yet implemented"},
-	ErrOOM:              {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "error: out of memory"},
-	ErrQueryInterrupted: {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
-	ErrNotSupported:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
+	ErrStart:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: error code start"},
+	ErrInternal:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: %s"},
+	ErrNYI:                         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s is not yet implemented"},
+	ErrOOM:                         {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "error: out of memory"},
+	ErrQueryInterrupted:            {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
+	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
+	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
@@ -912,6 +914,10 @@ func NewNotSupportedf(ctx context.Context, format string, args ...any) *Error {
 
 func NewNotSupported(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrNotSupported, msg)
+}
+
+func NewRemoteDispatchNotRegistered(ctx context.Context, uuid string) *Error {
+	return newError(ctx, ErrRemoteDispatchNotRegistered, uuid)
 }
 
 func NewOOM(ctx context.Context) *Error {
