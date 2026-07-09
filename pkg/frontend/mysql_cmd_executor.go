@@ -1184,9 +1184,21 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 	}
 
 	for _, entry := range stmt.Entries {
+		cols := entry.Cols
+		if len(cols) == 0 {
+			// Restore tcc.execCtx to the outer execCtx; the inner doComQuery
+			// call below may have left it pointing at a closed tempExecCtx
+			// from a previous iteration (Close() nils out reqCtx).
+			ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+			resolved, err := resolveTableVisibleColumns(ses, execCtx.reqCtx, entry.Table)
+			if err != nil {
+				return err
+			}
+			cols = resolved
+		}
 		ctx := tree.NewFmtCtx(dialect.MYSQL)
 		ctx.WriteString("select ")
-		for i, ident := range entry.Cols {
+		for i, ident := range cols {
 			if i > 0 {
 				ctx.WriteByte(',')
 			}
@@ -1208,6 +1220,40 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		}
 	}
 	return nil
+}
+
+// resolveTableVisibleColumns returns the names of all visible (non-hidden) columns
+// of the given table. Used by ANALYZE TABLE without an explicit column list.
+func resolveTableVisibleColumns(ses *Session, ctx context.Context, tbl *tree.TableName) (tree.IdentifierList, error) {
+	dbName := string(tbl.Schema())
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	if dbName == "" {
+		return nil, moerr.NewNoDB(ctx)
+	}
+	tblName := string(tbl.Name())
+
+	tcc := ses.GetTxnCompileCtx()
+	_, tableDef, err := tcc.Resolve(dbName, tblName, nil)
+	if err != nil {
+		return nil, err
+	}
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx, dbName, tblName)
+	}
+
+	var cols tree.IdentifierList
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
+		cols = append(cols, tree.Identifier(col.GetOriginCaseName()))
+	}
+	if len(cols) == 0 {
+		return nil, moerr.NewInternalErrorf(ctx, "ANALYZE TABLE: no visible columns found for table %s", tblName)
+	}
+	return cols, nil
 }
 
 func handleCheckTableStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.CheckTableStmt) error {

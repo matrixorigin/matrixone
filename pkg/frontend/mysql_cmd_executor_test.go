@@ -1472,6 +1472,9 @@ func Test_statement_type(t *testing.T) {
 			{&tree.LockTableStmt{}},
 			{&tree.UnLockTableStmt{}},
 			{&tree.Use{}},
+			{&tree.AnalyzeStmt{}},
+			{&tree.CheckTableStmt{}},
+			{&tree.ShowProfileStmt{}},
 		}
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1547,6 +1550,10 @@ func TestUnsupportedFrontendParserStatements(t *testing.T) {
 	err = run(&tree.ShowProfileStmt{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "SHOW PROFILE is not supported in MatrixOne")
+
+	err = run(&tree.AnalyzeStmt{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ANALYZE TABLE requires at least one table")
 }
 
 func Test_convert_type(t *testing.T) {
@@ -1945,6 +1952,9 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.ShowPublications{}, true},
 		{&tree.ShowCreatePublications{}, true},
 		{&tree.ShowBackendServers{}, true},
+		{&tree.AnalyzeStmt{}, true},
+		{&tree.CheckTableStmt{}, true},
+		{&tree.ShowProfileStmt{}, true},
 	}
 	ses := &Session{
 		feSessionImpl: feSessionImpl{},

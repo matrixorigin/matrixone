@@ -24,6 +24,16 @@ insert into t_analyze_02 values
 analyze table t_analyze_01(a, b);
 approx_count_distinct(a)    approx_count_distinct(b)
 2    3
+analyze table t_analyze_01;
+approx_count_distinct(a)    approx_count_distinct(b)
+2    3
+analyze table t_analyze_01, t_analyze_02;
+approx_count_distinct(a)    approx_count_distinct(b)
+2    3
+approx_count_distinct(x)    approx_count_distinct(y)
+4    4
+analyze table t_analyze_nonexistent;
+no such table db_analyze_stmt.t_analyze_nonexistent
 check table t_analyze_01;
 not supported: CHECK TABLE is not supported in MatrixOne
 check table t_analyze_01 extended;
@@ -44,6 +54,24 @@ show profile for query 2 limit 10;
 not supported: SHOW PROFILE FOR QUERY 2 is not supported in MatrixOne
 show profile for query 2 limit 10 offset 5;
 not supported: SHOW PROFILE FOR QUERY 2 is not supported in MatrixOne
+begin;
+analyze table t_analyze_01(a, b);
+approx_count_distinct(a)    approx_count_distinct(b)
+2    3
+commit;
+begin;
+analyze table t_analyze_01;
+approx_count_distinct(a)    approx_count_distinct(b)
+2    3
+commit;
+begin;
+check table t_analyze_01;
+not supported: CHECK TABLE is not supported in MatrixOne
+rollback;
+begin;
+show profile;
+not supported: SHOW PROFILE is not supported in MatrixOne
+rollback;
 drop table t_analyze_01;
 drop table t_analyze_02;
 drop database db_analyze_stmt;
