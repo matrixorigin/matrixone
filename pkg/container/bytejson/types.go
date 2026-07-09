@@ -73,6 +73,7 @@ const (
 	subPathDoubleStar subPathType = iota + 1
 	subPathIdx
 	subPathKey
+	subPathKeyWildcard
 	subPathRange
 )
 

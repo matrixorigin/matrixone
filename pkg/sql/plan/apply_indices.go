@@ -719,6 +719,15 @@ func canUseRegularIndexHiddenSortKey(scanNode *plan.Node, orderByCol *plan.ColRe
 	return isRegularIndexFullPrefixEquality(scanNode.FilterList[0], numKeyParts)
 }
 
+func canPushRegularIndexOrderedLimit(scanNode *plan.Node) bool {
+	if scanNode == nil || len(scanNode.IndexScanInfo.Parts) < 2 || len(scanNode.FilterList) != 1 {
+		return false
+	}
+	// Static reader limit is valid only when index scan candidates exactly match the SQL filter.
+	numKeyParts := len(scanNode.IndexScanInfo.Parts) - 1
+	return isRegularIndexFullPrefixEquality(scanNode.FilterList[0], numKeyParts)
+}
+
 func isRegularIndexFullPrefixEquality(expr *plan.Expr, numKeyParts int) bool {
 	if numKeyParts <= 0 || expr == nil {
 		return false
@@ -764,7 +773,7 @@ func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortCo
 		Expr: scanHiddenKeyExpr,
 		Flag: ctx.sortNode.OrderBy[0].Flag,
 	})
-	if ctx.sortNode.Offset == nil && ctx.sortNode.RankOption == nil {
+	if ctx.sortNode.Offset == nil && ctx.sortNode.RankOption == nil && canPushRegularIndexOrderedLimit(ctx.scanNode) {
 		applyRegularIndexOrderedLimitParam(ctx.scanNode, ctx.scanNode.OrderBy[len(ctx.scanNode.OrderBy)-1], ctx.sortNode.Limit)
 	}
 
