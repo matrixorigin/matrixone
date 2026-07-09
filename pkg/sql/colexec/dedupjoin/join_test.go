@@ -825,3 +825,37 @@ func TestReceiveWorkerMsg_ChannelClose(t *testing.T) {
 	msg := receiveWorkerMsg(context.Background(), ch)
 	require.Nil(t, msg)
 }
+
+// TestCleanBucketState verifies that cleanBucketState releases all per-bucket
+// state without leaking memory or leaving stale references.
+func TestCleanBucketState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	ctr := &container{
+		mp:             message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp()),
+		batches:        []*batch.Batch{batch.NewWithSize(1)},
+		batchRowCount:  10,
+		matched:        &bitmap.Bitmap{},
+		captured:       &bitmap.Bitmap{},
+		capturedVecs:   []*vector.Vector{vector.NewOffHeapVecWithType(types.T_int32.ToType())},
+	}
+	ctr.mp.IncRef(1)
+
+	// Verify state is set up.
+	require.NotNil(t, ctr.mp)
+	require.NotNil(t, ctr.batches)
+	require.Equal(t, int64(10), ctr.batchRowCount)
+	require.NotNil(t, ctr.matched)
+	require.NotNil(t, ctr.captured)
+
+	// Clean and verify everything is cleared.
+	ctr.cleanBucketState(proc)
+
+	require.Nil(t, ctr.mp)
+	require.Nil(t, ctr.batches)
+	require.Equal(t, int64(0), ctr.batchRowCount)
+	require.Nil(t, ctr.matched)
+	require.Nil(t, ctr.capturedVecs)
+	require.Nil(t, ctr.captured)
+}
