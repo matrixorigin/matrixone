@@ -1193,7 +1193,9 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 			// Restore tcc.execCtx to the outer execCtx; the inner doComQuery
 			// call below may have left it pointing at a closed tempExecCtx
 			// from a previous iteration (Close() nils out reqCtx).
-			ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+			if tcc := ses.GetTxnCompileCtx(); tcc != nil {
+				tcc.SetExecCtx(execCtx)
+			}
 			resolved, err := resolveTableVisibleColumns(ses, execCtx.reqCtx, entry.Table)
 			if err != nil {
 				return err
@@ -1218,6 +1220,9 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 			reqCtx: execCtx.reqCtx,
 		}
 		err := doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
+		if tcc := ses.GetTxnCompileCtx(); tcc != nil {
+			tcc.SetExecCtx(execCtx)
+		}
 		tempExecCtx.Close()
 		if err != nil {
 			return err
