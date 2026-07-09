@@ -2568,12 +2568,10 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 			s = string('0') + s
 		}
 		bytes, _ := hex.DecodeString(s)
-		isBin := true
 		if !typ.IsEmpty() {
-			target := types.T(typ.Id)
-			isBin = !(target.IsInteger() || target.IsFloat() || target.IsDecimal())
+			return appendCastBeforeExpr(b.GetContext(), makePlan2VarBinaryConstExprWithType(string(bytes)), typ)
 		}
-		return returnHexNumExpr(string(bytes), isBin)
+		return makePlan2VarBinaryConstExprWithType(string(bytes)), nil
 	case tree.P_ScoreBinary:
 		return returnHexNumExpr(astExpr.String(), true)
 	case tree.P_bit:
