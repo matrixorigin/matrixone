@@ -2230,7 +2230,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 }
 
 func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot bool) (int32, error) {
-	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, 0)
+	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, 0, nil)
 }
 
 func (builder *QueryBuilder) buildUnionWithResultLen(
@@ -2241,6 +2241,13 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	ctx *BindContext,
 	isRoot bool,
 	hiddenResultLen int,
+	// hiddenOrderIdx is parallel to astOrderBy and only set on the grouping-set
+	// path (nil for ordinary UNION). hiddenOrderIdx[i] >= 0 means ORDER BY entry
+	// i references the k-th appended hidden grouping-set sort key; it is resolved
+	// against the star-expanded projection tail. When hiddenOrderIdx is non-nil,
+	// positional ORDER BY references are additionally validated against the
+	// visible width (resultLen) so hidden keys are not addressable by ordinal.
+	hiddenOrderIdx []int,
 ) (int32, error) {
 	if builder.isForUpdate {
 		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
@@ -2497,14 +2504,50 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		orderBinder := NewOrderBinder(projectionBinder, nil)
 		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
-		for _, order := range astOrderBy {
+		for oi, order := range astOrderBy {
 			if isNullAstExpr(unwrapParenExpr(order.Expr)) {
 				continue
 			}
 
-			expr, err := orderBinder.BindExpr(order.Expr)
-			if err != nil {
-				return 0, err
+			var expr *plan.Expr
+			switch {
+			case hiddenOrderIdx != nil && oi < len(hiddenOrderIdx) && hiddenOrderIdx[oi] >= 0:
+				// Reference to a hidden grouping-set sort key. Hidden projections
+				// occupy the star-expanded projection tail [resultLen, projectLen);
+				// the k-th appended hidden column lives at resultLen+k.
+				colPos := resultLen + hiddenOrderIdx[oi]
+				if colPos < 0 || colPos >= len(ctx.projects) {
+					return 0, moerr.NewInternalError(builder.GetContext(), "hidden grouping order column out of range")
+				}
+				expr = &plan.Expr{
+					Typ: ctx.projects[colPos].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: ctx.projectTag,
+							ColPos: int32(colPos),
+						},
+					},
+				}
+			default:
+				// On the grouping-set path a positional ORDER BY may only address
+				// the visible (star-expanded) select list, not hidden sort keys,
+				// so validate against resultLen rather than the full projection.
+				if hiddenOrderIdx != nil {
+					if numVal, ok := order.Expr.(*tree.NumVal); ok && numVal.Kind() == tree.Int {
+						colPos, _ := numVal.Int64()
+						if numVal.Negative() {
+							colPos = -colPos
+						}
+						if colPos < 1 || int(colPos) > resultLen {
+							return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "ORDER BY position %v is not in select list", colPos)
+						}
+					}
+				}
+				var err error
+				expr, err = orderBinder.BindExpr(order.Expr)
+				if err != nil {
+					return 0, err
+				}
 			}
 
 			orderBy := &plan.OrderBySpec{
@@ -3088,7 +3131,8 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			if len(groupByExprsList) > 1 && !selectClause.GroupBy.Apart {
 				var branchExprs tree.SelectExprs
 				var unionOrderBy tree.OrderBy
-				branchExprs, unionOrderBy, err = prepareGroupingSetOrderByProjects(builder, astOrderBy, selectClause.Exprs, selectClause.Distinct)
+				var hiddenOrderIdx []int
+				branchExprs, unionOrderBy, hiddenOrderIdx, err = prepareGroupingSetOrderByProjects(builder, astOrderBy, selectClause.Exprs, selectClause.Distinct)
 				if err != nil {
 					return 0, err
 				}
@@ -3132,6 +3176,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					ctx,
 					false,
 					hiddenResultLen,
+					hiddenOrderIdx,
 				); err != nil {
 					return
 				}
@@ -3847,9 +3892,23 @@ func prepareGroupingSetOrderByProjects(
 	astOrderBy tree.OrderBy,
 	selectList tree.SelectExprs,
 	distinct bool,
-) (tree.SelectExprs, tree.OrderBy, error) {
+) (tree.SelectExprs, tree.OrderBy, []int, error) {
 	branchSelectList := append(tree.SelectExprs(nil), selectList...)
 	unionOrderBy := make(tree.OrderBy, len(astOrderBy))
+
+	// hiddenOrderIdx[i] >= 0 marks ORDER BY entry i as a reference to the k-th
+	// appended hidden grouping-set sort key (0-based). The absolute projection
+	// position of a hidden key is only known in the star-expanded projection
+	// space, which does not exist yet here (the FROM clause is not bound). It is
+	// therefore finalized by buildUnionWithResultLen once the true visible width
+	// is known. All other entries stay -1. Note: we deliberately do NOT validate
+	// positional ORDER BY references here — selectList is the pre-star-expansion
+	// AST list, so len(selectList) is not the visible column count; that check
+	// also moves to buildUnionWithResultLen.
+	hiddenOrderIdx := make([]int, len(astOrderBy))
+	for i := range hiddenOrderIdx {
+		hiddenOrderIdx[i] = -1
+	}
 
 	// For SELECT DISTINCT we must not inject hidden order keys: they would
 	// participate in the branch-level DISTINCT and then be trimmed from the
@@ -3862,26 +3921,10 @@ func prepareGroupingSetOrderByProjects(
 		for selectIdx := range selectList {
 			key, err := groupingOrderExprKey(builder, selectList, selectList[selectIdx].Expr)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			if _, exists := visibleOrdinals[key]; !exists {
 				visibleOrdinals[key] = selectIdx + 1
-			}
-		}
-	}
-
-	// Validate positional ORDER BY references against the visible select list
-	// length, not the hidden-expanded projection list. Hidden grouping-set
-	// projections are internal and must not be addressable via ordinal.
-	visibleLen := len(selectList)
-	for _, order := range astOrderBy {
-		if numVal, ok := order.Expr.(*tree.NumVal); ok && numVal.Kind() == tree.Int {
-			colPos, _ := numVal.Int64()
-			if numVal.Negative() {
-				colPos = -colPos
-			}
-			if colPos < 1 || int(colPos) > visibleLen {
-				return nil, nil, moerr.NewSyntaxErrorf(builder.GetContext(), "ORDER BY position %v is not in select list", colPos)
 			}
 		}
 	}
@@ -3898,25 +3941,26 @@ func prepareGroupingSetOrderByProjects(
 		if distinct {
 			key, err := groupingOrderExprKey(builder, selectList, order.Expr)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			if projectPos, ok := visibleOrdinals[key]; ok {
 				orderCopy.Expr = tree.NewNumVal(int64(projectPos), strconv.FormatInt(int64(projectPos), 10), false, tree.P_int64)
 				continue
 			}
-			return nil, nil, moerr.NewSyntaxError(builder.GetContext(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+			return nil, nil, nil, moerr.NewSyntaxError(builder.GetContext(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 		}
 
 		hiddenExpr, err := qualifyGroupingOrderExpr(builder, selectList, order.Expr)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 
+		// Record which appended hidden column this entry maps to (0-based). Its
+		// absolute ordinal is resolved later against the star-expanded width.
+		hiddenOrderIdx[i] = len(branchSelectList) - len(selectList)
 		branchSelectList = append(branchSelectList, tree.SelectExpr{Expr: hiddenExpr})
-		projectPos := int64(len(branchSelectList))
-		orderCopy.Expr = tree.NewNumVal(projectPos, strconv.FormatInt(projectPos, 10), false, tree.P_int64)
 	}
-	return branchSelectList, unionOrderBy, nil
+	return branchSelectList, unionOrderBy, hiddenOrderIdx, nil
 }
 
 // qualifyGroupingOrderExpr clones astExpr and canonicalizes it the same way a

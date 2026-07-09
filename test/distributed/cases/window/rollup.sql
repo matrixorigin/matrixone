@@ -619,5 +619,23 @@ from grouping_order
 group by region, product with rollup
 order by grouping(region), region_label, grouping(product), product_label;
 
+-- star-expanded select list with rollup order by: positional ORDER BY must be
+-- validated against the visible (star-expanded) columns, and grouping() must
+-- resolve to its hidden sort key rather than a visible column shifted by '*'.
+select *, count(*) as cnt
+from grouping_order
+group by region, product, amount with rollup
+order by grouping(region), 1, 2, 3;
+
+select *, count(*) as cnt
+from grouping_order
+group by region, product, amount with rollup
+order by 4 desc, 1, 2, 3;
+
+select *, count(*) as cnt
+from grouping_order
+group by region, product, amount with rollup
+order by 6;
+
 drop table grouping_order;
 drop database rollup_test;

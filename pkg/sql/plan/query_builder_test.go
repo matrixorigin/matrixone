@@ -724,29 +724,22 @@ func TestAppendGroupingSetOrderByProjects(t *testing.T) {
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	branchExprs, rewrittenOrderBy, hiddenOrderIdx, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	require.Len(t, branchExprs, 4)
 	require.Len(t, selectClause.Exprs, 2)
 
-	rewrittenPos, ok := rewrittenOrderBy[0].Expr.(*tree.NumVal)
-	require.True(t, ok)
-	pos, ok := rewrittenPos.Int64()
-	require.True(t, ok)
-	require.Equal(t, int64(3), pos)
+	// Hidden grouping keys are tracked positionally (k-th appended hidden column)
+	// and resolved to an absolute ordinal later against the star-expanded width.
+	// grouping(a, b) -> 0th hidden, ordinal 2 passes through, grouping(a) -> 1st hidden.
+	require.Equal(t, []int{0, -1, 1}, hiddenOrderIdx)
 	require.Equal(t, tree.Descending, selectStmt.OrderBy[0].Direction)
 
 	existingPos, ok := rewrittenOrderBy[1].Expr.(*tree.NumVal)
 	require.True(t, ok)
-	pos, ok = existingPos.Int64()
+	pos, ok := existingPos.Int64()
 	require.True(t, ok)
 	require.Equal(t, int64(2), pos)
-
-	rewrittenPos, ok = rewrittenOrderBy[2].Expr.(*tree.NumVal)
-	require.True(t, ok)
-	pos, ok = rewrittenPos.Int64()
-	require.True(t, ok)
-	require.Equal(t, int64(4), pos)
 }
 
 func TestAppendGroupingSetOrderByProjectsIgnoresAliasShadowing(t *testing.T) {
@@ -763,15 +756,12 @@ func TestAppendGroupingSetOrderByProjectsIgnoresAliasShadowing(t *testing.T) {
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	branchExprs, _, hiddenOrderIdx, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	require.Len(t, branchExprs, 4)
 
-	rewrittenPos, ok := rewrittenOrderBy[0].Expr.(*tree.NumVal)
-	require.True(t, ok)
-	pos, ok := rewrittenPos.Int64()
-	require.True(t, ok)
-	require.Equal(t, int64(4), pos)
+	// grouping(b) -> 0th appended hidden key (visible len 3, hidden at tail).
+	require.Equal(t, []int{0}, hiddenOrderIdx)
 }
 
 func TestAppendGroupingSetOrderByProjectsDefersAmbiguousColumnToBinder(t *testing.T) {
@@ -788,15 +778,11 @@ func TestAppendGroupingSetOrderByProjectsDefersAmbiguousColumnToBinder(t *testin
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	branchExprs, _, hiddenOrderIdx, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	require.Len(t, branchExprs, 3)
 
-	rewrittenPos, ok := rewrittenOrderBy[0].Expr.(*tree.NumVal)
-	require.True(t, ok)
-	pos, ok := rewrittenPos.Int64()
-	require.True(t, ok)
-	require.Equal(t, int64(3), pos)
+	require.Equal(t, []int{0}, hiddenOrderIdx)
 }
 
 func TestAppendGroupingSetOrderByProjectsSupportsGroupAlias(t *testing.T) {
@@ -813,15 +799,11 @@ func TestAppendGroupingSetOrderByProjectsSupportsGroupAlias(t *testing.T) {
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	branchExprs, _, hiddenOrderIdx, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	require.Len(t, branchExprs, 4)
 
-	rewrittenPos, ok := rewrittenOrderBy[0].Expr.(*tree.NumVal)
-	require.True(t, ok)
-	pos, ok := rewrittenPos.Int64()
-	require.True(t, ok)
-	require.Equal(t, int64(4), pos)
+	require.Equal(t, []int{0}, hiddenOrderIdx)
 }
 
 // For SELECT DISTINCT, an ORDER BY expression that is already a visible
@@ -841,10 +823,12 @@ func TestAppendGroupingSetOrderByProjectsDistinctReusesVisibleProjection(t *test
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, true)
+	branchExprs, rewrittenOrderBy, hiddenOrderIdx, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, true)
 	require.NoError(t, err)
 	// No hidden order key appended: the branch list stays equal to the select list.
 	require.Len(t, branchExprs, len(selectClause.Exprs))
+	// DISTINCT rewrites to an existing visible ordinal, so nothing is hidden.
+	require.Equal(t, []int{-1}, hiddenOrderIdx)
 
 	rewrittenPos, ok := rewrittenOrderBy[0].Expr.(*tree.NumVal)
 	require.True(t, ok)
@@ -870,7 +854,7 @@ func TestAppendGroupingSetOrderByProjectsDistinctRejectsHiddenKey(t *testing.T) 
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	_, _, err = prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, true)
+	_, _, _, err = prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, true)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 }
@@ -1181,11 +1165,12 @@ func TestAppendGroupingSetOrderByNestedProjects(t *testing.T) {
 			selectClause := selectStmt.Select.(*tree.SelectClause)
 			selectExprBefore := tree.String(selectClause.Exprs[0].Expr, dialect.MYSQL)
 			orderExprBefore := tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL)
-			_, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+			_, _, hiddenOrderIdx, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 			require.NoError(t, err)
 
-			_, rewritten := rewrittenOrderBy[0].Expr.(*tree.NumVal)
-			require.Equal(t, testCase.expectRewritten, rewritten)
+			// A recognized grouping key is appended as a hidden column (idx >= 0);
+			// an ordinary expression is left for the binder (idx == -1).
+			require.Equal(t, testCase.expectRewritten, hiddenOrderIdx[0] >= 0)
 			require.Equal(t, selectExprBefore, tree.String(selectClause.Exprs[0].Expr, dialect.MYSQL))
 			require.Equal(t, orderExprBefore, tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL))
 		})
@@ -1209,15 +1194,11 @@ func TestAppendGroupingSetOrderByNestedQualifiedProject(t *testing.T) {
 	orderFunc := selectStmt.OrderBy[0].Expr.(*tree.FuncExpr)
 	groupingFunc := orderFunc.Exprs[0].(*tree.FuncExpr)
 	groupingFunc.Exprs[0] = tree.NewUnresolvedName(tree.NewCStr("t", 0), tree.NewCStr("a", 0))
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	branchExprs, _, hiddenOrderIdx, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	require.Len(t, branchExprs, 3)
 
-	rewrittenPos, ok := rewrittenOrderBy[0].Expr.(*tree.NumVal)
-	require.True(t, ok)
-	pos, ok := rewrittenPos.Int64()
-	require.True(t, ok)
-	require.Equal(t, int64(3), pos)
+	require.Equal(t, []int{0}, hiddenOrderIdx)
 }
 
 func TestQueryBuilder_bindHaving(t *testing.T) {
@@ -3698,30 +3679,9 @@ func TestBaseBinder_baseBindExpr(t *testing.T) {
 	}
 }
 
-// TestAppendGroupingSetOrderByProjectsOrdinalExceedsVisibleLen verifies that a
-// positional ORDER BY reference beyond the visible select list is rejected even
-// when hidden GROUPING() projections would make it valid in the expanded list.
-func TestAppendGroupingSetOrderByProjectsOrdinalExceedsVisibleLen(t *testing.T) {
-	stmts, err := parsers.Parse(
-		context.TODO(),
-		dialect.MYSQL,
-		`select a, count(*)
-		from select_test.bind_select
-		group by a with rollup
-		order by 3, grouping(a)`,
-		1,
-	)
-	require.NoError(t, err)
-
-	selectStmt := stmts[0].(*tree.Select)
-	selectClause := selectStmt.Select.(*tree.SelectClause)
-	_, _, err = prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "ORDER BY position 3 is not in select list")
-}
-
 // TestAppendGroupingSetOrderByProjectsOrdinalWithinVisibleLen verifies that a
-// positional ORDER BY reference within the visible select list is accepted.
+// positional ORDER BY reference within the visible select list passes through,
+// while a grouping key is tracked as a hidden column.
 func TestAppendGroupingSetOrderByProjectsOrdinalWithinVisibleLen(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
@@ -3736,24 +3696,18 @@ func TestAppendGroupingSetOrderByProjectsOrdinalWithinVisibleLen(t *testing.T) {
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	branchExprs, rewrittenOrderBy, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	branchExprs, rewrittenOrderBy, hiddenOrderIdx, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	// visible: [a, count(*)] + hidden: [grouping(a)] = 3
 	require.Len(t, branchExprs, 3)
 
-	// First ORDER BY: ordinal 2 -> passes through
+	// First ORDER BY: ordinal 2 -> passes through; second: grouping(a) -> 0th hidden.
+	require.Equal(t, []int{-1, 0}, hiddenOrderIdx)
 	existingPos, ok := rewrittenOrderBy[0].Expr.(*tree.NumVal)
 	require.True(t, ok)
 	pos, ok := existingPos.Int64()
 	require.True(t, ok)
 	require.Equal(t, int64(2), pos)
-
-	// Second ORDER BY: grouping(a) -> rewritten to hidden position 3
-	rewrittenPos, ok := rewrittenOrderBy[1].Expr.(*tree.NumVal)
-	require.True(t, ok)
-	pos, ok = rewrittenPos.Int64()
-	require.True(t, ok)
-	require.Equal(t, int64(3), pos)
 }
 
 // TestAppendGroupingSetOrderByProjectsOrdinalOneWithinVisibleLen verifies that
@@ -3772,7 +3726,84 @@ func TestAppendGroupingSetOrderByProjectsOrdinalOneWithinVisibleLen(t *testing.T
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	branchExprs, _, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
+	branchExprs, _, hiddenOrderIdx, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, false)
 	require.NoError(t, err)
 	require.Len(t, branchExprs, 3)
+	require.Equal(t, []int{-1, 0}, hiddenOrderIdx)
+}
+
+// TestGroupingSetOrderByOrdinalStarExpansion is an end-to-end guard for the
+// star-expansion contract in the grouping-set ORDER BY path:
+//   - positional ORDER BY references are validated against the *visible*,
+//     star-expanded select list, not the raw AST list nor the hidden-expanded
+//     projection; and
+//   - a grouping() sort key resolves to its hidden projection column, not to a
+//     visible column, even when '*' widens the visible list.
+//
+// bind_select has columns (a, b, c), so `*, count(*)` yields 4 visible columns.
+func TestGroupingSetOrderByOrdinalStarExpansion(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	// Valid visible ordinals (3 -> c, 4 -> count(*)) must be accepted even though
+	// the raw AST select list has only 2 entries.
+	pass := []string{
+		"select *, count(*) from select_test.bind_select group by a, b, c with rollup order by 3, grouping(a)",
+		"select *, count(*) from select_test.bind_select group by a, b, c with rollup order by 4",
+	}
+	for _, sql := range pass {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, "sql=%s", sql)
+	}
+
+	// Ordinal 5 addresses a hidden grouping key (visible width is 4) and must be
+	// rejected; ordinal 6 is out of range entirely.
+	fail := []string{
+		"select *, count(*) from select_test.bind_select group by a, b, c with rollup order by 5, grouping(a)",
+		"select *, count(*) from select_test.bind_select group by a, b, c with rollup order by 6",
+	}
+	for _, sql := range fail {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, "sql=%s", sql)
+		require.Contains(t, err.Error(), "is not in select list", "sql=%s", sql)
+	}
+}
+
+// TestGroupingSetOrderByGroupingResolvesHiddenColumnWithStar verifies Bug 2: a
+// grouping() ORDER BY key must sort by the appended hidden projection column,
+// not by a visible column shifted in by '*' expansion.
+func TestGroupingSetOrderByGroupingResolvesHiddenColumnWithStar(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	starPlan, err := runOneStmt(mock, t,
+		"select *, count(*) from select_test.bind_select group by a, b, c with rollup order by grouping(a)")
+	require.NoError(t, err)
+	starSort := firstSortColPos(t, starPlan)
+
+	// Without '*' the visible list is [a, b, c, count(*)] and the hidden
+	// grouping(a) column lands right after it. With '*' the visible list is the
+	// same width, so the hidden column position must be identical.
+	explicitPlan, err := runOneStmt(mock, t,
+		"select a, b, c, count(*) from select_test.bind_select group by a, b, c with rollup order by grouping(a)")
+	require.NoError(t, err)
+	explicitSort := firstSortColPos(t, explicitPlan)
+
+	require.Equal(t, explicitSort, starSort,
+		"grouping(a) must resolve to the same hidden column with and without '*'")
+	// The hidden grouping column sits past the 4 visible columns (0-based >= 4).
+	require.GreaterOrEqual(t, starSort, int32(4))
+}
+
+// firstSortColPos returns the ColPos of the first ORDER BY key of the first SORT
+// node in the plan, failing the test if the key is not a plain column reference.
+func firstSortColPos(t *testing.T, p *Plan) int32 {
+	for _, n := range p.GetQuery().Nodes {
+		if n.NodeType == plan.Node_SORT {
+			require.NotEmpty(t, n.OrderBy)
+			col := n.OrderBy[0].Expr.GetCol()
+			require.NotNil(t, col, "first sort key is not a column reference")
+			return col.ColPos
+		}
+	}
+	t.Fatal("no SORT node in plan")
+	return -1
 }
