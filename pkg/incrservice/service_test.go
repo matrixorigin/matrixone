@@ -32,6 +32,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type setOffsetStore struct {
+	IncrValueStore
+
+	t           *testing.T
+	forceCalled bool
+	tableID     uint64
+	colName     string
+	offset      uint64
+}
+
+func (s *setOffsetStore) GetColumns(
+	ctx context.Context,
+	tableID uint64,
+	txnOp client.TxnOperator,
+) ([]AutoColumn, error) {
+	s.t.Fatalf("SetOffset should not read committed columns")
+	return nil, nil
+}
+
+func (s *setOffsetStore) ForceSetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	s.forceCalled = true
+	s.tableID = tableID
+	s.colName = colName
+	s.offset = offset
+	return nil
+}
+
 func TestCreate(t *testing.T) {
 	runServiceTests(
 		t,
@@ -163,6 +196,18 @@ func TestSetOffset(t *testing.T) {
 			require.Equal(t, uint64(42), store.caches[0][0].Offset)
 			store.Unlock()
 		})
+}
+
+func TestSetOffsetDoesNotReadCommittedColumns(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	store := &setOffsetStore{t: t}
+	s := &service{store: store}
+
+	require.NoError(t, s.SetOffset(ctx, 10, "auto_col", 99, nil))
+	require.True(t, store.forceCalled)
+	require.Equal(t, uint64(10), store.tableID)
+	require.Equal(t, "auto_col", store.colName)
+	require.Equal(t, uint64(99), store.offset)
 }
 
 func TestSetOffsetReturnsStoreError(t *testing.T) {
