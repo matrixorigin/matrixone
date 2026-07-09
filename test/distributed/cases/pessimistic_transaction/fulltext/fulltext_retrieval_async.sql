@@ -15,7 +15,7 @@ insert into t values (3, '营养 健康 食谱');
 delete from t where id = 1;
 
 -- single settle wait for the ISCP sinker to converge the tag=1 tail
-select sleep(60);
+select sleep(30);
 
 -- final converged state: id=1 deleted, id=2/3 inserted and searchable
 select id from t where match(txt) against('营养') order by id;

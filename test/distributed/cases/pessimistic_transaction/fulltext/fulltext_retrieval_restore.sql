@@ -23,7 +23,7 @@ use ft_restore;
 insert into t values (6,'grape apple');
 
 -- single settle wait for the restore's async reindex + the post-restore CDC insert
-select sleep(60);
+select sleep(30);
 
 -- converged: restored base with row 5 rolled back, plus the post-restore insert (6)
 select id from t where match(txt) against('apple' in retrieval mode) order by id;

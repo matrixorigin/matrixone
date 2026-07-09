@@ -14,8 +14,8 @@ insert into t values (5,'fig apple');
 restore database ft_restore {snapshot = "sn_ft_restore"};
 use ft_restore;
 insert into t values (6,'grape apple');
-select sleep(60);
-sleep(60)
+select sleep(30);
+sleep(30)
 0
 select id from t where match(txt) against('apple' in retrieval mode) order by id;
 id

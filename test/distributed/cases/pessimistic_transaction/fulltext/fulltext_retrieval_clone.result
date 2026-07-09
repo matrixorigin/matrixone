@@ -10,8 +10,8 @@ id
 4
 create table t2 clone t;
 insert into t2 values (5,'apple mango');
-select sleep(60);
-sleep(60)
+select sleep(30);
+sleep(30)
 0
 select id from t2 where match(txt) against('apple' in retrieval mode) order by id;
 id

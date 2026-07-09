@@ -23,7 +23,7 @@ insert into t values
 create fulltext index ft on t(txt) with parser retrieval;
 
 -- wait for the async (CDC/ISCP) initial build from postings
-select sleep(60);
+select sleep(30);
 
 -- no LIMIT: returns ALL matching docs (doc5 matches nothing). ordered by id for a stable check.
 select id from t where match(txt) against('营养 早餐 视频' in retrieval mode) order by id;

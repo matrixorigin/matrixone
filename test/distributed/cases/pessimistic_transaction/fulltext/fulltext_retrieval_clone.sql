@@ -18,7 +18,7 @@ create table t2 clone t;
 insert into t2 values (5,'apple mango');
 
 -- single settle wait for the clone's async reindex + the post-clone CDC insert
-select sleep(60);
+select sleep(30);
 
 -- converged: cloned+rebuilt base (1,4) plus the post-clone insert (5)
 select id from t2 where match(txt) against('apple' in retrieval mode) order by id;

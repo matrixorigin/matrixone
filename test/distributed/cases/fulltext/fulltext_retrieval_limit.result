@@ -9,8 +9,8 @@ insert into t values
 (4, '视频 天气 城市'),
 (5, '教育 成长 学习');
 create fulltext index ft on t(txt) with parser retrieval;
-select sleep(60);
-sleep(60)
+select sleep(30);
+sleep(30)
 0
 select id from t where match(txt) against('营养 早餐 视频' in retrieval mode) order by id;
 id
