@@ -982,6 +982,31 @@ func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewApplyBatchInfoUsesCommonVisibleColumnsForEvolvedSchema(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"a", "__mo_cbkey_001a", "c", "b"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 2, 3}
+	tblStuff.def.commonIdxes = []int{0, 1, 3}
+	tblStuff.def.commonVisibleIdxes = []int{0, 3}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+
+	info := newApplyBatchInfo(ctx, ses, tblStuff, []int{0}, false)
+	require.NotNil(t, info)
+	require.Equal(t, []string{"a"}, info.deleteKeyNames)
+	require.Equal(t, []string{"a", "b"}, info.visibleNames)
+}
+
 func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {
 	ctx := context.Background()
 	filePath := filepath.Join(t.TempDir(), "diff.sql")

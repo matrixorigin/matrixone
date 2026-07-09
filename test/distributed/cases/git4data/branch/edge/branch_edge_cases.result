@@ -83,7 +83,8 @@ data branch create table rename_left from base;
 data branch create table rename_right from base;
 alter table rename_left rename column b to bb;
 data branch diff rename_left against rename_right;
-diff rename_left against rename_right    flag    a    bb
+-- @regex("schema compatibility check: base column 'b' is not present in target schema",true)
+internal error: schema compatibility check: base column 'b' is not present in target schema
 drop database br_schema_drift;
 drop database if exists br_txn_src;
 drop database if exists br_txn_dst;

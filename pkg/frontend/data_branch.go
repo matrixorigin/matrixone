@@ -956,11 +956,12 @@ func getTableStuff(
 		}
 	}
 
-	var commonIdxes, tarOnlyIdxes []int
-	if commonIdxes, tarOnlyIdxes, err = checkSchemaCompatibility(tarTblDef, baseTblDef); err != nil {
+	var commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int
+	if commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err = checkSchemaCompatibility(tarTblDef, baseTblDef); err != nil {
 		return
 	}
 	tblStuff.def.commonIdxes = commonIdxes
+	tblStuff.def.commonVisibleIdxes = commonVisibleIdxes
 	tblStuff.def.tarOnlyIdxes = tarOnlyIdxes
 
 	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
@@ -1000,16 +1001,14 @@ func getTableStuff(
 	}
 
 	// Build baseColToTarIdx: map each base data column (in batch column order,
-	// excluding Row_ID / FakePK / CPK) to its position in target colNames.
+	// excluding Row_ID) to its position in target colNames.
 	// colNames is already populated above from tarTblDef.Cols (excluding Row_ID,
-	// including FakePK/CPK). This mapping is used by projectBaseBatchToTarget to
-	// place base batch vectors at the correct target positions.
+	// including FakePK/CPK). Hidden key columns must stay in the mapping because
+	// BranchHashmap keys may be built from FakePK/CPK vectors.
 	{
 		baseDataNames := make([]string, 0, len(baseTblDef.Cols))
 		for _, col := range baseTblDef.Cols {
-			if col.Name == catalog.Row_ID ||
-				col.Name == catalog.FakePrimaryKeyColName ||
-				col.Name == catalog.CPrimaryKeyColName {
+			if col.Name == catalog.Row_ID {
 				continue
 			}
 			baseDataNames = append(baseDataNames, col.Name)
@@ -1129,7 +1128,7 @@ func diffOnBase(
 	return
 }
 
-func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, tarOnlyIdxes []int, err error) {
+func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int, err error) {
 	// Build a map from lowercase base column name to *ColDef.
 	baseColMap := make(map[string]*plan.ColDef, len(baseDef.Cols))
 	for _, col := range baseDef.Cols {
@@ -1153,7 +1152,10 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, tarO
 		if found {
 			if baseCol.Typ.Id == tarCol.Typ.Id {
 				commonIdxes = append(commonIdxes, dataIdx)
-				commonColNameSet[strings.ToLower(tarCol.Name)] = true
+				if isDataBranchUserVisibleColumn(tarCol) {
+					commonVisibleIdxes = append(commonVisibleIdxes, dataIdx)
+					commonColNameSet[strings.ToLower(tarCol.Name)] = true
+				}
 			} else {
 				err = moerr.NewInternalErrorNoCtxf(
 					"schema compatibility check: column '%s' exists in both schemas but has different types (target: %d, base: %d)",
@@ -1186,6 +1188,19 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, tarO
 			err = moerr.NewInternalErrorNoCtxf(
 				"schema compatibility check: primary key column '%s' is not present in common columns",
 				pkName,
+			)
+			return
+		}
+	}
+
+	for _, baseCol := range baseDef.Cols {
+		if !isDataBranchUserVisibleColumn(baseCol) {
+			continue
+		}
+		if !commonColNameSet[strings.ToLower(baseCol.Name)] {
+			err = moerr.NewInternalErrorNoCtxf(
+				"schema compatibility check: base column '%s' is not present in target schema",
+				baseCol.Name,
 			)
 			return
 		}

@@ -156,7 +156,7 @@ func newApplyBatchInfo(
 
 	visibleIdxes := tblStuff.def.visibleIdxes
 	if len(tblStuff.def.tarOnlyIdxes) > 0 {
-		visibleIdxes = tblStuff.def.commonIdxes
+		visibleIdxes = tblStuff.def.commonVisibleIdxes
 	}
 	visibleNames := make([]string, len(visibleIdxes))
 	for i, idx := range visibleIdxes {
@@ -1183,7 +1183,7 @@ func appendDataBranchApplyRowAsSQLValues(
 	} else {
 		insertIdxes := tblStuff.def.visibleIdxes
 		if len(tblStuff.def.tarOnlyIdxes) > 0 {
-			insertIdxes = tblStuff.def.commonIdxes
+			insertIdxes = tblStuff.def.commonVisibleIdxes
 		}
 		if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer, insertIdxes); err != nil {
 			return err
@@ -1846,13 +1846,17 @@ func flushSqlValues(
 	defer releaseBuffer(tblStuff.bufPool, sqlBuffer)
 
 	initInsertIntoBuf := func() {
+		insertIdxes := tblStuff.def.visibleIdxes
+		if len(tblStuff.def.tarOnlyIdxes) > 0 {
+			insertIdxes = tblStuff.def.commonVisibleIdxes
+		}
 		sqlBuffer.WriteString(fmt.Sprintf(
 			"insert into %s (%s) values ",
 			qualifiedTableName(
 				tblStuff.baseRel.GetTableDef(ctx).DbName,
 				tblStuff.baseRel.GetTableDef(ctx).Name,
 			),
-			strings.Join(quotedColumnNamesByIdxes(tblStuff, tblStuff.def.visibleIdxes), ","),
+			strings.Join(quotedColumnNamesByIdxes(tblStuff, insertIdxes), ","),
 		))
 	}
 

@@ -867,9 +867,10 @@ func TestCheckSchemaCompatibility_Identical(t *testing.T) {
 		},
 	}
 
-	commonIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
 	require.Empty(t, tarOnlyIdxes)
 }
 
@@ -898,9 +899,10 @@ func TestCheckSchemaCompatibility_ExtraColumnOnTarget(t *testing.T) {
 		},
 	}
 
-	commonIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
 	require.Equal(t, []int{2}, tarOnlyIdxes)
 }
 
@@ -931,9 +933,46 @@ func TestCheckSchemaCompatibility_ReturnsDataBatchIndexes(t *testing.T) {
 		},
 	}
 
-	commonIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
+	require.Equal(t, []int{2}, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_SeparatesPhysicalAndVisibleCommonIndexes(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "__mo_cbkey_001a", Typ: plan.Type{Id: int32(types.T_varchar)}, Hidden: true},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "__mo_cbkey_001a", Typ: plan.Type{Id: int32(types.T_varchar)}, Hidden: true},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 3}, commonIdxes)
+	require.Equal(t, []int{0, 3}, commonVisibleIdxes)
 	require.Equal(t, []int{2}, tarOnlyIdxes)
 }
 
@@ -963,7 +1002,7 @@ func TestCheckSchemaCompatibility_PKChanged(t *testing.T) {
 		},
 	}
 
-	_, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "primary key column")
 }
@@ -992,9 +1031,37 @@ func TestCheckSchemaCompatibility_TypeMismatch(t *testing.T) {
 		},
 	}
 
-	_, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "has different types")
+}
+
+func TestCheckSchemaCompatibility_BaseOnlyVisibleColumnRejected(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "base column 'b' is not present in target schema")
 }
 
 func TestCheckSchemaCompatibility_CompositePK(t *testing.T) {
@@ -1024,9 +1091,10 @@ func TestCheckSchemaCompatibility_CompositePK(t *testing.T) {
 		},
 	}
 
-	commonIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
 	require.Equal(t, []int{2}, tarOnlyIdxes)
 }
 
@@ -1053,8 +1121,9 @@ func TestCheckSchemaCompatibility_FakePK(t *testing.T) {
 		},
 	}
 
-	commonIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
 	require.Equal(t, []int{2}, tarOnlyIdxes)
 }
