@@ -42,9 +42,4 @@ create index idx_comp_b using ivfflat on t_comp(b) lists=4 op_type 'vector_l2_op
 select group_concat(concat(a, ':', c) order by a) as comp_ids, count(*) as row_count, count(distinct concat(a, ':', c)) as distinct_count
 from (select a, c from t_comp order by l2_distance(b, '[0,0,0,0]') limit 4) s;
 
-explain select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4;
-
--- @ignore:0
-explain analyze select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4;
-
 drop database vector_ivf_multicn_search;

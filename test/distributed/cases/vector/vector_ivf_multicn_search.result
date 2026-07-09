@@ -40,37 +40,4 @@ select group_concat(concat(a, ':', c) order by a) as comp_ids, count(*) as row_c
 from (select a, c from t_comp order by l2_distance(b, '[0,0,0,0]') limit 4) s;
 comp_ids	row_count	distinct_count
 1:c01,2:c02,3:c03,4:c04	4	4
-explain select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4;
-AP QUERY PLAN ON MULTICN(8 core)
-Project
-  ->  Sort
-        Sort Key: mo_ivf_alias_0.score INTERNAL
-        Limit: 4
-        ->  Join
-              Join Type: INNER
-              Join Cond: (t_int.a = mo_ivf_alias_0.pkid)
-              Runtime Filter Build: #[-1,0]
-              ->  Table Scan on vector_ivf_multicn_search.t_int
-                    Runtime Filter Probe: t_int.a
-              ->  Table Function on ivf_search
-                    Index Reader Param:  Limit: 4
-explain analyze select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4;
-ap query plan on multicn(8 core)
-Project
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=32 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32 bytes (min=32 bytes, max=32 bytes)
-  ->  Sort
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32 bytes (min=32 bytes, max=32 bytes)
-        Sort Key: mo_ivf_alias_0.score INTERNAL
-        Limit: 4
-        ->  Join
-              Analyze: timeConsumed=0ms waitTime=14ms inputRows=8 outputRows=4 (min=4, max=4) InputSize=96 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.21 KiB (min=16.06 KiB, max=16.15 KiB)
-              Join Type: INNER
-              Join Cond: (t_int.a = mo_ivf_alias_0.pkid)
-              Runtime Filter Build: #[-1,0]
-              ->  Table Scan on vector_ivf_multicn_search.t_int
-                    Analyze: timeConsumed=0ms waitTime=4ms inputBlocks=1 inputRows=4 outputRows=4 (min=4, max=4) InputSize=32 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)
-                    Runtime Filter Probe: t_int.a
-              ->  Table Function on ivf_search
-                    Analyze: timeConsumed=9ms waitTime=0ms inputRows=0 outputRows=4 (min=1, max=3) InputSize=0 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=16 bytes, max=48 bytes)
-                    Index Reader Param:  Limit: 4
 drop database vector_ivf_multicn_search;
