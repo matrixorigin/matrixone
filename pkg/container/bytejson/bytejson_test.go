@@ -217,6 +217,72 @@ func TestQuery(t *testing.T) {
 	}
 }
 
+func TestQuerySimpleContainPath(t *testing.T) {
+	kases := []struct {
+		name    string
+		jsonStr string
+		pathStr string
+		outStr  string
+		exists  bool
+	}{
+		{
+			name:    "root scalar autowrap",
+			jsonStr: `1`,
+			pathStr: `$[0]`,
+			outStr:  `1`,
+			exists:  true,
+		},
+		{
+			name:    "root scalar nonzero index misses",
+			jsonStr: `1`,
+			pathStr: `$[1]`,
+			outStr:  `null`,
+			exists:  false,
+		},
+		{
+			name:    "object scalar child autowrap",
+			jsonStr: `{"a":1}`,
+			pathStr: `$.a[0]`,
+			outStr:  `1`,
+			exists:  true,
+		},
+		{
+			name:    "nested scalar child autowrap",
+			jsonStr: `{"a":[{"b":1}]}`,
+			pathStr: `$.a[0].b[0]`,
+			outStr:  `1`,
+			exists:  true,
+		},
+		{
+			name:    "string scalar child autowrap",
+			jsonStr: `{"a":"x"}`,
+			pathStr: `$.a[0]`,
+			outStr:  `"x"`,
+			exists:  true,
+		},
+		{
+			name:    "normal array path still works",
+			jsonStr: `[1,2,3]`,
+			pathStr: `$[1]`,
+			outStr:  `2`,
+			exists:  true,
+		},
+	}
+
+	for _, kase := range kases {
+		t.Run(kase.name, func(t *testing.T) {
+			bj, err := ParseFromString(kase.jsonStr)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(kase.pathStr)
+			require.NoError(t, err)
+
+			out, exists := bj.QuerySimpleContainPath(&path)
+			require.Equal(t, kase.exists, exists)
+			require.JSONEq(t, kase.outStr, out.String())
+		})
+	}
+}
+
 func TestUnnest(t *testing.T) {
 	kases := []struct {
 		jsonStr   string
