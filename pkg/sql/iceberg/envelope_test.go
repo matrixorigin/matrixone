@@ -17,6 +17,7 @@ package iceberg
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
@@ -59,6 +60,55 @@ func TestParseCreateSQLLegacyExternal(t *testing.T) {
 	}
 	if found || env.Kind != CreateSQLKindLegacy {
 		t.Fatalf("legacy SQL should remain compatible: %+v found=%v", env, found)
+	}
+}
+
+func TestParseCreateSQLEnvelopeRejectsMalformedMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		createSQL      string
+		wantErrMessage string
+	}{
+		{
+			name:           "unclosed",
+			createSQL:      "/* MO_ICEBERG: version=1; kind=iceberg_table",
+			wantErrMessage: "envelope is not closed",
+		},
+		{
+			name:           "field without assignment",
+			createSQL:      "/* MO_ICEBERG: version=1; kind */",
+			wantErrMessage: "field must be key=value",
+		},
+		{
+			name:           "bad escape",
+			createSQL:      "/* MO_ICEBERG: version=1; catalog=%zz */",
+			wantErrMessage: "field is not url-escaped",
+		},
+		{
+			name:           "bad version",
+			createSQL:      "/* MO_ICEBERG: version=2; kind=iceberg_table; catalog=ksa; namespace=prod; table=orders */",
+			wantErrMessage: "version must be 1",
+		},
+		{
+			name:           "bad catalog id",
+			createSQL:      "/* MO_ICEBERG: version=1; kind=iceberg_table; catalog_id=0; catalog=ksa; namespace=prod; table=orders */",
+			wantErrMessage: "catalog_id must be positive",
+		},
+		{
+			name:           "missing required fields",
+			createSQL:      "/* MO_ICEBERG: version=1; kind=iceberg_table; catalog=ksa; namespace=prod */",
+			wantErrMessage: "missing required fields",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, found, err := ParseCreateSQLEnvelope(context.Background(), tc.createSQL)
+			if !found {
+				t.Fatalf("malformed envelope should still be detected")
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErrMessage) {
+				t.Fatalf("expected %q error, got %v", tc.wantErrMessage, err)
+			}
+		})
 	}
 }
 

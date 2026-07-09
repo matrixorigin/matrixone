@@ -130,6 +130,92 @@ func TestDMLActionExecutorRejectsUnconfiguredWorkflowBeforeObjectWrite(t *testin
 	}
 }
 
+func TestDMLActionExecutorValidateCommitPrerequisitesRejectsMissingInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		executor       DMLActionExecutor
+		tableLocation  string
+		snapshotID     int64
+		wantErrMessage string
+	}{
+		{
+			name: "missing manifest writer",
+			executor: DMLActionExecutor{
+				Workflow:       dml.CommitWorkflow{Committer: &fakeDMLWorkflowCommitter{}},
+				SequenceNumber: 7,
+			},
+			tableLocation:  "s3://warehouse/gold/orders",
+			snapshotID:     31,
+			wantErrMessage: "requires a manifest writer",
+		},
+		{
+			name: "missing committer",
+			executor: DMLActionExecutor{
+				Workflow:       dml.CommitWorkflow{ManifestWriter: &fakeSQLManifestWriter{}},
+				SequenceNumber: 7,
+			},
+			tableLocation:  "s3://warehouse/gold/orders",
+			snapshotID:     31,
+			wantErrMessage: "requires a committer",
+		},
+		{
+			name: "missing table location",
+			executor: DMLActionExecutor{
+				Workflow: dml.CommitWorkflow{
+					ManifestWriter: &fakeSQLManifestWriter{},
+					Committer:      &fakeDMLWorkflowCommitter{},
+				},
+				SequenceNumber: 7,
+			},
+			tableLocation:  "   ",
+			snapshotID:     31,
+			wantErrMessage: "requires table location",
+		},
+		{
+			name: "missing snapshot",
+			executor: DMLActionExecutor{
+				Workflow: dml.CommitWorkflow{
+					ManifestWriter: &fakeSQLManifestWriter{},
+					Committer:      &fakeDMLWorkflowCommitter{},
+				},
+				SequenceNumber: 7,
+			},
+			tableLocation:  "s3://warehouse/gold/orders",
+			wantErrMessage: "requires positive snapshot and sequence numbers",
+		},
+		{
+			name: "missing sequence",
+			executor: DMLActionExecutor{
+				Workflow: dml.CommitWorkflow{
+					ManifestWriter: &fakeSQLManifestWriter{},
+					Committer:      &fakeDMLWorkflowCommitter{},
+				},
+			},
+			tableLocation:  "s3://warehouse/gold/orders",
+			snapshotID:     31,
+			wantErrMessage: "requires positive snapshot and sequence numbers",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.executor.validateCommitPrerequisites(context.Background(), tc.tableLocation, tc.snapshotID)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErrMessage) {
+				t.Fatalf("expected %q error, got %v", tc.wantErrMessage, err)
+			}
+		})
+	}
+
+	executor := DMLActionExecutor{
+		Workflow: dml.CommitWorkflow{
+			ManifestWriter: &fakeSQLManifestWriter{},
+			Committer:      &fakeDMLWorkflowCommitter{},
+		},
+		SequenceNumber: 8,
+	}
+	if err := executor.validateCommitPrerequisites(context.Background(), "s3://warehouse/gold/orders", 32); err != nil {
+		t.Fatalf("valid commit prerequisites should pass: %v", err)
+	}
+}
+
 func TestDMLActionExecutorCommitUpdateWritesDeleteAndDataManifests(t *testing.T) {
 	deleteWriter := &recordingDMLDeleteObjectWriter{}
 	manifestWriter := &fakeSQLManifestWriter{}
