@@ -357,6 +357,51 @@ func TestNewTypedByteJson(t *testing.T) {
 	}
 }
 
+func TestJsonContainsNumericEqualDecimalAndFloat(t *testing.T) {
+	scientificFloat, err := bytejson.CreateByteJSON(1e20)
+	require.NoError(t, err)
+	fractionalFloat, err := bytejson.CreateByteJSON(0.1)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		target    bytejson.ByteJson
+		candidate bytejson.ByteJson
+		expect    bool
+	}{
+		{
+			name:      "decimal equals scientific float",
+			target:    newTypedByteJson(bytejson.TpCodeDecimal, "100000000000000000000"),
+			candidate: scientificFloat,
+			expect:    true,
+		},
+		{
+			name:      "scientific float equals decimal",
+			target:    scientificFloat,
+			candidate: newTypedByteJson(bytejson.TpCodeDecimal, "100000000000000000000"),
+			expect:    true,
+		},
+		{
+			name:      "decimal differs from nearby scientific float",
+			target:    newTypedByteJson(bytejson.TpCodeDecimal, "100000000000000000001"),
+			candidate: scientificFloat,
+			expect:    false,
+		},
+		{
+			name:      "decimal equals fractional float",
+			target:    newTypedByteJson(bytejson.TpCodeDecimal, "0.1"),
+			candidate: fractionalFloat,
+			expect:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expect, jsonContainsNumericEqual(tt.target, tt.candidate))
+		})
+	}
+}
+
 // ============================================================================
 // computeString / computeStringSimple (use raw JSON text, not internal encoding)
 // ============================================================================
