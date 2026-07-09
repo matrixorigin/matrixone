@@ -497,4 +497,26 @@ func TestResidencyValidatorAdapters(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "ICEBERG_RESIDENCY_DENIED") {
 		t.Fatalf("object scope validator should deny bucket outside account policy, got %v", err)
 	}
+
+	objectRequestValidator := ObjectResidencyRequestValidator(policies, "https://catalog.example.com/rest")
+	err = objectRequestValidator(ctx, api.ObjectResidencyRequest{
+		AccountID: 42,
+		CatalogID: 7,
+		Endpoint:  "s3.me-central-1.amazonaws.com",
+		Region:    "me-central-1",
+		Bucket:    "gold",
+	})
+	if err != nil {
+		t.Fatalf("object request validator should allow account bucket: %v", err)
+	}
+	err = objectRequestValidator(ctx, api.ObjectResidencyRequest{
+		AccountID: 42,
+		CatalogID: 7,
+		Endpoint:  "s3.me-central-1.amazonaws.com",
+		Region:    "me-central-1",
+		Bucket:    "silver",
+	})
+	if err == nil || !strings.Contains(err.Error(), "ICEBERG_RESIDENCY_DENIED") {
+		t.Fatalf("object request validator should deny bucket outside account policy, got %v", err)
+	}
 }

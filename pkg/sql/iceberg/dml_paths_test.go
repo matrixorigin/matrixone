@@ -209,6 +209,61 @@ func TestBuildDMLCommitWorkflowRequestAssemblesManifestPaths(t *testing.T) {
 	}
 }
 
+func TestBuildDMLCommitWorkflowRequestRejectsInvalidRequiredFields(t *testing.T) {
+	stream := dml.ActionStream{
+		Operation: dml.OperationMerge,
+		Base: dml.CommitBase{
+			Namespace:      api.Namespace{"sales"},
+			Table:          "orders",
+			StatementID:    "stmt-merge",
+			IdempotencyKey: "idem-merge",
+		},
+		Actions: []dml.Action{{Kind: dml.ActionAppendData}},
+	}
+
+	for _, tc := range []struct {
+		name           string
+		spec           DMLCommitWorkflowRequestSpec
+		wantErrMessage string
+	}{
+		{
+			name: "missing table location",
+			spec: DMLCommitWorkflowRequestSpec{
+				Stream:         stream,
+				TableLocation:  "   ",
+				SnapshotID:     205,
+				SequenceNumber: 33,
+			},
+			wantErrMessage: "requires table location",
+		},
+		{
+			name: "missing snapshot",
+			spec: DMLCommitWorkflowRequestSpec{
+				Stream:         stream,
+				TableLocation:  "s3://warehouse/gold/orders",
+				SequenceNumber: 33,
+			},
+			wantErrMessage: "requires positive snapshot and sequence numbers",
+		},
+		{
+			name: "missing sequence",
+			spec: DMLCommitWorkflowRequestSpec{
+				Stream:        stream,
+				TableLocation: "s3://warehouse/gold/orders",
+				SnapshotID:    205,
+			},
+			wantErrMessage: "requires positive snapshot and sequence numbers",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := BuildDMLCommitWorkflowRequest(context.Background(), tc.spec)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErrMessage) {
+				t.Fatalf("expected %q error, got %v", tc.wantErrMessage, err)
+			}
+		})
+	}
+}
+
 func TestCommitDMLActionStreamBuildsRequestAndProfile(t *testing.T) {
 	writer := &fakeSQLManifestWriter{}
 	committer := &fakeDMLWorkflowCommitter{
@@ -283,6 +338,54 @@ func TestCommitDMLActionStreamBuildsRequestAndProfile(t *testing.T) {
 		"replacement.parquet",
 		"stmt-overwrite",
 	)
+}
+
+func TestCommitDMLActionStreamPropagatesBuildIntentError(t *testing.T) {
+	_, err := CommitDMLActionStream(context.Background(), DMLCommitActionStreamSpec{
+		Workflow: dml.CommitWorkflow{
+			ManifestWriter: &fakeSQLManifestWriter{},
+			Committer:      &fakeDMLWorkflowCommitter{},
+		},
+		Stream: dml.ActionStream{
+			Operation: dml.OperationDelete,
+			Base: dml.CommitBase{
+				Namespace:      api.Namespace{"gold"},
+				Table:          "orders",
+				StatementID:    "stmt-empty-delete",
+				IdempotencyKey: "idem-empty-delete",
+			},
+		},
+		TableLocation:  "s3://warehouse/gold/orders",
+		SnapshotID:     910,
+		SequenceNumber: 45,
+	})
+	if err == nil || !strings.Contains(err.Error(), "action stream is empty") {
+		t.Fatalf("expected empty action stream error, got %v", err)
+	}
+}
+
+func TestCommitDMLActionStreamPropagatesWorkflowError(t *testing.T) {
+	_, err := CommitDMLActionStream(context.Background(), DMLCommitActionStreamSpec{
+		Workflow: dml.CommitWorkflow{
+			Committer: &fakeDMLWorkflowCommitter{},
+		},
+		Stream: dml.ActionStream{
+			Operation: dml.OperationDelete,
+			Base: dml.CommitBase{
+				Namespace:      api.Namespace{"gold"},
+				Table:          "orders",
+				StatementID:    "stmt-delete",
+				IdempotencyKey: "idem-delete",
+			},
+			Actions: []dml.Action{{Kind: dml.ActionAddPositionDelete}},
+		},
+		TableLocation:  "s3://warehouse/gold/orders",
+		SnapshotID:     911,
+		SequenceNumber: 46,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires a manifest writer") {
+		t.Fatalf("expected workflow manifest writer error, got %v", err)
+	}
 }
 
 func profileText(profile map[string]string) string {
