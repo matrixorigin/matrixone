@@ -238,6 +238,28 @@ func TestSameExecutionNodeUsesIdentityAndDoesNotMatchEmptyAddressToRemote(t *tes
 		engine.Node{Addr: "remote:6001", Mcpu: 1},
 	))
 }
+	
+	// TestSameExecutionNodeMatchesByAddress covers the regression from #25537/#25554:
+	// compileExternScanParallelWrite constructs source scope with the current CN
+	// address while target merge scopes use the same CN worker. sameExecutionNode
+	// must return true so dispatch stays local. Before the fix the source scope
+	// was constructed with an empty address causing "SendToAnyLocalFunc should not
+	// send to remote" and infinite retry to empty remote address.
+	func TestSameExecutionNodeMatchesByAddressForLocalScope(t *testing.T) {
+		require.True(t, sameExecutionNode(
+			engine.Node{Addr: "10.0.0.1:6001", Mcpu: 1},
+			engine.Node{Addr: "10.0.0.1:6001", Mcpu: 1},
+		), "same address should match")
+		require.True(t, sameExecutionNode(
+			engine.Node{Addr: "cn-local:6001", Mcpu: 1},
+			engine.Node{Addr: "cn-local:6001", Mcpu: 1},
+		), "same hostname+port should match")
+		require.False(t, sameExecutionNode(
+			engine.Node{Addr: "cn-local:6001", Mcpu: 1},
+			engine.Node{Addr: "cn-remote:6001", Mcpu: 1},
+		), "different addresses should not match")
+	}
+
 
 func TestMergeScopesByStageNodesUsesExecutionIdentity(t *testing.T) {
 	c := NewMockCompile(t)
