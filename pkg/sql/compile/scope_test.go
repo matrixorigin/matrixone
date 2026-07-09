@@ -438,6 +438,49 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))
 }
 
+// TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr verifies the
+// regression fix for #25554: compileExternScanParallelWrite constructs the
+// source scope with the current CN address so sameExecutionNode correctly
+// identifies it as local in constructDispatchLocalAndRemote. Without this
+// fix the empty address causes RemoteRegs to be generated with an empty
+// NodeAddr, leading to "SendToAnyLocalFunc should not send to remote" and
+// infinite morpc retry to an empty address.
+func TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_ONECN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: "test.csv",
+		},
+	}
+	// Use explicit stats to guarantee mcpu >= 2 regardless of GOMAXPROCS.
+	n := &plan.Node{
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
+		Stats:      &plan.Stats{Cost: 1000000, Rowsize: 2000},
+	}
+	rs, err := testCompile.compileExternScanParallelWrite(n, param, []string{"a"}, []int64{100000}, true)
+	require.NoError(t, err)
+
+	// The source scope (pre-scope of the first returned scope) must have
+	// the current CN address so sameExecutionNode matches the merge scopes.
+	sourceScope := rs[0].PreScopes[0]
+	require.Equal(t, testCompile.addr, sourceScope.NodeInfo.Addr,
+		"source scope address must match current CN so dispatch stays local")
+
+	// Dispatch must be SendToAnyLocalFunc with zero RemoteRegs.
+	dispatchOp, ok := sourceScope.RootOp.(*dispatch.Dispatch)
+	require.True(t, ok, "source scope must have a dispatch root operator")
+	require.Equal(t, dispatch.SendToAnyLocalFunc, dispatchOp.FuncId)
+	require.Empty(t, dispatchOp.RemoteRegs,
+		"RemoteRegs must be empty; a non-empty RemoteRegs with SendToAnyLocalFunc causes 'should not send to remote' error")
+	require.Len(t, dispatchOp.LocalRegs, len(rs),
+		"all merge scopes are on the current CN so LocalRegs must cover every merge scope")
+}
+
 func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}

@@ -12928,7 +12928,7 @@ literal:
     }
 |   UNDERSCORE_BINARY HEXNUM
     {
-        $$ = tree.NewNumVal($2, $2, false, tree.P_hexnum)
+        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinaryHexnum)
     }
 |   DECIMAL_VALUE
     {
