@@ -1,0 +1,7 @@
+show cdc;
+task_id    task_name    source_uri    sink_uri    state    err_msg    checkpoint    timestamp
+show cdc all;
+task_id    task_name    source_uri    sink_uri    state    err_msg    checkpoint    timestamp
+drop cdc if exists cdc_not_exist;
+drop cdc cdc_not_exist;
+internal error: no cdc task found, accountId: 0, taskName: cdc_not_exist
