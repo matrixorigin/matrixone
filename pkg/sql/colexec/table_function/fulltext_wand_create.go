@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
@@ -23,8 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/fulltext/wand"
+	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -159,9 +162,13 @@ func fulltextWandCreatePrepare(proc *process.Process, arg *TableFunction) (tvfSt
 	return st, err
 }
 
-// start processes one postings row. argVecs: [0]=cfg(json const), [1]=word,
-// [2]=doc_id(int64). One row == one token occurrence; the builder sums tf per
-// (word, doc_id). The __DocLen BM25 length sentinel is skipped.
+// start feeds one row into the builder. Two input shapes, selected by cfg.FromSource:
+//   - postings mode (default): argVecs [0]=cfg, [1]=word, [2]=doc_id — one row is one
+//     token occurrence; the builder sums tf per (word, doc_id), skipping __DocLen.
+//   - source mode: argVecs [0]=cfg, [1]=pk, [2..]=text cols — the row is tokenized in-Go
+//     (jieba, HMM=false) and every token is Add'd, so no separate postings table or
+//     tokenize pass is needed. Builder.Add caps tf and tracks doc length internally, so
+//     there is no __DocLen sentinel here.
 func (u *fulltextWandCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
 	if !u.inited {
 		cfgVec := tf.ctr.argVecs[0]
@@ -179,19 +186,24 @@ func (u *fulltextWandCreateState) start(tf *TableFunction, proc *process.Process
 			return err
 		}
 
-		wordVec := tf.ctr.argVecs[1]
-		if wordVec.GetType().Oid != types.T_varchar {
+		// The builder's pk type comes from the doc_id column (postings mode) or the pk
+		// column (source mode); either is the source pk type.
+		pkVec := tf.ctr.argVecs[2]
+		if u.tblcfg.FromSource {
+			pkVec = tf.ctr.argVecs[1]
+		} else if tf.ctr.argVecs[1].GetType().Oid != types.T_varchar {
 			return moerr.NewInvalidInput(proc.Ctx, "fulltext_wand_create: second argument (word) must be a string")
 		}
-		// doc_id may be any source-pk type; the builder maps it to a dense ord
-		// and the pk type is persisted for output decode + membership.
-		docVec := tf.ctr.argVecs[2]
-		u.builder = wand.NewBuilder(u.tblcfg.IndexTable, int32(docVec.GetType().Oid))
+		u.builder = wand.NewBuilder(u.tblcfg.IndexTable, int32(pkVec.GetType().Oid))
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
 
 	u.batch.CleanOnlyData()
+
+	if u.tblcfg.FromSource {
+		return u.addSourceRow(tf, proc, nthRow)
+	}
 
 	wordVec := tf.ctr.argVecs[1]
 	docVec := tf.ctr.argVecs[2]
@@ -204,4 +216,61 @@ func (u *fulltextWandCreateState) start(tf *TableFunction, proc *process.Process
 	}
 	pk := vector.GetAny(docVec, nthRow, false)
 	return u.builder.Add(word, pk)
+}
+
+// addSourceRow tokenizes one source row (argVecs [1]=pk, [2..]=text cols) with the
+// retrieval jieba tokenizer and Add's every token to the builder. It mirrors
+// fulltext_index_tokenize's retrieval branch (concat columns with '\n', datalink →
+// plain text, HMM=false), minus the position/__DocLen bookkeeping the WAND builder
+// does not need.
+func (u *fulltextWandCreateState) addSourceRow(tf *TableFunction, proc *process.Process, nthRow int) error {
+	argVecs := tf.ctr.argVecs
+	pkVec := argVecs[1]
+	if pkVec.IsNull(uint64(nthRow)) {
+		return nil
+	}
+	// Match fulltext_index_tokenize: if any text column is NULL the doc yields no tokens.
+	for i := 2; i < len(argVecs); i++ {
+		if argVecs[i].IsNull(uint64(nthRow)) {
+			return nil
+		}
+	}
+	var content bytes.Buffer
+	for i := 2; i < len(argVecs); i++ {
+		if i > 2 {
+			content.WriteByte('\n')
+		}
+		data := argVecs[i].GetStringAt(nthRow)
+		if types.T(tf.Args[i].Typ.Id) == types.T_datalink {
+			dl, err := datalink.NewDatalink(data, proc)
+			if err != nil {
+				return err
+			}
+			b, err := dl.GetPlainText(proc)
+			if err != nil {
+				return err
+			}
+			content.Write(b)
+		} else {
+			content.WriteString(data)
+		}
+	}
+	if content.Len() == 0 {
+		return nil
+	}
+	jtok, err := tokenizer.SharedJiebaTokenizer(false)
+	if err != nil {
+		return err
+	}
+	pk := vector.GetAny(pkVec, nthRow, false)
+	for t, terr := range jtok.Tokenize(content.Bytes()) {
+		if terr != nil {
+			return terr
+		}
+		slen := t.TokenBytes[0]
+		if aerr := u.builder.Add(string(t.TokenBytes[1:slen+1]), pk); aerr != nil {
+			return aerr
+		}
+	}
+	return nil
 }

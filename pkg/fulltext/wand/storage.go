@@ -45,6 +45,11 @@ type TableConfig struct {
 	// so the base is split at the same value every compaction later reads. 0 ⇒ unset (the
 	// TVF falls back to the resolver, for older indexes without the flat param).
 	Capacity int64 `json:"capacity,omitempty"`
+	// FromSource selects the create-build TVF's input shape. false (default): the TVF
+	// reads pre-tokenized postings rows (argVecs = [cfg, word, doc_id]). true: the TVF
+	// reads SOURCE rows (argVecs = [cfg, pk, cols…]) and tokenizes them in-Go — one build
+	// statement straight off the source, so the postings table is never populated.
+	FromSource bool `json:"from_source,omitempty"`
 }
 
 // SubIndexId is the index_id for the i-th tag=0 base sub-index of a build identified by

@@ -140,19 +140,15 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 				return err
 			}
 		}
-		// Build postings, then split the tag=0 base per max_index_capacity.
-		insertSQLs, err := genInsertSQL(originalTableDef, indexDef, qryDatabase)
+		// Build the tag=0 base directly from the source rows in ONE statement: the create
+		// TVF tokenizes each row in-Go and splits at max_index_capacity — no postings
+		// insert/read/delete round-trip, so the postings table stays empty (a retrieval
+		// index never reads it anyway).
+		buildSQLs, err := genWandBuildFromSourceSQL(originalTableDef, indexDef, storeDef, metaDef, qryDatabase, buildCapacity)
 		if err != nil {
 			return err
 		}
-		buildSQLs, err := genWandBuildSQL(indexDef, storeDef, metaDef, qryDatabase, buildCapacity)
-		if err != nil {
-			return err
-		}
-		// Empty the postings table once the WAND base is built from it: for a retrieval
-		// index the postings are only the build input, never read again (see emptyPostingsSQL).
-		buildSQLs = append(buildSQLs, emptyPostingsSQL(indexDef, qryDatabase))
-		for _, sql := range append(insertSQLs, buildSQLs...) {
+		for _, sql := range buildSQLs {
 			if err = ctx.RunSql(sql); err != nil {
 				return err
 			}
@@ -259,6 +255,38 @@ func genWandBuildSQL(postingsDef, storeDef, metaDef *plan.IndexDef, qryDatabase 
 		sqlquote.String(string(cfgbytes)),
 		sqlquote.QualifiedIdent(srcAlias, catalog.FullTextIndex_TabCol_Word),
 		sqlquote.QualifiedIdent(srcAlias, catalog.FullTextIndex_TabCol_Id))
+	return []string{sql}, nil
+}
+
+// genWandBuildFromSourceSQL builds the WAND chunk store straight from the SOURCE table
+// in one statement: `SELECT f.* FROM src CROSS APPLY fulltext_wand_create(params,
+// cfg{FromSource}, pk, cols…)`. The create TVF tokenizes each source row in-Go (jieba)
+// and Add's the tokens, so the postings table is never written/read/deleted. cfg carries
+// FromSource=true (the TVF's input-shape switch) and max_index_capacity for the split.
+func genWandBuildFromSourceSQL(originalTableDef *plan.TableDef, indexDef, storeDef, metaDef *plan.IndexDef, qryDatabase string, capacity int64) ([]string, error) {
+	const srcAlias = "src"
+	cfg := wand.TableConfig{
+		DbName:        qryDatabase,
+		IndexTable:    storeDef.IndexTableName,
+		MetadataTable: metaDef.IndexTableName,
+		Capacity:      capacity,
+		FromSource:    true,
+	}
+	cfgbytes, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	cols := make([]string, 0, len(indexDef.Parts))
+	for _, p := range indexDef.Parts {
+		cols = append(cols, sqlquote.QualifiedIdent(srcAlias, p))
+	}
+	sql := fmt.Sprintf("SELECT f.* FROM %s AS %s CROSS APPLY fulltext_wand_create(%s, %s, %s, %s) AS f",
+		sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name),
+		sqlquote.Ident(srcAlias),
+		sqlquote.String(indexDef.IndexAlgoParams),
+		sqlquote.String(string(cfgbytes)),
+		sqlquote.QualifiedIdent(srcAlias, originalTableDef.Pkey.PkeyColName),
+		strings.Join(cols, ", "))
 	return []string{sql}, nil
 }
 
