@@ -813,6 +813,79 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		requireJSONAt(t, vecJSON, 1, `-67.89`)
 	})
 
+	t.Run("decimal logical to integer keeps exact boundaries", func(t *testing.T) {
+		decimalFixedLenValue := func(v *big.Int, size int) parquet.Value {
+			b, err := bigIntToTwosComplementBytes(ctx, v, size)
+			require.NoError(t, err)
+			return parquet.FixedLenByteArrayValue(b)
+		}
+		twoTo53PlusOne := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 53), big.NewInt(1))
+		var h ParquetHandler
+
+		f, page := writeDictAndGetPage(t, parquet.Decimal(0, 19, parquet.FixedLenByteArrayType(8)), []parquet.Value{
+			decimalFixedLenValue(twoTo53PlusOne, 8),
+			decimalFixedLenValue(maxInt64Big, 8),
+		})
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
+		require.NotNil(t, mp)
+		vecInt := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, mp.mapping(page, proc, vecInt))
+		require.Equal(t, []int64{twoTo53PlusOne.Int64(), maxInt64Big.Int64()}, vector.MustFixedColWithTypeCheck[int64](vecInt))
+
+		fRound, pageRound := writeDictAndGetPage(t, parquet.Decimal(1, 19, parquet.FixedLenByteArrayType(8)), []parquet.Value{
+			decimalFixedLenValue(big.NewInt(15), 8),
+			decimalFixedLenValue(big.NewInt(-15), 8),
+			decimalFixedLenValue(big.NewInt(-4), 8),
+		})
+		mp = h.getMapper(fRound.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
+		require.NotNil(t, mp)
+		vecRound := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, mp.mapping(pageRound, proc, vecRound))
+		require.Equal(t, []int64{2, -2, 0}, vector.MustFixedColWithTypeCheck[int64](vecRound))
+
+		fUint, pageUint := writeDictAndGetPage(t, parquet.Decimal(0, 20, parquet.FixedLenByteArrayType(9)), []parquet.Value{
+			decimalFixedLenValue(maxUint64Big, 9),
+		})
+		mp = h.getMapper(fUint.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
+		require.NotNil(t, mp)
+		vecUint := vector.NewVec(types.T_uint64.ToType())
+		require.NoError(t, mp.mapping(pageUint, proc, vecUint))
+		require.Equal(t, []uint64{math.MaxUint64}, vector.MustFixedColWithTypeCheck[uint64](vecUint))
+	})
+
+	t.Run("decimal logical to integer rejects exact overflows", func(t *testing.T) {
+		decimalFixedLenValue := func(v *big.Int, size int) parquet.Value {
+			b, err := bigIntToTwosComplementBytes(ctx, v, size)
+			require.NoError(t, err)
+			return parquet.FixedLenByteArrayValue(b)
+		}
+		var h ParquetHandler
+
+		fIntOverflow, pageIntOverflow := writeDictAndGetPage(t, parquet.Decimal(0, 20, parquet.FixedLenByteArrayType(9)), []parquet.Value{
+			decimalFixedLenValue(new(big.Int).Add(maxInt64Big, big.NewInt(1)), 9),
+		})
+		mp := h.getMapper(fIntOverflow.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
+		require.NotNil(t, mp)
+		vecInt := vector.NewVec(types.T_int64.ToType())
+		require.ErrorContains(t, mp.mapping(pageIntOverflow, proc, vecInt), "overflows BIGINT")
+
+		fUintOverflow, pageUintOverflow := writeDictAndGetPage(t, parquet.Decimal(0, 21, parquet.FixedLenByteArrayType(10)), []parquet.Value{
+			decimalFixedLenValue(new(big.Int).Add(maxUint64Big, big.NewInt(1)), 10),
+		})
+		mp = h.getMapper(fUintOverflow.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
+		require.NotNil(t, mp)
+		vecUint := vector.NewVec(types.T_uint64.ToType())
+		require.ErrorContains(t, mp.mapping(pageUintOverflow, proc, vecUint), "overflows BIGINT UNSIGNED")
+
+		fNegativeUint, pageNegativeUint := writeDictAndGetPage(t, parquet.Decimal(1, 9, parquet.FixedLenByteArrayType(4)), []parquet.Value{
+			decimalFixedLenValue(big.NewInt(-5), 4),
+		})
+		mp = h.getMapper(fNegativeUint.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
+		require.NotNil(t, mp)
+		vecNegativeUint := vector.NewVec(types.T_uint64.ToType())
+		require.ErrorContains(t, mp.mapping(pageNegativeUint, proc, vecNegativeUint), "overflows unsigned integer")
+	})
+
 	t.Run("string to bool and bit", func(t *testing.T) {
 		f, page := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
 			parquet.ByteArrayValue([]byte("true")),
@@ -1254,6 +1327,7 @@ func TestParquetCrossTypeHelperCoverage(t *testing.T) {
 	rounded, err = parquetValueToRoundedInt64(ctx, parquet.Int64Type, parquet.Int64Value(7))
 	require.NoError(t, err)
 	require.Equal(t, int64(7), rounded)
+	require.Equal(t, big.NewInt(0), roundScaledDecimalBigInt(big.NewInt(999), 4))
 	_, err = roundParquetFloatToInt64(ctx, math.NaN())
 	require.ErrorContains(t, err, "cannot convert parquet floating point")
 	_, err = roundParquetFloatToInt64(ctx, float64(uint64(1)<<63))
