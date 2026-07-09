@@ -199,6 +199,8 @@ func makeSpecialAggExec(
 			return makeSumAvgExec(mp, true, id, isDistinct, params[0]), true, nil
 		case AggIdOfSumCount:
 			return newSumCountExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfSumTwResult:
+			return newSumTwResultExec(mp, id, isDistinct, params[0]), true, nil
 		case AggIdOfAvg:
 			return makeSumAvgExec(mp, false, id, isDistinct, params[0]), true, nil
 		case AggIdOfCountColumn:

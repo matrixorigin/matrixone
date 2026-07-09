@@ -1060,6 +1060,40 @@ func newSumCountExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types.
 	return &exec
 }
 
+func newSumTwResultExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
+	switch param.Oid {
+	case types.T_int64:
+		return newSumTwResultExecWithType[int64, int64](mp, aggID, isDistinct, param, int64OfCheck)
+	case types.T_uint64:
+		return newSumTwResultExecWithType[uint64, uint64](mp, aggID, isDistinct, param, uint64OfCheck)
+	default:
+		panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for time window sum result", param.Oid))
+	}
+}
+
+func newSumTwResultExecWithType[T int64 | uint64, A types.Ints | types.UInts](
+	mp *mpool.MPool,
+	aggID int64,
+	isDistinct bool,
+	param types.Type,
+	ofCheck func(T, T, T) error,
+) AggFuncExec {
+	var exec sumAvgExec[T, A]
+	exec.mp = mp
+	exec.isSum = true
+	exec.ofCheck = ofCheck
+	exec.aggInfo = aggInfo{
+		aggId:      aggID,
+		isDistinct: isDistinct,
+		argTypes:   []types.Type{param},
+		retType:    param,
+		emptyNull:  true,
+		saveArg:    isDistinct,
+		stateTypes: []types.Type{param},
+	}
+	return &exec
+}
+
 func newSumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState](mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
 	var exec sumAvgDecExec[A, S]
 	exec.mp = mp

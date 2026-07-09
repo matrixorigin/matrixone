@@ -149,6 +149,45 @@ func TestConstructTimeWindowUsesInternalSumCount(t *testing.T) {
 	require.Equal(t, types.T_int64, timeWin.Types[0].Oid)
 }
 
+func TestConstructTimeWindowUsesInternalSumTwResult(t *testing.T) {
+	arg := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 1},
+		},
+	}
+	ts := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 0},
+		},
+	}
+	node := &plan.Node{
+		AggList: []*plan.Expr{
+			{
+				Typ: plan.Type{Id: int32(types.T_uint64)},
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{
+							Obj:     function.AggSumOverloadID,
+							ObjName: "sum_tw_result",
+						},
+						Args: []*plan.Expr{arg},
+					},
+				},
+			},
+		},
+		GroupBy:   []*plan.Expr{ts},
+		Timestamp: ts,
+		Interval:  makeTimeWindowIntervalExpr(1, "second"),
+	}
+
+	timeWin := constructTimeWindow(context.Background(), node, nil)
+	require.Len(t, timeWin.Aggs, 1)
+	require.Equal(t, aggexec.AggIdOfSumTwResult, timeWin.Aggs[0].GetAggID())
+	require.Equal(t, types.T_uint64, timeWin.Types[0].Oid)
+}
+
 func TestDupOperatorLoopJoinMarkPos(t *testing.T) {
 	op := loopjoin.NewArgument()
 	op.MarkPos = 3

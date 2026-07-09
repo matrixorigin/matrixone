@@ -1364,6 +1364,8 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 		if f.F.Func.ObjName == "sum_count" {
 			functionID = aggexec.AggIdOfSumCount
+		} else if f.F.Func.ObjName == "sum_tw_result" {
+			functionID = aggexec.AggIdOfSumTwResult
 		}
 		e := f.F.Args[0]
 		if e != nil {

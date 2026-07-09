@@ -274,6 +274,11 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 
 	funcId, _ := function.DecodeOverloadID(obj.Obj)
 	switch funcId {
+	case function.SUM:
+		switch types.T(expr.Typ.Id) {
+		case types.T_int64, types.T_uint64:
+			obj.ObjName = "sum_tw_result"
+		}
 	case function.COUNT:
 		fGet, err := function.GetFunctionByName(b.GetContext(), "sum", []types.Type{types.T_int64.ToType()})
 		if err != nil {
