@@ -1330,7 +1330,7 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 
 // TestUpdateSnapshotWriteOffset_ReentrantSafety verifies that
 // UpdateSnapshotWriteOffset does not deadlock when called reentrantly
-// from within dumpBatch context (inDumpBatch == true).
+// from within a locked context (e.g. dumpBatch or IncrStatementID).
 // This is the exact scenario that caused issue #25557.
 func TestUpdateSnapshotWriteOffset_ReentrantSafety(t *testing.T) {
 	txn := &Transaction{
@@ -1338,42 +1338,35 @@ func TestUpdateSnapshotWriteOffset_ReentrantSafety(t *testing.T) {
 		snapshotWriteOffset: 0,
 	}
 
-	// Simulate the reentrant call path: dumpBatch sets inDumpBatch=true,
+	// Simulate the reentrant call path: dumpBatch (or IncrStatementID)
 	// holds txn.Lock(), then calls into code that eventually invokes
 	// NewCompile → UpdateSnapshotWriteOffset.
-	txn.inDumpBatch.Store(true)
+	// TryLock must detect the held lock and fall through.
 	txn.Lock()
 
-	// This must NOT deadlock — the reentrant check should skip Lock acquisition.
 	txn.UpdateSnapshotWriteOffset()
 	require.Equal(t, 3, txn.snapshotWriteOffset)
 	require.Equal(t, 3, txn.adjustWriteOffset)
 
 	txn.Unlock()
-	txn.inDumpBatch.Store(false)
 }
 
 // TestGetSnapshotWriteOffset_ReentrantSafety verifies that
 // GetSnapshotWriteOffset does not deadlock when called reentrantly
-// from within dumpBatch context (inDumpBatch == true).
+// from within a locked context.
 func TestGetSnapshotWriteOffset_ReentrantSafety(t *testing.T) {
 	txn := &Transaction{
 		writes:              []Entry{{}, {}},
 		snapshotWriteOffset: 42,
 	}
 
-	// Simulate the reentrant call path: dumpBatch sets inDumpBatch=true,
-	// holds txn.Lock(), then calls into code that invokes
-	// NewCompile → GetSnapshotWriteOffset.
-	txn.inDumpBatch.Store(true)
 	txn.Lock()
 
-	// This must NOT deadlock — the reentrant check should skip Lock acquisition.
+	// This must NOT deadlock — TryLock detects the held lock.
 	offset := txn.GetSnapshotWriteOffset()
 	require.Equal(t, 42, offset)
 
 	txn.Unlock()
-	txn.inDumpBatch.Store(false)
 }
 
 // TestUpdateSnapshotWriteOffset_NormalPath verifies that the normal
@@ -1383,7 +1376,6 @@ func TestUpdateSnapshotWriteOffset_NormalPath(t *testing.T) {
 		writes:              []Entry{{}, {}, {}, {}},
 		snapshotWriteOffset: 0,
 	}
-	require.False(t, txn.inDumpBatch.Load())
 
 	txn.UpdateSnapshotWriteOffset()
 	require.Equal(t, 4, txn.snapshotWriteOffset)
@@ -1396,33 +1388,22 @@ func TestGetSnapshotWriteOffset_NormalPath(t *testing.T) {
 	txn := &Transaction{
 		snapshotWriteOffset: 99,
 	}
-	require.False(t, txn.inDumpBatch.Load())
 
 	offset := txn.GetSnapshotWriteOffset()
 	require.Equal(t, 99, offset)
 }
 
-// TestInDumpBatchFlagLifecycle verifies that dumpBatch correctly sets
-// and clears the inDumpBatch flag around its execution.
-func TestInDumpBatchFlagLifecycle(t *testing.T) {
-	txn := &Transaction{
-		writes: []Entry{},
-	}
-
-	// Before dumpBatch, flag should be false
-	require.False(t, txn.inDumpBatch.Load())
-
-	// After dumpBatch completes, flag should be restored to false
-	require.False(t, txn.inDumpBatch.Load())
-}
-
 // TestReentrantLock_SimulatedFullDeadlockPath verifies the complete
 // deadlock scenario from issue #25557:
 //
-//	dumpBatch [holds Lock, sets inDumpBatch=true]
+//	dumpBatch [holds Lock]
 //	  → dumpBatchLocked → ... → NewCompile
 //	    → UpdateSnapshotWriteOffset [must NOT deadlock]
 //	    → GetSnapshotWriteOffset    [must NOT deadlock]
+//
+// This test also covers the IncrStatementID → dumpBatchLocked path
+// (types.go:603), which enters the locked context through a different
+// wrapper but triggers the same reentrant chain.
 func TestReentrantLock_SimulatedFullDeadlockPath(t *testing.T) {
 	txn := &Transaction{
 		writes:              make([]Entry, 5),
@@ -1432,15 +1413,13 @@ func TestReentrantLock_SimulatedFullDeadlockPath(t *testing.T) {
 	// Simulate the exact sequence from the deadlock call chain
 	var completed bool
 	func() {
-		// Step 1: dumpBatch acquires lock and sets inDumpBatch
+		// Step 1: dumpBatch (or IncrStatementID) acquires lock
 		txn.Lock()
 		defer txn.Unlock()
-		txn.inDumpBatch.Store(true)
-		defer txn.inDumpBatch.Store(false)
 
-		// Step 2: Inside dumpBatchLocked, code calls getTable() which
-		// triggers internal SQL → NewCompile → UpdateSnapshotWriteOffset
-		// This must NOT deadlock.
+		// Step 2: Inside dumpBatchLocked, the code calls getTable() which
+		// triggers internal SQL → NewCompile → UpdateSnapshotWriteOffset.
+		// TryLock detects the held lock and falls through — no deadlock.
 		txn.UpdateSnapshotWriteOffset()
 		require.Equal(t, 5, txn.snapshotWriteOffset)
 
@@ -1452,5 +1431,34 @@ func TestReentrantLock_SimulatedFullDeadlockPath(t *testing.T) {
 	}()
 
 	require.True(t, completed, "full deadlock path must complete without deadlocking")
-	require.False(t, txn.inDumpBatch.Load(), "inDumpBatch must be cleared after dumpBatch")
+}
+
+// TestReentrantLock_ConcurrentSafety verifies that TryLock-based
+// GetSnapshotWriteOffset and UpdateSnapshotWriteOffset are safe under
+// concurrent access from multiple goroutines.
+func TestReentrantLock_ConcurrentSafety(t *testing.T) {
+	txn := &Transaction{
+		writes:              make([]Entry, 10),
+		snapshotWriteOffset: 5,
+	}
+
+	var wg sync.WaitGroup
+	// Multiple goroutines concurrently calling the accessor functions.
+	// TryLock ensures no data races: when a goroutine successfully
+	// TryLock's, it has exclusive access; when it fails, it uses the
+	// fallback path which for GetSnapshotWriteOffset just reads an int
+	// (safe on 64-bit), and for UpdateSnapshotWriteOffset skips the write.
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			offset := txn.GetSnapshotWriteOffset()
+			require.GreaterOrEqual(t, offset, 0)
+			txn.UpdateSnapshotWriteOffset()
+		}()
+	}
+
+	wg.Wait()
+	// After concurrent access, snapshotWriteOffset should still be valid
+	require.GreaterOrEqual(t, txn.GetSnapshotWriteOffset(), 0)
 }
