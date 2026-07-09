@@ -1556,6 +1556,23 @@ func TestUnsupportedFrontendParserStatements(t *testing.T) {
 	require.Contains(t, err.Error(), "ANALYZE TABLE requires at least one table")
 }
 
+func TestHandleAnalyzeStmtRestoresOuterExecCtxOnError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	outerExecCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		ses:    ses,
+	}
+	staleExecCtx := &ExecCtx{reqCtx: context.Background()}
+	ses.GetTxnCompileCtx().SetExecCtx(staleExecCtx)
+
+	err := handleAnalyzeStmt(ses, outerExecCtx, &tree.AnalyzeStmt{})
+	require.Error(t, err)
+	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
+}
+
 func Test_convert_type(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("type conversion", t, func() {

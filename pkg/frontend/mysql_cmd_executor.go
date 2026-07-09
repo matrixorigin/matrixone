@@ -1178,6 +1178,10 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 		//restore the inside statement
 		ses.ReplaceDerivedStmt(prevInsideStmt)
 	}()
+	if tcc := ses.GetTxnCompileCtx(); tcc != nil {
+		defer tcc.SetExecCtx(execCtx)
+		tcc.SetExecCtx(execCtx)
+	}
 
 	if len(stmt.Entries) == 0 {
 		return moerr.NewInternalError(execCtx.reqCtx, "ANALYZE TABLE requires at least one table")
