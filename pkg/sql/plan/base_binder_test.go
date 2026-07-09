@@ -157,6 +157,26 @@ func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T
 	require.Equal(t, int32(types.T_varbinary), bitCountExpr.GetF().Args[0].Typ.Id)
 }
 
+func TestBindScoreBinaryStringUsesBinaryStringSemantics(t *testing.T) {
+	binder := &baseBinder{sysCtx: context.Background()}
+	binStr := tree.NewNumVal("1", "1", false, tree.P_ScoreBinary)
+
+	rawExpr, err := binder.bindNumVal(binStr, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, "1", rawExpr.GetLit().GetSval())
+	require.Equal(t, int32(types.T_varbinary), rawExpr.Typ.Id)
+	require.False(t, rawExpr.GetLit().GetIsBin())
+
+	castExpr, err := binder.bindNumVal(binStr, plan.Type{Id: int32(types.T_uint64)})
+	require.NoError(t, err)
+	castFunc := castExpr.GetF()
+	require.NotNil(t, castFunc)
+	require.Len(t, castFunc.Args, 2)
+	require.Equal(t, "1", castFunc.Args[0].GetLit().GetSval())
+	require.Equal(t, int32(types.T_varbinary), castFunc.Args[0].Typ.Id)
+	require.False(t, castFunc.Args[0].GetLit().GetIsBin())
+}
+
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 

@@ -277,12 +277,21 @@ select cast(X'312E35' as double), cast(_binary X'312E35' as double);
 select (_binary X'31' | X'31');
 ➤ 0x31 | 0x31[12,196605,0]  𝄀
 1
+select _binary '1' + 0;
+➤ 1 + 0[-5,64,0]  𝄀
+1
 select (_binary X'31' | X'31') + 0;
 ➤ (0x31 | 0x31) + 0[-5,64,0]  𝄀
 1
 select 1.0 * (_binary X'312E35' | X'312E35');
 ➤ 1.0 * (0x312E35 | 0x312E35)[8,53,1]  𝄀
 1.5
+select 1.0 * (X'312E35' | X'312E35');
+➤ 1.0 * (0x312E35 | 0x312E35)[3,38,1]  𝄀
+3223093.0
+select (_binary X'31' | NULL) + 0;
+➤ (0x31 | null) + 0[-5,64,0]  𝄀
+null
 SELECT CAST(X'' AS SIGNED);
 invalid argument cast to int, bad value []
 SELECT CAST(X'11111111111111111111111111' AS SIGNED);
