@@ -21,26 +21,29 @@ import (
 )
 
 func TestDecideScanPlacementKeepsSingleWorkerLocal(t *testing.T) {
+	workers := Workers{{ID: "local", Addr: "local:6001"}}
 	decision := DecideScanPlacement(ScanRequest{
-		QueryWorkers: Workers{{ID: "local", Addr: "local:6001"}},
+		QueryWorkers: workers,
 		Stats:        scanStats(100, 4, false),
 	})
 
 	require.True(t, decision.LocalOnly)
 	require.Equal(t, ReasonScanSingleWorker, decision.Reason)
-	require.Nil(t, decision.Workers)
+	require.Equal(t, workers, decision.Workers)
 }
 
 func TestDecideScanPlacementKeepsMissingStatsLocal(t *testing.T) {
+	workers := Workers{
+		{ID: "remote", Addr: "remote:6001"},
+		{ID: "local", Addr: "local:6001"},
+	}
 	decision := DecideScanPlacement(ScanRequest{
-		QueryWorkers: Workers{
-			{ID: "local", Addr: "local:6001"},
-			{ID: "remote", Addr: "remote:6001"},
-		},
+		QueryWorkers: workers,
 	})
 
 	require.True(t, decision.LocalOnly)
 	require.Equal(t, ReasonScanMissingStats, decision.Reason)
+	require.Equal(t, workers[:1], decision.Workers)
 }
 
 func TestDecideScanPlacementKeepsForcedScanLocal(t *testing.T) {
@@ -56,6 +59,7 @@ func TestDecideScanPlacementKeepsForcedScanLocal(t *testing.T) {
 
 	require.True(t, decision.LocalOnly)
 	require.Equal(t, ReasonScanForceOneCN, decision.Reason)
+	require.Equal(t, workers[:1], decision.Workers)
 
 	decision = DecideScanPlacement(ScanRequest{
 		QueryWorkers: workers,
@@ -65,6 +69,7 @@ func TestDecideScanPlacementKeepsForcedScanLocal(t *testing.T) {
 
 	require.True(t, decision.LocalOnly)
 	require.Equal(t, ReasonScanForceSingle, decision.Reason)
+	require.Equal(t, workers[:1], decision.Workers)
 }
 
 func TestDecideScanPlacementKeepsSmallScansLocal(t *testing.T) {
@@ -79,6 +84,7 @@ func TestDecideScanPlacementKeepsSmallScansLocal(t *testing.T) {
 
 	require.True(t, decision.LocalOnly)
 	require.Equal(t, ReasonScanSmallBlocks, decision.Reason)
+	require.Equal(t, Workers{{ID: "local", Addr: "local:6001"}}, decision.Workers)
 }
 
 func TestDecideScanPlacementCanForceSmallScansToMultiCN(t *testing.T) {
@@ -128,6 +134,47 @@ func TestDecideScanPlacementKeepsLargeScanLocalWhenNoWorkers(t *testing.T) {
 	require.True(t, decision.LocalOnly)
 	require.Equal(t, ReasonScanNoWorkers, decision.Reason)
 	require.Nil(t, decision.Workers)
+}
+
+func TestDecideScanPlacementPreservesQueryFallbackReason(t *testing.T) {
+	workers := Workers{{ID: "local", Addr: "local:6001"}}
+	decision := DecideScanPlacement(ScanRequest{
+		QueryWorkers:         workers,
+		QueryPlacementReason: ReasonNoCandidateCN,
+		Stats:                scanStats(100, 4, false),
+	})
+
+	require.True(t, decision.LocalOnly)
+	require.Equal(t, ReasonScanQueryFallbackCN, decision.Reason)
+	require.Equal(t, workers, decision.Workers)
+}
+
+func TestDecideScanPlacementPreservesQueryLocalExecReason(t *testing.T) {
+	workers := Workers{{ID: "local", Addr: "local:6001"}}
+	decision := DecideScanPlacement(ScanRequest{
+		QueryWorkers:         workers,
+		QueryPlacementReason: ReasonLocalExecType,
+		Stats:                scanStats(100, 4, false),
+	})
+
+	require.True(t, decision.LocalOnly)
+	require.Equal(t, ReasonScanQueryLocalExec, decision.Reason)
+	require.Equal(t, workers, decision.Workers)
+}
+
+func TestDecideScanPlacementPrefersCurrentCNForLocalOnlyScan(t *testing.T) {
+	workers := Workers{
+		{ID: "remote", Addr: "remote:6001"},
+		{ID: "local", Addr: "local:6001"},
+	}
+	decision := DecideScanPlacement(ScanRequest{
+		QueryWorkers: workers,
+		CurrentCN:    Worker{ID: "local", Addr: "local:6001"},
+	})
+
+	require.True(t, decision.LocalOnly)
+	require.Equal(t, ReasonScanMissingStats, decision.Reason)
+	require.Equal(t, Workers{{ID: "local", Addr: "local:6001"}}, decision.Workers)
 }
 
 func scanStats(blockNum int32, dop int32, forceOneCN bool) *ScanStats {
