@@ -80,7 +80,7 @@ func (bm *bytejsonModifier) remove(path *Path) (ByteJson, error) {
 	}
 
 	parentPath, lastSub := path.popOneSubPath()
-	parent, exists := bm.bj.querySimpleExist(&parentPath)
+	parent, exists := bm.bj.querySimpleExist(&parentPath, false)
 	if !exists {
 		return bm.bj, nil
 	}
@@ -143,7 +143,7 @@ func (bm *bytejsonModifier) removePathWithoutAutowrapping(path *Path) *Path {
 	for _, sub := range path.paths {
 		if isAutowrapArrayCell(sub) {
 			clonedPath := Path{paths: clonedSubs}
-			hit, exists := bm.bj.querySimpleExist(&clonedPath)
+			hit, exists := bm.bj.querySimpleExist(&clonedPath, false)
 			if exists && hit.Type != TpCodeArray {
 				continue
 			}
