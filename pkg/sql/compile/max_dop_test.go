@@ -239,7 +239,6 @@ func TestSameExecutionNodeUsesIdentityAndDoesNotMatchEmptyAddressToRemote(t *tes
 	))
 }
 
-
 func TestMergeScopesByStageNodesUsesExecutionIdentity(t *testing.T) {
 	c := NewMockCompile(t)
 	c.anal = &AnalyzeModule{}
