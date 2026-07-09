@@ -319,8 +319,30 @@ create table t_left_probe(c1 int not null, c2 int not null) cluster by c1;
 insert into t_left_build select *, 1 from generate_series(1, 100000) g;
 insert into t_left_probe select *, 1 from generate_series(100001, 200000) g;
 select mo_ctl('dn', 'flush', 'd1.t_left_build');
+➤ mo_ctl(dn, flush, d1.t_left_build)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select mo_ctl('dn', 'flush', 'd1.t_left_probe');
+➤ mo_ctl(dn, flush, d1.t_left_probe)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select Sleep(1);
+➤ Sleep(1)[-6,8,0]  𝄀
+0
 set @@join_spill_mem = 1000;
 select count(*) from t_left_probe left join t_left_build on t_left_probe.c1=t_left_build.c1;
 ➤ count(*)[-5,64,0]  𝄀
@@ -334,8 +356,30 @@ create table t_right_probe(c1 int not null, c2 int not null) cluster by c1;
 insert into t_right_build select *, 1 from generate_series(1, 100000) g;
 insert into t_right_probe select *, 1 from generate_series(100001, 200000) g;
 select mo_ctl('dn', 'flush', 'd1.t_right_build');
+➤ mo_ctl(dn, flush, d1.t_right_build)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select mo_ctl('dn', 'flush', 'd1.t_right_probe');
+➤ mo_ctl(dn, flush, d1.t_right_probe)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select Sleep(1);
+➤ Sleep(1)[-6,8,0]  𝄀
+0
 select count(*) from t_right_build right join t_right_probe on t_right_build.c1=t_right_probe.c1;
 ➤ count(*)[-5,64,0]  𝄀
 100000
