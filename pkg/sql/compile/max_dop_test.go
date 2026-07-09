@@ -238,7 +238,7 @@ func TestSameExecutionNodeUsesIdentityAndDoesNotMatchEmptyAddressToRemote(t *tes
 		engine.Node{Addr: "remote:6001", Mcpu: 1},
 	))
 }
-	
+
 
 func TestMergeScopesByStageNodesUsesExecutionIdentity(t *testing.T) {
 	c := NewMockCompile(t)

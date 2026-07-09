@@ -477,6 +477,8 @@ func TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr(t *testing.T) {
 	require.Equal(t, dispatch.SendToAnyLocalFunc, dispatchOp.FuncId)
 	require.Empty(t, dispatchOp.RemoteRegs,
 		"RemoteRegs must be empty; a non-empty RemoteRegs with SendToAnyLocalFunc causes 'should not send to remote' error")
+	require.Len(t, dispatchOp.LocalRegs, len(rs),
+		"all merge scopes are on the current CN so LocalRegs must cover every merge scope")
 }
 
 func TestCompileExternScanParallelReadWrite(t *testing.T) {
