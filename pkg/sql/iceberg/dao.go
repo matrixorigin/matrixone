@@ -147,8 +147,8 @@ func (d *DAO) ListPrincipalMaps(ctx context.Context, accountID uint32, catalogID
 	if d.exec == nil {
 		return nil, moerr.NewInvalidInput(ctx, "iceberg DAO executor is nil")
 	}
-	if accountID == 0 || catalogID == 0 {
-		return nil, moerr.NewInvalidInput(ctx, "iceberg principal map lookup requires account_id and catalog_id")
+	if catalogID == 0 {
+		return nil, moerr.NewInvalidInput(ctx, "iceberg principal map lookup requires catalog_id")
 	}
 	rows, err := d.exec.Query(ctx, ListPrincipalMapsSQL(accountID, catalogID))
 	if err != nil {

@@ -579,11 +579,6 @@ func filterOverwritePartitionDataFiles(ctx context.Context, files []api.DataFile
 	return out, nil
 }
 
-func validateOverwritePartitionKeys(ctx context.Context, partition map[string]any, spec api.PartitionSpec, table string) error {
-	_, err := canonicalizeOverwritePartition(ctx, partition, spec, table)
-	return err
-}
-
 func canonicalizeOverwritePartition(ctx context.Context, partition map[string]any, spec api.PartitionSpec, table string) (map[string]any, error) {
 	if len(partition) == 0 {
 		return nil, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg partition overwrite requires an explicit partition tuple", map[string]string{

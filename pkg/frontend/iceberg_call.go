@@ -238,7 +238,6 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 	if err != nil {
 		return nil, err
 	}
-	catalogURI = policy.AllowedCatalogURI
 	if policyState == model.ResidencyPolicyEnabled {
 		if err := sqliceberg.ValidateResidencyPolicy(ctx, policy); err != nil {
 			return nil, err

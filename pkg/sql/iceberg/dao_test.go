@@ -651,6 +651,21 @@ func TestDAOListMethodsScanRows(t *testing.T) {
 			t.Fatalf("unexpected principal maps: %+v", got)
 		}
 	})
+	t.Run("principal maps allow sys account id", func(t *testing.T) {
+		exec := &fakeExec{rows: &staticRows{rows: [][]any{
+			{uint32(0), uint64(7), uint64(0), uint64(0), "sys-principal", `{}`, uint64(1)},
+		}}}
+		got, err := NewDAO(exec).ListPrincipalMaps(context.Background(), 0, 7)
+		if err != nil {
+			t.Fatalf("ListPrincipalMaps for sys account failed: %v", err)
+		}
+		if len(got) != 1 || got[0].AccountID != 0 || got[0].ExternalPrincipal != "sys-principal" {
+			t.Fatalf("unexpected sys principal maps: %+v", got)
+		}
+		if !strings.Contains(exec.sqls[0], "account_id = 0") {
+			t.Fatalf("sys account lookup should query account_id 0: %s", exec.sqls[0])
+		}
+	})
 	t.Run("residency policies", func(t *testing.T) {
 		exec := &fakeExec{rows: &staticRows{rows: [][]any{
 			{model.ResidencyScopeCluster, uint32(0), uint64(7), "http://catalog", "s3.local", "us-east-1", "*", model.ResidencyPolicyEnabled, uint64(1)},
@@ -722,7 +737,7 @@ func TestDAOWriteMethodsValidateAndExecute(t *testing.T) {
 		func(d *DAO) error { _, err := d.GetCatalogByID(ctx, 1, 0); return err },
 		func(d *DAO) error { _, err := d.GetTableMapping(ctx, 1, 0, 3); return err },
 		func(d *DAO) error { _, err := d.GetRefCache(ctx, 1, 7, "", "orders", "main"); return err },
-		func(d *DAO) error { _, err := d.ListPrincipalMaps(ctx, 0, 7); return err },
+		func(d *DAO) error { _, err := d.ListPrincipalMaps(ctx, 1, 0); return err },
 		func(d *DAO) error { _, err := d.ListResidencyPolicies(ctx, 1, 0); return err },
 		func(d *DAO) error { return d.UpdatePublishJobStatus(ctx, 1, "", "committed", "", 1) },
 		func(d *DAO) error { return d.UpdateOrphanFileCleanupStatus(ctx, 1, "job", "", "deleted", 1) },
