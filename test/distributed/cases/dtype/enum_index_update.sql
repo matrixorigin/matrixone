@@ -24,6 +24,10 @@ update enum_idx07 set status='shipped' where id=1;
 select id, status, note from enum_idx07 order by id;
 select id from enum_idx07 where status='new';
 select id from enum_idx07 where status='shipped';
+-- unique conflict is properly raised; key name differs across exec modes, match prefix only
+-- @regex("Duplicate entry", true)
+update enum_idx07 set status='paid' where id=1;
+select id, status, note from enum_idx07 order by id;
 drop table enum_idx07;
 
 -- update enum column with composite unique index
@@ -32,8 +36,10 @@ create table enum_idx08 (id int primary key, status enum('new','paid','shipped')
 insert into enum_idx08 values (1,'new','n1'),(2,'paid','n2');
 update enum_idx08 set status='shipped', note='updated' where id=1;
 select id, status, note from enum_idx08 order by id;
-select id from enum_idx08 where status='new';
-select id from enum_idx08 where status='shipped';
+-- both queries use the (note, status) composite unique index (two leading equal conds);
+-- they verify the old index key was deleted and the new one written, not just the main table
+select id from enum_idx08 where note='updated' and status='shipped';
+select id from enum_idx08 where note='n1' and status='new';
 drop table enum_idx08;
 
 -- update set column with single-column secondary index

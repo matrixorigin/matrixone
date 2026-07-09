@@ -35,6 +35,13 @@ id
 select id from enum_idx07 where status='shipped';
 id
 1
+update enum_idx07 set status='paid' where id=1;
+-- @regex("Duplicate entry", true)
+Duplicate entry '2' for key 'status'
+select id, status, note from enum_idx07 order by id;
+id    status    note
+1    shipped    n1
+2    paid    n2
 drop table enum_idx07;
 drop table if exists enum_idx08;
 create table enum_idx08 (id int primary key, status enum('new','paid','shipped'), note varchar(20), unique key uk_note_status(note, status));
@@ -44,11 +51,11 @@ select id, status, note from enum_idx08 order by id;
 id    status    note
 1    shipped    updated
 2    paid    n2
-select id from enum_idx08 where status='new';
-id
-select id from enum_idx08 where status='shipped';
+select id from enum_idx08 where note='updated' and status='shipped';
 id
 1
+select id from enum_idx08 where note='n1' and status='new';
+id
 drop table enum_idx08;
 drop table if exists set_idx01;
 create table set_idx01 (id int primary key, opts set('a','b','c'), key idx_opts(opts));
