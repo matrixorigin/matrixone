@@ -70,10 +70,15 @@ func isDataBranchUserVisibleColumn(col *plan.ColDef) bool {
 
 func dataBranchFakePKColIdxes(tblDef *plan.TableDef) []int {
 	idxes := make([]int, 0, len(tblDef.Cols))
-	for i, col := range tblDef.Cols {
-		if isDataBranchUserVisibleColumn(col) {
-			idxes = append(idxes, i)
+	dataIdx := 0
+	for _, col := range tblDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
 		}
+		if isDataBranchUserVisibleColumn(col) {
+			idxes = append(idxes, dataIdx)
+		}
+		dataIdx++
 	}
 	return idxes
 }
@@ -966,6 +971,21 @@ func getTableStuff(
 	tarTblDef = tblStuff.tarRel.GetTableDef(ctx)
 	baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
 
+	for _, col := range tarTblDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+
+		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+
+		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
+		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
+
+		if isDataBranchUserVisibleColumn(col) {
+			tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, len(tblStuff.def.colNames)-1)
+		}
+	}
+
 	var commonIdxes, tarOnlyIdxes []int
 	if commonIdxes, tarOnlyIdxes, err = checkSchemaCompatibility(tarTblDef, baseTblDef); err != nil {
 		return
@@ -980,34 +1000,31 @@ func getTableStuff(
 		tblStuff.def.pkKind = compositeKind
 		pkNames := baseTblDef.Pkey.Names
 		for _, name := range pkNames {
-			idx := int(baseTblDef.Name2ColIndex[name])
+			idx := dataBranchColumnIndexByName(tblStuff.def.colNames, name)
+			if idx < 0 {
+				err = moerr.NewInternalErrorNoCtxf("primary key column %q is not present in target data columns", name)
+				return
+			}
 			tblStuff.def.pkColIdxes = append(tblStuff.def.pkColIdxes, idx)
 		}
 	} else {
 		// normal pk
 		tblStuff.def.pkKind = normalKind
 		pkName := baseTblDef.Pkey.PkeyColName
-		idx := int(baseTblDef.Name2ColIndex[pkName])
+		idx := dataBranchColumnIndexByName(tblStuff.def.colNames, pkName)
+		if idx < 0 {
+			err = moerr.NewInternalErrorNoCtxf("primary key column %q is not present in target data columns", pkName)
+			return
+		}
 		tblStuff.def.pkColIdxes = append(tblStuff.def.pkColIdxes, idx)
 	}
 
-	tblStuff.def.pkColIdx = int(baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName])
-	tblStuff.def.pkSeqnum = int(baseTblDef.Cols[tblStuff.def.pkColIdx].Seqnum)
-
-	for i, col := range tarTblDef.Cols {
-		if col.Name == catalog.Row_ID {
-			continue
-		}
-
-		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
-
-		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
-		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
-
-		if isDataBranchUserVisibleColumn(col) {
-			tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
-		}
+	tblStuff.def.pkColIdx = dataBranchColumnIndexByName(tblStuff.def.colNames, baseTblDef.Pkey.PkeyColName)
+	if tblStuff.def.pkColIdx < 0 {
+		err = moerr.NewInternalErrorNoCtxf("primary key column %q is not present in target data columns", baseTblDef.Pkey.PkeyColName)
+		return
 	}
+	tblStuff.def.pkSeqnum = int(baseTblDef.Cols[baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName]].Seqnum)
 	if tblStuff.def.pkKind == fakeKind {
 		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(baseTblDef)
 	}
@@ -1052,6 +1069,15 @@ func getTableStuff(
 
 	return
 
+}
+
+func dataBranchColumnIndexByName(colNames []string, name string) int {
+	for i, colName := range colNames {
+		if strings.EqualFold(colName, name) {
+			return i
+		}
+	}
+	return -1
 }
 
 func diffOnBase(
@@ -1158,17 +1184,23 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, tarO
 	}
 
 	// Iterate over target columns to find common and target-only columns.
-	for i, tarCol := range tarDef.Cols {
-		if tarCol.Name == catalog.Row_ID ||
-			tarCol.Name == catalog.FakePrimaryKeyColName ||
+	commonColNameSet := make(map[string]bool)
+	dataIdx := 0
+	for _, tarCol := range tarDef.Cols {
+		if tarCol.Name == catalog.Row_ID {
+			continue
+		}
+		if tarCol.Name == catalog.FakePrimaryKeyColName ||
 			tarCol.Name == catalog.CPrimaryKeyColName {
+			dataIdx++
 			continue
 		}
 
 		baseCol, found := baseColMap[strings.ToLower(tarCol.Name)]
 		if found {
 			if baseCol.Typ.Id == tarCol.Typ.Id {
-				commonIdxes = append(commonIdxes, i)
+				commonIdxes = append(commonIdxes, dataIdx)
+				commonColNameSet[strings.ToLower(tarCol.Name)] = true
 			} else {
 				err = moerr.NewInternalErrorNoCtxf(
 					"schema compatibility check: column '%s' exists in both schemas but has different types (target: %d, base: %d)",
@@ -1177,14 +1209,9 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, tarO
 				return
 			}
 		} else {
-			tarOnlyIdxes = append(tarOnlyIdxes, i)
+			tarOnlyIdxes = append(tarOnlyIdxes, dataIdx)
 		}
-	}
-
-	// Verify PK columns exist in common columns.
-	commonColNameSet := make(map[string]bool, len(commonIdxes))
-	for _, idx := range commonIdxes {
-		commonColNameSet[strings.ToLower(tarDef.Cols[idx].Name)] = true
+		dataIdx++
 	}
 
 	if baseDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
