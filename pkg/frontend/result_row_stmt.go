@@ -296,7 +296,7 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 		if err != nil {
 			return
 		}
-		appendSchedulingExplain(buffer, schedulingTraceFromComputationWrapper(execCtx.cw))
+		appendSchedulingExplain(buffer, schedulingTraceForExplain(ses, execCtx.cw))
 
 		err = buildMoExplainQuery(execCtx, explainColName, buffer, ses, getDataFromPipeline)
 		if err != nil {
@@ -325,7 +325,7 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			reader,
 			ses,
 			getDataFromPipeline,
-			schedulingTraceFromComputationWrapper(execCtx.cw),
+			schedulingTraceForExplain(ses, execCtx.cw),
 		)
 		if err != nil {
 			return
@@ -352,6 +352,13 @@ func schedulingTraceFromComputationWrapper(cw ComputationWrapper) schedule.Trace
 		return provider.SchedulingTrace()
 	}
 	return schedule.Trace{}
+}
+
+func schedulingTraceForExplain(ses *Session, cw ComputationWrapper) schedule.Trace {
+	if !explainSchedulingEnabled(ses) {
+		return schedule.Trace{}
+	}
+	return schedulingTraceFromComputationWrapper(cw)
 }
 
 func (resper *MysqlResp) respPrebuildResultRow(ses *Session,

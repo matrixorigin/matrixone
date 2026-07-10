@@ -228,6 +228,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		c.TxnOffset = 0
 	}
 
+	// A reused prepared pipeline runs directly after Reset. Only retries compile
+	// again, so the cached placement is this execution's first real attempt.
 	c.beginSchedulingTraceAttempt()
 	if c.queryPlacement.Reason != "" {
 		c.recordQuerySchedulingTrace(c.queryPlacement)

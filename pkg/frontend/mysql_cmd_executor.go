@@ -1253,11 +1253,13 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	if err != nil {
 		return err
 	}
-	schedulingPreview := previewQueryScheduling(reqCtx, ses, exPlan.GetQuery(), txnHaveDDL)
+	if explainSchedulingEnabled(ses) {
+		schedulingPreview := previewQueryScheduling(reqCtx, ses, exPlan.GetQuery(), txnHaveDDL)
+		appendSchedulingExplain(buffer, schedulingPreview)
+	}
 	if err = reqCtx.Err(); err != nil {
 		return err
 	}
-	appendSchedulingExplain(buffer, schedulingPreview)
 
 	//2. fill the result set
 	//column
@@ -1317,6 +1319,18 @@ func appendSchedulingExplain(buffer *explain.ExplainDataBuffer, trace schedule.T
 	for _, line := range schedule.ExplainLines(trace) {
 		buffer.PushNewLine(line, false, 0)
 	}
+}
+
+func explainSchedulingEnabled(ses *Session) bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar(enableExplainScheduling)
+	if err != nil {
+		return false
+	}
+	boolType, ok := gSysVarsDefs[enableExplainScheduling].Type.(SystemVariableBoolType)
+	return ok && boolType.IsTrue(value)
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.

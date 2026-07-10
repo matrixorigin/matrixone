@@ -1666,6 +1666,20 @@ func TestAppendSchedulingExplainRendersPreviewAndHandlesNil(t *testing.T) {
 	require.Equal(t, before, len(buffer.Lines))
 }
 
+func TestExplainSchedulingEnabledUsesSessionOptIn(t *testing.T) {
+	require.False(t, explainSchedulingEnabled(nil))
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	require.False(t, explainSchedulingEnabled(ses))
+
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), enableExplainScheduling, int64(1)))
+	require.True(t, explainSchedulingEnabled(ses))
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), enableExplainScheduling, int64(0)))
+	require.False(t, explainSchedulingEnabled(ses))
+}
+
 func TestWithSchedulingTraceTakesIndependentOwnership(t *testing.T) {
 	recorder := new(schedule.TraceRecorder)
 	attempt := recorder.StartAttempt()
@@ -1704,6 +1718,51 @@ func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testin
 		}, nil
 	}
 
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), enableExplainScheduling, int64(1)))
+	stmt := tree.NewExplainStmt(&tree.Select{}, "text")
+	err := doExplainStmt(
+		context.Background(),
+		ses,
+		stmt,
+	)
+	require.NoError(t, err)
+
+	var output strings.Builder
+	for i := uint64(0); i < ses.GetMysqlResultSet().GetRowCount(); i++ {
+		row, rowErr := ses.GetMysqlResultSet().GetRow(context.Background(), i)
+		require.NoError(t, rowErr)
+		require.Len(t, row, 1)
+		output.WriteString(row[0].(string))
+		output.WriteByte('\n')
+	}
+	require.Contains(t, output.String(), "Scheduling (preview):")
+	require.Contains(t, output.String(), "Failure: category=candidate-provider")
+}
+
+func TestDoExplainStmtKeepsSchedulingPreviewOptIn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		context.Context,
+		FeSession,
+		plan.CompilerContext,
+		tree.Statement,
+	) (*plan.Plan, error) {
+		return &plan.Plan{
+			Plan: &plan0.Plan_Query{
+				Query: &plan0.Query{
+					Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+					Steps: []int32{0},
+				},
+			},
+		}, nil
+	}
+
 	err := doExplainStmt(
 		context.Background(),
 		ses,
@@ -1719,8 +1778,7 @@ func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testin
 		output.WriteString(row[0].(string))
 		output.WriteByte('\n')
 	}
-	require.Contains(t, output.String(), "Scheduling (preview):")
-	require.Contains(t, output.String(), "Failure: category=candidate-provider")
+	require.NotContains(t, output.String(), "Scheduling (")
 }
 
 func TestDoExplainStmtDoesNotSwallowRequestCancellation(t *testing.T) {
@@ -1893,6 +1951,19 @@ func TestSchedulingTraceFromComputationWrapperReturnsIndependentSnapshot(t *test
 	require.Equal(t, "failure", trace.Attempts[0].Failures[0].Category)
 	trace.Attempts[0].Failures[0].Category = "changed"
 	require.Equal(t, "failure", cw.SchedulingTrace().Attempts[0].Failures[0].Category)
+}
+
+func TestSchedulingTraceForExplainUsesSessionOptIn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	cw := &TxnComputationWrapper{}
+	attempt := cw.schedulingTrace.StartAttempt()
+	cw.schedulingTrace.RecordFailure(attempt, "failure", schedule.Worker{})
+
+	require.True(t, schedulingTraceForExplain(ses, cw).Empty())
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), enableExplainScheduling, int64(1)))
+	require.Equal(t, "failure", schedulingTraceForExplain(ses, cw).Attempts[0].Failures[0].Category)
 }
 
 func TestBuildMoExplainPhyPlanAppendsActualSchedulingTrace(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -26,10 +27,12 @@ import (
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	motestutil "github.com/matrixorigin/matrixone/pkg/testutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -742,6 +745,53 @@ func TestValidateScheduledQueryRoutesRejectsRuntimeIneligibleSelectedWorker(t *t
 	}, schedule.QueryDecision{Reason: schedule.ReasonMultiCN})
 	require.ErrorContains(t, err, "runtime state Draining")
 	require.Equal(t, failureBefore+1, testutil.ToFloat64(failureCounter))
+}
+
+func TestCompileResetRecordsOnePreparedReuseSchedulingAttempt(t *testing.T) {
+	c := NewCompile(
+		"local:6001",
+		"",
+		"execute p1",
+		"",
+		"",
+		nil,
+		motestutil.NewProcess(t),
+		nil,
+		false,
+		nil,
+		time.Now(),
+	)
+	c.anal = newAnalyzeModule()
+	c.anal.qry = &plan.Query{}
+	defer c.Release()
+	c.queryPlacement = schedule.QueryDecision{
+		ExecKind:  schedule.QueryExecAPMultiCN,
+		Reason:    "reused-placement",
+		Satisfied: true,
+	}
+
+	var lastRecorder *schedule.TraceRecorder
+	for execution := 0; execution < 10; execution++ {
+		recorder := new(schedule.TraceRecorder)
+		lastRecorder = recorder
+		c.SetSchedulingTraceRecorder(recorder)
+		c.Reset(c.proc, time.Now(), nil, "execute p1")
+		trace := recorder.Snapshot()
+		require.Equal(t, 1, trace.AttemptCount)
+		require.Len(t, trace.Attempts, 1)
+		require.Equal(t, "reused-placement", trace.Attempts[0].Query.Reason)
+	}
+
+	c.beginSchedulingTraceAttempt()
+	c.recordQuerySchedulingTrace(schedule.QueryDecision{
+		ExecKind:  schedule.QueryExecAPMultiCN,
+		Reason:    "retry-placement",
+		Satisfied: true,
+	})
+	retryTrace := lastRecorder.Snapshot()
+	require.Equal(t, 2, retryTrace.AttemptCount)
+	require.Equal(t, "reused-placement", retryTrace.Attempts[0].Query.Reason)
+	require.Equal(t, "retry-placement", retryTrace.Attempts[1].Query.Reason)
 }
 
 func TestRecordScanSchedulingMetricsRecordsEveryScan(t *testing.T) {
