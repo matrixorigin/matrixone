@@ -20,7 +20,7 @@ show grants;
 use system;
 show triggers;
 use mo_catalog;
--- @ignore:6
+-- @regex("Field", true)
 show columns from mo_tables;
 select datname, dat_createsql from mo_database;
 select relname from mo_tables where relname="sql_statement_total";
@@ -87,7 +87,7 @@ create table tb1(
                     unique key(deptno)
 );
 select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
--- @ignore:6
+-- @regex("Field", true)
 desc mo_catalog.mo_indexes;
 
 -- @bvt:issue#16438
@@ -116,7 +116,7 @@ desc mo_catalog.mo_table_partitions;
 create account accx11 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 -- @session:id=2&user=accx11:admin&password=123456
 select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
--- @ignore:6
+-- @regex("Field", true)
 desc mo_catalog.mo_indexes;
 -- @session
 
@@ -125,7 +125,7 @@ drop account if exists inner_account;
 drop account if exists accx11;
 drop role if exists revoke_role_1;
 set global enable_privilege_cache = on;
--- @ignore:6
+-- @regex("Field", true)
 desc mo_catalog.mo_stages;
 select disable_fault_injection();
 
