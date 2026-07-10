@@ -1412,6 +1412,83 @@ func TestHandleMessageFromTopToScanPushesOrderedLimitWithCursorRange(t *testing.
 	assert.Equal(t, uint64(20), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
 }
 
+func TestHandleMessageFromTopToScanSkipsOrderedLimitAcrossFilter(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+	scanNode := builder.qry.Nodes[0]
+	scanNode.FilterList = []*planpb.Expr{
+		makeTestRegularIndexPrefixEq(t, 2),
+		makeTestRegularIndexPKLessThan(t, 4900),
+	}
+
+	filterID := int32(len(builder.qry.Nodes))
+	builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+		NodeType:   planpb.Node_FILTER,
+		NodeId:     filterID,
+		Children:   []int32{0},
+		FilterList: []*planpb.Expr{makeTestRegularIndexPKLessThan(t, 4800)},
+	})
+	builder.qry.Nodes[1].Children[0] = filterID
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	sortNode := builder.qry.Nodes[1]
+	require.Len(t, sortNode.SendMsgList, 1)
+	require.Len(t, scanNode.RecvMsgList, 1)
+	require.Len(t, scanNode.OrderBy, 1)
+	assert.Nil(t, scanNode.IndexReaderParam)
+	assert.True(t, isRegularIndexFullPrefixEquality(scanNode.FilterList[0], 2))
+}
+
+func TestHandleMessageFromTopToScanSkipsOrderedLimitAcrossCardinalityReducingJoin(t *testing.T) {
+	for _, joinType := range []planpb.Node_JoinType{planpb.Node_INNER, planpb.Node_SEMI} {
+		t.Run(joinType.String(), func(t *testing.T) {
+			builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+			scanNode := builder.qry.Nodes[0]
+			scanNode.FilterList = []*planpb.Expr{
+				makeTestRegularIndexPrefixEq(t, 2),
+				makeTestRegularIndexPKLessThan(t, 4900),
+			}
+
+			rightScanID := int32(len(builder.qry.Nodes))
+			builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+				NodeType:    planpb.Node_TABLE_SCAN,
+				NodeId:      rightScanID,
+				BindingTags: []int32{300},
+				TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{
+					{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				}},
+			})
+			joinCond, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{
+				GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
+				GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 300, 0),
+			})
+			require.NoError(t, err)
+
+			joinID := int32(len(builder.qry.Nodes))
+			builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+				NodeType: planpb.Node_JOIN,
+				NodeId:   joinID,
+				Children: []int32{0, rightScanID},
+				JoinType: joinType,
+				OnList:   []*planpb.Expr{joinCond},
+				Stats: &planpb.Stats{
+					HashmapStats: &planpb.HashMapStats{},
+				},
+			})
+			builder.qry.Nodes[1].Children[0] = joinID
+
+			builder.handleMessageFromTopToScan(rootNodeID)
+
+			sortNode := builder.qry.Nodes[1]
+			require.Len(t, sortNode.SendMsgList, 1)
+			require.Len(t, scanNode.RecvMsgList, 1)
+			require.Len(t, scanNode.OrderBy, 1)
+			assert.Nil(t, scanNode.IndexReaderParam)
+			assert.True(t, isRegularIndexFullPrefixEquality(scanNode.FilterList[0], 2))
+		})
+	}
+}
+
 func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T) {
 	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 1, 1, planpb.OrderBySpec_DESC)
 
