@@ -724,7 +724,12 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 				s.logger.Warn("found orphans txns",
 					bytesArrayField("txns", timeoutTxns))
 				for _, txnID := range timeoutTxns {
-					fenceTS := ensureFenceTS(fenceTSByTxn[util.UnsafeBytesToString(txnID)], s.clock)
+					fenceTS := fenceTSByTxn[util.UnsafeBytesToString(txnID)]
+					if fenceTS.IsEmpty() {
+						s.logger.Warn("skip orphan unlock without allocator fence",
+							bytesArrayField("txn", [][]byte{txnID}))
+						continue
+					}
 					s.logger.Warn("unlock orphan txn with fence timestamp",
 						bytesArrayField("txn", [][]byte{txnID}),
 						zap.String("fence-ts", fenceTS.DebugString()))
@@ -750,7 +755,6 @@ func (s *service) checkTxnTimeout(ctx context.Context) {
 		createOn := txn.remoteService
 		if len(createOn) == 0 {
 			if canUnlock, fenceTS := s.canUnlockLocalTxn(t); canUnlock {
-				fenceTS = ensureFenceTS(fenceTS, s.clock)
 				s.logger.Warn("found timeout txn",
 					bytesArrayField("txn", [][]byte{t}),
 					zap.String("fence-ts", fenceTS.DebugString()))
@@ -767,7 +771,6 @@ func (s *service) checkTxnTimeout(ctx context.Context) {
 					bytesArrayField("txn", [][]byte{t}))
 				continue
 			}
-			fenceTS = ensureFenceTS(fenceTS, s.clock)
 			s.logger.Warn("found timeout txn",
 				bytesArrayField("txn", [][]byte{t}),
 				zap.String("fence-ts", fenceTS.DebugString()))
@@ -808,8 +811,9 @@ func (s *service) canUnlockLocalTxn(t []byte) (bool, timestamp.Timestamp) {
 		// any error, we cannot make txn as a invalid txn
 		return false, timestamp.Timestamp{}
 	}
-	// the target txn is safe to unlock only when TN confirms it is not committing.
-	return len(committing.CommittingTxn) == 0, committing.FenceTS
+	// The target txn is safe to unlock only when TN confirms it is not
+	// committing and returns an allocator fence that dominates future commits.
+	return len(committing.CommittingTxn) == 0 && !committing.FenceTS.IsEmpty(), committing.FenceTS
 }
 
 type allocatorState struct {

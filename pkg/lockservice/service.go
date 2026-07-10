@@ -1299,23 +1299,25 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 		// In case2: txn1'commit request will failed, and we can make txn1 as
 		//           timeout txn.
 		if committing, err := h.notify(cannotCommit); err == nil {
-			committingTxns := committing.CommittingTxn
-			for sid, idx := range cannotCommitServices {
-				if len(committingTxns) == 0 {
-					needRemoved = append(needRemoved, cannotCommit[idx].Txn...)
-					for _, txn := range cannotCommit[idx].Txn {
-						fenceTSByTxn[util.UnsafeBytesToString(txn)] = committing.FenceTS
-					}
-					timeoutServices[sid] = struct{}{}
-				} else {
-					m := make(map[string]struct{}, len(committingTxns))
-					for _, v := range committingTxns {
-						m[util.UnsafeBytesToString(v)] = struct{}{}
-					}
-					for _, v := range cannotCommit[idx].Txn {
-						if _, ok := m[util.UnsafeBytesToString(v)]; !ok {
-							needRemoved = append(needRemoved, v)
-							fenceTSByTxn[util.UnsafeBytesToString(v)] = committing.FenceTS
+			if !committing.FenceTS.IsEmpty() {
+				committingTxns := committing.CommittingTxn
+				for sid, idx := range cannotCommitServices {
+					if len(committingTxns) == 0 {
+						needRemoved = append(needRemoved, cannotCommit[idx].Txn...)
+						for _, txn := range cannotCommit[idx].Txn {
+							fenceTSByTxn[util.UnsafeBytesToString(txn)] = committing.FenceTS
+						}
+						timeoutServices[sid] = struct{}{}
+					} else {
+						m := make(map[string]struct{}, len(committingTxns))
+						for _, v := range committingTxns {
+							m[util.UnsafeBytesToString(v)] = struct{}{}
+						}
+						for _, v := range cannotCommit[idx].Txn {
+							if _, ok := m[util.UnsafeBytesToString(v)]; !ok {
+								needRemoved = append(needRemoved, v)
+								fenceTSByTxn[util.UnsafeBytesToString(v)] = committing.FenceTS
+							}
 						}
 					}
 				}
@@ -1374,22 +1376,9 @@ func (h *mapBasedTxnHolder) canUnlockRemoteTxn(txn pb.WaitTxn) (bool, timestamp.
 		// any error, we cannot determine that the txn is safe to unlock.
 		return false, timestamp.Timestamp{}
 	}
-	// the target txn is safe to unlock only when TN confirms it is not committing.
-	return len(committing.CommittingTxn) == 0, committing.FenceTS
-}
-
-func ensureFenceTS(ts timestamp.Timestamp, clock clock.Clock) timestamp.Timestamp {
-	if !ts.IsEmpty() {
-		return ts
-	}
-	if clock == nil {
-		clock = runtime.DefaultRuntime().Clock()
-	}
-	if clock == nil {
-		return timestamp.Timestamp{}
-	}
-	_, ts = clock.Now()
-	return ts
+	// The target txn is safe to unlock only when TN confirms it is not
+	// committing and returns an allocator fence that dominates future commits.
+	return len(committing.CommittingTxn) == 0 && !committing.FenceTS.IsEmpty(), committing.FenceTS
 }
 
 func (h *mapBasedTxnHolder) close() {

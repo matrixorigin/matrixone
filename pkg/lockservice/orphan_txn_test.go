@@ -137,8 +137,8 @@ func TestCannotUnlockOrphanTxnWithCommittingInAllocator(t *testing.T) {
 			txn2 := []byte{2}
 			table1 := uint64(1)
 
-			alloc.getCtl(l1.GetServiceID()).add(string(txn1), committingState)
-			alloc.getCtl(l2.GetServiceID()).add(string(txn2), committingState)
+			alloc.getCtl(l1.GetServiceID()).beginCommit(string(txn1))
+			alloc.getCtl(l2.GetServiceID()).beginCommit(string(txn2))
 
 			// table1 on l1
 			mustAddTestLock(t, ctx, l1, table1, txn1, [][]byte{{1}}, pb.Granularity_Row)
@@ -341,7 +341,7 @@ func TestCannotUnlockStaleBindTxnWithCommittingInAllocator(t *testing.T) {
 
 			mustAddTestLock(t, ctx, l1, table1, anchorTxn, [][]byte{row2}, pb.Granularity_Row)
 			mustAddTestLock(t, ctx, l2, table1, holderTxn, [][]byte{row1}, pb.Granularity_Row)
-			alloc.getCtl(l2.GetServiceID()).add(string(holderTxn), committingState)
+			alloc.getCtl(l2.GetServiceID()).beginCommit(string(holderTxn))
 
 			l2.tableGroups.removeWithFilter(func(id uint64, _ lockTable) bool {
 				return id == table1
@@ -459,7 +459,9 @@ func TestGetTimeoutRemoveTxn(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{FenceTS: timestamp.Timestamp{PhysicalTime: 10}}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
 
@@ -502,7 +504,9 @@ func TestGetTimeoutRemoveTxnWithValid(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return sid == "s1", nil },
-		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{FenceTS: timestamp.Timestamp{PhysicalTime: 10}}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
 
@@ -548,7 +552,9 @@ func TestGetTimeoutRemoveTxnWithValidErrorAndNotifyOK(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, ErrTxnNotFound },
-		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{FenceTS: timestamp.Timestamp{PhysicalTime: 10}}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) { return true, nil },
 	).(*mapBasedTxnHolder)
 
@@ -647,13 +653,8 @@ func TestCannotCommitTxnCanBeRemovedWithNotInActiveTxn(t *testing.T) {
 				require.True(t, ok)
 
 				c := v.(*commitCtl)
-				_, ok = c.states.Load(string([]byte{1}))
-				n := 0
-				c.states.Range(func(key, value any) bool {
-					n++
-					return true
-				})
-				if n == 1 && ok {
+				_, ok = c.getCommitState(string([]byte{1}))
+				if c.size() == 1 && ok {
 					return
 				}
 				time.Sleep(time.Millisecond * 10)
@@ -935,7 +936,9 @@ func TestValidTxnWithInvalidRemoteTxn(t *testing.T) {
 		getLogger(""),
 		newFixedSlicePool(16),
 		func(sid string) (bool, error) { return false, nil },
-		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{FenceTS: timestamp.Timestamp{PhysicalTime: 10}}, nil
+		},
 		func(txn pb.WaitTxn) (bool, error) {
 			return false, nil
 		},
@@ -1054,12 +1057,20 @@ func TestCanUnlockRemoteTxnWithNotifyFailed(t *testing.T) {
 	require.False(t, canUnlock)
 }
 
-func TestEnsureFenceTSFallback(t *testing.T) {
-	input := timestamp.Timestamp{PhysicalTime: 10}
-	require.Equal(t, input, ensureFenceTS(input, nil))
-
-	fallback := ensureFenceTS(timestamp.Timestamp{}, nil)
-	require.False(t, fallback.IsEmpty())
+func TestCanUnlockRemoteTxnWithoutFence(t *testing.T) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) { return true, nil },
+	).(*mapBasedTxnHolder)
+	canUnlock, fenceTS := hold.canUnlockRemoteTxn(pb.WaitTxn{TxnID: []byte{1}, CreatedOn: "s0"})
+	require.False(t, canUnlock)
+	require.True(t, fenceTS.IsEmpty())
 }
 
 func TestCanUnlockRemoteTxnWithNotifyFoundCommitting(t *testing.T) {

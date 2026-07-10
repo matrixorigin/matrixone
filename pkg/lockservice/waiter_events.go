@@ -410,7 +410,6 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 					bytesArrayField("txns", [][]byte{h.TxnID}))
 				continue
 			}
-			fenceTS = ensureFenceTS(fenceTS, v.lt.clock)
 			mw.logger.Warn("found stale remote lock without bind heartbeat",
 				zap.String("bind", v.lt.bind.DebugString()),
 				zap.String("fence-ts", fenceTS.DebugString()),
@@ -428,7 +427,6 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 					bytesArrayField("txns", [][]byte{h.TxnID}))
 				continue
 			}
-			fenceTS = ensureFenceTS(fenceTS, v.lt.clock)
 			mw.logger.Warn("found orphan remote txn, unlock with fence timestamp",
 				zap.String("bind", v.lt.bind.DebugString()),
 				zap.String("fence-ts", fenceTS.DebugString()),
