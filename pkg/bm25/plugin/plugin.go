@@ -70,8 +70,8 @@ func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
 // Compile-time check that *Plugin satisfies the AlgoPlugin interface.
 var _ plugin.AlgoPlugin = (*Plugin)(nil)
 
-// Registration is deferred until Phase 2 (see package doc). Uncomment to
-// enable dispatch once compile.HandleCreateIndex and
-// plan.BuildSecondaryIndexDefs are implemented.
-//
-// func init() { plugin.Register(New()) }
+// init registers bm25 with the global plugin registry. As of Phase 2 the
+// create/build path (compile.HandleCreateIndex + plan.BuildSecondaryIndexDefs)
+// is real, so CREATE INDEX ... USING bm25 builds an index synchronously from
+// source. CDC/idxcron are still off (catalog SyncDescriptor is the zero value).
+func init() { plugin.Register(New()) }
