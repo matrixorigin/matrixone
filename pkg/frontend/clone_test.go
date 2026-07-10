@@ -134,6 +134,21 @@ func Test_rewriteCloneCreateSQL_RewritesOnlyTableNames(t *testing.T) {
 	require.Contains(t, got, "as pub_db")
 }
 
+func Test_rewriteCloneCreateSQL_RewritesQualifiedColumnsAndOrderingSubqueries(t *testing.T) {
+	got, err := rewriteCloneCreateSQL(
+		"create view src.v as select src.t.a from src.t order by (select max(b) from src.u)",
+		"src",
+		"dst",
+	)
+	require.NoError(t, err)
+	require.Contains(t, got, "create view `dst`.`v`")
+	require.Contains(t, got, "select `dst`.`t`.`a` from `dst`.`t`")
+	require.Contains(t, got, "from `dst`.`u`")
+	require.NotContains(t, got, "`src`.`t`.`a`")
+	require.NotContains(t, got, "from `src`.`t`")
+	require.NotContains(t, got, "from `src`.`u`")
+}
+
 func Test_rewriteCloneCreateSQL_PreservesUnqualifiedViewFormat(t *testing.T) {
 	got, err := rewriteCloneCreateSQL(
 		"create view v1 as select * from t1;",
