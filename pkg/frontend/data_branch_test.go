@@ -1091,6 +1091,61 @@ func TestCheckSchemaCompatibility_SeparatesPhysicalAndVisibleCommonIndexes(t *te
 	require.Equal(t, []int{2}, tarOnlyIdxes)
 }
 
+func TestCheckSchemaCompatibility_HiddenColumnsAreNotOutputColumns(t *testing.T) {
+	tarDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "hidden", Hidden: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+	baseDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "hidden", Hidden: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 2}, commonIdxes)
+	require.Equal(t, []int{0, 2}, commonVisibleIdxes)
+	require.Empty(t, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_RejectsBaseOnlyVisibleColumn(t *testing.T) {
+	tarDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}}}
+	baseDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "removed", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.ErrorContains(t, err, "base-only user-visible column 'removed'")
+}
+
+func TestCheckSchemaCompatibility_RejectsChangedSharedColumnMetadata(t *testing.T) {
+	metadataChanges := []struct {
+		name   string
+		mutate func(*plan.ColDef)
+	}{
+		{"column id", func(col *plan.ColDef) { col.ColId++ }},
+		{"cluster by", func(col *plan.ColDef) { col.ClusterBy = !col.ClusterBy }},
+		{"primary", func(col *plan.ColDef) { col.Primary = !col.Primary }},
+		{"sequence number", func(col *plan.ColDef) { col.Seqnum++ }},
+		{"not null", func(col *plan.ColDef) { col.NotNull = !col.NotNull }},
+	}
+	for _, tc := range metadataChanges {
+		t.Run(tc.name, func(t *testing.T) {
+			tarCol := &plan.ColDef{Name: "a", ColId: 1, ClusterBy: true, Primary: true, Seqnum: 1, NotNull: true, Typ: plan.Type{Id: int32(types.T_int64)}}
+			baseCol := &plan.ColDef{Name: "a", ColId: 1, ClusterBy: true, Primary: true, Seqnum: 1, NotNull: true, Typ: plan.Type{Id: int32(types.T_int64)}}
+			tc.mutate(tarCol)
+			tarDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{tarCol}}
+			baseDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{baseCol}}
+
+			_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+			require.ErrorContains(t, err, "has different metadata")
+		})
+	}
+}
+
 func TestCheckSchemaCompatibility_PKChanged(t *testing.T) {
 	// base has PK on column "a" which is also in target, so it passes.
 	// We need a case where the BASE's PK column does NOT exist in target.
@@ -1176,7 +1231,7 @@ func TestCheckSchemaCompatibility_BaseOnlyVisibleColumnRejected(t *testing.T) {
 
 	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "base column 'b' is not present in target schema")
+	require.Contains(t, err.Error(), "base-only user-visible column 'b' is not supported")
 }
 
 func TestCheckSchemaCompatibility_CompositePK(t *testing.T) {
@@ -1236,9 +1291,6 @@ func TestCheckSchemaCompatibility_FakePK(t *testing.T) {
 		},
 	}
 
-	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
-	require.NoError(t, err)
-	require.Equal(t, []int{0, 1}, commonIdxes)
-	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
-	require.Equal(t, []int{2}, tarOnlyIdxes)
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.ErrorContains(t, err, "fake primary key")
 }

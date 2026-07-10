@@ -1176,13 +1176,19 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 }
 
 func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int, err error) {
-	// Build a map from lowercase base column name to *ColDef.
 	baseColMap := make(map[string]*plan.ColDef, len(baseDef.Cols))
+	baseVisibleColMap := make(map[string]*plan.ColDef, len(baseDef.Cols))
 	for _, col := range baseDef.Cols {
-		baseColMap[strings.ToLower(col.Name)] = col
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		name := strings.ToLower(col.Name)
+		baseColMap[name] = col
+		if isDataBranchUserVisibleColumn(col) {
+			baseVisibleColMap[name] = col
+		}
 	}
 
-	// Iterate over target columns to find common and target-only columns.
 	commonColNameSet := make(map[string]bool)
 	dataIdx := 0
 	for _, tarCol := range tarDef.Cols {
@@ -1195,13 +1201,26 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, comm
 			continue
 		}
 
-		baseCol, found := baseColMap[strings.ToLower(tarCol.Name)]
+		name := strings.ToLower(tarCol.Name)
+		baseCol, found := baseColMap[name]
 		if found {
 			if baseCol.Typ.Id == tarCol.Typ.Id {
+				if baseCol.ColId != tarCol.ColId ||
+					baseCol.ClusterBy != tarCol.ClusterBy ||
+					baseCol.Primary != tarCol.Primary ||
+					baseCol.Seqnum != tarCol.Seqnum ||
+					baseCol.NotNull != tarCol.NotNull {
+					err = moerr.NewInternalErrorNoCtxf(
+						"schema compatibility check: column '%s' exists in both schemas but has different metadata",
+						tarCol.Name,
+					)
+					return
+				}
 				commonIdxes = append(commonIdxes, dataIdx)
 				if isDataBranchUserVisibleColumn(tarCol) {
 					commonVisibleIdxes = append(commonVisibleIdxes, dataIdx)
-					commonColNameSet[strings.ToLower(tarCol.Name)] = true
+					commonColNameSet[name] = true
+					delete(baseVisibleColMap, name)
 				}
 			} else {
 				err = moerr.NewInternalErrorNoCtxf(
@@ -1211,9 +1230,17 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, comm
 				return
 			}
 		} else {
-			tarOnlyIdxes = append(tarOnlyIdxes, dataIdx)
+			if isDataBranchUserVisibleColumn(tarCol) {
+				tarOnlyIdxes = append(tarOnlyIdxes, dataIdx)
+			}
 		}
 		dataIdx++
+	}
+	if baseDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName && len(tarOnlyIdxes) > 0 {
+		err = moerr.NewInternalErrorNoCtx(
+			"schema compatibility check: fake primary key tables do not support target-only user-visible columns",
+		)
+		return
 	}
 
 	if baseDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
@@ -1240,17 +1267,12 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, comm
 		}
 	}
 
-	for _, baseCol := range baseDef.Cols {
-		if !isDataBranchUserVisibleColumn(baseCol) {
-			continue
-		}
-		if !commonColNameSet[strings.ToLower(baseCol.Name)] {
-			err = moerr.NewInternalErrorNoCtxf(
-				"schema compatibility check: base column '%s' is not present in target schema",
-				baseCol.Name,
-			)
-			return
-		}
+	for _, baseCol := range baseVisibleColMap {
+		err = moerr.NewInternalErrorNoCtxf(
+			"schema compatibility check: base-only user-visible column '%s' is not supported",
+			baseCol.Name,
+		)
+		return
 	}
 
 	return
