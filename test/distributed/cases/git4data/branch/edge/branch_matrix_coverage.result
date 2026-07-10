@@ -17,17 +17,20 @@ e enum('red','blue','green'),
 bl blob,
 dl datalink,
 g geometry,
+g32 geometry32,
 vf vecf64(3)
 );
 insert into wide_base values
 (1, b'101', 250, 65000, 4000000000, 9000000000000000000,
 cast('12345678901234567890123456789012345.123456789012345678901234567890' as decimal(65,30)),
 2024, '6d1b1f73-2dbf-11ed-940f-000c29847904', 'ab', x'01020304',
-'red', 'blob-base', 'file:///tmp/mo_branch_type_base.csv', 'POINT(1 1)', '[1.1,2.2,3.3]'),
+'red', 'blob-base', 'file:///tmp/mo_branch_type_base.csv', 'POINT(1 1)',
+cast('POINT(1 1)' as geometry32), '[1.1,2.2,3.3]'),
 (2, b'010', 1, 2, 3, 4,
 cast('-0.000000000000000000000000000001' as decimal(65,30)),
 1999, 'ad9f809f-2dbd-11ed-940f-000c29847904', 'cd', x'05060708',
-'blue', 'blob-two', 'file:///tmp/mo_branch_type_two.csv', 'LINESTRING(0 0,1 1)', '[4.4,5.5,6.6]');
+'blue', 'blob-two', 'file:///tmp/mo_branch_type_two.csv', 'LINESTRING(0 0,1 1)',
+cast('LINESTRING(0 0,1 1)' as geometry32), '[4.4,5.5,6.6]');
 data branch create table wide_branch from wide_base;
 update wide_branch set
 b = b'111',
@@ -44,13 +47,15 @@ e = 'green',
 bl = 'blob-updated',
 dl = 'file:///tmp/mo_branch_type_updated.csv',
 g = st_geomfromtext('POINT(2 2)'),
+g32 = cast('POINT(2 2)' as geometry32),
 vf = '[7.7,8.8,9.9]'
 where id = 1;
 insert into wide_branch values
 (3, b'001', 2, 3, 4, 5,
 cast('7.000000000000000000000000000000' as decimal(65,30)),
 2000, '3ddf7b28-2dba-11ed-940f-000c29847904', 'gh', x'0d0e0f10',
-'red', 'blob-new', 'file:///tmp/mo_branch_type_new.csv', 'POINT(3 3)', '[0.1,0.2,0.3]');
+'red', 'blob-new', 'file:///tmp/mo_branch_type_new.csv', 'POINT(3 3)',
+cast('POINT(3 3)' as geometry32), '[0.1,0.2,0.3]');
 delete from wide_branch where id = 2;
 data branch diff wide_branch against wide_base output summary;
 ➤ metric[12,0,0]  ¦  wide_branch[-5,0,0]  ¦  wide_base[-5,0,0]  𝄀
@@ -62,13 +67,58 @@ select count(*) as wide_rows from wide_base;
 ➤ wide_rows[-5,64,0]  𝄀
 2
 select id, cast(b as int) as bit_i, u8, u16, u32, u64, y, e from wide_base order by id;
-➤ id[4,32,0]  ¦  bit_i[4,32,0]  ¦  u8[-6,8,0]  ¦  u16[5,16,0]  ¦  u32[4,32,0]  ¦  u64[-5,64,0]  ¦  y[91,2147483647,0]  ¦  e[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  bit_i[4,32,0]  ¦  u8[-6,8,0]  ¦  u16[5,16,0]  ¦  u32[4,32,0]  ¦  u64[-5,64,0]  ¦  y[91,65535,0]  ¦  e[12,-1,0]  𝄀
 1  ¦  7  ¦  251  ¦  65001  ¦  4000000001  ¦  9000000000000000001  ¦  2025-01-01  ¦  green  𝄀
 3  ¦  1  ¦  2  ¦  3  ¦  4  ¦  5  ¦  2000-01-01  ¦  red
-select id, d256, st_astext(g) as g from wide_base order by id;
-➤ id[4,32,0]  ¦  d256[3,65,30]  ¦  g[12,-1,0]  𝄀
-1  ¦  42.000000000000000000000000000000  ¦  POINT(2 2)  𝄀
-3  ¦  7.000000000000000000000000000000  ¦  POINT(3 3)
+select id, d256, st_astext(g) as g, st_astext(g32) as g32 from wide_base order by id;
+➤ id[4,32,0]  ¦  d256[3,65,30]  ¦  g[12,-1,0]  ¦  g32[12,-1,0]  𝄀
+1  ¦  42.000000000000000000000000000000  ¦  POINT(2 2)  ¦  POINT(2 2)  𝄀
+3  ¦  7.000000000000000000000000000000  ¦  POINT(3 3)  ¦  POINT(3 3)
+create table geometry32_base(
+id int primary key,
+g geometry32,
+p point32,
+geog geography32,
+g3857 geometry32 srid 3857
+);
+insert into geometry32_base values (
+1,
+cast('POINT(1 1)' as geometry32),
+cast(st_point32(1, 1) as point32),
+cast('POINT(1 1)' as geography32),
+st_geomfromtext('POINT(1 1)', 3857)
+);
+data branch create table geometry32_branch from geometry32_base;
+update geometry32_base set
+g = cast('POINT(2 2)' as geometry32),
+p = cast(st_point32(2, 2) as point32),
+geog = cast('POINT(2 2)' as geography32),
+g3857 = st_geomfromtext('POINT(2 2)', 3857)
+where id = 1;
+update geometry32_branch set
+g = cast('POINT(3 3)' as geometry32),
+p = cast(st_point32(3, 3) as point32),
+geog = cast('POINT(3 3)' as geography32),
+g3857 = st_geomfromtext('POINT(3 3)', 3857)
+where id = 1;
+data branch diff geometry32_branch against geometry32_base output summary;
+➤ metric[12,0,0]  ¦  geometry32_branch[-5,0,0]  ¦  geometry32_base[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  1  ¦  1
+data branch merge geometry32_branch into geometry32_base;
+internal error: conflict: geometry32_branch DELETE and geometry32_base DELETE on pk(1) with different values
+data branch merge geometry32_branch into geometry32_base when conflict accept;
+select id,
+st_astext(g) as g,
+st_astext(p) as p,
+st_astext(geog) as geog,
+st_srid(geog) as geog_srid,
+st_astext(g3857) as g3857,
+st_srid(g3857) as g3857_srid
+from geometry32_base order by id;
+➤ id[4,32,0]  ¦  g[12,-1,0]  ¦  p[12,-1,0]  ¦  geog[12,-1,0]  ¦  geog_srid[4,32,0]  ¦  g3857[12,-1,0]  ¦  g3857_srid[4,32,0]  𝄀
+1  ¦  POINT(3 3)  ¦  POINT(3 3)  ¦  POINT(3 3)  ¦  4326  ¦  POINT(3 3)  ¦  3857
 create table pick_year_base(y year primary key, v int);
 insert into pick_year_base values (2024, 1);
 data branch create table pick_year_dst from pick_year_base;
@@ -76,7 +126,7 @@ data branch create table pick_year_src from pick_year_base;
 insert into pick_year_src values (2025, 20250);
 data branch pick pick_year_src into pick_year_dst keys('2025') when conflict accept;
 select y, v from pick_year_dst order by y;
-➤ y[91,2147483647,0]  ¦  v[4,32,0]  𝄀
+➤ y[91,65535,0]  ¦  v[4,32,0]  𝄀
 2024-01-01  ¦  1  𝄀
 2025-01-01  ¦  20250
 drop database br_matrix_types;

@@ -21,6 +21,7 @@ create table wide_base(
   bl blob,
   dl datalink,
   g geometry,
+  g32 geometry32,
   vf vecf64(3)
 );
 
@@ -28,11 +29,13 @@ insert into wide_base values
   (1, b'101', 250, 65000, 4000000000, 9000000000000000000,
    cast('12345678901234567890123456789012345.123456789012345678901234567890' as decimal(65,30)),
    2024, '6d1b1f73-2dbf-11ed-940f-000c29847904', 'ab', x'01020304',
-   'red', 'blob-base', 'file:///tmp/mo_branch_type_base.csv', 'POINT(1 1)', '[1.1,2.2,3.3]'),
+   'red', 'blob-base', 'file:///tmp/mo_branch_type_base.csv', 'POINT(1 1)',
+   cast('POINT(1 1)' as geometry32), '[1.1,2.2,3.3]'),
   (2, b'010', 1, 2, 3, 4,
    cast('-0.000000000000000000000000000001' as decimal(65,30)),
    1999, 'ad9f809f-2dbd-11ed-940f-000c29847904', 'cd', x'05060708',
-   'blue', 'blob-two', 'file:///tmp/mo_branch_type_two.csv', 'LINESTRING(0 0,1 1)', '[4.4,5.5,6.6]');
+   'blue', 'blob-two', 'file:///tmp/mo_branch_type_two.csv', 'LINESTRING(0 0,1 1)',
+   cast('LINESTRING(0 0,1 1)' as geometry32), '[4.4,5.5,6.6]');
 
 data branch create table wide_branch from wide_base;
 update wide_branch set
@@ -49,20 +52,63 @@ update wide_branch set
   e = 'green',
   bl = 'blob-updated',
   dl = 'file:///tmp/mo_branch_type_updated.csv',
-g = st_geomfromtext('POINT(2 2)'),
+  g = st_geomfromtext('POINT(2 2)'),
+  g32 = cast('POINT(2 2)' as geometry32),
   vf = '[7.7,8.8,9.9]'
 where id = 1;
 insert into wide_branch values
   (3, b'001', 2, 3, 4, 5,
    cast('7.000000000000000000000000000000' as decimal(65,30)),
    2000, '3ddf7b28-2dba-11ed-940f-000c29847904', 'gh', x'0d0e0f10',
-   'red', 'blob-new', 'file:///tmp/mo_branch_type_new.csv', 'POINT(3 3)', '[0.1,0.2,0.3]');
+   'red', 'blob-new', 'file:///tmp/mo_branch_type_new.csv', 'POINT(3 3)',
+   cast('POINT(3 3)' as geometry32), '[0.1,0.2,0.3]');
 delete from wide_branch where id = 2;
 data branch diff wide_branch against wide_base output summary;
 data branch merge wide_branch into wide_base;
 select count(*) as wide_rows from wide_base;
 select id, cast(b as int) as bit_i, u8, u16, u32, u64, y, e from wide_base order by id;
-select id, d256, st_astext(g) as g from wide_base order by id;
+select id, d256, st_astext(g) as g, st_astext(g32) as g32 from wide_base order by id;
+
+-- Concurrent GEOMETRY32 updates must reach row conflict comparison instead of
+-- failing type dispatch with unsupported type 68.
+create table geometry32_base(
+  id int primary key,
+  g geometry32,
+  p point32,
+  geog geography32,
+  g3857 geometry32 srid 3857
+);
+insert into geometry32_base values (
+  1,
+  cast('POINT(1 1)' as geometry32),
+  cast(st_point32(1, 1) as point32),
+  cast('POINT(1 1)' as geography32),
+  st_geomfromtext('POINT(1 1)', 3857)
+);
+data branch create table geometry32_branch from geometry32_base;
+update geometry32_base set
+  g = cast('POINT(2 2)' as geometry32),
+  p = cast(st_point32(2, 2) as point32),
+  geog = cast('POINT(2 2)' as geography32),
+  g3857 = st_geomfromtext('POINT(2 2)', 3857)
+where id = 1;
+update geometry32_branch set
+  g = cast('POINT(3 3)' as geometry32),
+  p = cast(st_point32(3, 3) as point32),
+  geog = cast('POINT(3 3)' as geography32),
+  g3857 = st_geomfromtext('POINT(3 3)', 3857)
+where id = 1;
+data branch diff geometry32_branch against geometry32_base output summary;
+data branch merge geometry32_branch into geometry32_base;
+data branch merge geometry32_branch into geometry32_base when conflict accept;
+select id,
+  st_astext(g) as g,
+  st_astext(p) as p,
+  st_astext(geog) as geog,
+  st_srid(geog) as geog_srid,
+  st_astext(g3857) as g3857,
+  st_srid(g3857) as g3857_srid
+from geometry32_base order by id;
 
 create table pick_year_base(y year primary key, v int);
 insert into pick_year_base values (2024, 1);

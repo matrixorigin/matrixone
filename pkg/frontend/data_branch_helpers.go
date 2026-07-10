@@ -488,13 +488,19 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 			writeEscapedSQLString(buf, jsonLiteral)
 			return nil
 		}
+		var bytesVal []byte
 		switch x := val.(type) {
 		case []byte:
-			writeEscapedSQLString(buf, x)
+			bytesVal = x
 		case string:
-			writeEscapedSQLString(buf, []byte(x))
+			bytesVal = []byte(x)
 		default:
 			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
+		}
+		if t.Oid == types.T_geometry32 {
+			writeSQLGeometry32Literal(buf, bytesVal, t)
+		} else {
+			writeEscapedSQLString(buf, bytesVal)
 		}
 	case types.T_varbinary, types.T_binary, types.T_blob:
 		var bytesVal []byte
@@ -606,6 +612,17 @@ func extractDataBranchSQLRowValue(
 	default:
 		return extractRowFromVector(ctx, ses, vec, colIdx, row, rowIdx, false)
 	}
+}
+
+func writeSQLGeometry32Literal(buf *bytes.Buffer, b []byte, t types.Type) {
+	buf.WriteString("st_geomfromtext(")
+	writeEscapedSQLString(buf, b)
+	// Geometry types encode a declared SRID as Width = SRID + 1; zero means unspecified.
+	if t.Width > 0 {
+		buf.WriteByte(',')
+		buf.WriteString(strconv.FormatInt(int64(t.Width-1), 10))
+	}
+	buf.WriteByte(')')
 }
 
 // writeEscapedSQLString escapes special and control characters for SQL literal output.
@@ -759,7 +776,7 @@ func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
 		return vector.GetFixedAtNoTypeCheck[float32](vec, rowIdx), nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, rowIdx), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return vec.GetBytesAt(rowIdx), nil
 	case types.T_array_float32:
 		return vector.GetArrayAt[float32](vec, rowIdx), nil
@@ -805,7 +822,7 @@ func normalizeCompareValue(typ types.Type, val any) (any, error) {
 		case []byte:
 			return types.DecodeJson(v), nil
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
 		switch v := val.(type) {
 		case []byte:
 			return v, nil

@@ -111,6 +111,14 @@ func TestFormatValIntoString_GeometryText(t *testing.T) {
 
 	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry, 0, 0), &buf))
 	require.Equal(t, "'POINT(2 2)'", buf.String())
+
+	buf.Reset()
+	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry32, 0, 0), &buf))
+	require.Equal(t, "st_geomfromtext('POINT(2 2)')", buf.String())
+
+	buf.Reset()
+	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry32, 4326+1, 0), &buf))
+	require.Equal(t, "st_geomfromtext('POINT(2 2)',4326)", buf.String())
 }
 
 func TestFormatValIntoString_JSONEscaping(t *testing.T) {
@@ -504,6 +512,16 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 			build: func(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector, int) {
 				typ := types.T_datalink.ToType()
 				leftVal, rightVal := []byte("link-a"), []byte("link-b")
+				leftVec := buildBytesVector(t, mp, typ, leftVal)
+				rightVec := buildBytesVector(t, mp, typ, rightVal)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
+			},
+		},
+		{
+			name: "geometry32",
+			build: func(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector, int) {
+				typ := types.T_geometry32.ToType()
+				leftVal, rightVal := []byte{0x01, 0x02, 0x03}, []byte{0x01, 0x02, 0x04}
 				leftVec := buildBytesVector(t, mp, typ, leftVal)
 				rightVec := buildBytesVector(t, mp, typ, rightVal)
 				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
