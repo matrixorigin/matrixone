@@ -1252,7 +1252,6 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 	require.True(t, orig.HasNull())
 }
 
-
 // TestSnapshotWriteOffset_NormalPath verifies that the normal (non-reentrant)
 // code path still works with correct locking.
 func TestSnapshotWriteOffset_NormalPath(t *testing.T) {
@@ -1331,4 +1330,3 @@ func TestSnapshotWriteOffset_ConcurrentAccess(t *testing.T) {
 	wg.Wait()
 	require.Equal(t, 10, txn.GetSnapshotWriteOffset())
 }
-

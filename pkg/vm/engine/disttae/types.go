@@ -347,7 +347,6 @@ type Transaction struct {
 	// the last snapshot write offset
 	snapshotWriteOffset int
 
-
 	tnStores []DNStore
 	proc     *process.Process
 
