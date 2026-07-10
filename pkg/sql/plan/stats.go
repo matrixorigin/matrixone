@@ -1390,33 +1390,56 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	// LIMIT caps the output cardinality. It never increases an estimate, and a
 	// fold failure must not turn into an optimizer panic.
-	if node.Limit != nil || node.Offset != nil {
-		applyPaginationToStats(node.Stats, node.Limit, node.Offset, builder)
+	if node.Limit != nil {
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			applyScanPaginationToStats(node.Stats, node.Limit, node.Offset, builder)
+		} else {
+			applyLimitToStats(node.Stats, node.Limit, builder)
+		}
 	} else if node.NodeType == plan.Node_FUNCTION_SCAN && node.IndexReaderParam != nil {
 		if node.IndexReaderParam.Limit != nil {
-			applyPaginationToStats(node.Stats, node.IndexReaderParam.Limit, nil, builder)
+			applyLimitToStats(node.Stats, node.IndexReaderParam.Limit, builder)
 		}
 	}
 }
 
-func applyPaginationToStats(stats *Stats, limit, offset *plan.Expr, builder *QueryBuilder) {
+func applyLimitToStats(stats *Stats, limit *plan.Expr, builder *QueryBuilder) {
 	if stats == nil {
 		return
 	}
 	originalOutcnt := stats.Outcnt
-	if offsetValue, ok := literalUint64ForStats(offset, builder); ok {
-		if float64(offsetValue) >= stats.Outcnt {
-			stats.Outcnt = 0
-		} else {
-			stats.Outcnt -= float64(offsetValue)
-		}
-	}
 	if limitValue, ok := literalUint64ForStats(limit, builder); ok && float64(limitValue) < stats.Outcnt {
 		stats.Outcnt = float64(limitValue)
 	}
 	if stats.Outcnt != originalOutcnt {
 		stats.Selectivity = safeSelectivityRatio(stats.Outcnt, stats.Cost)
 	}
+}
+
+func applyScanPaginationToStats(stats *Stats, limit, offset *plan.Expr, builder *QueryBuilder) {
+	if stats == nil {
+		return
+	}
+	limitValue, literalLimit := literalUint64ForStats(limit, builder)
+	if literalLimit && limitValue == 0 {
+		stats.BlockNum = 0
+		stats.Cost = 0
+		applyLimitToStats(stats, limit, builder)
+		return
+	}
+
+	if candidate, ok := buildCandidateLimit(limit, offset); ok {
+		if candidateValue, literal := getLiteralUint64(candidate); literal && stats.Selectivity > 0 {
+			rowsToScan := float64(candidateValue) / stats.Selectivity
+			blockEstimate := math.Min(math.Ceil(rowsToScan/objectio.BlockMaxRows), math.MaxInt32)
+			newBlockNum := max(int32(blockEstimate), int32(1))
+			if newBlockNum < stats.BlockNum {
+				stats.BlockNum = newBlockNum
+				stats.Cost = float64(stats.BlockNum) * objectio.BlockMaxRows
+			}
+		}
+	}
+	applyLimitToStats(stats, limit, builder)
 }
 
 func literalUint64ForStats(expr *plan.Expr, builder *QueryBuilder) (uint64, bool) {

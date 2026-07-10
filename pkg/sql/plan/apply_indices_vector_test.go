@@ -73,6 +73,22 @@ func TestVectorResultPaginationIsSeparateFromCandidateBudget(t *testing.T) {
 	require.Equal(t, uint64(5), ctx.limit.GetLit().GetU64Val())
 }
 
+func TestVectorPaginationSurvivesPluginRoundTrip(t *testing.T) {
+	ctx := &vectorSortContext{
+		limit:        makePlan2Uint64ConstExprWithType(3),
+		resultLimit:  makePlan2Uint64ConstExprWithType(2),
+		resultOffset: makePlan2Uint64ConstExprWithType(1),
+	}
+
+	pluginCtx, _ := toPlanplugin(ctx, nil)
+	roundTrip, _ := fromPlanplugin(pluginCtx, nil)
+	limit, offset := vectorResultPagination(roundTrip)
+
+	require.Equal(t, uint64(3), roundTrip.limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(2), limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(1), offset.GetLit().GetU64Val())
+}
+
 func TestValidateVectorIndexSortRewrite(t *testing.T) {
 	// nil context: rewrite is allowed (no-op path).
 	b := &QueryBuilder{}
@@ -266,6 +282,26 @@ func TestGetDistRangeFromFilters_NonMatching(t *testing.T) {
 	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{f32Lit(0.5)}, partPos, "l2_distance", vecLitArg)
 	require.Len(t, rem, 1)
 	require.Nil(t, dr)
+}
+
+func TestGetDistRangeFromFiltersKeepsDuplicateSideAsResidual(t *testing.T) {
+	const scanTag int32 = 11
+	const partPos int32 = 1
+	const vecVal = "[1,2,3]"
+	vecLitArg := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: vecVal}}},
+	}
+	first := makeDistFnFilter(">", "l2_distance", scanTag, partPos, vecVal, f32Lit(1))
+	second := makeDistFnFilter(">=", "l2_distance", scanTag, partPos, vecVal, f32Lit(10))
+
+	var builder *QueryBuilder
+	remaining, distRange := builder.getDistRangeFromFilters(
+		[]*plan.Expr{first, second}, partPos, "l2_distance", vecLitArg,
+	)
+
+	require.Equal(t, plan.BoundType_EXCLUSIVE, distRange.LowerBoundType)
+	require.Equal(t, first.GetF().Args[1], distRange.LowerBound)
+	require.Equal(t, []*plan.Expr{second}, remaining)
 }
 
 func TestPeelAndRewriteDistFnFilters_AllOps(t *testing.T) {

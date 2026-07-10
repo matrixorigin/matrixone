@@ -944,10 +944,17 @@ func TestCalculatePostFilterOverFetchFactor(t *testing.T) {
 }
 
 func TestCalculateOverFetchLimitSaturates(t *testing.T) {
+	require.Equal(t, uint64(0), calculateOverFetchLimit(0, 5))
 	require.Equal(t, uint64(20), calculateOverFetchLimit(10, 2))
 	require.Equal(t, uint64(15), calculateOverFetchLimit(5, 1))
 	require.Equal(t, uint64(math.MaxUint64), calculateOverFetchLimit(math.MaxUint64, 1.2))
 	require.Equal(t, uint64(math.MaxUint64), calculateOverFetchLimit(math.MaxUint64-5, 1))
+}
+
+func TestPositiveLiteralLimitRejectsReaderOverflow(t *testing.T) {
+	require.True(t, isPositiveLiteralLimit(makePlan2Uint64ConstExprWithType(1)))
+	require.False(t, isPositiveLiteralLimit(makePlan2Uint64ConstExprWithType(0)))
+	require.False(t, isPositiveLiteralLimit(makePlan2Uint64ConstExprWithType(maxVectorIndexTopPushdownLimit+1)))
 }
 
 // Test the actual over-fetch calculation results
@@ -1487,6 +1494,75 @@ func TestHandleMessageFromTopToScanSkipsSortWithoutOrderKey(t *testing.T) {
 
 	require.NotPanics(t, func() { builder.handleMessageFromTopToScan(1) })
 	require.Empty(t, builder.qry.Nodes[0].RecvMsgList)
+}
+
+func TestHandleMessageFromTopToScanPreservesShuffleOnRejectedPath(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	leftTag := builder.genNewBindTag()
+	rightTag := builder.genNewBindTag()
+	left := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, NodeId: 0, BindingTags: []int32{leftTag}}
+	right := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, NodeId: 1, BindingTags: []int32{rightTag}}
+	join := &planpb.Node{
+		NodeType:               planpb.Node_JOIN,
+		NodeId:                 2,
+		JoinType:               planpb.Node_INNER,
+		Children:               []int32{0, 1},
+		Stats:                  &planpb.Stats{HashmapStats: &planpb.HashMapStats{Shuffle: true}},
+		RuntimeFilterProbeList: []*planpb.RuntimeFilterSpec{{Tag: 1}},
+		RuntimeFilterBuildList: []*planpb.RuntimeFilterSpec{{Tag: 1}},
+	}
+	sort := &planpb.Node{
+		NodeType: planpb.Node_SORT,
+		NodeId:   3,
+		Children: []int32{2},
+		OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: rightTag, ColPos: 0}},
+		}}},
+		Limit: makePlan2Uint64ConstExprWithType(1),
+	}
+	builder.qry.Nodes = []*planpb.Node{left, right, join, sort}
+
+	builder.handleMessageFromTopToScan(3)
+
+	require.True(t, join.Stats.HashmapStats.Shuffle)
+	require.Len(t, join.RuntimeFilterProbeList, 1)
+	require.Len(t, join.RuntimeFilterBuildList, 1)
+	require.Empty(t, sort.SendMsgList)
+}
+
+func TestHandleMessageFromTopToScanDisablesShuffleOnAcceptedPath(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	leftTag := builder.genNewBindTag()
+	rightTag := builder.genNewBindTag()
+	left := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, NodeId: 0, BindingTags: []int32{leftTag}}
+	right := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, NodeId: 1, BindingTags: []int32{rightTag}}
+	join := &planpb.Node{
+		NodeType:               planpb.Node_JOIN,
+		NodeId:                 2,
+		JoinType:               planpb.Node_INNER,
+		Children:               []int32{0, 1},
+		Stats:                  &planpb.Stats{HashmapStats: &planpb.HashMapStats{Shuffle: true}},
+		RuntimeFilterProbeList: []*planpb.RuntimeFilterSpec{{Tag: 1}},
+		RuntimeFilterBuildList: []*planpb.RuntimeFilterSpec{{Tag: 1}},
+	}
+	sort := &planpb.Node{
+		NodeType: planpb.Node_SORT,
+		NodeId:   3,
+		Children: []int32{2},
+		OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: leftTag, ColPos: 0}},
+		}}},
+		Limit: makePlan2Uint64ConstExprWithType(1),
+	}
+	builder.qry.Nodes = []*planpb.Node{left, right, join, sort}
+
+	builder.handleMessageFromTopToScan(3)
+
+	require.False(t, join.Stats.HashmapStats.Shuffle)
+	require.Empty(t, join.RuntimeFilterProbeList)
+	require.Empty(t, join.RuntimeFilterBuildList)
+	require.Len(t, sort.SendMsgList, 1)
+	require.Len(t, left.RecvMsgList, 1)
 }
 
 func TestHandleMessageFromTopToScanSkipsOrderedLimitWithAdditionalResidualFilter(t *testing.T) {

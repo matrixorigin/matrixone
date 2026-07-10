@@ -19,42 +19,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
-func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32, orderExpr *plan.Expr) (scanID int32, scanOrderExpr *plan.Expr, staticLimitSafe bool) {
+func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32, orderExpr *plan.Expr) (scanID int32, scanOrderExpr *plan.Expr, staticLimitSafe bool, shuffleJoins []int32) {
 	node := builder.qry.Nodes[nodeID]
 	switch node.NodeType {
 	case plan.Node_PROJECT:
 		if len(node.Children) != 1 || len(node.BindingTags) == 0 {
-			return -1, nil, false
+			return -1, nil, false, nil
 		}
 		orderCol := orderExpr.GetCol()
 		if orderCol == nil || orderCol.RelPos != node.BindingTags[0] || orderCol.ColPos < 0 || int(orderCol.ColPos) >= len(node.ProjectList) {
-			return -1, nil, false
+			return -1, nil, false, nil
 		}
 		projectedExpr := node.ProjectList[orderCol.ColPos]
 		if projectedExpr.GetCol() == nil {
-			return -1, nil, false
+			return -1, nil, false, nil
 		}
 		return builder.gatherLeavesForMessageFromTopToScan(node.Children[0], projectedExpr)
 	case plan.Node_JOIN:
 		if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_SEMI {
 			// for now, only support inner join and semi join.
 			// for left join, top operator can directly push down over this
-			if node.Stats.HashmapStats.Shuffle {
-				// don't need to go shuffle join for this
-				node.Stats.HashmapStats.Shuffle = false
-				node.RuntimeFilterProbeList = nil
-				node.RuntimeFilterBuildList = nil
+			scanID, scanOrderExpr, _, shuffleJoins = builder.gatherLeavesForMessageFromTopToScan(node.Children[0], orderExpr)
+			if scanID == -1 {
+				return -1, nil, false, nil
 			}
-			scanID, scanOrderExpr, _ = builder.gatherLeavesForMessageFromTopToScan(node.Children[0], orderExpr)
-			return scanID, scanOrderExpr, false
+			if node.Stats.HashmapStats.Shuffle {
+				shuffleJoins = append(shuffleJoins, nodeID)
+			}
+			return scanID, scanOrderExpr, false, shuffleJoins
 		}
 	case plan.Node_FILTER:
-		scanID, scanOrderExpr, _ = builder.gatherLeavesForMessageFromTopToScan(node.Children[0], orderExpr)
-		return scanID, scanOrderExpr, false
+		scanID, scanOrderExpr, _, shuffleJoins = builder.gatherLeavesForMessageFromTopToScan(node.Children[0], orderExpr)
+		return scanID, scanOrderExpr, false, shuffleJoins
 	case plan.Node_TABLE_SCAN:
-		return nodeID, DeepCopyExpr(orderExpr), true
+		return nodeID, DeepCopyExpr(orderExpr), true, nil
 	}
-	return -1, nil, false
+	return -1, nil, false, nil
 }
 
 // send message from top to scan. if block node(like group or window), no need to send this message
@@ -82,7 +82,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	if orderByCol == nil {
 		return
 	}
-	scanID, scanOrderExpr, staticLimitSafe := builder.gatherLeavesForMessageFromTopToScan(node.Children[0], node.OrderBy[0].Expr)
+	scanID, scanOrderExpr, staticLimitSafe, shuffleJoins := builder.gatherLeavesForMessageFromTopToScan(node.Children[0], node.OrderBy[0].Expr)
 	if scanID == -1 || scanOrderExpr == nil {
 		return
 	}
@@ -120,6 +120,12 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	}
 	if scanOrderByCol.RelPos != scanNode.BindingTags[0] {
 		return
+	}
+	for _, joinID := range shuffleJoins {
+		joinNode := builder.qry.Nodes[joinID]
+		joinNode.Stats.HashmapStats.Shuffle = false
+		joinNode.RuntimeFilterProbeList = nil
+		joinNode.RuntimeFilterBuildList = nil
 	}
 
 	msgTag := builder.genNewMsgTag()

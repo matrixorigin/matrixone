@@ -16,7 +16,6 @@ package plan
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -659,25 +658,6 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.Limit, child.Offset = node.Limit, node.Offset
 			node.Limit, node.Offset = nil, nil
-
-			// if there is a limit, outcnt is limit number
-			if child.Limit != nil {
-				if limitValue, ok := getLiteralUint64(child.Limit); ok {
-					child.Stats.Outcnt = min(child.Stats.Outcnt, float64(limitValue))
-					if limitValue == 0 {
-						child.Stats.BlockNum = 0
-					} else if child.Stats.Selectivity < 0.5 {
-						blockEstimate := math.Min(math.Ceil(float64(limitValue)/2), math.MaxInt32)
-						newBlockNum := max(int32(blockEstimate), int32(1))
-						if newBlockNum < child.Stats.BlockNum {
-							child.Stats.BlockNum = newBlockNum
-						}
-					} else {
-						child.Stats.BlockNum = 1
-					}
-					child.Stats.Cost = float64(child.Stats.BlockNum) * objectio.BlockMaxRows
-				}
-			}
 		}
 	}
 }

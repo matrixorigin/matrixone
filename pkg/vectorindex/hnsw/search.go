@@ -65,6 +65,8 @@ func (s *HnswSearch[T]) lock() {
 
 // release a lock from a usearch threads
 func (s *HnswSearch[T]) unlock() {
+	s.Cond.L.Lock()
+	defer s.Cond.L.Unlock()
 	s.Concurrency.Add(-1)
 	s.Cond.Signal()
 }

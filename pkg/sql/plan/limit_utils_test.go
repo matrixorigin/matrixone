@@ -36,6 +36,7 @@ func TestBuildCandidateLimit(t *testing.T) {
 		{name: "overflow", limit: makePlan2Uint64ConstExprWithType(math.MaxUint64), offset: makePlan2Uint64ConstExprWithType(1)},
 		{name: "dynamic offset", limit: makePlan2Uint64ConstExprWithType(10), offset: &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}},
 		{name: "dynamic limit without offset", limit: &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}, wantUsable: true},
+		{name: "null literal offset", limit: makePlan2Uint64ConstExprWithType(10), offset: &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true, Value: &planpb.Literal_U64Val{U64Val: 5}}}}},
 	}
 
 	for _, tc := range tests {

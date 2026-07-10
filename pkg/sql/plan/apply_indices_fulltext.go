@@ -61,8 +61,14 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 
 	// check equal fulltext_match func and only compute once for equal function()
 	eqmap := builder.findEqualFullTextMatchFunc(projNode, scanNode, projids, filterids)
-	paginationLimit, paginationOffset := scanNode.Limit, scanNode.Offset
-	if sortNode != nil && sortNode.Limit != nil {
+	var paginationLimit, paginationOffset *plan.Expr
+	if projNode.Limit != nil || projNode.Offset != nil {
+		paginationLimit, paginationOffset = projNode.Limit, projNode.Offset
+	}
+	if scanNode.Limit != nil || scanNode.Offset != nil {
+		paginationLimit, paginationOffset = scanNode.Limit, scanNode.Offset
+	}
+	if sortNode != nil && (sortNode.Limit != nil || sortNode.Offset != nil) {
 		paginationLimit, paginationOffset = sortNode.Limit, sortNode.Offset
 	}
 	internalLimit, internalOffset := paginationLimit, paginationOffset

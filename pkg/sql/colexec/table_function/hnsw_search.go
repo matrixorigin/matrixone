@@ -106,13 +106,13 @@ func hnswSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 	var err error
 	st := &hnswSearchState{}
 
-	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
-	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
+	st.limit, err = evalLimitExpression(proc, arg.Limit, 1)
 	if err != nil {
 		return nil, err
 	}
 
-	st.limit, err = evalLimitExpression(proc, arg.Limit, 1)
+	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 	if err != nil {
 		return nil, err
 	}

@@ -114,6 +114,15 @@ func evalLimitExpression(proc *process.Process, expr *plan.Expr, defaultValue ui
 	if expr == nil {
 		return defaultValue, nil
 	}
+	if literal := expr.GetLit(); literal != nil {
+		if literal.Isnull {
+			return 0, moerr.NewInvalidInput(proc.Ctx, "LIMIT cannot be NULL")
+		}
+		if value, ok := literal.Value.(*plan.Literal_U64Val); ok {
+			return value.U64Val, nil
+		}
+		return 0, moerr.NewInvalidInputf(proc.Ctx, "LIMIT must evaluate to uint64, got %s", expr.Typ.String())
+	}
 	executor, err := colexec.NewExpressionExecutor(proc, expr)
 	if err != nil {
 		return 0, err

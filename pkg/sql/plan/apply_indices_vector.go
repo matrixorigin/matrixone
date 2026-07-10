@@ -722,12 +722,18 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
+			if distRange.UpperBoundType != plan.BoundType_UNBOUNDED {
+				goto NO_RANGE
+			}
 			distRange.UpperBoundType = plan.BoundType_EXCLUSIVE
 			distRange.UpperBound = f.Args[1]
 
 		case "<=":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
+			}
+			if distRange.UpperBoundType != plan.BoundType_UNBOUNDED {
+				goto NO_RANGE
 			}
 			distRange.UpperBoundType = plan.BoundType_INCLUSIVE
 			distRange.UpperBound = f.Args[1]
@@ -736,12 +742,18 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
+			if distRange.LowerBoundType != plan.BoundType_UNBOUNDED {
+				goto NO_RANGE
+			}
 			distRange.LowerBoundType = plan.BoundType_EXCLUSIVE
 			distRange.LowerBound = f.Args[1]
 
 		case ">=":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
+			}
+			if distRange.LowerBoundType != plan.BoundType_UNBOUNDED {
+				goto NO_RANGE
 			}
 			distRange.LowerBoundType = plan.BoundType_INCLUSIVE
 			distRange.LowerBound = f.Args[1]

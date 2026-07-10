@@ -24,7 +24,7 @@ import (
 // uint64 literal. Optimizer rules must not treat a non-literal expression as
 // zero: prepared parameters and variables are evaluated at execution time.
 func getLiteralUint64(expr *plan.Expr) (uint64, bool) {
-	if expr == nil || expr.GetLit() == nil {
+	if expr == nil || expr.GetLit() == nil || expr.GetLit().Isnull {
 		return 0, false
 	}
 	value, ok := expr.GetLit().Value.(*plan.Literal_U64Val)

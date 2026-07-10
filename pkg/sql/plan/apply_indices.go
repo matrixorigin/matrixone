@@ -114,6 +114,9 @@ func calculateFilteredPostModeOverFetchFactor(originalLimit uint64) float64 {
 }
 
 func calculateOverFetchLimit(originalLimit uint64, factor float64) uint64 {
+	if originalLimit == 0 {
+		return 0
+	}
 	if factor < 1 {
 		factor = 1
 	}
@@ -927,11 +930,8 @@ func applyRegularIndexOrderedLimitParam(scanNode *plan.Node, orderBy *plan.Order
 }
 
 func isPositiveLiteralLimit(limit *plan.Expr) bool {
-	if limit == nil {
-		return false
-	}
-	limitLit := limit.GetLit()
-	return limitLit != nil && limitLit.GetU64Val() > 0
+	limitValue, literal := getLiteralUint64(limit)
+	return literal && limitValue > 0 && limitValue <= maxVectorIndexTopPushdownLimit
 }
 
 func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {

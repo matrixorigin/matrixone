@@ -111,13 +111,13 @@ func cagraSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 	var err error
 	st := &cagraSearchState{}
 
-	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
-	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
+	st.limit, err = evalLimitExpression(proc, arg.Limit, 1)
 	if err != nil {
 		return nil, err
 	}
 
-	st.limit, err = evalLimitExpression(proc, arg.Limit, 1)
+	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 	if err != nil {
 		return nil, err
 	}
