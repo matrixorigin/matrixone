@@ -15,27 +15,123 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-// BuildSecondaryIndexDefs constructs the bm25 index def + its two hidden
-// tables (storage + metadata) from CREATE INDEX ... USING bm25. bm25 parses
-// to *tree.Index and is dispatched here (the vector-plugin path), NOT through
-// BuildFullTextIndexDefs.
-//
-// STUB (Phase 1b): the real builder (validate single TEXT/VARCHAR column,
-// emit the storage+metadata TableDefs) lands in Phase 2.
+// bm25TextColumn reports whether a column type can be bm25-indexed
+// (text-ish types, same set the classic fulltext index accepts).
+func bm25TextColumn(id int32) bool {
+	return id == int32(types.T_text) || id == int32(types.T_char) ||
+		id == int32(types.T_varchar) || id == int32(types.T_json) ||
+		id == int32(types.T_datalink)
+}
+
+// BuildSecondaryIndexDefs constructs the bm25 index def + its two hidden tables
+// (storage + metadata) from CREATE INDEX ... USING bm25. bm25 parses to
+// *tree.Index and is dispatched here (the vector-plugin path). The two tables
+// mirror the HNSW storage/metadata layout: the storage table holds the chunked
+// binary (WAND) index blobs, the metadata table one row per sub-index. There is
+// no postings table — bm25 builds directly from the source rows.
 func (Hooks) BuildSecondaryIndexDefs(
-	_ planplugin.CompilerContext,
-	_ *tree.Index,
-	_ map[string]*plan.ColDef,
-	_ []*plan.IndexDef,
-	_ string,
+	ctx planplugin.CompilerContext,
+	indexInfo *tree.Index,
+	colMap map[string]*plan.ColDef,
+	existedIndexes []*plan.IndexDef,
+	pkeyName string,
 ) ([]*plan.IndexDef, []*plan.TableDef, error) {
-	return nil, nil, moerr.NewNYINoCtx("bm25 BuildSecondaryIndexDefs (Phase 2)")
+
+	// 0. Validate: single text/varchar column, no duplicate bm25 on it.
+	if len(indexInfo.KeyParts) != 1 {
+		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "bm25 index does not support multiple columns")
+	}
+	name := indexInfo.KeyParts[0].ColName.ColName()
+	indexParts := []string{name}
+	col, ok := colMap[name]
+	if !ok {
+		return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
+	}
+	if !bm25TextColumn(col.Typ.Id) {
+		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "bm25 index only supports CHAR/VARCHAR/TEXT/JSON/DATALINK columns")
+	}
+	for _, existed := range existedIndexes {
+		if existed.IndexAlgo == catalog.MoIndexBm25Algo.ToString() && len(existed.Parts) > 0 && existed.Parts[0] == name {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple bm25 indexes are not allowed to use the same column")
+		}
+	}
+
+	// 1. storage (chunk) table: ( index_id VARCHAR, chunk_id INT64, data BLOB,
+	//    tag INT64, PRIMARY KEY (index_id, chunk_id) )
+	storeName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+	if err != nil {
+		return nil, nil, err
+	}
+	storeIdx, err := planplugin.CreateIndexDef(ctx, indexInfo, storeName, catalog.Bm25Index_TblType_Storage, indexParts, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	storeTbl := &plan.TableDef{
+		Name:      storeName,
+		TableType: catalog.Bm25Index_TblType_Storage,
+		Cols: []*plan.ColDef{
+			{Name: catalog.Bm25Index_TblCol_Storage_Index_Id, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_varchar), Width: 128}, Default: &plan.Default{}},
+			{Name: catalog.Bm25Index_TblCol_Storage_Chunk_Id, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+			{Name: catalog.Bm25Index_TblCol_Storage_Data, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_blob), Width: 65536}, Default: &plan.Default{}},
+			{Name: catalog.Bm25Index_TblCol_Storage_Tag, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+		},
+	}
+	storePk := planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+	storePk.Alg = plan.CompressType_Lz4
+	storePk.Primary = true
+	storeTbl.Cols = append(storeTbl.Cols, storePk)
+	storeTbl.Pkey = &plan.PrimaryKeyDef{
+		Names:       []string{catalog.Bm25Index_TblCol_Storage_Index_Id, catalog.Bm25Index_TblCol_Storage_Chunk_Id},
+		PkeyColName: catalog.CPrimaryKeyColName,
+		CompPkeyCol: storeTbl.Cols[3], // tag col, mirrors HNSW storage layout
+	}
+	storeTbl.Defs = append(storeTbl.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.Bm25Index_TblType_Storage},
+		}}},
+	})
+
+	// 2. metadata table: one row per sub-index.
+	metaName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+	if err != nil {
+		return nil, nil, err
+	}
+	metaIdx, err := planplugin.CreateIndexDef(ctx, indexInfo, metaName, catalog.Bm25Index_TblType_Metadata, indexParts, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	metaTbl := &plan.TableDef{
+		Name:      metaName,
+		TableType: catalog.Bm25Index_TblType_Metadata,
+		Cols: []*plan.ColDef{
+			{Name: catalog.Bm25Index_TblCol_Metadata_Index_Id, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_varchar), Width: 128}, Primary: true, Default: &plan.Default{}},
+			{Name: catalog.Bm25Index_TblCol_Metadata_Timestamp, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+			{Name: catalog.Bm25Index_TblCol_Metadata_Checksum, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, Default: &plan.Default{}},
+			{Name: catalog.Bm25Index_TblCol_Metadata_Filesize, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+			{Name: catalog.Bm25Index_TblCol_Metadata_Recency, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+			{Name: catalog.Bm25Index_TblCol_Metadata_Nrow, Alg: plan.CompressType_Lz4, Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}},
+		},
+	}
+	metaTbl.Pkey = &plan.PrimaryKeyDef{
+		Names:       []string{catalog.Bm25Index_TblCol_Metadata_Index_Id},
+		PkeyColName: catalog.Bm25Index_TblCol_Metadata_Index_Id,
+	}
+	metaTbl.Defs = append(metaTbl.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.Bm25Index_TblType_Metadata},
+		}}},
+	})
+
+	return []*plan.IndexDef{storeIdx, metaIdx}, []*plan.TableDef{storeTbl, metaTbl}, nil
 }
 
 // BuildFullTextIndexDefs — bm25 is not reached via CREATE FULLTEXT INDEX

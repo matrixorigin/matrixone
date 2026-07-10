@@ -182,6 +182,12 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = ivfCreatePrepare(proc, tblArg)
 	case "ivf_search":
 		tblArg.ctr.state, err = ivfSearchPrepare(proc, tblArg)
+	case "bm25_create":
+		tblArg.ctr.state, err = bm25CreatePrepare(proc, tblArg)
+	case "bm25_search":
+		tblArg.ctr.state, err = bm25SearchPrepare(proc, tblArg)
+	case "bm25_compact":
+		tblArg.ctr.state, err = bm25CompactPrepare(proc, tblArg)
 	case "parse_jsonl_data":
 		tblArg.ctr.state, err = parseJsonlDataPrepare(proc, tblArg)
 	case "parse_jsonl_file":
