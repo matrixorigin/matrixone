@@ -98,10 +98,22 @@ func (Hooks) BuildFullTextIndexDefs(
 		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
 	}
 
-	// 1. Reject if an existing fulltext index already covers the same
-	// columns. Matches the legacy outer "for existedIndexes" loop.
+	// 1. Reject a same-column DUPLICATE, but allow a retrieval + non-retrieval pair
+	// on the same column(s): they are different implementations selected by the query
+	// mode (IN RETRIEVAL MODE -> the retrieval/WAND index; IN BOOLEAN/NATURAL LANGUAGE
+	// MODE -> the classic postings index). Only reject when the new and existing index
+	// are in the SAME category (both retrieval, or both non-retrieval).
+	newIsRetrieval := false
+	if indexInfo.IndexOption != nil {
+		newIsRetrieval = strings.ToLower(indexInfo.IndexOption.ParserName) == "retrieval"
+	}
 	for _, existed := range existedIndexes {
 		if existed.IndexAlgo != catalog.MOIndexFullTextAlgo.ToString() {
+			continue
+		}
+		// A retrieval index carries WAND store/metadata sibling defs (same Parts, a
+		// non-empty IndexAlgoTableType); only compare against the real postings def.
+		if existed.IndexAlgoTableType != "" {
 			continue
 		}
 		if len(indexInfo.KeyParts) != len(existed.Parts) {
@@ -117,7 +129,10 @@ func (Hooks) BuildFullTextIndexDefs(
 			}
 		}
 		if n == len(indexInfo.KeyParts) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Fulltext index are not allowed to use the same column")
+			existedIsRetrieval := catalog.GetIndexParser(existed.IndexAlgoParams) == "retrieval"
+			if newIsRetrieval == existedIsRetrieval {
+				return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Fulltext index are not allowed to use the same column")
+			}
 		}
 	}
 

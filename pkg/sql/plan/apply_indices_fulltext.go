@@ -880,7 +880,13 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 		argColNames = append(argColNames, colName)
 	}
 
+	// The query mode selects between a retrieval and a non-retrieval fulltext index on
+	// the same column(s): RETRIEVAL routes to the retrieval/WAND index, everything else
+	// (BOOLEAN / NATURAL LANGUAGE / DEFAULT) to the classic postings index.
+	wantRetrieval := fn.Args[1].GetLit().GetI64Val() == int64(tree.FULLTEXT_RETRIEVAL)
+
 	nargs := len(fn.Args) - 2
+	var candidates []*plan.IndexDef
 	for _, idx := range scanNode.TableDef.Indexes {
 		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
 			continue
@@ -909,10 +915,25 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 		}
 
 		if nfound == nargs && nfound == len(idx.Parts) {
+			candidates = append(candidates, idx)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	if len(candidates) == 1 {
+		// Single index on the column: return it and let the downstream mode check
+		// reject a mode it can't serve (clearer than "no index").
+		return candidates[0]
+	}
+	for _, idx := range candidates {
+		if (catalog.GetIndexParser(idx.IndexAlgoParams) == "retrieval") == wantRetrieval {
 			return idx
 		}
 	}
-	return nil
+	// No candidate's parser matches the mode; return the first so the downstream mode
+	// check emits the clear retrieval-vs-classic error.
+	return candidates[0]
 }
 
 // Get the filters that are fulltext_match() in ScanNode

@@ -1,0 +1,28 @@
+drop database if exists ft_coexist;
+create database ft_coexist;
+use ft_coexist;
+create table t (id bigint primary key, txt text);
+insert into t values (1,'apple banana cherry'),(2,'apple banana'),(3,'apple'),(4,'durian');
+create fulltext index ftc on t(txt);
+create fulltext index ftr on t(txt) with parser retrieval;
+select id from t where match(txt) against('apple banana cherry' in boolean mode);
+id
+1
+2
+3
+select id from t where match(txt) against('apple banana cherry' in natural language mode);
+id
+1
+select id from t where match(txt) against('apple banana cherry');
+id
+1
+select id from t where match(txt) against('apple banana cherry' in retrieval mode);
+id
+1
+2
+3
+create fulltext index ftc2 on t(txt);
+not supported: Fulltext index are not allowed to use the same column
+create fulltext index ftr2 on t(txt) with parser retrieval;
+not supported: Fulltext index are not allowed to use the same column
+drop database ft_coexist;
