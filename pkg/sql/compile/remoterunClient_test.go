@@ -16,10 +16,12 @@ package compile
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -32,10 +34,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -227,4 +233,100 @@ func TestRemoteRun(t *testing.T) {
 
 	_, err := s1.remoteRun(c)
 	assert.Error(t, err)
+}
+
+func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	oldRuntime := runtime.ServiceRuntime("")
+	testRuntime := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", testRuntime)
+	t.Cleanup(func() {
+		runtime.SetupServiceBasedRuntime("", oldRuntime)
+	})
+
+	runErr := moerr.NewInternalErrorNoCtx("injected new stream failure")
+	var newStreamCalled atomic.Bool
+	testRuntime.SetGlobalVariables(runtime.PipelineClient, &testPipelineClient{
+		genStream: func(context.Context, string) (morpc.Stream, error) {
+			newStreamCalled.Store(true)
+			return nil, runErr
+		},
+	})
+
+	ctrl := gomock.NewController(t)
+	catalog.SetupDefines("")
+	proc := testutil.NewProcess(t)
+	accountCtx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.ReplaceTopCtx(accountCtx)
+	queryCtx := proc.Base.GetContextBase().BuildQueryCtx(accountCtx)
+	proc.BuildPipelineContext(queryCtx)
+	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+
+	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	c := NewCompile("local-cn:6002", "test", "select 1", "", "", e, proc, nil, false, nil, time.Now())
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	uid := uuid.Must(uuid.NewV7())
+	child := value_scan.NewArgument()
+	defer child.Release()
+	root := dispatch.NewArgument()
+	defer root.Release()
+	root.FuncId = dispatch.SendToAllFunc
+	root.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+	root.AppendChild(child)
+	s := &Scope{
+		Magic:    Remote,
+		Proc:     proc,
+		RootOp:   root,
+		NodeInfo: engine.Node{Addr: "remote-cn:6002", Mcpu: 1},
+	}
+
+	registrations, err := registerLocalDispatchReceivers([]*Scope{s}, c.addr)
+	require.NoError(t, err)
+	defer registrations.cleanup()
+	registeredProc, notifyCh, err := (&messageReceiverOnServer{
+		connectionCtx: context.Background(),
+		messageCtx:    context.Background(),
+	}).TryGetProcByUuid(uid)
+	require.NoError(t, err)
+	require.Same(t, proc, registeredProc)
+
+	pendingDone := make(chan string, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		select {
+		case notifyCh <- &process.WrapCs{Uid: uid, Err: make(chan error, 1)}:
+			pendingDone <- "attached"
+		case <-proc.Ctx.Done():
+			pendingDone <- "canceled"
+		}
+	}()
+	<-started
+	select {
+	case result := <-pendingDone:
+		t.Fatalf("pending remote notify completed before RemoteRun failed: %s", result)
+	default:
+	}
+
+	start := time.Now()
+	err = s.RemoteRun(c)
+	require.Less(t, time.Since(start), time.Second)
+	require.True(t, newStreamCalled.Load(), "test must reach the injected NewStream failure")
+	require.ErrorIs(t, err, runErr)
+	require.ErrorIs(t, context.Cause(proc.Ctx), runErr)
+	select {
+	case result := <-pendingDone:
+		require.Equal(t, "canceled", result)
+	case <-time.After(time.Second):
+		t.Fatal("RemoteRun failure did not release the pending retained-root attach")
+	}
+	registrations.cleanup()
+	registeredProc, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+	require.False(t, ok)
+	require.Nil(t, registeredProc)
+	require.Nil(t, notifyCh)
 }
