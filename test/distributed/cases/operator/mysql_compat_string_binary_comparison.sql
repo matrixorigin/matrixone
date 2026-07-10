@@ -102,4 +102,101 @@ select id,
 from t_string_binary_unhappy
 order by id;
 
+-- VARBINARY/BINARY comparisons must preserve stored 0x00 padding while
+-- avoiding implicit padding of the VARBINARY operand.
+drop table if exists t_varbinary_binary_cmp;
+create table t_varbinary_binary_cmp (
+  id int primary key,
+  vb varbinary(8),
+  b binary(4)
+);
+
+insert into t_varbinary_binary_cmp values
+  (1, 'a', 'a'),
+  (2, 'a ', 'a '),
+  (3, x'61000000', 'a');
+
+select id, hex(vb) as vb_hex, hex(b) as b_hex
+from t_varbinary_binary_cmp
+order by id;
+
+select id,
+       vb = binary 'a' as vb_eq_bin_a,
+       binary 'a' = vb as bin_a_eq_vb,
+       b = vb as b_eq_vb,
+       vb = b as vb_eq_b,
+       b = x'61' as b_eq_short_hex,
+       b = x'61000000' as b_eq_padded_hex,
+       vb <=> binary 'a' as vb_null_safe_eq_bin_a,
+       vb > binary 'a' as vb_gt_bin_a
+from t_varbinary_binary_cmp
+order by id;
+
+select id, vb in (binary 'a') as vb_in_bin_a
+from t_varbinary_binary_cmp
+order by id;
+
+select id,
+       vb in (select b from t_varbinary_binary_cmp where id = 1) as vb_in_b_subquery,
+       b in (select vb from t_varbinary_binary_cmp where id = 1) as b_in_vb_subquery
+from t_varbinary_binary_cmp
+order by id;
+
+drop table t_varbinary_binary_cmp;
+
+-- MySQL Bug #28076: BINARY(N) padding must remain significant when an IN
+-- predicate or a scalar subquery compares it with an unpadded VARBINARY(N).
+drop table if exists t_binary_varbinary_subquery_cmp;
+create table t_binary_varbinary_subquery_cmp (
+  id int primary key,
+  b binary(5),
+  vb varbinary(5)
+);
+
+insert into t_binary_varbinary_subquery_cmp values
+  (1, x'41', x'41'),
+  (2, x'42', x'42'),
+  (3, x'43', x'43');
+
+-- No row matches: b is zero-padded, while vb is not.
+select id
+from t_binary_varbinary_subquery_cmp
+where vb in (select b from t_binary_varbinary_subquery_cmp)
+order by id;
+
+select id
+from t_binary_varbinary_subquery_cmp
+where (vb, 10) in (select b, 10 from t_binary_varbinary_subquery_cmp)
+order by id;
+
+-- The direct literal comparison has the same byte-preserving behavior.
+select id
+from t_binary_varbinary_subquery_cmp
+where b = x'41'
+order by id;
+
+create index idx_binary_varbinary_subquery_b on t_binary_varbinary_subquery_cmp(b);
+create index idx_binary_varbinary_subquery_vb on t_binary_varbinary_subquery_cmp(vb);
+
+-- Index availability must not change the comparison result.
+select id
+from t_binary_varbinary_subquery_cmp
+where vb in (select b from t_binary_varbinary_subquery_cmp)
+order by id;
+
+select id
+from t_binary_varbinary_subquery_cmp
+where (vb, 10) in (select b, 10 from t_binary_varbinary_subquery_cmp)
+order by id;
+
+truncate table t_binary_varbinary_subquery_cmp;
+insert into t_binary_varbinary_subquery_cmp values (1, x'41', x'41');
+
+select id
+from t_binary_varbinary_subquery_cmp
+where b = (select vb from t_binary_varbinary_subquery_cmp)
+order by id;
+
+drop table t_binary_varbinary_subquery_cmp;
+
 drop database mysql_compat_string_binary_cmp;
