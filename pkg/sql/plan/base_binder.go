@@ -2424,24 +2424,18 @@ func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args [
 	if args[0].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[1]) {
 		var err error
 		args[0], err = appendCastBeforeExpr(ctx, args[0], targetType)
-		if err != nil {
-			return err
+		if err == nil {
+			args[1], err = appendCastBeforeExpr(ctx, args[1], targetType)
 		}
-		args[1], err = appendCastBeforeExpr(ctx, args[1], targetType)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 	if args[1].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[0]) {
 		var err error
 		args[0], err = appendCastBeforeExpr(ctx, args[0], targetType)
-		if err != nil {
-			return err
+		if err == nil {
+			args[1], err = appendCastBeforeExpr(ctx, args[1], targetType)
 		}
-		args[1], err = appendCastBeforeExpr(ctx, args[1], targetType)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 	return nil
 }
