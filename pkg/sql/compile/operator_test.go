@@ -91,6 +91,28 @@ func TestDupOperatorPartitionMultiUpdate(t *testing.T) {
 	}
 }
 
+func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
+	op := multi_update.NewArgument()
+	op.Action = multi_update.UpdateWriteTable
+	op.IsOnduplicateKeyUpdate = true
+	op.CountDeleteAffectRows = true
+	result := dupOperator(op, 0, 1)
+	if result == nil {
+		t.Fatal("dupOperator returned nil for MultiUpdate")
+	}
+	dupOp := result.(*multi_update.MultiUpdate)
+	if !dupOp.CountDeleteAffectRows {
+		t.Error("CountDeleteAffectRows not preserved by dupOperator")
+	}
+	if dupOp.Action != op.Action {
+		t.Errorf("Action mismatch: got %v, want %v", dupOp.Action, op.Action)
+	}
+	if dupOp.IsOnduplicateKeyUpdate != op.IsOnduplicateKeyUpdate {
+		t.Errorf("IsOnduplicateKeyUpdate mismatch: got %v, want %v",
+			dupOp.IsOnduplicateKeyUpdate, op.IsOnduplicateKeyUpdate)
+	}
+}
+
 func TestDupOperatorDispatchRecCTE(t *testing.T) {
 	op := dispatch.NewArgument()
 	op.RecCTE = true
