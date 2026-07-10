@@ -159,6 +159,13 @@ func schedulableEngineWorkState(state metadata.WorkState) bool {
 
 type queryCandidatePoolRequest = engine.QueryCandidatePoolRequest
 
+type queryCandidateMode uint8
+
+const (
+	queryCandidateModeExecution queryCandidateMode = iota
+	queryCandidateModePreview
+)
+
 type discoveredQueryCandidates struct {
 	legacyNodes engine.Nodes
 	candidates  engine.QueryCandidates
@@ -309,6 +316,7 @@ func (r engineQueryCandidatePoolResolver) resolve(
 func queryCandidatePipeline(
 	e engine.Engine,
 	poolRequest queryCandidatePoolRequest,
+	mode queryCandidateMode,
 ) (queryCandidateDiscoverer, queryCandidatePoolResolver, error) {
 	base, ok := unwrapSchedulingEngine(e)
 	if !ok {
@@ -321,6 +329,11 @@ func queryCandidatePipeline(
 		return engineQueryCandidateDiscoverer{provider: discoverer},
 			engineQueryCandidatePoolResolver{provider: resolver}, nil
 	case !hasDiscoverer && !hasResolver:
+		// Engine.Nodes has no context, so preview cannot bound its latency.
+		if mode == queryCandidateModePreview {
+			return nil, nil, moerr.NewInternalErrorNoCtx(
+				"query scheduling preview requires context-aware candidate discovery and pool resolution")
+		}
 		return legacyEngineNodesCandidateDiscoverer{engine: base, poolRequest: poolRequest},
 			legacyEngineNodesPoolResolver{}, nil
 	default:
@@ -340,7 +353,10 @@ func cloneCNLabels(labels map[string]string) map[string]string {
 	return cloned
 }
 
-func (c *Compile) evaluateQueryPlacement(ctx context.Context) (schedule.QueryDecision, string, error) {
+func (c *Compile) evaluateQueryPlacement(
+	ctx context.Context,
+	mode queryCandidateMode,
+) (schedule.QueryDecision, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -357,6 +373,9 @@ func (c *Compile) evaluateQueryPlacement(ctx context.Context) (schedule.QueryDec
 		}
 		return schedule.DecideQueryPlacement(req), "", nil
 	}
+	if err := ctx.Err(); err != nil {
+		return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
+	}
 
 	poolRequest := queryCandidatePoolRequest{
 		IsInternal: c.isInternal,
@@ -364,7 +383,7 @@ func (c *Compile) evaluateQueryPlacement(ctx context.Context) (schedule.QueryDec
 		Username:   c.uid,
 		CNLabel:    c.cnLabel,
 	}
-	discoverer, poolResolver, err := queryCandidatePipeline(c.e, poolRequest)
+	discoverer, poolResolver, err := queryCandidatePipeline(c.e, poolRequest, mode)
 	if err != nil {
 		return schedule.QueryDecision{}, scheduleFailureCandidateProvider, err
 	}
@@ -410,7 +429,10 @@ func currentCNWorkerFromCandidates(
 }
 
 func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
-	decision, failureCategory, err := c.evaluateQueryPlacement(c.querySchedulingContext())
+	decision, failureCategory, err := c.evaluateQueryPlacement(
+		c.querySchedulingContext(),
+		queryCandidateModeExecution,
+	)
 	if err != nil {
 		c.recordSchedulingFailure(failureCategory, schedule.Worker{})
 		return schedule.QueryDecision{}, err

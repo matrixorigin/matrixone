@@ -25,41 +25,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPreviewQuerySchedulingUsesExplicitLegacyCandidateBoundary(t *testing.T) {
-	e := &schedulerTestEngine{
-		nodes: engine.Nodes{
-			{Id: "working", Addr: "working:6001", Mcpu: 8, WorkState: metadata.WorkState_Working},
-			{Id: "draining", Addr: "draining:6001", Mcpu: 4, WorkState: metadata.WorkState_Draining},
-		},
-	}
+func TestPreviewQuerySchedulingRejectsLegacyCandidateProvider(t *testing.T) {
+	e := &schedulerTestEngine{}
 	trace := PreviewQueryScheduling(SchedulingPreviewRequest{
 		Query: &plan.Query{
 			Nodes: []*plan.Node{{NodeType: plan.Node_TABLE_SCAN}},
 		},
-		Engine:     e,
-		Address:    "local:6001",
-		IsInternal: true,
-		Tenant:     "sys",
-		Username:   "root",
-		CNLabel:    map[string]string{"role": "ap"},
+		Engine: e,
 	})
 
 	require.Equal(t, schedule.TraceModePreview, trace.Mode)
-	require.Equal(t, 1, e.calls)
-	require.True(t, e.isInternal)
-	require.Equal(t, "sys", e.tenant)
-	require.Equal(t, "root", e.uid)
-	require.Equal(t, map[string]string{"role": "ap"}, e.cnLabel)
-	query := trace.Attempts[0].Query
-	require.NotNil(t, query)
-	require.Equal(t, schedule.QueryExecAPMultiCN.String(), query.ExecKind)
-	require.Equal(t, string(schedule.CandidateSourceEngineNodes), query.CandidateSource)
-	require.Equal(t, string(schedule.PoolResolutionLegacyEngineNodes), query.PoolResolution)
-	require.Equal(t, 2, query.DiscoveredCount)
-	require.Equal(t, 2, query.ResolvedCount)
-	require.Equal(t, 1, query.SelectedCount)
-	require.Equal(t, "working", query.Selected[0].ID)
-	require.Equal(t, 1, query.DroppedCount)
+	require.Zero(t, e.calls)
+	require.Nil(t, trace.Attempts[0].Query)
+	require.Equal(t, scheduleFailureCandidateProvider, trace.Attempts[0].Failures[0].Category)
 }
 
 func TestPreviewQuerySchedulingDoesNotDiscoverCandidatesForLocalQuery(t *testing.T) {

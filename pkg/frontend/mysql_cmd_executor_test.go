@@ -1786,6 +1786,61 @@ func TestSchedulingPreviewHasIndependentTimeout(t *testing.T) {
 	require.Equal(t, "candidate-discovery", trace.Attempts[0].Failures[0].Category)
 }
 
+type blockingLegacySchedulingPreviewEngine struct {
+	engine.Engine
+	called  chan struct{}
+	release chan struct{}
+}
+
+func (e *blockingLegacySchedulingPreviewEngine) Nodes(
+	bool,
+	string,
+	string,
+	map[string]string,
+) (engine.Nodes, error) {
+	close(e.called)
+	<-e.release
+	return nil, nil
+}
+
+func TestSchedulingPreviewDoesNotCallBlockingLegacyEngine(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	legacy := &blockingLegacySchedulingPreviewEngine{
+		called:  make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	ses.txnHandler.storage = legacy
+
+	done := make(chan schedule.Trace, 1)
+	go func() {
+		done <- previewQueryScheduling(
+			context.Background(),
+			ses,
+			&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
+			false,
+		)
+	}()
+
+	var trace schedule.Trace
+	select {
+	case trace = <-done:
+		close(legacy.release)
+	case <-time.After(time.Second):
+		close(legacy.release)
+		<-done
+		t.Fatal("scheduling preview called blocking legacy Engine.Nodes")
+	}
+	select {
+	case <-legacy.called:
+		t.Fatal("scheduling preview must not call legacy Engine.Nodes")
+	default:
+	}
+	require.Equal(t, schedule.TraceModePreview, trace.Mode)
+	require.Equal(t, "candidate-provider", trace.Attempts[0].Failures[0].Category)
+}
+
 func TestSchedulingTraceFromComputationWrapperReturnsIndependentSnapshot(t *testing.T) {
 	cw := &TxnComputationWrapper{}
 	attempt := cw.schedulingTrace.StartAttempt()

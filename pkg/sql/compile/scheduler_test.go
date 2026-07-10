@@ -369,7 +369,11 @@ func TestQueryCandidatePipelineRejectsPartialProvider(t *testing.T) {
 		&schedulerDiscoverOnlyEngine{schedulerTestEngine: &schedulerTestEngine{}},
 		&schedulerResolveOnlyEngine{schedulerTestEngine: &schedulerTestEngine{}},
 	} {
-		_, _, err := queryCandidatePipeline(provider, queryCandidatePoolRequest{})
+		_, _, err := queryCandidatePipeline(
+			provider,
+			queryCandidatePoolRequest{},
+			queryCandidateModeExecution,
+		)
 		require.ErrorContains(t, err, "must implement both")
 	}
 }
@@ -392,7 +396,11 @@ func TestQueryCandidatePipelineUnwrapsEntireEngine(t *testing.T) {
 	provider := &schedulerProviderTestEngine{schedulerTestEngine: &schedulerTestEngine{}}
 	wrapper := &engine.EntireEngine{Engine: &engine.EntireEngine{Engine: provider}}
 
-	discoverer, resolver, err := queryCandidatePipeline(wrapper, queryCandidatePoolRequest{})
+	discoverer, resolver, err := queryCandidatePipeline(
+		wrapper,
+		queryCandidatePoolRequest{},
+		queryCandidateModeExecution,
+	)
 	require.NoError(t, err)
 	require.IsType(t, engineQueryCandidateDiscoverer{}, discoverer)
 	require.IsType(t, engineQueryCandidatePoolResolver{}, resolver)

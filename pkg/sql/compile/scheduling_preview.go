@@ -68,7 +68,7 @@ func PreviewQueryScheduling(req SchedulingPreviewRequest) schedule.Trace {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	decision, failureCategory, err := c.evaluateQueryPlacement(ctx)
+	decision, failureCategory, err := c.evaluateQueryPlacement(ctx, queryCandidateModePreview)
 	if err != nil {
 		recorder.RecordFailure(attempt, failureCategory, schedule.Worker{})
 		return recorder.Snapshot()
