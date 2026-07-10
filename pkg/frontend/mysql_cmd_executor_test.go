@@ -1641,6 +1641,11 @@ func TestMarshalPlanHandlerPersistsDistributedSchedulingTraceWithoutFullPlan(t *
 	require.NoError(t, json.Unmarshal(jsonBytes, &payload))
 	require.Equal(t, 1, payload.Scheduling.AttemptCount)
 	require.Equal(t, 2, payload.Scheduling.Attempts[0].Query.SelectedCount)
+	require.True(t, payload.Scheduling.Attempts[0].Query.Selected[0].Routable)
+	require.True(t, payload.Scheduling.Attempts[0].Query.Selected[1].Routable)
+	require.NotContains(t, string(jsonBytes), "cn-a:6001")
+	require.NotContains(t, string(jsonBytes), "cn-b:6001")
+	require.NotContains(t, string(jsonBytes), "\"addr\"")
 	require.NotContains(t, string(jsonBytes), "\"steps\"")
 }
 
@@ -1784,6 +1789,44 @@ func TestSchedulingPreviewHasIndependentTimeout(t *testing.T) {
 	require.Less(t, time.Since(started), time.Second)
 	require.Equal(t, schedule.TraceModePreview, trace.Mode)
 	require.Equal(t, "candidate-discovery", trace.Attempts[0].Failures[0].Category)
+}
+
+type blockingPoolResolutionPreviewEngine struct {
+	engine.Engine
+}
+
+func (*blockingPoolResolutionPreviewEngine) DiscoverQueryCandidates(
+	context.Context,
+) (engine.QueryCandidates, error) {
+	return nil, nil
+}
+
+func (*blockingPoolResolutionPreviewEngine) ResolveQueryCandidatePool(
+	ctx context.Context,
+	_ engine.QueryCandidates,
+	_ engine.QueryCandidatePoolRequest,
+) (engine.Nodes, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestSchedulingPreviewTimeoutBoundsPoolResolution(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler.storage = &blockingPoolResolutionPreviewEngine{}
+
+	started := time.Now()
+	trace := previewQueryScheduling(
+		context.Background(),
+		ses,
+		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
+		false,
+	)
+
+	require.Less(t, time.Since(started), time.Second)
+	require.Equal(t, schedule.TraceModePreview, trace.Mode)
+	require.Equal(t, "pool-resolution", trace.Attempts[0].Failures[0].Category)
 }
 
 type blockingLegacySchedulingPreviewEngine struct {

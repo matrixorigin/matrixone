@@ -884,13 +884,18 @@ func (e *Engine) ResolveQueryCandidatePool(
 		return nil, err
 	}
 	if len(request.CNLabel) == 0 {
-		return queryCandidateNodes(candidates), nil
+		return queryCandidateNodes(ctx, candidates)
 	}
 
-	labels := cloneStringMap(request.CNLabel)
+	labels, err := cloneStringMap(ctx, request.CNLabel)
+	if err != nil {
+		return nil, err
+	}
 	selector := clusterservice.NewSelector().SelectByLabel(labels, clusterservice.EQ_Globbing)
-	services := queryCandidateServices(candidates)
-	byID := queryCandidatesByID(candidates)
+	services, byID, err := queryCandidateRoutingInput(ctx, candidates)
+	if err != nil {
+		return nil, err
+	}
 	var nodes engine.Nodes
 	appendCandidate := func(service *metadata.CNService) {
 		candidate, ok := byID[service.ServiceID]
@@ -899,35 +904,43 @@ func (e *Engine) ResolveQueryCandidatePool(
 		}
 	}
 	if request.IsInternal || strings.ToLower(request.Tenant) == "sys" {
-		route.RouteForSuperTenantCandidates(services, selector, request.Username, nil, appendCandidate)
+		err = route.RouteForSuperTenantCandidates(ctx, services, selector, request.Username, nil, appendCandidate)
 	} else {
-		route.RouteForCommonTenantCandidates(services, selector, nil, appendCandidate)
+		err = route.RouteForCommonTenantCandidates(ctx, services, selector, nil, appendCandidate)
 	}
-	appendRuntimeIneligibleQueryCandidates(candidates, selector, &nodes)
-	if err := ctx.Err(); err != nil {
+	if err != nil {
+		return nil, err
+	}
+	if err = appendRuntimeIneligibleQueryCandidates(ctx, candidates, selector, &nodes); err != nil {
 		return nil, err
 	}
 	return nodes, nil
 }
 
-func queryCandidateNodes(candidates engine.QueryCandidates) engine.Nodes {
+func queryCandidateNodes(ctx context.Context, candidates engine.QueryCandidates) (engine.Nodes, error) {
 	if len(candidates) == 0 {
-		return nil
+		return nil, ctx.Err()
 	}
 	nodes := make(engine.Nodes, 0, len(candidates))
 	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if candidate.Service.WorkState == metadata.WorkState_Working ||
 			candidate.Service.WorkState == metadata.WorkState_Unknown {
 			nodes = append(nodes, queryCandidateNode(candidate))
 		}
 	}
 	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if candidate.Service.WorkState == metadata.WorkState_Draining ||
 			candidate.Service.WorkState == metadata.WorkState_Drained {
 			nodes = append(nodes, queryCandidateNode(candidate))
 		}
 	}
-	return nodes
+	return nodes, ctx.Err()
 }
 
 func queryCandidateNode(candidate engine.QueryCandidate) engine.Node {
@@ -939,37 +952,48 @@ func queryCandidateNode(candidate engine.QueryCandidate) engine.Node {
 	}
 }
 
-func queryCandidateServices(candidates engine.QueryCandidates) []metadata.CNService {
+func queryCandidateRoutingInput(
+	ctx context.Context,
+	candidates engine.QueryCandidates,
+) ([]metadata.CNService, map[string]engine.QueryCandidate, error) {
 	services := make([]metadata.CNService, 0, len(candidates))
-	for _, candidate := range candidates {
-		services = append(services, candidate.Service)
-	}
-	return services
-}
-
-func queryCandidatesByID(candidates engine.QueryCandidates) map[string]engine.QueryCandidate {
 	byID := make(map[string]engine.QueryCandidate, len(candidates))
 	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		services = append(services, candidate.Service)
 		byID[candidate.Service.ServiceID] = candidate
 	}
-	return byID
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	return services, byID, nil
 }
 
 func appendRuntimeIneligibleQueryCandidates(
+	ctx context.Context,
 	candidates engine.QueryCandidates,
 	selector clusterservice.Selector,
 	nodes *engine.Nodes,
-) {
+) error {
 	seen := make(map[string]struct{}, len(*nodes))
+	matcher := new(clusterservice.SelectorMatcher)
 	for _, node := range *nodes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		seen[node.Id] = struct{}{}
 	}
 	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		service := candidate.Service
 		if service.WorkState != metadata.WorkState_Draining && service.WorkState != metadata.WorkState_Drained {
 			continue
 		}
-		if !selector.Match(service.Labels) {
+		if !matcher.MatchCN(selector, service) {
 			continue
 		}
 		if _, ok := seen[service.ServiceID]; ok {
@@ -978,14 +1002,21 @@ func appendRuntimeIneligibleQueryCandidates(
 		*nodes = append(*nodes, queryCandidateNode(candidate))
 		seen[service.ServiceID] = struct{}{}
 	}
+	return ctx.Err()
 }
 
-func cloneStringMap(values map[string]string) map[string]string {
+func cloneStringMap(ctx context.Context, values map[string]string) (map[string]string, error) {
 	cloned := make(map[string]string, len(values))
 	for key, value := range values {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		cloned[key] = value
 	}
-	return cloned
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return cloned, nil
 }
 
 func (e *Engine) Hints() (h engine.Hints) {

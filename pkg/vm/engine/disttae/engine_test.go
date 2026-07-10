@@ -371,6 +371,61 @@ func TestEngineQueryCandidateProvidersHonorCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+type cancelAfterChecksContext struct {
+	context.Context
+	remaining int
+	done      chan struct{}
+}
+
+func newCancelAfterChecksContext(checks int) *cancelAfterChecksContext {
+	return &cancelAfterChecksContext{
+		Context:   context.Background(),
+		remaining: checks,
+		done:      make(chan struct{}),
+	}
+}
+
+func (c *cancelAfterChecksContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *cancelAfterChecksContext) Err() error {
+	if c.remaining > 0 {
+		c.remaining--
+		if c.remaining == 0 {
+			close(c.done)
+		}
+	}
+	if c.remaining == 0 {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestEngineQueryCandidatePoolHonorsCancellationDuringIteration(t *testing.T) {
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{ServiceID: "cn-1", WorkState: metadata.WorkState_Working}},
+		{Service: metadata.CNService{ServiceID: "cn-2", WorkState: metadata.WorkState_Working}},
+		{Service: metadata.CNService{ServiceID: "cn-3", WorkState: metadata.WorkState_Working}},
+	}
+	e := new(Engine)
+
+	t.Run("without labels", func(t *testing.T) {
+		ctx := newCancelAfterChecksContext(3)
+		_, err := e.ResolveQueryCandidatePool(ctx, candidates, engine.QueryCandidatePoolRequest{})
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("while building labeled route input", func(t *testing.T) {
+		ctx := newCancelAfterChecksContext(5)
+		_, err := e.ResolveQueryCandidatePool(ctx, candidates, engine.QueryCandidatePoolRequest{
+			Tenant:  "app",
+			CNLabel: map[string]string{"account": "app"},
+		})
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+}
+
 func newEngineWithClusterDetails(t *testing.T, details logpb.ClusterDetails) *Engine {
 	t.Helper()
 

@@ -120,10 +120,10 @@ type FailureTrace struct {
 }
 
 type WorkerTrace struct {
-	ID    string `json:"id,omitempty"`
-	Addr  string `json:"addr,omitempty"`
-	Mcpu  int    `json:"mcpu,omitempty"`
-	State string `json:"state,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Routable bool   `json:"routable"`
+	Mcpu     int    `json:"mcpu,omitempty"`
+	State    string `json:"state,omitempty"`
 }
 
 type ReasonCount struct {
@@ -442,10 +442,10 @@ func omitLocalPlacementDetails(attempt *AttemptTrace) bool {
 
 func traceWorker(worker Worker) WorkerTrace {
 	return WorkerTrace{
-		ID:    boundedTraceWorkerValue(worker.ID),
-		Addr:  boundedTraceWorkerValue(worker.Addr),
-		Mcpu:  worker.Mcpu,
-		State: worker.State.String(),
+		ID:       boundedTraceWorkerValue(worker.ID),
+		Routable: worker.Addr != "",
+		Mcpu:     worker.Mcpu,
+		State:    worker.State.String(),
 	}
 }
 

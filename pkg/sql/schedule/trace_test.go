@@ -15,6 +15,7 @@
 package schedule
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -76,6 +77,8 @@ func TestTraceRecorderCapturesSchedulingDecisionChain(t *testing.T) {
 	require.Equal(t, StageKindSingleWorker, trace.Attempts[0].Stages[0].Kind)
 	require.Equal(t, StageKindQueryWorkerSet, trace.Attempts[0].Stages[1].Kind)
 	require.Equal(t, "runtime-ineligible-selected-worker", trace.Attempts[0].Failures[0].Category)
+	require.True(t, trace.Attempts[0].Query.CurrentCN.Routable)
+	require.True(t, trace.Attempts[0].Query.Selected[1].Routable)
 	require.True(t, trace.PersistStandalone())
 }
 
@@ -138,22 +141,28 @@ func TestTraceRecorderBoundsEveryAccumulation(t *testing.T) {
 	require.LessOrEqual(t, countTraceWorkerRefs(trace), maxTraceWorkerRefs)
 }
 
-func TestTraceRecorderBoundsWorkerValueBytes(t *testing.T) {
+func TestTraceRecorderBoundsWorkerIDAndRedactsAddress(t *testing.T) {
 	recorder := new(TraceRecorder)
 	attempt := recorder.StartAttempt()
-	value := strings.Repeat("x", maxTraceWorkerValueBytes*4)
+	id := strings.Repeat("i", maxTraceWorkerValueBytes*4)
+	addr := "private-pipeline-address:6001"
 	recorder.RecordQuery(attempt, QueryDecision{
 		ExecKind: QueryExecAPMultiCN,
 		Workers: Workers{{
-			ID:   value,
-			Addr: value,
+			ID:   id,
+			Addr: addr,
 		}},
 		Satisfied: true,
 	})
 
-	worker := recorder.Snapshot().Attempts[0].Query.Selected[0]
+	trace := recorder.Snapshot()
+	worker := trace.Attempts[0].Query.Selected[0]
 	require.Len(t, worker.ID, maxTraceWorkerValueBytes)
-	require.Len(t, worker.Addr, maxTraceWorkerValueBytes)
+	require.True(t, worker.Routable)
+	payload, err := json.Marshal(trace)
+	require.NoError(t, err)
+	require.NotContains(t, string(payload), addr)
+	require.NotContains(t, string(payload), `"addr"`)
 }
 
 func countTraceWorkerRefs(trace Trace) int {

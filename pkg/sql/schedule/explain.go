@@ -201,7 +201,7 @@ func explainWorker(worker WorkerTrace) string {
 	if worker.ID != "" {
 		parts = append(parts, "id="+explainValue(worker.ID))
 	}
-	if worker.Addr != "" {
+	if worker.Routable {
 		parts = append(parts, "route=available")
 	}
 	if worker.Mcpu != 0 {
