@@ -412,6 +412,37 @@ const (
 	FullTextIndex_TabCol_Id       = "doc_id"
 	FullTextIndex_TabCol_Position = "pos"
 
+	/************ 3b. BM25 Index **************/
+
+	// BM25 ranked-retrieval index: a chunked binary (WAND) index store + metadata,
+	// HNSW-style. A bm25 index (CREATE INDEX ... USING bm25) has these two hidden
+	// tables (no postings table — it builds directly from the source rows); both
+	// share the IndexName and are distinguished by IndexAlgoTableType.
+	// NOTE: IndexAlgoTableType is stored in a varchar(11) catalog column, so these
+	// must be <= 11 chars (cf. "cagra_index"/"ivfpq_index").
+	Bm25Index_TblType_Metadata = "bm25_meta"
+	Bm25Index_TblType_Storage  = "bm25_index"
+
+	Bm25Index_TblCol_Storage_Index_Id = "index_id"
+	Bm25Index_TblCol_Storage_Chunk_Id = "chunk_id"
+	Bm25Index_TblCol_Storage_Data     = "data"
+	Bm25Index_TblCol_Storage_Tag      = "tag"
+
+	Bm25Index_TblCol_Metadata_Index_Id  = "index_id"
+	Bm25Index_TblCol_Metadata_Timestamp = "timestamp"
+	Bm25Index_TblCol_Metadata_Checksum  = "checksum"
+	Bm25Index_TblCol_Metadata_Filesize  = "filesize"
+	// Recency is the tag=0 base sub-index's recency key (0 for a full-build base = oldest;
+	// K = max folded tail chunk_id for a compacted base). ComputeLiveness dedups bases +
+	// tail uniformly by this; NextTailChunkId reads MAX over it too. Named distinctly from
+	// the storage table's chunk_id (a physical chunk position within a sub's blob), which
+	// is a different concept that happened to share the column name.
+	Bm25Index_TblCol_Metadata_Recency = "recency"
+	// Nrow is the sub-index's live doc count. Tiered merge reads it (without loading the
+	// sub) to skip subs already at max_index_capacity — a "full" sub is optimal and is
+	// never re-merged, so a MERGE over a pure-insert tail never rewrites the full base.
+	Bm25Index_TblCol_Metadata_Nrow = "nrow"
+
 	/************ 4. HNSW Index *************/
 
 	// HNSW Table Types

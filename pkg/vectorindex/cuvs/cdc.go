@@ -84,6 +84,12 @@ const (
 	cdcFrameOverhead        = cdcHeaderSize + cdcFooterSize // 44 bytes, ex. header section
 )
 
+// CdcHeaderSize is the fixed frame header length — the minimum prefix CdcFrameLen
+// needs. Exported so a streaming reader (e.g. the bm25 index's file-based tail
+// loader) can read exactly the header to learn a frame's total length before
+// reading it.
+const CdcHeaderSize = cdcHeaderSize
+
 // FrameCdcChunk wraps the given record bytes (plus an optional header,
 // typically colMetaJSON) into the on-wire chunk frame described above.
 // nInserts / nDeletes / nUpserts are the per-op record counts contained
@@ -156,6 +162,26 @@ func UnframeCdcChunk(framed []byte) (records, header []byte, nInserts, nDeletes,
 	}
 	records = framed[cdcHeaderSize+int(hlen) : cdcHeaderSize+int(hlen)+int(plen)]
 	return records, header, nInserts, nDeletes, nUpserts, nil
+}
+
+// CdcFrameLen returns the total on-wire byte length of the CDC chunk frame whose
+// leading bytes are `prefix` (at least cdcHeaderSize bytes — the frame header is
+// self-describing). It lets a consumer that STORES one frame split across several
+// fixed-size storage chunks reassemble it: read the first stored chunk's header,
+// get the total length, then read that many bytes across the following chunks.
+// cuVS's own tail packs small records so a frame is always <= one chunk; the bm25
+// retrieval index stores indivisible segment blobs that can exceed a chunk, hence
+// this helper. Validates the start magic; does not require the full frame.
+func CdcFrameLen(prefix []byte) (int, error) {
+	if len(prefix) < cdcHeaderSize {
+		return 0, moerr.NewInternalErrorNoCtxf("CdcFrameLen: prefix too short (%d < %d)", len(prefix), cdcHeaderSize)
+	}
+	if got := binary.LittleEndian.Uint32(prefix[0:4]); got != cdcChunkMagic {
+		return 0, moerr.NewInternalErrorNoCtxf("CdcFrameLen: bad start magic 0x%08x (want 0x%08x)", got, cdcChunkMagic)
+	}
+	plen := binary.LittleEndian.Uint32(prefix[20:24])
+	hlen := binary.LittleEndian.Uint32(prefix[24:28])
+	return cdcFrameOverhead + int(hlen) + int(plen), nil
 }
 
 // CDC event log helpers shared by CAGRA and IVF-PQ.

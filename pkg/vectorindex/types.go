@@ -261,6 +261,14 @@ type RuntimeConfig struct {
 	// Go never parses this payload; it's produced by the SQL layer and
 	// consumed by the C++ eval_filter_bitmap_cpu.
 	FilterJSON string
+
+	// Emit, when non-nil, requests a STREAMING search: instead of returning all
+	// results at once, the index yields them in bounded batches by calling Emit
+	// once per batch (Search then returns empty keys/distances). Only the bm25
+	// index honors it, and only for the no-LIMIT case (return every matching
+	// doc, ranked by an upstream ORDER BY) — so it walks and streams without a
+	// top-K heap. Other algorithms ignore this field.
+	Emit func(keys []any, distances []float64) error
 }
 
 type VectorIndexCdc[T types.RealNumbers] struct {
