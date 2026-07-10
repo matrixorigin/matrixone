@@ -481,6 +481,95 @@ func TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr(t *testing.T) {
 		"all merge scopes are on the current CN so LocalRegs must cover every merge scope")
 }
 
+func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	source := &Scope{NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 2}}
+	localTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+	remoteTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+
+	arg, err := constructLocalDispatchFromScopes(0, []*Scope{localTarget}, source)
+	require.NoError(t, err)
+	require.Len(t, arg.LocalRegs, 1)
+	require.Empty(t, arg.RemoteRegs)
+	require.Equal(t, []int{0}, arg.ShuffleRegIdxLocal)
+
+	untouchedTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+	beforeNilBatchCnt := untouchedTarget.Proc.Reg.MergeReceivers[0].NilBatchCnt
+	_, err = constructLocalDispatchFromScopes(0, []*Scope{untouchedTarget, remoteTarget}, source)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "different CN")
+	require.Equal(t, beforeNilBatchCnt, untouchedTarget.Proc.Reg.MergeReceivers[0].NilBatchCnt,
+		"validation failure must not partially mutate earlier targets")
+	require.Empty(t, remoteTarget.RemoteReceivRegInfos)
+}
+
+func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	source := &Scope{NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 2}}
+	validTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+
+	tests := []struct {
+		name    string
+		idx     int
+		targets []*Scope
+		source  *Scope
+		errText string
+	}{
+		{
+			name:    "nil source",
+			targets: []*Scope{validTarget},
+			errText: "source scope is nil",
+		},
+		{
+			name:    "empty targets",
+			source:  source,
+			targets: nil,
+			errText: "requires at least one target scope",
+		},
+		{
+			name:    "nil target",
+			source:  source,
+			targets: []*Scope{nil},
+			errText: "target scope 0 is nil",
+		},
+		{
+			name:   "target without process",
+			source: source,
+			targets: []*Scope{{
+				NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+			}},
+			errText: "target scope 0 has no process",
+		},
+		{
+			name:    "merge receiver index out of range",
+			idx:     1,
+			source:  source,
+			targets: []*Scope{validTarget},
+			errText: "has no merge receiver at index 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := constructLocalDispatchFromScopes(tt.idx, tt.targets, tt.source)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.errText)
+		})
+	}
+}
+
 func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
@@ -1398,6 +1487,62 @@ func TestCleanPipelineWitchStartFail(t *testing.T) {
 	signal := <-op.Reg.Ch2
 	_, err := signal.Action()
 	require.Error(t, err)
+}
+
+func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	reg := process.NewPipelineEdge(1, 0)
+	s := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: "malformed-remote-address"},
+		Proc:     proc,
+		RootOp:   connector.NewArgument().WithReg(reg),
+	}
+	c := &Compile{proc: proc, addr: "local:6001"}
+
+	err := s.RemoteRun(c)
+	require.ErrorContains(t, err, "malformed remote CN address")
+
+	select {
+	case signal := <-reg.Ch2:
+		_, signalErr := signal.Action()
+		require.ErrorIs(t, signalErr, err)
+	case <-time.After(time.Second):
+		t.Fatal("malformed remote start failure did not terminate its receiver")
+	}
+}
+
+func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.hasMergeOp = true
+
+	parent := &Scope{
+		Magic:  Merge,
+		Proc:   c.proc.NewContextChildProc(1),
+		RootOp: merge.NewArgument(),
+	}
+	child := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: "malformed-remote-address"},
+		Proc:     c.proc.NewContextChildProc(0),
+		RootOp:   connector.NewArgument().WithReg(parent.Proc.Reg.MergeReceivers[0]),
+	}
+	parent.PreScopes = []*Scope{child}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- parent.MergeRun(c)
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "malformed remote CN address")
+	case <-time.After(2 * time.Second):
+		parent.Proc.Cancel(moerr.NewInternalErrorNoCtx("test timeout"))
+		t.Fatal("merge run hung after malformed remote pre-scope failed")
+	}
 }
 
 func TestScopeGetRelDataError(t *testing.T) {
