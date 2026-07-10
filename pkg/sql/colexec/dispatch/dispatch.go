@@ -16,6 +16,7 @@ package dispatch
 
 import (
 	"bytes"
+	"context"
 	"time"
 
 	"github.com/google/uuid"
@@ -172,7 +173,7 @@ func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, erro
 		select {
 		case <-proc.Ctx.Done():
 			dispatch.ctr.prepared = true
-			return true, nil
+			return false, remoteRegistrationCancelCause(proc.Ctx)
 
 		case <-deadline.C:
 			return false, moerr.NewInternalErrorf(proc.Ctx,
@@ -185,6 +186,19 @@ func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, erro
 	}
 	dispatch.ctr.prepared = true
 	return false, nil
+}
+
+func remoteRegistrationCancelCause(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return context.Canceled
 }
 
 // RegisterRemoteReceivers publishes remote receiver UUIDs before the dispatch
