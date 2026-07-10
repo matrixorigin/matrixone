@@ -69,6 +69,13 @@ const (
 
 	FJ_CNCLONEFailed    = "fj/cn/clone_fails"
 	FJ_CNNeedRetryError = "fj/cn/need_retry_error"
+
+	// FJ_CNReenterSnapshotOffsetOnGetTable is a test-only fault that makes
+	// Transaction.getTable reenter UpdateSnapshotWriteOffset, deterministically
+	// simulating the internal-SQL leg of the issue #25557 deadlock:
+	// getTable -> Engine.Database -> loadDatabaseFromStorage -> execReadSql
+	// -> NewCompile -> UpdateSnapshotWriteOffset.
+	FJ_CNReenterSnapshotOffsetOnGetTable = "fj/cn/reenter_snapshot_offset_on_get_table"
 )
 
 const (
@@ -293,6 +300,16 @@ func SimpleInject(key string) (rmFault func(), err error) {
 func SimpleInjected(key string) bool {
 	_, _, injected := fault.TriggerFault(key)
 	return injected
+}
+
+// CNReenterSnapshotOffsetOnGetTableInjected reports whether the
+// FJ_CNReenterSnapshotOffsetOnGetTable fault is active. When it is,
+// Transaction.getTable reenters UpdateSnapshotWriteOffset; errorOut
+// additionally tells it to fail with an injected error (iarg == 0, the
+// SimpleInject default) instead of continuing the normal lookup (iarg != 0).
+func CNReenterSnapshotOffsetOnGetTableInjected() (injected bool, errorOut bool) {
+	iarg, _, injected := fault.TriggerFault(FJ_CNReenterSnapshotOffsetOnGetTable)
+	return injected, injected && iarg == 0
 }
 
 // inject log reader and partition state

@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1329,4 +1330,190 @@ func TestSnapshotWriteOffset_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 	require.Equal(t, 10, txn.GetSnapshotWriteOffset())
+}
+
+// enableReenterSnapshotOffsetFault turns on the fault that makes getTable
+// reenter UpdateSnapshotWriteOffset and then fail with an injected error,
+// deterministically simulating the internal-SQL leg of the issue #25557
+// deadlock chain.
+func enableReenterSnapshotOffsetFault(t *testing.T) {
+	fault.Enable()
+	t.Cleanup(func() {
+		// Fault injection is a process-level global switch. Removing the
+		// fault point alone does not turn it off; subsequent tests would
+		// run with injection still active, causing order-dependent
+		// failures.
+		fault.Disable()
+	})
+	rmFault, err := objectio.SimpleInject(objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+	require.NoError(t, err)
+	t.Cleanup(rmFault)
+}
+
+// newDumpableTxnForTest builds a minimal Transaction whose workspace holds
+// one user-table INSERT entry that dumpBatchLocked will try to flush,
+// reaching getTable. The zero-valued engine config (all thresholds 0)
+// guarantees the entry is not skipped.
+func newDumpableTxnForTest(t *testing.T) *Transaction {
+	proc := testutil.NewProc(t)
+	txn := &Transaction{
+		proc:   proc,
+		engine: &Engine{},
+		writes: []Entry{
+			{
+				typ:          INSERT,
+				accountId:    0,
+				tableId:      42, // must not be a catalog table id
+				databaseId:   7,
+				tableName:    "tbl",
+				databaseName: "db",
+				bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2}),
+			},
+		},
+	}
+	t.Cleanup(func() {
+		// If the dump aborts before consuming the entries, their batches
+		// are still owned by the workspace; release them here.
+		for i := range txn.writes {
+			if txn.writes[i].bat != nil {
+				txn.writes[i].bat.Clean(proc.Mp())
+			}
+		}
+	})
+	return txn
+}
+
+// requireConsistentReenteredOffset asserts that the offset captured by the
+// reentrant UpdateSnapshotWriteOffset covers every entry that was in
+// txn.writes when the dump started. If the dump had already removed the raw
+// entries when getTable ran (inconsistent intermediate state), the captured
+// offset would be smaller, and the replacement S3 entries appended later
+// would fall outside [0, offset) — invisible to every reader of this txn.
+func requireConsistentReenteredOffset(t *testing.T, txn *Transaction, preDumpLen int) {
+	t.Helper()
+	require.Equal(t, preDumpLen, txn.GetSnapshotWriteOffset(),
+		"reentrant UpdateSnapshotWriteOffset observed an inconsistent "+
+			"intermediate workspace state")
+}
+
+// TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock covers the
+// original issue #25557 entry point:
+//
+//	txnTable.Write -> dumpBatch [acquires txn.Lock()]
+//	  -> dumpBatchLocked -> dumpInsertBatchLocked -> getTable
+//	    -> internal SQL -> NewCompile -> UpdateSnapshotWriteOffset
+//
+// The fault point makes the internal-SQL leg deterministic. Before the fix
+// the reentrant UpdateSnapshotWriteOffset self-deadlocked on txn.Lock().
+func TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
+	enableReenterSnapshotOffsetFault(t)
+	txn := newDumpableTxnForTest(t)
+	preDumpLen := len(txn.writes)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- txn.dumpBatch(context.Background(), 0)
+	}()
+
+	select {
+	case err := <-errCh:
+		// The injected error proves getTable was reached and the
+		// reentrant UpdateSnapshotWriteOffset returned instead of
+		// deadlocking.
+		require.ErrorContains(t, err, "reenter snapshot write offset")
+		requireConsistentReenteredOffset(t, txn, preDumpLen)
+	case <-time.After(10 * time.Second):
+		t.Fatal("dumpBatch deadlocked when getTable reentered " +
+			"UpdateSnapshotWriteOffset with txn.Lock held")
+	}
+}
+
+// TestIssue25557_LockedDumpInsertBatchReentrantGetTableDoesNotDeadlock covers
+// the locked entry points that call dumpBatchLocked directly without going
+// through the dumpBatch wrapper (IncrStatementID, commit):
+//
+//	IncrStatementID [acquires txn.Lock()]
+//	  -> dumpBatchLocked -> dumpInsertBatchLocked -> getTable
+//	    -> internal SQL -> NewCompile -> UpdateSnapshotWriteOffset
+//
+// This is the reproducer shape from the PR #25560 review: a fix scoped to
+// the dumpBatch wrapper does not cover this path.
+func TestIssue25557_LockedDumpInsertBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
+	enableReenterSnapshotOffsetFault(t)
+	txn := newDumpableTxnForTest(t)
+	preDumpLen := len(txn.writes)
+
+	fs, err := colexec.GetSharedFSFromProc(txn.proc)
+	require.NoError(t, err)
+
+	errCh := make(chan error, 1)
+	go func() {
+		txn.Lock()
+		defer txn.Unlock()
+		var size uint64
+		var pkCount int
+		errCh <- txn.dumpInsertBatchLocked(
+			context.Background(), fs, 0, &size, &pkCount)
+	}()
+
+	select {
+	case err := <-errCh:
+		require.ErrorContains(t, err, "reenter snapshot write offset")
+		requireConsistentReenteredOffset(t, txn, preDumpLen)
+	case <-time.After(10 * time.Second):
+		t.Fatal("dumpInsertBatchLocked deadlocked when getTable reentered " +
+			"UpdateSnapshotWriteOffset with txn.Lock held")
+	}
+}
+
+// TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock covers the
+// delete flush path, which has the same getTable -> internal SQL shape as
+// the insert path.
+func TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
+	enableReenterSnapshotOffsetFault(t)
+
+	proc := testutil.NewProc(t)
+	txn := &Transaction{
+		proc:   proc,
+		engine: &Engine{},
+		writes: []Entry{
+			{
+				typ:          DELETE,
+				accountId:    0,
+				tableId:      42, // must not be a catalog table id
+				databaseId:   7,
+				tableName:    "tbl",
+				databaseName: "db",
+				bat:          newDeleteBatchForTest(t, proc, []int64{1, 2}),
+			},
+		},
+	}
+	t.Cleanup(func() {
+		for i := range txn.writes {
+			if txn.writes[i].bat != nil {
+				txn.writes[i].bat.Clean(proc.Mp())
+			}
+		}
+	})
+	preDumpLen := len(txn.writes)
+
+	fs, err := colexec.GetSharedFSFromProc(txn.proc)
+	require.NoError(t, err)
+
+	errCh := make(chan error, 1)
+	go func() {
+		txn.Lock()
+		defer txn.Unlock()
+		var size uint64
+		errCh <- txn.dumpDeleteBatchLocked(context.Background(), fs, 0, &size)
+	}()
+
+	select {
+	case err := <-errCh:
+		require.ErrorContains(t, err, "reenter snapshot write offset")
+		requireConsistentReenteredOffset(t, txn, preDumpLen)
+	case <-time.After(10 * time.Second):
+		t.Fatal("dumpDeleteBatchLocked deadlocked when getTable reentered " +
+			"UpdateSnapshotWriteOffset with txn.Lock held")
+	}
 }
