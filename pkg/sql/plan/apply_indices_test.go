@@ -1021,20 +1021,66 @@ func makeTestRegularIndexPrefixEqWithSerialFunc(t *testing.T, numArgs int, seria
 }
 
 func makeTestRegularIndexPKLessThan(t *testing.T, value int64) *planpb.Expr {
+	return makeTestRegularIndexPKRange(t, "<", 100, 1, value, false)
+}
+
+func makeTestRegularIndexPKRange(t *testing.T, op string, tag, colPos int32, value int64, constFirst bool) *planpb.Expr {
 	t.Helper()
-	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "<", []*planpb.Expr{
-		GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
-		{
-			Typ: planpb.Type{Id: int32(types.T_int64)},
-			Expr: &planpb.Expr_Lit{
-				Lit: &planpb.Literal{
-					Value: &planpb.Literal_I64Val{I64Val: value},
-				},
+	colExpr := GetColExpr(planpb.Type{Id: int32(types.T_int64)}, tag, colPos)
+	valueExpr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int64)},
+		Expr: &planpb.Expr_Lit{
+			Lit: &planpb.Literal{
+				Value: &planpb.Literal_I64Val{I64Val: value},
 			},
 		},
-	})
+	}
+	args := []*planpb.Expr{colExpr, valueExpr}
+	if constFirst {
+		args[0], args[1] = args[1], args[0]
+	}
+	expr, err := BindFuncExprImplByPlanExpr(context.Background(), op, args)
 	require.NoError(t, err)
 	return expr
+}
+
+func requireTestRegularIndexCursorRange(t *testing.T, expr *planpb.Expr, numKeyParts int, op string) *planpb.Expr {
+	t.Helper()
+	fn := expr.GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, "prefix_in_range", fn.Func.ObjName)
+	require.Len(t, fn.Args, 4)
+
+	leftSerial := fn.Args[1].GetF()
+	rightSerial := fn.Args[2].GetF()
+	require.NotNil(t, leftSerial)
+	require.NotNil(t, rightSerial)
+	require.Equal(t, "serial_full", leftSerial.Func.ObjName)
+	require.Equal(t, "serial_full", rightSerial.Func.ObjName)
+
+	var prefixArgs, fullArgs []*planpb.Expr
+	switch op {
+	case "<", "<=":
+		prefixArgs, fullArgs = leftSerial.Args, rightSerial.Args
+	case ">", ">=":
+		prefixArgs, fullArgs = rightSerial.Args, leftSerial.Args
+	default:
+		t.Fatalf("unsupported cursor operator %q", op)
+	}
+	require.Len(t, prefixArgs, numKeyParts)
+	require.Len(t, fullArgs, numKeyParts+1)
+	for i := range prefixArgs {
+		require.True(t, reflect.DeepEqual(prefixArgs[i], fullArgs[i]))
+	}
+
+	wantFlag := uint32(0)
+	if op == "<" {
+		wantFlag = 2
+	} else if op == ">" {
+		wantFlag = 1
+	}
+	require.Equal(t, wantFlag, fn.Args[3].GetLit().GetU8Val())
+	return fullArgs[numKeyParts]
 }
 
 func makeTestRegularIndexProjectBuilder(
@@ -1260,7 +1306,7 @@ func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrderAsc(t *te
 	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol().Name)
 }
 
-func TestApplyIndicesForProjectSkipsOrderedLimitWithResidualPKFilter(t *testing.T) {
+func TestApplyIndicesForProjectSkipsOrderedLimitWithAdditionalResidualFilter(t *testing.T) {
 	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
 		t,
 		2,
@@ -1269,6 +1315,7 @@ func TestApplyIndicesForProjectSkipsOrderedLimitWithResidualPKFilter(t *testing.
 	)
 	scanNode := builder.qry.Nodes[0]
 	scanNode.FilterList = append(scanNode.FilterList, makeTestRegularIndexPKLessThan(t, 4900))
+	scanNode.FilterList = append(scanNode.FilterList, makeTestRegularIndexPKRange(t, ">", 100, 1, 100, false))
 
 	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 	require.NoError(t, err)
@@ -1279,6 +1326,33 @@ func TestApplyIndicesForProjectSkipsOrderedLimitWithResidualPKFilter(t *testing.
 	require.Len(t, scanNode.OrderBy, 1)
 	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.OrderBy[0].Expr.GetCol().Name)
 	assert.Nil(t, scanNode.IndexReaderParam)
+}
+
+func TestApplyIndicesForProjectPushesOrderedLimitWithCursorRange(t *testing.T) {
+	for _, op := range []string{"<", "<=", ">", ">="} {
+		t.Run(op, func(t *testing.T) {
+			builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+				t,
+				2,
+				GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
+				planpb.OrderBySpec_DESC,
+			)
+			scanNode := builder.qry.Nodes[0]
+			scanNode.FilterList = []*planpb.Expr{
+				makeTestRegularIndexPrefixEq(t, 2),
+				makeTestRegularIndexPKRange(t, op, 100, 1, 4900, false),
+			}
+
+			_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
+
+			require.NotNil(t, scanNode.IndexReaderParam)
+			requireTestRegularIndexCursorRange(t, scanNode.FilterList[0], 2, op)
+			require.Len(t, scanNode.IndexReaderParam.OrderBy, 1)
+			assert.Equal(t, uint64(20), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
+			assert.Equal(t, catalog.IndexTableIndexColName, scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol().Name)
+		})
+	}
 }
 
 func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *testing.T) {
@@ -1314,10 +1388,11 @@ func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *tes
 	assert.Equal(t, catalog.IndexTableIndexColName, indexParamCol.Name)
 }
 
-func TestHandleMessageFromTopToScanSkipsOrderedLimitWithResidualPKFilter(t *testing.T) {
+func TestHandleMessageFromTopToScanSkipsOrderedLimitWithAdditionalResidualFilter(t *testing.T) {
 	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
 	scanNode := builder.qry.Nodes[0]
 	scanNode.FilterList = append(scanNode.FilterList, makeTestRegularIndexPKLessThan(t, 4900))
+	scanNode.FilterList = append(scanNode.FilterList, makeTestRegularIndexPKRange(t, ">", 100, 1, 100, false))
 
 	builder.handleMessageFromTopToScan(rootNodeID)
 
@@ -1327,6 +1402,99 @@ func TestHandleMessageFromTopToScanSkipsOrderedLimitWithResidualPKFilter(t *test
 	require.Len(t, scanNode.OrderBy, 1)
 	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.OrderBy[0].Expr.GetCol().Name)
 	assert.Nil(t, scanNode.IndexReaderParam)
+}
+
+func TestHandleMessageFromTopToScanPushesOrderedLimitWithCursorRange(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+	scanNode := builder.qry.Nodes[0]
+	scanNode.FilterList = []*planpb.Expr{
+		makeTestRegularIndexPrefixEq(t, 2),
+		makeTestRegularIndexPKLessThan(t, 4900),
+	}
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	require.NotNil(t, scanNode.IndexReaderParam)
+	requireTestRegularIndexCursorRange(t, scanNode.FilterList[0], 2, "<")
+	require.Len(t, scanNode.IndexReaderParam.OrderBy, 1)
+	assert.Equal(t, uint64(20), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
+}
+
+func TestHandleMessageFromTopToScanSkipsOrderedLimitAcrossFilter(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+	scanNode := builder.qry.Nodes[0]
+	scanNode.FilterList = []*planpb.Expr{
+		makeTestRegularIndexPrefixEq(t, 2),
+		makeTestRegularIndexPKLessThan(t, 4900),
+	}
+
+	filterID := int32(len(builder.qry.Nodes))
+	builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+		NodeType:   planpb.Node_FILTER,
+		NodeId:     filterID,
+		Children:   []int32{0},
+		FilterList: []*planpb.Expr{makeTestRegularIndexPKLessThan(t, 4800)},
+	})
+	builder.qry.Nodes[1].Children[0] = filterID
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	sortNode := builder.qry.Nodes[1]
+	require.Len(t, sortNode.SendMsgList, 1)
+	require.Len(t, scanNode.RecvMsgList, 1)
+	require.Len(t, scanNode.OrderBy, 1)
+	assert.Nil(t, scanNode.IndexReaderParam)
+	assert.True(t, isRegularIndexFullPrefixEquality(scanNode.FilterList[0], 2))
+}
+
+func TestHandleMessageFromTopToScanSkipsOrderedLimitAcrossCardinalityReducingJoin(t *testing.T) {
+	for _, joinType := range []planpb.Node_JoinType{planpb.Node_INNER, planpb.Node_SEMI} {
+		t.Run(joinType.String(), func(t *testing.T) {
+			builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+			scanNode := builder.qry.Nodes[0]
+			scanNode.FilterList = []*planpb.Expr{
+				makeTestRegularIndexPrefixEq(t, 2),
+				makeTestRegularIndexPKLessThan(t, 4900),
+			}
+
+			rightScanID := int32(len(builder.qry.Nodes))
+			builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+				NodeType:    planpb.Node_TABLE_SCAN,
+				NodeId:      rightScanID,
+				BindingTags: []int32{300},
+				TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{
+					{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+				}},
+			})
+			joinCond, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{
+				GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
+				GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 300, 0),
+			})
+			require.NoError(t, err)
+
+			joinID := int32(len(builder.qry.Nodes))
+			builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+				NodeType: planpb.Node_JOIN,
+				NodeId:   joinID,
+				Children: []int32{0, rightScanID},
+				JoinType: joinType,
+				OnList:   []*planpb.Expr{joinCond},
+				Stats: &planpb.Stats{
+					HashmapStats: &planpb.HashMapStats{},
+				},
+			})
+			builder.qry.Nodes[1].Children[0] = joinID
+
+			builder.handleMessageFromTopToScan(rootNodeID)
+
+			sortNode := builder.qry.Nodes[1]
+			require.Len(t, sortNode.SendMsgList, 1)
+			require.Len(t, scanNode.RecvMsgList, 1)
+			require.Len(t, scanNode.OrderBy, 1)
+			assert.Nil(t, scanNode.IndexReaderParam)
+			assert.True(t, isRegularIndexFullPrefixEquality(scanNode.FilterList[0], 2))
+		})
+	}
 }
 
 func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T) {
@@ -1356,6 +1524,97 @@ func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T
 func TestRegularIndexFullPrefixEqualityRequiresSerialFull(t *testing.T) {
 	assert.True(t, isRegularIndexFullPrefixEquality(makeTestRegularIndexPrefixEq(t, 2), 2))
 	assert.False(t, isRegularIndexFullPrefixEquality(makeTestRegularIndexPrefixEqWithSerialFunc(t, 2, "serial"), 2))
+}
+
+func TestRewriteRegularIndexCursorRangeFilter(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	scanNode := &planpb.Node{
+		BindingTags: []int32{100},
+		TableDef: &planpb.TableDef{
+			Cols: []*planpb.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+				{Name: catalog.IndexTablePrimaryColName, Typ: planpb.Type{Id: int32(types.T_int64)}},
+			},
+		},
+		IndexScanInfo: planpb.IndexScanInfo{
+			IsIndexScan: true,
+			Parts:       []string{"user_id", "is_active", "__mo_alias_id"},
+		},
+	}
+
+	for _, tc := range []struct {
+		name       string
+		op         string
+		constFirst bool
+		expectedOp string
+	}{
+		{name: "less", op: "<", expectedOp: "<"},
+		{name: "less reversed", op: ">", constFirst: true, expectedOp: "<"},
+		{name: "less equal", op: "<=", expectedOp: "<="},
+		{name: "greater", op: ">", expectedOp: ">"},
+		{name: "greater reversed", op: "<", constFirst: true, expectedOp: ">"},
+		{name: "greater equal", op: ">=", expectedOp: ">="},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cursorFilter := makeTestRegularIndexPKRange(t, tc.op, 100, 1, 4900, tc.constFirst)
+			scanNode.FilterList = []*planpb.Expr{
+				makeTestRegularIndexPrefixEq(t, 2),
+				cursorFilter,
+			}
+			require.True(t, builder.rewriteRegularIndexCursorRangeFilter(scanNode))
+			cursor := requireTestRegularIndexCursorRange(t, scanNode.FilterList[0], 2, tc.expectedOp)
+			assert.Equal(t, int64(4900), cursor.GetLit().GetI64Val())
+			assert.Same(t, cursorFilter, scanNode.FilterList[1])
+		})
+	}
+
+	scanNode.FilterList = []*planpb.Expr{
+		makeTestRegularIndexPrefixEq(t, 2),
+		makeTestRegularIndexPKRange(t, "<", 100, 1, 4900, false),
+		makeTestRegularIndexPKRange(t, ">", 100, 1, 100, false),
+	}
+	assert.False(t, builder.rewriteRegularIndexCursorRangeFilter(scanNode))
+	assert.True(t, isRegularIndexFullPrefixEquality(scanNode.FilterList[0], 2))
+
+	paramCursor, err := BindFuncExprImplByPlanExpr(context.Background(), "<", []*planpb.Expr{
+		GetColExpr(scanNode.TableDef.Cols[1].Typ, 100, 1),
+		{
+			Typ:  scanNode.TableDef.Cols[1].Typ,
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+		},
+	})
+	require.NoError(t, err)
+	scanNode.FilterList = []*planpb.Expr{makeTestRegularIndexPrefixEq(t, 2), paramCursor}
+	assert.True(t, builder.rewriteRegularIndexCursorRangeFilter(scanNode))
+
+	computedCursorValue, err := BindFuncExprImplByPlanExpr(context.Background(), "+", []*planpb.Expr{
+		MakePlan2Int64ConstExprWithType(4899),
+		MakePlan2Int64ConstExprWithType(1),
+	})
+	require.NoError(t, err)
+	computedCursor, err := BindFuncExprImplByPlanExpr(context.Background(), "<", []*planpb.Expr{
+		GetColExpr(scanNode.TableDef.Cols[1].Typ, 100, 1),
+		computedCursorValue,
+	})
+	require.NoError(t, err)
+	scanNode.FilterList = []*planpb.Expr{makeTestRegularIndexPrefixEq(t, 2), computedCursor}
+	assert.False(t, builder.rewriteRegularIndexCursorRangeFilter(scanNode))
+	assert.True(t, isRegularIndexFullPrefixEquality(scanNode.FilterList[0], 2))
+
+	scanNode.TableDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 64}
+	stringCursor, err := BindFuncExprImplByPlanExpr(context.Background(), "<", []*planpb.Expr{
+		GetColExpr(scanNode.TableDef.Cols[1].Typ, 100, 1),
+		{
+			Typ: planpb.Type{Id: int32(types.T_varchar), Width: 11},
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "id_00004900"}},
+			},
+		},
+	})
+	require.NoError(t, err)
+	scanNode.FilterList = []*planpb.Expr{makeTestRegularIndexPrefixEq(t, 2), stringCursor}
+	assert.True(t, builder.rewriteRegularIndexCursorRangeFilter(scanNode))
+	requireTestRegularIndexCursorRange(t, scanNode.FilterList[0], 2, "<")
 }
 
 func TestApplyIndicesForProjectSkipsRegularIndexPKOrderWithoutFullPrefixEquality(t *testing.T) {
@@ -1428,15 +1687,20 @@ func TestHandleMessageFromTopToScanSkipsOrderedLimitForOffsetOrRank(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
 			sortNode := builder.qry.Nodes[1]
+			scanNode := builder.qry.Nodes[0]
+			scanNode.FilterList = []*planpb.Expr{
+				makeTestRegularIndexPrefixEq(t, 2),
+				makeTestRegularIndexPKLessThan(t, 4900),
+			}
 			tc.setup(sortNode)
 
 			builder.handleMessageFromTopToScan(rootNodeID)
 
-			scanNode := builder.qry.Nodes[0]
 			require.Len(t, sortNode.SendMsgList, 1)
 			require.Len(t, scanNode.RecvMsgList, 1)
 			require.Len(t, scanNode.OrderBy, 1)
 			assert.Nil(t, scanNode.IndexReaderParam)
+			assert.True(t, isRegularIndexFullPrefixEquality(scanNode.FilterList[0], 2))
 		})
 	}
 }
@@ -1472,16 +1736,21 @@ func TestApplyIndicesForProjectSkipsOrderedLimitForOffsetOrRank(t *testing.T) {
 				planpb.OrderBySpec_DESC,
 			)
 			sortNode := builder.qry.Nodes[2]
+			scanNode := builder.qry.Nodes[0]
+			scanNode.FilterList = []*planpb.Expr{
+				makeTestRegularIndexPrefixEq(t, 2),
+				makeTestRegularIndexPKLessThan(t, 4900),
+			}
 			tc.setup(sortNode)
 
 			_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 			require.NoError(t, err)
 
-			scanNode := builder.qry.Nodes[0]
 			assert.Empty(t, sortNode.SendMsgList)
 			assert.Empty(t, scanNode.RecvMsgList)
 			assert.Empty(t, scanNode.OrderBy)
 			assert.Nil(t, scanNode.IndexReaderParam)
+			assert.True(t, isRegularIndexFullPrefixEquality(scanNode.FilterList[0], 2))
 		})
 	}
 }

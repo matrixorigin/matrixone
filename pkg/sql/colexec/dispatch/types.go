@@ -47,6 +47,7 @@ type container struct {
 	// the clientsession info for the channel you want to dispatch
 	remoteReceivers []*process.WrapCs
 	remoteInfo      process.RemotePipelineInformationChannel
+	remoteProc      *process.Process
 
 	// sendFunc is the rule you want to send batch
 	sendFunc func(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error)

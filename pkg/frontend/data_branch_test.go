@@ -68,13 +68,23 @@ func TestFormatValIntoString_StringEscaping(t *testing.T) {
 	require.Equal(t, `'a\'b"c\\\n\t\r\Z\0'`, buf.String())
 }
 
-func TestFormatValIntoString_ByteEscaping(t *testing.T) {
-	var buf bytes.Buffer
-	ses := &Session{}
-
+func TestFormatValIntoString_BinaryHexLiteral(t *testing.T) {
 	val := []byte{'x', 0x00, '\\', 0x07, '\''}
-	require.NoError(t, formatValIntoString(ses, val, types.New(types.T_varbinary, 0, 0), &buf))
-	require.Equal(t, `'x\0\\\x07\''`, buf.String())
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run(oid.String(), func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, formatValIntoString(&Session{}, val, types.New(oid, 0, 0), &buf))
+			require.Equal(t, `x'78005c0727'`, buf.String())
+
+			buf.Reset()
+			require.NoError(t, formatValIntoString(&Session{}, []byte{}, types.New(oid, 0, 0), &buf))
+			require.Equal(t, `x''`, buf.String())
+
+			buf.Reset()
+			require.NoError(t, formatValIntoString(&Session{}, "x\x00", types.New(oid, 0, 0), &buf))
+			require.Equal(t, `x'7800'`, buf.String())
+		})
+	}
 }
 
 func TestFormatValIntoString_Time(t *testing.T) {
