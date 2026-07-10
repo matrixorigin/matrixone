@@ -66,45 +66,109 @@ func TestBitwiseUint64PreservesHighBit(t *testing.T) {
 	require.True(t, ok, info)
 }
 
-func TestBitwiseNumericArgumentsCastToUint64(t *testing.T) {
+func TestBitwiseInt64UsesUnsignedBitPattern(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{8}, nil),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{math.MaxUint64}, nil),
+		operatorOpBitOrInt64Fn)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestBitwiseInt64RightShiftUsesUnsignedBitPattern(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -1}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 64}, nil),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{math.MaxInt64, 0}, nil),
+		operatorOpBitShiftRightInt64Fn)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestBitwiseMixedIntegerInputsUseUnsignedBitPatterns(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{8}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{math.MaxUint64}, nil),
+		operatorOpBitOrUint64Int64Fn)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+
+	tc = NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil),
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1}, nil),
+		},
+		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{math.MaxInt64}, nil),
+		operatorOpBitShiftRightInt64Uint64Fn)
+	ok, info = tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestBitwiseNumericArgumentsKeepSignedAndUnsignedPaths(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
-		name string
-		args []types.Type
+		name        string
+		args        []types.Type
+		shouldCast  bool
+		targetTypes []types.Type
+		overloadID  int32
 	}{
-		{"int8", []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}},
-		{"int16", []types.Type{types.T_int16.ToType(), types.T_int64.ToType()}},
-		{"int32", []types.Type{types.T_int32.ToType(), types.T_int64.ToType()}},
-		{"int64", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}},
-		{"uint8", []types.Type{types.T_uint8.ToType(), types.T_int64.ToType()}},
-		{"uint16", []types.Type{types.T_uint16.ToType(), types.T_int64.ToType()}},
-		{"uint32", []types.Type{types.T_uint32.ToType(), types.T_int64.ToType()}},
-		{"mixed integers", []types.Type{types.T_uint64.ToType(), types.T_int64.ToType()}},
-		{"decimal64", []types.Type{types.New(types.T_decimal64, 10, 0), types.T_int64.ToType()}},
-		{"decimal128", []types.Type{types.New(types.T_decimal128, 20, 0), types.T_int64.ToType()}},
-		{"float32", []types.Type{types.T_float32.ToType(), types.T_int64.ToType()}},
-		{"float64", []types.Type{types.T_float64.ToType(), types.T_int64.ToType()}},
-		{"char", []types.Type{types.T_char.ToType(), types.T_int64.ToType()}},
-		{"varchar", []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()}},
-		{"text", []types.Type{types.T_text.ToType(), types.T_int64.ToType()}},
+		{"int64", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, false, nil, 0},
+		{"varchar", []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()}, true, []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, 0},
+		{"uint64", []types.Type{types.T_uint64.ToType(), types.T_uint64.ToType()}, false, nil, 3},
+		{"uint64 int64", []types.Type{types.T_uint64.ToType(), types.T_int64.ToType()}, false, nil, 4},
+		{"int64 uint64", []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()}, false, nil, 5},
 	} {
-		for _, op := range []string{"&", "|", "^", "<<", ">>"} {
+		for _, op := range []string{"&", "|", "^"} {
 			t.Run(tc.name+"/"+op, func(t *testing.T) {
 				get, err := GetFunctionByName(ctx, op, tc.args)
 				require.NoError(t, err)
 				targets, cast := get.ShouldDoImplicitTypeCast()
-				require.True(t, cast)
-				require.Equal(t, []types.Type{types.T_uint64.ToType(), types.T_uint64.ToType()}, targets)
+				require.Equal(t, tc.shouldCast, cast)
+				require.Equal(t, tc.targetTypes, targets)
+				require.Equal(t, tc.overloadID, get.overloadId)
 				require.Equal(t, types.T_uint64, get.GetReturnType().Oid)
 			})
 		}
 	}
 
-	get, err := GetFunctionByName(ctx, "unary_tilde", []types.Type{types.New(types.T_decimal64, 10, 0)})
+	for _, tc := range []struct {
+		name       string
+		args       []types.Type
+		overloadID int32
+	}{
+		{"int64", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, 0},
+		{"varchar", []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()}, 0},
+		{"uint64", []types.Type{types.T_uint64.ToType(), types.T_uint64.ToType()}, 1},
+		{"uint64 int64", []types.Type{types.T_uint64.ToType(), types.T_int64.ToType()}, 2},
+		{"int64 uint64", []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()}, 3},
+	} {
+		for _, op := range []string{"<<", ">>"} {
+			t.Run(tc.name+"/"+op, func(t *testing.T) {
+				get, err := GetFunctionByName(ctx, op, tc.args)
+				require.NoError(t, err)
+				require.Equal(t, tc.overloadID, get.overloadId)
+				require.Equal(t, types.T_uint64, get.GetReturnType().Oid)
+			})
+		}
+	}
+
+	get, err := GetFunctionByName(ctx, "unary_tilde", []types.Type{types.T_varchar.ToType()})
 	require.NoError(t, err)
 	targets, cast := get.ShouldDoImplicitTypeCast()
 	require.True(t, cast)
-	require.Equal(t, []types.Type{types.T_uint64.ToType()}, targets)
+	require.Equal(t, []types.Type{types.T_int64.ToType()}, targets)
 	require.Equal(t, types.T_uint64, get.GetReturnType().Oid)
 }
 

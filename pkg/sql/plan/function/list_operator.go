@@ -2291,11 +2291,81 @@ var supportedOperators = []FuncNew{
 		functionId: UNARY_TILDE,
 		class:      plan.Function_STRICT,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    unaryTildeTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				args:       []types.T{types.T_int8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorUnaryTilde[int8]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_int16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorUnaryTilde[int16]
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_int32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorUnaryTilde[int32]
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorUnaryTilde[int64]
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_uint8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorUnaryTilde[uint8]
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_uint16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorUnaryTilde[uint16]
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_uint32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorUnaryTilde[uint32]
+				},
+			},
+			{
+				overloadId: 7,
 				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -2876,12 +2946,12 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_uint64, types.T_uint64},
+				args:       []types.T{types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return operatorOpBitAndUint64Fn
+					return operatorOpBitAndInt64Fn
 				},
 			},
 			{
@@ -2903,6 +2973,24 @@ var supportedOperators = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return operatorOpBitAndStrFn
 				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_uint64, types.T_uint64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitAndUint64Fn },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_uint64, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitAndUint64Int64Fn },
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_int64, types.T_uint64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitAndInt64Uint64Fn },
 			},
 		},
 	},
@@ -2917,12 +3005,12 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_uint64, types.T_uint64},
+				args:       []types.T{types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return operatorOpBitOrUint64Fn
+					return operatorOpBitOrInt64Fn
 				},
 			},
 			{
@@ -2944,6 +3032,24 @@ var supportedOperators = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return operatorOpBitOrStrFn
 				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_uint64, types.T_uint64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitOrUint64Fn },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_uint64, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitOrUint64Int64Fn },
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_int64, types.T_uint64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitOrInt64Uint64Fn },
 			},
 		},
 	},
@@ -2958,12 +3064,12 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_uint64, types.T_uint64},
+				args:       []types.T{types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return operatorOpBitXorUint64Fn
+					return operatorOpBitXorInt64Fn
 				},
 			},
 			{
@@ -2986,6 +3092,24 @@ var supportedOperators = []FuncNew{
 					return operatorOpBitXorStrFn
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_uint64, types.T_uint64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitXorUint64Fn },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_uint64, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitXorUint64Int64Fn },
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_int64, types.T_uint64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitXorInt64Uint64Fn },
+			},
 		},
 	},
 
@@ -2999,13 +3123,31 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_uint64, types.T_uint64},
+				args:       []types.T{types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return operatorOpBitShiftLeftUint64Fn
+					return operatorOpBitShiftLeftInt64Fn
 				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_uint64, types.T_uint64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitShiftLeftUint64Fn },
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_uint64, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitShiftLeftUint64Int64Fn },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_int64, types.T_uint64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitShiftLeftInt64Uint64Fn },
 			},
 		},
 	},
@@ -3020,13 +3162,31 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_uint64, types.T_uint64},
+				args:       []types.T{types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return operatorOpBitShiftRightUint64Fn
+					return operatorOpBitShiftRightInt64Fn
 				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_uint64, types.T_uint64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitShiftRightUint64Fn },
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_uint64, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitShiftRightUint64Int64Fn },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_int64, types.T_uint64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return operatorOpBitShiftRightInt64Uint64Fn },
 			},
 		},
 	},

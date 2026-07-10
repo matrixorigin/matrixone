@@ -1,11 +1,11 @@
 -- @suite
 
 -- @case
--- @desc: Numeric bitwise UINT64 cast behavior, including negative rejections
+-- @desc: MySQL-compatible signed integer bit-pattern behavior
 -- @label:bvt
 
--- Each negative operand is kept in a separate statement. The current generic
--- UINT64 cast rejects it, so BVT output identifies the exact operator path.
+-- Each negative operand is kept in a separate statement so failures identify
+-- the exact signed bit-pattern operator path.
 select '-1' & 3 as bit_and_result;
 select '-1' | 8 as bit_or_result;
 select '-1' ^ 8 as bit_xor_result;

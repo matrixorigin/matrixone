@@ -1,47 +1,65 @@
 select '-1' & 3 as bit_and_result;
-invalid argument cast to uint64, bad value -1
+➤ bit_and_result[-5,64,0]  𝄀
+3
 select '-1' | 8 as bit_or_result;
-invalid argument cast to uint64, bad value -1
+➤ bit_or_result[-5,64,0]  𝄀
+18446744073709551615
 select '-1' ^ 8 as bit_xor_result;
-invalid argument cast to uint64, bad value -1
+➤ bit_xor_result[-5,64,0]  𝄀
+18446744073709551607
 select '-1' << 1 as bit_left_shift_result;
-invalid argument cast to uint64, bad value -1
+➤ bit_left_shift_result[-5,64,0]  𝄀
+18446744073709551614
 select '-1' >> 1 as bit_right_shift_result;
-invalid argument cast to uint64, bad value -1
+➤ bit_right_shift_result[-5,64,0]  𝄀
+9223372036854775807
 select -1 & 3 as bit_and_result;
-Data truncation: data out of range: data type uint64, value '-1'
+➤ bit_and_result[-5,64,0]  𝄀
+3
 select -1 | 8 as bit_or_result;
-Data truncation: data out of range: data type uint64, value '-1'
+➤ bit_or_result[-5,64,0]  𝄀
+18446744073709551615
 select -1 ^ 8 as bit_xor_result;
-Data truncation: data out of range: data type uint64, value '-1'
+➤ bit_xor_result[-5,64,0]  𝄀
+18446744073709551607
 select -1 << 1 as bit_left_shift_result;
-Data truncation: data out of range: data type uint64, value '-1'
+➤ bit_left_shift_result[-5,64,0]  𝄀
+18446744073709551614
 select -1 >> 1 as bit_right_shift_result;
-Data truncation: data out of range: data type uint64, value '-1'
+➤ bit_right_shift_result[-5,64,0]  𝄀
+9223372036854775807
 select ~'7' as string_bit_not;
 ➤ string_bit_not[-5,64,0]  𝄀
 18446744073709551608
 select ~'-1' as negative_string_bit_not;
-invalid argument cast to uint64, bad value -1
+➤ negative_string_bit_not[-5,64,0]  𝄀
+0
 select '+7' & 3 as positive_string_bit_and,
 '+7' | 8 as positive_string_bit_or,
 '+7' << 2 as positive_string_bit_left_shift;
 ➤ positive_string_bit_and[-5,64,0]  ¦  positive_string_bit_or[-5,64,0]  ¦  positive_string_bit_left_shift[-5,64,0]  𝄀
 3  ¦  15  ¦  28
 select '-2' & 3 as negative_bit_and;
-invalid argument cast to uint64, bad value -2
+➤ negative_bit_and[-5,64,0]  𝄀
+2
 select '-2' | 1 as negative_bit_or;
-invalid argument cast to uint64, bad value -2
+➤ negative_bit_or[-5,64,0]  𝄀
+18446744073709551615
 select '-2' >> 1 as negative_bit_right_shift;
-invalid argument cast to uint64, bad value -2
+➤ negative_bit_right_shift[-5,64,0]  𝄀
+9223372036854775807
 select -1 >> 0 as zero_shift;
-Data truncation: data out of range: data type uint64, value '-1'
+➤ zero_shift[-5,64,0]  𝄀
+18446744073709551615
 select -1 >> 63 as max_valid_shift;
-Data truncation: data out of range: data type uint64, value '-1'
+➤ max_valid_shift[-5,64,0]  𝄀
+1
 select -1 >> 64 as oversized_shift;
-Data truncation: data out of range: data type uint64, value '-1'
+➤ oversized_shift[-5,64,0]  𝄀
+0
 select -1 >> -1 as negative_shift;
-Data truncation: data out of range: data type uint64, value '-1'
+➤ negative_shift[-5,64,0]  𝄀
+0
 select null | 1 as null_bit_or;
 ➤ null_bit_or[-5,64,0]  𝄀
 null
@@ -65,5 +83,7 @@ order by u;
 select s >> 1 as signed_right_shift
 from mysql_compat_bitwise_unsigned
 order by u;
-Data truncation: data out of range: data type uint64, value '-1'
+➤ signed_right_shift[-5,64,0]  𝄀
+9223372036854775807  𝄀
+9223372036854775807
 drop table mysql_compat_bitwise_unsigned;
