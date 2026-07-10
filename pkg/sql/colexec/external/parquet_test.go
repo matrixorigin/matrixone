@@ -3539,6 +3539,53 @@ func TestParquet_Timestamp_NotAdjustedToUTC_Dictionary(t *testing.T) {
 	require.Equal(t, "2024-01-15 10:30:00", got[2].String2(loc, 0))
 }
 
+func TestParquet_Timestamp_NotAdjustedToUTC_UsesValueTimezoneOffset(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.TimeZone = loc
+
+	// The parquet values encode these local wall-clock values as UTC epoch offsets.
+	// New York has different offsets for the January and July values.
+	values := []int64{
+		time.Date(2024, time.January, 15, 10, 30, 0, 0, time.UTC).UnixMicro(),
+		time.Date(2024, time.July, 15, 10, 30, 0, 0, time.UTC).UnixMicro(),
+	}
+	want := []string{"2024-01-15 10:30:00", "2024-07-15 10:30:00"}
+
+	assertMappedValues := func(t *testing.T, f *parquet.File, page parquet.Page, expected []string) {
+		t.Helper()
+		vec := vector.NewVec(types.T_timestamp.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+
+		got := vector.MustFixedColWithTypeCheck[types.Timestamp](vec)
+		require.Len(t, got, len(expected))
+		for i := range expected {
+			require.Equal(t, expected[i], got[i].String2(loc, 0))
+		}
+	}
+
+	t.Run("plain page", func(t *testing.T) {
+		rows := make([]parquet.Row, len(values))
+		for i, value := range values {
+			rows[i] = parquet.Row{parquet.Int64Value(value).Level(0, 0, 0)}
+		}
+		f, page := writeColumnAndGetPage(t, parquet.TimestampAdjusted(parquet.Microsecond, false), rows)
+		assertMappedValues(t, f, page, want)
+	})
+
+	t.Run("dictionary page", func(t *testing.T) {
+		f, page := writeDictAndGetPage(t,
+			parquet.Encoded(parquet.TimestampAdjusted(parquet.Microsecond, false), &parquet.RLEDictionary),
+			[]parquet.Value{parquet.Int64Value(values[0]), parquet.Int64Value(values[1]), parquet.Int64Value(values[0])},
+		)
+		assertMappedValues(t, f, page, append(want, want[0]))
+	})
+}
+
 // TestParquet_EmptyFile_ColumnCountMatch tests that empty parquet files (0 rows)
 // only check column count, not column names or types. This aligns with DuckDB behavior.
 func TestParquet_EmptyFile_ColumnCountMatch(t *testing.T) {
