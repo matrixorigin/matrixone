@@ -131,10 +131,15 @@ type collectRange struct {
 type branchMetaInfo struct {
 	lcaTableId uint64
 
-	pathFromLCAToTar    []uint64
-	pathFromLCAToTarTS  []types.TS
-	pathFromLCAToBase   []uint64
-	pathFromLCAToBaseTS []types.TS
+	pathFromLCAToTar   []uint64
+	pathFromLCAToTarTS []types.TS
+	// LineageOnly[i] marks an ALTER copy-and-swap edge into path[i]. Such
+	// edges split physical collection ranges but do not represent a branch
+	// fork for LCA probing/conflict semantics.
+	pathFromLCAToTarLineageOnly  []bool
+	pathFromLCAToBase            []uint64
+	pathFromLCAToBaseTS          []types.TS
+	pathFromLCAToBaseLineageOnly []bool
 }
 
 // hasLCA reports whether tar and base share a common ancestor in the
@@ -154,24 +159,42 @@ func (m *branchMetaInfo) hasLCA() bool {
 // point from base: base's first-child CloneTS, or baseSP if base is
 // also the LCA (case-0 same-table diff).
 func (m *branchMetaInfo) tarLCASnapshot(baseSP types.TS) types.TS {
-	if len(m.pathFromLCAToTar) > 1 {
-		return m.pathFromLCAToTarTS[1]
+	if ts, ok := firstDataBranchForkTS(
+		m.pathFromLCAToTarTS, m.pathFromLCAToTarLineageOnly,
+	); ok {
+		return ts
 	}
-	if len(m.pathFromLCAToBase) > 1 {
-		return m.pathFromLCAToBaseTS[1]
+	if ts, ok := firstDataBranchForkTS(
+		m.pathFromLCAToBaseTS, m.pathFromLCAToBaseLineageOnly,
+	); ok {
+		return ts
 	}
 	return baseSP
 }
 
 // baseLCASnapshot is the mirror of tarLCASnapshot for the base side.
 func (m *branchMetaInfo) baseLCASnapshot(tarSP types.TS) types.TS {
-	if len(m.pathFromLCAToBase) > 1 {
-		return m.pathFromLCAToBaseTS[1]
+	if ts, ok := firstDataBranchForkTS(
+		m.pathFromLCAToBaseTS, m.pathFromLCAToBaseLineageOnly,
+	); ok {
+		return ts
 	}
-	if len(m.pathFromLCAToTar) > 1 {
-		return m.pathFromLCAToTarTS[1]
+	if ts, ok := firstDataBranchForkTS(
+		m.pathFromLCAToTarTS, m.pathFromLCAToTarLineageOnly,
+	); ok {
+		return ts
 	}
 	return tarSP
+}
+
+func firstDataBranchForkTS(pathTS []types.TS, lineageOnly []bool) (types.TS, bool) {
+	for i := 1; i < len(pathTS); i++ {
+		if i < len(lineageOnly) && lineageOnly[i] {
+			continue
+		}
+		return pathTS[i], true
+	}
+	return types.TS{}, false
 }
 
 // lcaProbeSnapshot is the snapshot used by diffOnBase to fetch the

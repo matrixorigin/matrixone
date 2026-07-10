@@ -68,10 +68,8 @@ update both_add_left set c = 'left' where a = 2;
 update both_add_right set c = 'right' where a = 3;
 data branch diff both_add_left against both_add_right columns (a, c);
 diff both_add_left against both_add_right    flag    a    c
-both_add_left    INSERT    2    left
-both_add_right    INSERT    2    same
-both_add_left    INSERT    3    same
-both_add_right    INSERT    3    right
+both_add_left    UPDATE    2    left
+both_add_right    UPDATE    3    right
 data branch create table type_left from base;
 data branch create table type_right from base;
 alter table type_left add column c int default 0;
