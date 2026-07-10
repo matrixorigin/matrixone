@@ -347,13 +347,6 @@ type Transaction struct {
 	// the last snapshot write offset
 	snapshotWriteOffset int
 
-	// disableSnapshotOffset is set during dumpBatchLocked to signal that
-	// reentrant calls into UpdateSnapshotWriteOffset from internal SQL
-	// (e.g. getTable -> Engine.Database -> loadDatabaseFromStorage ->
-	// execReadSql -> NewCompile) should be short-circuited. This avoids
-	// the self-deadlock described in issue #25557 without requiring
-	// goroutine-level ownership tracking.
-	disableSnapshotOffset atomic.Bool
 
 	tnStores []DNStore
 	proc     *process.Process

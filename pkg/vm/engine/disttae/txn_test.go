@@ -1253,34 +1253,6 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 }
 
 
-// TestSnapshotWriteOffset_ReentrantWhileHoldingLock verifies that when
-// disableSnapshotOffset is set (as it is in execReadSql), calling
-// UpdateSnapshotWriteOffset from the goroutine that already holds txn.Lock()
-// does not deadlock. This covers the issue #25557 reentrant path regardless
-// of which locked entry point (dumpBatch wrapper, IncrStatementID, commit)
-// acquired the lock — the flag is set in execReadSql itself, covering all
-// callers.
-func TestSnapshotWriteOffset_ReentrantWhileHoldingLock(t *testing.T) {
-	txn := &Transaction{
-		writes:              []Entry{{}, {}, {}},
-		snapshotWriteOffset: 0,
-	}
-
-	txn.disableSnapshotOffset.Store(true)
-
-	txn.Lock()
-	txn.UpdateSnapshotWriteOffset()
-	require.Equal(t, 0, txn.snapshotWriteOffset,
-		"reentrant call under disableSnapshotOffset must skip update")
-	require.Equal(t, 0, txn.GetSnapshotWriteOffset())
-	txn.Unlock()
-
-	txn.disableSnapshotOffset.Store(false)
-	txn.UpdateSnapshotWriteOffset()
-	require.Equal(t, 3, txn.snapshotWriteOffset)
-	require.Equal(t, 3, txn.GetSnapshotWriteOffset())
-}
-
 // TestSnapshotWriteOffset_NormalPath verifies that the normal (non-reentrant)
 // code path still works with correct locking.
 func TestSnapshotWriteOffset_NormalPath(t *testing.T) {
@@ -1303,8 +1275,7 @@ func TestSnapshotWriteOffset_NormalPath(t *testing.T) {
 }
 
 // TestSnapshotWriteOffset_BlocksWhenAnotherGoroutineHoldsLock verifies that
-// a non-holder goroutine cannot bypass the mutex via the disableSnapshotOffset
-// flag (which is false by default), and must block on Lock() instead. Run with
+// a non-holder goroutine blocks on Lock() instead of bypassing it. Run with
 // -race.
 func TestSnapshotWriteOffset_BlocksWhenAnotherGoroutineHoldsLock(t *testing.T) {
 	txn := &Transaction{

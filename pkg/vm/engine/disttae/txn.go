@@ -833,7 +833,13 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
+		// Release and re-acquire the lock around getTable to avoid a reentrant
+		// self-deadlock: getTable may call Engine.Database() -> execReadSql ->
+		// NewCompile -> UpdateSnapshotWriteOffset, which re-enters txn.Lock()
+		// on the same goroutine.
+		txn.Unlock()
 		tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
+		txn.Lock()
 		if err != nil {
 			return err
 		}
@@ -958,7 +964,9 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
+		txn.Unlock()
 		tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
+		txn.Lock()
 		if err != nil {
 			return err
 		}
@@ -1893,9 +1901,12 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		return nil, err
 	}
+	txn.Lock()
 	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
+		txn.Unlock()
 		return nil, err
 	}
+	txn.Unlock()
 
 	txn.traceWorkspaceLocked(true)
 
@@ -2096,33 +2107,12 @@ func (txn *Transaction) clearTableCache() {
 }
 
 func (txn *Transaction) GetSnapshotWriteOffset() int {
-	if txn.disableSnapshotOffset.Load() {
-		// Reentrant call from within dumpBatchLocked. The goroutine already
-		// holds txn.Lock() (e.g. dumpBatchLocked -> getTable -> internal SQL
-		// -> NewCompile, see issue #25557), so locking again would self-
-		// deadlock. See UpdateSnapshotWriteOffset for correctness analysis.
-		return txn.snapshotWriteOffset
-	}
 	txn.Lock()
 	defer txn.Unlock()
 	return txn.snapshotWriteOffset
 }
 
 func (txn *Transaction) UpdateSnapshotWriteOffset() {
-	if txn.disableSnapshotOffset.Load() {
-		// Reentrant call from within dumpBatchLocked context: the goroutine
-		// already holds txn.Lock() and cannot re-acquire it (self-deadlock).
-		//
-		// Skipping is safe for two reasons:
-		//   1. updateSnapshotWriteOffset during dump is meaningless — writes
-		//      are being flushed/truncated, not added as a statement boundary.
-		//   2. A non-owner goroutine that reads disableSnapshotOffset=true
-		//      during this window (between the Set and Clear in dumpBatchLocked)
-		//      sees a stale snapshotWriteOffset at worst, which is bounded by
-		//      the next successful UpdateSnapshotWriteOffset after the flag
-		//      clears. In practice this window is only a few hundred microseconds.
-		return
-	}
 	txn.Lock()
 	defer txn.Unlock()
 	txn.snapshotWriteOffset = len(txn.writes)
