@@ -148,10 +148,17 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 			return prefixType
 		}
 	}
+	// Preserve Enumvalues so a single-column UNIQUE index on an ENUM/SET
+	// column stores the typed key with the same enum metadata as the base
+	// column. DML index-maintenance joins compare the source value against
+	// this index-table column; without matching Enumvalues the equality bind
+	// either fails (nil-pointer panic) or compares values in incompatible
+	// representations.
 	return Type{
-		Id:    col.Typ.Id,
-		Width: col.Typ.Width,
-		Scale: col.Typ.Scale,
+		Id:         col.Typ.Id,
+		Width:      col.Typ.Width,
+		Scale:      col.Typ.Scale,
+		Enumvalues: col.Typ.Enumvalues,
 	}
 }
 
