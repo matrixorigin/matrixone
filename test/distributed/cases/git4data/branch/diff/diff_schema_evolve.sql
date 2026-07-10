@@ -3,6 +3,17 @@ create database test;
 use test;
 
 -- =====================================================
+-- Case 0: exact regression for issue #24549
+-- =====================================================
+create table a(id int primary key, f0 double);
+data branch create table b from a;
+alter table b add column f1 double default 0.0;
+data branch diff b against a;
+data branch merge b into a;
+drop table a;
+drop table b;
+
+-- =====================================================
 -- Case 1: basic schema evolution - target has one extra column
 --   base:   [a, b]
 --   target: [a, b, c]
@@ -37,6 +48,7 @@ create snapshot sp0 for table test t0;
 
 data branch create table t1 from t0{snapshot="sp0"};
 alter table t1 add column c int default 0;
+update t1 set b=22 where a=2;
 alter table t1 add column d varchar(20) default 'x';
 insert into t1 values(3,3,30,'new');
 create snapshot sp1 for table test t1;
@@ -167,7 +179,7 @@ data branch create table t1 from t0{snapshot="sp0"};
 alter table t1 drop column a;
 create snapshot sp1 for table test t1;
 
--- @regex("schema compatibility check: primary key column 'a' is not present in common columns", true)
+-- @regex("schema compatibility check: target primary key columns .* do not match base primary key columns", true)
 data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
 
 drop snapshot sp1;
@@ -202,13 +214,17 @@ drop table t1;
 -- =====================================================
 -- Case 10: cluster-by hidden helper columns stay out of SQL/output columns
 -- =====================================================
-create table t0(a int, b int) cluster by(a,b);
+create table t0(a int primary key, b int) cluster by(a,b);
+insert into t0 values(1,1),(2,2);
 create snapshot sp0 for table test t0;
 
 data branch create table t1 from t0{snapshot="sp0"};
 alter table t1 add column c int default 0 after a;
+update t1 set b=11 where a=1;
+insert into t1(a,c,b) values(3,30,3);
 create snapshot sp1 for table test t1;
 
+-- Common-column UPDATE and INSERT must not expose the hidden cluster-by helper.
 data branch diff t1{snapshot="sp1"} against t0{snapshot="sp0"};
 
 drop snapshot sp1;
@@ -234,5 +250,153 @@ drop snapshot sp1;
 drop snapshot sp0;
 drop table t0;
 drop table t1;
+
+-- =====================================================
+-- Case 12: common-column UPDATE before ALTER is preserved
+-- =====================================================
+create table t0(a int primary key, b int);
+insert into t0 values(1,1),(2,2);
+data branch create table t1 from t0;
+update t1 set b=11 where a=1;
+alter table t1 add column c int default 0;
+data branch diff t1 against t0;
+drop table t0;
+drop table t1;
+
+-- =====================================================
+-- Case 13: DELETE before ADD FIRST is preserved
+-- =====================================================
+create table t0(a int primary key, b int);
+insert into t0 values(1,1),(2,2);
+data branch create table t1 from t0;
+delete from t1 where a=2;
+alter table t1 add column c int default 0 first;
+data branch diff t1 against t0;
+drop table t0;
+drop table t1;
+
+-- =====================================================
+-- Case 14: base-side UPDATE after target ALTER keeps commit_ts
+-- =====================================================
+create table t0(a int primary key, b int);
+insert into t0 values(1,1),(2,2);
+data branch create table t1 from t0;
+alter table t1 add column c int default 0;
+update t0 set b=77 where a=1;
+data branch diff t1 against t0;
+drop table t0;
+drop table t1;
+
+-- =====================================================
+-- Case 15: fake-PK hash is incompatible across added columns
+-- =====================================================
+create table t0(a int, b int);
+insert into t0 values(1,1);
+data branch create table t1 from t0;
+alter table t1 add column c int default 0;
+-- @regex("schema compatibility check: target-only columns require an explicit primary key", true)
+data branch diff t1 against t0;
+drop table t0;
+drop table t1;
+
+-- =====================================================
+-- Case 16: same PK updated before and after ALTER is emitted once
+-- =====================================================
+create table t0(a int primary key, b int);
+insert into t0 values(1,1),(2,2);
+data branch create table t1 from t0;
+update t1 set b=11 where a=1;
+alter table t1 add column c int default 7;
+update t1 set b=12 where a=1;
+data branch diff t1 against t0;
+drop table t0;
+drop table t1;
+
+-- =====================================================
+-- Case 17: ALTER on live data-branch lineage rejects explicit transactions
+-- =====================================================
+create table t0(a int primary key, b int);
+insert into t0 values(1,1),(2,2);
+data branch create table t1 from t0;
+begin;
+update t1 set b=11 where a=1;
+-- @regex("ALTER on a data-branch lineage is not supported inside an explicit transaction", true)
+alter table t1 add column c int default 0;
+rollback;
+data branch diff t1 against t0;
+drop table t0;
+drop table t1;
+
+-- =====================================================
+-- Case 18: snapshot diff spans an ALTER physical generation
+-- =====================================================
+create table t0(a int primary key, b int);
+insert into t0 values(1,1),(2,2);
+data branch create table t1 from t0;
+drop snapshot if exists s0;
+drop snapshot if exists s1;
+create snapshot s0 for account sys;
+update t1 set b=11 where a=1;
+alter table t1 add column c int default 7;
+update t1 set b=22 where a=2;
+create snapshot s1 for account sys;
+data branch diff t1{snapshot="s1"} against t1{snapshot="s0"};
+drop snapshot s1;
+drop snapshot s0;
+drop table t0;
+drop table t1;
+
+-- =====================================================
+-- Case 19: branch-from-snapshot records the snapshot physical parent
+-- =====================================================
+create table t0(a int primary key, b int);
+insert into t0 values(1,1),(2,2);
+data branch create table t1 from t0;
+drop snapshot if exists s0;
+create snapshot s0 for account sys;
+update t1 set b=11 where a=1;
+alter table t1 add column c int default 7;
+data branch create table t2 from t1{snapshot="s0"};
+update t2 set b=22 where a=2;
+-- t2 must fork from t1's old physical ID captured by s0, not current t1.
+data branch diff t1 against t2;
+drop snapshot s0;
+drop table t2;
+drop table t1;
+drop table t0;
+
+-- =====================================================
+-- Case 20: root ALTER is retained for a future snapshot branch
+-- =====================================================
+-- No branch metadata exists when s0 is created.  ALTER must still retain
+-- old->new lineage because the user snapshot can become a branch parent.
+create table t0(a int primary key, b int);
+insert into t0 values(1,1),(2,2);
+drop snapshot if exists s0;
+create snapshot s0 for account sys;
+update t0 set b=11 where a=1;
+alter table t0 add column c int default 7;
+data branch create table t1 from t0{snapshot="s0"};
+update t1 set b=22 where a=2;
+data branch diff t0 against t1;
+drop snapshot s0;
+drop table t1;
+drop table t0;
+
+-- =====================================================
+-- Case 21: historical fake-PK generations fail closed
+-- =====================================================
+-- Endpoint schemas match, but old fake PKs hash (a,b) while endpoint fake
+-- PKs hash (a,b,c); historical rows cannot be matched safely.
+create table t0(a int, b int);
+insert into t0 values(1,1);
+data branch create table t1 from t0;
+update t1 set b=11 where a=1;
+alter table t0 add column c int default 0;
+alter table t1 add column c int default 0;
+-- @regex("historical data branch fake primary key schema differs from the endpoint schema", true)
+data branch diff t1 against t0;
+drop table t1;
+drop table t0;
 
 drop database test;

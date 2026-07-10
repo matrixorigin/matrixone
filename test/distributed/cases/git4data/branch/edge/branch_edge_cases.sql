@@ -70,6 +70,8 @@ alter table both_add_left add column c varchar(20) default 'same';
 alter table both_add_right add column c varchar(20) default 'same';
 update both_add_left set c = 'left' where a = 2;
 update both_add_right set c = 'right' where a = 3;
+-- ALTER preserves branch lineage: changes to inherited rows remain UPDATEs,
+-- and only the side that changed each row is emitted.
 data branch diff both_add_left against both_add_right columns (a, c);
 
 data branch create table type_left from base;

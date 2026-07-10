@@ -23,6 +23,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
+func TestDataBranchCloneCatalogLockBatch(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	baseline := mp.CurrNB()
+
+	bat, err := dataBranchCloneCatalogLockBatch(ses.proc, 7, "db", "tbl")
+	require.NoError(t, err)
+	require.Len(t, bat.Vecs, 1)
+	require.Equal(t, 1, bat.Vecs[0].Length())
+	require.NotEmpty(t, bat.Vecs[0].GetBytesAt(0))
+	bat.Vecs[0].Free(mp)
+	require.Equal(t, baseline, mp.CurrNB())
+}
+
 func Test_prepareCloneViewSnapshot(t *testing.T) {
 	original := &plan.Snapshot{
 		Tenant: &plan.SnapshotTenant{TenantID: 1001},

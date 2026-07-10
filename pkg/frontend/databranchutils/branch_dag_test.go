@@ -195,3 +195,23 @@ func TestDAGFunctionality(t *testing.T) {
 		}
 	})
 }
+
+func TestPathFromRoot(t *testing.T) {
+	dag := NewDAG([]DataBranchMetadata{
+		{TableID: 2, PTableID: 1, CloneTS: 20},
+		{TableID: 3, PTableID: 2, CloneTS: 30},
+	})
+
+	ids, cloneTSs, ok := dag.PathFromRoot(3)
+	if !ok || len(ids) != 3 || ids[0] != 1 || ids[1] != 2 || ids[2] != 3 {
+		t.Fatalf("unexpected root path: ids=%v ok=%v", ids, ok)
+	}
+	if len(cloneTSs) != 3 || cloneTSs[0] != 0 || cloneTSs[1] != 20 || cloneTSs[2] != 30 {
+		t.Fatalf("unexpected clone timestamps: %v", cloneTSs)
+	}
+
+	_, _, ok = dag.PathFromRoot(99)
+	if ok {
+		t.Fatal("missing node unexpectedly had a root path")
+	}
+}

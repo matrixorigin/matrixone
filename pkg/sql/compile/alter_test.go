@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -53,6 +54,85 @@ func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 	assert.False(t, shouldEnableAlterCopyPipelineFlush(nil))
 	assert.False(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: false}))
 	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: true}))
+}
+
+func TestBuildAlterDataBranchLineageSQL(t *testing.T) {
+	metadataSQL, snapshotSQL := buildAlterDataBranchLineageSQL(
+		11, 22, 123456, 7,
+		"alter:table", "tenant'o", "db'x", "tbl'y", "snapshot-id",
+	)
+
+	require.Equal(t,
+		"insert into mo_catalog.mo_branch_metadata values(22, 123456, 11, 7, 'alter:table', false)",
+		metadataSQL,
+	)
+	require.Contains(t, snapshotSQL, "insert into mo_catalog.mo_snapshots")
+	require.Contains(t, snapshotSQL, "'snapshot-id', '__mo_branch_22', 123456")
+	require.Contains(t, snapshotSQL, "'tenant''o', 'db''x', 'tbl''y', 11, 'branch'")
+}
+
+func TestAlterDataBranchHistoricalSourceSQL(t *testing.T) {
+	sql := alterDataBranchHistoricalSourceSQL("tenant'o", "db'x", "tbl'y", 42)
+	require.Contains(t, sql, "from mo_catalog.mo_snapshots where kind = 'user'")
+	require.Contains(t, sql, "from mo_catalog.mo_pitr where pitr_status = 1")
+	require.Contains(t, sql, "h.account_name = 'tenant''o'")
+	require.Contains(t, sql, "h.database_name = 'db''x'")
+	require.Contains(t, sql, "h.table_name = 'tbl''y'")
+	require.Contains(t, sql, "h.obj_id = 42")
+}
+
+func TestAlterDataBranchLineageMetadata(t *testing.T) {
+	dag := databranchutils.NewBranchReclaimDag([]databranchutils.DataBranchMetadata{
+		{TableID: 2, PTableID: 1, Creator: 9, Level: "table", TableDeleted: false},
+	})
+
+	creator, level := alterDataBranchLineageMetadata(dag, 2)
+	require.Equal(t, uint32(9), creator)
+	require.Equal(t, "alter:table", level)
+
+	creator, level = alterDataBranchLineageMetadata(dag, 1)
+	require.Equal(t, uint32(catalog.System_Account), creator)
+	require.Equal(t, "alter", level)
+}
+
+func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
+	require.NoError(t, validateAlterDataBranchLineageTxn(false, true, true))
+	require.NoError(t, validateAlterDataBranchLineageTxn(false, true, false))
+
+	for _, tc := range []struct {
+		name        string
+		byBegin     bool
+		autocommit  bool
+		pessimistic bool
+		want        string
+	}{
+		{
+			name:        "explicit begin",
+			byBegin:     true,
+			autocommit:  true,
+			pessimistic: true,
+			want:        "not supported inside an explicit transaction",
+		},
+		{
+			name:        "autocommit disabled",
+			autocommit:  false,
+			pessimistic: true,
+			want:        "not supported inside an explicit transaction",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateAlterDataBranchLineageTxn(tc.byBegin, tc.autocommit, tc.pessimistic)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestShouldAdvanceAlterDataBranchLineageSnapshot(t *testing.T) {
+	require.True(t, shouldAdvanceAlterDataBranchLineageSnapshot(true, true))
+	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(true, false))
+	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(false, true))
+	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(false, false))
 }
 
 type alterCopyInsertSpyExecutor struct {
@@ -446,6 +526,8 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	require.True(t, spyExec.insertOption.AlterCopyDedupOpt().SkipPkDedup)
 	require.Equal(t, alterTable.Options.TargetTableName, spyExec.insertOption.AlterCopyDedupOpt().TargetTableName)
 	assert.Equal(t, []string{
+		alterDataBranchParticipationSQL(1),
+		alterDataBranchHistoricalSourceSQL("", "test", "dept", 1),
 		alterTable.CreateTmpTableSql,
 		alterCopyTestPkNullCheckSQL,
 		alterCopyTestPkDuplicateCheckSQL,

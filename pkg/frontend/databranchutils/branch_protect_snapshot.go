@@ -29,6 +29,25 @@ import (
 // branch".
 const BranchSnapshotKind = "branch"
 
+// AlterLineageLevel marks an internal mo_branch_metadata edge created by
+// ALTER's copy-and-swap. It preserves physical history but is not a logical
+// branch fork.
+const AlterLineageLevel = "alter"
+
+func IsAlterLineageLevel(level string) bool {
+	return level == AlterLineageLevel || strings.HasPrefix(level, AlterLineageLevel+":")
+}
+
+func NextAlterLineageLevel(parentLevel string) string {
+	if IsAlterLineageLevel(parentLevel) {
+		return parentLevel
+	}
+	if parentLevel == "" {
+		return AlterLineageLevel
+	}
+	return AlterLineageLevel + ":" + parentLevel
+}
+
 // BranchSnapshotSnamePrefix is the sname prefix used by branch-owned snapshot
 // rows. The suffix is the decimal child table id. Keep this in sync with the
 // design doc §4.3.
@@ -57,6 +76,8 @@ type BranchReclaimDag struct {
 type BranchReclaimNode struct {
 	ParentTableID uint64
 	CloneTS       int64
+	Creator       uint64
+	Level         string
 	Deleted       bool
 }
 
@@ -71,6 +92,8 @@ func NewBranchReclaimDag(rows []DataBranchMetadata) BranchReclaimDag {
 		dag.Info[r.TableID] = BranchReclaimNode{
 			ParentTableID: r.PTableID,
 			CloneTS:       r.CloneTS,
+			Creator:       r.Creator,
+			Level:         r.Level,
 			Deleted:       r.TableDeleted,
 		}
 		if r.PTableID != 0 {
@@ -97,6 +120,31 @@ func (d BranchReclaimDag) SubtreeAllDeleted(root uint64) bool {
 	memo := make(map[uint64]bool, len(d.Info))
 	visited := make(map[uint64]struct{}, len(d.Info))
 	return d.subtreeAllDeletedMemo(root, memo, visited)
+}
+
+// SubtreeHasLiveNode reports whether root or any descendant still represents
+// a live physical generation. Unlike SubtreeAllDeleted, it intentionally
+// walks children even when root has no metadata row; root tables commonly
+// appear only as p_table_id. The walk is cycle-safe for corrupted metadata.
+func (d BranchReclaimDag) SubtreeHasLiveNode(root uint64) bool {
+	visited := make(map[uint64]struct{}, len(d.Info))
+	var walk func(uint64) bool
+	walk = func(tableID uint64) bool {
+		if _, ok := visited[tableID]; ok {
+			return false
+		}
+		visited[tableID] = struct{}{}
+		if meta, ok := d.Info[tableID]; ok && !meta.Deleted {
+			return true
+		}
+		for _, childID := range d.Children[tableID] {
+			if walk(childID) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(root)
 }
 
 func (d BranchReclaimDag) subtreeAllDeletedMemo(

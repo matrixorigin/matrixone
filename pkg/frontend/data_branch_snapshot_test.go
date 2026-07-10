@@ -144,6 +144,20 @@ func TestSubtreeAllDeleted_Linear(t *testing.T) {
 	require.True(t, dag.SubtreeAllDeleted(2))
 }
 
+func TestSubtreeHasLiveNodeThroughDeletedGeneration(t *testing.T) {
+	dag := databranchutils.NewBranchReclaimDag([]databranchutils.DataBranchMetadata{
+		{TableID: 2, PTableID: 1, TableDeleted: true},
+		{TableID: 3, PTableID: 2, TableDeleted: false},
+	})
+
+	require.True(t, dag.SubtreeHasLiveNode(1))
+	require.True(t, dag.SubtreeHasLiveNode(2))
+	require.True(t, dag.SubtreeHasLiveNode(3))
+
+	dag.Info[3] = databranchutils.BranchReclaimNode{ParentTableID: 2, Deleted: true}
+	require.False(t, dag.SubtreeHasLiveNode(1))
+}
+
 // ---------------------------------------------------------------------------
 // UT-U4 — SubtreeAllDeleted on a branching DAG t1 -> {t2, t3}, t2 -> t4
 // ---------------------------------------------------------------------------
