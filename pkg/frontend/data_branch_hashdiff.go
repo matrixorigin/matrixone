@@ -1548,6 +1548,19 @@ func visibleTupleKeyIdxes(tblStuff tableStuff) []int {
 	return idxes
 }
 
+func fakePKTupleKeyIdxes(tblStuff tableStuff) []int {
+	keyColIdxes := tblStuff.def.commonVisibleIdxes
+	if len(keyColIdxes) == 0 {
+		keyColIdxes = tblStuff.def.visibleIdxes
+	}
+
+	idxes := make([]int, len(keyColIdxes))
+	for i, colIdx := range keyColIdxes {
+		idxes[i] = colIdx + 1
+	}
+	return idxes
+}
+
 func batchSampleRowsForLog(bat *batch.Batch, limit int) []string {
 	if bat == nil || bat.RowCount() == 0 || limit <= 0 {
 		return nil
@@ -1747,7 +1760,7 @@ func diffDataHelper(
 
 	if tblStuff.def.pkKind == fakeKind {
 		var (
-			keyIdxes   = visibleTupleKeyIdxes(tblStuff)
+			keyIdxes   = fakePKTupleKeyIdxes(tblStuff)
 			newHashmap databranchutils.BranchHashmap
 		)
 

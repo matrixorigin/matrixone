@@ -1128,7 +1128,7 @@ func TestCheckSchemaCompatibility_CompositePK(t *testing.T) {
 	require.Equal(t, []int{2}, tarOnlyIdxes)
 }
 
-func TestCheckSchemaCompatibility_FakePK(t *testing.T) {
+func TestCheckSchemaCompatibility_FakePKAllowsTargetOnlyColumns(t *testing.T) {
 	tarDef := &plan.TableDef{
 		Name: "target",
 		Pkey: &plan.PrimaryKeyDef{
@@ -1151,6 +1151,9 @@ func TestCheckSchemaCompatibility_FakePK(t *testing.T) {
 		},
 	}
 
-	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
-	require.ErrorContains(t, err, "fake primary key")
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
+	require.Equal(t, []int{2}, tarOnlyIdxes)
 }

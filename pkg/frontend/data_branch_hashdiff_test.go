@@ -524,6 +524,174 @@ func TestDiffDataHelperClosesMigratedHashmaps(t *testing.T) {
 	require.Equal(t, 1, tarMigratedHashmap.closeCalls)
 }
 
+func TestDiffDataHelperFakePKUsesCommonVisibleColumnsAsKey(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkKind = fakeKind
+	tblStuff.def.colNames = []string{"a", "c", "b", catalog.FakePrimaryKeyColName}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint64.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.commonIdxes = []int{0, 2}
+	tblStuff.def.commonVisibleIdxes = []int{0, 2}
+	tblStuff.def.tarOnlyIdxes = []int{1}
+	tblStuff.def.pkColIdxes = []int{0, 2}
+
+	// Rows differ only in target-only column c. Fake-PK matching must use the
+	// common visible columns [a,b], otherwise schema evolution turns a no-op
+	// target-only update into one target INSERT plus one base INSERT.
+	rowColTypes := append([]types.Type{types.T_Rowid.ToType()}, tblStuff.def.colTypes...)
+	tarHashmap := buildTestBranchHashmap(
+		t, mp, rowColTypes,
+		[][]any{{buildHashDiffRowID(t, 1), int64(1), int64(99), int64(1), uint64(11)}},
+	)
+	defer func() {
+		require.NoError(t, tarHashmap.Close())
+	}()
+	baseHashmap := buildTestBranchHashmap(
+		t, mp, rowColTypes,
+		[][]any{{buildHashDiffRowID(t, 2), int64(1), nil, int64(1), uint64(22)}},
+	)
+	defer func() {
+		require.NoError(t, baseHashmap.Close())
+	}()
+
+	var got []capturedBatch
+	var mu sync.Mutex
+	err := diffDataHelper(
+		context.Background(),
+		ses,
+		compositeOption{},
+		tblStuff,
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			mu.Lock()
+			if len(rows) != 0 {
+				got = append(got, capturedBatch{
+					kind: w.kind,
+					side: w.side,
+					rows: rows,
+				})
+			}
+			mu.Unlock()
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		tarHashmap,
+		baseHashmap,
+	)
+	require.NoError(t, err)
+	require.Empty(t, got)
+}
+
+func TestBuildHashmapForTableProjectsBaseRowsBeforeKeying(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"a", "b", "c"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.commonIdxes = []int{0, 1}
+	tblStuff.def.commonVisibleIdxes = []int{0, 1}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+	tblStuff.def.baseColToTarIdx = []int{0, 1}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.def.pkColIdxes = []int{0}
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+
+	baseRowID := buildHashDiffRowID(t, 1)
+	baseBat := buildIntDataBatch(
+		t, ses.proc.Mp(), []string{catalog.Row_ID, "a", "b"},
+		[]types.Type{types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
+		[][]any{{baseRowID, int64(1), int64(1)}},
+	)
+	baseDataHashmap, baseTombstoneHashmap, err := buildHashmapForTable(
+		context.Background(),
+		ses.proc.Mp(),
+		&tblStuff,
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{data: baseBat}},
+		}},
+		"base",
+		nil,
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, baseDataHashmap.Close())
+		require.NoError(t, baseTombstoneHashmap.Close())
+	}()
+
+	targetRowID := buildHashDiffRowID(t, 2)
+	targetBat := buildIntDataBatch(
+		t, ses.proc.Mp(), []string{catalog.Row_ID, "a", "b", "c"},
+		[]types.Type{types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
+		[][]any{{targetRowID, int64(1), int64(99), int64(0)}},
+	)
+	targetDataHashmap, targetTombstoneHashmap, err := buildHashmapForTable(
+		context.Background(),
+		ses.proc.Mp(),
+		&tblStuff,
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{data: targetBat}},
+		}},
+		"target",
+		nil,
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, targetDataHashmap.Close())
+		require.NoError(t, targetTombstoneHashmap.Close())
+	}()
+
+	require.NoError(t, targetDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+		return cursor.ForEach(func(key []byte, _ []byte) error {
+			ret, err := baseDataHashmap.PopByEncodedKey(key, false)
+			require.NoError(t, err)
+			require.True(t, ret.Exists)
+			require.Len(t, ret.Rows, 1)
+			baseTuple, _, err := baseDataHashmap.DecodeRow(ret.Rows[0])
+			require.NoError(t, err)
+			require.Len(t, baseTuple, 4)
+			return nil
+		})
+	}, -1))
+}
+
+func TestDataBranchLineageTableIDFallsBackToLogicalID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	dag := databranchutils.NewDAG([]databranchutils.DataBranchMetadata{
+		{TableID: 10, PTableID: 1, CloneTS: 100},
+	})
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(20)).AnyTimes()
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		TblId:     20,
+		LogicalId: 10,
+	}).AnyTimes()
+
+	require.Equal(t, uint64(10), dataBranchLineageTableID(context.Background(), dag, rel))
+}
+
 func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()
@@ -892,6 +1060,10 @@ func appendTestVectorValue(vec *vector.Vector, val any, mp *mpool.MPool) error {
 	}
 	switch x := val.(type) {
 	case int64:
+		return vector.AppendFixed(vec, x, false, mp)
+	case uint64:
+		return vector.AppendFixed(vec, x, false, mp)
+	case types.Rowid:
 		return vector.AppendFixed(vec, x, false, mp)
 	case string:
 		return vector.AppendBytes(vec, []byte(x), false, mp)
@@ -1389,6 +1561,107 @@ func TestHashDiff_HasLCANoopUpdateFiltering(t *testing.T) {
 	}
 }
 
+func TestHashDiff_HasLCAUpdateIgnoresTargetOnlyColumns(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp()).AnyTimes()
+	ses.txnHandler = &TxnHandler{
+		txnOp: txnOp,
+	}
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.commonIdxes = []int{0, 1}
+	tblStuff.def.commonVisibleIdxes = []int{0, 1}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+	tblStuff.def.baseColToTarIdx = []int{0, 1}
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+	tblStuff.worker = worker
+	tblStuff.maxTombstoneBatchCnt = 1
+	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
+
+	lcaRel := mock_frontend.NewMockRelation(ctrl)
+	lcaDef := &plan.TableDef{
+		DbName: "db1",
+		Name:   "lca_tbl",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+	}
+	lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+	lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
+	tblStuff.lcaRel = lcaRel
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{
+		buildLCAProbeResultSetWithRows([]interface{}{int64(0), int64(1), "before", nil}),
+	}).Times(1)
+	bh.EXPECT().ClearExecResultSet().Times(1)
+
+	oldRowID := buildHashDiffRowID(t, 0)
+	newRowID := buildHashDiffRowID(t, 1)
+	tarData := buildHashDiffDataBatchWithRowIDs(
+		t, ses.proc.Mp(), []types.Rowid{newRowID},
+		[][]any{{int64(1), "after", "target-only", commitTSBytes(types.BuildTS(15, 0))}},
+	)
+	tarTombstone := buildHashDiffTombstoneBatchWithRowIDs(
+		t, ses.proc.Mp(), []types.Rowid{oldRowID},
+		[][]any{{int64(1), commitTSBytes(types.BuildTS(12, 0))}},
+	)
+
+	dagInfo := branchMetaInfo{
+		lcaTableId:          77,
+		pathFromLCAToTar:    []uint64{77, 88},
+		pathFromLCAToTarTS:  []types.TS{{}, types.BuildTS(10, 0)},
+		pathFromLCAToBase:   []uint64{77},
+		pathFromLCAToBaseTS: []types.TS{{}},
+	}
+
+	var got []capturedBatch
+	var mu sync.Mutex
+	err = hashDiff(
+		context.Background(),
+		ses,
+		bh,
+		tblStuff,
+		dagInfo,
+		compositeOption{},
+		func(w batchWithKind) (bool, error) {
+			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
+			mu.Lock()
+			if len(rows) != 0 {
+				got = append(got, capturedBatch{
+					kind: w.kind,
+					side: w.side,
+					rows: rows,
+				})
+			}
+			mu.Unlock()
+			tblStuff.retPool.releaseRetBatch(w.batch, false)
+			return false, nil
+		},
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{
+				data:      tarData,
+				tombstone: tarTombstone,
+			}},
+		}},
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, diffUpdate, got[0].kind)
+	require.Equal(t, diffSideTarget, got[0].side)
+	require.Equal(t, [][]any{{int64(1), "after", "target-only"}}, got[0].rows)
+}
+
 func TestHashDiff_HasLCAFakePKUpdateIsNotNoop(t *testing.T) {
 	ses := newValidateSession(t)
 	ctrl := gomock.NewController(t)
@@ -1544,6 +1817,25 @@ func buildVisibleComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *b
 		require.Len(t, row, 2)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row[0].(int64), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(row[1].(string)), false, mp))
+	}
+	bat.SetRowCount(len(rows))
+	return bat
+}
+
+func buildIntDataBatch(t *testing.T, mp *mpool.MPool, attrs []string, colTypes []types.Type, rows [][]any) *batch.Batch {
+	t.Helper()
+
+	require.Len(t, attrs, len(colTypes))
+	bat := batch.NewWithSize(len(colTypes))
+	bat.SetAttributes(attrs)
+	for i, typ := range colTypes {
+		bat.Vecs[i] = vector.NewVec(typ)
+	}
+	for _, row := range rows {
+		require.Len(t, row, len(colTypes))
+		for i, val := range row {
+			require.NoError(t, appendTestVectorValue(bat.Vecs[i], val, mp))
+		}
 	}
 	bat.SetRowCount(len(rows))
 	return bat

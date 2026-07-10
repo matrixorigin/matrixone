@@ -1178,13 +1178,6 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, comm
 		}
 		dataIdx++
 	}
-	if baseDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName && len(tarOnlyIdxes) > 0 {
-		err = moerr.NewInternalErrorNoCtx(
-			"schema compatibility check: fake primary key tables do not support target-only user-visible columns",
-		)
-		return
-	}
-
 	if baseDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		// For fake PK tables, the PK column is generated from all columns.
 		// No specific PK name to verify.
@@ -2454,20 +2447,29 @@ func decideLCABranchTSFromBranchDAG(
 		return
 	}
 
-	if lcaTableID, _, _, hasLca := dag.FindLCA(tarTableID, baseTableID); hasLca {
-		tarIDs, tarTSs, ok := dag.PathFromAncestor(tarTableID, lcaTableID)
+	tarLineageID := dataBranchLineageTableID(ctx, dag, tblStuff.tarRel)
+	baseLineageID := dataBranchLineageTableID(ctx, dag, tblStuff.baseRel)
+
+	if lcaTableID, _, _, hasLca := dag.FindLCA(tarLineageID, baseLineageID); hasLca {
+		tarIDs, tarTSs, ok := dag.PathFromAncestor(tarLineageID, lcaTableID)
 		if !ok {
 			err = moerr.NewInternalErrorNoCtxf(
 				"data branch: DAG path broken from LCA %d to tar %d",
-				lcaTableID, tarTableID)
+				lcaTableID, tarLineageID)
 			return
 		}
-		baseIDs, baseTSs, ok := dag.PathFromAncestor(baseTableID, lcaTableID)
+		baseIDs, baseTSs, ok := dag.PathFromAncestor(baseLineageID, lcaTableID)
 		if !ok {
 			err = moerr.NewInternalErrorNoCtxf(
 				"data branch: DAG path broken from LCA %d to base %d",
-				lcaTableID, baseTableID)
+				lcaTableID, baseLineageID)
 			return
+		}
+		if tarLineageID != tarTableID {
+			tarIDs[len(tarIDs)-1] = tarTableID
+		}
+		if baseLineageID != baseTableID {
+			baseIDs[len(baseIDs)-1] = baseTableID
 		}
 		branchInfo.lcaTableId = lcaTableID
 		branchInfo.pathFromLCAToTar = tarIDs
@@ -2489,6 +2491,17 @@ func decideLCABranchTSFromBranchDAG(
 		branchInfo.pathFromLCAToBaseTS = []types.TS{{}}
 	}
 	return
+}
+
+func dataBranchLineageTableID(ctx context.Context, dag *databranchutils.DataBranchDAG, rel engine.Relation) uint64 {
+	tableID := rel.GetTableID(ctx)
+	if dag.Exists(tableID) {
+		return tableID
+	}
+	if tblDef := rel.GetTableDef(ctx); tblDef != nil && tblDef.LogicalId != 0 && dag.Exists(tblDef.LogicalId) {
+		return tblDef.LogicalId
+	}
+	return tableID
 }
 
 // buildTSs lifts a slice of int64 physical timestamps into the
