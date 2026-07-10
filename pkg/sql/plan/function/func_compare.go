@@ -1309,16 +1309,64 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	panic("unreached code")
 }
 
-func operatorOpInt64Fn(
+func operatorOpInt64ToUint64Fn(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	fn func(int64, int64) int64) error {
+	fn func(uint64, uint64) uint64) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
-	rs := vector.MustFunctionResult[int64](result)
+	rs := vector.MustFunctionResult[uint64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if err := rs.Append(fn(uint64(v1), uint64(v2)), null1 || null2); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func operatorOpUint64Fn(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	fn func(uint64, uint64) uint64) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[1])
+	rs := vector.MustFunctionResult[uint64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
 		if err := rs.Append(fn(v1, v2), null1 || null2); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func operatorOpUint64Int64Fn(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	fn func(uint64, uint64) uint64) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+	rs := vector.MustFunctionResult[uint64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if err := rs.Append(fn(v1, uint64(v2)), null1 || null2); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func operatorOpInt64Uint64Fn(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	fn func(uint64, uint64) uint64) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[1])
+	rs := vector.MustFunctionResult[uint64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if err := rs.Append(fn(uint64(v1), v2), null1 || null2); err != nil {
 			return err
 		}
 	}
@@ -1352,9 +1400,21 @@ func operatorOpStrFn(
 }
 
 func operatorOpBitAndInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return operatorOpInt64Fn(parameters, result, proc, length, func(i int64, i2 int64) int64 {
+	return operatorOpInt64ToUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 {
 		return i & i2
 	})
+}
+
+func operatorOpBitAndUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i & i2 })
+}
+
+func operatorOpBitAndUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpUint64Int64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i & i2 })
+}
+
+func operatorOpBitAndInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpInt64Uint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i & i2 })
 }
 
 func operatorOpBitAndStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1371,9 +1431,21 @@ func operatorOpBitAndStrFn(parameters []*vector.Vector, result vector.FunctionRe
 }
 
 func operatorOpBitXorInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return operatorOpInt64Fn(parameters, result, proc, length, func(i int64, i2 int64) int64 {
+	return operatorOpInt64ToUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 {
 		return i ^ i2
 	})
+}
+
+func operatorOpBitXorUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i ^ i2 })
+}
+
+func operatorOpBitXorUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpUint64Int64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i ^ i2 })
+}
+
+func operatorOpBitXorInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpInt64Uint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i ^ i2 })
 }
 
 func operatorOpBitXorStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1390,9 +1462,21 @@ func operatorOpBitXorStrFn(parameters []*vector.Vector, result vector.FunctionRe
 }
 
 func operatorOpBitOrInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return operatorOpInt64Fn(parameters, result, proc, length, func(i int64, i2 int64) int64 {
+	return operatorOpInt64ToUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 {
 		return i | i2
 	})
+}
+
+func operatorOpBitOrUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i | i2 })
+}
+
+func operatorOpBitOrUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpUint64Int64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i | i2 })
+}
+
+func operatorOpBitOrInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpInt64Uint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 { return i | i2 })
 }
 
 func operatorOpBitOrStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1409,8 +1493,35 @@ func operatorOpBitOrStrFn(parameters []*vector.Vector, result vector.FunctionRes
 }
 
 func operatorOpBitShiftLeftInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return operatorOpInt64Fn(parameters, result, proc, length, func(i int64, i2 int64) int64 {
-		if i2 < 0 {
+	return operatorOpInt64ToUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 {
+		if i2 >= 64 {
+			return 0
+		}
+		return i << i2
+	})
+}
+
+func operatorOpBitShiftLeftUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 {
+		if i2 >= 64 {
+			return 0
+		}
+		return i << i2
+	})
+}
+
+func operatorOpBitShiftLeftUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpUint64Int64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 {
+		if i2 >= 64 {
+			return 0
+		}
+		return i << i2
+	})
+}
+
+func operatorOpBitShiftLeftInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpInt64Uint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 {
+		if i2 >= 64 {
 			return 0
 		}
 		return i << i2
@@ -1418,8 +1529,35 @@ func operatorOpBitShiftLeftInt64Fn(parameters []*vector.Vector, result vector.Fu
 }
 
 func operatorOpBitShiftRightInt64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return operatorOpInt64Fn(parameters, result, proc, length, func(i int64, i2 int64) int64 {
-		if i2 < 0 {
+	return operatorOpInt64ToUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 {
+		if i2 >= 64 {
+			return 0
+		}
+		return i >> i2
+	})
+}
+
+func operatorOpBitShiftRightUint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpUint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 {
+		if i2 >= 64 {
+			return 0
+		}
+		return i >> i2
+	})
+}
+
+func operatorOpBitShiftRightUint64Int64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpUint64Int64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 {
+		if i2 >= 64 {
+			return 0
+		}
+		return i >> i2
+	})
+}
+
+func operatorOpBitShiftRightInt64Uint64Fn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return operatorOpInt64Uint64Fn(parameters, result, proc, length, func(i uint64, i2 uint64) uint64 {
+		if i2 >= 64 {
 			return 0
 		}
 		return i >> i2

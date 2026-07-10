@@ -15,6 +15,7 @@
 package function
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -35,8 +36,8 @@ func TestOperatorOpBitAndInt64Fn(t *testing.T) {
 			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{2, 2, 2}, []bool{false, false, false}),
 		},
-		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-			[]int64{0, 2, 0}, []bool{false, false, true}),
+		expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{0, 2, 0}, []bool{false, false, true}),
 	}
 
 	proc := testutil.NewProcess(t)
@@ -48,7 +49,7 @@ func TestOperatorOpBitAndInt64Fn(t *testing.T) {
 
 func TestOperatorOpBitOrInt64Fn(t *testing.T) {
 	// 1 | 2 = 3
-	// -1 | 2 = -1
+	// -1 | 2 = max uint64
 	// null | 2 = null
 	tc := tcTemp{
 		info: "| test",
@@ -58,8 +59,8 @@ func TestOperatorOpBitOrInt64Fn(t *testing.T) {
 			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{2, 2, 2}, []bool{false, false, false}),
 		},
-		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-			[]int64{3, -1, 0}, []bool{false, false, true}),
+		expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{3, math.MaxUint64, 0}, []bool{false, false, true}),
 	}
 
 	proc := testutil.NewProcess(t)
@@ -71,7 +72,7 @@ func TestOperatorOpBitOrInt64Fn(t *testing.T) {
 
 func TestOperatorOpBitXorInt64Fn(t *testing.T) {
 	// 1 ^ 2 = 3
-	// -1 ^ 2 = -3
+	// -1 ^ 2 = max uint64 - 2
 	// null ^ 2 = null
 	tc := tcTemp{
 		info: "^ test",
@@ -81,8 +82,8 @@ func TestOperatorOpBitXorInt64Fn(t *testing.T) {
 			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{2, 2, 2}, []bool{false, false, false}),
 		},
-		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-			[]int64{3, -3, 0}, []bool{false, false, true}),
+		expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{3, math.MaxUint64 - 2, 0}, []bool{false, false, true}),
 	}
 
 	proc := testutil.NewProcess(t)
@@ -94,7 +95,7 @@ func TestOperatorOpBitXorInt64Fn(t *testing.T) {
 
 func TestOperatorOpBitRightShiftInt64Fn(t *testing.T) {
 	// 1024 >> 2 = 256
-	// -5 >> 2 = -2
+	// -5 >> 2 = 4611686018427387902
 	// 2 >> -2 = 0
 	// null >> 2 = null
 	tc := tcTemp{
@@ -105,8 +106,8 @@ func TestOperatorOpBitRightShiftInt64Fn(t *testing.T) {
 			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{2, 2, -2, 2}, []bool{false, false, false, true}),
 		},
-		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-			[]int64{256, -2, 0, 0}, []bool{false, false, false, true}),
+		expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{256, (math.MaxUint64 - 4) >> 2, 0, 0}, []bool{false, false, false, true}),
 	}
 
 	proc := testutil.NewProcess(t)
@@ -118,7 +119,7 @@ func TestOperatorOpBitRightShiftInt64Fn(t *testing.T) {
 
 func TestOperatorOpBitLeftShiftInt64Fn(t *testing.T) {
 	// -1 << 2 = 4
-	// -1 << 2 = -4
+	// -1 << 2 = max uint64 - 3
 	// 2 << -2 = 0
 	// null << 2 = null
 	tc := tcTemp{
@@ -129,8 +130,8 @@ func TestOperatorOpBitLeftShiftInt64Fn(t *testing.T) {
 			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{2, 2, -2, 2}, []bool{false, false, false, true}),
 		},
-		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-			[]int64{4, -4, 0, 0}, []bool{false, false, false, true}),
+		expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{4, math.MaxUint64 - 3, 0, 0}, []bool{false, false, false, true}),
 	}
 
 	proc := testutil.NewProcess(t)
