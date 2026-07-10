@@ -3065,7 +3065,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 			}
 			if len(selectClause.GroupBy.GroupByExprsList) > 1 && !selectClause.GroupBy.Apart {
-				if rewrittenSelect, ok := rewriteRollupWindowSelect(selectClause, astOrderBy, astLimit, astRankOption); ok {
+				if rewrittenSelect, hasWindow := rewriteRollupWindowSelect(selectClause, astOrderBy, astLimit, astRankOption); hasWindow {
+					if rewrittenSelect == nil {
+						return 0, moerr.NewNotSupported(builder.GetContext(), "window functions with ROLLUP or CUBE for this expression")
+					}
 					return builder.bindSelect(rewrittenSelect, ctx, isRoot)
 				}
 
@@ -3304,33 +3307,65 @@ func rewriteRollupWindowSelect(
 	astLimit *tree.Limit,
 	astRankOption *tree.RankOption,
 ) (*tree.Select, bool) {
-	if selectClause == nil || selectClause.GroupBy == nil || selectClause.GroupBy.Apart || selectClause.Distinct {
-		return nil, false
-	}
-	if selectClause.Having != nil && rollupWindowExprContainsWindow(selectClause.Having.Expr) {
+	if selectClause == nil {
 		return nil, false
 	}
 
-	innerExprs, outerExprs, exprAliases, ok := buildRollupWindowSelectExprs(selectClause.Exprs)
-	if !ok {
+	hasWindow := false
+	for _, selectExpr := range selectClause.Exprs {
+		hasWindow = hasWindow || rollupWindowExprContainsWindow(selectExpr.Expr)
+	}
+	for _, order := range astOrderBy {
+		hasWindow = hasWindow || rollupWindowExprContainsWindow(order.Expr)
+	}
+	if selectClause.Having != nil {
+		hasWindow = hasWindow || rollupWindowExprContainsWindow(selectClause.Having.Expr)
+	}
+	if !hasWindow {
 		return nil, false
+	}
+	if selectClause.GroupBy == nil || selectClause.GroupBy.Apart ||
+		len(selectClause.GroupBy.GroupByExprsList) <= 1 ||
+		selectClause.Distinct ||
+		(selectClause.Having != nil && rollupWindowExprContainsWindow(selectClause.Having.Expr)) {
+		return nil, true
+	}
+
+	rewriteState := newRollupWindowRewriteState(selectClause.Exprs)
+	outerExprs, ok := buildRollupWindowSelectExprs(selectClause.Exprs, rewriteState)
+	if !ok {
+		return nil, true
+	}
+	var rewrittenHaving *tree.Where
+	if selectClause.Having != nil {
+		havingExpr, ok := rewriteRollupWindowExpr(selectClause.Having.Expr, rewriteState)
+		if !ok {
+			return nil, true
+		}
+		rewrittenHaving = &tree.Where{
+			Type:         selectClause.Having.Type,
+			RollupHaving: true,
+			Expr:         havingExpr,
+		}
+	}
+	rewrittenOrderBy, ok := rewriteRollupWindowOrderBy(astOrderBy, rewriteState)
+	if !ok {
+		return nil, true
+	}
+	if len(rewriteState.innerExprs) == 0 {
+		_, ok = rewriteState.ensureInnerExpr(tree.NewNumVal(int64(1), "1", false, tree.P_int64))
+		if !ok {
+			return nil, true
+		}
 	}
 
 	groupingCount := len(selectClause.GroupBy.GroupByExprsList)
-	if groupingCount <= 1 {
-		return nil, false
-	}
-	if selectClause.Having != nil {
-		selectClause.Having.RollupHaving = true
-	}
-
 	selectStmts := make([]*tree.SelectClause, groupingCount)
 	for i, list := range selectClause.GroupBy.GroupByExprsList {
 		selectStmts[i] = &tree.SelectClause{
-			Distinct: selectClause.Distinct,
-			Exprs:    append(tree.SelectExprs(nil), innerExprs...),
-			From:     selectClause.From,
-			Where:    selectClause.Where,
+			Exprs: append(tree.SelectExprs(nil), rewriteState.innerExprs...),
+			From:  selectClause.From,
+			Where: selectClause.Where,
 			GroupBy: &tree.GroupByClause{
 				GroupByExprsList: selectClause.GroupBy.GroupByExprsList,
 				GroupingSet:      list,
@@ -3338,7 +3373,7 @@ func rewriteRollupWindowSelect(
 				Cube:             false,
 				Rollup:           false,
 			},
-			Having: selectClause.Having,
+			Having: rewrittenHaving,
 			Option: selectClause.Option,
 		}
 	}
@@ -3354,7 +3389,8 @@ func rewriteRollupWindowSelect(
 	derived := &tree.Select{Select: leftClause}
 	return &tree.Select{
 		Select: &tree.SelectClause{
-			Exprs: outerExprs,
+			Distinct: selectClause.Distinct,
+			Exprs:    outerExprs,
 			From: &tree.From{
 				Tables: tree.TableExprs{
 					&tree.AliasedTableExpr{
@@ -3366,96 +3402,174 @@ func rewriteRollupWindowSelect(
 				},
 			},
 		},
-		OrderBy:    rewriteRollupWindowOrderBy(astOrderBy, exprAliases),
+		OrderBy:    rewrittenOrderBy,
 		Limit:      astLimit,
 		RankOption: astRankOption,
 	}, true
 }
 
-func buildRollupWindowSelectExprs(selectExprs tree.SelectExprs) (tree.SelectExprs, tree.SelectExprs, map[string]string, bool) {
-	if len(selectExprs) == 0 {
-		return nil, nil, nil, false
+const rollupWindowInternalAliasPrefix = "__mo_rollup_window_col_"
+
+type rollupWindowRewriteState struct {
+	innerExprs  tree.SelectExprs
+	exprAliases map[string]string
+	nameAliases map[string]string
+	usedAliases map[string]struct{}
+	nextAlias   int
+}
+
+func newRollupWindowRewriteState(selectExprs tree.SelectExprs) *rollupWindowRewriteState {
+	state := &rollupWindowRewriteState{
+		innerExprs:  make(tree.SelectExprs, 0, len(selectExprs)),
+		exprAliases: make(map[string]string),
+		nameAliases: make(map[string]string),
+		usedAliases: make(map[string]struct{}),
+	}
+	for _, selectExpr := range selectExprs {
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			state.usedAliases[strings.ToLower(selectExpr.As.Origin())] = struct{}{}
+		}
+		if colName, ok := rollupWindowBareColumnName(selectExpr.Expr); ok {
+			state.usedAliases[strings.ToLower(colName)] = struct{}{}
+		}
+	}
+	return state
+}
+
+func (state *rollupWindowRewriteState) newInternalAlias() string {
+	for {
+		alias := fmt.Sprintf("%s%d", rollupWindowInternalAliasPrefix, state.nextAlias)
+		state.nextAlias++
+		key := strings.ToLower(alias)
+		if _, exists := state.usedAliases[key]; exists {
+			continue
+		}
+		state.usedAliases[key] = struct{}{}
+		return alias
+	}
+}
+
+func (state *rollupWindowRewriteState) ensureInnerExpr(expr tree.Expr) (string, bool) {
+	if rollupWindowExprIsStar(expr) {
+		return "", false
+	}
+	if alias, ok := state.lookupExprAlias(expr); ok {
+		return alias, true
 	}
 
-	hasWindow := false
-	innerExprs := make(tree.SelectExprs, 0, len(selectExprs))
+	alias := state.newInternalAlias()
+	state.innerExprs = append(state.innerExprs, tree.SelectExpr{
+		Expr: expr,
+		As:   tree.NewCStr(alias, 1),
+	})
+	state.addExprAlias(expr, alias)
+	if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star && unresolvedName.NumParts == 1 {
+		state.addNameAlias(unresolvedName.ColNameOrigin(), alias)
+	}
+	return alias, true
+}
+
+func (state *rollupWindowRewriteState) addExprAlias(expr tree.Expr, alias string) {
+	key := rollupWindowExprKey(expr)
+	if _, exists := state.exprAliases[key]; !exists {
+		state.exprAliases[key] = alias
+	}
+}
+
+func (state *rollupWindowRewriteState) addNameAlias(name, alias string) {
+	key := strings.ToLower(name)
+	if key == "" {
+		return
+	}
+	if _, exists := state.nameAliases[key]; !exists {
+		state.nameAliases[key] = alias
+	}
+}
+
+func (state *rollupWindowRewriteState) lookupExprAlias(expr tree.Expr) (string, bool) {
+	if alias, ok := state.exprAliases[rollupWindowExprKey(expr)]; ok {
+		return alias, true
+	}
+	if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star && unresolvedName.NumParts == 1 {
+		alias, ok := state.nameAliases[strings.ToLower(unresolvedName.ColNameOrigin())]
+		return alias, ok
+	}
+	return "", false
+}
+
+func rollupWindowExprKey(expr tree.Expr) string {
+	return tree.String(expr, dialect.MYSQL)
+}
+
+func buildRollupWindowSelectExprs(selectExprs tree.SelectExprs, state *rollupWindowRewriteState) (tree.SelectExprs, bool) {
+	if len(selectExprs) == 0 {
+		return nil, false
+	}
+
 	outerExprs := make(tree.SelectExprs, 0, len(selectExprs))
-	exprAliases := make(map[string]string)
-	usedAliases := make(map[string]struct{})
 	aliasesByIndex := make([]string, len(selectExprs))
+	for _, selectExpr := range selectExprs {
+		if rollupWindowExprContainsWindow(selectExpr.Expr) && selectExpr.As != nil && !selectExpr.As.Empty() {
+			state.addNameAlias(selectExpr.As.Origin(), selectExpr.As.Origin())
+		}
+	}
 
 	for i, selectExpr := range selectExprs {
 		if rollupWindowExprContainsWindow(selectExpr.Expr) {
-			hasWindow = true
 			continue
 		}
 
-		alias, ok := rollupWindowSelectExprAlias(selectExpr, usedAliases)
+		alias, ok := state.ensureInnerExpr(selectExpr.Expr)
 		if !ok {
-			return nil, nil, nil, false
+			return nil, false
 		}
-
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			state.addNameAlias(selectExpr.As.Origin(), alias)
+		}
 		aliasesByIndex[i] = alias
-		innerExprs = append(innerExprs, selectExpr)
-		addRollupWindowExprAlias(exprAliases, selectExpr.Expr, alias)
-		addRollupWindowExprAlias(exprAliases, tree.NewUnresolvedColName(alias), alias)
-		if colName, ok := rollupWindowBareColumnName(selectExpr.Expr); ok {
-			addRollupWindowExprAlias(exprAliases, tree.NewUnresolvedColName(colName), alias)
-		}
-	}
-
-	if !hasWindow || len(innerExprs) == 0 {
-		return nil, nil, nil, false
 	}
 
 	for i, selectExpr := range selectExprs {
 		if rollupWindowExprContainsWindow(selectExpr.Expr) {
-			rewrittenExpr, ok := rewriteRollupWindowExpr(selectExpr.Expr, exprAliases)
+			rewrittenExpr, ok := rewriteRollupWindowExpr(selectExpr.Expr, state)
 			if !ok {
-				return nil, nil, nil, false
+				return nil, false
 			}
 			outerExprs = append(outerExprs, tree.SelectExpr{
 				Expr: rewrittenExpr,
-				As:   selectExpr.As,
+				As:   rollupWindowOutputAlias(selectExpr),
 			})
 			continue
 		}
 
 		outerExprs = append(outerExprs, tree.SelectExpr{
 			Expr: tree.NewUnresolvedColName(aliasesByIndex[i]),
-			As:   selectExpr.As,
+			As:   rollupWindowOutputAlias(selectExpr),
 		})
 	}
 
-	return innerExprs, outerExprs, exprAliases, true
+	return outerExprs, true
 }
 
-func rollupWindowSelectExprAlias(selectExpr tree.SelectExpr, usedAliases map[string]struct{}) (string, bool) {
+func rollupWindowOutputAlias(selectExpr tree.SelectExpr) *tree.CStr {
 	if selectExpr.As != nil && !selectExpr.As.Empty() {
-		alias := selectExpr.As.Origin()
-		if useRollupWindowAlias(alias, usedAliases) {
-			return alias, true
+		return selectExpr.As
+	}
+	if colName, ok := rollupWindowBareColumnName(selectExpr.Expr); ok {
+		return tree.NewCStr(colName, 1)
+	}
+	expr := selectExpr.Expr
+	for {
+		parenExpr, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
 		}
-		return "", false
+		expr = parenExpr.Expr
 	}
-
-	if alias, ok := rollupWindowBareColumnName(selectExpr.Expr); ok && useRollupWindowAlias(alias, usedAliases) {
-		return alias, true
+	if heading, ok := nameConstHeading(expr); ok {
+		return tree.NewCStr(heading, 1)
 	}
-
-	return "", false
-}
-
-func useRollupWindowAlias(alias string, usedAliases map[string]struct{}) bool {
-	if alias == "" {
-		return false
-	}
-	key := strings.ToLower(alias)
-	if _, ok := usedAliases[key]; ok {
-		return false
-	}
-	usedAliases[key] = struct{}{}
-	return true
+	return tree.NewCStr(tree.String(expr, dialect.MYSQL), 1)
 }
 
 func rollupWindowBareColumnName(expr tree.Expr) (string, bool) {
@@ -3466,45 +3580,51 @@ func rollupWindowBareColumnName(expr tree.Expr) (string, bool) {
 	return unresolvedName.ColNameOrigin(), true
 }
 
-func addRollupWindowExprAlias(exprAliases map[string]string, expr tree.Expr, alias string) {
-	exprKey := tree.String(expr, dialect.MYSQL)
-	exprAliases[exprKey] = alias
-	exprAliases[strings.ToLower(exprKey)] = alias
-}
-
-func lookupRollupWindowExprAlias(exprAliases map[string]string, expr tree.Expr) (string, bool) {
-	exprKey := tree.String(expr, dialect.MYSQL)
-	if alias, ok := exprAliases[exprKey]; ok {
-		return alias, true
+func rollupWindowExprIsStar(expr tree.Expr) bool {
+	switch e := expr.(type) {
+	case *tree.UnresolvedName:
+		return e.Star
+	case tree.UnqualifiedStar:
+		return true
+	default:
+		return false
 	}
-	alias, ok := exprAliases[strings.ToLower(exprKey)]
-	return alias, ok
 }
 
-func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tree.Expr, bool) {
-	if alias, ok := lookupRollupWindowExprAlias(exprAliases, expr); ok {
+func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (tree.Expr, bool) {
+	if alias, ok := state.lookupExprAlias(expr); ok {
 		return tree.NewUnresolvedColName(alias), true
 	}
 
 	switch e := expr.(type) {
 	case *tree.FuncExpr:
+		if rollupWindowFuncMustBeMaterialized(e) {
+			if rollupWindowExprContainsWindow(e) {
+				return nil, false
+			}
+			alias, ok := state.ensureInnerExpr(e)
+			if !ok {
+				return nil, false
+			}
+			return tree.NewUnresolvedColName(alias), true
+		}
 		next := *e
 		if len(e.Exprs) > 0 {
-			exprs, ok := rewriteRollupWindowExprs(e.Exprs, exprAliases)
+			exprs, ok := rewriteRollupWindowExprs(e.Exprs, state)
 			if !ok {
 				return nil, false
 			}
 			next.Exprs = exprs
 		}
 		if len(e.OrderBy) > 0 {
-			orderBy, ok := rewriteRollupWindowOrderByStrict(e.OrderBy, exprAliases)
+			orderBy, ok := rewriteRollupWindowOrderBy(e.OrderBy, state)
 			if !ok {
 				return nil, false
 			}
 			next.OrderBy = orderBy
 		}
 		if e.WindowSpec != nil {
-			windowSpec, ok := rewriteRollupWindowSpec(e.WindowSpec, exprAliases)
+			windowSpec, ok := rewriteRollupWindowSpec(e.WindowSpec, state)
 			if !ok {
 				return nil, false
 			}
@@ -3512,11 +3632,11 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 		}
 		return &next, true
 	case *tree.BinaryExpr:
-		left, ok := rewriteRollupWindowExpr(e.Left, exprAliases)
+		left, ok := rewriteRollupWindowExpr(e.Left, state)
 		if !ok {
 			return nil, false
 		}
-		right, ok := rewriteRollupWindowExpr(e.Right, exprAliases)
+		right, ok := rewriteRollupWindowExpr(e.Right, state)
 		if !ok {
 			return nil, false
 		}
@@ -3525,7 +3645,7 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 		next.Right = right
 		return &next, true
 	case *tree.UnaryExpr:
-		child, ok := rewriteRollupWindowExpr(e.Expr, exprAliases)
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
 		if !ok {
 			return nil, false
 		}
@@ -3535,21 +3655,21 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 	case *tree.ComparisonExpr:
 		next := *e
 		if e.Left != nil {
-			left, ok := rewriteRollupWindowExpr(e.Left, exprAliases)
+			left, ok := rewriteRollupWindowExpr(e.Left, state)
 			if !ok {
 				return nil, false
 			}
 			next.Left = left
 		}
 		if e.Right != nil {
-			right, ok := rewriteRollupWindowExpr(e.Right, exprAliases)
+			right, ok := rewriteRollupWindowExpr(e.Right, state)
 			if !ok {
 				return nil, false
 			}
 			next.Right = right
 		}
 		if e.Escape != nil {
-			escape, ok := rewriteRollupWindowExpr(e.Escape, exprAliases)
+			escape, ok := rewriteRollupWindowExpr(e.Escape, state)
 			if !ok {
 				return nil, false
 			}
@@ -3557,11 +3677,11 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 		}
 		return &next, true
 	case *tree.AndExpr:
-		left, ok := rewriteRollupWindowExpr(e.Left, exprAliases)
+		left, ok := rewriteRollupWindowExpr(e.Left, state)
 		if !ok {
 			return nil, false
 		}
-		right, ok := rewriteRollupWindowExpr(e.Right, exprAliases)
+		right, ok := rewriteRollupWindowExpr(e.Right, state)
 		if !ok {
 			return nil, false
 		}
@@ -3570,11 +3690,11 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 		next.Right = right
 		return &next, true
 	case *tree.XorExpr:
-		left, ok := rewriteRollupWindowExpr(e.Left, exprAliases)
+		left, ok := rewriteRollupWindowExpr(e.Left, state)
 		if !ok {
 			return nil, false
 		}
-		right, ok := rewriteRollupWindowExpr(e.Right, exprAliases)
+		right, ok := rewriteRollupWindowExpr(e.Right, state)
 		if !ok {
 			return nil, false
 		}
@@ -3583,11 +3703,11 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 		next.Right = right
 		return &next, true
 	case *tree.OrExpr:
-		left, ok := rewriteRollupWindowExpr(e.Left, exprAliases)
+		left, ok := rewriteRollupWindowExpr(e.Left, state)
 		if !ok {
 			return nil, false
 		}
-		right, ok := rewriteRollupWindowExpr(e.Right, exprAliases)
+		right, ok := rewriteRollupWindowExpr(e.Right, state)
 		if !ok {
 			return nil, false
 		}
@@ -3596,7 +3716,7 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 		next.Right = right
 		return &next, true
 	case *tree.NotExpr:
-		child, ok := rewriteRollupWindowExpr(e.Expr, exprAliases)
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
 		if !ok {
 			return nil, false
 		}
@@ -3604,7 +3724,7 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 		next.Expr = child
 		return &next, true
 	case *tree.ParenExpr:
-		child, ok := rewriteRollupWindowExpr(e.Expr, exprAliases)
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
 		if !ok {
 			return nil, false
 		}
@@ -3612,7 +3732,7 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 		next.Expr = child
 		return &next, true
 	case *tree.CastExpr:
-		child, ok := rewriteRollupWindowExpr(e.Expr, exprAliases)
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
 		if !ok {
 			return nil, false
 		}
@@ -3620,7 +3740,7 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 		next.Expr = child
 		return &next, true
 	case *tree.Tuple:
-		exprs, ok := rewriteRollupWindowExprs(e.Exprs, exprAliases)
+		exprs, ok := rewriteRollupWindowExprs(e.Exprs, state)
 		if !ok {
 			return nil, false
 		}
@@ -3630,7 +3750,7 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 	case *tree.CaseExpr:
 		next := *e
 		if e.Expr != nil {
-			caseExpr, ok := rewriteRollupWindowExpr(e.Expr, exprAliases)
+			caseExpr, ok := rewriteRollupWindowExpr(e.Expr, state)
 			if !ok {
 				return nil, false
 			}
@@ -3639,11 +3759,11 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 		if len(e.Whens) > 0 {
 			next.Whens = make([]*tree.When, len(e.Whens))
 			for i, when := range e.Whens {
-				cond, ok := rewriteRollupWindowExpr(when.Cond, exprAliases)
+				cond, ok := rewriteRollupWindowExpr(when.Cond, state)
 				if !ok {
 					return nil, false
 				}
-				val, ok := rewriteRollupWindowExpr(when.Val, exprAliases)
+				val, ok := rewriteRollupWindowExpr(when.Val, state)
 				if !ok {
 					return nil, false
 				}
@@ -3651,28 +3771,58 @@ func rewriteRollupWindowExpr(expr tree.Expr, exprAliases map[string]string) (tre
 			}
 		}
 		if e.Else != nil {
-			elseExpr, ok := rewriteRollupWindowExpr(e.Else, exprAliases)
+			elseExpr, ok := rewriteRollupWindowExpr(e.Else, state)
 			if !ok {
 				return nil, false
 			}
 			next.Else = elseExpr
 		}
 		return &next, true
-	case *tree.NumVal, *tree.StrVal, *tree.TimeUnitExpr:
+	case *tree.NumVal, *tree.StrVal, *tree.TimeUnitExpr, *tree.ParamExpr, *tree.VarExpr:
+		return expr, true
+	case *tree.UnresolvedName:
+		if e.Star {
+			return expr, true
+		}
+		alias, ok := state.ensureInnerExpr(expr)
+		if !ok {
+			return nil, false
+		}
+		return tree.NewUnresolvedColName(alias), true
+	case tree.UnqualifiedStar:
 		return expr, true
 	default:
-		return nil, false
+		if rollupWindowExprContainsWindow(expr) {
+			return nil, false
+		}
+		alias, ok := state.ensureInnerExpr(expr)
+		if !ok {
+			return nil, false
+		}
+		return tree.NewUnresolvedColName(alias), true
 	}
 }
 
-func rewriteRollupWindowExprs(exprs tree.Exprs, exprAliases map[string]string) (tree.Exprs, bool) {
+func rollupWindowFuncMustBeMaterialized(expr *tree.FuncExpr) bool {
+	if expr.WindowSpec != nil {
+		return false
+	}
+	funcRef, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
+	if !ok {
+		return true
+	}
+	funcName := funcRef.ColName()
+	return function.GetFunctionIsAggregateByName(funcName) || strings.EqualFold(funcName, "grouping")
+}
+
+func rewriteRollupWindowExprs(exprs tree.Exprs, state *rollupWindowRewriteState) (tree.Exprs, bool) {
 	if len(exprs) == 0 {
 		return nil, true
 	}
 
 	rewrittenExprs := make(tree.Exprs, len(exprs))
 	for i, expr := range exprs {
-		rewrittenExpr, ok := rewriteRollupWindowExpr(expr, exprAliases)
+		rewrittenExpr, ok := rewriteRollupWindowExpr(expr, state)
 		if !ok {
 			return nil, false
 		}
@@ -3681,24 +3831,24 @@ func rewriteRollupWindowExprs(exprs tree.Exprs, exprAliases map[string]string) (
 	return rewrittenExprs, true
 }
 
-func rewriteRollupWindowSpec(windowSpec *tree.WindowSpec, exprAliases map[string]string) (*tree.WindowSpec, bool) {
+func rewriteRollupWindowSpec(windowSpec *tree.WindowSpec, state *rollupWindowRewriteState) (*tree.WindowSpec, bool) {
 	next := *windowSpec
 	if len(windowSpec.PartitionBy) > 0 {
-		partitionBy, ok := rewriteRollupWindowExprs(windowSpec.PartitionBy, exprAliases)
+		partitionBy, ok := rewriteRollupWindowExprs(windowSpec.PartitionBy, state)
 		if !ok {
 			return nil, false
 		}
 		next.PartitionBy = partitionBy
 	}
 	if len(windowSpec.OrderBy) > 0 {
-		orderBy, ok := rewriteRollupWindowOrderByStrict(windowSpec.OrderBy, exprAliases)
+		orderBy, ok := rewriteRollupWindowOrderBy(windowSpec.OrderBy, state)
 		if !ok {
 			return nil, false
 		}
 		next.OrderBy = orderBy
 	}
 	if windowSpec.Frame != nil {
-		frame, ok := rewriteRollupWindowFrame(windowSpec.Frame, exprAliases)
+		frame, ok := rewriteRollupWindowFrame(windowSpec.Frame, state)
 		if !ok {
 			return nil, false
 		}
@@ -3707,17 +3857,17 @@ func rewriteRollupWindowSpec(windowSpec *tree.WindowSpec, exprAliases map[string
 	return &next, true
 }
 
-func rewriteRollupWindowFrame(frame *tree.FrameClause, exprAliases map[string]string) (*tree.FrameClause, bool) {
+func rewriteRollupWindowFrame(frame *tree.FrameClause, state *rollupWindowRewriteState) (*tree.FrameClause, bool) {
 	next := *frame
 	if frame.Start != nil {
-		start, ok := rewriteRollupWindowFrameBound(frame.Start, exprAliases)
+		start, ok := rewriteRollupWindowFrameBound(frame.Start, state)
 		if !ok {
 			return nil, false
 		}
 		next.Start = start
 	}
 	if frame.End != nil {
-		end, ok := rewriteRollupWindowFrameBound(frame.End, exprAliases)
+		end, ok := rewriteRollupWindowFrameBound(frame.End, state)
 		if !ok {
 			return nil, false
 		}
@@ -3726,10 +3876,10 @@ func rewriteRollupWindowFrame(frame *tree.FrameClause, exprAliases map[string]st
 	return &next, true
 }
 
-func rewriteRollupWindowFrameBound(bound *tree.FrameBound, exprAliases map[string]string) (*tree.FrameBound, bool) {
+func rewriteRollupWindowFrameBound(bound *tree.FrameBound, state *rollupWindowRewriteState) (*tree.FrameBound, bool) {
 	next := *bound
 	if bound.Expr != nil {
-		expr, ok := rewriteRollupWindowExpr(bound.Expr, exprAliases)
+		expr, ok := rewriteRollupWindowExpr(bound.Expr, state)
 		if !ok {
 			return nil, false
 		}
@@ -3738,30 +3888,14 @@ func rewriteRollupWindowFrameBound(bound *tree.FrameBound, exprAliases map[strin
 	return &next, true
 }
 
-func rewriteRollupWindowOrderBy(orderBy tree.OrderBy, exprAliases map[string]string) tree.OrderBy {
-	if len(orderBy) == 0 {
-		return nil
-	}
-
-	rewrittenOrderBy := make(tree.OrderBy, len(orderBy))
-	for i, order := range orderBy {
-		next := *order
-		if expr, ok := rewriteRollupWindowExpr(order.Expr, exprAliases); ok {
-			next.Expr = expr
-		}
-		rewrittenOrderBy[i] = &next
-	}
-	return rewrittenOrderBy
-}
-
-func rewriteRollupWindowOrderByStrict(orderBy tree.OrderBy, exprAliases map[string]string) (tree.OrderBy, bool) {
+func rewriteRollupWindowOrderBy(orderBy tree.OrderBy, state *rollupWindowRewriteState) (tree.OrderBy, bool) {
 	if len(orderBy) == 0 {
 		return nil, true
 	}
 
 	rewrittenOrderBy := make(tree.OrderBy, len(orderBy))
 	for i, order := range orderBy {
-		expr, ok := rewriteRollupWindowExpr(order.Expr, exprAliases)
+		expr, ok := rewriteRollupWindowExpr(order.Expr, state)
 		if !ok {
 			return nil, false
 		}
@@ -3804,16 +3938,46 @@ func rollupWindowExprContainsWindow(expr tree.Expr) bool {
 		return rollupWindowExprContainsWindow(e.Left) || rollupWindowExprContainsWindow(e.Right)
 	case *tree.NotExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.IsNullExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.IsNotNullExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.IsUnknownExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.IsNotUnknownExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.IsTrueExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.IsNotTrueExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.IsFalseExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.IsNotFalseExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.ExprList:
+		for _, child := range e.Exprs {
+			if rollupWindowExprContainsWindow(child) {
+				return true
+			}
+		}
 	case *tree.ParenExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.CastExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.BitCastExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.SerialExtractExpr:
+		return rollupWindowExprContainsWindow(e.SerialExpr) || rollupWindowExprContainsWindow(e.IndexExpr)
 	case *tree.Tuple:
 		for _, child := range e.Exprs {
 			if rollupWindowExprContainsWindow(child) {
 				return true
 			}
 		}
+	case *tree.RangeCond:
+		return rollupWindowExprContainsWindow(e.Left) ||
+			rollupWindowExprContainsWindow(e.From) ||
+			rollupWindowExprContainsWindow(e.To)
 	case *tree.CaseExpr:
 		if rollupWindowExprContainsWindow(e.Expr) || rollupWindowExprContainsWindow(e.Else) {
 			return true
@@ -3823,6 +3987,12 @@ func rollupWindowExprContainsWindow(expr tree.Expr) bool {
 				return true
 			}
 		}
+	case *tree.IntervalExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.DefaultVal:
+		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.VarExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
 	}
 	return false
 }

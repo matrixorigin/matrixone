@@ -828,41 +828,92 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 
 func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 	mock := NewMockOptimizer(false)
-	sql := `
-		select
-			l_returnflag,
-			l_linestatus,
-			sum(l_quantity) as total_qty,
-			row_number() over (order by sum(l_quantity) desc, l_returnflag, l_linestatus) as row_num,
-			rank() over (order by sum(l_quantity) desc) as rank_num,
-			dense_rank() over (order by sum(l_quantity) desc) as dense_rank_num
-		from
-			lineitem
-		group by
-			l_returnflag,
-			l_linestatus with rollup
-		order by total_qty desc, l_returnflag, l_linestatus`
+	for _, tc := range []struct {
+		name             string
+		sql              string
+		expectedHeadings []string
+	}{
+		{
+			name: "aliased aggregate output",
+			sql: `
+				select
+					l_returnflag,
+					l_linestatus,
+					sum(l_quantity) as total_qty,
+					row_number() over (order by sum(l_quantity) desc, l_returnflag, l_linestatus) as row_num,
+					rank() over (order by sum(l_quantity) desc) as rank_num,
+					dense_rank() over (order by sum(l_quantity) desc) as dense_rank_num
+				from lineitem
+				group by l_returnflag, l_linestatus with rollup
+				having total_qty > 0
+				order by total_qty desc, l_returnflag, l_linestatus`,
+			expectedHeadings: []string{"l_returnflag", "l_linestatus", "total_qty", "row_num", "rank_num", "dense_rank_num"},
+		},
+		{
+			name: "aggregate output without alias",
+			sql: `
+				select
+					l_returnflag,
+					l_linestatus,
+					sum(l_quantity),
+					row_number() over (order by sum(l_quantity) desc) as row_num,
+					rank() over (order by sum(l_quantity) desc) as rank_num,
+					dense_rank() over (order by sum(l_quantity) desc) as dense_rank_num
+				from lineitem
+				group by l_returnflag, l_linestatus with rollup
+				order by sum(l_quantity) desc, l_returnflag, l_linestatus`,
+			expectedHeadings: []string{"l_returnflag", "l_linestatus", "sum(l_quantity)", "row_num", "rank_num", "dense_rank_num"},
+		},
+		{
+			name: "aggregate used only by windows",
+			sql: `
+				select
+					l_returnflag,
+					l_linestatus,
+					row_number() over (order by sum(l_quantity) desc) as row_num,
+					rank() over (order by sum(l_quantity) desc) as rank_num,
+					dense_rank() over (order by sum(l_quantity) desc) as dense_rank_num
+				from lineitem
+				group by l_returnflag, l_linestatus with rollup
+				order by row_num`,
+			expectedHeadings: []string{"l_returnflag", "l_linestatus", "row_num", "rank_num", "dense_rank_num"},
+		},
+		{
+			name: "window outputs only",
+			sql: `
+				select
+					row_number() over (order by 1) as row_num,
+					rank() over (order by 1) as rank_num,
+					dense_rank() over (order by 1) as dense_rank_num
+				from lineitem
+				group by l_returnflag with rollup`,
+			expectedHeadings: []string{"row_num", "rank_num", "dense_rank_num"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
 
-	logicPlan, err := runOneStmt(mock, t, sql)
-	require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+			require.Equal(t, tc.expectedHeadings, query.Headings)
 
-	query := logicPlan.GetQuery()
-	require.NotNil(t, query)
-
-	windowCount := 0
-	windowAfterUnionCount := 0
-	for _, node := range query.Nodes {
-		if node.NodeType == plan.Node_WINDOW {
-			windowCount++
-			require.Len(t, node.Children, 1)
-			if query.Nodes[node.Children[0]].NodeType == plan.Node_UNION_ALL {
-				windowAfterUnionCount++
+			windowCount := 0
+			windowAfterUnionCount := 0
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_WINDOW {
+					windowCount++
+					require.Len(t, node.Children, 1)
+					if query.Nodes[node.Children[0]].NodeType == plan.Node_UNION_ALL {
+						windowAfterUnionCount++
+					}
+				}
 			}
-		}
-	}
 
-	require.Equal(t, 3, windowCount)
-	require.Equal(t, 1, windowAfterUnionCount)
+			require.Equal(t, 3, windowCount)
+			require.Equal(t, 1, windowAfterUnionCount)
+		})
+	}
 }
 
 func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
@@ -883,23 +934,33 @@ func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
 	rewritten, ok := rewriteRollupWindowSelect(clause, stmt.OrderBy, stmt.Limit, stmt.RankOption)
 	require.True(t, ok)
 	require.NotNil(t, rewritten)
-	require.True(t, clause.Having.RollupHaving)
 	require.NotNil(t, rewritten.Limit)
 	require.Len(t, rewritten.OrderBy, 1)
 	require.Contains(t, tree.String(rewritten, dialect.MYSQL), "__mo_rollup_window")
 	require.Contains(t, tree.String(rewritten, dialect.MYSQL), "total_qty")
 
-	innerExprs, outerExprs, exprAliases, ok := buildRollupWindowSelectExprs(clause.Exprs)
+	state := newRollupWindowRewriteState(clause.Exprs)
+	outerExprs, ok := buildRollupWindowSelectExprs(clause.Exprs, state)
 	require.True(t, ok)
-	require.Len(t, innerExprs, 3)
+	require.Len(t, state.innerExprs, 3)
 	require.Len(t, outerExprs, 4)
+	for _, innerExpr := range state.innerExprs {
+		require.NotNil(t, innerExpr.As)
+		require.True(t, strings.HasPrefix(innerExpr.As.Origin(), rollupWindowInternalAliasPrefix))
+	}
 
-	alias, ok := lookupRollupWindowExprAlias(exprAliases, tree.NewUnresolvedColName("l_returnflag"))
+	alias, ok := state.lookupExprAlias(tree.NewUnresolvedColName("l_returnflag"))
 	require.True(t, ok)
-	require.Equal(t, "flag", alias)
-	alias, ok = lookupRollupWindowExprAlias(exprAliases, tree.NewUnresolvedColName("total_qty"))
+	require.True(t, strings.HasPrefix(alias, rollupWindowInternalAliasPrefix))
+	flagAlias, ok := state.lookupExprAlias(tree.NewUnresolvedColName("flag"))
 	require.True(t, ok)
-	require.Equal(t, "total_qty", alias)
+	require.Equal(t, alias, flagAlias)
+	upperFlagAlias, ok := state.lookupExprAlias(tree.NewUnresolvedColName("FLAG"))
+	require.True(t, ok)
+	require.Equal(t, alias, upperFlagAlias)
+	alias, ok = state.lookupExprAlias(tree.NewUnresolvedColName("total_qty"))
+	require.True(t, ok)
+	require.True(t, strings.HasPrefix(alias, rollupWindowInternalAliasPrefix))
 }
 
 func TestRewriteRollupWindowSelectGuards(t *testing.T) {
@@ -908,39 +969,86 @@ func TestRewriteRollupWindowSelectGuards(t *testing.T) {
 
 	noGroup := mustParseRollupWindowSelect(t, "select a, row_number() over () from t")
 	_, ok = rewriteRollupWindowSelect(noGroup.Select.(*tree.SelectClause), noGroup.OrderBy, noGroup.Limit, noGroup.RankOption)
-	require.False(t, ok)
+	require.True(t, ok)
 
 	distinct := mustParseRollupWindowSelect(t, "select distinct a, row_number() over () from t group by a, b with rollup")
-	_, ok = rewriteRollupWindowSelect(distinct.Select.(*tree.SelectClause), distinct.OrderBy, distinct.Limit, distinct.RankOption)
-	require.False(t, ok)
+	distinctClause := distinct.Select.(*tree.SelectClause)
+	expandRollupGroupByForTest(distinctClause.GroupBy)
+	rewritten, ok := rewriteRollupWindowSelect(distinctClause, distinct.OrderBy, distinct.Limit, distinct.RankOption)
+	require.True(t, ok)
+	require.Nil(t, rewritten)
 
 	havingWindow := mustParseRollupWindowSelect(t, "select a, b, row_number() over () from t group by a, b with rollup having row_number() over () > 0")
-	_, ok = rewriteRollupWindowSelect(havingWindow.Select.(*tree.SelectClause), havingWindow.OrderBy, havingWindow.Limit, havingWindow.RankOption)
-	require.False(t, ok)
+	havingWindowClause := havingWindow.Select.(*tree.SelectClause)
+	expandRollupGroupByForTest(havingWindowClause.GroupBy)
+	rewritten, ok = rewriteRollupWindowSelect(havingWindowClause, havingWindow.OrderBy, havingWindow.Limit, havingWindow.RankOption)
+	require.True(t, ok)
+	require.Nil(t, rewritten)
 
 	oneGroup := mustParseRollupWindowSelect(t, "select a, row_number() over () from t group by a")
 	_, ok = rewriteRollupWindowSelect(oneGroup.Select.(*tree.SelectClause), oneGroup.OrderBy, oneGroup.Limit, oneGroup.RankOption)
-	require.False(t, ok)
+	require.True(t, ok)
 
-	emptyExprs := &tree.SelectClause{Exprs: nil}
-	_, _, _, ok = buildRollupWindowSelectExprs(emptyExprs.Exprs)
+	state := newRollupWindowRewriteState(nil)
+	_, ok = buildRollupWindowSelectExprs(nil, state)
+	require.False(t, ok)
+	star := mustParseRollupWindowSelect(t, "select *, row_number() over () from t")
+	starExprs := star.Select.(*tree.SelectClause).Exprs
+	state = newRollupWindowRewriteState(starExprs)
+	_, ok = buildRollupWindowSelectExprs(starExprs, state)
 	require.False(t, ok)
 
 	noWindow := mustParseRollupWindowSelect(t, "select a from t")
-	_, _, _, ok = buildRollupWindowSelectExprs(noWindow.Select.(*tree.SelectClause).Exprs)
+	_, ok = rewriteRollupWindowSelect(noWindow.Select.(*tree.SelectClause), noWindow.OrderBy, noWindow.Limit, noWindow.RankOption)
 	require.False(t, ok)
 
-	unsupportedInnerExpr := mustParseRollupWindowSelect(t, "select a + b, row_number() over () from t")
-	_, _, _, ok = buildRollupWindowSelectExprs(unsupportedInnerExpr.Select.(*tree.SelectClause).Exprs)
-	require.False(t, ok)
+	complexInnerExpr := mustParseRollupWindowSelect(t, "select a + b, row_number() over () from t")
+	complexExprs := complexInnerExpr.Select.(*tree.SelectClause).Exprs
+	state = newRollupWindowRewriteState(complexExprs)
+	_, ok = buildRollupWindowSelectExprs(complexExprs, state)
+	require.True(t, ok)
+	require.Len(t, state.innerExprs, 1)
+
+	windowBeforeAlias := mustParseRollupWindowSelect(t, "select row_number() over (order by total) as rn, sum(a) as total from t")
+	windowBeforeAliasExprs := windowBeforeAlias.Select.(*tree.SelectClause).Exprs
+	state = newRollupWindowRewriteState(windowBeforeAliasExprs)
+	outerExprs, ok := buildRollupWindowSelectExprs(windowBeforeAliasExprs, state)
+	require.True(t, ok)
+	require.Len(t, state.innerExprs, 1)
+	require.Contains(t, tree.String(outerExprs[0].Expr, dialect.MYSQL), state.innerExprs[0].As.Origin())
 
 	duplicateAlias := mustParseRollupWindowSelect(t, "select a as x, b as x, row_number() over () from t")
-	_, _, _, ok = buildRollupWindowSelectExprs(duplicateAlias.Select.(*tree.SelectClause).Exprs)
-	require.False(t, ok)
+	duplicateExprs := duplicateAlias.Select.(*tree.SelectClause).Exprs
+	state = newRollupWindowRewriteState(duplicateExprs)
+	_, ok = buildRollupWindowSelectExprs(duplicateExprs, state)
+	require.True(t, ok)
+	require.Len(t, state.innerExprs, 2)
+
+	state = newRollupWindowRewriteState(nil)
+	upperLiteralAlias, ok := state.ensureInnerExpr(mustParseRollupWindowExpr(t, "'A'"))
+	require.True(t, ok)
+	lowerLiteralAlias, ok := state.ensureInnerExpr(mustParseRollupWindowExpr(t, "'a'"))
+	require.True(t, ok)
+	require.NotEqual(t, upperLiteralAlias, lowerLiteralAlias)
+
+	parenAggregate := mustParseRollupWindowSelect(t, "select (sum(a)), row_number() over () from t")
+	require.Equal(t, "sum(a)", rollupWindowOutputAlias(parenAggregate.Select.(*tree.SelectClause).Exprs[0]).Origin())
+}
+
+func TestRewriteRollupWindowUnsupportedDoesNotFallback(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, sql := range []string{
+		"select distinct a, row_number() over () from nation group by a, n_regionkey with rollup",
+		"select a, row_number() over () is null from nation group by a, n_regionkey with rollup",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "window functions with ROLLUP or CUBE for this expression")
+	}
 }
 
 func TestRewriteRollupWindowExprSupportedShapes(t *testing.T) {
-	exprAliases := rollupWindowAliasMap(
+	state := rollupWindowAliasMap(
 		"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
 	)
 
@@ -953,7 +1061,7 @@ func TestRewriteRollupWindowExprSupportedShapes(t *testing.T) {
 			)
 			else 'fallback'
 		end`)
-	rewritten, ok := rewriteRollupWindowExpr(complexExpr, exprAliases)
+	rewritten, ok := rewriteRollupWindowExpr(complexExpr, state)
 	require.True(t, ok)
 	rewrittenSQL := tree.String(rewritten, dialect.MYSQL)
 	require.Contains(t, rewrittenSQL, "a_alias")
@@ -965,35 +1073,31 @@ func TestRewriteRollupWindowExprSupportedShapes(t *testing.T) {
 			order by c
 			rows between 1 preceding and 2 following
 		)`)
-	rewritten, ok = rewriteRollupWindowExpr(windowExpr, exprAliases)
+	rewritten, ok = rewriteRollupWindowExpr(windowExpr, state)
 	require.True(t, ok)
 	rewrittenSQL = tree.String(rewritten, dialect.MYSQL)
 	require.Contains(t, rewrittenSQL, "a_alias")
 	require.Contains(t, rewrittenSQL, "partition by b_alias")
 	require.Contains(t, rewrittenSQL, "order by c_alias")
 
-	funcOrderExpr := mustParseRollupWindowExpr(t, "group_concat(a order by b)")
-	rewritten, ok = rewriteRollupWindowExpr(funcOrderExpr, exprAliases)
+	aggregateExpr := mustParseRollupWindowExpr(t, "sum(missing)")
+	rewritten, ok = rewriteRollupWindowExpr(aggregateExpr, state)
 	require.True(t, ok)
-	require.Contains(t, tree.String(rewritten, dialect.MYSQL), "b_alias")
+	require.True(t, strings.HasPrefix(tree.String(rewritten, dialect.MYSQL), rollupWindowInternalAliasPrefix))
+	require.Len(t, state.innerExprs, 1)
 
-	tupleExprs, ok := rewriteRollupWindowExprs(tree.Exprs{tree.NewUnresolvedColName("a"), tree.NewUnresolvedColName("b")}, exprAliases)
+	tupleExprs, ok := rewriteRollupWindowExprs(tree.Exprs{tree.NewUnresolvedColName("a"), tree.NewUnresolvedColName("b")}, state)
 	require.True(t, ok)
 	require.Len(t, tupleExprs, 2)
 
-	emptyExprs, ok := rewriteRollupWindowExprs(nil, exprAliases)
+	emptyExprs, ok := rewriteRollupWindowExprs(nil, state)
 	require.True(t, ok)
 	require.Nil(t, emptyExprs)
 
-	_, ok = rewriteRollupWindowExpr(tree.NewUnresolvedColName("missing"), exprAliases)
-	require.False(t, ok)
-
-	_, ok = rewriteRollupWindowOrderByStrict(tree.OrderBy{{Expr: tree.NewUnresolvedColName("missing")}}, exprAliases)
-	require.False(t, ok)
-
-	orderBy := rewriteRollupWindowOrderBy(tree.OrderBy{{Expr: tree.NewUnresolvedColName("missing")}}, exprAliases)
+	orderBy, ok := rewriteRollupWindowOrderBy(tree.OrderBy{{Expr: tree.NewUnresolvedColName("another_missing")}}, state)
+	require.True(t, ok)
 	require.Len(t, orderBy, 1)
-	require.Equal(t, "missing", tree.String(orderBy[0].Expr, dialect.MYSQL))
+	require.True(t, strings.HasPrefix(tree.String(orderBy[0].Expr, dialect.MYSQL), rollupWindowInternalAliasPrefix))
 }
 
 func TestRollupWindowExprContainsWindowRecursiveShapes(t *testing.T) {
@@ -1010,9 +1114,12 @@ func TestRollupWindowExprContainsWindowRecursiveShapes(t *testing.T) {
 		{name: "xor", expr: "a xor sum(b) over ()"},
 		{name: "or", expr: "a or sum(b) over ()"},
 		{name: "not", expr: "not sum(a) over ()"},
+		{name: "is null", expr: "sum(a) over () is null"},
+		{name: "is not null", expr: "sum(a) over () is not null"},
 		{name: "paren", expr: "(sum(a) over ())"},
 		{name: "cast", expr: "cast(sum(a) over () as signed)"},
 		{name: "tuple", expr: "(a, sum(b) over ())"},
+		{name: "between", expr: "sum(a) over () between 1 and 2"},
 		{name: "case expr", expr: "case sum(a) over () when 1 then b else c end"},
 		{name: "case when", expr: "case when a then sum(b) over () else c end"},
 	} {
@@ -1043,12 +1150,12 @@ func mustParseRollupWindowExpr(t *testing.T, expr string) tree.Expr {
 	return clause.Exprs[0].Expr
 }
 
-func rollupWindowAliasMap(cols ...string) map[string]string {
-	exprAliases := make(map[string]string)
+func rollupWindowAliasMap(cols ...string) *rollupWindowRewriteState {
+	state := newRollupWindowRewriteState(nil)
 	for _, col := range cols {
-		addRollupWindowExprAlias(exprAliases, tree.NewUnresolvedColName(col), col+"_alias")
+		state.addExprAlias(tree.NewUnresolvedColName(col), col+"_alias")
 	}
-	return exprAliases
+	return state
 }
 
 func expandRollupGroupByForTest(groupBy *tree.GroupByClause) {

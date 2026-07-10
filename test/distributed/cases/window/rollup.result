@@ -920,5 +920,46 @@ west    apple    30    4    3    3
 east    banana    20    5    5    4
 east    apple    10    6    6    5
 west    banana    10    7    6    5
+select
+region,
+product,
+sum(qty),
+row_number() over (order by sum(qty) desc, region, product) as row_num,
+rank() over (order by sum(qty) desc) as rank_num,
+dense_rank() over (order by sum(qty) desc) as dense_rank_num
+from
+rollup_window_sales
+group by
+region,
+product with rollup
+order by sum(qty) desc, region, product;
+region    product    sum(qty)    row_num    rank_num    dense_rank_num
+null    null    70    1    1    1
+west    null    40    2    2    2
+east    null    30    3    3    3
+west    apple    30    4    3    3
+east    banana    20    5    5    4
+east    apple    10    6    6    5
+west    banana    10    7    6    5
+select
+region,
+product,
+row_number() over (order by sum(qty) desc, region, product) as row_num,
+rank() over (order by sum(qty) desc) as rank_num,
+dense_rank() over (order by sum(qty) desc) as dense_rank_num
+from
+rollup_window_sales
+group by
+region,
+product with rollup
+order by row_num;
+region    product    row_num    rank_num    dense_rank_num
+null    null    1    1    1
+west    null    2    2    2
+east    null    3    3    3
+west    apple    4    3    3
+east    banana    5    5    4
+east    apple    6    6    5
+west    banana    7    6    5
 drop table rollup_window_sales;
 drop database rollup_test;
