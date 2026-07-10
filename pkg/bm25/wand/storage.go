@@ -37,8 +37,8 @@ import (
 type TableConfig struct {
 	DbName        string `json:"db"`
 	SrcTable      string `json:"src"`
-	IndexTable    string `json:"index"`    // chunk store (FullTextIndex_TblType_Storage)
-	MetadataTable string `json:"metadata"` // metadata (FullTextIndex_TblType_Metadata)
+	IndexTable    string `json:"index"`    // chunk store (Bm25Index_TblType_Storage)
+	MetadataTable string `json:"metadata"` // metadata (Bm25Index_TblType_Metadata)
 	PKey          string `json:"pkey"`
 	// Capacity is max_index_capacity, resolved by the compile layer from the index's
 	// persisted algo_params (the immutable flat param) and carried to the create-build TVF

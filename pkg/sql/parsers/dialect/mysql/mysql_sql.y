@@ -8337,6 +8337,8 @@ index_option_list:
 	      opt1.Async = opt2.Async
  	    } else if opt2.ForceSync {
 	      opt1.ForceSync = opt2.ForceSync
+ 	    } else if opt2.Merge {
+	      opt1.Merge = opt2.Merge
  	    } else if opt2.AutoUpdate {
 	      opt1.AutoUpdate = opt2.AutoUpdate
  	    } else if opt2.Day > 0 {

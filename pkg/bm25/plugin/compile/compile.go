@@ -53,25 +53,29 @@ var _ compileplugin.Hooks = Hooks{}
 type Hooks struct{}
 
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
-	return handleCreate(ctx, indexDefs)
+	return handleCreate(ctx, indexDefs, false)
 }
 
 // HandleReindex — ALTER … REINDEX. Default (merge=false) rebuilds the whole
 // binary index from the current source rows (a full re-tokenize). merge=true
 // runs incremental compaction: fold the tag=1 CdcTail into the tag=0 base +
-// tiered-merge the base, without re-tokenizing. forceSync is implicit — bm25's
-// build/compaction is always synchronous inside the txn.
+// tiered-merge the base, without re-tokenizing. A REINDEX is always a SYNC
+// rebuild (forceSync=true) regardless of the index's async param — mirrors the
+// vector plugins / the retrieval index.
 func (Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _, merge bool) error {
 	if merge {
 		return handleMergeCompact(ctx, indexDefs)
 	}
-	return handleCreate(ctx, indexDefs)
+	return handleCreate(ctx, indexDefs, true)
 }
 
-// handleCreate builds the storage+metadata hidden tables and the tag=0 base
-// synchronously from the source rows. Idempotent: it clears any prior tag=1
-// tail / tag=0 base first, so it doubles as the REINDEX rebuild body.
-func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+// handleCreate creates the storage+metadata hidden tables and builds the tag=0
+// base. The `async` param gates only the initial BUILD (sync vs async), NOT DML
+// (bm25 DML is always CDC): with async=false (default) or a REINDEX (forceSync)
+// the base is built synchronously inline; with async=true on a fresh CREATE the
+// build runs at CDC-task start via the InitSQL. Idempotent — it clears any prior
+// tag=1 tail first, so the sync path doubles as the REINDEX rebuild body.
+func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
 	storeDef, ok := indexDefs[catalog.Bm25Index_TblType_Storage]
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("bm25 storage index definition not found")
@@ -105,14 +109,38 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 	}
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexBm25Algo.ToString())
 
+	// The `async` param gates the BUILD only (never DML — bm25 is AlwaysAsync).
+	async, err := catalog.IsIndexAsync(storeDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+
 	// 3. Drop any prior CDC task first — on REINDEX re-entry it would otherwise
 	// survive at its old watermark and replay history over the freshly built state.
 	if err = ctx.DropIndexCdcTask(originalTableDef, qryDatabase, originalTableDef.Name, storeDef.IndexName); err != nil {
 		return err
 	}
 
-	// 4. Clear any prior tag=1 tail (no-op on a fresh CREATE; a real clear on
-	// REINDEX), then build the tag=0 base from source in one CROSS APPLY statement.
+	// 4a. ASYNC CREATE (async=true, and not a REINDEX): register the CDC task with a
+	// non-empty InitSQL that clears + builds the tag=0 base from source at task start
+	// (startFromNow=false → the CDC re-arms at the post-build watermark). CREATE returns
+	// immediately; the build happens in the background. A REINDEX always takes 4b.
+	if async && !forceSync {
+		initSQL, err := genBm25InitSQL(originalTableDef, storeDef, metaDef, qryDatabase, capacity)
+		if err != nil {
+			return err
+		}
+		if err = ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
+			originalTableDef.TblId, storeDef.IndexName, sinkerType, false, initSQL, originalTableDef); err != nil {
+			return err
+		}
+		return registerBm25Idxcron(ctx, storeDef, qryDatabase, originalTableDef)
+	}
+
+	// 4b. SYNC build (default, or REINDEX forceSync): clear any prior tag=1 tail
+	// (no-op on a fresh CREATE; a real clear on REINDEX), then build the tag=0 base
+	// from source inline, then register the CDC task from now (startFromNow=true) —
+	// the inline build covers the pre-create rows, post-create DML flows into the tail.
 	cfg := wand.TableConfig{DbName: qryDatabase, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
 	for _, sql := range wand.DeleteTailSqls(cfg) {
 		if err = ctx.RunSql(sql); err != nil {
@@ -128,17 +156,17 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 			return err
 		}
 	}
-
-	// 5. Register the CDC task that maintains the index from now on (startFromNow=
-	// true): post-create DML flows into the tag=1 CdcTail via the WAND sinker. The
-	// initial build above already covers the pre-create rows.
 	if err = ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
 		originalTableDef.TblId, storeDef.IndexName, sinkerType, true, "", originalTableDef); err != nil {
 		return err
 	}
+	return registerBm25Idxcron(ctx, storeDef, qryDatabase, originalTableDef)
+}
 
-	// 6. Register the idxcron scheduled-compaction task. Skipped on a background
-	// re-entry (IdxcronMetadata returns nil) so the existing task row persists.
+// registerBm25Idxcron registers the idxcron scheduled-compaction task. Skipped on
+// a background re-entry (IdxcronMetadata returns nil) so the existing task row
+// persists.
+func registerBm25Idxcron(ctx compileplugin.CompileContext, storeDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) error {
 	metadata, err := Hooks{}.IdxcronMetadata(ctx)
 	if err != nil {
 		return err
@@ -148,6 +176,24 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 	}
 	return ctx.RegisterIdxcronUpdate(originalTableDef.TblId, qryDatabase,
 		originalTableDef.Name, storeDef.IndexName, actionBm25Reindex, metadata)
+}
+
+// genBm25InitSQL builds the ISCP InitSQL — a JSON array of statements run at CDC
+// task start — that clears any prior tag=1 tail and builds the tag=0 base from the
+// SOURCE rows (the async-CREATE analogue of the inline sync build).
+func genBm25InitSQL(originalTableDef *plan.TableDef, storeDef, metaDef *plan.IndexDef, qryDatabase string, capacity int64) (string, error) {
+	cfg := wand.TableConfig{DbName: qryDatabase, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
+	sqls := wand.DeleteTailSqls(cfg)
+	buildSQLs, err := genBm25BuildFromSourceSQL(originalTableDef, storeDef, metaDef, qryDatabase, capacity)
+	if err != nil {
+		return "", err
+	}
+	sqls = append(sqls, buildSQLs...)
+	js, err := json.Marshal(sqls)
+	if err != nil {
+		return "", err
+	}
+	return string(js), nil
 }
 
 // RestoreInitSQL rebuilds the bm25 index from the restored/cloned rows. It runs
