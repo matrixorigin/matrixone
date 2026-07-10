@@ -1135,34 +1135,33 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			if tsT == nil {
 				break
 			}
-			// isAdjustedToUTC: true=UTC (use directly), false=local time (subtract session timezone offset for correct MO display)
+			// isAdjustedToUTC: true=UTC (use directly), false=local wall-clock time.
 			isAdjustedToUTC := tsT.IsAdjustedToUTC
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				dict := page.Dictionary()
 
-				// Get timezone offset for non-UTC timestamps
-				var tzOffsetMicros int64 = 0
-				if !isAdjustedToUTC {
-					loc := parquetSessionLocation(proc)
-					// Get the timezone offset in seconds, then convert to microseconds
-					// We use current time to get the offset, which handles DST correctly for current data
-					_, offset := time.Now().In(loc).Zone()
-					tzOffsetMicros = int64(offset) * 1000000 // seconds to microseconds
-				}
-
 				if tsT.Unit.Nanos == nil && tsT.Unit.Micros == nil && tsT.Unit.Millis == nil {
 					return moerr.NewInvalidInput(proc.Ctx, "missing parquet timestamp unit")
 				}
+				var loc *time.Location
+				if !isAdjustedToUTC {
+					loc = parquetSessionLocation(proc)
+				}
+				convert := func(micros int64) types.Timestamp {
+					if isAdjustedToUTC {
+						return types.UnixMicroToTimestamp(micros)
+					}
+					return parquetLocalTimestampMicrosToTimestamp(micros, loc)
+				}
 				switch {
 				case tsT.Unit.Nanos != nil:
-					tzOffsetNanos := tzOffsetMicros * 1000 // convert to nanoseconds
 					if dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixNanoToTimestamp(v - tzOffsetNanos)
+							converted[i] = convert(v / 1000)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -1170,7 +1169,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixNanoToTimestamp(v - tzOffsetNanos)
+						return convert(v / 1000)
 					})
 				case tsT.Unit.Micros != nil:
 					if dict != nil {
@@ -1178,7 +1177,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixMicroToTimestamp(v - tzOffsetMicros)
+							converted[i] = convert(v)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -1186,16 +1185,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixMicroToTimestamp(v - tzOffsetMicros)
+						return convert(v)
 					})
 				case tsT.Unit.Millis != nil:
-					tzOffsetMillis := tzOffsetMicros / 1000 // convert to milliseconds
 					if dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixMicroToTimestamp((v - tzOffsetMillis) * 1000)
+							converted[i] = convert(v * 1000)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -1203,7 +1201,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixMicroToTimestamp((v - tzOffsetMillis) * 1000)
+						return convert(v * 1000)
 					})
 				default:
 					return moerr.NewInternalError(proc.Ctx, "unknown unit")
@@ -2930,6 +2928,17 @@ func parquetSessionLocation(proc *process.Process) *time.Location {
 		return time.Local
 	}
 	return loc
+}
+
+// parquetLocalTimestampMicrosToTimestamp interprets micros as a local wall-clock
+// timestamp encoded relative to the UTC epoch, as required by isAdjustedToUTC=false.
+func parquetLocalTimestampMicrosToTimestamp(micros int64, loc *time.Location) types.Timestamp {
+	wallClock := time.UnixMicro(micros).UTC()
+	return types.UnixMicroToTimestamp(time.Date(
+		wallClock.Year(), wallClock.Month(), wallClock.Day(),
+		wallClock.Hour(), wallClock.Minute(), wallClock.Second(), wallClock.Nanosecond(),
+		loc,
+	).UnixMicro())
 }
 
 func parquetValueToDecimal256(ctx context.Context, st parquet.Type, v parquet.Value) (types.Decimal256, error) {
