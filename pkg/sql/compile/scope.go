@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"net"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -397,11 +399,14 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
+	if err := validateRemoteRunAddress(s.NodeInfo.Addr, c.addr); err != nil {
+		return s.failRemoteRunBeforeStart(c, err)
+	}
 	if s.ipAddrMatch(c.addr) {
 		return s.MergeRun(c)
 	}
 	if err := s.holdAnyCannotRemoteOperator(); err != nil {
-		return err
+		return s.failRemoteRunBeforeStart(c, err)
 	}
 
 	// In fact, it's not a safe way to convert this pipeline to run at local.
@@ -427,6 +432,13 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	runErr := err
 	runErr = suppressRemoteRunCancelError(s.Proc.Ctx, runErr)
+	if err != nil && s.Proc.Cancel != nil {
+		cancelErr := runErr
+		if cancelErr == nil {
+			cancelErr = err
+		}
+		s.Proc.Cancel(cancelErr)
+	}
 	// this clean-up action shouldn't be called before context check.
 	// because the clean-up action will cancel the context, and error will be suppressed.
 	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, runErr)
@@ -436,6 +448,29 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		sender.close()
 	}
 	return runErr
+}
+
+func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
+	cleanPipelineWitchStartFail(s, err, c.isPrepare)
+	return err
+}
+
+func validateRemoteRunAddress(scopeAddr, localAddr string) error {
+	if scopeAddr == "" || scopeAddr == localAddr {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(scopeAddr)
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: %v", scopeAddr, err)
+	}
+	if host == "" {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: host is empty", scopeAddr)
+	}
+	portNumber, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || portNumber == 0 {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: invalid port %q", scopeAddr, port)
+	}
+	return nil
 }
 
 // ParallelRun run a pipeline in parallel.

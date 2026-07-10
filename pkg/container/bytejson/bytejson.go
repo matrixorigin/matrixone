@@ -376,14 +376,12 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 				cur = bj.query(cur, &nPath)
 			}
 		case subPathKey:
+			tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
+			cur = tmp.query(cur, &nPath)
+		case subPathKeyWildcard:
 			cnt := bj.GetElemCnt()
-			if sub.key == "*" {
-				for i := 0; i < cnt; i++ {
-					cur = bj.getObjectVal(i).query(cur, &nPath)
-				}
-			} else {
-				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
-				cur = tmp.query(cur, &nPath)
+			for i := 0; i < cnt; i++ {
+				cur = bj.getObjectVal(i).query(cur, &nPath)
 			}
 		}
 		return cur
@@ -473,20 +471,16 @@ func (bj ByteJson) querySimpleExist(path *Path, autowrapScalarIndex bool) (ByteJ
 		if cur.Type == TpCodeObject {
 			switch sub.tp {
 			case subPathIdx:
+				// obj[0] is itself, continue
 				start, _, _ := sub.idx.genIndex(1)
 				if start != 0 {
 					return Null, false
 				}
-				// obj[0] is itself, continue
 			case subPathKey:
-				if sub.key == "*" {
-					panic("bytejson simple path should not contain *")
-				} else {
-					var ok bool
-					cur, ok = cur.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
-					if !ok {
-						return Null, false
-					}
+				var ok bool
+				cur, ok = cur.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+				if !ok {
+					return Null, false
 				}
 			default:
 				return Null, false
@@ -587,6 +581,28 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 	return bj, nil
 }
 
+func (bj ByteJson) Remove(pathList []*Path) (ByteJson, error) {
+	if len(pathList) == 0 {
+		return bj, nil
+	}
+
+	for _, path := range pathList {
+		if path == nil || path.empty() || !path.IsSimple() {
+			return Null, moerr.NewInvalidInputNoCtx("path expression is not simple")
+		}
+	}
+
+	var err error
+	for _, path := range pathList {
+		modifier := &bytejsonModifier{bj: bj}
+		bj, err = modifier.remove(path)
+		if err != nil {
+			return Null, err
+		}
+	}
+	return bj, nil
+}
+
 func (bj ByteJson) canUnnest() bool {
 	return bj.Type == TpCodeArray || bj.Type == TpCodeObject
 }
@@ -631,15 +647,13 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 				keys, vals = bj.queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
 		case subPathKey:
-			if sub.key == "*" {
-				for i := 0; i < cnt; i++ {
-					newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
-					keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
-				}
-			} else {
-				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
-				newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
-				keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
+			tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
+			newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
+			keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
+		case subPathKeyWildcard:
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
+				keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
 		}
 	}

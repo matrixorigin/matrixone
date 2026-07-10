@@ -15,8 +15,10 @@
 package compile
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -28,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,6 +94,28 @@ func TestDupOperatorPartitionMultiUpdate(t *testing.T) {
 	}
 }
 
+func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
+	op := multi_update.NewArgument()
+	op.Action = multi_update.UpdateWriteTable
+	op.IsOnduplicateKeyUpdate = true
+	op.CountDeleteAffectRows = true
+	result := dupOperator(op, 0, 1)
+	if result == nil {
+		t.Fatal("dupOperator returned nil for MultiUpdate")
+	}
+	dupOp := result.(*multi_update.MultiUpdate)
+	if !dupOp.CountDeleteAffectRows {
+		t.Error("CountDeleteAffectRows not preserved by dupOperator")
+	}
+	if dupOp.Action != op.Action {
+		t.Errorf("Action mismatch: got %v, want %v", dupOp.Action, op.Action)
+	}
+	if dupOp.IsOnduplicateKeyUpdate != op.IsOnduplicateKeyUpdate {
+		t.Errorf("IsOnduplicateKeyUpdate mismatch: got %v, want %v",
+			dupOp.IsOnduplicateKeyUpdate, op.IsOnduplicateKeyUpdate)
+	}
+}
+
 func TestDupOperatorDispatchRecCTE(t *testing.T) {
 	op := dispatch.NewArgument()
 	op.RecCTE = true
@@ -104,6 +129,84 @@ func TestDupOperatorDispatchRecCTE(t *testing.T) {
 	if dupOp.RecCTE != op.RecCTE {
 		t.Errorf("RecCTE mismatch: got %v, want %v", dupOp.RecCTE, op.RecCTE)
 	}
+}
+
+func TestConstructTimeWindowUsesRegularSumForCountCache(t *testing.T) {
+	arg := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 1},
+		},
+	}
+	ts := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 0},
+		},
+	}
+	node := &plan.Node{
+		AggList: []*plan.Expr{
+			{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{
+							Obj:     function.AggSumOverloadID,
+							ObjName: "sum",
+						},
+						Args: []*plan.Expr{arg},
+					},
+				},
+			},
+		},
+		GroupBy:   []*plan.Expr{ts},
+		Timestamp: ts,
+		Interval:  makeTimeWindowIntervalExpr(1, "second"),
+	}
+
+	timeWin := constructTimeWindow(context.Background(), node, nil)
+	require.Len(t, timeWin.Aggs, 1)
+	require.Equal(t, int64(function.AggSumOverloadID), timeWin.Aggs[0].GetAggID())
+	require.Equal(t, types.T_int64, timeWin.Types[0].Oid)
+}
+
+func TestConstructTimeWindowUsesRegularSumForPartialSum(t *testing.T) {
+	arg := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 0},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 1},
+		},
+	}
+	ts := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 0},
+		},
+	}
+	node := &plan.Node{
+		AggList: []*plan.Expr{
+			{
+				Typ: plan.Type{Id: int32(types.T_uint64)},
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{
+							Obj:     function.AggSumOverloadID,
+							ObjName: "sum",
+						},
+						Args: []*plan.Expr{arg},
+					},
+				},
+			},
+		},
+		GroupBy:   []*plan.Expr{ts},
+		Timestamp: ts,
+		Interval:  makeTimeWindowIntervalExpr(1, "second"),
+	}
+
+	timeWin := constructTimeWindow(context.Background(), node, nil)
+	require.Len(t, timeWin.Aggs, 1)
+	require.Equal(t, int64(function.AggSumOverloadID), timeWin.Aggs[0].GetAggID())
+	require.Equal(t, types.T_decimal128, timeWin.Types[0].Oid)
 }
 
 func TestDupOperatorLoopJoinMarkPos(t *testing.T) {
@@ -141,4 +244,29 @@ func TestDupOperatorShuffleV2SharesPoolAcrossWorkers(t *testing.T) {
 	require.NotNil(t, op.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup1.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup2.GetShufflePool())
+}
+
+func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{
+				List: []*plan.Expr{
+					{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{
+								Value: &plan.Literal_I64Val{I64Val: value},
+							},
+						},
+					},
+					{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{
+								Value: &plan.Literal_Sval{Sval: unit},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 }
