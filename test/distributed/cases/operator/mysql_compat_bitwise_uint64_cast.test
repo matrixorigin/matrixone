@@ -1,0 +1,63 @@
+-- @suite
+
+-- @case
+-- @desc: Numeric bitwise operands are implicitly cast to uint64
+-- @label:bvt
+
+-- Signed integers, decimal, and float literals all resolve to the uint64
+-- numeric bitwise overload.
+select 7 | 8 as signed_int_or,
+       cast(7 as decimal(10,0)) & 3 as decimal_and,
+       cast(7.5 as decimal(10,1)) ^ 3 as decimal_xor,
+       cast(7.5 as double) >> 1 as double_right_shift;
+
+-- Decimal values above max int64 must not be bound through an int64 overload.
+select cast(9223372036854775808 as decimal(20,0)) | 0 as decimal_high_bit_or,
+       cast(9223372036854775808 as decimal(20,0)) >> 63 as decimal_high_bit_shift,
+       ~cast(7 as decimal(10,0)) as decimal_bit_not;
+
+drop table if exists mysql_compat_bitwise_uint64_cast;
+create table mysql_compat_bitwise_uint64_cast (
+    id int primary key,
+    i8 tinyint,
+    i16 smallint,
+    i32 int,
+    i64 bigint,
+    u8 tinyint unsigned,
+    u16 smallint unsigned,
+    u32 int unsigned,
+    d decimal(20,0),
+    f float,
+    db double,
+    c char(4),
+    v varchar(4),
+    u bigint unsigned
+);
+insert into mysql_compat_bitwise_uint64_cast values
+    (1, 7, 7, 7, 7, 7, 7, 7, 9223372036854775808, 7, 7, '7', '7', 9223372036854775808),
+    (2, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, '7', '7', 7);
+
+select id,
+       i8 | 8 as int8_column_or,
+       i16 | 8 as int16_column_or,
+       i32 | 8 as int32_column_or,
+       i64 | 8 as int64_column_or,
+       u8 | 8 as uint8_column_or,
+       u16 | 8 as uint16_column_or,
+       u32 | 8 as uint32_column_or,
+       d | 0 as decimal_column_or,
+       d >> 1 as decimal_column_shift,
+       f | 8 as float_column_or,
+       db | 8 as double_column_or,
+       c | 8 as char_column_or,
+       v | 8 as varchar_column_or,
+       u ^ 3 as uint64_column_xor
+from mysql_compat_bitwise_uint64_cast
+order by id;
+
+-- Explicit binary data must keep the bytewise overload rather than casting
+-- through the numeric uint64 path.
+select hex(_binary X'40' | X'01') as binary_string_or,
+       length(_binary X'40' | X'01') as binary_string_or_length;
+
+drop table mysql_compat_bitwise_uint64_cast;

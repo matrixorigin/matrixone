@@ -1,37 +1,39 @@
 -- @suite
 
 -- @case
--- @desc: MySQL-compatible unsigned numeric bitwise coercion
+-- @desc: Numeric bitwise UINT64 cast behavior, including negative rejections
 -- @label:bvt
 
-select '-1' & 3 as bit_and_result,
-       '-1' | 8 as bit_or_result,
-       '-1' ^ 8 as bit_xor_result,
-       '-1' << 1 as bit_left_shift_result,
-       '-1' >> 1 as bit_right_shift_result;
+-- Each negative operand is kept in a separate statement. The current generic
+-- UINT64 cast rejects it, so BVT output identifies the exact operator path.
+select '-1' & 3 as bit_and_result;
+select '-1' | 8 as bit_or_result;
+select '-1' ^ 8 as bit_xor_result;
+select '-1' << 1 as bit_left_shift_result;
+select '-1' >> 1 as bit_right_shift_result;
 
-select -1 & 3 as bit_and_result,
-       -1 | 8 as bit_or_result,
-       -1 ^ 8 as bit_xor_result,
-       -1 << 1 as bit_left_shift_result,
-       -1 >> 1 as bit_right_shift_result;
+select -1 & 3 as bit_and_result;
+select -1 | 8 as bit_or_result;
+select -1 ^ 8 as bit_xor_result;
+select -1 << 1 as bit_left_shift_result;
+select -1 >> 1 as bit_right_shift_result;
 
-select ~'7' as string_bit_not,
-       ~'-1' as negative_string_bit_not;
+select ~'7' as string_bit_not;
+select ~'-1' as negative_string_bit_not;
 
 select '+7' & 3 as positive_string_bit_and,
        '+7' | 8 as positive_string_bit_or,
        '+7' << 2 as positive_string_bit_left_shift;
 
-select '-2' & 3 as negative_bit_and,
-       '-2' | 1 as negative_bit_or,
-       '-2' >> 1 as negative_bit_right_shift;
+select '-2' & 3 as negative_bit_and;
+select '-2' | 1 as negative_bit_or;
+select '-2' >> 1 as negative_bit_right_shift;
 
-select -1 >> 0 as zero_shift,
-       -1 >> 63 as max_valid_shift,
-       -1 >> 64 as oversized_shift,
-       -1 >> -1 as negative_shift,
-       null | 1 as null_bit_or;
+select -1 >> 0 as zero_shift;
+select -1 >> 63 as max_valid_shift;
+select -1 >> 64 as oversized_shift;
+select -1 >> -1 as negative_shift;
+select null | 1 as null_bit_or;
 
 select X'40' | X'01' as numeric_hex_or,
        hex(_binary X'40' | X'01') as binary_hex_or,
@@ -44,8 +46,11 @@ insert into mysql_compat_bitwise_unsigned values
     (18446744073709551615, -2);
 
 select u | 8 as unsigned_or_result,
-       u >> 63 as unsigned_right_shift,
-       s >> 1 as signed_right_shift
+       u >> 63 as unsigned_right_shift
+from mysql_compat_bitwise_unsigned
+order by u;
+
+select s >> 1 as signed_right_shift
 from mysql_compat_bitwise_unsigned
 order by u;
 
