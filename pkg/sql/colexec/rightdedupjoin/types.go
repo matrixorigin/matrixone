@@ -167,6 +167,7 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanHashMap() {
+	ctr.itr = nil
 	if ctr.mp != nil {
 		ctr.mp.Free()
 		ctr.mp = nil
