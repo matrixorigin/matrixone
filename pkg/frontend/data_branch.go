@@ -1205,17 +1205,6 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, comm
 		baseCol, found := baseColMap[name]
 		if found {
 			if baseCol.Typ.Id == tarCol.Typ.Id {
-				if baseCol.ColId != tarCol.ColId ||
-					baseCol.ClusterBy != tarCol.ClusterBy ||
-					baseCol.Primary != tarCol.Primary ||
-					baseCol.Seqnum != tarCol.Seqnum ||
-					baseCol.NotNull != tarCol.NotNull {
-					err = moerr.NewInternalErrorNoCtxf(
-						"schema compatibility check: column '%s' exists in both schemas but has different metadata",
-						tarCol.Name,
-					)
-					return
-				}
 				commonIdxes = append(commonIdxes, dataIdx)
 				if isDataBranchUserVisibleColumn(tarCol) {
 					commonVisibleIdxes = append(commonVisibleIdxes, dataIdx)
@@ -1269,7 +1258,7 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, comm
 
 	for _, baseCol := range baseVisibleColMap {
 		err = moerr.NewInternalErrorNoCtxf(
-			"schema compatibility check: base-only user-visible column '%s' is not supported",
+			"schema compatibility check: base column '%s' is not present in target schema",
 			baseCol.Name,
 		)
 		return

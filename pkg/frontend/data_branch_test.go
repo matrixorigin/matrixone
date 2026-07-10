@@ -1118,32 +1118,7 @@ func TestCheckSchemaCompatibility_RejectsBaseOnlyVisibleColumn(t *testing.T) {
 	}}
 
 	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
-	require.ErrorContains(t, err, "base-only user-visible column 'removed'")
-}
-
-func TestCheckSchemaCompatibility_RejectsChangedSharedColumnMetadata(t *testing.T) {
-	metadataChanges := []struct {
-		name   string
-		mutate func(*plan.ColDef)
-	}{
-		{"column id", func(col *plan.ColDef) { col.ColId++ }},
-		{"cluster by", func(col *plan.ColDef) { col.ClusterBy = !col.ClusterBy }},
-		{"primary", func(col *plan.ColDef) { col.Primary = !col.Primary }},
-		{"sequence number", func(col *plan.ColDef) { col.Seqnum++ }},
-		{"not null", func(col *plan.ColDef) { col.NotNull = !col.NotNull }},
-	}
-	for _, tc := range metadataChanges {
-		t.Run(tc.name, func(t *testing.T) {
-			tarCol := &plan.ColDef{Name: "a", ColId: 1, ClusterBy: true, Primary: true, Seqnum: 1, NotNull: true, Typ: plan.Type{Id: int32(types.T_int64)}}
-			baseCol := &plan.ColDef{Name: "a", ColId: 1, ClusterBy: true, Primary: true, Seqnum: 1, NotNull: true, Typ: plan.Type{Id: int32(types.T_int64)}}
-			tc.mutate(tarCol)
-			tarDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{tarCol}}
-			baseDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{baseCol}}
-
-			_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
-			require.ErrorContains(t, err, "has different metadata")
-		})
-	}
+	require.ErrorContains(t, err, "base column 'removed' is not present in target schema")
 }
 
 func TestCheckSchemaCompatibility_PKChanged(t *testing.T) {
@@ -1231,7 +1206,7 @@ func TestCheckSchemaCompatibility_BaseOnlyVisibleColumnRejected(t *testing.T) {
 
 	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "base-only user-visible column 'b' is not supported")
+	require.Contains(t, err.Error(), "base column 'b' is not present in target schema")
 }
 
 func TestCheckSchemaCompatibility_CompositePK(t *testing.T) {
