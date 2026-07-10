@@ -74,6 +74,7 @@ type MultiUpdate struct {
 	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
 	IsRemote               bool
+	CountDeleteAffectRows  bool
 	Engine                 engine.Engine
 
 	getS3WriterFunc          func(sid string, id uint64) (*s3WriterDelegate, error)
@@ -210,18 +211,13 @@ func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCou
 	if tableType != UpdateMainTable {
 		return
 	}
-	// For REPLACE INTO, we don't count DELETE rows in affected rows
-	// REPLACE INTO should only return the number of INSERT rows
-	// Only count DELETE rows for regular UPDATE operations
 	switch update.ctr.action {
 	case actionDelete:
-		// Regular DELETE operation, count it
 		update.addAffectedRowsFunc(rowCount)
 	case actionUpdate:
-		// For UPDATE operations (not REPLACE INTO), count DELETE rows
-		// But for REPLACE INTO, this should not be called or should be ignored
-		// REPLACE INTO uses actionUpdate but should only count INSERT
-		// So we don't count DELETE here for actionUpdate
+		if update.CountDeleteAffectRows {
+			update.addAffectedRowsFunc(rowCount)
+		}
 	}
 }
 

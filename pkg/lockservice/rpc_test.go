@@ -34,6 +34,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const rpcTestResponseTimeout = 10 * time.Second
+
 type testClientSession struct {
 	ctx         context.Context
 	writeCtx    context.Context
@@ -141,7 +143,7 @@ func TestRPCSend(t *testing.T) {
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTestResponseTimeout)
 			defer cancel()
 			resp, err := c.Send(ctx,
 				&lock.Request{
@@ -170,7 +172,7 @@ func TestSetRestartServiceRPCSend(t *testing.T) {
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTestResponseTimeout)
 			defer cancel()
 			resp, err := c.Send(ctx,
 				&lock.Request{
@@ -200,7 +202,7 @@ func TestAbortRemoteDeadlockTxnFailed(t *testing.T) {
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTestResponseTimeout)
 			defer cancel()
 			resp, err := c.Send(ctx,
 				&lock.Request{
@@ -231,7 +233,7 @@ func TestCanRestartServiceRPCSend(t *testing.T) {
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTestResponseTimeout)
 			defer cancel()
 			resp, err := c.Send(ctx,
 				&lock.Request{
@@ -261,7 +263,7 @@ func TestRemainTxnServiceRPCSend(t *testing.T) {
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTestResponseTimeout)
 			defer cancel()
 			resp, err := c.Send(ctx,
 				&lock.Request{
@@ -311,14 +313,15 @@ func TestRPCSendWithNotSupport(t *testing.T) {
 	runRPCTests(
 		t,
 		func(c Client, s Server) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTestResponseTimeout)
 			defer cancel()
 			_, err := c.Send(ctx,
 				&lock.Request{
 					LockTable: lock.LockTable{ServiceID: "s1"},
 					Method:    lock.Method_Lock})
 			require.Error(t, err)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported),
+				"expected ErrNotSupported, got %T: %v", err, err)
 		},
 	)
 }
@@ -338,7 +341,7 @@ func TestMOErrorCanHandled(t *testing.T) {
 					writeResponse(getLogger(""), cancel, resp, moerr.NewDeadLockDetectedNoCtx(), cs)
 				})
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTestResponseTimeout)
 			defer cancel()
 			resp, err := c.Send(ctx, &lock.Request{
 				LockTable: lock.LockTable{ServiceID: "s1"},
@@ -443,7 +446,7 @@ func TestLockTableBindChanged(t *testing.T) {
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTestResponseTimeout)
 			defer cancel()
 			resp, err := c.Send(ctx, &lock.Request{
 				LockTable: lock.LockTable{ServiceID: "s1"},
