@@ -184,9 +184,19 @@ func indexColumnCheckKind(indexType tree.IndexType) string {
 		return "ivfpq"
 	case tree.INDEX_TYPE_RTREE:
 		return "rtree"
+	case tree.INDEX_TYPE_BM25:
+		return "bm25"
 	default:
 		return "secondary"
 	}
+}
+
+// bm25IndexableColumn reports whether a column type can back a bm25 index
+// (the same text-ish set the classic fulltext index accepts).
+func bm25IndexableColumn(id int32) bool {
+	return id == int32(types.T_text) || id == int32(types.T_char) ||
+		id == int32(types.T_varchar) || id == int32(types.T_json) ||
+		id == int32(types.T_datalink)
 }
 
 func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *tree.KeyPart, indexKind string) error {
@@ -195,6 +205,16 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 	}
 
 	colName := keyPart.ColName.ColNameOrigin()
+
+	// A bm25 ranked-retrieval index tokenizes a text column, so it accepts the
+	// same text/char/varchar/text/json/datalink types the classic fulltext index
+	// does (fulltext takes a separate build path and never reaches this check).
+	if indexKind == "bm25" {
+		if bm25IndexableColumn(col.Typ.Id) {
+			return nil
+		}
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("bm25 index only supports CHAR/VARCHAR/TEXT/JSON/DATALINK columns, not '%s'", colName))
+	}
 
 	switch col.Typ.Id {
 	case int32(types.T_blob):
