@@ -43,6 +43,47 @@ import (
 	"go.uber.org/zap"
 )
 
+type lcaProbeLayout struct {
+	attrs       []string
+	types       []types.Type
+	targetIdxes []int
+}
+
+// lcaProbeColumnLayout selects only columns that exist in both the LCA and
+// target layouts. The caller reconstructs omitted target-only columns as NULL,
+// because they cannot exist in an ancestor snapshot.
+func lcaProbeColumnLayout(lcaDef *plan2.TableDef, targetColNames []string, targetColTypes []types.Type) lcaProbeLayout {
+	if len(lcaDef.Cols) == 0 {
+		layout := lcaProbeLayout{
+			attrs: append([]string(nil), targetColNames...),
+			types: append([]types.Type(nil), targetColTypes...),
+		}
+		for i := range targetColNames {
+			layout.targetIdxes = append(layout.targetIdxes, i)
+		}
+		return layout
+	}
+	targetByName := make(map[string]int, len(targetColNames))
+	for idx, name := range targetColNames {
+		targetByName[strings.ToLower(name)] = idx
+	}
+
+	layout := lcaProbeLayout{}
+	for _, col := range lcaDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		targetIdx, ok := targetByName[strings.ToLower(col.Name)]
+		if !ok {
+			continue
+		}
+		layout.attrs = append(layout.attrs, col.Name)
+		layout.types = append(layout.types, types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
+		layout.targetIdxes = append(layout.targetIdxes, targetIdx)
+	}
+	return layout
+}
+
 // should read the LCA table to get all column values.
 func handleDelsOnLCA(
 	ctx context.Context,
@@ -68,14 +109,7 @@ func handleDelsOnLCA(
 		expandedPKColIdxes = tblStuff.def.pkColIdxes
 		snapshotTS         = types.TimestampToTS(snapshot)
 	)
-	lcaColDefs, err := dataBranchColumnsByIdentity(targetTblDef, lcaTblDef, tblStuff.def.colNames)
-	if err != nil {
-		return nil, err
-	}
-	lcaColNames := make([]string, len(lcaColDefs))
-	for i, colDef := range lcaColDefs {
-		lcaColNames[i] = colDef.Name
-	}
+	lcaLayout := lcaProbeColumnLayout(lcaTblDef, tblStuff.def.colNames, tblStuff.def.colTypes)
 
 	forceReaderProbe := tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load()
 	if forceReaderProbe {
@@ -153,9 +187,9 @@ func handleDelsOnLCA(
 			}
 		}
 
-		selectCols := make([]string, len(tblStuff.def.colNames)+1)
+		selectCols := make([]string, len(lcaLayout.attrs)+1)
 		selectCols[0] = "pks.__idx_"
-		for i, colName := range lcaColNames {
+		for i, colName := range lcaLayout.attrs {
 			selectCols[i+1] = fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
 		}
 
@@ -286,19 +320,32 @@ func handleDelsOnLCA(
 
 			lcaHitRows++
 			for j := 1; j < len(cols); j++ {
-				if err = appendLCAProbeValue(
-					dBat.Vecs[j-1], cols[j], i,
-					lcaColDefs[j-1].Typ.GetEnumvalues(), ses.proc.Mp(),
-				); err != nil {
+				targetIdx := lcaLayout.targetIdxes[j-1]
+				if err = dBat.Vecs[targetIdx].UnionOne(cols[j], int64(i), ses.proc.Mp()); err != nil {
 					return false
 				}
 			}
 
 		}
 
-		dBat.SetRowCount(dBat.Vecs[0].Length())
 		return true
 	})
+	selectedTargetIdxes := make(map[int]struct{}, len(lcaLayout.targetIdxes))
+	for _, targetIdx := range lcaLayout.targetIdxes {
+		selectedTargetIdxes[targetIdx] = struct{}{}
+	}
+	for targetIdx, typ := range tblStuff.def.colTypes {
+		if _, selected := selectedTargetIdxes[targetIdx]; selected {
+			continue
+		}
+		nullVec := vector.NewConstNull(typ, dBat.Vecs[0].Length(), ses.proc.Mp())
+		if err = dBat.Vecs[targetIdx].UnionBatch(nullVec, 0, dBat.Vecs[0].Length(), nil, ses.proc.Mp()); err != nil {
+			nullVec.Free(ses.proc.Mp())
+			return nil, err
+		}
+		nullVec.Free(ses.proc.Mp())
+	}
+	dBat.SetRowCount(dBat.Vecs[0].Length())
 
 	sqlRet.Close()
 	logutil.Debug(
@@ -443,14 +490,15 @@ func runLCAProbeWithReaderFallback(
 		inputKeys[string(pkVec.GetRawBytesAt(i))] = struct{}{}
 	}
 	lcaTblDef := tblStuff.lcaRel.GetTableDef(ctx)
-	targetTblDef := tblStuff.tarRel.GetTableDef(ctx)
-	lcaColDefs, err := dataBranchColumnsByIdentity(targetTblDef, lcaTblDef, tblStuff.def.colNames)
-	if err != nil {
-		return executor.Result{}, err
-	}
-	lcaColNames := make([]string, len(lcaColDefs))
-	for i, colDef := range lcaColDefs {
-		lcaColNames[i] = colDef.Name
+	lcaLayout := lcaProbeColumnLayout(lcaTblDef, tblStuff.def.colNames, tblStuff.def.colTypes)
+	lcaPKIdx := slices.IndexFunc(lcaLayout.attrs, func(name string) bool {
+		return strings.EqualFold(name, lcaTblDef.Pkey.PkeyColName)
+	})
+	if lcaPKIdx < 0 {
+		return executor.Result{}, moerr.NewInternalErrorNoCtxf(
+			"data branch: LCA primary key column %q is absent from probe layout",
+			lcaTblDef.Pkey.PkeyColName,
+		)
 	}
 	// Build a sorted IN vector for reader-side PK filtering.
 	// The sorted-search path uses binary search over the IN value array and
@@ -464,8 +512,8 @@ func runLCAProbeWithReaderFallback(
 	pkFilterExpr := readutil.ConstructInExpr(ctx, lcaTblDef.Pkey.PkeyColName, filterVec)
 	prepareCost = time.Since(start)
 
-	tmp := batch.NewWithSize(len(tblStuff.def.colNames))
-	for i, typ := range tblStuff.def.colTypes {
+	tmp := batch.NewWithSize(len(lcaLayout.attrs))
+	for i, typ := range lcaLayout.types {
 		tmp.Vecs[i] = vector.NewVec(typ)
 	}
 	defer tmp.Clean(mp)
@@ -520,8 +568,8 @@ func runLCAProbeWithReaderFallback(
 		ses,
 		tblStuff.lcaRel.GetTableID(ctx),
 		snapshotTS,
-		lcaColNames,
-		tblStuff.def.colTypes,
+		lcaLayout.attrs,
+		lcaLayout.types,
 		pkFilterExpr,
 		0,
 		func(readBatch *batch.Batch) error {
@@ -533,7 +581,7 @@ func runLCAProbeWithReaderFallback(
 			}()
 			scannedBatchCnt++
 			scannedRowCnt += readBatch.RowCount()
-			readPK := readBatch.Vecs[tblStuff.def.pkColIdx]
+			readPK := readBatch.Vecs[lcaPKIdx]
 			sels := make([]int64, 0, readBatch.RowCount())
 			keys := make([]string, 0, readBatch.RowCount())
 			filterStart := time.Now()
@@ -555,7 +603,7 @@ func runLCAProbeWithReaderFallback(
 			}
 			base := tmp.Vecs[0].Length()
 			unionStart := time.Now()
-			for colIdx := range tblStuff.def.colNames {
+			for colIdx := range lcaLayout.attrs {
 				if err = tmp.Vecs[colIdx].Union(readBatch.Vecs[colIdx], sels, mp); err != nil {
 					return err
 				}
@@ -613,6 +661,13 @@ func runLCAProbeWithReaderFallback(
 		return executor.Result{}, err
 	}
 
+	sourceIdxByTarget := make([]int, len(tblStuff.def.colNames))
+	for i := range sourceIdxByTarget {
+		sourceIdxByTarget[i] = -1
+	}
+	for sourceIdx, targetIdx := range lcaLayout.targetIdxes {
+		sourceIdxByTarget[targetIdx] = sourceIdx
+	}
 	if !hasAnyHit {
 		for colIdx := range tblStuff.def.colNames {
 			nullConst := vector.NewConstNull(tblStuff.def.colTypes[colIdx], rowCount, mp)
@@ -623,18 +678,36 @@ func runLCAProbeWithReaderFallback(
 			}
 		}
 	} else if len(missedRows) == 0 {
-		for colIdx := range tblStuff.def.colNames {
-			if err = out.Vecs[colIdx+1].UnionBatch(tmp.Vecs[colIdx], 0, rowCount, nil, mp); err != nil {
+		for targetIdx, sourceIdx := range sourceIdxByTarget {
+			if sourceIdx < 0 {
+				nullConst := vector.NewConstNull(tblStuff.def.colTypes[targetIdx], rowCount, mp)
+				err = out.Vecs[targetIdx+1].UnionBatch(nullConst, 0, rowCount, nil, mp)
+				nullConst.Free(mp)
+				if err != nil {
+					return executor.Result{}, err
+				}
+				continue
+			}
+			if err = out.Vecs[targetIdx+1].UnionBatch(tmp.Vecs[sourceIdx], 0, rowCount, nil, mp); err != nil {
 				return executor.Result{}, err
 			}
 		}
 	} else {
-		for colIdx := range tblStuff.def.colNames {
-			if err = out.Vecs[colIdx+1].Union(tmp.Vecs[colIdx], sels, mp); err != nil {
+		for targetIdx, sourceIdx := range sourceIdxByTarget {
+			if sourceIdx < 0 {
+				nullConst := vector.NewConstNull(tblStuff.def.colTypes[targetIdx], rowCount, mp)
+				err = out.Vecs[targetIdx+1].UnionBatch(nullConst, 0, rowCount, nil, mp)
+				nullConst.Free(mp)
+				if err != nil {
+					return executor.Result{}, err
+				}
+				continue
+			}
+			if err = out.Vecs[targetIdx+1].Union(tmp.Vecs[sourceIdx], sels, mp); err != nil {
 				return executor.Result{}, err
 			}
 			for _, rowIdx := range missedRows {
-				nulls.Add(out.Vecs[colIdx+1].GetNulls(), rowIdx)
+				nulls.Add(out.Vecs[targetIdx+1].GetNulls(), rowIdx)
 			}
 		}
 	}
@@ -1596,14 +1669,6 @@ func getTupleColumnValue(tuple types.Tuple, tblStuff tableStuff, colIdx int) (an
 			len(tuple), tblStuff.tarRel.GetTableName(), len(tblStuff.def.visibleIdxes),
 		)
 	}
-}
-
-func visibleTupleKeyIdxes(tblStuff tableStuff) []int {
-	idxes := make([]int, len(tblStuff.def.visibleIdxes))
-	for i, colIdx := range tblStuff.def.visibleIdxes {
-		idxes[i] = colIdx + 1
-	}
-	return idxes
 }
 
 func fakePKTupleKeyIdxes(tblStuff tableStuff) []int {
