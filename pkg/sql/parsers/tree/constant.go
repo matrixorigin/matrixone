@@ -37,6 +37,7 @@ const (
 	P_decimal
 	P_bit
 	P_ScoreBinary
+	P_ScoreBinaryHexnum
 	P_nulltext
 	P_star // the * in count(*), not a string literal
 )

@@ -331,6 +331,21 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 	})
 }
 
+func TestMessageSenderOnClientReceiveBatchReturnsStreamClosed(t *testing.T) {
+	sender := new(messageSenderOnClient)
+	sender.ctx = context.Background()
+	sender.receiveCh = make(chan morpc.Message)
+	close(sender.receiveCh)
+
+	bat, over, err := sender.receiveBatch()
+	require.Nil(t, bat)
+	require.False(t, over)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
+	require.True(t, sender.safeToClose)
+	require.True(t, sender.alreadyClose)
+}
+
 func TestNewParallelScope(t *testing.T) {
 	// function `newParallelScope` will dispatch one scope's work into n scopes.
 	testCompile := NewMockCompile(t)
@@ -421,6 +436,138 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.Merge}))
 	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))
+}
+
+// TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr verifies the
+// regression fix for #25554: compileExternScanParallelWrite constructs the
+// source scope with the current CN address so sameExecutionNode correctly
+// identifies it as local in constructDispatchLocalAndRemote. Without this
+// fix the empty address causes RemoteRegs to be generated with an empty
+// NodeAddr, leading to "SendToAnyLocalFunc should not send to remote" and
+// infinite morpc retry to an empty address.
+func TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_ONECN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: "test.csv",
+		},
+	}
+	// Use explicit stats to guarantee mcpu >= 2 regardless of GOMAXPROCS.
+	n := &plan.Node{
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
+		Stats:      &plan.Stats{Cost: 1000000, Rowsize: 2000},
+	}
+	rs, err := testCompile.compileExternScanParallelWrite(n, param, []string{"a"}, []int64{100000}, true)
+	require.NoError(t, err)
+
+	// The source scope (pre-scope of the first returned scope) must have
+	// the current CN address so sameExecutionNode matches the merge scopes.
+	sourceScope := rs[0].PreScopes[0]
+	require.Equal(t, testCompile.addr, sourceScope.NodeInfo.Addr,
+		"source scope address must match current CN so dispatch stays local")
+
+	// Dispatch must be SendToAnyLocalFunc with zero RemoteRegs.
+	dispatchOp, ok := sourceScope.RootOp.(*dispatch.Dispatch)
+	require.True(t, ok, "source scope must have a dispatch root operator")
+	require.Equal(t, dispatch.SendToAnyLocalFunc, dispatchOp.FuncId)
+	require.Empty(t, dispatchOp.RemoteRegs,
+		"RemoteRegs must be empty; a non-empty RemoteRegs with SendToAnyLocalFunc causes 'should not send to remote' error")
+	require.Len(t, dispatchOp.LocalRegs, len(rs),
+		"all merge scopes are on the current CN so LocalRegs must cover every merge scope")
+}
+
+func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	source := &Scope{NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 2}}
+	localTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+	remoteTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+
+	arg, err := constructLocalDispatchFromScopes(0, []*Scope{localTarget}, source)
+	require.NoError(t, err)
+	require.Len(t, arg.LocalRegs, 1)
+	require.Empty(t, arg.RemoteRegs)
+	require.Equal(t, []int{0}, arg.ShuffleRegIdxLocal)
+
+	untouchedTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+	beforeNilBatchCnt := untouchedTarget.Proc.Reg.MergeReceivers[0].NilBatchCnt
+	_, err = constructLocalDispatchFromScopes(0, []*Scope{untouchedTarget, remoteTarget}, source)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "different CN")
+	require.Equal(t, beforeNilBatchCnt, untouchedTarget.Proc.Reg.MergeReceivers[0].NilBatchCnt,
+		"validation failure must not partially mutate earlier targets")
+	require.Empty(t, remoteTarget.RemoteReceivRegInfos)
+}
+
+func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	source := &Scope{NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 2}}
+	validTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+
+	tests := []struct {
+		name    string
+		idx     int
+		targets []*Scope
+		source  *Scope
+		errText string
+	}{
+		{
+			name:    "nil source",
+			targets: []*Scope{validTarget},
+			errText: "source scope is nil",
+		},
+		{
+			name:    "empty targets",
+			source:  source,
+			targets: nil,
+			errText: "requires at least one target scope",
+		},
+		{
+			name:    "nil target",
+			source:  source,
+			targets: []*Scope{nil},
+			errText: "target scope 0 is nil",
+		},
+		{
+			name:   "target without process",
+			source: source,
+			targets: []*Scope{{
+				NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+			}},
+			errText: "target scope 0 has no process",
+		},
+		{
+			name:    "merge receiver index out of range",
+			idx:     1,
+			source:  source,
+			targets: []*Scope{validTarget},
+			errText: "has no merge receiver at index 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := constructLocalDispatchFromScopes(tt.idx, tt.targets, tt.source)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.errText)
+		})
+	}
 }
 
 func TestCompileExternScanParallelReadWrite(t *testing.T) {
@@ -794,7 +941,7 @@ func TestReadLoadParquetRowGroupMetadataLocalFile(t *testing.T) {
 	}
 
 	metas, stats, err := testCompile.readLoadParquetRowGroupMetadata(
-		param, []string{filePath}, []int64{int64(len(data))})
+		&plan.Node{}, param, []string{filePath}, []int64{int64(len(data))})
 	require.NoError(t, err)
 	require.Len(t, metas, 3)
 	t.Logf("parquet footer metadata stats: files=%d row_groups=%d rows=%d bytes=%d read_calls=%d read_bytes=%d duration=%s",
@@ -853,6 +1000,7 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 		Stats: &plan.Stats{Cost: float64(len(data)), Rowsize: 1},
 		TableDef: &plan.TableDef{
 			Createsql: string(createSQL),
+			Cols:      []*plan.ColDef{{Name: "c"}},
 		},
 		ExternScan: &plan.ExternScan{
 			Type:           int32(plan.ExternType_LOAD),
@@ -880,6 +1028,129 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 		}
 	}
 	require.Equal(t, map[int32]bool{0: true, 1: true, 2: true}, seen)
+}
+
+func TestCompileExternScanParquetLoadUsesRowGroupFanoutWithEmptyFiles(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	dir := t.TempDir()
+	emptyData := writeCompileInt32ParquetWithRowGroups(t, nil, 2)
+	data := writeCompileInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3}, 2)
+	emptyFile := filepath.Join(dir, "part-0.parquet")
+	dataFile := filepath.Join(dir, "part-1.parquet")
+	require.NoError(t, os.WriteFile(emptyFile, emptyData, 0o600))
+	require.NoError(t, os.WriteFile(dataFile, data, 0o600))
+	pattern := filepath.Join(dir, "part-*.parquet")
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: pattern,
+			Format:   tree.PARQUET,
+			FileSize: int64(len(emptyData) + len(data)),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD),
+			Parallel:   true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	node := &plan.Node{
+		Stats: &plan.Stats{Cost: float64(len(emptyData) + len(data)), Rowsize: 1},
+		TableDef: &plan.TableDef{
+			Createsql: string(createSQL),
+			Cols:      []*plan.ColDef{{Name: "c"}},
+		},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	ss, err := testCompile.compileExternScan(node)
+	require.NoError(t, err)
+	require.Len(t, ss, 2)
+
+	seen := make(map[int32]bool)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		ext := scope.RootOp.(*external.External)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.Equal(t, []string{dataFile}, ext.Es.FileList)
+		require.NotEmpty(t, ext.Es.ParquetRowGroupShards)
+		for _, shard := range ext.Es.ParquetRowGroupShards {
+			require.Equal(t, int32(0), shard.FileIndex)
+			for rowGroupIdx := shard.RowGroupStart; rowGroupIdx < shard.RowGroupEnd; rowGroupIdx++ {
+				seen[rowGroupIdx] = true
+			}
+		}
+	}
+	require.Equal(t, map[int32]bool{0: true, 1: true}, seen)
+}
+
+func TestCompileExternScanParquetRowGroupFanoutValidatesEmptyFileColumnCount(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	dir := t.TempDir()
+	emptyData := writeCompileEmptyParquet(t, parquet.Group{
+		"c":     parquet.Leaf(parquet.Int32Type),
+		"extra": parquet.Leaf(parquet.Int32Type),
+	})
+	data := writeCompileInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3}, 2)
+	emptyFile := filepath.Join(dir, "part-0.parquet")
+	dataFile := filepath.Join(dir, "part-1.parquet")
+	require.NoError(t, os.WriteFile(emptyFile, emptyData, 0o600))
+	require.NoError(t, os.WriteFile(dataFile, data, 0o600))
+	pattern := filepath.Join(dir, "part-*.parquet")
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: pattern,
+			Format:   tree.PARQUET,
+			FileSize: int64(len(emptyData) + len(data)),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD),
+			Parallel:   true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	node := &plan.Node{
+		Stats: &plan.Stats{Cost: float64(len(emptyData) + len(data)), Rowsize: 1},
+		TableDef: &plan.TableDef{
+			Createsql: string(createSQL),
+			Cols:      []*plan.ColDef{{Name: "c"}},
+		},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	_, err = testCompile.compileExternScan(node)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "column count mismatch")
 }
 
 func TestCompileExternScanParquetLoadUsesFileFanoutMainPath(t *testing.T) {
@@ -961,6 +1232,14 @@ func writeCompileInt32ParquetWithRowGroups(t *testing.T, values []int32, rowsPer
 	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
 	require.Len(t, f.RowGroups(), (len(values)+int(rowsPerGroup)-1)/int(rowsPerGroup))
+	return buf.Bytes()
+}
+
+func writeCompileEmptyParquet(t *testing.T, group parquet.Group) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, parquet.NewSchema("x", group))
+	require.NoError(t, w.Close())
 	return buf.Bytes()
 }
 
@@ -1208,6 +1487,62 @@ func TestCleanPipelineWitchStartFail(t *testing.T) {
 	signal := <-op.Reg.Ch2
 	_, err := signal.Action()
 	require.Error(t, err)
+}
+
+func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	reg := process.NewPipelineEdge(1, 0)
+	s := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: "malformed-remote-address"},
+		Proc:     proc,
+		RootOp:   connector.NewArgument().WithReg(reg),
+	}
+	c := &Compile{proc: proc, addr: "local:6001"}
+
+	err := s.RemoteRun(c)
+	require.ErrorContains(t, err, "malformed remote CN address")
+
+	select {
+	case signal := <-reg.Ch2:
+		_, signalErr := signal.Action()
+		require.ErrorIs(t, signalErr, err)
+	case <-time.After(time.Second):
+		t.Fatal("malformed remote start failure did not terminate its receiver")
+	}
+}
+
+func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.hasMergeOp = true
+
+	parent := &Scope{
+		Magic:  Merge,
+		Proc:   c.proc.NewContextChildProc(1),
+		RootOp: merge.NewArgument(),
+	}
+	child := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: "malformed-remote-address"},
+		Proc:     c.proc.NewContextChildProc(0),
+		RootOp:   connector.NewArgument().WithReg(parent.Proc.Reg.MergeReceivers[0]),
+	}
+	parent.PreScopes = []*Scope{child}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- parent.MergeRun(c)
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "malformed remote CN address")
+	case <-time.After(2 * time.Second):
+		parent.Proc.Cancel(moerr.NewInternalErrorNoCtx("test timeout"))
+		t.Fatal("merge run hung after malformed remote pre-scope failed")
+	}
 }
 
 func TestScopeGetRelDataError(t *testing.T) {

@@ -118,6 +118,44 @@ func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
 	require.Nil(t, notifyCh)
 }
 
+func TestWaitRemoteRegsReadyPropagatesCancelCause(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	proc.Ctx = ctx
+	proc.Cancel = cancel
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	d := &Dispatch{
+		RemoteRegs: []colexec.ReceiveInfo{{Uuid: uid}},
+		ctr: &container{
+			remoteInfo: make(process.RemotePipelineInformationChannel),
+		},
+	}
+
+	type result struct {
+		end bool
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		end, err := d.waitRemoteRegsReady(proc)
+		done <- result{end: end, err: err}
+	}()
+
+	want := moerr.NewInternalErrorNoCtx("remote receiver connection closed before registration")
+	cancel(want)
+
+	select {
+	case got := <-done:
+		require.False(t, got.end)
+		require.ErrorIs(t, got.err, want)
+		require.True(t, d.ctr.prepared)
+	case <-time.After(time.Second):
+		t.Fatal("waitRemoteRegsReady did not return after proc cancellation")
+	}
+}
+
 func TestDispatchAdoptCleanupState_TransfersOwnership(t *testing.T) {
 	original := &container{sendCnt: 1}
 	target := &Dispatch{ctr: &container{sendCnt: 99}}

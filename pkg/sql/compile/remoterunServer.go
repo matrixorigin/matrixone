@@ -142,7 +142,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
-		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid)
+		dispatchProc, dispatchNotifyCh, err := receiver.TryGetProcByUuid(receiver.messageUuid)
 		if err != nil || dispatchProc == nil {
 			return err
 		}
@@ -184,6 +184,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		defer func() {
+			runCompile.clear()
+			runCompile.Release()
+		}()
 
 		// decode and running the pipeline.
 		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -208,10 +212,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
-		defer func() {
-			runCompile.clear()
-			runCompile.Release()
-		}()
 
 		if err := registerRemoteDispatchReceivers(s, runCompile.proc); err != nil {
 			return err
@@ -312,6 +312,8 @@ type messageReceiverOnServer struct {
 	scopeData       []byte
 
 	needNotReply bool
+
+	waitRegistrationTimeout time.Duration
 
 	// result.
 	phyPlan *models.PhyPlan
@@ -560,16 +562,41 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 }
 
 // waitRegistrationTimeout bounds how long we wait for the dispatch operator
-// to register itself via PutProcIntoUuidMap. Under normal operation this
-// happens within seconds. A 5-minute timeout detects a fundamentally broken
-// remote CN (crash, network partition) without the false positives of a short
-// timeout, while avoiding the 24h hang of the unbounded RPC stream lifetime.
+// to register itself via PutProcIntoUuidMap. Notify messages use
+// TryGetProcByUuid so they can retry while dispatch registration is still in
+// progress; the blocking wait is bounded to avoid keeping the query alive
+// indefinitely when a remote CN fails.
 const waitRegistrationTimeout = 30 * time.Second
 
+func newRemoteDispatchNotRegisteredYetError(ctx context.Context, uid uuid.UUID) error {
+	return moerr.NewRemoteDispatchNotRegistered(ctx, uid.String())
+}
+
+func isRemoteDispatchNotRegisteredYetError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrRemoteDispatchNotRegistered)
+}
+
+func (receiver *messageReceiverOnServer) TryGetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
+	dispatchProc, notifyChannel, ok := colexec.Get().GetProcByUuid(uid, false)
+	if ok {
+		return dispatchProc, notifyChannel, nil
+	}
+	select {
+	case <-contextDone(receiver.connectionCtx):
+		colexec.Get().GetProcByUuid(uid, true)
+		return nil, nil, nil
+	default:
+		return nil, nil, newRemoteDispatchNotRegisteredYetError(receiver.getMessageContext(), uid)
+	}
+}
+
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
-	deadline := time.NewTimer(waitRegistrationTimeout)
+	waitTimeout := receiver.getWaitRegistrationTimeout()
+	deadline := time.NewTimer(waitTimeout)
 	defer deadline.Stop()
 
+	connectionDone := contextDone(receiver.connectionCtx)
+	messageDone := contextDone(receiver.messageCtx)
 	for {
 		dispatchProc, notifyChannel, ok, changed := colexec.Get().GetProcByUuidOrWait(uid)
 		if ok {
@@ -577,14 +604,46 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 		}
 
 		select {
-		case <-receiver.connectionCtx.Done():
-			colexec.Get().GetProcByUuid(uid, true)
+		case <-connectionDone:
+			receiver.cancelPendingDispatchRegistration(uid,
+				moerr.NewInternalError(receiver.getMessageContext(), "remote receiver connection closed before dispatch registration"))
+			return nil, nil, nil
+		case <-messageDone:
+			receiver.cancelPendingDispatchRegistration(uid, receiver.getMessageContext().Err())
 			return nil, nil, nil
 		case <-deadline.C:
-			colexec.Get().GetProcByUuid(uid, true)
-			return nil, nil, moerr.NewInternalErrorf(receiver.messageCtx,
-				"dispatch process not registered within %s, remote CN may have failed", waitRegistrationTimeout)
+			return nil, nil, moerr.NewInternalErrorf(receiver.getMessageContext(),
+				"dispatch process not registered within %s, remote CN may have failed", waitTimeout)
 		case <-changed:
 		}
 	}
+}
+
+func (receiver *messageReceiverOnServer) getWaitRegistrationTimeout() time.Duration {
+	if receiver.waitRegistrationTimeout > 0 {
+		return receiver.waitRegistrationTimeout
+	}
+	return waitRegistrationTimeout
+}
+
+func contextDone(ctx context.Context) <-chan struct{} {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Done()
+}
+
+func (receiver *messageReceiverOnServer) getMessageContext() context.Context {
+	if receiver.messageCtx != nil {
+		return receiver.messageCtx
+	}
+	return context.Background()
+}
+
+func (receiver *messageReceiverOnServer) cancelPendingDispatchRegistration(uid uuid.UUID, err error) {
+	dispatchProc, _, ok := colexec.Get().GetProcByUuid(uid, true)
+	if !ok || dispatchProc == nil || dispatchProc.Cancel == nil {
+		return
+	}
+	dispatchProc.Cancel(err)
 }
