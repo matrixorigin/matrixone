@@ -24,11 +24,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 )
 
 func TestCreateNamespaceURLUsesNegotiatedPrefix(t *testing.T) {
@@ -163,6 +167,9 @@ func TestLocalE2EStringHelpers(t *testing.T) {
 	if got := sqlString(`a\b'c`); got != `'a\\b''c'` {
 		t.Fatalf("sqlString returned %q", got)
 	}
+	if got := redactText(""); got != "" {
+		t.Fatalf("redactText returned %q for an empty string", got)
+	}
 	if err := validateIdentifier("ok_123", "catalog"); err != nil {
 		t.Fatalf("validateIdentifier rejected a valid identifier: %v", err)
 	}
@@ -203,6 +210,37 @@ func TestLocalE2EQueryLinesAndSQLValueString(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
+}
+
+func TestLocalE2EQueryLinesFailurePaths(t *testing.T) {
+	t.Run("query fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("new sqlmock: %v", err)
+		}
+		defer db.Close()
+		mock.ExpectQuery("SELECT").WillReturnError(errors.New("catalog offline"))
+		if _, err := queryLines(context.Background(), db, "SELECT * FROM t"); err == nil || !strings.Contains(err.Error(), "catalog offline") {
+			t.Fatalf("expected query failure, got %v", err)
+		}
+	})
+
+	t.Run("iteration fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("new sqlmock: %v", err)
+		}
+		defer db.Close()
+		rows := sqlmock.NewRows([]string{"name"}).AddRow("first").AddRow("second").RowError(1, errors.New("stream interrupted"))
+		mock.ExpectQuery("SELECT").WillReturnRows(rows)
+		got, err := queryLines(context.Background(), db, "SELECT name FROM t")
+		if err == nil || !strings.Contains(err.Error(), "stream interrupted") {
+			t.Fatalf("expected iteration failure, got rows=%v err=%v", got, err)
+		}
+		if len(got) != 1 || got[0] != "first" {
+			t.Fatalf("unexpected rows before iteration failure: %v", got)
+		}
+	})
 }
 
 func TestLocalE2EWaitForDBUsesPing(t *testing.T) {
@@ -271,6 +309,17 @@ func TestLocalE2ECaseReportsRedactAndSummarize(t *testing.T) {
 	if !strings.Contains(string(data), "ICE-CI-E2E-001") || !strings.Contains(string(data), "failed") {
 		t.Fatalf("summary missing case rows:\n%s", string(data))
 	}
+
+	if err := writeCaseReport(dir, failedCase("ICE-CI-E2E-998", "error-only", nil, nil, nil, "raw-secret-key")); err != nil {
+		t.Fatalf("write error-only report: %v", err)
+	}
+	errorOnly, err := os.ReadFile(filepath.Join(dir, safeFileName("ICE-CI-E2E-998_error-only"), "mo.out"))
+	if err != nil {
+		t.Fatalf("read error-only report: %v", err)
+	}
+	if strings.Contains(string(errorOnly), "raw-secret-key") || !strings.Contains(string(errorOnly), "<redacted>") {
+		t.Fatalf("error-only report did not redact the error: %s", errorOnly)
+	}
 }
 
 func TestLocalE2EReportErrorBranches(t *testing.T) {
@@ -306,6 +355,22 @@ func TestLocalE2EReportErrorBranches(t *testing.T) {
 	}
 }
 
+func TestLocalE2ECaseReportFileWriteFailures(t *testing.T) {
+	for _, blockedFile := range []string{"mo.out", "metadata.json", "diff.json", "summary.md"} {
+		t.Run(blockedFile, func(t *testing.T) {
+			root := t.TempDir()
+			result := passedCase("ICE-CI-E2E-997", "write-failure", nil, nil, nil, nil)
+			caseDir := filepath.Join(root, safeFileName(result.ID+"_"+result.Name))
+			if err := os.MkdirAll(filepath.Join(caseDir, blockedFile), 0o755); err != nil {
+				t.Fatalf("create blocking directory: %v", err)
+			}
+			if err := writeCaseReport(root, result); err == nil {
+				t.Fatalf("expected writeCaseReport to fail when %s is a directory", blockedFile)
+			}
+		})
+	}
+}
+
 func TestLocalE2ESetupExecutesExpectedStatements(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
@@ -328,6 +393,15 @@ func TestLocalE2ESetupExecutesExpectedStatements(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestLocalE2ESetupReportsStatementFailure(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectExec("DROP DATABASE IF EXISTS").WillReturnError(errors.New("database locked"))
+	if err := (&caseRunner{cfg: localE2ETestConfig(), db: db}).setup(context.Background()); err == nil || !strings.Contains(err.Error(), "database locked") {
+		t.Fatalf("expected setup statement failure, got %v", err)
 	}
 }
 
@@ -358,6 +432,41 @@ func TestLocalE2ECatalogAndMappingCase(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
+}
+
+func TestLocalE2EPartitionFilterCaseReportsInsertFailure(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectExec("INSERT INTO").WillReturnError(errors.New("write unavailable"))
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).partitionFilterCase(context.Background())
+	if result.Status != "failed" || !strings.Contains(result.Error, "write unavailable") {
+		t.Fatalf("expected insert failure, got %+v", result)
+	}
+}
+
+func TestLocalE2EPartitionFilterCaseReportsQueryAndMismatchFailures(t *testing.T) {
+	t.Run("query fails", func(t *testing.T) {
+		db, mock := newLocalE2ESQLMock(t)
+		defer db.Close()
+		mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 4))
+		mock.ExpectQuery("WHERE region = 'ksa'").WillReturnError(errors.New("catalog offline"))
+		result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).partitionFilterCase(context.Background())
+		if result.Status != "failed" || !strings.Contains(result.Error, "catalog offline") {
+			t.Fatalf("expected query failure, got %+v", result)
+		}
+	})
+
+	t.Run("result mismatches", func(t *testing.T) {
+		db, mock := newLocalE2ESQLMock(t)
+		defer db.Close()
+		mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 4))
+		mock.ExpectQuery("WHERE region = 'ksa'").WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(int64(1), int64(10)))
+		mock.ExpectQuery("WHERE region IN").WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(int64(2), int64(30)))
+		result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).partitionFilterCase(context.Background())
+		if result.Status != "failed" || !strings.Contains(result.Error, "result mismatch") {
+			t.Fatalf("expected mismatch failure, got %+v", result)
+		}
+	})
 }
 
 func TestLocalE2ECatalogAndMappingCaseFailures(t *testing.T) {
@@ -487,6 +596,16 @@ func TestLocalE2EAppendReadAndTimeTravelCase(t *testing.T) {
 	}
 }
 
+func TestLocalE2EAppendReadAndTimeTravelCaseReportsInsertFailure(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+	mock.ExpectExec("INSERT INTO").WillReturnError(errors.New("write unavailable"))
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).appendReadAndTimeTravelCase(context.Background())
+	if result.Status != "failed" || !strings.Contains(result.Error, "write unavailable") {
+		t.Fatalf("expected insert failure, got %+v", result)
+	}
+}
+
 func TestLocalE2ESnapshotHelpersAgainstREST(t *testing.T) {
 	cfg := localE2ETestConfig()
 	cfg.CatalogURI = newSnapshotRESTServer(t).URL + "/iceberg"
@@ -517,6 +636,339 @@ func TestNessieAPIURLEscapesReferenceAsOnePathSegment(t *testing.T) {
 	if got != "http://127.0.0.1:19120/api/v1/trees/tree/feature%2Fksa%20orders" {
 		t.Fatalf("unexpected Nessie API URL: %s", got)
 	}
+}
+
+func TestLocalE2EURLHelpersRejectMissingSchemeOrHost(t *testing.T) {
+	for _, rawURI := range []string{"", "/iceberg", "http:///iceberg", "://bad"} {
+		t.Run("nessie "+strconv.Quote(rawURI), func(t *testing.T) {
+			if _, err := nessieAPIURL(rawURI, "trees", "tree"); err == nil {
+				t.Fatalf("nessieAPIURL(%q) unexpectedly succeeded", rawURI)
+			}
+		})
+		t.Run("namespace "+strconv.Quote(rawURI), func(t *testing.T) {
+			if _, err := createNamespaceURL(rawURI, "main"); err == nil {
+				t.Fatalf("createNamespaceURL(%q) unexpectedly succeeded", rawURI)
+			}
+		})
+	}
+}
+
+func TestLocalE2EHTTPHelperFailurePaths(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("create namespace reports non-success status", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("namespace create failed"))
+		}))
+		t.Cleanup(server.Close)
+		cfg := localE2ETestConfig()
+		cfg.CatalogURI = server.URL
+		if err := createNamespace(ctx, cfg, "main"); err == nil || !strings.Contains(err.Error(), "returned HTTP 500") {
+			t.Fatalf("expected namespace HTTP error, got %v", err)
+		}
+	})
+
+	t.Run("create namespace rejects invalid catalog URI", func(t *testing.T) {
+		cfg := localE2ETestConfig()
+		cfg.CatalogURI = "/not-a-url"
+		if err := createNamespace(ctx, cfg, "main"); err == nil {
+			t.Fatal("expected createNamespace to reject an invalid catalog URI")
+		}
+	})
+
+	t.Run("create namespace reports request failures", func(t *testing.T) {
+		server := httptest.NewServer(http.NotFoundHandler())
+		catalogURI := server.URL
+		server.Close()
+		cfg := localE2ETestConfig()
+		cfg.CatalogURI = catalogURI
+		if err := createNamespace(ctx, cfg, "main"); err == nil || !strings.Contains(err.Error(), "request failed") {
+			t.Fatalf("expected namespace request failure, got %v", err)
+		}
+	})
+
+	t.Run("catalog helpers propagate config and load-table failures", func(t *testing.T) {
+		configDown := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		t.Cleanup(configDown.Close)
+		cfg := localE2ETestConfig()
+		cfg.CatalogURI = configDown.URL + "/iceberg"
+		if _, err := currentSnapshotID(ctx, cfg, "append_orders"); err == nil {
+			t.Fatal("expected currentSnapshotID config failure")
+		}
+		if _, err := snapshotAvailableOnRef(ctx, cfg, "append_orders", "feature/ksa", 100); err == nil {
+			t.Fatal("expected snapshotAvailableOnRef config failure")
+		}
+
+		loadTableDown := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/v1/config") {
+				_, _ = w.Write([]byte(`{"defaults":{"prefix":"main"}}`))
+				return
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		t.Cleanup(loadTableDown.Close)
+		cfg.CatalogURI = loadTableDown.URL + "/iceberg"
+		if _, err := currentSnapshotID(ctx, cfg, "append_orders"); err == nil {
+			t.Fatal("expected currentSnapshotID load-table failure")
+		}
+		if _, err := snapshotAvailableOnRef(ctx, cfg, "append_orders", "feature/ksa", 100); err == nil {
+			t.Fatal("expected snapshotAvailableOnRef load-table failure")
+		}
+	})
+
+	t.Run("nessie helpers reject invalid catalog URI", func(t *testing.T) {
+		cfg := localE2ETestConfig()
+		cfg.CatalogURI = "/not-a-url"
+		if _, err := getNessieReference(ctx, cfg, model.DefaultRefMain); err == nil {
+			t.Fatal("expected getNessieReference to reject an invalid catalog URI")
+		}
+		if _, err := createNessieBranchAtMain(ctx, cfg, "feature/ksa"); err == nil {
+			t.Fatal("expected createNessieBranchAtMain to reject an invalid catalog URI")
+		}
+	})
+
+	t.Run("nessie reference reports request failure", func(t *testing.T) {
+		server := httptest.NewServer(http.NotFoundHandler())
+		catalogURI := server.URL
+		server.Close()
+		cfg := localE2ETestConfig()
+		cfg.CatalogURI = catalogURI
+		if _, err := getNessieReference(ctx, cfg, model.DefaultRefMain); err == nil || !strings.Contains(err.Error(), "request failed") {
+			t.Fatalf("expected Nessie request failure, got %v", err)
+		}
+	})
+
+	t.Run("nessie branch reports request failure", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				w.Header().Set("Connection", "close")
+				_, _ = w.Write([]byte(`{"type":"BRANCH","name":"main","hash":"main-hash"}`))
+			case http.MethodPost:
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					_ = conn.Close()
+				}
+			}
+		}))
+		t.Cleanup(server.Close)
+		cfg := localE2ETestConfig()
+		cfg.CatalogURI = server.URL
+		if _, err := createNessieBranchAtMain(ctx, cfg, "feature/ksa"); err == nil || !strings.Contains(err.Error(), "request failed") {
+			t.Fatalf("expected branch request failure, got %v", err)
+		}
+	})
+}
+
+func TestSeedRESTTablesFailurePaths(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+		wantErr string
+	}{
+		{
+			name: "config request fails",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			},
+			wantErr: "get Iceberg REST catalog config",
+		},
+		{
+			name: "namespace creation fails",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/v1/config") {
+					_, _ = w.Write([]byte(`{"defaults":{"prefix":"main"}}`))
+					return
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+			},
+			wantErr: "create namespace",
+		},
+		{
+			name: "table creation fails",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/v1/config"):
+					_, _ = w.Write([]byte(`{"defaults":{"prefix":"main"}}`))
+				case strings.HasSuffix(r.URL.Path, "/namespaces"):
+					w.WriteHeader(http.StatusCreated)
+				default:
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+			},
+			wantErr: "create Iceberg table",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			t.Cleanup(server.Close)
+			cfg := localE2ETestConfig()
+			cfg.CatalogURI = server.URL + "/iceberg"
+			err := seedRESTTables(context.Background(), cfg)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestCatalogRequestWithPrefixForRef(t *testing.T) {
+	tests := []struct {
+		name       string
+		prefix     string
+		status     int
+		wantPrefix string
+		wantErr    string
+	}{
+		{
+			name:       "replaces main prefix",
+			prefix:     "main",
+			status:     http.StatusOK,
+			wantPrefix: "feature/ksa",
+		},
+		{
+			name:       "replaces ref inside warehouse prefix",
+			prefix:     "main|s3://warehouse",
+			status:     http.StatusOK,
+			wantPrefix: "feature/ksa|s3://warehouse",
+		},
+		{
+			name:       "uses target ref for empty prefix",
+			prefix:     "",
+			status:     http.StatusOK,
+			wantPrefix: "feature/ksa",
+		},
+		{
+			name:    "rejects an unstructured prefix",
+			prefix:  "warehouse-only",
+			status:  http.StatusOK,
+			wantErr: "nessie prefix",
+		},
+		{
+			name:    "propagates config failure",
+			status:  http.StatusServiceUnavailable,
+			wantErr: "get Iceberg REST catalog config",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/v1/config") {
+					http.NotFound(w, r)
+					return
+				}
+				if tt.status != http.StatusOK {
+					w.WriteHeader(tt.status)
+					_, _ = w.Write([]byte("catalog unavailable"))
+					return
+				}
+				_, _ = w.Write([]byte(`{"defaults":{"prefix":` + strconv.Quote(tt.prefix) + `}}`))
+			}))
+			t.Cleanup(server.Close)
+
+			req := api.CatalogRequest{Catalog: model.Catalog{
+				Name:      "ci_catalog",
+				Type:      "rest",
+				URI:       server.URL + "/iceberg",
+				Warehouse: "s3://warehouse",
+				AuthMode:  "none",
+			}}
+			got, err := catalogRequestWithPrefixForRef(
+				context.Background(),
+				catalog.NewRESTClient(catalog.WithAllowPlainHTTP(true)),
+				req,
+				req.Catalog.Warehouse,
+				"feature/ksa",
+			)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("catalogRequestWithPrefixForRef failed: %v", err)
+			}
+			if got.Prefix != tt.wantPrefix {
+				t.Fatalf("unexpected prefix: got %q want %q", got.Prefix, tt.wantPrefix)
+			}
+		})
+	}
+}
+
+func TestNessieReferenceFailurePaths(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		body    string
+		wantErr string
+	}{
+		{
+			name:    "non-success status",
+			status:  http.StatusConflict,
+			body:    "ref conflict",
+			wantErr: "returned HTTP 409",
+		},
+		{
+			name:    "invalid JSON",
+			status:  http.StatusOK,
+			body:    "{",
+			wantErr: "decode Nessie ref",
+		},
+		{
+			name:    "empty hash",
+			status:  http.StatusOK,
+			body:    `{"type":"BRANCH","name":"main"}`,
+			wantErr: "nessie ref main returned empty hash",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			t.Cleanup(server.Close)
+			cfg := localE2ETestConfig()
+			cfg.CatalogURI = server.URL
+			_, err := getNessieReference(context.Background(), cfg, model.DefaultRefMain)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+
+	t.Run("branch creation propagates POST failure", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				_, _ = w.Write([]byte(`{"type":"BRANCH","name":"main","hash":"main-hash"}`))
+			case http.MethodPost:
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte("branch create failed"))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(server.Close)
+		cfg := localE2ETestConfig()
+		cfg.CatalogURI = server.URL
+		_, err := createNessieBranchAtMain(context.Background(), cfg, "feature/ksa")
+		if err == nil || !strings.Contains(err.Error(), "returned HTTP 500") {
+			t.Fatalf("expected branch create HTTP error, got %v", err)
+		}
+	})
 }
 
 func TestLocalE2ESnapshotHelperFailures(t *testing.T) {

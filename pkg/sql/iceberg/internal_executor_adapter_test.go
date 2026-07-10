@@ -16,6 +16,7 @@ package iceberg
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -77,6 +78,10 @@ func TestInternalSQLExecutorAdapterErrorBranches(t *testing.T) {
 	ctx := context.Background()
 	if _, err := (InternalSQLExecutorAdapter{}).Exec(ctx, "select 1"); err == nil {
 		t.Fatalf("expected nil executor exec error")
+	}
+	execErr := errors.New("executor unavailable")
+	if _, err := (InternalSQLExecutorAdapter{Executor: &fakeInternalSQLExecutor{err: execErr}}).Exec(ctx, "select 1"); !errors.Is(err, execErr) {
+		t.Fatalf("expected executor error %v, got %v", execErr, err)
 	}
 	if _, err := (InternalSQLExecutorAdapter{}).Query(ctx, "select 1"); err == nil {
 		t.Fatalf("expected nil executor query error")

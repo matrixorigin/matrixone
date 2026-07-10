@@ -601,7 +601,7 @@ func catalogRequestWithPrefixForRef(ctx context.Context, client *catalog.RESTCli
 		reqWithPrefix.Prefix = ref + "|" + strings.TrimSpace(parts[1])
 		return reqWithPrefix, nil
 	}
-	return api.CatalogRequest{}, fmt.Errorf("Nessie prefix %q cannot be rewritten for ref %q", prefix, ref)
+	return api.CatalogRequest{}, fmt.Errorf("nessie prefix %q cannot be rewritten for ref %q", prefix, ref)
 }
 
 func createNessieBranchAtMain(ctx context.Context, cfg localE2EConfig, branch string) (string, error) {
@@ -667,7 +667,7 @@ func getNessieReference(ctx context.Context, cfg localE2EConfig, ref string) (ne
 		return nessieReference{}, fmt.Errorf("decode Nessie ref %s: %w", ref, err)
 	}
 	if strings.TrimSpace(out.Hash) == "" {
-		return nessieReference{}, fmt.Errorf("Nessie ref %s returned empty hash", ref)
+		return nessieReference{}, fmt.Errorf("nessie ref %s returned empty hash", ref)
 	}
 	return out, nil
 }

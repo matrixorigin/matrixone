@@ -38,10 +38,10 @@ func (a InternalSQLExecutorAdapter) Exec(ctx context.Context, sql string) (uint6
 		return 0, moerr.NewInvalidInput(ctx, "iceberg internal SQL executor adapter requires an executor")
 	}
 	result, err := a.Executor.Exec(ctx, sql, a.execOptions())
-	defer result.Close()
 	if err != nil {
 		return 0, err
 	}
+	defer result.Close()
 	return result.AffectedRows, nil
 }
 
