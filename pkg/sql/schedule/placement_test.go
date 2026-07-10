@@ -185,6 +185,77 @@ func TestDecideQueryPlacementDropsUnroutableCandidates(t *testing.T) {
 	require.True(t, decision.Satisfied)
 }
 
+func TestDecideQueryPlacementDropsRuntimeIneligibleCandidates(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
+	working := Worker{ID: "working", Addr: "z:6001", Mcpu: 16, State: WorkerStateWorking}
+	unknown := Worker{ID: "unknown", Addr: "a:6001", Mcpu: 12}
+	draining := Worker{ID: "draining", Addr: "b:6001", Mcpu: 8, State: WorkerStateDraining}
+	drained := Worker{ID: "drained", Addr: "c:6001", Mcpu: 8, State: WorkerStateDrained}
+	unroutable := Worker{ID: "missing-addr", Mcpu: 8}
+	duplicate := Worker{ID: "working", Addr: "stale:6001", Mcpu: 4, State: WorkerStateWorking}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:  QueryExecAPMultiCN,
+		CurrentCN: local,
+		Candidates: Workers{
+			working,
+			draining,
+			unknown,
+			drained,
+			unroutable,
+			duplicate,
+		},
+	})
+
+	require.Equal(t, Workers{unknown, working}, decision.Workers)
+	require.Equal(t, ReasonMultiCN, decision.Reason)
+	require.True(t, decision.Satisfied)
+	require.Equal(t, DroppedWorkers{
+		{Worker: draining, Reason: ReasonDroppedDrainingCN},
+		{Worker: drained, Reason: ReasonDroppedDrainedCN},
+		{Worker: unroutable, Reason: ReasonDroppedUnroutableCN},
+		{Worker: duplicate, Reason: ReasonDroppedDuplicateCN},
+	}, decision.Dropped)
+}
+
+func TestDecideQueryPlacementFallsBackWhenCandidatesAreRuntimeIneligible(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
+	draining := Worker{ID: "draining", Addr: "draining:6001", Mcpu: 8, State: WorkerStateDraining}
+	drained := Worker{ID: "drained", Addr: "drained:6001", Mcpu: 8, State: WorkerStateDrained}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:   QueryExecAPMultiCN,
+		CurrentCN:  local,
+		Candidates: Workers{draining, drained},
+	})
+
+	require.Equal(t, Workers{local}, decision.Workers)
+	require.Equal(t, ReasonNoCandidateCN, decision.Reason)
+	require.True(t, decision.Satisfied)
+	require.Equal(t, DroppedWorkers{
+		{Worker: draining, Reason: ReasonDroppedDrainingCN},
+		{Worker: drained, Reason: ReasonDroppedDrainedCN},
+	}, decision.Dropped)
+}
+
+func TestDecideQueryPlacementDoesNotPreferDrainingCurrentCandidate(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
+	drainingLocal := Worker{ID: "local", Addr: "local:6001", Mcpu: 8, State: WorkerStateDraining}
+	remote := Worker{ID: "remote", Addr: "remote:6001", Mcpu: 16, State: WorkerStateWorking}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:        QueryExecAPMultiCN,
+		CurrentCN:       local,
+		Candidates:      Workers{drainingLocal, remote},
+		CurrentCNPolicy: CurrentCNPreferred,
+	})
+
+	require.Equal(t, Workers{remote}, decision.Workers)
+	require.Equal(t, ReasonMultiCN, decision.Reason)
+	require.True(t, decision.Satisfied)
+	require.Equal(t, DroppedWorkers{{Worker: drainingLocal, Reason: ReasonDroppedDrainingCN}}, decision.Dropped)
+}
+
 func TestDecideQueryPlacementFallsBackWhenAllCandidatesUnroutable(t *testing.T) {
 	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
 	candidates := Workers{{ID: "missing-addr", Mcpu: 12}}
@@ -198,6 +269,9 @@ func TestDecideQueryPlacementFallsBackWhenAllCandidatesUnroutable(t *testing.T) 
 	require.Equal(t, Workers{local}, decision.Workers)
 	require.Equal(t, ReasonNoCandidateCN, decision.Reason)
 	require.True(t, decision.Satisfied)
+	require.Equal(t, DroppedWorkers{
+		{Worker: candidates[0], Reason: ReasonDroppedUnroutableCN},
+	}, decision.Dropped)
 }
 
 func TestDecideQueryPlacementCanRequireCurrentCN(t *testing.T) {
@@ -519,6 +593,54 @@ func TestDecideQueryPlacementRejectsRequiredCurrentCNWithoutIdentity(t *testing.
 	require.Equal(t, candidates, decision.Workers)
 	require.Equal(t, ReasonCurrentCNMissingIdentity, decision.Reason)
 	require.False(t, decision.Satisfied)
+}
+
+func TestDecideQueryPlacementRejectsRequiredDrainingCurrentCN(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8, State: WorkerStateDraining}
+	candidates := Workers{
+		local,
+		{ID: "remote", Addr: "remote:6001", Mcpu: 16, State: WorkerStateWorking},
+	}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:        QueryExecAPMultiCN,
+		CurrentCN:       local,
+		Candidates:      candidates,
+		CurrentCNPolicy: CurrentCNRequired,
+	})
+
+	require.Equal(t, Workers{candidates[1]}, decision.Workers)
+	require.Equal(t, ReasonCurrentCNDraining, decision.Reason)
+	require.False(t, decision.Satisfied)
+}
+
+func TestDecideQueryPlacementDoesNotFallbackToDrainedCurrentCN(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8, State: WorkerStateDrained}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:  QueryExecAPMultiCN,
+		CurrentCN: local,
+	})
+
+	require.Empty(t, decision.Workers)
+	require.Equal(t, ReasonCurrentCNDrained, decision.Reason)
+	require.False(t, decision.Satisfied)
+}
+
+func TestDecideQueryPlacementDoesNotLeaveWorkerWhenOnlyCurrentCandidateIsDraining(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8, State: WorkerStateDraining}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:        QueryExecAPMultiCN,
+		CurrentCN:       local,
+		Candidates:      Workers{local},
+		CurrentCNPolicy: CurrentCNAllowed,
+	})
+
+	require.Empty(t, decision.Workers)
+	require.Equal(t, ReasonCurrentCNDraining, decision.Reason)
+	require.False(t, decision.Satisfied)
+	require.Equal(t, DroppedWorkers{{Worker: local, Reason: ReasonDroppedDrainingCN}}, decision.Dropped)
 }
 
 func TestDecideQueryPlacementRequiresCurrentCNByIdentityWithoutRoute(t *testing.T) {
