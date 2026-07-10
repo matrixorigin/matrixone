@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"net"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -398,13 +400,13 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	if err := validateRemoteRunAddress(s.NodeInfo.Addr, c.addr); err != nil {
-		return err
+		return s.failRemoteRunBeforeStart(c, err)
 	}
 	if s.ipAddrMatch(c.addr) {
 		return s.MergeRun(c)
 	}
 	if err := s.holdAnyCannotRemoteOperator(); err != nil {
-		return err
+		return s.failRemoteRunBeforeStart(c, err)
 	}
 
 	// In fact, it's not a safe way to convert this pipeline to run at local.
@@ -441,12 +443,25 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	return runErr
 }
 
+func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
+	cleanPipelineWitchStartFail(s, err, c.isPrepare)
+	return err
+}
+
 func validateRemoteRunAddress(scopeAddr, localAddr string) error {
-	if scopeAddr == "" {
+	if scopeAddr == "" || scopeAddr == localAddr {
 		return nil
 	}
-	if malformedExecutionAddr(scopeAddr) && scopeAddr != localAddr {
-		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q", scopeAddr)
+	host, port, err := net.SplitHostPort(scopeAddr)
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: %v", scopeAddr, err)
+	}
+	if host == "" {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: host is empty", scopeAddr)
+	}
+	portNumber, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || portNumber == 0 {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: invalid port %q", scopeAddr, port)
 	}
 	return nil
 }

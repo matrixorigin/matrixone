@@ -100,7 +100,7 @@ func (c *Compile) validateScheduledQueryRoutes(nodes engine.Nodes, placement sch
 	}
 	for _, node := range nodes {
 		if !schedulableEngineWorkState(node.WorkState) {
-			c.recordSelectedWorkerFailureTrace(scheduleTraceFailureRuntimeIneligibleSelectedWorker, node)
+			recordSelectedWorkerFailureMetric(scheduleFailureRuntimeIneligibleSelectedWorker)
 			getQueryScheduleLogger().WarnWithConfig(
 				"query-schedule-runtime-ineligible-selected-worker",
 				"query schedule selected a runtime-ineligible worker",
@@ -123,7 +123,7 @@ func (c *Compile) validateScheduledQueryRoutes(nodes engine.Nodes, placement sch
 		if node.Addr != "" {
 			continue
 		}
-		c.recordSelectedWorkerFailureTrace(scheduleTraceFailureUnroutableSelectedWorker, node)
+		recordSelectedWorkerFailureMetric(scheduleFailureUnroutableSelectedWorker)
 		getQueryScheduleLogger().WarnWithConfig(
 			"query-schedule-unroutable-selected-worker",
 			"query schedule selected a worker without route for multi-CN execution",
@@ -166,7 +166,7 @@ func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		decision := schedule.DecideQueryPlacement(req)
-		c.recordQuerySchedulingTrace(decision, 0, 0)
+		c.recordQuerySchedulingMetrics(decision, 0, 0)
 		return decision, nil
 	}
 
@@ -178,7 +178,7 @@ func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
 	rawCandidateCount := len(candidates)
 	req.Candidates = toScheduleCandidateWorkers(candidates)
 	decision := schedule.DecideQueryPlacement(req)
-	c.recordQuerySchedulingTrace(decision, rawCandidateCount, len(req.Candidates))
+	c.recordQuerySchedulingMetrics(decision, rawCandidateCount, len(req.Candidates))
 	if len(decision.Dropped) > 0 {
 		getQueryScheduleLogger().WarnWithConfig(
 			"query-schedule-dropped-cn-candidates",

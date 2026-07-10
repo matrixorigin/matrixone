@@ -30,7 +30,9 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -266,6 +268,14 @@ func TestScheduleQueryWorkersDropsUnroutableCandidates(t *testing.T) {
 }
 
 func TestScheduleQueryWorkersDropsRuntimeIneligibleCandidates(t *testing.T) {
+	decisionCounter := metricv2.QueryScheduleDecisionCounter.WithLabelValues(
+		"ap-multi-cn", "allowed", schedule.ReasonMultiCN, "satisfied")
+	drainingCounter := metricv2.QueryScheduleDroppedWorkerCounter.WithLabelValues(schedule.ReasonDroppedDrainingCN)
+	drainedCounter := metricv2.QueryScheduleDroppedWorkerCounter.WithLabelValues(schedule.ReasonDroppedDrainedCN)
+	decisionBefore := testutil.ToFloat64(decisionCounter)
+	drainingBefore := testutil.ToFloat64(drainingCounter)
+	drainedBefore := testutil.ToFloat64(drainedCounter)
+
 	c := NewMockCompile(t)
 	c.addr = "local:6001"
 	c.execType = plan2.ExecTypeAP_MULTICN
@@ -305,20 +315,16 @@ func TestScheduleQueryWorkersDropsRuntimeIneligibleCandidates(t *testing.T) {
 		},
 	}, c.queryPlacement.Dropped)
 
-	trace := c.scheduleTrace.query
-	require.Equal(t, "ap-multi-cn", trace.execType)
-	require.Equal(t, schedule.ReasonMultiCN, trace.reason)
-	require.True(t, trace.satisfied)
-	require.False(t, trace.fallback)
-	require.Equal(t, 4, trace.candidateCount)
-	require.Equal(t, 4, trace.candidateWorkerCount)
-	require.Equal(t, 2, trace.selectedWorkerCount)
-	require.Equal(t, 2, trace.droppedWorkerCount)
-	require.Equal(t, 1, trace.droppedDraining)
-	require.Equal(t, 1, trace.droppedDrained)
+	require.Equal(t, decisionBefore+1, testutil.ToFloat64(decisionCounter))
+	require.Equal(t, drainingBefore+1, testutil.ToFloat64(drainingCounter))
+	require.Equal(t, drainedBefore+1, testutil.ToFloat64(drainedCounter))
 }
 
 func TestScheduleQueryWorkersFallsBackWhenCandidatesRuntimeIneligible(t *testing.T) {
+	fallbackCounter := metricv2.QueryScheduleDecisionCounter.WithLabelValues(
+		"ap-multi-cn", "allowed", schedule.ReasonNoCandidateCN, "satisfied")
+	fallbackBefore := testutil.ToFloat64(fallbackCounter)
+
 	c := NewMockCompile(t)
 	c.addr = "local:6001"
 	c.ncpu = 6
@@ -335,9 +341,7 @@ func TestScheduleQueryWorkersFallsBackWhenCandidatesRuntimeIneligible(t *testing
 	require.Equal(t, engine.Nodes{{Addr: "local:6001", Mcpu: 6}}, nodes)
 	require.Equal(t, schedule.ReasonNoCandidateCN, c.queryPlacement.Reason)
 	require.Equal(t, 2, len(c.queryPlacement.Dropped))
-	require.True(t, c.scheduleTrace.query.fallback)
-	require.Equal(t, schedule.ReasonNoCandidateCN, c.scheduleTrace.query.reason)
-	require.Equal(t, 2, c.scheduleTrace.query.droppedWorkerCount)
+	require.Equal(t, fallbackBefore+1, testutil.ToFloat64(fallbackCounter))
 }
 
 func TestScheduleQueryWorkersFallsBackToLocalWhenCandidatesUnroutable(t *testing.T) {
@@ -394,6 +398,10 @@ func TestScheduleQueryWorkersRejectsRequiredCurrentCNWithoutAddressForMultiCN(t 
 }
 
 func TestValidateScheduledQueryRoutesRejectsRuntimeIneligibleSelectedWorker(t *testing.T) {
+	failureCounter := metricv2.QueryScheduleSelectedWorkerFailureCounter.WithLabelValues(
+		scheduleFailureRuntimeIneligibleSelectedWorker)
+	failureBefore := testutil.ToFloat64(failureCounter)
+
 	c := NewMockCompile(t)
 	c.execType = plan2.ExecTypeAP_MULTICN
 
@@ -401,14 +409,10 @@ func TestValidateScheduledQueryRoutesRejectsRuntimeIneligibleSelectedWorker(t *t
 		{Id: "draining", Addr: "draining:6001", Mcpu: 4, WorkState: metadata.WorkState_Draining},
 	}, schedule.QueryDecision{Reason: schedule.ReasonMultiCN})
 	require.ErrorContains(t, err, "runtime state Draining")
-	require.Equal(t,
-		scheduleTraceFailureRuntimeIneligibleSelectedWorker,
-		c.scheduleTrace.selectedWorkerFailure.reason)
-	require.Equal(t, metadata.WorkState_Draining.String(), c.scheduleTrace.selectedWorkerFailure.workerState)
-	require.True(t, c.scheduleTrace.selectedWorkerFailure.workerHasRoute)
+	require.Equal(t, failureBefore+1, testutil.ToFloat64(failureCounter))
 }
 
-func TestRecordScanSchedulingTrace(t *testing.T) {
+func TestRecordScanSchedulingMetricsRecordsEveryScan(t *testing.T) {
 	c := NewMockCompile(t)
 	c.cnList = engine.Nodes{
 		{Id: "cn1", Addr: "cn1:6001", Mcpu: 4},
@@ -421,23 +425,18 @@ func TestRecordScanSchedulingTrace(t *testing.T) {
 		ForceOneCN: true,
 	}
 
-	c.recordScanSchedulingTrace(schedule.ScanDecision{
+	decisionCounter := metricv2.ScanScheduleDecisionCounter.WithLabelValues(
+		schedule.ReasonScanForceOneCN, schedule.ReasonMultiCN, "true", "true", "true", "true")
+	decisionBefore := testutil.ToFloat64(decisionCounter)
+	decision := schedule.ScanDecision{
 		Workers:   schedule.Workers{{ID: "cn1", Addr: "cn1:6001", Mcpu: 4}},
 		LocalOnly: true,
 		Reason:    schedule.ReasonScanForceOneCN,
-	}, stats, true)
+	}
+	c.recordScanSchedulingMetrics(decision, stats, true)
+	c.recordScanSchedulingMetrics(decision, stats, true)
 
-	trace := c.scheduleTrace.lastScan
-	require.Equal(t, schedule.ReasonScanForceOneCN, trace.reason)
-	require.Equal(t, schedule.ReasonMultiCN, trace.queryPlacementReason)
-	require.True(t, trace.localOnly)
-	require.True(t, trace.hasStats)
-	require.True(t, trace.forceSingle)
-	require.Equal(t, 2, trace.queryWorkerCount)
-	require.Equal(t, 1, trace.scanWorkerCount)
-	require.Equal(t, int32(42), trace.blockNum)
-	require.Equal(t, int32(8), trace.dop)
-	require.True(t, trace.forceOneCN)
+	require.Equal(t, decisionBefore+2, testutil.ToFloat64(decisionCounter))
 }
 
 func TestScheduleQueryWorkersRejectsDrainingRequiredCurrentCN(t *testing.T) {

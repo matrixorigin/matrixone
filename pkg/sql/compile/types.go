@@ -289,7 +289,6 @@ type Compile struct {
 
 	cnList         engine.Nodes
 	queryPlacement schedule.QueryDecision
-	scheduleTrace  schedulingTrace
 	// ast
 	stmt tree.Statement
 

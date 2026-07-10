@@ -1519,12 +1519,9 @@ func constructLocalDispatchFromScopes(idx int, target []*Scope, source *Scope) (
 	if source == nil {
 		return nil, moerr.NewInternalErrorNoCtx("local dispatch source scope is nil")
 	}
-	arg := dispatch.NewArgument()
-	arg.LocalRegs = make([]*process.WaitRegister, 0, len(target))
-	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0)
-	arg.ShuffleRegIdxLocal = make([]int, 0, len(target))
-	arg.ShuffleRegIdxRemote = make([]int, 0)
-
+	if len(target) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("local dispatch requires at least one target scope")
+	}
 	for i, s := range target {
 		if s == nil {
 			return nil, moerr.NewInternalErrorNoCtxf("local dispatch target scope %d is nil", i)
@@ -1541,6 +1538,14 @@ func constructLocalDispatchFromScopes(idx int, target []*Scope, source *Scope) (
 			return nil, moerr.NewInternalErrorNoCtxf(
 				"local dispatch target scope %d has no merge receiver at index %d", i, idx)
 		}
+	}
+
+	arg := dispatch.NewArgument()
+	arg.LocalRegs = make([]*process.WaitRegister, 0, len(target))
+	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0)
+	arg.ShuffleRegIdxLocal = make([]int, 0, len(target))
+	arg.ShuffleRegIdxRemote = make([]int, 0)
+	for i, s := range target {
 		s.Proc.Reg.MergeReceivers[idx].SetNilBatchCntForReuse(source.NodeInfo.Mcpu)
 		arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 		arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)

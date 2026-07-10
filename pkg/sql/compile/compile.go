@@ -266,7 +266,6 @@ func (c *Compile) clear() {
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
-	c.scheduleTrace = schedulingTrace{}
 	c.stmt = nil
 	c.startAt = time.Time{}
 	c.needLockMeta = false
@@ -5562,10 +5561,6 @@ func sameExecutionAddr(addr string, currentCNAddr string) bool {
 		return addr == currentCNAddr
 	}
 	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
-}
-
-func malformedExecutionAddr(addr string) bool {
-	return addr != "" && len(strings.Split(addr, ":")) != 2
 }
 
 func (s *Scope) affectedRows() uint64 {
