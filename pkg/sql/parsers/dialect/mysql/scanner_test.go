@@ -75,17 +75,18 @@ func TestLiteralID(t *testing.T) {
 }
 
 func TestScannerSQLModePipeConcat(t *testing.T) {
-	s := NewScanner(dialect.MYSQL, "||")
+	s := NewScannerWithSQLMode(dialect.MYSQL, "||", ParseSQLModeFlags("PIPES_AS_CONCAT"))
 	id, _ := s.Scan()
-	if id != OR {
-		t.Fatalf("default || token = %s, want OR", tokenName(id))
-	}
-
-	s = NewScanner(dialect.MYSQL, "||")
-	s.setSQLMode(ParseSQLModeFlags("PIPES_AS_CONCAT"))
-	id, _ = s.Scan()
 	if id != PIPE_CONCAT {
 		t.Fatalf("PIPES_AS_CONCAT || token = %s, want PIPE_CONCAT", tokenName(id))
+	}
+	PutScanner(s)
+
+	s = NewScanner(dialect.MYSQL, "||")
+	defer PutScanner(s)
+	id, _ = s.Scan()
+	if id != OR {
+		t.Fatalf("default || token after scanner reuse = %s, want OR", tokenName(id))
 	}
 }
 
