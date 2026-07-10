@@ -426,7 +426,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> PROPERTIES
 
 // Secondary Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ BM25
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY
 
 // Alter
@@ -8645,6 +8645,10 @@ using_opt:
     {
 	$$ = tree.INDEX_TYPE_CAGRA
     }
+|   USING BM25
+    {
+	$$ = tree.INDEX_TYPE_BM25
+    }
 |   USING MASTER
     {
 	$$ = tree.INDEX_TYPE_MASTER
@@ -10310,6 +10314,8 @@ index_def:
  	        keyTyp = tree.INDEX_TYPE_CAGRA
 	    case "ivfpq":
  	        keyTyp = tree.INDEX_TYPE_IVFPQ
+	    case "bm25":
+ 	        keyTyp = tree.INDEX_TYPE_BM25
             default:
                 yylex.Error("Invalid the type of index")
                 goto ret1
@@ -10522,6 +10528,7 @@ index_type:
 |   HNSW
 |   CAGRA
 |   IVFPQ
+|   BM25
 
 insert_method_options:
     NO
@@ -14218,6 +14225,7 @@ non_reserved_keyword:
 |   HNSW
 |   CAGRA
 |   IVFPQ
+|   BM25
 |   PERSIST
 |   GRANT
 |   INCLUDE

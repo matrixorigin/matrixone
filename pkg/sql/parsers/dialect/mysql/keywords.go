@@ -64,6 +64,7 @@ func init() {
 		"ivfflat":                    IVFFLAT,
 		"ivfpq":                      IVFPQ,
 		"hnsw":                       HNSW,
+		"bm25":                       BM25,
 		"m":                          M,
 		"ef_construction":            EF_CONSTRUCTION,
 		"ef_search":                  EF_SEARCH,

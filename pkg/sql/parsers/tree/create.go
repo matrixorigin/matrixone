@@ -2067,6 +2067,8 @@ func (it IndexType) ToString() string {
 		return "cagra"
 	case INDEX_TYPE_IVFPQ:
 		return "ivfpq"
+	case INDEX_TYPE_BM25:
+		return "bm25"
 	case INDEX_TYPE_INVALID:
 		return ""
 	default:
@@ -2087,6 +2089,7 @@ const (
 	INDEX_TYPE_HNSW
 	INDEX_TYPE_CAGRA
 	INDEX_TYPE_IVFPQ
+	INDEX_TYPE_BM25
 )
 
 type VisibleType int
