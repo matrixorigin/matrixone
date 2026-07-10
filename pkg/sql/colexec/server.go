@@ -102,13 +102,22 @@ func (srv *Server) GetProcByUuidOrWait(u uuid.UUID) (*process.Process, process.R
 
 func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process, ch process.RemotePipelineInformationChannel) error {
 	srv.uuidCsChanMap.Lock()
-	if _, ok := srv.uuidCsChanMap.mp[u]; ok {
-		delete(srv.uuidCsChanMap.mp, u)
+	if item, ok := srv.uuidCsChanMap.mp[u]; ok {
+		oldState := "live"
+		if item.proc == nil {
+			if item.ownerCh != nil {
+				oldState = "attached"
+			} else {
+				oldState = "tombstone"
+				delete(srv.uuidCsChanMap.mp, u)
+			}
+		}
 		srv.uuidCsChanMap.Unlock()
-		return moerr.NewInternalErrorNoCtx("remote receiver already done")
+		return moerr.NewInternalErrorNoCtxf(
+			"remote receiver %s already done (existing registry state: %s)", u.String(), oldState)
 	}
 
-	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, ch: ch}
+	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, ch: ch, ownerCh: ch}
 	old := srv.uuidCsChanMap.changed
 	srv.uuidCsChanMap.changed = make(chan struct{})
 	srv.uuidCsChanMap.Unlock()
@@ -131,6 +140,23 @@ func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
 			p.proc = nil
 			p.ch = nil
 			srv.uuidCsChanMap.mp[uuids[i]] = p
+		}
+	}
+}
+
+// RemoveUuidsOwned performs final cleanup for one exact registration. The
+// owner check prevents a delayed rollback from deleting a later registration
+// that happens to use the same UUID.
+func (srv *Server) RemoveUuidsOwned(
+	uuids []uuid.UUID,
+	ownerCh process.RemotePipelineInformationChannel,
+) {
+	srv.uuidCsChanMap.Lock()
+	defer srv.uuidCsChanMap.Unlock()
+	for i := range uuids {
+		item, ok := srv.uuidCsChanMap.mp[uuids[i]]
+		if ok && item.ownerCh == ownerCh {
+			delete(srv.uuidCsChanMap.mp, uuids[i])
 		}
 	}
 }
