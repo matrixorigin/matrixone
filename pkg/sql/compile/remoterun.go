@@ -656,13 +656,14 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:            t.Attrs,
-			Rets:             t.Rets,
-			Args:             t.Args,
-			Params:           t.Params,
-			Name:             t.FuncName,
-			IsSingle:         t.IsSingle,
-			IndexReaderParam: t.IndexReaderParam,
+			Attrs:                  t.Attrs,
+			Rets:                   t.Rets,
+			Args:                   t.Args,
+			Params:                 t.Params,
+			Name:                   t.FuncName,
+			IsSingle:               t.IsSingle,
+			IndexReaderParam:       t.IndexReaderParam,
+			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
 		}
 
 	case *external.External:
@@ -788,13 +789,14 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Types:     convertToPlanTypes(t.Typs),
 		}
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:            t.TableFunction.Attrs,
-			Rets:             t.TableFunction.Rets,
-			Args:             t.TableFunction.Args,
-			Params:           t.TableFunction.Params,
-			Name:             t.TableFunction.FuncName,
-			IsSingle:         t.TableFunction.IsSingle,
-			IndexReaderParam: t.TableFunction.IndexReaderParam,
+			Attrs:                  t.TableFunction.Attrs,
+			Rets:                   t.TableFunction.Rets,
+			Args:                   t.TableFunction.Args,
+			Params:                 t.TableFunction.Params,
+			Name:                   t.TableFunction.FuncName,
+			IsSingle:               t.TableFunction.IsSingle,
+			IndexReaderParam:       t.TableFunction.IndexReaderParam,
+			RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
 		}
 	case *multi_update.MultiUpdate:
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -1139,6 +1141,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
 		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
+		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
@@ -1272,6 +1275,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.Params = opr.TableFunction.Params
 		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
 		arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
+		arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()

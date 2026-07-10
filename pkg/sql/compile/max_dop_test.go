@@ -464,7 +464,7 @@ func TestGenerateNodesUsesMultiCNForSmallIvfSearchFunctionScan(t *testing.T) {
 	require.Equal(t, int32(1), nodes[1].CNIDX)
 }
 
-func TestGenerateNodesKeepsPartitionedIvfEntriesScanOnCurrentCNShard(t *testing.T) {
+func TestGenerateNodesKeepsPartitionedIvfEntriesScanOnCurrentCNFullScan(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
 	c.e = newStubEngineForGenerateNodes("testdb", "idx_entries")
@@ -503,8 +503,11 @@ func TestGenerateNodesKeepsPartitionedIvfEntriesScanOnCurrentCNShard(t *testing.
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
 	require.Equal(t, "cn-local:6001", nodes[0].Addr)
-	require.Equal(t, int32(2), nodes[0].CNCNT)
-	require.Equal(t, int32(1), nodes[0].CNIDX)
+	// The table function has already partitioned entries by PK in its SQL.
+	// The internal entries scan must read the complete local block, otherwise
+	// CNCNT/CNIDX applies a second, incompatible block-level partition.
+	require.Equal(t, int32(1), nodes[0].CNCNT)
+	require.Equal(t, int32(0), nodes[0].CNIDX)
 }
 
 func TestCompileTableFunctionDispatchesIvfSearchToAllCNs(t *testing.T) {

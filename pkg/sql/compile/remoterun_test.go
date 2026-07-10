@@ -380,6 +380,9 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	t.Run("TableFunction_IndexReaderParam", func(t *testing.T) {
 		op := &table_function.TableFunction{
 			FuncName: "ivf_search",
+			RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
+				{Tag: 42},
+			},
 			IndexReaderParam: &planpb.IndexReaderParam{
 				PartitionCnCnt: 2,
 				PartitionCnIdx: 1,
@@ -389,12 +392,16 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int32(2), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnCnt())
 		require.Equal(t, int32(1), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnIdx())
+		require.Len(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList(), 1)
+		require.Equal(t, int32(42), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetTag())
 
 		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
 		require.NoError(t, err)
 		restoredOp := restored.(*table_function.TableFunction)
 		require.Equal(t, int32(2), restoredOp.IndexReaderParam.GetPartitionCnCnt())
 		require.Equal(t, int32(1), restoredOp.IndexReaderParam.GetPartitionCnIdx())
+		require.Len(t, restoredOp.RuntimeFilterSpecs, 1)
+		require.Equal(t, int32(42), restoredOp.RuntimeFilterSpecs[0].GetTag())
 	})
 
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
@@ -1289,6 +1296,42 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s3, proc)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
+}
+
+func TestPrepareRemoteRunSendingDataKeepsConnectorChildTableFunctionParams(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+
+	tf := &table_function.TableFunction{
+		FuncName: "ivf_search",
+		RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
+			{Tag: 42},
+		},
+		IndexReaderParam: &planpb.IndexReaderParam{
+			PartitionCnCnt: 2,
+			PartitionCnIdx: 1,
+		},
+	}
+	conn := connector.NewArgument()
+	conn.AppendChild(tf)
+	s := &Scope{
+		Proc:   proc,
+		RootOp: conn,
+	}
+
+	scopeData, withoutOut, _, _, err := prepareRemoteRunSendingData("", s, proc)
+	require.NoError(t, err)
+	require.False(t, withoutOut)
+
+	restored, err := decodeScope(scopeData, proc, true, nil)
+	require.NoError(t, err)
+	restoredOp := restored.RootOp.(*table_function.TableFunction)
+	require.Equal(t, int32(2), restoredOp.IndexReaderParam.GetPartitionCnCnt())
+	require.Equal(t, int32(1), restoredOp.IndexReaderParam.GetPartitionCnIdx())
+	require.Len(t, restoredOp.RuntimeFilterSpecs, 1)
+	require.Equal(t, int32(42), restoredOp.RuntimeFilterSpecs[0].GetTag())
 }
 
 func TestGetScopeForRemoteRunEncodingDoesNotMutateOriginalScope(t *testing.T) {
