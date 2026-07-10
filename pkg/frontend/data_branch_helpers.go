@@ -591,6 +591,19 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	return nil
 }
 
+func writeSQLHexLiteral(buf *bytes.Buffer, b []byte) {
+	const hexDigits = "0123456789abcdef"
+
+	// Hex literals preserve every byte; SQL string escapes are not reversible for all control bytes.
+	buf.Grow(2*len(b) + 3)
+	buf.WriteString("x'")
+	for _, c := range b {
+		buf.WriteByte(hexDigits[c>>4])
+		buf.WriteByte(hexDigits[c&0x0f])
+	}
+	buf.WriteByte('\'')
+}
+
 func extractDataBranchSQLRowValue(
 	ctx context.Context,
 	ses *Session,

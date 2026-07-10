@@ -57,6 +57,15 @@ func fToDec128(f float64, scale int32) (types.Decimal128, error) {
 	return types.Decimal128FromFloat64(f, 38, scale)
 }
 
+func VarStdDevReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_decimal64, types.T_decimal128:
+		return AvgReturnType(typs)
+	default:
+		return types.T_float64.ToType()
+	}
+}
+
 func (exec *varStdDevExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
 }
@@ -332,12 +341,12 @@ func newVarStdDevExec[T float64 | types.Decimal128, A types.Ints | types.UInts |
 	exec.a2f = a2f
 	exec.f2t = f2t
 
-	avgTyp := AvgReturnType([]types.Type{param})
+	retType := VarStdDevReturnType([]types.Type{param})
 	exec.aggInfo = aggInfo{
 		aggId:      aggID,
 		isDistinct: isDistinct,
 		argTypes:   []types.Type{param},
-		retType:    avgTyp,
+		retType:    retType,
 		stateTypes: []types.Type{types.T_int64.ToType(), types.T_float64.ToType(), types.T_float64.ToType()},
 		emptyNull:  false,
 		saveArg:    isDistinct,
