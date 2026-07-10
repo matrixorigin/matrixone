@@ -464,7 +464,7 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 
 	switch t.Oid {
 	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
-		T_varbinary, types.T_binary:
+		T_varbinary, types.T_binary, types.T_blob:
 		if t.Oid == types.T_json {
 			var strVal string
 			switch x := val.(type) {
@@ -489,11 +489,15 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 			writeEscapedSQLString(buf, jsonLiteral)
 			return nil
 		}
+		writeBytes := writeEscapedSQLString
+		if t.Oid == types.T_binary || t.Oid == types.T_varbinary || t.Oid == types.T_blob {
+			writeBytes = writeSQLHexLiteral
+		}
 		switch x := val.(type) {
 		case []byte:
-			writeEscapedSQLString(buf, x)
+			writeBytes(buf, x)
 		case string:
-			writeEscapedSQLString(buf, []byte(x))
+			writeBytes(buf, []byte(x))
 		default:
 			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
 		}
@@ -556,6 +560,19 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	}
 
 	return nil
+}
+
+func writeSQLHexLiteral(buf *bytes.Buffer, b []byte) {
+	const hexDigits = "0123456789abcdef"
+
+	// Hex literals preserve every byte; SQL string escapes are not reversible for all control bytes.
+	buf.Grow(2*len(b) + 3)
+	buf.WriteString("x'")
+	for _, c := range b {
+		buf.WriteByte(hexDigits[c>>4])
+		buf.WriteByte(hexDigits[c&0x0f])
+	}
+	buf.WriteByte('\'')
 }
 
 func extractDataBranchSQLRowValue(
