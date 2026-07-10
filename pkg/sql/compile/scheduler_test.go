@@ -21,13 +21,18 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,6 +61,33 @@ func (e *schedulerTestEngine) Nodes(
 	return e.nodes, e.err
 }
 
+type schedulerTestCluster struct {
+	clusterservice.MOCluster
+	cns []metadata.CNService
+}
+
+func (c schedulerTestCluster) GetCNServiceWithoutWorkingState(
+	_ clusterservice.Selector,
+	apply func(metadata.CNService) bool,
+) {
+	for _, cn := range c.cns {
+		if !apply(cn) {
+			return
+		}
+	}
+}
+
+type panicWorkStateCluster struct {
+	clusterservice.MOCluster
+}
+
+func (panicWorkStateCluster) GetCNServiceWithoutWorkingState(
+	clusterservice.Selector,
+	func(metadata.CNService) bool,
+) {
+	panic("local execution should not read current CN work state")
+}
+
 func TestScheduleQueryWorkersKeepsLocalExecTypesLocal(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
@@ -78,6 +110,36 @@ func TestScheduleQueryWorkersKeepsLocalExecTypesLocal(t *testing.T) {
 			require.Equal(t, engine.Nodes{{Addr: "local:6001", Mcpu: tt.mcpu}}, nodes)
 			require.Zero(t, e.calls)
 		})
+	}
+}
+
+func TestScheduleQueryWorkersKeepsLocalExecTypesFromRuntimeStateLookup(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	const localID = "local-cn-local-exec"
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.ClusterService, panicWorkStateCluster{})
+	moruntime.SetupServiceBasedRuntime(localID, rt)
+
+	for _, tt := range []struct {
+		execType plan2.ExecType
+		mcpu     int
+	}{
+		{execType: plan2.ExecTypeTP, mcpu: 1},
+		{execType: plan2.ExecTypeAP_ONECN, mcpu: 6},
+	} {
+		c := NewMockCompile(t)
+		c.addr = "local:6001"
+		c.ncpu = 6
+		c.execType = tt.execType
+		lockSvc := mock_lock.NewMockLockService(ctrl)
+		lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: localID}).AnyTimes()
+		c.proc.Base.LockService = lockSvc
+
+		nodes, err := c.scheduleQueryWorkers()
+		require.NoError(t, err)
+		require.Equal(t, engine.Nodes{{Id: localID, Addr: "local:6001", Mcpu: tt.mcpu}}, nodes)
 	}
 }
 
@@ -200,6 +262,86 @@ func TestScheduleQueryWorkersDropsUnroutableCandidates(t *testing.T) {
 	nodes, err := c.scheduleQueryWorkers()
 	require.NoError(t, err)
 	require.Equal(t, engine.Nodes{{Id: "remote", Addr: "remote:6001", Mcpu: 4}}, nodes)
+	require.Equal(t, schedule.DroppedWorkers{
+		{Worker: schedule.Worker{ID: "missing-addr", Mcpu: 8}, Reason: schedule.ReasonDroppedUnroutableCN},
+	}, c.queryPlacement.Dropped)
+}
+
+func TestScheduleQueryWorkersDropsRuntimeIneligibleCandidates(t *testing.T) {
+	decisionCounter := metricv2.QueryScheduleDecisionCounter.WithLabelValues(
+		"ap-multi-cn", "allowed", schedule.ReasonMultiCN, "satisfied")
+	drainingCounter := metricv2.QueryScheduleDroppedWorkerCounter.WithLabelValues(schedule.ReasonDroppedDrainingCN)
+	drainedCounter := metricv2.QueryScheduleDroppedWorkerCounter.WithLabelValues(schedule.ReasonDroppedDrainedCN)
+	decisionBefore := testutil.ToFloat64(decisionCounter)
+	drainingBefore := testutil.ToFloat64(drainingCounter)
+	drainedBefore := testutil.ToFloat64(drainedCounter)
+
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.e = &schedulerTestEngine{
+		nodes: engine.Nodes{
+			{Id: "working", Addr: "z:6001", Mcpu: 4, WorkState: metadata.WorkState_Working},
+			{Id: "draining", Addr: "a:6001", Mcpu: 4, WorkState: metadata.WorkState_Draining},
+			{Id: "unknown", Addr: "b:6001", Mcpu: 4, WorkState: metadata.WorkState_Unknown},
+			{Id: "drained", Addr: "c:6001", Mcpu: 4, WorkState: metadata.WorkState_Drained},
+		},
+	}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{
+		{Id: "unknown", Addr: "b:6001", Mcpu: 4},
+		{Id: "working", Addr: "z:6001", Mcpu: 4, WorkState: metadata.WorkState_Working},
+	}, nodes)
+	require.Equal(t, schedule.DroppedWorkers{
+		{
+			Worker: schedule.Worker{
+				ID:    "draining",
+				Addr:  "a:6001",
+				Mcpu:  4,
+				State: schedule.WorkerStateDraining,
+			},
+			Reason: schedule.ReasonDroppedDrainingCN,
+		},
+		{
+			Worker: schedule.Worker{
+				ID:    "drained",
+				Addr:  "c:6001",
+				Mcpu:  4,
+				State: schedule.WorkerStateDrained,
+			},
+			Reason: schedule.ReasonDroppedDrainedCN,
+		},
+	}, c.queryPlacement.Dropped)
+
+	require.Equal(t, decisionBefore+1, testutil.ToFloat64(decisionCounter))
+	require.Equal(t, drainingBefore+1, testutil.ToFloat64(drainingCounter))
+	require.Equal(t, drainedBefore+1, testutil.ToFloat64(drainedCounter))
+}
+
+func TestScheduleQueryWorkersFallsBackWhenCandidatesRuntimeIneligible(t *testing.T) {
+	fallbackCounter := metricv2.QueryScheduleDecisionCounter.WithLabelValues(
+		"ap-multi-cn", "allowed", schedule.ReasonNoCandidateCN, "satisfied")
+	fallbackBefore := testutil.ToFloat64(fallbackCounter)
+
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.ncpu = 6
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.e = &schedulerTestEngine{
+		nodes: engine.Nodes{
+			{Id: "draining", Addr: "draining:6001", Mcpu: 4, WorkState: metadata.WorkState_Draining},
+			{Id: "drained", Addr: "drained:6001", Mcpu: 4, WorkState: metadata.WorkState_Drained},
+		},
+	}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{{Addr: "local:6001", Mcpu: 6}}, nodes)
+	require.Equal(t, schedule.ReasonNoCandidateCN, c.queryPlacement.Reason)
+	require.Equal(t, 2, len(c.queryPlacement.Dropped))
+	require.Equal(t, fallbackBefore+1, testutil.ToFloat64(fallbackCounter))
 }
 
 func TestScheduleQueryWorkersFallsBackToLocalWhenCandidatesUnroutable(t *testing.T) {
@@ -235,7 +377,7 @@ func TestScheduleQueryWorkersIncludesLocalWhenQueryClientExists(t *testing.T) {
 	require.Equal(t, []string{"local:6001", "remote:6001"}, []string{nodes[0].Addr, nodes[1].Addr})
 }
 
-func TestScheduleQueryWorkersIncludesRequiredCurrentCNWithoutAddress(t *testing.T) {
+func TestScheduleQueryWorkersRejectsRequiredCurrentCNWithoutAddressForMultiCN(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -251,12 +393,98 @@ func TestScheduleQueryWorkersIncludesRequiredCurrentCNWithoutAddress(t *testing.
 		nodes: engine.Nodes{{Id: "remote", Addr: "remote:6001", Mcpu: 4}},
 	}
 
+	_, err := c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, "without address for multi-CN execution")
+}
+
+func TestValidateScheduledQueryRoutesRejectsRuntimeIneligibleSelectedWorker(t *testing.T) {
+	failureCounter := metricv2.QueryScheduleSelectedWorkerFailureCounter.WithLabelValues(
+		scheduleFailureRuntimeIneligibleSelectedWorker)
+	failureBefore := testutil.ToFloat64(failureCounter)
+
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_MULTICN
+
+	err := c.validateScheduledQueryRoutes(engine.Nodes{
+		{Id: "draining", Addr: "draining:6001", Mcpu: 4, WorkState: metadata.WorkState_Draining},
+	}, schedule.QueryDecision{Reason: schedule.ReasonMultiCN})
+	require.ErrorContains(t, err, "runtime state Draining")
+	require.Equal(t, failureBefore+1, testutil.ToFloat64(failureCounter))
+}
+
+func TestRecordScanSchedulingMetricsRecordsEveryScan(t *testing.T) {
+	c := NewMockCompile(t)
+	c.cnList = engine.Nodes{
+		{Id: "cn1", Addr: "cn1:6001", Mcpu: 4},
+		{Id: "cn2", Addr: "cn2:6001", Mcpu: 4},
+	}
+	c.queryPlacement = schedule.QueryDecision{Reason: schedule.ReasonMultiCN}
+	stats := &schedule.ScanStats{
+		BlockNum:   42,
+		Dop:        8,
+		ForceOneCN: true,
+	}
+
+	decisionCounter := metricv2.ScanScheduleDecisionCounter.WithLabelValues(
+		schedule.ReasonScanForceOneCN, schedule.ReasonMultiCN, "true", "true", "true", "true")
+	decisionBefore := testutil.ToFloat64(decisionCounter)
+	decision := schedule.ScanDecision{
+		Workers:   schedule.Workers{{ID: "cn1", Addr: "cn1:6001", Mcpu: 4}},
+		LocalOnly: true,
+		Reason:    schedule.ReasonScanForceOneCN,
+	}
+	c.recordScanSchedulingMetrics(decision, stats, true)
+	c.recordScanSchedulingMetrics(decision, stats, true)
+
+	require.Equal(t, decisionBefore+2, testutil.ToFloat64(decisionCounter))
+}
+
+func TestScheduleQueryWorkersRejectsDrainingRequiredCurrentCN(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	const localID = "local-cn-draining"
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.ncpu = 6
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: localID}).AnyTimes()
+	c.proc.Base.LockService = lockSvc
+	c.e = &schedulerTestEngine{
+		nodes: engine.Nodes{{Id: "remote", Addr: "remote:6001", Mcpu: 4, WorkState: metadata.WorkState_Working}},
+	}
+
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.ClusterService, schedulerTestCluster{
+		cns: []metadata.CNService{{ServiceID: localID, WorkState: metadata.WorkState_Draining}},
+	})
+	moruntime.SetupServiceBasedRuntime(localID, rt)
+
+	_, err := c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, schedule.ReasonCurrentCNDraining)
+	require.Equal(t, schedule.ReasonCurrentCNDraining, c.queryPlacement.Reason)
+	require.False(t, c.queryPlacement.Satisfied)
+}
+
+func TestScheduleQueryWorkersAllowsRequiredCurrentCNWithoutAddressForLocalFallback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	const localID = "local-cn"
+	c := NewMockCompile(t)
+	c.ncpu = 6
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: localID}).AnyTimes()
+	c.proc.Base.LockService = lockSvc
+	c.e = &schedulerTestEngine{}
+
 	nodes, err := c.scheduleQueryWorkers()
 	require.NoError(t, err)
-	require.Equal(t, engine.Nodes{
-		{Id: localID, Mcpu: 6},
-		{Id: "remote", Addr: "remote:6001", Mcpu: 4},
-	}, nodes)
+	require.Equal(t, engine.Nodes{{Id: localID, Mcpu: 6}}, nodes)
 }
 
 func TestScheduleQueryWorkersReturnsErrorWhenRequiredCurrentCNMissingIdentity(t *testing.T) {
