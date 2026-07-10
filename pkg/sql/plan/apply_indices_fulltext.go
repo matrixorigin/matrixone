@@ -242,41 +242,54 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	for i := 0; i < len(ft_filters); i++ {
 		ftidxscan := ft_filters[i]
 		idxdef := indexDefs[i]
-		idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
-		srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
 		fn := ftidxscan.GetF()
 		pattern := fn.Args[0].GetLit().GetSval()
 		mode := fn.Args[1].GetLit().GetI64Val()
 
-		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
 		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
 		if projNode == nil {
 			alias_name = fmt.Sprintf("mo_fulltext_alias_%d_%d", scanNode.NodeId, i)
 		}
-		params := idxdef.IndexAlgoParams
 
-		var exprs tree.Exprs
-		exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
+		// One unified loop over ALL match predicates on this scan, so a mix of
+		// BM25(...) (bm25_match -> bm25_search) and MATCH(...) (fulltext_match ->
+		// fulltext_index_scan) on the same query chains into ONE join structure with
+		// ONE combined score sort. Dispatch the per-match TVF by the resolved index's
+		// algo; both TVFs emit the same (doc_id, score) shape so the rest is identical.
+		var tmpTableFunc *tree.AliasedTableExpr
+		if idxdef.IndexAlgo == catalog.MoIndexBm25Algo.ToString() {
+			var berr error
+			tmpTableFunc, berr = builder.buildBm25SearchTableFunc(scanNode, idxdef, pattern, alias_name)
+			if berr != nil {
+				return -1, nil, nil, berr
+			}
+		} else {
+			idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
+			srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
+			fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
+			params := idxdef.IndexAlgoParams
 
-		name := tree.NewUnresolvedName(fulltext_func)
+			var exprs tree.Exprs
+			exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
 
-		// TableFuncion AST
-		tmpTableFunc := &tree.AliasedTableExpr{
-			Expr: &tree.TableFunction{
-				Func: &tree.FuncExpr{
-					Func:     tree.FuncName2ResolvableFunctionReference(name),
-					FuncName: fulltext_func,
-					Exprs:    exprs,
-					Type:     tree.FUNC_TYPE_TABLE,
+			name := tree.NewUnresolvedName(fulltext_func)
+			tmpTableFunc = &tree.AliasedTableExpr{
+				Expr: &tree.TableFunction{
+					Func: &tree.FuncExpr{
+						Func:     tree.FuncName2ResolvableFunctionReference(name),
+						FuncName: fulltext_func,
+						Exprs:    exprs,
+						Type:     tree.FUNC_TYPE_TABLE,
+					},
 				},
-			},
-			As: tree.AliasClause{
-				Alias: tree.Identifier(alias_name),
-			},
+				As: tree.AliasClause{
+					Alias: tree.Identifier(alias_name),
+				},
+			}
 		}
 
 		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
@@ -718,7 +731,9 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 	return nil
 }
 
-// Get the filters that are fulltext_match() in ScanNode
+// Get the match filters in ScanNode — both fulltext_match (classic MATCH) and
+// bm25_match (BM25). Collecting both here lets applyJoinFullTextIndices chain a mix
+// of the two into one join structure with one combined score sort.
 func (builder *QueryBuilder) getFullTextMatchFiltersFromScanNode(node *plan.Node) ([]int32, []*plan.IndexDef) {
 
 	filterids := make([]int32, 0)
@@ -730,22 +745,27 @@ func (builder *QueryBuilder) getFullTextMatchFiltersFromScanNode(node *plan.Node
 			continue
 		}
 
+		var idx *plan.IndexDef
 		switch fn.Func.ObjName {
 		case "fulltext_match":
-
-			idx := builder.findMatchFullTextIndex(fn, node)
-			if idx != nil {
-				ftidxs = append(ftidxs, idx)
-				filterids = append(filterids, int32(i))
-			}
+			idx = builder.findMatchFullTextIndex(fn, node)
+		case "bm25_match":
+			idx = builder.findMatchBm25Index(fn, node)
 		default:
+		}
+		if idx != nil {
+			ftidxs = append(ftidxs, idx)
+			filterids = append(filterids, int32(i))
 		}
 	}
 
 	return filterids, ftidxs
 }
 
-// Get the projection that are fulltext_match() in ProjectList
+// Get the match projections in ProjectList — both fulltext_match (classic MATCH) and
+// bm25_match (BM25). An unmatched classic fulltext_match is rewritten to
+// fulltext_match_score (float32); an unmatched bm25_match is left as-is (BM25 requires
+// a bm25 index — it errors at execution rather than silently scoring).
 func (builder *QueryBuilder) getFullTextMatchFromProject(projNode *plan.Node, scanNode *plan.Node) ([]int32, []*plan.IndexDef) {
 	projids := make([]int32, 0)
 	ftidxs := make([]*plan.IndexDef, 0)
@@ -767,6 +787,13 @@ func (builder *QueryBuilder) getFullTextMatchFromProject(projNode *plan.Node, sc
 				// change the fulltext_match function to fulltext_match_score
 				// which has return type float32 instead of bool
 				projNode.ProjectList[i] = builder.getFullTextMatchScoreExpr(expr)
+			}
+		case "bm25_match":
+
+			idx := builder.findMatchBm25Index(fn, scanNode)
+			if idx != nil {
+				ftidxs = append(ftidxs, idx)
+				projids = append(projids, int32(i))
 			}
 		default:
 		}

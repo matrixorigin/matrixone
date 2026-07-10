@@ -1,0 +1,30 @@
+drop database if exists bm25_mixed;
+create database bm25_mixed;
+use bm25_mixed;
+create table t (id bigint primary key, a text, b text);
+insert into t values
+(1,'apple banana','cat dog'),
+(2,'apple','dog'),
+(3,'cherry','cat'),
+(4,'apple apple','cat cat'),
+(5,'banana','bird');
+create index ba using bm25 on t(a) with parser gojieba;
+create fulltext index fb on t(b);
+select id from t where bm25(a) against('apple') and match(b) against('cat') order by id;
+id
+1
+4
+select id from t where match(b) against('cat') and bm25(a) against('apple') order by id;
+id
+1
+4
+select id from t where bm25(a) against('apple') and match(b) against('dog') order by id;
+id
+1
+2
+select id from t where bm25(a) against('apple') and match(b) against('cat') and id > 1 order by id;
+id
+4
+select id from t where bm25(a) against('cherry') and match(b) against('dog') order by id;
+id
+drop database bm25_mixed;

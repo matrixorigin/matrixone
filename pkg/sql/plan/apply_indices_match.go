@@ -26,9 +26,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-// equalsMatchFunc reports whether two MATCH functions are equivalent: same
-// pattern, same mode, and the same set of index column names.
+// equalsMatchFunc reports whether two match functions are equivalent: same function
+// (a bm25_match and a fulltext_match are never equal, even on the same column/pattern),
+// same pattern, same mode, and the same set of index column names.
 func (builder *QueryBuilder) equalsMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {
+
+	if fn1.Func.ObjName != fn2.Func.ObjName {
+		return false
+	}
 
 	nargs1 := len(fn1.Args)
 	nargs2 := len(fn2.Args)
