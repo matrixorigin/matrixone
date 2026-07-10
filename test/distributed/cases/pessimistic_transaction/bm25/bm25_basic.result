@@ -27,5 +27,5 @@ id
 5
 3
 select id from docs where match(body) against('apple' in boolean mode);
-not supported: a bm25 index only supports ranked retrieval (default or natural language mode); boolean and query-expansion need a classic fulltext index
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 drop database bm25_basic;

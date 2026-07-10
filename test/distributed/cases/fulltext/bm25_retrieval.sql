@@ -1,0 +1,18 @@
+-- bm25 ranked-retrieval index: build from source + ranked MATCH over jieba tokens.
+-- Ported from fulltext_retrieval.sql (with parser retrieval -> using bm25;
+-- IN RETRIEVAL MODE -> default; bm25 build is synchronous so no settle sleep).
+drop database if exists bm25_retrieval;
+create database bm25_retrieval;
+use bm25_retrieval;
+create table t (id bigint primary key, txt text);
+insert into t values
+ (1, '孩子 营养 早餐 视频 文案'),
+ (2, '营养 早餐 健康 食谱'),
+ (3, '视频 文案 创作 技巧'),
+ (4, '孩子 教育 成长');
+create index ft using bm25 on t(txt) with parser gojieba;
+select id from t where match(txt) against('营养 早餐') order by id;
+select id from t where match(txt) against('视频 文案') order by id;
+select id from t where match(txt) against('教育') order by id;
+select id from t where match(txt) against('不存在的词') order by id;
+drop database bm25_retrieval;

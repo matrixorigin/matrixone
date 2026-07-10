@@ -60,7 +60,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 	ctx := builder.ctxByNode[nodeID]
 
 	// check equal fulltext_match func and only compute once for equal function()
-	eqmap := builder.findEqualFullTextMatchFunc(projNode, scanNode, projids, filterids)
+	eqmap := builder.findEqualMatchFunc(projNode, scanNode, projids, filterids)
 
 	idxID, filter_node_ids, proj_node_ids, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
 		filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
@@ -242,56 +242,41 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	for i := 0; i < len(ft_filters); i++ {
 		ftidxscan := ft_filters[i]
 		idxdef := indexDefs[i]
+		idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
+		srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
 		fn := ftidxscan.GetF()
 		pattern := fn.Args[0].GetLit().GetSval()
 		mode := fn.Args[1].GetLit().GetI64Val()
 
+		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
 		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
 		if projNode == nil {
 			alias_name = fmt.Sprintf("mo_fulltext_alias_%d_%d", scanNode.NodeId, i)
 		}
+		params := idxdef.IndexAlgoParams
 
-		// A bm25 ranked-retrieval index routes MATCH to the bm25_search TVF
-		// (bag-of-words BM25 top-K over the WAND binary index, emitting the same
-		// (doc_id, score) shape); a classic fulltext index routes to
-		// fulltext_index_scan. The downstream INNER-JOIN-to-source, score
-		// projection, and limit pushdown are identical for both.
-		var tmpTableFunc *tree.AliasedTableExpr
-		if idxdef.IndexAlgo == catalog.MoIndexBm25Algo.ToString() {
-			var berr error
-			tmpTableFunc, berr = builder.buildBm25SearchTableFunc(scanNode, idxdef, pattern, mode, alias_name)
-			if berr != nil {
-				return -1, nil, nil, berr
-			}
-		} else {
-			idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
-			srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
-			fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
-			params := idxdef.IndexAlgoParams
+		var exprs tree.Exprs
+		exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
 
-			var exprs tree.Exprs
-			exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-			exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
-			exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
-			exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
-			exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
+		name := tree.NewUnresolvedName(fulltext_func)
 
-			name := tree.NewUnresolvedName(fulltext_func)
-
-			// TableFuncion AST
-			tmpTableFunc = &tree.AliasedTableExpr{
-				Expr: &tree.TableFunction{
-					Func: &tree.FuncExpr{
-						Func:     tree.FuncName2ResolvableFunctionReference(name),
-						FuncName: fulltext_func,
-						Exprs:    exprs,
-						Type:     tree.FUNC_TYPE_TABLE,
-					},
+		// TableFuncion AST
+		tmpTableFunc := &tree.AliasedTableExpr{
+			Expr: &tree.TableFunction{
+				Func: &tree.FuncExpr{
+					Func:     tree.FuncName2ResolvableFunctionReference(name),
+					FuncName: fulltext_func,
+					Exprs:    exprs,
+					Type:     tree.FUNC_TYPE_TABLE,
 				},
-				As: tree.AliasClause{
-					Alias: tree.Identifier(alias_name),
-				},
-			}
+			},
+			As: tree.AliasClause{
+				Alias: tree.Identifier(alias_name),
+			},
 		}
 
 		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
@@ -656,7 +641,7 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 		return scanNode.NodeId, false, nil
 	}
 
-	ctxNodeID := builder.fullTextRewriteContextNodeID(nodeID, scanNode)
+	ctxNodeID := builder.matchRewriteContextNodeID(nodeID, scanNode)
 	newNodeID, _, _, err := builder.applyJoinFullTextIndices(
 		ctxNodeID,
 		nil,
@@ -674,68 +659,6 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 	}
 
 	return newNodeID, true, nil
-}
-
-func (builder *QueryBuilder) fullTextRewriteContextNodeID(preferredNodeID int32, scanNode *plan.Node) int32 {
-	if preferredNodeID >= 0 && int(preferredNodeID) < len(builder.ctxByNode) && builder.ctxByNode[preferredNodeID] != nil {
-		return preferredNodeID
-	}
-	if scanNode != nil && scanNode.NodeId >= 0 && int(scanNode.NodeId) < len(builder.ctxByNode) && builder.ctxByNode[scanNode.NodeId] != nil {
-		return scanNode.NodeId
-	}
-	return preferredNodeID
-}
-
-func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {
-
-	nargs1 := len(fn1.Args)
-	nargs2 := len(fn2.Args)
-
-	if nargs1 != nargs2 {
-		return false
-	}
-
-	// check search pattern and mode
-	var pattern1, pattern2 string
-	var mode1, mode2 int64
-
-	pattern1 = fn1.Args[0].GetLit().GetSval()
-	mode1 = fn1.Args[1].GetLit().GetI64Val()
-
-	pattern2 = fn2.Args[0].GetLit().GetSval()
-	mode2 = fn2.Args[1].GetLit().GetI64Val()
-
-	if pattern1 != pattern2 || mode1 != mode2 {
-		return false
-	}
-
-	// check index parts
-	for i := 2; i < nargs1; i++ {
-		if !strings.EqualFold(fn1.Args[i].GetCol().GetName(), fn2.Args[i].GetCol().GetName()) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// return map[projid]fiter_id -- position of the projids and filterids but NOT position of ProjectList and FilterList
-func (builder *QueryBuilder) findEqualFullTextMatchFunc(projNode *plan.Node, scanNode *plan.Node, projids, filterids []int32) map[int32]int32 {
-
-	eqmap := make(map[int32]int32)
-
-	for i, projid := range projids {
-		prexpr := projNode.ProjectList[projid]
-		for j, fid := range filterids {
-			fexpr := scanNode.FilterList[fid]
-			eq := builder.equalsFullTextMatchFunc(prexpr.GetF(), fexpr.GetF())
-			if eq {
-				eqmap[int32(i)] = int32(j)
-			}
-		}
-	}
-
-	return eqmap
 }
 
 func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode *plan.Node) *plan.IndexDef {
@@ -769,13 +692,7 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
-		// A MATCH may resolve to a classic fulltext index OR a bm25 ranked-
-		// retrieval index. For bm25 (two hidden tables) use the storage def as
-		// the single representative — the metadata sibling is resolved later.
-		isFT := catalog.IsFullTextIndexAlgo(idx.GetIndexAlgo())
-		isBm25 := idx.GetIndexAlgo() == catalog.MoIndexBm25Algo.ToString() &&
-			idx.IndexAlgoTableType == catalog.Bm25Index_TblType_Storage
-		if idx == nil || !idx.TableExist || (!isFT && !isBm25) {
+		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
 			continue
 		}
 		if len(idx.Parts) != nargs {

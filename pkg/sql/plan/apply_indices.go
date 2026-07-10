@@ -457,7 +457,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
-	if builder.scanHasMatchedFullTextFilter(node) {
+	if builder.scanHasMatchedFullTextFilter(node) || builder.scanHasMatchedBm25Filter(node) {
 		return nodeID
 	}
 	if builder.isScanProtected(node.NodeId) {
@@ -569,7 +569,16 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		}
 
 		if aggNode != nil {
-			// agg node and scan node present
+			// agg node and scan node present.
+			// bm25 first: a MATCH over a bm25 index (default / natural language mode)
+			// routes to the bm25 path; boolean/query-expansion return no bm25 match so
+			// they fall through to the classic fulltext path below.
+			bm25filterids, bm25_filter_idxs := builder.getBm25MatchFiltersFromScanNode(scanNode)
+			if len(bm25filterids) > 0 {
+				return builder.applyIndicesForAggUsingBm25Index(nodeID, projNode, aggNode, scanNode,
+					bm25filterids, bm25_filter_idxs, colRefCnt, idxColMap)
+			}
+
 			// get the list of filter that is fulltext_match func
 			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
 
@@ -579,6 +588,14 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 					filterids, filter_ftidxs, colRefCnt, idxColMap)
 			}
 		} else {
+			// bm25 first (see note above).
+			bm25projids, bm25_proj_idxs := builder.getBm25MatchFromProject(projNode, scanNode)
+			bm25filterids, bm25_filter_idxs := builder.getBm25MatchFiltersFromScanNode(scanNode)
+			if len(bm25filterids) > 0 || len(bm25projids) > 0 {
+				return builder.applyIndicesForProjectionUsingBm25Index(nodeID, projNode, sortNode, scanNode,
+					bm25filterids, bm25_filter_idxs, bm25projids, bm25_proj_idxs, colRefCnt, idxColMap)
+			}
+
 			// get the list of project that is fulltext_match func
 			projids, proj_ftidxs := builder.getFullTextMatchFromProject(projNode, scanNode)
 
@@ -832,7 +849,8 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 
 	if aggNode != nil {
 		filterids, _ := builder.getFullTextMatchFiltersFromScanNode(scanNode)
-		if len(filterids) > 0 {
+		bm25filterids, _ := builder.getBm25MatchFiltersFromScanNode(scanNode)
+		if len(filterids) > 0 || len(bm25filterids) > 0 {
 			return []int32{scanNode.NodeId}
 		}
 		return nil
@@ -840,7 +858,9 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 
 	projids, _ := builder.getFullTextMatchFromProject(projNode, scanNode)
 	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(scanNode)
-	if len(filterids) > 0 || len(projids) > 0 {
+	bm25projids, _ := builder.getBm25MatchFromProject(projNode, scanNode)
+	bm25filterids, _ := builder.getBm25MatchFiltersFromScanNode(scanNode)
+	if len(filterids) > 0 || len(projids) > 0 || len(bm25filterids) > 0 || len(bm25projids) > 0 {
 		return []int32{scanNode.NodeId}
 	}
 	return nil
@@ -1936,6 +1956,10 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	sid := builder.compCtx.GetProcess().GetService()
 
 	if changed, err := builder.applyFullTextFiltersForJoinChildren(nodeID, node, colRefCnt, idxColMap); err != nil || changed {
+		return nodeID, err
+	}
+
+	if changed, err := builder.applyBm25FiltersForJoinChildren(nodeID, node, colRefCnt, idxColMap); err != nil || changed {
 		return nodeID, err
 	}
 

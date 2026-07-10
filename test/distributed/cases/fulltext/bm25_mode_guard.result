@@ -1,0 +1,15 @@
+drop database if exists bm25_mode;
+create database bm25_mode;
+use bm25_mode;
+create table t (id bigint primary key, txt text);
+insert into t values (1,'apple banana'),(2,'banana cherry'),(3,'cherry date');
+create index ft using bm25 on t(txt) with parser gojieba;
+select id from t where match(txt) against('apple') order by id;
+id
+1
+select id from t where match(txt) against('apple' in natural language mode) order by id;
+id
+1
+select id from t where match(txt) against('+apple' in boolean mode) order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+drop database bm25_mode;
