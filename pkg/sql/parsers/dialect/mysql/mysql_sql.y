@@ -5462,6 +5462,7 @@ replace_data:
 		$$ = &tree.Replace{
 			Columns: identList,
 			Rows: tree.NewSelect(vc, nil, nil),
+			IsSetFormat: true,
 		}
 	}
 
@@ -12927,7 +12928,7 @@ literal:
     }
 |   UNDERSCORE_BINARY HEXNUM
     {
-        $$ = tree.NewNumVal($2, $2, false, tree.P_hexnum)
+        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinaryHexnum)
     }
 |   DECIMAL_VALUE
     {

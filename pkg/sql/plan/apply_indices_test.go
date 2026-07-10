@@ -1012,6 +1012,23 @@ func makeTestRegularIndexPrefixEqWithSerialFunc(t *testing.T, numArgs int, seria
 	return prefixExpr
 }
 
+func makeTestRegularIndexPKLessThan(t *testing.T, value int64) *planpb.Expr {
+	t.Helper()
+	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "<", []*planpb.Expr{
+		GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
+		{
+			Typ: planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{
+					Value: &planpb.Literal_I64Val{I64Val: value},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	return expr
+}
+
 func makeTestRegularIndexProjectBuilder(
 	t *testing.T,
 	prefixArgCount int,
@@ -1235,6 +1252,27 @@ func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrderAsc(t *te
 	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol().Name)
 }
 
+func TestApplyIndicesForProjectSkipsOrderedLimitWithResidualPKFilter(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+		t,
+		2,
+		GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
+		planpb.OrderBySpec_DESC,
+	)
+	scanNode := builder.qry.Nodes[0]
+	scanNode.FilterList = append(scanNode.FilterList, makeTestRegularIndexPKLessThan(t, 4900))
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	sortNode := builder.qry.Nodes[2]
+	require.Len(t, sortNode.SendMsgList, 1)
+	require.Len(t, scanNode.RecvMsgList, 1)
+	require.Len(t, scanNode.OrderBy, 1)
+	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.OrderBy[0].Expr.GetCol().Name)
+	assert.Nil(t, scanNode.IndexReaderParam)
+}
+
 func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *testing.T) {
 	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
 
@@ -1266,6 +1304,21 @@ func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *tes
 	assert.Equal(t, int32(100), indexParamCol.RelPos)
 	assert.Equal(t, int32(0), indexParamCol.ColPos)
 	assert.Equal(t, catalog.IndexTableIndexColName, indexParamCol.Name)
+}
+
+func TestHandleMessageFromTopToScanSkipsOrderedLimitWithResidualPKFilter(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+	scanNode := builder.qry.Nodes[0]
+	scanNode.FilterList = append(scanNode.FilterList, makeTestRegularIndexPKLessThan(t, 4900))
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	sortNode := builder.qry.Nodes[1]
+	require.Len(t, sortNode.SendMsgList, 1)
+	require.Len(t, scanNode.RecvMsgList, 1)
+	require.Len(t, scanNode.OrderBy, 1)
+	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.OrderBy[0].Expr.GetCol().Name)
+	assert.Nil(t, scanNode.IndexReaderParam)
 }
 
 func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T) {
