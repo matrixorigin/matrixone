@@ -376,14 +376,12 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 				cur = bj.query(cur, &nPath)
 			}
 		case subPathKey:
+			tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
+			cur = tmp.query(cur, &nPath)
+		case subPathKeyWildcard:
 			cnt := bj.GetElemCnt()
-			if sub.key == "*" {
-				for i := 0; i < cnt; i++ {
-					cur = bj.getObjectVal(i).query(cur, &nPath)
-				}
-			} else {
-				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
-				cur = tmp.query(cur, &nPath)
+			for i := 0; i < cnt; i++ {
+				cur = bj.getObjectVal(i).query(cur, &nPath)
 			}
 		}
 		return cur
@@ -446,14 +444,25 @@ func (bj ByteJson) Query(paths []*Path) ByteJson {
 }
 
 func (bj ByteJson) querySimple(path *Path) ByteJson {
-	val, ok := bj.querySimpleExist(path)
+	val, ok := bj.querySimpleExist(path, false)
 	if !ok {
 		return Null
 	}
 	return val
 }
 
-func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
+// QuerySimpleExist returns the value at a simple path and whether the path exists.
+func (bj ByteJson) QuerySimpleExist(path *Path) (ByteJson, bool) {
+	return bj.querySimpleExist(path, false)
+}
+
+// QuerySimpleContainPath returns the value at a simple path using JSON_CONTAINS
+// scalar-[0] autowrap semantics for scalar array-index access.
+func (bj ByteJson) QuerySimpleContainPath(path *Path) (ByteJson, bool) {
+	return bj.querySimpleExist(path, true)
+}
+
+func (bj ByteJson) querySimpleExist(path *Path, autowrapScalarIndex bool) (ByteJson, bool) {
 	cur := bj
 	// don't go through th step(), recursive call route.  We know
 	// we have a simple path, each step will bring us to ONE SINGLE next value.
@@ -462,20 +471,16 @@ func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
 		if cur.Type == TpCodeObject {
 			switch sub.tp {
 			case subPathIdx:
+				// obj[0] is itself, continue
 				start, _, _ := sub.idx.genIndex(1)
 				if start != 0 {
 					return Null, false
 				}
-				// obj[0] is itself, continue
 			case subPathKey:
-				if sub.key == "*" {
-					panic("bytejson simple path should not contain *")
-				} else {
-					var ok bool
-					cur, ok = cur.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
-					if !ok {
-						return Null, false
-					}
+				var ok bool
+				cur, ok = cur.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+				if !ok {
+					return Null, false
 				}
 			default:
 				return Null, false
@@ -496,6 +501,12 @@ func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
 				cur = cur.getArrayElem(idx)
 			}
 		} else {
+			if autowrapScalarIndex && sub.tp == subPathIdx {
+				idx, _, _ := sub.idx.genIndex(1)
+				if idx == 0 {
+					continue
+				}
+			}
 			return Null, false
 		}
 	}
@@ -570,6 +581,28 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 	return bj, nil
 }
 
+func (bj ByteJson) Remove(pathList []*Path) (ByteJson, error) {
+	if len(pathList) == 0 {
+		return bj, nil
+	}
+
+	for _, path := range pathList {
+		if path == nil || path.empty() || !path.IsSimple() {
+			return Null, moerr.NewInvalidInputNoCtx("path expression is not simple")
+		}
+	}
+
+	var err error
+	for _, path := range pathList {
+		modifier := &bytejsonModifier{bj: bj}
+		bj, err = modifier.remove(path)
+		if err != nil {
+			return Null, err
+		}
+	}
+	return bj, nil
+}
+
 func (bj ByteJson) canUnnest() bool {
 	return bj.Type == TpCodeArray || bj.Type == TpCodeObject
 }
@@ -614,15 +647,13 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 				keys, vals = bj.queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
 		case subPathKey:
-			if sub.key == "*" {
-				for i := 0; i < cnt; i++ {
-					newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
-					keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
-				}
-			} else {
-				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
-				newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
-				keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
+			tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
+			newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
+			keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
+		case subPathKeyWildcard:
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
+				keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
 		}
 	}
