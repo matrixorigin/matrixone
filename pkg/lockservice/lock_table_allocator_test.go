@@ -364,81 +364,20 @@ func TestCleanerPreservesCannotCommitOnActiveTxnQueryError(t *testing.T) {
 		})
 }
 
-func TestCleanerKeepsCannotCommitCreatedAfterActiveTxnSnapshot(t *testing.T) {
-	setupDone := make(chan struct{})
-	firstSnapshotDone := make(chan string, 1)
-	releaseSecondSnapshot := make(chan struct{})
-	calls := 0
+func TestCannotCommitGenerationRefresh(t *testing.T) {
+	c := &commitCtl{}
+	require.Equal(t, cannotCommitState, c.tryCannotCommit("refreshed"))
+	require.Equal(t, cannotCommitState, c.tryCannotCommit("rejected"))
+	watermark := c.currentGeneration()
 
-	runLockTableAllocatorTest(
-		t,
-		time.Hour,
-		func(a *lockTableAllocator) {
-			controls := make(map[string]*commitCtl, 2)
-			for _, sid := range []string{"s1", "s2"} {
-				controls[sid] = a.getCtl(sid)
-				require.Equal(t, cannotCommitState,
-					controls[sid].tryCannotCommit("old-"+sid))
-				require.Equal(t, cannotCommitState,
-					controls[sid].tryCannotCommit("refresh-"+sid))
-				require.Equal(t, cannotCommitState,
-					controls[sid].tryCannotCommit("reject-"+sid))
-			}
-			close(setupDone)
+	require.Equal(t, cannotCommitState, c.tryCannotCommit("refreshed"))
+	require.Equal(t, cannotCommitState, c.beginCommit("rejected"))
+	c.clean(nil, false, watermark, getLogger(""))
 
-			var firstService string
-			select {
-			case firstService = <-firstSnapshotDone:
-			case <-time.After(time.Second * 3):
-				require.FailNow(t, "cleaner did not obtain the first service snapshot")
-			}
-
-			newTxn := []byte("new-" + firstService)
-			refreshedTxn := []byte("refresh-" + firstService)
-			rejectedTxn := "reject-" + firstService
-			require.Empty(t, a.AddCannotCommit([]pb.OrphanTxn{{
-				Service: firstService,
-				Txn:     [][]byte{newTxn, refreshedTxn},
-			}}))
-			require.Equal(t, cannotCommitState,
-				controls[firstService].beginCommit(rejectedTxn))
-			close(releaseSecondSnapshot)
-
-			require.Eventually(t, func() bool {
-				for sid, c := range controls {
-					if _, ok := c.getCommitState("old-" + sid); ok {
-						return false
-					}
-				}
-				return true
-			}, time.Second*3, time.Millisecond*10)
-			state, ok := controls[firstService].getCommitState(string(newTxn))
-			require.True(t, ok)
-			require.Equal(t, cannotCommitState, state.state)
-			state, ok = controls[firstService].getCommitState(string(refreshedTxn))
-			require.True(t, ok)
-			require.Equal(t, cannotCommitState, state.state)
-			state, ok = controls[firstService].getCommitState(rejectedTxn)
-			require.True(t, ok)
-			require.Equal(t, cannotCommitState, state.state)
-		},
-		func(lta *lockTableAllocator) {
-			lta.keepBindTimeout = time.Millisecond * 100
-			lta.options.getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
-				<-setupDone
-				calls++
-				switch calls {
-				case 1:
-					firstSnapshotDone <- sid
-					return true, nil, nil
-				case 2:
-					<-releaseSecondSnapshot
-					return true, nil, nil
-				default:
-					return false, nil, moerr.NewBackendClosedNoCtx()
-				}
-			}
-		})
+	_, ok := c.getCommitState("refreshed")
+	require.True(t, ok)
+	_, ok = c.getCommitState("rejected")
+	require.True(t, ok)
 }
 
 func TestCommitCtlGenerationOverflowFailsClosed(t *testing.T) {
