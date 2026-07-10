@@ -31,6 +31,30 @@ func NewSetSnapshotRefUpdate(refName, refType string, snapshotID int64) CommitUp
 	}
 }
 
+func NewSetSnapshotRefUpdateWithRetention(refName, refType string, snapshotID int64, minSnapshotsToKeep int) CommitUpdate {
+	update := NewSetSnapshotRefUpdate(refName, refType, snapshotID)
+	if update.RefType == "branch" && minSnapshotsToKeep > 0 {
+		update.MinSnapshotsToKeep = minSnapshotsToKeep
+	}
+	return update
+}
+
+func NewSetSnapshotRefUpdatePreservingRetention(refName, refType string, snapshotID int64, retention SnapshotRef) CommitUpdate {
+	update := NewSetSnapshotRefUpdate(refName, refType, snapshotID)
+	if retention.MaxRefAgeMS > 0 {
+		update.MaxRefAgeMS = retention.MaxRefAgeMS
+	}
+	if update.RefType == "branch" {
+		if retention.MinSnapshotsToKeep > 0 {
+			update.MinSnapshotsToKeep = retention.MinSnapshotsToKeep
+		}
+		if retention.MaxSnapshotAgeMS > 0 {
+			update.MaxSnapshotAgeMS = retention.MaxSnapshotAgeMS
+		}
+	}
+	return update
+}
+
 func NewCommitSnapshot(snapshotID, parentSnapshotID, sequenceNumber int64, schemaID int, timestampMS int64, manifestList string, summary map[string]string) Snapshot {
 	schemaIDCopy := schemaID
 	snapshot := Snapshot{

@@ -28,7 +28,6 @@ import (
 	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/dml"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
-	"github.com/matrixorigin/matrixone/pkg/iceberg/metadata"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -580,7 +579,7 @@ func TestDMLDeleteRuntimeFactoryAllowsSchemaIDZeroAndPreservesBaseManifests(t *t
 	ctx := context.Background()
 	manifestListLocation := "s3://warehouse/gold/orders/metadata/snap-30.avro"
 	baseManifestLocation := "s3://warehouse/gold/orders/metadata/base-manifest.avro"
-	baseManifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{{
+	baseManifestBytes, err := encodeSQLIcebergTestManifest([]api.ManifestEntry{{
 		Status:     api.ManifestEntryAdded,
 		SnapshotID: 30,
 		DataFile: api.DataFile{
@@ -592,7 +591,7 @@ func TestDMLDeleteRuntimeFactoryAllowsSchemaIDZeroAndPreservesBaseManifests(t *t
 		},
 	}})
 	require.NoError(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	manifestListBytes, err := encodeSQLIcebergTestManifestList([]api.ManifestFile{{
 		Path:            baseManifestLocation,
 		Length:          int64(len(baseManifestBytes)),
 		Content:         api.ManifestContentData,
@@ -763,7 +762,7 @@ func TestDMLDeleteRuntimeFactoryFallsBackForAppendAndValidatesDeleteConfig(t *te
 
 func TestDMLRuntimeCoordinatorCacheLifecycle(t *testing.T) {
 	ctx := context.Background()
-	cache := &dmlRuntimeCoordinatorCache{entries: make(map[string]icebergwrite.Coordinator)}
+	cache := &dmlRuntimeCoordinatorCache{entries: make(map[string]*dmlRuntimeCoordinatorCacheEntry)}
 	inner := &countingDMLRuntimeCoordinator{}
 	first, err := cache.getOrCreate(ctx, "stmt", func() (icebergwrite.Coordinator, error) {
 		return inner, nil
@@ -791,6 +790,65 @@ func TestDMLRuntimeCoordinatorCacheLifecycle(t *testing.T) {
 	require.Len(t, cache.entries, 1)
 	require.NoError(t, third.Abort(ctx, context.Canceled))
 	require.Len(t, cache.entries, 0)
+}
+
+func TestDMLRuntimeCoordinatorCacheBuildsDifferentStatementsConcurrently(t *testing.T) {
+	ctx := context.Background()
+	cache := &dmlRuntimeCoordinatorCache{entries: make(map[string]*dmlRuntimeCoordinatorCacheEntry)}
+	entered := make(chan string, 2)
+	release := make(chan struct{})
+	results := make(chan error, 2)
+
+	build := func(key string) {
+		_, err := cache.getOrCreate(ctx, key, func() (icebergwrite.Coordinator, error) {
+			entered <- key
+			<-release
+			return &countingDMLRuntimeCoordinator{}, nil
+		})
+		results <- err
+	}
+	go build("stmt-1")
+	go build("stmt-2")
+
+	seen := make(map[string]bool, 2)
+	for len(seen) < 2 {
+		select {
+		case key := <-entered:
+			seen[key] = true
+		case <-time.After(time.Second):
+			t.Fatal("DML coordinator builds for different statements were serialized")
+		}
+	}
+	close(release)
+	for range 2 {
+		require.NoError(t, <-results)
+	}
+}
+
+func TestDMLRuntimeCoordinatorCacheSingleflightsSameStatement(t *testing.T) {
+	ctx := context.Background()
+	cache := &dmlRuntimeCoordinatorCache{entries: make(map[string]*dmlRuntimeCoordinatorCacheEntry)}
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	results := make(chan error, 2)
+	build := func() (icebergwrite.Coordinator, error) {
+		entered <- struct{}{}
+		<-release
+		return &countingDMLRuntimeCoordinator{}, nil
+	}
+
+	for range 2 {
+		go func() {
+			_, err := cache.getOrCreate(ctx, "stmt-shared", build)
+			results <- err
+		}()
+	}
+	<-entered
+	close(release)
+	for range 2 {
+		require.NoError(t, <-results)
+	}
+	require.Len(t, entered, 0, "same-key DML cache miss must build only once")
 }
 
 func TestDMLRuntimeSharedCoordinatorProcessAwareAppend(t *testing.T) {

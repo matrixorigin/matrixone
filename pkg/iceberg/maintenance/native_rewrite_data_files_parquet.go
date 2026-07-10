@@ -118,6 +118,7 @@ func (c ParquetConcatRewriteDataFilesCompactor) buildDeleteFilters(ctx context.C
 				continue
 			}
 			file := entry.DataFile
+			file.SpecID = manifest.PartitionSpecID
 			if err := metadata.ValidateP1DeleteFile(file); err != nil {
 				return nil, err
 			}

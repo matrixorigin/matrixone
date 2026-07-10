@@ -169,6 +169,55 @@ func TestRuntimeScanPlannerRewritesNessieNamedRefToCatalogPrefix(t *testing.T) {
 	require.Equal(t, "tag:release", plan.Snapshot.RefName)
 }
 
+func TestRuntimeScanPlannerRewritesNessieNamedRefForPlainMainPrefix(t *testing.T) {
+	fixture := newPlannerFixture(t, 1)
+	fixture.client.GetConfigFunc = func(ctx context.Context, req api.GetConfigRequest) (*api.ConfigResponse, error) {
+		return &api.ConfigResponse{
+			Prefix:    "main",
+			Overrides: map[string]string{"nessie.is-nessie-catalog": "true"},
+		}, nil
+	}
+	var readerReq api.ScanPlanRequest
+	var loadTablePrefix string
+	fixture.client.LoadTableFunc = func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+		loadTablePrefix = req.Prefix
+		fixture.catalogLoads++
+		return &api.LoadTableResponse{
+			MetadataLocation: "s3://warehouse/sales/orders/metadata/v2.metadata.json",
+			MetadataJSON:     []byte(sampleMetadataJSON),
+			ETag:             "etag-1",
+		}, nil
+	}
+	planner := RuntimeScanPlanner{
+		CatalogFactory: &recordingCatalogFactory{client: fixture.client},
+		Metadata:       fixture.facade,
+		ObjectReader: func(ctx context.Context, catalogClient api.CatalogClient, req api.ScanPlanRequest) (api.ObjectReader, ObjectReaderContext, error) {
+			readerReq = req
+			return fixture.reader, ObjectReaderContext{}, nil
+		},
+		Cache: fixture.cache,
+		Config: api.Config{Scan: api.ScanPlanningConfig{
+			ManifestReadParallelism: 1,
+			MaxManifestFiles:        100,
+			MaxDataFiles:            100,
+		}},
+	}
+
+	_, err := planner.PlanScan(context.Background(), api.ScanPlanRequest{
+		CatalogRequest: api.CatalogRequest{Catalog: model.Catalog{AccountID: 42, CatalogID: 7, URI: "https://catalog.example.com/iceberg", Warehouse: "s3://warehouse"}},
+		Namespace:      api.Namespace{"sales"},
+		Table:          "orders",
+		Ref:            "audit_branch",
+		Snapshot:       api.SnapshotSelector{RefName: "audit_branch"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "audit_branch", readerReq.Prefix)
+	require.Equal(t, "audit_branch", loadTablePrefix)
+	require.Empty(t, readerReq.Ref)
+	require.Equal(t, "main", readerReq.Snapshot.RefName)
+	require.True(t, readerReq.Snapshot.AllowMainFallback)
+}
+
 func TestRuntimeScanPlannerHonorsServerPlanningModes(t *testing.T) {
 	tests := []struct {
 		name            string

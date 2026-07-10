@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -450,9 +451,11 @@ func TestLocalE2EAppendReadAndTimeTravelCase(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
 	cfg := localE2ETestConfig()
-	cfg.CatalogURI = newSnapshotRESTServer(t).URL + "/iceberg"
+	server := newSnapshotRESTServer(t)
+	cfg.CatalogURI = server.URL + "/iceberg"
 
 	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 4))
+	mock.ExpectExec("CREATE EXTERNAL TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("COUNT\\(\\*\\), SUM\\(amount\\)").
 		WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(int64(4), int64(100)))
 	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -467,6 +470,17 @@ func TestLocalE2EAppendReadAndTimeTravelCase(t *testing.T) {
 	}
 	if result.Details["old_snapshot_id"] != "100" || result.Details["current_snapshot_id"] != "101" {
 		t.Fatalf("unexpected snapshot details: %+v", result.Details)
+	}
+	if result.Details["old_snapshot_ref"] != "mo_e2e_t1_100" {
+		t.Fatalf("unexpected snapshot ref detail: %+v", result.Details)
+	}
+	if result.Details["historical_snapshot_retained"] != "true" {
+		t.Fatalf("expected retained historical snapshot detail: %+v", result.Details)
+	}
+	for _, key := range []string{"case_wall_s", "select_first_s", "select_current_s", "time_travel_select_s"} {
+		if result.Details[key] == "" {
+			t.Fatalf("missing timing detail %s: %+v", key, result.Details)
+		}
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -484,6 +498,24 @@ func TestLocalE2ESnapshotHelpersAgainstREST(t *testing.T) {
 	ok, err := snapshotAvailable(ctx, cfg, "append_orders", 100)
 	if err != nil || !ok {
 		t.Fatalf("snapshotAvailable got=%v err=%v", ok, err)
+	}
+	branch, err := createNessieBranchAtMain(ctx, cfg, "mo_e2e_t1_100")
+	if err != nil || branch != "mo_e2e_t1_100" {
+		t.Fatalf("createNessieBranchAtMain got=%q err=%v", branch, err)
+	}
+	ok, err = snapshotAvailableOnRef(ctx, cfg, "append_orders", branch, 100)
+	if err != nil || !ok {
+		t.Fatalf("snapshotAvailableOnRef got=%v err=%v", ok, err)
+	}
+}
+
+func TestNessieAPIURLEscapesReferenceAsOnePathSegment(t *testing.T) {
+	got, err := nessieAPIURL("http://127.0.0.1:19120/iceberg", "trees", "tree", "feature/ksa orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "http://127.0.0.1:19120/api/v1/trees/tree/feature%2Fksa%20orders" {
+		t.Fatalf("unexpected Nessie API URL: %s", got)
 	}
 }
 
@@ -533,27 +565,31 @@ func TestLocalE2ESnapshotHelperFailures(t *testing.T) {
 	}
 }
 
-func TestLocalE2EAppendReadAndTimeTravelCaseFallbackWhenOldSnapshotExpired(t *testing.T) {
+func TestLocalE2EAppendReadAndTimeTravelCaseReadsOldSnapshotWhenMetadataOmitsHistory(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
 	cfg := localE2ETestConfig()
 	cfg.CatalogURI = newSnapshotRESTServerWithoutOldSnapshot(t).URL + "/iceberg"
 
 	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 4))
+	mock.ExpectExec("CREATE EXTERNAL TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("COUNT\\(\\*\\), SUM\\(amount\\)").
 		WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(int64(4), int64(100)))
 	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("COUNT\\(\\*\\), SUM\\(amount\\)").
 		WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(int64(5), int64(150)))
 	mock.ExpectQuery("FOR ICEBERG SNAPSHOT").
-		WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(int64(5), int64(150)))
+		WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(int64(4), int64(100)))
 
 	result := (&caseRunner{cfg: cfg, db: db}).appendReadAndTimeTravelCase(context.Background())
 	if result.Status != "passed" {
-		t.Fatalf("append/time-travel fallback failed: %+v", result)
+		t.Fatalf("expected append/time-travel to read old snapshot through planner fallback, got %+v", result)
 	}
 	if result.Details["historical_snapshot_retained"] != "false" {
-		t.Fatalf("expected expired snapshot fallback detail: %+v", result.Details)
+		t.Fatalf("expected expired snapshot detail: %+v", result.Details)
+	}
+	if !sameLines([]string{"4\t100", "5\t150", "4\t100"}, result.Actual) {
+		t.Fatalf("unexpected actual results: %+v", result)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -810,9 +846,32 @@ func newSnapshotRESTServerWithRetention(t *testing.T, retainOld bool) *httptest.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/api/v1/trees/tree/main") && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"type":"BRANCH","name":"main","hash":"main-hash-1"}`))
+		case strings.HasSuffix(r.URL.Path, "/api/v1/trees/tree") && r.Method == http.MethodPost:
+			var body struct {
+				Type string `json:"type"`
+				Name string `json:"name"`
+				Hash string `json:"hash"`
+			}
+			data, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read Nessie branch body: %v", err)
+			}
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatalf("decode Nessie branch body: %v body=%s", err, string(data))
+			}
+			if body.Type != "BRANCH" || !strings.HasPrefix(body.Name, "mo_e2e_t1_") || body.Hash != "main-hash-1" {
+				t.Fatalf("unexpected Nessie branch body: %+v", body)
+			}
+			_, _ = w.Write(data)
 		case strings.HasSuffix(r.URL.Path, "/v1/config"):
 			_, _ = w.Write([]byte(`{"defaults":{"prefix":"main"}}`))
 		case strings.Contains(r.URL.Path, "/namespaces/ci_ns/tables/append_orders"):
+			if r.Method == http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
 			loads++
 			current := int64(100)
 			if loads >= 2 {

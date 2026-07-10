@@ -59,9 +59,12 @@ func TestInternalSQLExecutorAdapterScansRows(t *testing.T) {
 }
 
 func TestInternalSQLExecutorAdapterExec(t *testing.T) {
-	exec := &fakeInternalSQLExecutor{}
-	err := (InternalSQLExecutorAdapter{Executor: exec}).Exec(context.Background(), "insert into mo_catalog.t values (1)")
+	exec := &fakeInternalSQLExecutor{result: internalexecutor.Result{AffectedRows: 3}}
+	affected, err := (InternalSQLExecutorAdapter{Executor: exec}).Exec(context.Background(), "insert into mo_catalog.t values (1)")
 	requireNoErr(t, err)
+	if affected != 3 {
+		t.Fatalf("unexpected affected rows: %d", affected)
+	}
 	if len(exec.sqls) != 1 || !strings.HasPrefix(exec.sqls[0], "insert into") {
 		t.Fatalf("unexpected executed SQLs: %v", exec.sqls)
 	}
@@ -72,7 +75,7 @@ func TestInternalSQLExecutorAdapterExec(t *testing.T) {
 
 func TestInternalSQLExecutorAdapterErrorBranches(t *testing.T) {
 	ctx := context.Background()
-	if err := (InternalSQLExecutorAdapter{}).Exec(ctx, "select 1"); err == nil {
+	if _, err := (InternalSQLExecutorAdapter{}).Exec(ctx, "select 1"); err == nil {
 		t.Fatalf("expected nil executor exec error")
 	}
 	if _, err := (InternalSQLExecutorAdapter{}).Query(ctx, "select 1"); err == nil {

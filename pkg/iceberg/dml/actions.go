@@ -54,6 +54,7 @@ type CommitBase struct {
 	Table               string
 	TargetRef           string
 	TargetRefType       string
+	TargetRefRetention  api.SnapshotRef
 	AllowTagMove        bool
 	CatalogCapabilities api.CatalogCapabilities
 	BaseSnapshotID      int64
@@ -85,16 +86,17 @@ type ActionStream struct {
 // It is not a REST catalog CommitAttempt: data/delete file actions must still be
 // written into data/delete manifests and a snapshot update by the write layer.
 type CommitIntent struct {
-	Requirements   []api.CommitRequirement
-	Actions        []Action
-	Summary        map[string]string
-	IdempotencyKey string
-	BaseSnapshotID int64
-	BaseSchemaID   int
-	BaseSpecID     int
-	TargetRef      string
-	TargetRefType  string
-	Profile        Profile
+	Requirements       []api.CommitRequirement
+	Actions            []Action
+	Summary            map[string]string
+	IdempotencyKey     string
+	BaseSnapshotID     int64
+	BaseSchemaID       int
+	BaseSpecID         int
+	TargetRef          string
+	TargetRefType      string
+	TargetRefRetention api.SnapshotRef
+	Profile            Profile
 }
 
 type Profile struct {
@@ -421,16 +423,17 @@ func BuildCommitIntent(stream ActionStream) (*CommitIntent, error) {
 	summary["deleted-data-files"] = strconv.Itoa(profile.DeletedDataFiles)
 	summary["rewritten-data-files"] = strconv.Itoa(profile.RewrittenDataFiles)
 	return &CommitIntent{
-		Requirements:   requirements,
-		Actions:        cloneActions(stream.Actions),
-		Summary:        summary,
-		IdempotencyKey: stream.Base.IdempotencyKey,
-		BaseSnapshotID: stream.Base.BaseSnapshotID,
-		BaseSchemaID:   stream.Base.BaseSchemaID,
-		BaseSpecID:     stream.Base.BaseSpecID,
-		TargetRef:      targetRef,
-		TargetRefType:  stream.Base.TargetRefType,
-		Profile:        profile,
+		Requirements:       requirements,
+		Actions:            cloneActions(stream.Actions),
+		Summary:            summary,
+		IdempotencyKey:     stream.Base.IdempotencyKey,
+		BaseSnapshotID:     stream.Base.BaseSnapshotID,
+		BaseSchemaID:       stream.Base.BaseSchemaID,
+		BaseSpecID:         stream.Base.BaseSpecID,
+		TargetRef:          targetRef,
+		TargetRefType:      stream.Base.TargetRefType,
+		TargetRefRetention: stream.Base.TargetRefRetention,
+		Profile:            profile,
 	}, nil
 }
 

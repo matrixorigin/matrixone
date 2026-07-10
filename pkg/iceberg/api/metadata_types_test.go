@@ -113,6 +113,30 @@ func TestIcebergTypeUnmarshalJSONPrimitiveAndNestedObjects(t *testing.T) {
 	require.Equal(t, 32, fixed.Length)
 }
 
+func TestIcebergTypeMarshalJSONUsesIcebergSchemaEncoding(t *testing.T) {
+	typ := IcebergType{
+		Kind:          TypeMap,
+		KeyID:         3,
+		Key:           &IcebergType{Kind: TypeString},
+		ValueID:       4,
+		Value:         &IcebergType{Kind: TypeList, ElementID: 5, Element: &IcebergType{Kind: TypeLong}},
+		ValueRequired: true,
+	}
+	data, err := json.Marshal(typ)
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"type":"map",
+		"key-id":3,
+		"key":"string",
+		"value-id":4,
+		"value":{"type":"list","element-id":5,"element":"long","element-required":false},
+		"value-required":true
+	}`, string(data))
+
+	_, err = json.Marshal(IcebergType{Kind: TypeList})
+	require.Error(t, err)
+}
+
 func TestIcebergTypeUnmarshalJSONRejectsInvalidObjects(t *testing.T) {
 	for _, raw := range []string{
 		`42`,

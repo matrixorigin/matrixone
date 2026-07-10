@@ -16,6 +16,7 @@ package iceberg
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -85,7 +86,7 @@ func NewAppendRuntimeCoordinatorFactory(opts AppendRuntimeCoordinatorFactoryOpti
 	return AppendRuntimeCoordinatorFactory{
 		opts: opts,
 		shared: &appendRuntimeCoordinatorCache{
-			entries: make(map[string]*appendRuntimeSharedCoordinator),
+			entries: make(map[string]*appendRuntimeCoordinatorCacheEntry),
 		},
 	}
 }
@@ -161,6 +162,9 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 	tableMeta, err := metadata.ParseTableMetadata(loadResp.MetadataJSON, strings.TrimSpace(loadResp.MetadataLocation))
 	if err != nil {
 		return nil, api.ToMOErr(ctx, err)
+	}
+	if err := validateRuntimeWriteFormatVersion(ctx, req.Table, tableMeta.FormatVersion); err != nil {
+		return nil, err
 	}
 	schema, err := appendCurrentSchema(ctx, tableMeta, req.Table)
 	if err != nil {
@@ -240,9 +244,11 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 		TableLocation:        tableMeta.Location,
 		TargetRef:            targetRef,
 		TargetRefType:        targetRefType,
+		TargetRefRetention:   tableMeta.Refs[targetRef],
 		AllowTagMove:         f.opts.AllowTagMove,
 		CatalogCapabilities:  caps,
 		TableUUID:            tableMeta.TableUUID,
+		FormatVersion:        tableMeta.FormatVersion,
 		BaseSnapshotID:       baseSnapshotID,
 		BaseSchemaID:         schema.SchemaID,
 		BaseSpecID:           spec.SpecID,
@@ -282,31 +288,57 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 
 type appendRuntimeCoordinatorCache struct {
 	mu      sync.Mutex
-	entries map[string]*appendRuntimeSharedCoordinator
+	entries map[string]*appendRuntimeCoordinatorCacheEntry
+}
+
+type appendRuntimeCoordinatorCacheEntry struct {
+	ready  chan struct{}
+	shared *appendRuntimeSharedCoordinator
+	err    error
 }
 
 func (c *appendRuntimeCoordinatorCache) getOrCreate(ctx context.Context, key string, req icebergwrite.AppendRequest, build func() (icebergwrite.Coordinator, error)) (icebergwrite.Coordinator, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if shared := c.entries[key]; shared != nil {
-		return &appendRuntimeSharedCoordinatorScope{shared: shared, scopeID: appendRuntimeParallelScopeID(req)}, nil
+	if entry := c.entries[key]; entry != nil {
+		c.mu.Unlock()
+		select {
+		case <-entry.ready:
+			if entry.err != nil {
+				return nil, entry.err
+			}
+			return &appendRuntimeSharedCoordinatorScope{shared: entry.shared, scopeID: appendRuntimeParallelScopeID(req)}, nil
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
 	}
+	entry := &appendRuntimeCoordinatorCacheEntry{ready: make(chan struct{})}
+	c.entries[key] = entry
+	c.mu.Unlock()
+
 	coord, err := build()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err != nil {
+		entry.err = err
+		if c.entries[key] == entry {
+			delete(c.entries, key)
+		}
+		close(entry.ready)
 		return nil, err
 	}
 	shared := newAppendRuntimeSharedCoordinator(coord, req)
 	shared.release = func() {
 		c.release(key, shared)
 	}
-	c.entries[key] = shared
+	entry.shared = shared
+	close(entry.ready)
 	return &appendRuntimeSharedCoordinatorScope{shared: shared, scopeID: appendRuntimeParallelScopeID(req)}, nil
 }
 
 func (c *appendRuntimeCoordinatorCache) release(key string, coord *appendRuntimeSharedCoordinator) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.entries[key] == coord {
+	if entry := c.entries[key]; entry != nil && entry.shared == coord {
 		delete(c.entries, key)
 	}
 }
@@ -821,10 +853,13 @@ func (c *AppendRuntimeCoordinator) Commit(ctx context.Context) error {
 		return nil
 	}
 	files, err := c.writer.Close(ctx)
-	c.closed = true
 	if err != nil {
-		return api.ToMOErr(ctx, err)
+		abortErr := c.writer.Abort(ctx)
+		recordErr := c.workflow.RecordOrphanPaths(ctx, c.appendReq, c.writer.OrphanPaths(), true)
+		c.closed = true
+		return api.ToMOErr(ctx, errors.Join(err, abortErr, recordErr))
 	}
+	c.closed = true
 	c.dataFiles = append([]api.DataFile(nil), files...)
 	if len(files) == 0 {
 		c.committed = true
@@ -843,8 +878,10 @@ func (c *AppendRuntimeCoordinator) Abort(ctx context.Context, cause error) error
 	if c == nil || c.writer == nil || c.closed || c.committed {
 		return nil
 	}
+	abortErr := c.writer.Abort(ctx)
+	recordErr := c.workflow.RecordOrphanPaths(ctx, c.appendReq, c.writer.OrphanPaths(), true)
 	c.closed = true
-	return api.ToMOErr(ctx, c.writer.Abort(ctx))
+	return api.ToMOErr(ctx, errors.Join(abortErr, recordErr))
 }
 
 type appendManifestWritingBuilder struct {
@@ -865,10 +902,10 @@ func (b *appendManifestWritingBuilder) BuildAppend(ctx context.Context, req api.
 		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg append manifest builder did not return artifacts", nil)
 	}
 	if err := b.Writer.WriteManifestObject(ctx, result.ManifestFile.Path, result.ManifestBytes); err != nil {
-		return nil, err
+		return attempt, err
 	}
 	if err := b.Writer.WriteManifestObject(ctx, b.ManifestListPath, result.ManifestListBytes); err != nil {
-		return nil, err
+		return attempt, err
 	}
 	return attempt, nil
 }

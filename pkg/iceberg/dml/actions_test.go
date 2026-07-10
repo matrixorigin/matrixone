@@ -252,8 +252,9 @@ func TestBuildManifestCommitAttemptMaterializesDataAndDeleteManifests(t *testing
 	require.NoError(t, err)
 	intent, err := BuildCommitIntent(*stream)
 	require.NoError(t, err)
+	intent.TargetRefRetention = api.SnapshotRef{MinSnapshotsToKeep: 3, MaxSnapshotAgeMS: 1_000, MaxRefAgeMS: 2_000}
 
-	result, err := BuildManifestCommitAttempt(context.Background(), ManifestMaterializeRequest{
+	result, err := BuildManifestCommitAttempt(context.Background(), withDMLTestManifestMetadata(ManifestMaterializeRequest{
 		Intent:             *intent,
 		SnapshotID:         99,
 		SequenceNumber:     12,
@@ -267,7 +268,7 @@ func TestBuildManifestCommitAttemptMaterializesDataAndDeleteManifests(t *testing
 			Content:         api.ManifestContentData,
 			AddedSnapshotID: 7,
 		}},
-	})
+	}, 2))
 	require.NoError(t, err)
 	require.NotNil(t, result.DataManifest)
 	require.NotNil(t, result.DeleteManifest)
@@ -307,9 +308,63 @@ func TestBuildManifestCommitAttemptMaterializesDataAndDeleteManifests(t *testing
 	require.Equal(t, "main", result.Attempt.Updates[1].Ref)
 	require.Equal(t, "branch", result.Attempt.Updates[1].RefType)
 	require.Equal(t, int64(99), result.Attempt.Updates[1].SnapshotID)
+	require.Equal(t, 3, result.Attempt.Updates[1].MinSnapshotsToKeep)
+	require.Equal(t, int64(1_000), result.Attempt.Updates[1].MaxSnapshotAgeMS)
+	require.Equal(t, int64(2_000), result.Attempt.Updates[1].MaxRefAgeMS)
 	require.Equal(t, intent.Requirements, result.Attempt.Requirements)
 	require.Equal(t, "update", result.Attempt.Summary["operation"])
 	assertRESTSnapshotCommitUpdates(t, result.Attempt.Updates, int64(99), testBase().BaseSnapshotID, int64(12), testBase().BaseSchemaID, "s3://warehouse/orders/metadata/snap-99.avro")
+}
+
+func TestBuildManifestCommitAttemptSeparatesPartitionSpecs(t *testing.T) {
+	fileForSpec := func(specID int, suffix string) api.DataFile {
+		file := dataFile("s3://warehouse/orders/data-" + suffix + ".parquet")
+		file.SpecID = specID
+		return file
+	}
+	result, err := BuildManifestCommitAttempt(context.Background(), ManifestMaterializeRequest{
+		Intent: CommitIntent{
+			Actions: []Action{
+				{Kind: ActionAppendData, File: fileForSpec(1, "one")},
+				{Kind: ActionAppendData, File: fileForSpec(0, "zero")},
+			},
+			IdempotencyKey: "idem-multi-spec",
+			BaseSnapshotID: 7,
+			BaseSchemaID:   3,
+			TargetRef:      "main",
+			TargetRefType:  "branch",
+		},
+		FormatVersion:    2,
+		Schema:           api.Schema{SchemaID: 3, Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}}}},
+		PartitionSpecs:   []api.PartitionSpec{{SpecID: 0}, {SpecID: 1}},
+		SnapshotID:       99,
+		SequenceNumber:   12,
+		DataManifestPath: "s3://warehouse/orders/metadata/data-99.avro",
+		ManifestListPath: "s3://warehouse/orders/metadata/snap-99.avro",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.DataManifests, 2)
+	require.Nil(t, result.DeleteManifest)
+	require.Equal(t, []int{0, 1}, []int{
+		result.DataManifests[0].Manifest.PartitionSpecID,
+		result.DataManifests[1].Manifest.PartitionSpecID,
+	})
+	require.Contains(t, result.DataManifests[0].Manifest.Path, "data-99-spec-0.avro")
+	require.Contains(t, result.DataManifests[1].Manifest.Path, "data-99-spec-1.avro")
+	require.Len(t, result.Attempt.ManifestFiles, 2)
+	manifestList, err := metadata.ReadManifestList(result.ManifestListBytes)
+	require.NoError(t, err)
+	require.Len(t, manifestList, 2)
+}
+
+func TestDeletedManifestEntryPreservesOriginalSequences(t *testing.T) {
+	file := dataFile("s3://warehouse/orders/data-old.parquet")
+	file.SequenceNumber = 5
+	file.FileSequenceNumber = 4
+	entry := deletedManifestEntry(99, file)
+	require.Equal(t, int64(99), entry.SnapshotID)
+	require.Equal(t, int64(5), entry.SequenceNumber)
+	require.Equal(t, int64(4), entry.FileSequence)
 }
 
 func TestBuildManifestCommitAttemptRewritesPreservedManifestForFileDeletes(t *testing.T) {
@@ -330,7 +385,7 @@ func TestBuildManifestCommitAttemptRewritesPreservedManifestForFileDeletes(t *te
 	mixedManifest := api.ManifestFile{Path: "s3://warehouse/orders/metadata/base-mixed.avro", Content: api.ManifestContentData, AddedFilesCount: 2}
 	otherManifest := api.ManifestFile{Path: "s3://warehouse/orders/metadata/base-other.avro", Content: api.ManifestContentData, AddedFilesCount: 1}
 
-	result, err := BuildManifestCommitAttempt(context.Background(), ManifestMaterializeRequest{
+	result, err := BuildManifestCommitAttempt(context.Background(), withDMLTestManifestMetadata(ManifestMaterializeRequest{
 		Intent:           *intent,
 		SnapshotID:       101,
 		SequenceNumber:   14,
@@ -352,7 +407,7 @@ func TestBuildManifestCommitAttemptRewritesPreservedManifestForFileDeletes(t *te
 				{Status: api.ManifestEntryExisting, SnapshotID: 7, DataFile: otherFile},
 			},
 		}},
-	})
+	}, 2))
 	require.NoError(t, err)
 	require.Len(t, result.RewrittenPreservedManifests, 1)
 	require.Equal(t, mixedManifest.Path, result.RewrittenPreservedManifests[0].OriginalPath)
@@ -394,7 +449,7 @@ func TestBuildManifestCommitAttemptDropsFullyDeletedPreservedManifest(t *testing
 	require.NoError(t, err)
 	baseManifest := api.ManifestFile{Path: "s3://warehouse/orders/metadata/base.avro", Content: api.ManifestContentData, AddedFilesCount: 1}
 
-	result, err := BuildManifestCommitAttempt(context.Background(), ManifestMaterializeRequest{
+	result, err := BuildManifestCommitAttempt(context.Background(), withDMLTestManifestMetadata(ManifestMaterializeRequest{
 		Intent:             *intent,
 		SnapshotID:         102,
 		SequenceNumber:     15,
@@ -409,7 +464,7 @@ func TestBuildManifestCommitAttemptDropsFullyDeletedPreservedManifest(t *testing
 				DataFile:   oldFile,
 			}},
 		}},
-	})
+	}, 2))
 	require.NoError(t, err)
 	require.Empty(t, result.RewrittenPreservedManifests)
 	manifestList, err := metadata.ReadManifestList(result.ManifestListBytes)
@@ -431,13 +486,13 @@ func TestBuildManifestCommitAttemptRequiresPreservedManifestsForFileDeletes(t *t
 	intent, err := BuildCommitIntent(*stream)
 	require.NoError(t, err)
 
-	_, err = BuildManifestCommitAttempt(context.Background(), ManifestMaterializeRequest{
+	_, err = BuildManifestCommitAttempt(context.Background(), withDMLTestManifestMetadata(ManifestMaterializeRequest{
 		Intent:           *intent,
 		SnapshotID:       103,
 		SequenceNumber:   16,
 		DataManifestPath: "s3://warehouse/orders/metadata/data-103.avro",
 		ManifestListPath: "s3://warehouse/orders/metadata/snap-103.avro",
-	})
+	}, 2))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires preserved data manifests")
 	require.Contains(t, err.Error(), "deleted_files")
@@ -457,12 +512,12 @@ func TestBuildManifestCommitAttemptRequiresDeleteManifestPath(t *testing.T) {
 	require.NoError(t, err)
 	intent, err := BuildCommitIntent(*stream)
 	require.NoError(t, err)
-	_, err = BuildManifestCommitAttempt(context.Background(), ManifestMaterializeRequest{
+	_, err = BuildManifestCommitAttempt(context.Background(), withDMLTestManifestMetadata(ManifestMaterializeRequest{
 		Intent:           *intent,
 		SnapshotID:       99,
 		SequenceNumber:   12,
 		ManifestListPath: "s3://warehouse/orders/metadata/snap-99.avro",
-	})
+	}, 2))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "delete manifest path")
 }

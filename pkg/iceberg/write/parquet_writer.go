@@ -721,7 +721,11 @@ func transformTemporal(ctx context.Context, transform string, ts time.Time) (any
 	case "day":
 		return int32(ts.Unix() / 86400), nil
 	case "hour":
-		return ts.Unix() / 3600, nil
+		hour := ts.Unix() / 3600
+		if hour < math.MinInt32 || hour > math.MaxInt32 {
+			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg hour partition value is outside int32 range", nil)
+		}
+		return int32(hour), nil
 	default:
 		return nil, api.NewError(api.ErrUnsupportedFeature, "Iceberg writer partition transform is unsupported", map[string]string{"transform": transform})
 	}

@@ -345,6 +345,26 @@ func TestAppendWorkflowStopsOnIncompatibleConflictAndRecordsOrphans(t *testing.T
 	require.Equal(t, string(api.ErrCommitConflict), audit.audits[0].ErrorCategory)
 }
 
+func TestAppendWorkflowRecordsDataFilesWhenManifestBuildFails(t *testing.T) {
+	orphan := &fakeOrphanRecorder{}
+	audit := &fakeAuditRecorder{}
+	committer := &fakeCommitter{}
+	workflow := AppendWorkflow{
+		Builder:        failingWriteBuilder{err: api.NewError(api.ErrMetadataInvalid, "manifest encode failed", nil)},
+		Committer:      committer,
+		OrphanRecorder: orphan,
+		AuditRecorder:  audit,
+	}
+
+	_, err := workflow.CommitAppend(context.Background(), appendRequest())
+	require.Error(t, err)
+	require.Empty(t, committer.requests)
+	require.Len(t, orphan.candidates, 1)
+	require.Equal(t, "s3://warehouse/sales/orders/data/part-1.parquet", orphan.candidates[0].FilePath)
+	require.Len(t, audit.audits, 1)
+	require.Equal(t, "failed", audit.audits[0].Status)
+}
+
 func TestAppendWorkflowImmediateCleanupIsExplicitOptIn(t *testing.T) {
 	committer := &fakeCommitter{results: []commitOutcome{{err: api.NewError(api.ErrCommitConflict, "schema changed", nil)}}}
 	orphan := &fakeOrphanRecorder{}
@@ -363,6 +383,36 @@ func TestAppendWorkflowImmediateCleanupIsExplicitOptIn(t *testing.T) {
 	require.Error(t, err)
 	require.Len(t, orphan.candidates, 1)
 	require.Len(t, cleaner.cleaned, 1)
+}
+
+func TestAppendWorkflowRecordsAllUncommittedObjects(t *testing.T) {
+	orphan := &fakeOrphanRecorder{}
+	workflow := AppendWorkflow{OrphanRecorder: orphan}
+	req := appendRequest()
+	attempt := &api.CommitAttempt{
+		DataFiles: []api.DataFile{{FilePath: "s3://warehouse/sales/orders/data/part-1.parquet"}},
+		ManifestFiles: []api.ManifestFile{{
+			Path: "s3://warehouse/sales/orders/metadata/manifest-1.avro",
+		}},
+		Updates: []api.CommitUpdate{{
+			Type: "add-snapshot",
+			Snapshot: &api.Snapshot{
+				ManifestList: "s3://warehouse/sales/orders/metadata/snap-101.avro",
+			},
+		}},
+	}
+
+	require.NoError(t, workflow.recordOrphans(context.Background(), req, attempt, false))
+	require.Len(t, orphan.candidates, 3)
+	require.ElementsMatch(t, []string{
+		"s3://warehouse/sales/orders/data/part-1.parquet",
+		"s3://warehouse/sales/orders/metadata/manifest-1.avro",
+		"s3://warehouse/sales/orders/metadata/snap-101.avro",
+	}, []string{
+		orphan.candidates[0].FilePath,
+		orphan.candidates[1].FilePath,
+		orphan.candidates[2].FilePath,
+	})
 }
 
 func TestAppendWorkflowVerifiesUnknownCommit(t *testing.T) {
@@ -462,6 +512,7 @@ func appendRequest() api.AppendRequest {
 		TableLocation:        "s3://warehouse/sales/orders",
 		TargetRef:            "main",
 		TableUUID:            "table-uuid",
+		FormatVersion:        2,
 		BaseSnapshotID:       100,
 		BaseSchemaID:         3,
 		BaseSpecID:           7,
@@ -536,6 +587,15 @@ type commitOutcome struct {
 type fakeCommitter struct {
 	results  []commitOutcome
 	requests []api.CommitRequest
+}
+
+type failingWriteBuilder struct {
+	attempt *api.CommitAttempt
+	err     error
+}
+
+func (b failingWriteBuilder) BuildAppend(context.Context, api.AppendRequest) (*api.CommitAttempt, error) {
+	return b.attempt, b.err
 }
 
 func (c *fakeCommitter) CommitTable(ctx context.Context, req api.CommitRequest) (*api.CommitResult, error) {

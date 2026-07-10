@@ -66,7 +66,12 @@ func buildAppendManifests(ctx context.Context, req AppendManifestRequest, builde
 			DataFile:       file,
 		})
 	}
-	manifestBytes, err := metadata.EncodeManifest(entries)
+	manifestBytes, err := metadata.EncodeManifest(entries, metadata.ManifestWriteOptions{
+		FormatVersion: req.Append.FormatVersion,
+		Schema:        req.Append.BaseSchema,
+		PartitionSpec: req.Append.BaseSpec,
+		Content:       api.ManifestContentData,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +90,16 @@ func buildAppendManifests(ctx context.Context, req AppendManifestRequest, builde
 		ManifestPathHash:      api.PathHash(req.ManifestPath),
 	}
 	manifestList := append(cloneManifestFiles(req.PreservedManifests), manifest)
-	manifestListBytes, err := metadata.EncodeManifestList(manifestList)
+	var parentSnapshotID *int64
+	if req.Append.BaseSnapshotID > 0 {
+		parentSnapshotID = &req.Append.BaseSnapshotID
+	}
+	manifestListBytes, err := metadata.EncodeManifestList(manifestList, metadata.ManifestListWriteOptions{
+		FormatVersion:    req.Append.FormatVersion,
+		SnapshotID:       req.SnapshotID,
+		ParentSnapshotID: parentSnapshotID,
+		SequenceNumber:   req.SequenceNumber,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +114,7 @@ func buildAppendManifests(ctx context.Context, req AppendManifestRequest, builde
 			req.ManifestListPath,
 			attempt.Summary,
 		)),
-		api.NewSetSnapshotRefUpdate(attempt.TargetRef, attempt.TargetRefType, req.SnapshotID),
+		api.NewSetSnapshotRefUpdatePreservingRetention(attempt.TargetRef, attempt.TargetRefType, req.SnapshotID, req.Append.TargetRefRetention),
 	}
 	return &AppendManifestResult{
 		Entries:           entries,

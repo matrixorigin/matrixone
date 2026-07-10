@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -254,64 +255,101 @@ func (r *caseRunner) catalogAndMappingCase(ctx context.Context) caseResult {
 }
 
 func (r *caseRunner) appendReadAndTimeTravelCase(ctx context.Context) caseResult {
+	caseStarted := time.Now()
+	details := map[string]string{}
+	fail := func(sqls, expected, actual []string, msg string) caseResult {
+		details["case_wall_s"] = formatSeconds(time.Since(caseStarted))
+		res := failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, expected, actual, msg)
+		res.Details = details
+		return res
+	}
 	table := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident("append_orders"))
-	sqls := []string{
-		fmt.Sprintf("INSERT INTO %s VALUES (1,1,10,'ksa'),(2,1,20,'uae'),(3,2,30,'ksa'),(4,2,40,'qat')", table),
-		fmt.Sprintf("SELECT COUNT(*), SUM(amount) FROM %s", table),
-		fmt.Sprintf("INSERT INTO %s VALUES (5,3,50,'ksa')", table),
-		fmt.Sprintf("SELECT COUNT(*), SUM(amount) FROM %s", table),
+	insertFirstSQL := fmt.Sprintf("INSERT INTO %s VALUES (1,1,10,'ksa'),(2,1,20,'uae'),(3,2,30,'ksa'),(4,2,40,'qat')", table)
+	selectFirstSQL := fmt.Sprintf("SELECT COUNT(*), SUM(amount) FROM %s", table)
+	insertSecondSQL := fmt.Sprintf("INSERT INTO %s VALUES (5,3,50,'ksa')", table)
+	selectCurrentSQL := fmt.Sprintf("SELECT COUNT(*), SUM(amount) FROM %s", table)
+	sqls := []string{insertFirstSQL, selectFirstSQL}
+
+	opStarted := time.Now()
+	if _, err := r.db.ExecContext(ctx, insertFirstSQL); err != nil {
+		return fail(sqls, nil, nil, err.Error())
 	}
-	if _, err := r.db.ExecContext(ctx, sqls[0]); err != nil {
-		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, nil, err.Error())
-	}
+	details["insert_first_s"] = formatSeconds(time.Since(opStarted))
+	opStarted = time.Now()
 	oldSnapshot, err := currentSnapshotID(ctx, r.cfg, "append_orders")
 	if err != nil {
-		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, nil, err.Error())
+		return fail(sqls, nil, nil, err.Error())
 	}
-	first, err := queryLines(ctx, r.db, sqls[1])
+	details["old_snapshot_lookup_s"] = formatSeconds(time.Since(opStarted))
+	opStarted = time.Now()
+	oldSnapshotRef, err := createNessieBranchAtMain(ctx, r.cfg, "mo_e2e_t1_"+strconv.FormatInt(oldSnapshot, 10))
 	if err != nil {
-		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, first, err.Error())
+		return fail(sqls, nil, nil, err.Error())
 	}
-	if _, err := r.db.ExecContext(ctx, sqls[2]); err != nil {
-		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, first, err.Error())
+	details["create_nessie_branch_s"] = formatSeconds(time.Since(opStarted))
+	oldTable := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident("append_orders_old"))
+	createOldMappingSQL := fmt.Sprintf(`CREATE EXTERNAL TABLE %s (
+  order_id BIGINT,
+  bucket INT,
+  amount BIGINT,
+  region TEXT
+	) ENGINE = ICEBERG WITH ('catalog'=%s,'namespace'=%s,'table'='append_orders','ref'=%s,'read_mode'='append_only','write_mode'='append_only')`,
+		oldTable, sqlString(r.cfg.Catalog), sqlString(r.cfg.Namespace), sqlString(oldSnapshotRef))
+	sqls = append(sqls, createOldMappingSQL)
+	opStarted = time.Now()
+	if _, err := r.db.ExecContext(ctx, createOldMappingSQL); err != nil {
+		return fail(sqls, nil, nil, err.Error())
 	}
-	current, err := queryLines(ctx, r.db, sqls[3])
+	details["create_old_mapping_s"] = formatSeconds(time.Since(opStarted))
+	opStarted = time.Now()
+	first, err := queryLines(ctx, r.db, selectFirstSQL)
+	details["select_first_s"] = formatSeconds(time.Since(opStarted))
 	if err != nil {
-		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, current, err.Error())
+		return fail(sqls, nil, first, err.Error())
 	}
+	sqls = append(sqls, insertSecondSQL, selectCurrentSQL)
+	opStarted = time.Now()
+	if _, err := r.db.ExecContext(ctx, insertSecondSQL); err != nil {
+		return fail(sqls, nil, first, err.Error())
+	}
+	details["insert_second_s"] = formatSeconds(time.Since(opStarted))
+	opStarted = time.Now()
+	current, err := queryLines(ctx, r.db, selectCurrentSQL)
+	details["select_current_s"] = formatSeconds(time.Since(opStarted))
+	if err != nil {
+		return fail(sqls, nil, current, err.Error())
+	}
+	opStarted = time.Now()
 	currentSnapshot, err := currentSnapshotID(ctx, r.cfg, "append_orders")
 	if err != nil {
-		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, current, err.Error())
+		return fail(sqls, nil, current, err.Error())
 	}
-	details := map[string]string{
-		"old_snapshot_id":     fmt.Sprintf("%d", oldSnapshot),
-		"current_snapshot_id": fmt.Sprintf("%d", currentSnapshot),
-	}
-	snapshotToRead := oldSnapshot
-	snapshotExpected := "4\t100"
-	retained, err := snapshotAvailable(ctx, r.cfg, "append_orders", oldSnapshot)
+	details["current_snapshot_lookup_s"] = formatSeconds(time.Since(opStarted))
+	details["old_snapshot_id"] = fmt.Sprintf("%d", oldSnapshot)
+	details["old_snapshot_ref"] = oldSnapshotRef
+	details["current_snapshot_id"] = fmt.Sprintf("%d", currentSnapshot)
+	timeTravelSQL := fmt.Sprintf("SELECT COUNT(*), SUM(amount) FROM %s FOR ICEBERG SNAPSHOT %d", oldTable, oldSnapshot)
+	opStarted = time.Now()
+	retained, err := snapshotAvailableOnRef(ctx, r.cfg, "append_orders", oldSnapshotRef, oldSnapshot)
+	details["snapshot_ref_check_s"] = formatSeconds(time.Since(opStarted))
 	if err != nil {
-		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, current, err.Error())
+		return fail(sqls, nil, current, err.Error())
 	}
-	if retained {
-		details["historical_snapshot_retained"] = "true"
-	} else {
-		details["historical_snapshot_retained"] = "false"
-		snapshotToRead = currentSnapshot
-		snapshotExpected = "5\t150"
-	}
-	timeTravelSQL := fmt.Sprintf("SELECT COUNT(*), SUM(amount) FROM %s FOR ICEBERG SNAPSHOT %d", table, snapshotToRead)
+	details["historical_snapshot_retained"] = fmt.Sprintf("%t", retained)
+	opStarted = time.Now()
 	old, err := queryLines(ctx, r.db, timeTravelSQL)
+	details["time_travel_select_s"] = formatSeconds(time.Since(opStarted))
 	sqls = append(sqls, timeTravelSQL)
 	if err != nil {
-		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, nil, old, err.Error())
+		return fail(sqls, nil, old, err.Error())
 	}
-	expected := []string{"4\t100", "5\t150", snapshotExpected}
+	expected := []string{"4\t100", "5\t150", "4\t100"}
 	actual := append(append([]string{}, first...), current...)
 	actual = append(actual, old...)
 	if !sameLines(expected, actual) {
-		return failedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, expected, actual, "append/time-travel result mismatch")
+		return fail(sqls, expected, actual, "append/time-travel result mismatch")
 	}
+	details["case_wall_s"] = formatSeconds(time.Since(caseStarted))
 	return passedCase("ICE-CI-E2E-020", "append-read-time-travel", sqls, expected, actual, details)
 }
 
@@ -403,8 +441,9 @@ func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
 			PartitionSpec:  spec.partitionSpec,
 			Location:       fmt.Sprintf("%s/%s/%s", strings.TrimRight(cfg.Warehouse, "/"), cfg.Namespace, spec.name),
 			Properties: map[string]string{
-				"format-version": "2",
-				"owner":          "matrixone-ci",
+				"format-version":                       "2",
+				"history.expire.min-snapshots-to-keep": "2",
+				"owner":                                "matrixone-ci",
 			},
 		})
 		if err != nil {
@@ -518,12 +557,16 @@ func currentSnapshotID(ctx context.Context, cfg localE2EConfig, table string) (i
 }
 
 func snapshotAvailable(ctx context.Context, cfg localE2EConfig, table string, snapshotID int64) (bool, error) {
+	return snapshotAvailableOnRef(ctx, cfg, table, model.DefaultRefMain, snapshotID)
+}
+
+func snapshotAvailableOnRef(ctx context.Context, cfg localE2EConfig, table, ref string, snapshotID int64) (bool, error) {
 	client := catalog.NewRESTClient(catalog.WithAllowPlainHTTP(true))
 	req := api.CatalogRequest{
 		Catalog:           model.Catalog{Name: cfg.Catalog, Type: "rest", URI: cfg.CatalogURI, Warehouse: cfg.Warehouse, AuthMode: "none"},
 		ExternalPrincipal: "ci-local",
 	}
-	reqWithPrefix, err := catalogRequestWithPrefix(ctx, client, req, cfg.Warehouse)
+	reqWithPrefix, err := catalogRequestWithPrefixForRef(ctx, client, req, cfg.Warehouse, ref)
 	if err != nil {
 		return false, err
 	}
@@ -537,6 +580,96 @@ func snapshotAvailable(ctx context.Context, cfg localE2EConfig, table string, sn
 		return false, err
 	}
 	return snapshotRetainedInMetadata(resp.MetadataJSON, snapshotID)
+}
+
+func catalogRequestWithPrefixForRef(ctx context.Context, client *catalog.RESTClient, req api.CatalogRequest, warehouse, ref string) (api.CatalogRequest, error) {
+	reqWithPrefix, err := catalogRequestWithPrefix(ctx, client, req, warehouse)
+	if err != nil {
+		return api.CatalogRequest{}, err
+	}
+	ref = strings.TrimSpace(ref)
+	if ref == "" || ref == model.DefaultRefMain {
+		return reqWithPrefix, nil
+	}
+	prefix := strings.TrimSpace(reqWithPrefix.Prefix)
+	if prefix == "" || prefix == model.DefaultRefMain {
+		reqWithPrefix.Prefix = ref
+		return reqWithPrefix, nil
+	}
+	parts := strings.SplitN(prefix, "|", 2)
+	if len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
+		reqWithPrefix.Prefix = ref + "|" + strings.TrimSpace(parts[1])
+		return reqWithPrefix, nil
+	}
+	return api.CatalogRequest{}, fmt.Errorf("Nessie prefix %q cannot be rewritten for ref %q", prefix, ref)
+}
+
+func createNessieBranchAtMain(ctx context.Context, cfg localE2EConfig, branch string) (string, error) {
+	ref, err := getNessieReference(ctx, cfg, model.DefaultRefMain)
+	if err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(map[string]string{
+		"type": "BRANCH",
+		"name": branch,
+		"hash": ref.Hash,
+	})
+	if err != nil {
+		return "", err
+	}
+	target, err := nessieAPIURL(cfg.CatalogURI, "trees", "tree")
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("create Nessie branch %s request failed: %w", branch, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("create Nessie branch %s returned HTTP %d: %s", branch, resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return branch, nil
+}
+
+type nessieReference struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
+	Hash string `json:"hash"`
+}
+
+func getNessieReference(ctx context.Context, cfg localE2EConfig, ref string) (nessieReference, error) {
+	target, err := nessieAPIURL(cfg.CatalogURI, "trees", "tree", ref)
+	if err != nil {
+		return nessieReference{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nessieReference{}, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nessieReference{}, fmt.Errorf("load Nessie ref %s request failed: %w", ref, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nessieReference{}, fmt.Errorf("load Nessie ref %s returned HTTP %d: %s", ref, resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	var out nessieReference
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nessieReference{}, fmt.Errorf("decode Nessie ref %s: %w", ref, err)
+	}
+	if strings.TrimSpace(out.Hash) == "" {
+		return nessieReference{}, fmt.Errorf("Nessie ref %s returned empty hash", ref)
+	}
+	return out, nil
 }
 
 func snapshotRetainedInMetadata(metadataJSON []byte, snapshotID int64) (bool, error) {
@@ -557,6 +690,30 @@ func snapshotRetainedInMetadata(metadataJSON []byte, snapshotID int64) (bool, er
 		}
 	}
 	return false, nil
+}
+
+func nessieAPIURL(rawCatalogURI string, parts ...string) (string, error) {
+	base, err := url.Parse(strings.TrimSpace(rawCatalogURI))
+	if err != nil {
+		return "", fmt.Errorf("invalid Iceberg REST catalog URI %q: %w", rawCatalogURI, err)
+	}
+	if base.Scheme == "" || base.Host == "" {
+		return "", fmt.Errorf("invalid Iceberg REST catalog URI %q", rawCatalogURI)
+	}
+	pathParts := []string{"api", "v1"}
+	escapedParts := []string{"api", "v1"}
+	for _, part := range parts {
+		part = strings.Trim(part, "/")
+		if part != "" {
+			pathParts = append(pathParts, part)
+			escapedParts = append(escapedParts, url.PathEscape(part))
+		}
+	}
+	base.Path = "/" + strings.Join(pathParts, "/")
+	base.RawPath = "/" + strings.Join(escapedParts, "/")
+	base.RawQuery = ""
+	base.Fragment = ""
+	return base.String(), nil
 }
 
 func createNamespaceURL(rawBase string, prefix string) (string, error) {
@@ -655,6 +812,10 @@ func sqlValueString(value any) string {
 	default:
 		return fmt.Sprint(v)
 	}
+}
+
+func formatSeconds(duration time.Duration) string {
+	return fmt.Sprintf("%.3f", duration.Seconds())
 }
 
 func passedCase(id, name string, sqls, expected, actual []string, details map[string]string) caseResult {

@@ -92,6 +92,7 @@ func (b *ManifestAttemptBuilder) BuildAppend(ctx context.Context, req api.Append
 	if b == nil {
 		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg manifest attempt builder is nil", nil)
 	}
+	b.LastResult = nil
 	adapter := b.Adapter
 	if adapter == nil {
 		adapter = NativeManifestCommitAdapter{}

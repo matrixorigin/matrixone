@@ -16,12 +16,23 @@ package iceberg
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	icebergref "github.com/matrixorigin/matrixone/pkg/iceberg/ref"
 )
+
+func validateRuntimeWriteFormatVersion(ctx context.Context, table string, formatVersion int) error {
+	if formatVersion == 2 {
+		return nil
+	}
+	return api.ToMOErr(ctx, api.NewError(api.ErrUnsupportedFeature, "Iceberg writes require a format v2 table", map[string]string{
+		"table":          table,
+		"format_version": strconv.Itoa(formatVersion),
+	}))
+}
 
 func resolveRuntimeCatalogRequestPrefix(ctx context.Context, client api.CatalogClient, req api.CatalogRequest) (api.CatalogRequest, error) {
 	if client == nil || strings.TrimSpace(req.Prefix) != "" {
@@ -106,6 +117,10 @@ func rewriteRuntimeNessiePrefix(prefix, refName string) (string, bool) {
 	}
 	parts := strings.SplitN(strings.TrimSpace(prefix), "|", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
+		plainPrefix := strings.TrimSpace(prefix)
+		if plainPrefix == "" || plainPrefix == model.DefaultRefMain {
+			return refName, true
+		}
 		return prefix, false
 	}
 	return refName + "|" + parts[1], true

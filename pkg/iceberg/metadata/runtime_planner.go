@@ -170,6 +170,10 @@ func rewriteNessieRefPrefix(prefix, requestRef, selectorRef string) (string, str
 	}
 	parts := strings.SplitN(strings.TrimSpace(prefix), "|", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
+		plainPrefix := strings.TrimSpace(prefix)
+		if plainPrefix == "" || plainPrefix == model.DefaultRefMain {
+			return refName, ref, true
+		}
 		return prefix, "", false
 	}
 	return refName + "|" + parts[1], ref, true

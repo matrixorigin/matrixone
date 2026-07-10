@@ -40,9 +40,9 @@ func TestRewriteDataFilesSelectorGroupsSmallCurrentDataFiles(t *testing.T) {
 		rewriteDataFileEntry("s3://warehouse/orders/data/part-us.parquet", 30, map[string]any{"region": "us"}, api.ManifestEntryExisting),
 		rewriteDataFileEntry("s3://warehouse/orders/data/part-us-2.parquet", 35, map[string]any{"region": "us"}, api.ManifestEntryDeleted),
 	}
-	dataManifestBytes, err := metadata.EncodeManifest(dataEntries)
+	dataManifestBytes, err := encodeMaintenanceTestManifest(dataEntries)
 	require.NoError(t, err)
-	deleteManifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{{
+	deleteManifestBytes, err := encodeMaintenanceTestManifest([]api.ManifestEntry{{
 		Status: api.ManifestEntryAdded,
 		DataFile: api.DataFile{
 			Content:         api.DataFileContentPositionDelete,
@@ -52,7 +52,7 @@ func TestRewriteDataFilesSelectorGroupsSmallCurrentDataFiles(t *testing.T) {
 		},
 	}})
 	require.NoError(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{
 		{
 			Path:              dataManifestPath,
 			Length:            int64(len(dataManifestBytes)),
@@ -108,9 +108,9 @@ func TestRewriteDataFilesSelectorChunksByMaxGroupSize(t *testing.T) {
 		rewriteDataFileEntry("s3://warehouse/orders/data/part-2.parquet", 80, map[string]any{"day": int32(1)}, api.ManifestEntryExisting),
 		rewriteDataFileEntry("s3://warehouse/orders/data/part-3.parquet", 60, map[string]any{"day": int32(1)}, api.ManifestEntryExisting),
 	}
-	manifestBytes, err := metadata.EncodeManifest(entries)
+	manifestBytes, err := encodeMaintenanceTestManifest(entries)
 	require.NoError(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{Path: manifestPath, Length: int64(len(manifestBytes)), Content: api.ManifestContentData}})
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{Path: manifestPath, Length: int64(len(manifestBytes)), Content: api.ManifestContentData}})
 	require.NoError(t, err)
 
 	selection, err := (RewriteDataFilesSelector{
@@ -165,16 +165,25 @@ func TestBuildRewriteDataFilesManifestCommitMaterializesSnapshotUpdate(t *testin
 	}
 
 	result, err := BuildRewriteDataFilesManifestCommit(RewriteDataFilesMaterializeRequest{
-		Snapshot:         api.Snapshot{SnapshotID: 10, ManifestList: "s3://warehouse/orders/metadata/snap-10.avro"},
-		SnapshotID:       11,
-		SequenceNumber:   12,
-		TimestampMS:      123456,
-		SchemaID:         9,
-		TargetRef:        "compact",
-		TargetRefType:    "branch",
-		IdempotencyKey:   "idem-rdf",
-		DataManifestPath: "s3://warehouse/orders/metadata/mo-rewrite-data-files/rw-1/data-manifest.avro",
-		ManifestListPath: "s3://warehouse/orders/metadata/mo-rewrite-data-files/rw-1/manifest-list.avro",
+		Snapshot:      api.Snapshot{SnapshotID: 10, ManifestList: "s3://warehouse/orders/metadata/snap-10.avro"},
+		FormatVersion: 2,
+		Schema: api.Schema{SchemaID: 9, Fields: []api.SchemaField{
+			{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}},
+			{ID: 2, Name: "region", Type: api.IcebergType{Kind: api.TypeString}},
+		}},
+		PartitionSpecs: []api.PartitionSpec{{SpecID: 0, Fields: []api.PartitionField{{
+			SourceID: 2, FieldID: 1000, Name: "region", Transform: "identity",
+		}}}},
+		SnapshotID:         11,
+		SequenceNumber:     12,
+		TimestampMS:        123456,
+		SchemaID:           9,
+		TargetRef:          "compact",
+		TargetRefType:      "branch",
+		TargetRefRetention: api.SnapshotRef{MinSnapshotsToKeep: 3, MaxSnapshotAgeMS: 1_000, MaxRefAgeMS: 2_000},
+		IdempotencyKey:     "idem-rdf",
+		DataManifestPath:   "s3://warehouse/orders/metadata/mo-rewrite-data-files/rw-1/data-manifest.avro",
+		ManifestListPath:   "s3://warehouse/orders/metadata/mo-rewrite-data-files/rw-1/manifest-list.avro",
 		PreservedManifests: []api.ManifestFile{{
 			Path:    "s3://warehouse/orders/metadata/data-manifest.avro",
 			Length:  123,
@@ -190,6 +199,8 @@ func TestBuildRewriteDataFilesManifestCommitMaterializesSnapshotUpdate(t *testin
 	require.Equal(t, api.ManifestEntryDeleted, result.Entries[0].Status)
 	require.Equal(t, api.ManifestEntryDeleted, result.Entries[1].Status)
 	require.Equal(t, api.ManifestEntryAdded, result.Entries[2].Status)
+	require.Equal(t, int64(10), result.Entries[0].SequenceNumber)
+	require.Equal(t, int64(10), result.Entries[0].FileSequence)
 	require.Equal(t, int64(11), result.Entries[2].SnapshotID)
 	require.Equal(t, int64(12), result.Entries[2].SequenceNumber)
 	require.Equal(t, int64(90), result.ManifestFile.AddedRowsCount)
@@ -221,9 +232,63 @@ func TestBuildRewriteDataFilesManifestCommitMaterializesSnapshotUpdate(t *testin
 	require.Equal(t, int64(123456), result.Attempt.Updates[0].Snapshot.TimestampMS)
 	require.Equal(t, "s3://warehouse/orders/metadata/mo-rewrite-data-files/rw-1/manifest-list.avro", result.Attempt.Updates[0].Snapshot.ManifestList)
 	require.Equal(t, int64(11), result.Attempt.Updates[1].SnapshotID)
+	require.Equal(t, 3, result.Attempt.Updates[1].MinSnapshotsToKeep)
+	require.Equal(t, int64(1_000), result.Attempt.Updates[1].MaxSnapshotAgeMS)
+	require.Equal(t, int64(2_000), result.Attempt.Updates[1].MaxRefAgeMS)
 	require.Equal(t, "2", result.Attempt.Summary["rewritten-files"])
 	require.Equal(t, "1", result.Attempt.Summary["added-files"])
 	require.Equal(t, "kept", result.Attempt.Summary["custom"])
+}
+
+func TestBuildRewriteDataFilesManifestCommitSeparatesPartitionSpecs(t *testing.T) {
+	groupForSpec := func(specID int, suffix string) RewriteDataFileRewrite {
+		source := rewriteDataFileEntry("s3://warehouse/orders/data/source-"+suffix+".parquet", 10, nil, api.ManifestEntryExisting)
+		source.DataFile.SpecID = specID
+		replacement := rewriteDataFileEntry("s3://warehouse/orders/data/replacement-"+suffix+".parquet", 10, nil, api.ManifestEntryAdded).DataFile
+		replacement.SpecID = specID
+		return RewriteDataFileRewrite{
+			Group: RewriteDataFileGroup{
+				PartitionSpecID: specID,
+				Candidates: []RewriteDataFileCandidate{{
+					Entry: source,
+					File:  source.DataFile,
+				}},
+			},
+			ReplacementFiles: []api.DataFile{replacement},
+		}
+	}
+	result, err := BuildRewriteDataFilesManifestCommit(RewriteDataFilesMaterializeRequest{
+		Snapshot:         api.Snapshot{SnapshotID: 10},
+		FormatVersion:    2,
+		Schema:           api.Schema{SchemaID: 9, Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}}}},
+		PartitionSpecs:   []api.PartitionSpec{{SpecID: 0}, {SpecID: 1}},
+		SnapshotID:       11,
+		SequenceNumber:   12,
+		SchemaID:         9,
+		IdempotencyKey:   "idem-multi-spec",
+		DataManifestPath: "s3://warehouse/orders/metadata/data-manifest.avro",
+		ManifestListPath: "s3://warehouse/orders/metadata/manifest-list.avro",
+		Rewrites:         []RewriteDataFileRewrite{groupForSpec(1, "one"), groupForSpec(0, "zero")},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.ManifestFiles, 2)
+	require.Len(t, result.ManifestObjects, 2)
+	require.Equal(t, []int{0, 1}, []int{result.ManifestFiles[0].PartitionSpecID, result.ManifestFiles[1].PartitionSpecID})
+	require.Contains(t, result.ManifestFiles[0].Path, "data-manifest-spec-0.avro")
+	require.Contains(t, result.ManifestFiles[1].Path, "data-manifest-spec-1.avro")
+	require.Len(t, result.Attempt.ManifestFiles, 2)
+	manifestList, err := metadata.ReadManifestList(result.ManifestListBytes)
+	require.NoError(t, err)
+	require.Len(t, manifestList, 2)
+	for idx, object := range result.ManifestObjects {
+		entries, readErr := metadata.ReadManifest(object.Payload)
+		require.NoError(t, readErr)
+		require.Len(t, entries, 2)
+		for _, entry := range entries {
+			require.Zero(t, entry.DataFile.SpecID, "partition spec id is carried by the manifest list, not the v2 data_file struct")
+		}
+		require.Equal(t, idx, result.ManifestFiles[idx].PartitionSpecID)
+	}
 }
 
 func TestBuildRewriteDataFilesManifestCommitValidatesReplacementFiles(t *testing.T) {
@@ -252,9 +317,9 @@ func TestNativeRewriteDataFilesPlannerBuildsCommitPlanWithInjectedCompactor(t *t
 		rewriteDataFileEntry("s3://warehouse/orders/data/part-2.parquet", 50, map[string]any{"region": "ksa"}, api.ManifestEntryExisting),
 		rewriteDataFileEntry("s3://warehouse/orders/data/part-large.parquet", 200, map[string]any{"region": "ksa"}, api.ManifestEntryExisting),
 	}
-	manifestBytes, err := metadata.EncodeManifest(entries)
+	manifestBytes, err := encodeMaintenanceTestManifest(entries)
 	require.NoError(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{Path: manifestPath, Length: int64(len(manifestBytes)), Content: api.ManifestContentData}})
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{Path: manifestPath, Length: int64(len(manifestBytes)), Content: api.ManifestContentData}})
 	require.NoError(t, err)
 	meta := expireMetadata(4)
 	meta.Snapshots[3].SequenceNumber = 7
@@ -328,11 +393,11 @@ func TestNativeRewriteDataFilesPlannerBuildsCommitPlanWithInjectedCompactor(t *t
 func TestNativeRewriteDataFilesPlannerReturnsNoOpWhenNoCandidateGroups(t *testing.T) {
 	manifestPath := "s3://warehouse/orders/metadata/data-manifest.avro"
 	manifestListPath := "s3://warehouse/orders/metadata/snap-4.avro"
-	manifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{
+	manifestBytes, err := encodeMaintenanceTestManifest([]api.ManifestEntry{
 		rewriteDataFileEntry("s3://warehouse/orders/data/part-large.parquet", 200, map[string]any{"region": "ksa"}, api.ManifestEntryExisting),
 	})
 	require.NoError(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{Path: manifestPath, Length: int64(len(manifestBytes)), Content: api.ManifestContentData}})
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{Path: manifestPath, Length: int64(len(manifestBytes)), Content: api.ManifestContentData}})
 	require.NoError(t, err)
 	meta := expireMetadata(4)
 	called := false
@@ -363,9 +428,9 @@ func TestNativeRewriteDataFilesPlannerRejectsDeleteManifestsBeforeCompaction(t *
 		rewriteDataFileEntry("s3://warehouse/orders/data/part-1.parquet", 40, map[string]any{"region": "ksa"}, api.ManifestEntryExisting),
 		rewriteDataFileEntry("s3://warehouse/orders/data/part-2.parquet", 50, map[string]any{"region": "ksa"}, api.ManifestEntryExisting),
 	}
-	manifestBytes, err := metadata.EncodeManifest(entries)
+	manifestBytes, err := encodeMaintenanceTestManifest(entries)
 	require.NoError(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{
 		{Path: dataManifestPath, Length: int64(len(manifestBytes)), Content: api.ManifestContentData},
 		{Path: deleteManifestPath, Length: 10, Content: api.ManifestContentDeletes},
 	})
@@ -392,7 +457,7 @@ func TestNativeRewriteDataFilesPlannerRejectsDeleteManifestsBeforeCompaction(t *
 
 func TestParquetConcatRewriteDataFilesCompactorMergesAppendOnlyFiles(t *testing.T) {
 	manifestListPath := "s3://warehouse/orders/metadata/snap-10.avro"
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{
 		Path:    "s3://warehouse/orders/metadata/data-manifest.avro",
 		Content: api.ManifestContentData,
 	}})
@@ -441,12 +506,12 @@ func TestParquetConcatRewriteDataFilesCompactorMergesAppendOnlyFiles(t *testing.
 func TestParquetConcatRewriteDataFilesCompactorAllowsIrrelevantDeleteManifests(t *testing.T) {
 	manifestListPath := "s3://warehouse/orders/metadata/snap-10.avro"
 	deleteManifestPath := "s3://warehouse/orders/metadata/delete-manifest.avro"
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{
 		Path:    deleteManifestPath,
 		Content: api.ManifestContentDeletes,
 	}})
 	require.NoError(t, err)
-	deleteManifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{{
+	deleteManifestBytes, err := encodeMaintenanceTestManifest([]api.ManifestEntry{{
 		Status: api.ManifestEntryAdded,
 		DataFile: api.DataFile{
 			Content:         api.DataFileContentEqualityDelete,
@@ -498,7 +563,7 @@ func TestParquetConcatRewriteDataFilesCompactorAllowsIrrelevantDeleteManifests(t
 func TestParquetConcatRewriteDataFilesCompactorAppliesEqualityDeleteManifests(t *testing.T) {
 	manifestListPath := "s3://warehouse/orders/metadata/snap-10.avro"
 	deleteManifestPath := "s3://warehouse/orders/metadata/delete-manifest.avro"
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{
 		Path:    deleteManifestPath,
 		Content: api.ManifestContentDeletes,
 	}})
@@ -506,7 +571,7 @@ func TestParquetConcatRewriteDataFilesCompactorAppliesEqualityDeleteManifests(t 
 	firstPath := "s3://warehouse/orders/data/part-1.parquet"
 	secondPath := "s3://warehouse/orders/data/part-2.parquet"
 	deleteFilePath := "s3://warehouse/orders/delete/eq-1.parquet"
-	deleteManifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{{
+	deleteManifestBytes, err := encodeMaintenanceTestManifest([]api.ManifestEntry{{
 		Status: api.ManifestEntryAdded,
 		DataFile: api.DataFile{
 			Content:         api.DataFileContentEqualityDelete,
@@ -555,7 +620,7 @@ func TestParquetConcatRewriteDataFilesCompactorAppliesEqualityDeleteManifests(t 
 func TestParquetConcatRewriteDataFilesCompactorAppliesPositionDeleteManifests(t *testing.T) {
 	manifestListPath := "s3://warehouse/orders/metadata/snap-10.avro"
 	deleteManifestPath := "s3://warehouse/orders/metadata/delete-manifest.avro"
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{
 		Path:    deleteManifestPath,
 		Content: api.ManifestContentDeletes,
 	}})
@@ -563,7 +628,7 @@ func TestParquetConcatRewriteDataFilesCompactorAppliesPositionDeleteManifests(t 
 	dataPath := "s3://warehouse/orders/data/part-1.parquet"
 	otherDataPath := "s3://warehouse/orders/data/part-other.parquet"
 	deleteFilePath := "s3://warehouse/orders/delete/pos-1.parquet"
-	deleteManifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{{
+	deleteManifestBytes, err := encodeMaintenanceTestManifest([]api.ManifestEntry{{
 		Status: api.ManifestEntryAdded,
 		DataFile: api.DataFile{
 			Content:            api.DataFileContentPositionDelete,
@@ -612,14 +677,15 @@ func TestParquetConcatRewriteDataFilesCompactorAppliesPositionDeleteManifests(t 
 func TestParquetConcatRewriteDataFilesCompactorSkipsDifferentSpecEqualityDeletes(t *testing.T) {
 	manifestListPath := "s3://warehouse/orders/metadata/snap-10.avro"
 	deleteManifestPath := "s3://warehouse/orders/metadata/delete-manifest.avro"
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
-		Path:    deleteManifestPath,
-		Content: api.ManifestContentDeletes,
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{
+		Path:            deleteManifestPath,
+		Content:         api.ManifestContentDeletes,
+		PartitionSpecID: 1,
 	}})
 	require.NoError(t, err)
 	dataPath := "s3://warehouse/orders/data/part-1.parquet"
 	deleteFilePath := "s3://warehouse/orders/delete/eq-1.parquet"
-	deleteManifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{{
+	deleteManifestBytes, err := encodeMaintenanceTestManifest([]api.ManifestEntry{{
 		Status: api.ManifestEntryAdded,
 		DataFile: api.DataFile{
 			Content:         api.DataFileContentEqualityDelete,
@@ -647,7 +713,7 @@ func TestParquetConcatRewriteDataFilesCompactorSkipsDifferentSpecEqualityDeletes
 	}).CompactRewriteDataFiles(context.Background(), RewriteDataFilesCompactRequest{
 		Metadata: &api.TableMetadata{Location: "s3://warehouse/orders"},
 		Snapshot: api.Snapshot{SnapshotID: 10, ManifestList: manifestListPath},
-		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes}}, Groups: []RewriteDataFileGroup{{
+		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes, PartitionSpecID: 1}}, Groups: []RewriteDataFileGroup{{
 			PartitionSpecID: 0,
 			PartitionKey:    "0|region=s:ksa",
 			Candidates: []RewriteDataFileCandidate{

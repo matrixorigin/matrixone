@@ -138,6 +138,7 @@ type BaseState struct {
 	SchemaID     int
 	SpecID       int
 	SortOrderID  int
+	RefRetention api.SnapshotRef
 	MetadataHash string
 	Schema       api.Schema
 	Spec         api.PartitionSpec
@@ -206,7 +207,10 @@ func (w AppendWorkflow) CommitAppend(ctx context.Context, req api.AppendRequest)
 	}
 	attempt, err := w.Builder.BuildAppend(ctx, req)
 	if err != nil {
-		return nil, err
+		attempt = appendBuildFailureAttempt(req, attempt)
+		recordErr := w.recordOrphans(ctx, req, attempt, true)
+		w.onFailure(ctx, req, attempt, "failed", appendErrorCategory(err))
+		return nil, stderrors.Join(err, recordErr)
 	}
 	maxRetries := w.MaxConflictRetry
 	if maxRetries < 0 {
@@ -243,12 +247,17 @@ func (w AppendWorkflow) CommitAppend(ctx context.Context, req api.AppendRequest)
 			}
 			if compatibleRetry(req, base, w.RetryPolicy) {
 				req = rebaseAppendRequest(req, base)
-				attempt, err = w.Builder.BuildAppend(ctx, req)
-				if err != nil {
-					_ = w.recordOrphans(ctx, req, attempt, true)
-					w.onFailure(ctx, req, attempt, "failed", appendErrorCategory(err))
-					return nil, err
+				nextAttempt, buildErr := w.Builder.BuildAppend(ctx, req)
+				if buildErr != nil {
+					failedAttempt := appendBuildFailureAttempt(req, nextAttempt)
+					if nextAttempt == nil {
+						failedAttempt = attempt
+					}
+					recordErr := w.recordOrphans(ctx, req, failedAttempt, true)
+					w.onFailure(ctx, req, failedAttempt, "failed", appendErrorCategory(buildErr))
+					return nil, stderrors.Join(buildErr, recordErr)
 				}
+				attempt = nextAttempt
 				continue
 			}
 		}
@@ -262,6 +271,13 @@ func (w AppendWorkflow) CommitAppend(ctx context.Context, req api.AppendRequest)
 		w.onFailure(ctx, req, attempt, "unknown", appendErrorCategory(unknownErr))
 		return nil, unknownErr
 	}
+}
+
+func appendBuildFailureAttempt(req api.AppendRequest, attempt *api.CommitAttempt) *api.CommitAttempt {
+	if attempt != nil {
+		return attempt
+	}
+	return &api.CommitAttempt{DataFiles: cloneDataFiles(req.DataFiles)}
 }
 
 func (w AppendWorkflow) reloadBase(ctx context.Context, req api.AppendRequest) (BaseState, error) {
@@ -347,7 +363,26 @@ func logAppendHookWarning(message string, req api.AppendRequest, result api.Comm
 }
 
 func (w AppendWorkflow) recordOrphans(ctx context.Context, req api.AppendRequest, attempt *api.CommitAttempt, allowImmediateCleanup bool) error {
-	if w.OrphanRecorder == nil || attempt == nil || len(attempt.DataFiles) == 0 {
+	if attempt == nil {
+		return nil
+	}
+	paths := make([]string, 0, len(attempt.DataFiles)+len(attempt.ManifestFiles)+1)
+	for _, file := range attempt.DataFiles {
+		paths = append(paths, file.FilePath)
+	}
+	for _, manifest := range attempt.ManifestFiles {
+		paths = append(paths, manifest.Path)
+	}
+	for _, update := range attempt.Updates {
+		if update.Snapshot != nil {
+			paths = append(paths, update.Snapshot.ManifestList)
+		}
+	}
+	return w.RecordOrphanPaths(ctx, req, paths, allowImmediateCleanup)
+}
+
+func (w AppendWorkflow) RecordOrphanPaths(ctx context.Context, req api.AppendRequest, paths []string, allowImmediateCleanup bool) error {
+	if w.OrphanRecorder == nil || len(paths) == 0 {
 		return nil
 	}
 	now := time.Now()
@@ -358,8 +393,17 @@ func (w AppendWorkflow) recordOrphans(ctx context.Context, req api.AppendRequest
 	if ttl <= 0 {
 		ttl = 24 * time.Hour
 	}
-	candidates := make([]OrphanCandidate, 0, len(attempt.DataFiles))
-	for _, file := range attempt.DataFiles {
+	seen := make(map[string]struct{}, len(paths))
+	candidates := make([]OrphanCandidate, 0, len(paths))
+	for _, rawPath := range paths {
+		path := strings.TrimSpace(rawPath)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
 		candidates = append(candidates, OrphanCandidate{
 			AccountID:         req.Catalog.AccountID,
 			CatalogID:         req.Catalog.CatalogID,
@@ -367,13 +411,16 @@ func (w AppendWorkflow) recordOrphans(ctx context.Context, req api.AppendRequest
 			Namespace:         strings.Join(req.Namespace, "."),
 			TableName:         req.Table,
 			TableLocationHash: api.PathHash(firstNonEmpty(req.TableLocation, req.Table)),
-			FilePath:          file.FilePath,
-			FilePathHash:      firstNonEmpty(file.FilePathHash, api.PathHash(file.FilePath)),
-			FilePathRedacted:  firstNonEmpty(file.FilePathRedacted, api.RedactPath(file.FilePath)),
+			FilePath:          path,
+			FilePathHash:      api.PathHash(path),
+			FilePathRedacted:  api.RedactPath(path),
 			WrittenAt:         now,
 			ExpireAt:          now.Add(ttl),
 			CleanupStatus:     "pending",
 		})
+	}
+	if len(candidates) == 0 {
+		return nil
 	}
 	if err := w.OrphanRecorder.RecordOrphans(ctx, candidates); err != nil {
 		return err
@@ -431,6 +478,7 @@ func rebaseAppendRequest(req api.AppendRequest, base BaseState) api.AppendReques
 	req.BaseSchemaID = base.SchemaID
 	req.BaseSpecID = base.SpecID
 	req.BaseSortOrderID = base.SortOrderID
+	req.TargetRefRetention = base.RefRetention
 	if len(base.Schema.Fields) > 0 {
 		req.BaseSchema = base.Schema
 	}

@@ -1225,6 +1225,9 @@ func commitUpdateWires(in []api.CommitUpdate) []commitUpdateWire {
 			wire.RefName = update.Ref
 			wire.RefType = update.RefType
 			wire.SnapshotID = update.SnapshotID
+			wire.MinSnapshotsToKeep = update.MinSnapshotsToKeep
+			wire.MaxSnapshotAgeMS = update.MaxSnapshotAgeMS
+			wire.MaxRefAgeMS = update.MaxRefAgeMS
 		case "remove-snapshot":
 			if raw := firstNonEmpty(update.Payload["snapshot-id"], update.Payload["snapshot_id"]); raw != "" {
 				if snapshotID, err := strconv.ParseInt(raw, 10, 64); err == nil {
@@ -1443,13 +1446,16 @@ type commitRequirementWire struct {
 }
 
 type commitUpdateWire struct {
-	Action     string            `json:"action"`
-	Payload    map[string]string `json:"payload,omitempty"`
-	FilePath   string            `json:"file-path,omitempty"`
-	Snapshot   *api.Snapshot     `json:"snapshot,omitempty"`
-	RefName    string            `json:"ref-name,omitempty"`
-	RefType    string            `json:"type,omitempty"`
-	SnapshotID int64             `json:"snapshot-id,omitempty"`
+	Action             string            `json:"action"`
+	Payload            map[string]string `json:"payload,omitempty"`
+	FilePath           string            `json:"file-path,omitempty"`
+	Snapshot           *api.Snapshot     `json:"snapshot,omitempty"`
+	RefName            string            `json:"ref-name,omitempty"`
+	RefType            string            `json:"type,omitempty"`
+	SnapshotID         int64             `json:"snapshot-id,omitempty"`
+	MinSnapshotsToKeep int               `json:"min-snapshots-to-keep,omitempty"`
+	MaxSnapshotAgeMS   int64             `json:"max-snapshot-age-ms,omitempty"`
+	MaxRefAgeMS        int64             `json:"max-ref-age-ms,omitempty"`
 }
 
 type storageCredentialWire struct {

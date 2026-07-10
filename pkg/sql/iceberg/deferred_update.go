@@ -37,7 +37,7 @@ func (d *DAO) ApplyDeferredMappingUpdate(ctx context.Context, update DeferredMap
 	if err := ValidateDeferredMappingUpdate(ctx, update); err != nil {
 		return err
 	}
-	return d.exec.Exec(ctx, BuildDeferredMappingUpdateSQL(update))
+	return d.execOptimistic(ctx, "deferred table mapping update", BuildDeferredMappingUpdateSQL(update))
 }
 
 func ValidateDeferredMappingUpdate(ctx context.Context, update DeferredMappingUpdate) error {

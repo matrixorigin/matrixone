@@ -29,6 +29,9 @@ type DMLActionExecutor struct {
 	Workflow           dml.CommitWorkflow
 	Catalog            api.CatalogRequest
 	TableLocation      string
+	FormatVersion      int
+	Schema             api.Schema
+	PartitionSpecs     []api.PartitionSpec
 	SnapshotID         int64
 	SequenceNumber     int64
 	TimestampMS        int64
@@ -117,6 +120,9 @@ func (e DMLActionExecutor) commit(ctx context.Context, tableLocation string, sna
 		Catalog:        e.Catalog,
 		Stream:         *stream,
 		TableLocation:  strings.TrimRight(strings.TrimSpace(tableLocation), "/"),
+		FormatVersion:  e.FormatVersion,
+		Schema:         e.Schema,
+		PartitionSpecs: append([]api.PartitionSpec(nil), e.PartitionSpecs...),
 		SnapshotID:     snapshotID,
 		SequenceNumber: e.SequenceNumber,
 		TimestampMS:    e.TimestampMS,

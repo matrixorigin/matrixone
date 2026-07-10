@@ -48,9 +48,37 @@ func TestSetSnapshotRefUpdateDefaultsToBranch(t *testing.T) {
 	require.Equal(t, "main", update.Ref)
 	require.Equal(t, "branch", update.RefType)
 	require.Equal(t, int64(42), update.SnapshotID)
+	require.Zero(t, update.MinSnapshotsToKeep)
+
+	retained := NewSetSnapshotRefUpdateWithRetention("main", "", 44, 2)
+	require.Equal(t, "branch", retained.RefType)
+	require.Equal(t, int64(44), retained.SnapshotID)
+	require.Equal(t, 2, retained.MinSnapshotsToKeep)
 
 	tag := NewSetSnapshotRefUpdate("release", "tag", 43)
 	require.Equal(t, "tag", tag.RefType)
+
+	tagWithRetention := NewSetSnapshotRefUpdateWithRetention("release", "tag", 45, 2)
+	require.Equal(t, "tag", tagWithRetention.RefType)
+	require.Zero(t, tagWithRetention.MinSnapshotsToKeep)
+
+	preserved := NewSetSnapshotRefUpdatePreservingRetention("main", "branch", 46, SnapshotRef{
+		MinSnapshotsToKeep: 3,
+		MaxSnapshotAgeMS:   1_000,
+		MaxRefAgeMS:        2_000,
+	})
+	require.Equal(t, 3, preserved.MinSnapshotsToKeep)
+	require.Equal(t, int64(1_000), preserved.MaxSnapshotAgeMS)
+	require.Equal(t, int64(2_000), preserved.MaxRefAgeMS)
+
+	preservedTag := NewSetSnapshotRefUpdatePreservingRetention("release", "tag", 47, SnapshotRef{
+		MinSnapshotsToKeep: 3,
+		MaxSnapshotAgeMS:   1_000,
+		MaxRefAgeMS:        2_000,
+	})
+	require.Zero(t, preservedTag.MinSnapshotsToKeep)
+	require.Zero(t, preservedTag.MaxSnapshotAgeMS)
+	require.Equal(t, int64(2_000), preservedTag.MaxRefAgeMS)
 }
 
 func TestRetryPolicyNormalize(t *testing.T) {

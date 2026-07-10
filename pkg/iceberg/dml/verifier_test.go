@@ -187,17 +187,17 @@ func dmlVerifierRequest(ref string) (CommitWorkflowRequest, *ManifestMaterialize
 	if err != nil {
 		panic(err)
 	}
-	materialized, err := BuildManifestCommitAttempt(context.Background(), ManifestMaterializeRequest{
+	materialized, err := BuildManifestCommitAttempt(context.Background(), withDMLTestManifestMetadata(ManifestMaterializeRequest{
 		Intent:           *intent,
 		SnapshotID:       4,
 		SequenceNumber:   4,
 		DataManifestPath: "s3://warehouse/orders/metadata/data-4.avro",
 		ManifestListPath: "s3://warehouse/orders/metadata/snap-4.avro",
-	})
+	}, 0))
 	if err != nil {
 		panic(err)
 	}
-	return CommitWorkflowRequest{
+	return withDMLTestWorkflowMetadata(CommitWorkflowRequest{
 		Catalog: api.CatalogRequest{Catalog: model.Catalog{
 			AccountID: 7,
 			CatalogID: 42,
@@ -209,7 +209,7 @@ func dmlVerifierRequest(ref string) (CommitWorkflowRequest, *ManifestMaterialize
 		DataManifestPath: "s3://warehouse/orders/metadata/data-4.avro",
 		ManifestListPath: materialized.AttemptManifestListPath(),
 		TableLocation:    "s3://warehouse/orders",
-	}, materialized
+	}, 0), materialized
 }
 
 func dmlVerifierMetadataJSON() []byte {

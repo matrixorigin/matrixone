@@ -218,7 +218,9 @@ const (
 	IcebergConfigKeyServerPlanningMode      = "iceberg.scan.server_planning"
 	IcebergConfigKeyPlanningTimeout         = "iceberg.planning.timeout"
 	IcebergConfigKeyDeleteMaxMemory         = "iceberg.delete.max_memory"
+	IcebergConfigKeyEnableDeleteSpill       = "iceberg.delete.enable_spill"
 	IcebergConfigKeyWriteOrphanTTL          = "iceberg.write.orphan_ttl"
+	IcebergConfigKeyEnableOrphanGC          = "iceberg.write.enable_orphan_gc"
 	IcebergConfigKeyProtectedCNToCN         = "iceberg.security.protected_cn_to_cn"
 
 	IcebergServerPlanningOff      = "off"
@@ -305,8 +307,14 @@ func (ip IcebergParameters) Validate(ctx context.Context) error {
 	if ip.DeleteMaxMemory < 0 {
 		return moerr.NewBadConfig(ctx, IcebergConfigKeyDeleteMaxMemory+" must be greater than or equal to zero")
 	}
+	if ip.EnableDeleteSpill {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyEnableDeleteSpill+" is not supported; keep enable-delete-spill disabled")
+	}
 	if ip.OrphanTTL.Duration < 0 {
 		return moerr.NewBadConfig(ctx, IcebergConfigKeyWriteOrphanTTL+" must be greater than or equal to zero")
+	}
+	if ip.EnableOrphanGC {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyEnableOrphanGC+" is not supported; orphan files are recorded for audited cleanup")
 	}
 	return nil
 }

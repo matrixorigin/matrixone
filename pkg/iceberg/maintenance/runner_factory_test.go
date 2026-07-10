@@ -244,7 +244,7 @@ func TestResolveMaintenanceCatalogRequestPrefixSkipsWhenAlreadySetOrClientMissin
 func TestNativeRewriteManifestsRunnerMaterializesWritesAndCommits(t *testing.T) {
 	oldManifestPath := "s3://warehouse/orders/metadata/old-manifest.avro"
 	oldManifestListPath := "s3://warehouse/orders/metadata/snap-4.avro"
-	manifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{{
+	manifestBytes, err := encodeMaintenanceTestManifest([]api.ManifestEntry{{
 		Status:         api.ManifestEntryExisting,
 		SnapshotID:     4,
 		SequenceNumber: 4,
@@ -258,7 +258,7 @@ func TestNativeRewriteManifestsRunnerMaterializesWritesAndCommits(t *testing.T) 
 		},
 	}})
 	require.NoError(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{
 		Path:               oldManifestPath,
 		Length:             int64(len(manifestBytes)),
 		Content:            api.ManifestContentData,

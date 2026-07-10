@@ -25,8 +25,10 @@ import (
 )
 
 func TestBuildAppendManifestsRoundTripsArtifacts(t *testing.T) {
+	appendReq := appendRequest()
+	appendReq.TargetRefRetention = api.SnapshotRef{MinSnapshotsToKeep: 3, MaxSnapshotAgeMS: 1_000, MaxRefAgeMS: 2_000}
 	result, err := BuildAppendManifests(context.Background(), AppendManifestRequest{
-		Append:           appendRequest(),
+		Append:           appendReq,
 		SnapshotID:       200,
 		SequenceNumber:   9,
 		TimestampMS:      123456,
@@ -62,6 +64,9 @@ func TestBuildAppendManifestsRoundTripsArtifacts(t *testing.T) {
 	require.Equal(t, "main", result.Attempt.Updates[1].Ref)
 	require.Equal(t, "branch", result.Attempt.Updates[1].RefType)
 	require.Equal(t, int64(200), result.Attempt.Updates[1].SnapshotID)
+	require.Equal(t, 3, result.Attempt.Updates[1].MinSnapshotsToKeep)
+	require.Equal(t, int64(1_000), result.Attempt.Updates[1].MaxSnapshotAgeMS)
+	require.Equal(t, int64(2_000), result.Attempt.Updates[1].MaxRefAgeMS)
 
 	entries, err := metadata.ReadManifest(result.ManifestBytes)
 	require.NoError(t, err)

@@ -45,9 +45,9 @@ func TestRewriteManifestsMaterializerRewritesManifestObjects(t *testing.T) {
 			FilePathRedacted: api.RedactPath("s3://warehouse/orders/data/part-1.parquet"),
 		},
 	}}
-	manifestBytes, err := metadata.EncodeManifest(entries)
+	manifestBytes, err := encodeMaintenanceTestManifest(entries)
 	require.NoError(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{
 		Path:                 oldManifestPath,
 		Length:               int64(len(manifestBytes)),
 		PartitionSpecID:      0,
@@ -62,7 +62,7 @@ func TestRewriteManifestsMaterializerRewritesManifestObjects(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	meta := &api.TableMetadata{Location: "s3://warehouse/orders"}
+	meta := maintenanceTestTableMetadata("s3://warehouse/orders")
 	result, err := (RewriteManifestsMaterializer{
 		ObjectReader: fakeRewriteManifestObjectReader{
 			oldManifestListPath: manifestListBytes,
@@ -71,6 +71,8 @@ func TestRewriteManifestsMaterializerRewritesManifestObjects(t *testing.T) {
 	}).Materialize(context.Background(), RewriteManifestsMaterializeRequest{
 		Metadata:       meta,
 		Snapshot:       api.Snapshot{SnapshotID: 10, ManifestList: oldManifestListPath},
+		SnapshotID:     11,
+		SequenceNumber: 11,
 		JobID:          "job-1",
 		IdempotencyKey: "idem-1",
 	})
@@ -106,13 +108,13 @@ func TestRewriteManifestsMaterializerRewritesManifestObjects(t *testing.T) {
 func TestRewriteManifestsMaterializerUsesCustomPathPrefixAndManifestListDirFallback(t *testing.T) {
 	oldManifestPath := "s3://warehouse/orders/metadata/old-manifest.avro"
 	oldManifestListPath := "s3://warehouse/orders/metadata/snap-10.avro"
-	manifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{{
+	manifestBytes, err := encodeMaintenanceTestManifest([]api.ManifestEntry{{
 		Status:     api.ManifestEntryExisting,
 		SnapshotID: 10,
 		DataFile:   api.DataFile{Content: api.DataFileContentData, FilePath: "s3://warehouse/orders/data/part-1.parquet", FileFormat: "parquet"},
 	}})
 	require.NoError(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{Path: oldManifestPath, Length: int64(len(manifestBytes))}})
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{Path: oldManifestPath, Length: int64(len(manifestBytes))}})
 	require.NoError(t, err)
 	reader := fakeRewriteManifestObjectReader{
 		oldManifestListPath: manifestListBytes,
@@ -123,14 +125,20 @@ func TestRewriteManifestsMaterializerUsesCustomPathPrefixAndManifestListDirFallb
 		ObjectReader: reader,
 		PathPrefix:   "s3://tmp/rewrite-prefix/",
 	}).Materialize(context.Background(), RewriteManifestsMaterializeRequest{
-		Snapshot: api.Snapshot{SnapshotID: 10, ManifestList: oldManifestListPath},
-		JobID:    "job-1",
+		Metadata:       maintenanceTestTableMetadata("s3://warehouse/orders"),
+		Snapshot:       api.Snapshot{SnapshotID: 10, ManifestList: oldManifestListPath},
+		SnapshotID:     11,
+		SequenceNumber: 11,
+		JobID:          "job-1",
 	})
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(result.ManifestListPath, "s3://tmp/rewrite-prefix/mo-rewrite-manifests/rw-"+api.PathHash("job-1")))
 
 	result, err = (RewriteManifestsMaterializer{ObjectReader: reader}).Materialize(context.Background(), RewriteManifestsMaterializeRequest{
-		Snapshot: api.Snapshot{SnapshotID: 10, ManifestList: oldManifestListPath},
+		Metadata:       maintenanceTestTableMetadata("s3://warehouse/orders"),
+		Snapshot:       api.Snapshot{SnapshotID: 10, ManifestList: oldManifestListPath},
+		SnapshotID:     11,
+		SequenceNumber: 11,
 	})
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(result.ManifestListPath, "s3://warehouse/orders/metadata/mo-rewrite-manifests/rw-"+api.PathHash("10")))

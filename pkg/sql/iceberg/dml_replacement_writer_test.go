@@ -133,3 +133,25 @@ func TestWriteDMLReplacementDataFilesRequiresOutput(t *testing.T) {
 		t.Fatalf("expected missing output error, got %v", err)
 	}
 }
+
+func TestBufferedDataFileObjectAbortDoesNotPublishPartialObject(t *testing.T) {
+	objectWriter := &recordingDMLDeleteObjectWriter{}
+	object := &bufferedDataFileObject{
+		ctx:      context.Background(),
+		location: "s3://warehouse/gold/orders/data/partial.parquet",
+		writer:   objectWriter,
+	}
+
+	if _, err := object.Write([]byte("partial parquet payload")); err != nil {
+		t.Fatalf("buffer partial object: %v", err)
+	}
+	if err := object.Abort(); err != nil {
+		t.Fatalf("abort partial object: %v", err)
+	}
+	if err := object.Close(); err != nil {
+		t.Fatalf("close aborted object: %v", err)
+	}
+	if len(objectWriter.objects) != 0 {
+		t.Fatalf("abort published partial object: %+v", objectWriter.objects)
+	}
+}

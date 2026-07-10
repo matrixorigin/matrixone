@@ -44,6 +44,25 @@ func TestResolveRuntimeCatalogRequestPrefixForWriteRefRewritesNessieBranch(t *te
 	require.Equal(t, "branch", targetRefType)
 }
 
+func TestResolveRuntimeCatalogRequestPrefixForWriteRefRewritesPlainMainNessiePrefix(t *testing.T) {
+	client := &catalog.MockClient{
+		GetConfigFunc: func(ctx context.Context, req api.GetConfigRequest) (*api.ConfigResponse, error) {
+			return &api.ConfigResponse{
+				Prefix:    "main",
+				Overrides: map[string]string{"nessie.is-nessie-catalog": "true"},
+			}, nil
+		},
+	}
+
+	req, targetRef, targetRefType, err := resolveRuntimeCatalogRequestPrefixForWriteRef(context.Background(), client, api.CatalogRequest{
+		Catalog: model.Catalog{Warehouse: "s3://warehouse"},
+	}, "publish_branch", api.CatalogCapabilities{}, false)
+	require.NoError(t, err)
+	require.Equal(t, "publish_branch", req.Prefix)
+	require.Equal(t, "main", targetRef)
+	require.Equal(t, "branch", targetRefType)
+}
+
 func TestResolveRuntimeCatalogRequestPrefixForWriteRefRejectsTag(t *testing.T) {
 	client := &catalog.MockClient{
 		GetConfigFunc: func(ctx context.Context, req api.GetConfigRequest) (*api.ConfigResponse, error) {
@@ -101,4 +120,11 @@ func TestRuntimeNessiePrefixHelpersRejectNoopInputs(t *testing.T) {
 		require.False(t, ok)
 		require.Equal(t, tc.prefix, rewritten)
 	}
+}
+
+func TestValidateRuntimeWriteFormatVersion(t *testing.T) {
+	require.NoError(t, validateRuntimeWriteFormatVersion(context.Background(), "orders", 2))
+	err := validateRuntimeWriteFormatVersion(context.Background(), "orders", 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrUnsupportedFeature))
 }

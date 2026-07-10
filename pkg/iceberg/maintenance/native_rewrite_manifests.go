@@ -34,6 +34,8 @@ type RewriteManifestsMaterializer struct {
 type RewriteManifestsMaterializeRequest struct {
 	Metadata       *api.TableMetadata
 	Snapshot       api.Snapshot
+	SnapshotID     int64
+	SequenceNumber int64
 	JobID          string
 	IdempotencyKey string
 }
@@ -70,19 +72,21 @@ func (p NativeRewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
+	targetRef := firstNonEmptyString(req.TargetRef, "main")
+	now := maintenanceNow(p.Now)
+	newSnapshotID := nextMaintenanceSnapshotID(now, meta)
+	sequenceNumber := nextMaintenanceSequenceNumber(meta)
 	materialized, err := p.Materializer.Materialize(ctx, RewriteManifestsMaterializeRequest{
 		Metadata:       meta,
 		Snapshot:       snapshot,
+		SnapshotID:     newSnapshotID,
+		SequenceNumber: sequenceNumber,
 		JobID:          req.JobID,
 		IdempotencyKey: req.IdempotencyKey,
 	})
 	if err != nil {
 		return nil, err
 	}
-	targetRef := firstNonEmptyString(req.TargetRef, "main")
-	now := maintenanceNow(p.Now)
-	newSnapshotID := nextMaintenanceSnapshotID(now, meta)
-	sequenceNumber := nextMaintenanceSequenceNumber(meta)
 	summary := map[string]string{
 		"operation":           string(OperationRewriteManifests),
 		"engine":              "matrixone",
@@ -100,7 +104,7 @@ func (p NativeRewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Contex
 			materialized.ManifestListPath,
 			summary,
 		)),
-		api.NewSetSnapshotRefUpdate(targetRef, req.TargetRefType, newSnapshotID),
+		api.NewSetSnapshotRefUpdatePreservingRetention(targetRef, req.TargetRefType, newSnapshotID, meta.Refs[targetRef]),
 	}
 	return &CommitPlan{
 		Catalog: p.Catalog,
@@ -127,6 +131,12 @@ func (p NativeRewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Contex
 func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req RewriteManifestsMaterializeRequest) (*RewriteManifestsMaterializeResult, error) {
 	if m.ObjectReader == nil {
 		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg rewrite-manifests materializer requires an object reader", nil)
+	}
+	if req.SnapshotID <= 0 || req.SequenceNumber < 0 {
+		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg rewrite-manifests materializer requires snapshot and sequence numbers", nil)
+	}
+	if _, err := currentMaintenanceSchema(req.Metadata); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(req.Snapshot.ManifestList) == "" {
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-manifests materializer requires a target manifest list", map[string]string{
@@ -178,8 +188,19 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 		if err != nil {
 			return nil, err
 		}
+		for entryIdx := range entries {
+			entries[entryIdx].DataFile.SpecID = manifest.PartitionSpecID
+		}
 		rewritePath := joinObjectPath(basePath, fmt.Sprintf("manifest-%05d.avro", idx))
-		rewriteData, err := metadata.EncodeManifest(entries)
+		content := manifest.Content
+		if content == "" {
+			content = api.ManifestContentData
+		}
+		writeOpts, err := maintenanceManifestWriteOptions(req.Metadata, manifest.PartitionSpecID, content)
+		if err != nil {
+			return nil, err
+		}
+		rewriteData, err := metadata.EncodeManifest(entries, writeOpts)
 		if err != nil {
 			return nil, err
 		}
@@ -193,7 +214,13 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 		result.PostCommitOrphanPaths = append(result.PostCommitOrphanPaths, manifestPath)
 	}
 	manifestListPath := joinObjectPath(basePath, "manifest-list.avro")
-	manifestListBytes, err := metadata.EncodeManifestList(result.Manifests)
+	parentSnapshotID := req.Snapshot.SnapshotID
+	manifestListBytes, err := metadata.EncodeManifestList(result.Manifests, metadata.ManifestListWriteOptions{
+		FormatVersion:    req.Metadata.FormatVersion,
+		SnapshotID:       req.SnapshotID,
+		ParentSnapshotID: &parentSnapshotID,
+		SequenceNumber:   req.SequenceNumber,
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
-	"github.com/matrixorigin/matrixone/pkg/iceberg/metadata"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/write"
 )
 
@@ -39,9 +38,9 @@ func TestMetadataReferenceCheckerFindsCommittedReferences(t *testing.T) {
 			FileSizeInBytes: 1,
 		},
 	}}
-	manifestBytes, err := metadata.EncodeManifest(manifestEntries)
+	manifestBytes, err := encodeMaintenanceTestManifest(manifestEntries)
 	require.NoError(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	manifestListBytes, err := encodeMaintenanceTestManifestList([]api.ManifestFile{{
 		Path:            "s3://warehouse/orders/metadata/manifest-1.avro",
 		Length:          int64(len(manifestBytes)),
 		Content:         api.ManifestContentData,

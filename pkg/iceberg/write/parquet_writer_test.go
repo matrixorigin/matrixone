@@ -439,7 +439,7 @@ func TestParquetWriterPartitionTransformsAndFormatting(t *testing.T) {
 	require.Equal(t, dateValue, day)
 	hour, err := transformPartitionValue(ctx, api.IcebergType{Kind: api.TypeTimestamp}, "hour", time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC).UnixMicro())
 	require.NoError(t, err)
-	require.Equal(t, time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC).Unix()/3600, hour)
+	require.Equal(t, int32(time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC).Unix()/3600), hour)
 	identity, err := transformPartitionValue(ctx, api.IcebergType{Kind: api.TypeString}, "identity", "ksa")
 	require.NoError(t, err)
 	require.Equal(t, "ksa", identity)
@@ -594,6 +594,32 @@ func TestFanoutParquetDataWriterFillsMissingNullablePartitionValue(t *testing.T)
 	require.Equal(t, int64(2), files[0].NullValueCounts[2])
 }
 
+func TestFanoutParquetDataWriterAbortsSinkWhenWriterInitializationFails(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"unsupported"})
+	vec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed[int64](vec, 1, false, mp))
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	sink := &abortTrackingDataFileSink{}
+	writer, err := NewFanoutParquetDataWriter(ctx, FanoutWriterConfig{
+		Schema: api.Schema{Fields: []api.SchemaField{{
+			ID: 1, Name: "unsupported", Type: api.IcebergType{Kind: api.TypeStruct},
+		}}},
+		TableLocation: "s3://warehouse/accounts",
+	}, DataFileOutputFactoryFunc(func(context.Context, string) (io.WriteCloser, error) {
+		return sink, nil
+	}))
+	require.NoError(t, err)
+	require.Error(t, writer.WriteBatch(ctx, bat.Attrs, bat))
+	require.True(t, sink.aborted)
+	require.False(t, sink.closed, "abort-capable sinks must not be finalized on initialization failure")
+	require.Empty(t, writer.OrphanPaths(), "successful abort guarantees no object was published")
+}
+
 func requireParquetColumnPlainEncoded(t *testing.T, file *parquet.File, path string) {
 	t.Helper()
 	for _, rowGroup := range file.Metadata().RowGroups {
@@ -628,5 +654,22 @@ type nopWriteCloser struct {
 }
 
 func (nopWriteCloser) Close() error {
+	return nil
+}
+
+type abortTrackingDataFileSink struct {
+	bytes.Buffer
+	aborted bool
+	closed  bool
+}
+
+func (s *abortTrackingDataFileSink) Close() error {
+	s.closed = true
+	return nil
+}
+
+func (s *abortTrackingDataFileSink) Abort() error {
+	s.aborted = true
+	s.Reset()
 	return nil
 }

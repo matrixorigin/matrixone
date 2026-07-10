@@ -227,7 +227,7 @@ func TestMaintenanceProcedureExecutorRunsNativeRewriteManifests(t *testing.T) {
 	ctx := context.Background()
 	oldManifestPath := "s3://warehouse/orders/metadata/old-manifest.avro"
 	oldManifestListPath := "s3://warehouse/orders/metadata/snap-4.avro"
-	manifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{{
+	manifestBytes, err := encodeSQLIcebergTestManifest([]api.ManifestEntry{{
 		Status:         api.ManifestEntryExisting,
 		SnapshotID:     4,
 		SequenceNumber: 4,
@@ -241,7 +241,7 @@ func TestMaintenanceProcedureExecutorRunsNativeRewriteManifests(t *testing.T) {
 		},
 	}})
 	requireNoErr(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	manifestListBytes, err := encodeSQLIcebergTestManifestList([]api.ManifestFile{{
 		Path:               oldManifestPath,
 		Length:             int64(len(manifestBytes)),
 		Content:            api.ManifestContentData,
@@ -454,12 +454,12 @@ func TestMaintenanceProcedureExecutorRunsNativeRewriteDataFilesWithDefaultCompac
 	secondPath := "s3://warehouse/orders/data/part-2.parquet"
 	firstData := maintenanceParquetDataFile(t, []int64{1, 2})
 	secondData := maintenanceParquetDataFile(t, []int64{3, 4, 5})
-	manifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{
+	manifestBytes, err := encodeSQLIcebergTestManifest([]api.ManifestEntry{
 		maintenanceRewriteDataEntry(firstPath, int64(len(firstData)), 2),
 		maintenanceRewriteDataEntry(secondPath, int64(len(secondData)), 3),
 	})
 	requireNoErr(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	manifestListBytes, err := encodeSQLIcebergTestManifestList([]api.ManifestFile{{
 		Path:               manifestPath,
 		Length:             int64(len(manifestBytes)),
 		Content:            api.ManifestContentData,

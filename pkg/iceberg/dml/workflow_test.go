@@ -56,7 +56,7 @@ func TestCommitWorkflowWritesManifestsAndCommits(t *testing.T) {
 		Committer:       committer,
 		AuditRecorder:   audit,
 		MetricsReporter: metrics,
-	}).CommitDML(context.Background(), CommitWorkflowRequest{
+	}).CommitDML(context.Background(), withDMLTestWorkflowMetadata(CommitWorkflowRequest{
 		Catalog:            api.CatalogRequest{Catalog: model.Catalog{AccountID: 7, CatalogID: 42}},
 		Stream:             *stream,
 		SnapshotID:         99,
@@ -66,7 +66,7 @@ func TestCommitWorkflowWritesManifestsAndCommits(t *testing.T) {
 		DeleteManifestPath: "s3://warehouse/orders/metadata/delete-99.avro",
 		ManifestListPath:   "s3://warehouse/orders/metadata/snap-99.avro",
 		TableLocation:      "s3://warehouse/orders",
-	})
+	}, 2))
 	require.NoError(t, err)
 	require.Equal(t, int64(99), result.SnapshotID)
 	require.Equal(t, []string{
@@ -132,7 +132,7 @@ func TestCommitWorkflowRecordsOrphansOnCommitFailure(t *testing.T) {
 		AuditRecorder:  audit,
 		Now:            func() time.Time { return now },
 		OrphanTTL:      time.Hour,
-	}).CommitDML(context.Background(), CommitWorkflowRequest{
+	}).CommitDML(context.Background(), withDMLTestWorkflowMetadata(CommitWorkflowRequest{
 		Catalog:            api.CatalogRequest{Catalog: model.Catalog{AccountID: 7, CatalogID: 42}},
 		Stream:             *stream,
 		SnapshotID:         99,
@@ -140,7 +140,7 @@ func TestCommitWorkflowRecordsOrphansOnCommitFailure(t *testing.T) {
 		DeleteManifestPath: "s3://warehouse/orders/metadata/delete-99.avro",
 		ManifestListPath:   "s3://warehouse/orders/metadata/snap-99.avro",
 		TableLocation:      "s3://warehouse/orders",
-	})
+	}, 2))
 	require.Error(t, err)
 	require.Len(t, recorder.candidates, 3)
 	paths := make([]string, 0, len(recorder.candidates))
@@ -229,7 +229,7 @@ func TestCommitWorkflowTreatsAuditAndMetricsAsBestEffort(t *testing.T) {
 		Committer:       &fakeDMLCommitter{result: &api.CommitResult{SnapshotID: 99, CommitID: "commit-99"}},
 		AuditRecorder:   &fakeDMLAuditRecorder{err: api.NewError(api.ErrInternal, "audit down", nil)},
 		MetricsReporter: &fakeDMLMetricsReporter{err: api.NewError(api.ErrInternal, "metrics down", nil)},
-	}).CommitDML(context.Background(), CommitWorkflowRequest{
+	}).CommitDML(context.Background(), withDMLTestWorkflowMetadata(CommitWorkflowRequest{
 		Catalog:            api.CatalogRequest{Catalog: model.Catalog{AccountID: 7, CatalogID: 42}},
 		Stream:             *stream,
 		SnapshotID:         99,
@@ -237,7 +237,7 @@ func TestCommitWorkflowTreatsAuditAndMetricsAsBestEffort(t *testing.T) {
 		DeleteManifestPath: "s3://warehouse/orders/metadata/delete-99.avro",
 		ManifestListPath:   "s3://warehouse/orders/metadata/snap-99.avro",
 		TableLocation:      "s3://warehouse/orders",
-	})
+	}, 2))
 	require.NoError(t, err)
 	require.Equal(t, int64(99), result.SnapshotID)
 }
@@ -290,7 +290,7 @@ func TestCommitWorkflowVerifierResolvesUnknownCommit(t *testing.T) {
 		Verifier:       verifier,
 		OrphanRecorder: orphan,
 		AuditRecorder:  audit,
-	}).CommitDML(context.Background(), CommitWorkflowRequest{
+	}).CommitDML(context.Background(), withDMLTestWorkflowMetadata(CommitWorkflowRequest{
 		Catalog:            api.CatalogRequest{Catalog: model.Catalog{AccountID: 7, CatalogID: 42}},
 		Stream:             *stream,
 		SnapshotID:         99,
@@ -298,7 +298,7 @@ func TestCommitWorkflowVerifierResolvesUnknownCommit(t *testing.T) {
 		DeleteManifestPath: "s3://warehouse/orders/metadata/delete-99.avro",
 		ManifestListPath:   "s3://warehouse/orders/metadata/snap-99.avro",
 		TableLocation:      "s3://warehouse/orders",
-	})
+	}, 2))
 	require.NoError(t, err)
 	require.Equal(t, int64(101), result.SnapshotID)
 	require.True(t, result.Verified)
@@ -331,7 +331,7 @@ func TestCommitWorkflowAuditsUnverifiedUnknownCommit(t *testing.T) {
 		Verifier:       &fakeDMLVerifier{},
 		OrphanRecorder: orphan,
 		AuditRecorder:  audit,
-	}).CommitDML(context.Background(), CommitWorkflowRequest{
+	}).CommitDML(context.Background(), withDMLTestWorkflowMetadata(CommitWorkflowRequest{
 		Catalog:            api.CatalogRequest{Catalog: model.Catalog{AccountID: 7, CatalogID: 42}},
 		Stream:             *stream,
 		SnapshotID:         99,
@@ -339,7 +339,7 @@ func TestCommitWorkflowAuditsUnverifiedUnknownCommit(t *testing.T) {
 		DeleteManifestPath: "s3://warehouse/orders/metadata/delete-99.avro",
 		ManifestListPath:   "s3://warehouse/orders/metadata/snap-99.avro",
 		TableLocation:      "s3://warehouse/orders",
-	})
+	}, 2))
 	require.Error(t, err)
 	require.Len(t, orphan.candidates, 3)
 	require.Len(t, audit.audits, 1)
@@ -368,7 +368,7 @@ func TestCommitWorkflowVerifierFailureDoesNotReverseCommittedResult(t *testing.T
 		Committer:      &fakeDMLCommitter{result: &api.CommitResult{SnapshotID: 99, CommitID: "commit-99", Verified: true}},
 		Verifier:       &fakeDMLVerifier{err: api.NewError(api.ErrCatalogUnavailable, "catalog reload failed", nil)},
 		AuditRecorder:  audit,
-	}).CommitDML(context.Background(), CommitWorkflowRequest{
+	}).CommitDML(context.Background(), withDMLTestWorkflowMetadata(CommitWorkflowRequest{
 		Catalog:            api.CatalogRequest{Catalog: model.Catalog{AccountID: 7, CatalogID: 42}},
 		Stream:             *stream,
 		SnapshotID:         99,
@@ -376,7 +376,7 @@ func TestCommitWorkflowVerifierFailureDoesNotReverseCommittedResult(t *testing.T
 		DeleteManifestPath: "s3://warehouse/orders/metadata/delete-99.avro",
 		ManifestListPath:   "s3://warehouse/orders/metadata/snap-99.avro",
 		TableLocation:      "s3://warehouse/orders",
-	})
+	}, 2))
 	require.NoError(t, err)
 	require.Equal(t, int64(99), result.SnapshotID)
 	require.Equal(t, "commit-99", result.CommitID)

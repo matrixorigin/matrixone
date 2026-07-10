@@ -307,6 +307,9 @@ func TestCommitDMLActionStreamBuildsRequestAndProfile(t *testing.T) {
 		},
 		Stream:         stream,
 		TableLocation:  "s3://warehouse/gold/orders/",
+		FormatVersion:  2,
+		Schema:         api.Schema{SchemaID: 9, Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}}}},
+		PartitionSpecs: []api.PartitionSpec{{SpecID: 0}},
 		SnapshotID:     909,
 		SequenceNumber: 44,
 	})

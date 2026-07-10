@@ -169,6 +169,52 @@ func (t IcebergType) String() string {
 	}
 }
 
+func (t IcebergType) MarshalJSON() ([]byte, error) {
+	switch t.Kind {
+	case TypeStruct:
+		return json.Marshal(struct {
+			Type   string        `json:"type"`
+			Fields []SchemaField `json:"fields"`
+		}{Type: string(TypeStruct), Fields: t.Fields})
+	case TypeList:
+		if t.Element == nil {
+			return nil, NewError(ErrMetadataInvalid, "Iceberg list type is missing element type", nil)
+		}
+		return json.Marshal(struct {
+			Type            string      `json:"type"`
+			ElementID       int         `json:"element-id"`
+			Element         IcebergType `json:"element"`
+			ElementRequired bool        `json:"element-required"`
+		}{
+			Type:            string(TypeList),
+			ElementID:       t.ElementID,
+			Element:         *t.Element,
+			ElementRequired: t.ElementRequired,
+		})
+	case TypeMap:
+		if t.Key == nil || t.Value == nil {
+			return nil, NewError(ErrMetadataInvalid, "Iceberg map type is missing key or value type", nil)
+		}
+		return json.Marshal(struct {
+			Type          string      `json:"type"`
+			KeyID         int         `json:"key-id"`
+			Key           IcebergType `json:"key"`
+			ValueID       int         `json:"value-id"`
+			Value         IcebergType `json:"value"`
+			ValueRequired bool        `json:"value-required"`
+		}{
+			Type:          string(TypeMap),
+			KeyID:         t.KeyID,
+			Key:           *t.Key,
+			ValueID:       t.ValueID,
+			Value:         *t.Value,
+			ValueRequired: t.ValueRequired,
+		})
+	default:
+		return json.Marshal(t.String())
+	}
+}
+
 func (t *IcebergType) UnmarshalJSON(data []byte) error {
 	var primitive string
 	if err := json.Unmarshal(data, &primitive); err == nil {

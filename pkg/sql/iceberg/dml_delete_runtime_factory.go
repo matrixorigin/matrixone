@@ -72,7 +72,7 @@ func NewDMLDeleteRuntimeCoordinatorFactory(opts DMLDeleteRuntimeCoordinatorFacto
 	return DMLDeleteRuntimeCoordinatorFactory{
 		opts: opts,
 		shared: &dmlRuntimeCoordinatorCache{
-			entries: make(map[string]icebergwrite.Coordinator),
+			entries: make(map[string]*dmlRuntimeCoordinatorCacheEntry),
 		},
 	}
 }
@@ -152,6 +152,9 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 	if err != nil {
 		return nil, api.ToMOErr(ctx, err)
 	}
+	if err := validateRuntimeWriteFormatVersion(ctx, req.Table, tableMeta.FormatVersion); err != nil {
+		return nil, err
+	}
 	schema, err := dmlDeleteSchemaForRequest(ctx, tableMeta, req.DMLScan.BaseSchemaID)
 	if err != nil {
 		return nil, err
@@ -201,6 +204,9 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 		Workflow:       workflow,
 		Catalog:        catalogReq,
 		TableLocation:  tableMeta.Location,
+		FormatVersion:  tableMeta.FormatVersion,
+		Schema:         schema,
+		PartitionSpecs: append([]api.PartitionSpec(nil), tableMeta.PartitionSpecs...),
 		SnapshotID:     f.nextSnapshotID(now, tableMeta),
 		SequenceNumber: nextDMLSequenceNumber(tableMeta),
 		TimestampMS:    now.UnixMilli(),
@@ -214,6 +220,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 		Table:               strings.TrimSpace(req.Table),
 		TargetRef:           targetRef,
 		TargetRefType:       targetRefType,
+		TargetRefRetention:  tableMeta.Refs[targetRef],
 		AllowTagMove:        f.opts.AllowTagMove,
 		CatalogCapabilities: caps,
 		BaseSnapshotID:      req.DMLScan.BaseSnapshotID,
@@ -286,31 +293,54 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 
 type dmlRuntimeCoordinatorCache struct {
 	mu      sync.Mutex
-	entries map[string]icebergwrite.Coordinator
+	entries map[string]*dmlRuntimeCoordinatorCacheEntry
+}
+
+type dmlRuntimeCoordinatorCacheEntry struct {
+	ready chan struct{}
+	coord icebergwrite.Coordinator
+	err   error
 }
 
 func (c *dmlRuntimeCoordinatorCache) getOrCreate(ctx context.Context, key string, build func() (icebergwrite.Coordinator, error)) (icebergwrite.Coordinator, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if coord := c.entries[key]; coord != nil {
-		return coord, nil
+	if entry := c.entries[key]; entry != nil {
+		c.mu.Unlock()
+		select {
+		case <-entry.ready:
+			return entry.coord, entry.err
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
 	}
+	entry := &dmlRuntimeCoordinatorCacheEntry{ready: make(chan struct{})}
+	c.entries[key] = entry
+	c.mu.Unlock()
+
 	coord, err := build()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err != nil {
+		entry.err = err
+		if c.entries[key] == entry {
+			delete(c.entries, key)
+		}
+		close(entry.ready)
 		return nil, err
 	}
 	shared := &dmlRuntimeSharedCoordinator{inner: coord}
 	shared.release = func() {
 		c.release(key, shared)
 	}
-	c.entries[key] = shared
+	entry.coord = shared
+	close(entry.ready)
 	return shared, nil
 }
 
 func (c *dmlRuntimeCoordinatorCache) release(key string, coord icebergwrite.Coordinator) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.entries[key] == coord {
+	if entry := c.entries[key]; entry != nil && entry.coord == coord {
 		delete(c.entries, key)
 	}
 }
@@ -687,6 +717,9 @@ func readDMLBaseManifests(ctx context.Context, reader objectIORefDMLObjectWriter
 		entries, err := metadata.ReadManifest(manifestData)
 		if err != nil {
 			return nil, nil, api.ToMOErr(ctx, err)
+		}
+		for entryIdx := range entries {
+			entries[entryIdx].DataFile.SpecID = manifest.PartitionSpecID
 		}
 		sources = append(sources, dml.PreservedManifestSource{
 			Manifest: manifest,

@@ -180,7 +180,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 			file := normalizeDataFile(entry.DataFile)
 			file.SequenceNumber = firstNonZeroInt64(file.SequenceNumber, entry.SequenceNumber, read.Manifest.SequenceNumber)
 			file.FileSequenceNumber = firstNonZeroInt64(file.FileSequenceNumber, entry.FileSequence)
-			file.SpecID = firstNonZeroInt(file.SpecID, read.Manifest.PartitionSpecID)
+			file.SpecID = read.Manifest.PartitionSpecID
 			if read.Manifest.Content == api.ManifestContentDeletes {
 				if !req.EnableDeleteApply {
 					return nil, ValidateP0ManifestFile(read.Manifest)

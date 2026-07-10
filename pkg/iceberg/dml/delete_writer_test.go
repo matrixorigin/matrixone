@@ -199,13 +199,13 @@ func TestWriteEqualityDeleteFileMaterializesDeleteManifest(t *testing.T) {
 	}
 	intent, err := BuildCommitIntent(stream)
 	require.NoError(t, err)
-	materialized, err := BuildManifestCommitAttempt(ctx, ManifestMaterializeRequest{
+	materialized, err := BuildManifestCommitAttempt(ctx, withDMLTestManifestMetadata(ManifestMaterializeRequest{
 		Intent:             *intent,
 		SnapshotID:         11,
 		SequenceNumber:     12,
 		DeleteManifestPath: "s3://warehouse/orders/metadata/delete-manifest.avro",
 		ManifestListPath:   "s3://warehouse/orders/metadata/manifest-list.avro",
-	})
+	}, 7))
 	require.NoError(t, err)
 	require.Nil(t, materialized.DataManifest)
 	require.NotNil(t, materialized.DeleteManifest)

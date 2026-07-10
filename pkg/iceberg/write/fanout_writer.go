@@ -16,6 +16,7 @@ package write
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/url"
 	"sort"
@@ -40,6 +41,10 @@ func (f DataFileOutputFactoryFunc) CreateDataFile(ctx context.Context, location 
 	return f(ctx, location)
 }
 
+type DataFileOutputAborter interface {
+	Abort() error
+}
+
 type FanoutWriterConfig struct {
 	Schema              api.Schema
 	PartitionSpec       api.PartitionSpec
@@ -55,6 +60,7 @@ type FanoutParquetDataWriter struct {
 	factory DataFileOutputFactory
 	active  map[string]*activeDataFileWriter
 	files   []api.DataFile
+	orphans []string
 	seq     int64
 	closed  bool
 }
@@ -147,13 +153,54 @@ func (w *FanoutParquetDataWriter) Abort(ctx context.Context) error {
 	}
 	var firstErr error
 	for key, active := range w.active {
-		if err := active.sink.Close(); err != nil && firstErr == nil {
-			firstErr = api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to close aborted data file", map[string]string{"location": api.RedactPath(active.location)}, err)
+		if aborter, ok := active.sink.(DataFileOutputAborter); ok {
+			if err := aborter.Abort(); err != nil {
+				w.orphans = append(w.orphans, active.location)
+				if firstErr == nil {
+					firstErr = api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to abort data file", map[string]string{"location": api.RedactPath(active.location)}, err)
+				}
+			}
+		} else {
+			w.orphans = append(w.orphans, active.location)
+			if err := active.sink.Close(); err != nil && firstErr == nil {
+				firstErr = api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to close aborted data file", map[string]string{"location": api.RedactPath(active.location)}, err)
+			}
 		}
 		delete(w.active, key)
 	}
 	w.closed = true
 	return firstErr
+}
+
+func (w *FanoutParquetDataWriter) OrphanPaths() []string {
+	if w == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(w.files)+len(w.orphans))
+	out := make([]string, 0, len(w.files)+len(w.orphans))
+	for _, file := range w.files {
+		path := strings.TrimSpace(file.FilePath)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	for _, candidate := range w.orphans {
+		path := strings.TrimSpace(candidate)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
 }
 
 func (w *FanoutParquetDataWriter) openForPartition(ctx context.Context, key string, partition map[string]any) (*activeDataFileWriter, error) {
@@ -173,12 +220,31 @@ func (w *FanoutParquetDataWriter) openForPartition(ctx context.Context, key stri
 		TimeZone:      w.cfg.TimeZone,
 	}, sink)
 	if err != nil {
-		_ = sink.Close()
-		return nil, err
+		cleanupErr := abortDataFileSink(sink, location)
+		if cleanupErr != nil {
+			w.orphans = append(w.orphans, location)
+		}
+		if _, canAbort := sink.(DataFileOutputAborter); !canAbort {
+			w.orphans = append(w.orphans, location)
+		}
+		return nil, errors.Join(err, cleanupErr)
 	}
 	active := &activeDataFileWriter{location: location, sink: sink, writer: writer}
 	w.active[key] = active
 	return active, nil
+}
+
+func abortDataFileSink(sink io.WriteCloser, location string) error {
+	if aborter, ok := sink.(DataFileOutputAborter); ok {
+		if err := aborter.Abort(); err != nil {
+			return api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to abort data file", map[string]string{"location": api.RedactPath(location)}, err)
+		}
+		return nil
+	}
+	if err := sink.Close(); err != nil {
+		return api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to close aborted data file", map[string]string{"location": api.RedactPath(location)}, err)
+	}
+	return nil
 }
 
 func (w *FanoutParquetDataWriter) closeActive(ctx context.Context, key string) error {
@@ -189,11 +255,13 @@ func (w *FanoutParquetDataWriter) closeActive(ctx context.Context, key string) e
 	file, writerErr := active.writer.Close(ctx)
 	closeErr := active.sink.Close()
 	delete(w.active, key)
-	if writerErr != nil {
-		return writerErr
-	}
-	if closeErr != nil {
-		return api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to close data file", map[string]string{"location": api.RedactPath(active.location)}, closeErr)
+	if writerErr != nil || closeErr != nil {
+		w.orphans = append(w.orphans, active.location)
+		var wrappedCloseErr error
+		if closeErr != nil {
+			wrappedCloseErr = api.WrapError(api.ErrObjectIO, "Iceberg fanout writer failed to close data file", map[string]string{"location": api.RedactPath(active.location)}, closeErr)
+		}
+		return errors.Join(writerErr, wrappedCloseErr)
 	}
 	if file.RecordCount > 0 {
 		w.files = append(w.files, file)

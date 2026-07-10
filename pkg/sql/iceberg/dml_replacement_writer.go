@@ -149,3 +149,14 @@ func (o *bufferedDataFileObject) Close() error {
 	}
 	return o.writer.WriteObject(o.ctx, o.location, o.buf.Bytes())
 }
+
+func (o *bufferedDataFileObject) Abort() error {
+	if o == nil || o.closed {
+		return nil
+	}
+	o.closed = true
+	o.buf.Reset()
+	return nil
+}
+
+var _ icebergwrite.DataFileOutputAborter = (*bufferedDataFileObject)(nil)

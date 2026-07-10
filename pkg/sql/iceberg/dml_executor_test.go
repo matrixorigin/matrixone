@@ -51,6 +51,7 @@ func TestDMLActionExecutorCommitDeleteWritesDeleteObjectAndCommits(t *testing.T)
 		SequenceNumber: 7,
 	}
 
+	executor = withSQLTestDMLExecutorMetadata(executor, 1)
 	result, err := executor.CommitDelete(context.Background(), DMLDeleteActionStreamRequest{
 		Schema: api.Schema{SchemaID: 9},
 		Base: dml.CommitBase{
@@ -237,6 +238,7 @@ func TestDMLActionExecutorCommitUpdateWritesDeleteAndDataManifests(t *testing.T)
 		SequenceNumber: 9,
 	}
 
+	executor = withSQLTestDMLExecutorMetadata(executor, 1)
 	result, err := executor.CommitUpdate(context.Background(), DMLUpdateActionStreamRequest{
 		DMLDeleteActionStreamRequest: DMLDeleteActionStreamRequest{
 			Schema: api.Schema{SchemaID: 9},
@@ -361,6 +363,7 @@ func TestDMLActionExecutorCommitUpdateMaterializesReplacementBatch(t *testing.T)
 	bat, cleanup := newReplacementExecutorBatch(t)
 	defer cleanup()
 
+	executor = withSQLTestDMLExecutorMetadata(executor, 0, 1)
 	result, err := executor.CommitUpdate(context.Background(), DMLUpdateActionStreamRequest{
 		DMLDeleteActionStreamRequest: DMLDeleteActionStreamRequest{
 			Schema: api.Schema{SchemaID: 9, Fields: []api.SchemaField{
@@ -533,6 +536,7 @@ func TestDMLActionExecutorCommitMergeCombinesMatchedAndUnmatchedActions(t *testi
 		SequenceNumber: 10,
 	}
 
+	executor = withSQLTestDMLExecutorMetadata(executor, 1)
 	result, err := executor.CommitMerge(context.Background(), DMLMergeActionStreamRequest{
 		Schema:         api.Schema{SchemaID: 9},
 		DeleteSchemaID: 9,
@@ -677,6 +681,7 @@ func TestDMLActionExecutorCommitOverwriteBuildsDataManifestCommit(t *testing.T) 
 		}},
 	}
 
+	executor = withSQLTestDMLExecutorMetadata(executor, 1)
 	result, err := executor.CommitOverwrite(context.Background(), DMLOverwriteActionStreamRequest{
 		Base: dml.CommitBase{
 			Namespace:      api.Namespace{"gold"},

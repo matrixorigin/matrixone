@@ -33,9 +33,26 @@ type fakeExec struct {
 	rows RowsScanner
 }
 
-func (f *fakeExec) Exec(ctx context.Context, sql string) error {
+type zeroAffectedExec struct {
+	fakeExec
+}
+
+func (f *zeroAffectedExec) Exec(ctx context.Context, sql string) (uint64, error) {
 	f.sqls = append(f.sqls, sql)
-	return nil
+	return 0, nil
+}
+
+func TestDAOOptimisticUpdateRejectsVersionConflict(t *testing.T) {
+	exec := &zeroAffectedExec{}
+	err := NewDAO(exec).UpdateOrphanFileCleanupStatus(context.Background(), 7, "job-1", "path-hash", OrphanCleanupStatusDeleted, 3)
+	if err == nil || !strings.Contains(err.Error(), "ICEBERG_COMMIT_CONFLICT") {
+		t.Fatalf("expected optimistic conflict, got %v", err)
+	}
+}
+
+func (f *fakeExec) Exec(ctx context.Context, sql string) (uint64, error) {
+	f.sqls = append(f.sqls, sql)
+	return 1, nil
 }
 
 func (f *fakeExec) QueryRow(ctx context.Context, sql string) RowScanner {
@@ -973,6 +990,9 @@ func TestNewDMLCommitWorkflowWiresSQLAdapters(t *testing.T) {
 			},
 		},
 		Stream:           stream,
+		FormatVersion:    2,
+		Schema:           api.Schema{SchemaID: 1, Fields: []api.SchemaField{{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}}}},
+		PartitionSpecs:   []api.PartitionSpec{{SpecID: 0}},
 		SnapshotID:       202,
 		SequenceNumber:   11,
 		DataManifestPath: "s3://warehouse/gold/orders/metadata/data-202.avro",

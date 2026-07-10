@@ -61,6 +61,9 @@ func (f CommitVerifierFunc) VerifyDMLCommit(ctx context.Context, req CommitWorkf
 type CommitWorkflowRequest struct {
 	Catalog            api.CatalogRequest
 	Stream             ActionStream
+	FormatVersion      int
+	Schema             api.Schema
+	PartitionSpecs     []api.PartitionSpec
 	SnapshotID         int64
 	SequenceNumber     int64
 	TimestampMS        int64
@@ -87,6 +90,9 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 	}
 	materialized, err := BuildManifestCommitAttempt(ctx, ManifestMaterializeRequest{
 		Intent:             *intent,
+		FormatVersion:      req.FormatVersion,
+		Schema:             req.Schema,
+		PartitionSpecs:     append([]api.PartitionSpec(nil), req.PartitionSpecs...),
 		SnapshotID:         req.SnapshotID,
 		SequenceNumber:     req.SequenceNumber,
 		TimestampMS:        req.TimestampMS,
@@ -236,13 +242,13 @@ func (w CommitWorkflow) writeManifests(ctx context.Context, result *ManifestMate
 			return err
 		}
 	}
-	if result.DataManifest != nil {
-		if err := w.ManifestWriter.WriteManifestObject(ctx, result.DataManifest.Path, result.DataManifestBytes); err != nil {
+	for _, manifest := range result.DataManifests {
+		if err := w.ManifestWriter.WriteManifestObject(ctx, manifest.Manifest.Path, manifest.ManifestBytes); err != nil {
 			return err
 		}
 	}
-	if result.DeleteManifest != nil {
-		if err := w.ManifestWriter.WriteManifestObject(ctx, result.DeleteManifest.Path, result.DeleteManifestBytes); err != nil {
+	for _, manifest := range result.DeleteManifests {
+		if err := w.ManifestWriter.WriteManifestObject(ctx, manifest.Manifest.Path, manifest.ManifestBytes); err != nil {
 			return err
 		}
 	}
@@ -475,11 +481,11 @@ func dmlManifestPaths(result *ManifestMaterializeResult) []string {
 			paths = append(paths, rewritten.Manifest.Path)
 		}
 	}
-	if result.DataManifest != nil {
-		paths = append(paths, result.DataManifest.Path)
+	for _, manifest := range result.DataManifests {
+		paths = append(paths, manifest.Manifest.Path)
 	}
-	if result.DeleteManifest != nil {
-		paths = append(paths, result.DeleteManifest.Path)
+	for _, manifest := range result.DeleteManifests {
+		paths = append(paths, manifest.Manifest.Path)
 	}
 	if path := result.AttemptManifestListPath(); path != "" {
 		paths = append(paths, path)

@@ -33,15 +33,16 @@ type InternalSQLExecutorAdapter struct {
 	StatementOption internalexecutor.StatementOption
 }
 
-func (a InternalSQLExecutorAdapter) Exec(ctx context.Context, sql string) error {
+func (a InternalSQLExecutorAdapter) Exec(ctx context.Context, sql string) (uint64, error) {
 	if a.Executor == nil {
-		return moerr.NewInvalidInput(ctx, "iceberg internal SQL executor adapter requires an executor")
+		return 0, moerr.NewInvalidInput(ctx, "iceberg internal SQL executor adapter requires an executor")
 	}
 	result, err := a.Executor.Exec(ctx, sql, a.execOptions())
-	if err == nil {
-		result.Close()
+	defer result.Close()
+	if err != nil {
+		return 0, err
 	}
-	return err
+	return result.AffectedRows, nil
 }
 
 func (a InternalSQLExecutorAdapter) QueryRow(ctx context.Context, sql string) RowScanner {

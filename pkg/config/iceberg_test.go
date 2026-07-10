@@ -15,6 +15,8 @@
 package config
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -64,5 +66,20 @@ func TestIcebergParametersValidation(t *testing.T) {
 	params.OrphanTTL.Duration = -time.Second
 	if err := params.Validate(t.Context()); err == nil {
 		t.Fatalf("expected negative orphan ttl to fail validation")
+	}
+}
+
+func TestIcebergParametersRejectUnavailableBackgroundFeatures(t *testing.T) {
+	var params IcebergParameters
+	params.SetDefaultValues()
+	params.EnableDeleteSpill = true
+	if err := params.Validate(context.Background()); err == nil || !strings.Contains(err.Error(), IcebergConfigKeyEnableDeleteSpill) {
+		t.Fatalf("expected delete spill configuration error, got %v", err)
+	}
+
+	params.EnableDeleteSpill = false
+	params.EnableOrphanGC = true
+	if err := params.Validate(context.Background()); err == nil || !strings.Contains(err.Error(), IcebergConfigKeyEnableOrphanGC) {
+		t.Fatalf("expected orphan GC configuration error, got %v", err)
 	}
 }

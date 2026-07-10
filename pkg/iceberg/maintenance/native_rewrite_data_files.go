@@ -80,12 +80,16 @@ type RewriteDataFilesPreservedManifest struct {
 
 type RewriteDataFilesMaterializeRequest struct {
 	Snapshot           api.Snapshot
+	FormatVersion      int
+	Schema             api.Schema
+	PartitionSpecs     []api.PartitionSpec
 	SnapshotID         int64
 	SequenceNumber     int64
 	TimestampMS        int64
 	SchemaID           int
 	TargetRef          string
 	TargetRefType      string
+	TargetRefRetention api.SnapshotRef
 	IdempotencyKey     string
 	DataManifestPath   string
 	ManifestListPath   string
@@ -97,8 +101,10 @@ type RewriteDataFilesMaterializeRequest struct {
 type RewriteDataFilesMaterializeResult struct {
 	Entries           []api.ManifestEntry
 	ManifestFile      api.ManifestFile
+	ManifestFiles     []api.ManifestFile
 	ManifestListPath  string
 	ManifestBytes     []byte
+	ManifestObjects   []ObjectWrite
 	ManifestListBytes []byte
 	Attempt           *api.CommitAttempt
 	RewrittenFiles    uint64
@@ -165,6 +171,10 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
+	schema, err := currentMaintenanceSchema(meta)
+	if err != nil {
+		return nil, err
+	}
 	snapshot, err := maintenanceTargetSnapshot(meta, req.TargetRef, req.SnapshotBefore)
 	if err != nil {
 		return nil, err
@@ -215,6 +225,7 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 	dataManifestPath := joinObjectPath(basePath, "data-manifest.avro")
 	manifestListPath := joinObjectPath(basePath, "manifest-list.avro")
 	preservedDataManifests, preservedObjects, err := materializeRewriteDataFilesPreservedManifests(
+		meta,
 		basePath,
 		selection.PreservedDataManifests,
 		rewriteDataFilesSourcePathSet(compacted.Rewrites),
@@ -223,16 +234,20 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 		return nil, err
 	}
 	materialized, err := BuildRewriteDataFilesManifestCommit(RewriteDataFilesMaterializeRequest{
-		Snapshot:         snapshot,
-		SnapshotID:       newSnapshotID,
-		SequenceNumber:   nextMaintenanceSequenceNumber(meta),
-		TimestampMS:      now.UnixMilli(),
-		SchemaID:         meta.CurrentSchemaID,
-		TargetRef:        firstNonEmptyString(req.TargetRef, "main"),
-		TargetRefType:    req.TargetRefType,
-		IdempotencyKey:   firstNonEmptyString(req.IdempotencyKey, req.JobID),
-		DataManifestPath: dataManifestPath,
-		ManifestListPath: manifestListPath,
+		Snapshot:           snapshot,
+		FormatVersion:      meta.FormatVersion,
+		Schema:             schema,
+		PartitionSpecs:     append([]api.PartitionSpec(nil), meta.PartitionSpecs...),
+		SnapshotID:         newSnapshotID,
+		SequenceNumber:     nextMaintenanceSequenceNumber(meta),
+		TimestampMS:        now.UnixMilli(),
+		SchemaID:           meta.CurrentSchemaID,
+		TargetRef:          firstNonEmptyString(req.TargetRef, "main"),
+		TargetRefType:      req.TargetRefType,
+		TargetRefRetention: meta.Refs[firstNonEmptyString(req.TargetRef, "main")],
+		IdempotencyKey:     firstNonEmptyString(req.IdempotencyKey, req.JobID),
+		DataManifestPath:   dataManifestPath,
+		ManifestListPath:   manifestListPath,
 		PreservedManifests: append(
 			append([]api.ManifestFile(nil), selection.PreservedManifests...),
 			preservedManifestFiles(preservedDataManifests)...,
@@ -251,13 +266,11 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	objects := make([]ObjectWrite, 0, len(compacted.Objects)+len(preservedObjects)+2)
+	objects := make([]ObjectWrite, 0, len(compacted.Objects)+len(preservedObjects)+len(materialized.ManifestObjects)+1)
 	objects = append(objects, compacted.Objects...)
 	objects = append(objects, preservedObjects...)
-	objects = append(objects,
-		ObjectWrite{Location: materialized.ManifestFile.Path, Payload: materialized.ManifestBytes},
-		ObjectWrite{Location: materialized.ManifestListPath, Payload: materialized.ManifestListBytes},
-	)
+	objects = append(objects, materialized.ManifestObjects...)
+	objects = append(objects, ObjectWrite{Location: materialized.ManifestListPath, Payload: materialized.ManifestListBytes})
 	return &CommitPlan{
 		Catalog:            p.Catalog,
 		Attempt:            materialized.Attempt,
@@ -321,7 +334,7 @@ func rewriteDataFilesSourcePathSet(rewrites []RewriteDataFileRewrite) map[string
 	return out
 }
 
-func materializeRewriteDataFilesPreservedManifests(basePath string, preserved []RewriteDataFilesPreservedManifest, removedPaths map[string]struct{}) ([]api.ManifestFile, []ObjectWrite, error) {
+func materializeRewriteDataFilesPreservedManifests(meta *api.TableMetadata, basePath string, preserved []RewriteDataFilesPreservedManifest, removedPaths map[string]struct{}) ([]api.ManifestFile, []ObjectWrite, error) {
 	if len(preserved) == 0 {
 		return nil, nil, nil
 	}
@@ -333,7 +346,15 @@ func materializeRewriteDataFilesPreservedManifests(basePath string, preserved []
 			continue
 		}
 		path := joinObjectPath(basePath, fmt.Sprintf("preserved-manifest-%05d.avro", idx+1))
-		payload, err := metadata.EncodeManifest(entries)
+		content := item.Manifest.Content
+		if content == "" {
+			content = api.ManifestContentData
+		}
+		writeOpts, err := maintenanceManifestWriteOptions(meta, item.Manifest.PartitionSpecID, content)
+		if err != nil {
+			return nil, nil, err
+		}
+		payload, err := metadata.EncodeManifest(entries, writeOpts)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -448,6 +469,9 @@ func (s RewriteDataFilesSelector) Select(ctx context.Context, req RewriteDataFil
 		entries, err := facade.ReadManifest(ctx, manifestData)
 		if err != nil {
 			return nil, err
+		}
+		for idx := range entries {
+			entries[idx].DataFile.SpecID = manifest.PartitionSpecID
 		}
 		selection.ScannedManifestCount++
 		selection.PreservedDataManifests = append(selection.PreservedDataManifests, RewriteDataFilesPreservedManifest{
@@ -640,14 +664,83 @@ func BuildRewriteDataFilesManifestCommit(req RewriteDataFilesMaterializeRequest)
 	if len(entries) == 0 {
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files materialization requires at least one rewrite group", nil)
 	}
-	manifestBytes, err := metadata.EncodeManifest(entries)
+	entriesBySpec := rewriteDataFilesEntriesBySpec(entries)
+	specIDs := make([]int, 0, len(entriesBySpec))
+	for specID := range entriesBySpec {
+		specIDs = append(specIDs, specID)
+	}
+	sort.Ints(specIDs)
+	manifests := make([]api.ManifestFile, 0, len(specIDs))
+	manifestObjects := make([]ObjectWrite, 0, len(specIDs))
+	for _, specID := range specIDs {
+		specEntries := entriesBySpec[specID]
+		writeOpts, err := rewriteDataFilesManifestWriteOptions(req, specID)
+		if err != nil {
+			return nil, err
+		}
+		manifestBytes, err := metadata.EncodeManifest(specEntries, writeOpts)
+		if err != nil {
+			return nil, err
+		}
+		manifestPath := rewriteDataFilesManifestPath(req.DataManifestPath, specID, len(specIDs))
+		manifest := rewriteDataFilesManifestFile(req, manifestPath, specID, manifestBytes, specEntries)
+		manifests = append(manifests, manifest)
+		manifestObjects = append(manifestObjects, ObjectWrite{Location: manifestPath, Payload: manifestBytes})
+	}
+	manifestList := append(cloneRewriteDataFilesManifests(req.PreservedManifests), manifests...)
+	parentSnapshotID := req.Snapshot.SnapshotID
+	manifestListBytes, err := metadata.EncodeManifestList(manifestList, metadata.ManifestListWriteOptions{
+		FormatVersion:    req.FormatVersion,
+		SnapshotID:       req.SnapshotID,
+		ParentSnapshotID: &parentSnapshotID,
+		SequenceNumber:   req.SequenceNumber,
+	})
 	if err != nil {
 		return nil, err
 	}
-	manifest := api.ManifestFile{
-		Path:                     req.DataManifestPath,
-		Length:                   int64(len(manifestBytes)),
-		PartitionSpecID:          rewriteDataFilesManifestSpecID(entries),
+	result := &RewriteDataFilesMaterializeResult{
+		Entries:           entries,
+		ManifestFiles:     manifests,
+		ManifestListPath:  req.ManifestListPath,
+		ManifestObjects:   manifestObjects,
+		ManifestListBytes: manifestListBytes,
+		RewrittenFiles:    rewrittenFiles,
+		AddedFiles:        addedFiles,
+	}
+	if len(manifests) > 0 {
+		result.ManifestFile = manifests[0]
+		result.ManifestBytes = manifestObjects[0].Payload
+	}
+	result.Attempt = buildRewriteDataFilesCommitAttempt(req, manifests, rewrittenFiles, addedFiles)
+	return result, nil
+}
+
+func rewriteDataFilesEntriesBySpec(entries []api.ManifestEntry) map[int][]api.ManifestEntry {
+	out := make(map[int][]api.ManifestEntry)
+	for _, entry := range entries {
+		specID := entry.DataFile.SpecID
+		out[specID] = append(out[specID], entry)
+	}
+	return out
+}
+
+func rewriteDataFilesManifestPath(base string, specID, specCount int) string {
+	if specCount <= 1 {
+		return base
+	}
+	ext := ""
+	if idx := strings.LastIndex(base, "."); idx > strings.LastIndex(base, "/") {
+		ext = base[idx:]
+		base = base[:idx]
+	}
+	return base + "-spec-" + strconv.Itoa(specID) + ext
+}
+
+func rewriteDataFilesManifestFile(req RewriteDataFilesMaterializeRequest, path string, specID int, payload []byte, entries []api.ManifestEntry) api.ManifestFile {
+	return api.ManifestFile{
+		Path:                     path,
+		Length:                   int64(len(payload)),
+		PartitionSpecID:          specID,
 		Content:                  api.ManifestContentData,
 		SequenceNumber:           req.SequenceNumber,
 		MinSequenceNumber:        req.SequenceNumber,
@@ -659,25 +752,25 @@ func BuildRewriteDataFilesManifestCommit(req RewriteDataFilesMaterializeRequest)
 		AddedFilesSizeInBytes:    rewriteDataFilesBytes(entries, api.ManifestEntryAdded),
 		DeletedFilesSizeInBytes:  rewriteDataFilesBytes(entries, api.ManifestEntryDeleted),
 		ExistingFilesSizeInBytes: 0,
-		ManifestPathRedacted:     api.RedactPath(req.DataManifestPath),
-		ManifestPathHash:         api.PathHash(req.DataManifestPath),
+		ManifestPathRedacted:     api.RedactPath(path),
+		ManifestPathHash:         api.PathHash(path),
 	}
-	manifestList := append(cloneRewriteDataFilesManifests(req.PreservedManifests), manifest)
-	manifestListBytes, err := metadata.EncodeManifestList(manifestList)
-	if err != nil {
-		return nil, err
+}
+
+func rewriteDataFilesManifestWriteOptions(req RewriteDataFilesMaterializeRequest, specID int) (metadata.ManifestWriteOptions, error) {
+	for _, spec := range req.PartitionSpecs {
+		if spec.SpecID == specID {
+			return metadata.ManifestWriteOptions{
+				FormatVersion: req.FormatVersion,
+				Schema:        req.Schema,
+				PartitionSpec: spec,
+				Content:       api.ManifestContentData,
+			}, nil
+		}
 	}
-	result := &RewriteDataFilesMaterializeResult{
-		Entries:           entries,
-		ManifestFile:      manifest,
-		ManifestListPath:  req.ManifestListPath,
-		ManifestBytes:     manifestBytes,
-		ManifestListBytes: manifestListBytes,
-		RewrittenFiles:    rewrittenFiles,
-		AddedFiles:        addedFiles,
-	}
-	result.Attempt = buildRewriteDataFilesCommitAttempt(req, manifest, len(manifestListBytes), rewrittenFiles, addedFiles)
-	return result, nil
+	return metadata.ManifestWriteOptions{}, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files manifest partition spec is missing", map[string]string{
+		"spec_id": strconv.Itoa(specID),
+	})
 }
 
 func rewriteDataFilesManifestEntries(req RewriteDataFilesMaterializeRequest) ([]api.ManifestEntry, uint64, uint64, error) {
@@ -697,7 +790,21 @@ func rewriteDataFilesManifestEntries(req RewriteDataFilesMaterializeRequest) ([]
 			if strings.TrimSpace(file.FilePath) == "" {
 				return nil, 0, 0, api.NewError(api.ErrMetadataInvalid, "Iceberg rewrite-data-files source file path is required", nil)
 			}
-			entries = append(entries, rewriteDataFilesManifestEntry(api.ManifestEntryDeleted, req.SnapshotID, req.SequenceNumber, file))
+			sequenceNumber := candidate.Entry.SequenceNumber
+			if sequenceNumber == 0 {
+				sequenceNumber = file.SequenceNumber
+			}
+			fileSequenceNumber := candidate.Entry.FileSequence
+			if fileSequenceNumber == 0 {
+				fileSequenceNumber = file.FileSequenceNumber
+			}
+			entries = append(entries, rewriteDataFilesManifestEntryWithSequences(
+				api.ManifestEntryDeleted,
+				req.SnapshotID,
+				sequenceNumber,
+				fileSequenceNumber,
+				file,
+			))
 			rewrittenFiles++
 		}
 		for _, replacement := range rewrite.ReplacementFiles {
@@ -713,16 +820,20 @@ func rewriteDataFilesManifestEntries(req RewriteDataFilesMaterializeRequest) ([]
 }
 
 func rewriteDataFilesManifestEntry(status api.ManifestEntryStatus, snapshotID, sequenceNumber int64, file api.DataFile) api.ManifestEntry {
+	return rewriteDataFilesManifestEntryWithSequences(status, snapshotID, sequenceNumber, sequenceNumber, file)
+}
+
+func rewriteDataFilesManifestEntryWithSequences(status api.ManifestEntryStatus, snapshotID, sequenceNumber, fileSequenceNumber int64, file api.DataFile) api.ManifestEntry {
 	return api.ManifestEntry{
 		Status:         status,
 		SnapshotID:     snapshotID,
 		SequenceNumber: sequenceNumber,
-		FileSequence:   sequenceNumber,
+		FileSequence:   fileSequenceNumber,
 		DataFile:       file,
 	}
 }
 
-func buildRewriteDataFilesCommitAttempt(req RewriteDataFilesMaterializeRequest, manifest api.ManifestFile, manifestListBytes int, rewrittenFiles, addedFiles uint64) *api.CommitAttempt {
+func buildRewriteDataFilesCommitAttempt(req RewriteDataFilesMaterializeRequest, manifests []api.ManifestFile, rewrittenFiles, addedFiles uint64) *api.CommitAttempt {
 	targetRef := firstNonEmptyString(req.TargetRef, "main")
 	summary := cloneStringMap(req.Summary)
 	if summary == nil {
@@ -744,7 +855,7 @@ func buildRewriteDataFilesCommitAttempt(req RewriteDataFilesMaterializeRequest, 
 			req.ManifestListPath,
 			summary,
 		)),
-		api.NewSetSnapshotRefUpdate(targetRef, req.TargetRefType, req.SnapshotID),
+		api.NewSetSnapshotRefUpdatePreservingRetention(targetRef, req.TargetRefType, req.SnapshotID, req.TargetRefRetention),
 	}
 	return &api.CommitAttempt{
 		Requirements: []api.CommitRequirement{{
@@ -753,7 +864,7 @@ func buildRewriteDataFilesCommitAttempt(req RewriteDataFilesMaterializeRequest, 
 			SnapshotID: req.Snapshot.SnapshotID,
 		}},
 		Updates:        updates,
-		ManifestFiles:  []api.ManifestFile{manifest},
+		ManifestFiles:  append([]api.ManifestFile(nil), manifests...),
 		Summary:        summary,
 		IdempotencyKey: req.IdempotencyKey,
 		BaseSnapshotID: req.Snapshot.SnapshotID,
@@ -776,15 +887,6 @@ func cloneRewriteDataFilesManifests(in []api.ManifestFile) []api.ManifestFile {
 	out := make([]api.ManifestFile, len(in))
 	copy(out, in)
 	return out
-}
-
-func rewriteDataFilesManifestSpecID(entries []api.ManifestEntry) int {
-	for _, entry := range entries {
-		if entry.DataFile.SpecID != 0 {
-			return entry.DataFile.SpecID
-		}
-	}
-	return 0
 }
 
 func rewriteDataFilesCountEntries(entries []api.ManifestEntry, status api.ManifestEntryStatus) int {

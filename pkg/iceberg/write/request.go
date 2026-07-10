@@ -37,9 +37,11 @@ type AppendRequestSpec struct {
 	TableLocation        string
 	TargetRef            string
 	TargetRefType        string
+	TargetRefRetention   api.SnapshotRef
 	AllowTagMove         bool
 	CatalogCapabilities  api.CatalogCapabilities
 	TableUUID            string
+	FormatVersion        int
 	BaseSnapshotID       int64
 	BaseSchemaID         int
 	BaseSpecID           int
@@ -95,9 +97,11 @@ func BuildAppendRequest(ctx context.Context, spec AppendRequestSpec) (api.Append
 		TableLocation:        spec.TableLocation,
 		TargetRef:            spec.TargetRef,
 		TargetRefType:        spec.TargetRefType,
+		TargetRefRetention:   spec.TargetRefRetention,
 		AllowTagMove:         spec.AllowTagMove,
 		CatalogCapabilities:  spec.CatalogCapabilities,
 		TableUUID:            spec.TableUUID,
+		FormatVersion:        spec.FormatVersion,
 		BaseSnapshotID:       spec.BaseSnapshotID,
 		BaseSchemaID:         spec.BaseSchemaID,
 		BaseSpecID:           spec.BaseSpecID,

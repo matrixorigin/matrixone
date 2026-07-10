@@ -16,6 +16,7 @@ package dml
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,9 @@ import (
 
 type ManifestMaterializeRequest struct {
 	Intent             CommitIntent
+	FormatVersion      int
+	Schema             api.Schema
+	PartitionSpecs     []api.PartitionSpec
 	SnapshotID         int64
 	SequenceNumber     int64
 	TimestampMS        int64
@@ -41,11 +45,18 @@ type ManifestMaterializeResult struct {
 	DeleteEntries               []api.ManifestEntry
 	DataManifest                *api.ManifestFile
 	DeleteManifest              *api.ManifestFile
+	DataManifests               []MaterializedManifest
+	DeleteManifests             []MaterializedManifest
 	RewrittenPreservedManifests []RewrittenPreservedManifest
 	DataManifestBytes           []byte
 	DeleteManifestBytes         []byte
 	ManifestListBytes           []byte
 	Attempt                     *api.CommitAttempt
+}
+
+type MaterializedManifest struct {
+	Manifest      api.ManifestFile
+	ManifestBytes []byte
 }
 
 type PreservedManifestSource struct {
@@ -86,25 +97,27 @@ func BuildManifestCommitAttempt(ctx context.Context, req ManifestMaterializeRequ
 		if strings.TrimSpace(req.DataManifestPath) == "" {
 			return nil, api.NewError(api.ErrConfigInvalid, "Iceberg DML data manifest path is required", nil)
 		}
-		manifest, manifestBytes, err := buildDMLManifest(req.DataManifestPath, api.ManifestContentData, req.SnapshotID, req.SequenceNumber, dataEntries)
+		manifests, err := buildDMLManifests(req, req.DataManifestPath, api.ManifestContentData, req.SnapshotID, req.SequenceNumber, dataEntries)
 		if err != nil {
 			return nil, err
 		}
-		result.DataManifest = &manifest
-		result.DataManifestBytes = manifestBytes
-		newManifests = append(newManifests, manifest)
+		result.DataManifests = manifests
+		result.DataManifest = &result.DataManifests[0].Manifest
+		result.DataManifestBytes = result.DataManifests[0].ManifestBytes
+		newManifests = append(newManifests, materializedManifestFiles(manifests)...)
 	}
 	if len(deleteEntries) > 0 {
 		if strings.TrimSpace(req.DeleteManifestPath) == "" {
 			return nil, api.NewError(api.ErrConfigInvalid, "Iceberg DML delete manifest path is required", nil)
 		}
-		manifest, manifestBytes, err := buildDMLManifest(req.DeleteManifestPath, api.ManifestContentDeletes, req.SnapshotID, req.SequenceNumber, deleteEntries)
+		manifests, err := buildDMLManifests(req, req.DeleteManifestPath, api.ManifestContentDeletes, req.SnapshotID, req.SequenceNumber, deleteEntries)
 		if err != nil {
 			return nil, err
 		}
-		result.DeleteManifest = &manifest
-		result.DeleteManifestBytes = manifestBytes
-		newManifests = append(newManifests, manifest)
+		result.DeleteManifests = manifests
+		result.DeleteManifest = &result.DeleteManifests[0].Manifest
+		result.DeleteManifestBytes = result.DeleteManifests[0].ManifestBytes
+		newManifests = append(newManifests, materializedManifestFiles(manifests)...)
 	}
 	preservedManifests, rewrittenPreserved, err := materializePreservedManifests(req, dataEntries)
 	if err != nil {
@@ -112,7 +125,16 @@ func BuildManifestCommitAttempt(ctx context.Context, req ManifestMaterializeRequ
 	}
 	result.RewrittenPreservedManifests = rewrittenPreserved
 	manifestList := append(preservedManifests, newManifests...)
-	manifestListBytes, err := metadata.EncodeManifestList(manifestList)
+	var parentSnapshotID *int64
+	if req.Intent.BaseSnapshotID > 0 {
+		parentSnapshotID = &req.Intent.BaseSnapshotID
+	}
+	manifestListBytes, err := metadata.EncodeManifestList(manifestList, metadata.ManifestListWriteOptions{
+		FormatVersion:    req.FormatVersion,
+		SnapshotID:       req.SnapshotID,
+		ParentSnapshotID: parentSnapshotID,
+		SequenceNumber:   req.SequenceNumber,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +169,7 @@ func manifestEntries(intent CommitIntent, snapshotID, sequenceNumber int64) ([]a
 		case ActionRewriteDataFile:
 			old := action.ReplacedFile
 			old.Content = api.DataFileContentData
-			dataEntries = append(dataEntries, deletedManifestEntry(snapshotID, sequenceNumber, old))
+			dataEntries = append(dataEntries, deletedManifestEntry(snapshotID, old))
 			for _, replacement := range action.ReplacementFiles {
 				replacement.Content = api.DataFileContentData
 				dataEntries = append(dataEntries, addedManifestEntry(snapshotID, sequenceNumber, replacement))
@@ -155,7 +177,7 @@ func manifestEntries(intent CommitIntent, snapshotID, sequenceNumber int64) ([]a
 		case ActionDeleteDataFile:
 			old := action.ReplacedFile
 			old.Content = api.DataFileContentData
-			dataEntries = append(dataEntries, deletedManifestEntry(snapshotID, sequenceNumber, old))
+			dataEntries = append(dataEntries, deletedManifestEntry(snapshotID, old))
 		default:
 			return nil, nil, api.NewError(api.ErrUnsupportedFeature, "Iceberg DML action kind is unsupported", map[string]string{"action": string(action.Kind)})
 		}
@@ -173,39 +195,80 @@ func addedManifestEntry(snapshotID, sequenceNumber int64, file api.DataFile) api
 	}
 }
 
-func deletedManifestEntry(snapshotID, sequenceNumber int64, file api.DataFile) api.ManifestEntry {
+func deletedManifestEntry(snapshotID int64, file api.DataFile) api.ManifestEntry {
 	return api.ManifestEntry{
 		Status:         api.ManifestEntryDeleted,
 		SnapshotID:     snapshotID,
-		SequenceNumber: sequenceNumber,
-		FileSequence:   sequenceNumber,
+		SequenceNumber: file.SequenceNumber,
+		FileSequence:   file.FileSequenceNumber,
 		DataFile:       file,
 	}
 }
 
-func buildDMLManifest(path string, content api.ManifestContent, snapshotID, sequenceNumber int64, entries []api.ManifestEntry) (api.ManifestFile, []byte, error) {
-	manifestBytes, err := metadata.EncodeManifest(entries)
-	if err != nil {
-		return api.ManifestFile{}, nil, err
+func buildDMLManifests(req ManifestMaterializeRequest, basePath string, content api.ManifestContent, snapshotID, sequenceNumber int64, entries []api.ManifestEntry) ([]MaterializedManifest, error) {
+	entriesBySpec := make(map[int][]api.ManifestEntry)
+	for _, entry := range entries {
+		entriesBySpec[entry.DataFile.SpecID] = append(entriesBySpec[entry.DataFile.SpecID], entry)
 	}
-	manifest := api.ManifestFile{
-		Path:                    path,
-		Length:                  int64(len(manifestBytes)),
-		PartitionSpecID:         manifestSpecID(entries),
-		Content:                 content,
-		SequenceNumber:          sequenceNumber,
-		MinSequenceNumber:       sequenceNumber,
-		AddedSnapshotID:         snapshotID,
-		AddedFilesCount:         countManifestEntries(entries, api.ManifestEntryAdded),
-		DeletedFilesCount:       countManifestEntries(entries, api.ManifestEntryDeleted),
-		AddedRowsCount:          rowsForManifestEntries(entries, api.ManifestEntryAdded),
-		DeletedRowsCount:        rowsForManifestEntries(entries, api.ManifestEntryDeleted),
-		AddedFilesSizeInBytes:   bytesForManifestEntries(entries, api.ManifestEntryAdded),
-		DeletedFilesSizeInBytes: bytesForManifestEntries(entries, api.ManifestEntryDeleted),
-		ManifestPathRedacted:    api.RedactPath(path),
-		ManifestPathHash:        api.PathHash(path),
+	specIDs := make([]int, 0, len(entriesBySpec))
+	for specID := range entriesBySpec {
+		specIDs = append(specIDs, specID)
 	}
-	return manifest, manifestBytes, nil
+	sort.Ints(specIDs)
+	out := make([]MaterializedManifest, 0, len(specIDs))
+	for _, specID := range specIDs {
+		specEntries := entriesBySpec[specID]
+		opts, err := dmlManifestWriteOptions(req, content, specID)
+		if err != nil {
+			return nil, err
+		}
+		manifestBytes, err := metadata.EncodeManifest(specEntries, opts)
+		if err != nil {
+			return nil, err
+		}
+		path := dmlManifestPathForSpec(basePath, specID, len(specIDs))
+		out = append(out, MaterializedManifest{
+			Manifest: api.ManifestFile{
+				Path:                    path,
+				Length:                  int64(len(manifestBytes)),
+				PartitionSpecID:         specID,
+				Content:                 content,
+				SequenceNumber:          sequenceNumber,
+				MinSequenceNumber:       sequenceNumber,
+				AddedSnapshotID:         snapshotID,
+				AddedFilesCount:         countManifestEntries(specEntries, api.ManifestEntryAdded),
+				DeletedFilesCount:       countManifestEntries(specEntries, api.ManifestEntryDeleted),
+				AddedRowsCount:          rowsForManifestEntries(specEntries, api.ManifestEntryAdded),
+				DeletedRowsCount:        rowsForManifestEntries(specEntries, api.ManifestEntryDeleted),
+				AddedFilesSizeInBytes:   bytesForManifestEntries(specEntries, api.ManifestEntryAdded),
+				DeletedFilesSizeInBytes: bytesForManifestEntries(specEntries, api.ManifestEntryDeleted),
+				ManifestPathRedacted:    api.RedactPath(path),
+				ManifestPathHash:        api.PathHash(path),
+			},
+			ManifestBytes: manifestBytes,
+		})
+	}
+	return out, nil
+}
+
+func dmlManifestPathForSpec(basePath string, specID, specCount int) string {
+	if specCount <= 1 {
+		return basePath
+	}
+	ext := ""
+	if idx := strings.LastIndex(basePath, "."); idx > strings.LastIndex(basePath, "/") {
+		ext = basePath[idx:]
+		basePath = basePath[:idx]
+	}
+	return basePath + "-spec-" + strconv.Itoa(specID) + ext
+}
+
+func materializedManifestFiles(manifests []MaterializedManifest) []api.ManifestFile {
+	out := make([]api.ManifestFile, 0, len(manifests))
+	for _, manifest := range manifests {
+		out = append(out, manifest.Manifest)
+	}
+	return out
 }
 
 func buildDMLCommitAttempt(req ManifestMaterializeRequest, manifests []api.ManifestFile) *api.CommitAttempt {
@@ -219,7 +282,7 @@ func buildDMLCommitAttempt(req ManifestMaterializeRequest, manifests []api.Manif
 			req.ManifestListPath,
 			req.Intent.Summary,
 		)),
-		api.NewSetSnapshotRefUpdate(req.Intent.TargetRef, req.Intent.TargetRefType, req.SnapshotID),
+		api.NewSetSnapshotRefUpdatePreservingRetention(req.Intent.TargetRef, req.Intent.TargetRefType, req.SnapshotID, req.Intent.TargetRefRetention),
 	}
 	return &api.CommitAttempt{
 		Requirements:   append([]api.CommitRequirement(nil), req.Intent.Requirements...),
@@ -323,7 +386,19 @@ func filterPreservedManifestEntries(entries []api.ManifestEntry, deletedFiles ma
 
 func buildRewrittenPreservedManifest(req ManifestMaterializeRequest, original api.ManifestFile, entries []api.ManifestEntry, index int, removed int) (RewrittenPreservedManifest, error) {
 	path := rewrittenPreservedManifestPath(req.ManifestListPath, original.Path, index)
-	manifestBytes, err := metadata.EncodeManifest(entries)
+	content := original.Content
+	if content == "" {
+		content = api.ManifestContentData
+	}
+	specID := original.PartitionSpecID
+	if inferred := manifestSpecID(entries); specID == 0 && inferred != 0 {
+		specID = inferred
+	}
+	opts, err := dmlManifestWriteOptions(req, content, specID)
+	if err != nil {
+		return RewrittenPreservedManifest{}, err
+	}
+	manifestBytes, err := metadata.EncodeManifest(entries, opts)
 	if err != nil {
 		return RewrittenPreservedManifest{}, err
 	}
@@ -347,6 +422,22 @@ func buildRewrittenPreservedManifest(req ManifestMaterializeRequest, original ap
 		ManifestBytes:  manifestBytes,
 		RemovedEntries: removed,
 	}, nil
+}
+
+func dmlManifestWriteOptions(req ManifestMaterializeRequest, content api.ManifestContent, specID int) (metadata.ManifestWriteOptions, error) {
+	for _, spec := range req.PartitionSpecs {
+		if spec.SpecID == specID {
+			return metadata.ManifestWriteOptions{
+				FormatVersion: req.FormatVersion,
+				Schema:        req.Schema,
+				PartitionSpec: spec,
+				Content:       content,
+			}, nil
+		}
+	}
+	return metadata.ManifestWriteOptions{}, api.NewError(api.ErrMetadataInvalid, "Iceberg DML manifest partition spec is missing", map[string]string{
+		"spec_id": strconv.Itoa(specID),
+	})
 }
 
 func rewrittenPreservedManifestPath(manifestListPath, originalPath string, index int) string {

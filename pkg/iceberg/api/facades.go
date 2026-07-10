@@ -259,9 +259,11 @@ type AppendRequest struct {
 	TableLocation        string
 	TargetRef            string
 	TargetRefType        string
+	TargetRefRetention   SnapshotRef
 	AllowTagMove         bool
 	CatalogCapabilities  CatalogCapabilities
 	TableUUID            string
+	FormatVersion        int
 	BaseSnapshotID       int64
 	BaseSchemaID         int
 	BaseSpecID           int
@@ -314,15 +316,18 @@ type CommitRequirement struct {
 }
 
 type CommitUpdate struct {
-	Type       string
-	Payload    map[string]string
-	FilePath   string
-	DataFile   *DataFile
-	Manifest   *ManifestFile
-	Snapshot   *Snapshot
-	Ref        string
-	RefType    string
-	SnapshotID int64
+	Type               string
+	Payload            map[string]string
+	FilePath           string
+	DataFile           *DataFile
+	Manifest           *ManifestFile
+	Snapshot           *Snapshot
+	Ref                string
+	RefType            string
+	SnapshotID         int64
+	MinSnapshotsToKeep int
+	MaxSnapshotAgeMS   int64
+	MaxRefAgeMS        int64
 }
 
 type CommitResult struct {

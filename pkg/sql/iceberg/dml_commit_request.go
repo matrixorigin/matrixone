@@ -27,6 +27,9 @@ type DMLCommitWorkflowRequestSpec struct {
 	Catalog            api.CatalogRequest
 	Stream             dml.ActionStream
 	TableLocation      string
+	FormatVersion      int
+	Schema             api.Schema
+	PartitionSpecs     []api.PartitionSpec
 	SnapshotID         int64
 	SequenceNumber     int64
 	TimestampMS        int64
@@ -39,6 +42,9 @@ type DMLCommitActionStreamSpec struct {
 	Catalog            api.CatalogRequest
 	Stream             dml.ActionStream
 	TableLocation      string
+	FormatVersion      int
+	Schema             api.Schema
+	PartitionSpecs     []api.PartitionSpec
 	SnapshotID         int64
 	SequenceNumber     int64
 	TimestampMS        int64
@@ -75,6 +81,9 @@ func BuildDMLCommitWorkflowRequest(ctx context.Context, spec DMLCommitWorkflowRe
 	return dml.CommitWorkflowRequest{
 		Catalog:            spec.Catalog,
 		Stream:             spec.Stream,
+		FormatVersion:      spec.FormatVersion,
+		Schema:             spec.Schema,
+		PartitionSpecs:     append([]api.PartitionSpec(nil), spec.PartitionSpecs...),
 		SnapshotID:         spec.SnapshotID,
 		SequenceNumber:     spec.SequenceNumber,
 		TimestampMS:        spec.TimestampMS,
@@ -93,6 +102,9 @@ func CommitDMLActionStream(ctx context.Context, spec DMLCommitActionStreamSpec) 
 		Catalog:        spec.Catalog,
 		Stream:         spec.Stream,
 		TableLocation:  spec.TableLocation,
+		FormatVersion:  spec.FormatVersion,
+		Schema:         spec.Schema,
+		PartitionSpecs: append([]api.PartitionSpec(nil), spec.PartitionSpecs...),
 		SnapshotID:     spec.SnapshotID,
 		SequenceNumber: spec.SequenceNumber,
 		TimestampMS:    spec.TimestampMS,

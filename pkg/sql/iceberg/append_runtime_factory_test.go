@@ -70,7 +70,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 	tableLocation := "s3://warehouse/writer/gold_kpi"
 	baseManifestLocation := tableLocation + "/metadata/base-manifest.avro"
 	baseManifestListLocation := tableLocation + "/metadata/base-list.avro"
-	baseManifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{{
+	baseManifestBytes, err := encodeSQLIcebergTestManifest([]api.ManifestEntry{{
 		Status:         api.ManifestEntryAdded,
 		SnapshotID:     30,
 		SequenceNumber: 44,
@@ -83,7 +83,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 		},
 	}})
 	require.NoError(t, err)
-	baseManifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	baseManifestListBytes, err := encodeSQLIcebergTestManifestList([]api.ManifestFile{{
 		Path:            baseManifestLocation,
 		Length:          int64(len(baseManifestBytes)),
 		Content:         api.ManifestContentData,
@@ -222,6 +222,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 	require.Equal(t, string(icebergwrite.OperationAppend), snapshot.Summary["mo-operation"])
 	require.Equal(t, "set-snapshot-ref", commitReq.Updates[1].Type)
 	require.Equal(t, model.DefaultRefMain, commitReq.Updates[1].Ref)
+	require.Zero(t, commitReq.Updates[1].MinSnapshotsToKeep)
 
 	manifestListBytes := readAppendRuntimeMemoryFile(t, ctx, fs, snapshot.ManifestList)
 	manifestList, err := metadata.ReadManifestList(manifestListBytes)
@@ -305,7 +306,7 @@ func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
 func TestAppendRuntimeSharedCoordinatorCommitsOncePerStatement(t *testing.T) {
 	ctx := context.Background()
 	inner := &countingAppendCoordinator{}
-	cache := &appendRuntimeCoordinatorCache{entries: make(map[string]*appendRuntimeSharedCoordinator)}
+	cache := &appendRuntimeCoordinatorCache{entries: make(map[string]*appendRuntimeCoordinatorCacheEntry)}
 	req := icebergwrite.AppendRequest{
 		AccountID:      42,
 		Operation:      icebergwrite.OperationAppend,
@@ -356,6 +357,66 @@ func TestAppendRuntimeSharedCoordinatorCommitsOncePerStatement(t *testing.T) {
 	require.NoError(t, err)
 	require.NotSame(t, coord1, coord3)
 	require.Equal(t, 2, builds)
+}
+
+func TestAppendRuntimeCoordinatorCacheBuildsDifferentStatementsConcurrently(t *testing.T) {
+	ctx := context.Background()
+	cache := &appendRuntimeCoordinatorCache{entries: make(map[string]*appendRuntimeCoordinatorCacheEntry)}
+	entered := make(chan string, 2)
+	release := make(chan struct{})
+	results := make(chan error, 2)
+
+	build := func(key string) {
+		_, err := cache.getOrCreate(ctx, key, icebergwrite.AppendRequest{StatementID: key}, func() (icebergwrite.Coordinator, error) {
+			entered <- key
+			<-release
+			return &countingAppendCoordinator{}, nil
+		})
+		results <- err
+	}
+	go build("stmt-1")
+	go build("stmt-2")
+
+	seen := make(map[string]bool, 2)
+	for len(seen) < 2 {
+		select {
+		case key := <-entered:
+			seen[key] = true
+		case <-time.After(time.Second):
+			t.Fatal("coordinator builds for different statements were serialized")
+		}
+	}
+	close(release)
+	for range 2 {
+		require.NoError(t, <-results)
+	}
+}
+
+func TestAppendRuntimeCoordinatorCacheSingleflightsSameStatement(t *testing.T) {
+	ctx := context.Background()
+	cache := &appendRuntimeCoordinatorCache{entries: make(map[string]*appendRuntimeCoordinatorCacheEntry)}
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	results := make(chan error, 2)
+	build := func() (icebergwrite.Coordinator, error) {
+		entered <- struct{}{}
+		<-release
+		return &countingAppendCoordinator{}, nil
+	}
+	request := icebergwrite.AppendRequest{StatementID: "stmt-shared"}
+
+	for range 2 {
+		go func() {
+			_, err := cache.getOrCreate(ctx, "stmt-shared", request, build)
+			results <- err
+		}()
+	}
+	<-entered
+	close(release)
+	for range 2 {
+		require.NoError(t, <-results)
+	}
+	require.Len(t, entered, 0, "same-key cache miss must build only once")
 }
 
 func TestAppendRuntimeFactoryValidationAndHelpers(t *testing.T) {

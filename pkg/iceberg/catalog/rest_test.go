@@ -619,7 +619,11 @@ func TestRESTClientCommitTableSerializesSnapshotUpdates(t *testing.T) {
 		Table:          "orders",
 		Updates: []api.CommitUpdate{
 			api.NewAddSnapshotUpdate(snapshot),
-			api.NewSetSnapshotRefUpdate("main", "branch", 200),
+			api.NewSetSnapshotRefUpdatePreservingRetention("main", "branch", 200, api.SnapshotRef{
+				MinSnapshotsToKeep: 2,
+				MaxSnapshotAgeMS:   1_000,
+				MaxRefAgeMS:        2_000,
+			}),
 		},
 	})
 	if err != nil {
@@ -636,6 +640,12 @@ func TestRESTClientCommitTableSerializesSnapshotUpdates(t *testing.T) {
 	}
 	if gotBody.Updates[1].Action != "set-snapshot-ref" || gotBody.Updates[1].RefName != "main" || gotBody.Updates[1].RefType != "branch" || gotBody.Updates[1].SnapshotID != 200 {
 		t.Fatalf("unexpected set-snapshot-ref update: %+v", gotBody.Updates[1])
+	}
+	if gotBody.Updates[1].MinSnapshotsToKeep != 2 {
+		t.Fatalf("set-snapshot-ref must preserve historical snapshots: %+v", gotBody.Updates[1])
+	}
+	if gotBody.Updates[1].MaxSnapshotAgeMS != 1_000 || gotBody.Updates[1].MaxRefAgeMS != 2_000 {
+		t.Fatalf("set-snapshot-ref must preserve age policies: %+v", gotBody.Updates[1])
 	}
 }
 

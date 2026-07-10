@@ -145,8 +145,17 @@ func expireMetadata(currentID int64) *api.TableMetadata {
 	parent2 := int64(2)
 	parent3 := int64(3)
 	return &api.TableMetadata{
-		FormatVersion:     2,
-		Location:          "s3://warehouse/orders",
+		FormatVersion:   2,
+		Location:        "s3://warehouse/orders",
+		CurrentSchemaID: 0,
+		Schemas: []api.Schema{{SchemaID: 0, Fields: []api.SchemaField{
+			{ID: 1, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}},
+			{ID: 2, Name: "region", Type: api.IcebergType{Kind: api.TypeString}},
+		}}},
+		DefaultSpecID: 0,
+		PartitionSpecs: []api.PartitionSpec{{SpecID: 0, Fields: []api.PartitionField{{
+			SourceID: 2, FieldID: 1000, Name: "region", Transform: "identity",
+		}}}},
 		CurrentSnapshotID: &currentID,
 		Refs: map[string]api.SnapshotRef{
 			"main": {SnapshotID: currentID, Type: "branch"},

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 )
 
@@ -35,7 +36,7 @@ type RowsScanner interface {
 }
 
 type SQLExecutor interface {
-	Exec(ctx context.Context, sql string) error
+	Exec(ctx context.Context, sql string) (uint64, error)
 	QueryRow(ctx context.Context, sql string) RowScanner
 	Query(ctx context.Context, sql string) (RowsScanner, error)
 }
@@ -61,7 +62,7 @@ func (d *DAO) InsertCatalog(ctx context.Context, catalog model.Catalog) error {
 	if err := ValidateCatalog(ctx, catalog); err != nil {
 		return err
 	}
-	return d.exec.Exec(ctx, InsertCatalogSQL(catalog))
+	return d.execSQL(ctx, InsertCatalogSQL(catalog))
 }
 
 func (d *DAO) UpdateCatalog(ctx context.Context, catalog model.Catalog) error {
@@ -71,7 +72,7 @@ func (d *DAO) UpdateCatalog(ctx context.Context, catalog model.Catalog) error {
 	if err := ValidateCatalog(ctx, catalog); err != nil {
 		return err
 	}
-	return d.exec.Exec(ctx, UpdateCatalogSQL(catalog))
+	return d.execOptimistic(ctx, "catalog update", UpdateCatalogSQL(catalog))
 }
 
 func (d *DAO) DeleteCatalog(ctx context.Context, accountID uint32, catalogID uint64) error {
@@ -81,7 +82,7 @@ func (d *DAO) DeleteCatalog(ctx context.Context, accountID uint32, catalogID uin
 	if accountID == 0 || catalogID == 0 {
 		return moerr.NewInvalidInput(ctx, "iceberg catalog delete requires account_id and catalog_id")
 	}
-	return d.exec.Exec(ctx, fmt.Sprintf(
+	return d.execSQL(ctx, fmt.Sprintf(
 		"delete from mo_catalog.%s where account_id = %d and catalog_id = %d",
 		TableCatalogs, accountID, catalogID,
 	))
@@ -140,7 +141,7 @@ func (d *DAO) InsertPrincipalMap(ctx context.Context, mapping model.PrincipalMap
 	if err := ValidatePrincipalMap(ctx, mapping); err != nil {
 		return err
 	}
-	return d.exec.Exec(ctx, InsertPrincipalMapSQL(mapping))
+	return d.execSQL(ctx, InsertPrincipalMapSQL(mapping))
 }
 
 func (d *DAO) ListPrincipalMaps(ctx context.Context, accountID uint32, catalogID uint64) ([]model.PrincipalMap, error) {
@@ -176,7 +177,7 @@ func (d *DAO) InsertResidencyPolicy(ctx context.Context, policy model.ResidencyP
 	if err := ValidateResidencyPolicy(ctx, policy); err != nil {
 		return err
 	}
-	return d.exec.Exec(ctx, InsertResidencyPolicySQL(policy))
+	return d.execSQL(ctx, InsertResidencyPolicySQL(policy))
 }
 
 func (d *DAO) InsertResidencyPolicyWithPrivilege(ctx context.Context, actorAccountID uint32, isClusterAdmin bool, policy model.ResidencyPolicy) error {
@@ -186,7 +187,7 @@ func (d *DAO) InsertResidencyPolicyWithPrivilege(ctx context.Context, actorAccou
 	if err := ValidateResidencyPolicyPrivilege(ctx, actorAccountID, isClusterAdmin, policy); err != nil {
 		return err
 	}
-	return d.exec.Exec(ctx, InsertResidencyPolicySQL(policy))
+	return d.execSQL(ctx, InsertResidencyPolicySQL(policy))
 }
 
 func (d *DAO) ListResidencyPolicies(ctx context.Context, accountID uint32, catalogID uint64) ([]model.ResidencyPolicy, error) {
@@ -222,7 +223,7 @@ func (d *DAO) InsertTableMapping(ctx context.Context, mapping model.TableMapping
 	if err := ValidateTableMapping(ctx, mapping); err != nil {
 		return err
 	}
-	return d.exec.Exec(ctx, InsertTableMappingSQL(mapping))
+	return d.execSQL(ctx, InsertTableMappingSQL(mapping))
 }
 
 func (d *DAO) GetTableMapping(ctx context.Context, accountID uint32, databaseID uint64, tableID uint64) (model.TableMapping, error) {
@@ -262,7 +263,7 @@ func (d *DAO) UpdateTableMappingOptimistic(ctx context.Context, mapping model.Ta
 	if expectedVersion == 0 {
 		return moerr.NewInvalidInput(ctx, "iceberg table mapping optimistic update requires expected version")
 	}
-	return d.exec.Exec(ctx, UpdateTableMappingOptimisticSQL(mapping, expectedVersion))
+	return d.execOptimistic(ctx, "table mapping update", UpdateTableMappingOptimisticSQL(mapping, expectedVersion))
 }
 
 func (d *DAO) GetRefCache(ctx context.Context, accountID uint32, catalogID uint64, namespace, tableName, refName string) (model.RefCache, error) {
@@ -351,11 +352,11 @@ func (d *DAO) RefreshRefCache(ctx context.Context, refs []model.RefCache) error 
 		return err
 	}
 	first := normalized[0]
-	if err := d.exec.Exec(ctx, DeleteRefCacheSQL(first.AccountID, first.CatalogID, first.Namespace, first.TableName)); err != nil {
+	if err := d.execSQL(ctx, DeleteRefCacheSQL(first.AccountID, first.CatalogID, first.Namespace, first.TableName)); err != nil {
 		return err
 	}
 	for _, ref := range normalized {
-		if err := d.exec.Exec(ctx, InsertRefCacheSQL(ref)); err != nil {
+		if err := d.execSQL(ctx, InsertRefCacheSQL(ref)); err != nil {
 			return err
 		}
 	}
@@ -369,7 +370,7 @@ func (d *DAO) InsertPublishJob(ctx context.Context, job model.PublishJob) error 
 	if err := ValidatePublishJob(ctx, job); err != nil {
 		return err
 	}
-	return d.exec.Exec(ctx, InsertPublishJobSQL(job))
+	return d.execSQL(ctx, InsertPublishJobSQL(job))
 }
 
 func (d *DAO) UpdatePublishJobStatus(ctx context.Context, accountID uint32, jobID, status, errorCategory string, expectedVersion uint64) error {
@@ -379,7 +380,7 @@ func (d *DAO) UpdatePublishJobStatus(ctx context.Context, accountID uint32, jobI
 	if trimNonEmpty(jobID) == "" || trimNonEmpty(status) == "" || expectedVersion == 0 {
 		return moerr.NewInvalidInput(ctx, "iceberg publish job status update requires account_id, job_id, status, and expected version")
 	}
-	return d.exec.Exec(ctx, UpdatePublishJobStatusSQL(accountID, jobID, status, errorCategory, expectedVersion))
+	return d.execOptimistic(ctx, "publish job status update", UpdatePublishJobStatusSQL(accountID, jobID, status, errorCategory, expectedVersion))
 }
 
 func (d *DAO) InsertOrphanFile(ctx context.Context, file model.OrphanFile) error {
@@ -389,7 +390,7 @@ func (d *DAO) InsertOrphanFile(ctx context.Context, file model.OrphanFile) error
 	if err := ValidateOrphanFile(ctx, file); err != nil {
 		return err
 	}
-	return d.exec.Exec(ctx, InsertOrphanFileSQL(file))
+	return d.execSQL(ctx, InsertOrphanFileSQL(file))
 }
 
 func (d *DAO) ListOrphanCleanupCandidates(ctx context.Context, accountID uint32, limit int) ([]model.OrphanFile, error) {
@@ -422,7 +423,7 @@ func (d *DAO) UpdateOrphanFileCleanupStatus(ctx context.Context, accountID uint3
 	if trimNonEmpty(jobID) == "" || trimNonEmpty(filePathHash) == "" || trimNonEmpty(cleanupStatus) == "" || expectedVersion == 0 {
 		return moerr.NewInvalidInput(ctx, "iceberg orphan cleanup status update requires job_id, file_path_hash, cleanup_status, and expected version")
 	}
-	return d.exec.Exec(ctx, UpdateOrphanFileCleanupStatusSQL(accountID, jobID, filePathHash, cleanupStatus, expectedVersion))
+	return d.execOptimistic(ctx, "orphan cleanup status update", UpdateOrphanFileCleanupStatusSQL(accountID, jobID, filePathHash, cleanupStatus, expectedVersion))
 }
 
 func (d *DAO) InsertMaintenanceJob(ctx context.Context, job model.MaintenanceJob) error {
@@ -432,7 +433,7 @@ func (d *DAO) InsertMaintenanceJob(ctx context.Context, job model.MaintenanceJob
 	if err := ValidateMaintenanceJob(ctx, job); err != nil {
 		return err
 	}
-	return d.exec.Exec(ctx, InsertMaintenanceJobSQL(job))
+	return d.execSQL(ctx, InsertMaintenanceJobSQL(job))
 }
 
 func (d *DAO) UpdateMaintenanceJobStatus(ctx context.Context, accountID uint32, jobID, status, errorCategory string, snapshotAfter string, rewrittenFileCount, removedFileCount uint64, expectedVersion uint64) error {
@@ -442,7 +443,26 @@ func (d *DAO) UpdateMaintenanceJobStatus(ctx context.Context, accountID uint32, 
 	if trimNonEmpty(jobID) == "" || trimNonEmpty(status) == "" || expectedVersion == 0 {
 		return moerr.NewInvalidInput(ctx, "iceberg maintenance job status update requires job_id, status, and expected version")
 	}
-	return d.exec.Exec(ctx, UpdateMaintenanceJobStatusSQL(accountID, jobID, status, errorCategory, snapshotAfter, rewrittenFileCount, removedFileCount, expectedVersion))
+	return d.execOptimistic(ctx, "maintenance job status update", UpdateMaintenanceJobStatusSQL(accountID, jobID, status, errorCategory, snapshotAfter, rewrittenFileCount, removedFileCount, expectedVersion))
+}
+
+func (d *DAO) execSQL(ctx context.Context, sql string) error {
+	_, err := d.exec.Exec(ctx, sql)
+	return err
+}
+
+func (d *DAO) execOptimistic(ctx context.Context, operation, sql string) error {
+	affected, err := d.exec.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return api.ToMOErr(ctx, api.NewError(api.ErrCommitConflict, "Iceberg optimistic update did not match the expected version", map[string]string{
+			"operation":     operation,
+			"affected_rows": fmt.Sprintf("%d", affected),
+		}))
+	}
+	return nil
 }
 
 func ValidateCatalog(ctx context.Context, catalog model.Catalog) error {

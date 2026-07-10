@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
-	"github.com/matrixorigin/matrixone/pkg/iceberg/metadata"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 )
 
@@ -119,7 +118,7 @@ func TestOrphanSweeperRefusesReferencedCandidate(t *testing.T) {
 
 func writeOrphanSweeperManifestFiles(t *testing.T, ctx context.Context, fs fileservice.ETLFileService, manifestListPath, manifestPath, dataPath string) {
 	t.Helper()
-	manifestBytes, err := metadata.EncodeManifest([]api.ManifestEntry{{
+	manifestBytes, err := encodeSQLIcebergTestManifest([]api.ManifestEntry{{
 		Status:         api.ManifestEntryExisting,
 		SnapshotID:     4,
 		SequenceNumber: 4,
@@ -135,7 +134,7 @@ func writeOrphanSweeperManifestFiles(t *testing.T, ctx context.Context, fs files
 		},
 	}})
 	requireNoErr(t, err)
-	manifestListBytes, err := metadata.EncodeManifestList([]api.ManifestFile{{
+	manifestListBytes, err := encodeSQLIcebergTestManifestList([]api.ManifestFile{{
 		Path:    manifestPath,
 		Content: api.ManifestContentData,
 		Length:  int64(len(manifestBytes)),
