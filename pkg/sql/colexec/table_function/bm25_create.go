@@ -20,12 +20,12 @@ import (
 	"time"
 
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/bm25/wand"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
-	"github.com/matrixorigin/matrixone/pkg/bm25/wand"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"

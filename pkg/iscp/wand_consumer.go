@@ -18,9 +18,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/bm25/wand"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/bm25/wand"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
