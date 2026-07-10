@@ -460,6 +460,43 @@ func TestCleanCommitStateCancelsInFlightProbe(t *testing.T) {
 	})
 }
 
+func TestCleanCommitStateExpiresRetryableServiceState(t *testing.T) {
+	runtime.RunTest("", func(_ runtime.Runtime) {
+		lta := &lockTableAllocator{
+			logger:          getLogger("").Named("clean-commit-state-expiry-test"),
+			keepBindTimeout: time.Millisecond,
+		}
+		lta.options.removeDisconnectDuration = 10 * time.Millisecond
+		ctl := lta.getCtl("expired-service")
+		require.Equal(t, cannotCommitState, ctl.tryCannotCommit("t1"))
+		lta.inactiveService.Store("expired-service", time.Now().Add(-time.Second))
+		lta.options.getActiveTxnFunc = func(context.Context, string) (bool, [][]byte, error) {
+			return false, nil, assert.AnError
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			lta.cleanCommitState(ctx)
+		}()
+
+		require.Eventually(t, func() bool {
+			_, exists := lta.ctl.Load("expired-service")
+			return !exists
+		}, time.Second, 5*time.Millisecond)
+		require.False(t, lta.HasInvalidService("expired-service"))
+
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("cleanCommitState did not stop after cancellation")
+		}
+	})
+}
+
 func TestCannotCommitGenerationRefresh(t *testing.T) {
 	c := &commitCtl{}
 	require.Equal(t, cannotCommitState, c.tryCannotCommit("refreshed"))

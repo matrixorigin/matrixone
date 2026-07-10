@@ -698,6 +698,12 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 					l.logger.Error("retry to check service if alive on next sweep",
 						zap.String("serviceID", sid),
 						zap.Error(err))
+					if _, expired := expiredUnknownServices[sid]; expired {
+						// The disconnected-service retention already elapsed before this
+						// probe. Preserve the existing expiry policy even if the current
+						// probe failed with a retryable error.
+						unknownServices = append(unknownServices, sid)
+					}
 					continue
 				}
 
