@@ -1,0 +1,67 @@
+drop database if exists bm25_pushdown;
+create database bm25_pushdown;
+use bm25_pushdown;
+create table docs (id bigint primary key, body text, cat int);
+insert into docs values
+(1,'apple banana cherry',10),
+(2,'apple banana',20),
+(3,'apple',10),
+(4,'durian mango',10),
+(5,'apple apple apple banana',20),
+(6,'apple cherry',10),
+(7,'banana cherry',20);
+create index ftx using bm25 on docs(body) with parser gojieba;
+set fulltext_bloom_filter_pushdown=off;
+select id from docs where match(body) against('apple') and cat=10 order by id;
+id
+1
+3
+6
+select id from docs where match(body) against('apple') and cat=20 order by id;
+id
+2
+5
+select id from docs where match(body) against('apple') and cat=10 limit 2;
+id
+3
+6
+select id from docs where match(body) against('apple banana') and cat=20 order by id;
+id
+2
+5
+7
+select id from docs where match(body) against('durian') and cat=20 order by id;
+id
+select id from docs where match(body) against('apple') and cat=99 order by id;
+id
+select count(*) from docs where match(body) against('apple') and cat=10;
+count(*)
+3
+set fulltext_bloom_filter_pushdown=on;
+select id from docs where match(body) against('apple') and cat=10 order by id;
+id
+1
+3
+6
+select id from docs where match(body) against('apple') and cat=20 order by id;
+id
+2
+5
+select id from docs where match(body) against('apple') and cat=10 limit 2;
+id
+3
+6
+select id from docs where match(body) against('apple banana') and cat=20 order by id;
+id
+2
+5
+7
+select id from docs where match(body) against('durian') and cat=20 order by id;
+id
+select id from docs where match(body) against('apple') and cat=99 order by id;
+id
+select count(*) from docs where match(body) against('apple') and cat=10;
+count(*)
+3
+set fulltext_bloom_filter_pushdown=off;
+drop database bm25_pushdown;

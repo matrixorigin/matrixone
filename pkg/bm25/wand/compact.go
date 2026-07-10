@@ -164,6 +164,28 @@ func (m *WandModel) Split(capacity int64) []*WandModel {
 //
 // Returns the number of new tag=0 sub-indexes written (0 when the tail held only
 // resolved churn / nothing to fold).
+
+// survivingDeletes returns the tail deletes NOT resolved by a live re-insert among
+// the filtered (live) tail segments — the deletes that must still shadow stale copies
+// in the untouched old bases. Keys are normalizeKey'd to match ComputeLiveness and
+// the `deletes` map: a string-family pk decodes to []byte, which is unhashable as a
+// raw map key (would panic) and would never match the normalized delete keys.
+func survivingDeletes(filtered []*WandModel, deletes map[any]int64) []DeleteRecord {
+	livePks := make(map[any]struct{}, len(filtered))
+	for _, f := range filtered {
+		for _, pk := range f.pks {
+			livePks[normalizeKey(pk)] = struct{}{}
+		}
+	}
+	var surviving []DeleteRecord
+	for pk := range deletes {
+		if _, ok := livePks[pk]; !ok {
+			surviving = append(surviving, DeleteRecord{Pk: pk})
+		}
+	}
+	return surviving
+}
+
 func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int64) (int, error) {
 	// K = MAX tail chunk_id in this snapshot (the prefix we fold + delete).
 	_, k, emptyTail, err := tailChunkBounds(sqlproc, cfg)
@@ -185,16 +207,12 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 	// models are pk-disjoint — Merge's precondition.
 	live := ComputeLiveness(tailSegs, deletes)
 	filtered := make([]*WandModel, 0, len(tailSegs))
-	livePks := make(map[any]struct{})
 	for i, s := range tailSegs {
 		f := s.FilterLive(live[i])
 		if f.N == 0 {
 			continue // segment fully dead/superseded within the tail
 		}
 		filtered = append(filtered, f)
-		for _, pk := range f.pks {
-			livePks[pk] = struct{}{}
-		}
 	}
 	if pkType == 0 && len(filtered) > 0 {
 		pkType = filtered[0].PkType
@@ -215,12 +233,7 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity int6
 
 	// Surviving deletes: tail deletes not resolved by a live re-insert. They shadow
 	// stale copies in the untouched old bases (recency < K).
-	var surviving []DeleteRecord
-	for pk := range deletes {
-		if _, ok := livePks[pk]; !ok {
-			surviving = append(surviving, DeleteRecord{Pk: pk})
-		}
-	}
+	surviving := survivingDeletes(filtered, deletes)
 
 	// Write the new base sub(s) at recency K.
 	for i, m := range segs {

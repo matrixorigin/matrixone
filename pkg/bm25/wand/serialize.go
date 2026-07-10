@@ -409,16 +409,20 @@ func encodePk(pkType int32, v any) ([]byte, error) {
 // use it to drop the length prefix for fixed types.
 //
 // The width comes from types.T.FixedLength() (the canonical source) rather than a
-// second hardcoded copy — but the switch is scoped to exactly the types encodePk
-// encodes: types.T.IsFixedLen()/FixedLength() alone would also report int8/decimal/
-// uuid/… as fixed, yet encodePk only handles the four integer widths + varlena
-// (it errors on anything else), so pkFixedWidth must mirror that set.
+// second hardcoded copy. encodePk handles more than the integer widths (varlena,
+// the fixed-width temporal/decimal types, and uuid), but pkFixedWidth deliberately
+// fast-paths only the four integer widths: the temporal/decimal types (and uuid,
+// which encodePk stores as its variable-looking canonical text form) simply take
+// the length-prefixed varlena path below. That is correct — just not maximally
+// compact for the fixed-width temporal/decimal pks. Promoting those to fixed-width
+// here is a delete-log/docmap on-disk format change and must be done with matching
+// encode/decode-symmetry tests, not as an incidental tweak.
 func pkFixedWidth(pkType int32) (int, bool) {
 	switch t := types.T(pkType); t {
 	case types.T_int64, types.T_uint64, types.T_int32, types.T_uint32:
 		return t.FixedLength(), true
 	default:
-		return -1, false // variable-length (varlena): length-prefixed
+		return -1, false // variable-length (varlena) or length-prefixed fixed type
 	}
 }
 

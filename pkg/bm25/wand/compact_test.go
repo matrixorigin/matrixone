@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // The compaction correctness property: FilterLive each segment by its liveness,
@@ -49,6 +51,33 @@ func TestWandCompact_FilterLiveMerge(t *testing.T) {
 
 	require.Equal(t, want, got, "compacted result must equal the live set")
 	require.Equal(t, int64(2), merged.N, "merged holds only the 2 live docs (5,7)")
+}
+
+// Regression: a string-family (varchar/text/…) pk decodes to []byte, which is
+// unhashable as a raw map key. survivingDeletes (used by CompactSegments during
+// MERGE) must normalizeKey the live pks — otherwise MERGE panics ("hash of
+// unhashable type []uint8"), and even for comparable pks a raw key would never
+// match the normalized `deletes` keys, mis-classifying every delete as surviving.
+func TestWandSurvivingDeletes_StringPk(t *testing.T) {
+	// A varchar-pk tail: docs alpha/beta/gamma live; deletes of beta (re-inserted
+	// live) and delta (never re-inserted). pks are []byte, the decodePk form.
+	b := NewBuilder("seg1", int32(types.T_varchar))
+	for _, pk := range [][]byte{[]byte("alpha"), []byte("beta"), []byte("gamma")} {
+		require.NoError(t, b.Add("x", pk))
+	}
+	filtered := []*WandModel{b.Finish()}
+
+	// deletes map is keyed the way FoldDeleteFrame/ComputeLiveness key it: normalized.
+	deletes := map[any]int64{
+		normalizeKey([]byte("beta")):  5, // resolved: beta is a live insert -> dropped
+		normalizeKey([]byte("delta")): 5, // surviving: delta is not a live insert
+	}
+
+	var surviving []DeleteRecord
+	require.NotPanics(t, func() { surviving = survivingDeletes(filtered, deletes) })
+
+	require.Len(t, surviving, 1, "only the unresolved delete (delta) survives")
+	require.Equal(t, normalizeKey([]byte("delta")), normalizeKey(surviving[0].Pk))
 }
 
 // FilterLive(nil) is the all-live fast path — returns the receiver unchanged.

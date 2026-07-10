@@ -32,6 +32,26 @@ func bm25TextColumn(id int32) bool {
 		id == int32(types.T_datalink)
 }
 
+// bm25SupportedPkType reports whether a single-column primary key of this type can
+// be encoded/decoded by the WAND engine (wand.encodePk / decodePk). It MUST mirror
+// encodePk's switch exactly — a pk type accepted at CREATE but not by encodePk would
+// silently abort the CDC sink later (the index would stop updating with no visible
+// error). A composite primary key is delivered as the packed CPrimaryKey varchar,
+// which is covered by the varlena case, so composite pks are always supported.
+func bm25SupportedPkType(id int32) bool {
+	switch types.T(id) {
+	case types.T_int64, types.T_uint64, types.T_int32, types.T_uint32,
+		types.T_varchar, types.T_char, types.T_text, types.T_datalink,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_json,
+		types.T_uuid,
+		types.T_date, types.T_datetime, types.T_time, types.T_timestamp,
+		types.T_decimal64, types.T_decimal128:
+		return true
+	default:
+		return false
+	}
+}
+
 // BuildSecondaryIndexDefs constructs the bm25 index def + its two hidden tables
 // (storage + metadata) from CREATE INDEX ... USING bm25. bm25 parses to
 // *tree.Index and is dispatched here (the vector-plugin path). The two tables
@@ -63,6 +83,15 @@ func (Hooks) BuildSecondaryIndexDefs(
 		if existed.IndexAlgo == catalog.MoIndexBm25Algo.ToString() && len(existed.Parts) > 0 && existed.Parts[0] == name {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple bm25 indexes are not allowed to use the same column")
 		}
+	}
+	// Reject a primary key whose type the WAND engine cannot encode, at CREATE time
+	// rather than letting the CDC sink silently abort later. A single-column pk is in
+	// colMap; a composite pk uses the packed CPrimaryKey varchar (not in colMap, and
+	// always encodable), so only validate when the pk column is present here.
+	if pkCol, ok := colMap[pkeyName]; ok && !bm25SupportedPkType(pkCol.Typ.Id) {
+		return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
+			"bm25 index does not support a primary key of type %s; use an integer, decimal, string, uuid, date/time, or timestamp primary key",
+			types.T(pkCol.Typ.Id).String())
 	}
 
 	// 1. storage (chunk) table: ( index_id VARCHAR, chunk_id INT64, data BLOB,
