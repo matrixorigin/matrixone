@@ -30,6 +30,7 @@ func TestValid(t *testing.T) {
 		{"$", true, true, 0},
 		{"$.", false, false, 0},
 		{"$.*", true, false, 1},
+		{`$."*"`, true, true, 1},
 		{"$.a", true, true, 1},
 		{"$..a.", false, false, 0},
 		{"$.a.b", true, true, 2},
@@ -109,6 +110,7 @@ func TestStar(t *testing.T) {
 		flag pathFlag
 	}{
 		{"$[*]", pathFlagSingleStar},
+		{`$."*"`, 0},
 		{"$[*].a", pathFlagSingleStar},
 		{`$[*]."a"`, pathFlagSingleStar},
 		{"$.a[*]", pathFlagSingleStar},

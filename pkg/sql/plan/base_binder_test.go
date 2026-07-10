@@ -96,6 +96,87 @@ func TestBindSerialFunctionMapsExprListItems(t *testing.T) {
 	}
 }
 
+func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T) {
+	binder := &baseBinder{sysCtx: context.Background()}
+	hex := tree.NewNumVal("0x3132", "0x3132", false, tree.P_ScoreBinaryHexnum)
+
+	rawExpr, err := binder.bindNumVal(hex, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, "12", rawExpr.GetLit().GetSval())
+	require.Equal(t, int32(types.T_varbinary), rawExpr.Typ.Id)
+	require.False(t, rawExpr.GetLit().GetIsBin())
+
+	testCases := []struct {
+		name  string
+		typ   plan.Type
+		isBin bool
+	}{
+		{name: "integer numeric cast parses text", typ: plan.Type{Id: int32(types.T_uint64)}, isBin: false},
+		{name: "decimal numeric cast parses text", typ: plan.Type{Id: int32(types.T_decimal128)}, isBin: false},
+		{name: "float numeric cast parses text", typ: plan.Type{Id: int32(types.T_float64)}, isBin: false},
+		{name: "binary cast keeps binary string type", typ: plan.Type{Id: int32(types.T_binary)}, isBin: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			castExpr, err := binder.bindNumVal(hex, tc.typ)
+			require.NoError(t, err)
+			castFunc := castExpr.GetF()
+			require.NotNil(t, castFunc)
+			require.Len(t, castFunc.Args, 2)
+			require.Equal(t, "12", castFunc.Args[0].GetLit().GetSval())
+			require.Equal(t, tc.isBin, castFunc.Args[0].GetLit().GetIsBin())
+		})
+	}
+
+	target := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{},
+		},
+	}
+	explicitCast, err := BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{rawExpr, target})
+	require.NoError(t, err)
+	explicitCastFunc := explicitCast.GetF()
+	require.NotNil(t, explicitCastFunc)
+	require.Equal(t, int32(types.T_varbinary), explicitCastFunc.Args[0].Typ.Id)
+	require.False(t, explicitCastFunc.Args[0].GetLit().GetIsBin())
+
+	plainHex := tree.NewNumVal("0x3132", "0x3132", false, tree.P_hexnum)
+	plainHexExpr, err := binder.bindNumVal(plainHex, plan.Type{})
+	require.NoError(t, err)
+	require.True(t, plainHexExpr.GetLit().GetIsBin())
+
+	bitOrExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "|", []*plan.Expr{rawExpr, plainHexExpr})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varbinary), bitOrExpr.Typ.Id)
+
+	bitCountExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "bit_count", []*plan.Expr{rawExpr})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_uint64), bitCountExpr.Typ.Id)
+	require.Equal(t, int32(types.T_varbinary), bitCountExpr.GetF().Args[0].Typ.Id)
+}
+
+func TestBindScoreBinaryStringUsesBinaryStringSemantics(t *testing.T) {
+	binder := &baseBinder{sysCtx: context.Background()}
+	binStr := tree.NewNumVal("1", "1", false, tree.P_ScoreBinary)
+
+	rawExpr, err := binder.bindNumVal(binStr, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, "1", rawExpr.GetLit().GetSval())
+	require.Equal(t, int32(types.T_varbinary), rawExpr.Typ.Id)
+	require.False(t, rawExpr.GetLit().GetIsBin())
+
+	castExpr, err := binder.bindNumVal(binStr, plan.Type{Id: int32(types.T_uint64)})
+	require.NoError(t, err)
+	castFunc := castExpr.GetF()
+	require.NotNil(t, castFunc)
+	require.Len(t, castFunc.Args, 2)
+	require.Equal(t, "1", castFunc.Args[0].GetLit().GetSval())
+	require.Equal(t, int32(types.T_varbinary), castFunc.Args[0].Typ.Id)
+	require.False(t, castFunc.Args[0].GetLit().GetIsBin())
+}
+
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 
