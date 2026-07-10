@@ -3743,6 +3743,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			// merge + reject happens at compile in Compile.ValidateReindexParams,
 			// reading the options straight off the parse tree.
 			alterTableReIndex.ForceSync = opt.ForceSync
+			alterTableReIndex.Merge = opt.Merge
 
 			name_not_found := true
 			// check index

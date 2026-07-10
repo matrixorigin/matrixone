@@ -52,10 +52,15 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 	return handleCreate(ctx, indexDefs)
 }
 
-// HandleReindex — ALTER … REINDEX rebuilds the whole binary index from the
-// current source rows (a full re-tokenize). forceSync is implicit: bm25's build
-// is always synchronous in Phase 2. MERGE compaction lands in Phase 4.
-func (Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _ bool) error {
+// HandleReindex — ALTER … REINDEX. Default (merge=false) rebuilds the whole
+// binary index from the current source rows (a full re-tokenize). merge=true
+// runs incremental compaction: fold the tag=1 CdcTail into the tag=0 base +
+// tiered-merge the base, without re-tokenizing. forceSync is implicit — bm25's
+// build/compaction is always synchronous inside the txn.
+func (Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, _, merge bool) error {
+	if merge {
+		return handleMergeCompact(ctx, indexDefs)
+	}
 	return handleCreate(ctx, indexDefs)
 }
 
@@ -127,14 +132,59 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 		originalTableDef.TblId, storeDef.IndexName, sinkerType, true, "", originalTableDef)
 }
 
-func (Hooks) RestoreInitSQL(compileplugin.CompileContext, map[string]*plan.IndexDef) (bool, string, error) {
-	// Phase 4: rebuild from the restored rows. Phase 2 has no CDC, so restore
-	// is a no-op rebuild (the block-clone carries the storage tables as-is).
-	return false, "", nil
+// RestoreInitSQL rebuilds the bm25 index from the restored/cloned rows. It runs
+// post-commit as the re-armed CDC's InitSQL (startFromNow=true), so it sees the
+// committed clone and re-arms the CDC at the post-clone watermark. The rebuild
+// discards the block-cloned tag=0 base (which would otherwise be doubled).
+func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	storeDef, ok := indexDefs[catalog.Bm25Index_TblType_Storage]
+	if !ok {
+		return false, "", moerr.NewInternalErrorNoCtx("bm25 storage index definition not found")
+	}
+	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` BM25 FORCE_SYNC",
+		ctx.QryDatabase(), ctx.OriginalTableDef().Name, storeDef.IndexName), nil
 }
 
-func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	return old, nil
+// handleMergeCompact runs incremental compaction: fold the tag=1 CdcTail into
+// the tag=0 base + tiered-merge the base, via the standalone bm25_compact TVF —
+// no re-tokenize. Capacity comes from the PERSISTED algo_params (pinned at
+// CREATE) so a manual MERGE never depends on the triggering session.
+func handleMergeCompact(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	storeDef, ok := indexDefs[catalog.Bm25Index_TblType_Storage]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("bm25 storage index definition not found")
+	}
+	metaDef, ok := indexDefs[catalog.Bm25Index_TblType_Metadata]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("bm25 metadata index definition not found")
+	}
+	capacity, err := resolveBm25Capacity(storeDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	sql := fmt.Sprintf("SELECT * FROM bm25_compact(%s, %s, %s, %s) AS f",
+		sqlquote.String(ctx.QryDatabase()),
+		sqlquote.String(storeDef.IndexTableName),
+		sqlquote.String(metaDef.IndexTableName),
+		sqlquote.String(strconv.FormatInt(capacity, 10)))
+	return ctx.RunSql(sql)
+}
+
+// ValidateReindexParams merges the reindex-time options bm25 honors on a rebuild
+// (only max_index_capacity) into the persisted params, and rejects any other
+// option (e.g. a vector index's `lists`) with a clear error.
+func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	merged := make(map[string]string, len(old)+1)
+	for k, v := range old {
+		merged[k] = v
+	}
+	for k, v := range alter.Params {
+		if k != catalog.IndexAlgoParamMaxIndexCapacity {
+			return nil, moerr.NewNotSupportedNoCtxf("bm25 reindex does not support option %q (only max_index_capacity)", k)
+		}
+		merged[k] = v
+	}
+	return merged, nil
 }
 
 func (Hooks) HandleDropIndex(compileplugin.CompileContext, map[string]*plan.IndexDef) error {

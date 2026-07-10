@@ -2128,6 +2128,7 @@ type IndexOption struct {
 	BitsPerCode              int64
 	Async                    bool
 	ForceSync                bool
+	Merge                    bool
 	AutoUpdate               bool
 	Day                      int64
 	Hour                     int64
@@ -2206,6 +2207,9 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	}
 	if node.ForceSync {
 		ctx.WriteString("FORCE_SYNC ")
+	}
+	if node.Merge {
+		ctx.WriteString("MERGE ")
 	}
 	if node.AutoUpdate {
 		ctx.WriteString("AUTO_UPDATE=TRUE ")

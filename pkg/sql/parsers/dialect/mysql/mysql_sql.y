@@ -4178,6 +4178,19 @@ alter_table_alter:
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
+| REINDEX ident BM25 index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_BM25
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_BM25
+        }
+        var name = tree.Identifier($2.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
 |   CHECK ident enforce
     {
         var checkType = $1
@@ -8543,7 +8556,13 @@ index_option:
 |    FORCE_SYNC
      {
 	io := tree.NewIndexOption()
-	io.ForceSync = true	
+	io.ForceSync = true
+	$$ = io
+     }
+|    MERGE
+     {
+	io := tree.NewIndexOption()
+	io.Merge = true
 	$$ = io
      }
 |    AUTO_UPDATE '=' TRUE

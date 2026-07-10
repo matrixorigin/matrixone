@@ -1030,7 +1030,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					alterIndex = indexDef
 
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
-					if !indexplugin.IsVectorIndexAlgo(indexAlgo) {
+					if !indexplugin.IsVectorIndexAlgo(indexAlgo) && indexAlgo != catalog.MoIndexBm25Algo.ToString() {
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
 					// Each algorithm's plugin owns parameter-update
@@ -1103,7 +1103,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if cctx == nil {
 						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					}
-					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync)
+					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync, tableAlterIndex.Merge)
 				}
 
 				if err != nil {

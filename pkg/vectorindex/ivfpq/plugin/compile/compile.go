@@ -120,7 +120,7 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 // branch builds ivfpq_create synchronously inside the txn so the new
 // tag=0 model lands before subsequent steps observe the index — mirrors
 // IVF-FLAT and CAGRA.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
 	return h.handleCreate(ctx, indexDefs, forceSync)
 }
 
