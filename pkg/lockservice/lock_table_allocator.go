@@ -632,6 +632,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 			var invalidServices []string
 			var unknownServices []string
 			activeTxnMap := make(map[string]map[string]struct{})
+			cleanupWatermarks := make(map[string]uint64)
 			expiredUnknownServices := make(map[string]struct{})
 
 			l.ctlMu.RLock()
@@ -656,6 +657,13 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 
 			for _, sid := range services {
 				for i := 0; i < retryCount+1; i++ {
+					// The active-txn response can only classify control states that
+					// existed before this request started.
+					watermark, ok := l.getCtlGeneration(sid)
+					if !ok {
+						break
+					}
+					cleanupWatermarks[sid] = watermark
 					valid, actives, err := getActiveTxnFunc(sid)
 					if err == nil {
 						if !valid {
@@ -691,17 +699,17 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 
 			l.ctlMu.Lock()
 			for _, sid := range invalidServices {
-				l.cleanCtlLocked(sid, nil, false)
+				l.cleanCtlLocked(sid, nil, false, cleanupWatermarks[sid])
 			}
 			for _, sid := range unknownServices {
 				// An RPC error is not proof that a fenced txn can commit again.
 				// Keep cannot-commit tombstones until the service state is known
 				// or the existing disconnected-service retention expires.
 				_, expired := expiredUnknownServices[sid]
-				l.cleanCtlLocked(sid, nil, !expired)
+				l.cleanCtlLocked(sid, nil, !expired, cleanupWatermarks[sid])
 			}
 			for sid, activeTxns := range activeTxnMap {
-				l.cleanCtlLocked(sid, activeTxns, false)
+				l.cleanCtlLocked(sid, activeTxns, false, cleanupWatermarks[sid])
 			}
 			l.ctlMu.Unlock()
 
@@ -1089,13 +1097,15 @@ var (
 )
 
 type commitCtl struct {
-	mu     sync.Mutex
-	states map[string]commitState
+	mu         sync.Mutex
+	generation uint64
+	states     map[string]commitState
 }
 
 type commitState struct {
-	state    ctlState
-	inflight uint32
+	state      ctlState
+	inflight   uint32
+	generation uint64
 }
 
 func (c *commitCtl) beginCommit(txnID string) ctlState {
@@ -1105,12 +1115,15 @@ func (c *commitCtl) beginCommit(txnID string) ctlState {
 
 	state, ok := c.states[txnID]
 	if ok && state.state == cannotCommitState {
+		state.generation = c.nextGenerationLocked()
+		c.states[txnID] = state
 		return cannotCommitState
 	}
 	state.state = committingState
 	if state.inflight < math.MaxUint32 {
 		state.inflight++
 	}
+	state.generation = c.nextGenerationLocked()
 	c.states[txnID] = state
 	return committingState
 }
@@ -1128,6 +1141,7 @@ func (c *commitCtl) finishCommit(txnID string) bool {
 		delete(c.states, txnID)
 		return true
 	}
+	state.generation = c.nextGenerationLocked()
 	c.states[txnID] = state
 	return true
 }
@@ -1141,8 +1155,14 @@ func (c *commitCtl) tryCannotCommit(txnID string) ctlState {
 	if ok && state.state == committingState && state.inflight > 0 {
 		return committingState
 	}
+	if ok && state.state == cannotCommitState {
+		state.generation = c.nextGenerationLocked()
+		c.states[txnID] = state
+		return cannotCommitState
+	}
 	state.state = cannotCommitState
 	state.inflight = 0
+	state.generation = c.nextGenerationLocked()
 	c.states[txnID] = state
 	return cannotCommitState
 }
@@ -1169,11 +1189,17 @@ func (c *commitCtl) getCommitState(txnID string) (commitState, bool) {
 func (c *commitCtl) clean(
 	activeTxns map[string]struct{},
 	preserveCannotCommit bool,
+	maxGeneration uint64,
 	logger *log.MOLogger,
 ) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for txnID, state := range c.states {
+		// A newer state was created or refreshed while GetActiveTxn was in
+		// flight, so the response cannot be used to remove it.
+		if state.generation == math.MaxUint64 || state.generation > maxGeneration {
+			continue
+		}
 		_, active := activeTxns[txnID]
 		if active || state.inflight > 0 ||
 			(preserveCannotCommit && state.state == cannotCommitState) {
@@ -1204,17 +1230,41 @@ func (c *commitCtl) ensureStatesLocked() {
 	}
 }
 
+func (c *commitCtl) nextGenerationLocked() uint64 {
+	if c.generation < math.MaxUint64 {
+		c.generation++
+	}
+	return c.generation
+}
+
+func (c *commitCtl) currentGeneration() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation
+}
+
+func (l *lockTableAllocator) getCtlGeneration(serviceID string) (uint64, bool) {
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
+	value, ok := l.ctl.Load(serviceID)
+	if !ok {
+		return 0, false
+	}
+	return value.(*commitCtl).currentGeneration(), true
+}
+
 func (l *lockTableAllocator) cleanCtlLocked(
 	serviceID string,
 	activeTxns map[string]struct{},
 	preserveCannotCommit bool,
+	maxGeneration uint64,
 ) {
 	value, ok := l.ctl.Load(serviceID)
 	if !ok {
 		return
 	}
 	c := value.(*commitCtl)
-	c.clean(activeTxns, preserveCannotCommit, l.logger)
+	c.clean(activeTxns, preserveCannotCommit, maxGeneration, l.logger)
 	if c.empty() {
 		l.ctl.CompareAndDelete(serviceID, c)
 	}
