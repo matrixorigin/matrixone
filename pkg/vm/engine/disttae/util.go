@@ -662,13 +662,23 @@ func execReadSql(
 	disableLog bool,
 ) (executor.Result, error) {
 	// copy from compile.go runSqlWithResult
-	service := op.GetWorkspace().(*Transaction).proc.GetService()
+	txn := op.GetWorkspace().(*Transaction)
+	// execReadSql is always a catalog metadata read. Any call deeper in the
+	// stack (exec.Exec -> NewCompile -> UpdateSnapshotWriteOffset) that tries
+	// to re-acquire txn.Lock() would self-deadlock if the caller already holds
+	// it (e.g. dumpBatchLocked -> getTable, issue #25557). Since internal reads
+	// never iterate txn.writes, snapshotWriteOffset is meaningless here; skip
+	// it for the duration of this read.
+	txn.disableSnapshotOffset.Store(true)
+	defer txn.disableSnapshotOffset.Store(false)
+
+	service := txn.proc.GetService()
 	v, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic(fmt.Sprintf("missing sql executor in service %q", service))
 	}
 	exec := v.(executor.SQLExecutor)
-	proc := op.GetWorkspace().(*Transaction).proc
+	proc := txn.proc
 	opts := executor.Options{}.
 		WithDisableIncrStatement().
 		WithTxn(op).

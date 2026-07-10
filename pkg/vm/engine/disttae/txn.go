@@ -667,8 +667,6 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		size = 0
 	}
 	txn.hasS3Op.Store(true)
-	txn.disableSnapshotOffset.Store(true)
-	defer txn.disableSnapshotOffset.Store(false)
 
 	var (
 		err error
