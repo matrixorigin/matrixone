@@ -16,6 +16,10 @@ package logservice
 
 import (
 	"context"
+	"errors"
+	"math"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
@@ -82,76 +86,231 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 
 	var nextID uint64
 	var nextIDByKey map[string]uint64
-	backup, err := s.getBackupData(ctx)
+	backupRestoreTagExists := false
+	backup, err := s.getBackupDataForBootstrap(ctx, cfg)
 	if err != nil {
 		s.runtime.SubLogger(runtime.SystemInit).Error("failed to get backup data", zap.Error(err))
 		return err
 	}
 	if backup != nil { // We are trying to restore from a backup.
-		// If a backup has already been issued, ignore this time.
 		_, err := fs.StatFile(ctx, restoredTagFile)
-		if s.cfg.BootstrapConfig.Restore.Force || // force is true, we do restore whatever.
-			(err != nil && moerr.IsMoErrCode(err, moerr.ErrFileNotFound)) {
-			s.runtime.SubLogger(runtime.SystemInit).Info("restore hakeeper data",
-				zap.Uint64("next ID", backup.NextID),
-				zap.Any("next ID by key", backup.NextIDByKey),
-			)
-			// Restored tag file does not exist, we can do backup.
-			nextID = backup.NextID
-			nextIDByKey = backup.NextIDByKey
-
-			// After backup, create a restore file.
-			if err := fs.Write(ctx, fileservice.IOVector{
-				FilePath: restoredTagFile,
-				Entries: []fileservice.IOEntry{
-					{
-						Offset: 0,
-						Size:   1,
-						Data:   []byte{1},
-					},
-				},
-			}); err != nil {
-				s.runtime.SubLogger(runtime.SystemInit).Error("failed to write restore tag file",
-					zap.Error(err))
-				return err
-			}
+		if err == nil {
+			backupRestoreTagExists = true
+		} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			s.runtime.SubLogger(runtime.SystemInit).Error("failed to stat restore tag file",
+				zap.Error(err))
+			return err
 		}
+		s.runtime.SubLogger(runtime.SystemInit).Info("restore hakeeper data",
+			zap.Uint64("next ID", backup.NextID),
+			zap.Any("next ID by key", backup.NextIDByKey),
+			zap.Bool("restore tag exists", backupRestoreTagExists),
+			zap.Bool("force", s.cfg.BootstrapConfig.Restore.Force),
+		)
+		// Always carry backup IDs into the initial-cluster proposal when
+		// restore is configured. RESTORED is only an acknowledgement that a
+		// previous restore reached HAKeeper state; old versions wrote it too
+		// early, so it must not suppress the backup payload by itself.
+		nextID = backup.NextID
+		nextIDByKey = backup.NextIDByKey
 	} else {
 		s.runtime.SubLogger(runtime.SystemInit).Info("backup is nil")
 	}
+
+	logServiceRecovery := cfg.BootstrapConfig.Restore.Enabled
+	walRecoveryCoordinator := cfg.BootstrapConfig.Restore.WALDataPath != ""
+	restoreConfigured := backup != nil || logServiceRecovery
+	if walRecoveryCoordinator && backup == nil {
+		return moerr.NewInternalError(ctx,
+			"WAL recovery requires a valid HAKeeper backup file")
+	}
+
+	initialClusterProposed := false
+	var lastInitialClusterErr error
 	for i := 0; i < checkBootstrapCycles; i++ {
 		select {
 		case <-ctx.Done():
 			s.runtime.SubLogger(runtime.SystemInit).Error("context error", zap.Error(ctx.Err()))
+			if restoreConfigured {
+				return moerr.AttachCause(ctx, ctx.Err())
+			}
 			return nil
 		default:
 		}
 		s.runtime.SubLogger(runtime.SystemInit).Info("before initial cluster info")
-		if err := s.store.setInitialClusterInfo(
+		applied, err := s.store.setInitialClusterInfoWithRecoveryResult(
 			numOfLogShards,
 			numOfTNShards,
 			numOfLogReplicas,
 			nextID,
 			nextIDByKey,
 			nonVotingLocality,
-		); err != nil {
+			logServiceRecovery,
+		)
+		if err != nil {
+			lastInitialClusterErr = err
 			s.runtime.SubLogger(runtime.SystemInit).Error("failed to set initial cluster info", zap.Error(err))
-			if err == dragonboat.ErrShardNotFound {
+			if errors.Is(err, dragonboat.ErrShardNotFound) {
+				if restoreConfigured {
+					return err
+				}
 				return nil
 			}
 			time.Sleep(time.Second)
 			continue
 		}
-		s.runtime.SubLogger(runtime.SystemInit).Info("initial cluster info set")
+		initialClusterProposed = true
+		s.runtime.SubLogger(runtime.SystemInit).Info("initial cluster info set",
+			zap.Bool("applied", applied))
 		break
 	}
+	if backup != nil {
+		if !initialClusterProposed {
+			if lastInitialClusterErr != nil {
+				return lastInitialClusterErr
+			}
+			return moerr.NewInternalError(ctx, "restore backup configured but initial cluster info was not proposed")
+		}
+		// A different LogService may have won the initial-cluster proposal with
+		// default IDs. Apply the restore watermarks through an explicit,
+		// idempotent HAKeeper command and verify the replicated state before
+		// acknowledging the restore.
+		if err := s.restoreHAKeeperIDWatermarks(ctx, backup, logServiceRecovery); err != nil {
+			return err
+		}
+		if !backupRestoreTagExists {
+			if err := writeRestoredTag(ctx, fs); err != nil {
+				s.runtime.SubLogger(runtime.SystemInit).Error("failed to write restore tag file",
+					zap.Error(err))
+				return err
+			}
+		}
+	}
+
+	// Recover WAL data if configured
+	// This must be done after the cluster is initialized and Log shard is running
+	if logServiceRecovery {
+		state, err := s.store.getCheckerState()
+		if err != nil {
+			return err
+		}
+		recoveryAlreadyCompleted := state.LogServiceRecoveryCompleted
+		if recoveryAlreadyCompleted && !walRecoveryCoordinator {
+			// A non-coordinator can restart after recovery without waiting for the
+			// artifact-owning store to restart at the same time.
+			s.setWALRecoveryInProgress(false)
+			return nil
+		}
+
+		if !recoveryAlreadyCompleted {
+			coordinator, err := s.waitWALRecoveryCoordinator(ctx, numOfLogReplicas)
+			if err != nil {
+				return err
+			}
+			if !coordinator {
+				// Only the elected artifact-owning store is allowed to append the WAL.
+				s.setWALRecoveryInProgress(false)
+				return nil
+			}
+		}
+		if !walRecoveryCoordinator {
+			return moerr.NewInternalError(ctx,
+				"selected WAL recovery coordinator has no WAL data path")
+		}
+		s.runtime.SubLogger(runtime.SystemInit).Info("WAL recovery: starting WAL data recovery",
+			zap.String("wal_data_path", cfg.BootstrapConfig.Restore.WALDataPath))
+		if err := s.recoverWALData(ctx, cfg, recoveryAlreadyCompleted); err != nil {
+			s.runtime.SubLogger(runtime.SystemInit).Error("WAL recovery: failed to recover WAL data", zap.Error(err))
+			return err
+		}
+		if err := s.store.completeLogServiceRecovery(ctx); err != nil {
+			s.runtime.SubLogger(runtime.SystemInit).Error(
+				"WAL recovery: failed to publish replicated completion", zap.Error(err))
+			return err
+		}
+		// Publish completion only after replay and its durable completion record
+		// have succeeded. On any failure the replicated heartbeat status remains
+		// pending and HAKeeper cannot expose the cluster as Running.
+		s.setWALRecoveryInProgress(false)
+		s.runtime.SubLogger(runtime.SystemInit).Info("WAL recovery: completed, HAKeeper can now report running state")
+	}
+
 	return nil
+}
+
+func (s *Service) restoreHAKeeperIDWatermarks(
+	ctx context.Context,
+	backup *pb.BackupData,
+	logServiceRecovery bool,
+) error {
+	var lastErr error
+	for i := 0; i < checkBootstrapCycles; i++ {
+		if err := ctx.Err(); err != nil {
+			return moerr.AttachCause(ctx, err)
+		}
+
+		state, stateErr := s.store.getCheckerState()
+		if stateErr == nil && restoredHAKeeperStateReached(backup, state) &&
+			(!logServiceRecovery ||
+				(state.LogServiceRecoveryPending && state.LogServiceRecoveryPrepared) ||
+				state.LogServiceRecoveryCompleted) {
+			return nil
+		}
+
+		if err := s.store.restoreIDWatermarks(
+			ctx,
+			backup.NextID,
+			backup.NextIDByKey,
+			logServiceRecovery,
+		); err != nil {
+			lastErr = err
+		} else {
+			state, err := s.store.getCheckerState()
+			if err != nil {
+				lastErr = err
+			} else if restoredHAKeeperStateReached(backup, state) &&
+				(!logServiceRecovery ||
+					(state.LogServiceRecoveryPending && state.LogServiceRecoveryPrepared) ||
+					state.LogServiceRecoveryCompleted) {
+				return nil
+			} else {
+				lastErr = moerr.NewInternalErrorf(ctx,
+					"restored HAKeeper state not confirmed: nextID %d, backup nextID %d, nextIDByKey %v, backup nextIDByKey %v, recovery pending %t, prepared %t",
+					state.NextId, backup.NextID, state.NextIDByKey, backup.NextIDByKey,
+					state.LogServiceRecoveryPending, state.LogServiceRecoveryPrepared)
+			}
+		}
+
+		s.runtime.SubLogger(runtime.SystemInit).Warn(
+			"HAKeeper ID restore not yet confirmed, retrying",
+			zap.Int("attempt", i+1),
+			zap.Error(lastErr),
+		)
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return moerr.AttachCause(ctx, ctx.Err())
+		case <-timer.C:
+		}
+	}
+	return moerr.NewInternalErrorf(ctx,
+		"failed to restore HAKeeper ID watermarks after %d attempts: %v",
+		checkBootstrapCycles, lastErr)
 }
 
 func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 	filePath := s.cfg.BootstrapConfig.Restore.FilePath
 	if filePath == "" {
 		return nil, nil
+	}
+
+	if filepath.IsAbs(filePath) {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, err
+		}
+		return parseBackupData(data)
 	}
 
 	path, err := fileservice.ParsePath(filePath)
@@ -175,6 +334,9 @@ func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 	st, err := fs.StatFile(ctx, filePath)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			if filePath != defaultRestoreFilePath {
+				return nil, err
+			}
 			return nil, nil
 		}
 		return nil, err
@@ -195,9 +357,79 @@ func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 	}
 	defer ioVec.Release()
 
-	var data pb.BackupData
-	if err := data.Unmarshal(ioVec.Entries[0].Data); err != nil {
+	return parseBackupData(ioVec.Entries[0].Data)
+}
+
+func (s *Service) getBackupDataForBootstrap(
+	ctx context.Context,
+	cfg Config,
+) (*pb.BackupData, error) {
+	backup, err := s.getBackupData(ctx)
+	if err == nil {
+		return backup, nil
+	}
+	if cfg.BootstrapConfig.Restore.Enabled &&
+		cfg.BootstrapConfig.Restore.WALDataPath == "" &&
+		(errors.Is(err, os.ErrNotExist) || moerr.IsMoErrCode(err, moerr.ErrFileNotFound)) {
+		// Only the WAL recovery coordinator owns the recovery artifacts. Other
+		// initial members still join the replicated recovery barrier and wait for
+		// the coordinator to publish the backup ID watermarks.
+		return nil, nil
+	}
+	return nil, err
+}
+
+func parseBackupData(data []byte) (*pb.BackupData, error) {
+	var backup pb.BackupData
+	if err := backup.Unmarshal(data); err != nil {
 		return nil, err
 	}
-	return &data, nil
+	if backup.NextID == 0 && len(backup.NextIDByKey) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("HAKeeper backup contains no ID watermarks")
+	}
+	if backup.NextID == math.MaxUint64 {
+		return nil, moerr.NewInvalidInputNoCtx("HAKeeper backup NextID is exhausted")
+	}
+	for key, nextID := range backup.NextIDByKey {
+		if nextID == math.MaxUint64 {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"HAKeeper backup NextIDByKey is exhausted for key %q", key)
+		}
+	}
+	return &backup, nil
+}
+
+func restoredHAKeeperStateReached(backup *pb.BackupData, state *pb.CheckerState) bool {
+	if backup == nil {
+		return true
+	}
+	if state == nil {
+		return false
+	}
+	expectedNextID := backup.NextID
+	if expectedNextID < hakeeper.K8SIDRangeEnd {
+		expectedNextID = hakeeper.K8SIDRangeEnd
+	}
+	if state.NextId < expectedNextID {
+		return false
+	}
+	for key, backupNextID := range backup.NextIDByKey {
+		if state.NextIDByKey[key] < backupNextID {
+			return false
+		}
+	}
+	return true
+}
+
+func writeRestoredTag(ctx context.Context, fs fileservice.FileService) error {
+	return fs.Write(ctx, fileservice.IOVector{
+		FilePath: restoredTagFile,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   1,
+				Data:   []byte{1},
+			},
+		},
+	})
 }

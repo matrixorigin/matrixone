@@ -73,6 +73,26 @@ func TestIDAllocatorSet(t *testing.T) {
 	assert.Equal(t, expected, alloc)
 }
 
+func TestIDAllocatorDiscardsCachedRangeOnlyDuringRecovery(t *testing.T) {
+	alloc := idAllocator{nextID: hakeeper.K8SIDRangeEnd + 10, lastID: hakeeper.K8SIDRangeEnd + 100}
+	alloc.discardForRestoreGeneration(0)
+	assert.Equal(t, hakeeper.K8SIDRangeEnd+10, alloc.nextID)
+	assert.Equal(t, hakeeper.K8SIDRangeEnd+100, alloc.lastID)
+
+	alloc.discardForRestoreGeneration(1)
+	assert.Equal(t, uint64(1), alloc.nextID)
+	assert.Equal(t, uint64(0), alloc.lastID)
+	assert.Zero(t, alloc.Capacity())
+	assert.Equal(t, uint64(1), alloc.restoreGenerationSeen)
+
+	alloc.Set(hakeeper.K8SIDRangeEnd+200, hakeeper.K8SIDRangeEnd+300)
+	alloc.discardForRestoreGeneration(1)
+	assert.Equal(t, hakeeper.K8SIDRangeEnd+200, alloc.nextID)
+	alloc.discardForRestoreGeneration(2)
+	assert.Zero(t, alloc.Capacity())
+	assert.Equal(t, uint64(2), alloc.restoreGenerationSeen)
+}
+
 func TestIDAllocatorRejectInvalidSetInput(t *testing.T) {
 	alloc := idAllocator{nextID: 100, lastID: 200}
 	defer func() {
@@ -151,6 +171,36 @@ func TestCheckBootstrapRetriesSetBootstrapStateFailure(t *testing.T) {
 	})
 
 	require.Equal(t, 1, calls)
+	require.Equal(t, uint64(checkBootstrapCycles), s.bootstrapCheckCycles)
+}
+
+func TestCheckBootstrapWaitsForReplicatedLogServiceRecovery(t *testing.T) {
+	s := &store{bootstrapCheckCycles: checkBootstrapCycles}
+	state := &pb.CheckerState{
+		State:                     pb.HAKeeperBootstrapCommandsReceived,
+		LogServiceRecoveryPending: true,
+		ClusterInfo: pb.ClusterInfo{
+			LogShards: []metadata.LogShardRecord{{
+				ShardID:          1,
+				NumberOfReplicas: 1,
+			}},
+		},
+		LogState: pb.LogState{
+			Shards: map[uint64]pb.LogShardInfo{
+				1: {
+					ShardID:  1,
+					Replicas: map[uint64]string{1: "log-1"},
+				},
+			},
+		},
+	}
+
+	calls := 0
+	s.checkBootstrapWithSetter(state, func(bool) error {
+		calls++
+		return nil
+	})
+	require.Equal(t, 0, calls)
 	require.Equal(t, uint64(checkBootstrapCycles), s.bootstrapCheckCycles)
 }
 
@@ -556,6 +606,71 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 	runHAKeeperClusterTest(t, fn)
 }
 
+func TestRestoreIDWatermarksFromNonLeader(t *testing.T) {
+	fn := func(t *testing.T, services []*Service) {
+		stores := make([]*store, 0, 3)
+		for _, service := range services[:3] {
+			stores = append(stores, service.store)
+		}
+
+		applied, err := stores[0].setInitialClusterInfoWithRecoveryResult(
+			1,
+			1,
+			3,
+			hakeeper.K8SIDRangeEnd+10,
+			map[string]uint64{"existing": 10},
+			nil,
+			true,
+		)
+		require.NoError(t, err)
+		require.True(t, applied)
+
+		var nonLeader *store
+		require.Eventually(t, func() bool {
+			for _, store := range stores {
+				isLeader, _, err := store.isLeaderHAKeeper()
+				if err == nil && !isLeader {
+					nonLeader = store
+					return true
+				}
+			}
+			return false
+		}, 10*time.Second, 20*time.Millisecond)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		require.NoError(t, nonLeader.restoreIDWatermarks(
+			ctx,
+			hakeeper.K8SIDRangeEnd+100,
+			map[string]uint64{"existing": 5, "restored": 20},
+			true,
+		))
+
+		for _, store := range stores {
+			require.Eventually(t, func() bool {
+				state, err := store.getCheckerState()
+				return err == nil &&
+					state.NextId == hakeeper.K8SIDRangeEnd+100 &&
+					state.NextIDByKey["existing"] == 10 &&
+					state.NextIDByKey["restored"] == 20 &&
+					state.LogServiceRecoveryPending &&
+					state.LogServiceRecoveryPrepared &&
+					state.IDWatermarkRestoreGeneration > 0
+			}, 10*time.Second, 20*time.Millisecond)
+		}
+
+		require.NoError(t, nonLeader.completeLogServiceRecovery(ctx))
+		for _, store := range stores {
+			require.Eventually(t, func() bool {
+				state, err := store.getCheckerState()
+				return err == nil && !state.LogServiceRecoveryPending &&
+					state.LogServiceRecoveryCompleted
+			}, 10*time.Second, 20*time.Millisecond)
+		}
+	}
+	runHAKeeperClusterTest(t, fn)
+}
+
 func TestGetCheckerStateFromLeader(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second*10))
@@ -602,32 +717,104 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
 		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-		require.NoError(t, store.setInitialClusterInfo(
+		applied, err := store.setInitialClusterInfoWithResult(
 			1,
 			1,
 			1,
 			hakeeper.K8SIDRangeEnd+10,
 			nextIDByKey,
 			nil,
-		))
+		)
+		require.NoError(t, err)
+		assert.True(t, applied)
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
 		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
 		assert.Equal(t, nextIDByKey, state.NextIDByKey)
+
+		applied, err = store.setInitialClusterInfoWithResult(
+			1,
+			1,
+			1,
+			hakeeper.K8SIDRangeEnd+50,
+			map[string]uint64{"a": 10, "b": 1},
+			nil,
+		)
+		require.NoError(t, err)
+		assert.False(t, applied)
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, nextIDByKey, state.NextIDByKey)
+
+		err = store.restoreIDWatermarks(
+			context.Background(),
+			hakeeper.K8SIDRangeEnd+50,
+			map[string]uint64{"a": 10, "b": 1, "c": 3},
+			false,
+		)
+		require.ErrorContains(t, err, "without initial recovery intent")
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, uint64(1), state.NextIDByKey["a"])
+		assert.Equal(t, uint64(2), state.NextIDByKey["b"])
+		assert.Zero(t, state.NextIDByKey["c"])
+	}
+	runHAKeeperStoreTest(t, false, fn)
+}
+
+func TestRestoreIDWatermarksRejectsLateLogServiceRecovery(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		require.NoError(t, store.setInitialClusterInfo(
+			1, 1, 1, hakeeper.K8SIDRangeEnd+10, nil, nil))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		session := store.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+		_, err := store.propose(ctx, session,
+			hakeeper.GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
+		require.NoError(t, err)
+		_, err = store.propose(ctx, session, hakeeper.GetSetStateCmd(pb.HAKeeperRunning))
+		require.NoError(t, err)
+
+		err = store.restoreIDWatermarks(
+			ctx, hakeeper.K8SIDRangeEnd+100, map[string]uint64{"restored": 20}, true)
+		require.ErrorContains(t, err, "HAKeeperRunning")
+		state, err := store.getCheckerState()
+		require.NoError(t, err)
+		require.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		require.Empty(t, state.NextIDByKey)
+		require.False(t, state.LogServiceRecoveryPending)
+	}
+	runHAKeeperStoreTest(t, false, fn)
+}
+
+func TestCNAllocateIDRejectsUninitializedHAKeeper(t *testing.T) {
+	fn := func(t *testing.T, store *store) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := store.cnAllocateID(ctx, pb.CNAllocateID{Batch: 1})
+		require.ErrorContains(t, err, "not ready for ID allocation")
 	}
 	runHAKeeperStoreTest(t, false, fn)
 }
 
 func TestFailedBootstrap(t *testing.T) {
-	testBootstrap(t, true)
+	testBootstrap(t, true, false)
 }
 
 func TestBootstrap(t *testing.T) {
-	testBootstrap(t, false)
+	testBootstrap(t, false, false)
 }
 
-func testBootstrap(t *testing.T, fail bool) {
+func TestBootstrapWaitsForRemoteWALRecovery(t *testing.T) {
+	testBootstrap(t, false, true)
+}
+
+func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 	fn := func(t *testing.T, store *store) {
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
@@ -696,6 +883,17 @@ func testBootstrap(t *testing.T, fail bool) {
 			assert.True(t, cb.Commands[0].Bootstrapping)
 			service := &Service{store: store}
 			service.handleStartReplica(cb.Commands[0])
+			if remoteRecoveryPending {
+				_, err = store.addLogStoreHeartbeat(ctx, pb.LogStoreHeartbeat{
+					UUID: "remote-recovery-coordinator",
+					ConfigData: &pb.ConfigData{Content: map[string]*pb.ConfigItem{
+						walRecoveryStatusConfigKey: {
+							CurrentValue: walRecoveryStatusPending,
+						},
+					}},
+				})
+				require.NoError(t, err)
+			}
 
 			for i := 0; i < 100; i++ {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -706,6 +904,24 @@ func testBootstrap(t *testing.T, fail bool) {
 
 				state, err = store.getCheckerState()
 				require.NoError(t, err)
+				if remoteRecoveryPending && store.bootstrapMgr.CheckBootstrap(state.LogState) {
+					store.checkBootstrap(state)
+					state, err = store.getCheckerState()
+					require.NoError(t, err)
+					assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
+
+					_, err = store.addLogStoreHeartbeat(ctx, pb.LogStoreHeartbeat{
+						UUID: "remote-recovery-coordinator",
+						ConfigData: &pb.ConfigData{Content: map[string]*pb.ConfigItem{
+							walRecoveryStatusConfigKey: {
+								CurrentValue: walRecoveryStatusComplete,
+							},
+						}},
+					})
+					require.NoError(t, err)
+					remoteRecoveryPending = false
+					continue
+				}
 				store.checkBootstrap(state)
 
 				state, err = store.getCheckerState()
@@ -715,7 +931,7 @@ func testBootstrap(t *testing.T, fail bool) {
 				} else {
 					return
 				}
-				if i == 2999 {
+				if i == 99 {
 					t.Fatalf("failed to complete bootstrap")
 				}
 			}
