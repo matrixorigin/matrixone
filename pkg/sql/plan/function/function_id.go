@@ -763,10 +763,11 @@ const (
 	CAST_STRICT   = 541
 	DATE_TRUNC    = 542
 	JSON_CONTAINS = 543
+	JSON_REMOVE   = 544
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 544
+	FUNCTION_END_NUMBER = 545
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1044,6 +1045,7 @@ var functionIdRegister = map[string]int32{
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
+	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,
 	"json_valid":                     JSON_VALID,
