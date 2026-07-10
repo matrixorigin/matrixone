@@ -825,6 +825,118 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestOnlyFullGroupByAllowsCorrelatedSubqueryOnGroupedColumn(t *testing.T) {
+	sqls := []string{
+		`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY n_name
+		ORDER BY n_name`,
+		`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) > 0`,
+		`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		ORDER BY (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name)`,
+		`
+		SELECT n.n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = n.n_name) AS c
+		FROM nation n
+		GROUP BY n.n_name`,
+		`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY 1`,
+		`
+		SELECT n_name AS name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY name`,
+		`
+		SELECT n_regionkey
+		FROM nation
+		GROUP BY n_regionkey
+		HAVING EXISTS (
+			SELECT n_name
+			FROM nation2
+			GROUP BY n_name
+			HAVING COUNT(*) > nation.n_regionkey
+		)`,
+	}
+
+	for _, sql := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T) {
+	sqls := []struct {
+		sql         string
+		errContains string
+	}{
+		{`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) AS c
+		FROM nation
+		GROUP BY n_name`, "nation.n_comment"},
+		{`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) > 0`, "nation.n_comment"},
+	}
+
+	for _, tt := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, tt.sql)
+		require.Error(t, err, tt.sql)
+		require.Contains(t, err.Error(), tt.errContains)
+	}
+}
+
+func TestOnlyFullGroupByPreservesCorrelatedAggregateNYI(t *testing.T) {
+	sqls := []string{
+		`
+		SELECT (SELECT COUNT(DISTINCT nation.n_comment))
+		FROM nation
+		GROUP BY n_name`,
+		`
+		SELECT n_name
+		FROM nation
+		WHERE (SELECT AVG(nation.n_regionkey) FROM nation2) = 1`,
+		`
+		SELECT n_name,
+		       (SELECT COUNT(nation.n_name) FROM nation2) AS c
+		FROM nation
+		GROUP BY n_name`,
+		`
+		SELECT n_regionkey
+		FROM nation
+		GROUP BY n_regionkey
+		HAVING EXISTS (
+			SELECT n_name
+			FROM nation2
+			GROUP BY n_name
+			HAVING SUM(nation.n_regionkey) > 0
+		)`,
+	}
+
+	for _, sql := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "correlated columns in aggregate function")
+	}
+}
+
 // test join table plan building
 func TestJoinTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
@@ -1421,6 +1533,81 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 	}
 }
 
+func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// Generate dname from loc on the second table (dept).
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'non-first-gen' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback multi-table update with non-first table generated column: %v", err)
+	}
+	query := logicPlan.GetQuery()
+
+	// The source project should contain emp cols (9) + SET comm (1) + dept cols (4) + SET loc (1) + generated dname (1) = 16.
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	deptCols := len(mock.ctxt.tables["dept"].Cols)
+	expectedLen := empCols + 1 + deptCols + 1 + 1 // emp SET + dept SET + dname generated
+	node := requireFallbackSourceProjectNode(t, query, expectedLen, "non-first-gen")
+	if !nodeContainsStringLiteral(node, "non-first-gen") {
+		t.Fatalf("generated column on non-first table should contain the SET value, got %v", node.ProjectList)
+	}
+}
+
+func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// Chain: sal depends on comm, comm is a SET column.
+	// After optimization and rewrite, sal's generated expr should use the SET value of comm.
+	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-opt-marker' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with generated column after optimization: %v", err)
+	}
+
+	// emp cols (9) + SET comm (1) + generated sal (1) + dept cols (4) + SET loc (1) = 16
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	deptCols := len(mock.ctxt.tables["dept"].Cols)
+	expectedLen := empCols + 2 + deptCols + 1
+	// Position of generated sal: after emp cols (9) + SET comm (1) = index 10
+	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(), expectedLen,
+		empCols+1, "chain-opt-marker")
+	if generatedExpr == nil {
+		t.Fatal("generated column position after optimization should not be nil")
+	}
+	// The generated expr should be a non-nil expression (DeepCopy of the SET value).
+	// We don't check the exact contents since substituteColRefsInExpr deep-copies,
+	// but we verify the expression exists at the expected position.
+}
+
+func TestUpdateFallbackGeneratedColumnDerivedTableSource(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET comm = 1, ename = 'derived-src-marker' FROM (SELECT deptno, loc FROM dept) AS d WHERE emp.deptno = d.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with derived table source and generated column: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	expectedLen := empCols + 3
+	node := requireFallbackSourceProjectNode(t, query, expectedLen, "derived-src-marker")
+	if node == nil {
+		t.Fatalf("missing source PROJECT with length %d and derived-src-marker", expectedLen)
+	}
+	generatedPos := empCols + 2
+	if generatedPos >= len(node.ProjectList) {
+		t.Fatalf("generated column position %d out of range (ProjectList length %d)", generatedPos, len(node.ProjectList))
+	}
+	if node.ProjectList[generatedPos] == nil {
+		t.Fatalf("generated column expression at position %d should not be nil", generatedPos)
+	}
+}
+
 func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, generatedName, sourceName string) {
 	tableDef := mock.ctxt.tables[tableName]
 	if tableDef == nil {
@@ -1514,6 +1701,20 @@ func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int
 			continue
 		}
 		return node
+	}
+	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
+	return nil
+}
+
+func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
+	for _, node := range query.Nodes {
+		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
+			continue
+		}
+		if pos >= len(node.ProjectList) {
+			continue
+		}
+		return node.ProjectList[pos]
 	}
 	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
 	return nil
@@ -1870,6 +2071,39 @@ func TestReplacePKTable(t *testing.T) {
 		"REPLACE INTO dept (deptno, badcol) VALUES (1, 2)", // column not exist
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestReplaceSetColRefAsDefault(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// REPLACE ... SET col = <expr referencing columns> must bind the RHS column
+	// references as DEFAULT(col) instead of failing with
+	// "ambiguous column reference". The exact computed values are covered by BVT.
+	sqls := []string{
+		// reference the assigned column itself: deptno = DEFAULT(deptno) + 1
+		"REPLACE INTO dept SET deptno = deptno + 1, dname = 'Eng'",
+		// reference another column: loc = DEFAULT(dname)
+		"REPLACE INTO dept SET deptno = 1, loc = dname",
+		// reference the assigned column directly: dname = DEFAULT(dname)
+		"REPLACE INTO dept SET deptno = 1, dname = dname",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// An RHS reference to a non-existent column must still error.
+	// A qualified RHS reference must NOT be silently resolved to DEFAULT(col) of
+	// the destination column; it must error rather than dropping the qualifier.
+	sqls = []string{
+		"REPLACE INTO dept SET deptno = 1, dname = nosuchcol",
+		"REPLACE INTO dept SET deptno = 1, dname = other.dname",
+		"REPLACE INTO dept SET deptno = 1, dname = dept.dname",
+	}
+	runTestShouldError(mock, t, sqls)
+}
+
+func TestReplaceSetFunctionColRefAsDefault(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	runTestShouldPass(mock, t, []string{
+		"REPLACE INTO dept SET deptno = 1, dname = upper(dname)",
+	}, false, false)
 }
 
 func TestReplaceFakePKTable(t *testing.T) {

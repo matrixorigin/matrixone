@@ -1,0 +1,24 @@
+drop database if exists test_diff_save_year;
+create database test_diff_save_year;
+use test_diff_save_year;
+create table year_base(
+id int primary key,
+y year
+);
+insert into year_base values
+(1, 2020),
+(3, 2022);
+data branch create table year_branch from year_base;
+update year_branch set y = 2024 where id = 1;
+insert into year_branch values (2, 2025);
+delete from year_branch where id = 3;
+set save_query_result = on;
+data branch diff year_branch against year_base;
+➤ diff year_branch against year_base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  y[91,2147483647,0]  𝄀
+year_branch  ¦  UPDATE  ¦  1  ¦  2024-01-01  𝄀
+year_branch  ¦  INSERT  ¦  2  ¦  2025-01-01  𝄀
+year_branch  ¦  DELETE  ¦  3  ¦  2022-01-01
+set save_query_result = off;
+drop table year_branch;
+drop table year_base;
+drop database test_diff_save_year;
