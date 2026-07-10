@@ -1022,6 +1022,24 @@ func newTestBranchTableStuff(ctrl *gomock.Controller) tableStuff {
 	return tblStuff
 }
 
+func TestLCAProbeColumnLayoutExcludesTargetOnlyColumns(t *testing.T) {
+	lcaDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		{Name: catalog.Row_ID, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+	}}
+
+	layout := lcaProbeColumnLayout(
+		lcaDef,
+		[]string{"id", "name", "added"},
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()},
+	)
+
+	require.Equal(t, []string{"id", "name"}, layout.attrs)
+	require.Equal(t, []int{0, 1}, layout.targetIdxes)
+	require.Equal(t, []types.T{types.T_int64, types.T_varchar}, []types.T{layout.types[0].Oid, layout.types[1].Oid})
+}
+
 func makeTestBranchTableStuffFakePK(tblStuff *tableStuff) {
 	tblStuff.def.pkKind = fakeKind
 	tblStuff.def.pkColIdxes = []int{0, 1}
