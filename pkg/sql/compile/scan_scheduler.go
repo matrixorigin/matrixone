@@ -45,6 +45,7 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 		ForceMultiCN:         plan2.GetForceScanOnMultiCN() || plan2.IsIvfSearchEntriesInternalScan(node),
 		OneCNBlockThreshold:  int32(plan2.BlockThresholdForOneCN),
 	})
+	c.recordScanSchedulingMetrics(scanPlacement, stats, forceSingle)
 	c.maybeLogScanPlacement(scanPlacement, stats, forceSingle)
 	if scanPlacement.LocalOnly {
 		return c.localScanNodes(scanPlacement.Workers, stats, forceSingle, node, rel)
