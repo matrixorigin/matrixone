@@ -167,6 +167,14 @@ type Schema struct {
 	// tableType overrides TableType when non-empty; used to mock index tables
 	// carrying an algo-specific type (e.g. ivfflat "metadata").
 	tableType string
+	// onUpdateCols maps column index → ON UPDATE expression string (e.g. "current_timestamp()").
+	// When non-empty, the ColDef.OnUpdate.Expr will be set to a non-nil expression.
+	onUpdateCols map[int]string
+	// genCols maps a generated column index → the source column index its
+	// definition expression references (i.e. the mock column is `col AS (src)`).
+	// Used to test that generated columns derived from ON UPDATE columns are
+	// excluded from the ODKU no-op filter.
+	genCols map[int]int
 }
 
 type ViewCfg struct {
@@ -1113,6 +1121,46 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt: 4,
 	}
 
+	// Table with ON UPDATE CURRENT_TIMESTAMP column for testing
+	// no-op FILTER exclusion of implicit auto-update columns.
+	constraintTestSchema["t_on_update"] = &Schema{
+		tblId: 88901,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"val", types.T_int32, true, 32, 0},
+			{"updated_at", types.T_timestamp, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:    []int{0},
+		outcnt: 10,
+		onUpdateCols: map[int]string{
+			2: "current_timestamp()",
+		},
+	}
+
+	// t_on_update_gen adds a stored generated column g derived from the
+	// implicit ON UPDATE column updated_at, to test that generated columns
+	// depending on an auto-update column are also excluded from the ODKU
+	// no-op filter.
+	constraintTestSchema["t_on_update_gen"] = &Schema{
+		tblId: 88902,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"val", types.T_int32, true, 32, 0},
+			{"updated_at", types.T_timestamp, true, 0, 0},
+			{"g", types.T_timestamp, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:    []int{0},
+		outcnt: 10,
+		onUpdateCols: map[int]string{
+			2: "current_timestamp()",
+		},
+		genCols: map[int]int{
+			3: 2, // g AS (updated_at)
+		},
+	}
+
 	cteTestSchema["t1"] = &Schema{
 		cols: []col{
 			{"a", types.T_int64, false, 0, 0},
@@ -1352,7 +1400,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 			for idx, col := range table.cols {
 				isFakePK := col.Name == catalog.FakePrimaryKeyColName
-				colDefs = append(colDefs, &ColDef{
+				colDef := &ColDef{
 					ColId: uint64(idx),
 					Typ: plan.Type{
 						Id:          int32(col.Id),
@@ -1369,7 +1417,37 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					Default: &plan.Default{
 						NullAbility: col.Nullable,
 					},
-				})
+				}
+				if onUpdateExpr, ok := table.onUpdateCols[idx]; ok {
+					colDef.OnUpdate = &plan.OnUpdate{
+						Expr: &plan.Expr{
+							Expr: &plan.Expr_F{
+								F: &plan.Function{
+									Func: &plan.ObjectRef{ObjName: "current_timestamp"},
+								},
+							},
+						},
+						OriginString: onUpdateExpr,
+					}
+				}
+				if srcIdx, ok := table.genCols[idx]; ok {
+					srcCol := table.cols[srcIdx]
+					colDef.GeneratedCol = &plan.GeneratedCol{
+						Expr: &plan.Expr{
+							Typ: plan.Type{Id: int32(srcCol.Id)},
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									RelPos: 0,
+									ColPos: int32(srcIdx),
+									Name:   strings.ToLower(srcCol.Name),
+								},
+							},
+						},
+						IsStored:     true,
+						OriginString: strings.ToLower(srcCol.Name),
+					}
+				}
+				colDefs = append(colDefs, colDef)
 			}
 
 			objects[tableName] = &ObjectRef{

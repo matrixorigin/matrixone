@@ -298,7 +298,7 @@ a
 4
 SELECT a FROM t1 GROUP BY a
 HAVING EXISTS(SELECT c FROM t2 GROUP BY c HAVING SUM(a) = c);
-SQL syntax error: column "a" must appear in the GROUP BY clause or be used in an aggregate function
+correlated columns in aggregate function is not yet implemented
 SELECT a FROM t1
 WHERE a < 3 AND
 EXISTS(SELECT c FROM t2 GROUP BY c HAVING SUM(a) != c) GROUP BY a;
