@@ -78,6 +78,13 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	scanOrderBy := DeepCopyOrderBySpec(node.OrderBy[0])
 	enableOrderedLimit := false
 	if canUseRegularIndexHiddenSortKey(scanNode, orderByCol) {
+		eligibleOrderedLimit := node.Offset == nil && node.RankOption == nil && isPositiveLiteralLimit(node.Limit)
+		if eligibleOrderedLimit {
+			enableOrderedLimit = canPushRegularIndexOrderedLimit(scanNode)
+			if !enableOrderedLimit {
+				enableOrderedLimit = builder.rewriteRegularIndexCursorRangeFilter(scanNode)
+			}
+		}
 		orderByName := orderByCol.Name
 		hiddenKeyExpr := GetColExpr(scanNode.TableDef.Cols[0].Typ, scanNode.BindingTags[0], 0)
 		hiddenKeyExpr.GetCol().Name = orderByName
@@ -90,7 +97,6 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 			Expr: scanHiddenKeyExpr,
 			Flag: node.OrderBy[0].Flag,
 		}
-		enableOrderedLimit = node.Offset == nil && node.RankOption == nil && canPushRegularIndexOrderedLimit(scanNode)
 	}
 	if orderByCol.RelPos != scanNode.BindingTags[0] {
 		return
