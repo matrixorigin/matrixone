@@ -760,8 +760,10 @@ const (
 	ST_POINT32 = 540
 
 	// function `cast_strict`
-	CAST_STRICT = 541
-	DATE_TRUNC  = 542
+	CAST_STRICT   = 541
+	DATE_TRUNC    = 542
+	JSON_CONTAINS = 543
+	JSON_REMOVE   = 544
 
 	// vec{bf16,f16,int8}_from_base64: decode a base64 payload of the narrow type's
 	// raw bytes into that narrow vector type — the narrow siblings of
@@ -769,17 +771,18 @@ const (
 	// where the query must be a constant narrow vec literal matching the narrow
 	// entries (a cast of vecf32_from_base64 does not constant-fold, breaking the
 	// ORDER BY index pushdown).
-	// Renumbered after the main merge, which took 524-542 for the S2/H3/ST_POINT/
-	// CAST_STRICT/DATE_TRUNC functions. These IDs are referenced by name only (name
-	// map + list_builtIn registration), so renumbering is safe.
-	VECBF16_FROM_BASE64  = 543
-	VECF16_FROM_BASE64   = 544
-	VECINT8_FROM_BASE64  = 545
-	VECUINT8_FROM_BASE64 = 546
+	// Renumbered after the main merge, which took 524-544 for the S2/H3/ST_POINT/
+	// CAST_STRICT/DATE_TRUNC/JSON_CONTAINS/JSON_REMOVE functions. These IDs are
+	// referenced by name only (name map + list_builtIn registration), so renumbering
+	// is safe.
+	VECBF16_FROM_BASE64  = 545
+	VECF16_FROM_BASE64   = 546
+	VECINT8_FROM_BASE64  = 547
+	VECUINT8_FROM_BASE64 = 548
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 547
+	FUNCTION_END_NUMBER = 549
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1057,10 +1060,12 @@ var functionIdRegister = map[string]int32{
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
+	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,
 	"json_valid":                     JSON_VALID,
 	"json_length":                    JSON_LENGTH,
+	"json_contains":                  JSON_CONTAINS,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
 	"json_schema_valid":              JSON_SCHEMA_VALID,

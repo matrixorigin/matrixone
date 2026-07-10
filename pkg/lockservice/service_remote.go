@@ -47,6 +47,7 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_ValidateService:        defines.MORPCVersion2,
 	pb.Method_CannotCommit:           defines.MORPCVersion2,
 	pb.Method_GetActiveTxn:           defines.MORPCVersion2,
+	pb.Method_CheckActiveTxn:         defines.MORPCVersion2,
 	pb.Method_CheckOrphan:            defines.MORPCVersion2,
 	pb.Method_ResumeInvalidCN:        defines.MORPCVersion2,
 	pb.Method_AbortRemoteDeadlockTxn: defines.MORPCVersion2,
@@ -104,29 +105,49 @@ func (s *service) initRemote() {
 			req := acquireRequest()
 			defer releaseRequest(req)
 
-			req.Method = pb.Method_GetActiveTxn
-			req.GetActiveTxn.ServiceID = txn.CreatedOn
+			req.Method = pb.Method_CheckActiveTxn
+			req.CheckActiveTxn.ServiceID = txn.CreatedOn
+			req.CheckActiveTxn.Txn = txn.TxnID
 
 			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseInitRemote2)
 			defer cancel()
 
 			resp, err := s.remote.client.Send(ctx, req)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+					req = acquireRequest()
+					defer releaseRequest(req)
+
+					req.Method = pb.Method_GetActiveTxn
+					req.GetActiveTxn.ServiceID = txn.CreatedOn
+
+					resp, err = s.remote.client.Send(ctx, req)
+					if err != nil {
+						return false, moerr.AttachCause(ctx, err)
+					}
+					defer releaseResponse(resp)
+
+					if !resp.GetActiveTxn.Valid {
+						return false, nil
+					}
+
+					for _, v := range resp.GetActiveTxn.Txn {
+						if bytes.Equal(v, txn.TxnID) {
+							return true, nil
+						}
+					}
+					return false, nil
+				}
 				return false, moerr.AttachCause(ctx, err)
 			}
 			defer releaseResponse(resp)
 
 			// cn restarted
-			if !resp.GetActiveTxn.Valid {
+			if !resp.CheckActiveTxn.Valid {
 				return false, nil
 			}
 
-			for _, v := range resp.GetActiveTxn.Txn {
-				if bytes.Equal(v, txn.TxnID) {
-					return true, nil
-				}
-			}
-			return false, nil
+			return resp.CheckActiveTxn.Active, nil
 		},
 	)
 
@@ -177,6 +198,8 @@ func (s *service) initRemoteHandler() {
 		s.handleValidateService)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetActiveTxn,
 		s.handleGetActiveTxn)
+	s.remote.server.RegisterMethodHandler(pb.Method_CheckActiveTxn,
+		s.handleCheckActiveTxn)
 	s.remote.server.RegisterMethodHandler(pb.Method_AbortRemoteDeadlockTxn,
 		s.handleAbortRemoteDeadlockTxn)
 }
@@ -432,6 +455,22 @@ func (s *service) handleGetActiveTxn(
 		s.cfg.TxnIterFunc(func(txnID []byte) bool {
 			resp.GetActiveTxn.Txn = append(resp.GetActiveTxn.Txn, txnID)
 			return true
+		})
+	}
+	writeResponse(s.logger, cancel, resp, nil, cs)
+}
+
+func (s *service) handleCheckActiveTxn(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	resp.CheckActiveTxn.Valid = s.serviceID == req.CheckActiveTxn.ServiceID
+	if resp.CheckActiveTxn.Valid && s.cfg.TxnIterFunc != nil {
+		s.cfg.TxnIterFunc(func(txnID []byte) bool {
+			resp.CheckActiveTxn.Active = bytes.Equal(req.CheckActiveTxn.Txn, txnID)
+			return !resp.CheckActiveTxn.Active
 		})
 	}
 	writeResponse(s.logger, cancel, resp, nil, cs)

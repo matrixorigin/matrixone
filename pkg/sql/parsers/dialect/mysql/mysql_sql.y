@@ -3939,9 +3939,7 @@ alter_option:
     }
 |   ALGORITHM equal_opt algorithm_type
     {
-        var checkType = $1
-        var enforce bool
-        $$ = tree.NewAlterOptionAlterCheck(checkType, enforce)
+        $$ = tree.NewAlterOptionAlgorithm($3)
     }
 |   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
     {
@@ -3969,7 +3967,7 @@ alter_option:
     }
 |   LOCK equal_opt lock_type
     {
-        $$ = tree.NewTableOptionCharset($1)
+        $$ = tree.NewAlterOptionLock($3)
     }
 |   with_type VALIDATION
     {
@@ -5464,6 +5462,7 @@ replace_data:
 		$$ = &tree.Replace{
 			Columns: identList,
 			Rows: tree.NewSelect(vc, nil, nil),
+			IsSetFormat: true,
 		}
 	}
 
@@ -12929,7 +12928,7 @@ literal:
     }
 |   UNDERSCORE_BINARY HEXNUM
     {
-        $$ = tree.NewNumVal($2, $2, false, tree.P_hexnum)
+        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinaryHexnum)
     }
 |   DECIMAL_VALUE
     {
