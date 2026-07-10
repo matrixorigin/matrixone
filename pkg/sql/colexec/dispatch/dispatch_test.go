@@ -121,6 +121,82 @@ func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
 	require.Nil(t, notifyCh)
 }
 
+func TestRegisterRemoteReceiversRollbackPreservesConflictingLiveOwner(t *testing.T) {
+	server := colexec.NewServer(nil)
+	proc := testutil.NewProcess(t)
+	ownerProc := &process.Process{}
+	ownerCh := make(process.RemotePipelineInformationChannel)
+	uid1 := uuid.Must(uuid.NewV7())
+	uid2 := uuid.Must(uuid.NewV7())
+	t.Cleanup(func() {
+		server.RemoveUuidsOwned([]uuid.UUID{uid2}, ownerCh)
+	})
+
+	require.NoError(t, server.PutProcIntoUuidMap(uid2, ownerProc, ownerCh))
+	d := Dispatch{
+		FuncId: SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: uid1},
+			{Uuid: uid2},
+		},
+	}
+
+	require.Error(t, d.RegisterRemoteReceivers(proc))
+	require.Nil(t, d.ctr.remoteInfo)
+
+	registeredProc, notifyCh, ok := server.GetProcByUuid(uid1, false)
+	require.False(t, ok)
+	require.Nil(t, registeredProc)
+	require.Nil(t, notifyCh)
+
+	registeredProc, notifyCh, ok = server.GetProcByUuid(uid2, false)
+	require.True(t, ok)
+	require.Same(t, ownerProc, registeredProc)
+	require.Equal(t, ownerCh, notifyCh)
+}
+
+func TestRegisterRemoteReceiversRollbackPreservesConflictingAttachedOwner(t *testing.T) {
+	server := colexec.NewServer(nil)
+	proc := testutil.NewProcess(t)
+	ownerProc := &process.Process{}
+	ownerCh := make(process.RemotePipelineInformationChannel)
+	probeCh := make(process.RemotePipelineInformationChannel)
+	uid1 := uuid.Must(uuid.NewV7())
+	uid2 := uuid.Must(uuid.NewV7())
+	t.Cleanup(func() {
+		server.RemoveUuidsOwned([]uuid.UUID{uid2}, ownerCh)
+		server.RemoveUuidsOwned([]uuid.UUID{uid2}, probeCh)
+	})
+
+	require.NoError(t, server.PutProcIntoUuidMap(uid2, ownerProc, ownerCh))
+	registeredProc, notifyCh, ok := server.GetProcByUuid(uid2, false)
+	require.True(t, ok)
+	require.Same(t, ownerProc, registeredProc)
+	require.Equal(t, ownerCh, notifyCh)
+
+	d := Dispatch{
+		FuncId: SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: uid1},
+			{Uuid: uid2},
+		},
+	}
+
+	require.Error(t, d.RegisterRemoteReceivers(proc))
+	require.Nil(t, d.ctr.remoteInfo)
+
+	registeredProc, notifyCh, ok = server.GetProcByUuid(uid1, false)
+	require.False(t, ok)
+	require.Nil(t, registeredProc)
+	require.Nil(t, notifyCh)
+
+	// A second non-destructive conflict proves the attached owner survived;
+	// calling GetProcByUuid again would consume the attached entry.
+	err := server.PutProcIntoUuidMap(uid2, &process.Process{}, probeCh)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "state: attached")
+}
+
 func TestRemoteReceiverRegistrationCleanupChecksOwner(t *testing.T) {
 	_ = colexec.NewServer(nil)
 

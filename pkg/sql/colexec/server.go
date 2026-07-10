@@ -105,9 +105,13 @@ func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process, ch proces
 	if item, ok := srv.uuidCsChanMap.mp[u]; ok {
 		oldState := "live"
 		if item.proc == nil {
-			oldState = "tombstone"
+			if item.ownerCh != nil {
+				oldState = "attached"
+			} else {
+				oldState = "tombstone"
+				delete(srv.uuidCsChanMap.mp, u)
+			}
 		}
-		delete(srv.uuidCsChanMap.mp, u)
 		srv.uuidCsChanMap.Unlock()
 		return moerr.NewInternalErrorNoCtxf(
 			"remote receiver %s already done (existing registry state: %s)", u.String(), oldState)
