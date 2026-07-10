@@ -354,7 +354,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 						ctr.mp = jm
 						ctr.rightBats = jm.GetBatches()
 						ctr.rightRowCnt = jm.GetRowCount()
-						if hashJoin.IsRightJoin && ctr.rightRowCnt > 0 {
+						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
 							ctr.rightRowsMatched = &bitmap.Bitmap{}
 							ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
 							ctr.rightMatchedIter = nil

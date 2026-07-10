@@ -21,7 +21,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"sync"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
@@ -366,24 +365,9 @@ func ShouldSpill(memUsed int64, threshold int64) bool {
 	return memUsed > threshold
 }
 
-var (
-	cachedFS   fileservice.MutableFileService
-	cachedFSMu sync.Mutex
-)
-
-// GetSpillFS returns the cached spill file service.
+// GetSpillFS returns a spill file service for the given process.
 func GetSpillFS(proc *process.Process) (fileservice.MutableFileService, error) {
-	cachedFSMu.Lock()
-	defer cachedFSMu.Unlock()
-	if cachedFS != nil {
-		return cachedFS, nil
-	}
-	fs, err := proc.GetSpillFileService()
-	if err != nil {
-		return nil, err
-	}
-	cachedFS = fs
-	return fs, nil
+	return proc.GetSpillFileService()
 }
 
 // ReusableBufferPool maintains a persistent pool of spill buffers, preserving
@@ -427,6 +411,16 @@ type SpillEngineConfig struct {
 	NeedsProbeForEmptyBuild bool         // keep probe file when build is empty (left outer/anti)
 	NeedsBuildForEmptyProbe bool         // keep build sub-buckets when probe is empty (right/full outer)
 	HashOnPK                bool         // hashmap build strategy
+	// Dedup metadata — passed through to HashmapBuilder during rebuild so that
+	// duplicate detection, IGNORE/UPDATE/REPLACE semantics are preserved.
+	IsDedup                   bool
+	OnDuplicateAction         plan.Node_OnDuplicateAction
+	DedupBuildKeepLast        bool
+	DedupColName              string
+	DedupColTypes             []plan.Type
+	DelColIdx                 int32
+	DedupDeleteMarkerColIdx   int32
+	DedupDeleteKeepColIdxList []int32
 }
 
 // BucketResult encodes the outcome of a RebuildHashmap call.
@@ -459,7 +453,11 @@ type SpillEngine struct {
 
 	// Cached key executors for re-spill
 	keyExecs []colexec.ExpressionExecutor
-	keyVecs  []*vector.Vector
+
+	// Reusable scatter buffers to avoid per-batch allocations.
+	scatterHashValues   []uint64
+	scatterBucketRowIds [][]int32
+	keyVecs             []*vector.Vector
 
 	// probeKeyEval evaluates probe-side key expressions for probe re-scatter.
 	// Stored from ScatterProbeTable. Must use probe-side conditions
@@ -602,7 +600,12 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	}
 
 	builder := &hashbuild.HashmapBuilder{}
-	if err := builder.Prepare(e.cfg.BuildKeyExprs, -1, -1, nil, proc); err != nil {
+	builder.IsDedup = e.cfg.IsDedup
+	builder.OnDuplicateAction = e.cfg.OnDuplicateAction
+	builder.DedupBuildKeepLast = e.cfg.DedupBuildKeepLast
+	builder.DedupColName = e.cfg.DedupColName
+	builder.DedupColTypes = e.cfg.DedupColTypes
+	if err := builder.Prepare(e.cfg.BuildKeyExprs, e.cfg.DelColIdx, e.cfg.DedupDeleteMarkerColIdx, e.cfg.DedupDeleteKeepColIdxList, proc); err != nil {
 		return nil, BucketSkip, err
 	}
 
@@ -631,7 +634,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 
 		if bucket.Depth < SpillMaxPass && e.cfg.SpillThreshold > 0 &&
 			ShouldSpill(builderMemSize(builder), e.cfg.SpillThreshold) {
-			subBuckets, err := e.reSpillBucket(proc, bucket, builder, &e.buildReader)
+			subBuckets, err := e.reSpillBucket(proc, analyzer, bucket, builder, &e.buildReader)
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
 			if err != nil {
@@ -676,7 +679,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	return jm, BucketReady, nil
 }
 
-func (e *SpillEngine) reSpillBucket(proc *process.Process, bucket SpillBucket, builder *hashbuild.HashmapBuilder, reader *BucketReader) ([]SpillBucket, error) {
+func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Analyzer, bucket SpillBucket, builder *hashbuild.HashmapBuilder, reader *BucketReader) ([]SpillBucket, error) {
 	buildWriters := MakeBucketWriters("build_sub")
 	buildBuffers := e.buildPool.Acquire(len(buildWriters))
 	probeWriters := MakeBucketWriters("probe_sub")
@@ -718,7 +721,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, bucket SpillBucket, b
 			}
 			keyVecs[i] = vec
 		}
-		return ScatterBatch(proc, bat, keyVecs, writers, buffers, seed, &e.writeBuf, nil)
+		return ScatterBatch(proc, bat, keyVecs, writers, buffers, seed, &e.writeBuf, analyzer)
 	}
 
 	// Scatter builder's accumulated batches + remaining build file.
@@ -743,7 +746,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, bucket SpillBucket, b
 	// Flush build buffers FIRST so Created() sees the correct state below.
 	for i := range buildWriters {
 		if buildBuffers[i] != nil && buildBuffers[i].RowCount() > 0 {
-			if err := FlushBucketBatch(proc, buildBuffers[i], &buildWriters[i], &e.writeBuf, nil); err != nil {
+			if err := FlushBucketBatch(proc, buildBuffers[i], &buildWriters[i], &e.writeBuf, analyzer); err != nil {
 				return nil, err
 			}
 			buildBuffers[i].CleanOnlyData()
@@ -773,7 +776,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, bucket SpillBucket, b
 			if err != nil {
 				return nil, err
 			}
-			if err := scatterProbe(proc, e, bat, probeWriters, probeBuffers, seed); err != nil {
+			if err := scatterProbe(proc, e, bat, probeWriters, probeBuffers, seed, analyzer); err != nil {
 				return nil, err
 			}
 		}
@@ -782,7 +785,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, bucket SpillBucket, b
 	// Flush probe buffer tails (build already flushed before probe scatter).
 	for i := range probeWriters {
 		if probeBuffers[i] != nil && probeBuffers[i].RowCount() > 0 {
-			if err := FlushBucketBatch(proc, probeBuffers[i], &probeWriters[i], &e.writeBuf, nil); err != nil {
+			if err := FlushBucketBatch(proc, probeBuffers[i], &probeWriters[i], &e.writeBuf, analyzer); err != nil {
 				return nil, err
 			}
 			probeBuffers[i].CleanOnlyData()
@@ -849,12 +852,12 @@ func (e *SpillEngine) AdvanceToNextBucket(
 // scatterProbe evaluates probe-side keys (EqConds[0]) for probe re-scatter.
 // Uses probeKeyEval — NOT keyExecs — to get correct column subscripts
 // when probe and build batches have different column layouts.
-func scatterProbe(proc *process.Process, e *SpillEngine, bat *batch.Batch, writers []BucketWriter, buffers []*batch.Batch, seed uint64) error {
+func scatterProbe(proc *process.Process, e *SpillEngine, bat *batch.Batch, writers []BucketWriter, buffers []*batch.Batch, seed uint64, analyzer process.Analyzer) error {
 	keyVecs, err := e.probeKeyEval(bat)
 	if err != nil {
 		return err
 	}
-	return ScatterBatch(proc, bat, keyVecs, writers, buffers, seed, &e.writeBuf, nil)
+	return ScatterBatch(proc, bat, keyVecs, writers, buffers, seed, &e.writeBuf, analyzer)
 }
 
 func (e *SpillEngine) freeKeyExecs() {

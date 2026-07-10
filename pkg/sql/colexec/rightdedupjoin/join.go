@@ -125,6 +125,9 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 					continue
 				}
 			}
+			if ctr.mp == nil {
+				continue
+			}
 			if err := ctr.probe(bat, rightDedupJoin, proc, analyzer, &result); err != nil {
 				return result, err
 			}
@@ -139,6 +142,7 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 						if res == spillutil.BucketReady {
 							ctr.mp = jm
 							ctr.groupCount = jm.GetGroupCount()
+							ctr.buildGroupCount = ctr.groupCount
 							ctr.matched = &bitmap.Bitmap{}
 							ctr.matched.InitWithSize(int64(ctr.groupCount))
 						}
@@ -209,6 +213,12 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				BuildKeyExprs:           rightDedupJoin.Conditions[1],
 				SpillThreshold:          rightDedupJoin.SpillThreshold,
 				NeedsProbeForEmptyBuild: true,
+				NeedsBuildForEmptyProbe: true,
+				IsDedup:                 false,
+				OnDuplicateAction:       rightDedupJoin.OnDuplicateAction,
+				DedupColName:            rightDedupJoin.DedupColName,
+				DedupColTypes:           rightDedupJoin.DedupColTypes,
+				DelColIdx:               rightDedupJoin.DelColIdx,
 			})
 			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
 			if err := engine.ScatterProbeTable(proc,
@@ -225,6 +235,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				engine.Cleanup(proc)
 				return err
 			}
+			ctr.mp.Free()
 			ctr.spillEngine = engine
 			ctr.mp = nil
 			return

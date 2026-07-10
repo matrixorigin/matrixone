@@ -587,6 +587,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
+		op.SpillThreshold = t.SpillThreshold
 		op.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
 		op.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		return op
@@ -610,6 +611,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 	case vm.PostDml:
@@ -1233,6 +1235,7 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 			}
 		}
 	}
+	arg.SpillThreshold = node.SpillMem
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1288,6 +1291,7 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 			arg.DelColIdx = node.DedupJoinCtx.OldColList[0].ColPos
 		}
 	}
+	arg.SpillThreshold = node.SpillMem
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -1935,6 +1939,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
 		ret.JoinMapTag = arg.JoinMapTag
+		ret.CanSpill = true
 
 	case vm.RightDedupJoin:
 		arg := op.(*rightdedupjoin.RightDedupJoin)
@@ -1951,6 +1956,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
 		ret.JoinMapTag = arg.JoinMapTag
+		ret.CanSpill = true
 
 	default:
 		ret.Release()
@@ -2013,6 +2019,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		}
 		ret.JoinMapTag = arg.JoinMapTag
 		ret.ShuffleIdx = arg.ShuffleIdx
+		ret.CanSpill = true
 
 	case vm.RightDedupJoin:
 		arg := op.(*rightdedupjoin.RightDedupJoin)
@@ -2029,6 +2036,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		}
 		ret.JoinMapTag = arg.JoinMapTag
 		ret.ShuffleIdx = arg.ShuffleIdx
+		ret.CanSpill = true
 
 	default:
 		ret.Release()

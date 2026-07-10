@@ -19,10 +19,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -288,4 +291,85 @@ func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+}
+
+// TestRightDedupJoinCall exercises the Call/Build/Probe/Finalize cycle
+// to cover the non-spill branches in the operator.
+func TestRightDedupJoinCall(t *testing.T) {
+	int32Typ := types.T_int32.ToType()
+	tag++
+	curTag := tag
+
+	conditions := [][]*plan.Expr{
+		{newExpr(0, int32Typ)},
+		{newExpr(0, int32Typ)},
+	}
+
+	arg := &RightDedupJoin{
+		LeftTypes:  []types.Type{int32Typ},
+		RightTypes: []types.Type{int32Typ},
+		Conditions: conditions,
+		Result: []colexec.ResultPos{
+			{Rel: 0, Pos: 0},
+		},
+		OnDuplicateAction: plan.Node_FAIL,
+		JoinMapTag:        curTag,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:   true,
+		NeedBatches:   true,
+		Conditions:    conditions[1],
+		OperatorBase:  vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+		JoinMapTag:    curTag,
+		JoinMapRefCnt: 1,
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.SetMessageBoard(message.NewMessageBoard())
+	proc.Base.TxnOperator = txnOp
+
+	// Build: single row key=10.
+	buildBat := batch.NewWithSize(1)
+	buildBat.Vecs[0] = testutil.MakeInt32Vector([]int32{10}, nil, proc.Mp())
+	buildBat.SetRowCount(1)
+	buildOp := colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat})
+	buildArg.AppendChild(buildOp)
+
+	// Probe: rows key=[10, 20, 30] — all different, no duplicate errors.
+	probeBat := batch.NewWithSize(1)
+	probeBat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
+	probeBat.SetRowCount(3)
+	probeOp := colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat})
+	arg.AppendChild(probeOp)
+
+	require.NoError(t, buildArg.Prepare(proc))
+	require.NoError(t, arg.Prepare(proc))
+
+	// Build hashmap.
+	res, err := vm.Exec(buildArg, proc)
+	require.NoError(t, err)
+	require.True(t, res.Batch == nil)
+
+	// First Call: Build → Probe → processes probe batch.
+	res, err = vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+
+	// Second Call: probe exhausted → Finalize → End.
+	res, err = vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.True(t, res.Batch == nil)
+
+	arg.Free(proc, false, nil)
+	buildArg.Free(proc, false, nil)
 }

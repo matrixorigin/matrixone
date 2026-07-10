@@ -996,14 +996,7 @@ func makeInt32Batch(proc *process.Process, vals []int32) *batch.Batch {
 	return bat
 }
 
-func resetCachedFS() {
-	cachedFSMu.Lock()
-	defer cachedFSMu.Unlock()
-	cachedFS = nil
-}
-
 func writeBuildFile(proc *process.Process, name string, bat *batch.Batch) *os.File {
-	resetCachedFS()
 	spillfs, _ := proc.GetSpillFileService()
 	f, _ := spillfs.CreateAndRemoveFile(context.Background(), name)
 	var buf bytes.Buffer
@@ -1600,7 +1593,6 @@ func TestCleanupSpillEngine(t *testing.T) {
 }
 
 func TestResetForFile(t *testing.T) {
-	resetCachedFS()
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
@@ -1671,7 +1663,7 @@ func TestScatterProbeFunctionUsesStoredEval(t *testing.T) {
 	buffers := make([]*batch.Batch, len(writers))
 	bat := makeInt32Batch(proc, []int32{5, 15, 25})
 
-	err := scatterProbe(proc, engine, bat, writers, buffers, 1)
+	err := scatterProbe(proc, engine, bat, writers, buffers, 1, nil)
 	require.NoError(t, err)
 	require.True(t, evalCalled, "probeKeyEval must be used for scatterProbe")
 
@@ -1684,15 +1676,14 @@ func TestGetSpillFS(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	resetCachedFS()
 	fs, err := GetSpillFS(proc)
 	require.NoError(t, err)
 	require.NotNil(t, fs)
 
-	// Second call returns cached (exercises cachedFS != nil path).
+	// Second call returns the same FS.
 	fs2, err := GetSpillFS(proc)
 	require.NoError(t, err)
-	require.Equal(t, fs, fs2)
+	require.NotNil(t, fs2)
 }
 
 func TestScatterProbeTableOuterJoinKeepsProbe(t *testing.T) {

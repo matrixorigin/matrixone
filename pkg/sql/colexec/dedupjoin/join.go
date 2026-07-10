@@ -242,9 +242,18 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 		if ctr.mp.IsSpilled() {
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
-				BuildKeyExprs:           dedupJoin.Conditions[1],
-				SpillThreshold:          dedupJoin.SpillThreshold,
-				NeedsProbeForEmptyBuild: true,
+				BuildKeyExprs:             dedupJoin.Conditions[1],
+				SpillThreshold:            dedupJoin.SpillThreshold,
+				NeedsProbeForEmptyBuild:   true,
+				NeedsBuildForEmptyProbe:   true,
+				IsDedup:                   true,
+				OnDuplicateAction:         dedupJoin.OnDuplicateAction,
+				DedupBuildKeepLast:        dedupJoin.DedupBuildKeepLast,
+				DedupColName:              dedupJoin.DedupColName,
+				DedupColTypes:             dedupJoin.DedupColTypes,
+				DelColIdx:                 dedupJoin.DelColIdx,
+				DedupDeleteMarkerColIdx:   dedupJoin.DedupDeleteMarkerColIdx,
+				DedupDeleteKeepColIdxList: dedupJoin.DedupDeleteKeepColIdxList,
 			})
 			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
 			if err := engine.ScatterProbeTable(proc,
@@ -261,6 +270,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				engine.Cleanup(proc)
 				return err
 			}
+			ctr.mp.Free()
 			ctr.spillEngine = engine
 			ctr.mp = nil
 			return
