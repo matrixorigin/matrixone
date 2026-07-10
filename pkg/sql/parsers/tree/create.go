@@ -2132,6 +2132,7 @@ type IndexOption struct {
 	AutoUpdate               bool
 	Day                      int64
 	Hour                     int64
+	Second                   int64
 	IntermediateGraphDegree  int64
 	GraphDegree              int64
 	Quantization             string
@@ -2150,7 +2151,7 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.AlgoParamList != 0 || node.AlgoParamVectorOpType != "" ||
 		node.AlgoParamM != 0 || node.HnswEfConstruction != 0 ||
 		node.HnswEfSearch != 0 || node.AutoUpdate || node.Day != 0 ||
-		node.Hour != 0 ||
+		node.Hour != 0 || node.Second != 0 ||
 		node.IntermediateGraphDegree != 0 || node.GraphDegree != 0 ||
 		node.Quantization != "" || node.DistributionMode != "" ||
 		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
@@ -2222,6 +2223,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.Hour != 0 {
 		ctx.WriteString("HOUR ")
 		ctx.WriteString(strconv.FormatInt(node.Hour, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.Second != 0 {
+		ctx.WriteString("SECOND ")
+		ctx.WriteString(strconv.FormatInt(node.Second, 10))
 		ctx.WriteByte(' ')
 	}
 	if node.IntermediateGraphDegree != 0 {

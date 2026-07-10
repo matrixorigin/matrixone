@@ -8343,6 +8343,8 @@ index_option_list:
 	      opt1.Day = opt2.Day
  	    } else if opt2.Hour > 0 {
 	      opt1.Hour = opt2.Hour
+	    } else if opt2.Second > 0 {
+	      opt1.Second = opt2.Second
 	    } else if opt2.IntermediateGraphDegree > 0 {
               opt1.IntermediateGraphDegree = opt2.IntermediateGraphDegree
 	    } else if opt2.GraphDegree > 0 {
@@ -8597,6 +8599,17 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.Hour = val
+	$$ = io
+     }
+|    SECOND equal_opt INTEGRAL
+     {
+        val := int64($3.(int64))
+	if val < 0 {
+		yylex.Error("SECOND should be greater than or equal to 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.Second = val
 	$$ = io
      }
 

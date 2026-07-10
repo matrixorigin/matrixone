@@ -167,6 +167,9 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if idx.IndexOption.Hour > 0 {
 		res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
 	}
+	if idx.IndexOption.Second > 0 {
+		res[catalog.Second] = strconv.FormatInt(idx.IndexOption.Second, 10)
+	}
 	if idx.IndexOption.MaxIndexCapacity > 0 {
 		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
 	}

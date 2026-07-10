@@ -108,6 +108,7 @@ const (
 	AutoUpdate              = "auto_update"
 	Day                     = "day"
 	Hour                    = "hour"
+	Second                  = "second"
 	DistributionMode        = "distribution_mode"
 	Quantization            = "quantization"
 	BitsPerCode             = "bits_per_code"

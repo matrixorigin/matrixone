@@ -396,6 +396,23 @@ func runReindex(ctx context.Context,
 						return err2
 					}
 				}
+
+				// SECOND is a sub-day cadence override: when set (> 0), the interval
+				// is that many seconds and the hour-of-day gate is bypassed (matched to
+				// currentHour) since it is meaningless at second granularity. Lets an
+				// index set a short interval in DDL (auto_update=true second=5) without
+				// the MO_IDXCRON_INTERVAL_SEC env override.
+				secondAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.Second)
+				if err2 == nil {
+					second, err2 := secondAst.Int64()
+					if err2 != nil {
+						return err2
+					}
+					if second > 0 {
+						interval = time.Duration(second) * time.Second
+						hour = int64(currentHour)
+					}
+				}
 				break
 			}
 
@@ -544,6 +561,21 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 // observe scheduled rebuilds without waiting for the top of the hour. Read once at
 // init; the cron task is registered from this value at bootstrap (predefine.go).
 var IndexUpdateTaskCronExpr = func() string {
+	// MO_IDXCRON_TICK_SEC is an ergonomic seconds-interval knob for the bootstrap
+	// tick, translated to a cron descriptor (the parser enables cron.Descriptor).
+	// e.g. MO_IDXCRON_TICK_SEC=10 -> "@every 10s". Takes precedence over
+	// MO_IDXCRON_CRON so a deploy can change how often the executor checks index
+	// tasks without hand-writing a cron expression. Like MO_IDXCRON_CRON it is read
+	// once and baked into the cron task at first bootstrap (predefine.go), so it
+	// only takes effect on a fresh cluster — an existing cluster keeps its
+	// registered expr. The default stays conservative (hourly): every tick lists
+	// the registered index tasks (a small SQL), so a very short interval adds
+	// background load and should be an explicit opt-in.
+	if v := os.Getenv("MO_IDXCRON_TICK_SEC"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return fmt.Sprintf("@every %ds", n)
+		}
+	}
 	if v := os.Getenv("MO_IDXCRON_CRON"); v != "" {
 		return v
 	}
