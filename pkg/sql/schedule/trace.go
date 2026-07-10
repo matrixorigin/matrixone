@@ -16,6 +16,7 @@ package schedule
 
 import (
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -29,6 +30,7 @@ const (
 	maxTraceStages             = 128
 	maxTraceFailures           = 16
 	maxTraceReasonCounts       = 16
+	maxTraceWorkerValueBytes   = 256
 )
 
 type TraceMode string
@@ -411,6 +413,12 @@ func (t Trace) PersistStandalone() bool {
 	return false
 }
 
+// Clone returns an ownership-independent copy suitable for asynchronous
+// observability handoff.
+func (t Trace) Clone() Trace {
+	return cloneTrace(t)
+}
+
 func (r *TraceRecorder) ensureVersionLocked() {
 	if r.trace.Version == 0 {
 		r.trace.Version = SchedulingTraceVersion
@@ -434,11 +442,18 @@ func omitLocalPlacementDetails(attempt *AttemptTrace) bool {
 
 func traceWorker(worker Worker) WorkerTrace {
 	return WorkerTrace{
-		ID:    worker.ID,
-		Addr:  worker.Addr,
+		ID:    boundedTraceWorkerValue(worker.ID),
+		Addr:  boundedTraceWorkerValue(worker.Addr),
 		Mcpu:  worker.Mcpu,
 		State: worker.State.String(),
 	}
+}
+
+func boundedTraceWorkerValue(value string) string {
+	if len(value) > maxTraceWorkerValueBytes {
+		value = value[:maxTraceWorkerValueBytes]
+	}
+	return strings.Clone(value)
 }
 
 func (r *TraceRecorder) traceWorkersLocked(workers Workers) ([]WorkerTrace, bool) {

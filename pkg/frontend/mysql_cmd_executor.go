@@ -81,6 +81,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const schedulingPreviewTimeout = 100 * time.Millisecond
+
 func createDropDatabaseErrorInfo() string {
 	return "CREATE/DROP of database is not supported in transactions"
 }
@@ -1279,9 +1281,14 @@ func previewQueryScheduling(
 	query *plan.Query,
 	txnHaveDDL bool,
 ) schedule.Trace {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	previewCtx, cancel := context.WithTimeout(ctx, schedulingPreviewTimeout)
+	defer cancel()
 	if ses == nil {
 		return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
-			Context: ctx,
+			Context: previewCtx,
 			Query:   query,
 		})
 	}
@@ -1290,7 +1297,7 @@ func previewQueryScheduling(
 		tenant = info.GetTenant()
 	}
 	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
-		Context:    ctx,
+		Context:    previewCtx,
 		Query:      query,
 		Engine:     ses.GetTxnHandler().GetStorage(),
 		Process:    ses.GetProc(),
@@ -4048,6 +4055,7 @@ func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses Fe
 }
 
 func newSchedulingTracePlanHandler(ctx context.Context, trace schedule.Trace) *jsonPlanHandler {
+	trace = trace.Clone()
 	h := &marshalPlanHandler{
 		marshalPlanConfig: marshalPlanConfig{
 			schedulingTrace: &trace,
@@ -4095,7 +4103,8 @@ func WithSchedulingTrace(trace schedule.Trace) marshalPlanOptions {
 		if trace.Empty() {
 			return
 		}
-		h.schedulingTrace = &trace
+		cloned := trace.Clone()
+		h.schedulingTrace = &cloned
 	}
 }
 

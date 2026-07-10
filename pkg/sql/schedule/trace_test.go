@@ -15,6 +15,7 @@
 package schedule
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
@@ -135,6 +136,24 @@ func TestTraceRecorderBoundsEveryAccumulation(t *testing.T) {
 	require.Len(t, trace.Attempts[0].Failures, maxTraceFailures)
 	require.True(t, trace.Attempts[0].Truncated)
 	require.LessOrEqual(t, countTraceWorkerRefs(trace), maxTraceWorkerRefs)
+}
+
+func TestTraceRecorderBoundsWorkerValueBytes(t *testing.T) {
+	recorder := new(TraceRecorder)
+	attempt := recorder.StartAttempt()
+	value := strings.Repeat("x", maxTraceWorkerValueBytes*4)
+	recorder.RecordQuery(attempt, QueryDecision{
+		ExecKind: QueryExecAPMultiCN,
+		Workers: Workers{{
+			ID:   value,
+			Addr: value,
+		}},
+		Satisfied: true,
+	})
+
+	worker := recorder.Snapshot().Attempts[0].Query.Selected[0]
+	require.Len(t, worker.ID, maxTraceWorkerValueBytes)
+	require.Len(t, worker.Addr, maxTraceWorkerValueBytes)
 }
 
 func countTraceWorkerRefs(trace Trace) int {

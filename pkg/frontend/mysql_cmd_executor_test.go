@@ -1661,6 +1661,20 @@ func TestAppendSchedulingExplainRendersPreviewAndHandlesNil(t *testing.T) {
 	require.Equal(t, before, len(buffer.Lines))
 }
 
+func TestWithSchedulingTraceTakesIndependentOwnership(t *testing.T) {
+	recorder := new(schedule.TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordFailure(attempt, "candidate-discovery", schedule.Worker{})
+	trace := recorder.Snapshot()
+	config := marshalPlanConfig{}
+
+	WithSchedulingTrace(trace)(&config)
+	trace.Attempts[0].Failures[0].Category = "changed"
+
+	require.NotNil(t, config.schedulingTrace)
+	require.Equal(t, "candidate-discovery", config.schedulingTrace.Attempts[0].Failures[0].Category)
+}
+
 func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1732,6 +1746,44 @@ func TestDoExplainStmtDoesNotSwallowRequestCancellation(t *testing.T) {
 
 	err := doExplainStmt(ctx, ses, tree.NewExplainStmt(&tree.Select{}, "text"))
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+type blockingSchedulingPreviewEngine struct {
+	engine.Engine
+}
+
+func (*blockingSchedulingPreviewEngine) DiscoverQueryCandidates(
+	ctx context.Context,
+) (engine.QueryCandidates, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (*blockingSchedulingPreviewEngine) ResolveQueryCandidatePool(
+	context.Context,
+	engine.QueryCandidates,
+	engine.QueryCandidatePoolRequest,
+) (engine.Nodes, error) {
+	return nil, moerr.NewInternalErrorNoCtx("pool resolution should not run")
+}
+
+func TestSchedulingPreviewHasIndependentTimeout(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler.storage = &blockingSchedulingPreviewEngine{}
+
+	started := time.Now()
+	trace := previewQueryScheduling(
+		context.Background(),
+		ses,
+		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
+		false,
+	)
+
+	require.Less(t, time.Since(started), time.Second)
+	require.Equal(t, schedule.TraceModePreview, trace.Mode)
+	require.Equal(t, "candidate-discovery", trace.Attempts[0].Failures[0].Category)
 }
 
 func TestSchedulingTraceFromComputationWrapperReturnsIndependentSnapshot(t *testing.T) {
