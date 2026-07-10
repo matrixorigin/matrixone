@@ -158,6 +158,25 @@ func TestCompileIcebergInsertMergesParallelInputToSingleWriter(t *testing.T) {
 	require.Equal(t, vm.Merge, out[0].RootOp.GetOperatorBase().GetChildren(0).OpType())
 }
 
+func TestIcebergInsertNeedsSingleWriterMergeUsesExecutionIdentity(t *testing.T) {
+	current := engine.Node{Id: "cn-local", Addr: "local:6001", Mcpu: 8}
+
+	require.False(t, icebergInsertNeedsSingleWriterMerge([]*Scope{{
+		NodeInfo: engine.Node{Id: "cn-local", Mcpu: 1},
+	}}, current))
+	require.True(t, icebergInsertNeedsSingleWriterMerge([]*Scope{{
+		NodeInfo: engine.Node{Id: "cn-local", Addr: "local:6001", Mcpu: 2},
+	}}, current))
+	require.True(t, icebergInsertNeedsSingleWriterMerge([]*Scope{{
+		NodeInfo: engine.Node{Id: "cn-remote", Addr: "remote:6001", Mcpu: 1},
+	}}, current))
+	require.True(t, icebergInsertNeedsSingleWriterMerge([]*Scope{
+		{NodeInfo: engine.Node{Id: "cn-local", Addr: "local:6001", Mcpu: 1}},
+		{NodeInfo: engine.Node{Id: "cn-remote", Addr: "remote:6001", Mcpu: 1}},
+	}, current))
+	require.False(t, icebergInsertNeedsSingleWriterMerge([]*Scope{nil}, current))
+}
+
 func TestIcebergDeleteIntentBuildsDeleteWriteRequest(t *testing.T) {
 	restoreRuntimeVariableForTest(t, "", IcebergAppendCoordinatorFactoryRuntimeKey, icebergwrite.CoordinatorFactoryFunc(func(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
 		return nil, nil
