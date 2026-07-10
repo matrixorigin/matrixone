@@ -33,9 +33,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -59,6 +61,26 @@ func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
 	want := moerr.NewBadDB(context.Background(), "db1")
 	got := convertDBEOBToNoSuchTable(context.Background(), want, "db1", "t2")
 	require.Same(t, want, got)
+}
+
+func TestReloadAutoIncrementCacheOnAllCNDoesNotNeedProcess(t *testing.T) {
+	const serviceID = "fake-query-client"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	cluster := clusterservice.NewMOCluster(
+		serviceID,
+		nil,
+		time.Second,
+		clusterservice.WithDisableRefresh(),
+	)
+	defer cluster.Close()
+	moruntime.ServiceRuntime(serviceID).SetGlobalVariables(moruntime.ClusterService, cluster)
+
+	proc := testutil.NewProcess(t)
+	qc := fakeQueryClient{}
+	proc.Free()
+
+	require.NoError(t, reloadAutoIncrementCacheOnAllCN(context.Background(), qc, 42))
 }
 
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {

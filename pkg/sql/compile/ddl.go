@@ -32,6 +32,7 @@ import (
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -1113,6 +1114,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case *plan.AlterTable_Action_AlterAutoIncrement:
 			autoCols := incrservice.GetAutoColumnFromDef(qry.GetTableDef())
 			sid := c.proc.GetService()
+			// The transaction's closed callbacks run after the compile process has
+			// been released. Capture the query client now instead of dereferencing
+			// c.proc from the callback.
+			qc := c.proc.GetQueryClient()
 			svc := incrservice.GetAutoIncrementService(sid)
 			for _, col := range autoCols {
 				offset, err := c.getAlterAutoIncrementOffset(qry.Database, qry.TableDef.Name, col.ColName, act.AlterAutoIncrement.NewOffset)
@@ -1135,7 +1140,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if !event.Committed() {
 						return nil
 					}
-					return c.reloadAutoIncrementCacheOnAllCN(ctx, tid)
+					return reloadAutoIncrementCacheOnAllCN(ctx, qc, tid)
 				}))
 		case *plan.AlterTable_Action_AlterName:
 			reqs = append(reqs, api.NewRenameTableReq(
@@ -6091,8 +6096,11 @@ func (c *Compile) getAlterAutoIncrementOffset(
 	return requestedOffset, nil
 }
 
-func (c *Compile) reloadAutoIncrementCacheOnAllCN(ctx context.Context, tableID uint64) error {
-	qc := c.proc.GetQueryClient()
+func reloadAutoIncrementCacheOnAllCN(
+	ctx context.Context,
+	qc qclient.QueryClient,
+	tableID uint64,
+) error {
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
