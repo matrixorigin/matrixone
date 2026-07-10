@@ -87,6 +87,25 @@ func (l *store) setInitialClusterInfo(
 	nextIDByKey map[string]uint64,
 	nonVotingLocality map[string]string,
 ) error {
+	_, err := l.setInitialClusterInfoWithResult(
+		numOfLogShards,
+		numOfTNShards,
+		numOfLogReplicas,
+		nextID,
+		nextIDByKey,
+		nonVotingLocality,
+	)
+	return err
+}
+
+func (l *store) setInitialClusterInfoWithResult(
+	numOfLogShards uint64,
+	numOfTNShards uint64,
+	numOfLogReplicas uint64,
+	nextID uint64,
+	nextIDByKey map[string]uint64,
+	nonVotingLocality map[string]string,
+) (bool, error) {
 	cmd := hakeeper.GetInitialClusterRequestCmd(
 		numOfLogShards,
 		numOfTNShards,
@@ -102,13 +121,31 @@ func (l *store) setInitialClusterInfo(
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
 		l.runtime.Logger().Error("failed to propose initial cluster info", zap.Error(err))
-		return err
+		return false, err
 	}
 	if result.Value == uint64(pb.HAKeeperBootstrapFailed) {
 		panic("bootstrap failed")
 	}
 	if result.Value != uint64(pb.HAKeeperCreated) {
 		l.runtime.Logger().Error("initial cluster info already set")
+		return false, nil
+	}
+	return true, nil
+}
+
+func (l *store) restoreIDWatermarks(nextID uint64, nextIDByKey map[string]uint64) error {
+	cmd := hakeeper.GetRestoreIDWatermarkCmd(nextID, nextIDByKey)
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(), hakeeperDefaultTimeout, moerr.CauseSetInitialClusterInfo)
+	defer cancel()
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	if result.Value == uint64(pb.HAKeeperCreated) {
+		return moerr.NewInternalError(ctx,
+			"cannot restore HAKeeper ID watermarks before initial cluster state is applied")
 	}
 	return nil
 }
@@ -123,6 +160,9 @@ func (l *store) updateIDAlloc(count uint64) error {
 		err = moerr.AttachCause(ctx, err)
 		l.runtime.Logger().Error("propose get id failed", zap.Error(err))
 		return err
+	}
+	if result.Value == 0 {
+		return moerr.NewInternalError(ctx, "HAKeeper is not ready for ID allocation")
 	}
 	// TODO: add a test for this
 	l.alloc.Set(result.Value, result.Value+count-1)
@@ -312,6 +352,13 @@ func (l *store) checkBootstrap(state *pb.CheckerState) {
 	if !l.bootstrapMgr.CheckBootstrap(state.LogState) {
 		l.bootstrapCheckCycles--
 	} else {
+		// Recovery status is replicated through LogStore heartbeats. Do not use
+		// the leader process's local flag here: the recovery coordinator and the
+		// HAKeeper leader are not guaranteed to be the same LogService pod.
+		if walRecoveryPending(state) {
+			l.runtime.Logger().Info("bootstrap complete but WAL recovery is pending")
+			return
+		}
 		if err := l.setBootstrapState(true); err != nil {
 			panic(err)
 		}

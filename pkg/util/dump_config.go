@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -259,9 +260,12 @@ func MergeConfig(dst *ConfigData, src map[string]*logservicepb.ConfigItem) {
 	if dst == nil || dst.configData == nil || src == nil {
 		return
 	}
+	dst.mu.Lock()
+	defer dst.mu.Unlock()
 	for s, item := range src {
 		dst.configData[s] = item
 	}
+	dst.count.Store(count)
 }
 
 const (
@@ -269,6 +273,7 @@ const (
 )
 
 type ConfigData struct {
+	mu         sync.RWMutex
 	count      atomic.Int32
 	configData map[string]*logservicepb.ConfigItem
 }
@@ -287,15 +292,41 @@ func NewConfigData(data map[string]*logservicepb.ConfigItem) *ConfigData {
 
 func (cd *ConfigData) GetData() *logservicepb.ConfigData {
 	if cd.count.Load() > 0 {
+		cd.mu.RLock()
+		defer cd.mu.RUnlock()
+		content := make(map[string]*logservicepb.ConfigItem, len(cd.configData))
+		for key, item := range cd.configData {
+			content[key] = item
+		}
 		return &logservicepb.ConfigData{
-			Content: cd.configData,
+			Content: content,
 		}
 	}
 	return nil
 }
 
+// Set updates a dynamic config item and schedules it to be sent in upcoming
+// heartbeats. The copy prevents callers from mutating heartbeat data after Set
+// returns.
+func (cd *ConfigData) Set(key string, item *logservicepb.ConfigItem) {
+	if cd == nil || key == "" || item == nil {
+		return
+	}
+	copyItem := *item
+	cd.mu.Lock()
+	cd.configData[key] = &copyItem
+	cd.mu.Unlock()
+	cd.count.Store(count)
+}
+
 func (cd *ConfigData) DecrCount() {
-	if cd.count.Load() > 0 {
-		cd.count.Add(-1)
+	for {
+		current := cd.count.Load()
+		if current <= 0 {
+			return
+		}
+		if cd.count.CompareAndSwap(current, current-1) {
+			return
+		}
 	}
 }

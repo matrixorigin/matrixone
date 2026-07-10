@@ -828,6 +828,9 @@ func (l *store) cnAllocateID(ctx context.Context,
 		l.runtime.Logger().Error("propose get id failed", zap.Error(err))
 		return 0, err
 	}
+	if result.Value == 0 {
+		return 0, moerr.NewInternalError(ctx, "HAKeeper is not ready for ID allocation")
+	}
 	return result.Value, nil
 }
 

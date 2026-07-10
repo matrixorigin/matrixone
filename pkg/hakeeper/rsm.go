@@ -98,6 +98,13 @@ func GetInitialClusterRequestCmd(
 	return cmd
 }
 
+// GetRestoreIDWatermarkCmd returns an explicit, idempotent restore request.
+// Zero shard counts are not valid for initial cluster creation, so they mark
+// this command as an ID-only restore without adding a new protobuf command.
+func GetRestoreIDWatermarkCmd(nextID uint64, nextIDByKey map[string]uint64) []byte {
+	return GetInitialClusterRequestCmd(0, 0, 0, nextID, nextIDByKey, nil)
+}
+
 func parseInitialClusterRequestCmd(cmd []byte) pb.InitialClusterRequest {
 	if parseCmdTag(cmd) != pb.InitialClusterUpdate {
 		panic("not a initial cluster update")
@@ -674,10 +681,16 @@ func (s *stateMachine) handleLogShardUpdate(cmd []byte) sm.Result {
 // set to HAKeeperBootstrapping.
 func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	result := sm.Result{Value: uint64(s.state.State)}
+	req := parseInitialClusterRequestCmd(cmd)
+	if isRestoreIDWatermarkRequest(req) {
+		if s.state.State != pb.HAKeeperCreated {
+			s.patchRestoreIDWatermarks(req)
+		}
+		return result
+	}
 	if s.state.State != pb.HAKeeperCreated {
 		return result
 	}
-	req := parseInitialClusterRequestCmd(cmd)
 
 	// The number of TN shard should only be 1.
 	// There is one corresponding Log shard with that TN shard.
@@ -744,6 +757,37 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	return result
 }
 
+func isRestoreIDWatermarkRequest(req pb.InitialClusterRequest) bool {
+	return req.NumOfLogShards == 0 &&
+		req.NumOfTNShards == 0 &&
+		req.NumOfLogReplicas == 0 &&
+		len(req.NonVotingLocality) == 0 &&
+		(req.NextID != 0 || len(req.NextIDByKey) != 0)
+}
+
+func (s *stateMachine) patchRestoreIDWatermarks(req pb.InitialClusterRequest) {
+	updated := false
+	if req.NextID > s.state.NextID {
+		s.state.NextID = req.NextID
+		updated = true
+	}
+	if len(req.NextIDByKey) > 0 {
+		if s.state.NextIDByKey == nil {
+			s.state.NextIDByKey = make(map[string]uint64)
+		}
+		for key, nextID := range req.NextIDByKey {
+			if nextID > s.state.NextIDByKey[key] {
+				s.state.NextIDByKey[key] = nextID
+				updated = true
+			}
+		}
+	}
+	if updated {
+		plog.Infof("patched HAKeeper ID watermarks from restore data, next-id %d, next-id-by-key %v",
+			s.state.NextID, s.state.NextIDByKey)
+	}
+}
+
 func (s *stateMachine) assertState() {
 	if s.state.State != pb.HAKeeperRunning && s.state.State != pb.HAKeeperBootstrapping {
 		panic(fmt.Sprintf("HAKeeper not in the running state, in %s", s.state.State.String()))
@@ -765,7 +809,12 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.TickUpdate:
 		return s.handleTick(cmd), nil
 	case pb.GetIDUpdate:
-		s.assertState()
+		if s.state.State != pb.HAKeeperRunning && s.state.State != pb.HAKeeperBootstrapping {
+			// ID allocation is an external request. Reject it deterministically
+			// while bootstrap commands are being applied instead of panicking the
+			// replicated state machine.
+			return sm.Result{}, nil
+		}
 		return s.handleGetIDCmd(cmd), nil
 	case pb.ScheduleCommandUpdate:
 		return s.handleUpdateCommandsCmd(cmd), nil

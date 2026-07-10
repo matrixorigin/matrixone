@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
@@ -134,6 +135,10 @@ func TestConfigCanBeValidated(t *testing.T) {
 func TestBootstrapConfigCanBeValidated(t *testing.T) {
 	c := getTestConfig()
 	assert.NoError(t, c.Validate())
+	nonBootstrapRecovery := c
+	nonBootstrapRecovery.BootstrapConfig.Restore.WALDataPath = "/recovery/wal_data.bin"
+	err := nonBootstrapRecovery.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c.BootstrapConfig.BootstrapCluster = true
 	c.BootstrapConfig.NumOfLogShards = 3
@@ -144,7 +149,7 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 
 	c1 := c
 	c1.BootstrapConfig.NumOfLogShards = 0
-	err := c1.Validate()
+	err = c1.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c2 := c
@@ -160,6 +165,21 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 	c4 := c
 	c4.BootstrapConfig.NumOfLogShardReplicas = 2
 	err = c4.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	recovery := c
+	recovery.UUID = "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
+	recovery.BootstrapConfig.Restore.FilePath = "/recovery/hakeeper_backup.data"
+	recovery.BootstrapConfig.Restore.WALDataPath = "/recovery/wal_data.bin"
+	assert.NoError(t, recovery.Validate())
+
+	recovery.BootstrapConfig.Restore.FilePath = ""
+	err = recovery.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	recovery.BootstrapConfig.Restore.FilePath = "/recovery/hakeeper_backup.data"
+	recovery.UUID = "9c4dccb4-4d3c-41f8-b482-5251dc7a41be"
+	err = recovery.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 }
 
@@ -199,6 +219,11 @@ func TestClientConfigValidate(t *testing.T) {
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 		}
 	}
+	cfg := HAKeeperClientConfig{}
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, 2*time.Minute, cfg.GetHAKeeperRunningTimeout())
+	cfg.HAKeeperRunningTimeout.Duration = -time.Second
+	assert.True(t, moerr.IsMoErrCode(cfg.Validate(), moerr.ErrBadConfig))
 }
 
 func TestHAKeeperClientConfigValidate(t *testing.T) {

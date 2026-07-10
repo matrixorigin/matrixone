@@ -15,8 +15,10 @@
 package util
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/stretchr/testify/assert"
 )
 
 type abc struct {
@@ -76,4 +78,24 @@ func Test_flatten(t *testing.T) {
 	err = flatten(k, "", "", "", exp)
 	assert.NoError(t, err)
 	exp.Print()
+}
+
+func TestConfigDataSetReschedulesHeartbeatData(t *testing.T) {
+	data := NewConfigData(map[string]*logservicepb.ConfigItem{
+		"static": {Name: "static", CurrentValue: "value"},
+	})
+	for i := 0; i < count; i++ {
+		data.DecrCount()
+	}
+	assert.Nil(t, data.GetData())
+
+	item := &logservicepb.ConfigItem{Name: "dynamic", CurrentValue: "pending"}
+	data.Set("dynamic", item)
+	item.CurrentValue = "mutated"
+
+	got := data.GetData()
+	if assert.NotNil(t, got) {
+		assert.Equal(t, "pending", got.Content["dynamic"].CurrentValue)
+		assert.Equal(t, "value", got.Content["static"].CurrentValue)
+	}
 }

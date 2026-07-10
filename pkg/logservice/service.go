@@ -192,6 +192,12 @@ func NewService(
 	service.server = server
 	service.pool = pool
 	service.respPool = respPool
+	if cfg.BootstrapConfig.Restore.WALDataPath != "" {
+		// Set this before the heartbeat worker starts. The status is carried in
+		// LogStore heartbeats, so whichever HAKeeper replica becomes leader can
+		// keep the cluster out of Running state until replay completes.
+		service.setWALRecoveryInProgress(true)
+	}
 
 	server.RegisterRequestHandler(service.handleRPCRequest)
 	// TODO: before making the service available to the outside world, restore all

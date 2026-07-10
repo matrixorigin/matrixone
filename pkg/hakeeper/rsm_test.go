@@ -211,6 +211,25 @@ func TestGetIDCmd(t *testing.T) {
 	assert.Equal(t, sm.Result{Value: 202}, result)
 }
 
+func TestGetIDCmdRejectedDuringBootstrapCommandsReceived(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	tsm1.state.State = pb.HAKeeperBootstrapCommandsReceived
+	tsm1.state.NextID = 50000000
+	tsm1.state.NextIDByKey["____server_conn_id"] = 900
+
+	cmd := GetAllocateIDCmd(pb.CNAllocateID{Batch: 100})
+	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Equal(t, uint64(50000000), tsm1.state.NextID)
+
+	cmd = GetAllocateIDCmd(pb.CNAllocateID{Key: "____server_conn_id", Batch: 100})
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Equal(t, uint64(900), tsm1.state.NextIDByKey["____server_conn_id"])
+}
+
 func TestAllocateIDByKeyCmd(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	tsm1.state.State = pb.HAKeeperRunning
@@ -661,6 +680,58 @@ func TestHandleInitialClusterRequestCmd(t *testing.T) {
 	assert.Equal(t, pb.HAKeeperBootstrapping, rsm.state.State)
 	assert.Equal(t, K8SIDRangeEnd+10, rsm.state.NextID)
 	assert.Equal(t, nextIDByKey, rsm.state.NextIDByKey)
+}
+
+func TestHandleInitialClusterRequestCmdPatchesIDsWhenAlreadyInitialized(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.State = pb.HAKeeperRunning
+	rsm.state.NextID = 1000
+	rsm.state.NextIDByKey = map[string]uint64{
+		"index_key":          100,
+		"____server_conn_id": 900,
+	}
+	rsm.state.ClusterInfo = pb.ClusterInfo{
+		LogShards: []metadata.LogShardRecord{
+			{
+				ShardID:          10,
+				NumberOfReplicas: 3,
+			},
+		},
+	}
+
+	cmd := GetRestoreIDWatermarkCmd(
+		5000,
+		map[string]uint64{
+			"index_key":          200,
+			"____server_conn_id": 800,
+			"_mo_bootstrap":      1,
+		},
+	)
+	result, err := rsm.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+
+	assert.Equal(t, sm.Result{Value: uint64(pb.HAKeeperRunning)}, result)
+	assert.Equal(t, pb.HAKeeperRunning, rsm.state.State)
+	assert.Equal(t, uint64(5000), rsm.state.NextID)
+	assert.Equal(t, uint64(200), rsm.state.NextIDByKey["index_key"])
+	assert.Equal(t, uint64(900), rsm.state.NextIDByKey["____server_conn_id"])
+	assert.Equal(t, uint64(1), rsm.state.NextIDByKey["_mo_bootstrap"])
+	assert.Equal(t, uint64(10), rsm.state.ClusterInfo.LogShards[0].ShardID)
+
+	// A normal duplicate initial-cluster request remains a no-op, even when
+	// its ID fields are higher than the live state.
+	cmd = GetInitialClusterRequestCmd(
+		1,
+		1,
+		3,
+		9000,
+		map[string]uint64{"index_key": 9000},
+		nil,
+	)
+	_, err = rsm.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(5000), rsm.state.NextID)
+	assert.Equal(t, uint64(200), rsm.state.NextIDByKey["index_key"])
 }
 
 func TestGetCommandBatch(t *testing.T) {

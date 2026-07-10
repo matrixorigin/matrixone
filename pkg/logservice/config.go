@@ -215,9 +215,15 @@ type Config struct {
 			// FilePath is the path of the file, which contains the backup data.
 			// If is not set, nothing will be done for restore.
 			FilePath string `toml:"file-path"`
-			// Force means that we force to do restore even if RESTORED tag file
-			// already exists.
+			// Force is retained for restore configuration compatibility. HAKeeper
+			// ID watermarks are restored idempotently, and a completed WAL is never
+			// replayed into a non-empty Log shard even when Force is true.
 			Force bool `toml:"force"`
+			// WALDataPath is the path to the WAL data file extracted from damaged LogService.
+			// When set, LogService will replay WAL entries from this file during bootstrap.
+			// This is used for disaster recovery when the original LogService cluster is
+			// completely damaged but Raft logs can still be read offline.
+			WALDataPath string `toml:"wal-data-path"`
 		} `toml:"restore"`
 		// NonVotingLocality is the locality for non-voting replicas.
 		NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
@@ -394,6 +400,14 @@ func (c *Config) Validate() error {
 			return moerr.NewBadConfigNoCtx("InitHAKeeperMembers does not match NumOfLogShardReplicas")
 		}
 	}
+	if c.BootstrapConfig.Restore.WALDataPath != "" {
+		if c.BootstrapConfig.Restore.FilePath == "" {
+			return moerr.NewBadConfigNoCtx("HAKeeper restore file path is required for WAL recovery")
+		}
+		if _, ok := c.Bootstrapping(); !ok {
+			return moerr.NewBadConfigNoCtx("WAL recovery must run on an initial HAKeeper member")
+		}
+	}
 
 	return nil
 }
@@ -455,8 +469,9 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
 			InitHAKeeperMembers   []string `toml:"init-hakeeper-members" user_setting:"advanced"`
 			Restore               struct {
-				FilePath string `toml:"file-path"`
-				Force    bool   `toml:"force"`
+				FilePath    string `toml:"file-path"`
+				Force       bool   `toml:"force"`
+				WALDataPath string `toml:"wal-data-path"`
 			} `toml:"restore"`
 			NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
 			StandbyEnabled    bool   `toml:"standby-enabled" user_setting:"advanced"`
@@ -467,8 +482,9 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas uint64
 			InitHAKeeperMembers   []string
 			Restore               struct {
-				FilePath string
-				Force    bool
+				FilePath    string
+				Force       bool
+				WALDataPath string
 			}
 			NonVotingLocality string
 			StandbyEnabled    bool
@@ -479,11 +495,13 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas: 1,
 			InitHAKeeperMembers:   []string{"131072:" + uid},
 			Restore: struct {
-				FilePath string
-				Force    bool
+				FilePath    string
+				Force       bool
+				WALDataPath string
 			}{
-				FilePath: defaultRestoreFilePath,
-				Force:    false,
+				FilePath:    defaultRestoreFilePath,
+				Force:       false,
+				WALDataPath: "",
 			},
 			NonVotingLocality: "",
 			StandbyEnabled:    false,
@@ -565,6 +583,11 @@ type HAKeeperClientConfig struct {
 	AllocateIDBatch uint64 `toml:"allocate-id-batch"`
 	// EnableCompress enable compress
 	EnableCompress bool `toml:"enable-compress"`
+	// HAKeeperRunningTimeout is the timeout for waiting HAKeeper to be running.
+	// This is useful during disaster recovery when WAL recovery may take a long time.
+	// Default remains 2 minutes for compatibility. Set a larger value (e.g., 30m)
+	// on clients that should wait through a long disaster recovery.
+	HAKeeperRunningTimeout toml.Duration `toml:"hakeeper-running-timeout"`
 }
 
 // Validate validates the HAKeeperClientConfig.
@@ -575,7 +598,22 @@ func (c *HAKeeperClientConfig) Validate() error {
 	if c.AllocateIDBatch == 0 {
 		c.AllocateIDBatch = 100
 	}
+	if c.HAKeeperRunningTimeout.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("HAKeeperRunningTimeout cannot be negative")
+	}
+	if c.HAKeeperRunningTimeout.Duration == 0 {
+		c.HAKeeperRunningTimeout.Duration = time.Minute * 2
+	}
 	return nil
+}
+
+// GetHAKeeperRunningTimeout returns the timeout for waiting HAKeeper to be running.
+// Returns the configured value or the compatibility default of 2 minutes.
+func (c *HAKeeperClientConfig) GetHAKeeperRunningTimeout() time.Duration {
+	if c.HAKeeperRunningTimeout.Duration == 0 {
+		return time.Minute * 2
+	}
+	return c.HAKeeperRunningTimeout.Duration
 }
 
 // ClientConfig is the configuration for log service clients.
