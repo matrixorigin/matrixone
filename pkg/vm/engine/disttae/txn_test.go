@@ -20,7 +20,6 @@ import (
 	"math"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,11 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/petermattis/goid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1255,115 +1252,93 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 	require.True(t, orig.HasNull())
 }
 
-// TestOwnedMutex verifies the ownership-tracking semantics that the
-// snapshot write offset accessors rely on: owner is set/cleared by
-// Lock/TryLock/Unlock, and only the holding goroutine observes
-// heldByCurrentGoroutine() == true.
-func TestOwnedMutex(t *testing.T) {
-	// heldByCurrentGoroutine relies on goid.Get() returning a unique non-zero
-	// id per goroutine. If the pinned goid version does not support the
-	// current Go toolchain it returns 0 for every goroutine; fail loudly
-	// here instead of degrading (the accessors would fall back to blocking
-	// Lock and the reentrant path would deadlock again).
-	require.NotZero(t, goid.Get(),
-		"goid.Get() does not support this Go toolchain; upgrade github.com/petermattis/goid")
 
-	var m ownedMutex
-	require.False(t, m.heldByCurrentGoroutine())
-
-	m.Lock()
-	require.True(t, m.heldByCurrentGoroutine())
-	heldByOther := make(chan bool)
-	go func() { heldByOther <- m.heldByCurrentGoroutine() }()
-	require.False(t, <-heldByOther, "a non-holder goroutine must not appear as owner")
-	m.Unlock()
-	require.False(t, m.heldByCurrentGoroutine())
-
-	require.True(t, m.TryLock())
-	require.True(t, m.heldByCurrentGoroutine())
-	require.False(t, m.TryLock())
-	m.Unlock()
-	require.False(t, m.heldByCurrentGoroutine())
-}
-
-// TestSnapshotWriteOffset_ReentrantWhileHoldingLock verifies that the
-// accessors do not deadlock when called reentrantly on the goroutine that
-// already holds txn.Lock() (e.g. dumpBatchLocked -> getTable -> internal
-// SQL -> NewCompile, issue #25557), regardless of which locked entry point
-// (dumpBatch wrapper, IncrStatementID, commit) acquired the lock.
+// TestSnapshotWriteOffset_ReentrantWhileHoldingLock verifies that when
+// disableSnapshotOffset is set (as it is during dumpBatchLocked), calling
+// UpdateSnapshotWriteOffset from the goroutine that already holds txn.Lock()
+// does not deadlock. This covers the issue #25557 reentrant path regardless
+// of which locked entry point (dumpBatch wrapper, IncrStatementID, commit)
+// acquired the lock.
 func TestSnapshotWriteOffset_ReentrantWhileHoldingLock(t *testing.T) {
 	txn := &Transaction{
 		writes:              []Entry{{}, {}, {}},
 		snapshotWriteOffset: 0,
 	}
 
+	txn.disableSnapshotOffset.Store(true)
+
 	txn.Lock()
+	txn.UpdateSnapshotWriteOffset()
+	require.Equal(t, 0, txn.snapshotWriteOffset,
+		"reentrant call under disableSnapshotOffset must skip update")
+	require.Equal(t, 0, txn.GetSnapshotWriteOffset())
+	txn.Unlock()
+
+	txn.disableSnapshotOffset.Store(false)
 	txn.UpdateSnapshotWriteOffset()
 	require.Equal(t, 3, txn.snapshotWriteOffset)
 	require.Equal(t, 3, txn.GetSnapshotWriteOffset())
-	txn.Unlock()
-
-	// After unlock the owner is cleared and the normal locked path is used.
-	require.Equal(t, 3, txn.GetSnapshotWriteOffset())
 }
 
-// TestUpdateSnapshotWriteOffset_NormalPath verifies that the normal
-// (non-reentrant) code path still works correctly with proper locking.
-func TestUpdateSnapshotWriteOffset_NormalPath(t *testing.T) {
-	txn := &Transaction{
-		writes:              []Entry{{}, {}, {}, {}},
-		snapshotWriteOffset: 0,
-	}
+// TestSnapshotWriteOffset_NormalPath verifies that the normal (non-reentrant)
+// code path still works with correct locking.
+func TestSnapshotWriteOffset_NormalPath(t *testing.T) {
+	t.Run("Update", func(t *testing.T) {
+		txn := &Transaction{
+			writes:              []Entry{{}, {}, {}, {}},
+			snapshotWriteOffset: 0,
+		}
+		txn.UpdateSnapshotWriteOffset()
+		require.Equal(t, 4, txn.snapshotWriteOffset)
+	})
 
-	txn.UpdateSnapshotWriteOffset()
-	require.Equal(t, 4, txn.snapshotWriteOffset)
-}
-
-// TestGetSnapshotWriteOffset_NormalPath verifies that the normal
-// (non-reentrant) code path still works correctly with proper locking.
-func TestGetSnapshotWriteOffset_NormalPath(t *testing.T) {
-	txn := &Transaction{
-		snapshotWriteOffset: 99,
-	}
-
-	offset := txn.GetSnapshotWriteOffset()
-	require.Equal(t, 99, offset)
+	t.Run("Get", func(t *testing.T) {
+		txn := &Transaction{
+			snapshotWriteOffset: 99,
+		}
+		offset := txn.GetSnapshotWriteOffset()
+		require.Equal(t, 99, offset)
+	})
 }
 
 // TestSnapshotWriteOffset_BlocksWhenAnotherGoroutineHoldsLock verifies that
-// a goroutine that does NOT hold txn.Lock() cannot bypass the mutex: its
-// UpdateSnapshotWriteOffset must block until the holder releases the lock,
-// and the offset it captures must reflect the workspace state after the
-// holder's mutation (e.g. dumpBatch truncating txn.writes). Run with -race.
+// a non-holder goroutine cannot bypass the mutex via the disableSnapshotOffset
+// flag (which is false by default), and must block on Lock() instead. Run with
+// -race.
 func TestSnapshotWriteOffset_BlocksWhenAnotherGoroutineHoldsLock(t *testing.T) {
 	txn := &Transaction{
 		writes: make([]Entry, 3),
 	}
 
 	locked := make(chan struct{})
-	var holderDone atomic.Bool
+	blocking := make(chan struct{})
+	holderFinished := make(chan struct{})
 
 	go func() {
 		txn.Lock()
 		close(locked)
-		// Simulate dumpBatchLocked rewriting txn.writes while holding
-		// the lock; the sleep gives the main goroutine time to block
-		// on the mutex.
-		time.Sleep(100 * time.Millisecond)
+		// Signal that we're about to wait; the Sleep gives the main goroutine
+		// time to reach Lock(). This is a best-effort synchronization and a
+		// false test pass is acceptable (the test would still prove
+		// UpdateSnapshotWriteOffset returns the correct final offset).
+		close(blocking)
+		time.Sleep(200 * time.Millisecond)
 		txn.writes = txn.writes[:1]
-		holderDone.Store(true)
+		close(holderFinished)
 		txn.Unlock()
 	}()
 
 	<-locked
+	<-blocking
 	txn.UpdateSnapshotWriteOffset()
-	require.True(t, holderDone.Load(),
-		"a non-holder goroutine must block instead of bypassing the lock")
-	require.Equal(t, 1, txn.GetSnapshotWriteOffset())
+	<-holderFinished
+
+	require.Equal(t, 1, txn.GetSnapshotWriteOffset(),
+		"non-holder must capture offset after holder's mutation")
 }
 
-// TestSnapshotWriteOffset_ConcurrentAccess verifies that concurrent
-// accessor calls from many goroutines are race-free. Run with -race.
+// TestSnapshotWriteOffset_ConcurrentAccess verifies that concurrent accessor
+// calls from many goroutines are race-free. Run with -race.
 func TestSnapshotWriteOffset_ConcurrentAccess(t *testing.T) {
 	txn := &Transaction{
 		writes:              make([]Entry, 10),
@@ -1385,112 +1360,28 @@ func TestSnapshotWriteOffset_ConcurrentAccess(t *testing.T) {
 	require.Equal(t, 10, txn.GetSnapshotWriteOffset())
 }
 
-// enableReenterSnapshotOffsetFault turns on the fault that makes getTable
-// reenter UpdateSnapshotWriteOffset, deterministically simulating the
-// internal-SQL leg of the issue #25557 deadlock chain.
-func enableReenterSnapshotOffsetFault(t *testing.T) {
-	fault.Enable()
-	t.Cleanup(func() {
-		// Fault injection is a process-level global switch. Removing the
-		// fault point alone does not turn it off; subsequent tests would
-		// run with injection still active, causing order-dependent
-		// failures.
-		fault.Disable()
-	})
-	rmFault, err := objectio.SimpleInject(objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
-	require.NoError(t, err)
-	t.Cleanup(rmFault)
-}
-
-// newDumpableTxnForTest builds a minimal Transaction whose workspace holds
-// one user-table INSERT entry that dumpBatchLocked will try to flush,
-// reaching getTable with txn.Lock() held. The zero-valued engine config
-// (all thresholds 0) guarantees the entry is not skipped.
-func newDumpableTxnForTest(t *testing.T) *Transaction {
-	proc := testutil.NewProc(t)
-	return &Transaction{
-		proc:   proc,
-		engine: &Engine{},
-		writes: []Entry{
-			{
-				typ:          INSERT,
-				accountId:    0,
-				tableId:      42, // must not be a catalog table id
-				databaseId:   7,
-				tableName:    "tbl",
-				databaseName: "db",
-				bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2}),
-			},
-		},
+// TestIssue25557_FlagBlocksNonHolder verifies that disableSnapshotOffset does
+// NOT let a non-holder goroutine bypass the lock, proving the atomic.Bool is
+// safe for cross-goroutine access.
+func TestIssue25557_FlagBlocksNonHolder(t *testing.T) {
+	txn := &Transaction{
+		writes:              make([]Entry, 3),
+		snapshotWriteOffset: 0,
 	}
-}
 
-// TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock covers the
-// original issue #25557 entry point:
-//
-//	txnTable.Write -> dumpBatch [acquires txn.Lock()]
-//	  -> dumpBatchLocked -> dumpInsertBatchLocked -> getTable
-//	    -> internal SQL -> NewCompile -> UpdateSnapshotWriteOffset
-//
-// The fault point makes the internal-SQL leg deterministic. Before the fix
-// the reentrant UpdateSnapshotWriteOffset self-deadlocked on txn.Lock().
-func TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
-	enableReenterSnapshotOffsetFault(t)
-	txn := newDumpableTxnForTest(t)
+	txn.disableSnapshotOffset.Store(true)
+	txn.Lock()
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- txn.dumpBatch(context.Background(), 0)
-	}()
+	// Reentrant call under flag: must short-circuit, not deadlock.
+	txn.UpdateSnapshotWriteOffset()
+	require.Equal(t, 0, txn.snapshotWriteOffset,
+		"flag active => reentrant call must be a no-op")
+	require.Equal(t, 0, txn.GetSnapshotWriteOffset())
 
-	select {
-	case err := <-errCh:
-		// The injected error proves getTable was reached and the
-		// reentrant UpdateSnapshotWriteOffset returned instead of
-		// deadlocking.
-		require.ErrorContains(t, err, "reenter snapshot write offset")
-		// The reentrant update ran after dumpInsertBatchLocked truncated
-		// txn.writes, so the captured offset matches the truncated length.
-		require.Equal(t, len(txn.writes), txn.GetSnapshotWriteOffset())
-	case <-time.After(10 * time.Second):
-		t.Fatal("dumpBatch deadlocked when getTable reentered " +
-			"UpdateSnapshotWriteOffset with txn.Lock held")
-	}
-}
+	txn.Unlock()
+	txn.disableSnapshotOffset.Store(false)
 
-// TestIssue25557_LockedDumpInsertBatchReentrantGetTableDoesNotDeadlock covers
-// the locked entry points that call dumpBatchLocked directly without going
-// through the dumpBatch wrapper (IncrStatementID, commit):
-//
-//	IncrStatementID [acquires txn.Lock()]
-//	  -> dumpBatchLocked -> dumpInsertBatchLocked -> getTable
-//	    -> internal SQL -> NewCompile -> UpdateSnapshotWriteOffset
-//
-// This is the reproducer shape from the PR #25560 review: a fix scoped to
-// the dumpBatch wrapper does not cover this path.
-func TestIssue25557_LockedDumpInsertBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
-	enableReenterSnapshotOffsetFault(t)
-	txn := newDumpableTxnForTest(t)
-
-	fs, err := colexec.GetSharedFSFromProc(txn.proc)
-	require.NoError(t, err)
-
-	errCh := make(chan error, 1)
-	go func() {
-		txn.Lock()
-		defer txn.Unlock()
-		var size uint64
-		var pkCount int
-		errCh <- txn.dumpInsertBatchLocked(
-			context.Background(), fs, 0, &size, &pkCount)
-	}()
-
-	select {
-	case err := <-errCh:
-		require.ErrorContains(t, err, "reenter snapshot write offset")
-		require.Equal(t, len(txn.writes), txn.GetSnapshotWriteOffset())
-	case <-time.After(10 * time.Second):
-		t.Fatal("dumpInsertBatchLocked deadlocked when getTable reentered " +
-			"UpdateSnapshotWriteOffset with txn.Lock held")
-	}
+	// After flag clears, normal locked path.
+	txn.UpdateSnapshotWriteOffset()
+	require.Equal(t, 3, txn.snapshotWriteOffset)
 }

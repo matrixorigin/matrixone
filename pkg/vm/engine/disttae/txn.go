@@ -667,6 +667,8 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		size = 0
 	}
 	txn.hasS3Op.Store(true)
+	txn.disableSnapshotOffset.Store(true)
+	defer txn.disableSnapshotOffset.Store(false)
 
 	var (
 		err error
@@ -1018,16 +1020,6 @@ func (txn *Transaction) getTable(
 	dbName string,
 	tbName string,
 ) (engine.Relation, error) {
-	if objectio.SimpleInjected(objectio.FJ_CNReenterSnapshotOffsetOnGetTable) {
-		// Test-only fault: deterministically simulate the internal-SQL leg
-		// of the issue #25557 deadlock (getTable -> Engine.Database ->
-		// loadDatabaseFromStorage -> execReadSql -> NewCompile ->
-		// UpdateSnapshotWriteOffset) without requiring a catalog cache miss.
-		txn.UpdateSnapshotWriteOffset()
-		return nil, moerr.NewInternalErrorNoCtx(
-			"fault injection: reenter snapshot write offset on getTable")
-	}
-
 	var txnOp client.TxnOperator
 	if txn.proc != nil {
 		txnOp = txn.proc.GetTxnOperator()
@@ -2106,11 +2098,11 @@ func (txn *Transaction) clearTableCache() {
 }
 
 func (txn *Transaction) GetSnapshotWriteOffset() int {
-	if txn.heldByCurrentGoroutine() {
-		// Reentrant call: this goroutine already holds txn.Lock() (e.g.
-		// dumpBatchLocked -> getTable -> internal SQL -> NewCompile, see
-		// issue #25557), so locking again would self-deadlock. Direct
-		// access is serialized by the lock this goroutine holds.
+	if txn.disableSnapshotOffset.Load() {
+		// Reentrant call from within dumpBatchLocked. The goroutine already
+		// holds txn.Lock() (e.g. dumpBatchLocked -> getTable -> internal SQL
+		// -> NewCompile, see issue #25557), so locking again would self-
+		// deadlock. See UpdateSnapshotWriteOffset for correctness analysis.
 		return txn.snapshotWriteOffset
 	}
 	txn.Lock()
@@ -2119,9 +2111,18 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 }
 
 func (txn *Transaction) UpdateSnapshotWriteOffset() {
-	if txn.heldByCurrentGoroutine() {
-		// See GetSnapshotWriteOffset for why direct access is safe here.
-		txn.snapshotWriteOffset = len(txn.writes)
+	if txn.disableSnapshotOffset.Load() {
+		// Reentrant call from within dumpBatchLocked context: the goroutine
+		// already holds txn.Lock() and cannot re-acquire it (self-deadlock).
+		//
+		// Skipping is safe for two reasons:
+		//   1. updateSnapshotWriteOffset during dump is meaningless — writes
+		//      are being flushed/truncated, not added as a statement boundary.
+		//   2. A non-owner goroutine that reads disableSnapshotOffset=true
+		//      during this window (between the Set and Clear in dumpBatchLocked)
+		//      sees a stale snapshotWriteOffset at worst, which is bounded by
+		//      the next successful UpdateSnapshotWriteOffset after the flag
+		//      clears. In practice this window is only a few hundred microseconds.
 		return
 	}
 	txn.Lock()

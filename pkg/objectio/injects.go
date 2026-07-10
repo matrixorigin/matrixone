@@ -69,13 +69,6 @@ const (
 
 	FJ_CNCLONEFailed    = "fj/cn/clone_fails"
 	FJ_CNNeedRetryError = "fj/cn/need_retry_error"
-
-	// FJ_CNReenterSnapshotOffsetOnGetTable is a test-only fault that makes
-	// Transaction.getTable reenter UpdateSnapshotWriteOffset, deterministically
-	// simulating the internal-SQL leg of the issue #25557 deadlock:
-	// getTable -> Engine.Database -> loadDatabaseFromStorage -> execReadSql
-	// -> NewCompile -> UpdateSnapshotWriteOffset.
-	FJ_CNReenterSnapshotOffsetOnGetTable = "fj/cn/reenter_snapshot_offset_on_get_table"
 )
 
 const (
