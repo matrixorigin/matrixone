@@ -2466,6 +2466,38 @@ func TestIssue5176_2(t *testing.T) {
 	)
 }
 
+func TestCheckTxnTimeoutSkipRemoteTxnIfSecondCannotCommitReportsCommitting(t *testing.T) {
+	txn := []byte("remote-committing")
+	var notifyCalls atomic.Int32
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			if notifyCalls.Add(1) == 1 {
+				return pb.CannotCommitResponse{
+					FenceTS: timestamp.Timestamp{PhysicalTime: 10},
+				}, nil
+			}
+			return pb.CannotCommitResponse{CommittingTxn: [][]byte{txn}}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) { return false, nil },
+	)
+	hold.getActiveTxn(txn, true, "s2")
+
+	s := &service{
+		serviceID:       "s1",
+		activeTxnHolder: hold,
+		logger:          getLogger(""),
+	}
+	s.setStatus(pb.Status_ServiceLockWaiting)
+	s.checkTxnTimeout(context.Background())
+
+	require.Equal(t, int32(2), notifyCalls.Load())
+	require.NotNil(t, hold.getActiveTxn(txn, false, ""))
+}
+
 func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
