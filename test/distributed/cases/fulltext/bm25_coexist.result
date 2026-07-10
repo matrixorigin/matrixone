@@ -11,18 +11,24 @@ id
 2
 3
 5
-select id from t where match(txt) against('apple');
+select id from t where match(txt) against('apple' in natural language mode) order by id;
+id
+1
+2
+3
+5
+select id from t where bm25(txt) against('apple');
 id
 5
 3
 2
 1
-select id from t where match(txt) against('apple' in natural language mode);
+select id from t where bm25(txt) against('apple banana');
 id
-5
-3
 2
 1
+5
+3
 create fulltext index ftc2 on t(txt);
 not supported: Fulltext index are not allowed to use the same column
 create index ftr2 using bm25 on t(txt) with parser gojieba;

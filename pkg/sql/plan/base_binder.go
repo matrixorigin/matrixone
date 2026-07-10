@@ -1207,7 +1207,13 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 		args[i+2] = c
 	}
 
-	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
+	// BM25(col) AGAINST('q') binds to the distinct bm25_match function so the
+	// planner routes it to bm25_search; classic MATCH(...) binds to fulltext_match.
+	funcName := "fulltext_match"
+	if astExpr.IsBm25 {
+		funcName = "bm25_match"
+	}
+	return BindFuncExprImplByPlanExpr(b.GetContext(), funcName, args)
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {

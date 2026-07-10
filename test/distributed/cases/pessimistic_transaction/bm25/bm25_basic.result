@@ -4,28 +4,28 @@ use bm25_basic;
 create table docs (id bigint primary key, body text);
 insert into docs values (1,'apple banana cherry'),(2,'apple banana'),(3,'apple'),(4,'durian mango'),(5,'apple apple apple banana');
 create index ftx using bm25 on docs(body) with parser gojieba;
-select id from docs where match(body) against('apple') order by id;
+select id from docs where bm25(body) against('apple') order by id;
 id
 1
 2
 3
 5
+select id from docs where bm25(body) against('apple');
+id
+5
+3
+2
+1
+select id from docs where bm25(body) against('apple banana') order by id;
+id
+1
+2
+3
+5
+select id from docs where bm25(body) against('apple') limit 2;
+id
+5
+3
 select id from docs where match(body) against('apple');
-id
-5
-3
-2
-1
-select id from docs where match(body) against('apple banana') order by id;
-id
-1
-2
-3
-5
-select id from docs where match(body) against('apple') limit 2;
-id
-5
-3
-select id from docs where match(body) against('apple' in boolean mode);
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 drop database bm25_basic;

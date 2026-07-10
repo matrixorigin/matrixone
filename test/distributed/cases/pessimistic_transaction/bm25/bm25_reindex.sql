@@ -10,8 +10,8 @@ insert into t values (1,'apple banana'),(2,'banana cherry'),(3,'cherry date'),(4
 create index ft using bm25 on t(txt) with parser gojieba max_index_capacity=2;
 insert into t values (5,'fig grape'),(6,'grape apple');
 alter table t alter reindex ft bm25;
-select id from t where match(txt) against('apple') order by id;
+select id from t where bm25(txt) against('apple') order by id;
 alter table t alter reindex ft bm25 max_index_capacity=3;
-select id from t where match(txt) against('apple') order by id;
+select id from t where bm25(txt) against('apple') order by id;
 alter table t alter reindex ft bm25 lists=5;
 drop database bm25_reindex;

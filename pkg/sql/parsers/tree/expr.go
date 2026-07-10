@@ -1873,6 +1873,12 @@ type FullTextMatchExpr struct {
 	Pattern string
 
 	Mode FullTextSearchType
+
+	// IsBm25 marks a BM25(col) AGAINST('query') expression — the distinct
+	// ranked-retrieval surface of the bm25 index. It binds to the bm25_match
+	// function (not fulltext_match) so the planner routes it to bm25_search, and
+	// it carries no mode (bm25 is always ranked bag-of-words; Mode stays DEFAULT).
+	IsBm25 bool
 }
 
 func (node *FullTextSearchType) ToString() string {
@@ -1911,6 +1917,18 @@ func (node *FullTextMatchExpr) Valid() error {
 func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern string, mode FullTextSearchType) (*FullTextMatchExpr, error) {
 
 	e := &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Mode: mode}
+	if err := e.Valid(); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// NewBm25MatchFuncExpression builds a BM25(col) AGAINST('query') expression — the
+// bm25 index's ranked-retrieval surface. It carries no mode (always DEFAULT ranked
+// bag-of-words) and binds to the bm25_match function.
+func NewBm25MatchFuncExpression(columns []*KeyPart, pattern string) (*FullTextMatchExpr, error) {
+
+	e := &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Mode: FULLTEXT_DEFAULT, IsBm25: true}
 	if err := e.Valid(); err != nil {
 		return nil, err
 	}

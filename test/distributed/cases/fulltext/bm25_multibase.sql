@@ -13,8 +13,8 @@ insert into t values
  (5,'elderberry fig'),
  (6,'fig grape');
 create index ft using bm25 on t(txt) with parser gojieba max_index_capacity=2;
-select id from t where match(txt) against('apple') order by id;
-select id from t where match(txt) against('cherry') order by id;
-select id from t where match(txt) against('banana') order by id;
-select id from t where match(txt) against('fig') order by id;
+select id from t where bm25(txt) against('apple') order by id;
+select id from t where bm25(txt) against('cherry') order by id;
+select id from t where bm25(txt) against('banana') order by id;
+select id from t where bm25(txt) against('fig') order by id;
 drop database bm25_multibase;

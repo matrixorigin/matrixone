@@ -13,13 +13,14 @@
 // limitations under the License.
 
 // This file is the bm25 ranked-retrieval counterpart of apply_indices_fulltext.go.
-// bm25 shares the MATCH(...) AGAINST(...) query surface with classic fulltext but is
-// a first-class, position-free index type with its own storage/metadata hidden tables
-// and its own bm25_search TVF. To keep the two decoupled, the MATCH->JOIN planner
-// machinery is duplicated here (rather than shared) and stripped of everything bm25
-// does not need: no fulltext_index_scan branch, no fulltext_match_score projection
-// fallback, and only the ranked bag-of-words modes (default / natural language) — the
-// position-free index rejects boolean/phrase/query-expansion.
+// bm25 has its OWN query surface — BM25(col) AGAINST('query') — which binds to the
+// distinct bm25_match function (NOT fulltext_match), so the planner disambiguates it
+// from a classic MATCH by function name alone. It is a first-class, position-free
+// index type with its own storage/metadata hidden tables and its own bm25_search TVF.
+// The MATCH->JOIN planner machinery is duplicated here (rather than shared) and
+// stripped of everything bm25 does not need: no fulltext_index_scan branch, no
+// fulltext_match_score projection fallback, and no search modes (BM25() is always
+// ranked bag-of-words; boolean/phrase/query-expansion are simply not expressible).
 package plan
 
 import (
@@ -40,19 +41,11 @@ const bm25_search_func_name = "bm25_search"
 // JSON, pattern]. The TVF tokenizes the pattern as bag-of-words and answers a
 // BM25 top-K walk, emitting (doc_id, score) — the same shape fulltext_index_scan
 // emits, so the downstream join/projection/limit is unchanged.
-func (builder *QueryBuilder) buildBm25SearchTableFunc(scanNode *plan.Node, idxdef *plan.IndexDef, pattern string, mode int64, aliasName string) (*tree.AliasedTableExpr, error) {
-	// bm25 is a position-free bag-of-words BM25 index: it implements only ranked
-	// retrieval (DEFAULT / NATURAL LANGUAGE / RETRIEVAL). Boolean (+/-/~/phrase)
-	// and query-expansion need term positions bm25 does not store — reject them
-	// with a clear message rather than silently returning bag-of-words results.
-	switch mode {
-	case int64(tree.FULLTEXT_DEFAULT), int64(tree.FULLTEXT_NL):
-		// ranked retrieval — supported (both tokenize the pattern as bag-of-words)
-	default:
-		return nil, moerr.NewNotSupported(builder.GetContext(),
-			"a bm25 index only supports ranked retrieval (default or natural language mode); boolean and query-expansion need a classic fulltext index")
-	}
-
+func (builder *QueryBuilder) buildBm25SearchTableFunc(scanNode *plan.Node, idxdef *plan.IndexDef, pattern string, aliasName string) (*tree.AliasedTableExpr, error) {
+	// bm25 is a position-free bag-of-words BM25 index with a single, mode-free query
+	// surface: BM25(col) AGAINST('query') always answers ranked bag-of-words top-K.
+	// (Boolean / phrase / query-expansion — which need term positions — are simply
+	// not expressible via BM25(); use a classic fulltext MATCH index for those.)
 	storeTbl, metaTbl, ok := builder.findBm25IndexTables(scanNode, idxdef)
 	if !ok {
 		return nil, moerr.NewInternalErrorf(builder.GetContext(),
@@ -300,14 +293,13 @@ func (builder *QueryBuilder) applyJoinBm25Indices(nodeID int32, projNode *plan.N
 		idxdef := indexDefs[i]
 		fn := ftidxscan.GetF()
 		pattern := fn.Args[0].GetLit().GetSval()
-		mode := fn.Args[1].GetLit().GetI64Val()
 
 		alias_name := fmt.Sprintf("mo_bm25_alias_%d", i)
 		if projNode == nil {
 			alias_name = fmt.Sprintf("mo_bm25_alias_%d_%d", scanNode.NodeId, i)
 		}
 
-		tmpTableFunc, berr := builder.buildBm25SearchTableFunc(scanNode, idxdef, pattern, mode, alias_name)
+		tmpTableFunc, berr := builder.buildBm25SearchTableFunc(scanNode, idxdef, pattern, alias_name)
 		if berr != nil {
 			return -1, nil, nil, berr
 		}
@@ -688,11 +680,11 @@ func (builder *QueryBuilder) applyBm25FiltersForScanInJoin(nodeID int32, scanNod
 	return newNodeID, true, nil
 }
 
-// findMatchBm25Index resolves a MATCH(...) function to a bm25 storage index def on the
-// scan's columns. It returns non-nil ONLY for the ranked bag-of-words modes bm25
-// implements (default / natural language). For boolean and query-expansion it returns
-// nil so that, when a column also carries a classic fulltext index (coexistence), the
-// planner falls through to the fulltext path which implements those modes.
+// findMatchBm25Index resolves a bm25_match(...) function — the bound form of
+// BM25(col) AGAINST('q') — to a bm25 storage index def on the scan's columns.
+// Because BM25() binds to its own function (never fulltext_match), the function name
+// alone disambiguates it from a classic MATCH; no mode gating is needed (BM25 has no
+// modes) and a coexisting classic fulltext index on the same column is irrelevant here.
 func (builder *QueryBuilder) findMatchBm25Index(fn *plan.Function, scanNode *plan.Node) *plan.IndexDef {
 	if fn == nil || scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
 		return nil
@@ -701,16 +693,6 @@ func (builder *QueryBuilder) findMatchBm25Index(fn *plan.Function, scanNode *pla
 		return nil
 	}
 	if scanNode.TableDef.Pkey == nil || scanNode.TableDef.Pkey.PkeyColName == "" {
-		return nil
-	}
-
-	// Only the ranked bag-of-words modes route to bm25; other modes are left for a
-	// classic fulltext index (buildBm25SearchTableFunc also enforces this as a hard
-	// error for a bm25-only column with no fulltext fallback).
-	mode := fn.Args[1].GetLit().GetI64Val()
-	switch mode {
-	case int64(tree.FULLTEXT_DEFAULT), int64(tree.FULLTEXT_NL):
-	default:
 		return nil
 	}
 
@@ -766,8 +748,8 @@ func (builder *QueryBuilder) findMatchBm25Index(fn *plan.Function, scanNode *pla
 	return nil
 }
 
-// getBm25MatchFiltersFromScanNode returns the fulltext_match() filters in a scan node
-// that resolve to a bm25 index (and their storage defs).
+// getBm25MatchFiltersFromScanNode returns the bm25_match() filters in a scan node
+// (bound from BM25(col) AGAINST(...)) that resolve to a bm25 index, and their defs.
 func (builder *QueryBuilder) getBm25MatchFiltersFromScanNode(node *plan.Node) ([]int32, []*plan.IndexDef) {
 
 	filterids := make([]int32, 0)
@@ -780,7 +762,7 @@ func (builder *QueryBuilder) getBm25MatchFiltersFromScanNode(node *plan.Node) ([
 		}
 
 		switch fn.Func.ObjName {
-		case "fulltext_match":
+		case "bm25_match":
 
 			idx := builder.findMatchBm25Index(fn, node)
 			if idx != nil {
@@ -794,10 +776,11 @@ func (builder *QueryBuilder) getBm25MatchFiltersFromScanNode(node *plan.Node) ([
 	return filterids, ftidxs
 }
 
-// getBm25MatchFromProject returns the fulltext_match() projections that resolve to a
-// bm25 index. Unlike the fulltext path it does NOT rewrite non-matching MATCH
-// projections into fulltext_match_score — a MATCH that is not a bm25 match is left
-// untouched so the fulltext path can claim it (coexistence / classic-only columns).
+// getBm25MatchFromProject returns the bm25_match() projections (bound from BM25(col)
+// AGAINST(...)) that resolve to a bm25 index. Unlike the fulltext path it does NOT
+// rewrite non-matching projections into a score function — a bm25_match with no
+// resolvable bm25 index is left as-is (it errors at execution, as BM25() requires a
+// bm25 index); classic MATCH projections are a different function entirely.
 func (builder *QueryBuilder) getBm25MatchFromProject(projNode *plan.Node, scanNode *plan.Node) ([]int32, []*plan.IndexDef) {
 	projids := make([]int32, 0)
 	ftidxs := make([]*plan.IndexDef, 0)
@@ -809,7 +792,7 @@ func (builder *QueryBuilder) getBm25MatchFromProject(projNode *plan.Node, scanNo
 		}
 
 		switch fn.Func.ObjName {
-		case "fulltext_match":
+		case "bm25_match":
 
 			idx := builder.findMatchBm25Index(fn, scanNode)
 			if idx != nil {

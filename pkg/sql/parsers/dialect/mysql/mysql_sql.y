@@ -11231,7 +11231,16 @@ simple_expr:
 		yylex.Error(err.Error())
 		goto ret1
 	}
-	$$ = val		
+	$$ = val
+    }
+|   BM25 '(' index_column_list ')' AGAINST '(' search_pattern ')'
+    {
+	val, err := tree.NewBm25MatchFuncExpression($3, $7)
+	if err != nil {
+		yylex.Error(err.Error())
+		goto ret1
+	}
+	$$ = val
     }
 
 search_pattern:

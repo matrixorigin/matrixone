@@ -14009,6 +14009,27 @@ var supportedOthersBuiltIns = []FuncNew{
 		Overloads: fulltext_expand_overload(types.T_float32),
 	},
 
+	// function `BM25_MATCH` — bm25's ranked-retrieval surface, BM25(col) AGAINST('q').
+	// Same signature as fulltext_match ([pattern, mode, cols...] -> bool/float32); the
+	// distinct name is what lets the planner route it to bm25_search. If it ever
+	// reaches execution unrewritten (no bm25 index) it errors like fulltext_match.
+	{
+		functionId: BM25_MATCH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: fulltext_expand_overload(types.T_float32),
+	},
+	{
+		functionId: BM25_MATCH_SCORE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: fulltext_expand_overload(types.T_float32),
+	},
+
 	// function `mo_tuple_expr`
 	{
 		functionId: MO_TUPLE_EXPR,
