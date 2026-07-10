@@ -642,6 +642,19 @@ func computeStringJsonReplace(json []byte, paths []*bytejson.Path, newVal []byte
 	return bj.Modify(paths, newVal, bytejson.JsonModifyReplace)
 }
 
+func computeJsonRemove(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.Remove(paths)
+}
+
+func computeStringJsonRemove(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bj.Remove(paths)
+}
+
 func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int, selectList *FunctionSelectList) error {
 	op.npath = len(params) - 1
 	if op.npath == 0 {
@@ -1034,6 +1047,13 @@ func newOpBuiltInJsonSet() *opBuiltInJsonSet {
 	return &opBuiltInJsonSet{}
 }
 
+type opBuiltInJsonRemove struct {
+}
+
+func newOpBuiltInJsonRemove() *opBuiltInJsonRemove {
+	return &opBuiltInJsonRemove{}
+}
+
 // JSON_SET
 func jsonSetCheckFn(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) >= 3 && len(inputs)%2 == 1 {
@@ -1075,6 +1095,45 @@ func jsonSetCheckFn(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
+// JSON_REMOVE
+func jsonRemoveCheckFn(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) < 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	ts := make([]types.Type, len(inputs))
+	allMatch := true
+	for i, input := range inputs {
+		if i == 0 {
+			if input.Oid == types.T_json || input.Oid.IsMySQLString() {
+				ts[i] = input
+			} else if input.Oid == types.T_any {
+				ts[i] = types.T_varchar.ToType()
+				allMatch = false
+			} else {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			continue
+		}
+
+		if input.Oid == types.T_json {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		} else if input.Oid.IsMySQLString() {
+			ts[i] = input
+		} else if input.Oid == types.T_any {
+			ts[i] = types.T_varchar.ToType()
+			allMatch = false
+		} else {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+	}
+
+	if allMatch {
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithCast(0, ts)
+}
+
 func (op *opBuiltInJsonSet) buildJsonSet(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifySet)
 }
@@ -1085,6 +1144,76 @@ func (op *opBuiltInJsonSet) buildJsonInsert(parameters []*vector.Vector, result 
 
 func (op *opBuiltInJsonSet) buildJsonReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyReplace)
+}
+
+func (op *opBuiltInJsonRemove) buildJsonRemove(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	var fn computeFn
+
+	jsonVec := parameters[0]
+	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	if selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if jsonVec.GetType().Oid == types.T_json {
+		fn = computeJsonRemove
+	} else {
+		fn = computeStringJsonRemove
+	}
+
+rowLoop:
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
+		if jIsNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		pathExprs := make([]*bytejson.Path, 0, len(parameters)-1)
+		for j := 1; j < len(parameters); j++ {
+			pathBytes, pIsNull := vector.GenerateFunctionStrParameter(parameters[j]).GetStrValue(i)
+			if pIsNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue rowLoop
+			}
+
+			p, err := types.ParseStringToPath(string(pathBytes))
+			if err != nil {
+				return err
+			}
+			if !p.IsSimple() || p.String() == "$" {
+				return moerr.NewInvalidArg(proc.Ctx, "json_remove", "invalid path expression")
+			}
+			pathExprs = append(pathExprs, &p)
+		}
+
+		out, err := fn(jsonBytes, pathExprs)
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendByteJson(out, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, jsonFuncType bytejson.JsonModifyType) error {
