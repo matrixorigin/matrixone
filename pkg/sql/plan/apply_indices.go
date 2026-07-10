@@ -943,6 +943,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		}
 		indexes = append(indexes, node.TableDef.Indexes[i])
 	}
+	indexes = builder.filterRegularIndexesByScanHints(node, indexes)
 	if len(indexes) == 0 && len(spatialIndexes) == 0 {
 		return nodeID
 	}

@@ -5100,9 +5100,17 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 		err = builder.addBinding(nodeID, tbl.As, ctx)
+		if err != nil {
+			return
+		}
 
 		//tableDef := builder.qry.Nodes[nodeID].GetTableDef()
 		midNode := builder.qry.Nodes[nodeID]
+		if midNode.NodeType == plan.Node_TABLE_SCAN {
+			if err = builder.recordIndexHints(nodeID, midNode.TableDef, tbl.IndexHints); err != nil {
+				return 0, err
+			}
+		}
 		//if it is the non-sys account and reads the cluster table,
 		//we add an account_id filter to make sure that the non-sys account
 		//can only read its own data.

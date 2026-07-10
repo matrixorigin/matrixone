@@ -21,8 +21,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
@@ -59,6 +61,191 @@ func TestIndexOnlyScanGuard_RandomRangesScenario(t *testing.T) {
 	oomRejectNew := oomSelectivity >= InFilterSelectivityLimit || oomOutcnt >= newThreshold
 	assert.True(t, oomRejectOld, "old guard should reject non-selective scan")
 	assert.True(t, oomRejectNew, "new guard should also reject non-selective scan (selectivity >= 0.3)")
+}
+
+func TestIndexHintMissingIndexReturnsMysqlKeyDoesNotExist(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t, "select val from single_idx_t force index(idx_missing) where val = 1")
+	require.Error(t, err)
+
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+	require.Equal(t, "42000", moErr.SqlState())
+	require.Contains(t, moErr.Error(), "Key 'idx_missing' doesn't exist in table 'single_idx_t'")
+}
+
+func TestFilterRegularIndexesByScanHints(t *testing.T) {
+	idxA := &planpb.IndexDef{IndexName: "idx_a"}
+	idxB := &planpb.IndexDef{IndexName: "idx_b"}
+	indexes := []*planpb.IndexDef{idxA, idxB}
+	node := &planpb.Node{NodeId: 7}
+
+	testCases := []struct {
+		name string
+		hint indexHintScopeSet
+		want []string
+	}{
+		{
+			name: "use",
+			hint: indexHintScopeSet{use: map[string]struct{}{"idx_b": {}}},
+			want: []string{"idx_b"},
+		},
+		{
+			name: "force",
+			hint: indexHintScopeSet{force: map[string]struct{}{"idx_a": {}}},
+			want: []string{"idx_a"},
+		},
+		{
+			name: "ignore",
+			hint: indexHintScopeSet{ignore: map[string]struct{}{"idx_a": {}}},
+			want: []string{"idx_b"},
+		},
+		{
+			name: "ignore wins over force",
+			hint: indexHintScopeSet{
+				force:  map[string]struct{}{"idx_a": {}},
+				ignore: map[string]struct{}{"idx_a": {}},
+			},
+			want: []string{},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := &QueryBuilder{
+				indexHintsByScan: map[int32]*indexHintSet{
+					node.NodeId: {scan: tc.hint},
+				},
+			}
+			got := builder.filterRegularIndexesByScanHints(node, indexes)
+			gotNames := make([]string, 0, len(got))
+			for _, idx := range got {
+				gotNames = append(gotNames, idx.IndexName)
+			}
+			require.Equal(t, tc.want, gotNames)
+		})
+	}
+}
+
+func TestRecordIndexHintsValidatesNames(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	tableDef := &planpb.TableDef{
+		Name: "t",
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+		Indexes: []*planpb.IndexDef{{IndexName: "idx_a"}},
+	}
+
+	err := builder.recordIndexHints(1, tableDef, []*tree.IndexHint{
+		{HintType: tree.HintForce, HintScope: tree.HintForScan, IndexNames: []string{"PRIMARY"}},
+	})
+	require.NoError(t, err)
+
+	err = builder.recordIndexHints(1, tableDef, []*tree.IndexHint{
+		{HintType: tree.HintUse, HintScope: tree.HintForScan, IndexNames: []string{"idx_missing"}},
+	})
+	require.Error(t, err)
+
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+}
+
+func TestIndexHintAffectsRegularIndexChoice(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+
+	plan, err := runOneStmt(mock, t, "select a from index_hint_t use index(idx_ab) where a = 1")
+	require.NoError(t, err)
+	require.Equal(t, "idx_ab", findFirstIndexScanName(plan))
+}
+
+func addIndexHintChoiceTableForTest(mock *MockOptimizer) {
+	idType := planpb.Type{Id: int32(types.T_int32), NotNullable: true}
+	intType := planpb.Type{Id: int32(types.T_int32)}
+	rowIDType := planpb.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
+	mainTable := &planpb.TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     25356,
+		Name:      "index_hint_t",
+		Cols: []*planpb.ColDef{
+			{ColId: 0, Name: "id", OriginName: "id", Typ: idType, Primary: true, Pkidx: 1, Default: &planpb.Default{}},
+			{ColId: 1, Name: "a", OriginName: "a", Typ: intType, Default: &planpb.Default{NullAbility: true}},
+			{ColId: 2, Name: "b", OriginName: "b", Typ: intType, Default: &planpb.Default{NullAbility: true}},
+			{ColId: 3, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &planpb.Default{}},
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+		},
+		Indexes: []*planpb.IndexDef{
+			{
+				IndexName:      "idx_a",
+				Parts:          []string{"a", catalog.CreateAlias("id")},
+				IndexTableName: "idx_hint_a",
+				TableExist:     true,
+			},
+			{
+				IndexName:      "idx_ab",
+				Parts:          []string{"a", "b", catalog.CreateAlias("id")},
+				IndexTableName: "idx_hint_ab",
+				TableExist:     true,
+			},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "a": 1, "b": 2},
+	}
+
+	mock.ctxt.objects["index_hint_t"] = &ObjectRef{SchemaName: "tpch", ObjName: "index_hint_t", Obj: 25356}
+	mock.ctxt.tables["index_hint_t"] = mainTable
+	mock.ctxt.id2name[25356] = "index_hint_t"
+	mock.ctxt.pks["index_hint_t"] = []int{0}
+	addIndexHintIndexTableForTest(mock, "idx_hint_a", 25357)
+	addIndexHintIndexTableForTest(mock, "idx_hint_ab", 25358)
+}
+
+func addIndexHintIndexTableForTest(mock *MockOptimizer, name string, tableID uint64) {
+	keyType := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	pkType := planpb.Type{Id: int32(types.T_int32), NotNullable: true}
+	rowIDType := planpb.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
+	tableDef := &planpb.TableDef{
+		TableType: catalog.SystemIndexRel,
+		TblId:     tableID,
+		Name:      name,
+		Cols: []*planpb.ColDef{
+			{ColId: 0, Name: catalog.IndexTableIndexColName, OriginName: catalog.IndexTableIndexColName, Typ: keyType, Primary: true, Default: &planpb.Default{}},
+			{ColId: 1, Name: catalog.IndexTablePrimaryColName, OriginName: catalog.IndexTablePrimaryColName, Typ: pkType, Default: &planpb.Default{}},
+			{ColId: 2, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &planpb.Default{}},
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: catalog.IndexTableIndexColName,
+			Cols:        []uint64{0},
+			Names:       []string{catalog.IndexTableIndexColName},
+		},
+		Name2ColIndex: map[string]int32{
+			catalog.IndexTableIndexColName:   0,
+			catalog.IndexTablePrimaryColName: 1,
+		},
+	}
+	mock.ctxt.objects[name] = &ObjectRef{SchemaName: "tpch", ObjName: name, Obj: int64(tableID)}
+	mock.ctxt.tables[name] = tableDef
+	mock.ctxt.id2name[tableID] = name
+	mock.ctxt.pks[name] = []int{0}
+}
+
+func findFirstIndexScanName(p *Plan) string {
+	if p == nil || p.GetQuery() == nil {
+		return ""
+	}
+	for _, node := range p.GetQuery().Nodes {
+		if node.IndexScanInfo.IsIndexScan {
+			return node.IndexScanInfo.IndexName
+		}
+	}
+	return ""
 }
 
 func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {

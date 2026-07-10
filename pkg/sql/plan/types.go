@@ -183,6 +183,7 @@ type QueryBuilder struct {
 	nameByColRef         map[[2]int32]string
 	protectedScans       map[int32]int
 	projectSpecialGuards map[int32]*specialIndexGuard
+	indexHintsByScan     map[int32]*indexHintSet
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
