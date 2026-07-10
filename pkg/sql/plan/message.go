@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
-func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) int32 {
+func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) (scanID int32, staticLimitSafe bool) {
 	node := builder.qry.Nodes[nodeID]
 	switch node.NodeType {
 	case plan.Node_JOIN:
@@ -32,14 +32,16 @@ func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) i
 				node.RuntimeFilterProbeList = nil
 				node.RuntimeFilterBuildList = nil
 			}
-			return builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
+			scanID, _ = builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
+			return scanID, false
 		}
 	case plan.Node_FILTER:
-		return builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
+		scanID, _ = builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
+		return scanID, false
 	case plan.Node_TABLE_SCAN:
-		return nodeID
+		return nodeID, true
 	}
-	return -1
+	return -1, false
 }
 
 // send message from top to scan. if block node(like group or window), no need to send this message
@@ -63,7 +65,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 		// for now ,only support order by one column
 		return
 	}
-	scanID := builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
+	scanID, staticLimitSafe := builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
 	if scanID == -1 {
 		return
 	}
@@ -78,6 +80,13 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	scanOrderBy := DeepCopyOrderBySpec(node.OrderBy[0])
 	enableOrderedLimit := false
 	if canUseRegularIndexHiddenSortKey(scanNode, orderByCol) {
+		eligibleOrderedLimit := staticLimitSafe && node.Offset == nil && node.RankOption == nil && isPositiveLiteralLimit(node.Limit)
+		if eligibleOrderedLimit {
+			enableOrderedLimit = canPushRegularIndexOrderedLimit(scanNode)
+			if !enableOrderedLimit {
+				enableOrderedLimit = builder.rewriteRegularIndexCursorRangeFilter(scanNode)
+			}
+		}
 		orderByName := orderByCol.Name
 		hiddenKeyExpr := GetColExpr(scanNode.TableDef.Cols[0].Typ, scanNode.BindingTags[0], 0)
 		hiddenKeyExpr.GetCol().Name = orderByName
@@ -90,7 +99,6 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 			Expr: scanHiddenKeyExpr,
 			Flag: node.OrderBy[0].Flag,
 		}
-		enableOrderedLimit = node.Offset == nil && node.RankOption == nil && canPushRegularIndexOrderedLimit(scanNode)
 	}
 	if orderByCol.RelPos != scanNode.BindingTags[0] {
 		return

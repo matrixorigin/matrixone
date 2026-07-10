@@ -304,7 +304,7 @@ func TestCommitRollsBackPreparedWorkspaceAfterCommitSendError(t *testing.T) {
 	})
 }
 
-func TestCommitKeepsPreparedWorkspaceAfterTxnUnknown(t *testing.T) {
+func TestCommitFinalizesPreparedWorkspaceWithoutRollbackAfterTxnUnknown(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ws := &trackingWorkspace{
 			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
@@ -320,7 +320,14 @@ func TestCommitKeepsPreparedWorkspaceAfterTxnUnknown(t *testing.T) {
 		require.Zero(t, ws.finalizeCount)
 		require.Equal(t, 1, ws.unknownCount)
 		require.Zero(t, ws.rollbackCount)
-		require.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
+		require.Equal(t, txn.TxnStatus_Active, tc.mu.txn.Status)
+		require.True(t, tc.reset.cannotCleanWorkspace.Load())
+
+		// A retained direct handle must still be unable to run workspace
+		// rollback after an unknown finalization.
+		require.NoError(t, tc.Rollback(ctx))
+		require.Zero(t, ws.rollbackCount)
+		require.Equal(t, txn.TxnStatus_Active, tc.mu.txn.Status)
 	})
 }
 
