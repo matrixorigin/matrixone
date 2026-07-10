@@ -52,12 +52,14 @@ var (
 // remoteLockTable the lock corresponding to the Table is managed by a remote LockTable.
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
-	logger             *log.MOLogger
-	removeLockTimeout  time.Duration
-	serviceID          string
-	bind               pb.LockTable
-	client             Client
-	bindChangedHandler func(pb.LockTable)
+	logger                      *log.MOLogger
+	removeLockTimeout           time.Duration
+	serviceID                   string
+	bind                        pb.LockTable
+	client                      Client
+	bindChangedHandler          func(pb.LockTable)
+	allocatorStateProvider      func() allocatorState
+	allocatorBindChangedHandler func(string, pb.LockTable, pb.LockTable, allocatorState, allocatorState) error
 }
 
 func newRemoteLockTable(
@@ -105,6 +107,12 @@ func (l *remoteLockTable) lock(
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
 
+	if err := ctx.Err(); err != nil {
+		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
+		cb(pb.Result{}, err)
+		return
+	}
+
 	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
 	// after rpc completed
 	txn.Unlock()
@@ -135,10 +143,25 @@ func (l *remoteLockTable) lock(
 		cb(pb.Result{}, ErrTxnNotFound)
 		return
 	}
+	if txn.bindChanged {
+		cb(pb.Result{}, ErrLockTableBindChanged)
+		return
+	}
 
 	if err == nil {
 		defer releaseResponse(resp)
-		if err := l.maybeHandleBindChanged(resp); err != nil {
+		if resp.NewBind != nil {
+			txn.Unlock()
+			err = l.maybeHandleBindChanged(resp)
+			txn.Lock()
+			if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+				cb(pb.Result{}, ErrTxnNotFound)
+				return
+			}
+			if txn.bindChanged {
+				cb(pb.Result{}, ErrLockTableBindChanged)
+				return
+			}
 			logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 			cb(pb.Result{}, err)
 			return
@@ -150,8 +173,12 @@ func (l *remoteLockTable) lock(
 		return
 	}
 
-	// encounter any error, we also added lock to txn, because we need unlock on remote
-	_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+	if shouldTrackRemoteLockOnSendError(err) {
+		// The request may have reached the remote owner and acquired locks even if
+		// the response was lost or the client-side context timed out. Keep local
+		// bookkeeping so normal transaction close can send the remote unlock.
+		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+	}
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
 		cb(pb.Result{}, err)
@@ -161,7 +188,18 @@ func (l *remoteLockTable) lock(
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
 	originalErr := err
-	if e := l.handleError(err, true); e != nil {
+	txn.Unlock()
+	e := l.handleError(err, true)
+	txn.Lock()
+	if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+		cb(pb.Result{}, ErrTxnNotFound)
+		return
+	}
+	if txn.bindChanged {
+		cb(pb.Result{}, ErrLockTableBindChanged)
+		return
+	}
+	if e != nil {
 		err = e
 	} else {
 		// handleError returned nil, meaning bind changed and error was swallowed
@@ -189,6 +227,7 @@ func (l *remoteLockTable) unlock(
 		txn,
 		l.bind,
 	)
+	start := time.Now()
 	backoff := remoteRetryInitialBackoff
 	for {
 		err := l.doUnlock(txn, commitTS, mutations...)
@@ -210,10 +249,51 @@ func (l *remoteLockTable) unlock(
 		// that the current bind is valid, retry unlock.
 		if err := l.handleError(err, false); err == nil {
 			return
+		} else if l.remoteUnlockRetryTimedOut(start, err) {
+			if l.logger != nil {
+				l.logger.Warn("stop retrying remote unlock after timeout",
+					txnField(txn),
+					zap.String("bind", l.bind.DebugString()),
+					zap.Duration("timeout", l.removeLockTimeout),
+					zap.Error(err))
+			}
+			return
+		} else {
+			backoff = l.remoteUnlockRetryBackoff(start, backoff, err)
 		}
 		waitRemoteRetryBackoff(backoff)
 		backoff = nextRemoteRetryBackoff(backoff)
 	}
+}
+
+func (l *remoteLockTable) remoteUnlockRetryTimedOut(
+	start time.Time,
+	err error,
+) bool {
+	return l.removeLockTimeout > 0 &&
+		isRemoteUnlockRetryTimeoutError(err) &&
+		time.Since(start) >= l.removeLockTimeout
+}
+
+func (l *remoteLockTable) remoteUnlockRetryBackoff(
+	start time.Time,
+	backoff time.Duration,
+	err error,
+) time.Duration {
+	if l.removeLockTimeout <= 0 || !isRemoteUnlockRetryTimeoutError(err) {
+		return backoff
+	}
+	if maxBackoff := l.removeLockTimeout / 10; maxBackoff > 0 && backoff > maxBackoff {
+		backoff = maxBackoff
+	}
+	remaining := l.removeLockTimeout - time.Since(start)
+	if remaining <= 0 {
+		return 0
+	}
+	if backoff <= 0 || backoff > remaining {
+		return remaining
+	}
+	return backoff
 }
 
 func (l *remoteLockTable) getLock(
@@ -322,8 +402,8 @@ func (l *remoteLockTable) getBind() pb.LockTable {
 	return l.bind
 }
 
-func (l *remoteLockTable) close() {
-	logLockTableClosed(l.logger, l.bind, true)
+func (l *remoteLockTable) close(reasons ...closeReason) {
+	logLockTableClosed(l.logger, l.bind, true, closeReasonOrDefault(reasons))
 }
 
 func (l *remoteLockTable) handleError(
@@ -343,7 +423,11 @@ func (l *remoteLockTable) handleError(
 	// Note. Since the cn where the remote lock table is located may
 	// be permanently gone, we need to go to the allocator to check if
 	// the bind is valid.
-	new, err := getLockTableBind(
+	requestAllocator := allocatorState{}
+	if l.allocatorStateProvider != nil {
+		requestAllocator = l.allocatorStateProvider()
+	}
+	new, allocator, err := getLockTableBind(
 		l.client,
 		l.bind.Group,
 		l.bind.Table,
@@ -356,6 +440,14 @@ func (l *remoteLockTable) handleError(
 		return oldError
 	}
 	if new.Changed(l.bind) {
+		if l.allocatorBindChangedHandler != nil {
+			return l.allocatorBindChangedHandler(
+				"remote-bind-refresh",
+				l.bind,
+				new,
+				allocator,
+				requestAllocator)
+		}
 		l.bindChangedHandler(new)
 		return nil
 	}
@@ -377,16 +469,77 @@ func retryRemoteLockError(err error) bool {
 	return false
 }
 
+func isRemoteUnlockRetryTimeoutError(err error) bool {
+	return retryRemoteLockError(err) ||
+		moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect)
+}
+
+func shouldTrackRemoteLockOnSendError(err error) bool {
+	var notSent *lockRequestNotSentError
+	if errors.As(err, &notSent) {
+		return false
+	}
+	err = unwrapLockRequestNotSentError(err)
+	// A bare backend/connection error does not prove the request stayed local:
+	// morpc can report it after the lock request has already been written and
+	// the future is waiting for a response. Only explicit not-sent markers and
+	// connect-timeout failures skip bookkeeping.
+	return !moerr.IsMoErrCode(err, moerr.ErrRPCTimeout)
+}
+
+func unwrapLockRequestNotSentError(err error) error {
+	var notSent *lockRequestNotSentError
+	if errors.As(err, &notSent) {
+		return notSent.err
+	}
+	return err
+}
+
 func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
 	if resp.NewBind == nil {
 		return nil
 	}
-	newBind := resp.NewBind
-	l.bindChangedHandler(*newBind)
+	newBind := *resp.NewBind
+	if l.allocatorBindChangedHandler != nil &&
+		l.allocatorStateProvider != nil &&
+		l.client != nil &&
+		l.bind.AllocatorID != "" &&
+		newBind.AllocatorID != "" &&
+		l.bind.AllocatorID != newBind.AllocatorID {
+		requestAllocator := l.allocatorStateProvider()
+		refreshedBind, allocator, err := getLockTableBind(
+			l.client,
+			newBind.Group,
+			newBind.Table,
+			newBind.OriginTable,
+			l.serviceID,
+			newBind.Sharding,
+		)
+		if err != nil {
+			logGetRemoteBindFailed(l.logger, newBind.Table, err)
+			return ErrLockTableBindChanged
+		}
+		if !refreshedBind.Changed(l.bind) {
+			return ErrLockTableBindChanged
+		}
+		if err := l.allocatorBindChangedHandler(
+			"remote-new-bind",
+			l.bind,
+			refreshedBind,
+			allocator,
+			requestAllocator); err != nil {
+			return err
+		}
+		return ErrLockTableBindChanged
+	}
+	l.bindChangedHandler(newBind)
 	return ErrLockTableBindChanged
 }
 
 func isRetryError(err error) bool {
+	err = unwrapLockRequestNotSentError(err)
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 		return false

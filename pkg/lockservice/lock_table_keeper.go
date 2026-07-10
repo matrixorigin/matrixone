@@ -185,6 +185,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxnID()
 	}
 
+	requestAllocator := k.service.allocatorStateSnapshot()
 	ctx, cancel := context.WithTimeoutCause(ctx, k.keepLockTableBindInterval, moerr.CauseDoKeepLockTableBind)
 	defer cancel()
 	resp, err := k.client.Send(ctx, req)
@@ -196,6 +197,17 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	defer releaseResponse(resp)
 
 	if resp.KeepLockTableBind.OK {
+		if _, accepted := k.service.observeAllocatorStateWithHoldersFromSnapshot(
+			"keepalive",
+			allocatorState{
+				id:      resp.KeepLockTableBind.AllocatorID,
+				version: resp.KeepLockTableBind.AllocatorVersion,
+			},
+			requestAllocator,
+			true,
+			k.groupTables); !accepted {
+			return
+		}
 		switch resp.KeepLockTableBind.Status {
 		case pb.Status_ServiceLockEnable:
 			if !k.service.isStatus(pb.Status_ServiceLockEnable) {
@@ -219,19 +231,15 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		return
 	}
 
-	n := 0
-	k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
-		newVersion := k.groupTables.getVersion()
-		if oldVersion != newVersion {
-			return false
-		}
-		bind := v.getBind()
-		if bind.ServiceID == k.serviceID {
-			n++
-			return true
-		}
-		return false
-	})
+	n := k.service.handleKeepBindFailed(
+		k.serviceID,
+		k.groupTables,
+		oldVersion,
+		allocatorState{
+			id:      resp.KeepLockTableBind.AllocatorID,
+			version: resp.KeepLockTableBind.AllocatorVersion,
+		},
+		requestAllocator)
 
 	if n > 0 {
 		// Keep bind receiving an explicit failure means that all the binds of the local
