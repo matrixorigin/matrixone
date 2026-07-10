@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -263,6 +264,153 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 
 	require.Equal(t, 5, ret.RowCount())
 	require.NoError(t, txn.Commit(ctx))
+}
+
+// Test_Issue25557MidTxnDumpKeepsWorkspaceVisibility drives the full
+// issue #25557 chain against a real engine:
+//
+//	relation.Write -> dumpBatch [txn.Lock()]
+//	  -> dumpInsertBatchLocked -> getTable
+//	    -> (fault-injected) internal SQL -> UpdateSnapshotWriteOffset
+//
+// A tiny write-workspace threshold and an exhausted quota pool force the
+// dump in the middle of the statement, and the fault point makes getTable
+// reenter UpdateSnapshotWriteOffset exactly like a compile hitting the dump
+// window. The offset captured there must observe a consistent workspace:
+// if the dump has already removed the raw insert entries (intermediate
+// state), the captured offset excludes the replacement S3 entries appended
+// afterwards, and the rows just flushed silently disappear from every
+// subsequent read of this transaction.
+func Test_Issue25557MidTxnDumpKeepsWorkspaceVisibility(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		// force the dump in the middle of the write statement
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
+		// an exhausted quota pool so the dump cannot be postponed
+		testutil.WithDisttaeEngineQuota(1),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	// Make getTable reenter UpdateSnapshotWriteOffset (iarg != 0: keep the
+	// normal lookup working afterwards).
+	fault.Enable()
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable, ":::", "echo", 1, "", false))
+	defer func() {
+		_, err := fault.RemoveFaultPoint(
+			ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+		require.NoError(t, err)
+	}()
+
+	rowsCount := 10
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bat1 := containers.ToCNBatch(bat)
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+
+	// Do NOT end the statement: the only snapshotWriteOffset advance comes
+	// from the reentrant UpdateSnapshotWriteOffset inside the dump, so the
+	// read below sees exactly the offset captured in the dump window.
+	require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, false))
+
+	// the write workspace threshold guarantees the insert was flushed to S3
+	// during the statement; the reentrantly captured offset must keep it
+	// visible inside this transaction
+	{
+		reader, err := testutil.GetRelationReader(
+			ctx,
+			disttaeEngine,
+			txn,
+			relation,
+			nil,
+			mp,
+			t,
+		)
+		require.NoError(t, err)
+
+		total := 0
+		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		for {
+			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+			require.NoError(t, err)
+			total += ret.RowCount()
+			if done {
+				break
+			}
+		}
+		require.Equal(t, rowsCount, total,
+			"rows flushed by the mid-statement dump must stay visible "+
+				"to reads of the same transaction")
+	}
+
+	require.NoError(t, testutil.EndThisStatement(ctx, txn))
+	require.NoError(t, txn.Commit(ctx))
+
+	// the committed data must be complete
+	{
+		txn, relation, reader, err := testutil.GetTableTxnReader(
+			ctx,
+			disttaeEngine,
+			databaseName,
+			tableName,
+			nil,
+			mp,
+			t,
+		)
+		require.NoError(t, err)
+		_ = relation
+
+		total := 0
+		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		for {
+			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+			require.NoError(t, err)
+			total += ret.RowCount()
+			if done {
+				break
+			}
+		}
+		require.Equal(t, rowsCount, total)
+		require.NoError(t, txn.Commit(ctx))
+	}
 }
 
 // #endregion
