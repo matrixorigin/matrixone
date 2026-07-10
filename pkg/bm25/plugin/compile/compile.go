@@ -94,9 +94,16 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 	if err != nil {
 		return err
 	}
+	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexBm25Algo.ToString())
 
-	// 3. Clear any prior state (no-op on a fresh CREATE; a real clear on REINDEX),
-	// then build the tag=0 base from source in one CROSS APPLY statement.
+	// 3. Drop any prior CDC task first — on REINDEX re-entry it would otherwise
+	// survive at its old watermark and replay history over the freshly built state.
+	if err = ctx.DropIndexCdcTask(originalTableDef, qryDatabase, originalTableDef.Name, storeDef.IndexName); err != nil {
+		return err
+	}
+
+	// 4. Clear any prior tag=1 tail (no-op on a fresh CREATE; a real clear on
+	// REINDEX), then build the tag=0 base from source in one CROSS APPLY statement.
 	cfg := wand.TableConfig{DbName: qryDatabase, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
 	for _, sql := range wand.DeleteTailSqls(cfg) {
 		if err = ctx.RunSql(sql); err != nil {
@@ -112,7 +119,12 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 			return err
 		}
 	}
-	return nil
+
+	// 5. Register the CDC task that maintains the index from now on (startFromNow=
+	// true): post-create DML flows into the tag=1 CdcTail via the WAND sinker. The
+	// initial build above already covers the pre-create rows.
+	return ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
+		originalTableDef.TblId, storeDef.IndexName, sinkerType, true, "", originalTableDef)
 }
 
 func (Hooks) RestoreInitSQL(compileplugin.CompileContext, map[string]*plan.IndexDef) (bool, string, error) {

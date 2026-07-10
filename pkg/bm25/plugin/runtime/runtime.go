@@ -34,6 +34,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+// actionBm25Reindex is the idxcron action key for bm25's scheduled
+// merge-compaction. Inlined here (rather than importing
+// pkg/vectorindex/idxcron) to avoid an import cycle, mirroring the ivfflat
+// plugin's actionIvfflatReindex. Stays in lock-step with the bm25 arm of
+// pkg/vectorindex/idxcron/executor.go.
+const actionBm25Reindex = "bm25_reindex"
+
 // DefaultParser is the tokenizer used when WITH PARSER is omitted. The WAND
 // engine's word-id layer is jieba-backed, so gojieba is the default (and the
 // only parser wired end-to-end until the word-id layer is generalized).
@@ -67,11 +74,12 @@ func (CatalogHooks) HiddenTableTypes() []string {
 // rows and must be reset alongside a TRUNCATE of the source table.
 func (CatalogHooks) ShouldTruncateHiddenTable(string) bool { return true }
 
-// AlterTableCloneBehavior — Phase 2 (sync-only): the clone copies the hidden
-// tables as-is (zero value). Phase 4 flips this to SkipWholeIndex once bm25 is
-// CDC-maintained and rebuilds from source on the new table.
+// AlterTableCloneBehavior — bm25 is CDC-maintained and rebuilds its whole
+// binary index from the source rows on the new table (via the re-armed CDC's
+// InitSQL), so the unaffected-index clone skips the whole index rather than
+// block-copying a base that would then be doubled by the rebuild.
 func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
-	return catalogplugin.AlterTableCloneBehavior{}
+	return catalogplugin.AlterTableCloneBehavior{SkipWholeIndex: true}
 }
 
 // RestoreBehavior — the restore rebuilds the binary index from the restored
@@ -115,13 +123,19 @@ func (CatalogHooks) ValidQuantization(quant, _ string) error {
 	return nil
 }
 
-// SyncDescriptor — Phase 2 (sync-only): NO CDC, NO idxcron. The index builds
-// synchronously from source on CREATE / ALTER REINDEX; post-create DML does not
-// yet flow in. Phase 4 flips this to the CDC-maintained descriptor (UsesCDC +
-// AlwaysAsync + idxcron bm25_reindex / token BM25) once the CDC consumer and
-// idxcron merge-compaction are wired.
+// SyncDescriptor — bm25 is always CDC-maintained (AlwaysAsync): post-create DML
+// flows into the tag=1 CdcTail via the WAND sinker, and a scheduled idxcron
+// merge-compaction (action bm25_reindex, token BM25) folds the tail into the
+// tag=0 base. It is not lists-aware (no k-means / nlist concept).
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
-	return catalogplugin.SyncDescriptor{}
+	return catalogplugin.SyncDescriptor{
+		UsesCDC:           true,
+		SinkerType:        catalogplugin.SinkerType_IndexSync,
+		AlwaysAsync:       true,
+		IdxcronAction:     actionBm25Reindex,
+		IdxcronAlgoToken:  "BM25",
+		IdxcronListsAware: false,
+	}
 }
 
 // ParamsFromTree extracts the WITH(...) options from CREATE INDEX ... USING bm25
