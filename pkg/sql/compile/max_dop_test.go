@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -568,6 +569,26 @@ func TestCompileTableFunctionDispatchesIvfSearchToAllCNs(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int32(2), op1.IndexReaderParam.GetPartitionCnCnt())
 	require.Equal(t, int32(1), op1.IndexReaderParam.GetPartitionCnIdx())
+}
+
+type readonlyWorkspaceForIvfTest struct{ *Ws }
+
+func (*readonlyWorkspaceForIvfTest) Readonly() bool { return true }
+
+func TestShouldDispatchIvfSearchMultiCNRejectsWritableWorkspace(t *testing.T) {
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		TableDef: &plan.TableDef{
+			TableType: "func_table",
+			TblFunc:   &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+		},
+	}
+	cnList := engine.Nodes{{Addr: "cn1:6001"}, {Addr: "cn2:6001"}}
+
+	var writable client.Workspace = &Ws{}
+	require.False(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, writable))
+	require.True(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, &readonlyWorkspaceForIvfTest{Ws: &Ws{}}))
+	require.True(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, nil))
 }
 
 func TestGenerateNodesKeepsForceOneCNIvfEntriesInternalScanOnCurrentCN(t *testing.T) {

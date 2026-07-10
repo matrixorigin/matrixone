@@ -70,8 +70,8 @@ func (c *Compile) partitionedIvfScanNodes(node *plan.Node) engine.Nodes {
 		mcpu = int(node.GetStats().GetDop())
 	}
 	return engine.Nodes{{
-		Addr:  c.addr,
-		Mcpu:  normalizeMcpu(mcpu),
+		Addr: c.addr,
+		Mcpu: normalizeMcpu(mcpu),
 		// ivf_search already partitions entries by PK in its internal SQL.
 		// Keep that scan on the invoking CN, but do not apply a second
 		// block-level partition here: a partition may otherwise lose the only

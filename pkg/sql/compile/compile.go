@@ -2721,10 +2721,16 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 	return ss, nil
 }
 
-func shouldDispatchIvfSearchMultiCN(node *plan.Node, execType plan2.ExecType, cnList engine.Nodes) bool {
+func shouldDispatchIvfSearchMultiCN(
+	node *plan.Node,
+	execType plan2.ExecType,
+	cnList engine.Nodes,
+	workspace client.Workspace,
+) bool {
 	return plan2.IsIvfSearchEntriesInternalScan(node) &&
 		execType == plan2.ExecTypeAP_MULTICN &&
 		len(cnList) > 1 &&
+		(workspace == nil || workspace.Readonly()) &&
 		(node.GetStats() == nil || !node.GetStats().GetForceOneCN())
 }
 
@@ -2739,7 +2745,11 @@ func partitionedIndexReaderParam(param *plan.IndexReaderParam, cncnt, cnidx int3
 }
 
 func (c *Compile) compileIvfSearchParallel(node *plan.Node) ([]*Scope, error) {
-	if !shouldDispatchIvfSearchMultiCN(node, c.execType, c.cnList) {
+	var workspace client.Workspace
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		workspace = txnOp.GetWorkspace()
+	}
+	if !shouldDispatchIvfSearchMultiCN(node, c.execType, c.cnList, workspace) {
 		return c.compileSingleTableFunction(node)
 	}
 
