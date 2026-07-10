@@ -914,9 +914,10 @@ func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
 			item, itemLen = stringifyUint(uint64Code, b[offset+1:])
 			itemLen += 1
 		case b[offset] == enumCode:
-			// TODO: need to verify @YANGGMM
-			item, itemLen = stringifyUint(uint16Code, b[offset+1:])
-			itemLen += 1
+			// EncodeEnum emits [enumCode, uint16Code, ...]: skip both the enumCode and
+			// the nested uint16Code byte before reading the uint payload.
+			item, itemLen = stringifyUint(uint16Code, b[offset+2:])
+			itemLen += 2
 		case b[offset] == uuidCode:
 			item, itemLen = stringifyUuid(b[offset:])
 			// off += 1

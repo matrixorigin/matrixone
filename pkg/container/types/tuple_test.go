@@ -22,6 +22,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -604,8 +605,37 @@ func encodeBufToPacker(tuple Tuple, p *Packer) {
 			p.EncodeStringType(e)
 		case Uuid:
 			p.EncodeUuid(e)
+		case Enum:
+			p.EncodeEnum(e)
 		}
 	}
+}
+
+func TestTupleEnumRoundTrip(t *testing.T) {
+	// EncodeEnum emits [enumCode, uint16Code, <len>, <value>]: EncodeUint16 writes its
+	// own uint16Code byte after the enumCode byte. Every decode/stringify path must skip
+	// that nested uint16Code byte. This guards the composite unique index key path
+	// (e.g. UNIQUE KEY(note, status) with status ENUM), whose duplicate-key error renders
+	// the tuple via StringifyTuple - previously panicking with slice bounds out of range.
+	tuple := Tuple{[]byte("n1"), Enum(2)}
+	packer := NewPacker()
+	encodeBufToPacker(tuple, packer)
+	buf := packer.GetBuf()
+
+	// Unpack round-trip: the ENUM value must survive the extra code byte.
+	tt, err := Unpack(buf)
+	require.NoError(t, err)
+	require.Equal(t, []byte("n1"), tt[0])
+	require.EqualValues(t, 2, tt[1])
+
+	// StringifyTuple renders duplicate-key errors; it must not panic and must print
+	// the ENUM index value.
+	strs, err := StringifyTuple(buf, []plan.Type{
+		{Id: int32(T_varchar)},
+		{Id: int32(T_enum)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"n1", "2"}, strs)
 }
 
 func TestTupleSQLStrings(t *testing.T) {
@@ -1197,6 +1227,11 @@ func TestUnpackNthElement(t *testing.T) {
 		Decimal256{3, 4, 5, 6},
 		[]byte("hello"),
 		uuid,
+		// ENUM in a non-trailing position: extracting the element after it exercises
+		// UnpackNthElement's enum-skip (nested uint16Code byte), the path used by
+		// serial_extract's constant-index fast path.
+		Enum(2),
+		[]byte("world"),
 	}
 	p := NewPacker()
 	encodeBufToPacker(tuple, p)
