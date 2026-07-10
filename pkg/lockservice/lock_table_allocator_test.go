@@ -15,9 +15,12 @@
 package lockservice
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -357,11 +360,104 @@ func TestCleanerPreservesCannotCommitOnActiveTxnQueryError(t *testing.T) {
 		},
 		func(lta *lockTableAllocator) {
 			lta.keepBindTimeout = time.Millisecond * 20
-			lta.options.getActiveTxnFunc = func(string) (bool, [][]byte, error) {
+			lta.options.getActiveTxnFunc = func(context.Context, string) (bool, [][]byte, error) {
 				<-ready
 				return false, nil, moerr.NewBackendClosedNoCtx()
 			}
 		})
+}
+
+func TestCleanCommitStateDefersRetryableErrorToNextSweep(t *testing.T) {
+	runtime.RunTest("", func(_ runtime.Runtime) {
+		lta := &lockTableAllocator{
+			logger:          getLogger("").Named("clean-commit-state-test"),
+			keepBindTimeout: 100 * time.Millisecond,
+		}
+		retryCtl := lta.getCtl("retry-service")
+		require.Equal(t, cannotCommitState, retryCtl.tryCannotCommit("t1"))
+		healthyCtl := lta.getCtl("healthy-service")
+		require.Equal(t, cannotCommitState, healthyCtl.tryCannotCommit("t2"))
+
+		var retryCalls atomic.Int64
+		var healthyCalls atomic.Int64
+		lta.options.getActiveTxnFunc = func(_ context.Context, sid string) (bool, [][]byte, error) {
+			switch sid {
+			case "retry-service":
+				retryCalls.Add(1)
+				return false, nil, assert.AnError
+			case "healthy-service":
+				healthyCalls.Add(1)
+				return true, [][]byte{[]byte("t2")}, nil
+			default:
+				panic("unexpected service: " + sid)
+			}
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			lta.cleanCommitState(ctx)
+		}()
+
+		require.Eventually(t, func() bool {
+			return retryCalls.Load() > 0 && healthyCalls.Load() > 0
+		}, time.Second, 5*time.Millisecond)
+
+		retryCount := retryCalls.Load()
+		healthyCount := healthyCalls.Load()
+		time.Sleep(25 * time.Millisecond)
+		require.Equal(t, retryCount, retryCalls.Load())
+		require.Equal(t, healthyCount, healthyCalls.Load())
+		state, exists := retryCtl.getCommitState("t1")
+		require.True(t, exists)
+		require.Equal(t, cannotCommitState, state.state)
+		require.False(t, lta.HasInvalidService("retry-service"))
+
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("cleanCommitState did not stop after cancellation")
+		}
+	})
+}
+
+func TestCleanCommitStateCancelsInFlightProbe(t *testing.T) {
+	runtime.RunTest("", func(_ runtime.Runtime) {
+		lta := &lockTableAllocator{
+			logger:          getLogger("").Named("clean-commit-state-cancel-test"),
+			keepBindTimeout: time.Millisecond,
+		}
+		lta.getCtl("s1").tryCannotCommit("t1")
+
+		started := make(chan struct{})
+		var once sync.Once
+		lta.options.getActiveTxnFunc = func(ctx context.Context, _ string) (bool, [][]byte, error) {
+			once.Do(func() { close(started) })
+			<-ctx.Done()
+			return false, nil, ctx.Err()
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			lta.cleanCommitState(ctx)
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("cleanCommitState did not start the probe")
+		}
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("cleanCommitState did not stop after context cancellation")
+		}
+	})
 }
 
 func TestCannotCommitGenerationRefresh(t *testing.T) {
@@ -478,7 +574,7 @@ func TestCtlCanRemovedByInvalidService(t *testing.T) {
 		},
 		func(lta *lockTableAllocator) {
 			lta.keepBindTimeout = time.Millisecond * 100
-			lta.options.getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
+			lta.options.getActiveTxnFunc = func(_ context.Context, sid string) (bool, [][]byte, error) {
 				<-ch
 				return false, nil, nil
 			}
@@ -503,7 +599,7 @@ func TestCtlCanRemovedByNotActiveTxn(t *testing.T) {
 		},
 		func(lta *lockTableAllocator) {
 			lta.keepBindTimeout = time.Millisecond * 100
-			lta.options.getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
+			lta.options.getActiveTxnFunc = func(_ context.Context, sid string) (bool, [][]byte, error) {
 				<-ch
 				return true, [][]byte{[]byte("t2")}, nil
 			}

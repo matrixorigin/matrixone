@@ -63,7 +63,7 @@ type lockTableAllocator struct {
 
 	// for test
 	options struct {
-		getActiveTxnFunc         func(sid string) (bool, [][]byte, error)
+		getActiveTxnFunc         func(context.Context, string) (bool, [][]byte, error)
 		removeDisconnectDuration time.Duration
 	}
 }
@@ -601,8 +601,8 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 
 	getActiveTxnFunc := l.options.getActiveTxnFunc
 	if getActiveTxnFunc == nil {
-		getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
-			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseCleanCommitState)
+		getActiveTxnFunc = func(ctx context.Context, sid string) (bool, [][]byte, error) {
+			ctx, cancel := context.WithTimeoutCause(ctx, defaultRPCTimeout, moerr.CauseCleanCommitState)
 			defer cancel()
 
 			req := acquireRequest()
@@ -662,48 +662,50 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 				return true
 			})
 
-			retryCount := math.MaxInt - 1
-
 			for _, sid := range services {
-				for i := 0; i < retryCount+1; i++ {
-					// The active-txn response can only classify control states that
-					// existed before this request started.
-					watermark, ok := l.getCtlGeneration(sid)
-					if !ok {
-						break
-					}
-					cleanupWatermarks[sid] = watermark
-					valid, actives, err := getActiveTxnFunc(sid)
-					if err == nil {
-						if !valid {
-							invalidServices = append(invalidServices, sid)
-						} else {
-							m := make(map[string]struct{}, len(actives))
-							for _, txn := range actives {
-								m[util.UnsafeBytesToString(txn)] = struct{}{}
-							}
-							activeTxnMap[sid] = m
-						}
-					} else if isRetryError(err) {
-						// retry err
-						l.logger.Error("retry to check service if alive",
-							zap.String("serviceID", sid),
-							zap.Error(err))
-						if i < retryCount {
-							continue
-						}
-						l.inactiveService.Store(sid, time.Now())
-						unknownServices = append(unknownServices, sid)
-					} else {
-						// is not retry err
-						l.logger.Error("get active txn failed",
-							zap.String("serviceID", sid),
-							zap.Error(err))
-						l.inactiveService.Store(sid, time.Now())
-						unknownServices = append(unknownServices, sid)
-					}
-					break
+				if ctx.Err() != nil {
+					return
 				}
+
+				// The active-txn response can only classify control states that
+				// existed before this request started.
+				watermark, ok := l.getCtlGeneration(sid)
+				if !ok {
+					continue
+				}
+				cleanupWatermarks[sid] = watermark
+
+				valid, actives, err := getActiveTxnFunc(ctx, sid)
+				if err == nil {
+					if !valid {
+						invalidServices = append(invalidServices, sid)
+					} else {
+						m := make(map[string]struct{}, len(actives))
+						for _, txn := range actives {
+							m[util.UnsafeBytesToString(txn)] = struct{}{}
+						}
+						activeTxnMap[sid] = m
+					}
+					continue
+				}
+
+				if ctx.Err() != nil {
+					return
+				}
+				if isRetryError(err) {
+					// Keep the commit state and retry on the next timer sweep. Retrying
+					// this service in-place can starve all later services forever.
+					l.logger.Error("retry to check service if alive on next sweep",
+						zap.String("serviceID", sid),
+						zap.Error(err))
+					continue
+				}
+
+				l.logger.Error("get active txn failed",
+					zap.String("serviceID", sid),
+					zap.Error(err))
+				l.inactiveService.Store(sid, time.Now())
+				unknownServices = append(unknownServices, sid)
 			}
 
 			l.ctlMu.Lock()
