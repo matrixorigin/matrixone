@@ -129,12 +129,13 @@ func (CatalogHooks) ValidQuantization(quant, _ string) error {
 // tag=0 base. It is not lists-aware (no k-means / nlist concept).
 func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	return catalogplugin.SyncDescriptor{
-		UsesCDC:           true,
-		SinkerType:        catalogplugin.SinkerType_IndexSync,
-		AlwaysAsync:       true,
-		IdxcronAction:     actionBm25Reindex,
-		IdxcronAlgoToken:  "BM25",
-		IdxcronListsAware: false,
+		UsesCDC:              true,
+		SinkerType:           catalogplugin.SinkerType_IndexSync,
+		AlwaysAsync:          true,
+		IdxcronAction:        actionBm25Reindex,
+		IdxcronAlgoToken:     "BM25",
+		IdxcronReindexOption: "MERGE",
+		IdxcronListsAware:    false,
 	}
 }
 

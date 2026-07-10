@@ -92,3 +92,13 @@ type Hooks interface {
 	// IVF-FLAT, trivial-true for HNSW / fulltext.
 	Updatable(in UpdatableInput) (ok bool, reason string, err error)
 }
+
+// ReindexOptioner is an OPTIONAL idxcron hook (checked via type assertion). A plugin that
+// implements it chooses the REINDEX option per cron fire, OVERRIDING the static
+// SyncDescriptor.IdxcronReindexOption. Fulltext uses it to return "MERGE" (incremental
+// fold+tiered compaction) normally, but "" (a full REBUILD) once the dead-doc fraction is
+// high enough that a rebuild reclaims more than it costs. Plugins that don't implement it
+// keep their descriptor's fixed option. Called only when Updatable returned ok.
+type ReindexOptioner interface {
+	ReindexOption(in UpdatableInput) (option string, err error)
+}

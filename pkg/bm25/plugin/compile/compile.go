@@ -42,6 +42,10 @@ import (
 // WITH max_index_capacity option is omitted.
 const DefaultMaxIndexCapacity = int64(1000000)
 
+// actionBm25Reindex is the idxcron action key for bm25's scheduled compaction;
+// must match the runtime plugin's SyncDescriptor.IdxcronAction.
+const actionBm25Reindex = "bm25_reindex"
+
 // Compile-time interface check.
 var _ compileplugin.Hooks = Hooks{}
 
@@ -128,8 +132,22 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 	// 5. Register the CDC task that maintains the index from now on (startFromNow=
 	// true): post-create DML flows into the tag=1 CdcTail via the WAND sinker. The
 	// initial build above already covers the pre-create rows.
-	return ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
-		originalTableDef.TblId, storeDef.IndexName, sinkerType, true, "", originalTableDef)
+	if err = ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
+		originalTableDef.TblId, storeDef.IndexName, sinkerType, true, "", originalTableDef); err != nil {
+		return err
+	}
+
+	// 6. Register the idxcron scheduled-compaction task. Skipped on a background
+	// re-entry (IdxcronMetadata returns nil) so the existing task row persists.
+	metadata, err := Hooks{}.IdxcronMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return ctx.RegisterIdxcronUpdate(originalTableDef.TblId, qryDatabase,
+		originalTableDef.Name, storeDef.IndexName, actionBm25Reindex, metadata)
 }
 
 // RestoreInitSQL rebuilds the bm25 index from the restored/cloned rows. It runs
@@ -193,8 +211,16 @@ func (Hooks) HandleDropIndex(compileplugin.CompileContext, map[string]*plan.Inde
 	return nil
 }
 
-func (Hooks) IdxcronMetadata(compileplugin.CompileContext) ([]byte, error) {
-	return nil, nil
+// IdxcronMetadata — bm25's scheduled compaction reads max_index_capacity from
+// the index's PERSISTED algo_params (not a session var), so the metadata blob
+// carries no captured vars; it only needs to be non-nil so the idxcron task
+// registers. In a background re-entry (not frontend) return nil so the existing
+// task's row persists (mirrors BuildIdxcronMetadata's frontend gate).
+func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
+	if !ctx.IsFrontend() {
+		return nil, nil
+	}
+	return []byte("{}"), nil
 }
 
 // resolveBm25Capacity reads max_index_capacity from the index's algo_params,
