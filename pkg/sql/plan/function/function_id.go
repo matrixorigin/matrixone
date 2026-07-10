@@ -780,12 +780,11 @@ const (
 	VECINT8_FROM_BASE64  = 547
 	VECUINT8_FROM_BASE64 = 548
 
-	BM25_MATCH       = 549
-	BM25_MATCH_SCORE = 550
+	BM25_MATCH = 549
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 551
+	FUNCTION_END_NUMBER = 550
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1368,8 +1367,7 @@ var functionIdRegister = map[string]int32{
 	// match function
 	"fulltext_match":       FULLTEXT_MATCH,
 	"fulltext_match_score": FULLTEXT_MATCH_SCORE,
-	"bm25_match":           BM25_MATCH,
-	"bm25_match_score":     BM25_MATCH_SCORE,
+	"bm25_match": BM25_MATCH,
 
 	// starlark function
 	"starlark":     STARLARK,

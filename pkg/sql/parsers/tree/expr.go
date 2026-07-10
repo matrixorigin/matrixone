@@ -1936,7 +1936,14 @@ func NewBm25MatchFuncExpression(columns []*KeyPart, pattern string) (*FullTextMa
 }
 
 func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
-	ctx.WriteString("MATCH (")
+	// A BM25() expression must deparse back to BM25(), not MATCH() — otherwise a
+	// deparse+reparse (e.g. CTAS's CreateAsSelectSql) would lose IsBm25 and re-bind
+	// to the classic fulltext index. BM25 carries no mode (always ranked).
+	if node.IsBm25 {
+		ctx.WriteString("BM25 (")
+	} else {
+		ctx.WriteString("MATCH (")
+	}
 	for i, k := range node.KeyParts {
 		if i > 0 {
 			ctx.WriteString(", ")
@@ -1947,7 +1954,7 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	ctx.WriteString("AGAINST (")
 	ctx.WriteString(node.Pattern)
 
-	if node.Mode != FULLTEXT_DEFAULT {
+	if !node.IsBm25 && node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")
 		ctx.WriteString(node.Mode.ToString())
 	}
