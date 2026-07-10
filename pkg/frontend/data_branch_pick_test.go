@@ -120,6 +120,23 @@ func TestSegmentBuilder_StringType_CountBased(t *testing.T) {
 	require.Equal(t, types.T_varchar, zm.GetType())
 }
 
+func TestSegmentBuilder_Decimal256GapBased(t *testing.T) {
+	pkType := types.New(types.T_decimal256, 39, 4)
+	sb := newSegmentBuilder(pkType)
+	require.True(t, sb.isNumeric)
+
+	for _, text := range []string{
+		"1.0000", "2.0000", "3.0000", "4.0000", "5.0000", "1000000.0000",
+	} {
+		value, err := types.ParseDecimal256(text, pkType.Width, pkType.Scale)
+		require.NoError(t, err)
+		sb.observe(types.EncodeDecimal256(&value))
+	}
+
+	segments := sb.finalize()
+	require.Len(t, segments, 2)
+}
+
 func TestBuildSegmentsFromSortedVec_Int32(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
@@ -264,6 +281,11 @@ func TestNumericGap_AllTypes(t *testing.T) {
 			b, _ := types.ParseDecimal128("200.75", 20, 2)
 			return types.EncodeDecimal128(&a), types.EncodeDecimal128(&b)
 		}, 100.50},
+		{"decimal256", types.T_decimal256, types.New(types.T_decimal256, 39, 4), func() ([]byte, []byte) {
+			a, _ := types.ParseDecimal256("1234567890123456789012345678901230.0001", 39, 4)
+			b, _ := types.ParseDecimal256("1234567890123456789012345678901232.0001", 39, 4)
+			return types.EncodeDecimal256(&a), types.EncodeDecimal256(&b)
+		}, 2.0},
 		{"varchar_returns_zero", types.T_varchar, types.Type{}, func() ([]byte, []byte) {
 			return []byte("aaa"), []byte("zzz")
 		}, 0.0},
@@ -287,7 +309,7 @@ func TestIsNumericType(t *testing.T) {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 	}
 	for _, oid := range numeric {
 		require.True(t, isNumericType(oid), "expected numeric: %s", oid)

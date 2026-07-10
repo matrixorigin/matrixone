@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/big"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1164,9 +1165,49 @@ func numericGap(a, b []byte, pkType types.Type) float64 {
 		va := types.Decimal128ToFloat64(types.DecodeDecimal128(a), pkType.Scale)
 		vb := types.Decimal128ToFloat64(types.DecodeDecimal128(b), pkType.Scale)
 		return math.Abs(vb - va)
+	case types.T_decimal256:
+		return decimal256AbsGap(
+			types.DecodeDecimal256(a),
+			types.DecodeDecimal256(b),
+			pkType.Scale,
+		)
 	default:
 		return 0
 	}
+}
+
+func decimal256AbsGap(a, b types.Decimal256, scale int32) float64 {
+	ai := decimal256ToBigInt(a)
+	bi := decimal256ToBigInt(b)
+	diff := new(big.Int).Sub(bi, ai)
+	diff.Abs(diff)
+
+	f := new(big.Float).SetPrec(256).SetInt(diff)
+	if scale > 0 {
+		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
+		f.Quo(f, new(big.Float).SetPrec(256).SetInt(divisor))
+	}
+	v, _ := f.Float64()
+	return v
+}
+
+func decimal256ToBigInt(x types.Decimal256) *big.Int {
+	negative := x.Sign()
+	if negative {
+		x = x.Minus()
+	}
+
+	n := new(big.Int).SetUint64(x.B192_255)
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B128_191))
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B64_127))
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B0_63))
+	if negative {
+		n.Neg(n)
+	}
+	return n
 }
 
 func isNumericType(oid types.T) bool {
@@ -1174,7 +1215,7 @@ func isNumericType(oid types.T) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128:
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false
