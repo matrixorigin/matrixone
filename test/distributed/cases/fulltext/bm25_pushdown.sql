@@ -21,28 +21,28 @@ create index ftx using bm25 on docs(body) with parser gojieba;
 -- ===== baseline: pushdown OFF (single JOIN, filter applied after search) =====
 set fulltext_bloom_filter_pushdown=off;
 -- apple ∩ cat=10 -> {1,3,6}
-select id from docs where bm25(body) against('apple') and cat=10 order by id;
+select id from docs where bm25(body) against('apple') and cat=10;
 -- apple ∩ cat=20 -> {2,5}
-select id from docs where bm25(body) against('apple') and cat=20 order by id;
+select id from docs where bm25(body) against('apple') and cat=20;
 -- ranked top-2 of apple ∩ cat=10
 select id from docs where bm25(body) against('apple') and cat=10 limit 2;
 -- two-term MATCH + filter
-select id from docs where bm25(body) against('apple banana') and cat=20 order by id;
+select id from docs where bm25(body) against('apple banana') and cat=20;
 -- filter selects rows the term does not match -> empty
-select id from docs where bm25(body) against('durian') and cat=20 order by id;
+select id from docs where bm25(body) against('durian') and cat=20;
 -- filter matches nothing -> empty
-select id from docs where bm25(body) against('apple') and cat=99 order by id;
+select id from docs where bm25(body) against('apple') and cat=99;
 -- count with MATCH + filter
 select count(*) from docs where bm25(body) against('apple') and cat=10;
 
 -- ===== pushdown ON (2-JOIN membership-bitset prefilter): SAME rows =====
 set fulltext_bloom_filter_pushdown=on;
-select id from docs where bm25(body) against('apple') and cat=10 order by id;
-select id from docs where bm25(body) against('apple') and cat=20 order by id;
+select id from docs where bm25(body) against('apple') and cat=10;
+select id from docs where bm25(body) against('apple') and cat=20;
 select id from docs where bm25(body) against('apple') and cat=10 limit 2;
-select id from docs where bm25(body) against('apple banana') and cat=20 order by id;
-select id from docs where bm25(body) against('durian') and cat=20 order by id;
-select id from docs where bm25(body) against('apple') and cat=99 order by id;
+select id from docs where bm25(body) against('apple banana') and cat=20;
+select id from docs where bm25(body) against('durian') and cat=20;
+select id from docs where bm25(body) against('apple') and cat=99;
 select count(*) from docs where bm25(body) against('apple') and cat=10;
 
 set fulltext_bloom_filter_pushdown=off;

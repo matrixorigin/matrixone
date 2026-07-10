@@ -10,9 +10,9 @@ insert into t values (1,'apple banana cherry'),(2,'apple banana'),(3,'apple'),(4
 create fulltext index ftc on t(txt);
 create index ftr using bm25 on t(txt) with parser gojieba;
 -- MATCH -> classic fulltext (boolean mode: OR bag-of-words over any term)
-select id from t where match(txt) against('apple banana cherry' in boolean mode) order by id;
+select id from t where match(txt) against('apple banana cherry' in boolean mode);
 -- MATCH -> classic fulltext (natural language)
-select id from t where match(txt) against('apple' in natural language mode) order by id;
+select id from t where match(txt) against('apple' in natural language mode);
 -- BM25 -> bm25 ranked top-K (BM25 score DESC)
 select id from t where bm25(txt) against('apple');
 -- BM25 ranked bag-of-words, multi-term

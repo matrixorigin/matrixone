@@ -8,17 +8,17 @@ insert into t values
 (3, '视频 文案 创作 技巧'),
 (4, '孩子 教育 成长');
 create index ft using bm25 on t(txt) with parser gojieba;
-select id from t where bm25(txt) against('营养 早餐') order by id;
+select id from t where bm25(txt) against('营养 早餐');
 id
-1
 2
-select id from t where bm25(txt) against('视频 文案') order by id;
-id
 1
+select id from t where bm25(txt) against('视频 文案');
+id
 3
-select id from t where bm25(txt) against('教育') order by id;
+1
+select id from t where bm25(txt) against('教育');
 id
 4
-select id from t where bm25(txt) against('不存在的词') order by id;
+select id from t where bm25(txt) against('不存在的词');
 id
 drop database bm25_retrieval;

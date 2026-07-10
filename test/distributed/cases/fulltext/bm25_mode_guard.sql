@@ -11,10 +11,10 @@ create table t (id bigint primary key, txt text);
 insert into t values (1,'apple banana'),(2,'banana cherry'),(3,'cherry date');
 create index ft using bm25 on t(txt) with parser gojieba;
 -- BM25() ranked retrieval works
-select id from t where bm25(txt) against('apple') order by id;
-select id from t where bm25(txt) against('banana') order by id;
+select id from t where bm25(txt) against('apple');
+select id from t where bm25(txt) against('banana');
 -- multi-term bag-of-words
-select id from t where bm25(txt) against('apple cherry') order by id;
+select id from t where bm25(txt) against('apple cherry');
 -- MATCH() on a bm25-only column has no classic fulltext index -> error
 select id from t where match(txt) against('apple');
 drop database bm25_mode;

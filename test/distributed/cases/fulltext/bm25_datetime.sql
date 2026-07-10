@@ -10,8 +10,8 @@ insert into t values
  ('2020-06-01 10:00:03', '视频 文案 创作 技巧'),
  ('2020-06-01 10:00:04', '孩子 教育 成长');
 create index ft using bm25 on t(txt) with parser gojieba;
-select id from t where bm25(txt) against('营养 早餐') order by id;
-select id from t where bm25(txt) against('视频 文案') order by id;
-select id from t where bm25(txt) against('教育') order by id;
-select id from t where bm25(txt) against('不存在的词') order by id;
+select id from t where bm25(txt) against('营养 早餐');
+select id from t where bm25(txt) against('视频 文案');
+select id from t where bm25(txt) against('教育');
+select id from t where bm25(txt) against('不存在的词');
 drop database bm25_datetime;

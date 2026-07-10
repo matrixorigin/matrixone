@@ -15,13 +15,13 @@ insert into t values
 create index ba using bm25 on t(a) with parser gojieba;
 create fulltext index fb on t(b);
 -- BM25(a) apple ∩ MATCH(b) cat  -> docs 1,4 (apple in a AND cat in b)
-select id from t where bm25(a) against('apple') and match(b) against('cat') order by id;
+select id from t where bm25(a) against('apple') and match(b) against('cat');
 -- order of the two verbs does not matter
-select id from t where match(b) against('cat') and bm25(a) against('apple') order by id;
+select id from t where match(b) against('cat') and bm25(a) against('apple');
 -- BM25(a) apple ∩ MATCH(b) dog -> docs 1,2
-select id from t where bm25(a) against('apple') and match(b) against('dog') order by id;
+select id from t where bm25(a) against('apple') and match(b) against('dog');
 -- combined with a normal SQL filter
-select id from t where bm25(a) against('apple') and match(b) against('cat') and id > 1 order by id;
+select id from t where bm25(a) against('apple') and match(b) against('cat') and id > 1;
 -- no overlap -> empty (banana in a, but cat in b matches none of the banana docs)
-select id from t where bm25(a) against('cherry') and match(b) against('dog') order by id;
+select id from t where bm25(a) against('cherry') and match(b) against('dog');
 drop database bm25_mixed;

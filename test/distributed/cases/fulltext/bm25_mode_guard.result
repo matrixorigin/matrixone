@@ -4,14 +4,14 @@ use bm25_mode;
 create table t (id bigint primary key, txt text);
 insert into t values (1,'apple banana'),(2,'banana cherry'),(3,'cherry date');
 create index ft using bm25 on t(txt) with parser gojieba;
-select id from t where bm25(txt) against('apple') order by id;
+select id from t where bm25(txt) against('apple');
 id
 1
-select id from t where bm25(txt) against('banana') order by id;
+select id from t where bm25(txt) against('banana');
 id
 1
 2
-select id from t where bm25(txt) against('apple cherry') order by id;
+select id from t where bm25(txt) against('apple cherry');
 id
 1
 2
