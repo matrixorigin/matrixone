@@ -630,7 +630,9 @@ func decodeTupleTo(b []byte, t Tuple, schema []T) (Tuple, int, []T, error) {
 
 		case enumCode:
 			schema = append(schema, T_enum)
-			el, off, err = decodeWithOffset(i, decodeUint, uint16Code)
+			// EncodeEnum emits [enumCode, uint16Code, ...]: skip the nested uint16Code byte.
+			el, off, err = decodeWithOffset(i+1, decodeUint, uint16Code)
+			off += 1
 
 		case uuidCode:
 			if err = checkBytes(i, 17); err != nil {
@@ -792,7 +794,9 @@ func UnpackNthElement(b []byte, n int) (any, T, error) {
 			el, off, err = decodeWithOffset(i, decodeUint, uint64Code)
 		case enumCode:
 			schema = T_enum
-			el, off, err = decodeWithOffset(i, decodeUint, uint16Code)
+			// EncodeEnum emits [enumCode, uint16Code, ...]: skip the nested uint16Code byte.
+			el, off, err = decodeWithOffset(i+1, decodeUint, uint16Code)
+			off += 1
 		case uuidCode:
 			if err = checkBytes(i, 17); err != nil {
 				return nil, 0, err
@@ -900,9 +904,10 @@ func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
 			item, itemLen = stringifyUint(uint64Code, b[offset+1:])
 			itemLen += 1
 		case b[offset] == enumCode:
-			// TODO: need to verify @YANGGMM
-			item, itemLen = stringifyUint(uint16Code, b[offset+1:])
-			itemLen += 1
+			// EncodeEnum emits [enumCode, uint16Code, ...]: skip both the enumCode and
+			// the nested uint16Code byte before reading the uint payload.
+			item, itemLen = stringifyUint(uint16Code, b[offset+2:])
+			itemLen += 2
 		case b[offset] == uuidCode:
 			item, itemLen = stringifyUuid(b[offset:])
 			// off += 1
