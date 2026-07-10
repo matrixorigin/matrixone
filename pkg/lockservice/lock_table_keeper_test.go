@@ -238,7 +238,7 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 				logger,
 				fsp,
 				func(string) (bool, error) { return true, nil },
-				func([]pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+				func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 				func(pb.WaitTxn) (bool, error) { return true, nil },
 			)
 			svc.tableGroups.set(
@@ -322,7 +322,7 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 				logger,
 				fsp,
 				func(string) (bool, error) { return true, nil },
-				func([]pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+				func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 				func(pb.WaitTxn) (bool, error) { return true, nil },
 			)
 			svc.tableGroups.set(
@@ -465,7 +465,7 @@ func TestKeepRemoteLockIgnoresNonBindResponseErrors(t *testing.T) {
 				logger,
 				fsp,
 				func(string) (bool, error) { return true, nil },
-				func([]pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+				func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 				func(pb.WaitTxn) (bool, error) { return true, nil },
 			)
 			svc.tableGroups.set(

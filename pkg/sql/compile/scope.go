@@ -432,6 +432,13 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	runErr := err
 	runErr = suppressRemoteRunCancelError(s.Proc.Ctx, runErr)
+	if err != nil && s.Proc.Cancel != nil {
+		cancelErr := runErr
+		if cancelErr == nil {
+			cancelErr = err
+		}
+		s.Proc.Cancel(cancelErr)
+	}
 	// this clean-up action shouldn't be called before context check.
 	// because the clean-up action will cancel the context, and error will be suppressed.
 	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, runErr)

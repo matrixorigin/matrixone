@@ -75,13 +75,14 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 	result := make([]*plan.UpdateCtx, len(updateCtxList))
 	for i, ctx := range updateCtxList {
 		result[i] = &plan.UpdateCtx{
-			ObjRef:             DeepCopyObjectRef(ctx.ObjRef),
-			TableDef:           DeepCopyTableDef(ctx.TableDef, true),
-			InsertCols:         slices.Clone(ctx.InsertCols),
-			DeleteCols:         slices.Clone(ctx.DeleteCols),
-			PartitionCols:      slices.Clone(ctx.PartitionCols),
-			SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
-			InsertPkColIdx:     ctx.InsertPkColIdx,
+			ObjRef:                DeepCopyObjectRef(ctx.ObjRef),
+			TableDef:              DeepCopyTableDef(ctx.TableDef, true),
+			InsertCols:            slices.Clone(ctx.InsertCols),
+			DeleteCols:            slices.Clone(ctx.DeleteCols),
+			PartitionCols:         slices.Clone(ctx.PartitionCols),
+			SkipInsertOnNullPk:    ctx.SkipInsertOnNullPk,
+			InsertPkColIdx:        ctx.InsertPkColIdx,
+			CountDeleteAffectRows: ctx.CountDeleteAffectRows,
 		}
 	}
 
