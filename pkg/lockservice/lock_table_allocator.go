@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"go.uber.org/zap"
 )
@@ -48,6 +49,7 @@ type lockTableAllocator struct {
 	client          Client
 	inactiveService sync.Map // lock service id -> inactive time
 	ctl             sync.Map // lock service id -> *commitCtl
+	ctlMu           sync.RWMutex
 	version         uint64
 	mu              struct {
 		sync.RWMutex
@@ -140,17 +142,42 @@ func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
 }
 
 func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) [][]byte {
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
+	return l.addCannotCommitLocked(values)
+}
+
+func (l *lockTableAllocator) addCannotCommitLocked(values []pb.OrphanTxn) [][]byte {
 	var committing [][]byte
 	for _, v := range values {
 		c := l.getCtl(v.Service)
 		for _, txn := range v.Txn {
-			state := c.add(util.UnsafeBytesToString(txn), cannotCommitState)
+			state := c.tryCannotCommit(util.UnsafeBytesToString(txn))
 			if state == committingState {
 				committing = append(committing, txn)
 			}
 		}
 	}
 	return committing
+}
+
+func (l *lockTableAllocator) FinishCommit(serviceID string, txnID []byte) {
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
+
+	value, ok := l.ctl.Load(serviceID)
+	if !ok {
+		l.logger.Warn("finish commit without control state",
+			zap.String("serviceID", serviceID),
+			zap.Binary("txn", txnID))
+		return
+	}
+	c := value.(*commitCtl)
+	if !c.finishCommit(util.UnsafeBytesToString(txnID)) {
+		l.logger.Warn("finish unregistered commit",
+			zap.String("serviceID", serviceID),
+			zap.Binary("txn", txnID))
+	}
 }
 
 func (l *lockTableAllocator) AddInvalidService(serviceID string) {
@@ -197,8 +224,10 @@ func (l *lockTableAllocator) Valid(
 		return nil, moerr.NewCannotCommitOnInvalidCNNoCtx()
 	}
 
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
 	c := l.getCtl(serviceID)
-	state := c.add(util.UnsafeBytesToString(txnID), committingState)
+	state := c.beginCommit(util.UnsafeBytesToString(txnID))
 	if state == cannotCommitState {
 		return nil, moerr.NewCannotCommitOrphanNoCtx()
 	}
@@ -601,17 +630,23 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 
 			var services []string
 			var invalidServices []string
+			var unknownServices []string
 			activeTxnMap := make(map[string]map[string]struct{})
+			expiredUnknownServices := make(map[string]struct{})
 
+			l.ctlMu.RLock()
 			l.ctl.Range(func(key, value any) bool {
 				services = append(services, key.(string))
 				return true
 			})
+			l.ctlMu.RUnlock()
 
 			l.inactiveService.Range(func(key, value any) bool {
 				if time.Since(value.(time.Time)) > removeDisconnectDuration {
+					sid := key.(string)
 					l.logger.Error("remove inactive service",
-						zap.String("serviceID", key.(string)))
+						zap.String("serviceID", sid))
+					expiredUnknownServices[sid] = struct{}{}
 					l.inactiveService.Delete(key)
 				}
 				return true
@@ -641,39 +676,34 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 							continue
 						}
 						l.inactiveService.Store(sid, time.Now())
-						l.ctl.Delete(sid)
+						unknownServices = append(unknownServices, sid)
 					} else {
 						// is not retry err
 						l.logger.Error("get active txn failed",
 							zap.String("serviceID", sid),
 							zap.Error(err))
 						l.inactiveService.Store(sid, time.Now())
-						l.ctl.Delete(sid)
+						unknownServices = append(unknownServices, sid)
 					}
 					break
 				}
 			}
 
+			l.ctlMu.Lock()
 			for _, sid := range invalidServices {
-				l.ctl.Delete(sid)
+				l.cleanCtlLocked(sid, nil, false)
 			}
-
-			l.ctl.Range(func(key, value any) bool {
-				sid := key.(string)
-				if m, ok := activeTxnMap[sid]; ok {
-					c := value.(*commitCtl)
-					c.states.Range(func(key, value any) bool {
-						if _, ok := m[key.(string)]; !ok {
-							if value.(ctlState) == cannotCommitState {
-								logCleanCannotCommitTxn(l.logger, key.(string), int(value.(ctlState)))
-							}
-							c.states.Delete(key)
-						}
-						return true
-					})
-				}
-				return true
-			})
+			for _, sid := range unknownServices {
+				// An RPC error is not proof that a fenced txn can commit again.
+				// Keep cannot-commit tombstones until the service state is known
+				// or the existing disconnected-service retention expires.
+				_, expired := expiredUnknownServices[sid]
+				l.cleanCtlLocked(sid, nil, !expired)
+			}
+			for sid, activeTxns := range activeTxnMap {
+				l.cleanCtlLocked(sid, activeTxns, false)
+			}
+			l.ctlMu.Unlock()
 
 			timer.Reset(l.keepBindTimeout * 2)
 		}
@@ -958,12 +988,28 @@ func (l *lockTableAllocator) handleCannotCommit(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	committingTxn := l.AddCannotCommit(req.CannotCommit.OrphanTxnList)
+	l.ctlMu.RLock()
+	committingTxn := l.addCannotCommitLocked(req.CannotCommit.OrphanTxnList)
+	fenceTS := l.newFenceTS()
+	l.ctlMu.RUnlock()
 	resp.CannotCommit.CommittingTxn = committingTxn
-	if l.clock != nil {
-		_, resp.CannotCommit.FenceTS = l.clock.Now()
-	}
+	resp.CannotCommit.FenceTS = fenceTS
 	writeResponse(l.logger, cancel, resp, nil, cs)
+}
+
+func (l *lockTableAllocator) newFenceTS() timestamp.Timestamp {
+	if l.clock == nil {
+		return timestamp.Timestamp{}
+	}
+	_, upper := l.clock.Now()
+	if upper.PhysicalTime < 0 || upper.PhysicalTime == math.MaxInt64 {
+		return timestamp.Timestamp{}
+	}
+	// Move to the next physical tick so the fence dominates every logical
+	// timestamp at the clock's current upper-bound physical time.
+	upper.PhysicalTime++
+	upper.LogicalTime = 0
+	return upper
 }
 
 func (l *lockTableAllocator) handleCheckOrphan(
@@ -972,6 +1018,8 @@ func (l *lockTableAllocator) handleCheckOrphan(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
 	c := l.getCtl(req.CheckOrphan.ServiceID)
 	state, ok := c.getCtlState(util.UnsafeBytesToString(req.CheckOrphan.Txn))
 	resp.CheckOrphan.Orphan = ok && state == cannotCommitState
@@ -1041,26 +1089,135 @@ var (
 )
 
 type commitCtl struct {
-	// txn id -> state, 0: cannot commit, 1: committed
-	states sync.Map
+	mu     sync.Mutex
+	states map[string]commitState
 }
 
-func (c *commitCtl) add(txnID string, state ctlState) ctlState {
-	old, loaded := c.states.LoadOrStore(txnID, state)
-	if loaded {
-		return old.(ctlState)
+type commitState struct {
+	state    ctlState
+	inflight uint32
+}
+
+func (c *commitCtl) beginCommit(txnID string) ctlState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureStatesLocked()
+
+	state, ok := c.states[txnID]
+	if ok && state.state == cannotCommitState {
+		return cannotCommitState
 	}
-	return state
+	state.state = committingState
+	if state.inflight < math.MaxUint32 {
+		state.inflight++
+	}
+	c.states[txnID] = state
+	return committingState
+}
+
+func (c *commitCtl) finishCommit(txnID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	state, ok := c.states[txnID]
+	if !ok || state.state != committingState || state.inflight == 0 {
+		return false
+	}
+	state.inflight--
+	if state.inflight == 0 {
+		delete(c.states, txnID)
+		return true
+	}
+	c.states[txnID] = state
+	return true
+}
+
+func (c *commitCtl) tryCannotCommit(txnID string) ctlState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureStatesLocked()
+
+	state, ok := c.states[txnID]
+	if ok && state.state == committingState && state.inflight > 0 {
+		return committingState
+	}
+	state.state = cannotCommitState
+	state.inflight = 0
+	c.states[txnID] = state
+	return cannotCommitState
 }
 
 func (c *commitCtl) getCtlState(
 	txnID string,
 ) (ctlState, bool) {
-	old, loaded := c.states.Load(txnID)
-	if loaded {
-		return old.(ctlState), true
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state, ok := c.states[txnID]
+	if ok {
+		return state.state, true
 	}
 	return ctlState(0), false
+}
+
+func (c *commitCtl) getCommitState(txnID string) (commitState, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state, ok := c.states[txnID]
+	return state, ok
+}
+
+func (c *commitCtl) clean(
+	activeTxns map[string]struct{},
+	preserveCannotCommit bool,
+	logger *log.MOLogger,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for txnID, state := range c.states {
+		_, active := activeTxns[txnID]
+		if active || state.inflight > 0 ||
+			(preserveCannotCommit && state.state == cannotCommitState) {
+			continue
+		}
+		if state.state == cannotCommitState {
+			logCleanCannotCommitTxn(logger, txnID, int(state.state))
+		}
+		delete(c.states, txnID)
+	}
+}
+
+func (c *commitCtl) empty() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.states) == 0
+}
+
+func (c *commitCtl) size() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.states)
+}
+
+func (c *commitCtl) ensureStatesLocked() {
+	if c.states == nil {
+		c.states = make(map[string]commitState)
+	}
+}
+
+func (l *lockTableAllocator) cleanCtlLocked(
+	serviceID string,
+	activeTxns map[string]struct{},
+	preserveCannotCommit bool,
+) {
+	value, ok := l.ctl.Load(serviceID)
+	if !ok {
+		return
+	}
+	c := value.(*commitCtl)
+	c.clean(activeTxns, preserveCannotCommit, l.logger)
+	if c.empty() {
+		l.ctl.CompareAndDelete(serviceID, c)
+	}
 }
 
 func (l *lockTableAllocator) canGetBind(serviceID string) bool {

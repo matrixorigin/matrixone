@@ -2467,7 +2467,9 @@ func TestCheckTxnTimeoutSkipRemoteTxnIfSecondCannotCommitReportsCommitting(t *te
 		func(sid string) (bool, error) { return false, nil },
 		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
 			if notifyCalls.Add(1) == 1 {
-				return pb.CannotCommitResponse{}, nil
+				return pb.CannotCommitResponse{
+					FenceTS: timestamp.Timestamp{PhysicalTime: 10},
+				}, nil
 			}
 			return pb.CannotCommitResponse{CommittingTxn: [][]byte{txn}}, nil
 		},
