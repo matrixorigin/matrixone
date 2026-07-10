@@ -273,6 +273,44 @@ func TestScopeIpAddrMatchDoesNotTreatEmptyLocalAddressAsRemoteMatch(t *testing.T
 
 	scope.NodeInfo.Addr = ""
 	require.True(t, scope.ipAddrMatch(""))
+
+	scope.NodeInfo.Addr = "malformed-remote-address"
+	require.False(t, scope.ipAddrMatch("local:6001"))
+}
+
+func TestValidateRemoteRunAddressRejectsMalformedRemote(t *testing.T) {
+	valid := []struct {
+		scopeAddr string
+		localAddr string
+	}{
+		{scopeAddr: "", localAddr: "local:6001"},
+		{scopeAddr: "remote:6001", localAddr: "local:6001"},
+		{scopeAddr: "127.0.0.1:6001", localAddr: "local:6001"},
+		{scopeAddr: "[2001:db8::1]:6001", localAddr: "local:6001"},
+		{scopeAddr: "local:6001", localAddr: "local:6001"},
+		// A local sentinel never reaches RPC dialing, so legacy test/local
+		// identities remain valid when both sides are exactly equal.
+		{scopeAddr: "local", localAddr: "local"},
+	}
+	for _, tt := range valid {
+		require.NoError(t, validateRemoteRunAddress(tt.scopeAddr, tt.localAddr), tt.scopeAddr)
+	}
+
+	invalid := []string{
+		"malformed-remote-address",
+		"remote:",
+		":6001",
+		":",
+		"remote:not-a-port",
+		"remote:0",
+		"remote:65536",
+		"2001:db8::1:6001",
+	}
+	for _, addr := range invalid {
+		err := validateRemoteRunAddress(addr, "local:6001")
+		require.Error(t, err, addr)
+		require.Contains(t, err.Error(), "malformed remote CN address", addr)
+	}
 }
 
 func TestGenerateNodesRespectsNodeDOPOnMultiCN(t *testing.T) {
