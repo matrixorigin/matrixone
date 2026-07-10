@@ -47,6 +47,65 @@ type schedulerTestEngine struct {
 	cnLabel    map[string]string
 }
 
+type schedulerProviderTestEngine struct {
+	*schedulerTestEngine
+	candidates       engine.QueryCandidates
+	resolvedNodes    engine.Nodes
+	discoveryErr     error
+	resolutionErr    error
+	discoveryCalls   int
+	resolutionCalls  int
+	resolvedSnapshot engine.QueryCandidates
+	poolRequest      engine.QueryCandidatePoolRequest
+	mutateLabels     bool
+}
+
+func (e *schedulerProviderTestEngine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandidates, error) {
+	e.discoveryCalls++
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return e.candidates, e.discoveryErr
+}
+
+func (e *schedulerProviderTestEngine) ResolveQueryCandidatePool(
+	ctx context.Context,
+	candidates engine.QueryCandidates,
+	request engine.QueryCandidatePoolRequest,
+) (engine.Nodes, error) {
+	e.resolutionCalls++
+	e.resolvedSnapshot = candidates
+	e.poolRequest = request
+	e.poolRequest.CNLabel = cloneCNLabels(request.CNLabel)
+	if e.mutateLabels {
+		request.CNLabel["mutated"] = "true"
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return e.resolvedNodes, e.resolutionErr
+}
+
+type schedulerDiscoverOnlyEngine struct {
+	*schedulerTestEngine
+}
+
+func (*schedulerDiscoverOnlyEngine) DiscoverQueryCandidates(context.Context) (engine.QueryCandidates, error) {
+	return nil, nil
+}
+
+type schedulerResolveOnlyEngine struct {
+	*schedulerTestEngine
+}
+
+func (*schedulerResolveOnlyEngine) ResolveQueryCandidatePool(
+	context.Context,
+	engine.QueryCandidates,
+	engine.QueryCandidatePoolRequest,
+) (engine.Nodes, error) {
+	return nil, nil
+}
+
 func (e *schedulerTestEngine) Nodes(
 	isInternal bool,
 	tenant string,
@@ -193,6 +252,170 @@ func TestScheduleQueryWorkersForwardsCandidateFilters(t *testing.T) {
 	require.Equal(t, schedule.PoolResolutionLegacyEngineNodes, c.queryPlacement.CandidateResolution.PoolResolution)
 	require.Equal(t, 1, c.queryPlacement.CandidateResolution.DiscoveredCount)
 	require.Equal(t, 1, c.queryPlacement.ResolvedCandidateCount)
+}
+
+func TestScheduleQueryWorkersUsesIndependentCandidateProviders(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.isInternal = true
+	c.tenant = "sys"
+	c.uid = "root"
+	c.cnLabel = map[string]string{"role": "ap"}
+	legacy := &schedulerTestEngine{err: errors.New("legacy Nodes must not run")}
+	provider := &schedulerProviderTestEngine{
+		schedulerTestEngine: legacy,
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{ServiceID: "ap-1", PipelineServiceAddress: "ap-1:6001"}, Mcpu: 4},
+			{Service: metadata.CNService{ServiceID: "ap-2", PipelineServiceAddress: "ap-2:6001"}, Mcpu: 8},
+			{Service: metadata.CNService{ServiceID: "tp-1", PipelineServiceAddress: "tp-1:6001"}, Mcpu: 2},
+		},
+		resolvedNodes: engine.Nodes{
+			{Id: "ap-2", Addr: "ap-2:6001", Mcpu: 8},
+			{Id: "ap-1", Addr: "ap-1:6001", Mcpu: 4},
+		},
+		mutateLabels: true,
+	}
+	c.e = provider
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, []string{"ap-1:6001", "ap-2:6001"}, []string{nodes[0].Addr, nodes[1].Addr})
+	require.Zero(t, legacy.calls)
+	require.Equal(t, 1, provider.discoveryCalls)
+	require.Equal(t, 1, provider.resolutionCalls)
+	require.Equal(t, provider.candidates, provider.resolvedSnapshot)
+	require.Equal(t, engine.QueryCandidatePoolRequest{
+		IsInternal: true,
+		Tenant:     "sys",
+		Username:   "root",
+		CNLabel:    map[string]string{"role": "ap"},
+	}, provider.poolRequest)
+	require.Equal(t, map[string]string{"role": "ap"}, c.cnLabel)
+	require.Equal(t, schedule.CandidateSourceClusterInventory, c.queryPlacement.CandidateResolution.DiscoverySource)
+	require.Equal(t, schedule.PoolResolutionTenantLabels, c.queryPlacement.CandidateResolution.PoolResolution)
+	require.Equal(t, 3, c.queryPlacement.CandidateResolution.DiscoveredCount)
+	require.Equal(t, 2, c.queryPlacement.ResolvedCandidateCount)
+}
+
+func TestScheduleQueryWorkersFallsBackWhenResolvedPoolIsEmpty(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.ncpu = 6
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.e = &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{ServiceID: "tp-1", PipelineServiceAddress: "tp-1:6001"}, Mcpu: 4},
+			{Service: metadata.CNService{ServiceID: "tp-2", PipelineServiceAddress: "tp-2:6001"}, Mcpu: 4},
+		},
+	}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{{Addr: "local:6001", Mcpu: 6}}, nodes)
+	require.Equal(t, schedule.ReasonNoCandidateCN, c.queryPlacement.Reason)
+	require.Equal(t, 2, c.queryPlacement.CandidateResolution.DiscoveredCount)
+	require.Zero(t, c.queryPlacement.ResolvedCandidateCount)
+}
+
+func TestIndependentDiscoveryUsesSameSnapshotForCurrentCNState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	const localID = "local-cn"
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.QueryClient = fakeQueryClient{}
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: localID}).AnyTimes()
+	c.proc.Base.LockService = lockSvc
+	c.e = &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{
+			{
+				Service: metadata.CNService{
+					ServiceID:              localID,
+					PipelineServiceAddress: "local:6001",
+					WorkState:              metadata.WorkState_Draining,
+				},
+				Mcpu: 6,
+			},
+			{
+				Service: metadata.CNService{
+					ServiceID:              "remote-cn",
+					PipelineServiceAddress: "remote:6001",
+					WorkState:              metadata.WorkState_Working,
+				},
+				Mcpu: 4,
+			},
+		},
+		resolvedNodes: engine.Nodes{{
+			Id:        "remote-cn",
+			Addr:      "remote:6001",
+			Mcpu:      4,
+			WorkState: metadata.WorkState_Working,
+		}},
+	}
+
+	_, err := c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, schedule.ReasonCurrentCNDraining)
+	require.Equal(t, schedule.WorkerStateDraining, c.queryPlacement.CurrentCN.State)
+}
+
+func TestQueryCandidatePipelineRejectsPartialProvider(t *testing.T) {
+	for _, provider := range []engine.Engine{
+		&schedulerDiscoverOnlyEngine{schedulerTestEngine: &schedulerTestEngine{}},
+		&schedulerResolveOnlyEngine{schedulerTestEngine: &schedulerTestEngine{}},
+	} {
+		_, _, err := queryCandidatePipeline(provider, queryCandidatePoolRequest{})
+		require.ErrorContains(t, err, "must implement both")
+	}
+}
+
+func TestScheduleQueryWorkersRecordsPartialProviderFailure(t *testing.T) {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.e = &schedulerDiscoverOnlyEngine{schedulerTestEngine: &schedulerTestEngine{}}
+	recorder := new(schedule.TraceRecorder)
+	c.SetSchedulingTraceRecorder(recorder)
+	c.beginSchedulingTraceAttempt()
+
+	_, err := c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, "must implement both")
+	trace := recorder.Snapshot()
+	require.Equal(t, scheduleFailureCandidateProvider, trace.Attempts[0].Failures[0].Category)
+}
+
+func TestQueryCandidatePipelineUnwrapsEntireEngine(t *testing.T) {
+	provider := &schedulerProviderTestEngine{schedulerTestEngine: &schedulerTestEngine{}}
+	wrapper := &engine.EntireEngine{Engine: &engine.EntireEngine{Engine: provider}}
+
+	discoverer, resolver, err := queryCandidatePipeline(wrapper, queryCandidatePoolRequest{})
+	require.NoError(t, err)
+	require.IsType(t, engineQueryCandidateDiscoverer{}, discoverer)
+	require.IsType(t, engineQueryCandidatePoolResolver{}, resolver)
+}
+
+func TestScheduleQueryWorkersRecordsPoolResolutionFailure(t *testing.T) {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.e = &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{ServiceID: "cn", PipelineServiceAddress: "cn:6001"}, Mcpu: 4},
+		},
+		resolutionErr: errors.New("pool resolution failed"),
+	}
+	recorder := new(schedule.TraceRecorder)
+	c.SetSchedulingTraceRecorder(recorder)
+	c.beginSchedulingTraceAttempt()
+
+	_, err := c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, "pool resolution failed")
+	trace := recorder.Snapshot()
+	require.Equal(t, scheduleFailurePoolResolution, trace.Attempts[0].Failures[0].Category)
 }
 
 func TestScheduleQueryWorkersRequiredLocalExecWithoutAddress(t *testing.T) {

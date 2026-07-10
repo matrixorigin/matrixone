@@ -812,107 +812,180 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Nodes(
 	isInternal bool, tenant string, username string, cnLabel map[string]string,
 ) (engine.Nodes, error) {
-	var ncpu = system.GoMaxProcs()
-	var nodes engine.Nodes
+	candidates, err := e.DiscoverQueryCandidates(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	return e.ResolveQueryCandidatePool(context.Background(), candidates, engine.QueryCandidatePoolRequest{
+		IsInternal: isInternal,
+		Tenant:     tenant,
+		Username:   username,
+		CNLabel:    cnLabel,
+	})
+}
 
+var _ engine.QueryCandidateDiscoverer = (*Engine)(nil)
+var _ engine.QueryCandidatePoolResolver = (*Engine)(nil)
+
+// DiscoverQueryCandidates reads a version-compatible CN inventory without
+// applying tenant or label policy.
+func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandidates, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementNodesHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	cluster := clusterservice.GetMOCluster(e.service)
-	var selector clusterservice.Selector
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cluster, err := clusterservice.GetMOClusterWithContext(ctx, e.service)
+	if err != nil {
+		return nil, err
+	}
 
-	// If the requested labels are empty, return all CN servers.
-	if len(cnLabel) == 0 {
-		cluster.GetCNService(selector, func(c metadata.CNService) bool {
+	ncpu := system.GoMaxProcs()
+	var candidates engine.QueryCandidates
+	err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+		ctx,
+		cluster,
+		clusterservice.NewSelector(),
+		func(c metadata.CNService) bool {
+			if ctx.Err() != nil {
+				return false
+			}
 			if c.CommitID == version.CommitID {
-				nodes = append(nodes, engine.Node{
-					// should use c.CPUTotal to set Mcpu for the compile and pipeline.
-					// ref: https://github.com/matrixorigin/matrixone/issues/17935
-					Mcpu:      ncpu,
-					Id:        c.ServiceID,
-					Addr:      c.PipelineServiceAddress,
-					WorkState: c.WorkState,
-				})
+				candidates = append(candidates, engine.QueryCandidate{Service: c, Mcpu: ncpu})
 			}
 			return true
 		})
-		appendRuntimeIneligibleCNNodes(cluster, selector, ncpu, &nodes)
-		return nodes, nil
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+// ResolveQueryCandidatePool applies the historical disttae tenant/label route
+// to one candidate snapshot. It does not rank or choose a worker subset.
+func (e *Engine) ResolveQueryCandidatePool(
+	ctx context.Context,
+	candidates engine.QueryCandidates,
+	request engine.QueryCandidatePoolRequest,
+) (engine.Nodes, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(request.CNLabel) == 0 {
+		return queryCandidateNodes(candidates), nil
 	}
 
-	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ_Globbing)
-	if isInternal || strings.ToLower(tenant) == "sys" {
-		route.RouteForSuperTenant(
-			e.service,
-			selector,
-			username,
-			nil,
-			func(s *metadata.CNService) {
-				if s.CommitID == version.CommitID {
-					nodes = append(nodes, engine.Node{
-						Mcpu:      ncpu,
-						Id:        s.ServiceID,
-						Addr:      s.PipelineServiceAddress,
-						WorkState: s.WorkState,
-					})
-				}
-			},
-		)
-	} else {
-		route.RouteForCommonTenant(
-			e.service,
-			selector,
-			nil,
-			func(s *metadata.CNService) {
-				if s.CommitID == version.CommitID {
-					nodes = append(nodes, engine.Node{
-						Mcpu:      ncpu,
-						Id:        s.ServiceID,
-						Addr:      s.PipelineServiceAddress,
-						WorkState: s.WorkState,
-					})
-				}
-			},
-		)
+	labels := cloneStringMap(request.CNLabel)
+	selector := clusterservice.NewSelector().SelectByLabel(labels, clusterservice.EQ_Globbing)
+	services := queryCandidateServices(candidates)
+	byID := queryCandidatesByID(candidates)
+	var nodes engine.Nodes
+	appendCandidate := func(service *metadata.CNService) {
+		candidate, ok := byID[service.ServiceID]
+		if ok {
+			nodes = append(nodes, queryCandidateNode(candidate))
+		}
 	}
-	appendRuntimeIneligibleCNNodes(cluster, selector, ncpu, &nodes)
+	if request.IsInternal || strings.ToLower(request.Tenant) == "sys" {
+		route.RouteForSuperTenantCandidates(services, selector, request.Username, nil, appendCandidate)
+	} else {
+		route.RouteForCommonTenantCandidates(services, selector, nil, appendCandidate)
+	}
+	appendRuntimeIneligibleQueryCandidates(candidates, selector, &nodes)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nodes, nil
 }
 
-// appendRuntimeIneligibleCNNodes preserves the route package's working-CN
-// fallback semantics while exposing matching Draining/Drained candidates to the
-// scheduling layer for structured drop accounting.
-func appendRuntimeIneligibleCNNodes(
-	cluster clusterservice.MOCluster,
+func queryCandidateNodes(candidates engine.QueryCandidates) engine.Nodes {
+	if len(candidates) == 0 {
+		return nil
+	}
+	nodes := make(engine.Nodes, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Service.WorkState == metadata.WorkState_Working ||
+			candidate.Service.WorkState == metadata.WorkState_Unknown {
+			nodes = append(nodes, queryCandidateNode(candidate))
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate.Service.WorkState == metadata.WorkState_Draining ||
+			candidate.Service.WorkState == metadata.WorkState_Drained {
+			nodes = append(nodes, queryCandidateNode(candidate))
+		}
+	}
+	return nodes
+}
+
+func queryCandidateNode(candidate engine.QueryCandidate) engine.Node {
+	return engine.Node{
+		Mcpu:      candidate.Mcpu,
+		Id:        candidate.Service.ServiceID,
+		Addr:      candidate.Service.PipelineServiceAddress,
+		WorkState: candidate.Service.WorkState,
+	}
+}
+
+func queryCandidateServices(candidates engine.QueryCandidates) []metadata.CNService {
+	services := make([]metadata.CNService, 0, len(candidates))
+	for _, candidate := range candidates {
+		services = append(services, candidate.Service)
+	}
+	return services
+}
+
+func queryCandidatesByID(candidates engine.QueryCandidates) map[string]engine.QueryCandidate {
+	byID := make(map[string]engine.QueryCandidate, len(candidates))
+	for _, candidate := range candidates {
+		byID[candidate.Service.ServiceID] = candidate
+	}
+	return byID
+}
+
+func appendRuntimeIneligibleQueryCandidates(
+	candidates engine.QueryCandidates,
 	selector clusterservice.Selector,
-	ncpu int,
 	nodes *engine.Nodes,
 ) {
 	seen := make(map[string]struct{}, len(*nodes))
 	for _, node := range *nodes {
 		seen[node.Id] = struct{}{}
 	}
-	cluster.GetCNServiceWithoutWorkingState(selector, func(c metadata.CNService) bool {
-		if c.WorkState != metadata.WorkState_Draining && c.WorkState != metadata.WorkState_Drained {
-			return true
+	for _, candidate := range candidates {
+		service := candidate.Service
+		if service.WorkState != metadata.WorkState_Draining && service.WorkState != metadata.WorkState_Drained {
+			continue
 		}
-		if c.CommitID != version.CommitID {
-			return true
+		if !selector.Match(service.Labels) {
+			continue
 		}
-		if _, ok := seen[c.ServiceID]; ok {
-			return true
+		if _, ok := seen[service.ServiceID]; ok {
+			continue
 		}
-		*nodes = append(*nodes, engine.Node{
-			Mcpu:      ncpu,
-			Id:        c.ServiceID,
-			Addr:      c.PipelineServiceAddress,
-			WorkState: c.WorkState,
-		})
-		seen[c.ServiceID] = struct{}{}
-		return true
-	})
+		*nodes = append(*nodes, queryCandidateNode(candidate))
+		seen[service.ServiceID] = struct{}{}
+	}
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (e *Engine) Hints() (h engine.Hints) {

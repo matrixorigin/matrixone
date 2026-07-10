@@ -39,13 +39,37 @@ func RouteForSuperTenant(
 	appendFn func(service *metadata.CNService),
 ) {
 	mc := clusterservice.GetMOCluster(service)
+	routeForSuperTenant(mc.GetCNService, selector, username, filter, appendFn)
+}
+
+// RouteForSuperTenantCandidates applies the super-tenant routing policy to an
+// immutable candidate snapshot instead of reading cluster state itself.
+func RouteForSuperTenantCandidates(
+	candidates []metadata.CNService,
+	selector clusterservice.Selector,
+	username string,
+	filter func(string) bool,
+	appendFn func(service *metadata.CNService),
+) {
+	routeForSuperTenant(candidateGetter(candidates), selector, username, filter, appendFn)
+}
+
+type cnServiceGetter func(clusterservice.Selector, func(metadata.CNService) bool)
+
+func routeForSuperTenant(
+	getCNService cnServiceGetter,
+	selector clusterservice.Selector,
+	username string,
+	filter func(string) bool,
+	appendFn func(service *metadata.CNService),
+) {
 
 	// found is true indicates that we have find some available CN services.
 	var found bool
 	var emptyCNs []*metadata.CNService
 
 	// S1: Select servers that configured as sys account.
-	mc.GetCNService(selector, func(s metadata.CNService) bool {
+	getCNService(selector, func(s metadata.CNService) bool {
 		if filter != nil && filter(s.SQLAddress) {
 			return true
 		}
@@ -76,7 +100,7 @@ func RouteForSuperTenant(
 	} else {
 		se = selector.SelectWithoutLabel(map[string]string{"account": "sys"})
 	}
-	mc.GetCNService(se, func(s metadata.CNService) bool {
+	getCNService(se, func(s metadata.CNService) bool {
 		if filter != nil && filter(s.SQLAddress) {
 			return true
 		}
@@ -102,7 +126,7 @@ func RouteForSuperTenant(
 	// S4.1: If the root is super, return all servers.
 	username = strings.ToLower(username)
 	if username == "dump" || username == "root" {
-		mc.GetCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
+		getCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
 			if filter != nil && filter(s.SQLAddress) {
 				return true
 			}
@@ -125,6 +149,26 @@ func RouteForCommonTenant(
 	appendFn func(service *metadata.CNService),
 ) {
 	mc := clusterservice.GetMOCluster(service)
+	routeForCommonTenant(mc.GetCNService, selector, filter, appendFn)
+}
+
+// RouteForCommonTenantCandidates applies the common-tenant routing policy to
+// an immutable candidate snapshot instead of reading cluster state itself.
+func RouteForCommonTenantCandidates(
+	candidates []metadata.CNService,
+	selector clusterservice.Selector,
+	filter func(string) bool,
+	appendFn func(service *metadata.CNService),
+) {
+	routeForCommonTenant(candidateGetter(candidates), selector, filter, appendFn)
+}
+
+func routeForCommonTenant(
+	getCNService cnServiceGetter,
+	selector clusterservice.Selector,
+	filter func(string) bool,
+	appendFn func(service *metadata.CNService),
+) {
 
 	// found is true indicates that there are CN services for the selector.
 	var found bool
@@ -133,7 +177,7 @@ func RouteForCommonTenant(
 	// find any CN service with non-empty label.
 	var preEmptyCNs []*metadata.CNService
 
-	mc.GetCNService(selector, func(s metadata.CNService) bool {
+	getCNService(selector, func(s metadata.CNService) bool {
 		if filter != nil && filter(s.SQLAddress) {
 			return true
 		}
@@ -161,6 +205,24 @@ func RouteForCommonTenant(
 	if !found && len(preEmptyCNs) > 0 {
 		for _, cn := range preEmptyCNs {
 			appendFn(cn)
+		}
+	}
+}
+
+func candidateGetter(candidates []metadata.CNService) cnServiceGetter {
+	matcher := new(clusterservice.SelectorMatcher)
+	return func(selector clusterservice.Selector, apply func(metadata.CNService) bool) {
+		for _, candidate := range candidates {
+			if candidate.WorkState != metadata.WorkState_Working &&
+				candidate.WorkState != metadata.WorkState_Unknown {
+				continue
+			}
+			if !matcher.MatchCN(selector, candidate) {
+				continue
+			}
+			if !apply(candidate) {
+				return
+			}
 		}
 	}
 }

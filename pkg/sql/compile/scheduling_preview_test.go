@@ -93,7 +93,7 @@ func TestPreviewQuerySchedulingRecordsUnhappyPathsWithoutReturningError(t *testi
 			},
 		})
 		require.Nil(t, trace.Attempts[0].Query)
-		require.Equal(t, scheduleFailureCandidateDiscovery, trace.Attempts[0].Failures[0].Category)
+		require.Equal(t, scheduleFailureCandidateProvider, trace.Attempts[0].Failures[0].Category)
 	})
 
 	t.Run("typed nil engine", func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestPreviewQuerySchedulingRecordsUnhappyPathsWithoutReturningError(t *testi
 			Engine: e,
 		})
 		require.Nil(t, trace.Attempts[0].Query)
-		require.Equal(t, scheduleFailureCandidateDiscovery, trace.Attempts[0].Failures[0].Category)
+		require.Equal(t, scheduleFailureCandidateProvider, trace.Attempts[0].Failures[0].Category)
 	})
 
 	t.Run("empty entire engine wrapper", func(t *testing.T) {
@@ -116,7 +116,7 @@ func TestPreviewQuerySchedulingRecordsUnhappyPathsWithoutReturningError(t *testi
 			Engine: &engine.EntireEngine{},
 		})
 		require.Nil(t, trace.Attempts[0].Query)
-		require.Equal(t, scheduleFailureCandidateDiscovery, trace.Attempts[0].Failures[0].Category)
+		require.Equal(t, scheduleFailureCandidateProvider, trace.Attempts[0].Failures[0].Category)
 	})
 
 	t.Run("cyclic entire engine wrapper", func(t *testing.T) {
@@ -129,7 +129,7 @@ func TestPreviewQuerySchedulingRecordsUnhappyPathsWithoutReturningError(t *testi
 			Engine: e,
 		})
 		require.Nil(t, trace.Attempts[0].Query)
-		require.Equal(t, scheduleFailureCandidateDiscovery, trace.Attempts[0].Failures[0].Category)
+		require.Equal(t, scheduleFailureCandidateProvider, trace.Attempts[0].Failures[0].Category)
 	})
 
 	t.Run("cancelled context", func(t *testing.T) {
@@ -163,10 +163,10 @@ func TestLegacyEngineNodesPoolResolverPreservesCandidates(t *testing.T) {
 	resolved, err := (legacyEngineNodesPoolResolver{}).resolve(
 		context.Background(),
 		discoveredQueryCandidates{
-			nodes:  nodes,
-			source: schedule.CandidateSourceEngineNodes,
+			legacyNodes: nodes,
+			source:      schedule.CandidateSourceEngineNodes,
 		},
-		queryCandidatePoolRequest{tenant: "tenant", cnLabel: map[string]string{"role": "ap"}},
+		queryCandidatePoolRequest{Tenant: "tenant", CNLabel: map[string]string{"role": "ap"}},
 	)
 
 	require.NoError(t, err)

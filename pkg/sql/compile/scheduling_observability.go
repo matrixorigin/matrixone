@@ -24,6 +24,7 @@ import (
 const (
 	scheduleFailureRuntimeIneligibleSelectedWorker = "runtime-ineligible-selected-worker"
 	scheduleFailureUnroutableSelectedWorker        = "unroutable-selected-worker"
+	scheduleFailureCandidateProvider               = "candidate-provider"
 	scheduleFailureCandidateDiscovery              = "candidate-discovery"
 	scheduleFailurePoolResolution                  = "pool-resolution"
 	scheduleFailureInvalidQuery                    = "invalid-query"

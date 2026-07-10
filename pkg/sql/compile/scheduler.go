@@ -157,16 +157,12 @@ func schedulableEngineWorkState(state metadata.WorkState) bool {
 	}
 }
 
-type queryCandidatePoolRequest struct {
-	isInternal bool
-	tenant     string
-	username   string
-	cnLabel    map[string]string
-}
+type queryCandidatePoolRequest = engine.QueryCandidatePoolRequest
 
 type discoveredQueryCandidates struct {
-	nodes  engine.Nodes
-	source schedule.CandidateSource
+	legacyNodes engine.Nodes
+	candidates  engine.QueryCandidates
+	source      schedule.CandidateSource
 }
 
 type queryCandidateDiscoverer interface {
@@ -185,39 +181,58 @@ func (d legacyEngineNodesCandidateDiscoverer) discover(ctx context.Context) (dis
 	if err := ctx.Err(); err != nil {
 		return discoveredQueryCandidates{}, err
 	}
-	if nilEngine(d.engine) {
+	if nilEngineValue(d.engine) {
 		return discoveredQueryCandidates{}, moerr.NewInternalErrorNoCtx("compile engine is not initialized")
 	}
 	nodes, err := d.engine.Nodes(
-		d.poolRequest.isInternal,
-		d.poolRequest.tenant,
-		d.poolRequest.username,
-		d.poolRequest.cnLabel,
+		d.poolRequest.IsInternal,
+		d.poolRequest.Tenant,
+		d.poolRequest.Username,
+		cloneCNLabels(d.poolRequest.CNLabel),
 	)
 	if err != nil {
 		return discoveredQueryCandidates{}, err
 	}
 	return discoveredQueryCandidates{
-		nodes:  nodes,
-		source: schedule.CandidateSourceEngineNodes,
+		legacyNodes: nodes,
+		source:      schedule.CandidateSourceEngineNodes,
 	}, nil
 }
 
-func nilEngine(e engine.Engine) bool {
+type engineQueryCandidateDiscoverer struct {
+	provider engine.QueryCandidateDiscoverer
+}
+
+func (d engineQueryCandidateDiscoverer) discover(ctx context.Context) (discoveredQueryCandidates, error) {
+	candidates, err := d.provider.DiscoverQueryCandidates(ctx)
+	if err != nil {
+		return discoveredQueryCandidates{}, err
+	}
+	return discoveredQueryCandidates{
+		candidates: candidates,
+		source:     schedule.CandidateSourceClusterInventory,
+	}, nil
+}
+
+func unwrapSchedulingEngine(e engine.Engine) (engine.Engine, bool) {
 	const maxEntireEngineDepth = 8
 	for depth := 0; depth < maxEntireEngineDepth; depth++ {
+		if nilEngineValue(e) {
+			return nil, false
+		}
 		entire, ok := e.(*engine.EntireEngine)
 		if !ok {
-			break
+			return e, true
 		}
 		if entire == nil || entire.Engine == nil {
-			return true
+			return nil, false
 		}
 		e = entire.Engine
 	}
-	if _, wrapped := e.(*engine.EntireEngine); wrapped {
-		return true
-	}
+	return nil, false
+}
+
+func nilEngineValue(e engine.Engine) bool {
 	if e == nil {
 		return true
 	}
@@ -252,22 +267,84 @@ func (legacyEngineNodesPoolResolver) resolve(
 	if err := ctx.Err(); err != nil {
 		return resolvedQueryCandidates{}, err
 	}
-	workers := toScheduleCandidateWorkers(discovered.nodes)
+	workers := toScheduleCandidateWorkers(discovered.legacyNodes)
 	return resolvedQueryCandidates{
 		workers: workers,
 		resolution: schedule.CandidateResolution{
 			DiscoverySource: discovered.source,
 			PoolResolution:  schedule.PoolResolutionLegacyEngineNodes,
-			DiscoveredCount: len(discovered.nodes),
+			DiscoveredCount: len(discovered.legacyNodes),
 		},
 	}, nil
 }
 
-func (c *Compile) evaluateQueryPlacement(ctx context.Context) (schedule.QueryDecision, string, error) {
-	currentCN := c.currentCNWorker()
-	if c.execType == plan2.ExecTypeAP_MULTICN {
-		currentCN = c.currentCNWorkerWithRuntimeState()
+type engineQueryCandidatePoolResolver struct {
+	provider engine.QueryCandidatePoolResolver
+}
+
+func (r engineQueryCandidatePoolResolver) resolve(
+	ctx context.Context,
+	discovered discoveredQueryCandidates,
+	request queryCandidatePoolRequest,
+) (resolvedQueryCandidates, error) {
+	request.CNLabel = cloneCNLabels(request.CNLabel)
+	nodes, err := r.provider.ResolveQueryCandidatePool(
+		ctx,
+		discovered.candidates,
+		request,
+	)
+	if err != nil {
+		return resolvedQueryCandidates{}, err
 	}
+	return resolvedQueryCandidates{
+		workers: toScheduleCandidateWorkers(nodes),
+		resolution: schedule.CandidateResolution{
+			DiscoverySource: discovered.source,
+			PoolResolution:  schedule.PoolResolutionTenantLabels,
+			DiscoveredCount: len(discovered.candidates),
+		},
+	}, nil
+}
+
+func queryCandidatePipeline(
+	e engine.Engine,
+	poolRequest queryCandidatePoolRequest,
+) (queryCandidateDiscoverer, queryCandidatePoolResolver, error) {
+	base, ok := unwrapSchedulingEngine(e)
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("compile engine is not initialized")
+	}
+	discoverer, hasDiscoverer := base.(engine.QueryCandidateDiscoverer)
+	resolver, hasResolver := base.(engine.QueryCandidatePoolResolver)
+	switch {
+	case hasDiscoverer && hasResolver:
+		return engineQueryCandidateDiscoverer{provider: discoverer},
+			engineQueryCandidatePoolResolver{provider: resolver}, nil
+	case !hasDiscoverer && !hasResolver:
+		return legacyEngineNodesCandidateDiscoverer{engine: base, poolRequest: poolRequest},
+			legacyEngineNodesPoolResolver{}, nil
+	default:
+		return nil, nil, moerr.NewInternalErrorNoCtx(
+			"compile engine must implement both query candidate discovery and pool resolution")
+	}
+}
+
+func cloneCNLabels(labels map[string]string) map[string]string {
+	if labels == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(labels))
+	for key, value := range labels {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func (c *Compile) evaluateQueryPlacement(ctx context.Context) (schedule.QueryDecision, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	currentCN := c.currentCNWorker()
 	req := schedule.QueryRequest{
 		ExecKind:        toScheduleExecKind(c.execType),
 		CurrentCN:       currentCN,
@@ -282,20 +359,28 @@ func (c *Compile) evaluateQueryPlacement(ctx context.Context) (schedule.QueryDec
 	}
 
 	poolRequest := queryCandidatePoolRequest{
-		isInternal: c.isInternal,
-		tenant:     c.tenant,
-		username:   c.uid,
-		cnLabel:    c.cnLabel,
+		IsInternal: c.isInternal,
+		Tenant:     c.tenant,
+		Username:   c.uid,
+		CNLabel:    c.cnLabel,
 	}
-	var discoverer queryCandidateDiscoverer = legacyEngineNodesCandidateDiscoverer{
-		engine:      c.e,
-		poolRequest: poolRequest,
+	discoverer, poolResolver, err := queryCandidatePipeline(c.e, poolRequest)
+	if err != nil {
+		return schedule.QueryDecision{}, scheduleFailureCandidateProvider, err
 	}
 	discovered, err := discoverer.discover(ctx)
 	if err != nil {
 		return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
 	}
-	var poolResolver queryCandidatePoolResolver = legacyEngineNodesPoolResolver{}
+	if discovered.source == schedule.CandidateSourceClusterInventory {
+		currentCN = currentCNWorkerFromCandidates(currentCN, discovered.candidates)
+	} else {
+		currentCN, err = c.currentCNWorkerWithRuntimeState(ctx)
+		if err != nil {
+			return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
+		}
+	}
+	req.CurrentCN = currentCN
 	resolved, err := poolResolver.resolve(ctx, discovered, poolRequest)
 	if err != nil {
 		return schedule.QueryDecision{}, scheduleFailurePoolResolution, err
@@ -303,6 +388,25 @@ func (c *Compile) evaluateQueryPlacement(ctx context.Context) (schedule.QueryDec
 	req.Candidates = resolved.workers
 	req.CandidateResolution = resolved.resolution
 	return schedule.DecideQueryPlacement(req), "", nil
+}
+
+func currentCNWorkerFromCandidates(
+	current schedule.Worker,
+	candidates engine.QueryCandidates,
+) schedule.Worker {
+	for _, candidate := range candidates {
+		service := candidate.Service
+		if current.ID != "" {
+			if service.ServiceID != current.ID {
+				continue
+			}
+		} else if current.Addr == "" || service.PipelineServiceAddress != current.Addr {
+			continue
+		}
+		current.State = toScheduleWorkerState(service.WorkState)
+		return current
+	}
+	return current
 }
 
 func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
@@ -394,40 +498,43 @@ func (c *Compile) currentCNWorker() schedule.Worker {
 	return toScheduleWorker(currentCN)
 }
 
-func (c *Compile) currentCNWorkerWithRuntimeState() schedule.Worker {
+func (c *Compile) currentCNWorkerWithRuntimeState(ctx context.Context) (schedule.Worker, error) {
 	worker := c.currentCNWorker()
-	worker.State = toScheduleWorkerState(c.currentCNWorkState(worker.ID))
-	return worker
+	state, err := c.currentCNWorkState(ctx, worker.ID)
+	worker.State = toScheduleWorkerState(state)
+	return worker, err
 }
 
-func (c *Compile) currentCNWorkState(serviceID string) metadata.WorkState {
+func (c *Compile) currentCNWorkState(ctx context.Context, serviceID string) (metadata.WorkState, error) {
 	// State lookup is best-effort. Missing runtime or cluster metadata falls
 	// back to Unknown, which the scheduler treats as schedulable. Only an
 	// explicit Draining/Drained signal should block current-CN placement.
 	if serviceID == "" {
-		return metadata.WorkState_Unknown
+		return metadata.WorkState_Unknown, nil
 	}
 	rt := moruntime.ServiceRuntime(serviceID)
 	if rt == nil {
-		return metadata.WorkState_Unknown
+		return metadata.WorkState_Unknown, nil
 	}
 	v, ok := rt.GetGlobalVariables(moruntime.ClusterService)
 	if !ok {
-		return metadata.WorkState_Unknown
+		return metadata.WorkState_Unknown, nil
 	}
 	cluster, ok := v.(clusterservice.MOCluster)
 	if !ok || cluster == nil {
-		return metadata.WorkState_Unknown
+		return metadata.WorkState_Unknown, nil
 	}
 
 	state := metadata.WorkState_Unknown
-	cluster.GetCNServiceWithoutWorkingState(
+	err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+		ctx,
+		cluster,
 		clusterservice.NewServiceIDSelector(serviceID),
 		func(cn metadata.CNService) bool {
 			state = cn.WorkState
 			return false
 		})
-	return state
+	return state, err
 }
 
 func (c *Compile) currentCNPolicy() schedule.CurrentCNPolicy {

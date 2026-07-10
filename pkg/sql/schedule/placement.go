@@ -103,9 +103,10 @@ type QueryDecision struct {
 type CandidateSource string
 
 const (
-	CandidateSourceUnspecified CandidateSource = "unspecified"
-	CandidateSourceNotRequired CandidateSource = "not-required"
-	CandidateSourceEngineNodes CandidateSource = "engine-nodes"
+	CandidateSourceUnspecified      CandidateSource = "unspecified"
+	CandidateSourceNotRequired      CandidateSource = "not-required"
+	CandidateSourceEngineNodes      CandidateSource = "engine-nodes"
+	CandidateSourceClusterInventory CandidateSource = "cluster-inventory"
 )
 
 type PoolResolution string
@@ -114,6 +115,7 @@ const (
 	PoolResolutionUnspecified       PoolResolution = "unspecified"
 	PoolResolutionNotRequired       PoolResolution = "not-required"
 	PoolResolutionLegacyEngineNodes PoolResolution = "legacy-engine-nodes"
+	PoolResolutionTenantLabels      PoolResolution = "tenant-labels"
 )
 
 // CandidateResolution describes the boundary before worker selection. The

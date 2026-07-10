@@ -1701,7 +1701,7 @@ func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testin
 		output.WriteByte('\n')
 	}
 	require.Contains(t, output.String(), "Scheduling (preview):")
-	require.Contains(t, output.String(), "Failure: category=candidate-discovery")
+	require.Contains(t, output.String(), "Failure: category=candidate-provider")
 }
 
 func TestDoExplainStmtDoesNotSwallowRequestCancellation(t *testing.T) {
