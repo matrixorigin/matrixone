@@ -488,17 +488,21 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 			writeEscapedSQLString(buf, jsonLiteral)
 			return nil
 		}
-		writeBytes := writeEscapedSQLString
-		if t.Oid == types.T_binary || t.Oid == types.T_varbinary || t.Oid == types.T_blob {
-			writeBytes = writeSQLHexLiteral
-		}
+		var bytesVal []byte
 		switch x := val.(type) {
 		case []byte:
-			writeBytes(buf, x)
+			bytesVal = x
 		case string:
-			writeBytes(buf, []byte(x))
+			bytesVal = []byte(x)
 		default:
 			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
+		}
+		if t.Oid == types.T_geometry32 {
+			writeSQLGeometry32Literal(buf, bytesVal, t)
+		} else if t.Oid == types.T_binary || t.Oid == types.T_varbinary || t.Oid == types.T_blob {
+			writeSQLHexLiteral(buf, bytesVal)
+		} else {
+			writeEscapedSQLString(buf, bytesVal)
 		}
 	case types.T_timestamp:
 		buf.WriteString("'")
@@ -574,6 +578,17 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	}
 
 	return nil
+}
+
+func writeSQLGeometry32Literal(buf *bytes.Buffer, b []byte, t types.Type) {
+	buf.WriteString("st_geomfromtext(")
+	writeEscapedSQLString(buf, b)
+	// Geometry types encode a declared SRID as Width = SRID + 1; zero means unspecified.
+	if t.Width > 0 {
+		buf.WriteByte(',')
+		buf.WriteString(strconv.FormatInt(int64(t.Width-1), 10))
+	}
+	buf.WriteByte(')')
 }
 
 func writeSQLHexLiteral(buf *bytes.Buffer, b []byte) {
@@ -770,7 +785,7 @@ func compareSingleValInVector(
 			vector.GetFixedAtNoTypeCheck[float64](vec1, rowIdx1),
 			vector.GetFixedAtNoTypeCheck[float64](vec2, rowIdx2),
 		), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return bytes.Compare(
 			vec1.GetBytesAt(rowIdx1),
 			vec2.GetBytesAt(rowIdx2),
