@@ -170,6 +170,7 @@ drop table if exists t_null_dup;
 drop table if exists t_dup_large;
 create table t_dup_large (id int primary key, val int);
 insert into t_dup_large select result, result * 10 from generate_series(1, 2000) g;
+set @@join_spill_mem = 1000;
 insert into t_dup_large select result, 0 from generate_series(1, 100) g
 on duplicate key update val = val + 1;
 select count(*) from t_dup_large;

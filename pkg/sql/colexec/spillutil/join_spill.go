@@ -21,6 +21,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
@@ -159,7 +160,7 @@ func (r *BucketReader) Close() {
 		r.fd.Close()
 		r.fd = nil
 	}
-	r.reader = nil
+	// Keep r.reader alive so ResetForFd/ResetForFile can reuse the 4 MiB buffer.
 }
 
 // BucketWriter writes serialized batch records to an fd.
@@ -189,7 +190,7 @@ func (w *BucketWriter) HandOffFd() *os.File {
 
 // MakeBucketWriters creates SpillNumBuckets writers with derived names.
 func MakeBucketWriters(prefix string) []BucketWriter {
-	uid := uuid.Must(uuid.NewV7()).String()
+	uid := uuid.New().String()
 	writers := make([]BucketWriter, SpillNumBuckets)
 	for i := range writers {
 		writers[i].Name = prefix + "_" + uid + "_" + string(rune('0'+i%10)) + string(rune('0'+i/10))
@@ -365,10 +366,15 @@ func ShouldSpill(memUsed int64, threshold int64) bool {
 	return memUsed > threshold
 }
 
-var cachedFS fileservice.MutableFileService
+var (
+	cachedFS   fileservice.MutableFileService
+	cachedFSMu sync.Mutex
+)
 
 // GetSpillFS returns the cached spill file service.
 func GetSpillFS(proc *process.Process) (fileservice.MutableFileService, error) {
+	cachedFSMu.Lock()
+	defer cachedFSMu.Unlock()
 	if cachedFS != nil {
 		return cachedFS, nil
 	}
@@ -737,7 +743,9 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, bucket SpillBucket, b
 	// Flush build buffers FIRST so Created() sees the correct state below.
 	for i := range buildWriters {
 		if buildBuffers[i] != nil && buildBuffers[i].RowCount() > 0 {
-			FlushBucketBatch(proc, buildBuffers[i], &buildWriters[i], &e.writeBuf, nil)
+			if err := FlushBucketBatch(proc, buildBuffers[i], &buildWriters[i], &e.writeBuf, nil); err != nil {
+				return nil, err
+			}
 			buildBuffers[i].CleanOnlyData()
 		}
 	}
@@ -774,7 +782,9 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, bucket SpillBucket, b
 	// Flush probe buffer tails (build already flushed before probe scatter).
 	for i := range probeWriters {
 		if probeBuffers[i] != nil && probeBuffers[i].RowCount() > 0 {
-			FlushBucketBatch(proc, probeBuffers[i], &probeWriters[i], &e.writeBuf, nil)
+			if err := FlushBucketBatch(proc, probeBuffers[i], &probeWriters[i], &e.writeBuf, nil); err != nil {
+				return nil, err
+			}
 			probeBuffers[i].CleanOnlyData()
 		}
 	}
