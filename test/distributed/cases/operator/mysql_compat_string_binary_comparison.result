@@ -183,6 +183,11 @@ order by id;
 ➤ id[4,32,0]
 select id
 from t_binary_varbinary_subquery_cmp
+where (vb, 10) in (select b, 10 from t_binary_varbinary_subquery_cmp)
+order by id;
+➤ id[4,32,0]
+select id
+from t_binary_varbinary_subquery_cmp
 where b = x'41'
 order by id;
 ➤ id[4,32,0]
@@ -191,6 +196,11 @@ create index idx_binary_varbinary_subquery_vb on t_binary_varbinary_subquery_cmp
 select id
 from t_binary_varbinary_subquery_cmp
 where vb in (select b from t_binary_varbinary_subquery_cmp)
+order by id;
+➤ id[4,32,0]
+select id
+from t_binary_varbinary_subquery_cmp
+where (vb, 10) in (select b, 10 from t_binary_varbinary_subquery_cmp)
 order by id;
 ➤ id[4,32,0]
 truncate table t_binary_varbinary_subquery_cmp;
