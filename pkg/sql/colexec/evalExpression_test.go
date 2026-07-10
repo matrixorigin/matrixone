@@ -514,6 +514,63 @@ func TestExpressionReset(t *testing.T) {
 	}
 }
 
+func TestCastTextPrepareParamToFloat64(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	textType := types.T_text.ToType()
+	floatType := types.T_float64.ToType()
+	castFn, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{textType, floatType})
+	require.NoError(t, err)
+
+	expr := &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_float64),
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					ObjName: "cast",
+					Obj:     castFn.GetEncodedOverloadID(),
+				},
+				Args: []*plan.Expr{
+					{
+						Typ: plan.Type{
+							Id: int32(types.T_text),
+						},
+						Expr: &plan.Expr_P{
+							P: &plan.ParamRef{Pos: 0},
+						},
+					},
+					{
+						Typ: plan.Type{
+							Id: int32(types.T_float64),
+						},
+						Expr: &plan.Expr_T{
+							T: &plan.TargetType{},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	executor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_float64, result.GetType().Oid)
+	require.Equal(t, float64(1), vector.MustFixedColWithTypeCheck[float64](result)[0])
+}
+
 func TestFunctionFold(t *testing.T) {
 	t.Skip("todo: implement this test")
 }

@@ -219,6 +219,17 @@ func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
 			},
 		}
 	}
+	requireCastToFloat64 := func(t *testing.T, expr *plan.Expr) *plan.Expr {
+		t.Helper()
+		require.Equal(t, int32(types.T_float64), expr.Typ.Id)
+		cast := expr.GetF()
+		require.NotNil(t, cast)
+		require.Equal(t, "cast", cast.GetFunc().GetObjName())
+		require.Len(t, cast.GetArgs(), 2)
+		require.Equal(t, int32(types.T_float64), cast.GetArgs()[1].Typ.Id)
+		require.NotNil(t, cast.GetArgs()[1].GetT())
+		return cast.GetArgs()[0]
+	}
 
 	t.Run("json on left", func(t *testing.T) {
 		param := makeParamExpr(0)
@@ -228,9 +239,10 @@ func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
 
 		args := result.GetF().Args
 		require.Len(t, args, 2)
-		require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
-		require.Equal(t, int32(types.T_float64), args[1].Typ.Id)
-		require.NotNil(t, args[1].GetP())
+		requireCastToFloat64(t, args[0])
+		paramArg := requireCastToFloat64(t, args[1])
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
 	})
 
 	t.Run("json on right", func(t *testing.T) {
@@ -241,9 +253,10 @@ func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
 
 		args := result.GetF().Args
 		require.Len(t, args, 2)
-		require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
-		require.Equal(t, int32(types.T_float64), args[1].Typ.Id)
-		require.NotNil(t, args[0].GetP())
+		paramArg := requireCastToFloat64(t, args[0])
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+		requireCastToFloat64(t, args[1])
 	})
 
 	t.Run("string literal remains rejected", func(t *testing.T) {

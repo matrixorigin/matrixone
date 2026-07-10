@@ -2527,6 +2527,15 @@ func TestParseExecuteDataWithJSONParam(t *testing.T) {
 	require.Equal(t, string(jsonPayload), prepareStmt.params.GetStringAt(0))
 }
 
+func TestParseExecuteDataWithVarStringParamPreservesTextVector(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select json_extract('{\"a\":1}', '$.a') >= ?")
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "1"), 0))
+	require.Equal(t, types.T_text, prepareStmt.params.GetType().Oid)
+	require.Equal(t, "1", prepareStmt.params.GetStringAt(0))
+}
+
 func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, payload string) []byte {
 	data := make([]byte, 8+2+9+len(payload))
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(tp), 0})
