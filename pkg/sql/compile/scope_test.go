@@ -47,9 +47,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -117,6 +120,52 @@ func TestScopeSerialization(t *testing.T) {
 		require.Equal(t, sourceScope.NodeInfo.Id, targetScope.NodeInfo.Id)
 	}
 
+}
+
+func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
+	catalog.SetupDefines("")
+	scope := generateScopeCases(t, []string{
+		"select uid from R order by uid limit 2 + 3 offset 0 + 2",
+	})[0]
+
+	var topLimits []uint64
+	var offsets []uint64
+	var opTypes []vm.OpType
+	var visitOperator func(vm.Operator)
+	visitOperator = func(operator vm.Operator) {
+		if operator == nil {
+			return
+		}
+		base := operator.GetOperatorBase()
+		for i := 0; i < base.NumChildren(); i++ {
+			visitOperator(base.GetChildren(i))
+		}
+		opTypes = append(opTypes, operator.OpType())
+		switch op := operator.(type) {
+		case *top.Top:
+			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+		case *mergetop.MergeTop:
+			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+		case *offset.Offset:
+			offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
+		}
+	}
+	var visitScope func(*Scope)
+	visitScope = func(current *Scope) {
+		visitOperator(current.RootOp)
+		for _, preScope := range current.PreScopes {
+			visitScope(preScope)
+		}
+	}
+	visitScope(scope)
+
+	require.NotEmpty(t, topLimits)
+	for _, candidateLimit := range topLimits {
+		require.Equal(t, uint64(7), candidateLimit)
+	}
+	require.Contains(t, offsets, uint64(2))
+	require.NotContains(t, opTypes, vm.Order)
+	require.NotContains(t, opTypes, vm.MergeOrder)
 }
 
 func checkScopeRoot(t *testing.T, s *Scope) {

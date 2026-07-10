@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -110,6 +111,28 @@ func calculateFilteredPostModeOverFetchFactor(originalLimit uint64) float64 {
 	} else {
 		return 1.3
 	}
+}
+
+func calculateOverFetchLimit(originalLimit uint64, factor float64) uint64 {
+	if factor < 1 {
+		factor = 1
+	}
+	multiplied := originalLimit
+	if factor > 1 {
+		if float64(originalLimit) > float64(math.MaxUint64)/factor {
+			multiplied = math.MaxUint64
+		} else {
+			multiplied = uint64(float64(originalLimit) * factor)
+		}
+	}
+
+	withFloor := originalLimit
+	if originalLimit > math.MaxUint64-10 {
+		withFloor = math.MaxUint64
+	} else {
+		withFloor += 10
+	}
+	return max(multiplied, withFloor)
 }
 
 func containsDynamicParam(expr *plan.Expr) bool {

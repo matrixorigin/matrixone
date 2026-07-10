@@ -29,6 +29,35 @@ import (
 )
 
 func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
+	t.Run("limit never increases cardinality", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		node := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats:    &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
+			Limit:    MakePlan2Uint64ConstExprWithType(100),
+		}
+		builder.qry.Nodes = []*planpb.Node{node}
+
+		ReCalcNodeStats(0, builder, false, false, false)
+
+		require.Equal(t, float64(10), node.Stats.Outcnt)
+	})
+
+	t.Run("offset reduces cardinality before limit", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+		node := &planpb.Node{
+			NodeType: planpb.Node_VALUE_SCAN,
+			Stats:    &planpb.Stats{Outcnt: 10, Cost: 10, Selectivity: 1},
+			Limit:    MakePlan2Uint64ConstExprWithType(8),
+			Offset:   MakePlan2Uint64ConstExprWithType(7),
+		}
+		builder.qry.Nodes = []*planpb.Node{node}
+
+		ReCalcNodeStats(0, builder, false, false, false)
+
+		require.Equal(t, float64(3), node.Stats.Outcnt)
+	})
+
 	t.Run("limit over zero cost", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
 		node := &planpb.Node{

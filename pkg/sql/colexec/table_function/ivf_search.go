@@ -121,8 +121,15 @@ func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
+	if err != nil {
+		return nil, err
+	}
 
-	st.limit = max(arg.IndexReaderParam.GetLimit().GetLit().GetU64Val(), uint64(1))
+	st.limit, err = evalLimitExpression(proc, arg.IndexReaderParam.GetLimit(), 1)
+	if err != nil {
+		return nil, err
+	}
+	st.limit = max(st.limit, uint64(1))
 	st.indexReaderParam = arg.IndexReaderParam
 
 	return st, err

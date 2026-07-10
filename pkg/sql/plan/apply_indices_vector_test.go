@@ -57,6 +57,22 @@ func TestPickVectorLimit(t *testing.T) {
 	require.Nil(t, gotRank)
 }
 
+func TestVectorResultPaginationIsSeparateFromCandidateBudget(t *testing.T) {
+	candidate := makePlan2Uint64ConstExprWithType(5)
+	resultLimit := makePlan2Uint64ConstExprWithType(3)
+	resultOffset := makePlan2Uint64ConstExprWithType(2)
+	ctx := &vectorSortContext{
+		limit:        candidate,
+		resultLimit:  resultLimit,
+		resultOffset: resultOffset,
+	}
+
+	limit, offset := vectorResultPagination(ctx)
+	require.Equal(t, uint64(3), limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(2), offset.GetLit().GetU64Val())
+	require.Equal(t, uint64(5), ctx.limit.GetLit().GetU64Val())
+}
+
 func TestValidateVectorIndexSortRewrite(t *testing.T) {
 	// nil context: rewrite is allowed (no-op path).
 	b := &QueryBuilder{}

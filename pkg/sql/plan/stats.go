@@ -1388,54 +1388,55 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 	}
 
-	// if there is a limit, outcnt is limit number
-	if node.Limit != nil && node.NodeType != plan.Node_TABLE_SCAN {
-		// Fast path: if Limit is already a literal, no need to deep copy
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				node.Stats.Outcnt = float64(c.U64Val)
-				node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
-			}
-		} else {
-			// Slow path: need to fold the expression
-			limitExpr := DeepCopyExpr(node.Limit)
-			if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
-				if !hasParam(limitExpr) {
-					limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true, true)
-				}
-			}
-			if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-					node.Stats.Outcnt = float64(c.U64Val)
-					node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
-				}
-			}
-		}
+	// LIMIT caps the output cardinality. It never increases an estimate, and a
+	// fold failure must not turn into an optimizer panic.
+	if node.Limit != nil || node.Offset != nil {
+		applyPaginationToStats(node.Stats, node.Limit, node.Offset, builder)
 	} else if node.NodeType == plan.Node_FUNCTION_SCAN && node.IndexReaderParam != nil {
 		if node.IndexReaderParam.Limit != nil {
-			// Fast path: if Limit is already a literal, no need to deep copy
-			if cExpr, ok := node.IndexReaderParam.Limit.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-					node.Stats.Outcnt = float64(c.U64Val)
-					node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
-				}
-			} else {
-				// Slow path: need to fold the expression
-				limitExpr := DeepCopyExpr(node.IndexReaderParam.Limit)
-				if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
-					if !hasParam(limitExpr) {
-						limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true, true)
-					}
-				}
-				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-						node.Stats.Outcnt = float64(c.U64Val)
-						node.Stats.Selectivity = safeSelectivityRatio(node.Stats.Outcnt, node.Stats.Cost)
-					}
-				}
-			}
+			applyPaginationToStats(node.Stats, node.IndexReaderParam.Limit, nil, builder)
 		}
 	}
+}
+
+func applyPaginationToStats(stats *Stats, limit, offset *plan.Expr, builder *QueryBuilder) {
+	if stats == nil {
+		return
+	}
+	originalOutcnt := stats.Outcnt
+	if offsetValue, ok := literalUint64ForStats(offset, builder); ok {
+		if float64(offsetValue) >= stats.Outcnt {
+			stats.Outcnt = 0
+		} else {
+			stats.Outcnt -= float64(offsetValue)
+		}
+	}
+	if limitValue, ok := literalUint64ForStats(limit, builder); ok && float64(limitValue) < stats.Outcnt {
+		stats.Outcnt = float64(limitValue)
+	}
+	if stats.Outcnt != originalOutcnt {
+		stats.Selectivity = safeSelectivityRatio(stats.Outcnt, stats.Cost)
+	}
+}
+
+func literalUint64ForStats(expr *plan.Expr, builder *QueryBuilder) (uint64, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	value, ok := getLiteralUint64(expr)
+	if !ok && !containsDynamicParam(expr) {
+		folded, err := ConstantFold(
+			batch.EmptyForConstFoldBatch,
+			DeepCopyExpr(expr),
+			builder.compCtx.GetProcess(),
+			false,
+			true,
+		)
+		if err == nil && folded != nil {
+			value, ok = getLiteralUint64(folded)
+		}
+	}
+	return value, ok
 }
 
 func computeFunctionScan(name string, exprs []*Expr, nodeStat *Stats) bool {

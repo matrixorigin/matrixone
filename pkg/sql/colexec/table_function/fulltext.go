@@ -351,13 +351,13 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	st := &fulltextState{}
 	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
 	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
+	if err != nil {
+		return nil, err
+	}
 
-	if tableFunction.Limit != nil {
-		if cExpr, ok := tableFunction.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				st.limit = c.U64Val
-			}
-		}
+	st.limit, err = evalLimitExpression(proc, tableFunction.Limit, 0)
+	if err != nil {
+		return nil, err
 	}
 
 	// TODO: LIMIT BY RANK should set ranking to true

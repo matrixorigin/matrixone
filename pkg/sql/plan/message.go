@@ -19,9 +19,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
-func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) (scanID int32, staticLimitSafe bool) {
+func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32, orderExpr *plan.Expr) (scanID int32, scanOrderExpr *plan.Expr, staticLimitSafe bool) {
 	node := builder.qry.Nodes[nodeID]
 	switch node.NodeType {
+	case plan.Node_PROJECT:
+		if len(node.Children) != 1 || len(node.BindingTags) == 0 {
+			return -1, nil, false
+		}
+		orderCol := orderExpr.GetCol()
+		if orderCol == nil || orderCol.RelPos != node.BindingTags[0] || orderCol.ColPos < 0 || int(orderCol.ColPos) >= len(node.ProjectList) {
+			return -1, nil, false
+		}
+		projectedExpr := node.ProjectList[orderCol.ColPos]
+		if projectedExpr.GetCol() == nil {
+			return -1, nil, false
+		}
+		return builder.gatherLeavesForMessageFromTopToScan(node.Children[0], projectedExpr)
 	case plan.Node_JOIN:
 		if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_SEMI {
 			// for now, only support inner join and semi join.
@@ -32,16 +45,16 @@ func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) (
 				node.RuntimeFilterProbeList = nil
 				node.RuntimeFilterBuildList = nil
 			}
-			scanID, _ = builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
-			return scanID, false
+			scanID, scanOrderExpr, _ = builder.gatherLeavesForMessageFromTopToScan(node.Children[0], orderExpr)
+			return scanID, scanOrderExpr, false
 		}
 	case plan.Node_FILTER:
-		scanID, _ = builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
-		return scanID, false
+		scanID, scanOrderExpr, _ = builder.gatherLeavesForMessageFromTopToScan(node.Children[0], orderExpr)
+		return scanID, scanOrderExpr, false
 	case plan.Node_TABLE_SCAN:
-		return nodeID, true
+		return nodeID, DeepCopyExpr(orderExpr), true
 	}
-	return -1, false
+	return -1, nil, false
 }
 
 // send message from top to scan. if block node(like group or window), no need to send this message
@@ -61,16 +74,20 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	if node.Limit == nil {
 		return
 	}
-	if len(node.OrderBy) > 1 {
+	if len(node.OrderBy) != 1 {
 		// for now ,only support order by one column
-		return
-	}
-	scanID, staticLimitSafe := builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
-	if scanID == -1 {
 		return
 	}
 	orderByCol := node.OrderBy[0].Expr.GetCol()
 	if orderByCol == nil {
+		return
+	}
+	scanID, scanOrderExpr, staticLimitSafe := builder.gatherLeavesForMessageFromTopToScan(node.Children[0], node.OrderBy[0].Expr)
+	if scanID == -1 || scanOrderExpr == nil {
+		return
+	}
+	scanOrderByCol := scanOrderExpr.GetCol()
+	if scanOrderByCol == nil {
 		return
 	}
 	scanNode := builder.qry.Nodes[scanID]
@@ -78,8 +95,9 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 		return
 	}
 	scanOrderBy := DeepCopyOrderBySpec(node.OrderBy[0])
+	scanOrderBy.Expr = scanOrderExpr
 	enableOrderedLimit := false
-	if canUseRegularIndexHiddenSortKey(scanNode, orderByCol) {
+	if orderByCol.RelPos == scanNode.BindingTags[0] && canUseRegularIndexHiddenSortKey(scanNode, scanOrderByCol) {
 		eligibleOrderedLimit := staticLimitSafe && node.Offset == nil && node.RankOption == nil && isPositiveLiteralLimit(node.Limit)
 		if eligibleOrderedLimit {
 			enableOrderedLimit = canPushRegularIndexOrderedLimit(scanNode)
@@ -91,7 +109,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 		hiddenKeyExpr := GetColExpr(scanNode.TableDef.Cols[0].Typ, scanNode.BindingTags[0], 0)
 		hiddenKeyExpr.GetCol().Name = orderByName
 		node.OrderBy[0].Expr = hiddenKeyExpr
-		orderByCol = hiddenKeyExpr.GetCol()
+		scanOrderByCol = hiddenKeyExpr.GetCol()
 
 		scanHiddenKeyExpr := GetColExpr(scanNode.TableDef.Cols[0].Typ, scanNode.BindingTags[0], 0)
 		scanHiddenKeyExpr.GetCol().Name = scanNode.TableDef.Cols[0].Name
@@ -100,7 +118,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 			Flag: node.OrderBy[0].Flag,
 		}
 	}
-	if orderByCol.RelPos != scanNode.BindingTags[0] {
+	if scanOrderByCol.RelPos != scanNode.BindingTags[0] {
 		return
 	}
 

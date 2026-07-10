@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -356,6 +357,51 @@ func TestFullTextJoinRewritePreservesNonFullTextFilter(t *testing.T) {
 	require.Equal(t, "=", leftScan.FilterList[0].GetF().Func.ObjName)
 	require.False(t, nodeHasFullTextMatchFilter(leftScan))
 	require.Equal(t, 1, countFullTextFunctionScans(builder, builder.qry.Nodes[joinID].Children[0]))
+}
+
+func TestFullTextCandidateLimitIncludesOffset(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
+	scan := builder.qry.Nodes[leftScanID]
+	scan.Limit = makePlan2Uint64ConstExprWithType(10)
+	scan.Offset = makePlan2Uint64ConstExprWithType(5)
+
+	newID, changed, err := builder.applyFullTextFiltersForScanInJoin(
+		joinID,
+		scan,
+		map[[2]int32]int{},
+		map[[2]int32]*planpb.Expr{},
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	functions := collectFullTextFunctionScans(builder, newID)
+	require.Len(t, functions, 1)
+	require.Equal(t, uint64(15), functions[0].Limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(10), builder.qry.Nodes[newID].Limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(5), builder.qry.Nodes[newID].Offset.GetLit().GetU64Val())
+	require.Nil(t, scan.Limit)
+	require.Nil(t, scan.Offset)
+}
+
+func TestFullTextDoesNotLimitIndependentIntersectionInputs(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
+	scan := builder.qry.Nodes[leftScanID]
+	scan.FilterList = append(scan.FilterList, DeepCopyExpr(scan.FilterList[0]))
+	scan.Limit = makePlan2Uint64ConstExprWithType(10)
+	scan.Offset = makePlan2Uint64ConstExprWithType(5)
+
+	newID, changed, err := builder.applyFullTextFiltersForScanInJoin(
+		joinID,
+		scan,
+		map[[2]int32]int{},
+		map[[2]int32]*planpb.Expr{},
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	functions := collectFullTextFunctionScans(builder, newID)
+	require.Len(t, functions, 2)
+	for _, functionNode := range functions {
+		require.Nil(t, functionNode.Limit)
+	}
 }
 
 func TestFullTextScanProtectionSkipsRegularIndexRule(t *testing.T) {
@@ -715,22 +761,26 @@ func ftjMakeEqExpr(t *testing.T, left, right *planpb.Expr) *planpb.Expr {
 }
 
 func countFullTextFunctionScans(builder *QueryBuilder, nodeID int32) int {
+	return len(collectFullTextFunctionScans(builder, nodeID))
+}
+
+func collectFullTextFunctionScans(builder *QueryBuilder, nodeID int32) []*planpb.Node {
 	node := builder.qry.Nodes[nodeID]
 	if node == nil {
-		return 0
+		return nil
 	}
 
-	count := 0
+	var nodes []*planpb.Node
 	if node.NodeType == planpb.Node_FUNCTION_SCAN &&
 		node.TableDef != nil &&
 		node.TableDef.TblFunc != nil &&
 		node.TableDef.TblFunc.Name == fulltext_index_scan_func_name {
-		count++
+		nodes = append(nodes, node)
 	}
 	for _, childID := range node.Children {
-		count += countFullTextFunctionScans(builder, childID)
+		nodes = append(nodes, collectFullTextFunctionScans(builder, childID)...)
 	}
-	return count
+	return nodes
 }
 
 func nodeHasFullTextMatchFilter(node *planpb.Node) bool {
@@ -891,6 +941,13 @@ func TestCalculatePostFilterOverFetchFactor(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCalculateOverFetchLimitSaturates(t *testing.T) {
+	require.Equal(t, uint64(20), calculateOverFetchLimit(10, 2))
+	require.Equal(t, uint64(15), calculateOverFetchLimit(5, 1))
+	require.Equal(t, uint64(math.MaxUint64), calculateOverFetchLimit(math.MaxUint64, 1.2))
+	require.Equal(t, uint64(math.MaxUint64), calculateOverFetchLimit(math.MaxUint64-5, 1))
 }
 
 // Test the actual over-fetch calculation results
@@ -1378,6 +1435,58 @@ func TestHandleMessageFromTopToScanRewritesRegularIndexPKOrderToHiddenKey(t *tes
 	assert.Equal(t, int32(100), indexParamCol.RelPos)
 	assert.Equal(t, int32(0), indexParamCol.ColPos)
 	assert.Equal(t, catalog.IndexTableIndexColName, indexParamCol.Name)
+}
+
+func TestHandleMessageFromTopToScanThroughDirectProjection(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	scanTag := builder.genNewBindTag()
+	projectTag := builder.genNewBindTag()
+	colType := planpb.Type{Id: int32(types.T_int64)}
+
+	scanID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		BindingTags: []int32{scanTag},
+		TableDef: &planpb.TableDef{
+			Name:          "t",
+			Cols:          []*planpb.ColDef{{Name: "id", Typ: colType}},
+			Name2ColIndex: map[string]int32{"id": 0},
+		},
+	}, ctx)
+	projectID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{scanID},
+		BindingTags: []int32{projectTag},
+		ProjectList: []*planpb.Expr{GetColExpr(colType, scanTag, 0)},
+	}, ctx)
+	sortID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_SORT,
+		Children: []int32{projectID},
+		OrderBy: []*planpb.OrderBySpec{{
+			Expr: GetColExpr(colType, projectTag, 0),
+		}},
+		Limit: makePlan2Uint64ConstExprWithType(10),
+	}, ctx)
+
+	builder.handleMessageFromTopToScan(sortID)
+
+	scan := builder.qry.Nodes[scanID]
+	require.Len(t, builder.qry.Nodes[sortID].SendMsgList, 1)
+	require.Len(t, scan.RecvMsgList, 1)
+	require.Len(t, scan.OrderBy, 1)
+	require.Equal(t, scanTag, scan.OrderBy[0].Expr.GetCol().RelPos)
+	require.Equal(t, int32(0), scan.OrderBy[0].Expr.GetCol().ColPos)
+}
+
+func TestHandleMessageFromTopToScanSkipsSortWithoutOrderKey(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.qry.Nodes = []*planpb.Node{
+		{NodeType: planpb.Node_TABLE_SCAN, NodeId: 0},
+		{NodeType: planpb.Node_SORT, NodeId: 1, Children: []int32{0}, Limit: makePlan2Uint64ConstExprWithType(1)},
+	}
+
+	require.NotPanics(t, func() { builder.handleMessageFromTopToScan(1) })
+	require.Empty(t, builder.qry.Nodes[0].RecvMsgList)
 }
 
 func TestHandleMessageFromTopToScanSkipsOrderedLimitWithAdditionalResidualFilter(t *testing.T) {

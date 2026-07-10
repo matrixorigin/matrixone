@@ -477,6 +477,10 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 	if param == nil || len(param.OrderBy) == 0 || param.Limit == nil {
 		return
 	}
+	limitLiteral := param.Limit.GetLit()
+	if limitLiteral == nil {
+		return
+	}
 	if r.orderByLimit == nil {
 		r.orderByLimit = &objectio.IndexReaderTopOp{}
 	}
@@ -484,7 +488,7 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 	if col := param.OrderBy[0].Expr.GetCol(); col != nil {
 		r.orderByLimit.Typ = types.T(param.OrderBy[0].Expr.Typ.Id)
 		r.orderByLimit.ColPos = col.ColPos
-		r.orderByLimit.Limit = param.Limit.GetLit().GetU64Val()
+		r.orderByLimit.Limit = limitLiteral.GetU64Val()
 		r.orderByLimit.OrderedLimit = true
 		r.orderByLimit.Desc = param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 		r.orderByLimit.NumVec = nil
@@ -520,7 +524,7 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 	r.orderByLimit.MetricType = metricType
 	r.orderByLimit.ColPos = col.ColPos
 	r.orderByLimit.NumVec = []byte(numVec)
-	r.orderByLimit.Limit = param.Limit.GetLit().GetU64Val()
+	r.orderByLimit.Limit = limitLiteral.GetU64Val()
 	r.orderByLimit.OrderedLimit = false
 	r.orderByLimit.Desc = param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 

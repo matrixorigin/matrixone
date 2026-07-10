@@ -155,6 +155,22 @@ func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestBoundedHnswSearchLimits(t *testing.T) {
+	perIndex, resultLimit, heapCapacity := boundedHnswSearchLimits([]uint{3, 7}, ^uint(0))
+	require.Equal(t, []uint{3, 7}, perIndex)
+	require.Equal(t, uint(10), resultLimit)
+	require.Equal(t, 10, heapCapacity)
+
+	perIndex, resultLimit, heapCapacity = boundedHnswSearchLimits([]uint{3, 7}, 5)
+	require.Equal(t, []uint{3, 5}, perIndex)
+	require.Equal(t, uint(5), resultLimit)
+	require.Equal(t, 8, heapCapacity)
+
+	_, resultLimit, heapCapacity = boundedHnswSearchLimits([]uint{^uint(0), ^uint(0)}, ^uint(0))
+	require.Equal(t, ^uint(0), resultLimit)
+	require.Equal(t, 1<<20, heapCapacity)
+}
+
 func TestHnswSearchUpdateConfig(t *testing.T) {
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	tblcfg := vectorindex.IndexTableConfig{}

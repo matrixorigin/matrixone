@@ -96,3 +96,22 @@ func TestReaderSetIndexParamSupportsOrderedLimit(t *testing.T) {
 	require.Equal(t, uint64(8), r.orderByLimit.Limit)
 	require.Nil(t, r.orderByLimit.NumVec)
 }
+
+func TestReaderSetIndexParamIgnoresUnevaluatedLimit(t *testing.T) {
+	r := &reader{}
+	param := &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+			},
+		}},
+		Limit: &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_uint64)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		},
+	}
+
+	require.NotPanics(t, func() { r.SetIndexParam(param) })
+	require.Nil(t, r.orderByLimit)
+}
