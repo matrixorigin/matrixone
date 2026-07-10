@@ -4050,10 +4050,11 @@ func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, ms
 }
 
 type jsonPlanHandler struct {
-	jsonBytes  []byte
-	statsBytes statistic.StatsArray
-	stats      motrace.Statistic
-	buffer     *bytes.Buffer
+	jsonBytes              []byte
+	statsBytes             statistic.StatsArray
+	stats                  motrace.Statistic
+	buffer                 *bytes.Buffer
+	persistSchedulingTrace bool
 }
 
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
@@ -4061,10 +4062,11 @@ func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses Fe
 	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx, ses)
 	return &jsonPlanHandler{
-		jsonBytes:  jsonBytes,
-		statsBytes: statsBytes,
-		stats:      stats,
-		buffer:     h.handoverBuffer(),
+		jsonBytes:              jsonBytes,
+		statsBytes:             statsBytes,
+		stats:                  stats,
+		buffer:                 h.handoverBuffer(),
+		persistSchedulingTrace: h.persistSchedulingTrace,
 	}
 }
 
@@ -4100,8 +4102,9 @@ func (h *jsonPlanHandler) Free() {
 }
 
 type marshalPlanConfig struct {
-	waitActiveCost  time.Duration
-	schedulingTrace *schedule.Trace
+	waitActiveCost          time.Duration
+	schedulingTrace         *schedule.Trace
+	schedulingTraceRecorder *schedule.TraceRecorder
 }
 
 type marshalPlanOptions func(*marshalPlanConfig)
@@ -4122,6 +4125,12 @@ func WithSchedulingTrace(trace schedule.Trace) marshalPlanOptions {
 	}
 }
 
+func withSchedulingTraceRecorder(recorder *schedule.TraceRecorder) marshalPlanOptions {
+	return func(h *marshalPlanConfig) {
+		h.schedulingTraceRecorder = recorder
+	}
+}
+
 type marshalPlanHandler struct {
 	query       *plan.Query
 	marshalPlan *models.ExplainData
@@ -4130,6 +4139,8 @@ type marshalPlanHandler struct {
 	buffer      *bytes.Buffer
 	// internal sub statements, such as sub statements of compound statements, is not user SQL requests,
 	isInternalSubStmt bool
+
+	persistSchedulingTrace bool
 
 	marshalPlanConfig
 }
@@ -4145,12 +4156,13 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 	for _, opt := range opts {
 		opt(&h.marshalPlanConfig)
 	}
-	if plan == nil || plan.GetQuery() == nil {
-		return h
+	if plan != nil && plan.GetQuery() != nil {
+		h.query = plan.GetQuery()
 	}
-	h.query = plan.GetQuery()
+	needFullPlan := h.query != nil && h.needMarshalPlan()
+	h.resolveSchedulingTrace(needFullPlan)
 
-	if h.needMarshalPlan() {
+	if needFullPlan {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
 		if phyPlan != nil {
@@ -4161,6 +4173,20 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		}
 	}
 	return h
+}
+
+func (h *marshalPlanHandler) resolveSchedulingTrace(includeNormalLocal bool) {
+	if h.schedulingTrace == nil && h.schedulingTraceRecorder != nil {
+		trace := h.schedulingTraceRecorder.SnapshotForExport(includeNormalLocal)
+		if !trace.Empty() {
+			h.schedulingTrace = &trace
+		}
+	}
+	if h.schedulingTrace != nil {
+		h.persistSchedulingTrace = h.schedulingTrace.PersistStandalone()
+	}
+	// The recorder is only needed while constructing the synchronous handler.
+	h.schedulingTraceRecorder = nil
 }
 
 // NewMarshalPlanHandlerCompositeSubStmt MarshalHandler for child statements of composite statements

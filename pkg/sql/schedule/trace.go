@@ -138,6 +138,34 @@ type TraceRecorder struct {
 	mu             sync.Mutex
 	trace          Trace
 	workerRefCount int
+	pendingLocal   pendingLocalAttempt
+}
+
+// pendingLocalAttempt keeps the common first-attempt local path allocation
+// free. It is materialized before a snapshot or as soon as the statement
+// becomes interesting enough to persist independently.
+type pendingLocalAttempt struct {
+	sequence       TraceAttemptID
+	query          pendingLocalQuery
+	hasQuery       bool
+	detailsOmitted bool
+}
+
+type pendingLocalQuery struct {
+	execKind               QueryExecKind
+	currentCNPolicy        CurrentCNPolicy
+	currentCN              pendingWorkerTrace
+	reason                 string
+	candidateResolution    CandidateResolution
+	resolvedCandidateCount int
+	selectedCount          int
+}
+
+type pendingWorkerTrace struct {
+	id       string
+	routable bool
+	mcpu     int
+	state    WorkerState
 }
 
 func (r *TraceRecorder) StartAttempt() TraceAttemptID {
@@ -150,8 +178,13 @@ func (r *TraceRecorder) StartAttempt() TraceAttemptID {
 	r.ensureVersionLocked()
 	r.trace.AttemptCount++
 	id := TraceAttemptID(r.trace.AttemptCount)
+	r.materializePendingLocalLocked()
 	if len(r.trace.Attempts) >= maxTraceAttempts {
 		r.trace.Truncated = true
+		return id
+	}
+	if id == 1 {
+		r.pendingLocal.sequence = id
 		return id
 	}
 	r.trace.Attempts = append(r.trace.Attempts, AttemptTrace{Sequence: int(id)})
@@ -168,6 +201,30 @@ func (r *TraceRecorder) RecordQuery(
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.pendingLocal.sequence == attempt {
+		if r.pendingLocal.hasQuery {
+			return
+		}
+		if canDeferLocalQuery(decision) {
+			r.pendingLocal.query = pendingLocalQuery{
+				execKind:        decision.ExecKind,
+				currentCNPolicy: decision.CurrentCNPolicy,
+				currentCN: pendingWorkerTrace{
+					id:       decision.CurrentCN.ID,
+					routable: decision.CurrentCN.Addr != "",
+					mcpu:     decision.CurrentCN.Mcpu,
+					state:    decision.CurrentCN.State,
+				},
+				reason:                 decision.Reason,
+				candidateResolution:    decision.CandidateResolution,
+				resolvedCandidateCount: max(decision.ResolvedCandidateCount, 0),
+				selectedCount:          len(decision.Workers),
+			}
+			r.pendingLocal.hasQuery = true
+			return
+		}
+		r.materializePendingLocalLocked()
+	}
 	target := r.attemptLocked(attempt)
 	if target == nil {
 		return
@@ -217,6 +274,9 @@ func (r *TraceRecorder) RecordScan(
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.omitPendingLocalPlacementDetailsLocked(attempt) {
+		return
+	}
 	target := r.attemptLocked(attempt)
 	if target == nil {
 		return
@@ -267,6 +327,19 @@ func (r *TraceRecorder) RecordStage(
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.omitPendingLocalPlacementDetailsLocked(attempt) {
+		return
+	}
+	r.recordStageLocked(attempt, kind, len(queryWorkers), decision.Workers, decision.Reason)
+}
+
+func (r *TraceRecorder) recordStageLocked(
+	attempt TraceAttemptID,
+	kind StageKind,
+	queryWorkerCount int,
+	workers Workers,
+	reason string,
+) {
 	target := r.attemptLocked(attempt)
 	if target == nil {
 		return
@@ -281,13 +354,13 @@ func (r *TraceRecorder) RecordStage(
 		r.trace.Truncated = true
 		return
 	}
-	selected, selectedTruncated := r.traceWorkersLocked(decision.Workers)
+	selected, selectedTruncated := r.traceWorkersLocked(workers)
 	target.Stages = append(target.Stages, StageTrace{
 		Kind:              kind,
-		Reason:            decision.Reason,
-		QueryWorkerCount:  len(queryWorkers),
+		Reason:            reason,
+		QueryWorkerCount:  queryWorkerCount,
 		Selected:          selected,
-		SelectedCount:     len(decision.Workers),
+		SelectedCount:     len(workers),
 		SelectedTruncated: selectedTruncated,
 	})
 	if selectedTruncated {
@@ -301,14 +374,20 @@ func (r *TraceRecorder) RecordSingleWorkerStage(
 	queryWorkers Workers,
 	decision StageDecision,
 ) {
+	if r == nil || attempt == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.omitPendingLocalPlacementDetailsLocked(attempt) {
+		return
+	}
 	workers := Workers(nil)
 	if hasWorkerIdentity(decision.Worker) || decision.Worker.Mcpu != 0 {
 		workers = Workers{decision.Worker}
 	}
-	r.RecordStage(attempt, StageKindSingleWorker, queryWorkers, StageWorkerSetDecision{
-		Workers: workers,
-		Reason:  decision.Reason,
-	})
+	r.recordStageLocked(attempt, StageKindSingleWorker, len(queryWorkers), workers, decision.Reason)
 }
 
 func (r *TraceRecorder) RecordFailure(
@@ -348,6 +427,28 @@ func (r *TraceRecorder) Snapshot() Trace {
 	defer r.mu.Unlock()
 
 	r.ensureVersionLocked()
+	r.materializePendingLocalLocked()
+	return cloneTrace(r.trace)
+}
+
+// SnapshotForExport returns an ownership-independent trace only when the
+// caller needs normal local detail or when the trace must be persisted on its
+// own. The normal short local path returns an empty trace without materializing
+// or cloning its pending attempt.
+func (r *TraceRecorder) SnapshotForExport(includeNormalLocal bool) Trace {
+	if r == nil {
+		return Trace{Version: SchedulingTraceVersion, Mode: TraceModeExecution}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.ensureVersionLocked()
+	// A pending attempt is normal local by construction, so it never changes
+	// the standalone persistence decision.
+	if !includeNormalLocal && !r.trace.PersistStandalone() {
+		return Trace{Version: r.trace.Version, Mode: r.trace.Mode}
+	}
+	r.materializePendingLocalLocked()
 	return cloneTrace(r.trace)
 }
 
@@ -358,6 +459,7 @@ func (r *TraceRecorder) Reset() {
 	r.mu.Lock()
 	r.trace = Trace{Version: SchedulingTraceVersion, Mode: TraceModeExecution}
 	r.workerRefCount = 0
+	r.pendingLocal = pendingLocalAttempt{}
 	r.mu.Unlock()
 }
 
@@ -429,11 +531,63 @@ func (r *TraceRecorder) ensureVersionLocked() {
 }
 
 func (r *TraceRecorder) attemptLocked(id TraceAttemptID) *AttemptTrace {
+	if r.pendingLocal.sequence == id {
+		r.materializePendingLocalLocked()
+	}
 	idx := int(id) - 1
 	if idx < 0 || idx >= len(r.trace.Attempts) {
 		return nil
 	}
 	return &r.trace.Attempts[idx]
+}
+
+func canDeferLocalQuery(decision QueryDecision) bool {
+	return (decision.ExecKind == QueryExecTP || decision.ExecKind == QueryExecAPOneCN) &&
+		decision.Satisfied &&
+		decision.Reason != ReasonNoCandidateCN &&
+		len(decision.Dropped) == 0
+}
+
+func (r *TraceRecorder) omitPendingLocalPlacementDetailsLocked(attempt TraceAttemptID) bool {
+	if r.pendingLocal.sequence != attempt || !r.pendingLocal.hasQuery {
+		return false
+	}
+	r.pendingLocal.detailsOmitted = true
+	return true
+}
+
+func (r *TraceRecorder) materializePendingLocalLocked() {
+	pending := r.pendingLocal
+	if pending.sequence == 0 {
+		return
+	}
+	attempt := AttemptTrace{
+		Sequence:       int(pending.sequence),
+		DetailsOmitted: pending.detailsOmitted,
+	}
+	if pending.hasQuery {
+		query := pending.query
+		attempt.Query = &QueryTrace{
+			ExecKind:        query.execKind.String(),
+			CurrentCNPolicy: query.currentCNPolicy.String(),
+			CurrentCN: WorkerTrace{
+				ID:       boundedTraceWorkerValue(query.currentCN.id),
+				Routable: query.currentCN.routable,
+				Mcpu:     query.currentCN.mcpu,
+				State:    query.currentCN.state.String(),
+			},
+			Reason:          query.reason,
+			Satisfied:       true,
+			CandidateSource: string(query.candidateResolution.DiscoverySource),
+			PoolResolution:  string(query.candidateResolution.PoolResolution),
+			DiscoveredCount: max(query.candidateResolution.DiscoveredCount, 0),
+			ResolvedCount:   query.resolvedCandidateCount,
+			SelectedCount:   query.selectedCount,
+			SelectedOmitted: query.selectedCount > 0,
+		}
+	}
+	r.trace.Attempts = append(r.trace.Attempts, attempt)
+	r.pendingLocal = pendingLocalAttempt{}
 }
 
 func omitLocalPlacementDetails(attempt *AttemptTrace) bool {

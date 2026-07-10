@@ -275,6 +275,151 @@ func TestTraceRecorderPersistencePolicyAvoidsNormalLocalAmplification(t *testing
 	require.True(t, recorder.Snapshot().PersistStandalone())
 }
 
+func TestTraceRecorderDefersNormalLocalTraceUntilRequested(t *testing.T) {
+	recorder := new(TraceRecorder)
+	attempt := recorder.StartAttempt()
+	decision := normalLocalTraceDecision()
+	recorder.RecordQuery(attempt, decision)
+	recorder.RecordScan(attempt, ScanRequest{}, ScanDecision{Workers: decision.Workers})
+	recorder.RecordStage(attempt, StageKindQueryWorkerSet, decision.Workers, StageWorkerSetDecision{Workers: decision.Workers})
+
+	require.True(t, recorder.SnapshotForExport(false).Empty())
+
+	trace := recorder.SnapshotForExport(true)
+	require.Len(t, trace.Attempts, 1)
+	require.Equal(t, QueryExecTP.String(), trace.Attempts[0].Query.ExecKind)
+	require.Equal(t, "current", trace.Attempts[0].Query.CurrentCN.ID)
+	require.Equal(t, 1, trace.Attempts[0].Query.SelectedCount)
+	require.True(t, trace.Attempts[0].Query.SelectedOmitted)
+	require.True(t, trace.Attempts[0].DetailsOmitted)
+	require.False(t, trace.PersistStandalone())
+}
+
+func TestTraceRecorderMaterializesDeferredAttemptOnFailureAndRetry(t *testing.T) {
+	recorder := new(TraceRecorder)
+	first := recorder.StartAttempt()
+	recorder.RecordQuery(first, normalLocalTraceDecision())
+	recorder.RecordFailure(first, "validation", Worker{ID: "current"})
+
+	second := recorder.StartAttempt()
+	recorder.RecordQuery(second, QueryDecision{
+		ExecKind:  QueryExecAPMultiCN,
+		Workers:   Workers{{ID: "remote", Addr: "remote:6001"}},
+		Reason:    ReasonMultiCN,
+		Satisfied: true,
+	})
+
+	trace := recorder.SnapshotForExport(false)
+	require.Len(t, trace.Attempts, 2)
+	require.Equal(t, "validation", trace.Attempts[0].Failures[0].Category)
+	require.Equal(t, QueryExecAPMultiCN.String(), trace.Attempts[1].Query.ExecKind)
+	require.True(t, trace.PersistStandalone())
+}
+
+func TestTraceRecorderExportMatchesStandalonePersistencePolicy(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(*QueryDecision)
+		exported bool
+	}{
+		{
+			name: "normal AP one CN remains deferred",
+			mutate: func(decision *QueryDecision) {
+				decision.ExecKind = QueryExecAPOneCN
+			},
+		},
+		{
+			name: "unsatisfied local decision",
+			mutate: func(decision *QueryDecision) {
+				decision.Satisfied = false
+			},
+			exported: true,
+		},
+		{
+			name: "fallback local decision",
+			mutate: func(decision *QueryDecision) {
+				decision.Reason = ReasonNoCandidateCN
+			},
+			exported: true,
+		},
+		{
+			name: "decision with dropped workers",
+			mutate: func(decision *QueryDecision) {
+				decision.Dropped = DroppedWorkers{{Reason: ReasonDroppedDrainingCN}}
+			},
+			exported: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := new(TraceRecorder)
+			decision := normalLocalTraceDecision()
+			test.mutate(&decision)
+			attempt := recorder.StartAttempt()
+			recorder.RecordQuery(attempt, decision)
+
+			trace := recorder.SnapshotForExport(false)
+			require.Equal(t, test.exported, !trace.Empty())
+			require.Equal(t, test.exported, trace.PersistStandalone())
+		})
+	}
+}
+
+func TestTraceRecorderNormalLocalExportAllocations(t *testing.T) {
+	recorder := new(TraceRecorder)
+	decision := normalLocalTraceDecision()
+	scanDecision := ScanDecision{Workers: decision.Workers}
+	stageDecision := StageWorkerSetDecision{Workers: decision.Workers}
+	singleWorkerDecision := StageDecision{Worker: decision.CurrentCN, Reason: ReasonStageCurrentCoordinator}
+	allocs := testing.AllocsPerRun(1000, func() {
+		recorder.Reset()
+		attempt := recorder.StartAttempt()
+		recorder.RecordQuery(attempt, decision)
+		recorder.RecordScan(attempt, ScanRequest{}, scanDecision)
+		recorder.RecordSingleWorkerStage(attempt, decision.Workers, singleWorkerDecision)
+		recorder.RecordStage(attempt, StageKindQueryWorkerSet, decision.Workers, stageDecision)
+		if !recorder.SnapshotForExport(false).Empty() {
+			panic("normal local trace unexpectedly exported")
+		}
+	})
+	require.Zero(t, allocs)
+}
+
+func BenchmarkTraceRecorderNormalLocalExport(b *testing.B) {
+	recorder := new(TraceRecorder)
+	decision := normalLocalTraceDecision()
+	scanDecision := ScanDecision{Workers: decision.Workers}
+	stageDecision := StageWorkerSetDecision{Workers: decision.Workers}
+	singleWorkerDecision := StageDecision{Worker: decision.CurrentCN, Reason: ReasonStageCurrentCoordinator}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		recorder.Reset()
+		attempt := recorder.StartAttempt()
+		recorder.RecordQuery(attempt, decision)
+		recorder.RecordScan(attempt, ScanRequest{}, scanDecision)
+		recorder.RecordSingleWorkerStage(attempt, decision.Workers, singleWorkerDecision)
+		recorder.RecordStage(attempt, StageKindQueryWorkerSet, decision.Workers, stageDecision)
+		_ = recorder.SnapshotForExport(false)
+	}
+}
+
+func normalLocalTraceDecision() QueryDecision {
+	return QueryDecision{
+		ExecKind:  QueryExecTP,
+		CurrentCN: Worker{ID: "current"},
+		Workers:   Workers{{ID: "current"}},
+		Reason:    ReasonLocalExecType,
+		CandidateResolution: CandidateResolution{
+			DiscoverySource: CandidateSourceNotRequired,
+			PoolResolution:  PoolResolutionNotRequired,
+		},
+		CurrentCNPolicy: CurrentCNAllowed,
+		Satisfied:       true,
+	}
+}
+
 func TestTraceRecorderHandlesNilInvalidAndConcurrentAccess(t *testing.T) {
 	var nilRecorder *TraceRecorder
 	require.Zero(t, nilRecorder.StartAttempt())

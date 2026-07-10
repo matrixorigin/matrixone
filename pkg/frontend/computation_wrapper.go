@@ -381,15 +381,15 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *
 				waitActiveCost = txn.GetWaitActiveCost()
 			}
 		}
-		traceSnapshot := cwft.schedulingTrace.Snapshot()
-		opts := []marshalPlanOptions{WithWaitActiveCost(waitActiveCost)}
-		if !traceSnapshot.Empty() {
-			opts = append(opts, WithSchedulingTrace(traceSnapshot))
+		opts := []marshalPlanOptions{
+			WithWaitActiveCost(waitActiveCost),
+			withSchedulingTraceRecorder(&cwft.schedulingTrace),
 		}
-		if traceSnapshot.PersistStandalone() {
+		handler := NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, opts...)
+		if handler.persistSchedulingTrace {
 			stm.DisableAgg()
 		}
-		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, opts...))
+		stm.SetSerializableExecPlan(handler)
 	}
 	return nil
 }
@@ -402,8 +402,8 @@ func (cwft *TxnComputationWrapper) recordSchedulingTraceOnCompileError(ctx conte
 	if cwft.ses == nil {
 		return
 	}
-	traceSnapshot := cwft.schedulingTrace.Snapshot()
-	if traceSnapshot.Empty() || !traceSnapshot.PersistStandalone() {
+	traceSnapshot := cwft.schedulingTrace.SnapshotForExport(false)
+	if traceSnapshot.Empty() {
 		return
 	}
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {

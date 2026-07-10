@@ -2026,6 +2026,66 @@ func TestMarshalPlanHandlerDoesNotAmplifyShortLocalSchedulingTrace(t *testing.T)
 	require.Equal(t, sqlQueryIgnoreExecPlan, h.Marshal(context.Background()))
 }
 
+func TestMarshalPlanHandlerRequestsSchedulingSnapshotOnlyWhenNeeded(t *testing.T) {
+	recorder := new(schedule.TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordQuery(attempt, schedule.QueryDecision{
+		ExecKind:        schedule.QueryExecTP,
+		CurrentCN:       schedule.Worker{ID: "local"},
+		Workers:         schedule.Workers{{ID: "local"}},
+		Reason:          schedule.ReasonLocalExecType,
+		CurrentCNPolicy: schedule.CurrentCNAllowed,
+		Satisfied:       true,
+	})
+	logicPlan := &plan0.Plan{
+		Plan: &plan0.Plan_Query{Query: &plan0.Query{
+			Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+			Steps: []int32{0},
+		}},
+	}
+
+	shortStmt := &motrace.StatementInfo{RequestAt: time.Now()}
+	shortHandler := NewMarshalPlanHandler(
+		context.Background(), shortStmt, logicPlan, nil,
+		WithWaitActiveCost(time.Hour),
+		withSchedulingTraceRecorder(recorder),
+	)
+	defer shortHandler.Free()
+	require.Nil(t, shortHandler.schedulingTrace)
+	require.False(t, shortHandler.persistSchedulingTrace)
+	require.Equal(t, sqlQueryIgnoreExecPlan, shortHandler.Marshal(context.Background()))
+
+	longStmt := &motrace.StatementInfo{RequestAt: time.Now().Add(-motrace.GetLongQueryTime() - time.Second)}
+	longHandler := NewMarshalPlanHandler(
+		context.Background(), longStmt, logicPlan, nil,
+		withSchedulingTraceRecorder(recorder),
+	)
+	defer longHandler.Free()
+	require.NotNil(t, longHandler.schedulingTrace)
+	require.False(t, longHandler.persistSchedulingTrace)
+	require.Equal(t, schedule.QueryExecTP.String(), longHandler.schedulingTrace.Attempts[0].Query.ExecKind)
+}
+
+func TestMarshalPlanHandlerRequestsStandaloneTraceWithoutQueryPlan(t *testing.T) {
+	recorder := new(schedule.TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordFailure(attempt, "candidate-discovery", schedule.Worker{})
+	stmt := &motrace.StatementInfo{RequestAt: time.Now()}
+
+	h := NewMarshalPlanHandler(
+		context.Background(), stmt, nil, nil,
+		withSchedulingTraceRecorder(recorder),
+	)
+	defer h.Free()
+	require.True(t, h.persistSchedulingTrace)
+	require.NotNil(t, h.schedulingTrace)
+	var payload struct {
+		Scheduling schedule.Trace `json:"scheduling"`
+	}
+	require.NoError(t, json.Unmarshal(h.Marshal(context.Background()), &payload))
+	require.Equal(t, "candidate-discovery", payload.Scheduling.Attempts[0].Failures[0].Category)
+}
+
 func TestMarshalPlanHandlerIncludesLocalSchedulingTraceWithFullPlan(t *testing.T) {
 	recorder := new(schedule.TraceRecorder)
 	attempt := recorder.StartAttempt()
