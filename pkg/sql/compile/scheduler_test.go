@@ -189,6 +189,10 @@ func TestScheduleQueryWorkersForwardsCandidateFilters(t *testing.T) {
 	require.Equal(t, "sys", e.tenant)
 	require.Equal(t, "root", e.uid)
 	require.Equal(t, map[string]string{"role": "ap"}, e.cnLabel)
+	require.Equal(t, schedule.CandidateSourceEngineNodes, c.queryPlacement.CandidateResolution.DiscoverySource)
+	require.Equal(t, schedule.PoolResolutionLegacyEngineNodes, c.queryPlacement.CandidateResolution.PoolResolution)
+	require.Equal(t, 1, c.queryPlacement.CandidateResolution.DiscoveredCount)
+	require.Equal(t, 1, c.queryPlacement.ResolvedCandidateCount)
 }
 
 func TestScheduleQueryWorkersRequiredLocalExecWithoutAddress(t *testing.T) {
@@ -344,8 +348,10 @@ func TestScheduleQueryWorkersRecordsStructuredTrace(t *testing.T) {
 	query := trace.Attempts[0].Query
 	require.NotNil(t, query)
 	require.Equal(t, "ap-multi-cn", query.ExecKind)
+	require.Equal(t, string(schedule.CandidateSourceEngineNodes), query.CandidateSource)
+	require.Equal(t, string(schedule.PoolResolutionLegacyEngineNodes), query.PoolResolution)
 	require.Equal(t, 2, query.DiscoveredCount)
-	require.Equal(t, 2, query.CandidateCount)
+	require.Equal(t, 2, query.ResolvedCount)
 	require.Equal(t, 1, query.SelectedCount)
 	require.Equal(t, "working", query.Selected[0].ID)
 	require.Equal(t, 1, query.DroppedCount)

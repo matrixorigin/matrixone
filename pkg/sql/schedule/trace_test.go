@@ -29,14 +29,21 @@ func TestTraceRecorderCapturesSchedulingDecisionChain(t *testing.T) {
 		current,
 		{ID: "cn-remote", Addr: "remote:6001", Mcpu: 8, State: WorkerStateWorking},
 	}
-	recorder.RecordQuery(attempt, current, QueryDecision{
-		ExecKind:        QueryExecAPMultiCN,
-		Workers:         selected,
-		Dropped:         DroppedWorkers{{Reason: ReasonDroppedDrainingCN}, {Reason: ReasonDroppedDrainingCN}},
-		Reason:          ReasonRequiredCurrentCN,
-		CurrentCNPolicy: CurrentCNRequired,
-		Satisfied:       true,
-	}, 4, 3)
+	recorder.RecordQuery(attempt, QueryDecision{
+		ExecKind:  QueryExecAPMultiCN,
+		CurrentCN: current,
+		Workers:   selected,
+		Dropped:   DroppedWorkers{{Reason: ReasonDroppedDrainingCN}, {Reason: ReasonDroppedDrainingCN}},
+		Reason:    ReasonRequiredCurrentCN,
+		CandidateResolution: CandidateResolution{
+			DiscoverySource: CandidateSourceEngineNodes,
+			PoolResolution:  PoolResolutionLegacyEngineNodes,
+			DiscoveredCount: 4,
+		},
+		ResolvedCandidateCount: 3,
+		CurrentCNPolicy:        CurrentCNRequired,
+		Satisfied:              true,
+	})
 	recorder.RecordScan(attempt, ScanRequest{
 		QueryWorkers: selected,
 		Stats:        &ScanStats{BlockNum: 128, Dop: 8},
@@ -58,8 +65,10 @@ func TestTraceRecorderCapturesSchedulingDecisionChain(t *testing.T) {
 	require.Len(t, trace.Attempts, 1)
 	require.Equal(t, "ap-multi-cn", trace.Attempts[0].Query.ExecKind)
 	require.Equal(t, "required", trace.Attempts[0].Query.CurrentCNPolicy)
+	require.Equal(t, string(CandidateSourceEngineNodes), trace.Attempts[0].Query.CandidateSource)
+	require.Equal(t, string(PoolResolutionLegacyEngineNodes), trace.Attempts[0].Query.PoolResolution)
 	require.Equal(t, 4, trace.Attempts[0].Query.DiscoveredCount)
-	require.Equal(t, 3, trace.Attempts[0].Query.CandidateCount)
+	require.Equal(t, 3, trace.Attempts[0].Query.ResolvedCount)
 	require.Equal(t, []ReasonCount{{Reason: ReasonDroppedDrainingCN, Count: 2}}, trace.Attempts[0].Query.Dropped)
 	require.Equal(t, int32(128), trace.Attempts[0].Scans[0].BlockCount)
 	require.Equal(t, int32(8), trace.Attempts[0].Scans[0].DOP)
@@ -81,13 +90,20 @@ func TestTraceRecorderBoundsEveryAccumulation(t *testing.T) {
 	}
 
 	first := recorder.StartAttempt()
-	recorder.RecordQuery(first, Worker{ID: "current"}, QueryDecision{
+	recorder.RecordQuery(first, QueryDecision{
 		ExecKind:  QueryExecAPMultiCN,
+		CurrentCN: Worker{ID: "current"},
 		Workers:   workers,
 		Dropped:   dropped,
 		Reason:    ReasonMultiCN,
 		Satisfied: true,
-	}, len(workers), len(workers))
+		CandidateResolution: CandidateResolution{
+			DiscoverySource: CandidateSourceEngineNodes,
+			PoolResolution:  PoolResolutionLegacyEngineNodes,
+			DiscoveredCount: len(workers),
+		},
+		ResolvedCandidateCount: len(workers),
+	})
 	for i := 0; i < maxTraceScans+5; i++ {
 		recorder.RecordScan(first, ScanRequest{QueryWorkers: workers}, ScanDecision{Workers: workers, Reason: ReasonScanMultiCN})
 	}
@@ -140,12 +156,17 @@ func countTraceWorkerRefs(trace Trace) int {
 func TestTraceRecorderSnapshotIsIndependent(t *testing.T) {
 	recorder := new(TraceRecorder)
 	attempt := recorder.StartAttempt()
-	recorder.RecordQuery(attempt, Worker{ID: "current"}, QueryDecision{
-		ExecKind: QueryExecAPMultiCN,
-		Workers:  Workers{{ID: "selected"}},
-		Dropped:  DroppedWorkers{{Reason: "drop"}},
-		Reason:   ReasonMultiCN,
-	}, 1, 1)
+	recorder.RecordQuery(attempt, QueryDecision{
+		ExecKind:  QueryExecAPMultiCN,
+		CurrentCN: Worker{ID: "current"},
+		Workers:   Workers{{ID: "selected"}},
+		Dropped:   DroppedWorkers{{Reason: "drop"}},
+		Reason:    ReasonMultiCN,
+		CandidateResolution: CandidateResolution{
+			DiscoveredCount: 1,
+		},
+		ResolvedCandidateCount: 1,
+	})
 	recorder.RecordScan(attempt, ScanRequest{}, ScanDecision{Workers: Workers{{ID: "scan"}}})
 	recorder.RecordStage(attempt, StageKindQueryWorkerSet, nil, StageWorkerSetDecision{Workers: Workers{{ID: "stage"}}})
 	recorder.RecordFailure(attempt, "failure", Worker{ID: "failure"})
@@ -168,18 +189,28 @@ func TestTraceRecorderSnapshotIsIndependent(t *testing.T) {
 func TestTraceRecorderKeepsOneQueryDecisionPerAttempt(t *testing.T) {
 	recorder := new(TraceRecorder)
 	attempt := recorder.StartAttempt()
-	recorder.RecordQuery(attempt, Worker{ID: "current"}, QueryDecision{
+	recorder.RecordQuery(attempt, QueryDecision{
 		ExecKind:  QueryExecAPMultiCN,
+		CurrentCN: Worker{ID: "current"},
 		Workers:   Workers{{ID: "first"}},
 		Reason:    ReasonMultiCN,
 		Satisfied: true,
-	}, 1, 1)
-	recorder.RecordQuery(attempt, Worker{ID: "current"}, QueryDecision{
+		CandidateResolution: CandidateResolution{
+			DiscoveredCount: 1,
+		},
+		ResolvedCandidateCount: 1,
+	})
+	recorder.RecordQuery(attempt, QueryDecision{
 		ExecKind:  QueryExecAPMultiCN,
+		CurrentCN: Worker{ID: "current"},
 		Workers:   Workers{{ID: "second"}},
 		Reason:    ReasonNoCandidateCN,
 		Satisfied: true,
-	}, 2, 2)
+		CandidateResolution: CandidateResolution{
+			DiscoveredCount: 2,
+		},
+		ResolvedCandidateCount: 2,
+	})
 
 	trace := recorder.Snapshot()
 	require.Equal(t, ReasonMultiCN, trace.Attempts[0].Query.Reason)
@@ -190,13 +221,18 @@ func TestTraceRecorderKeepsOneQueryDecisionPerAttempt(t *testing.T) {
 func TestTraceRecorderPersistencePolicyAvoidsNormalLocalAmplification(t *testing.T) {
 	recorder := new(TraceRecorder)
 	attempt := recorder.StartAttempt()
-	recorder.RecordQuery(attempt, Worker{ID: "current"}, QueryDecision{
-		ExecKind:        QueryExecTP,
-		Workers:         Workers{{ID: "current"}},
-		Reason:          ReasonLocalExecType,
+	recorder.RecordQuery(attempt, QueryDecision{
+		ExecKind:  QueryExecTP,
+		CurrentCN: Worker{ID: "current"},
+		Workers:   Workers{{ID: "current"}},
+		Reason:    ReasonLocalExecType,
+		CandidateResolution: CandidateResolution{
+			DiscoverySource: CandidateSourceNotRequired,
+			PoolResolution:  PoolResolutionNotRequired,
+		},
 		CurrentCNPolicy: CurrentCNAllowed,
 		Satisfied:       true,
-	}, 0, 0)
+	})
 	recorder.RecordScan(attempt, ScanRequest{}, ScanDecision{Workers: Workers{{ID: "current"}}})
 	recorder.RecordStage(attempt, StageKindQueryWorkerSet, nil, StageWorkerSetDecision{Workers: Workers{{ID: "current"}}})
 	trace := recorder.Snapshot()
@@ -215,7 +251,7 @@ func TestTraceRecorderHandlesNilInvalidAndConcurrentAccess(t *testing.T) {
 	var nilRecorder *TraceRecorder
 	require.Zero(t, nilRecorder.StartAttempt())
 	require.True(t, nilRecorder.Snapshot().Empty())
-	nilRecorder.RecordQuery(1, Worker{}, QueryDecision{}, 0, 0)
+	nilRecorder.RecordQuery(1, QueryDecision{})
 	nilRecorder.RecordFailure(1, "failure", Worker{})
 
 	recorder := new(TraceRecorder)
@@ -236,4 +272,33 @@ func TestTraceRecorderHandlesNilInvalidAndConcurrentAccess(t *testing.T) {
 	require.Equal(t, 32, trace.Attempts[0].FailureCount)
 	require.Len(t, trace.Attempts[0].Failures, maxTraceFailures)
 	require.True(t, trace.Attempts[0].Truncated)
+}
+
+func TestTraceRecorderModeDefaultsAndResetsToExecution(t *testing.T) {
+	recorder := new(TraceRecorder)
+	require.Equal(t, TraceModeExecution, recorder.Snapshot().Mode)
+
+	recorder.SetMode(TraceModePreview)
+	require.Equal(t, TraceModePreview, recorder.Snapshot().Mode)
+
+	recorder.Reset()
+	require.Equal(t, TraceModeExecution, recorder.Snapshot().Mode)
+	require.Equal(t, TraceModeExecution, (*TraceRecorder)(nil).Snapshot().Mode)
+}
+
+func TestTracePersistenceRequiresDataUnlessTraceIsTruncated(t *testing.T) {
+	recorder := new(TraceRecorder)
+	recorder.StartAttempt()
+	recorder.StartAttempt()
+	trace := recorder.Snapshot()
+	require.True(t, trace.Empty())
+	require.False(t, trace.PersistStandalone())
+
+	for i := 2; i < maxTraceAttempts+1; i++ {
+		recorder.StartAttempt()
+	}
+	trace = recorder.Snapshot()
+	require.True(t, trace.Truncated)
+	require.False(t, trace.Empty())
+	require.True(t, trace.PersistStandalone())
 }

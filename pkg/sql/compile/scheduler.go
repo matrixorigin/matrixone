@@ -15,6 +15,8 @@
 package compile
 
 import (
+	"context"
+	"reflect"
 	"sync"
 	"time"
 
@@ -155,14 +157,113 @@ func schedulableEngineWorkState(state metadata.WorkState) bool {
 	}
 }
 
-func (c *Compile) getCandidateCNs() (engine.Nodes, error) {
-	if c.e == nil {
-		return nil, moerr.NewInternalErrorNoCtx("compile engine is not initialized")
-	}
-	return c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
+type queryCandidatePoolRequest struct {
+	isInternal bool
+	tenant     string
+	username   string
+	cnLabel    map[string]string
 }
 
-func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
+type discoveredQueryCandidates struct {
+	nodes  engine.Nodes
+	source schedule.CandidateSource
+}
+
+type queryCandidateDiscoverer interface {
+	discover(context.Context) (discoveredQueryCandidates, error)
+}
+
+// legacyEngineNodesCandidateDiscoverer captures pool constraints only because
+// Engine.Nodes still combines discovery with pool/label resolution. The
+// discoverer interface itself intentionally has no pool-policy input.
+type legacyEngineNodesCandidateDiscoverer struct {
+	engine      engine.Engine
+	poolRequest queryCandidatePoolRequest
+}
+
+func (d legacyEngineNodesCandidateDiscoverer) discover(ctx context.Context) (discoveredQueryCandidates, error) {
+	if err := ctx.Err(); err != nil {
+		return discoveredQueryCandidates{}, err
+	}
+	if nilEngine(d.engine) {
+		return discoveredQueryCandidates{}, moerr.NewInternalErrorNoCtx("compile engine is not initialized")
+	}
+	nodes, err := d.engine.Nodes(
+		d.poolRequest.isInternal,
+		d.poolRequest.tenant,
+		d.poolRequest.username,
+		d.poolRequest.cnLabel,
+	)
+	if err != nil {
+		return discoveredQueryCandidates{}, err
+	}
+	return discoveredQueryCandidates{
+		nodes:  nodes,
+		source: schedule.CandidateSourceEngineNodes,
+	}, nil
+}
+
+func nilEngine(e engine.Engine) bool {
+	const maxEntireEngineDepth = 8
+	for depth := 0; depth < maxEntireEngineDepth; depth++ {
+		entire, ok := e.(*engine.EntireEngine)
+		if !ok {
+			break
+		}
+		if entire == nil || entire.Engine == nil {
+			return true
+		}
+		e = entire.Engine
+	}
+	if _, wrapped := e.(*engine.EntireEngine); wrapped {
+		return true
+	}
+	if e == nil {
+		return true
+	}
+	value := reflect.ValueOf(e)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+type resolvedQueryCandidates struct {
+	workers    schedule.Workers
+	resolution schedule.CandidateResolution
+}
+
+type queryCandidatePoolResolver interface {
+	resolve(context.Context, discoveredQueryCandidates, queryCandidatePoolRequest) (resolvedQueryCandidates, error)
+}
+
+// legacyEngineNodesPoolResolver is an explicit compatibility boundary:
+// Engine.Nodes currently applies tenant/label pool constraints while discovering
+// nodes, so this resolver is intentionally a one-to-one adapter.
+type legacyEngineNodesPoolResolver struct{}
+
+func (legacyEngineNodesPoolResolver) resolve(
+	ctx context.Context,
+	discovered discoveredQueryCandidates,
+	_ queryCandidatePoolRequest,
+) (resolvedQueryCandidates, error) {
+	if err := ctx.Err(); err != nil {
+		return resolvedQueryCandidates{}, err
+	}
+	workers := toScheduleCandidateWorkers(discovered.nodes)
+	return resolvedQueryCandidates{
+		workers: workers,
+		resolution: schedule.CandidateResolution{
+			DiscoverySource: discovered.source,
+			PoolResolution:  schedule.PoolResolutionLegacyEngineNodes,
+			DiscoveredCount: len(discovered.nodes),
+		},
+	}, nil
+}
+
+func (c *Compile) evaluateQueryPlacement(ctx context.Context) (schedule.QueryDecision, string, error) {
 	currentCN := c.currentCNWorker()
 	if c.execType == plan2.ExecTypeAP_MULTICN {
 		currentCN = c.currentCNWorkerWithRuntimeState()
@@ -173,35 +274,68 @@ func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
 		CurrentCNPolicy: c.currentCNPolicy(),
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
-		decision := schedule.DecideQueryPlacement(req)
-		c.queryRawCandidateCount = 0
-		c.queryCandidateWorkerCount = 0
-		c.recordQuerySchedulingTrace(req.CurrentCN, decision, 0, 0)
-		c.recordQuerySchedulingMetrics(decision, 0, 0)
-		return decision, nil
+		req.CandidateResolution = schedule.CandidateResolution{
+			DiscoverySource: schedule.CandidateSourceNotRequired,
+			PoolResolution:  schedule.PoolResolutionNotRequired,
+		}
+		return schedule.DecideQueryPlacement(req), "", nil
 	}
 
-	candidates, err := c.getCandidateCNs()
+	poolRequest := queryCandidatePoolRequest{
+		isInternal: c.isInternal,
+		tenant:     c.tenant,
+		username:   c.uid,
+		cnLabel:    c.cnLabel,
+	}
+	var discoverer queryCandidateDiscoverer = legacyEngineNodesCandidateDiscoverer{
+		engine:      c.e,
+		poolRequest: poolRequest,
+	}
+	discovered, err := discoverer.discover(ctx)
 	if err != nil {
-		c.recordSchedulingFailure(scheduleFailureCandidateDiscovery, schedule.Worker{})
+		return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
+	}
+	var poolResolver queryCandidatePoolResolver = legacyEngineNodesPoolResolver{}
+	resolved, err := poolResolver.resolve(ctx, discovered, poolRequest)
+	if err != nil {
+		return schedule.QueryDecision{}, scheduleFailurePoolResolution, err
+	}
+	req.Candidates = resolved.workers
+	req.CandidateResolution = resolved.resolution
+	return schedule.DecideQueryPlacement(req), "", nil
+}
+
+func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
+	decision, failureCategory, err := c.evaluateQueryPlacement(c.querySchedulingContext())
+	if err != nil {
+		c.recordSchedulingFailure(failureCategory, schedule.Worker{})
 		return schedule.QueryDecision{}, err
 	}
-
-	rawCandidateCount := len(candidates)
-	req.Candidates = toScheduleCandidateWorkers(candidates)
-	decision := schedule.DecideQueryPlacement(req)
-	c.queryRawCandidateCount = rawCandidateCount
-	c.queryCandidateWorkerCount = len(req.Candidates)
-	c.recordQuerySchedulingTrace(req.CurrentCN, decision, rawCandidateCount, len(req.Candidates))
-	c.recordQuerySchedulingMetrics(decision, rawCandidateCount, len(req.Candidates))
+	c.recordQuerySchedulingTrace(decision)
+	c.recordQuerySchedulingMetrics(decision)
 	if len(decision.Dropped) > 0 {
 		getQueryScheduleLogger().WarnWithConfig(
 			"query-schedule-dropped-cn-candidates",
 			"query schedule dropped CN candidates",
 			queryScheduleLogRateLimit,
-			c.queryScheduleDroppedCandidateFields(decision, rawCandidateCount, len(req.Candidates))...)
+			c.queryScheduleDroppedCandidateFields(decision)...)
 	}
 	return decision, nil
+}
+
+func (c *Compile) querySchedulingContext() context.Context {
+	if c.proc == nil {
+		return context.Background()
+	}
+	if c.proc.Base != nil {
+		if ctx := c.proc.GetTopContext(); ctx != nil {
+			return ctx
+		}
+	}
+	if c.proc.Ctx != nil {
+		return c.proc.Ctx
+	}
+	return context.Background()
 }
 
 func (c *Compile) SetSchedulingTraceRecorder(recorder *schedule.TraceRecorder) {
@@ -214,17 +348,11 @@ func (c *Compile) beginSchedulingTraceAttempt() {
 }
 
 func (c *Compile) recordQuerySchedulingTrace(
-	current schedule.Worker,
 	decision schedule.QueryDecision,
-	rawCandidateCount int,
-	candidateWorkerCount int,
 ) {
 	c.schedulingTrace.RecordQuery(
 		c.schedulingAttempt,
-		current,
 		decision,
-		rawCandidateCount,
-		candidateWorkerCount,
 	)
 }
 
@@ -234,14 +362,14 @@ func (c *Compile) recordSchedulingFailure(category string, worker schedule.Worke
 
 func (c *Compile) queryScheduleDroppedCandidateFields(
 	placement schedule.QueryDecision,
-	rawCandidateCount int,
-	candidateWorkerCount int,
 ) []zap.Field {
 	counts := droppedWorkerReasonCounts(placement.Dropped)
 	fields := c.querySchedulePlacementFields(placement)
 	fields = append(fields,
-		zap.Int("candidate-count", rawCandidateCount),
-		zap.Int("candidate-worker-count", candidateWorkerCount),
+		zap.String("candidate-source", string(placement.CandidateResolution.DiscoverySource)),
+		zap.String("pool-resolution", string(placement.CandidateResolution.PoolResolution)),
+		zap.Int("candidate-count", placement.CandidateResolution.DiscoveredCount),
+		zap.Int("candidate-worker-count", placement.ResolvedCandidateCount),
 		zap.Int("dropped-unroutable-count", counts[schedule.ReasonDroppedUnroutableCN]),
 		zap.Int("dropped-draining-count", counts[schedule.ReasonDroppedDrainingCN]),
 		zap.Int("dropped-drained-count", counts[schedule.ReasonDroppedDrainedCN]),

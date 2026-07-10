@@ -25,12 +25,12 @@ const (
 	scheduleFailureRuntimeIneligibleSelectedWorker = "runtime-ineligible-selected-worker"
 	scheduleFailureUnroutableSelectedWorker        = "unroutable-selected-worker"
 	scheduleFailureCandidateDiscovery              = "candidate-discovery"
+	scheduleFailurePoolResolution                  = "pool-resolution"
+	scheduleFailureInvalidQuery                    = "invalid-query"
 )
 
 func (c *Compile) recordQuerySchedulingMetrics(
 	placement schedule.QueryDecision,
-	rawCandidateCount int,
-	candidateWorkerCount int,
 ) {
 	result := "satisfied"
 	if !placement.Satisfied {
@@ -43,8 +43,8 @@ func (c *Compile) recordQuerySchedulingMetrics(
 		result,
 	).Inc()
 
-	metricv2.QueryScheduleWorkerHistogram.WithLabelValues("discovered").Observe(float64(rawCandidateCount))
-	metricv2.QueryScheduleWorkerHistogram.WithLabelValues("candidate").Observe(float64(candidateWorkerCount))
+	metricv2.QueryScheduleWorkerHistogram.WithLabelValues("discovered").Observe(float64(placement.CandidateResolution.DiscoveredCount))
+	metricv2.QueryScheduleWorkerHistogram.WithLabelValues("candidate").Observe(float64(placement.ResolvedCandidateCount))
 	metricv2.QueryScheduleWorkerHistogram.WithLabelValues("selected").Observe(float64(len(placement.Workers)))
 
 	for reason, count := range droppedWorkerReasonCounts(placement.Dropped) {

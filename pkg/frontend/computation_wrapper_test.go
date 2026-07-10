@@ -260,13 +260,18 @@ func TestTxnComputationWrapperDoesNotPersistNormalLocalTraceOnCompileError(t *te
 	ses.SetTStmt(stmt)
 	cwft := &TxnComputationWrapper{ses: ses}
 	attempt := cwft.schedulingTrace.StartAttempt()
-	cwft.schedulingTrace.RecordQuery(attempt, schedule.Worker{ID: "local"}, schedule.QueryDecision{
-		ExecKind:        schedule.QueryExecTP,
-		Workers:         schedule.Workers{{ID: "local"}},
-		Reason:          schedule.ReasonLocalExecType,
+	cwft.schedulingTrace.RecordQuery(attempt, schedule.QueryDecision{
+		ExecKind:  schedule.QueryExecTP,
+		CurrentCN: schedule.Worker{ID: "local"},
+		Workers:   schedule.Workers{{ID: "local"}},
+		Reason:    schedule.ReasonLocalExecType,
+		CandidateResolution: schedule.CandidateResolution{
+			DiscoverySource: schedule.CandidateSourceNotRequired,
+			PoolResolution:  schedule.PoolResolutionNotRequired,
+		},
 		CurrentCNPolicy: schedule.CurrentCNAllowed,
 		Satisfied:       true,
-	}, 0, 0)
+	})
 
 	cwft.recordSchedulingTraceOnCompileError(context.Background())
 	assert.Nil(t, stmt.ExecPlan)

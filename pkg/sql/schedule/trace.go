@@ -31,6 +31,13 @@ const (
 	maxTraceReasonCounts       = 16
 )
 
+type TraceMode string
+
+const (
+	TraceModeExecution TraceMode = "execution"
+	TraceModePreview   TraceMode = "preview"
+)
+
 type TraceAttemptID uint64
 
 type StageKind string
@@ -42,6 +49,7 @@ const (
 
 type Trace struct {
 	Version      int            `json:"version"`
+	Mode         TraceMode      `json:"mode"`
 	Attempts     []AttemptTrace `json:"attempts,omitempty"`
 	AttemptCount int            `json:"attemptCount"`
 	Truncated    bool           `json:"truncated,omitempty"`
@@ -67,8 +75,10 @@ type QueryTrace struct {
 	Reason            string        `json:"reason"`
 	Satisfied         bool          `json:"satisfied"`
 	Fallback          bool          `json:"fallback,omitempty"`
+	CandidateSource   string        `json:"candidateSource"`
+	PoolResolution    string        `json:"poolResolution"`
 	DiscoveredCount   int           `json:"discoveredCount"`
-	CandidateCount    int           `json:"candidateCount"`
+	ResolvedCount     int           `json:"resolvedCount"`
 	Selected          []WorkerTrace `json:"selected,omitempty"`
 	SelectedCount     int           `json:"selectedCount"`
 	SelectedOmitted   bool          `json:"selectedOmitted,omitempty"`
@@ -148,10 +158,7 @@ func (r *TraceRecorder) StartAttempt() TraceAttemptID {
 
 func (r *TraceRecorder) RecordQuery(
 	attempt TraceAttemptID,
-	current Worker,
 	decision QueryDecision,
-	discoveredCount int,
-	candidateCount int,
 ) {
 	if r == nil || attempt == 0 {
 		return
@@ -175,12 +182,14 @@ func (r *TraceRecorder) RecordQuery(
 	target.Query = &QueryTrace{
 		ExecKind:          decision.ExecKind.String(),
 		CurrentCNPolicy:   decision.CurrentCNPolicy.String(),
-		CurrentCN:         traceWorker(current),
+		CurrentCN:         traceWorker(decision.CurrentCN),
 		Reason:            decision.Reason,
 		Satisfied:         decision.Satisfied,
 		Fallback:          decision.Reason == ReasonNoCandidateCN,
-		DiscoveredCount:   max(discoveredCount, 0),
-		CandidateCount:    max(candidateCount, 0),
+		CandidateSource:   string(decision.CandidateResolution.DiscoverySource),
+		PoolResolution:    string(decision.CandidateResolution.PoolResolution),
+		DiscoveredCount:   max(decision.CandidateResolution.DiscoveredCount, 0),
+		ResolvedCount:     max(decision.ResolvedCandidateCount, 0),
 		Selected:          selected,
 		SelectedCount:     len(decision.Workers),
 		SelectedOmitted:   decision.ExecKind != QueryExecAPMultiCN && len(decision.Workers) > 0,
@@ -331,7 +340,7 @@ func (r *TraceRecorder) RecordFailure(
 
 func (r *TraceRecorder) Snapshot() Trace {
 	if r == nil {
-		return Trace{Version: SchedulingTraceVersion}
+		return Trace{Version: SchedulingTraceVersion, Mode: TraceModeExecution}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -345,12 +354,28 @@ func (r *TraceRecorder) Reset() {
 		return
 	}
 	r.mu.Lock()
-	r.trace = Trace{Version: SchedulingTraceVersion}
+	r.trace = Trace{Version: SchedulingTraceVersion, Mode: TraceModeExecution}
 	r.workerRefCount = 0
 	r.mu.Unlock()
 }
 
+func (r *TraceRecorder) SetMode(mode TraceMode) {
+	if r == nil {
+		return
+	}
+	if mode != TraceModePreview {
+		mode = TraceModeExecution
+	}
+	r.mu.Lock()
+	r.ensureVersionLocked()
+	r.trace.Mode = mode
+	r.mu.Unlock()
+}
+
 func (t Trace) Empty() bool {
+	if t.Truncated {
+		return false
+	}
 	for i := range t.Attempts {
 		attempt := &t.Attempts[i]
 		if attempt.Query != nil || attempt.ScanCount > 0 || attempt.StageCount > 0 || attempt.FailureCount > 0 {
@@ -364,6 +389,9 @@ func (t Trace) Empty() bool {
 // schedule-only record. Normal local TP/AP-one-CN decisions stay in metrics to
 // avoid amplifying statement_info storage on high-QPS workloads.
 func (t Trace) PersistStandalone() bool {
+	if t.Empty() {
+		return false
+	}
 	if t.Truncated || t.AttemptCount > 1 {
 		return true
 	}
@@ -386,6 +414,9 @@ func (t Trace) PersistStandalone() bool {
 func (r *TraceRecorder) ensureVersionLocked() {
 	if r.trace.Version == 0 {
 		r.trace.Version = SchedulingTraceVersion
+	}
+	if r.trace.Mode == "" {
+		r.trace.Mode = TraceModeExecution
 	}
 }
 

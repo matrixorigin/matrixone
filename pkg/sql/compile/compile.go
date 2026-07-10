@@ -230,12 +230,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 
 	c.beginSchedulingTraceAttempt()
 	if c.queryPlacement.Reason != "" {
-		c.recordQuerySchedulingTrace(
-			c.currentCNWorker(),
-			c.queryPlacement,
-			c.queryRawCandidateCount,
-			c.queryCandidateWorkerCount,
-		)
+		c.recordQuerySchedulingTrace(c.queryPlacement)
 	}
 }
 
@@ -277,8 +272,6 @@ func (c *Compile) clear() {
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
-	c.queryRawCandidateCount = 0
-	c.queryCandidateWorkerCount = 0
 	c.schedulingTrace = nil
 	c.schedulingAttempt = 0
 	c.stmt = nil

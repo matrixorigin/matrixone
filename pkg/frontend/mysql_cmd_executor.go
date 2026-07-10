@@ -1236,6 +1236,12 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	if exPlan.GetQuery() == nil {
 		return moerr.NewNotSupported(reqCtx, "the sql query plan does not support explain.")
 	}
+	txnHaveDDL := false
+	if txnOperator := ses.proc.GetTxnOperator(); txnOperator != nil {
+		if ws := txnOperator.GetWorkspace(); ws != nil {
+			txnHaveDDL = ws.GetHaveDDL()
+		}
+	}
 	// generator query explain
 	explainQuery := explain.NewExplainQueryImpl(exPlan.GetQuery())
 
@@ -1245,14 +1251,14 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	if err != nil {
 		return err
 	}
+	schedulingPreview := previewQueryScheduling(reqCtx, ses, exPlan.GetQuery(), txnHaveDDL)
+	if err = reqCtx.Err(); err != nil {
+		return err
+	}
+	appendSchedulingExplain(buffer, schedulingPreview)
 
 	//2. fill the result set
 	//column
-	txnHaveDDL := false
-	ws := ses.proc.GetTxnOperator().GetWorkspace()
-	if ws != nil {
-		txnHaveDDL = ws.GetHaveDDL()
-	}
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
@@ -1265,6 +1271,45 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	}
 
 	return trySaveQueryResult(reqCtx, ses, mrs)
+}
+
+func previewQueryScheduling(
+	ctx context.Context,
+	ses *Session,
+	query *plan.Query,
+	txnHaveDDL bool,
+) schedule.Trace {
+	if ses == nil {
+		return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
+			Context: ctx,
+			Query:   query,
+		})
+	}
+	tenant := ""
+	if info := ses.GetTenantInfo(); info != nil {
+		tenant = info.GetTenant()
+	}
+	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
+		Context:    ctx,
+		Query:      query,
+		Engine:     ses.GetTxnHandler().GetStorage(),
+		Process:    ses.GetProc(),
+		Address:    currentCNPipelineAddress(ses),
+		IsInternal: ses.GetIsInternal(),
+		Tenant:     tenant,
+		Username:   ses.GetUserName(),
+		CNLabel:    ses.getCNLabels(),
+		TxnHasDDL:  txnHaveDDL,
+	})
+}
+
+func appendSchedulingExplain(buffer *explain.ExplainDataBuffer, trace schedule.Trace) {
+	if buffer == nil {
+		return
+	}
+	for _, line := range schedule.ExplainLines(trace) {
+		buffer.PushNewLine(line, false, 0)
+	}
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
@@ -2162,7 +2207,14 @@ func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explai
 	return err
 }
 
-func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufio.Reader, session *Session, fill outputCallBackFunc) error {
+func buildMoExplainPhyPlan(
+	execCtx *ExecCtx,
+	explainColName string,
+	reader *bufio.Reader,
+	session *Session,
+	fill outputCallBackFunc,
+	trace schedule.Trace,
+) error {
 	bat := batch.New([]string{explainColName})
 	vs := make([][]byte, 0)
 	count := 0
@@ -2178,6 +2230,10 @@ func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufi
 		}
 
 		vs = append(vs, []byte(strings.TrimSuffix(line, "\n")))
+		count++
+	}
+	for _, line := range schedule.ExplainLines(trace) {
+		vs = append(vs, []byte(line))
 		count++
 	}
 

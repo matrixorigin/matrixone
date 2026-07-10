@@ -394,6 +394,10 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *
 	return nil
 }
 
+func (cwft *TxnComputationWrapper) SchedulingTrace() schedule.Trace {
+	return cwft.schedulingTrace.Snapshot()
+}
+
 func (cwft *TxnComputationWrapper) recordSchedulingTraceOnCompileError(ctx context.Context) {
 	if cwft.ses == nil {
 		return
@@ -608,11 +612,8 @@ func createCompile(
 	schedulingTrace *schedule.TraceRecorder,
 ) (retCompile *compile.Compile, err error) {
 
-	addr := ""
+	addr := currentCNPipelineAddress(ses)
 	pu := getPu(ses.GetService())
-	if len(pu.ClusterNodes) > 0 {
-		addr = pu.ClusterNodes[0].Addr
-	}
 	proc.ReplaceTopCtx(execCtx.reqCtx)
 	proc.Base.FileService = pu.FileService
 
@@ -686,4 +687,15 @@ func createCompile(
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+func currentCNPipelineAddress(ses FeSession) string {
+	if ses == nil {
+		return ""
+	}
+	pu := getPu(ses.GetService())
+	if len(pu.ClusterNodes) == 0 {
+		return ""
+	}
+	return pu.ClusterNodes[0].Addr
 }

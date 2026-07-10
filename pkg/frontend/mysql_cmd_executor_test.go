@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -51,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1606,16 +1608,23 @@ func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
 func TestMarshalPlanHandlerPersistsDistributedSchedulingTraceWithoutFullPlan(t *testing.T) {
 	recorder := new(schedule.TraceRecorder)
 	attempt := recorder.StartAttempt()
-	recorder.RecordQuery(attempt, schedule.Worker{ID: "local"}, schedule.QueryDecision{
-		ExecKind: schedule.QueryExecAPMultiCN,
+	recorder.RecordQuery(attempt, schedule.QueryDecision{
+		ExecKind:  schedule.QueryExecAPMultiCN,
+		CurrentCN: schedule.Worker{ID: "local"},
 		Workers: schedule.Workers{
 			{ID: "cn-a", Addr: "cn-a:6001", Mcpu: 4},
 			{ID: "cn-b", Addr: "cn-b:6001", Mcpu: 8},
 		},
-		Reason:          schedule.ReasonMultiCN,
-		CurrentCNPolicy: schedule.CurrentCNAllowed,
-		Satisfied:       true,
-	}, 2, 2)
+		CandidateResolution: schedule.CandidateResolution{
+			DiscoverySource: schedule.CandidateSourceEngineNodes,
+			PoolResolution:  schedule.PoolResolutionLegacyEngineNodes,
+			DiscoveredCount: 2,
+		},
+		ResolvedCandidateCount: 2,
+		Reason:                 schedule.ReasonMultiCN,
+		CurrentCNPolicy:        schedule.CurrentCNAllowed,
+		Satisfied:              true,
+	})
 	traceSnapshot := recorder.Snapshot()
 	h := &marshalPlanHandler{
 		query: &plan0.Query{},
@@ -1635,16 +1644,155 @@ func TestMarshalPlanHandlerPersistsDistributedSchedulingTraceWithoutFullPlan(t *
 	require.NotContains(t, string(jsonBytes), "\"steps\"")
 }
 
+func TestAppendSchedulingExplainRendersPreviewAndHandlesNil(t *testing.T) {
+	recorder := new(schedule.TraceRecorder)
+	recorder.SetMode(schedule.TraceModePreview)
+	attempt := recorder.StartAttempt()
+	recorder.RecordFailure(attempt, "candidate-discovery", schedule.Worker{})
+	buffer := explain.NewExplainDataBuffer()
+
+	appendSchedulingExplain(buffer, recorder.Snapshot())
+	require.Contains(t, strings.Join(buffer.Lines, "\n"), "Scheduling (preview):")
+	require.Contains(t, strings.Join(buffer.Lines, "\n"), "candidate-discovery")
+
+	appendSchedulingExplain(nil, recorder.Snapshot())
+	before := len(buffer.Lines)
+	appendSchedulingExplain(buffer, schedule.Trace{})
+	require.Equal(t, before, len(buffer.Lines))
+}
+
+func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		context.Context,
+		FeSession,
+		plan.CompilerContext,
+		tree.Statement,
+	) (*plan.Plan, error) {
+		return &plan.Plan{
+			Plan: &plan0.Plan_Query{
+				Query: &plan0.Query{
+					Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+					Steps: []int32{0},
+				},
+			},
+		}, nil
+	}
+
+	err := doExplainStmt(
+		context.Background(),
+		ses,
+		tree.NewExplainStmt(&tree.Select{}, "text"),
+	)
+	require.NoError(t, err)
+
+	var output strings.Builder
+	for i := uint64(0); i < ses.GetMysqlResultSet().GetRowCount(); i++ {
+		row, rowErr := ses.GetMysqlResultSet().GetRow(context.Background(), i)
+		require.NoError(t, rowErr)
+		require.Len(t, row, 1)
+		output.WriteString(row[0].(string))
+		output.WriteByte('\n')
+	}
+	require.Contains(t, output.String(), "Scheduling (preview):")
+	require.Contains(t, output.String(), "Failure: category=candidate-discovery")
+}
+
+func TestDoExplainStmtDoesNotSwallowRequestCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		context.Context,
+		FeSession,
+		plan.CompilerContext,
+		tree.Statement,
+	) (*plan.Plan, error) {
+		return &plan.Plan{
+			Plan: &plan0.Plan_Query{
+				Query: &plan0.Query{
+					Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+					Steps: []int32{0},
+				},
+			},
+		}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := doExplainStmt(ctx, ses, tree.NewExplainStmt(&tree.Select{}, "text"))
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestSchedulingTraceFromComputationWrapperReturnsIndependentSnapshot(t *testing.T) {
+	cw := &TxnComputationWrapper{}
+	attempt := cw.schedulingTrace.StartAttempt()
+	cw.schedulingTrace.RecordFailure(attempt, "failure", schedule.Worker{})
+
+	trace := schedulingTraceFromComputationWrapper(cw)
+	require.Equal(t, "failure", trace.Attempts[0].Failures[0].Category)
+	trace.Attempts[0].Failures[0].Category = "changed"
+	require.Equal(t, "failure", cw.SchedulingTrace().Attempts[0].Failures[0].Category)
+}
+
+func TestBuildMoExplainPhyPlanAppendsActualSchedulingTrace(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	recorder := new(schedule.TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordFailure(attempt, "runtime-ineligible-selected-worker", schedule.Worker{ID: "cn"})
+	var rows []string
+	fill := func(_ FeSession, _ *ExecCtx, bat *batch.Batch, _ *perfcounter.CounterSet) error {
+		if bat == nil {
+			return nil
+		}
+		for i := 0; i < bat.RowCount(); i++ {
+			rows = append(rows, bat.Vecs[0].GetStringAt(i))
+		}
+		return nil
+	}
+
+	err := buildMoExplainPhyPlan(
+		&ExecCtx{reqCtx: context.Background()},
+		"QUERY PLAN",
+		bufio.NewReader(strings.NewReader("Physical plan")),
+		ses,
+		fill,
+		recorder.Snapshot(),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "Physical plan", rows[0])
+	output := strings.Join(rows, "\n")
+	require.Contains(t, output, "Scheduling (execution):")
+	require.Contains(t, output, "runtime-ineligible-selected-worker")
+}
+
 func TestMarshalPlanHandlerDoesNotAmplifyShortLocalSchedulingTrace(t *testing.T) {
 	recorder := new(schedule.TraceRecorder)
 	attempt := recorder.StartAttempt()
-	recorder.RecordQuery(attempt, schedule.Worker{ID: "local"}, schedule.QueryDecision{
-		ExecKind:        schedule.QueryExecTP,
-		Workers:         schedule.Workers{{ID: "local"}},
-		Reason:          schedule.ReasonLocalExecType,
+	recorder.RecordQuery(attempt, schedule.QueryDecision{
+		ExecKind:  schedule.QueryExecTP,
+		CurrentCN: schedule.Worker{ID: "local"},
+		Workers:   schedule.Workers{{ID: "local"}},
+		Reason:    schedule.ReasonLocalExecType,
+		CandidateResolution: schedule.CandidateResolution{
+			DiscoverySource: schedule.CandidateSourceNotRequired,
+			PoolResolution:  schedule.PoolResolutionNotRequired,
+		},
 		CurrentCNPolicy: schedule.CurrentCNAllowed,
 		Satisfied:       true,
-	}, 0, 0)
+	})
 	traceSnapshot := recorder.Snapshot()
 	h := &marshalPlanHandler{
 		query: &plan0.Query{},
@@ -1660,13 +1808,18 @@ func TestMarshalPlanHandlerDoesNotAmplifyShortLocalSchedulingTrace(t *testing.T)
 func TestMarshalPlanHandlerIncludesLocalSchedulingTraceWithFullPlan(t *testing.T) {
 	recorder := new(schedule.TraceRecorder)
 	attempt := recorder.StartAttempt()
-	recorder.RecordQuery(attempt, schedule.Worker{ID: "local"}, schedule.QueryDecision{
-		ExecKind:        schedule.QueryExecTP,
-		Workers:         schedule.Workers{{ID: "local"}},
-		Reason:          schedule.ReasonLocalExecType,
+	recorder.RecordQuery(attempt, schedule.QueryDecision{
+		ExecKind:  schedule.QueryExecTP,
+		CurrentCN: schedule.Worker{ID: "local"},
+		Workers:   schedule.Workers{{ID: "local"}},
+		Reason:    schedule.ReasonLocalExecType,
+		CandidateResolution: schedule.CandidateResolution{
+			DiscoverySource: schedule.CandidateSourceNotRequired,
+			PoolResolution:  schedule.PoolResolutionNotRequired,
+		},
 		CurrentCNPolicy: schedule.CurrentCNAllowed,
 		Satisfied:       true,
-	}, 0, 0)
+	})
 	stmt := &motrace.StatementInfo{
 		Statement: []byte("select 1"),
 		RequestAt: time.Now().Add(-motrace.GetLongQueryTime() - time.Second),
