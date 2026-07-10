@@ -242,41 +242,56 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	for i := 0; i < len(ft_filters); i++ {
 		ftidxscan := ft_filters[i]
 		idxdef := indexDefs[i]
-		idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
-		srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
 		fn := ftidxscan.GetF()
 		pattern := fn.Args[0].GetLit().GetSval()
 		mode := fn.Args[1].GetLit().GetI64Val()
 
-		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
 		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
 		if projNode == nil {
 			alias_name = fmt.Sprintf("mo_fulltext_alias_%d_%d", scanNode.NodeId, i)
 		}
-		params := idxdef.IndexAlgoParams
 
-		var exprs tree.Exprs
-		exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
+		// A bm25 ranked-retrieval index routes MATCH to the bm25_search TVF
+		// (bag-of-words BM25 top-K over the WAND binary index, emitting the same
+		// (doc_id, score) shape); a classic fulltext index routes to
+		// fulltext_index_scan. The downstream INNER-JOIN-to-source, score
+		// projection, and limit pushdown are identical for both.
+		var tmpTableFunc *tree.AliasedTableExpr
+		if idxdef.IndexAlgo == catalog.MoIndexBm25Algo.ToString() {
+			var berr error
+			tmpTableFunc, berr = builder.buildBm25SearchTableFunc(scanNode, idxdef, pattern, mode, alias_name)
+			if berr != nil {
+				return -1, nil, nil, berr
+			}
+		} else {
+			idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
+			srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
+			fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
+			params := idxdef.IndexAlgoParams
 
-		name := tree.NewUnresolvedName(fulltext_func)
+			var exprs tree.Exprs
+			exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
+			exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
 
-		// TableFuncion AST
-		tmpTableFunc := &tree.AliasedTableExpr{
-			Expr: &tree.TableFunction{
-				Func: &tree.FuncExpr{
-					Func:     tree.FuncName2ResolvableFunctionReference(name),
-					FuncName: fulltext_func,
-					Exprs:    exprs,
-					Type:     tree.FUNC_TYPE_TABLE,
+			name := tree.NewUnresolvedName(fulltext_func)
+
+			// TableFuncion AST
+			tmpTableFunc = &tree.AliasedTableExpr{
+				Expr: &tree.TableFunction{
+					Func: &tree.FuncExpr{
+						Func:     tree.FuncName2ResolvableFunctionReference(name),
+						FuncName: fulltext_func,
+						Exprs:    exprs,
+						Type:     tree.FUNC_TYPE_TABLE,
+					},
 				},
-			},
-			As: tree.AliasClause{
-				Alias: tree.Identifier(alias_name),
-			},
+				As: tree.AliasClause{
+					Alias: tree.Identifier(alias_name),
+				},
+			}
 		}
 
 		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
@@ -754,7 +769,13 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
-		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+		// A MATCH may resolve to a classic fulltext index OR a bm25 ranked-
+		// retrieval index. For bm25 (two hidden tables) use the storage def as
+		// the single representative — the metadata sibling is resolved later.
+		isFT := catalog.IsFullTextIndexAlgo(idx.GetIndexAlgo())
+		isBm25 := idx.GetIndexAlgo() == catalog.MoIndexBm25Algo.ToString() &&
+			idx.IndexAlgoTableType == catalog.Bm25Index_TblType_Storage
+		if idx == nil || !idx.TableExist || (!isFT && !isBm25) {
 			continue
 		}
 		if len(idx.Parts) != nargs {
