@@ -210,12 +210,25 @@ func (e *Engine) Nodes(isInternal bool, tenant string, _ string, cnLabel map[str
 	cluster.GetCNService(selector,
 		func(c metadata.CNService) bool {
 			nodes = append(nodes, engine.Node{
-				Mcpu: 1,
-				Id:   c.ServiceID,
-				Addr: c.PipelineServiceAddress,
+				Mcpu:      1,
+				Id:        c.ServiceID,
+				Addr:      c.PipelineServiceAddress,
+				WorkState: c.WorkState,
 			})
 			return true
 		})
+	cluster.GetCNServiceWithoutWorkingState(selector, func(c metadata.CNService) bool {
+		if c.WorkState != metadata.WorkState_Draining && c.WorkState != metadata.WorkState_Drained {
+			return true
+		}
+		nodes = append(nodes, engine.Node{
+			Mcpu:      1,
+			Id:        c.ServiceID,
+			Addr:      c.PipelineServiceAddress,
+			WorkState: c.WorkState,
+		})
+		return true
+	})
 	return nodes, nil
 }
 
