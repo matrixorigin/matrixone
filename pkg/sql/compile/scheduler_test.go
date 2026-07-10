@@ -320,6 +320,101 @@ func TestScheduleQueryWorkersDropsRuntimeIneligibleCandidates(t *testing.T) {
 	require.Equal(t, drainedBefore+1, testutil.ToFloat64(drainedCounter))
 }
 
+func TestScheduleQueryWorkersRecordsStructuredTrace(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.e = &schedulerTestEngine{
+		nodes: engine.Nodes{
+			{Id: "working", Addr: "working:6001", Mcpu: 8, WorkState: metadata.WorkState_Working},
+			{Id: "draining", Addr: "draining:6001", Mcpu: 4, WorkState: metadata.WorkState_Draining},
+		},
+	}
+	recorder := new(schedule.TraceRecorder)
+	c.SetSchedulingTraceRecorder(recorder)
+	c.beginSchedulingTraceAttempt()
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Len(t, nodes, 1)
+
+	trace := recorder.Snapshot()
+	require.Equal(t, 1, trace.AttemptCount)
+	require.Len(t, trace.Attempts, 1)
+	query := trace.Attempts[0].Query
+	require.NotNil(t, query)
+	require.Equal(t, "ap-multi-cn", query.ExecKind)
+	require.Equal(t, 2, query.DiscoveredCount)
+	require.Equal(t, 2, query.CandidateCount)
+	require.Equal(t, 1, query.SelectedCount)
+	require.Equal(t, "working", query.Selected[0].ID)
+	require.Equal(t, 1, query.DroppedCount)
+	require.Equal(t, []schedule.ReasonCount{{
+		Reason: schedule.ReasonDroppedDrainingCN,
+		Count:  1,
+	}}, query.Dropped)
+}
+
+func TestScheduleQueryWorkersRecordsCandidateDiscoveryFailure(t *testing.T) {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.e = &schedulerTestEngine{err: errors.New("discovery failed")}
+	recorder := new(schedule.TraceRecorder)
+	c.SetSchedulingTraceRecorder(recorder)
+	c.beginSchedulingTraceAttempt()
+
+	_, err := c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, "discovery failed")
+
+	trace := recorder.Snapshot()
+	require.Len(t, trace.Attempts, 1)
+	require.Nil(t, trace.Attempts[0].Query)
+	require.Equal(t, 1, trace.Attempts[0].FailureCount)
+	require.Equal(t, scheduleFailureCandidateDiscovery, trace.Attempts[0].Failures[0].Category)
+	require.True(t, trace.PersistStandalone())
+}
+
+func TestPreparedCompileReleaseDetachesStatementTrace(t *testing.T) {
+	c := NewMockCompile(t)
+	c.isPrepare = true
+	recorder := new(schedule.TraceRecorder)
+	c.SetSchedulingTraceRecorder(recorder)
+	c.beginSchedulingTraceAttempt()
+
+	c.Release()
+
+	require.Nil(t, c.schedulingTrace)
+	require.Zero(t, c.schedulingAttempt)
+	require.NotNil(t, c.proc)
+}
+
+func TestValidateScheduledQueryRoutesRecordsFailure(t *testing.T) {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	recorder := new(schedule.TraceRecorder)
+	c.SetSchedulingTraceRecorder(recorder)
+	c.beginSchedulingTraceAttempt()
+	placement := schedule.QueryDecision{
+		ExecKind:        schedule.QueryExecAPMultiCN,
+		Reason:          schedule.ReasonMultiCN,
+		CurrentCNPolicy: schedule.CurrentCNAllowed,
+		Satisfied:       true,
+	}
+
+	err := c.validateScheduledQueryRoutes(engine.Nodes{{
+		Id:        "draining",
+		Addr:      "draining:6001",
+		Mcpu:      4,
+		WorkState: metadata.WorkState_Draining,
+	}}, placement)
+	require.ErrorContains(t, err, "draining")
+
+	trace := recorder.Snapshot()
+	require.Equal(t, scheduleFailureRuntimeIneligibleSelectedWorker, trace.Attempts[0].Failures[0].Category)
+	require.NotNil(t, trace.Attempts[0].Failures[0].Worker)
+	require.Equal(t, "draining", trace.Attempts[0].Failures[0].Worker.ID)
+}
+
 func TestScheduleQueryWorkersFallsBackWhenCandidatesRuntimeIneligible(t *testing.T) {
 	fallbackCounter := metricv2.QueryScheduleDecisionCounter.WithLabelValues(
 		"ap-multi-cn", "allowed", schedule.ReasonNoCandidateCN, "satisfied")

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -57,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -1599,6 +1601,123 @@ func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
 	jsonBytes := h.Marshal(context.Background())
 
 	require.NotContains(t, string(jsonBytes), "serialize plan to json error")
+}
+
+func TestMarshalPlanHandlerPersistsDistributedSchedulingTraceWithoutFullPlan(t *testing.T) {
+	recorder := new(schedule.TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordQuery(attempt, schedule.Worker{ID: "local"}, schedule.QueryDecision{
+		ExecKind: schedule.QueryExecAPMultiCN,
+		Workers: schedule.Workers{
+			{ID: "cn-a", Addr: "cn-a:6001", Mcpu: 4},
+			{ID: "cn-b", Addr: "cn-b:6001", Mcpu: 8},
+		},
+		Reason:          schedule.ReasonMultiCN,
+		CurrentCNPolicy: schedule.CurrentCNAllowed,
+		Satisfied:       true,
+	}, 2, 2)
+	traceSnapshot := recorder.Snapshot()
+	h := &marshalPlanHandler{
+		query: &plan0.Query{},
+		marshalPlanConfig: marshalPlanConfig{
+			schedulingTrace: &traceSnapshot,
+		},
+	}
+	defer h.Free()
+
+	jsonBytes := h.Marshal(context.Background())
+	var payload struct {
+		Scheduling schedule.Trace `json:"scheduling"`
+	}
+	require.NoError(t, json.Unmarshal(jsonBytes, &payload))
+	require.Equal(t, 1, payload.Scheduling.AttemptCount)
+	require.Equal(t, 2, payload.Scheduling.Attempts[0].Query.SelectedCount)
+	require.NotContains(t, string(jsonBytes), "\"steps\"")
+}
+
+func TestMarshalPlanHandlerDoesNotAmplifyShortLocalSchedulingTrace(t *testing.T) {
+	recorder := new(schedule.TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordQuery(attempt, schedule.Worker{ID: "local"}, schedule.QueryDecision{
+		ExecKind:        schedule.QueryExecTP,
+		Workers:         schedule.Workers{{ID: "local"}},
+		Reason:          schedule.ReasonLocalExecType,
+		CurrentCNPolicy: schedule.CurrentCNAllowed,
+		Satisfied:       true,
+	}, 0, 0)
+	traceSnapshot := recorder.Snapshot()
+	h := &marshalPlanHandler{
+		query: &plan0.Query{},
+		marshalPlanConfig: marshalPlanConfig{
+			schedulingTrace: &traceSnapshot,
+		},
+	}
+	defer h.Free()
+
+	require.Equal(t, sqlQueryIgnoreExecPlan, h.Marshal(context.Background()))
+}
+
+func TestMarshalPlanHandlerIncludesLocalSchedulingTraceWithFullPlan(t *testing.T) {
+	recorder := new(schedule.TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordQuery(attempt, schedule.Worker{ID: "local"}, schedule.QueryDecision{
+		ExecKind:        schedule.QueryExecTP,
+		Workers:         schedule.Workers{{ID: "local"}},
+		Reason:          schedule.ReasonLocalExecType,
+		CurrentCNPolicy: schedule.CurrentCNAllowed,
+		Satisfied:       true,
+	}, 0, 0)
+	stmt := &motrace.StatementInfo{
+		Statement: []byte("select 1"),
+		RequestAt: time.Now().Add(-motrace.GetLongQueryTime() - time.Second),
+	}
+	logicPlan := &plan0.Plan{
+		Plan: &plan0.Plan_Query{
+			Query: &plan0.Query{
+				Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+				Steps: []int32{0},
+			},
+		},
+	}
+	h := NewMarshalPlanHandler(
+		context.Background(),
+		stmt,
+		logicPlan,
+		nil,
+		WithSchedulingTrace(recorder.Snapshot()),
+	)
+	defer h.Free()
+
+	jsonBytes := h.Marshal(context.Background())
+	var payload struct {
+		Scheduling schedule.Trace `json:"scheduling"`
+		Steps      []any          `json:"steps"`
+	}
+	require.NoError(t, json.Unmarshal(jsonBytes, &payload))
+	require.Equal(t, 1, payload.Scheduling.AttemptCount)
+	require.NotNil(t, payload.Steps)
+}
+
+func TestMarshalPlanHandlerPersistsFailureTraceWithoutQueryPlan(t *testing.T) {
+	recorder := new(schedule.TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordFailure(attempt, "candidate-discovery", schedule.Worker{})
+	stmt := &motrace.StatementInfo{RequestAt: time.Now()}
+	h := NewMarshalPlanHandler(
+		context.Background(),
+		stmt,
+		nil,
+		nil,
+		WithSchedulingTrace(recorder.Snapshot()),
+	)
+	defer h.Free()
+
+	jsonBytes := h.Marshal(context.Background())
+	var payload struct {
+		Scheduling schedule.Trace `json:"scheduling"`
+	}
+	require.NoError(t, json.Unmarshal(jsonBytes, &payload))
+	require.Equal(t, "candidate-discovery", payload.Scheduling.Attempts[0].Failures[0].Category)
 }
 
 func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {

@@ -100,6 +100,10 @@ func (c *Compile) validateScheduledQueryRoutes(nodes engine.Nodes, placement sch
 	}
 	for _, node := range nodes {
 		if !schedulableEngineWorkState(node.WorkState) {
+			c.recordSchedulingFailure(
+				scheduleFailureRuntimeIneligibleSelectedWorker,
+				toScheduleWorker(node),
+			)
 			recordSelectedWorkerFailureMetric(scheduleFailureRuntimeIneligibleSelectedWorker)
 			getQueryScheduleLogger().WarnWithConfig(
 				"query-schedule-runtime-ineligible-selected-worker",
@@ -123,6 +127,10 @@ func (c *Compile) validateScheduledQueryRoutes(nodes engine.Nodes, placement sch
 		if node.Addr != "" {
 			continue
 		}
+		c.recordSchedulingFailure(
+			scheduleFailureUnroutableSelectedWorker,
+			toScheduleWorker(node),
+		)
 		recordSelectedWorkerFailureMetric(scheduleFailureUnroutableSelectedWorker)
 		getQueryScheduleLogger().WarnWithConfig(
 			"query-schedule-unroutable-selected-worker",
@@ -166,18 +174,25 @@ func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		decision := schedule.DecideQueryPlacement(req)
+		c.queryRawCandidateCount = 0
+		c.queryCandidateWorkerCount = 0
+		c.recordQuerySchedulingTrace(req.CurrentCN, decision, 0, 0)
 		c.recordQuerySchedulingMetrics(decision, 0, 0)
 		return decision, nil
 	}
 
 	candidates, err := c.getCandidateCNs()
 	if err != nil {
+		c.recordSchedulingFailure(scheduleFailureCandidateDiscovery, schedule.Worker{})
 		return schedule.QueryDecision{}, err
 	}
 
 	rawCandidateCount := len(candidates)
 	req.Candidates = toScheduleCandidateWorkers(candidates)
 	decision := schedule.DecideQueryPlacement(req)
+	c.queryRawCandidateCount = rawCandidateCount
+	c.queryCandidateWorkerCount = len(req.Candidates)
+	c.recordQuerySchedulingTrace(req.CurrentCN, decision, rawCandidateCount, len(req.Candidates))
 	c.recordQuerySchedulingMetrics(decision, rawCandidateCount, len(req.Candidates))
 	if len(decision.Dropped) > 0 {
 		getQueryScheduleLogger().WarnWithConfig(
@@ -187,6 +202,34 @@ func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
 			c.queryScheduleDroppedCandidateFields(decision, rawCandidateCount, len(req.Candidates))...)
 	}
 	return decision, nil
+}
+
+func (c *Compile) SetSchedulingTraceRecorder(recorder *schedule.TraceRecorder) {
+	c.schedulingTrace = recorder
+	c.schedulingAttempt = 0
+}
+
+func (c *Compile) beginSchedulingTraceAttempt() {
+	c.schedulingAttempt = c.schedulingTrace.StartAttempt()
+}
+
+func (c *Compile) recordQuerySchedulingTrace(
+	current schedule.Worker,
+	decision schedule.QueryDecision,
+	rawCandidateCount int,
+	candidateWorkerCount int,
+) {
+	c.schedulingTrace.RecordQuery(
+		c.schedulingAttempt,
+		current,
+		decision,
+		rawCandidateCount,
+		candidateWorkerCount,
+	)
+}
+
+func (c *Compile) recordSchedulingFailure(category string, worker schedule.Worker) {
+	c.schedulingTrace.RecordFailure(c.schedulingAttempt, category, worker)
 }
 
 func (c *Compile) queryScheduleDroppedCandidateFields(

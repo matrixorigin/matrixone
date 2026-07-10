@@ -24,6 +24,7 @@ import (
 const (
 	scheduleFailureRuntimeIneligibleSelectedWorker = "runtime-ineligible-selected-worker"
 	scheduleFailureUnroutableSelectedWorker        = "unroutable-selected-worker"
+	scheduleFailureCandidateDiscovery              = "candidate-discovery"
 )
 
 func (c *Compile) recordQuerySchedulingMetrics(

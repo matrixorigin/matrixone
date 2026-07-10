@@ -65,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -1346,7 +1347,7 @@ func createPrepareStmt(
 	var comp *compile.Compile
 	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true)
+		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -3990,6 +3991,20 @@ func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses Fe
 	}
 }
 
+func newSchedulingTracePlanHandler(ctx context.Context, trace schedule.Trace) *jsonPlanHandler {
+	h := &marshalPlanHandler{
+		marshalPlanConfig: marshalPlanConfig{
+			schedulingTrace: &trace,
+		},
+	}
+	jsonBytes := h.Marshal(ctx)
+	return &jsonPlanHandler{
+		jsonBytes:  jsonBytes,
+		statsBytes: statistic.DefaultStatsArray,
+		buffer:     h.handoverBuffer(),
+	}
+}
+
 func (h *jsonPlanHandler) Stats(ctx context.Context) (statistic.StatsArray, motrace.Statistic) {
 	return h.statsBytes, h.stats
 }
@@ -4007,7 +4022,8 @@ func (h *jsonPlanHandler) Free() {
 }
 
 type marshalPlanConfig struct {
-	waitActiveCost time.Duration
+	waitActiveCost  time.Duration
+	schedulingTrace *schedule.Trace
 }
 
 type marshalPlanOptions func(*marshalPlanConfig)
@@ -4015,6 +4031,15 @@ type marshalPlanOptions func(*marshalPlanConfig)
 func WithWaitActiveCost(cost time.Duration) marshalPlanOptions {
 	return func(h *marshalPlanConfig) {
 		h.waitActiveCost = cost
+	}
+}
+
+func WithSchedulingTrace(trace schedule.Trace) marshalPlanOptions {
+	return func(h *marshalPlanConfig) {
+		if trace.Empty() {
+			return
+		}
+		h.schedulingTrace = &trace
 	}
 }
 
@@ -4034,34 +4059,26 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
 	stmt.MarkResponseAt()
-	if plan == nil || plan.GetQuery() == nil {
-		return &marshalPlanHandler{
-			query:       nil,
-			marshalPlan: nil,
-			stmt:        stmt,
-			uuid:        uuid,
-			buffer:      nil,
-		}
-	}
-	query := plan.GetQuery()
 	h := &marshalPlanHandler{
-		query:  query,
-		stmt:   stmt,
-		uuid:   uuid,
-		buffer: nil,
+		stmt: stmt,
+		uuid: uuid,
 	}
-	// END> new marshalPlanHandler
-
-	// SET options
 	for _, opt := range opts {
 		opt(&h.marshalPlanConfig)
 	}
+	if plan == nil || plan.GetQuery() == nil {
+		return h
+	}
+	h.query = plan.GetQuery()
 
 	if h.needMarshalPlan() {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
 		if phyPlan != nil {
 			h.marshalPlan.PhyPlan = *phyPlan
+		}
+		if h.schedulingTrace != nil {
+			h.marshalPlan.Scheduling = h.schedulingTrace
 		}
 	}
 	return h
@@ -4159,6 +4176,18 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		if jsonBytesLen > 0 {
 			jsonBytes = h.buffer.Next(jsonBytesLen)
 		}
+	} else if h.schedulingTrace != nil && h.schedulingTrace.PersistStandalone() {
+		h.allocBufferIfNeeded()
+		h.buffer.Reset()
+		encoder := json.NewEncoder(h.buffer)
+		encoder.SetEscapeHTML(false)
+		if err = encoder.Encode(struct {
+			Scheduling *schedule.Trace `json:"scheduling"`
+		}{Scheduling: h.schedulingTrace}); err != nil {
+			h.buffer.Reset()
+			return sqlQueryIgnoreExecPlan
+		}
+		return h.buffer.Next(h.buffer.Len())
 	} else if h.query != nil {
 		// DO NOT use h.buffer
 		return sqlQueryIgnoreExecPlan

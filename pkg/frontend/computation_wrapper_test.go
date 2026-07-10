@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -25,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/assert"
@@ -191,4 +194,81 @@ func TestInitExecuteStmtParamReturnsRecompileError(t *testing.T) {
 	_, err := cw.Compile(execCtx, nil)
 	require.Error(t, err)
 	require.Nil(t, prepareStmt.compile)
+}
+
+func TestTxnComputationWrapperRunPanicStillReleases(t *testing.T) {
+	var released bool
+	mockComp := &mockCompile{
+		runFunc: func(uint64) (*util2.RunResult, error) {
+			panic("run panic")
+		},
+		getPlanFunc: func() *plan.Plan {
+			return nil
+		},
+		releaseFunc: func() {
+			released = true
+		},
+	}
+	cwft := &TxnComputationWrapper{compile: mockComp}
+
+	assert.PanicsWithValue(t, "run panic", func() {
+		_, _ = cwft.Run(100)
+	})
+	assert.True(t, released)
+	assert.Nil(t, cwft.compile)
+}
+
+func TestTxnComputationWrapperPreservesSchedulingTraceOnCompileError(t *testing.T) {
+	const failureCategory = "candidate-discovery"
+	stmt := &motrace.StatementInfo{
+		RequestAt:     time.Now(),
+		Status:        motrace.StatementStatusSuccess,
+		StatementType: "Select",
+		SqlSourceType: "external_sql",
+	}
+	assert.True(t, motrace.StatementInfoFilter(stmt))
+	ses := &Session{}
+	ses.SetTStmt(stmt)
+	cwft := &TxnComputationWrapper{ses: ses}
+	attempt := cwft.schedulingTrace.StartAttempt()
+	cwft.schedulingTrace.RecordFailure(attempt, failureCategory, schedule.Worker{})
+
+	cwft.recordSchedulingTraceOnCompileError(context.Background())
+	if assert.NotNil(t, stmt.ExecPlan) {
+		defer stmt.ExecPlan.Free()
+		jsonBytes := stmt.ExecPlan.Marshal(context.Background())
+		var payload struct {
+			Scheduling schedule.Trace `json:"scheduling"`
+		}
+		assert.NoError(t, json.Unmarshal(jsonBytes, &payload))
+		assert.Equal(t, failureCategory, payload.Scheduling.Attempts[0].Failures[0].Category)
+		assert.Nil(t, payload.Scheduling.Attempts[0].Failures[0].Worker)
+	}
+	assert.True(t, stmt.ResponseAt.IsZero())
+	assert.False(t, motrace.StatementInfoFilter(stmt))
+}
+
+func TestTxnComputationWrapperDoesNotPersistNormalLocalTraceOnCompileError(t *testing.T) {
+	stmt := &motrace.StatementInfo{
+		RequestAt:     time.Now(),
+		Status:        motrace.StatementStatusSuccess,
+		StatementType: "Select",
+		SqlSourceType: "external_sql",
+	}
+	assert.True(t, motrace.StatementInfoFilter(stmt))
+	ses := &Session{}
+	ses.SetTStmt(stmt)
+	cwft := &TxnComputationWrapper{ses: ses}
+	attempt := cwft.schedulingTrace.StartAttempt()
+	cwft.schedulingTrace.RecordQuery(attempt, schedule.Worker{ID: "local"}, schedule.QueryDecision{
+		ExecKind:        schedule.QueryExecTP,
+		Workers:         schedule.Workers{{ID: "local"}},
+		Reason:          schedule.ReasonLocalExecType,
+		CurrentCNPolicy: schedule.CurrentCNAllowed,
+		Satisfied:       true,
+	}, 0, 0)
+
+	cwft.recordSchedulingTraceOnCompileError(context.Background())
+	assert.Nil(t, stmt.ExecPlan)
+	assert.True(t, motrace.StatementInfoFilter(stmt))
 }

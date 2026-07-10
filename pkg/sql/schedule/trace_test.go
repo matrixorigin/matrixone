@@ -1,0 +1,239 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package schedule
+
+import (
+	"sync"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestTraceRecorderCapturesSchedulingDecisionChain(t *testing.T) {
+	recorder := new(TraceRecorder)
+	attempt := recorder.StartAttempt()
+	current := Worker{ID: "cn-local", Addr: "local:6001", Mcpu: 4, State: WorkerStateWorking}
+	selected := Workers{
+		current,
+		{ID: "cn-remote", Addr: "remote:6001", Mcpu: 8, State: WorkerStateWorking},
+	}
+	recorder.RecordQuery(attempt, current, QueryDecision{
+		ExecKind:        QueryExecAPMultiCN,
+		Workers:         selected,
+		Dropped:         DroppedWorkers{{Reason: ReasonDroppedDrainingCN}, {Reason: ReasonDroppedDrainingCN}},
+		Reason:          ReasonRequiredCurrentCN,
+		CurrentCNPolicy: CurrentCNRequired,
+		Satisfied:       true,
+	}, 4, 3)
+	recorder.RecordScan(attempt, ScanRequest{
+		QueryWorkers: selected,
+		Stats:        &ScanStats{BlockNum: 128, Dop: 8},
+		ForceMultiCN: true,
+	}, ScanDecision{Workers: selected, Reason: ReasonScanMultiCN})
+	recorder.RecordSingleWorkerStage(attempt, selected, StageDecision{
+		Worker: current,
+		Reason: ReasonStageCurrentCoordinator,
+	})
+	recorder.RecordStage(attempt, StageKindQueryWorkerSet, selected, StageWorkerSetDecision{
+		Workers: selected,
+		Reason:  ReasonStageQueryWorkers,
+	})
+	recorder.RecordFailure(attempt, "runtime-ineligible-selected-worker", selected[1])
+
+	trace := recorder.Snapshot()
+	require.Equal(t, SchedulingTraceVersion, trace.Version)
+	require.Equal(t, 1, trace.AttemptCount)
+	require.Len(t, trace.Attempts, 1)
+	require.Equal(t, "ap-multi-cn", trace.Attempts[0].Query.ExecKind)
+	require.Equal(t, "required", trace.Attempts[0].Query.CurrentCNPolicy)
+	require.Equal(t, 4, trace.Attempts[0].Query.DiscoveredCount)
+	require.Equal(t, 3, trace.Attempts[0].Query.CandidateCount)
+	require.Equal(t, []ReasonCount{{Reason: ReasonDroppedDrainingCN, Count: 2}}, trace.Attempts[0].Query.Dropped)
+	require.Equal(t, int32(128), trace.Attempts[0].Scans[0].BlockCount)
+	require.Equal(t, int32(8), trace.Attempts[0].Scans[0].DOP)
+	require.Equal(t, StageKindSingleWorker, trace.Attempts[0].Stages[0].Kind)
+	require.Equal(t, StageKindQueryWorkerSet, trace.Attempts[0].Stages[1].Kind)
+	require.Equal(t, "runtime-ineligible-selected-worker", trace.Attempts[0].Failures[0].Category)
+	require.True(t, trace.PersistStandalone())
+}
+
+func TestTraceRecorderBoundsEveryAccumulation(t *testing.T) {
+	recorder := new(TraceRecorder)
+	workers := make(Workers, maxTraceWorkersPerDecision+5)
+	for i := range workers {
+		workers[i] = Worker{ID: "worker", Addr: "worker:6001", Mcpu: i + 1}
+	}
+	dropped := make(DroppedWorkers, maxTraceReasonCounts+5)
+	for i := range dropped {
+		dropped[i] = DroppedWorker{Reason: string(rune('a' + i))}
+	}
+
+	first := recorder.StartAttempt()
+	recorder.RecordQuery(first, Worker{ID: "current"}, QueryDecision{
+		ExecKind:  QueryExecAPMultiCN,
+		Workers:   workers,
+		Dropped:   dropped,
+		Reason:    ReasonMultiCN,
+		Satisfied: true,
+	}, len(workers), len(workers))
+	for i := 0; i < maxTraceScans+5; i++ {
+		recorder.RecordScan(first, ScanRequest{QueryWorkers: workers}, ScanDecision{Workers: workers, Reason: ReasonScanMultiCN})
+	}
+	for i := 0; i < maxTraceStages+5; i++ {
+		recorder.RecordStage(first, StageKindQueryWorkerSet, workers, StageWorkerSetDecision{Workers: workers, Reason: ReasonStageQueryWorkers})
+	}
+	for i := 0; i < maxTraceFailures+5; i++ {
+		recorder.RecordFailure(first, "failure", workers[0])
+	}
+	require.True(t, recorder.Snapshot().Truncated)
+	for i := 1; i < maxTraceAttempts+5; i++ {
+		recorder.StartAttempt()
+	}
+
+	trace := recorder.Snapshot()
+	require.Equal(t, maxTraceAttempts+5, trace.AttemptCount)
+	require.Len(t, trace.Attempts, maxTraceAttempts)
+	require.True(t, trace.Truncated)
+	require.Len(t, trace.Attempts[0].Query.Selected, maxTraceWorkersPerDecision)
+	require.True(t, trace.Attempts[0].Query.SelectedTruncated)
+	require.Equal(t, len(dropped), trace.Attempts[0].Query.DroppedCount)
+	require.Len(t, trace.Attempts[0].Query.Dropped, maxTraceReasonCounts)
+	require.True(t, trace.Attempts[0].Query.DroppedTruncated)
+	require.Equal(t, maxTraceScans+5, trace.Attempts[0].ScanCount)
+	require.Len(t, trace.Attempts[0].Scans, maxTraceScans)
+	require.Equal(t, maxTraceStages+5, trace.Attempts[0].StageCount)
+	require.Len(t, trace.Attempts[0].Stages, maxTraceStages)
+	require.Equal(t, maxTraceFailures+5, trace.Attempts[0].FailureCount)
+	require.Len(t, trace.Attempts[0].Failures, maxTraceFailures)
+	require.True(t, trace.Attempts[0].Truncated)
+	require.LessOrEqual(t, countTraceWorkerRefs(trace), maxTraceWorkerRefs)
+}
+
+func countTraceWorkerRefs(trace Trace) int {
+	count := 0
+	for _, attempt := range trace.Attempts {
+		if attempt.Query != nil {
+			count += len(attempt.Query.Selected)
+		}
+		for _, scan := range attempt.Scans {
+			count += len(scan.Selected)
+		}
+		for _, stage := range attempt.Stages {
+			count += len(stage.Selected)
+		}
+	}
+	return count
+}
+
+func TestTraceRecorderSnapshotIsIndependent(t *testing.T) {
+	recorder := new(TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordQuery(attempt, Worker{ID: "current"}, QueryDecision{
+		ExecKind: QueryExecAPMultiCN,
+		Workers:  Workers{{ID: "selected"}},
+		Dropped:  DroppedWorkers{{Reason: "drop"}},
+		Reason:   ReasonMultiCN,
+	}, 1, 1)
+	recorder.RecordScan(attempt, ScanRequest{}, ScanDecision{Workers: Workers{{ID: "scan"}}})
+	recorder.RecordStage(attempt, StageKindQueryWorkerSet, nil, StageWorkerSetDecision{Workers: Workers{{ID: "stage"}}})
+	recorder.RecordFailure(attempt, "failure", Worker{ID: "failure"})
+
+	first := recorder.Snapshot()
+	first.Attempts[0].Query.Selected[0].ID = "changed"
+	first.Attempts[0].Query.Dropped[0].Reason = "changed"
+	first.Attempts[0].Scans[0].Selected[0].ID = "changed"
+	first.Attempts[0].Stages[0].Selected[0].ID = "changed"
+	first.Attempts[0].Failures[0].Worker.ID = "changed"
+
+	second := recorder.Snapshot()
+	require.Equal(t, "selected", second.Attempts[0].Query.Selected[0].ID)
+	require.Equal(t, "drop", second.Attempts[0].Query.Dropped[0].Reason)
+	require.Equal(t, "scan", second.Attempts[0].Scans[0].Selected[0].ID)
+	require.Equal(t, "stage", second.Attempts[0].Stages[0].Selected[0].ID)
+	require.Equal(t, "failure", second.Attempts[0].Failures[0].Worker.ID)
+}
+
+func TestTraceRecorderKeepsOneQueryDecisionPerAttempt(t *testing.T) {
+	recorder := new(TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordQuery(attempt, Worker{ID: "current"}, QueryDecision{
+		ExecKind:  QueryExecAPMultiCN,
+		Workers:   Workers{{ID: "first"}},
+		Reason:    ReasonMultiCN,
+		Satisfied: true,
+	}, 1, 1)
+	recorder.RecordQuery(attempt, Worker{ID: "current"}, QueryDecision{
+		ExecKind:  QueryExecAPMultiCN,
+		Workers:   Workers{{ID: "second"}},
+		Reason:    ReasonNoCandidateCN,
+		Satisfied: true,
+	}, 2, 2)
+
+	trace := recorder.Snapshot()
+	require.Equal(t, ReasonMultiCN, trace.Attempts[0].Query.Reason)
+	require.Equal(t, "first", trace.Attempts[0].Query.Selected[0].ID)
+	require.Equal(t, 1, trace.Attempts[0].Query.DiscoveredCount)
+}
+
+func TestTraceRecorderPersistencePolicyAvoidsNormalLocalAmplification(t *testing.T) {
+	recorder := new(TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordQuery(attempt, Worker{ID: "current"}, QueryDecision{
+		ExecKind:        QueryExecTP,
+		Workers:         Workers{{ID: "current"}},
+		Reason:          ReasonLocalExecType,
+		CurrentCNPolicy: CurrentCNAllowed,
+		Satisfied:       true,
+	}, 0, 0)
+	recorder.RecordScan(attempt, ScanRequest{}, ScanDecision{Workers: Workers{{ID: "current"}}})
+	recorder.RecordStage(attempt, StageKindQueryWorkerSet, nil, StageWorkerSetDecision{Workers: Workers{{ID: "current"}}})
+	trace := recorder.Snapshot()
+	require.False(t, trace.PersistStandalone())
+	require.Empty(t, trace.Attempts[0].Query.Selected)
+	require.True(t, trace.Attempts[0].Query.SelectedOmitted)
+	require.Zero(t, trace.Attempts[0].ScanCount)
+	require.Zero(t, trace.Attempts[0].StageCount)
+	require.True(t, trace.Attempts[0].DetailsOmitted)
+
+	recorder.RecordFailure(attempt, "validation", Worker{ID: "current"})
+	require.True(t, recorder.Snapshot().PersistStandalone())
+}
+
+func TestTraceRecorderHandlesNilInvalidAndConcurrentAccess(t *testing.T) {
+	var nilRecorder *TraceRecorder
+	require.Zero(t, nilRecorder.StartAttempt())
+	require.True(t, nilRecorder.Snapshot().Empty())
+	nilRecorder.RecordQuery(1, Worker{}, QueryDecision{}, 0, 0)
+	nilRecorder.RecordFailure(1, "failure", Worker{})
+
+	recorder := new(TraceRecorder)
+	recorder.RecordFailure(99, "ignored", Worker{})
+	attempt := recorder.StartAttempt()
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			recorder.RecordFailure(attempt, "failure", Worker{ID: "worker"})
+			_ = recorder.Snapshot()
+		}()
+	}
+	wg.Wait()
+
+	trace := recorder.Snapshot()
+	require.Equal(t, 32, trace.Attempts[0].FailureCount)
+	require.Len(t, trace.Attempts[0].Failures, maxTraceFailures)
+	require.True(t, trace.Attempts[0].Truncated)
+}

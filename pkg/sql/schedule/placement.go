@@ -41,6 +41,19 @@ const (
 	QueryExecAPMultiCN
 )
 
+func (k QueryExecKind) String() string {
+	switch k {
+	case QueryExecTP:
+		return "tp"
+	case QueryExecAPOneCN:
+		return "ap-one-cn"
+	case QueryExecAPMultiCN:
+		return "ap-multi-cn"
+	default:
+		return "unknown"
+	}
+}
+
 type CurrentCNPolicy uint8
 
 const (

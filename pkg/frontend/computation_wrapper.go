@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -70,6 +71,8 @@ type TxnComputationWrapper struct {
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
 	prepareName   string
+
+	schedulingTrace schedule.TraceRecorder
 }
 
 func InitTxnComputationWrapper(
@@ -128,6 +131,7 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.paramVals = nil
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
+	cwft.schedulingTrace.Reset()
 }
 
 func (cwft *TxnComputationWrapper) ParamVals() []any {
@@ -195,15 +199,19 @@ func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx conte
 }
 
 // Compile build logical plan and then build physical plan `Compile` object
-func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *perfcounter.CounterSet) error) (interface{}, error) {
+func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *perfcounter.CounterSet) error) (_ interface{}, err error) {
 	var originSQL string
 	var span trace.Span
-	var err error
 
 	execCtx := any.(*ExecCtx)
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "TxnComputationWrapper.Compile",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(cwft.ses.GetTxnId(), cwft.ses.GetStmtId(), cwft.ses.GetSqlOfStmt()))
+	defer func() {
+		if err != nil {
+			cwft.recordSchedulingTraceOnCompileError(execCtx.reqCtx)
+		}
+	}()
 
 	defer RecordStatementTxnID(execCtx.reqCtx, cwft.ses)
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
@@ -303,7 +311,17 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 
 		if retComp == nil {
-			cwft.compile, err = createCompile(execCtx, cwft.ses, cwft.proc, cwft.ses.GetSql(), cwft.stmt, cwft.plan, fill, false)
+			cwft.compile, err = createCompile(
+				execCtx,
+				cwft.ses,
+				cwft.proc,
+				cwft.ses.GetSql(),
+				cwft.stmt,
+				cwft.plan,
+				fill,
+				false,
+				&cwft.schedulingTrace,
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -311,6 +329,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		} else {
 			// retComp
 			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
+			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
 			retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql())
 			cwft.compile = retComp
 		}
@@ -323,7 +342,17 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		   }
 		*/
 	} else {
-		cwft.compile, err = createCompile(execCtx, cwft.ses, cwft.proc, execCtx.sqlOfStmt, cwft.stmt, cwft.plan, fill, false)
+		cwft.compile, err = createCompile(
+			execCtx,
+			cwft.ses,
+			cwft.proc,
+			execCtx.sqlOfStmt,
+			cwft.stmt,
+			cwft.plan,
+			fill,
+			false,
+			&cwft.schedulingTrace,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -352,9 +381,31 @@ func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *
 				waitActiveCost = txn.GetWaitActiveCost()
 			}
 		}
-		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, WithWaitActiveCost(waitActiveCost)))
+		traceSnapshot := cwft.schedulingTrace.Snapshot()
+		opts := []marshalPlanOptions{WithWaitActiveCost(waitActiveCost)}
+		if !traceSnapshot.Empty() {
+			opts = append(opts, WithSchedulingTrace(traceSnapshot))
+		}
+		if traceSnapshot.PersistStandalone() {
+			stm.DisableAgg()
+		}
+		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, opts...))
 	}
 	return nil
+}
+
+func (cwft *TxnComputationWrapper) recordSchedulingTraceOnCompileError(ctx context.Context) {
+	if cwft.ses == nil {
+		return
+	}
+	traceSnapshot := cwft.schedulingTrace.Snapshot()
+	if traceSnapshot.Empty() || !traceSnapshot.PersistStandalone() {
+		return
+	}
+	if stm := cwft.ses.GetStmtInfo(); stm != nil {
+		stm.DisableAgg()
+		stm.SetSerializableExecPlan(newSchedulingTracePlanHandler(ctx, traceSnapshot))
+	}
 }
 
 // RecordCompoundStmt Check if it is a compound statement, What is a compound statement?
@@ -393,12 +444,16 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
-	runResult, err := cwft.compile.Run(ts)
+	runningCompile := cwft.compile
+	defer func() {
+		runningCompile.Release()
+		cwft.compile = nil
+	}()
+
+	runResult, err := runningCompile.Run(ts)
 	// Sync the latest plan after Run (it may have changed due to retry)
-	cwft.plan = cwft.compile.GetPlan()
-	cwft.compile.Release()
+	cwft.plan = runningCompile.GetPlan()
 	cwft.runResult = runResult
-	cwft.compile = nil
 	return runResult, err
 }
 
@@ -490,7 +545,9 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		prepareStmt.compile = nil
 
 		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok {
-			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true)
+			// Prepare-time compiles are cached and must not retain a statement-owned trace.
+			// The execution path attaches the current wrapper trace after cache retrieval.
+			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true, nil)
 			if err != nil {
 				if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 					return nil, nil, nil, "", err
@@ -548,6 +605,7 @@ func createCompile(
 	plan *plan2.Plan,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 	isPrepare bool,
+	schedulingTrace *schedule.TraceRecorder,
 ) (retCompile *compile.Compile, err error) {
 
 	addr := ""
@@ -601,6 +659,7 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
+	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
 		// No permission verification is required when retry execute buildPlan
 		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
