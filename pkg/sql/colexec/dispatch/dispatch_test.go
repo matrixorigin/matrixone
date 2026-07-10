@@ -74,7 +74,10 @@ func TestRegisterRemoteReceiversBeforePrepare(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, d.RegisterRemoteReceivers(proc))
+	registration, err := d.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, registration)
+	defer registration.Cleanup()
 	require.NotNil(t, d.ctr)
 	earlyNotifyCh := d.ctr.remoteInfo
 	require.NotNil(t, earlyNotifyCh)
@@ -116,6 +119,37 @@ func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
 	require.False(t, ok)
 	require.Nil(t, p)
 	require.Nil(t, notifyCh)
+}
+
+func TestRemoteReceiverRegistrationCleanupChecksOwner(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	proc := testutil.NewProcess(t)
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	d := Dispatch{
+		FuncId:     SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{{Uuid: uid}},
+	}
+
+	first, err := d.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	first.Cleanup()
+
+	second, err := d.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	defer second.Cleanup()
+	secondCh := d.ctr.remoteInfo
+
+	// A delayed cleanup from the previous registration must not remove or
+	// clear the current owner, even though the UUID and process are reused.
+	first.Cleanup()
+	registeredProc, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+	require.True(t, ok)
+	require.Same(t, proc, registeredProc)
+	require.Equal(t, secondCh, notifyCh)
 }
 
 func TestWaitRemoteRegsReadyPropagatesCancelCause(t *testing.T) {
