@@ -15,13 +15,60 @@
 package schedule
 
 type Worker struct {
-	ID   string
-	Addr string
-	Mcpu int
+	ID    string
+	Addr  string
+	Mcpu  int
+	State WorkerState
 }
 
 type Workers []Worker
 
+type WorkerState uint8
+
+const (
+	WorkerStateUnknown WorkerState = iota
+	WorkerStateWorking
+	WorkerStateDraining
+	WorkerStateDrained
+)
+
+func (s WorkerState) String() string {
+	switch s {
+	case WorkerStateUnknown:
+		return "unknown"
+	case WorkerStateWorking:
+		return "working"
+	case WorkerStateDraining:
+		return "draining"
+	case WorkerStateDrained:
+		return "drained"
+	default:
+		return "invalid"
+	}
+}
+
+func (s WorkerState) Schedulable() bool {
+	switch s {
+	case WorkerStateDraining, WorkerStateDrained:
+		return false
+	default:
+		// Unknown is fail-open: absence of runtime state is not enough to
+		// reject a worker. Explicit Draining/Drained states are the hard stops.
+		return true
+	}
+}
+
+type DroppedWorker struct {
+	Worker Worker
+	Reason string
+}
+
+type DroppedWorkers []DroppedWorker
+
 func cloneWorkers(workers Workers) Workers {
 	return append(Workers(nil), workers...)
+}
+
+func cloneDroppedWorkers(workers DroppedWorkers) DroppedWorkers {
+	return append(DroppedWorkers(nil), workers...)
 }

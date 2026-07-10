@@ -1392,6 +1392,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 func (c *Compile) constructScopeForExternalNode(node engine.Node, parallel bool) *Scope {
 	scope := c.constructScopeForExternal(node.Addr, parallel)
 	scope.NodeInfo.Id = node.Id
+	scope.NodeInfo.WorkState = node.WorkState
 	return scope
 }
 
@@ -1911,7 +1912,10 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
 	}
-	_, dispatchOp := constructDispatchLocalAndRemote(0, ss, scope)
+	dispatchOp, err := constructLocalDispatchFromScopes(0, ss, scope)
+	if err != nil {
+		return nil, err
+	}
 	dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
 	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	scope.setRootOperator(dispatchOp)
@@ -4208,13 +4212,19 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			}
 		}
 		if c.anal.qry.LoadTag && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
-			_, arg := constructDispatchLocalAndRemote(0, scopes, dataScope)
+			arg, err := constructLocalDispatchFromScopes(0, scopes, dataScope)
+			if err != nil {
+				return nil, err
+			}
 			arg.FuncId = dispatch.ShuffleToAllFunc
 			arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			dataScope.setRootOperator(arg)
 		} else {
-			_, dispatchArg := constructDispatchLocalAndRemote(0, scopes, dataScope)
+			dispatchArg, err := constructLocalDispatchFromScopes(0, scopes, dataScope)
+			if err != nil {
+				return nil, err
+			}
 			dispatchArg.FuncId = dispatch.SendToAnyLocalFunc
 			dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			dataScope.setRootOperator(dispatchArg)
@@ -4288,7 +4298,10 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 					ss[i].Proc = c.proc.NewNoContextChildProc(1)
 					ss[i].NodeInfo = scopeNodeWithMcpu(oldScope.NodeInfo, 1)
 				}
-				_, dispatchOp := constructDispatchLocalAndRemote(0, ss, oldScope)
+				dispatchOp, err := constructLocalDispatchFromScopes(0, ss, oldScope)
+				if err != nil {
+					return nil, err
+				}
 				dispatchOp.FuncId = dispatch.SendToAnyLocalFunc
 				dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 				oldScope.setRootOperator(dispatchOp)
@@ -4669,9 +4682,10 @@ func (c *Compile) queryWorkerStageNodes() engine.Nodes {
 
 func scopeNodeWithMcpu(node engine.Node, mcpu int) engine.Node {
 	return engine.Node{
-		Id:   node.Id,
-		Addr: node.Addr,
-		Mcpu: normalizeMcpu(mcpu),
+		Id:        node.Id,
+		Addr:      node.Addr,
+		Mcpu:      normalizeMcpu(mcpu),
+		WorkState: node.WorkState,
 	}
 }
 
@@ -5549,21 +5563,6 @@ func sameExecutionAddr(addr string, currentCNAddr string) bool {
 	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
 }
 
-func isSameCN(addr string, currentCNAddr string) bool {
-	// just a defensive judgment. In fact, we shouldn't have received such data.
-	parts1 := strings.Split(addr, ":")
-	if len(parts1) != 2 {
-		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'; treating as same-CN", addr)
-		return true
-	}
-	parts2 := strings.Split(currentCNAddr, ":")
-	if len(parts2) != 2 {
-		logutil.Warnf("compileScope received a malformed current-cn address '%s', expected 'ip:port'; treating as same-CN", currentCNAddr)
-		return true
-	}
-	return parts1[0] == parts2[0] && parts1[1] == parts2[1]
-}
-
 func (s *Scope) affectedRows() uint64 {
 	op := s.RootOp
 	affectedRows := uint64(0)
@@ -5783,6 +5782,9 @@ func runDetectFkReferToDBSql(c *Compile, sql string) error {
 }
 
 func getEngineNode(c *Compile) engine.Node {
+	// getEngineNode only describes the local execution identity and capacity.
+	// Runtime work state is intentionally left Unknown here; callers that make
+	// AP multi-CN placement decisions must enrich it from cluster metadata.
 	if c.IsTpQuery() {
 		return engine.Node{Addr: c.addr, Mcpu: 1}
 	} else {
