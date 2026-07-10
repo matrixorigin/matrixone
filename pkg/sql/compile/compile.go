@@ -531,6 +531,15 @@ func (c *Compile) runOnce() (err error) {
 		}
 	}
 
+	// Publish every dispatch receiver that will execute on this CN before any
+	// scope goroutine starts. Remote consumers can otherwise notify while a
+	// local source is still blocked before vm.Prepare reaches its Dispatch.
+	registrations, err := registerLocalDispatchReceivers(c.scopes, c.addr)
+	if err != nil {
+		return err
+	}
+	defer registrations.cleanup()
+
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
 			return err

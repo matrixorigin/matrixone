@@ -18,7 +18,6 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"math"
 	"sync"
 
 	"github.com/bytedance/sonic"
@@ -392,83 +391,6 @@ func runWordStats(
 	return
 }
 
-func runSqlWithFulltextFilter(proc *process.Process, fulltextMembershipFilter []byte, sql string) (executor.Result, error) {
-	sqlProc := sqlexec.NewSqlProcess(proc)
-	if len(fulltextMembershipFilter) > 0 {
-		sqlProc.FulltextMembershipFilter = fulltextMembershipFilter
-	}
-	return ft_runSql(sqlProc, sql)
-}
-
-func runSingleKeywordTopK(
-	u *fulltextState,
-	proc *process.Process,
-	s *fulltext.SearchAccum,
-) (bool, error) {
-	if u.limit == 0 || u.ranking {
-		return false, nil
-	}
-
-	var topKSQL string
-	var ok bool
-	var err error
-	switch s.ScoreAlgo {
-	case fulltext.ALGO_TFIDF:
-		topKSQL, ok, err = fulltext.SingleKeywordTopKSQL(s.Pattern, s.Mode, s.TblName, u.limit)
-	case fulltext.ALGO_BM25:
-		topKSQL, ok, err = fulltext.SingleKeywordTopKBM25SQL(s.Pattern, s.Mode, s.TblName, s.AvgDocLen, u.limit)
-	default:
-		return false, nil
-	}
-	if err != nil || !ok {
-		return false, err
-	}
-
-	topKRes, err := runSqlWithFulltextFilter(proc, u.fulltextMembershipFilter, topKSQL)
-	if err != nil {
-		return false, err
-	}
-	defer topKRes.Close()
-
-	results := make([]*vectorindex.SearchResultAnyKey, 0, u.limit)
-	var nmatch int64
-	for _, bat := range topKRes.Batches {
-		if nmatch == 0 && bat.RowCount() > 0 {
-			nmatch = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[2], 0)
-			// Guard against zero nmatch (COUNT(*) OVER() on a non-empty
-			// result set should never be 0, but be defensive anyway).
-			if nmatch == 0 || s.Nrow == 0 {
-				return true, nil
-			}
-		}
-		for i := 0; i < bat.RowCount(); i++ {
-			docID := u.normalizeDocID(vector.GetAny(bat.Vecs[0], i, false))
-			var score float64
-			switch s.ScoreAlgo {
-			case fulltext.ALGO_TFIDF:
-				tf := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[1], i)
-				idf := math.Log10(float64(s.Nrow) / float64(nmatch))
-				score = float64(float32(tf) * float32(idf*idf))
-			case fulltext.ALGO_BM25:
-				idf := math.Log10(float64(s.Nrow) / float64(nmatch))
-				idfSq := idf * idf
-				score = vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[1], i) * idfSq
-			default:
-				return false, nil
-			}
-			results = append(results, &vectorindex.SearchResultAnyKey{Id: docID, Distance: score})
-		}
-	}
-	if nmatch == 0 || s.Nrow == 0 {
-		return true, nil
-	}
-
-	for i := len(results) - 1; i >= 0; i-- {
-		u.resbuf = append(u.resbuf, results[i])
-	}
-	return true, nil
-}
-
 // evaluate the score for all document vectors in Agg hashtable.
 // whenever there is 8192 results, return it immediately.
 func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (scoremap map[any]float32, err error) {
@@ -802,14 +724,6 @@ func fulltextIndexMatch(
 		u.sacc = s
 
 		opStats.BackgroundQueries = append(opStats.BackgroundQueries, res.LogicalPlan)
-
-		ok, err := runSingleKeywordTopK(u, proc, s)
-		if err != nil {
-			return err
-		}
-		if ok {
-			return nil
-		}
 
 	}
 
