@@ -28,6 +28,115 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestRouteForCommonTenantCandidatesUsesWorkingSnapshot(t *testing.T) {
+	candidates := []metadata.CNService{
+		{
+			ServiceID: "fallback",
+			WorkState: metadata.WorkState_Working,
+		},
+		{
+			ServiceID: "matching-draining",
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"app"}},
+			},
+			WorkState: metadata.WorkState_Draining,
+		},
+	}
+	selector := clusterservice.NewSelector().SelectByLabel(
+		map[string]string{"account": "app"}, clusterservice.EQ_Globbing)
+
+	var selected []string
+	err := RouteForCommonTenantCandidates(context.Background(), candidates, selector, nil, func(service *metadata.CNService) {
+		selected = append(selected, service.ServiceID)
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"fallback"}, selected)
+}
+
+func TestRouteForSuperTenantCandidatesDoesNotMutateLabels(t *testing.T) {
+	labels := map[string]string{"account": "sys", "role": "ap"}
+	selector := clusterservice.NewSelector().SelectByLabel(labels, clusterservice.EQ_Globbing)
+	candidates := []metadata.CNService{{
+		ServiceID: "role-only",
+		Labels: map[string]metadata.LabelList{
+			"role": {Labels: []string{"ap"}},
+		},
+		WorkState: metadata.WorkState_Working,
+	}}
+
+	var selected []string
+	err := RouteForSuperTenantCandidates(context.Background(), candidates, selector, "root", nil, func(service *metadata.CNService) {
+		selected = append(selected, service.ServiceID)
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"role-only"}, selected)
+	assert.Equal(t, map[string]string{"account": "sys", "role": "ap"}, labels)
+}
+
+func TestCandidateRouteHonorsServiceIDSelector(t *testing.T) {
+	candidates := []metadata.CNService{
+		{ServiceID: "cn-1", WorkState: metadata.WorkState_Working},
+		{ServiceID: "cn-2", WorkState: metadata.WorkState_Working},
+	}
+	selector := clusterservice.NewServiceIDSelector("cn-2")
+
+	var selected []string
+	err := RouteForCommonTenantCandidates(context.Background(), candidates, selector, nil, func(service *metadata.CNService) {
+		selected = append(selected, service.ServiceID)
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"cn-2"}, selected)
+}
+
+func TestCandidateRoutesHonorCancellationDuringIteration(t *testing.T) {
+	t.Run("common tenant fallback", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		candidates := []metadata.CNService{{ServiceID: "cn-1", WorkState: metadata.WorkState_Working}}
+
+		var selected []string
+		err := RouteForCommonTenantCandidates(
+			ctx,
+			candidates,
+			clusterservice.NewSelector(),
+			nil,
+			func(service *metadata.CNService) {
+				selected = append(selected, service.ServiceID)
+				cancel()
+			},
+		)
+
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, []string{"cn-1"}, selected)
+	})
+
+	t.Run("super tenant match", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		labels := map[string]metadata.LabelList{"account": {Labels: []string{"sys"}}}
+		candidates := []metadata.CNService{{ServiceID: "cn-1", Labels: labels, WorkState: metadata.WorkState_Working}}
+		selector := clusterservice.NewSelector().SelectByLabel(
+			map[string]string{"account": "sys"}, clusterservice.EQ_Globbing)
+
+		var selected []string
+		err := RouteForSuperTenantCandidates(
+			ctx,
+			candidates,
+			selector,
+			"root",
+			nil,
+			func(service *metadata.CNService) {
+				selected = append(selected, service.ServiceID)
+				cancel()
+			},
+		)
+
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, []string{"cn-1"}, selected)
+	})
+}
+
 type mockHAKeeperClient struct {
 	sync.RWMutex
 	value logpb.ClusterDetails

@@ -149,6 +149,7 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	c.SetSchedulingTraceRecorder(nil)
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
@@ -226,6 +227,13 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	} else {
 		c.TxnOffset = 0
 	}
+
+	// A reused prepared pipeline runs directly after Reset. Only retries compile
+	// again, so the cached placement is this execution's first real attempt.
+	c.beginSchedulingTraceAttempt()
+	if c.queryPlacement.Reason != "" {
+		c.recordQuerySchedulingTrace(c.queryPlacement)
+	}
 }
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
@@ -266,6 +274,8 @@ func (c *Compile) clear() {
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
+	c.schedulingTrace = nil
+	c.schedulingAttempt = 0
 	c.stmt = nil
 	c.startAt = time.Time{}
 	c.needLockMeta = false
@@ -4674,18 +4684,27 @@ func (c *Compile) newScopeListOnSingleWorkerStage(childrenCount int, mcpu int) [
 }
 
 func (c *Compile) singleWorkerStageNode() engine.Node {
+	queryWorkers := c.scheduledQueryWorkers()
 	decision := schedule.DecideSingleWorkerStagePlacement(schedule.StageRequest{
-		QueryWorkers: c.scheduledQueryWorkers(),
+		QueryWorkers: queryWorkers,
 		CurrentCN:    c.currentCNWorker(),
 	})
+	c.schedulingTrace.RecordSingleWorkerStage(c.schedulingAttempt, queryWorkers, decision)
 	return c.materializeScheduledWorker(decision.Worker)
 }
 
 func (c *Compile) queryWorkerStageNodes() engine.Nodes {
+	queryWorkers := c.scheduledQueryWorkers()
 	decision := schedule.DecideQueryWorkerStagePlacement(schedule.StageRequest{
-		QueryWorkers: c.scheduledQueryWorkers(),
+		QueryWorkers: queryWorkers,
 		CurrentCN:    c.currentCNWorker(),
 	})
+	c.schedulingTrace.RecordStage(
+		c.schedulingAttempt,
+		schedule.StageKindQueryWorkerSet,
+		queryWorkers,
+		decision,
+	)
 	return c.materializeScheduledWorkers(decision.Workers)
 }
 

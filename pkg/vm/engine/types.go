@@ -54,6 +54,39 @@ type Node struct {
 	CNIDX int32 // cn index , starts from 0
 }
 
+// QueryCandidate is a CN discovered before tenant and label pool resolution.
+// Service keeps the control-plane metadata needed by pool policy; Mcpu keeps
+// the legacy execution-capacity value until a real resource model replaces it.
+type QueryCandidate struct {
+	Service metadata.CNService
+	Mcpu    int
+}
+
+type QueryCandidates []QueryCandidate
+
+// QueryCandidatePoolRequest contains statement/session constraints used to
+// resolve the allowed CN pool. It deliberately contains no worker-selection
+// policy such as subset size or ranking.
+type QueryCandidatePoolRequest struct {
+	IsInternal bool
+	Tenant     string
+	Username   string
+	CNLabel    map[string]string
+}
+
+// QueryCandidateDiscoverer is an optional engine capability. Implementations
+// return an unpooled cluster snapshot and must not apply tenant or label policy.
+type QueryCandidateDiscoverer interface {
+	DiscoverQueryCandidates(context.Context) (QueryCandidates, error)
+}
+
+// QueryCandidatePoolResolver is the matching optional capability that applies
+// tenant and label policy to an already-discovered candidate snapshot.
+// Implementations must treat candidates and request.CNLabel as read-only.
+type QueryCandidatePoolResolver interface {
+	ResolveQueryCandidatePool(context.Context, QueryCandidates, QueryCandidatePoolRequest) (Nodes, error)
+}
+
 func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 	planDefs := tableDef.GetDefs()
 	c := new(ConstraintDef)
