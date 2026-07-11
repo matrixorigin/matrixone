@@ -345,6 +345,62 @@ func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 	return newNodeId
 }
 
+func aggregateDependsOnInputOrder(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "group_concat", "json_arrayagg", "json_objectagg":
+		return true
+	default:
+		return false
+	}
+}
+
+// retainInputOrder keeps windows on each order-transparent input path.
+// Order-sensitive aggregates expose the input sequence in their result, even
+// when a window's own output column is not referenced. Stacked windows must all
+// remain because an earlier ordering can determine tie order in a later one.
+// The returned references are temporary and must be released after child
+// remapping.
+func (builder *QueryBuilder) retainInputOrder(nodeID int32, colRefCnt map[[2]int32]int, refs [][2]int32) [][2]int32 {
+	node := builder.qry.Nodes[nodeID]
+	switch node.NodeType {
+	case plan.Node_WINDOW:
+		if len(node.BindingTags) > 0 {
+			ref := [2]int32{node.BindingTags[0], node.GetWindowIdx()}
+			if colRefCnt[ref] == 0 {
+				colRefCnt[ref]++
+				refs = append(refs, ref)
+			}
+		}
+		if len(node.Children) == 1 {
+			refs = builder.retainInputOrder(node.Children[0], colRefCnt, refs)
+		}
+		return refs
+
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_MATERIAL, plan.Node_PARTITION:
+		if len(node.Children) == 1 {
+			return builder.retainInputOrder(node.Children[0], colRefCnt, refs)
+		}
+
+	case plan.Node_UNION_ALL:
+		for _, childID := range node.Children {
+			refs = builder.retainInputOrder(childID, colRefCnt, refs)
+		}
+		return refs
+	}
+
+	return refs
+}
+
+func releaseRetainedOrderRefs(colRefCnt map[[2]int32]int, refs [][2]int32) {
+	for _, ref := range refs {
+		colRefCnt[ref]--
+	}
+}
+
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
 	node := builder.qry.Nodes[nodeID]
 
@@ -987,7 +1043,24 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
+		var retainedOrderRefs [][2]int32
+		for i, expr := range node.AggList {
+			if pruneAgg && aggPos[i] < 0 {
+				continue
+			}
+			// A scalar aggregate can be retained only as a row-count carrier.
+			// Its discarded value cannot observe input order.
+			if colRefCnt[[2]int32{aggregateTag, int32(i)}] == 0 {
+				continue
+			}
+			if aggregateDependsOnInputOrder(expr) {
+				retainedOrderRefs = builder.retainInputOrder(node.Children[0], colRefCnt, retainedOrderRefs)
+				break
+			}
+		}
+
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		releaseRetainedOrderRefs(colRefCnt, retainedOrderRefs)
 		if err != nil {
 			return nil, err
 		}

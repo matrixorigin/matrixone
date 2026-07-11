@@ -636,6 +636,13 @@ func TestColumnPruneSemanticBoundaries(t *testing.T) {
 			},
 		},
 		{
+			name: "order sensitive aggregate retains input window order",
+			sql:  "select n_regionkey, json_arrayagg(n_name) from (select n_regionkey, n_name, row_number() over (partition by n_regionkey order by n_comment) as rn from nation) w group by n_regionkey",
+			wantTableCol: []Entry[string, []string]{
+				{tableName: "nation", colNames: []string{"n_name", "n_regionkey", "n_comment"}},
+			},
+		},
+		{
 			name: "having keeps only its aggregate input",
 			sql:  "select c_custkey from (select c_custkey, count(c_comment) as cnt, sum(c_acctbal) as total from customer group by c_custkey having sum(c_acctbal) > 0) g",
 			wantTableCol: []Entry[string, []string]{
@@ -810,6 +817,57 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 			}
 		}
 		require.True(t, windowFound)
+	})
+
+	t.Run("order sensitive aggregate retains window without exposing its output", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select n_regionkey, json_arrayagg(n_name) from (select n_regionkey, n_name, row_number() over (partition by n_regionkey order by n_comment) as rn from nation) w group by n_regionkey",
+		)
+		require.NoError(t, err)
+
+		windowFound := false
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_WINDOW {
+				windowFound = true
+			}
+			if node.NodeType == plan.Node_AGG {
+				require.Len(t, node.ProjectList, 2)
+			}
+		}
+		require.True(t, windowFound)
+	})
+
+	t.Run("discarded order sensitive carrier does not retain window order", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select 1 from (select json_arrayagg(n_name) from (select n_name, row_number() over (order by n_comment) as rn from nation) w) g",
+		)
+		require.NoError(t, err)
+
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			require.NotEqual(t, plan.Node_WINDOW, node.NodeType)
+			require.NotEqual(t, plan.Node_PARTITION, node.NodeType)
+		}
+	})
+
+	t.Run("order sensitive aggregate retains stacked windows", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select json_arrayagg(n_name) from (select n_name, row_number() over (order by n_regionkey) as rn1, row_number() over (order by n_comment) as rn2 from nation) w",
+		)
+		require.NoError(t, err)
+
+		windowCount := 0
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_WINDOW {
+				windowCount++
+			}
+		}
+		require.Equal(t, 2, windowCount)
 	})
 
 	t.Run("cte consumers expose only referenced columns", func(t *testing.T) {

@@ -30,6 +30,10 @@ select total from (select count(payload) as unused_count, sum(b) as total from l
 select a from (select a, row_number() over(partition by b order by payload) as rn from l) w order by a;
 select a, rn from (select a, row_number() over(partition by b order by payload) as rn from l) w order by a, rn;
 
+-- An order-sensitive aggregate observes its input sequence. The window result
+-- is unused, but its ordering cannot be removed without changing the JSON array.
+select a, json_arrayagg(payload) from (select a, payload, row_number() over(partition by a order by b desc, payload) as rn from l) w group by a order by a;
+
 -- A scalar aggregate with a discarded value still produces one row on empty
 -- input, so pruning must retain a row-producing aggregate carrier.
 create table empty_t(v int);

@@ -46,6 +46,10 @@ a    rn
 1    1
 1    2
 2    1
+select a, json_arrayagg(payload) from (select a, payload, row_number() over(partition by a order by b desc, payload) as rn from l) w group by a order by a;
+a    json_arrayagg(payload)
+1    ["w", "x", "y"]
+2    ["z"]
 create table empty_t(v int);
 select 1 from (select sum(v) as discarded from empty_t) s;
 1

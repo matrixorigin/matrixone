@@ -340,6 +340,21 @@ func TestRemapHavingClause(t *testing.T) {
 	})
 }
 
+func TestAggregateDependsOnInputOrder(t *testing.T) {
+	makeAgg := func(name string) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: name}}}}
+	}
+
+	for _, name := range []string{"group_concat", "json_arrayagg", "json_objectagg"} {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, aggregateDependsOnInputOrder(makeAgg(name)))
+		})
+	}
+	require.False(t, aggregateDependsOnInputOrder(makeAgg("sum")))
+	require.False(t, aggregateDependsOnInputOrder(GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)))
+	require.False(t, aggregateDependsOnInputOrder(&plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}))
+}
+
 func TestBuildWindowFilterOnNonProjectedColumns(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
