@@ -15,11 +15,21 @@
 package frontend
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockCompile struct {
@@ -85,4 +95,100 @@ func TestTxnComputationWrapper_Run_Error(t *testing.T) {
 	assert.Nil(t, res)
 	assert.Equal(t, expectedPlan, cwft.plan)
 	assert.Nil(t, cwft.compile)
+}
+
+// newPreparedExecuteEnv sets up a session holding a prepared "select 1" and a
+// computation wrapper that executes it through the binary protocol, so tests
+// can drive cw.Compile through initExecuteStmtParam.
+func newPreparedExecuteEnv(t *testing.T, stmtID uint32) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
+	ctx := statistic.ContextWithStatsInfo(context.Background(), statistic.NewStatsInfo())
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+	proc.Base.SessionInfo.StorageEngine = &disttae.Engine{}
+
+	stmtName := getPrepareStmtName(stmtID)
+	prepareString := tree.NewPrepareString(tree.Identifier(stmtName), "select 1")
+	stmts, err := mysql.Parse(ctx, prepareString.Sql, 1)
+	require.NoError(t, err)
+	preparePlan, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), prepareString)
+	require.NoError(t, err)
+
+	prepareStmt := &PrepareStmt{
+		Name:                stmtName,
+		Sql:                 prepareString.Sql,
+		PreparePlan:         preparePlan,
+		PrepareStmt:         stmts[0],
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
+
+	cw := InitTxnComputationWrapper(ses, stmts[0], proc)
+	cw.plan = preparePlan.GetDcl().GetPrepare().Plan
+	execCtx := &ExecCtx{
+		reqCtx: ctx,
+		input: &UserInput{
+			stmtName:            stmtName,
+			isBinaryProtExecute: true,
+		},
+	}
+	return ses, prepareStmt, cw, execCtx
+}
+
+// A nil cached compile means the statement was rejected for prepare-time
+// compile (e.g. AP query hitting ErrCantCompileForPrepare). Execute must not
+// retry that doomed compile on every run; the cache stays nil and the regular
+// compile path (isPrepare=false) takes over.
+func TestInitExecuteStmtParamSkipsPrepareCompileWithoutCache(t *testing.T) {
+	_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 100)
+	defer prepareStmt.Close()
+
+	ret, err := cw.Compile(execCtx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, ret)
+	require.Nil(t, prepareStmt.compile)
+}
+
+// A cached compile must be dropped and rebuilt from the plan on every execute
+// so no stale operator state (hashbuild ctr, dispatch channels) survives into
+// the next run. See https://github.com/matrixorigin/matrixone/issues/25526.
+func TestInitExecuteStmtParamRecreatesCachedCompileOnEachExecute(t *testing.T) {
+	_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
+	defer prepareStmt.Close()
+
+	// The sentinel cached compile carries no plan; only a freshly built
+	// compile can have one.
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+
+	ret, err := cw.Compile(execCtx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, ret)
+	require.NotNil(t, prepareStmt.compile)
+	require.NotNil(t, prepareStmt.compile.GetPlan())
+}
+
+// When rebuilding the cached compile fails with a real error (not
+// ErrCantCompileForPrepare), execute must surface it and the stale compile
+// must not survive in the cache.
+func TestInitExecuteStmtParamReturnsRecompileError(t *testing.T) {
+	_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 102)
+	defer prepareStmt.Close()
+
+	prepareStmt.compile = compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+
+	// An unsupported node type makes compilePlanScope fail with NYI.
+	qry := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery()
+	require.NotEmpty(t, qry.Nodes)
+	qry.Nodes[len(qry.Nodes)-1].NodeType = plan.Node_UNKNOWN
+
+	_, err := cw.Compile(execCtx, nil)
+	require.Error(t, err)
+	require.Nil(t, prepareStmt.compile)
 }

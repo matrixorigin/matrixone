@@ -1044,10 +1044,11 @@ type activeTxnHolder interface {
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
 	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
-	canUnlockRemoteTxn(pb.WaitTxn) bool
+	canUnlockRemoteTxn(pb.WaitTxn) (bool, timestamp.Timestamp)
 	getTimeoutRemoveTxn(
 		timeoutServices map[string]struct{},
 		timeoutTxns [][]byte,
+		fenceTSByTxn map[string]timestamp.Timestamp,
 		maxKeepInterval time.Duration) [][]byte
 	isValidRemoteTxn(pb.WaitTxn) bool
 }
@@ -1058,7 +1059,7 @@ type mapBasedTxnHolder struct {
 	fsp       *fixedSlicePool
 	validTxn  func(txn pb.WaitTxn) (bool, error)
 	valid     func(sid string) (bool, error)
-	notify    func([]pb.OrphanTxn) ([][]byte, error)
+	notify    func([]pb.OrphanTxn) (pb.CannotCommitResponse, error)
 	mu        struct {
 		sync.RWMutex
 		// remoteServices known remote service
@@ -1077,7 +1078,7 @@ func newMapBasedTxnHandler(
 	logger *log.MOLogger,
 	fsp *fixedSlicePool,
 	valid func(sid string) (bool, error),
-	notify func([]pb.OrphanTxn) ([][]byte, error),
+	notify func([]pb.OrphanTxn) (pb.CannotCommitResponse, error),
 	validTxn func(txn pb.WaitTxn) (bool, error),
 ) activeTxnHolder {
 	h := &mapBasedTxnHolder{}
@@ -1229,9 +1230,13 @@ func (h *mapBasedTxnHolder) hasRemoteLockBind(remoteService string, bind pb.Lock
 func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	timeoutServices map[string]struct{},
 	needRemoved [][]byte,
+	fenceTSByTxn map[string]timestamp.Timestamp,
 	maxKeepInterval time.Duration,
 ) [][]byte {
 	needRemoved = needRemoved[:0]
+	for k := range fenceTSByTxn {
+		delete(fenceTSByTxn, k)
+	}
 	for k := range timeoutServices {
 		delete(timeoutServices, k)
 	}
@@ -1294,18 +1299,25 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 		// In case2: txn1'commit request will failed, and we can make txn1 as
 		//           timeout txn.
 		if committing, err := h.notify(cannotCommit); err == nil {
-			for sid, idx := range cannotCommitServices {
-				if len(committing) == 0 {
-					needRemoved = append(needRemoved, cannotCommit[idx].Txn...)
-					timeoutServices[sid] = struct{}{}
-				} else {
-					m := make(map[string]struct{}, len(committing))
-					for _, v := range committing {
-						m[util.UnsafeBytesToString(v)] = struct{}{}
-					}
-					for _, v := range cannotCommit[idx].Txn {
-						if _, ok := m[util.UnsafeBytesToString(v)]; !ok {
-							needRemoved = append(needRemoved, v)
+			if !committing.FenceTS.IsEmpty() {
+				committingTxns := committing.CommittingTxn
+				for sid, idx := range cannotCommitServices {
+					if len(committingTxns) == 0 {
+						needRemoved = append(needRemoved, cannotCommit[idx].Txn...)
+						for _, txn := range cannotCommit[idx].Txn {
+							fenceTSByTxn[util.UnsafeBytesToString(txn)] = committing.FenceTS
+						}
+						timeoutServices[sid] = struct{}{}
+					} else {
+						m := make(map[string]struct{}, len(committingTxns))
+						for _, v := range committingTxns {
+							m[util.UnsafeBytesToString(v)] = struct{}{}
+						}
+						for _, v := range cannotCommit[idx].Txn {
+							if _, ok := m[util.UnsafeBytesToString(v)]; !ok {
+								needRemoved = append(needRemoved, v)
+								fenceTSByTxn[util.UnsafeBytesToString(v)] = committing.FenceTS
+							}
 						}
 					}
 				}
@@ -1337,18 +1349,20 @@ func (h *mapBasedTxnHolder) isValidRemoteTxn(txn pb.WaitTxn) bool {
 		// A remote CN active-txn miss does not prove the txn is safe to unlock.
 		// The commit response may be lost after TN has already committed it, so
 		// require the allocator to confirm the txn cannot still be committing.
-		return !h.canUnlockRemoteTxn(txn)
+		canUnlock, _ := h.canUnlockRemoteTxn(txn)
+		return !canUnlock
 	}
 	logValidTxnFailed(h.logger, txn, err)
 	if isRetryError(err) {
 		return true
 	}
-	return !h.canUnlockRemoteTxn(txn)
+	canUnlock, _ := h.canUnlockRemoteTxn(txn)
+	return !canUnlock
 }
 
-func (h *mapBasedTxnHolder) canUnlockRemoteTxn(txn pb.WaitTxn) bool {
+func (h *mapBasedTxnHolder) canUnlockRemoteTxn(txn pb.WaitTxn) (bool, timestamp.Timestamp) {
 	if txn.CreatedOn == h.serviceID {
-		return false
+		return false, timestamp.Timestamp{}
 	}
 	cannotCommit := []pb.OrphanTxn{
 		{
@@ -1360,10 +1374,11 @@ func (h *mapBasedTxnHolder) canUnlockRemoteTxn(txn pb.WaitTxn) bool {
 	committing, err := h.notify(cannotCommit)
 	if err != nil {
 		// any error, we cannot determine that the txn is safe to unlock.
-		return false
+		return false, timestamp.Timestamp{}
 	}
-	// the target txn is safe to unlock only when TN confirms it is not committing.
-	return len(committing) == 0
+	// The target txn is safe to unlock only when TN confirms it is not
+	// committing and returns an allocator fence that dominates future commits.
+	return len(committing.CommittingTxn) == 0 && !committing.FenceTS.IsEmpty(), committing.FenceTS
 }
 
 func (h *mapBasedTxnHolder) close() {
