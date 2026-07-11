@@ -108,6 +108,7 @@ func TestInsertOperator(t *testing.T) {
 	require.Equal(t, uint64(3), argument1.ctr.affectedRows)
 
 	argument1.Reset(proc, false, nil)
+	require.Nil(t, argument1.ctr.source)
 
 	resetChildren(&argument1, batch1)
 	err = argument1.Prepare(proc)
