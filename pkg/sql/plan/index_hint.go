@@ -115,7 +115,7 @@ func validateIndexHintNames(ctx context.Context, tableDef *plan.TableDef, names 
 		existing[strings.ToLower(PrimaryKeyName)] = strings.ToLower(PrimaryKeyName)
 	}
 	for _, idx := range tableDef.Indexes {
-		if idx == nil {
+		if idx == nil || !idx.TableExist {
 			continue
 		}
 		lowerName := strings.ToLower(idx.IndexName)

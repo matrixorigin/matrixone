@@ -74,6 +74,39 @@ from t ignore index for group by(idx_a_b_c_id)
 group by a;
 
 -- @separator:table
+-- @regex("Filter Cond",true)
+-- @regex("Index Reader Param",false)
+explain select id,a,b
+from t force index for order by(idx_a_b_c_id)
+where b = 1
+order by a
+limit 1;
+
+select id,a,b
+from t force index for order by(idx_a_b_c_id)
+where b = 1
+order by a
+limit 1;
+
+select a,count(*)
+from t force index for group by(idx_a_b_c_id)
+where b = 7
+group by a
+order by a;
+
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",true)
+-- @regex("Join Type: INDEX",true)
+explain select a,max(score)
+from t force index for group by(idx_a_b_c_id)
+group by a;
+
+select a,max(score)
+from t force index for group by(idx_a_b_c_id)
+group by a
+order by a;
+
+-- @separator:table
 -- @regex("Index Table Scan.*idx_a_b_c_id",false)
 explain select id,a,b,c
 from t ignore index(idx_a_b_c_id)

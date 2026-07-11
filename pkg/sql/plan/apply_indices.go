@@ -472,7 +472,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	{
 		masterIndexes := make([]*plan.IndexDef, 0)
 		for _, indexDef := range node.TableDef.Indexes {
-			if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
+			if indexDef.TableExist && !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
 				masterIndexes = append(masterIndexes, indexDef)
 			}
 		}
@@ -721,7 +721,7 @@ func (builder *QueryBuilder) applyOrderHintIndexScan(projNode *plan.Node, colRef
 		return
 	}
 	hintSet := builder.indexHintsByScan[scanNode.NodeId]
-	if hintSet == nil || (!hintSet.order.useSpecified && !hintSet.order.forceSpecified) {
+	if hintSet == nil || hintSet.order.empty() {
 		return
 	}
 
@@ -749,24 +749,28 @@ func (builder *QueryBuilder) applyOrderHintIndexScan(projNode *plan.Node, colRef
 		if !usableRegularHintIndex(idxDef) || !indexLeadingColumnsMatch(idxDef, scanNode.TableDef, baseCols) {
 			continue
 		}
-		idxNodeID := builder.tryHintedCoveringIndexScan(idxDef, scanNode, colRefCnt, idxColMap)
-		if idxNodeID == -1 {
+		accessNodeID, idxNodeID, covering := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
+		if accessNodeID == -1 {
 			continue
 		}
 		if sortProjectNode != nil {
-			sortProjectNode.Children[0] = idxNodeID
-			replaceColumnsForNode(sortProjectNode, idxColMap)
+			sortProjectNode.Children[0] = accessNodeID
+			if covering {
+				replaceColumnsForNode(sortProjectNode, idxColMap)
+			}
 		} else {
-			sortNode.Children[0] = idxNodeID
+			sortNode.Children[0] = accessNodeID
 		}
-		replaceColumnsForNode(sortNode, idxColMap)
-		replaceColumnsForNode(projNode, idxColMap)
+		if covering {
+			replaceColumnsForNode(sortNode, idxColMap)
+			replaceColumnsForNode(projNode, idxColMap)
+		}
 		idxNode := builder.qry.Nodes[idxNodeID]
 		idxNode.OrderBy = []*plan.OrderBySpec{{
 			Expr: GetColExpr(idxNode.TableDef.Cols[0].Typ, idxNode.BindingTags[0], 0),
 			Flag: orderFlag,
 		}}
-		if sortNode.Limit != nil && sortNode.Offset == nil && sortNode.RankOption == nil {
+		if covering && len(idxNode.FilterList) == 0 && sortNode.Limit != nil && sortNode.Offset == nil && sortNode.RankOption == nil {
 			applyRegularIndexOrderedLimitParam(idxNode, idxNode.OrderBy[0], sortNode.Limit)
 		}
 		return
@@ -782,7 +786,7 @@ func (builder *QueryBuilder) applyGroupHintIndexScan(aggNode *plan.Node, colRefC
 		return
 	}
 	hintSet := builder.indexHintsByScan[scanNode.NodeId]
-	if hintSet == nil || (!hintSet.group.useSpecified && !hintSet.group.forceSpecified) {
+	if hintSet == nil || hintSet.group.empty() {
 		return
 	}
 	groupCols := make([]int32, len(aggNode.GroupBy))
@@ -798,18 +802,20 @@ func (builder *QueryBuilder) applyGroupHintIndexScan(aggNode *plan.Node, colRefC
 		if !usableRegularHintIndex(idxDef) || !indexLeadingColumnsMatch(idxDef, scanNode.TableDef, groupCols) {
 			continue
 		}
-		idxNodeID := builder.tryHintedCoveringIndexScan(idxDef, scanNode, colRefCnt, idxColMap)
-		if idxNodeID == -1 {
+		accessNodeID, _, covering := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
+		if accessNodeID == -1 {
 			continue
 		}
-		aggNode.Children[0] = idxNodeID
-		replaceColumnsForNode(aggNode, idxColMap)
+		aggNode.Children[0] = accessNodeID
+		if covering {
+			replaceColumnsForNode(aggNode, idxColMap)
+		}
 		return
 	}
 }
 
 func usableRegularHintIndex(idxDef *plan.IndexDef) bool {
-	return idxDef != nil && idxDef.TableExist && !idxDef.Unique && catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef)
+	return idxDef != nil && idxDef.TableExist && catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef)
 }
 
 func indexLeadingColumnsMatch(idxDef *plan.IndexDef, tableDef *plan.TableDef, colPositions []int32) bool {
@@ -822,6 +828,66 @@ func indexLeadingColumnsMatch(idxDef *plan.IndexDef, tableDef *plan.TableDef, co
 		}
 	}
 	return true
+}
+
+func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, int32, bool) {
+	if idxNodeID := builder.tryHintedCoveringIndexScan(idxDef, node, colRefCnt, idxColMap); idxNodeID != -1 {
+		return idxNodeID, idxNodeID, true
+	}
+	accessNodeID, idxNodeID := builder.buildHintedIndexBackfillJoin(idxDef, node)
+	return accessNodeID, idxNodeID, false
+}
+
+func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef, node *plan.Node) (int32, int32) {
+	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+		return -1, -1
+	}
+	snapshot := node.ScanSnapshot
+	if snapshot == nil {
+		snapshot = &Snapshot{}
+	}
+	pkIdx, ok := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
+	if !ok {
+		return -1, -1
+	}
+	idxTag := builder.genNewBindTag()
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, snapshot)
+	if err != nil {
+		panic(err)
+	}
+	if len(idxTableDef.Cols) < 2 {
+		return -1, -1
+	}
+	pkExpr := GetColExpr(node.TableDef.Cols[pkIdx].Typ, node.BindingTags[0], pkIdx)
+	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+		DeepCopyExpr(pkExpr),
+		GetColExpr(pkExpr.Typ, idxTag, 1),
+	})
+	if err != nil {
+		return -1, -1
+	}
+	builder.addNameByColRef(idxTag, idxTableDef)
+	idxNodeID := builder.appendNode(&plan.Node{
+		NodeType:     plan.Node_TABLE_SCAN,
+		TableDef:     idxTableDef,
+		ObjRef:       idxObjRef,
+		ParentObjRef: DeepCopyObjectRef(node.ObjRef),
+		IndexScanInfo: plan.IndexScanInfo{
+			IsIndexScan: true, IndexName: idxDef.IndexName, BelongToTable: node.ObjRef.ObjName,
+			Parts: slices.Clone(idxDef.Parts), IsUnique: idxDef.Unique, IndexTableName: idxDef.IndexTableName,
+		},
+		BindingTags:  []int32{idxTag},
+		ScanSnapshot: node.ScanSnapshot,
+	}, builder.ctxByNode[node.NodeId])
+	builder.inheritIndexHints(idxNodeID, node.NodeId)
+	forceScanNodeStatsTP(idxNodeID, builder)
+	joinNodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{node.NodeId, idxNodeID},
+		JoinType: plan.Node_INDEX,
+		OnList:   []*plan.Expr{joinCond},
+	}, builder.ctxByNode[node.NodeId])
+	return joinNodeID, idxNodeID
 }
 
 func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
@@ -839,6 +905,9 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 				break
 			}
 		}
+		if idxDef.Unique && col.Name == node.TableDef.Pkey.PkeyColName {
+			covered = true
+		}
 		if !covered {
 			return -1
 		}
@@ -853,7 +922,9 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 	if err != nil {
 		panic(err)
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
+	if len(idxTableDef.Cols) < 2 {
+		return -1
+	}
 	hiddenKey := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 	colMap := make(map[[2]int32]*plan.Expr, len(idxDef.Parts))
 	for i, part := range idxDef.Parts {
@@ -864,6 +935,8 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 		}
 		if colName == node.TableDef.Pkey.PkeyColName {
 			colMap[[2]int32{node.BindingTags[0], colIdx}] = GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1)
+		} else if len(idxDef.Parts) == 1 {
+			colMap[[2]int32{node.BindingTags[0], colIdx}] = DeepCopyExpr(hiddenKey)
 		} else {
 			mappedExpr, bindErr := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(hiddenKey), node.TableDef.Cols[colIdx].Typ, int64(i))
 			if bindErr != nil {
@@ -872,9 +945,21 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 			colMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
 		}
 	}
+	if idxDef.Unique {
+		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
+		colMap[[2]int32{node.BindingTags[0], pkIdx}] = GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1)
+	}
+	newFilters := make([]*plan.Expr, len(node.FilterList))
+	for i, filter := range node.FilterList {
+		if !exprUsesOnlyMappedCols(filter, colMap) {
+			return -1
+		}
+		newFilters[i] = replaceColumnsForExpr(DeepCopyExpr(filter), colMap)
+	}
 	for key, expr := range colMap {
 		idxColMap[key] = expr
 	}
+	builder.addNameByColRef(idxTag, idxTableDef)
 
 	idxNodeID := builder.appendNode(&plan.Node{
 		NodeType:     plan.Node_TABLE_SCAN,
@@ -883,8 +968,9 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 		ParentObjRef: DeepCopyObjectRef(node.ObjRef),
 		IndexScanInfo: plan.IndexScanInfo{
 			IsIndexScan: true, IndexName: idxDef.IndexName, BelongToTable: node.ObjRef.ObjName,
-			Parts: slices.Clone(idxDef.Parts), IndexTableName: idxDef.IndexTableName,
+			Parts: slices.Clone(idxDef.Parts), IsUnique: idxDef.Unique, IndexTableName: idxDef.IndexTableName,
 		},
+		FilterList:   newFilters,
 		BindingTags:  []int32{idxTag},
 		ScanSnapshot: node.ScanSnapshot,
 	}, builder.ctxByNode[node.NodeId])

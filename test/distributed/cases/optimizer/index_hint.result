@@ -120,6 +120,61 @@ Project  𝄀
         Group Key: t.a  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on mysql_compat_index_hint.t
+explain select id,a,b
+from t force index for order by(idx_a_b_c_id)
+where b = 1
+order by a
+limit 1;
+-- @regex("Filter Cond", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: serial_extract(__mo_index_idx_col, 1, VARCHAR)) INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Index Table Scan on t.idx_b_a_id  𝄀
+              Filter Cond: prefix_eq(__mo_index_idx_col)
+select id,a,b
+from t force index for order by(idx_a_b_c_id)
+where b = 1
+order by a
+limit 1;
+➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  𝄀
+112  ¦  g02  ¦  1
+select a,count(*)
+from t force index for group by(idx_a_b_c_id)
+where b = 7
+group by a
+order by a;
+➤ a[12,-1,0]  ¦  count(*)[-5,64,0]  𝄀
+g01  ¦  1  𝄀
+g02  ¦  1  𝄀
+g05  ¦  1
+explain select a,max(score)
+from t force index for group by(idx_a_b_c_id)
+group by a;
+-- @regex("Index Table Scan.*idx_a_b_c_id", true)
+-- @regex("Join Type: INDEX", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Group Key: t.a  𝄀
+        Aggregate Functions: max(t.score)  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (t.id = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on mysql_compat_index_hint.t [ForceOneCN]  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Index Table Scan on t.idx_a_b_c_id [ForceOneCN]
+select a,max(score)
+from t force index for group by(idx_a_b_c_id)
+group by a
+order by a;
+➤ a[12,-1,0]  ¦  max(score)[4,32,0]  𝄀
+g01  ¦  83  𝄀
+g02  ¦  94  𝄀
+g05  ¦  89
 explain select id,a,b,c
 from t ignore index(idx_a_b_c_id)
 where a in ('g02','g04')

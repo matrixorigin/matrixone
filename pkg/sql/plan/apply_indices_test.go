@@ -142,7 +142,10 @@ func TestRecordIndexHintsValidatesNames(t *testing.T) {
 			PkeyColName: "id",
 			Names:       []string{"id"},
 		},
-		Indexes: []*planpb.IndexDef{{IndexName: "idx_a"}},
+		Indexes: []*planpb.IndexDef{
+			{IndexName: "idx_a", TableExist: true},
+			{IndexName: "idx_unavailable"},
+		},
 	}
 
 	err := builder.recordIndexHints(1, tableDef, []*tree.IndexHint{
@@ -158,6 +161,13 @@ func TestRecordIndexHintsValidatesNames(t *testing.T) {
 	var moErr *moerr.Error
 	require.ErrorAs(t, err, &moErr)
 	require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+
+	err = builder.recordIndexHints(1, tableDef, []*tree.IndexHint{
+		{HintType: tree.HintForce, HintScope: tree.HintForScan, IndexNames: []string{"idx_unavailable"}},
+	})
+	require.Error(t, err)
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
 }
 
 func TestRecordIndexHintsMySQLCompatibility(t *testing.T) {
@@ -168,8 +178,8 @@ func TestRecordIndexHintsMySQLCompatibility(t *testing.T) {
 			Names:       []string{"id"},
 		},
 		Indexes: []*planpb.IndexDef{
-			{IndexName: "idx_alpha"},
-			{IndexName: "idx_beta"},
+			{IndexName: "idx_alpha", TableExist: true},
+			{IndexName: "idx_beta", TableExist: true},
 		},
 	}
 
@@ -255,7 +265,47 @@ func TestIndexHintOrderScopeSelectsCoveringIndexWithoutFilter(t *testing.T) {
 
 	queryPlan, err = runOneStmt(mock, t, "select a from index_hint_t ignore index for order by(idx_a) order by a limit 10")
 	require.NoError(t, err)
+	require.NotEqual(t, "idx_a", findFirstIndexScanName(queryPlan))
+}
+
+func TestIndexHintOrderScopePreservesCoveringIndexFilters(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, "select id,a,b from index_hint_t force index for order by(idx_ab) where b = 1 order by a limit 1")
+	require.NoError(t, err)
+	indexScan := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, indexScan)
+	require.Equal(t, "idx_ab", indexScan.IndexScanInfo.IndexName)
+	require.NotEmpty(t, indexScan.FilterList)
+	require.Nil(t, indexScan.IndexReaderParam)
+}
+
+func TestIndexHintOrderScopeBuildsNonCoveringBackfillJoin(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, "select b from index_hint_t force index for order by(idx_a) order by a")
+	require.NoError(t, err)
+	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+}
+
+func TestIndexHintPrimaryOrderAndGroupScopes(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, "select id from index_hint_t force index for order by(primary) order by id")
+	require.NoError(t, err)
 	require.Empty(t, findFirstIndexScanName(queryPlan))
+
+	queryPlan, err = runOneStmt(mock, t, "select id from index_hint_t ignore index for order by(primary) order by id")
+	require.NoError(t, err)
+	require.Equal(t, "idx_id", findFirstIndexScanName(queryPlan))
+
+	queryPlan, err = runOneStmt(mock, t, "select id,count(*) from index_hint_t ignore index for group by(primary) group by id")
+	require.NoError(t, err)
+	require.Equal(t, "idx_id", findFirstIndexScanName(queryPlan))
 }
 
 func TestIndexHintGroupScopeSelectsAndIgnoresCoveringIndex(t *testing.T) {
@@ -268,7 +318,27 @@ func TestIndexHintGroupScopeSelectsAndIgnoresCoveringIndex(t *testing.T) {
 
 	queryPlan, err = runOneStmt(mock, t, "select a, count(*) from index_hint_t ignore index for group by(idx_a) group by a")
 	require.NoError(t, err)
-	require.Empty(t, findFirstIndexScanName(queryPlan))
+	require.NotEqual(t, "idx_a", findFirstIndexScanName(queryPlan))
+
+	queryPlan, err = runOneStmt(mock, t, "select a, count(*) from index_hint_t force index for group by(idx_ab) where b = 1 group by a")
+	require.NoError(t, err)
+	indexScan := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, indexScan)
+	require.Equal(t, "idx_ab", indexScan.IndexScanInfo.IndexName)
+	require.NotEmpty(t, indexScan.FilterList)
+
+	queryPlan, err = runOneStmt(mock, t, "select a, max(b) from index_hint_t force index for group by(idx_a) group by a")
+	require.NoError(t, err)
+	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
+
+	queryPlan, err = runOneStmt(mock, t, "select a,b from index_hint_t force index for order by(uk_ab) order by a,b")
+	require.NoError(t, err)
+	require.Equal(t, "uk_ab", findFirstIndexScanName(queryPlan))
+
+	queryPlan, err = runOneStmt(mock, t, "select a,b,count(*) from index_hint_t force index for group by(uk_ab) group by a,b")
+	require.NoError(t, err)
+	require.Equal(t, "uk_ab", findFirstIndexScanName(queryPlan))
 }
 
 func TestIndexHintRejectsInvalidCombinations(t *testing.T) {
@@ -437,6 +507,19 @@ func addIndexHintChoiceTableForTest(mock *MockOptimizer) {
 				IndexTableName: "idx_hint_ab",
 				TableExist:     true,
 			},
+			{
+				IndexName:      "uk_ab",
+				Parts:          []string{"a", "b"},
+				IndexTableName: "uk_hint_ab",
+				TableExist:     true,
+				Unique:         true,
+			},
+			{
+				IndexName:      "idx_id",
+				Parts:          []string{"id", catalog.CreateAlias("id")},
+				IndexTableName: "idx_hint_id",
+				TableExist:     true,
+			},
 		},
 		Name2ColIndex: map[string]int32{"id": 0, "a": 1, "b": 2},
 	}
@@ -447,6 +530,8 @@ func addIndexHintChoiceTableForTest(mock *MockOptimizer) {
 	mock.ctxt.pks["index_hint_t"] = []int{0}
 	addIndexHintIndexTableForTest(mock, "idx_hint_a", 25357)
 	addIndexHintIndexTableForTest(mock, "idx_hint_ab", 25358)
+	addIndexHintIndexTableForTest(mock, "uk_hint_ab", 25359)
+	addIndexHintIndexTableForTest(mock, "idx_hint_id", 25360)
 }
 
 func addIndexHintIndexTableForTest(mock *MockOptimizer, name string, tableID uint64) {
@@ -479,15 +564,35 @@ func addIndexHintIndexTableForTest(mock *MockOptimizer, name string, tableID uin
 }
 
 func findFirstIndexScanName(p *Plan) string {
-	if p == nil || p.GetQuery() == nil {
+	node := findFirstIndexScanNode(p)
+	if node == nil {
 		return ""
+	}
+	return node.IndexScanInfo.IndexName
+}
+
+func findFirstIndexScanNode(p *Plan) *planpb.Node {
+	if p == nil || p.GetQuery() == nil {
+		return nil
 	}
 	for _, node := range p.GetQuery().Nodes {
 		if node.IndexScanInfo.IsIndexScan {
-			return node.IndexScanInfo.IndexName
+			return node
 		}
 	}
-	return ""
+	return nil
+}
+
+func planHasIndexJoin(p *Plan) bool {
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_INDEX {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
