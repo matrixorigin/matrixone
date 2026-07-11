@@ -99,6 +99,8 @@ func TestNewMemPKFilter(t *testing.T) {
 	ubUUID := encodeIntToUUID(int32(ub))
 
 	baseFilters := []BasePKFilter{
+		{Op: function.BETWEEN, Valid: true, Oid: types.T_bool, LB: types.EncodeFixed(false), UB: types.EncodeFixed(true)},
+		{Op: function.BETWEEN, Valid: true, Oid: types.T_bit, LB: types.EncodeFixed(uint64(lb)), UB: types.EncodeFixed(uint64(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_int8, LB: types.EncodeFixed(int8(lb)), UB: types.EncodeFixed(int8(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_int16, LB: types.EncodeFixed(int16(lb)), UB: types.EncodeFixed(int16(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
@@ -109,6 +111,8 @@ func TestNewMemPKFilter(t *testing.T) {
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_uint64, LB: types.EncodeFixed(uint64(lb)), UB: types.EncodeFixed(uint64(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_float32, LB: types.EncodeFixed(float32(lb)), UB: types.EncodeFixed(float32(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_float64, LB: types.EncodeFixed(float64(lb)), UB: types.EncodeFixed(float64(ub))},
+		{Op: function.BETWEEN, Valid: true, Oid: types.T_year, LB: types.EncodeFixed(types.MoYear(lb)), UB: types.EncodeFixed(types.MoYear(ub))},
+		{Op: function.BETWEEN, Valid: true, Oid: types.T_varbinary, LB: []byte("a"), UB: []byte("z")},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_enum, LB: types.EncodeFixed(types.Enum(lb)), UB: types.EncodeFixed(types.Enum(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_uuid, LB: lbUUID[:], UB: ubUUID[:]},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_blob, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
@@ -186,6 +190,10 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 		{Op: function.IN, Valid: true, Oid: types.T_int32, Vec: inVec},
 		{Op: function.PREFIX_IN, Valid: true, Oid: types.T_varchar, Vec: prefixInVec},
 		{Op: function.PREFIX_EQ, Valid: true, Oid: types.T_varchar, LB: []byte("aa")},
+		{Op: function.PREFIX_BETWEEN, Valid: true, Oid: types.T_varchar, LB: []byte("aa"), UB: []byte("bb")},
+		{Op: PrefixRangeLeftOpen, Valid: true, Oid: types.T_varchar, LB: []byte("aa"), UB: []byte("bb")},
+		{Op: PrefixRangeRightOpen, Valid: true, Oid: types.T_varchar, LB: []byte("aa"), UB: []byte("bb")},
+		{Op: PrefixRangeBothOpen, Valid: true, Oid: types.T_varchar, LB: []byte("aa"), UB: []byte("bb")},
 	}
 
 	skipCnt := []int{
@@ -197,11 +205,17 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 		3, // in
 		0, // prefix in
 		2, // prefix eq
+		1, // prefix between [,]
+		2, // prefix between (,]
+		2, // prefix between [,)
+		3, // prefix between (,)
 	}
 
 	vecs := make([]*vector.Vector, 0, len(baseFilters))
 	for _, f := range baseFilters {
-		if f.Op != function.PREFIX_IN && f.Op != function.PREFIX_EQ {
+		if f.Op != function.PREFIX_IN && f.Op != function.PREFIX_EQ &&
+			f.Op != function.PREFIX_BETWEEN && f.Op != PrefixRangeLeftOpen &&
+			f.Op != PrefixRangeRightOpen && f.Op != PrefixRangeBothOpen {
 			vec := vector.NewVec(types.T_int32.ToType())
 			vector.AppendFixed[int32](vec, int32(9), false, mp)
 			vector.AppendFixed[int32](vec, int32(10), false, mp)

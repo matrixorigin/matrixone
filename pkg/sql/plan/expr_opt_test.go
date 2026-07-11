@@ -54,6 +54,133 @@ func TestDoMergeFiltersOnCompositeKeyMergesSortKeyRanges(t *testing.T) {
 	requireFuncNames(t, ret, "in_range")
 }
 
+func TestCompositeKeyPushesCompoundAndPartBlockFilters(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	tableDef := makeExprOptCompositeSortKeyTableDef()
+
+	aEq := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1)
+	bGt := makeExprOptBinaryInt64Expr(t, ctx, ">", makeExprOptInt64Col(tag, 1, "b"), 2)
+	bLt := makeExprOptBinaryInt64Expr(t, ctx, "<", makeExprOptInt64Col(tag, 1, "b"), 4)
+	builder.qry.Nodes = []*planpb.Node{{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		BindingTags: []int32{tag},
+		TableDef:    tableDef,
+		FilterList:  []*planpb.Expr{aEq, bGt, bLt},
+	}}
+
+	parts := builder.collectCompositePartBlockFilters(0)
+	builder.qry.Nodes[0].FilterList = builder.doMergeFiltersOnCompositeKey(tableDef, tag, aEq, bGt, bLt)
+	builder.retainConsumedCompositePartBlockFilters(parts)
+	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, 0, true)
+	builder.appendCompoundKeyBlockFilters(0)
+	builder.appendCompoundKeyBlockFilters(0)
+	builder.appendCompositePartBlockFilters(parts)
+
+	filters := builder.qry.Nodes[0].BlockFilterList
+	require.Len(t, filters, 4)
+	requireFuncNames(t, filters, "in_range", "=", ">", "<")
+	require.Equal(t, int32(3), filters[0].GetF().Args[0].GetCol().ColPos, "compound filter must target hidden PK")
+	preserved := existingCompositeBlockFilters(builder.qry.Nodes[0])
+	require.Len(t, preserved, 4)
+	require.Same(t, filters[0], preserved[0], "stats passes must transfer owned block filters without deep copies")
+
+	// Re-optimizing an AP/high-cost plan must not lose constituent filters when
+	// stats rebuilds BlockFilterList from the already-compounded FilterList.
+	parts = builder.collectCompositePartBlockFilters(0)
+	builder.qry.Nodes[0].BlockFilterList = builder.qry.Nodes[0].BlockFilterList[:1]
+	builder.retainConsumedCompositePartBlockFilters(parts)
+	builder.appendCompositePartBlockFilters(parts)
+	require.Len(t, builder.qry.Nodes[0].BlockFilterList, 4)
+	builder.qry.Nodes[0].BlockFilterList = append(
+		builder.qry.Nodes[0].BlockFilterList,
+		DeepCopyExpr(builder.qry.Nodes[0].BlockFilterList[0]),
+	)
+	builder.deduplicateBlockFilters(0)
+	require.Len(t, builder.qry.Nodes[0].BlockFilterList, 4)
+}
+
+func TestCompositeKeyPartBlockFiltersRespectDisableHint(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	builder.optimizerHints = &OptimizerHints{blockFilter: 2}
+	tag := builder.genNewBindTag()
+	tableDef := makeExprOptCompositeSortKeyTableDef()
+	builder.qry.Nodes = []*planpb.Node{{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		BindingTags: []int32{tag},
+		TableDef:    tableDef,
+		FilterList: []*planpb.Expr{
+			makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1),
+		},
+	}}
+
+	require.Empty(t, builder.collectCompositePartBlockFilters(0))
+	builder.qry.Nodes[0].FilterList = builder.doMergeFiltersOnCompositeKey(
+		tableDef, tag, builder.qry.Nodes[0].FilterList...)
+	builder.appendCompoundKeyBlockFilters(0)
+	require.Empty(t, builder.qry.Nodes[0].BlockFilterList)
+}
+
+func TestCompositeKeyPreservesPartWhenRewriteMutatesPredicateInPlace(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	tableDef := makeExprOptCompositeSortKeyTableDef()
+	aEq := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1)
+	builder.qry.Nodes = []*planpb.Node{{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		BindingTags: []int32{tag},
+		TableDef:    tableDef,
+		FilterList:  []*planpb.Expr{aEq},
+	}}
+
+	parts := builder.collectCompositePartBlockFilters(0)
+	builder.mergeFiltersOnCompositeKey(0)
+	builder.retainConsumedCompositePartBlockFilters(parts)
+	builder.appendCompoundKeyBlockFilters(0)
+	builder.appendCompositePartBlockFilters(parts)
+	require.Len(t, builder.qry.Nodes[0].BlockFilterList, 2)
+	requireFuncNames(t, builder.qry.Nodes[0].BlockFilterList, "prefix_eq", "=")
+}
+
+func TestCompositeKeyPartBlockFiltersDoNotRestoreUnchangedPredicates(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	filter := makeExprOptBinaryInt64Expr(t, ctx, ">", makeExprOptInt64Col(tag, 1, "b"), 2)
+	builder.qry.Nodes = []*planpb.Node{{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		BindingTags: []int32{tag},
+		TableDef:    makeExprOptCompositeSortKeyTableDef(),
+		FilterList:  []*planpb.Expr{filter},
+	}}
+
+	candidates := builder.collectCompositePartBlockFilters(0)
+	builder.retainConsumedCompositePartBlockFilters(candidates)
+	require.Empty(t, candidates, "unchanged predicates must be left to later rewrites and stats")
+}
+
+func TestCompositeKeyPartBlockFiltersTrackCanonicalizedPredicateIdentity(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	filter := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 1, "b"), 2)
+	filter.GetF().Args[0], filter.GetF().Args[1] = filter.GetF().Args[1], filter.GetF().Args[0]
+	builder.qry.Nodes = []*planpb.Node{{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		BindingTags: []int32{tag},
+		TableDef:    makeExprOptCompositeSortKeyTableDef(),
+		FilterList:  []*planpb.Expr{filter},
+	}}
+
+	candidates := builder.collectCompositePartBlockFilters(0)
+	builder.mergeFiltersOnCompositeKey(0)
+	builder.retainConsumedCompositePartBlockFilters(candidates)
+	require.Empty(t, candidates, "an in-place canonicalized predicate was not consumed")
+}
+
 func makeExprOptCompositeSortKeyTableDef() *planpb.TableDef {
 	return &planpb.TableDef{
 		Cols: []*planpb.ColDef{

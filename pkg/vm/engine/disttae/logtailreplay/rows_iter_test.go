@@ -568,6 +568,33 @@ func TestPrefixIn(t *testing.T) {
 	require.Equal(t, []byte{4}, pkIter.iter.Item().Bytes)
 }
 
+func TestPrefixBetweenOpenBounds(t *testing.T) {
+	pkTree := btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, btree.Options{Degree: 64})
+	for _, key := range []string{"aa1", "aa2", "ab1", "ab2", "ac1"} {
+		pkTree.Set(&PrimaryIndexEntry{Bytes: []byte(key)})
+	}
+
+	tests := []struct {
+		kind int
+		want []string
+	}{
+		{kind: 4, want: []string{"aa1", "aa2", "ab1", "ab2"}},
+		{kind: 5, want: []string{"ab1", "ab2"}},
+		{kind: 6, want: []string{"aa1", "aa2"}},
+		{kind: 7, want: nil},
+	}
+	for _, test := range tests {
+		spec := BetweenKind([]byte("aa"), []byte("ab"), test.kind)
+		iter := &primaryKeyIter{primaryIndex: pkTree, iter: pkTree.Iter()}
+		var got []string
+		for spec.Move(iter) {
+			got = append(got, string(iter.iter.Item().Bytes))
+		}
+		require.Equal(t, test.want, got, "kind %d", test.kind)
+		iter.iter.Release()
+	}
+}
+
 func TestExactPrimaryKeyReplayIter(t *testing.T) {
 	state := NewPartitionState("", false, 42, false)
 	ctx := context.Background()

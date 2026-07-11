@@ -1637,6 +1637,10 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats := new(plan.Stats)
 	stats.TableCnt = s.TableCnt
 	var blockSel float64 = 1
+	var preservedCompositeFilters []*plan.Expr
+	if builder.optimizerHints == nil || builder.optimizerHints.blockFilter != 2 {
+		preservedCompositeFilters = existingCompositeBlockFilters(node)
+	}
 
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
@@ -1670,6 +1674,18 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 			}
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
+	}
+	for _, preserved := range preservedCompositeFilters {
+		duplicate := false
+		for _, existing := range blockExprList {
+			if blockFilterEquivalent(existing, preserved) || sameGeneratedCompoundFilter(node, existing, preserved) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			blockExprList = append(blockExprList, preserved)
+		}
 	}
 	node.BlockFilterList = blockExprList
 	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)

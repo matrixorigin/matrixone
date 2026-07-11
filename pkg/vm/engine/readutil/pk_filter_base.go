@@ -15,6 +15,7 @@
 package readutil
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 
@@ -285,8 +286,9 @@ func ConstructBasePKFilter(
 			filter.Valid = true
 			filter.Op = function.IN
 			{
-				vec := vector.NewVec(types.T_any.ToType())
-				if err = vec.UnmarshalBinary(vals[0]); err != nil {
+				vec, unmarshalErr := unmarshalPKInVector(vals[0])
+				if unmarshalErr != nil {
+					err = unmarshalErr
 					return BasePKFilter{}, err
 				}
 				filter.Vec = vec
@@ -301,8 +303,9 @@ func ConstructBasePKFilter(
 			filter.Valid = true
 			filter.Op = function.PREFIX_IN
 			{
-				vec := vector.NewVec(types.T_any.ToType())
-				if err = vec.UnmarshalBinary(vals[0]); err != nil {
+				vec, unmarshalErr := unmarshalPKInVector(vals[0])
+				if unmarshalErr != nil {
+					err = unmarshalErr
 					return BasePKFilter{}, err
 				}
 				filter.Vec = vec
@@ -383,6 +386,80 @@ func ConstructBasePKFilter(
 	}
 
 	return
+}
+
+// unmarshalPKInVector establishes the ordering invariant required by block
+// read filters, zonemap IN evaluation and ordered IN set merging.  SQL NULL can
+// never make an IN predicate TRUE for a non-null primary key, so dropping NULL
+// entries is both conservative and avoids preserving an otherwise unsorted
+// nullable constant vector.  UnmarshalBinary is zero-copy; only mutate an
+// a private copy so the shared serialized plan expression remains immutable.
+func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			ret = nil
+			err = fmt.Errorf("invalid PK IN vector encoding: %v", recovered)
+		}
+	}()
+	vec := vector.NewVec(types.T_any.ToType())
+	if err := vec.UnmarshalBinary(data); err != nil {
+		return nil, err
+	}
+	if err := validatePKInVectorShape(vec); err != nil {
+		return nil, err
+	}
+	if vec.GetSorted() && !vec.GetNulls().Any() {
+		return vec, nil
+	}
+	owned := vector.NewVec(types.T_any.ToType())
+	// Keep the mutable backing on the Go heap.  The search closures retain the
+	// vector after this function returns, while their Cleanup API has no mpool
+	// handle with which to release an owned vector allocation.
+	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
+		return nil, err
+	}
+	normalizePKInVector(owned)
+	return owned, nil
+}
+
+func validatePKInVectorShape(vec *vector.Vector) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("invalid PK IN vector layout: %v", recovered)
+		}
+	}()
+	if vec.Length() < 0 {
+		return fmt.Errorf("invalid PK IN vector length %d", vec.Length())
+	}
+	physicalLength := vec.Length()
+	if vec.IsConst() && physicalLength > 0 {
+		physicalLength = 1
+	}
+	if !vec.IsConstNull() {
+		typeSize := vec.GetType().TypeSize()
+		if typeSize <= 0 || physicalLength > len(vec.GetData())/typeSize {
+			return fmt.Errorf("invalid PK IN vector data length")
+		}
+	}
+	if vec.GetType().IsVarlen() {
+		for row := 0; row < physicalLength; row++ {
+			_ = vec.GetBytesAt(row)
+		}
+	}
+	return nil
+}
+
+func normalizePKInVector(vec *vector.Vector) {
+	if vec.GetNulls().Any() {
+		sels := make([]int64, 0, vec.Length()-vec.GetNulls().Count())
+		for row := 0; row < vec.Length(); row++ {
+			if !vec.IsNull(uint64(row)) {
+				sels = append(sels, int64(row))
+			}
+		}
+		vec.Shrink(sels, false)
+	}
+	vec.InplaceSortAndCompact()
 }
 
 func toDisjuncts(f BasePKFilter) []BasePKFilter {

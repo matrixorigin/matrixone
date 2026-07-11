@@ -45,6 +45,341 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 	resetHashMapStats(node.Stats)
 }
 
+// collectCompositePartBlockFilters preserves zonemappable predicates on the
+// physical columns that make up a composite primary/cluster key.  The regular
+// filter rewrite replaces a useful equality/range prefix with one predicate on
+// the hidden compound column.  That compound predicate is ideal for the read
+// filter and sorted-key pruning, but ranges can additionally prune blocks with
+// the zonemap of every constituent column.
+type compositePartBlockFilter struct {
+	original *plan.Expr
+	copy     *plan.Expr
+}
+
+func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32) map[int32][]compositePartBlockFilter {
+	ret := make(map[int32][]compositePartBlockFilter)
+	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
+		return ret
+	}
+	visited := make(map[int32]struct{})
+	var visit func(int32)
+	visit = func(id int32) {
+		if _, ok := visited[id]; ok {
+			return
+		}
+		visited[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		if node.NodeType != plan.Node_TABLE_SCAN {
+			for _, childID := range node.Children {
+				visit(childID)
+			}
+			return
+		}
+
+		partCols := compositeKeyPartColumns(node.TableDef)
+		if len(partCols) < 2 || len(node.BindingTags) == 0 {
+			return
+		}
+		filters := make([]*plan.Expr, 0, len(node.FilterList)+len(node.BlockFilterList))
+		filters = append(filters, node.FilterList...)
+		// A high-cost/AP optimization can revisit an already rewritten scan.  In
+		// that case the constituent predicates only survive in BlockFilterList;
+		// preserve them before the next stats pass rebuilds that list.
+		filters = append(filters, node.BlockFilterList...)
+		for _, filter := range filters {
+			if ExprIsZonemappable(builder.GetContext(), filter) &&
+				exprOnlyReferencesColumns(filter, node.BindingTags[0], partCols) {
+				ret[id] = append(ret[id], compositePartBlockFilter{original: filter, copy: DeepCopyExpr(filter)})
+			}
+		}
+	}
+	visit(nodeID)
+	return ret
+}
+
+func compositeKeyPartColumns(tableDef *plan.TableDef) map[int32]struct{} {
+	if tableDef == nil {
+		return nil
+	}
+	var parts []string
+	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		parts = util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+	} else if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
+		parts = tableDef.Pkey.Names
+	}
+	if len(parts) < 2 {
+		return nil
+	}
+	cols := make(map[int32]struct{}, len(parts))
+	for _, part := range parts {
+		if pos, ok := tableDef.Name2ColIndex[part]; ok {
+			cols[pos] = struct{}{}
+		}
+	}
+	return cols
+}
+
+// exprOnlyReferencesColumns accepts constants nested in the predicate but
+// requires at least one column and rejects any column outside allowed.
+func exprOnlyReferencesColumns(expr *plan.Expr, tableTag int32, allowed map[int32]struct{}) bool {
+	found := false
+	var visit func(*plan.Expr) bool
+	visit = func(e *plan.Expr) bool {
+		if e == nil {
+			return true
+		}
+		switch impl := e.Expr.(type) {
+		case *plan.Expr_Col:
+			if impl.Col.RelPos != tableTag {
+				return false
+			}
+			if _, ok := allowed[impl.Col.ColPos]; !ok {
+				return false
+			}
+			found = true
+			return true
+		case *plan.Expr_F:
+			for _, arg := range impl.F.Args {
+				if !visit(arg) {
+					return false
+				}
+			}
+			return true
+		case *plan.Expr_List:
+			for _, item := range impl.List.List {
+				if !visit(item) {
+					return false
+				}
+			}
+			return true
+		case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw,
+			*plan.Expr_Vec, *plan.Expr_Max, *plan.Expr_T, *plan.Expr_Fold:
+			return true
+		default:
+			return false
+		}
+	}
+	return visit(expr) && found
+}
+
+func (builder *QueryBuilder) appendCompositePartBlockFilters(filters map[int32][]compositePartBlockFilter) {
+	for nodeID, candidates := range filters {
+		node := builder.qry.Nodes[nodeID]
+		for _, candidate := range candidates {
+			duplicate := false
+			for _, existing := range node.BlockFilterList {
+				if blockFilterEquivalent(existing, candidate.copy) {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				node.BlockFilterList = append(node.BlockFilterList, candidate.copy)
+			}
+		}
+	}
+}
+
+// retainConsumedCompositePartBlockFilters keeps only predicates removed by the
+// compound-key rewrite.  Predicates that remain in FilterList will be handled
+// by the later date/LIKE rewrites and ReCalcNodeStats; re-appending their stale
+// pre-rewrite form could disable the ranges fast compiler for the entire list.
+func (builder *QueryBuilder) retainConsumedCompositePartBlockFilters(filters map[int32][]compositePartBlockFilter) {
+	for nodeID, candidates := range filters {
+		node := builder.qry.Nodes[nodeID]
+		remaining := node.FilterList
+		if !hasCompoundKeyFilter(remaining, node) {
+			delete(filters, nodeID)
+			continue
+		}
+		partCols := compositeKeyPartColumns(node.TableDef)
+		tableTag := node.BindingTags[0]
+		kept := candidates[:0]
+		for _, candidate := range candidates {
+			stillPresent := false
+			for _, filter := range remaining {
+				if candidate.original == filter && exprOnlyReferencesColumns(filter, tableTag, partCols) {
+					stillPresent = true
+					break
+				}
+			}
+			if !stillPresent {
+				kept = append(kept, candidate)
+			}
+		}
+		if len(kept) == 0 {
+			delete(filters, nodeID)
+		} else {
+			filters[nodeID] = kept
+		}
+	}
+}
+
+func hasCompoundKeyFilter(filters []*plan.Expr, node *plan.Node) bool {
+	if node.TableDef == nil || len(node.BindingTags) == 0 {
+		return false
+	}
+	compoundPos, ok := compoundKeyColumn(node.TableDef)
+	if !ok {
+		return false
+	}
+	allowed := map[int32]struct{}{compoundPos: {}}
+	for _, filter := range filters {
+		if exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+			return true
+		}
+	}
+	return false
+}
+
+func compoundKeyColumn(tableDef *plan.TableDef) (int32, bool) {
+	if tableDef == nil {
+		return 0, false
+	}
+	compoundName := ""
+	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		compoundName = tableDef.ClusterBy.Name
+	} else if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
+		compoundName = tableDef.Pkey.PkeyColName
+	}
+	if compoundName == "" {
+		return 0, false
+	}
+	pos, ok := tableDef.Name2ColIndex[compoundName]
+	return pos, ok
+}
+
+// appendCompoundKeyBlockFilters keeps the generated compound predicate in the
+// block-pruning set even when estimates are unavailable or selectivity rounds
+// to one.  Compound-key filters are sort-key predicates and use the ranges fast
+// path, so skipping them loses the cheapest pruning opportunity.
+func (builder *QueryBuilder) appendCompoundKeyBlockFilters(nodeID int32) {
+	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
+		return
+	}
+	visited := make(map[int32]struct{})
+	var visit func(int32)
+	visit = func(id int32) {
+		if _, ok := visited[id]; ok {
+			return
+		}
+		visited[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		if node.NodeType != plan.Node_TABLE_SCAN {
+			for _, childID := range node.Children {
+				visit(childID)
+			}
+			return
+		}
+		if node.TableDef == nil || len(node.BindingTags) == 0 {
+			return
+		}
+		compoundPos, ok := compoundKeyColumn(node.TableDef)
+		if !ok {
+			return
+		}
+		allowed := map[int32]struct{}{compoundPos: {}}
+		for _, filter := range node.FilterList {
+			if !ExprIsZonemappable(builder.GetContext(), filter) ||
+				!exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+				continue
+			}
+			duplicate := false
+			for _, existing := range node.BlockFilterList {
+				if blockFilterEquivalent(existing, filter) {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(filter))
+			}
+		}
+	}
+	visit(nodeID)
+}
+
+func existingCompositeBlockFilters(node *plan.Node) []*plan.Expr {
+	if node.TableDef == nil || len(node.BindingTags) == 0 {
+		return nil
+	}
+	allowed := compositeKeyPartColumns(node.TableDef)
+	if allowed == nil {
+		return nil
+	}
+	if compoundPos, ok := compoundKeyColumn(node.TableDef); ok {
+		allowed[compoundPos] = struct{}{}
+	}
+	ret := node.BlockFilterList[:0]
+	for _, filter := range node.BlockFilterList {
+		if exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+			// calcScanStats replaces BlockFilterList at the end of the pass and
+			// does not mutate preserved entries. Transfer the already-independent
+			// block-filter expression instead of deep-copying it on every stats
+			// recalculation; the initial FilterList boundary is still copied.
+			ret = append(ret, filter)
+		}
+	}
+	return ret
+}
+
+func blockFilterEquivalent(left, right *plan.Expr) bool {
+	return exprStructuralEqual(left, right)
+}
+
+// Compound IN predicates can alternate between Expr_List and folded Expr_Vec
+// across stats passes.  The compound rewrite produces at most one predicate of
+// a given operation for the hidden key, so operation+target is the stable
+// identity needed to avoid executing both representations.
+func sameGeneratedCompoundFilter(node *plan.Node, left, right *plan.Expr) bool {
+	if node == nil || node.TableDef == nil {
+		return false
+	}
+	compoundPos, ok := compoundKeyColumn(node.TableDef)
+	if !ok || len(node.BindingTags) == 0 || left.GetF() == nil || right.GetF() == nil ||
+		left.GetF().Func.ObjName != right.GetF().Func.ObjName ||
+		len(left.GetF().Args) == 0 || len(right.GetF().Args) == 0 {
+		return false
+	}
+	leftCol, rightCol := left.GetF().Args[0].GetCol(), right.GetF().Args[0].GetCol()
+	return leftCol != nil && rightCol != nil &&
+		leftCol.RelPos == node.BindingTags[0] && rightCol.RelPos == node.BindingTags[0] &&
+		leftCol.ColPos == compoundPos && rightCol.ColPos == compoundPos
+}
+
+func (builder *QueryBuilder) deduplicateBlockFilters(nodeID int32) {
+	visited := make(map[int32]struct{})
+	var visit func(int32)
+	visit = func(id int32) {
+		if _, ok := visited[id]; ok {
+			return
+		}
+		visited[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+		if len(node.BlockFilterList) < 2 {
+			return
+		}
+		unique := node.BlockFilterList[:0]
+		for _, filter := range node.BlockFilterList {
+			duplicate := false
+			for _, existing := range unique {
+				if blockFilterEquivalent(existing, filter) || sameGeneratedCompoundFilter(node, existing, filter) {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				unique = append(unique, filter)
+			}
+		}
+		node.BlockFilterList = unique
+	}
+	visit(nodeID)
+}
+
 func (builder *QueryBuilder) rewriteInDomainNotInFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType != plan.Node_TABLE_SCAN {

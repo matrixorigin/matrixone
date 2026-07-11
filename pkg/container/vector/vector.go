@@ -4805,7 +4805,12 @@ func (v *Vector) InplaceSortAndCompact() {
 			cleanDataNotResetArea()
 			appendList(v, newCol, nil, nil)
 		}
+	default:
+		return
 	}
+	// Sorting happened even when compaction did not change the vector length.
+	// Keep the metadata invariant aligned with the physical ordering.
+	v.SetSorted(true)
 }
 
 func (v *Vector) InplaceSort() {

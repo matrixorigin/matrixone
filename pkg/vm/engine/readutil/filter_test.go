@@ -15,8 +15,10 @@
 package readutil
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"slices"
 	"strconv"
@@ -1746,6 +1748,301 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 	}
 }
 
+func TestMergeBaseFilterInKindUsesOverflowSafeComparison(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+
+	t.Run("float64 fractional values", func(t *testing.T) {
+		left := vector.NewVec(types.T_float64.ToType())
+		right := vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixedList(left, []float64{1.1, 2.2}, nil, mp))
+		require.NoError(t, vector.AppendFixedList(right, []float64{1.2, 2.2}, nil, mp))
+		defer left.Free(mp)
+		defer right.Free(mp)
+
+		merged, err := mergeBaseFilterInKind(
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_float64, Vec: left},
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_float64, Vec: right},
+			false,
+			mp,
+		)
+		require.NoError(t, err)
+		defer merged.Vec.Free(mp)
+		require.Equal(t, []float64{2.2}, vector.MustFixedColNoTypeCheck[float64](merged.Vec))
+	})
+
+	t.Run("int64 extremes", func(t *testing.T) {
+		left := vector.NewVec(types.T_int64.ToType())
+		right := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(left, []int64{math.MinInt64, math.MaxInt64}, nil, mp))
+		require.NoError(t, vector.AppendFixedList(right, []int64{math.MaxInt64}, nil, mp))
+		defer left.Free(mp)
+		defer right.Free(mp)
+
+		merged, err := mergeBaseFilterInKind(
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_int64, Vec: left},
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_int64, Vec: right},
+			false,
+			mp,
+		)
+		require.NoError(t, err)
+		defer merged.Vec.Free(mp)
+		require.Equal(t, []int64{math.MaxInt64}, vector.MustFixedColNoTypeCheck[int64](merged.Vec))
+	})
+
+	t.Run("uint64 extremes", func(t *testing.T) {
+		left := vector.NewVec(types.T_uint64.ToType())
+		right := vector.NewVec(types.T_uint64.ToType())
+		require.NoError(t, vector.AppendFixedList(left, []uint64{0, math.MaxUint64}, nil, mp))
+		require.NoError(t, vector.AppendFixedList(right, []uint64{math.MaxUint64}, nil, mp))
+		defer left.Free(mp)
+		defer right.Free(mp)
+
+		merged, err := mergeBaseFilterInKind(
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_uint64, Vec: left},
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_uint64, Vec: right},
+			false,
+			mp,
+		)
+		require.NoError(t, err)
+		defer merged.Vec.Free(mp)
+		require.Equal(t, []uint64{math.MaxUint64}, vector.MustFixedColNoTypeCheck[uint64](merged.Vec))
+	})
+
+	t.Run("decimal64 negative values use signed decimal ordering", func(t *testing.T) {
+		negativeOne := types.Decimal64(1).Minus()
+		left := vector.NewVec(types.T_decimal64.ToType())
+		right := vector.NewVec(types.T_decimal64.ToType())
+		require.NoError(t, vector.AppendFixedList(left, []types.Decimal64{negativeOne, 1}, nil, mp))
+		require.NoError(t, vector.AppendFixedList(right, []types.Decimal64{1}, nil, mp))
+		defer left.Free(mp)
+		defer right.Free(mp)
+
+		intersection, err := mergeBaseFilterInKind(
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_decimal64, Vec: left},
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_decimal64, Vec: right},
+			false,
+			mp,
+		)
+		require.NoError(t, err)
+		defer intersection.Vec.Free(mp)
+		require.Equal(t, []types.Decimal64{1}, vector.MustFixedColNoTypeCheck[types.Decimal64](intersection.Vec))
+	})
+}
+
+func TestUnmarshalPKInVectorNormalizesWithoutMutatingPlanBytes(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	input := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(input, int64(2), false, mp))
+	require.NoError(t, vector.AppendFixed(input, int64(0), true, mp))
+	require.NoError(t, vector.AppendFixed(input, int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(input, int64(2), false, mp))
+	serialized, err := input.MarshalBinary()
+	require.NoError(t, err)
+	original := bytes.Clone(serialized)
+	input.Free(mp)
+
+	normalized, err := unmarshalPKInVector(serialized)
+	require.NoError(t, err)
+	require.Equal(t, original, serialized, "normalization must not mutate shared plan bytes")
+	require.False(t, normalized.GetNulls().Any())
+	require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](normalized))
+	require.True(t, normalized.GetSorted())
+	normalized.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestUnmarshalPKInVectorRejectsMalformedEncoding(t *testing.T) {
+	var err error
+	require.NotPanics(t, func() {
+		_, err = unmarshalPKInVector([]byte{1, 2, 3})
+	})
+	require.Error(t, err)
+}
+
+func TestUnmarshalPKInVectorValidatesConstPhysicalValueOnce(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	const logicalLength = 1 << 30
+	input, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("x"), logicalLength, mp)
+	require.NoError(t, err)
+	serialized, err := input.MarshalBinary()
+	require.NoError(t, err)
+	input.Free(mp)
+
+	normalized, err := unmarshalPKInVector(serialized)
+	require.NoError(t, err)
+	require.Equal(t, logicalLength, normalized.Length())
+	require.True(t, normalized.GetSorted())
+	normalized.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestBuildBlockPKSearchFuncsRejectMalformedFilters(t *testing.T) {
+	tests := []BasePKFilter{
+		{Valid: true, Op: function.EQUAL, Oid: types.T_int64, LB: []byte{1}},
+		{Valid: true, Op: function.BETWEEN, Oid: types.T_int64, LB: types.EncodeValue(int64(1), types.T_int64), UB: []byte{2}},
+		{Valid: true, Op: function.IN, Oid: types.T_int64},
+	}
+	for _, filter := range tests {
+		require.NotPanics(t, func() {
+			sorted, unsorted, err := buildBlockPKSearchFuncs(filter)
+			require.NoError(t, err)
+			require.Nil(t, sorted)
+			require.Nil(t, unsorted)
+		})
+	}
+}
+
+func TestBuildBlockPKSearchFuncsFailsOpenOnInputTypeMismatch(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	values := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(values, []byte("x"), false, mp))
+	input := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(input, []int64{1, 2}, nil, mp))
+	defer values.Free(mp)
+	defer input.Free(mp)
+
+	sorted, unsorted, err := buildBlockPKSearchFuncs(BasePKFilter{
+		Valid: true,
+		Op:    function.IN,
+		Oid:   types.T_int64,
+		Vec:   values,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 1}, sorted(input))
+	require.Equal(t, []int64{0, 1}, unsorted(input))
+}
+
+func TestCombineOffsetFuncsDeduplicatesAndRejectsInvalidOffsets(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	vec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(vec, []int64{1, 2, 3}, nil, mp))
+	defer vec.Free(mp)
+
+	combined := combineOffsetFuncs([]func(*vector.Vector) []int64{
+		func(*vector.Vector) []int64 { return []int64{2, 0, -1} },
+		func(*vector.Vector) []int64 { return []int64{0, 1, 3} },
+	})
+	require.Equal(t, []int64{0, 1, 2}, combined(vec))
+}
+
+func TestMergeBaseFilterInKindAdditionalPrimaryKeyTypes(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+
+	t.Run("bool intersection", func(t *testing.T) {
+		left := vector.NewVec(types.T_bool.ToType())
+		right := vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixed(left, false, false, mp))
+		require.NoError(t, vector.AppendFixed(left, true, false, mp))
+		require.NoError(t, vector.AppendFixed(right, true, false, mp))
+		merged, err := mergeBaseFilterInKind(
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_bool, Vec: left},
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_bool, Vec: right}, false, mp)
+		require.NoError(t, err)
+		require.True(t, merged.Valid)
+		require.Equal(t, []bool{true}, vector.MustFixedColNoTypeCheck[bool](merged.Vec))
+		left.Free(mp)
+		right.Free(mp)
+		merged.Vec.Free(mp)
+	})
+
+	tests := []struct {
+		name string
+		oid  types.T
+		add  func(*vector.Vector, int)
+	}{
+		{"bit", types.T_bit, func(vec *vector.Vector, value int) {
+			require.NoError(t, vector.AppendFixed(vec, uint64(value), false, mp))
+		}},
+		{"year", types.T_year, func(vec *vector.Vector, value int) {
+			require.NoError(t, vector.AppendFixed(vec, types.MoYear(value), false, mp))
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name+" union", func(t *testing.T) {
+			left := vector.NewVec(test.oid.ToType())
+			right := vector.NewVec(test.oid.ToType())
+			test.add(left, 1)
+			test.add(left, 2)
+			test.add(right, 2)
+			test.add(right, 3)
+			merged, err := mergeBaseFilterInKind(
+				BasePKFilter{Valid: true, Op: function.IN, Oid: test.oid, Vec: left},
+				BasePKFilter{Valid: true, Op: function.IN, Oid: test.oid, Vec: right}, true, mp)
+			require.NoError(t, err)
+			require.True(t, merged.Valid)
+			require.Equal(t, 3, merged.Vec.Length())
+			left.Free(mp)
+			right.Free(mp)
+			merged.Vec.Free(mp)
+		})
+	}
+
+	t.Run("varbinary union", func(t *testing.T) {
+		left := vector.NewVec(types.T_varbinary.ToType())
+		right := vector.NewVec(types.T_varbinary.ToType())
+		for _, value := range []string{"a", "b"} {
+			require.NoError(t, vector.AppendBytes(left, []byte(value), false, mp))
+		}
+		for _, value := range []string{"b", "c"} {
+			require.NoError(t, vector.AppendBytes(right, []byte(value), false, mp))
+		}
+		merged, err := mergeBaseFilterInKind(
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varbinary, Vec: left},
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varbinary, Vec: right}, true, mp)
+		require.NoError(t, err)
+		require.Equal(t, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, vector.InefficientMustBytesCol(merged.Vec))
+		left.Free(mp)
+		right.Free(mp)
+		merged.Vec.Free(mp)
+	})
+
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMergeFiltersUsesTypedValueOrdering(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	makeFilter := func(op int, oid types.T, value any) BasePKFilter {
+		return BasePKFilter{Valid: true, Op: op, Oid: oid, LB: types.EncodeValue(value, oid)}
+	}
+
+	t.Run("uint64 OR keeps the wider lower-bound range", func(t *testing.T) {
+		left := makeFilter(function.GREAT_EQUAL, types.T_uint64, uint64(10))
+		right := makeFilter(function.GREAT_EQUAL, types.T_uint64, uint64(256))
+		merged, err := mergeFilters(&left, &right, function.OR, mp)
+		require.NoError(t, err)
+		require.True(t, merged.Valid)
+		require.Equal(t, function.GREAT_EQUAL, merged.Op)
+		require.Equal(t, uint64(10), types.DecodeValue(merged.LB, types.T_uint64))
+	})
+
+	t.Run("uint64 AND keeps the tighter lower bound", func(t *testing.T) {
+		left := makeFilter(function.GREAT_EQUAL, types.T_uint64, uint64(10))
+		right := makeFilter(function.GREAT_EQUAL, types.T_uint64, uint64(256))
+		merged, err := mergeFilters(&left, &right, function.AND, mp)
+		require.NoError(t, err)
+		require.True(t, merged.Valid)
+		require.Equal(t, uint64(256), types.DecodeValue(merged.LB, types.T_uint64))
+	})
+
+	t.Run("float OR does not truncate fractional ordering", func(t *testing.T) {
+		left := makeFilter(function.LESS_EQUAL, types.T_float64, 1.1)
+		right := makeFilter(function.LESS_EQUAL, types.T_float64, 1.2)
+		merged, err := mergeFilters(&left, &right, function.OR, mp)
+		require.NoError(t, err)
+		require.True(t, merged.Valid)
+		require.Equal(t, 1.2, types.DecodeValue(merged.LB, types.T_float64))
+	})
+
+	t.Run("signed ordering crosses zero", func(t *testing.T) {
+		left := makeFilter(function.GREAT_EQUAL, types.T_int64, int64(-1))
+		right := makeFilter(function.GREAT_EQUAL, types.T_int64, int64(1))
+		merged, err := mergeFilters(&left, &right, function.OR, mp)
+		require.NoError(t, err)
+		require.True(t, merged.Valid)
+		require.Equal(t, int64(-1), types.DecodeValue(merged.LB, types.T_int64))
+	})
+}
+
 func TestMergeBaseFilterInKind(t *testing.T) {
 	mp, err := mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 	require.NoError(t, err)
@@ -2583,6 +2880,186 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		// Should return nil or empty since extraction fails
 		require.Empty(t, result)
 	})
+}
+
+type testMembershipFilter struct {
+	hits  []uint8
+	calls int
+}
+
+func (f *testMembershipFilter) Test([]byte) bool { return true }
+func (f *testMembershipFilter) TestVector(*vector.Vector, func(bool, bool, int)) []uint8 {
+	f.calls++
+	return f.hits
+}
+func (f *testMembershipFilter) Valid() bool { return true }
+func (f *testMembershipFilter) Exact() bool { return false }
+func (f *testMembershipFilter) Free()       {}
+
+func TestConstructBlockPKFilterBloomFailOpen(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	pk := vector.NewVec(types.T_int64.ToType())
+	for _, value := range []int64{1, 2, 3} {
+		require.NoError(t, vector.AppendFixed(pk, value, false, mp))
+	}
+	defer pk.Free(mp)
+
+	t.Run("empty preallocated secondary falls back to PK", func(t *testing.T) {
+		bf := &testMembershipFilter{hits: []uint8{1, 0, 1}}
+		filter, err := ConstructBlockPKFilter(false, BasePKFilter{}, bf)
+		require.NoError(t, err)
+		empty := vector.NewVec(types.T_int64.ToType())
+		result := filter.UnSortedSearchFunc(containers.Vectors{*pk, *empty})
+		require.Equal(t, []int64{0, 2}, result)
+		require.Equal(t, 1, bf.calls)
+	})
+
+	t.Run("nonempty mismatched secondary fails open", func(t *testing.T) {
+		bf := &testMembershipFilter{hits: []uint8{}}
+		filter, err := ConstructBlockPKFilter(false, BasePKFilter{}, bf)
+		require.NoError(t, err)
+		secondary := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(secondary, int64(1), false, mp))
+		defer secondary.Free(mp)
+		result := filter.UnSortedSearchFunc(containers.Vectors{*pk, *secondary})
+		require.Equal(t, []int64{0, 1, 2}, result)
+		require.Zero(t, bf.calls)
+	})
+
+	t.Run("short membership result fails open", func(t *testing.T) {
+		bf := &testMembershipFilter{hits: []uint8{1}}
+		filter, err := ConstructBlockPKFilter(false, BasePKFilter{}, bf)
+		require.NoError(t, err)
+		result := filter.UnSortedSearchFunc(containers.Vectors{*pk})
+		require.Equal(t, []int64{0, 1, 2}, result)
+		require.Equal(t, 1, bf.calls)
+	})
+}
+
+func TestBuildBlockPKSearchFuncsAdditionalPrimaryKeyTypes(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter BasePKFilter
+	}{
+		{"bool equal", BasePKFilter{Valid: true, Op: function.EQUAL, Oid: types.T_bool, LB: types.EncodeFixed(true)}},
+		{"bool less", BasePKFilter{Valid: true, Op: function.LESS_THAN, Oid: types.T_bool, LB: types.EncodeFixed(true)}},
+		{"bool greater", BasePKFilter{Valid: true, Op: function.GREAT_EQUAL, Oid: types.T_bool, LB: types.EncodeFixed(false)}},
+		{"bool between", BasePKFilter{Valid: true, Op: function.BETWEEN, Oid: types.T_bool, LB: types.EncodeFixed(false), UB: types.EncodeFixed(true)}},
+		{"bit equal", BasePKFilter{Valid: true, Op: function.EQUAL, Oid: types.T_bit, LB: types.EncodeFixed(uint64(2))}},
+		{"bit less", BasePKFilter{Valid: true, Op: function.LESS_EQUAL, Oid: types.T_bit, LB: types.EncodeFixed(uint64(2))}},
+		{"bit between", BasePKFilter{Valid: true, Op: function.BETWEEN, Oid: types.T_bit, LB: types.EncodeFixed(uint64(1)), UB: types.EncodeFixed(uint64(3))}},
+		{"year equal", BasePKFilter{Valid: true, Op: function.EQUAL, Oid: types.T_year, LB: types.EncodeFixed(types.MoYear(2026))}},
+		{"year greater", BasePKFilter{Valid: true, Op: function.GREAT_THAN, Oid: types.T_year, LB: types.EncodeFixed(types.MoYear(2025))}},
+		{"year between", BasePKFilter{Valid: true, Op: function.BETWEEN, Oid: types.T_year, LB: types.EncodeFixed(types.MoYear(2025)), UB: types.EncodeFixed(types.MoYear(2027))}},
+		{"varbinary equal", BasePKFilter{Valid: true, Op: function.EQUAL, Oid: types.T_varbinary, LB: []byte("b")}},
+		{"varbinary less", BasePKFilter{Valid: true, Op: function.LESS_THAN, Oid: types.T_varbinary, LB: []byte("b")}},
+		{"varbinary between", BasePKFilter{Valid: true, Op: function.BETWEEN, Oid: types.T_varbinary, LB: []byte("a"), UB: []byte("c")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sorted, unsorted, err := buildBlockPKSearchFuncs(test.filter)
+			require.NoError(t, err)
+			require.NotNil(t, sorted)
+			require.NotNil(t, unsorted)
+		})
+	}
+
+	mp := mpool.MustNew(t.Name())
+	for _, oid := range []types.T{types.T_bool, types.T_year} {
+		vec := vector.NewVec(oid.ToType())
+		if oid == types.T_bool {
+			require.NoError(t, vector.AppendFixed(vec, false, false, mp))
+			require.NoError(t, vector.AppendFixed(vec, true, false, mp))
+		} else {
+			require.NoError(t, vector.AppendFixed(vec, types.MoYear(2025), false, mp))
+			require.NoError(t, vector.AppendFixed(vec, types.MoYear(2026), false, mp))
+		}
+		sorted, unsorted, err := buildBlockPKSearchFuncs(BasePKFilter{Valid: true, Op: function.IN, Oid: oid, Vec: vec})
+		require.NoError(t, err)
+		require.NotNil(t, sorted)
+		require.NotNil(t, unsorted)
+		vec.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestBlockPKSearchFuncsExecuteAdditionalPrimaryKeyTypes(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	tests := []struct {
+		name         string
+		filter       BasePKFilter
+		buildVec     func(bool) *vector.Vector
+		want         []int64
+		wantUnsorted []int64
+	}{
+		{
+			name:   "bool between",
+			filter: BasePKFilter{Valid: true, Op: function.BETWEEN, Oid: types.T_bool, LB: types.EncodeFixed(false), UB: types.EncodeFixed(true)},
+			buildVec: func(sorted bool) *vector.Vector {
+				vec := vector.NewVec(types.T_bool.ToType())
+				require.NoError(t, vector.AppendFixedList(vec, []bool{false, true}, nil, mp))
+				return vec
+			},
+			want: []int64{0, 1}, wantUnsorted: []int64{0, 1},
+		},
+		{
+			name:   "bit equal",
+			filter: BasePKFilter{Valid: true, Op: function.EQUAL, Oid: types.T_bit, LB: types.EncodeFixed(uint64(2))},
+			buildVec: func(sorted bool) *vector.Vector {
+				vec := vector.NewVec(types.T_bit.ToType())
+				values := []uint64{1, 2, 3}
+				if !sorted {
+					values = []uint64{3, 1, 2}
+				}
+				require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+				return vec
+			},
+			want: []int64{1}, wantUnsorted: []int64{2},
+		},
+		{
+			name:   "year greater",
+			filter: BasePKFilter{Valid: true, Op: function.GREAT_THAN, Oid: types.T_year, LB: types.EncodeFixed(types.MoYear(2025))},
+			buildVec: func(sorted bool) *vector.Vector {
+				vec := vector.NewVec(types.T_year.ToType())
+				values := []types.MoYear{2025, 2026, 2027}
+				if !sorted {
+					values = []types.MoYear{2027, 2025, 2026}
+				}
+				require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+				return vec
+			},
+			want: []int64{2, 1}, wantUnsorted: []int64{2, 0},
+		},
+		{
+			name:   "varbinary less",
+			filter: BasePKFilter{Valid: true, Op: function.LESS_THAN, Oid: types.T_varbinary, LB: []byte("b")},
+			buildVec: func(sorted bool) *vector.Vector {
+				vec := vector.NewVec(types.T_varbinary.ToType())
+				values := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+				if !sorted {
+					values = [][]byte{[]byte("c"), []byte("a"), []byte("b")}
+				}
+				for _, value := range values {
+					require.NoError(t, vector.AppendBytes(vec, value, false, mp))
+				}
+				return vec
+			},
+			want: []int64{0}, wantUnsorted: []int64{1},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sortedSearch, unsortedSearch, err := buildBlockPKSearchFuncs(test.filter)
+			require.NoError(t, err)
+			sortedVec := test.buildVec(true)
+			unsortedVec := test.buildVec(false)
+			defer sortedVec.Free(mp)
+			defer unsortedVec.Free(mp)
+			require.Equal(t, test.want, sortedSearch(sortedVec))
+			require.Equal(t, test.wantUnsorted, unsortedSearch(unsortedVec))
+		})
+	}
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestCompileFilterExpr_PrefixInRangeAllFlags(t *testing.T) {

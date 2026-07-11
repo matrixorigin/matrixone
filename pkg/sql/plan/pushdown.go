@@ -553,8 +553,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.FilterList = append(node.FilterList, selfFilters...)
 		if len(node.Children) != 0 {
 			childId := node.Children[0]
-			childId, _ = builder.pushdownFilters(childId, downFilters, separateNonEquiConds)
+			var cantPushdownChild []*plan.Expr
+			childId, cantPushdownChild = builder.pushdownFilters(childId, downFilters, separateNonEquiConds)
 			node.Children[0] = childId
+			cantPushdown = append(cantPushdown, cantPushdownChild...)
+		} else {
+			cantPushdown = append(cantPushdown, downFilters...)
 		}
 
 	case plan.Node_APPLY:
