@@ -2948,29 +2948,12 @@ func TestReplaceParentSideFKMultiRow(t *testing.T) {
 func TestReplaceParentSideFKMixedLiteralRows(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
-	// A mixed VALUES list where one row has a non-literal PK must still generate
-	// the parent-side action for the literal rows; otherwise CASCADE/SET NULL
-	// would silently leave orphan child rows for those literal rows.
+	// A mixed VALUES list cannot partially apply parent-side actions because that
+	// would leave the non-literal rows unchecked.
 	logicPlan, err := runOneStmt(mock, t,
 		"REPLACE INTO replace_fk_cp VALUES (1, 'a'), (rand(), 'b')")
-	if err != nil {
-		t.Fatalf("%+v", err)
-	}
-
-	query := logicPlan.GetQuery()
-	assert.NotNil(t, query)
-
-	var action string
-	for _, sql := range query.DetectSqls {
-		if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
-			action = strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")
-			break
-		}
-	}
-	assert.NotEmpty(t, action,
-		"mixed literal/non-literal REPLACE should still act on the literal rows")
-	assert.Contains(t, action, "delete from", "literal row should still get its CASCADE delete")
-	assert.Contains(t, action, "(1)", "action should embed the literal PK value")
+	assert.Error(t, err)
+	assert.Nil(t, logicPlan)
 }
 
 func TestReplaceParentSideFKSetNull(t *testing.T) {
@@ -3011,21 +2994,22 @@ func TestReplaceParentSideFKSetNull(t *testing.T) {
 func TestReplaceParentSideFKNonLiteralSkip(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
-	// Non-literal PK expressions (rand(), ...) cannot be safely embedded into
-	// the background parent-side SQL, so generation must be skipped.
+	// Non-literal PK expressions cannot be safely embedded into the background
+	// parent-side SQL, so the statement must fail closed.
 	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_p VALUES (rand(), 'x')")
-	if err != nil {
-		t.Fatalf("%+v", err)
-	}
+	assert.Error(t, err)
+	assert.Nil(t, logicPlan)
+}
 
-	query := logicPlan.GetQuery()
-	assert.NotNil(t, query)
-
-	for _, sql := range query.DetectSqls {
-		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_CHK:"),
-			"non-literal PK must NOT generate a parent-side pre-check, got: %s", sql)
-		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:"),
-			"non-literal PK must NOT generate a parent-side action, got: %s", sql)
+func TestReplaceParentSideFKUnsupportedSources(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, sql := range []string{
+		"REPLACE INTO replace_fk_p VALUES (?, 'x')",
+		"REPLACE INTO replace_fk_p SELECT deptno, dname FROM dept",
+	} {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		assert.Error(t, err, sql)
+		assert.Nil(t, logicPlan, sql)
 	}
 }
 

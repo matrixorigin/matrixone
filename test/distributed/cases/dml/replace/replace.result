@@ -354,6 +354,74 @@ id    pid
 30    3
 drop table fk_mc;
 drop table fk_mp;
+drop table if exists fk_review_c;
+drop table if exists fk_review_p;
+create table fk_review_p(id int primary key, u int unique, v int);
+create table fk_review_c(id int primary key, pid int,
+foreign key(pid) references fk_review_p(id) on delete cascade);
+insert into fk_review_p values (1, 10, 100);
+insert into fk_review_c values (1, 1);
+replace into fk_review_p values (2, 10, 200);
+not supported: REPLACE on a referenced table with secondary unique keys
+select * from fk_review_p order by id;
+id    u    v
+1    10    100
+select * from fk_review_c order by id;
+id    pid
+1    1
+create table fk_review_src(id int, u int, v int);
+insert into fk_review_src values (1, 10, 400);
+replace into fk_review_p select * from fk_review_src;
+not supported: REPLACE SELECT/TABLE on a referenced parent table
+select * from fk_review_p order by id;
+id    u    v
+1    10    100
+select * from fk_review_c order by id;
+id    pid
+1    1
+drop table fk_review_src;
+drop table fk_review_c;
+drop table fk_review_p;
+create table fk_param_p(id int primary key, v int);
+create table fk_param_c(id int primary key, pid int,
+foreign key(pid) references fk_param_p(id) on delete restrict);
+prepare fk_review_stmt from 'replace into fk_param_p values (?, ?)';
+not supported: REPLACE with a non-literal parent key
+set @fk_id = 1, @fk_v = 300;
+execute fk_review_stmt using @fk_id, @fk_v;
+invalid state prepared statement 'fk_review_stmt' does not exist
+deallocate prepare fk_review_stmt;
+drop table fk_param_c;
+drop table fk_param_p;
+drop table if exists fk_comp_c;
+drop table if exists fk_comp_p;
+create table fk_comp_p(a int, b int, primary key(a, b));
+create table fk_comp_c(id int primary key, a int, b int,
+foreign key(a, b) references fk_comp_p(a, b) on delete cascade);
+insert into fk_comp_p values (1, 1);
+insert into fk_comp_c values (1, 1, 1);
+replace into fk_comp_p values (1, 1);
+not supported: REPLACE on a referenced composite primary key
+select * from fk_comp_p;
+a    b
+1    1
+select * from fk_comp_c;
+id    a    b
+1    1    1
+drop table fk_comp_c;
+drop table fk_comp_p;
+drop table if exists `fk``tick_c`;
+drop table if exists `fk``tick_p`;
+create table `fk``tick_p`(`id``x` int primary key);
+create table `fk``tick_c`(id int primary key, `pid``x` int,
+foreign key(`pid``x`) references `fk``tick_p`(`id``x`) on delete cascade);
+insert into `fk``tick_p` values (1);
+insert into `fk``tick_c` values (1, 1);
+replace into `fk``tick_p` values (1);
+select * from `fk``tick_c`;
+id    pid`x
+drop table `fk``tick_c`;
+drop table `fk``tick_p`;
 drop table if exists t_set_default;
 create table t_set_default(id int primary key, v int default 5, note varchar(20) default 'd');
 insert into t_set_default values (1, 10, 'old');

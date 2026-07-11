@@ -501,11 +501,7 @@ func (c *Compile) runOnce() (err error) {
 		c.proc.Base.StageCache.Clear()
 	}()
 
-	// Pre-actions for REPLACE parent→child FK semantics: replacing a referenced
-	// parent row behaves as delete-then-insert, so the children's ON DELETE
-	// action must be applied before the REPLACE execution modifies any rows.
-	//   - REPLACE_PARENT_CHK:    RESTRICT / NO_ACTION count check.
-	//   - REPLACE_PARENT_ACTION: CASCADE delete / SET NULL update on the child.
+	// REPLACE parent checks and actions run before the main pipeline.
 	query := c.pn.GetQuery()
 	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
 		for _, sql := range query.DetectSqls {
@@ -521,8 +517,6 @@ func (c *Compile) runOnce() (err error) {
 					return err
 				}
 			} else if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
-				// CASCADE / SET NULL: a real DML against the child table, run in
-				// the same transaction so it rolls back if REPLACE later fails.
 				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")); err != nil {
 					return err
 				}
@@ -619,9 +613,8 @@ func (c *Compile) runOnce() (err error) {
 	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		// Filter out REPLACE parent-side SQLs (already executed before the main
-		// operation): both the RESTRICT/NO_ACTION pre-checks and the
-		// CASCADE/SET NULL pre-actions.
+		// Filter out REPLACE parent-side checks and actions already executed before
+		// the main operation.
 		var postCheckSqls []string
 		for _, sql := range query.DetectSqls {
 			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") ||
