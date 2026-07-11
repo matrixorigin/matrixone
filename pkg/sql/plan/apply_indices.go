@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -110,6 +111,32 @@ func calculateFilteredPostModeOverFetchFactor(originalLimit uint64) float64 {
 	} else {
 		return 1.3
 	}
+}
+
+func calculateOverFetchLimit(originalLimit uint64, factor float64) uint64 {
+	if originalLimit == 0 {
+		return 0
+	}
+	if factor < 1 {
+		factor = 1
+	}
+	multiplied := originalLimit
+	if factor > 1 {
+		product := float64(originalLimit) * factor
+		if product >= float64(math.MaxUint64) {
+			multiplied = math.MaxUint64
+		} else {
+			multiplied = uint64(product)
+		}
+	}
+
+	withFloor := originalLimit
+	if originalLimit > math.MaxUint64-10 {
+		withFloor = math.MaxUint64
+	} else {
+		withFloor += 10
+	}
+	return max(multiplied, withFloor)
 }
 
 func containsDynamicParam(expr *plan.Expr) bool {
@@ -904,11 +931,8 @@ func applyRegularIndexOrderedLimitParam(scanNode *plan.Node, orderBy *plan.Order
 }
 
 func isPositiveLiteralLimit(limit *plan.Expr) bool {
-	if limit == nil {
-		return false
-	}
-	limitLit := limit.GetLit()
-	return limitLit != nil && limitLit.GetU64Val() > 0
+	limitValue, literal := getLiteralUint64(limit)
+	return literal && limitValue > 0 && limitValue <= maxVectorIndexTopPushdownLimit
 }
 
 func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
