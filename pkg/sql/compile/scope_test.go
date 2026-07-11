@@ -619,6 +619,53 @@ func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
+// A prepared statement's cached compile reuses its scope tree across
+// executions. The previous run's cleanup delivers End into the pipeline edges
+// and marks them done; a done edge silently rejects both data and End, so
+// without clearing that state the next run's receivers would wait forever.
+// Scope.Reset must clear the terminal state on the whole scope tree.
+func TestScopeResetClearsPipelineEdgeTerminalState(t *testing.T) {
+	testCompile := NewMockCompile(t)
+
+	child := &Scope{
+		Magic: Normal,
+		Proc:  testCompile.proc.NewNoContextChildProc(1),
+	}
+	s := &Scope{
+		Magic:     Merge,
+		Proc:      testCompile.proc.NewNoContextChildProc(2),
+		PreScopes: []*Scope{child},
+	}
+
+	var regs []*process.WaitRegister
+	regs = append(regs, s.Proc.Reg.MergeReceivers...)
+	regs = append(regs, child.Proc.Reg.MergeReceivers...)
+	for _, reg := range regs {
+		require.True(t, reg.SendEnd())
+		select {
+		case <-reg.Done():
+		default:
+			t.Fatal("edge should be done after SendEnd")
+		}
+	}
+
+	require.NoError(t, s.Reset(testCompile))
+
+	for _, reg := range regs {
+		select {
+		case <-reg.Done():
+			t.Fatal("Reset must clear edge terminal state for reuse")
+		default:
+		}
+		select {
+		case <-reg.Ch2:
+			t.Fatal("Reset must drain stale buffered signals")
+		default:
+		}
+		require.True(t, reg.SendEnd(), "edge must accept End again after Reset")
+	}
+}
+
 func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}

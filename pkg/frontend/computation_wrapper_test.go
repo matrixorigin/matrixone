@@ -154,46 +154,29 @@ func TestInitExecuteStmtParamSkipsPrepareCompileWithoutCache(t *testing.T) {
 	require.Nil(t, prepareStmt.compile)
 }
 
-// A cached compile must be dropped and rebuilt from the plan on every execute
-// so no stale operator state (hashbuild ctr, dispatch channels) survives into
-// the next run. See https://github.com/matrixorigin/matrixone/issues/25526.
-func TestInitExecuteStmtParamRecreatesCachedCompileOnEachExecute(t *testing.T) {
-	_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
+// Without a schema change the cached compile must be reused as-is instead of
+// being released and rebuilt on every execute: the per-execution recompilation
+// regressed TPCC by 25%. Stale pipeline state is cleared by Compile.Reset
+// (see Scope.resetForReuse) before the reused compile runs.
+// See https://github.com/matrixorigin/matrixone/issues/25614.
+func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
 	defer prepareStmt.Close()
 
-	// The sentinel cached compile carries no plan; only a freshly built
-	// compile can have one.
+	// The sentinel cached compile carries no plan; a recompilation would
+	// replace it with a freshly built compile.
 	sentinel := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.compile = sentinel
 
-	ret, err := cw.Compile(execCtx, nil)
+	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.NotNil(t, ret)
-	require.NotNil(t, prepareStmt.compile)
-	require.NotNil(t, prepareStmt.compile.GetPlan())
-}
-
-// When rebuilding the cached compile fails with a real error (not
-// ErrCantCompileForPrepare), execute must surface it and the stale compile
-// must not survive in the cache.
-func TestInitExecuteStmtParamReturnsRecompileError(t *testing.T) {
-	_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 102)
-	defer prepareStmt.Close()
-
-	prepareStmt.compile = compile.NewCompile(
-		"", "", prepareStmt.Sql, "", "", nil,
-		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
-
-	// An unsupported node type makes compilePlanScope fail with NYI.
-	qry := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery()
-	require.NotEmpty(t, qry.Nodes)
-	qry.Nodes[len(qry.Nodes)-1].NodeType = plan.Node_UNKNOWN
-
-	_, err := cw.Compile(execCtx, nil)
-	require.Error(t, err)
-	require.Nil(t, prepareStmt.compile)
+	require.Same(t, sentinel, retComp)
+	require.Same(t, sentinel, prepareStmt.compile)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
 }
 
 func TestTxnComputationWrapperRunPanicStillReleases(t *testing.T) {
