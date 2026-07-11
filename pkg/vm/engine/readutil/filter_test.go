@@ -1290,13 +1290,17 @@ func TestConstructBlockPKFilter(t *testing.T) {
 					copy(uub[:], u[:])
 				}
 
+				filterOID := ty
+				if opOnBinary(op) {
+					filterOID = types.T_binary
+				}
 				basePKFilter := BasePKFilter{
 					Valid: true,
 					Op:    op,
 					LB:    llb,
 					UB:    uub,
 					Vec:   vec,
-					Oid:   ty,
+					Oid:   filterOID,
 				}
 
 				blkPKFilter, err := ConstructBlockPKFilter(
@@ -1721,8 +1725,8 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		unsortedVec.Free(mp)
 	}
 
-	for _, ty := range []types.T{types.T_varchar, types.T_char, types.T_binary, types.T_json} {
-		useBinary := true
+	for _, ty := range []types.T{types.T_varchar, types.T_char, types.T_binary} {
+		useBinary := false
 		sortedVec, unsortedVec := buildVecs(ty, 1024, useBinary)
 		disjuncts := []BasePKFilter{
 			{Op: function.PREFIX_EQ, LB: []byte("10"), Oid: ty},
@@ -1852,11 +1856,88 @@ func TestUnmarshalPKInVectorNormalizesWithoutMutatingPlanBytes(t *testing.T) {
 }
 
 func TestUnmarshalPKInVectorRejectsMalformedEncoding(t *testing.T) {
-	var err error
-	require.NotPanics(t, func() {
-		_, err = unmarshalPKInVector([]byte{1, 2, 3})
+	t.Run("truncated header", func(t *testing.T) {
+		_, err := unmarshalPKInVector([]byte{1, 2, 3})
+		require.Error(t, err)
 	})
-	require.Error(t, err)
+
+	mp := mpool.MustNew(t.Name())
+	t.Run("oversized data field", func(t *testing.T) {
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
+		serialized, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		vec.Free(mp)
+
+		dataLenPos := 1 + types.TSize + 4
+		copy(serialized[dataLenPos:dataLenPos+4], types.EncodeFixed(uint32(math.MaxUint32)))
+		_, err = unmarshalPKInVector(serialized)
+		require.Error(t, err)
+	})
+
+	t.Run("varlena outside area", func(t *testing.T) {
+		vec := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(vec, bytes.Repeat([]byte("x"), 32), false, mp))
+		serialized, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		vec.Free(mp)
+
+		dataStart := 1 + types.TSize + 4 + 4
+		copy(serialized[dataStart+8:dataStart+12], types.EncodeFixed(uint32(math.MaxUint32)))
+		_, err = unmarshalPKInVector(serialized)
+		require.Error(t, err)
+	})
+
+	t.Run("truncated null bitmap", func(t *testing.T) {
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec, int64(1), true, mp))
+		serialized, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		vec.Free(mp)
+
+		pos := 1 + types.TSize + 4
+		dataLen := int(types.DecodeUint32(serialized[pos : pos+4]))
+		pos += 4 + dataLen
+		areaLen := int(types.DecodeUint32(serialized[pos : pos+4]))
+		pos += 4 + areaLen
+		copy(serialized[pos:pos+4], types.EncodeFixed(uint32(1)))
+		_, err = unmarshalPKInVector(serialized)
+		require.Error(t, err)
+	})
+
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestConstructBasePKFilterMalformedInFailsOpen(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	tableDef := &plan.TableDef{
+		Name:          "test",
+		Name2ColIndex: map[string]int32{"a": 0},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{{
+			Name: "a",
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+		}},
+	}
+
+	for _, name := range []string{"in", "prefix_in"} {
+		t.Run(name, func(t *testing.T) {
+			expr := MakeInExprForTest[[]byte](
+				MakeColExprForTest(0, types.T_varchar),
+				[][]byte{[]byte("a")},
+				types.T_varchar,
+				mp,
+			)
+			expr.GetF().Func.ObjName = name
+			expr.GetF().Args[1].GetVec().Data = []byte{1, 2, 3}
+
+			filter, err := ConstructBasePKFilter(expr, tableDef, mp)
+			require.NoError(t, err)
+			require.False(t, filter.Valid)
+		})
+	}
+
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestUnmarshalPKInVectorValidatesConstPhysicalValueOnce(t *testing.T) {
@@ -1870,17 +1951,43 @@ func TestUnmarshalPKInVectorValidatesConstPhysicalValueOnce(t *testing.T) {
 
 	normalized, err := unmarshalPKInVector(serialized)
 	require.NoError(t, err)
-	require.Equal(t, logicalLength, normalized.Length())
+	require.Equal(t, 1, normalized.Length(), "IN keeps one copy of a repeated constant")
 	require.True(t, normalized.GetSorted())
 	normalized.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestUnmarshalPKInVectorCollapsesLargeConstNull(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	input := vector.NewConstNull(types.T_varchar.ToType(), 1<<30, mp)
+	serialized, err := input.MarshalBinary()
+	require.NoError(t, err)
+	input.Free(mp)
+
+	normalized, err := unmarshalPKInVector(serialized)
+	require.NoError(t, err)
+	require.Zero(t, normalized.Length())
+	require.False(t, normalized.GetNulls().Any())
+	require.True(t, normalized.GetSorted())
+
+	packer := types.NewPacker()
+	require.Empty(t, EncodePrimaryKeyVector(normalized, packer))
+	packer.Close()
+	normalized.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestBuildBlockPKSearchFuncsRejectMalformedFilters(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	malformedVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(malformedVec, int64(1), false, mp))
+	malformedVec.SetLength(2)
+
 	tests := []BasePKFilter{
 		{Valid: true, Op: function.EQUAL, Oid: types.T_int64, LB: []byte{1}},
 		{Valid: true, Op: function.BETWEEN, Oid: types.T_int64, LB: types.EncodeValue(int64(1), types.T_int64), UB: []byte{2}},
 		{Valid: true, Op: function.IN, Oid: types.T_int64},
+		{Valid: true, Op: function.IN, Oid: types.T_int64, Vec: malformedVec},
 	}
 	for _, filter := range tests {
 		require.NotPanics(t, func() {
@@ -1890,6 +1997,8 @@ func TestBuildBlockPKSearchFuncsRejectMalformedFilters(t *testing.T) {
 			require.Nil(t, unsorted)
 		})
 	}
+	malformedVec.Free(mp)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestBuildBlockPKSearchFuncsFailsOpenOnInputTypeMismatch(t *testing.T) {
@@ -1908,8 +2017,113 @@ func TestBuildBlockPKSearchFuncsFailsOpenOnInputTypeMismatch(t *testing.T) {
 		Vec:   values,
 	})
 	require.NoError(t, err)
-	require.Equal(t, []int64{0, 1}, sorted(input))
-	require.Equal(t, []int64{0, 1}, unsorted(input))
+	require.Nil(t, sorted)
+	require.Nil(t, unsorted)
+}
+
+func TestValidBlockPKSearchFilterDoesNotAllocate(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	values := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(values, []int64{1, 2, 3}, nil, mp))
+	floatValues := vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(floatValues, []float64{1, 2, 3}, nil, mp))
+	prefixValues := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(prefixValues, bytes.Repeat([]byte("x"), 32), false, mp))
+	defer func() {
+		values.Free(mp)
+		floatValues.Free(mp)
+		prefixValues.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	scalar := BasePKFilter{
+		Valid: true,
+		Op:    function.GREAT_EQUAL,
+		Oid:   types.T_int64,
+		LB:    types.EncodeFixed(int64(1)),
+	}
+	var valid bool
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		valid = validBlockPKSearchFilter(scalar)
+	}))
+	require.True(t, valid)
+	for _, filter := range []BasePKFilter{
+		{Valid: true, Op: function.IN, Oid: types.T_int64, Vec: values},
+		{Valid: true, Op: function.IN, Oid: types.T_float64, Vec: floatValues},
+		{Valid: true, Op: function.PREFIX_IN, Oid: types.T_varchar, Vec: prefixValues},
+	} {
+		require.Zero(t, testing.AllocsPerRun(1000, func() {
+			valid = validBlockPKSearchFilter(filter)
+		}))
+		require.True(t, valid)
+	}
+}
+
+func TestMergeFiltersRejectsNaNOperands(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+
+	for _, test := range []struct {
+		name   string
+		oid    types.T
+		nan    any
+		inf    any
+		normal any
+	}{
+		{name: "float32", oid: types.T_float32, nan: float32(math.NaN()), inf: float32(math.Inf(1)), normal: float32(1)},
+		{name: "float64", oid: types.T_float64, nan: math.NaN(), inf: math.Inf(1), normal: float64(1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, connector := range []int{function.AND, function.OR} {
+				for _, nanFirst := range []bool{true, false} {
+					leftValue, rightValue := test.nan, test.normal
+					if !nanFirst {
+						leftValue, rightValue = rightValue, leftValue
+					}
+					left := BasePKFilter{
+						Valid: true,
+						Op:    function.GREAT_EQUAL,
+						Oid:   test.oid,
+						LB:    types.EncodeValue(leftValue, test.oid),
+					}
+					right := BasePKFilter{
+						Valid: true,
+						Op:    function.GREAT_EQUAL,
+						Oid:   test.oid,
+						LB:    types.EncodeValue(rightValue, test.oid),
+					}
+					merged, err := mergeFilters(&left, &right, connector, mp)
+					require.NoError(t, err)
+					require.False(t, merged.Valid, "connector %d, nanFirst %v must fail open", connector, nanFirst)
+				}
+			}
+
+			infinity := BasePKFilter{
+				Valid: true,
+				Op:    function.GREAT_EQUAL,
+				Oid:   test.oid,
+				LB:    types.EncodeValue(test.inf, test.oid),
+			}
+			normal := BasePKFilter{
+				Valid: true,
+				Op:    function.GREAT_EQUAL,
+				Oid:   test.oid,
+				LB:    types.EncodeValue(test.normal, test.oid),
+			}
+			for _, connector := range []int{function.AND, function.OR} {
+				left, right := infinity, normal
+				merged, err := mergeFilters(&left, &right, connector, mp)
+				require.NoError(t, err)
+				require.True(t, merged.Valid, "infinity connector %d must remain ordered", connector)
+				want := test.normal
+				if connector == function.AND {
+					want = test.inf
+				}
+				require.Zero(t, types.CompareValue(types.DecodeValue(merged.LB, test.oid), want))
+			}
+		})
+	}
+
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestCombineOffsetFuncsDeduplicatesAndRejectsInvalidOffsets(t *testing.T) {

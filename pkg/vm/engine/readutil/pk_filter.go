@@ -17,6 +17,7 @@ package readutil
 import (
 	"bytes"
 	stdcmp "cmp"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1240,20 +1241,85 @@ func validEncodedBasePKValue(oid types.T, value []byte) bool {
 }
 
 func validBlockPKSearchFilter(filter BasePKFilter) bool {
+	// A BasePKFilter can cross planner/read boundaries as serialized data.  Keep
+	// both persisted-block and workspace pruning on the same fail-open contract,
+	// including for malformed vector layouts supplied by older/newer versions.
 	switch filter.Op {
 	case function.IN:
-		return filter.Vec != nil && !filter.Vec.GetNulls().Any()
+		return filter.Vec != nil && filter.Vec.GetType().Oid == filter.Oid &&
+			supportedPKInType(filter.Oid) && !filter.Vec.GetNulls().Any() &&
+			validatePKInVectorShape(filter.Vec) == nil &&
+			!basePKFilterHasNaN(filter)
 	case function.PREFIX_IN:
-		return filter.Vec != nil && filter.Vec.GetType().IsVarlen() && !filter.Vec.GetNulls().Any()
+		return filter.Vec != nil && filter.Vec.GetType().Oid == filter.Oid &&
+			supportedPKPrefixType(filter.Oid) && !filter.Vec.GetNulls().Any() &&
+			validatePKInVectorShape(filter.Vec) == nil
 	case function.BETWEEN, RangeLeftOpen, RangeRightOpen, RangeBothOpen:
 		return validEncodedBasePKValue(filter.Oid, filter.LB) &&
-			validEncodedBasePKValue(filter.Oid, filter.UB)
+			validEncodedBasePKValue(filter.Oid, filter.UB) &&
+			!basePKFilterHasNaN(filter)
 	case function.PREFIX_EQ, function.PREFIX_BETWEEN,
 		PrefixRangeLeftOpen, PrefixRangeRightOpen, PrefixRangeBothOpen:
 		return true
 	case function.EQUAL, function.LESS_EQUAL, function.LESS_THAN,
 		function.GREAT_EQUAL, function.GREAT_THAN:
-		return validEncodedBasePKValue(filter.Oid, filter.LB)
+		return validEncodedBasePKValue(filter.Oid, filter.LB) &&
+			!basePKFilterHasNaN(filter)
+	default:
+		return false
+	}
+}
+
+func supportedPKPrefixType(oid types.T) bool {
+	switch oid {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
+		return true
+	default:
+		return false
+	}
+}
+
+func supportedPKInType(oid types.T) bool {
+	switch oid {
+	case types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json,
+		types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64,
+		types.T_datalink, types.T_enum, types.T_uuid:
+		return true
+	default:
+		return false
+	}
+}
+
+func basePKFilterHasNaN(filter BasePKFilter) bool {
+	switch filter.Oid {
+	case types.T_float32:
+		if filter.Op == function.IN {
+			for _, value := range vector.MustFixedColNoTypeCheck[float32](filter.Vec) {
+				if math.IsNaN(float64(value)) {
+					return true
+				}
+			}
+			return false
+		}
+		return math.IsNaN(float64(types.DecodeFloat32(filter.LB))) ||
+			(len(filter.UB) > 0 && math.IsNaN(float64(types.DecodeFloat32(filter.UB))))
+	case types.T_float64:
+		if filter.Op == function.IN {
+			for _, value := range vector.MustFixedColNoTypeCheck[float64](filter.Vec) {
+				if math.IsNaN(value) {
+					return true
+				}
+			}
+			return false
+		}
+		return math.IsNaN(types.DecodeFloat64(filter.LB)) ||
+			(len(filter.UB) > 0 && math.IsNaN(types.DecodeFloat64(filter.UB)))
 	default:
 		return false
 	}
@@ -1267,10 +1333,11 @@ func mergeFilters(
 	connector int,
 	mp *mpool.MPool,
 ) (finalFilter BasePKFilter, err error) {
+	unsafeInput := false
 	defer func() {
 		finalFilter.Oid = left.Oid
 
-		if !finalFilter.Valid && connector == function.AND {
+		if !finalFilter.Valid && connector == function.AND && !unsafeInput {
 			// nonempty disjuncts makes the memory pk filter invalid,
 			// so we choose the one whose disjuncts is empty as default here.
 			if len(left.Disjuncts) > 0 {
@@ -1291,7 +1358,10 @@ func mergeFilters(
 			}
 		}
 	}()
-	if (len(left.Disjuncts) == 0 && len(right.Disjuncts) == 0 && left.Oid != right.Oid) ||
+	unsafeInput = (len(left.Disjuncts) == 0 && !validBasePKMergeOperand(*left)) ||
+		(len(right.Disjuncts) == 0 && !validBasePKMergeOperand(*right))
+	if unsafeInput ||
+		(len(left.Disjuncts) == 0 && len(right.Disjuncts) == 0 && left.Oid != right.Oid) ||
 		(left.Op != function.IN && len(left.Disjuncts) == 0 && !validEncodedBasePKValue(left.Oid, left.LB)) ||
 		(right.Op != function.IN && len(right.Disjuncts) == 0 && !validEncodedBasePKValue(right.Oid, right.LB)) {
 		return BasePKFilter{}, nil
@@ -1638,4 +1708,17 @@ func mergeFilters(
 		}
 	}
 	return
+}
+
+func validBasePKMergeOperand(filter BasePKFilter) bool {
+	switch filter.Op {
+	case function.IN:
+		return validBlockPKSearchFilter(filter)
+	case function.EQUAL, function.LESS_EQUAL, function.LESS_THAN,
+		function.GREAT_EQUAL, function.GREAT_THAN:
+		return validEncodedBasePKValue(filter.Oid, filter.LB) &&
+			!basePKFilterHasNaN(filter)
+	default:
+		return true
+	}
 }

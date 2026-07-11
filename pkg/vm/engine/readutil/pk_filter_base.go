@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"math/bits"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -288,8 +290,10 @@ func ConstructBasePKFilter(
 			{
 				vec, unmarshalErr := unmarshalPKInVector(vals[0])
 				if unmarshalErr != nil {
-					err = unmarshalErr
-					return BasePKFilter{}, err
+					// The read filter is an optional pruning optimization.  Keep
+					// malformed or version-skewed vector data on the residual
+					// expression path instead of failing the query.
+					return BasePKFilter{}, nil
 				}
 				filter.Vec = vec
 			}
@@ -305,8 +309,7 @@ func ConstructBasePKFilter(
 			{
 				vec, unmarshalErr := unmarshalPKInVector(vals[0])
 				if unmarshalErr != nil {
-					err = unmarshalErr
-					return BasePKFilter{}, err
+					return BasePKFilter{}, nil
 				}
 				filter.Vec = vec
 			}
@@ -395,12 +398,9 @@ func ConstructBasePKFilter(
 // nullable constant vector.  UnmarshalBinary is zero-copy; only mutate an
 // a private copy so the shared serialized plan expression remains immutable.
 func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			ret = nil
-			err = fmt.Errorf("invalid PK IN vector encoding: %v", recovered)
-		}
-	}()
+	if err := validatePKInVectorEncoding(data); err != nil {
+		return nil, err
+	}
 	vec := vector.NewVec(types.T_any.ToType())
 	if err := vec.UnmarshalBinary(data); err != nil {
 		return nil, err
@@ -408,7 +408,7 @@ func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
 	if err := validatePKInVectorShape(vec); err != nil {
 		return nil, err
 	}
-	if vec.GetSorted() && !vec.GetNulls().Any() {
+	if !vec.IsConst() && vec.GetSorted() && !vec.GetNulls().Any() {
 		return vec, nil
 	}
 	owned := vector.NewVec(types.T_any.ToType())
@@ -423,33 +423,149 @@ func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
 }
 
 func validatePKInVectorShape(vec *vector.Vector) (err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("invalid PK IN vector layout: %v", recovered)
-		}
-	}()
 	if vec.Length() < 0 {
-		return fmt.Errorf("invalid PK IN vector length %d", vec.Length())
+		return moerr.NewInvalidInputNoCtxf("invalid PK IN vector length %d", vec.Length())
 	}
 	physicalLength := vec.Length()
 	if vec.IsConst() && physicalLength > 0 {
 		physicalLength = 1
 	}
+	if vec.IsConst() && vec.GetNulls().Any() && !vec.IsNull(0) {
+		return moerr.NewInvalidInputNoCtx("invalid PK IN constant null bitmap")
+	}
 	if !vec.IsConstNull() {
 		typeSize := vec.GetType().TypeSize()
 		if typeSize <= 0 || physicalLength > len(vec.GetData())/typeSize {
-			return fmt.Errorf("invalid PK IN vector data length")
+			return moerr.NewInvalidInputNoCtx("invalid PK IN vector data length")
 		}
 	}
 	if vec.GetType().IsVarlen() {
-		for row := 0; row < physicalLength; row++ {
-			_ = vec.GetBytesAt(row)
+		values := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
+		areaLen := uint64(len(vec.GetArea()))
+		for row := range values {
+			if values[row].IsSmall() {
+				continue
+			}
+			offset, length := values[row].OffsetLen()
+			if uint64(offset)+uint64(length) > areaLen {
+				return moerr.NewInvalidInputNoCtx("invalid PK IN vector varlen area")
+			}
 		}
 	}
 	return nil
 }
 
+func validatePKInVectorEncoding(data []byte) error {
+	const scalarBytes = 4
+	minimum := 1 + types.TSize + scalarBytes*4 + 1
+	if len(data) < minimum {
+		return moerr.NewInvalidInputNoCtx("invalid PK IN vector encoding")
+	}
+
+	class := int(data[0])
+	if class != vector.FLAT && class != vector.CONSTANT {
+		return moerr.NewInvalidInputNoCtxf("invalid PK IN vector class %d", class)
+	}
+	pos := 1
+	typ := types.DecodeType(data[pos : pos+types.TSize])
+	pos += types.TSize
+	if !supportedPKInType(typ.Oid) || typ.TypeSize() != typ.Oid.TypeLen() {
+		return moerr.NewInvalidInputNoCtxf("invalid PK IN vector type %s", typ.Oid.String())
+	}
+
+	logicalLength := uint64(types.DecodeUint32(data[pos : pos+scalarBytes]))
+	pos += scalarBytes
+	if logicalLength > uint64(math.MaxInt) {
+		return moerr.NewInvalidInputNoCtx("invalid PK IN vector length")
+	}
+
+	readBytes := func() ([]byte, bool) {
+		if len(data)-pos < scalarBytes {
+			return nil, false
+		}
+		length := uint64(types.DecodeUint32(data[pos : pos+scalarBytes]))
+		pos += scalarBytes
+		if length > uint64(len(data)-pos) {
+			return nil, false
+		}
+		value := data[pos : pos+int(length)]
+		pos += int(length)
+		return value, true
+	}
+
+	if _, ok := readBytes(); !ok { // vector data
+		return moerr.NewInvalidInputNoCtx("invalid PK IN vector data encoding")
+	}
+	if _, ok := readBytes(); !ok { // varlen area
+		return moerr.NewInvalidInputNoCtx("invalid PK IN vector area encoding")
+	}
+	nsp, ok := readBytes()
+	if !ok {
+		return moerr.NewInvalidInputNoCtx("invalid PK IN vector null encoding")
+	}
+	if err := validatePKInNullEncoding(nsp, logicalLength); err != nil {
+		return err
+	}
+	if len(data)-pos != 1 || data[pos] > 1 {
+		return moerr.NewInvalidInputNoCtx("invalid PK IN vector sorted flag")
+	}
+	return nil
+}
+
+func validatePKInNullEncoding(data []byte, logicalLength uint64) error {
+	if len(data) == 0 {
+		return nil
+	}
+	const headerBytes = 24
+	if len(data) < headerBytes {
+		return moerr.NewInvalidInputNoCtx("invalid PK IN vector null bitmap")
+	}
+	count := types.DecodeInt64(data[:8])
+	bitmapLength := types.DecodeUint64(data[8:16])
+	dataBytes := types.DecodeUint64(data[16:24])
+	if count < 0 || uint64(count) > logicalLength || dataBytes%8 != 0 ||
+		dataBytes != uint64(len(data)-headerBytes) || bitmapLength > dataBytes*8 {
+		return moerr.NewInvalidInputNoCtx("invalid PK IN vector null bitmap")
+	}
+
+	actualCount := 0
+	for pos := headerBytes; pos < len(data); pos += 8 {
+		word := types.DecodeUint64(data[pos : pos+8])
+		actualCount += bits.OnesCount64(word)
+		if logicalLength == 0 && word != 0 {
+			return moerr.NewInvalidInputNoCtx("invalid PK IN vector null bitmap")
+		}
+		if logicalLength > 0 && uint64(pos-headerBytes)/8 == (logicalLength-1)/64 {
+			validBits := logicalLength % 64
+			if validBits != 0 && word>>validBits != 0 {
+				return moerr.NewInvalidInputNoCtx("invalid PK IN vector null bitmap")
+			}
+		}
+		if logicalLength > 0 && uint64(pos-headerBytes)/8 > (logicalLength-1)/64 && word != 0 {
+			return moerr.NewInvalidInputNoCtx("invalid PK IN vector null bitmap")
+		}
+	}
+	if int64(actualCount) != count {
+		return moerr.NewInvalidInputNoCtx("invalid PK IN vector null bitmap count")
+	}
+	return nil
+}
+
 func normalizePKInVector(vec *vector.Vector) {
+	// A constant vector represents a repeated value, while IN is set-valued.
+	// Collapse its logical length before encoding it for workspace filtering;
+	// otherwise a corrupt or adversarial logical length can force an O(n)
+	// expansion (or allocation) for a single physical value.
+	if vec.IsConst() {
+		if vec.IsConstNull() {
+			vec.SetLength(0)
+			vec.GetNulls().Reset()
+		} else if vec.Length() > 0 {
+			vec.SetLength(1)
+		}
+		vec.SetSorted(true)
+		return
+	}
 	if vec.GetNulls().Any() {
 		sels := make([]int64, 0, vec.Length()-vec.GetNulls().Count())
 		for row := 0; row < vec.Length(); row++ {

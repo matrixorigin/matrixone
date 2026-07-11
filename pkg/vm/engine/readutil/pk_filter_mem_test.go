@@ -15,6 +15,7 @@
 package readutil
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -286,4 +287,124 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 
 		skipMask.Release()
 	}
+}
+
+func TestPKFiltersUseSameFailOpenValidation(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	packerPool := fileservice.NewPool(
+		8,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) { packer.Close() },
+	)
+	ts := types.MaxTs().ToTimestamp()
+
+	makeTable := func(oid types.T) *plan.TableDef {
+		return &plan.TableDef{
+			Name: "test",
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"pk"}, PkeyColName: "pk"},
+			Cols: []*plan.ColDef{{
+				Name: "pk",
+				Typ:  plan.Type{Id: int32(oid)},
+			}},
+		}
+	}
+	assertFailOpen := func(t *testing.T, tableOID types.T, base BasePKFilter) {
+		t.Helper()
+		block, err := ConstructBlockPKFilter(false, base, nil)
+		require.NoError(t, err)
+		require.False(t, block.Valid)
+		require.Nil(t, block.SortedSearchFunc)
+		require.Nil(t, block.UnSortedSearchFunc)
+
+		memory, err := NewMemPKFilter(makeTable(tableOID), ts, packerPool, base, engine.FilterHint{})
+		require.NoError(t, err)
+		require.False(t, memory.Valid())
+	}
+
+	t.Run("IN type mismatch", func(t *testing.T) {
+		values := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(values, []byte("1"), false, mp))
+		defer values.Free(mp)
+		assertFailOpen(t, types.T_int64, BasePKFilter{
+			Valid: true,
+			Op:    function.IN,
+			Oid:   types.T_int64,
+			Vec:   values,
+		})
+	})
+
+	t.Run("PREFIX_IN type mismatch", func(t *testing.T) {
+		values := vector.NewVec(types.T_varbinary.ToType())
+		require.NoError(t, vector.AppendBytes(values, []byte("prefix"), false, mp))
+		defer values.Free(mp)
+		assertFailOpen(t, types.T_varchar, BasePKFilter{
+			Valid: true,
+			Op:    function.PREFIX_IN,
+			Oid:   types.T_varchar,
+			Vec:   values,
+		})
+	})
+
+	for _, test := range []struct {
+		name string
+		oid  types.T
+		add  func(*vector.Vector)
+		lb   []byte
+		inf  []byte
+	}{
+		{
+			name: "float32",
+			oid:  types.T_float32,
+			add: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixedList(vec, []float32{1, float32(math.NaN())}, nil, mp))
+			},
+			lb:  types.EncodeFixed(float32(math.NaN())),
+			inf: types.EncodeFixed(float32(math.Inf(1))),
+		},
+		{
+			name: "float64",
+			oid:  types.T_float64,
+			add: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixedList(vec, []float64{1, math.NaN()}, nil, mp))
+			},
+			lb:  types.EncodeFixed(math.NaN()),
+			inf: types.EncodeFixed(math.Inf(1)),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertFailOpen(t, test.oid, BasePKFilter{
+				Valid: true,
+				Op:    function.GREAT_EQUAL,
+				Oid:   test.oid,
+				LB:    test.lb,
+			})
+
+			values := vector.NewVec(test.oid.ToType())
+			test.add(values)
+			defer values.Free(mp)
+			assertFailOpen(t, test.oid, BasePKFilter{
+				Valid: true,
+				Op:    function.IN,
+				Oid:   test.oid,
+				Vec:   values,
+			})
+
+			infinity := BasePKFilter{
+				Valid: true,
+				Op:    function.GREAT_EQUAL,
+				Oid:   test.oid,
+				LB:    test.inf,
+			}
+			sorted, unsorted, err := buildBlockPKSearchFuncs(infinity)
+			require.NoError(t, err)
+			require.NotNil(t, sorted)
+			require.NotNil(t, unsorted)
+			memory, err := NewMemPKFilter(makeTable(test.oid), ts, packerPool, infinity, engine.FilterHint{})
+			require.NoError(t, err)
+			require.True(t, memory.Valid())
+		})
+	}
+
+	require.Zero(t, mp.CurrNB())
 }
