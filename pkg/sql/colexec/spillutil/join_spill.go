@@ -300,18 +300,53 @@ func ScatterBatch(
 	bucketBuf *bytes.Buffer,
 	analyzer process.Analyzer,
 ) error {
+	return scatterImpl(proc, bat, keyVecs, writers, buffers, seed, bucketBuf, analyzer, nil, nil)
+}
+
+// scatterImpl is the internal implementation that accepts reusable buffers.
+func scatterImpl(
+	proc *process.Process,
+	bat *batch.Batch,
+	keyVecs []*vector.Vector,
+	writers []BucketWriter,
+	buffers []*batch.Batch,
+	seed uint64,
+	bucketBuf *bytes.Buffer,
+	analyzer process.Analyzer,
+	reuseHashValues *[]uint64,
+	reuseBucketRowIds *[][]int32,
+) error {
 	rowCount := bat.RowCount()
 	if rowCount == 0 {
 		return nil
 	}
 
-	hashValues := make([]uint64, rowCount)
+	var hashValues []uint64
+	if reuseHashValues != nil && cap(*reuseHashValues) >= rowCount {
+		hashValues = (*reuseHashValues)[:rowCount]
+	} else {
+		hashValues = make([]uint64, rowCount)
+		if reuseHashValues != nil {
+			*reuseHashValues = hashValues
+		}
+	}
 	if err := ComputeXXHash(keyVecs, hashValues, seed); err != nil {
 		return err
 	}
 
 	// Collect row indices per bucket.
-	bucketRowIds := make([][]int32, len(writers))
+	var bucketRowIds [][]int32
+	if reuseBucketRowIds != nil {
+		bucketRowIds = *reuseBucketRowIds
+		if cap(bucketRowIds) < len(writers) {
+			bucketRowIds = make([][]int32, len(writers))
+			*reuseBucketRowIds = bucketRowIds
+		} else {
+			bucketRowIds = bucketRowIds[:len(writers)]
+		}
+	} else {
+		bucketRowIds = make([][]int32, len(writers))
+	}
 	for i := range bucketRowIds {
 		bucketRowIds[i] = bucketRowIds[i][:0]
 	}
@@ -352,6 +387,20 @@ func ScatterBatch(
 	}
 
 	return nil
+}
+
+// scatterBatch scatters bat using the engine's reusable hash/row-id buffers.
+func (e *SpillEngine) scatterBatch(
+	proc *process.Process,
+	bat *batch.Batch,
+	keyVecs []*vector.Vector,
+	writers []BucketWriter,
+	buffers []*batch.Batch,
+	seed uint64,
+	analyzer process.Analyzer,
+) error {
+	return scatterImpl(proc, bat, keyVecs, writers, buffers, seed, &e.writeBuf, analyzer,
+		&e.scatterHashValues, &e.scatterBucketRowIds)
 }
 
 // ShouldSpill returns true when memUsed exceeds the spill threshold.
@@ -453,11 +502,11 @@ type SpillEngine struct {
 
 	// Cached key executors for re-spill
 	keyExecs []colexec.ExpressionExecutor
+	keyVecs  []*vector.Vector
 
 	// Reusable scatter buffers to avoid per-batch allocations.
 	scatterHashValues   []uint64
 	scatterBucketRowIds [][]int32
-	keyVecs             []*vector.Vector
 
 	// probeKeyEval evaluates probe-side key expressions for probe re-scatter.
 	// Stored from ScatterProbeTable. Must use probe-side conditions
@@ -527,7 +576,7 @@ func (e *SpillEngine) ScatterProbeTable(
 		if err != nil {
 			return err
 		}
-		if err := ScatterBatch(proc, bat, keyVecs, writers, buffers, 0, &e.writeBuf, analyzer); err != nil {
+		if err := e.scatterBatch(proc, bat, keyVecs, writers, buffers, 0, analyzer); err != nil {
 			return err
 		}
 	}
@@ -721,7 +770,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			}
 			keyVecs[i] = vec
 		}
-		return ScatterBatch(proc, bat, keyVecs, writers, buffers, seed, &e.writeBuf, analyzer)
+		return e.scatterBatch(proc, bat, keyVecs, writers, buffers, seed, analyzer)
 	}
 
 	// Scatter builder's accumulated batches + remaining build file.
@@ -857,7 +906,7 @@ func scatterProbe(proc *process.Process, e *SpillEngine, bat *batch.Batch, write
 	if err != nil {
 		return err
 	}
-	return ScatterBatch(proc, bat, keyVecs, writers, buffers, seed, &e.writeBuf, analyzer)
+	return e.scatterBatch(proc, bat, keyVecs, writers, buffers, seed, analyzer)
 }
 
 func (e *SpillEngine) freeKeyExecs() {

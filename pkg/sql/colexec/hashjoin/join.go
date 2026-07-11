@@ -240,10 +240,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if (ctr.spillEngine != nil) && (ctr.spillEngine.HasMoreBuckets() || ctr.spillEngine.IsProbing()) {
 					ctr.rightRowsMatched = nil
 					ctr.cleanHashMap()
-
-					if (ctr.spillEngine != nil) && (ctr.spillEngine.HasMoreBuckets() || ctr.spillEngine.IsProbing()) {
-						ctr.state = Probe
-					}
+					ctr.state = Probe
 				}
 				continue
 			}
@@ -292,9 +289,11 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 					return ctr.eqCondVecs, nil
 				},
 			); err != nil {
+				ctr.mp.Free()
 				engine.Cleanup(proc)
 				return err
 			}
+			ctr.mp.Free()
 			ctr.spillEngine = engine
 			ctr.mp = nil
 			return nil

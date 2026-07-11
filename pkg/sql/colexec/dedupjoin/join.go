@@ -267,6 +267,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 					return ctr.vecs, nil
 				},
 			); err != nil {
+				ctr.mp.Free()
 				engine.Cleanup(proc)
 				return err
 			}
