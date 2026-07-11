@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -475,12 +476,10 @@ func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
 
 func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 	proc := testutil.NewProc(t)
-	txn := &Transaction{
-		op:          newTxnOperatorForTest(t),
-		proc:        proc,
-		tableOps:    newTableOps(),
-		databaseOps: newDbOps(),
-	}
+	txn := newWorkspaceCompactionTxnForTest(proc)
+	txn.op = newTxnOperatorForTest(t)
+	txn.tableOps = newTableOps()
+	txn.databaseOps = newDbOps()
 
 	const (
 		dbID            = uint64(7)
@@ -489,10 +488,11 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 
 	defer func() {
 		for i := range txn.writes {
-			if txn.writes[i].bat != nil {
-				txn.writes[i].bat.Clean(proc.Mp())
-			}
+			txn.releaseWorkspaceEntryBatchLocked(i)
 		}
+		require.Zero(t, txn.workspaceSize)
+		require.Zero(t, txn.approximateInMemInsertSize)
+		require.Zero(t, txn.approximateInMemInsertCnt)
 	}()
 
 	// Two entries on the same table are enough to create a nil hole during merge.
@@ -503,7 +503,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 		if i == 1 {
 			tableID = 1000
 		}
-		txn.writes = append(txn.writes, Entry{
+		txn.appendWorkspaceEntryLocked(Entry{
 			typ:          INSERT,
 			tableId:      tableID,
 			databaseId:   dbID,
@@ -513,7 +513,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 		})
 	}
 
-	txn.writes = append(txn.writes, Entry{
+	txn.appendWorkspaceEntryLocked(Entry{
 		typ:          INSERT,
 		tableId:      catalog.MO_TABLES_ID,
 		databaseId:   catalog.MO_CATALOG_ID,
@@ -522,7 +522,7 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 		note:         noteForCreate(criticalTableID, "critical"),
 		bat:          newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1}),
 	})
-	txn.writes = append(txn.writes, Entry{
+	txn.appendWorkspaceEntryLocked(Entry{
 		typ:          INSERT,
 		tableId:      criticalTableID,
 		databaseId:   dbID,
@@ -545,6 +545,284 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 	require.NotEqual(t, -1, createIdx)
 	require.NotEqual(t, -1, dataIdx)
 	require.Less(t, createIdx, dataIdx)
+}
+
+func TestMergeTxnWorkspaceReclaimsSupersededEntries(t *testing.T) {
+	proc := testutil.NewProc(t)
+	baseline := proc.Mp().CurrNB()
+	txn := newWorkspaceCompactionTxnForTest(proc)
+
+	var live *batch.Batch
+	var steadyStateBytes int64
+	for i := 0; i < 1000; i++ {
+		next := newInsertBatchWithRowIDForTest(t, proc, []int64{int64(i)})
+		txn.appendWorkspaceEntryLocked(Entry{
+			typ:        INSERT,
+			databaseId: 7,
+			tableId:    42,
+			bat:        next,
+		})
+		if live != nil {
+			txn.batchSelectList[live] = []int64{0}
+		}
+
+		require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+		require.Len(t, txn.writes, 1)
+		require.Same(t, next, txn.writes[0].bat)
+		require.Equal(t, uint64(next.Size()), txn.workspaceSize)
+		require.Equal(t, uint64(next.Size()), txn.approximateInMemInsertSize)
+		require.Equal(t, next.RowCount(), txn.approximateInMemInsertCnt)
+		require.Empty(t, txn.batchSelectList)
+
+		if i == 0 {
+			steadyStateBytes = proc.Mp().CurrNB()
+		} else {
+			require.Equal(t, steadyStateBytes, proc.Mp().CurrNB())
+		}
+		live = next
+	}
+
+	txn.releaseWorkspaceEntryBatchLocked(0)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+}
+
+func TestMergeTxnWorkspaceDeduplicatesSelections(t *testing.T) {
+	proc := testutil.NewProc(t)
+	txn := newWorkspaceCompactionTxnForTest(proc)
+	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2, 3})
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:        INSERT,
+		databaseId: 7,
+		tableId:    42,
+		bat:        bat,
+	})
+	accountedSize := txn.workspaceSize
+	txn.batchSelectList[bat] = []int64{1, 1}
+
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	require.Len(t, txn.writes, 1)
+	require.Equal(t, 2, bat.RowCount())
+	require.Equal(t, accountedSize, txn.workspaceSize)
+	require.Equal(t, accountedSize, txn.approximateInMemInsertSize)
+	require.Equal(t, 2, txn.approximateInMemInsertCnt)
+
+	txn.releaseWorkspaceEntryBatchLocked(0)
+}
+
+func TestMergeTxnWorkspaceReclaimsTablesInVainEntries(t *testing.T) {
+	proc := testutil.NewProc(t)
+	baseline := proc.Mp().CurrNB()
+	txn := newWorkspaceCompactionTxnForTest(proc)
+	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2, 3})
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:        INSERT,
+		databaseId: 7,
+		tableId:    42,
+		bat:        bat,
+	})
+	txn.tablesInVain[42] = 1
+
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	require.Empty(t, txn.writes)
+	require.Zero(t, txn.workspaceSize)
+	require.Zero(t, txn.approximateInMemInsertSize)
+	require.Zero(t, txn.approximateInMemInsertCnt)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+}
+
+func TestMergeTxnWorkspacePreservesTransferredEntryAccounting(t *testing.T) {
+	proc := testutil.NewProc(t)
+	baseline := proc.Mp().CurrNB()
+	txn := newWorkspaceCompactionTxnForTest(proc)
+	original := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2, 3})
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:        INSERT,
+		databaseId: 7,
+		tableId:    42,
+		tableName:  "before_alter",
+		bat:        original,
+	})
+
+	transferred, err := original.Dup(proc.Mp())
+	require.NoError(t, err)
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:        INSERT,
+		databaseId: 7,
+		tableId:    42,
+		tableName:  "after_alter",
+		bat:        transferred,
+	})
+	txn.batchSelectList[original] = []int64{0, 1, 2}
+
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	require.Len(t, txn.writes, 1)
+	require.Same(t, transferred, txn.writes[0].bat)
+	require.Equal(t, "after_alter", txn.writes[0].tableName)
+	require.Equal(t, uint64(transferred.Size()), txn.workspaceSize)
+	require.Equal(t, uint64(transferred.Size()), txn.approximateInMemInsertSize)
+	require.Equal(t, transferred.RowCount(), txn.approximateInMemInsertCnt)
+
+	txn.releaseWorkspaceEntryBatchLocked(0)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+}
+
+func TestMergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *testing.T) {
+	proc := testutil.NewProc(t)
+	baseline := proc.Mp().CurrNB()
+	txn := newWorkspaceCompactionTxnForTest(proc)
+
+	for i := 0; i < 30; i++ {
+		txn.appendWorkspaceEntryLocked(Entry{
+			typ:        INSERT,
+			databaseId: 7,
+			tableId:    42,
+			bat:        newInsertBatchWithRowIDForTest(t, proc, []int64{int64(i)}),
+		})
+	}
+
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	require.Len(t, txn.writes, 1)
+	require.Equal(t, 30, txn.writes[0].bat.RowCount())
+	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.workspaceSize)
+	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.approximateInMemInsertSize)
+	require.Equal(t, 30, txn.approximateInMemInsertCnt)
+
+	txn.releaseWorkspaceEntryBatchLocked(0)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+}
+
+func TestMergeWorkspaceEntryBatchesRestoresAccountingOnError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	baseline := proc.Mp().CurrNB()
+	txn := newWorkspaceCompactionTxnForTest(proc)
+	dst := newInsertBatchWithRowIDForTest(t, proc, []int64{1})
+	src := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{2})
+	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: dst})
+	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: src})
+	wantSize := txn.workspaceSize
+	wantRows := txn.approximateInMemInsertCnt
+
+	require.Error(t, txn.mergeWorkspaceEntryBatchesLocked(context.Background(), 0, 1))
+	require.Equal(t, wantSize, txn.workspaceSize)
+	require.Equal(t, wantSize, txn.approximateInMemInsertSize)
+	require.Equal(t, wantRows, txn.approximateInMemInsertCnt)
+	require.NotNil(t, txn.writes[0].bat)
+	require.NotNil(t, txn.writes[1].bat)
+
+	txn.releaseWorkspaceEntryBatchLocked(0)
+	txn.releaseWorkspaceEntryBatchLocked(1)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+}
+
+func TestSoftDeleteObjectUsesWorkspaceAccounting(t *testing.T) {
+	proc := testutil.NewProc(t)
+	baseline := proc.Mp().CurrNB()
+	txn := newWorkspaceCompactionTxnForTest(proc)
+	txn.tnStores = []DNStore{{}}
+	op := newTxnOperatorForTestWithWorkspace(t, txn)
+	op.EXPECT().IsSnapOp().Return(false)
+	txn.op = op
+	tbl := &txnTable{
+		accountId: 1,
+		tableId:   42,
+		tableName: "tbl",
+		db: &txnDatabase{
+			op:           op,
+			databaseId:   7,
+			databaseName: "db",
+		},
+	}
+	rowID := types.RandomRowid()
+
+	require.NoError(t, tbl.SoftDeleteObject(
+		context.Background(),
+		rowID.BorrowObjectID(),
+		false,
+	))
+	require.Len(t, txn.writes, 1)
+	require.Equal(t, SOFT_DELETE_OBJECT, txn.writes[0].typ)
+	require.Equal(t, uint64(txn.writes[0].bat.Size()), txn.workspaceSize)
+	require.Zero(t, txn.approximateInMemInsertSize)
+	require.Zero(t, txn.approximateInMemInsertCnt)
+	require.Zero(t, txn.approximateInMemDeleteCnt)
+
+	txn.releaseWorkspaceEntryBatchLocked(0)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+}
+
+func TestRollbackLastStatementRestoresWorkspaceAccounting(t *testing.T) {
+	proc := testutil.NewProc(t)
+	op := newTxnOperatorForTest(t)
+	op.EXPECT().EnterRollbackStmt()
+	op.EXPECT().ExitRollbackStmt()
+	txn := newWorkspaceCompactionTxnForTest(proc)
+	txn.op = op
+	txn.tableCache = new(sync.Map)
+	txn.tableOps = newTableOps()
+	txn.databaseOps = newDbOps()
+	txn.isCCPRTxn = true
+
+	committed := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2})
+	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: committed})
+	committedSize := uint64(committed.Size())
+	txn.statementID = 1
+	txn.offsets = []int{1}
+
+	rolledBack := newInsertBatchWithRowIDForTest(t, proc, []int64{3, 4, 5})
+	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: rolledBack})
+	rolledBackDelete := newDeleteBatchForTest(t, proc, []int64{1, 2})
+	txn.appendWorkspaceEntryLocked(Entry{typ: DELETE, databaseId: 7, tableId: 42, bat: rolledBackDelete})
+
+	require.NoError(t, txn.RollbackLastStatement(context.Background()))
+	require.Len(t, txn.writes, 1)
+	require.Same(t, committed, txn.writes[0].bat)
+	require.Equal(t, committedSize, txn.workspaceSize)
+	require.Equal(t, committedSize, txn.approximateInMemInsertSize)
+	require.Equal(t, committed.RowCount(), txn.approximateInMemInsertCnt)
+	require.Zero(t, txn.approximateInMemDeleteCnt)
+
+	txn.releaseWorkspaceEntryBatchLocked(0)
+}
+
+func BenchmarkMergeTxnWorkspaceRepeatedMutation(b *testing.B) {
+	for _, statements := range []int{1000, 5000, 10000, 30000} {
+		b.Run(fmt.Sprintf("statements=%d", statements), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				proc := testutil.NewProc(b)
+				txn := newWorkspaceCompactionTxnForTest(proc)
+				var live *batch.Batch
+				for i := 0; i < statements; i++ {
+					next := newInsertBatchWithRowIDForTest(b, proc, []int64{int64(i)})
+					txn.appendWorkspaceEntryLocked(Entry{
+						typ:        INSERT,
+						databaseId: 7,
+						tableId:    42,
+						bat:        next,
+					})
+					if live != nil {
+						txn.batchSelectList[live] = []int64{0}
+					}
+					if err := txn.mergeTxnWorkspaceLocked(context.Background()); err != nil {
+						b.Fatal(err)
+					}
+					live = next
+				}
+				txn.releaseWorkspaceEntryBatchLocked(0)
+			}
+		})
+	}
+}
+
+func newWorkspaceCompactionTxnForTest(proc *process.Process) *Transaction {
+	txn := &Transaction{
+		proc:            proc,
+		batchSelectList: make(map[*batch.Batch][]int64),
+		tablesInVain:    make(map[uint64]int),
+		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+	}
+	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+	return txn
 }
 
 func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
@@ -1167,7 +1445,7 @@ func newDeleteBatchForTest(
 }
 
 func newInsertBatchWithRowIDForTest(
-	t *testing.T,
+	t testing.TB,
 	proc *process.Process,
 	pks []int64,
 ) *batch.Batch {

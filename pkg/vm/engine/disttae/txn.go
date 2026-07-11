@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -76,6 +77,169 @@ import (
 // detecting whether a transaction is a read-only transaction
 func (txn *Transaction) ReadOnly() bool {
 	return txn.readOnly.Load()
+}
+
+func (txn *Transaction) addWorkspaceEntryAccountingLocked(entry *Entry) {
+	if entry.bat == nil {
+		entry.accountedSize = 0
+		return
+	}
+
+	size := uint64(entry.bat.Size())
+	rows := entry.bat.RowCount()
+	entry.accountedSize = size
+	txn.workspaceSize += size
+
+	if entry.fileName != "" || catalog.IsSystemTable(entry.tableId) {
+		return
+	}
+
+	switch entry.typ {
+	case INSERT:
+		txn.approximateInMemInsertSize += size
+		txn.approximateInMemInsertCnt += rows
+	case DELETE:
+		txn.approximateInMemDeleteCnt += rows
+	}
+}
+
+func (txn *Transaction) removeWorkspaceEntryAccountingLocked(
+	entry *Entry,
+	size uint64,
+	rows int,
+) {
+	if size > entry.accountedSize {
+		panic("BUG: workspace entry size accounting underflow")
+	}
+	if txn.workspaceSize < size {
+		panic("BUG: workspace size accounting underflow")
+	}
+	entry.accountedSize -= size
+	txn.workspaceSize -= size
+
+	if entry.fileName != "" || catalog.IsSystemTable(entry.tableId) {
+		return
+	}
+
+	switch entry.typ {
+	case INSERT:
+		if txn.approximateInMemInsertSize < size || txn.approximateInMemInsertCnt < rows {
+			panic("BUG: in-memory insert accounting underflow")
+		}
+		txn.approximateInMemInsertSize -= size
+		txn.approximateInMemInsertCnt -= rows
+	case DELETE:
+		if txn.approximateInMemDeleteCnt < rows {
+			panic("BUG: in-memory delete accounting underflow")
+		}
+		txn.approximateInMemDeleteCnt -= rows
+	}
+}
+
+func (txn *Transaction) appendWorkspaceEntryLocked(entry Entry) {
+	txn.addWorkspaceEntryAccountingLocked(&entry)
+	txn.writes = append(txn.writes, entry)
+}
+
+func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
+	entry := &txn.writes[idx]
+	if entry.bat == nil {
+		return
+	}
+
+	bat := entry.bat
+	txn.removeWorkspaceEntryAccountingLocked(
+		entry,
+		entry.accountedSize,
+		bat.RowCount(),
+	)
+	delete(txn.batchSelectList, bat)
+	bat.Clean(txn.proc.GetMPool())
+	entry.bat = nil
+}
+
+func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) {
+	entry := &txn.writes[idx]
+	if entry.bat == nil {
+		return
+	}
+	bat := entry.bat
+	if len(sels) == 0 {
+		delete(txn.batchSelectList, bat)
+		return
+	}
+
+	slices.Sort(sels)
+	sels = slices.Compact(sels)
+
+	beforeRows := bat.RowCount()
+	shrinkBatchWithRowids(bat, sels)
+
+	afterRows := bat.RowCount()
+	releasedSize := uint64(0)
+	if afterRows == 0 {
+		releasedSize = entry.accountedSize
+	}
+
+	txn.removeWorkspaceEntryAccountingLocked(
+		entry,
+		releasedSize,
+		beforeRows-afterRows,
+	)
+	if afterRows == 0 {
+		bat.Clean(txn.proc.GetMPool())
+		entry.bat = nil
+	}
+	delete(txn.batchSelectList, bat)
+}
+
+func (txn *Transaction) mergeWorkspaceEntryBatchesLocked(
+	ctx context.Context,
+	dstIdx int64,
+	srcIdx int64,
+) error {
+	dst := &txn.writes[dstIdx]
+	src := &txn.writes[srcIdx]
+	dstSize := dst.accountedSize
+	dstRows := dst.bat.RowCount()
+	srcSize := src.accountedSize
+	srcRows := src.bat.RowCount()
+
+	// Batch.Append can grow some destination vectors before a later vector
+	// returns an allocation error. Remove the old destination accounting first,
+	// then always restore it from the batch's actual post-Append state.
+	txn.removeWorkspaceEntryAccountingLocked(dst, dstSize, dstRows)
+	if _, err := dst.bat.Append(ctx, txn.proc.Mp(), src.bat); err != nil {
+		txn.addWorkspaceEntryAccountingLocked(dst)
+		return err
+	}
+
+	// Replace the two source batches with the merged batch in the accounting.
+	// Batch.Append may change capacity and varlena-area size non-additively.
+	txn.removeWorkspaceEntryAccountingLocked(src, srcSize, srcRows)
+	txn.addWorkspaceEntryAccountingLocked(dst)
+
+	delete(txn.batchSelectList, src.bat)
+	src.bat.Clean(txn.proc.GetMPool())
+	src.bat = nil
+	return nil
+}
+
+func (txn *Transaction) compactWorkspaceEntriesLocked() {
+	n := 0
+	for i := range txn.writes {
+		if txn.writes[i].bat != nil && txn.writes[i].bat.IsEmpty() {
+			txn.releaseWorkspaceEntryBatchLocked(i)
+		}
+		if txn.writes[i].bat == nil {
+			continue
+		}
+		txn.writes[n] = txn.writes[i]
+		n++
+	}
+
+	clear(txn.writes[n:])
+	txn.writes = txn.writes[:n]
 }
 
 // WriteBatch used to write data to the transaction buffer
@@ -174,14 +338,6 @@ func (txn *Transaction) WriteBatch(
 		}
 		bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
 
-		if !catalog.IsSystemTable(tableId) {
-			txn.approximateInMemInsertSize += uint64(bat.Size())
-			txn.approximateInMemInsertCnt += bat.RowCount()
-		}
-	}
-
-	if typ == DELETE && !catalog.IsSystemTable(tableId) {
-		txn.approximateInMemDeleteCnt += bat.RowCount()
 	}
 
 	if injected, logLevel := objectio.LogWorkspaceInjected(
@@ -247,9 +403,8 @@ func (txn *Transaction) WriteBatch(
 		pkCheckPos:   pkCheckPos,
 		pkCheckReady: pkCheckReady,
 	}
-	txn.writes = append(txn.writes, e)
+	txn.appendWorkspaceEntryLocked(e)
 	txn.pkCount += bat.RowCount()
-	txn.workspaceSize += uint64(bat.Size())
 
 	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, tableId, typesNames[typ], bat)
 	return
@@ -697,7 +852,6 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				return nil
 			}
 		}
-		size = 0
 	}
 	if offset < txn.adjustWriteOffset {
 		txn.adjustWriteOffset = offset
@@ -713,7 +867,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		return err
 	}
 
-	if err := txn.dumpInsertBatchLocked(ctx, fs, offset, &size, &pkCount); err != nil {
+	if err := txn.dumpInsertBatchLocked(ctx, fs, offset, &pkCount); err != nil {
 		return err
 	}
 	// release the extra quota
@@ -731,7 +885,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	if dumpAll {
 		if txn.approximateInMemDeleteCnt >= txn.engine.config.insertEntryMaxCount {
-			if err := txn.dumpDeleteBatchLocked(ctx, fs, offset, &size); err != nil {
+			if err := txn.dumpDeleteBatchLocked(ctx, fs, offset); err != nil {
 				return err
 			}
 			//After flushing inserts/deletes in memory into S3, the entries in txn.writes will be unordered,
@@ -740,23 +894,13 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				return err
 			}
 		}
-		txn.approximateInMemDeleteCnt = 0
-		txn.approximateInMemInsertSize = 0
 		txn.pkCount -= pkCount
 		// modifies txn.writes.
-		writes := txn.writes[:0]
-		for i, write := range txn.writes {
-			if write.bat != nil {
-				writes = append(writes, txn.writes[i])
-			}
-		}
-		txn.writes = writes
+		txn.compactWorkspaceEntriesLocked()
 	} else {
-		txn.approximateInMemInsertSize -= size
 		txn.pkCount -= pkCount
 	}
 
-	txn.workspaceSize -= size
 	return nil
 }
 
@@ -764,7 +908,6 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	ctx context.Context,
 	fs fileservice.FileService,
 	offset int,
-	size *uint64,
 	pkCount *int,
 ) error {
 
@@ -840,8 +983,12 @@ func (txn *Transaction) dumpInsertBatchLocked(
 				name:       txn.writes[i].tableName,
 			}
 			bat := txn.writes[i].bat
-			*size += uint64(bat.Size())
 			*pkCount += bat.RowCount()
+			txn.removeWorkspaceEntryAccountingLocked(
+				&txn.writes[i],
+				txn.writes[i].accountedSize,
+				bat.RowCount(),
+			)
 			// skip rowid
 			newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
 			newBatch.SetAttributes(bat.Attrs[1:])
@@ -859,6 +1006,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		}
 	}
 
+	clear(writes[lastWriteIndex:])
 	txn.writes = writes[:lastWriteIndex]
 
 	var (
@@ -934,7 +1082,6 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 	ctx context.Context,
 	fs fileservice.FileService,
 	offset int,
-	size *uint64,
 ) error {
 
 	deleteCnt := 0
@@ -963,7 +1110,11 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			}
 			bat := txn.writes[i].bat
 			deleteCnt += bat.RowCount()
-			*size += uint64(bat.Size())
+			txn.removeWorkspaceEntryAccountingLocked(
+				&txn.writes[i],
+				txn.writes[i].accountedSize,
+				bat.RowCount(),
+			)
 
 			newBat := batch.NewWithSize(len(bat.Vecs))
 			newBat.SetAttributes(bat.Attrs)
@@ -982,6 +1133,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 		}
 	}
 
+	clear(writes[lastWriteIndex:])
 	txn.writes = writes[:lastWriteIndex]
 
 	var (
@@ -1211,7 +1363,6 @@ func (txn *Transaction) WriteFileLocked(
 	}
 
 	txn.readOnly.Store(false)
-	txn.workspaceSize += uint64(copied.Size())
 
 	if typ == DELETE {
 		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
@@ -1235,7 +1386,7 @@ func (txn *Transaction) WriteFileLocked(
 		pkCheckReady: true,
 	}
 
-	txn.writes = append(txn.writes, entry)
+	txn.appendWorkspaceEntryLocked(entry)
 
 	return nil
 }
@@ -1277,7 +1428,6 @@ func (txn *Transaction) WriteFileLockedSkipTransfer(
 	}
 
 	txn.readOnly.Store(false)
-	txn.workspaceSize += uint64(copied.Size())
 
 	if typ == DELETE {
 		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
@@ -1300,7 +1450,7 @@ func (txn *Transaction) WriteFileLockedSkipTransfer(
 		skipTransfer: true,
 	}
 
-	txn.writes = append(txn.writes, entry)
+	txn.appendWorkspaceEntryLocked(entry)
 
 	return nil
 }
@@ -1533,14 +1683,10 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	txn.restoreTxnTableFunc = txn.restoreTxnTableFunc[:0]
 
 	if len(txn.batchSelectList) > 0 {
-		for _, e := range txn.writes {
-			if sels, ok := txn.batchSelectList[e.bat]; ok {
-				txn.approximateInMemInsertCnt -= len(sels)
-				sort.Slice(sels, func(i, j int) bool {
-					return sels[i] < (sels[j])
-				})
-				shrinkBatchWithRowids(e.bat, sels)
-				delete(txn.batchSelectList, e.bat)
+		for i := range txn.writes {
+			bat := txn.writes[i].bat
+			if sels, ok := txn.batchSelectList[bat]; ok {
+				txn.shrinkWorkspaceEntryBatchLocked(i, sels)
 			}
 		}
 	}
@@ -1561,8 +1707,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 					)
 					_ = txn.GCObjsByIdxRange(i, i)
 				}
-				e.bat.Clean(txn.proc.GetMPool())
-				txn.writes[i].bat = nil
+				txn.releaseWorkspaceEntryBatchLocked(i)
 			}
 		}
 	}
@@ -1570,6 +1715,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	if err := txn.compactDeletionOnObjsLocked(ctx); err != nil {
 		return err
 	}
+	txn.compactWorkspaceEntriesLocked()
 
 	inserts := objectio.GetReusableBitmap()
 	deletes := objectio.GetReusableBitmap()
@@ -1614,12 +1760,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
 					a.bat.RowCount()+b.bat.RowCount() <= objectio.BlockMaxRows {
 					merged = true
-					if _, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
+					if err = txn.mergeWorkspaceEntryBatchesLocked(ctx, idxes[i], idxes[j]); err != nil {
 						return err
 					}
-
-					b.bat.Clean(txn.proc.GetMPool())
-					b.bat = nil
 				}
 
 				if a.bat.RowCount() == objectio.BlockMaxRows {
@@ -1670,16 +1813,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			return err
 		}
 
-		n := 0
-		for i := range txn.writes {
-			if txn.writes[i].bat == nil {
-				continue
-			}
-			txn.writes[n] = txn.writes[i]
-			n++
-		}
-
-		txn.writes = txn.writes[:n]
+		txn.compactWorkspaceEntriesLocked()
 
 		var sortBuf []int64
 		var shuffleBuf []byte
@@ -1866,8 +2000,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			offset += int(stats.BlkCnt())
 		}
 
-		txn.writes[i].bat.Clean(txn.proc.GetMPool())
-		txn.writes[i].bat = nil
+		txn.releaseWorkspaceEntryBatchLocked(i)
 	}
 
 	if txn.compactWorker == nil {

@@ -269,7 +269,7 @@ func TestCloneTxnTablesInVainGCDeletesUnreferencedTxnLocalSharedObject(t *testin
 	require.NoError(t, writeObjectToFS(ctx, fs, name))
 	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
 
-	txn.writes = append(txn.writes, Entry{
+	txn.appendWorkspaceEntryLocked(Entry{
 		typ:      INSERT,
 		tableId:  42,
 		fileName: name,
@@ -277,7 +277,8 @@ func TestCloneTxnTablesInVainGCDeletesUnreferencedTxnLocalSharedObject(t *testin
 	})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(ctx))
-	require.Nil(t, txn.writes[0].bat)
+	require.Empty(t, txn.writes)
+	require.Zero(t, txn.workspaceSize)
 	require.False(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
 	require.Eventually(t, func() bool {
 		return !objectExistsInFS(ctx, fs, name)
@@ -317,24 +318,24 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
 
 	liveBat := cloneObjectStatsBatchForTest(t, proc.Mp(), stats...)
-	txn.writes = append(txn.writes,
-		Entry{
-			typ:      INSERT,
-			tableId:  42,
-			fileName: name,
-			bat:      cloneObjectStatsBatchForTest(t, proc.Mp(), stats...),
-		},
-		Entry{
-			typ:      INSERT,
-			tableId:  43,
-			fileName: name,
-			bat:      liveBat,
-		},
-	)
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:      INSERT,
+		tableId:  42,
+		fileName: name,
+		bat:      cloneObjectStatsBatchForTest(t, proc.Mp(), stats...),
+	})
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:      INSERT,
+		tableId:  43,
+		fileName: name,
+		bat:      liveBat,
+	})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(ctx))
-	require.Nil(t, txn.writes[0].bat)
-	require.NotNil(t, txn.writes[1].bat)
+	require.Len(t, txn.writes, 1)
+	require.Equal(t, uint64(43), txn.writes[0].tableId)
+	require.Same(t, liveBat, txn.writes[0].bat)
+	require.Equal(t, uint64(liveBat.Size()), txn.workspaceSize)
 	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
 	require.True(t, objectExistsInFS(ctx, fs, name))
 

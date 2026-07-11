@@ -1786,32 +1786,32 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if createdInTxn {
 		// 3. adjust writes for the table
 		txn.Lock()
+		defer txn.Unlock()
 		for i, n := 0, len(txn.writes); i < n; i++ {
 			if cur := txn.writes[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
 				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
 					continue
 				}
-				txn.writes = append(txn.writes, txn.writes[i]) // copy by value
-				transfered := &txn.writes[len(txn.writes)-1]
-				transfered.tableName = tbl.tableName // in case renaming
-				transfered.bat, err = cur.bat.Dup(txn.proc.Mp())
-				if len(renameColMap) > 0 {
-					for i, attr := range transfered.bat.Attrs {
-						if newName, ok := renameColMap[attr]; ok {
-							transfered.bat.Attrs[i] = newName
-						}
-					}
-				}
+				transferred := cur
+				transferred.tableName = tbl.tableName // in case renaming
+				transferred.bat, err = cur.bat.Dup(txn.proc.Mp())
 				if err != nil {
 					return err
 				}
+				if len(renameColMap) > 0 {
+					for i, attr := range transferred.bat.Attrs {
+						if newName, ok := renameColMap[attr]; ok {
+							transferred.bat.Attrs[i] = newName
+						}
+					}
+				}
+				txn.appendWorkspaceEntryLocked(transferred)
 				for j := 0; j < cur.bat.RowCount(); j++ {
 					txn.batchSelectList[cur.bat] = append(txn.batchSelectList[cur.bat], int64(j))
 				}
 
 			}
 		}
-		txn.Unlock()
 	}
 
 	return nil
@@ -2104,7 +2104,10 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 		fileName:     makeSoftDeleteFileName(isTombstone),
 	}
 
-	tbl.getTxn().writes = append(tbl.getTxn().writes, entry)
+	txn := tbl.getTxn()
+	txn.Lock()
+	defer txn.Unlock()
+	txn.appendWorkspaceEntryLocked(entry)
 	return nil
 }
 

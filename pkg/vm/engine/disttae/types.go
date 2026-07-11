@@ -1015,9 +1015,9 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			if txn.writes[i].bat == nil {
 				continue
 			}
-			txn.workspaceSize -= uint64(txn.writes[i].bat.Size())
-			txn.writes[i].bat.Clean(txn.proc.Mp())
+			txn.releaseWorkspaceEntryBatchLocked(i)
 		}
+		clear(txn.writes[end:])
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
 
@@ -1105,9 +1105,12 @@ type Entry struct {
 	// blockName for s3 file
 	fileName string
 	//tuples would be applied to the table which belongs to the tenant(accountId)
-	bat       *batch.Batch
-	tnStore   DNStore
-	pkChkByTN int8
+	bat *batch.Batch
+	// accountedSize is retained across an in-place partial shrink because
+	// vector backing buffers are not released until the batch is cleaned.
+	accountedSize uint64
+	tnStore       DNStore
+	pkChkByTN     int8
 
 	// skipTransfer indicates this entry should skip transfer processing
 	// Used by CCPR to avoid transfer errors for cross-cluster tombstones
