@@ -73,8 +73,9 @@ const (
 	FJ_CNSubscribeTableFail  = "fj/cn/subscribe_table_fail"
 	FJ_CNWorkspaceForceFlush = "fj/cn/workspace_force_flush"
 
-	FJ_CNCLONEFailed    = "fj/cn/clone_fails"
-	FJ_CNNeedRetryError = "fj/cn/need_retry_error"
+	FJ_CNCLONEFailed                    = "fj/cn/clone_fails"
+	FJ_CNCommitAfterWorkspaceDumpFailed = "fj/cn/commit_after_workspace_dump_fails"
+	FJ_CNNeedRetryError                 = "fj/cn/need_retry_error"
 )
 
 const (
@@ -201,6 +202,11 @@ func LogCNFlushSmallObjsInjected(args ...string) (bool, int) {
 func CNWorkspaceForceFlushInjected() bool {
 	_, _, injected := fault.TriggerFault(FJ_CNWorkspaceForceFlush)
 	return injected
+}
+
+func CNCommitAfterWorkspaceDumpFailedInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CNCommitAfterWorkspaceDumpFailed)
+	return sarg, injected
 }
 
 func LogCNNeedRetryErrorInjected(args ...string) (bool, int) {

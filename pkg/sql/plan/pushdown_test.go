@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -647,4 +648,39 @@ func TestPushdownVectorIndexTopToTableScanKeepsSupportedLimit(t *testing.T) {
 	require.NotNil(t, scanNode.IndexReaderParam)
 	require.Equal(t, uint64(8), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
 	require.NotNil(t, projNode.ProjectList[0].GetCol())
+}
+
+func TestPushdownVectorIndexTopToTableScanSkipsDynamicLimit(t *testing.T) {
+	builder, scanNode, projNode := makeVectorTopPushdownBuilder(8)
+	builder.qry.Nodes[2].Limit = &plan.Expr{
+		Typ:  Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+
+	require.NotPanics(t, func() { builder.pushdownVectorIndexTopToTableScan(2) })
+	require.Nil(t, scanNode.IndexReaderParam)
+	require.NotNil(t, projNode.ProjectList[0].GetF())
+}
+
+func TestPushdownTopThroughLeftJoinSkipsOverflowingCandidateLimit(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	leftTag := builder.GenNewBindTag()
+	left := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NodeId: 0, BindingTags: []int32{leftTag}}
+	right := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NodeId: 1}
+	join := &plan.Node{NodeType: plan.Node_JOIN, NodeId: 2, JoinType: plan.Node_LEFT, Children: []int32{0, 1}}
+	sort := &plan.Node{
+		NodeType: plan.Node_SORT,
+		NodeId:   3,
+		Children: []int32{2},
+		OrderBy: []*plan.OrderBySpec{{Expr: &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: leftTag, ColPos: 0}},
+		}}},
+		Limit:  MakePlan2Uint64ConstExprWithType(math.MaxUint64),
+		Offset: MakePlan2Uint64ConstExprWithType(1),
+	}
+	builder.qry.Nodes = []*plan.Node{left, right, join, sort}
+
+	require.NotPanics(t, func() { builder.pushdownTopThroughLeftJoin(3) })
+	require.Equal(t, []int32{0, 1}, join.Children)
+	require.Len(t, builder.qry.Nodes, 4)
 }

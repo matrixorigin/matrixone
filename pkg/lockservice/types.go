@@ -42,6 +42,10 @@ var (
 	ErrLockTableNotFound = moerr.NewLockTableNotFoundNoCtx()
 	// ErrLockConflict lock option conflict
 	ErrLockConflict = moerr.NewLockConflictNoCtx()
+	// ErrLockTimeout lock table timeout
+	ErrLockTimeout = moerr.NewInvalidStateNoCtx("lock timeout")
+	// ErrRemoteLockWaitTimeout remote lock owner-side wait timeout
+	ErrRemoteLockWaitTimeout = moerr.NewRemoteLockWaitTimeoutNoCtx()
 )
 
 // Option lockservice option
@@ -116,6 +120,8 @@ type LockService interface {
 
 	// GetWaitingList get special txnID's waiting list
 	GetWaitingList(ctx context.Context, txnID []byte) (bool, []pb.WaitTxn, error)
+	// GetLockHolder returns the current holder of a row lock if it exists.
+	GetLockHolder(ctx context.Context, tableID uint64, row []byte, options pb.LockOptions) (pb.WaitTxn, bool, error)
 	// ForceRefreshLockTableBinds force refresh all lock tables binds
 	ForceRefreshLockTableBinds(targets []uint64, matcher func(bind pb.LockTable) bool)
 	// GetLockTableBind returns lock table bind
@@ -158,6 +164,8 @@ type lockTable interface {
 	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation)
 	// getLock get a lock
 	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
+	// getLockHolder returns the current holder if the lock is actively held.
+	getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error)
 	// getBind returns lock table binding
 	getBind() pb.LockTable
 	// close close the locktable
@@ -185,8 +193,11 @@ type LockTableAllocator interface {
 	// periodically to keep the binding in place. If no heartbeat is sent for a long
 	// period of time to maintain the binding, the binding will become invalid.
 	KeepLockTableBind(serviceID string) bool
-	// Valid check for changes in the binding relationship of a specific lock-table.
+	// Valid checks lock-table bindings and registers a successful commit attempt.
+	// Every successful call must be paired with exactly one FinishCommit call.
 	Valid(serviceID string, txnID []byte, binds []pb.LockTable) ([]uint64, error)
+	// FinishCommit marks the end of a commit attempt registered by Valid.
+	FinishCommit(serviceID string, txnID []byte)
 	// AddCannotCommit add cannot commit txn.
 	AddCannotCommit(values []pb.OrphanTxn) [][]byte
 	// AddInvalidService add invalid service
@@ -241,7 +252,8 @@ type Server interface {
 // LockOptions options for lock
 type LockOptions struct {
 	pb.LockOptions
-	async bool
+	async                      bool
+	remoteLockOwnerWaitTimeout time.Duration
 }
 
 // Lock stores specific lock information. Since there are a large number of lock objects

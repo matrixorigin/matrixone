@@ -827,6 +827,11 @@ func buildCreateTable(
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
+			// ConstructCreateTableSQL emits a bare `CREATE TABLE ...` without the
+			// IF NOT EXISTS clause, so propagate the original flag. Otherwise
+			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
+			// exists" when T exists instead of being a no-op (issue #25119).
+			stmtLike.IfNotExists = stmt.IfNotExists
 			p, err := buildCreateTable(ctx, stmtLike, nil)
 			if err != nil {
 				return nil, err
@@ -3856,6 +3861,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				updateSqls,
 				getSqlForRenameTable(databaseName, oldName, newName)...,
 			)
+		case *tree.AlterOptionAlgorithm:
+			// algorithm hint already consumed by ResolveAlterTableAlgorithm
+			alterTable.Actions[i] = nil
+		case *tree.AlterOptionLock:
+			// lock already validated by resolveAndValidateLock
+			alterTable.Actions[i] = nil
+
 		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:
 			continue
 

@@ -365,7 +365,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		}
 	}
 
-	defaultExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	defaultExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +405,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		return nil, err
 	}
 
-	onUpdateExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	onUpdateExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +497,11 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		return nil, err
 	}
 
-	genExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	// A generated CHAR/VARCHAR column is materialized as a real column write, so
+	// use the strict assignment cast: an over-length value is rejected instead of
+	// being silently truncated, matching column DEFAULT / ON UPDATE and the DML
+	// assignment paths.
+	genExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -690,6 +694,36 @@ func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int3
 		}
 	default:
 		return expr
+	}
+}
+
+// collectRefColPos returns the ColPos of every base-table column reference
+// (RelPos == 0) inside expr, e.g. the source columns of a generated column's
+// definition expression.
+func collectRefColPos(expr *plan.Expr) []int32 {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			return []int32{e.Col.ColPos}
+		}
+		return nil
+	case *plan.Expr_F:
+		var res []int32
+		for _, arg := range e.F.Args {
+			res = append(res, collectRefColPos(arg)...)
+		}
+		return res
+	case *plan.Expr_List:
+		var res []int32
+		for _, item := range e.List.List {
+			res = append(res, collectRefColPos(item)...)
+		}
+		return res
+	default:
+		return nil
 	}
 }
 
@@ -1025,45 +1059,6 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 			continue
 		}
 		sql, err := genSqlForCheckFKConstraints(ctx, fkey, dbName, tblName, cols, dbName, tblName, cols)
-		if err != nil {
-			return nil, err
-		}
-		ret = append(ret, sql)
-	}
-	return ret, nil
-}
-
-// genSqlsForCheckFKConstraints generates child-side fk constraint checking sqls
-// for every non-self-referencing foreign key (ForeignTbl != 0). It complements
-// genSqlsForCheckFKSelfRefer, which only handles self-referencing fks
-// (ForeignTbl == 0). The generated sqls verify that every child row's fk
-// columns reference an existing parent row, and are run after the REPLACE
-// execution: a violation rolls back the transaction and leaves the previous
-// conflicting row intact.
-//
-// It needs a CompilerContext (to resolve the parent table by id), which is why
-// it cannot share the plain context.Context signature of
-// genSqlsForCheckFKSelfRefer.
-func genSqlsForCheckFKConstraints(ctx CompilerContext,
-	dbName, tblName string,
-	cols []*plan.ColDef, fkeys []*plan.ForeignKeyDef) ([]string, error) {
-	ret := make([]string, 0, len(fkeys))
-	for _, fkey := range fkeys {
-		if fkey.ForeignTbl == 0 {
-			// self-referencing fk, handled by genSqlsForCheckFKSelfRefer
-			continue
-		}
-		parentObjRef, parentTableDef, err := ctx.ResolveById(fkey.ForeignTbl, nil)
-		if err != nil {
-			return nil, err
-		}
-		if parentObjRef == nil || parentTableDef == nil {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(),
-				"parent table %d not found for foreign key check", fkey.ForeignTbl)
-		}
-		sql, err := genSqlForCheckFKConstraints(ctx.GetContext(), fkey,
-			dbName, tblName, cols,
-			parentObjRef.SchemaName, parentTableDef.Name, parentTableDef.Cols)
 		if err != nil {
 			return nil, err
 		}

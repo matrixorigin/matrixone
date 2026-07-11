@@ -870,6 +870,23 @@ func TestSessionTempTableMap(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestRemoveAllPrepareStmts(t *testing.T) {
+	ses := &Session{}
+	ses.prepareStmts = map[string]*PrepareStmt{
+		"s1": {Name: "s1"},
+		"s2": {Name: "s2"},
+		"s3": {Name: "s3"},
+	}
+
+	ses.RemoveAllPrepareStmts()
+	assert.Equal(t, 0, len(ses.prepareStmts))
+	assert.NotNil(t, ses.prepareStmts)
+
+	// safe to call again on an already-empty session
+	ses.RemoveAllPrepareStmts()
+	assert.Equal(t, 0, len(ses.prepareStmts))
+}
+
 func TestSession_Cleanup(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	tz := time.Local

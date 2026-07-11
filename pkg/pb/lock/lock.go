@@ -105,17 +105,27 @@ func (m *Response) DebugString() string {
 // Changed returns true if LockTable bind changed
 func (m LockTable) Changed(v LockTable) bool {
 	return m.Version != v.Version ||
-		m.ServiceID != v.ServiceID
+		m.ServiceID != v.ServiceID ||
+		(m.AllocatorID != "" && v.AllocatorID != "" && m.AllocatorID != v.AllocatorID)
 }
 
 // Equal return true means same bind
 func (m LockTable) Equal(v LockTable) bool {
-	return m.Table == v.Table && m.Version == v.Version
+	return m.Group == v.Group &&
+		m.Table == v.Table &&
+		m.OriginTable == v.OriginTable &&
+		m.ServiceID == v.ServiceID &&
+		m.Version == v.Version &&
+		m.Sharding == v.Sharding &&
+		(m.AllocatorID == "" || v.AllocatorID == "" || m.AllocatorID == v.AllocatorID)
 }
 
 // DebugString returns the debug string
 func (m LockTable) DebugString() string {
-	return fmt.Sprintf("%d-%d(%d)-%s-%d", m.Group, m.Table, m.OriginTable, m.ServiceID, m.Version)
+	if m.AllocatorID == "" {
+		return fmt.Sprintf("%d-%d(%d)-%s-%d", m.Group, m.Table, m.OriginTable, m.ServiceID, m.Version)
+	}
+	return fmt.Sprintf("%d-%d(%d)-%s-%d-%s", m.Group, m.Table, m.OriginTable, m.ServiceID, m.Version, m.AllocatorID)
 }
 
 // WithGranularity set rows granularity, the default granularity is Row.
@@ -133,6 +143,13 @@ func (m LockOptions) WithMode(mode LockMode) LockOptions {
 // WithWaitPolicy set wait policy, the default policy is Wait.
 func (m LockOptions) WithWaitPolicy(policy WaitPolicy) LockOptions {
 	m.Policy = policy
+	return m
+}
+
+// WithLockWaitTimeout sets the lock wait timeout in seconds. 0 disables
+// lock-wait-timeout enforcement and relies on the caller context instead.
+func (m LockOptions) WithLockWaitTimeout(seconds int64) LockOptions {
+	m.LockWaitTimeout = seconds
 	return m
 }
 

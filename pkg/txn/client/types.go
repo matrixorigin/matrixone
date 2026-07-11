@@ -83,6 +83,8 @@ type TxnClient interface {
 	CNBasedConsistencyEnabled() bool
 	// IterTxns iter all txns
 	IterTxns(func(TxnOverview) bool)
+	// IterTxnIDs iter all active and waiting txn IDs without building txn overviews.
+	IterTxnIDs(func([]byte) bool)
 	// GetState returns the current state of txn client.
 	GetState() TxnState
 }
@@ -267,6 +269,11 @@ type Workspace interface {
 	Adjust(writeOffset uint64) error
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
+	FinalizeCommit(ctx context.Context)
+	// FinalizeCommitWithUnknownResult releases CN-local resources after a Commit
+	// request may have reached TN but no final response was received. It must
+	// not perform rollback object GC, because TN may have committed.
+	FinalizeCommitWithUnknownResult(ctx context.Context)
 	Rollback(ctx context.Context) error
 
 	IncrSQLCount()

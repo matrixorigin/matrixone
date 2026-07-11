@@ -32,6 +32,7 @@ func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt uint32) *PipelineSpool {
 		rs:           newReceivers(receiverCnt, bl),
 		cache:        initCachedBatch(mp, bl),
 		csDoneSignal: make(chan struct{}, receiverCnt),
+		abortDone:    make(chan struct{}),
 	}
 
 	// if there is only one receiver, we have no need to do reference check because it's always

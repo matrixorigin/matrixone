@@ -87,6 +87,294 @@ func TestSingleSQL(t *testing.T) {
 	}
 }
 
+func addTextCastTableForTest(mock *MockOptimizer) {
+	const tableName = "text_cast_t"
+	idType := plan.Type{Id: int32(types.T_int32), NotNullable: true}
+	textType := plan.Type{Id: int32(types.T_text)}
+	varcharType := plan.Type{Id: int32(types.T_varchar), Width: 255}
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
+
+	cols := []*ColDef{
+		{ColId: 0, Name: "id", OriginName: "id", Typ: idType, Primary: true, Pkidx: 1, Default: &plan.Default{}},
+		{ColId: 1, Name: "txt", OriginName: "txt", Typ: textType, Default: &plan.Default{NullAbility: true}},
+		{ColId: 2, Name: "vc", OriginName: "vc", Typ: varcharType, Default: &plan.Default{NullAbility: true}},
+		{ColId: 3, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &plan.Default{}},
+	}
+	tableDef := &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     23176,
+		Name:      tableName,
+		Cols:      cols,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+			CompPkeyCol: cols[0],
+		},
+		Defs: []*plan.TableDef_DefType{
+			{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: []*plan.Property{
+							{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel},
+						},
+					},
+				},
+			},
+		},
+	}
+	mock.ctxt.objects[tableName] = &ObjectRef{SchemaName: "tpch", ObjName: tableName, Obj: 23176}
+	mock.ctxt.tables[tableName] = tableDef
+	mock.ctxt.id2name[23176] = tableName
+	mock.ctxt.pks[tableName] = []int{0}
+}
+
+// resolveQueryPlan unwraps a PREPARE plan to the inner prepared query plan so
+// prepare-specific assertions inspect the real query instead of the outer DCL
+// node (whose GetQuery() is nil).
+func resolveQueryPlan(p *Plan) *Plan {
+	if p == nil {
+		return nil
+	}
+	if p.GetQuery() != nil {
+		return p
+	}
+	if prep := p.GetDcl().GetPrepare(); prep != nil {
+		return prep.GetPlan()
+	}
+	return p
+}
+
+func planHasTextToCharOrVarcharCast(p *Plan) bool {
+	p = resolveQueryPlan(p)
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	for _, node := range p.GetQuery().Nodes {
+		if nodeHasTextToCharOrVarcharCast(node) {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeHasTextToCharOrVarcharCast(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, expr := range node.ProjectList {
+		if exprHasTextToCharOrVarcharCast(expr) {
+			return true
+		}
+	}
+	for _, expr := range node.OnList {
+		if exprHasTextToCharOrVarcharCast(expr) {
+			return true
+		}
+	}
+	for _, expr := range node.FilterList {
+		if exprHasTextToCharOrVarcharCast(expr) {
+			return true
+		}
+	}
+	for _, expr := range node.GroupBy {
+		if exprHasTextToCharOrVarcharCast(expr) {
+			return true
+		}
+	}
+	for _, expr := range node.AggList {
+		if exprHasTextToCharOrVarcharCast(expr) {
+			return true
+		}
+	}
+	if node.DedupJoinCtx != nil {
+		for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+			if exprHasTextToCharOrVarcharCast(expr) {
+				return true
+			}
+		}
+	}
+	for _, expr := range node.OnUpdateExprs {
+		if exprHasTextToCharOrVarcharCast(expr) {
+			return true
+		}
+	}
+	if node.RowsetData != nil {
+		for _, col := range node.RowsetData.Cols {
+			for _, data := range col.Data {
+				if exprHasTextToCharOrVarcharCast(data.Expr) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func exprHasTextToCharOrVarcharCast(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if f := expr.GetF(); f != nil {
+		if (f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict") && len(f.Args) > 0 &&
+			f.Args[0].Typ.Id == int32(types.T_text) &&
+			(expr.Typ.Id == int32(types.T_char) || expr.Typ.Id == int32(types.T_varchar)) {
+			return true
+		}
+		for _, arg := range f.Args {
+			if exprHasTextToCharOrVarcharCast(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprHasTextToCharOrVarcharCast(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func planHasTextToVarcharCastWithWidth(p *Plan, width int32) bool {
+	return planHasTextToVarcharCastWithNameAndWidth(p, "", width)
+}
+
+func planHasTextToVarcharStrictCastWithWidth(p *Plan, width int32) bool {
+	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_strict", width)
+}
+
+func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width int32) bool {
+	p = resolveQueryPlan(p)
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	var visit func(expr *plan.Expr) bool
+	visit = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		if f := expr.GetF(); f != nil {
+			nameMatches := f.Func.GetObjName() == funcName
+			if funcName == "" {
+				nameMatches = f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict"
+			}
+			if nameMatches && len(f.Args) > 0 &&
+				f.Args[0].Typ.Id == int32(types.T_text) &&
+				expr.Typ.Id == int32(types.T_varchar) &&
+				expr.Typ.Width == width {
+				return true
+			}
+			for _, arg := range f.Args {
+				if visit(arg) {
+					return true
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if visit(item) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, node := range p.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			if visit(expr) {
+				return true
+			}
+		}
+		if node.DedupJoinCtx != nil {
+			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+				if visit(expr) {
+					return true
+				}
+			}
+		}
+		for _, expr := range node.OnUpdateExprs {
+			if visit(expr) {
+				return true
+			}
+		}
+		if node.RowsetData != nil {
+			for _, col := range node.RowsetData.Cols {
+				for _, data := range col.Data {
+					if visit(data.Expr) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func TestUpdateTextConcatCoalesceKeepsTextAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "update text_cast_t set txt = concat(coalesce(txt, ''), ' suffix') where id = 1")
+	assert.NoError(t, err)
+	assert.False(t, planHasTextToCharOrVarcharCast(logicPlan))
+}
+
+func TestPrepareUpdateTextConcatCoalesceKeepsTextAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "prepare stmt1 from update text_cast_t set txt = concat(coalesce(txt, ''), ?) where id = ?")
+	assert.NoError(t, err)
+	assert.False(t, planHasTextToCharOrVarcharCast(logicPlan))
+}
+
+func TestUpdateTextCaseKeepsTextAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "update text_cast_t set txt = case when id = 1 then txt else '' end where id = 1")
+	assert.NoError(t, err)
+	assert.False(t, planHasTextToCharOrVarcharCast(logicPlan))
+}
+
+func TestUpdateTextIfKeepsTextAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "update text_cast_t set txt = if(id = 1, txt, '') where id = 1")
+	assert.NoError(t, err)
+	assert.False(t, planHasTextToCharOrVarcharCast(logicPlan))
+}
+
+func TestUpdateVarcharFromTextKeepsVarcharWidthCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "update text_cast_t set vc = txt where id = 1")
+	assert.NoError(t, err)
+	assert.True(t, planHasTextToVarcharCastWithWidth(logicPlan, 255))
+}
+
+func TestInsertSelectVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, vc) select id, txt from text_cast_t")
+	assert.NoError(t, err)
+	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
+}
+
+func TestOnDuplicateUpdateVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addTextCastTableForTest(mock)
+
+	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
+	assert.NoError(t, err)
+	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
+}
+
 //Test Query Node Tree
 // func TestNodeTree(t *testing.T) {
 // 	type queryCheck struct {
@@ -537,6 +825,118 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestOnlyFullGroupByAllowsCorrelatedSubqueryOnGroupedColumn(t *testing.T) {
+	sqls := []string{
+		`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY n_name
+		ORDER BY n_name`,
+		`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) > 0`,
+		`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		ORDER BY (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name)`,
+		`
+		SELECT n.n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = n.n_name) AS c
+		FROM nation n
+		GROUP BY n.n_name`,
+		`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY 1`,
+		`
+		SELECT n_name AS name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_name) AS c
+		FROM nation
+		GROUP BY name`,
+		`
+		SELECT n_regionkey
+		FROM nation
+		GROUP BY n_regionkey
+		HAVING EXISTS (
+			SELECT n_name
+			FROM nation2
+			GROUP BY n_name
+			HAVING COUNT(*) > nation.n_regionkey
+		)`,
+	}
+
+	for _, sql := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T) {
+	sqls := []struct {
+		sql         string
+		errContains string
+	}{
+		{`
+		SELECT n_name,
+		       (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) AS c
+		FROM nation
+		GROUP BY n_name`, "nation.n_comment"},
+		{`
+		SELECT n_name
+		FROM nation
+		GROUP BY n_name
+		HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) > 0`, "nation.n_comment"},
+	}
+
+	for _, tt := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, tt.sql)
+		require.Error(t, err, tt.sql)
+		require.Contains(t, err.Error(), tt.errContains)
+	}
+}
+
+func TestOnlyFullGroupByPreservesCorrelatedAggregateNYI(t *testing.T) {
+	sqls := []string{
+		`
+		SELECT (SELECT COUNT(DISTINCT nation.n_comment))
+		FROM nation
+		GROUP BY n_name`,
+		`
+		SELECT n_name
+		FROM nation
+		WHERE (SELECT AVG(nation.n_regionkey) FROM nation2) = 1`,
+		`
+		SELECT n_name,
+		       (SELECT COUNT(nation.n_name) FROM nation2) AS c
+		FROM nation
+		GROUP BY n_name`,
+		`
+		SELECT n_regionkey
+		FROM nation
+		GROUP BY n_regionkey
+		HAVING EXISTS (
+			SELECT n_name
+			FROM nation2
+			GROUP BY n_name
+			HAVING SUM(nation.n_regionkey) > 0
+		)`,
+	}
+
+	for _, sql := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "correlated columns in aggregate function")
+	}
+}
+
 // test join table plan building
 func TestJoinTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
@@ -623,16 +1023,52 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"with qn (foo, bar) as (select 1 as col, 2 as coll union select 4, 5) select qn1.bar from qn qn1",
 		"select n_name, n_comment from nation union all select n_name, n_comment from nation2",
 		"select n_name from nation intersect all select n_name from nation2",
+		"(select n_name from nation for update) union all (select n_name from nation2 for update)",
+		"(select n_name from nation for update) union all (select n_name from nation2)",
+		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update",
+		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+
+	forUpdateUnionPlan, err := runOneStmt(mock, t, "(select n_name from nation for update) union all (select n_name from nation2 for update)")
+	require.NoError(t, err)
+	require.Equal(t, 2, countLockOpNodes(forUpdateUnionPlan))
+
+	forUpdateUnionOneBranchPlan, err := runOneStmt(mock, t, "(select n_name from nation for update) union all (select n_name from nation2)")
+	require.NoError(t, err)
+	require.Equal(t, 1, countLockOpNodes(forUpdateUnionOneBranchPlan))
+
+	cteOuterForUpdatePlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update")
+	require.NoError(t, err)
+	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdatePlan))
+
+	cteOuterForUpdateLimitPlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update")
+	require.NoError(t, err)
+	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdateLimitPlan))
 
 	// should error
 	sqls = []string{
 		"select 1 union select 2, 'a'",
 		"select n_name as a from nation union select n_comment from nation order by n_name",
 		"select n_name from nation minus all select n_name from nation2", // not support
+		"select n_name from nation union all select n_name from nation2 for update",
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func countLockOpNodes(logicPlan *Plan) int {
+	query := logicPlan.GetQuery()
+	if query == nil {
+		return 0
+	}
+
+	count := 0
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP {
+			count++
+		}
+	}
+	return count
 }
 
 // test CTE plan building
@@ -1097,6 +1533,81 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 	}
 }
 
+func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// Generate dname from loc on the second table (dept).
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'non-first-gen' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback multi-table update with non-first table generated column: %v", err)
+	}
+	query := logicPlan.GetQuery()
+
+	// The source project should contain emp cols (9) + SET comm (1) + dept cols (4) + SET loc (1) + generated dname (1) = 16.
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	deptCols := len(mock.ctxt.tables["dept"].Cols)
+	expectedLen := empCols + 1 + deptCols + 1 + 1 // emp SET + dept SET + dname generated
+	node := requireFallbackSourceProjectNode(t, query, expectedLen, "non-first-gen")
+	if !nodeContainsStringLiteral(node, "non-first-gen") {
+		t.Fatalf("generated column on non-first table should contain the SET value, got %v", node.ProjectList)
+	}
+}
+
+func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// Chain: sal depends on comm, comm is a SET column.
+	// After optimization and rewrite, sal's generated expr should use the SET value of comm.
+	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-opt-marker' WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with generated column after optimization: %v", err)
+	}
+
+	// emp cols (9) + SET comm (1) + generated sal (1) + dept cols (4) + SET loc (1) = 16
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	deptCols := len(mock.ctxt.tables["dept"].Cols)
+	expectedLen := empCols + 2 + deptCols + 1
+	// Position of generated sal: after emp cols (9) + SET comm (1) = index 10
+	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(), expectedLen,
+		empCols+1, "chain-opt-marker")
+	if generatedExpr == nil {
+		t.Fatal("generated column position after optimization should not be nil")
+	}
+	// The generated expr should be a non-nil expression (DeepCopy of the SET value).
+	// We don't check the exact contents since substituteColRefsInExpr deep-copies,
+	// but we verify the expression exists at the expected position.
+}
+
+func TestUpdateFallbackGeneratedColumnDerivedTableSource(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp SET comm = 1, ename = 'derived-src-marker' FROM (SELECT deptno, loc FROM dept) AS d WHERE emp.deptno = d.deptno")
+	if err != nil {
+		t.Fatalf("build fallback update with derived table source and generated column: %v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	empCols := len(mock.ctxt.tables["emp"].Cols)
+	expectedLen := empCols + 3
+	node := requireFallbackSourceProjectNode(t, query, expectedLen, "derived-src-marker")
+	if node == nil {
+		t.Fatalf("missing source PROJECT with length %d and derived-src-marker", expectedLen)
+	}
+	generatedPos := empCols + 2
+	if generatedPos >= len(node.ProjectList) {
+		t.Fatalf("generated column position %d out of range (ProjectList length %d)", generatedPos, len(node.ProjectList))
+	}
+	if node.ProjectList[generatedPos] == nil {
+		t.Fatalf("generated column expression at position %d should not be nil", generatedPos)
+	}
+}
+
 func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, generatedName, sourceName string) {
 	tableDef := mock.ctxt.tables[tableName]
 	if tableDef == nil {
@@ -1190,6 +1701,20 @@ func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int
 			continue
 		}
 		return node
+	}
+	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
+	return nil
+}
+
+func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
+	for _, node := range query.Nodes {
+		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
+			continue
+		}
+		if pos >= len(node.ProjectList) {
+			continue
+		}
+		return node.ProjectList[pos]
 	}
 	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
 	return nil
@@ -1548,6 +2073,39 @@ func TestReplacePKTable(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestReplaceSetColRefAsDefault(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// REPLACE ... SET col = <expr referencing columns> must bind the RHS column
+	// references as DEFAULT(col) instead of failing with
+	// "ambiguous column reference". The exact computed values are covered by BVT.
+	sqls := []string{
+		// reference the assigned column itself: deptno = DEFAULT(deptno) + 1
+		"REPLACE INTO dept SET deptno = deptno + 1, dname = 'Eng'",
+		// reference another column: loc = DEFAULT(dname)
+		"REPLACE INTO dept SET deptno = 1, loc = dname",
+		// reference the assigned column directly: dname = DEFAULT(dname)
+		"REPLACE INTO dept SET deptno = 1, dname = dname",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// An RHS reference to a non-existent column must still error.
+	// A qualified RHS reference must NOT be silently resolved to DEFAULT(col) of
+	// the destination column; it must error rather than dropping the qualifier.
+	sqls = []string{
+		"REPLACE INTO dept SET deptno = 1, dname = nosuchcol",
+		"REPLACE INTO dept SET deptno = 1, dname = other.dname",
+		"REPLACE INTO dept SET deptno = 1, dname = dept.dname",
+	}
+	runTestShouldError(mock, t, sqls)
+}
+
+func TestReplaceSetFunctionColRefAsDefault(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	runTestShouldPass(mock, t, []string{
+		"REPLACE INTO dept SET deptno = 1, dname = upper(dname)",
+	}, false, false)
+}
+
 func TestReplaceFakePKTable(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// REPLACE on table with only unique key (fake PK) should pass
@@ -1557,6 +2115,68 @@ func TestReplaceFakePKTable(t *testing.T) {
 		"REPLACE INTO fake_pk_t SET a = 3, b = 'test'",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestReplaceFakePKCompositeNullableUKSkipsNullKeyIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	idxTbl := catalog.UniqueIndexTableNamePrefix + "fake-pk-comp-uk-ab"
+
+	// touchesIdx reports whether the REPLACE plan reads or maintains the uk_ab index
+	// table (a TABLE_SCAN on it, or a MULTI_UPDATE UpdateCtx targeting it).
+	touchesIdx := func(sql string) bool {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("%s: %+v", sql, err)
+		}
+		query := logicPlan.GetQuery()
+		for _, node := range query.Nodes {
+			if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == idxTbl {
+				return true
+			}
+			if node.NodeType == plan.Node_MULTI_UPDATE {
+				for _, uc := range node.UpdateCtxList {
+					if uc.TableDef != nil && uc.TableDef.Name == idxTbl {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+
+	// fake_pk_comp has a composite UNIQUE(a, b) and no real PK. Omitting column a makes
+	// it default to NULL, so serial(a, b) is NULL: the unique key can never conflict and
+	// is never stored. Like a plain INSERT (which skips index maintenance for a NULL
+	// key), REPLACE must NOT read or maintain the uk_ab index table for this row.
+	assert.False(t, touchesIdx("REPLACE INTO fake_pk_comp (b, c) VALUES (1, 'x')"),
+		"REPLACE with a statically-NULL composite unique-key part must not maintain the unique index table")
+
+	// With both key parts provided (non-NULL) the unique key can conflict, so REPLACE
+	// must maintain the uk_ab index table as usual.
+	assert.True(t, touchesIdx("REPLACE INTO fake_pk_comp (a, b, c) VALUES (1, 2, 'x')"),
+		"REPLACE with a fully non-NULL composite unique key must maintain the unique index table")
+}
+
+func TestReplaceChildParentFKUsesInPlanCheck(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// emp has a child->parent foreign key (deptno references dept(deptno)). REPLACE
+	// must enforce parent existence in-plan with the per-FK MARK-join assert the modern
+	// INSERT path uses, not silently allow an orphan child row. emp has no
+	// self-referencing FK, so DetectSqls must be empty.
+	logicPlan, err := runOneStmt(mock, t,
+		"REPLACE INTO emp VALUES (1, 'Alice', 'DEV', 0, '2020-01-01', 5000.00, 500.00, 1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+	hasMark := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			hasMark = true
+		}
+	}
+	assert.True(t, hasMark, "REPLACE on a child FK table must enforce parent existence via an in-plan MARK join")
+	assert.Empty(t, query.DetectSqls, "child->parent FK on REPLACE should be enforced in-plan, not via DetectSqls")
 }
 
 func TestReplaceFKTable(t *testing.T) {
@@ -1613,6 +2233,310 @@ func TestReplacePlanStructure(t *testing.T) {
 	}
 	assert.True(t, hasMultiUpdate, "REPLACE plan should contain MULTI_UPDATE node")
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
+}
+
+func TestInsertOnDupFakePKUsesModernPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// fake_pk_t has no real PK, only unique key(a). ON DUPLICATE KEY UPDATE must
+	// be planned on the modern DEDUP JOIN + MULTI_UPDATE path (using the unique
+	// key for conflict detection), not fall back to the legacy
+	// Node_ON_DUPLICATE_KEY operator.
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO fake_pk_t VALUES (1, 'x') ON DUPLICATE KEY UPDATE b = 'y'")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	hasDedupJoin := false
+	for _, node := range query.Nodes {
+		switch {
+		case node.NodeType == plan.Node_MULTI_UPDATE:
+			hasMultiUpdate = true
+		case node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP:
+			hasDedupJoin = true
+		}
+	}
+	assert.True(t, hasMultiUpdate, "fake-PK ODKU plan should contain MULTI_UPDATE node")
+	assert.True(t, hasDedupJoin, "fake-PK ODKU plan should contain DEDUP JOIN node")
+}
+
+func TestInsertOnDupFKUsesModernPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// emp has a foreign key (deptno) references dept(deptno). ON DUPLICATE KEY
+	// UPDATE on an FK table must be planned on the modern MULTI_UPDATE path, not the
+	// legacy Node_ON_DUPLICATE_KEY operator. The child→parent FK is enforced
+	// row-scoped in-plan (see TestInsertOnDupChildParentFKUsesInPlanCheck), so emp —
+	// which has no self-referencing FK — generates no DetectSqls.
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO emp (empno, deptno) VALUES (1, 10) ON DUPLICATE KEY UPDATE comm = 100")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+	}
+	assert.True(t, hasMultiUpdate, "FK-table ODKU plan should contain MULTI_UPDATE node")
+	assert.Empty(t, query.DetectSqls, "child→parent FK ODKU should enforce FK in-plan, not via DetectSqls")
+}
+
+func TestInsertChildParentFKUsesInPlanCheck(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// emp has a child→parent foreign key (deptno references dept(deptno)). A plain
+	// INSERT must enforce it with the row-scoped in-plan assert (a FILTER over the
+	// new-row image joined against the parent), NOT a whole-table DetectSql — the
+	// latter would false-positive on rows inserted earlier under
+	// FOREIGN_KEY_CHECKS=0. Since emp has no self-referencing FK, DetectSqls must be
+	// empty.
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO emp (empno, deptno) VALUES (1, 10)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Empty(t, query.DetectSqls,
+		"plain INSERT with only a child→parent FK should enforce it in-plan, not via DetectSqls")
+
+	hasFilter := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
+			hasFilter = true
+			break
+		}
+	}
+	assert.True(t, hasFilter, "child→parent FK INSERT should contain an in-plan assert FILTER node")
+}
+
+func TestInsertOnDupChildParentFKUsesInPlanCheck(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// ON DUPLICATE KEY UPDATE on emp (deptno references dept) must enforce the
+	// child→parent FK with a row-scoped in-plan assert over the final merged image,
+	// NOT a whole-table DetectSql — the latter scales with table size and
+	// false-positives on rows inserted earlier under FOREIGN_KEY_CHECKS=0. emp has
+	// no self-referencing FK, so DetectSqls must be empty.
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO emp (empno, deptno) VALUES (1, 10) ON DUPLICATE KEY UPDATE deptno = 20")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Empty(t, query.DetectSqls,
+		"ODKU with only a child→parent FK should enforce it in-plan, not via DetectSqls")
+
+	hasFilter, hasMultiUpdate, hasMark := false, false, false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
+			hasFilter = true
+		}
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			hasMark = true
+		}
+	}
+	assert.True(t, hasFilter, "child→parent FK ODKU should contain an in-plan assert FILTER node")
+	assert.True(t, hasMultiUpdate, "child→parent FK ODKU should stay on the modern MULTI_UPDATE path")
+	assert.True(t, hasMark, "child→parent FK ODKU must use a per-FK MARK join (null-aware MATCH SIMPLE), not a global isnotnull pre-filter")
+}
+
+func TestInsertIgnoreChildParentFKDropsRows(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// INSERT IGNORE on emp (deptno references dept) must drop the rows whose parent
+	// does not exist (MySQL row-skip), not assert. On the modern path that is a MARK
+	// join against the parent (the existence check) plus a FILTER that keeps only the
+	// matching rows, feeding the MULTI_UPDATE. emp has no self-referencing FK, so
+	// DetectSqls must be empty.
+	logicPlan, err := runOneStmt(mock, t, "INSERT IGNORE INTO emp (empno, deptno) VALUES (1, 10)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+	assert.Empty(t, query.DetectSqls,
+		"INSERT IGNORE with only a child→parent FK should enforce it in-plan, not via DetectSqls")
+
+	hasParentJoin, hasFilter, hasMultiUpdate := false, false, false
+	for _, node := range query.Nodes {
+		// The parent-existence check is a MARK join (the optimizer may also rewrite
+		// the underlying join shape), so accept MARK / SEMI / LEFT / RIGHT.
+		if node.NodeType == plan.Node_JOIN &&
+			(node.JoinType == plan.Node_MARK || node.JoinType == plan.Node_SEMI ||
+				node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_RIGHT) {
+			hasParentJoin = true
+		}
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
+			hasFilter = true
+		}
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+	}
+	assert.True(t, hasParentJoin, "INSERT IGNORE FK row-skip should outer-join the parent table")
+	assert.True(t, hasFilter, "INSERT IGNORE FK row-skip should contain the parent-existence FILTER node")
+	assert.True(t, hasMultiUpdate, "INSERT IGNORE FK should stay on the modern MULTI_UPDATE path")
+}
+
+func TestInsertOnDupSelfReferFKUsesModernPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// self_ref has a self-referencing foreign key (parent_id references
+	// self_ref(id)). ON DUPLICATE KEY UPDATE must be planned on the modern
+	// MULTI_UPDATE path, and the self-referencing FK must be enforced via a
+	// generated DetectSql produced by genSqlsForCheckFKSelfRefer, not by falling
+	// back to the legacy Node_ON_DUPLICATE_KEY operator.
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO self_ref (id, parent_id, name) VALUES (1, NULL, 'x') ON DUPLICATE KEY UPDATE name = 'y'")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+	}
+	assert.True(t, hasMultiUpdate, "self-refer FK ODKU plan should contain MULTI_UPDATE node")
+	assert.NotEmpty(t, query.DetectSqls, "self-refer FK insert should generate FK constraint DetectSqls")
+}
+
+func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// dept has a real PK (deptno) and a unique key (dname). To align with MySQL,
+	// a unique-key conflict on a real-PK table must trigger an UPDATE of the
+	// conflicting row instead of raising a duplicate-entry error.
+	//
+	// The modern plan achieves this by resolving a single UPDATE target row up
+	// front: target_pk = coalesce(pk-existence-probe, uk1_pri, uk2_pri, ...),
+	// treating PRIMARY as the 0th index. The main DEDUP-update join then keys on
+	// target_pk so a cross-row UK conflict lands on the existing row's UPDATE.
+	// The per-UK FAIL dedup join is intentionally kept as in-batch protection
+	// (two brand-new rows sharing a new UK value still error, avoiding a
+	// duplicated unique-index entry).
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO dept VALUES (1, 'Sales', 'NY') ON DUPLICATE KEY UPDATE loc = 'LA'")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	hasUpdateDedupJoin := false
+	hasTargetPkResolve := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_UPDATE {
+			hasUpdateDedupJoin = true
+		}
+		for _, expr := range node.ProjectList {
+			if exprContainsFuncName(expr, "coalesce") {
+				hasTargetPkResolve = true
+			}
+		}
+	}
+	assert.True(t, hasMultiUpdate, "real-PK ODKU plan should contain MULTI_UPDATE node")
+	assert.True(t, hasUpdateDedupJoin,
+		"real-PK ODKU plan should contain a DEDUP JOIN with OnDuplicateAction=UPDATE")
+	assert.True(t, hasTargetPkResolve,
+		"real-PK ODKU must resolve a coalesce(pk, uk...) target so unique-key "+
+			"conflicts update the existing row (MySQL-aligned), not just dedup on PK")
+}
+
+func TestInsertOnDupRealPKCompositeUniqueKeyConflict(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// dept_ck has a real PK (deptno) and a composite unique key (dname, loc),
+	// plus a free column note. The target_pk resolution must serialize the
+	// composite unique-key value to probe its index table, so a composite
+	// unique-key conflict also resolves into the UPDATE target (MySQL-aligned).
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO dept_ck VALUES (1, 'Sales', 'NY', 'n') ON DUPLICATE KEY UPDATE note = 'x'")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	hasTargetPkResolve := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+		}
+		for _, expr := range node.ProjectList {
+			if exprContainsFuncName(expr, "coalesce") {
+				hasTargetPkResolve = true
+			}
+		}
+	}
+	assert.True(t, hasMultiUpdate, "composite-UK real-PK ODKU should contain MULTI_UPDATE node")
+	assert.True(t, hasTargetPkResolve,
+		"composite-UK real-PK ODKU should resolve a coalesce(pk, composite-uk) target")
+}
+
+// TestInsertOnDupIndexMetaTableUsesModernPath guards the regression where
+// dropping the legacy ODKU operator broke ivfflat/hnsw/cagra/fulltext index
+// creation: index maintenance upserts a version counter into the index metadata
+// table via ON DUPLICATE KEY UPDATE. That table carries an algo-specific
+// TableType ("metadata") and a secondary-index name, so it is neither
+// SystemOrdinaryRel nor SystemIndexRel and canSkipDedup would skip dedup. The
+// modern path must still handle this ODKU (build a MULTI_UPDATE with the
+// dedup-update join) instead of rejecting it with "insert into vector/text
+// index table".
+func TestInsertOnDupIndexMetaTableUsesModernPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	// Mirrors the internal SQL generated by handleIvfIndexMetaTable.
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO `__mo_index_secondary_meta` (`__mo_index_key`, `__mo_index_val`) "+
+			"VALUES ('version', '0') ON DUPLICATE KEY UPDATE "+
+			"`__mo_index_val` = CAST( (CAST(`__mo_index_val` AS BIGINT) + 1) AS CHAR)")
+	if err != nil {
+		t.Fatalf("ODKU into index metadata table must be supported by the modern path: %+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	hasMultiUpdate := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+			break
+		}
+	}
+	assert.True(t, hasMultiUpdate,
+		"ODKU into index metadata table should build a MULTI_UPDATE node")
 }
 
 func TestReplaceNonUniqueSingleIndexDeleteUsesIndexRowID(t *testing.T) {
@@ -1866,41 +2790,6 @@ func TestReplaceDetectSqlsMultipleRows(t *testing.T) {
 	assert.Contains(t, preCheck, "1", "pre-check IN list should contain row 1's PK")
 	assert.Contains(t, preCheck, "2", "pre-check IN list should contain row 2's PK")
 	assert.Contains(t, preCheck, "3", "pre-check IN list should contain row 3's PK")
-}
-
-func TestReplaceChildFKDetectSqls(t *testing.T) {
-	mock := NewMockOptimizer(true)
-
-	// `emp` has a non-self-referencing FK (emp.deptno -> dept.deptno).
-	// REPLACE on a child table must generate a child-side FK check SQL that
-	// runs AFTER execution (no REPLACE_PARENT_CHK: prefix) and rolls back the
-	// transaction when the inserted child row references a missing parent.
-	logicPlan, err := runOneStmt(mock, t,
-		"REPLACE INTO emp (empno, deptno) VALUES (1, 10)")
-	if err != nil {
-		t.Fatalf("%+v", err)
-	}
-
-	query := logicPlan.GetQuery()
-	assert.NotNil(t, query)
-
-	var childCheck string
-	for _, sql := range query.DetectSqls {
-		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
-			continue
-		}
-		if strings.Contains(sql, "dept") {
-			childCheck = sql
-			break
-		}
-	}
-	assert.NotEmpty(t, childCheck,
-		"REPLACE on a child table should generate a child-side FK check SQL")
-	assert.False(t, strings.HasPrefix(childCheck, "REPLACE_PARENT_CHK:"),
-		"child-side FK check must run post-execution, without REPLACE_PARENT_CHK: prefix")
-	assert.Contains(t, childCheck, "emp", "child-side FK check should scan the child table")
-	assert.Contains(t, childCheck, "dept", "child-side FK check should reference the parent table")
-	assert.Contains(t, childCheck, "deptno", "child-side FK check should reference the FK column")
 }
 
 func TestReplaceODKU(t *testing.T) {
@@ -2655,4 +3544,32 @@ func TestReplaceCaptureDedupJoinDoesNotShuffle(t *testing.T) {
 	}
 
 	t.Fatal("expected REPLACE plan to contain a DEDUP JOIN with OldColCaptureList")
+}
+
+// A multi-column row subquery as a COUNT(DISTINCT ...) argument binds to an
+// Expr_Sub whose Typ.Id is T_tuple. The tuple-expansion guard in BindAggFunc
+// must not mistake it for a genuine Expr_List (GetList() returns nil there, so
+// the earlier code nil-deref panicked). It must instead reject the query with a
+// clear error rather than silently collapsing to the subquery's first column.
+func TestCountDistinctRowSubqueryRejected(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	var (
+		plan *Plan
+		err  error
+	)
+	require.NotPanics(t, func() {
+		plan, err = runOneStmt(mock, t,
+			"select count(distinct (select n_nationkey, n_regionkey from nation)) from nation")
+	})
+	require.Error(t, err)
+	require.Nil(t, plan)
+	require.Contains(t, err.Error(), "multi-column subquery")
+}
+
+func TestSubqueryInJoinOn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"SELECT n_name FROM nation JOIN region ON r_regionkey = (SELECT MAX(r_regionkey) FROM region)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
 }

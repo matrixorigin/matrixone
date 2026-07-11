@@ -73,7 +73,15 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 
 	rootId, err := builder.bindInsert(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
+		// never fall back to the legacy ODKU operator. Two exceptions still fall
+		// back: plain INSERT (e.g. inserting into a system index table); and the
+		// degenerate ODKU on a table with no primary/unique key (no dedup key to
+		// represent the upsert; legacy treats it as a plain INSERT and preserves
+		// the prepared-statement parameters).
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
+			(len(stmt.OnDuplicateUpdate) == 0 ||
+				err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
 		}
 		return nil, err
@@ -86,6 +94,38 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	if err != nil {
 		return nil, err
 	}
+
+	// Append synchronous IVF/fulltext index maintenance (modern path, no legacy
+	// fallback) from the materialized new-row image; no-op without such indexes.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
+	// Enforce foreign key constraints for the modern insert path. The child→parent
+	// parent-existence check is row-scoped and in-plan for every conflict action:
+	// plain INSERT / ON DUPLICATE KEY UPDATE assert over the materialized image (see
+	// modernInsertFkCheckEnabled / appendForeignConstrantPlan), and INSERT IGNORE
+	// drops the offending rows (see buildInsertIgnoreFkFilter). Only self-referencing
+	// FKs still need a post-execution DetectSql, generated here for all of them.
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
+		enabled, err := IsForeignKeyChecksEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if enabled {
+			sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(), tblInfo.objRef[0].SchemaName,
+				tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
+			if err != nil {
+				return nil, err
+			}
+			query.DetectSqls = sqls
+		}
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -126,6 +166,13 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		return nil, err
 	}
 
+	// Append synchronous IVF/fulltext index maintenance (delete the conflicting
+	// rows' old entries + insert the new ones) from the materialized image; no-op
+	// without such indexes. Fixes issue #25000.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
 	// Generate DetectSqls for self-referencing FK constraint checks.
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
 	if err != nil {
@@ -143,30 +190,6 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 			return nil, err
 		}
 		query.DetectSqls = sqls
-
-		// Generate child-side FK check SQLs for non-self-referencing foreign
-		// keys. REPLACE bypasses the generic FK rejection (IgnoreForeignKey) and
-		// uses the modern operator path, which performs no child-side FK
-		// validation on its own. These SQLs run after the REPLACE execution and
-		// roll back the transaction (error 1452) when an inserted child row
-		// references a missing parent, leaving the previous row intact.
-		fkEnabled, err := IsForeignKeyChecksEnabled(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if fkEnabled {
-			childSqls, err := genSqlsForCheckFKConstraints(
-				ctx,
-				tblInfo.objRef[0].SchemaName,
-				tblInfo.tableDefs[0].Name,
-				tblInfo.tableDefs[0].Cols,
-				tblInfo.tableDefs[0].Fkeys,
-			)
-			if err != nil {
-				return nil, err
-			}
-			query.DetectSqls = append(query.DetectSqls, childSqls...)
-		}
 
 		// Generate pre-check SQLs for parent→child safety (RESTRICT).
 		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
@@ -220,6 +243,13 @@ func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStm
 	if err != nil {
 		return nil, err
 	}
+
+	// Append synchronous IVF/fulltext index maintenance (modern path, no legacy
+	// fallback) from the materialized new-row image; no-op without such indexes.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,

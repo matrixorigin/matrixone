@@ -830,13 +830,15 @@ func (e *Engine) Nodes(
 				nodes = append(nodes, engine.Node{
 					// should use c.CPUTotal to set Mcpu for the compile and pipeline.
 					// ref: https://github.com/matrixorigin/matrixone/issues/17935
-					Mcpu: ncpu,
-					Id:   c.ServiceID,
-					Addr: c.PipelineServiceAddress,
+					Mcpu:      ncpu,
+					Id:        c.ServiceID,
+					Addr:      c.PipelineServiceAddress,
+					WorkState: c.WorkState,
 				})
 			}
 			return true
 		})
+		appendRuntimeIneligibleCNNodes(cluster, selector, ncpu, &nodes)
 		return nodes, nil
 	}
 
@@ -850,9 +852,10 @@ func (e *Engine) Nodes(
 			func(s *metadata.CNService) {
 				if s.CommitID == version.CommitID {
 					nodes = append(nodes, engine.Node{
-						Mcpu: ncpu,
-						Id:   s.ServiceID,
-						Addr: s.PipelineServiceAddress,
+						Mcpu:      ncpu,
+						Id:        s.ServiceID,
+						Addr:      s.PipelineServiceAddress,
+						WorkState: s.WorkState,
 					})
 				}
 			},
@@ -865,15 +868,51 @@ func (e *Engine) Nodes(
 			func(s *metadata.CNService) {
 				if s.CommitID == version.CommitID {
 					nodes = append(nodes, engine.Node{
-						Mcpu: ncpu,
-						Id:   s.ServiceID,
-						Addr: s.PipelineServiceAddress,
+						Mcpu:      ncpu,
+						Id:        s.ServiceID,
+						Addr:      s.PipelineServiceAddress,
+						WorkState: s.WorkState,
 					})
 				}
 			},
 		)
 	}
+	appendRuntimeIneligibleCNNodes(cluster, selector, ncpu, &nodes)
 	return nodes, nil
+}
+
+// appendRuntimeIneligibleCNNodes preserves the route package's working-CN
+// fallback semantics while exposing matching Draining/Drained candidates to the
+// scheduling layer for structured drop accounting.
+func appendRuntimeIneligibleCNNodes(
+	cluster clusterservice.MOCluster,
+	selector clusterservice.Selector,
+	ncpu int,
+	nodes *engine.Nodes,
+) {
+	seen := make(map[string]struct{}, len(*nodes))
+	for _, node := range *nodes {
+		seen[node.Id] = struct{}{}
+	}
+	cluster.GetCNServiceWithoutWorkingState(selector, func(c metadata.CNService) bool {
+		if c.WorkState != metadata.WorkState_Draining && c.WorkState != metadata.WorkState_Drained {
+			return true
+		}
+		if c.CommitID != version.CommitID {
+			return true
+		}
+		if _, ok := seen[c.ServiceID]; ok {
+			return true
+		}
+		*nodes = append(*nodes, engine.Node{
+			Mcpu:      ncpu,
+			Id:        c.ServiceID,
+			Addr:      c.PipelineServiceAddress,
+			WorkState: c.WorkState,
+		})
+		seen[c.ServiceID] = struct{}{}
+		return true
+	})
 }
 
 func (e *Engine) Hints() (h engine.Hints) {

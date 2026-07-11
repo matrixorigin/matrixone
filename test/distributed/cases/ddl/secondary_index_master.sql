@@ -484,3 +484,52 @@ select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c
 --+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 --38 rows in set (0.01 sec)
 
+-- ---------------------------------------------------------------------------
+-- modern DML on MASTER index tables (issue #24939): MASTER now has full
+-- synchronous modern maintenance (insert + delete-by-pk), so INSERT,
+-- ON DUPLICATE KEY UPDATE and REPLACE all maintain the index on the modern path.
+-- ---------------------------------------------------------------------------
+drop table if exists mst_dml;
+create table mst_dml(a varchar(30), b varchar(30), c varchar(30) primary key);
+create index idx_m using master on mst_dml(a,b);
+insert into mst_dml values("alpha","one","1"),("beta","two","2");
+select * from mst_dml where a="alpha" and b="one";
+-- ON DUPLICATE KEY UPDATE on a PK conflict updates the row; the stale master
+-- entry for the old value is dropped and the new one inserted.
+insert into mst_dml values("alpha","x","1") on duplicate key update b="changed";
+select * from mst_dml order by c;
+select * from mst_dml where a="alpha" and b="changed";
+select * from mst_dml where a="alpha" and b="one";
+-- ON DUPLICATE KEY UPDATE with no conflict inserts a new row.
+insert into mst_dml values("gamma","three","3") on duplicate key update b="z";
+select * from mst_dml order by c;
+-- REPLACE updates an existing PK and maintains the master index.
+replace into mst_dml values("alpha","replaced","1");
+select * from mst_dml order by c;
+select * from mst_dml where a="alpha" and b="replaced";
+select * from mst_dml where a="alpha" and b="changed";
+drop table if exists mst_dml;
+
+-- MASTER table with no primary/unique key: ODKU and REPLACE behave like INSERT.
+drop table if exists mst_nopk;
+
+-- LIMIT/OFFSET must be applied once: the master-index intersection may fetch
+-- LIMIT+OFFSET candidates, while only the final result consumes OFFSET.
+drop table if exists mst_limit_offset;
+create table mst_limit_offset(id int primary key, a varchar(30), b varchar(30));
+create index idx_m_limit using master on mst_limit_offset(a,b);
+insert into mst_limit_offset values
+    (1,'same','group'),(2,'same','group'),(3,'same','group'),(4,'same','group'),(5,'same','group'),
+    (6,'same','group'),(7,'same','group'),(8,'same','group'),(9,'same','group'),(10,'same','group'),
+    (11,'same','group'),(12,'same','group'),(13,'same','group'),(14,'same','group'),(15,'same','group'),
+    (16,'same','group'),(17,'same','group'),(18,'same','group'),(19,'same','group'),(20,'same','group');
+select count(*) from (
+    select id from mst_limit_offset where a='same' and b='group' limit 10 offset 5
+) as page;
+drop table if exists mst_limit_offset;
+create table mst_nopk(a varchar(30), b varchar(30));
+create index idx_m2 using master on mst_nopk(a,b);
+insert into mst_nopk values("p","q") on duplicate key update b="r";
+replace into mst_nopk values("s","t");
+select * from mst_nopk order by a;
+drop table if exists mst_nopk;

@@ -237,7 +237,6 @@ insert into t_replace_multi_uk_batch (name, email, value) values ('a', 'x@a.com'
 replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com', 111), ('b', 'z@a.com', 222);
 select name, email, value from t_replace_multi_uk_batch order by name;
 drop table t_replace_multi_uk_batch;
-
 -- child-side foreign key check during REPLACE: an inserted/replaced child row
 -- must reference an existing parent row, otherwise REPLACE fails and the
 -- previous conflicting row stays intact
@@ -263,3 +262,74 @@ replace into replace_fk_c values (10,2);
 select * from replace_fk_c order by id;
 drop table replace_fk_c;
 drop table replace_fk_p;
+
+-- REPLACE ... SET evaluates an RHS column reference as DEFAULT(col), and
+-- omitted columns fall back to their defaults (MySQL-compatible).
+drop table if exists t_set_default;
+create table t_set_default(id int primary key, v int default 5, note varchar(20) default 'd');
+insert into t_set_default values (1, 10, 'old');
+replace into t_set_default set id = 1, v = v + 1;
+select * from t_set_default order by id;
+replace into t_set_default set id = 2, v = v * 2;
+select * from t_set_default order by id;
+drop table t_set_default;
+
+-- RHS references another column, also resolved to that column's DEFAULT value
+drop table if exists t_set_default2;
+create table t_set_default2(id int primary key, a int default 3, b int default 7);
+insert into t_set_default2 values (1, 100, 200);
+replace into t_set_default2 set id = 1, a = b + 1;
+select * from t_set_default2 order by id;
+drop table t_set_default2;
+
+-- RHS column reference inside a function expression is also resolved to DEFAULT(col)
+drop table if exists t_set_func;
+create table t_set_func(id int primary key, dname varchar(50) default 'hello', suffix varchar(20) default '_mo');
+insert into t_set_func values (1, 'world', '_x');
+replace into t_set_func set id = 1, dname = upper(dname);
+select * from t_set_func order by id;
+replace into t_set_func set id = 2, dname = concat(dname, '_mo');
+select * from t_set_func order by id;
+replace into t_set_func set id = 3, dname = concat(upper(dname), suffix);
+select * from t_set_func order by id;
+drop table t_set_func;
+
+-- MySQL-compatible REPLACE syntax variants: TABLE source (with/without column list), LOW_PRIORITY, DELAYED
+drop table if exists t_replace_src;
+drop table if exists t_replace_dst;
+create table t_replace_src (id int primary key, v int);
+create table t_replace_dst (id int primary key, v int);
+insert into t_replace_src values (1, 10), (2, 20), (3, 30);
+insert into t_replace_dst values (1, 999);
+replace into t_replace_dst table t_replace_src;
+select * from t_replace_dst order by id;
+replace into t_replace_dst (id, v) table t_replace_src;
+select * from t_replace_dst order by id;
+truncate table t_replace_dst;
+replace into t_replace_dst table t_replace_src order by id desc limit 1;
+select * from t_replace_dst order by id;
+replace into t_replace_dst (id, v) table t_replace_src order by id limit 1 offset 1;
+select * from t_replace_dst order by id;
+drop table t_replace_src;
+drop table t_replace_dst;
+drop table if exists t_replace_prio;
+create table t_replace_prio (id int primary key, v int);
+replace low_priority into t_replace_prio values (1, 20);
+replace delayed into t_replace_prio values (1, 30);
+select * from t_replace_prio order by id;
+drop table t_replace_prio;
+
+-- fake-PK table with a composite nullable unique key: a REPLACE whose composite
+-- unique-key part is statically NULL (column a omitted -> NULL) serializes to a NULL
+-- key, can never conflict, and behaves like a plain INSERT (no existing row deleted;
+-- a NULL key is allowed multiple times). A fully non-NULL key still conflicts and replaces.
+drop table if exists t_replace_fakepk_comp_null;
+create table t_replace_fakepk_comp_null (a int, b int, c varchar(20), unique key uk_ab(a, b));
+insert into t_replace_fakepk_comp_null values (1, 1, 'one'), (2, 2, 'two');
+replace into t_replace_fakepk_comp_null (b, c) values (1, 'null-a');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+replace into t_replace_fakepk_comp_null (b, c) values (1, 'null-a-2');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+replace into t_replace_fakepk_comp_null (a, b, c) values (1, 1, 'one-replaced');
+select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
+drop table t_replace_fakepk_comp_null;
