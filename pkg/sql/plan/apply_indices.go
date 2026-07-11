@@ -122,10 +122,11 @@ func calculateOverFetchLimit(originalLimit uint64, factor float64) uint64 {
 	}
 	multiplied := originalLimit
 	if factor > 1 {
-		if float64(originalLimit) > float64(math.MaxUint64)/factor {
+		product := float64(originalLimit) * factor
+		if product >= float64(math.MaxUint64) {
 			multiplied = math.MaxUint64
 		} else {
-			multiplied = uint64(float64(originalLimit) * factor)
+			multiplied = uint64(product)
 		}
 	}
 

@@ -528,16 +528,14 @@ func vectorSearchProviderChildren(vecCtx *vectorSortContext) []int32 {
 }
 
 func vectorResultPagination(vecCtx *vectorSortContext) (*plan.Expr, *plan.Expr) {
-	if vecCtx.resultLimit != nil {
-		return DeepCopyExpr(vecCtx.resultLimit), DeepCopyExpr(vecCtx.resultOffset)
+	if vecCtx == nil || vecCtx.resultLimit == nil {
+		return nil, nil
 	}
-	// Compatibility for algorithm-level callers that construct the context
-	// directly instead of going through buildVectorSortContext.
-	var offset *plan.Expr
-	if vecCtx.sortNode != nil {
-		offset = vecCtx.sortNode.Offset
-	}
-	return DeepCopyExpr(vecCtx.limit), DeepCopyExpr(offset)
+	return DeepCopyExpr(vecCtx.resultLimit), DeepCopyExpr(vecCtx.resultOffset)
+}
+
+func hasCompleteVectorPagination(vecCtx *vectorSortContext) bool {
+	return vecCtx != nil && vecCtx.limit != nil && vecCtx.resultLimit != nil
 }
 
 func pickVectorLimit(sortNode, scanNode, projNode *plan.Node) (*plan.Expr, *plan.RankOption) {
@@ -593,7 +591,10 @@ func isDescendingVectorSort(flag plan.OrderBySpec_OrderByFlag) bool {
 }
 
 func (builder *QueryBuilder) validateVectorIndexSortRewrite(vecCtx *vectorSortContext) (bool, error) {
-	if vecCtx == nil || !isDescendingVectorSort(vecCtx.sortDirection) {
+	if vecCtx == nil {
+		return true, nil
+	}
+	if !isDescendingVectorSort(vecCtx.sortDirection) {
 		return true, nil
 	}
 

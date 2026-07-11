@@ -97,7 +97,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	scanOrderBy := DeepCopyOrderBySpec(node.OrderBy[0])
 	scanOrderBy.Expr = scanOrderExpr
 	enableOrderedLimit := false
-	if orderByCol.RelPos == scanNode.BindingTags[0] && canUseRegularIndexHiddenSortKey(scanNode, scanOrderByCol) {
+	if canUseRegularIndexHiddenSortKey(scanNode, scanOrderByCol) {
 		eligibleOrderedLimit := staticLimitSafe && node.Offset == nil && node.RankOption == nil && isPositiveLiteralLimit(node.Limit)
 		if eligibleOrderedLimit {
 			enableOrderedLimit = canPushRegularIndexOrderedLimit(scanNode)

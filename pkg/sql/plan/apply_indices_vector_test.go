@@ -73,6 +73,43 @@ func TestVectorResultPaginationIsSeparateFromCandidateBudget(t *testing.T) {
 	require.Equal(t, uint64(5), ctx.limit.GetLit().GetU64Val())
 }
 
+func TestVectorResultPaginationRejectsMissingResultLimit(t *testing.T) {
+	ctx := &vectorSortContext{
+		limit:    makePlan2Uint64ConstExprWithType(15),
+		sortNode: &plan.Node{Offset: makePlan2Uint64ConstExprWithType(5)},
+	}
+	limit, offset := vectorResultPagination(ctx)
+	require.Nil(t, limit)
+	require.Nil(t, offset)
+	require.False(t, hasCompleteVectorPagination(ctx))
+}
+
+func TestVectorRewritesRejectMissingResultPagination(t *testing.T) {
+	builder := &QueryBuilder{}
+	ctx := &vectorSortContext{
+		sortNode: &plan.Node{},
+		scanNode: &plan.Node{},
+		limit:    makePlan2Uint64ConstExprWithType(15),
+	}
+
+	tests := []struct {
+		name  string
+		apply func() (int32, error)
+	}{
+		{name: "hnsw", apply: func() (int32, error) { return builder.applyIndicesForSortUsingHnsw(7, ctx, nil) }},
+		{name: "cagra", apply: func() (int32, error) { return builder.applyIndicesForSortUsingCagra(7, ctx, nil) }},
+		{name: "ivfpq", apply: func() (int32, error) { return builder.applyIndicesForSortUsingIvfpq(7, ctx, nil) }},
+		{name: "ivfflat", apply: func() (int32, error) { return builder.applyIndicesForSortUsingIvfflat(7, ctx, nil, nil, nil) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.apply()
+			require.NoError(t, err)
+			require.Equal(t, int32(7), got)
+		})
+	}
+}
+
 func TestVectorPaginationSurvivesPluginRoundTrip(t *testing.T) {
 	ctx := &vectorSortContext{
 		limit:        makePlan2Uint64ConstExprWithType(3),
@@ -96,15 +133,24 @@ func TestValidateVectorIndexSortRewrite(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	// ASC ordering: allowed.
-	asc := &vectorSortContext{sortDirection: plan.OrderBySpec_ASC}
+	// ASC ordering with complete pagination ownership: allowed.
+	asc := &vectorSortContext{
+		sortDirection: plan.OrderBySpec_ASC,
+		limit:         makePlan2Uint64ConstExprWithType(15),
+		resultLimit:   makePlan2Uint64ConstExprWithType(10),
+		resultOffset:  makePlan2Uint64ConstExprWithType(5),
+	}
 	ok, err = b.validateVectorIndexSortRewrite(asc)
 	require.NoError(t, err)
 	require.True(t, ok)
 
 	// DESC ordering: rewrite blocked, no error (caller leaves the original
 	// exact path in place rather than failing the query).
-	desc := &vectorSortContext{sortDirection: plan.OrderBySpec_DESC}
+	desc := &vectorSortContext{
+		sortDirection: plan.OrderBySpec_DESC,
+		limit:         makePlan2Uint64ConstExprWithType(10),
+		resultLimit:   makePlan2Uint64ConstExprWithType(10),
+	}
 	ok, err = b.validateVectorIndexSortRewrite(desc)
 	require.NoError(t, err)
 	require.False(t, ok)

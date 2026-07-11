@@ -947,6 +947,7 @@ func TestCalculateOverFetchLimitSaturates(t *testing.T) {
 	require.Equal(t, uint64(0), calculateOverFetchLimit(0, 5))
 	require.Equal(t, uint64(20), calculateOverFetchLimit(10, 2))
 	require.Equal(t, uint64(15), calculateOverFetchLimit(5, 1))
+	require.Equal(t, uint64(math.MaxUint64), calculateOverFetchLimit(15372286728091293696, 1.2))
 	require.Equal(t, uint64(math.MaxUint64), calculateOverFetchLimit(math.MaxUint64, 1.2))
 	require.Equal(t, uint64(math.MaxUint64), calculateOverFetchLimit(math.MaxUint64-5, 1))
 }
@@ -1483,6 +1484,32 @@ func TestHandleMessageFromTopToScanThroughDirectProjection(t *testing.T) {
 	require.Len(t, scan.OrderBy, 1)
 	require.Equal(t, scanTag, scan.OrderBy[0].Expr.GetCol().RelPos)
 	require.Equal(t, int32(0), scan.OrderBy[0].Expr.GetCol().ColPos)
+}
+
+func TestHandleMessageFromTopToScanPushesRegularIndexLimitThroughDirectProjection(t *testing.T) {
+	builder, rootID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+	sortID := builder.qry.Nodes[rootID].Children[0]
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[sortID]
+	projectTag := int32(200)
+	projectID := int32(len(builder.qry.Nodes))
+	builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		NodeId:      projectID,
+		Children:    []int32{scanNode.NodeId},
+		BindingTags: []int32{projectTag},
+		ProjectList: []*planpb.Expr{GetColExpr(scanNode.TableDef.Cols[1].Typ, scanNode.BindingTags[0], 1)},
+	})
+	sortNode.Children[0] = projectID
+	sortNode.OrderBy[0].Expr = GetColExpr(scanNode.TableDef.Cols[1].Typ, projectTag, 0)
+
+	builder.handleMessageFromTopToScan(sortID)
+
+	require.NotNil(t, scanNode.IndexReaderParam)
+	require.Len(t, scanNode.IndexReaderParam.OrderBy, 1)
+	require.Equal(t, uint64(20), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
+	require.Equal(t, scanNode.BindingTags[0], scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol().RelPos)
+	require.Equal(t, catalog.IndexTableIndexColName, scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol().Name)
 }
 
 func TestHandleMessageFromTopToScanSkipsSortWithoutOrderKey(t *testing.T) {
