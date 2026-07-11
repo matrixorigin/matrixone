@@ -663,6 +663,85 @@ func TestSendWithTxnUnknown(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+func TestCommitResponseTimeoutReturnsTxnUnknown(t *testing.T) {
+	s := newTestTxnServer(t, testTN1Addr, nil)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+	s.RegisterRequestHandler(func(
+		ctx context.Context,
+		request morpc.RPCMessage,
+		sequence uint64,
+		cs morpc.ClientSession) error {
+		return moerr.NewInternalError(ctx, "read tcp: i/o timeout")
+	})
+
+	sd, err := NewSender(Config{}, newTestRuntime(newTestClock(), nil))
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	result, err := sd.Send(ctx, []txn.TxnRequest{newCommitRequest(testTN1Addr)})
+	assert.Nil(t, result)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+}
+
+func TestStreamCommitResponseLossReturnsTxnUnknown(t *testing.T) {
+	s := newTestTxnServer(t, testTN1Addr, nil)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+	s.RegisterRequestHandler(func(
+		ctx context.Context,
+		request morpc.RPCMessage,
+		sequence uint64,
+		cs morpc.ClientSession) error {
+		req := request.Message.(*txn.TxnRequest)
+		if req.Method == txn.TxnMethod_Commit {
+			return moerr.NewInternalError(ctx, "read tcp: i/o timeout")
+		}
+		return cs.Write(ctx, &txn.TxnResponse{RequestID: req.RequestID, Method: req.Method})
+	})
+
+	sd, err := NewSender(Config{}, newTestRuntime(newTestClock(), nil))
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	requests := []txn.TxnRequest{
+		{
+			Method: txn.TxnMethod_Write,
+			CNRequest: &txn.CNOpRequest{
+				Target: metadata.TNShard{Address: testTN1Addr},
+			},
+		},
+		newCommitRequest(testTN1Addr),
+	}
+	result, err := sd.Send(ctx, requests)
+	assert.Nil(t, result)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+}
+
+func newCommitRequest(address string) txn.TxnRequest {
+	return txn.TxnRequest{
+		Method: txn.TxnMethod_Commit,
+		Txn: txn.TxnMeta{
+			ID: []byte("commit-response-lost"),
+			TNShards: []metadata.TNShard{
+				{Address: address},
+			},
+		},
+	}
+}
+
 func newTestTxnServer(
 	t assert.TestingT,
 	addr string,

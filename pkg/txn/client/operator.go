@@ -912,7 +912,7 @@ func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnRollback(tc.logger, txnMeta)
 
-	if tc.reset.workspace != nil && !tc.reset.cannotCleanWorkspace {
+	if tc.reset.workspace != nil && tc.canCleanWorkspace() {
 		if err = tc.reset.workspace.Rollback(ctx); err != nil {
 			tc.logger.Error("rollback workspace failed",
 				util.TxnIDField(txnMeta), zap.Error(err))
@@ -1223,8 +1223,20 @@ func (tc *txnOperator) doWrite(
 	resp, err = tc.trimResponses(tc.handleError(ctx, result, err))
 	if err != nil && commit {
 		tc.reset.commitErr = err
+		if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+			// The commit may have reached TN. Connection cleanup calls Rollback
+			// after Commit returns, so preserve prepared workspace files until an
+			// authoritative outcome is available.
+			tc.reset.cannotCleanWorkspace = true
+		}
 	}
 	return resp, err
+}
+
+func (tc *txnOperator) canCleanWorkspace() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return !tc.reset.cannotCleanWorkspace
 }
 
 func (tc *txnOperator) updateWritePartitions(requests []txn.TxnRequest, locked bool) {

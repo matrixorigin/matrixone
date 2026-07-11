@@ -316,6 +316,7 @@ func TestCommitKeepsPreparedWorkspaceAfterTxnUnknown(t *testing.T) {
 
 		err := tc.Commit(ctx)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.NoError(t, tc.Rollback(ctx))
 		require.Equal(t, 1, ws.commitCount)
 		require.Zero(t, ws.finalizeCount)
 		require.Equal(t, 1, ws.unknownCount)

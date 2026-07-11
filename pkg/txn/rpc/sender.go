@@ -136,6 +136,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 	}
 
 	sr.reset(requests)
+	var commitRequest *txn.TxnRequest
 	for idx := range requests {
 		tn := requests[idx].GetTargetTN()
 		st := sr.getStream(tn.ShardID)
@@ -150,9 +151,15 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		}
 
 		requests[idx].RequestID = st.ID()
+		if requests[idx].Method == txn.TxnMethod_Commit {
+			// Once Send is entered, the commit may reach TN even if the
+			// transport reports an error. Its result must be treated as unknown
+			// so the caller does not discard committed workspace files.
+			commitRequest = &requests[idx]
+		}
 		if err := st.Send(ctx, &requests[idx]); err != nil {
 			sr.Release()
-			return nil, err
+			return nil, unknownCommitResult(ctx, commitRequest, err)
 		}
 	}
 
@@ -161,11 +168,12 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		c, err := st.Receive()
 		if err != nil {
 			sr.Release()
-			return nil, err
+			return nil, unknownCommitResult(ctx, commitRequest, err)
 		}
 		v, ok := <-c
-		if !ok {
-			return nil, moerr.NewStreamClosedNoCtx()
+		if !ok || v == nil {
+			sr.Release()
+			return nil, unknownCommitResult(ctx, commitRequest, moerr.NewStreamClosedNoCtx())
 		}
 		resp := v.(*txn.TxnResponse)
 		sr.setResponse(resp, idx)
@@ -235,21 +243,24 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	defer f.Close()
 	v, err := f.Get()
 	if err != nil {
-		// if the error is io.EOF or "connection is reset by peer",
-		// means the connection to TN node is ended, but no response
-		// is returned from TN txn service. In this case, the result
-		// of the txn status is unknown.
-		if errors.Is(err, io.EOF) ||
-			strings.Contains(err.Error(), "connection reset by peer") {
-			return txn.TxnResponse{},
-				moerr.NewTxnUnknown(
-					ctx,
-					hex.EncodeToString(request.Txn.ID),
-				)
-		}
-		return txn.TxnResponse{}, err
+		return txn.TxnResponse{}, unknownCommitResult(ctx, &request, err)
 	}
 	return *(v.(*txn.TxnResponse)), nil
+}
+
+func unknownCommitResult(ctx context.Context, request *txn.TxnRequest, err error) error {
+	if request == nil {
+		return err
+	}
+	if request.Method == txn.TxnMethod_Commit {
+		return moerr.NewTxnUnknown(ctx, hex.EncodeToString(request.Txn.ID))
+	}
+	// Keep the existing handling for non-commit RPCs. A lost response leaves
+	// their result unknown as well, while other errors are returned unchanged.
+	if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "connection reset by peer") {
+		return moerr.NewTxnUnknown(ctx, hex.EncodeToString(request.Txn.ID))
+	}
+	return err
 }
 
 type backendRetryState struct {
