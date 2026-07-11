@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -232,15 +233,31 @@ func TestPipelineSpoolAbortReleasesPendingBatch(t *testing.T) {
 	require.False(t, queryDone)
 	require.Greater(t, mp.CurrNB(), int64(0))
 
-	sp.Abort()
+	sp.Abort(nil)
 	require.Equal(t, int64(0), mp.CurrNB())
 
 	got, info := sp.ReceiveBatch(0)
 	require.Nil(t, got)
-	require.ErrorIs(t, info, ErrPipelineSpoolAborted)
+	require.Same(t, ErrPipelineSpoolAborted, info)
 
-	sp.Abort()
+	sp.Abort(moerr.NewInternalErrorNoCtx("ignored second abort"))
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestPipelineSpoolAbortPreservesFirstCause(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+
+	sp := InitMyPipelineSpool(mp, 1)
+	firstCause := moerr.NewCheckRecursiveLevel(context.Background())
+	sp.Abort(firstCause)
+	sp.Abort(moerr.NewInternalErrorNoCtx("ignored second abort"))
+
+	got, info := sp.ReceiveBatch(0)
+	require.Nil(t, got)
+	require.Same(t, firstCause, info)
 }
 
 func TestPipelineSpoolAbortDefersCurrentBatchRelease(t *testing.T) {
@@ -268,7 +285,7 @@ func TestPipelineSpoolAbortDefersCurrentBatchRelease(t *testing.T) {
 	require.Equal(t, 1024, got.RowCount())
 	require.Greater(t, mp.CurrNB(), int64(0))
 
-	sp.Abort()
+	sp.Abort(nil)
 	require.Greater(t, mp.CurrNB(), int64(0))
 	require.Equal(t, 1024, got.RowCount())
 
@@ -311,7 +328,7 @@ func TestPipelineSpoolAbortUnblocksSendBatchWaitingForFreeSlot(t *testing.T) {
 		done <- nil
 	}()
 
-	sp.Abort()
+	sp.Abort(nil)
 	select {
 	case err := <-done:
 		require.NoError(t, err)
@@ -348,7 +365,7 @@ func TestPipelineSpoolAbortWaitsForAllCurrentBroadcastReceivers(t *testing.T) {
 	require.NotNil(t, got1)
 	require.Greater(t, mp.CurrNB(), int64(0))
 
-	sp.Abort()
+	sp.Abort(nil)
 	require.Greater(t, mp.CurrNB(), int64(0))
 
 	sp.ReleaseCurrent(0)
