@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -35,6 +36,7 @@ type CheckpointReader struct {
 	ctx     context.Context
 	fs      fileservice.FileService
 	dir     string
+	kind    string
 	entries []*checkpoint.CheckpointEntry
 	mp      *mpool.MPool
 }
@@ -49,21 +51,36 @@ func WithMPool(mp *mpool.MPool) Option {
 	}
 }
 
+// WithKind selects the on-disk format of the data dir: "local" (default,
+// DISK/CRC), "local2" (DISK-V2/raw) or "s3" (S3FS-on-disk/raw).
+func WithKind(kind string) Option {
+	return func(r *CheckpointReader) {
+		r.kind = kind
+	}
+}
+
+// Kind returns the offline fs kind the reader was opened with.
+func (r *CheckpointReader) Kind() string {
+	return r.kind
+}
+
 // Open opens checkpoint data from a directory
 func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, error) {
-	fs, err := fileservice.NewLocalFS(ctx, "local", dir, fileservice.DisabledCacheConfig, nil)
-	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
-	}
-
 	r := &CheckpointReader{
-		ctx: ctx,
-		fs:  fs,
-		dir: dir,
+		ctx:  ctx,
+		dir:  dir,
+		kind: objectio.OfflineKindLocal,
 	}
 	for _, opt := range opts {
 		opt(r)
 	}
+
+	fs, err := objectio.NewOfflineFS(ctx, dir, r.kind)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
+	}
+	r.fs = fs
+
 	if r.mp == nil {
 		r.mp = mpool.MustNewZero()
 	}

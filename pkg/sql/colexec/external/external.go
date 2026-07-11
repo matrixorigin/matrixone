@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,12 +36,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -762,6 +765,10 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 			if err != nil {
 				return false
 			}
+		case types.T_year:
+			if _, err := parseLoadDataYear(field); err != nil {
+				return false
+			}
 		case types.T_enum:
 			_, err := strconv.ParseUint(field.Val, 10, 16)
 			if err == nil {
@@ -886,9 +893,24 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
 	if param == nil || param.Extern == nil ||
 		param.Extern.ExternType != int32(plan.ExternType_LOAD) ||
-		(!param.ParallelLoad && !param.LoadEmptyNumericAsZero) {
+		(!param.ParallelLoad && !param.LoadEmptyNumericAsZero && !shouldApplyLoadDataNonStrictAdjustments(param)) {
 		return false
 	}
+	if !param.ParallelLoad && !param.LoadEmptyNumericAsZero {
+		return isLoadNumericAdjustedValueType(id)
+	}
+	return isLoadNumericZeroFillType(id)
+}
+
+func shouldApplyLoadDataNonStrictAdjustments(param *ExternalParam) bool {
+	return param != nil && param.Extern != nil &&
+		param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
+		param.Extern.Local &&
+		param.Extern.Format == tree.CSV &&
+		!param.StrictSqlMode
+}
+
+func isLoadNumericZeroFillType(id types.T) bool {
 	switch id {
 	case types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -899,6 +921,69 @@ func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
 	default:
 		return false
 	}
+}
+
+func isLoadNumericAdjustedValueType(id types.T) bool {
+	switch id {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
+		return true
+	default:
+		return false
+	}
+}
+
+func loadDataNonStrictNumericPrefix(val string) string {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return "0"
+	}
+
+	i := 0
+	if val[i] == '+' || val[i] == '-' {
+		i++
+	}
+	digitsStart := i
+	for i < len(val) && val[i] >= '0' && val[i] <= '9' {
+		i++
+	}
+	digits := i > digitsStart
+	if i < len(val) && val[i] == '.' {
+		i++
+		fracStart := i
+		for i < len(val) && val[i] >= '0' && val[i] <= '9' {
+			i++
+		}
+		digits = digits || i > fracStart
+	}
+	if !digits {
+		return "0"
+	}
+
+	end := i
+	if i < len(val) && (val[i] == 'e' || val[i] == 'E') {
+		exp := i + 1
+		if exp < len(val) && (val[exp] == '+' || val[exp] == '-') {
+			exp++
+		}
+		expDigits := exp
+		for exp < len(val) && val[exp] >= '0' && val[exp] <= '9' {
+			exp++
+		}
+		if exp > expDigits {
+			end = exp
+		}
+	}
+	return val[:end]
+}
+
+func truncateLoadDataStringValue(val string, width int32) string {
+	if width <= 0 || utf8.RuneCountInString(val) <= int(width) {
+		return val
+	}
+	return string([]rune(val)[:width])
 }
 
 func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp *mpool.MPool) error {
@@ -990,6 +1075,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 
 	field := getFieldFromLine(line, colName, param, fieldIdx)
 	id := types.T(col.Typ.Id)
+	loadDataNonStrictAdjustments := shouldApplyLoadDataNonStrictAdjustments(param)
 	trimSpace := false
 	// T_bit carries raw bytes (parsed byte-by-byte, not as text), so whitespace
 	// bytes are data and must not be trimmed (a whitespace-only bit value would
@@ -1012,6 +1098,34 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	if isNullOrEmpty {
 		vector.AppendBytes(vec, nil, true, mp)
 		return nil
+	}
+
+	zeroDateAdjusted := false
+	if loadDataNonStrictAdjustments {
+		switch {
+		case isLoadNumericAdjustedValueType(id):
+			if !field.HasStringQuote {
+				field.Val = loadDataNonStrictNumericPrefix(field.Val)
+			}
+		case id == types.T_date:
+			if _, err := types.ParseDateCast(field.Val); err != nil {
+				zeroDateAdjusted = true
+				if param.ParallelLoad {
+					field.Val = "0000-00-00"
+				}
+			}
+		case id == types.T_char || id == types.T_varchar:
+			field.Val = truncateLoadDataStringValue(field.Val, col.Typ.Width)
+		}
+	}
+
+	// In strict SQL mode (non-LOCAL load), an over-width CHAR/VARCHAR value is
+	// rejected instead of silently truncated, matching strict assignment casts
+	// (cast_strict) and MySQL's "Data too long" behavior. Uses rune count, like
+	// strToStr. LOCAL / non-strict loads keep the lenient (truncate) behavior.
+	if checkLineStrict(param) && (id == types.T_char || id == types.T_varchar) &&
+		col.Typ.Width > 0 && utf8.RuneCountInString(field.Val) > int(col.Typ.Width) {
+		return moerr.NewInternalErrorf(param.Ctx, "Data too long for column '%s' at row %d", colName, rowIdx+1)
 	}
 
 	if param.ParallelLoad {
@@ -1312,10 +1426,16 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_date:
-		d, err := types.ParseDateCast(field.Val)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Date type for column %d", field.Val, colIdx)
+		var d types.Date
+		if zeroDateAdjusted {
+			d = types.Date(0)
+		} else {
+			var err error
+			d, err = types.ParseDateCast(field.Val)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Date type for column %d", field.Val, colIdx)
+			}
 		}
 
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
@@ -1336,6 +1456,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err != nil {
 			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Datetime type for column %d", field.Val, colIdx)
+		}
+		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
+			return err
+		}
+	case types.T_year:
+		d, err := parseLoadDataYear(field)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Year type for column %d", field.Val, colIdx)
 		}
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 			return err
@@ -1418,10 +1547,39 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 			return err
 		}
+	case types.T_geometry, types.T_geometry32:
+		// The CSV field is (E)WKT text such as "POINT (-87.6 41.8)". Normalize it
+		// to the stored bare-WKB form (float32 for GEOMETRY32) and enforce the
+		// column's declared subtype, exactly like cast_geometry_to_subtype does
+		// for an INSERT, so an external read and an INSERT store identical bytes.
+		// The column subtype is carried in Typ.Scale as a geo.Subtype enum.
+		columnSubtype := ""
+		if s := geo.Subtype(col.Typ.Scale); s != geo.GENERIC {
+			columnSubtype = strings.ToUpper(s.String())
+		}
+		wkb, err := function.NormalizeGeometryForStorage(proc, []byte(field.Val), columnSubtype, id == types.T_geometry32)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not a valid geometry for column %d: %v", field.Val, colIdx, err)
+		}
+		if err := vector.AppendBytes(vec, wkb, false, mp); err != nil {
+			return err
+		}
 	default:
-		return moerr.NewInternalErrorf(param.Ctx, "the value type %d is not support now", param.Cols[rowIdx].Typ.Id)
+		return moerr.NewInternalErrorf(param.Ctx, "the value type %s is not support now", id.String())
 	}
 	return nil
+}
+
+func parseLoadDataYear(field csvparser.Field) (types.MoYear, error) {
+	if field.HasStringQuote {
+		return types.ParseMoYear(field.Val)
+	}
+	d, err := strconv.ParseInt(field.Val, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return types.ParseMoYearFromInt(d)
 }
 
 func loadFormatIsValid(param *tree.ExternParam) bool {

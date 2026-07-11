@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -411,6 +412,420 @@ func TestGetColDataParallelLoadNullNumericRemainsNull(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+}
+
+func TestGetColDataLoadDataYear(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_year.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Cols: []*plan.ColDef{{
+				Name: "y",
+				Typ:  plan.Type{Id: int32(types.T_year), Width: 4},
+			}},
+			Extern: &tree.ExternParam{
+				ExParam: tree.ExParam{ExternType: int32(plan.ExternType_LOAD)},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+	attr := plan.ExternAttr{ColName: "y", ColIndex: 0, ColFieldIndex: 0}
+
+	require.NoError(t, getColData(
+		bat,
+		[]csvparser.Field{{Val: "2024"}},
+		0,
+		param,
+		proc.Mp(),
+		attr,
+		proc,
+	))
+	require.Equal(t, []types.MoYear{2024}, vector.MustFixedColWithTypeCheck[types.MoYear](bat.Vecs[0]))
+
+	bat.CleanOnlyData()
+	require.NoError(t, getColData(
+		bat,
+		[]csvparser.Field{{Val: "0", HasStringQuote: true}},
+		0,
+		param,
+		proc.Mp(),
+		attr,
+		proc,
+	))
+	require.Equal(t, []types.MoYear{2000}, vector.MustFixedColWithTypeCheck[types.MoYear](bat.Vecs[0]))
+
+	bat.CleanOnlyData()
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: "2156"}},
+		0,
+		param,
+		proc.Mp(),
+		attr,
+		proc,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not Year type")
+}
+
+// TestGetColDataGeometry exercises the geometry/geography branch of the external
+// CSV loader: WKT fields are parsed and stored as bare WKB (float64 for GEOMETRY,
+// float32 for GEOMETRY32), an unconstrained GEOMETRY column accepts any subtype,
+// and a subtype-constrained column rejects a mismatching value the same way an
+// INSERT does.
+func TestGetColDataGeometry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	load := func(colTyp plan.Type, val string) (*batch.Batch, error) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.New(types.T(colTyp.Id), colTyp.Width, colTyp.Scale))
+		param := &ExternalParam{
+			ExParamConst: ExParamConst{
+				Ctx:  context.Background(),
+				Cols: []*plan.ColDef{{Name: "g", Typ: colTyp}},
+				Extern: &tree.ExternParam{
+					ExParam: tree.ExParam{ExternType: int32(plan.ExternType_EXTERNAL_TB)},
+				},
+			},
+			ExParam: ExParam{Fileparam: &ExFileparam{}},
+		}
+		attr := plan.ExternAttr{ColName: "g", ColIndex: 0, ColFieldIndex: 0}
+		err := getColData(bat, []csvparser.Field{{Val: val}}, 0, param, proc.Mp(), attr, proc)
+		return bat, err
+	}
+
+	// GEOMETRY column with a POINT subtype constraint: WKT -> float64 WKB.
+	geomPoint := plan.Type{Id: int32(types.T_geometry), Scale: int32(geo.POINT)}
+	bat, err := load(geomPoint, "POINT (1 2)")
+	require.NoError(t, err)
+	stored := bat.Vecs[0].GetBytesAt(0)
+	require.True(t, len(stored) > 0 && (stored[0] == 0 || stored[0] == 1), "geometry must be stored as WKB")
+	g, err := geo.ReadWKB(stored)
+	require.NoError(t, err)
+	require.Equal(t, "POINT(1 2)", geo.WriteWKT(g))
+	bat.Clean(proc.Mp())
+
+	// Unconstrained GEOMETRY column accepts a different subtype.
+	geomGeneric := plan.Type{Id: int32(types.T_geometry), Scale: int32(geo.GENERIC)}
+	bat, err = load(geomGeneric, "LINESTRING (0 0, 1 1)")
+	require.NoError(t, err)
+	bat.Clean(proc.Mp())
+
+	// GEOMETRY32 stores float32-coordinate WKB, distinct from the float64 form.
+	geom32 := plan.Type{Id: int32(types.T_geometry32), Scale: int32(geo.POINT)}
+	bat, err = load(geom32, "POINT (0.1 0.2)")
+	require.NoError(t, err)
+	stored32 := bat.Vecs[0].GetBytesAt(0)
+	_, err = geo.ReadWKBFloat32(stored32)
+	require.NoError(t, err)
+	bat.Clean(proc.Mp())
+
+	// Subtype constraint is enforced: a LINESTRING cannot land in a POINT column.
+	bat, err = load(geomPoint, "LINESTRING (0 0, 1 1)")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot store LINESTRING in POINT column")
+	bat.Clean(proc.Mp())
+
+	// Malformed WKT is rejected with a clear error, not stored silently.
+	bat, err = load(geomGeneric, "not-a-geometry")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a valid geometry")
+	bat.Clean(proc.Mp())
+}
+
+func TestGetOneRowDataLoadDataNonStrictAdjustedValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	decType := types.New(types.T_decimal64, 5, 2)
+	varcharType := types.New(types.T_varchar, 4, 0)
+	cols := []*plan.ColDef{
+		{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		{Name: "i", Typ: plan.Type{Id: int32(types.T_int32)}},
+		{Name: "d", Typ: plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2}},
+		{Name: "dt", Typ: plan.Type{Id: int32(types.T_date)}},
+		{Name: "vc", Typ: plan.Type{Id: int32(types.T_varchar), Width: 4}},
+	}
+	attrs := make([]plan.ExternAttr, len(cols))
+	for idx, col := range cols {
+		attrs[idx] = plan.ExternAttr{ColName: col.Name, ColIndex: int32(idx), ColFieldIndex: int32(idx)}
+	}
+
+	bat := batch.NewWithSize(len(cols))
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[2] = vector.NewVec(decType)
+	bat.Vecs[3] = vector.NewVec(types.T_date.ToType())
+	bat.Vecs[4] = vector.NewVec(varcharType)
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:           context.Background(),
+			ColumnListLen: int32(len(cols)),
+			StrictSqlMode: false,
+			Attrs:         attrs,
+			Cols:          cols,
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Format: tree.CSV},
+				ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_LOAD), Local: true},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+
+	lines := [][]csvparser.Field{
+		{{Val: "1"}, {Val: "12"}, {Val: "12.345"}, {Val: "20240102"}, {Val: "abcd"}},
+		{{Val: "2"}, {Val: "abc"}, {Val: "10.00x"}, {Val: "2024-02-31"}, {Val: "abcdef"}},
+		{{Val: "3"}, {Val: ""}, {Val: "bad"}, {Val: "0000-00-00"}, {Val: "xy"}},
+	}
+	for idx, line := range lines {
+		require.NoError(t, getOneRowData(proc, bat, line, idx, param))
+	}
+
+	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0]))
+	require.Equal(t, []int32{12, 0, 0}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[1]))
+
+	d0, err := types.ParseDecimal64("12.35", 5, 2)
+	require.NoError(t, err)
+	d1, err := types.ParseDecimal64("10.00", 5, 2)
+	require.NoError(t, err)
+	require.Equal(t, []types.Decimal64{d0, d1, 0}, vector.MustFixedColWithTypeCheck[types.Decimal64](bat.Vecs[2]))
+
+	date0, err := types.ParseDateCast("20240102")
+	require.NoError(t, err)
+	require.Equal(t, []types.Date{date0, types.Date(0), types.Date(0)}, vector.MustFixedColWithTypeCheck[types.Date](bat.Vecs[3]))
+
+	require.Equal(t, "abcd", string(bat.Vecs[4].GetBytesAt(0)))
+	require.Equal(t, "abcd", string(bat.Vecs[4].GetBytesAt(1)))
+	require.Equal(t, "xy", string(bat.Vecs[4].GetBytesAt(2)))
+}
+
+func TestGetColDataLoadDataStrictRejectsInvalidInteger(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:           context.Background(),
+			StrictSqlMode: true,
+			Cols: []*plan.ColDef{{
+				Name: "i",
+				Typ:  plan.Type{Id: int32(types.T_int32)},
+			}},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Format: tree.CSV},
+				ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_LOAD), Local: false},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: "abc"}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "i", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not int32 type")
+}
+
+func TestGetColDataLoadDataAdjustmentsOnlyLocalCSVNonStrict(t *testing.T) {
+	cases := []struct {
+		name          string
+		local         bool
+		strictSQLMode bool
+		format        string
+		wantErr       bool
+	}{
+		{name: "local csv non-strict adjusts", local: true, strictSQLMode: false, format: tree.CSV},
+		{name: "local csv strict rejects", local: true, strictSQLMode: true, format: tree.CSV, wantErr: true},
+		{name: "non-local csv non-strict rejects", local: false, strictSQLMode: false, format: tree.CSV, wantErr: true},
+		{name: "local jsonline non-strict rejects", local: true, strictSQLMode: false, format: tree.JSONLINE, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			defer bat.Clean(proc.Mp())
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Ctx:           context.Background(),
+					StrictSqlMode: tc.strictSQLMode,
+					Cols: []*plan.ColDef{{
+						Name: "i",
+						Typ:  plan.Type{Id: int32(types.T_int32)},
+					}},
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tc.format},
+						ExParam: tree.ExParam{
+							ExternType: int32(plan.ExternType_LOAD),
+							Local:      tc.local,
+						},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			err := getColData(
+				bat,
+				[]csvparser.Field{{Val: "abc"}},
+				0,
+				param,
+				proc.Mp(),
+				plan.ExternAttr{ColName: "i", ColIndex: 0, ColFieldIndex: 0},
+				proc,
+			)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "not int32 type")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, []int32{0}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0]))
+		})
+	}
+}
+
+func TestGetColDataLoadDataNonStrictAdjustmentRejectsQuotedInvalidNumeric(t *testing.T) {
+	cases := []struct {
+		name        string
+		colName     string
+		vecType     types.Type
+		colType     plan.Type
+		fieldVal    string
+		wantErrText string
+	}{
+		{
+			name:        "quoted invalid int is not adjusted",
+			colName:     "i",
+			vecType:     types.T_int32.ToType(),
+			colType:     plan.Type{Id: int32(types.T_int32)},
+			fieldVal:    "abc",
+			wantErrText: "not int32 type",
+		},
+		{
+			name:        "quoted invalid decimal is not adjusted",
+			colName:     "d",
+			vecType:     types.New(types.T_decimal64, 5, 2),
+			colType:     plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2},
+			fieldVal:    "10x",
+			wantErrText: "invalid Decimal64 type",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(tc.vecType)
+			defer bat.Clean(proc.Mp())
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Ctx:           context.Background(),
+					StrictSqlMode: false,
+					Cols: []*plan.ColDef{{
+						Name: tc.colName,
+						Typ:  tc.colType,
+					}},
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tree.CSV},
+						ExParam: tree.ExParam{
+							ExternType: int32(plan.ExternType_LOAD),
+							Local:      true,
+						},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			err := getColData(
+				bat,
+				[]csvparser.Field{{Val: tc.fieldVal, HasStringQuote: true}},
+				0,
+				param,
+				proc.Mp(),
+				plan.ExternAttr{ColName: tc.colName, ColIndex: 0, ColFieldIndex: 0},
+				proc,
+			)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErrText)
+		})
+	}
+}
+
+func TestGetColDataLoadDataNonStrictAdjustmentLeavesEmptyBoolNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:           context.Background(),
+			StrictSqlMode: false,
+			Cols: []*plan.ColDef{{
+				Name: "b",
+				Typ:  plan.Type{Id: int32(types.T_bool)},
+			}},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Format: tree.CSV},
+				ExParam: tree.ExParam{
+					ExternType: int32(plan.ExternType_LOAD),
+					Local:      true,
+				},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: ""}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "b", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.NoError(t, err)
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+}
+
+func TestIsLegalLineLoadDataYear(t *testing.T) {
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.CSV}}
+	cols := []*plan.ColDef{{
+		Name: "y",
+		Typ:  plan.Type{Id: int32(types.T_year), Width: 4},
+	}}
+
+	require.True(t, isLegalLine(param, cols, []csvparser.Field{{Val: "2024"}}))
+	require.False(t, isLegalLine(param, cols, []csvparser.Field{{Val: "2156"}}))
 }
 
 func TestGetOneRowDataParallelLoadMissingNumericRemainsNull(t *testing.T) {

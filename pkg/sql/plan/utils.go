@@ -76,32 +76,6 @@ func doGetBindings(expr *plan.Expr) map[int32]bool {
 	return res
 }
 
-func hasParam(expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_P:
-		return true
-
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			if hasParam(arg) {
-				return true
-			}
-		}
-		return false
-
-	case *plan.Expr_List:
-		for _, arg := range exprImpl.List.List {
-			if hasParam(arg) {
-				return true
-			}
-		}
-		return false
-
-	default:
-		return false
-	}
-}
-
 func hasCorrCol(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Corr:
@@ -986,6 +960,10 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 		for _, arg := range exprImpl.F.Args {
 			increaseRefCnt(arg, inc, colRefCnt)
 		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			increaseRefCnt(arg, inc, colRefCnt)
+		}
 	case *plan.Expr_W:
 		increaseRefCnt(exprImpl.W.WindowFunc, inc, colRefCnt)
 		//for _, arg := range exprImpl.W.PartitionBy {
@@ -1484,7 +1462,10 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 		defer vec.Free(proc.Mp())
 
-		vec.InplaceSortAndCompact()
+		// Nullable IN-lists must keep their null bitmap aligned with values.
+		if !vec.IsConstNull() && !vec.GetNulls().Any() {
+			vec.InplaceSortAndCompact()
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err
@@ -3260,7 +3241,8 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			if err != nil {
 				return err
 			}
-			if !vec.IsConstNull() {
+			// Nullable folded lists must keep their null bitmap aligned with values.
+			if !vec.IsConstNull() && !vec.GetNulls().Any() {
 				vec.InplaceSortAndCompact()
 			}
 			data, err = vec.MarshalBinary()

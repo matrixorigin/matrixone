@@ -138,6 +138,11 @@ func (tls *testLockService) GetWaitingList(ctx context.Context, txnID []byte) (b
 	panic("implement me")
 }
 
+func (tls *testLockService) GetLockHolder(ctx context.Context, tableID uint64, row []byte, options lock.LockOptions) (lock.WaitTxn, bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (tls *testLockService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lock.LockTable) bool) {
 	//TODO implement me
 	panic("implement me")

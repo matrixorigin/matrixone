@@ -332,10 +332,50 @@ func canWriteProtectedDatabase(ses *Session) bool {
 
 func normalizeProtectedDatabaseName(ses *Session, dbName string) string {
 	dbName = strings.TrimSpace(dbName)
+	if protectedDatabaseNamesAreLowerCased(ses) {
+		dbName = strings.ToLower(dbName)
+	}
+	return dbName
+}
+
+func resolveProtectedDatabaseRuntimeTarget(ses *Session, dbName string) string {
+	dbName = strings.TrimSpace(dbName)
 	if dbName == "" && ses != nil {
 		dbName = ses.GetDatabaseName()
 	}
+	if protectedDatabaseNamesAreLowerCased(ses) {
+		dbName = strings.ToLower(dbName)
+	}
 	return dbName
+}
+
+func protectedDatabaseNamesAreLowerCased(ses *Session) bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		return true
+	}
+	lowerCaseTableNames, ok := value.(int64)
+	return ok && lowerCaseTableNames != 0
+}
+
+func protectedDatabaseSetFromString(ses *Session, raw string) map[string]struct{} {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	protected := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		dbName := normalizeProtectedDatabaseName(ses, part)
+		if dbName != "" {
+			protected[dbName] = struct{}{}
+		}
+	}
+	if len(protected) == 0 {
+		return nil
+	}
+	return protected
 }
 
 func getProtectedDatabaseSet(ses *Session) map[string]struct{} {
@@ -350,18 +390,11 @@ func getProtectedDatabaseSet(ses *Session) map[string]struct{} {
 	if !ok || strings.TrimSpace(raw) == "" {
 		return nil
 	}
-	protected := make(map[string]struct{})
-	for _, part := range strings.Split(raw, ",") {
-		dbName := strings.TrimSpace(part)
-		if dbName != "" {
-			protected[dbName] = struct{}{}
-		}
-	}
-	return protected
+	return protectedDatabaseSetFromString(ses, raw)
 }
 
 func isProtectedDatabase(ses *Session, dbName string) bool {
-	dbName = normalizeProtectedDatabaseName(ses, dbName)
+	dbName = resolveProtectedDatabaseRuntimeTarget(ses, dbName)
 	if dbName == "" {
 		return false
 	}
@@ -393,7 +426,7 @@ func checkProtectedDatabaseWriteWithSet(ctx context.Context, ses *Session, prote
 		return true
 	}
 	for _, dbName := range dbNames {
-		dbName = normalizeProtectedDatabaseName(ses, dbName)
+		dbName = resolveProtectedDatabaseRuntimeTarget(ses, dbName)
 		if dbName == "" {
 			continue
 		}

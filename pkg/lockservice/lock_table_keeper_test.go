@@ -238,7 +238,7 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 				logger,
 				fsp,
 				func(string) (bool, error) { return true, nil },
-				func([]pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+				func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 				func(pb.WaitTxn) (bool, error) { return true, nil },
 			)
 			svc.tableGroups.set(
@@ -322,7 +322,7 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 				logger,
 				fsp,
 				func(string) (bool, error) { return true, nil },
-				func([]pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+				func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 				func(pb.WaitTxn) (bool, error) { return true, nil },
 			)
 			svc.tableGroups.set(
@@ -357,6 +357,67 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			}, logger)
 			txn.Unlock()
 			require.NoError(t, err)
+		},
+	)
+}
+
+func TestKeepRemoteLockRefreshRejectsSupersededAllocatorBind(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, server Server) {
+			oldAllocator := allocatorState{id: "old-keeper-refresh", version: 100}
+			newAllocator := allocatorState{id: "new-keeper-refresh", version: 90}
+			oldBind := pb.LockTable{
+				Group:       0,
+				Table:       1,
+				OriginTable: 1,
+				ServiceID:   "s2",
+				Version:     oldAllocator.version,
+				Valid:       true,
+				AllocatorID: oldAllocator.id,
+			}
+			staleBind := oldBind
+			staleBind.ServiceID = "s3"
+			staleBind.Version++
+
+			server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = staleBind
+					resp.GetBind.AllocatorID = oldAllocator.id
+					resp.GetBind.AllocatorVersion = oldAllocator.version
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				})
+
+			logger := getLogger("")
+			svc := &service{
+				serviceID: "s1",
+				logger:    logger,
+			}
+			svc.remote.client = c
+			svc.tableGroups = &lockTableHolders{service: svc.serviceID, logger: logger, holders: map[uint32]*lockTableHolder{}}
+			svc.allocatorVersionMu.Lock()
+			svc.lastAllocatorID = newAllocator.id
+			svc.lastAllocatorVersion = newAllocator.version
+			svc.addSupersededAllocatorIDLocked(oldAllocator.id)
+			svc.allocatorVersionMu.Unlock()
+
+			keeper := &lockTableKeeper{
+				serviceID:   svc.serviceID,
+				client:      c,
+				groupTables: svc.tableGroups,
+				service:     svc,
+			}
+			keeper.maybeHandleRemoteBindChanged(oldBind)
+
+			require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
+			require.Equal(t, newAllocator.id, svc.lastAllocatorID)
+			require.Equal(t, newAllocator.version, svc.lastAllocatorVersion)
 		},
 	)
 }
@@ -404,7 +465,7 @@ func TestKeepRemoteLockIgnoresNonBindResponseErrors(t *testing.T) {
 				logger,
 				fsp,
 				func(string) (bool, error) { return true, nil },
-				func([]pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+				func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 				func(pb.WaitTxn) (bool, error) { return true, nil },
 			)
 			svc.tableGroups.set(

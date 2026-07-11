@@ -139,6 +139,14 @@ func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	}
 }
 
+// WithTxnLockWaitTimeout sets the session-level lock wait timeout on the txn.
+// If set, the lock service will use this value instead of the global config.
+func WithTxnLockWaitTimeout(timeout time.Duration) TxnOption {
+	return func(tc *txnOperator) {
+		tc.opts.options.LockWaitTimeout = int64(timeout)
+	}
+}
+
 // WithTxnCreateBy set txn create by.
 func WithTxnCreateBy(
 	accountID uint32,
@@ -292,7 +300,7 @@ type txnOperator struct {
 		createAt             time.Time
 		commitAt             time.Time
 		createTs             timestamp.Timestamp
-		cannotCleanWorkspace bool
+		cannotCleanWorkspace atomic.Bool
 		workspace            Workspace
 		commitCounter        counter
 		rollbackCounter      counter
@@ -530,7 +538,7 @@ func (tc *txnOperator) initReset() {
 	tc.reset.createAt = time.Time{}
 	tc.reset.commitAt = time.Time{}
 	tc.reset.createTs = timestamp.Timestamp{}
-	tc.reset.cannotCleanWorkspace = false
+	tc.reset.cannotCleanWorkspace.Store(false)
 	tc.reset.workspace = nil
 	tc.reset.commitCounter = counter{}
 	tc.reset.rollbackCounter = counter{}
@@ -646,6 +654,15 @@ func (tc *txnOperator) waitActive(ctx context.Context) error {
 
 func (tc *txnOperator) GetWaitActiveCost() time.Duration {
 	return tc.reset.waitActiveCost
+}
+
+// LockWaitTimeoutFromTxn returns the lock wait timeout from a txn operator, or 0.
+// The timeout is stored in TxnOptions as a time.Duration in nanoseconds.
+func LockWaitTimeoutFromTxn(op TxnOperator) time.Duration {
+	if op == nil {
+		return 0
+	}
+	return time.Duration(op.TxnOptions().LockWaitTimeout)
 }
 
 func (tc *txnOperator) notifyActive() {
@@ -895,7 +912,7 @@ func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnRollback(tc.logger, txnMeta)
 
-	if tc.reset.workspace != nil && !tc.reset.cannotCleanWorkspace {
+	if tc.reset.workspace != nil && !tc.reset.cannotCleanWorkspace.Load() {
 		if err = tc.reset.workspace.Rollback(ctx); err != nil {
 			tc.logger.Error("rollback workspace failed",
 				util.TxnIDField(txnMeta), zap.Error(err))
@@ -1099,7 +1116,11 @@ func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*r
 	return tc.trimResponses(tc.handleError(ctx, result, err))
 }
 
-func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, commit bool) (*rpc.SendResult, error) {
+func (tc *txnOperator) doWrite(
+	ctx context.Context,
+	requests []txn.TxnRequest,
+	commit bool,
+) (resp *rpc.SendResult, err error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Write
 	}
@@ -1108,16 +1129,47 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		tc.logger.Fatal("can not write on ready only transaction")
 	}
 	var payload []txn.TxnRequest
+	workspacePrepared := false
 	if commit {
 		if tc.reset.workspace != nil {
-			reqs, err := tc.reset.workspace.Commit(ctx)
+			var reqs []txn.TxnRequest
+			reqs, err = tc.reset.workspace.Commit(ctx)
 			if err != nil {
 				return nil, errors.Join(err, tc.Rollback(ctx))
 			}
 			payload = reqs
+			workspacePrepared = true
+			defer func() {
+				if !workspacePrepared {
+					return
+				}
+				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+						tc.reset.cannotCleanWorkspace.Store(true)
+						tc.reset.workspace.FinalizeCommitWithUnknownResult(ctx)
+						return
+					}
+					if e := tc.reset.workspace.Rollback(ctx); e != nil {
+						tc.logger.Error("rollback prepared workspace failed",
+							util.TxnIDField(tc.getTxnMeta(false)), zap.Error(e))
+						err = errors.Join(err, e)
+					}
+					return
+				}
+				tc.reset.workspace.FinalizeCommit(ctx)
+			}()
 		}
 		tc.mu.Lock()
 		defer func() {
+			// Set the guard before releasing the operator lock. A later Rollback
+			// must not delete objects when the Commit result is unknown and TN
+			// may already have committed them.
+			if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+				tc.reset.cannotCleanWorkspace.Store(true)
+			}
+			if err != nil && tc.reset.commitErr == nil {
+				tc.reset.commitErr = err
+			}
 			tc.closeLocked(ctx)
 			tc.mu.Unlock()
 		}()
@@ -1173,8 +1225,9 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		return nil, tc.reset.commitErr
 	}
 
-	result, err := tc.doSend(ctx, requests, commit)
-	resp, err := tc.trimResponses(tc.handleError(ctx, result, err))
+	var result *rpc.SendResult
+	result, err = tc.doSend(ctx, requests, commit)
+	resp, err = tc.trimResponses(tc.handleError(ctx, result, err))
 	if err != nil && commit {
 		tc.reset.commitErr = err
 	}
@@ -1587,7 +1640,10 @@ func (tc *txnOperator) needUnlockLocked() bool {
 func (tc *txnOperator) closeLocked(ctx context.Context) {
 	if !tc.mu.closed {
 		tc.mu.closed = true
-		if tc.reset.commitErr != nil {
+		// ErrTxnUnknown only describes the CN's observation of Commit. TN may
+		// already have committed, so do not rewrite the status to Aborted.
+		if tc.reset.commitErr != nil &&
+			!moerr.IsMoErrCode(tc.reset.commitErr, moerr.ErrTxnUnknown) {
 			tc.mu.txn.Status = txn.TxnStatus_Aborted
 		}
 		tc.triggerEventLocked(

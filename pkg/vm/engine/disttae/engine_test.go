@@ -174,14 +174,183 @@ func newTxnMeta(snapshotTS int64) txn.TxnMeta {
 */
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/version"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
+
+type engineNodesClusterClient struct {
+	details logpb.ClusterDetails
+}
+
+func (c *engineNodesClusterClient) GetClusterDetails(context.Context) (logpb.ClusterDetails, error) {
+	return c.details, nil
+}
+
+func TestEngineNodesExposesRuntimeStateToScheduler(t *testing.T) {
+	t.Run("default discovery", func(t *testing.T) {
+		e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+			CNStores: []logpb.CNStore{
+				newEngineNodesCNStore("working-cn", "working-pipeline", nil, metadata.WorkState_Working, version.CommitID),
+				newEngineNodesCNStore("draining-cn", "draining-pipeline", nil, metadata.WorkState_Draining, version.CommitID),
+				newEngineNodesCNStore("drained-cn", "drained-pipeline", nil, metadata.WorkState_Drained, version.CommitID),
+				newEngineNodesCNStore("unknown-cn", "unknown-pipeline", nil, metadata.WorkState_Unknown, version.CommitID),
+				newEngineNodesCNStore("old-binary-cn", "old-binary-pipeline", nil, metadata.WorkState_Working, "different-commit"),
+			},
+		})
+
+		nodes, err := e.Nodes(false, "", "", nil)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{
+			"working-pipeline",
+			"draining-pipeline",
+			"drained-pipeline",
+			"unknown-pipeline",
+		}, nodeAddresses(nodes))
+		require.Equal(t, map[string]metadata.WorkState{
+			"working-pipeline":  metadata.WorkState_Working,
+			"draining-pipeline": metadata.WorkState_Draining,
+			"drained-pipeline":  metadata.WorkState_Drained,
+			"unknown-pipeline":  metadata.WorkState_Unknown,
+		}, nodeWorkStates(nodes))
+	})
+
+	t.Run("common tenant label route", func(t *testing.T) {
+		accountLabel := map[string]metadata.LabelList{
+			"account": {Labels: []string{"app"}},
+		}
+		e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+			CNStores: []logpb.CNStore{
+				newEngineNodesCNStore("working-cn", "working-pipeline", accountLabel, metadata.WorkState_Working, version.CommitID),
+				newEngineNodesCNStore("draining-cn", "draining-pipeline", accountLabel, metadata.WorkState_Draining, version.CommitID),
+				newEngineNodesCNStore("drained-cn", "drained-pipeline", accountLabel, metadata.WorkState_Drained, version.CommitID),
+				newEngineNodesCNStore("unknown-cn", "unknown-pipeline", accountLabel, metadata.WorkState_Unknown, version.CommitID),
+				newEngineNodesCNStore("old-binary-cn", "old-binary-pipeline", accountLabel, metadata.WorkState_Working, "different-commit"),
+			},
+		})
+
+		nodes, err := e.Nodes(false, "app", "user", map[string]string{"account": "app"})
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{
+			"working-pipeline",
+			"draining-pipeline",
+			"drained-pipeline",
+			"unknown-pipeline",
+		}, nodeAddresses(nodes))
+	})
+
+	t.Run("runtime-ineligible labeled CN does not replace working fallback", func(t *testing.T) {
+		accountLabel := map[string]metadata.LabelList{
+			"account": {Labels: []string{"app"}},
+		}
+		e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+			CNStores: []logpb.CNStore{
+				newEngineNodesCNStore("fallback-cn", "fallback-pipeline", nil, metadata.WorkState_Working, version.CommitID),
+				newEngineNodesCNStore("draining-cn", "draining-pipeline", accountLabel, metadata.WorkState_Draining, version.CommitID),
+			},
+		})
+
+		nodes, err := e.Nodes(false, "app", "user", map[string]string{"account": "app"})
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"fallback-pipeline", "draining-pipeline"}, nodeAddresses(nodes))
+	})
+
+	t.Run("super tenant label route", func(t *testing.T) {
+		accountLabel := map[string]metadata.LabelList{
+			"account": {Labels: []string{"sys"}},
+		}
+		cases := []struct {
+			name       string
+			isInternal bool
+			tenant     string
+		}{
+			{name: "internal query", isInternal: true, tenant: "app"},
+			{name: "sys tenant", tenant: "sys"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+					CNStores: []logpb.CNStore{
+						newEngineNodesCNStore("working-cn", "working-pipeline", accountLabel, metadata.WorkState_Working, version.CommitID),
+						newEngineNodesCNStore("draining-cn", "draining-pipeline", accountLabel, metadata.WorkState_Draining, version.CommitID),
+						newEngineNodesCNStore("drained-cn", "drained-pipeline", accountLabel, metadata.WorkState_Drained, version.CommitID),
+						newEngineNodesCNStore("unknown-cn", "unknown-pipeline", accountLabel, metadata.WorkState_Unknown, version.CommitID),
+						newEngineNodesCNStore("old-binary-cn", "old-binary-pipeline", accountLabel, metadata.WorkState_Working, "different-commit"),
+					},
+				})
+
+				nodes, err := e.Nodes(tc.isInternal, tc.tenant, "root", map[string]string{"account": "sys"})
+				require.NoError(t, err)
+				require.ElementsMatch(t, []string{
+					"working-pipeline",
+					"draining-pipeline",
+					"drained-pipeline",
+					"unknown-pipeline",
+				}, nodeAddresses(nodes))
+			})
+		}
+	})
+}
+
+func newEngineWithClusterDetails(t *testing.T, details logpb.ClusterDetails) *Engine {
+	t.Helper()
+
+	sid := t.Name()
+	rt := moruntime.DefaultRuntimeWithLevel(zap.InfoLevel)
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+
+	cluster := clusterservice.NewMOCluster(sid, &engineNodesClusterClient{details: details}, time.Hour)
+	cluster.ForceRefresh(true)
+	t.Cleanup(cluster.Close)
+	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
+
+	return &Engine{service: sid}
+}
+
+func newEngineNodesCNStore(
+	uuid string,
+	serviceAddress string,
+	labels map[string]metadata.LabelList,
+	workState metadata.WorkState,
+	commitID string,
+) logpb.CNStore {
+	return logpb.CNStore{
+		UUID:           uuid,
+		ServiceAddress: serviceAddress,
+		Labels:         labels,
+		WorkState:      workState,
+		CommitID:       commitID,
+	}
+}
+
+func nodeAddresses(nodes []engine.Node) []string {
+	addrs := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		addrs = append(addrs, node.Addr)
+	}
+	return addrs
+}
+
+func nodeWorkStates(nodes []engine.Node) map[string]metadata.WorkState {
+	states := make(map[string]metadata.WorkState, len(nodes))
+	for _, node := range nodes {
+		states[node.Addr] = node.WorkState
+	}
+	return states
+}
 
 func TestFilterDeleteDatabaseRelationsSkipsAlreadyDeletedRelation(t *testing.T) {
 	ctrl := gomock.NewController(t)

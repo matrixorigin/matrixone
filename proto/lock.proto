@@ -60,6 +60,8 @@ message LockOptions {
   uint32              Group             = 7;
   Sharding            Sharding          = 8;
   timestamp.Timestamp SnapShotTs        = 9 [(gogoproto.nullable) = false];
+  int64               LockWaitTimeout   = 10;
+  int64               LockWaitDeadline  = 11;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -75,6 +77,8 @@ message LockTable {
   uint32   Group       = 5;
   Sharding Sharding    = 6;
   uint64   OriginTable = 7;
+  // AllocatorID identifies the allocator process that created this bind.
+  string   AllocatorID = 8;
 }
 
 // Method lock table operations
@@ -117,6 +121,10 @@ enum Method {
   ResumeInvalidCN    = 16;
   // AbortRemoteDeadlockTxn abort remote txn for deadlock
   AbortRemoteDeadlockTxn = 17;
+  // GetLockHolder get current holder on a special lock
+  GetLockHolder      = 18;
+  // CheckActiveTxn checks whether a txn is still active on the lock service
+  CheckActiveTxn     = 19;
 }
 
 enum Status {
@@ -149,7 +157,9 @@ message Request {
   RemainTxnInServiceRequest  RemainTxnInService  = 16 [(gogoproto.nullable) = false];
   CheckOrphanRequest         CheckOrphan         = 17 [(gogoproto.nullable) = false];
   ResumeInvalidCNRequest     ResumeInvalidCN     = 18 [(gogoproto.nullable) = false];
+  GetLockHolderRequest       GetLockHolder       = 19 [(gogoproto.nullable) = false];
   AbortRemoteDeadlockTxnRequest    AbortRemoteDeadlockTxn      = 20 [(gogoproto.nullable) = false];
+  CheckActiveTxnRequest      CheckActiveTxn      = 21 [(gogoproto.nullable) = false];
 }
 
 
@@ -179,6 +189,8 @@ message Response {
     CheckOrphanResponse        CheckOrphan          = 18 [(gogoproto.nullable) = false];
     ResumeInvalidCNResponse    ResumeInvalidCN      = 19 [(gogoproto.nullable) = false];
     AbortRemoteDeadlockTxnResponse    AbortRemoteDeadlockTxn      = 20 [(gogoproto.nullable) = false];
+    GetLockHolderResponse      GetLockHolder       = 21 [(gogoproto.nullable) = false];
+    CheckActiveTxnResponse     CheckActiveTxn      = 22 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -206,6 +218,17 @@ message GetTxnLockRequest {
 message GetTxnLockResponse {
   int32            Value       = 1;
   repeated WaitTxn WaitingList = 2 [(gogoproto.nullable) = false];
+}
+
+// GetLockHolderRequest gets the current holder on a special row lock.
+message GetLockHolderRequest {
+  bytes    Row      = 1;
+  Sharding Sharding = 2;
+}
+
+// GetLockHolderResponse gets the current holder on a special row lock.
+message GetLockHolderResponse {
+  WaitTxn Holder = 1 [(gogoproto.nullable) = false];
 }
 
 // GetWaitingListRequest get a waiting txn list on a specical txn request. CN -> CN
@@ -251,6 +274,8 @@ message GetBindRequest {
 // GetBindResponse get bind request from allocator response. TN -> CN
 message GetBindResponse {
   LockTable LockTable = 2 [(gogoproto.nullable) = false];
+  uint64 AllocatorVersion = 3;
+  string AllocatorID = 4;
 }
 
 // KeepLockTableBindRequest keep lock table bind request. CN -> TN
@@ -265,6 +290,8 @@ message KeepLockTableBindRequest {
 message KeepLockTableBindResponse {
   bool OK = 1;
   Status Status = 2;
+  uint64 AllocatorVersion = 3;
+  string AllocatorID = 4;
 }
 
 // SetRestartServiceRequest set restart lock service request from allocator request. operator -> TN
@@ -335,6 +362,7 @@ message CannotCommitRequest {
 // CannotCommitResponse cannot commit response. TN -> CN
 message CannotCommitResponse {
   repeated bytes CommittingTxn = 1;
+  timestamp.Timestamp FenceTS = 2 [(gogoproto.nullable) = false];
 }
 
 message GetActiveTxnRequest {
@@ -397,4 +425,14 @@ message ResumeInvalidCNRequest {
 
 message ResumeInvalidCNResponse {
  
+}
+
+message CheckActiveTxnRequest {
+  string ServiceID = 1;
+  bytes  Txn       = 2;
+}
+
+message CheckActiveTxnResponse {
+  bool Valid  = 1;
+  bool Active = 2;
 }
