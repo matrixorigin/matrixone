@@ -76,7 +76,6 @@ Project  𝄀
               Filter Cond: (t.b = 7), t.a in ([g01 g03 g05])
 explain select id,a,b,c
 from t force index for order by(idx_a_b_c_id)
-where a in ('g02','g04')
 order by a,b,c,id
 limit 8;
 -- @regex("Index Table Scan.*idx_a_b_c_id", true)
@@ -86,21 +85,41 @@ Project  𝄀
         Sort Key: serial_extract(__mo_index_idx_col, 0, VARCHAR)) INTERNAL, serial_extract(__mo_index_idx_col, 1, INT)) INTERNAL, serial_extract(__mo_index_idx_col, 2, INT)) INTERNAL, __mo_index_pri_col INTERNAL  𝄀
         Limit: 8  𝄀
         ->  Index Table Scan on t.idx_a_b_c_id  𝄀
-              Filter Cond: prefix_in(__mo_index_idx_col)
+              Sort Key: __mo_index_idx_col INTERNAL  𝄀
+              Index Reader Param:  Sort Key: __mo_index_idx_col INTERNAL  Limit: 8
 select id,a,b,c
 from t force index for order by(idx_a_b_c_id)
-where a in ('g02','g04')
 order by a,b,c,id
 limit 8;
 ➤ id[4,32,0]  ¦  a[12,-1,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+81  ¦  g01  ¦  7  ¦  37  𝄀
 222  ¦  g02  ¦  0  ¦  17  𝄀
 112  ¦  g02  ¦  1  ¦  42  𝄀
 2  ¦  g02  ¦  2  ¦  14  𝄀
 152  ¦  g02  ¦  4  ¦  4  𝄀
 42  ¦  g02  ¦  5  ¦  29  𝄀
 192  ¦  g02  ¦  7  ¦  19  𝄀
-82  ¦  g02  ¦  8  ¦  44  𝄀
-232  ¦  g02  ¦  10  ¦  34
+82  ¦  g02  ¦  8  ¦  44
+explain select a,count(*)
+from t force index for group by(idx_a_b_c_id)
+group by a;
+-- @regex("Index Table Scan.*idx_a_b_c_id", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Group Key: serial_extract(__mo_index_idx_col, 0, VARCHAR))  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Index Table Scan on t.idx_a_b_c_id
+explain select a,count(*)
+from t ignore index for group by(idx_a_b_c_id)
+group by a;
+-- @regex("Index Table Scan.*idx_a_b_c_id", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Group Key: t.a  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on mysql_compat_index_hint.t
 explain select id,a,b,c
 from t ignore index(idx_a_b_c_id)
 where a in ('g02','g04')

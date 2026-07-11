@@ -53,15 +53,25 @@ order by a,id;
 -- @regex("Index Table Scan.*idx_a_b_c_id",true)
 explain select id,a,b,c
 from t force index for order by(idx_a_b_c_id)
-where a in ('g02','g04')
 order by a,b,c,id
 limit 8;
 
 select id,a,b,c
 from t force index for order by(idx_a_b_c_id)
-where a in ('g02','g04')
 order by a,b,c,id
 limit 8;
+
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",true)
+explain select a,count(*)
+from t force index for group by(idx_a_b_c_id)
+group by a;
+
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",false)
+explain select a,count(*)
+from t ignore index for group by(idx_a_b_c_id)
+group by a;
 
 -- @separator:table
 -- @regex("Index Table Scan.*idx_a_b_c_id",false)

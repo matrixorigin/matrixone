@@ -209,6 +209,15 @@ func TestRecordIndexHintsMySQLCompatibility(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("use and force conflict across scopes", func(t *testing.T) {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		err := builder.recordIndexHints(1, tableDef, []*tree.IndexHint{
+			{HintType: tree.HintUse, HintScope: tree.HintForJoin, IndexNames: []string{"idx_alpha"}},
+			{HintType: tree.HintForce, HintScope: tree.HintForOrderBy, IndexNames: []string{"idx_beta"}},
+		})
+		require.Error(t, err)
+	})
+
 	t.Run("ambiguous prefix", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 		err := builder.recordIndexHints(1, tableDef, []*tree.IndexHint{
@@ -236,6 +245,32 @@ func TestIndexHintUseEmptyDisablesRegularIndexChoice(t *testing.T) {
 	require.Empty(t, findFirstIndexScanName(plan))
 }
 
+func TestIndexHintOrderScopeSelectsCoveringIndexWithoutFilter(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, "select a from index_hint_t force index for order by(idx_a) order by a limit 10")
+	require.NoError(t, err)
+	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
+
+	queryPlan, err = runOneStmt(mock, t, "select a from index_hint_t ignore index for order by(idx_a) order by a limit 10")
+	require.NoError(t, err)
+	require.Empty(t, findFirstIndexScanName(queryPlan))
+}
+
+func TestIndexHintGroupScopeSelectsAndIgnoresCoveringIndex(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, "select a, count(*) from index_hint_t force index for group by(idx_a) group by a")
+	require.NoError(t, err)
+	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
+
+	queryPlan, err = runOneStmt(mock, t, "select a, count(*) from index_hint_t ignore index for group by(idx_a) group by a")
+	require.NoError(t, err)
+	require.Empty(t, findFirstIndexScanName(queryPlan))
+}
+
 func TestIndexHintRejectsInvalidCombinations(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -251,11 +286,40 @@ func TestIndexHintRejectsInvalidCombinations(t *testing.T) {
 }
 
 func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ignore      bool
+		wantRewrite bool
+	}{
+		{name: "control rewrites", wantRewrite: true},
+		{name: "join ignore prevents rewrite", ignore: true, wantRewrite: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+			if tc.ignore {
+				err := builder.recordIndexHints(leftScanID, leftDef, []*tree.IndexHint{
+					{HintType: tree.HintIgnore, HintScope: tree.HintForJoin, IndexNames: []string{"idx_a"}},
+				})
+				require.NoError(t, err)
+			}
+			newID, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
+			require.Equal(t, joinID, newID)
+			if tc.wantRewrite {
+				require.NotEqual(t, leftScanID, builder.qry.Nodes[joinID].Children[0])
+				require.Equal(t, planpb.Node_INDEX, builder.qry.Nodes[builder.qry.Nodes[joinID].Children[0]].JoinType)
+			} else {
+				require.Equal(t, leftScanID, builder.qry.Nodes[joinID].Children[0])
+			}
+		})
+	}
+}
+
+func makeIndexHintJoinBuilder(t *testing.T) (*QueryBuilder, int32, int32, *planpb.TableDef) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
 	ctx := NewBindContext(builder, nil)
 	leftTag := builder.genNewBindTag()
 	rightTag := builder.genNewBindTag()
-
 	leftDef := makeJoinHintTestTableDef()
 	rightDef := &planpb.TableDef{
 		Name: "right_t",
@@ -265,16 +329,12 @@ func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
 		},
 		Name2ColIndex: map[string]int32{"a": 0, "b": 1},
 	}
-
 	leftScanID := builder.appendNode(makeJoinIndexTestScan(leftDef, leftTag), ctx)
 	rightScanID := builder.appendNode(makeJoinIndexTestScan(rightDef, rightTag), ctx)
+	builder.qry.Nodes[rightScanID].Stats.Outcnt = 0
+	builder.qry.Nodes[rightScanID].Stats.Selectivity = 0.01
 	registerFullTextJoinRegularIndexTable(builder, "idx_join_a_table")
 	registerFullTextJoinRegularIndexTable(builder, "idx_join_b_table")
-	err := builder.recordIndexHints(leftScanID, leftDef, []*tree.IndexHint{
-		{HintType: tree.HintIgnore, HintScope: tree.HintForJoin, IndexNames: []string{"idx_a"}},
-	})
-	require.NoError(t, err)
-
 	joinCond := ftjMakeEqExpr(t, ftjColExpr(leftDef, leftTag, 1), ftjColExpr(rightDef, rightTag, 1))
 	joinID := builder.appendNode(&planpb.Node{
 		NodeType: planpb.Node_JOIN,
@@ -282,11 +342,7 @@ func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
 		JoinType: planpb.Node_INNER,
 		OnList:   []*planpb.Expr{joinCond},
 	}, ctx)
-
-	newID, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
-	require.NoError(t, err)
-	require.Equal(t, joinID, newID)
-	require.Equal(t, leftScanID, builder.qry.Nodes[joinID].Children[0])
+	return builder, joinID, leftScanID, leftDef
 }
 
 func TestIndexHintOrderScopeControlsTopSortRewrite(t *testing.T) {

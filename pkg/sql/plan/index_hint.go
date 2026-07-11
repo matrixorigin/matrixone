@@ -25,10 +25,12 @@ import (
 )
 
 type indexHintSet struct {
-	scan  indexHintScopeSet
-	order indexHintScopeSet
-	group indexHintScopeSet
-	join  indexHintScopeSet
+	scan           indexHintScopeSet
+	order          indexHintScopeSet
+	group          indexHintScopeSet
+	join           indexHintScopeSet
+	useSpecified   bool
+	forceSpecified bool
 }
 
 type indexHintScopeSet struct {
@@ -52,6 +54,17 @@ func (builder *QueryBuilder) recordIndexHints(nodeID int32, tableDef *plan.Table
 		names, err := validateIndexHintNames(builder.GetContext(), tableDef, hint.IndexNames)
 		if err != nil {
 			return err
+		}
+		if hint.HintType == tree.HintUse {
+			if hintSet.forceSpecified {
+				return moerr.NewSyntaxErrorNoCtx("USE INDEX and FORCE INDEX cannot be used together")
+			}
+			hintSet.useSpecified = true
+		} else if hint.HintType == tree.HintForce {
+			if hintSet.useSpecified {
+				return moerr.NewSyntaxErrorNoCtx("USE INDEX and FORCE INDEX cannot be used together")
+			}
+			hintSet.forceSpecified = true
 		}
 		scopes := hintSet.scopes(hint.HintScope)
 		for _, scope := range scopes {
@@ -170,6 +183,30 @@ func addIndexHintNames(dst *map[string]struct{}, names []string) {
 func (builder *QueryBuilder) filterRegularIndexesByScanHints(node *plan.Node, indexes []*plan.IndexDef) []*plan.IndexDef {
 	return builder.filterRegularIndexesByHints(node, indexes, func(hintSet *indexHintSet) indexHintScopeSet {
 		return hintSet.scan
+	})
+}
+
+func (builder *QueryBuilder) filterIndexesByScanHints(node *plan.Node, indexes []*plan.IndexDef) []*plan.IndexDef {
+	return builder.filterRegularIndexesByScanHints(node, indexes)
+}
+
+func (builder *QueryBuilder) scanHintsForceIndexes(node *plan.Node) bool {
+	if builder == nil || node == nil {
+		return false
+	}
+	hintSet := builder.indexHintsByScan[node.NodeId]
+	return hintSet != nil && hintSet.scan.forceSpecified
+}
+
+func (builder *QueryBuilder) filterRegularIndexesByOrderHints(node *plan.Node, indexes []*plan.IndexDef) []*plan.IndexDef {
+	return builder.filterRegularIndexesByHints(node, indexes, func(hintSet *indexHintSet) indexHintScopeSet {
+		return hintSet.order
+	})
+}
+
+func (builder *QueryBuilder) filterRegularIndexesByGroupHints(node *plan.Node, indexes []*plan.IndexDef) []*plan.IndexDef {
+	return builder.filterRegularIndexesByHints(node, indexes, func(hintSet *indexHintSet) indexHintScopeSet {
+		return hintSet.group
 	})
 }
 
