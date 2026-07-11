@@ -305,6 +305,127 @@ func TestEngineNodesExposesRuntimeStateToScheduler(t *testing.T) {
 	})
 }
 
+func TestEngineQueryCandidateProvidersSeparateInventoryAndPool(t *testing.T) {
+	appLabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"app"}},
+	}
+	sysLabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"sys"}},
+	}
+	e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+		CNStores: []logpb.CNStore{
+			newEngineNodesCNStore("app-working", "app-working:6001", appLabel, metadata.WorkState_Working, version.CommitID),
+			newEngineNodesCNStore("app-draining", "app-draining:6001", appLabel, metadata.WorkState_Draining, version.CommitID),
+			newEngineNodesCNStore("sys-working", "sys-working:6001", sysLabel, metadata.WorkState_Working, version.CommitID),
+			newEngineNodesCNStore("old-app", "old-app:6001", appLabel, metadata.WorkState_Working, "different-commit"),
+		},
+	})
+
+	candidates, err := e.DiscoverQueryCandidates(context.Background())
+	require.NoError(t, err)
+	require.Len(t, candidates, 3)
+	require.ElementsMatch(t,
+		[]string{"app-working", "app-draining", "sys-working"},
+		queryCandidateServiceIDs(candidates))
+
+	labels := map[string]string{"account": "app"}
+	nodes, err := e.ResolveQueryCandidatePool(
+		context.Background(),
+		candidates,
+		engine.QueryCandidatePoolRequest{
+			Tenant:  "app",
+			CNLabel: labels,
+		},
+	)
+	require.NoError(t, err)
+	require.ElementsMatch(t,
+		[]string{"app-working:6001", "app-draining:6001"},
+		nodeAddresses(nodes))
+	require.Equal(t, map[string]string{"account": "app"}, labels)
+}
+
+func TestEngineCandidateDiscoveryExcludesIncompatibleCNBeforePoolFallback(t *testing.T) {
+	appLabel := map[string]metadata.LabelList{
+		"account": {Labels: []string{"app"}},
+	}
+	e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+		CNStores: []logpb.CNStore{
+			newEngineNodesCNStore("old-app", "old-app:6001", appLabel, metadata.WorkState_Working, "different-commit"),
+			newEngineNodesCNStore("compatible-fallback", "fallback:6001", nil, metadata.WorkState_Working, version.CommitID),
+		},
+	})
+
+	nodes, err := e.Nodes(false, "app", "user", map[string]string{"account": "app"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"fallback:6001"}, nodeAddresses(nodes))
+}
+
+func TestEngineQueryCandidateProvidersHonorCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	e := &Engine{service: "missing-runtime"}
+
+	_, err := e.DiscoverQueryCandidates(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = e.ResolveQueryCandidatePool(ctx, nil, engine.QueryCandidatePoolRequest{})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+type cancelAfterChecksContext struct {
+	context.Context
+	remaining int
+	done      chan struct{}
+}
+
+func newCancelAfterChecksContext(checks int) *cancelAfterChecksContext {
+	return &cancelAfterChecksContext{
+		Context:   context.Background(),
+		remaining: checks,
+		done:      make(chan struct{}),
+	}
+}
+
+func (c *cancelAfterChecksContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *cancelAfterChecksContext) Err() error {
+	if c.remaining > 0 {
+		c.remaining--
+		if c.remaining == 0 {
+			close(c.done)
+		}
+	}
+	if c.remaining == 0 {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestEngineQueryCandidatePoolHonorsCancellationDuringIteration(t *testing.T) {
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{ServiceID: "cn-1", WorkState: metadata.WorkState_Working}},
+		{Service: metadata.CNService{ServiceID: "cn-2", WorkState: metadata.WorkState_Working}},
+		{Service: metadata.CNService{ServiceID: "cn-3", WorkState: metadata.WorkState_Working}},
+	}
+	e := new(Engine)
+
+	t.Run("without labels", func(t *testing.T) {
+		ctx := newCancelAfterChecksContext(3)
+		_, err := e.ResolveQueryCandidatePool(ctx, candidates, engine.QueryCandidatePoolRequest{})
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("while building labeled route input", func(t *testing.T) {
+		ctx := newCancelAfterChecksContext(5)
+		_, err := e.ResolveQueryCandidatePool(ctx, candidates, engine.QueryCandidatePoolRequest{
+			Tenant:  "app",
+			CNLabel: map[string]string{"account": "app"},
+		})
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+}
+
 func newEngineWithClusterDetails(t *testing.T, details logpb.ClusterDetails) *Engine {
 	t.Helper()
 
@@ -350,6 +471,14 @@ func nodeWorkStates(nodes []engine.Node) map[string]metadata.WorkState {
 		states[node.Addr] = node.WorkState
 	}
 	return states
+}
+
+func queryCandidateServiceIDs(candidates engine.QueryCandidates) []string {
+	ids := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		ids = append(ids, candidate.Service.ServiceID)
+	}
+	return ids
 }
 
 func TestFilterDeleteDatabaseRelationsSkipsAlreadyDeletedRelation(t *testing.T) {
