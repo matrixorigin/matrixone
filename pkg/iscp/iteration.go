@@ -556,7 +556,11 @@ func FlushStatus(
 	if err != nil {
 		return
 	}
-	result.Close()
+	defer result.Close()
+	if result.AffectedRows != 1 {
+		return fmt.Errorf("iscp flush status: update affected %d rows for job %s (id=%d), expected 1",
+			result.AffectedRows, jobName, jobID)
+	}
 	return
 }
 

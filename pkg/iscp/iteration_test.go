@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -340,4 +341,123 @@ func encodeJSONRows(t *testing.T, rows []string) [][]byte {
 		require.NoError(t, err)
 	}
 	return encodedRows
+}
+
+func TestFlushStatusSucceedsOnOneAffectedRow(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	defer func() {
+		ExecWithResult = oldExecWithResult
+	}()
+
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		return executor.Result{AffectedRows: 1}, nil
+	}
+
+	err := FlushStatus(
+		context.Background(),
+		"",
+		nil,
+		0,
+		0,
+		"test_job",
+		1,
+		&JobStatus{Stage: JobStage_Running},
+		types.TS{},
+		ISCPJobState_Error,
+		0,
+	)
+	require.NoError(t, err)
+}
+
+func TestFlushStatusErrorsOnZeroAffectedRows(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	defer func() {
+		ExecWithResult = oldExecWithResult
+	}()
+
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		return executor.Result{AffectedRows: 0}, nil
+	}
+
+	err := FlushStatus(
+		context.Background(),
+		"",
+		nil,
+		0,
+		0,
+		"test_job",
+		1,
+		&JobStatus{Stage: JobStage_Running},
+		types.TS{},
+		ISCPJobState_Error,
+		0,
+	)
+	require.Error(t, err)
+	require.False(t, isPermanentError(err))
+	require.Contains(t, err.Error(), "affected 0 rows")
+}
+
+// TestGetJobSpecsPermanentErrorFailsWhenFlushReturnsError verifies that when
+// FlushPermanentErrorMessage fails (e.g. because the conditional UPDATE affects
+// 0 rows), GetJobSpecs returns a non-permanent error so that ExecuteIteration
+// does NOT swallow it as handled.
+func TestGetJobSpecsPermanentErrorFailsWhenFlushReturnsError(t *testing.T) {
+	oldExecWithResult := ExecWithResult
+	oldFlushJobStatusOnIterationState := FlushJobStatusOnIterationState
+	defer func() {
+		ExecWithResult = oldExecWithResult
+		FlushJobStatusOnIterationState = oldFlushJobStatusOnIterationState
+	}()
+
+	result, mp := newISCPLogResult(t, []iscpLogBatch{
+		{
+			jobNames:   []string{"index_idx02"},
+			jobIDs:     []uint64{2},
+			jobSpecs:   []string{mustMarshalJobSpec(t, "idx02")},
+			jobStatuss: []string{mustMarshalJobStatus(t, 22, JobStage_Running)},
+		},
+	})
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	}()
+
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		return result, nil
+	}
+
+	FlushJobStatusOnIterationState = func(
+		_ context.Context,
+		_ string,
+		_ engine.Engine,
+		_ client.TxnClient,
+		_ uint32,
+		_ uint64,
+		_ []string,
+		_ []uint64,
+		_ []uint64,
+		_ []*JobStatus,
+		_ types.TS,
+		_ int8,
+		_ []uint64,
+	) error {
+		return moerr.NewInternalErrorNoCtx("update affected 0 rows for job")
+	}
+
+	_, _, err := GetJobSpecs(
+		context.Background(),
+		"",
+		nil,
+		nil,
+		nil,
+		0,
+		42,
+		[]string{"index_idx01", "index_idx02"},
+		[]uint64{101, 202},
+		types.TS{},
+		make([]*JobStatus, 2),
+		[]uint64{3, 2},
+	)
+	require.Error(t, err)
+	require.False(t, isPermanentError(err))
 }
