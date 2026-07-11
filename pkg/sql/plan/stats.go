@@ -1699,19 +1699,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
-	for _, preserved := range preservedCompositeFilters {
-		duplicate := false
-		for _, existing := range blockExprList {
-			if blockFilterEquivalent(existing, preserved) || sameGeneratedCompoundFilter(node, existing, preserved) {
-				duplicate = true
-				break
-			}
-		}
-		if !duplicate {
-			blockExprList = append(blockExprList, preserved)
-		}
-	}
-	node.BlockFilterList = blockExprList
+	blockExprList = append(blockExprList, preservedCompositeFilters...)
+	node.BlockFilterList = deduplicateBlockFilterList(blockExprList)
 	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel

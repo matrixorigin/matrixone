@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -221,6 +222,104 @@ func TestDeduplicateBlockFiltersAcrossPlannerRepresentations(t *testing.T) {
 	require.Same(t, nestedOr, builder.qry.Nodes[0].BlockFilterList[0])
 	require.Same(t, listIn, builder.qry.Nodes[0].BlockFilterList[1])
 	require.Same(t, differentIn, builder.qry.Nodes[0].BlockFilterList[2])
+}
+
+func TestDeduplicateBlockFiltersHandlesConstantLiteralVec(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	tag := int32(1)
+	listIn := makeExprOptInExpr(t, ctx, tag, 1, 42, 42)
+	mp := mpool.MustNew(t.Name())
+	constantVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), 2, mp)
+	require.NoError(t, err)
+	defer constantVec.Free(mp)
+	data, err := constantVec.MarshalBinary()
+	require.NoError(t, err)
+	constantIn := DeepCopyExpr(listIn)
+	constantIn.GetF().Args[1] = &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int64)},
+		Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+			Len:  2,
+			Data: data,
+		}},
+	}
+
+	filters := deduplicateBlockFilterList([]*planpb.Expr{listIn, constantIn})
+	require.Len(t, filters, 1)
+	require.Same(t, listIn, filters[0])
+
+	emptyVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 0, mp)
+	require.NoError(t, err)
+	defer emptyVec.Free(mp)
+	emptyData, err := emptyVec.MarshalBinary()
+	require.NoError(t, err)
+	emptySet, ok := blockFilterConstantSet(&planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int64)},
+		Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+			Len:  0,
+			Data: emptyData,
+		}},
+	})
+	require.True(t, ok)
+	require.Empty(t, emptySet)
+}
+
+func TestDeduplicateBlockFiltersRetainsDifferentCompoundPredicates(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	tag := int32(1)
+	tableDef := makeExprOptCompositeSortKeyTableDef()
+	left := makeExprOptInExpr(t, ctx, tag, 3, 11, 15)
+	right := makeExprOptInExpr(t, ctx, tag, 3, 11, 16)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	builder.qry.Nodes = []*planpb.Node{{
+		NodeType:        planpb.Node_TABLE_SCAN,
+		BindingTags:     []int32{tag},
+		TableDef:        tableDef,
+		BlockFilterList: []*planpb.Expr{left, right},
+	}}
+
+	builder.deduplicateBlockFilters(0)
+	require.Equal(t, []*planpb.Expr{left, right}, builder.qry.Nodes[0].BlockFilterList)
+}
+
+func BenchmarkDeduplicateBlockFiltersLargeIN(b *testing.B) {
+	const (
+		filterCount = 128
+		valueCount  = 512
+	)
+	filters := make([]*planpb.Expr, filterCount)
+	mp := mpool.MustNew(b.Name())
+	for filterIndex := range filters {
+		vec := vector.NewVec(types.T_int64.ToType())
+		for valueIndex := range valueCount {
+			value := int64(valueIndex)
+			if valueIndex == valueCount-1 {
+				value += int64(filterIndex)
+			}
+			require.NoError(b, vector.AppendFixed(vec, value, false, mp))
+		}
+		data, err := vec.MarshalBinary()
+		require.NoError(b, err)
+		vec.Free(mp)
+		filters[filterIndex] = &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "in"},
+				Args: []*planpb.Expr{
+					makeExprOptInt64Col(1, 0, "a"),
+					{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: valueCount, Data: data}}},
+				},
+			}},
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		result := deduplicateBlockFilterList(filters)
+		if len(result) != filterCount {
+			b.Fatalf("unexpected deduplicated filter count: %d", len(result))
+		}
+	}
 }
 
 func makeExprOptCompositeSortKeyTableDef() *planpb.TableDef {

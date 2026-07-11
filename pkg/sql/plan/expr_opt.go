@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -421,9 +422,22 @@ func blockFilterConstantSet(expr *plan.Expr) (map[string]struct{}, bool) {
 	if err := vec.UnmarshalBinary(literalVec.Data); err != nil || vec.Length() != int(literalVec.Len) {
 		return nil, false
 	}
-	typ := plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale}
-	ret := make(map[string]struct{}, vec.Length())
-	for i := 0; i < vec.Length(); i++ {
+	typ := plan.Type{
+		Id:    int32(vec.GetType().Oid),
+		Scale: vec.GetType().Scale,
+		Width: vec.GetType().Width,
+	}
+	physicalLength := vec.Length()
+	if physicalLength == 0 {
+		return make(map[string]struct{}), true
+	}
+	if vec.IsConst() {
+		// A constant vector has one physical value regardless of its logical
+		// length. Its set representation therefore contains exactly that value.
+		physicalLength = 1
+	}
+	ret := make(map[string]struct{}, physicalLength)
+	for i := 0; i < physicalLength; i++ {
 		lit := rule.GetConstantValue(&vec, true, uint64(i))
 		key, ok := blockFilterLiteralKey(lit, typ)
 		if !ok {
@@ -459,7 +473,7 @@ func blockFilterLiteralKey(lit *plan.Literal, typ plan.Type) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	key := make([]byte, 8+len(litBytes))
+	key := make([]byte, 12+len(litBytes))
 	key[0] = byte(typ.Id)
 	key[1] = byte(typ.Id >> 8)
 	key[2] = byte(typ.Id >> 16)
@@ -468,28 +482,97 @@ func blockFilterLiteralKey(lit *plan.Literal, typ plan.Type) (string, bool) {
 	key[5] = byte(typ.Scale >> 8)
 	key[6] = byte(typ.Scale >> 16)
 	key[7] = byte(typ.Scale >> 24)
-	copy(key[8:], litBytes)
+	key[8] = byte(typ.Width)
+	key[9] = byte(typ.Width >> 8)
+	key[10] = byte(typ.Width >> 16)
+	key[11] = byte(typ.Width >> 24)
+	copy(key[12:], litBytes)
 	return string(key), true
 }
 
-// Compound IN predicates can alternate between Expr_List and folded Expr_Vec
-// across stats passes.  The compound rewrite produces at most one predicate of
-// a given operation for the hidden key, so operation+target is the stable
-// identity needed to avoid executing both representations.
-func sameGeneratedCompoundFilter(node *plan.Node, left, right *plan.Expr) bool {
-	if node == nil || node.TableDef == nil {
-		return false
+// blockFilterSemanticHash buckets expressions that can be equal under
+// blockFilterSemanticallyEquivalent. Collisions are resolved with that exact
+// comparison. Unsupported expression forms retain their structural hash.
+func blockFilterSemanticHash(expr *plan.Expr) uint64 {
+	h := fnv.New64a()
+	hashBlockFilterSemanticInto(h, expr)
+	return h.Sum64()
+}
+
+func hashBlockFilterSemanticInto(h writeByter, expr *plan.Expr) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		writeByte(h, 0)
+		writeUint64(h, exprStructuralHash(expr))
+		return
 	}
-	compoundPos, ok := compoundKeyColumn(node.TableDef)
-	if !ok || len(node.BindingTags) == 0 || left.GetF() == nil || right.GetF() == nil ||
-		left.GetF().Func.ObjName != right.GetF().Func.ObjName ||
-		len(left.GetF().Args) == 0 || len(right.GetF().Args) == 0 {
-		return false
+
+	switch fn.Func.ObjName {
+	case "and", "or":
+		writeByte(h, 1)
+		writeString(h, fn.Func.ObjName)
+		var args []*plan.Expr
+		flattenLogicalExpressions(expr, fn.Func.ObjName, &args)
+		writeUint64(h, uint64(len(args)))
+		for _, arg := range args {
+			hashBlockFilterSemanticInto(h, arg)
+		}
+	case "in", "not_in", "prefix_in":
+		if len(fn.Args) != 2 {
+			writeByte(h, 0)
+			writeUint64(h, exprStructuralHash(expr))
+			return
+		}
+		set, ok := blockFilterConstantSet(fn.Args[1])
+		if !ok {
+			writeByte(h, 0)
+			writeUint64(h, exprStructuralHash(expr))
+			return
+		}
+		writeByte(h, 2)
+		writeString(h, fn.Func.ObjName)
+		writeUint64(h, exprStructuralHash(fn.Args[0]))
+		writeUint64(h, uint64(len(set)))
+		// Two order-independent accumulators keep key construction linear. A
+		// collision only adds an exact comparison; it cannot remove a filter.
+		var xor, sum uint64
+		for value := range set {
+			valueHash := hashString(value)
+			xor ^= valueHash
+			sum += valueHash
+		}
+		writeUint64(h, xor)
+		writeUint64(h, sum)
+	default:
+		writeByte(h, 0)
+		writeUint64(h, exprStructuralHash(expr))
 	}
-	leftCol, rightCol := left.GetF().Args[0].GetCol(), right.GetF().Args[0].GetCol()
-	return leftCol != nil && rightCol != nil &&
-		leftCol.RelPos == node.BindingTags[0] && rightCol.RelPos == node.BindingTags[0] &&
-		leftCol.ColPos == compoundPos && rightCol.ColPos == compoundPos
+}
+
+func deduplicateBlockFilterList(filters []*plan.Expr) []*plan.Expr {
+	if len(filters) < 2 {
+		return filters
+	}
+	originalLength := len(filters)
+	unique := filters[:0]
+	buckets := make(map[uint64][]*plan.Expr, len(filters))
+	for _, filter := range filters {
+		hash := blockFilterSemanticHash(filter)
+		duplicate := false
+		for _, existing := range buckets[hash] {
+			if blockFilterSemanticallyEquivalent(existing, filter) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		unique = append(unique, filter)
+		buckets[hash] = append(buckets[hash], filter)
+	}
+	clear(filters[len(unique):originalLength])
+	return unique
 }
 
 func (builder *QueryBuilder) deduplicateBlockFilters(nodeID int32) {
@@ -507,22 +590,7 @@ func (builder *QueryBuilder) deduplicateBlockFilters(nodeID int32) {
 		if len(node.BlockFilterList) < 2 {
 			return
 		}
-		unique := node.BlockFilterList[:0]
-		for _, filter := range node.BlockFilterList {
-			duplicate := false
-			for _, existing := range unique {
-				if blockFilterEquivalent(existing, filter) ||
-					blockFilterSemanticallyEquivalent(existing, filter) ||
-					sameGeneratedCompoundFilter(node, existing, filter) {
-					duplicate = true
-					break
-				}
-			}
-			if !duplicate {
-				unique = append(unique, filter)
-			}
-		}
-		node.BlockFilterList = unique
+		node.BlockFilterList = deduplicateBlockFilterList(node.BlockFilterList)
 	}
 	visit(nodeID)
 }
@@ -2234,7 +2302,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 func flattenLogicalExpressions(expr *plan.Expr, opName string, args *[]*plan.Expr) {
 	fn := expr.GetF()
-	if fn == nil || fn.Func.ObjName != opName {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != opName {
 		*args = append(*args, expr)
 		return
 	}
