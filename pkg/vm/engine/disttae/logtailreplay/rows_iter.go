@@ -385,6 +385,9 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 	case 5:
 		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) <= 0 }
 		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
+			if len(lb) == 0 {
+				return false
+			}
 			for types.PrefixCompare(iter.Item().Bytes, lb) == 0 {
 				if ok := iter.Next(); !ok {
 					return false
@@ -398,6 +401,9 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 	case 7:
 		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) < 0 }
 		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
+			if len(lb) == 0 {
+				return false
+			}
 			for types.PrefixCompare(iter.Item().Bytes, lb) == 0 {
 				if ok := iter.Next(); !ok {
 					return false

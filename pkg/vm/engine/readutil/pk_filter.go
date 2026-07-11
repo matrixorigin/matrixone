@@ -61,14 +61,22 @@ func ConstructBlockPKFilter(
 		bf = nil
 	}
 	if !basePKFilter.Valid && bf == nil {
+		basePKFilter.Cleanup()
 		return objectio.BlockReadFilter{}, nil
 	}
 
 	readFilter := objectio.BlockReadFilter{
 		HasFakePK: isFakePK,
 	}
+	if basePKFilter.cleanup != nil {
+		readFilter.Cleanup = basePKFilter.cleanup.run
+	}
 
 	defer func() {
+		if err != nil && readFilter.Cleanup != nil {
+			readFilter.Cleanup()
+			readFilter.Cleanup = nil
+		}
 		if readFilter.SortedSearchFunc == nil && readFilter.UnSortedSearchFunc == nil {
 			logutil.Warn("ConstructBlockPKFilter skipped data type",
 				zap.Int("expr op", basePKFilter.Op),
@@ -138,6 +146,10 @@ func ConstructBlockPKFilter(
 			return readFilter, nil
 		}
 		// No BF, and no search func constructed from PK, equivalent to "no block filtering"
+		if readFilter.Cleanup != nil {
+			readFilter.Cleanup()
+			readFilter.Cleanup = nil
+		}
 		return readFilter, nil
 	}
 
@@ -249,8 +261,12 @@ func ConstructBlockPKFilter(
 	readFilter.UnSortedSearchFunc = wrap(unSortedSearchFunc)
 	readFilter.Valid = true
 	// Set cleanup function
+	baseCleanup := readFilter.Cleanup
 	readFilter.Cleanup = func() {
 		reusableSels = nil
+		if baseCleanup != nil {
+			baseCleanup()
+		}
 	}
 
 	readFilter.Valid = true
@@ -1117,21 +1133,28 @@ func mergeBaseFilterInKind(
 		return BasePKFilter{}, err
 	}
 	ret.Vec.SetSorted(true)
-	// Set helpers allocate the merged vector from mp, but BasePKFilter is retained
-	// by reader search closures whose cleanup does not own an mpool.  Re-home the
-	// compact result in the serialized Go-heap buffer and release mp immediately.
-	data, marshalErr := ret.Vec.MarshalBinary()
-	if marshalErr != nil {
-		err = marshalErr
-		return BasePKFilter{}, err
+
+	// The merged vector remains live in reader search closures. Hand its mpool
+	// ownership to BlockReadFilter.Cleanup instead of serializing and rebuilding
+	// the complete vector on the Go heap.
+	cleanup := left.cleanup
+	otherCleanup := right.cleanup
+	if cleanup == nil {
+		cleanup = otherCleanup
+		otherCleanup = nil
 	}
-	ret.Vec.Free(mp)
+	if cleanup == nil {
+		cleanup = &basePKFilterCleanup{}
+	}
+	if otherCleanup != nil && otherCleanup != cleanup {
+		cleanup.add(otherCleanup.run)
+	}
+	merged := ret.Vec
+	resource := &basePKFilterResource{free: func() { merged.Free(mp) }}
+	cleanup.add(resource.release)
+	ret.cleanup = cleanup
+	ret.resource = resource
 	allocated = nil
-	ret.Vec = vector.NewVec(left.Oid.ToType())
-	if unmarshalErr := ret.Vec.UnmarshalBinary(data); unmarshalErr != nil {
-		err = unmarshalErr
-		return BasePKFilter{}, err
-	}
 
 	ret.Valid = true
 	ret.Op = left.Op

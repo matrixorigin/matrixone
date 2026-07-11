@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -46,6 +47,62 @@ type BasePKFilter struct {
 	Oid   types.T
 	// Disjuncts holds OR-ed atomic filters; when non-empty, Op/LB/UB/Vec are ignored.
 	Disjuncts []BasePKFilter
+	cleanup   *basePKFilterCleanup
+	resource  *basePKFilterResource
+}
+
+type basePKFilterCleanup struct {
+	once sync.Once
+	fns  []func()
+}
+
+type basePKFilterResource struct {
+	once sync.Once
+	free func()
+}
+
+func (r *basePKFilterResource) release() {
+	if r != nil {
+		r.once.Do(r.free)
+	}
+}
+
+func (c *basePKFilterCleanup) add(fn func()) {
+	if c != nil && fn != nil {
+		c.fns = append(c.fns, fn)
+	}
+}
+
+func (c *basePKFilterCleanup) run() {
+	if c == nil {
+		return
+	}
+	c.once.Do(func() {
+		for i := len(c.fns) - 1; i >= 0; i-- {
+			c.fns[i]()
+		}
+		c.fns = nil
+	})
+}
+
+// Cleanup releases temporary vectors created while merging filter operands.
+// ConstructBlockPKFilter consumes this ownership and invokes it through the
+// returned BlockReadFilter.Cleanup callback.
+func (b *BasePKFilter) Cleanup() {
+	if b == nil || b.cleanup == nil {
+		return
+	}
+	b.cleanup.run()
+	b.cleanup = nil
+}
+
+func (b *BasePKFilter) releaseMergedVector() {
+	if b == nil || b.resource == nil {
+		return
+	}
+	b.resource.release()
+	b.resource = nil
+	b.Vec = nil
 }
 
 func (b *BasePKFilter) String() string {
@@ -93,6 +150,27 @@ func ConstructBasePKFilter(
 	tblDef *plan.TableDef,
 	mp *mpool.MPool,
 ) (filter BasePKFilter, err error) {
+	cleanup := &basePKFilterCleanup{}
+	filter, err = constructBasePKFilter(expr, tblDef, mp, cleanup)
+	if err != nil || !filter.Valid {
+		cleanup.run()
+		filter.cleanup = nil
+		return filter, err
+	}
+	if len(cleanup.fns) == 0 {
+		filter.cleanup = nil
+	} else {
+		filter.cleanup = cleanup
+	}
+	return filter, nil
+}
+
+func constructBasePKFilter(
+	expr *plan.Expr,
+	tblDef *plan.TableDef,
+	mp *mpool.MPool,
+	cleanup *basePKFilterCleanup,
+) (filter BasePKFilter, err error) {
 	if expr == nil {
 		return
 	}
@@ -100,6 +178,9 @@ func ConstructBasePKFilter(
 	defer func() {
 		if tblDef.Pkey.CompPkeyCol != nil {
 			filter.Oid = types.T_varchar
+		}
+		if filter.Valid {
+			filter.cleanup = cleanup
 		}
 	}()
 
@@ -109,7 +190,7 @@ func ConstructBasePKFilter(
 		case "and":
 			var filters []BasePKFilter
 			for idx := range exprImpl.F.Args {
-				ff, err := ConstructBasePKFilter(exprImpl.F.Args[idx], tblDef, mp)
+				ff, err := constructBasePKFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
@@ -125,6 +206,7 @@ func ConstructBasePKFilter(
 			for idx := 0; idx < len(filters)-1; {
 				f1 := &filters[idx]
 				f2 := &filters[idx+1]
+				f1Vec, f2Vec := f1.Vec, f2.Vec
 				ff, err := mergeFilters(f1, f2, function.AND, mp)
 				if err != nil {
 					return BasePKFilter{}, err
@@ -133,15 +215,15 @@ func ConstructBasePKFilter(
 				if !ff.Valid {
 					return BasePKFilter{}, nil
 				}
+				if ff.Vec != f1Vec {
+					f1.releaseMergedVector()
+				}
+				if ff.Vec != f2Vec {
+					f2.releaseMergedVector()
+				}
 
 				idx++
 				filters[idx] = ff
-			}
-
-			for idx := 0; idx < len(filters)-1; idx++ {
-				if filters[idx].Vec != nil {
-					filters[idx].Vec.Free(mp)
-				}
 			}
 
 			ret := filters[len(filters)-1]
@@ -157,7 +239,7 @@ func ConstructBasePKFilter(
 			)
 
 			for idx := range exprImpl.F.Args {
-				ff, err := ConstructBasePKFilter(exprImpl.F.Args[idx], tblDef, mp)
+				ff, err := constructBasePKFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
@@ -195,22 +277,28 @@ func ConstructBasePKFilter(
 					cannotMerge = true
 					break
 				}
-
 				idx++
 				filters2[idx] = ff
 			}
 
 			if !cannotMerge {
-				for idx := 0; idx < len(filters2)-1; idx++ {
-					if filters2[idx].Vec != nil {
-						filters2[idx].Vec.Free(mp)
-					}
-				}
-
 				ret := filters2[len(filters2)-1]
+				releaseUnreferencedMergedVectors(filters1, ret.resource)
+				releaseUnreferencedMergedVectors(filters2, ret.resource)
 				return ret, nil
 			}
 
+			kept := make(map[*basePKFilterResource]struct{}, len(filters1))
+			for idx := range filters1 {
+				if filters1[idx].resource != nil {
+					kept[filters1[idx].resource] = struct{}{}
+				}
+			}
+			for idx := range filters2 {
+				if _, ok := kept[filters2[idx].resource]; !ok {
+					filters2[idx].releaseMergedVector()
+				}
+			}
 			filter.Valid = true
 			filter.Disjuncts = filters1
 			return filter, nil
@@ -412,9 +500,8 @@ func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
 		return vec, nil
 	}
 	owned := vector.NewVec(types.T_any.ToType())
-	// Keep the mutable backing on the Go heap.  The search closures retain the
-	// vector after this function returns, while their Cleanup API has no mpool
-	// handle with which to release an owned vector allocation.
+	// Keep the mutable clone on the Go heap: search closures retain it after this
+	// function returns, and GC can reclaim it without adding another mpool owner.
 	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
 		return nil, err
 	}
@@ -430,7 +517,7 @@ func validatePKInVectorShape(vec *vector.Vector) (err error) {
 	if vec.IsConst() && physicalLength > 0 {
 		physicalLength = 1
 	}
-	if vec.IsConst() && vec.GetNulls().Any() && !vec.IsNull(0) {
+	if vec.IsConst() && physicalLength > 0 && vec.GetNulls().Any() && !vec.IsNull(0) {
 		return moerr.NewInvalidInputNoCtx("invalid PK IN constant null bitmap")
 	}
 	if !vec.IsConstNull() {
@@ -576,6 +663,14 @@ func normalizePKInVector(vec *vector.Vector) {
 		vec.Shrink(sels, false)
 	}
 	vec.InplaceSortAndCompact()
+}
+
+func releaseUnreferencedMergedVectors(filters []BasePKFilter, keep *basePKFilterResource) {
+	for idx := range filters {
+		if filters[idx].resource != keep {
+			filters[idx].releaseMergedVector()
+		}
+	}
 }
 
 func toDisjuncts(f BasePKFilter) []BasePKFilter {

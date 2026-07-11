@@ -428,6 +428,7 @@ func NewReader(
 		filterHint,
 	)
 	if err != nil {
+		baseFilter.Cleanup()
 		return nil, err
 	}
 

@@ -3150,6 +3150,141 @@ func TestConstructBlockPKFilterBloomFailOpen(t *testing.T) {
 	})
 }
 
+func TestConstructBlockPKFilterIntersectsPrimaryKeyAndBloomFilter(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	makePK := func(values ...int64) *vector.Vector {
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+		return vec
+	}
+	base := BasePKFilter{
+		Valid: true,
+		Op:    function.BETWEEN,
+		Oid:   types.T_int64,
+		LB:    types.EncodeFixed(int64(2)),
+		UB:    types.EncodeFixed(int64(4)),
+	}
+
+	t.Run("sorted and unsorted intersections", func(t *testing.T) {
+		bf := &testMembershipFilter{hits: []uint8{1, 0, 1, 1, 0}}
+		filter, err := ConstructBlockPKFilter(false, base, bf)
+		require.NoError(t, err)
+		defer filter.Cleanup()
+
+		sorted := makePK(1, 2, 3, 4, 5)
+		unsorted := makePK(5, 3, 1, 4, 2)
+		defer sorted.Free(mp)
+		defer unsorted.Free(mp)
+		require.Equal(t, []int64{2, 3}, filter.SortedSearchFunc(containers.Vectors{*sorted}))
+		require.Equal(t, []int64{3}, filter.UnSortedSearchFunc(containers.Vectors{*unsorted}))
+		require.Equal(t, 2, bf.calls)
+	})
+
+	t.Run("empty inner result skips bloom filter", func(t *testing.T) {
+		bf := &testMembershipFilter{hits: []uint8{1, 1, 1}}
+		equalMissing := BasePKFilter{
+			Valid: true,
+			Op:    function.EQUAL,
+			Oid:   types.T_int64,
+			LB:    types.EncodeFixed(int64(9)),
+		}
+		filter, err := ConstructBlockPKFilter(false, equalMissing, bf)
+		require.NoError(t, err)
+		defer filter.Cleanup()
+		pk := makePK(1, 2, 3)
+		defer pk.Free(mp)
+		require.Empty(t, filter.SortedSearchFunc(containers.Vectors{*pk}))
+		require.Zero(t, bf.calls)
+	})
+
+	t.Run("malformed bloom result fails open to inner offsets", func(t *testing.T) {
+		bf := &testMembershipFilter{hits: []uint8{1}}
+		filter, err := ConstructBlockPKFilter(false, base, bf)
+		require.NoError(t, err)
+		defer filter.Cleanup()
+		pk := makePK(1, 2, 3, 4, 5)
+		defer pk.Free(mp)
+		require.Equal(t, []int64{1, 2, 3}, filter.SortedSearchFunc(containers.Vectors{*pk}))
+	})
+}
+
+func TestMergedInFilterCleanupHandoff(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	leftVec := vector.NewVec(types.T_int64.ToType())
+	rightVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(leftVec, []int64{1, 2, 3}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(rightVec, []int64{2, 3, 4}, nil, mp))
+	defer leftVec.Free(mp)
+	defer rightVec.Free(mp)
+	leftVec.SetSorted(true)
+	rightVec.SetSorted(true)
+	baseline := mp.CurrNB()
+
+	merged, err := mergeBaseFilterInKind(
+		BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_int64, Vec: leftVec},
+		BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_int64, Vec: rightVec},
+		false,
+		mp,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{2, 3}, vector.MustFixedColNoTypeCheck[int64](merged.Vec))
+
+	filter, err := ConstructBlockPKFilter(false, merged, nil)
+	require.NoError(t, err)
+	require.NotNil(t, filter.Cleanup)
+	filter.Cleanup()
+	require.Zero(t, merged.Vec.Length())
+	require.Equal(t, baseline, mp.CurrNB())
+	// Ownership cleanup is idempotent because callers can converge through
+	// multiple reset/error paths.
+	filter.Cleanup()
+	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestConstructBasePKFilterOrFallbackRetainsMergedDisjunct(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	tableDef := &plan.TableDef{
+		Name:          "test",
+		Name2ColIndex: map[string]int32{"a": 0},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{{
+			Name: "a",
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	column := func() *plan.Expr { return MakeColExprForTest(0, types.T_int64) }
+	left := MakeFunctionExprForTest("and", []*plan.Expr{
+		MakeInExprForTest(column(), []int64{1, 2, 3}, types.T_int64, mp),
+		MakeInExprForTest(column(), []int64{2, 3, 4}, types.T_int64, mp),
+	})
+	right := MakeFunctionExprForTest("=", []*plan.Expr{
+		column(),
+		plan2.MakePlan2Int64ConstExprWithType(10),
+	})
+	expr := MakeFunctionExprForTest("or", []*plan.Expr{left, right})
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	var executors []colexec.ExpressionExecutor
+	plan2.ReplaceFoldExpr(proc, expr, &executors)
+	plan2.EvalFoldExpr(proc, expr, &executors)
+	for _, executor := range executors {
+		defer executor.Free()
+	}
+
+	base, err := ConstructBasePKFilter(expr, tableDef, mp)
+	require.NoError(t, err)
+	require.True(t, base.Valid)
+	require.Len(t, base.Disjuncts, 2)
+	require.Equal(t, []int64{2, 3}, vector.MustFixedColNoTypeCheck[int64](base.Disjuncts[0].Vec))
+
+	filter, err := ConstructBlockPKFilter(false, base, nil)
+	require.NoError(t, err)
+	defer filter.Cleanup()
+	pk := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(pk, []int64{1, 2, 3, 10}, nil, mp))
+	defer pk.Free(mp)
+	require.Equal(t, []int64{1, 2, 3}, filter.UnSortedSearchFunc(containers.Vectors{*pk}))
+}
+
 func TestBuildBlockPKSearchFuncsAdditionalPrimaryKeyTypes(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -3217,6 +3352,20 @@ func TestBlockPKSearchFuncsExecuteAdditionalPrimaryKeyTypes(t *testing.T) {
 			want: []int64{0, 1}, wantUnsorted: []int64{0, 1},
 		},
 		{
+			name:   "bool equal",
+			filter: BasePKFilter{Valid: true, Op: function.EQUAL, Oid: types.T_bool, LB: types.EncodeFixed(true)},
+			buildVec: func(sorted bool) *vector.Vector {
+				vec := vector.NewVec(types.T_bool.ToType())
+				values := []bool{false, true}
+				if !sorted {
+					values = []bool{true, false}
+				}
+				require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+				return vec
+			},
+			want: []int64{1}, wantUnsorted: []int64{0},
+		},
+		{
 			name:   "bit equal",
 			filter: BasePKFilter{Valid: true, Op: function.EQUAL, Oid: types.T_bit, LB: types.EncodeFixed(uint64(2))},
 			buildVec: func(sorted bool) *vector.Vector {
@@ -3229,6 +3378,48 @@ func TestBlockPKSearchFuncsExecuteAdditionalPrimaryKeyTypes(t *testing.T) {
 				return vec
 			},
 			want: []int64{1}, wantUnsorted: []int64{2},
+		},
+		{
+			name:   "bit between",
+			filter: BasePKFilter{Valid: true, Op: function.BETWEEN, Oid: types.T_bit, LB: types.EncodeFixed(uint64(1)), UB: types.EncodeFixed(uint64(3))},
+			buildVec: func(sorted bool) *vector.Vector {
+				vec := vector.NewVec(types.T_bit.ToType())
+				values := []uint64{1, 2, 3, 4}
+				if !sorted {
+					values = []uint64{4, 2, 1, 3}
+				}
+				require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+				return vec
+			},
+			want: []int64{0, 1, 2}, wantUnsorted: []int64{1, 2, 3},
+		},
+		{
+			name:   "year equal",
+			filter: BasePKFilter{Valid: true, Op: function.EQUAL, Oid: types.T_year, LB: types.EncodeFixed(types.MoYear(2026))},
+			buildVec: func(sorted bool) *vector.Vector {
+				vec := vector.NewVec(types.T_year.ToType())
+				values := []types.MoYear{2025, 2026, 2027}
+				if !sorted {
+					values = []types.MoYear{2027, 2025, 2026}
+				}
+				require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+				return vec
+			},
+			want: []int64{1}, wantUnsorted: []int64{2},
+		},
+		{
+			name:   "year between",
+			filter: BasePKFilter{Valid: true, Op: function.BETWEEN, Oid: types.T_year, LB: types.EncodeFixed(types.MoYear(2026)), UB: types.EncodeFixed(types.MoYear(2027))},
+			buildVec: func(sorted bool) *vector.Vector {
+				vec := vector.NewVec(types.T_year.ToType())
+				values := []types.MoYear{2025, 2026, 2027}
+				if !sorted {
+					values = []types.MoYear{2027, 2025, 2026}
+				}
+				require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+				return vec
+			},
+			want: []int64{1, 2}, wantUnsorted: []int64{0, 2},
 		},
 		{
 			name:   "year greater",
