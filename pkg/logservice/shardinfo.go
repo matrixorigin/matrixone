@@ -70,7 +70,28 @@ func GetShardInfo(
 	}
 	leader, present := si.Replicas[si.LeaderID]
 	if !present || leader.ServiceAddress == "" {
-		// leader address is unknown
+		// When the leader entry is absent from Replicas because the
+		// server-side filter dropped it (hard-down / left), fall back to
+		// the surviving replica addresses so reverse-proxy callers can
+		// connect through a follower during the stale-leader window.
+		if !present {
+			result := ShardInfo{
+				Replicas: make(map[uint64]string),
+			}
+			for replicaID, info := range si.Replicas {
+				if info.ServiceAddress == "" {
+					continue
+				}
+				if result.ReplicaID == 0 {
+					result.ReplicaID = replicaID
+				}
+				result.Replicas[replicaID] = info.ServiceAddress
+			}
+			if result.ReplicaID != 0 {
+				return result, true, nil
+			}
+		}
+		// leader address is unknown, and no surviving replicas to fall back to
 		return ShardInfo{}, false, nil
 	}
 	result := ShardInfo{

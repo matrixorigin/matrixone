@@ -217,6 +217,46 @@ func TestGetShardInfoCanDisableHardDownReplicaAddressFiltering(t *testing.T) {
 	assert.Equal(t, "10.0.0.1:1", info.Replicas[1])
 }
 
+// TestGetShardInfo_StaleDeadLeaderFallsBackToSurvivingFollowers reproduces the
+// stale-leader window: gossip still reports the old leader id while memberlist
+// has already marked that node hard-down. The server-side filter drops the dead
+// leader from Replicas, so GetShardInfo must fall back to the surviving
+// follower addresses instead of returning ok=false.
+func TestGetShardInfo_StaleDeadLeaderFallsBackToSurvivingFollowers(t *testing.T) {
+	orig := queryShardInfoRawFn
+	defer func() { queryShardInfoRawFn = orig }()
+	queryShardInfoRawFn = func(
+		ctx context.Context,
+		sid string,
+		address string,
+		shardID uint64,
+		includeExpiredReplicaAddresses bool,
+		excludeHardDownReplicaAddresses bool,
+	) (pb.ShardInfoQueryResult, bool, error) {
+		assert.False(t, includeExpiredReplicaAddresses)
+		assert.True(t, excludeHardDownReplicaAddresses)
+		return pb.ShardInfoQueryResult{
+			ShardID:  shardID,
+			LeaderID: 1, // stale leader — hard-down, filtered out server-side
+			Replicas: map[uint64]pb.ReplicaInfo{
+				// replica 1 (leader) is absent because the server dropped it
+				2: {UUID: "uuid-2", ServiceAddress: "10.0.0.2:1"},
+				3: {UUID: "uuid-3", ServiceAddress: "10.0.0.3:1"},
+			},
+		}, true, nil
+	}
+
+	info, ok, err := GetShardInfo("", "doesnt-matter", 3)
+	require.NoError(t, err)
+	require.True(t, ok, "stale dead leader with live followers must return ok=true")
+	assert.NotZero(t, info.ReplicaID)
+	assert.Equal(t, "10.0.0.2:1", info.Replicas[2])
+	assert.Equal(t, "10.0.0.3:1", info.Replicas[3])
+	// The stale leader must not appear.
+	_, leaderPresent := info.Replicas[1]
+	assert.False(t, leaderPresent)
+}
+
 func TestGetShardMembership_IncludesExpiredReplicaAddresses(t *testing.T) {
 	orig := queryShardInfoRawFn
 	defer func() { queryShardInfoRawFn = orig }()
