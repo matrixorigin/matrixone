@@ -476,14 +476,16 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
 	}
 
-	// Recreate the cached compile on each execution to avoid stale operator state
-	// (e.g. hashbuild ctr, dispatch channels) from previous executions when the
-	// plan is reused. A nil cache means the statement is not eligible for
-	// prepare-time compile (e.g. AP query); recompiling would fail with
-	// ErrCantCompileForPrepare on every execution, so leave it to the regular
-	// compile path (isPrepare=false).
-	// See: https://github.com/matrixorigin/matrixone/issues/25526
-	if prepareStmt.compile != nil {
+	// Recreate the cached compile only when the schema changed. Without a
+	// schema change the cached compile is reused as-is: Compile.Reset clears
+	// the per-execution state, including the pipeline edges' terminal state
+	// (see Scope.resetForReuse), so reuse is safe and avoids the
+	// per-execution recompilation overhead that regressed TPCC. A nil cache
+	// means the statement is not eligible for prepare-time compile (e.g. AP
+	// query); recompiling would fail with ErrCantCompileForPrepare on every
+	// execution, so leave it to the regular compile path (isPrepare=false).
+	// See: https://github.com/matrixorigin/matrixone/issues/25614
+	if change && prepareStmt.compile != nil {
 		prepareStmt.compile.FreeOperator()
 		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()

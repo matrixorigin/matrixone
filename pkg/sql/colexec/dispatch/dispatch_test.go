@@ -417,10 +417,11 @@ func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
 		ctr:       &container{sp: sp},
 		LocalRegs: []*process.WaitRegister{fullReg, healthyReg},
 	}
+	sourceErr := moerr.NewCheckRecursiveLevel(context.Background())
 
 	done := make(chan struct{})
 	go func() {
-		d.Reset(nil, true, moerr.NewInternalErrorNoCtx("cleanup"))
+		d.Reset(nil, true, sourceErr)
 		close(done)
 	}()
 
@@ -445,7 +446,7 @@ func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
 	staleSignal := <-fullReg.Ch2
 	got, info := staleSignal.Action()
 	require.Nil(t, got)
-	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+	require.Same(t, sourceErr, info)
 
 	select {
 	case signal := <-healthyReg.Ch2:
@@ -520,12 +521,12 @@ func TestDispatchResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.
 	staleSignal := <-fullReg.Ch2
 	got, info := staleSignal.Action()
 	require.Nil(t, got)
-	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
 
 	staleSignal = <-healthyReg.Ch2
 	got, info = staleSignal.Action()
 	require.Nil(t, got)
-	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
 
 	terminalSignal := <-healthyReg.Ch2
 	require.Equal(t, process.EventEnd, terminalSignal.EventType)

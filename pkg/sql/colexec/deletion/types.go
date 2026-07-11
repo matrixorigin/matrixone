@@ -180,6 +180,7 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 
 	ctr.batch_size = 0
 	ctr.deleted_length = 0
+	ctr.source = nil
 }
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
