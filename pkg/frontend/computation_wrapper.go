@@ -461,7 +461,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 
-	// rebuild and recompile
+	// rebuild plan when schema changed
 	if change {
 		originPrepareStmt := &tree.PrepareStmt{
 			Name: tree.Identifier(prepareStmt.Name),
@@ -471,17 +471,28 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if err != nil {
 			return nil, nil, nil, "", err
 		}
-
-		if prepareStmt.compile != nil {
-			prepareStmt.compile.FreeOperator()
-			prepareStmt.compile.SetIsPrepare(false)
-			prepareStmt.compile.Release()
-			prepareStmt.compile = nil // set nil and recompile later
-		}
-
 		preparePlan = newPlan.GetDcl().GetPrepare()
+		prepareStmt.PreparePlan = newPlan
+		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
+	}
+
+	// Recreate the cached compile only when the schema changed. Without a
+	// schema change the cached compile is reused as-is: Compile.Reset clears
+	// the per-execution state, including the pipeline edges' terminal state
+	// (see Scope.resetForReuse), so reuse is safe and avoids the
+	// per-execution recompilation overhead that regressed TPCC. A nil cache
+	// means the statement is not eligible for prepare-time compile (e.g. AP
+	// query); recompiling would fail with ErrCantCompileForPrepare on every
+	// execution, so leave it to the regular compile path (isPrepare=false).
+	// See: https://github.com/matrixorigin/matrixone/issues/25614
+	if change && prepareStmt.compile != nil {
+		prepareStmt.compile.FreeOperator()
+		prepareStmt.compile.SetIsPrepare(false)
+		prepareStmt.compile.Release()
+		prepareStmt.compile = nil
+
 		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok && shouldCachePrepareCompile(preparePlan.Plan) {
-			//only DQL & DML will pre compile
+			// only DQL and DML plans eligible for caching are precompiled
 			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true)
 			if err != nil {
 				if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -495,13 +506,8 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 				comp = nil
 			}
 			prepareStmt.compile = comp
-
 		}
-		prepareStmt.PreparePlan = newPlan
-
-		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
 	}
-
 	numParams := len(preparePlan.ParamTypes)
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {

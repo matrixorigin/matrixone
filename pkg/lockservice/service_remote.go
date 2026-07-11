@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -84,7 +85,7 @@ func (s *service) initRemote() {
 			// transaction is marked as cannot commit on tn.
 			return false, err
 		},
-		func(txn []pb.OrphanTxn) ([][]byte, error) {
+		func(txn []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
 			req := acquireRequest()
 			defer releaseRequest(req)
 
@@ -96,10 +97,10 @@ func (s *service) initRemote() {
 
 			resp, err := s.remote.client.Send(ctx, req)
 			if err != nil {
-				return nil, moerr.AttachCause(ctx, err)
+				return pb.CannotCommitResponse{}, moerr.AttachCause(ctx, err)
 			}
 			defer releaseResponse(resp)
-			return resp.CannotCommit.CommittingTxn, nil
+			return resp.CannotCommit, nil
 		},
 		func(txn pb.WaitTxn) (bool, error) {
 			req := acquireRequest()
@@ -708,6 +709,7 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 
 	var timeoutTxns [][]byte
 	timeoutServices := make(map[string]struct{})
+	fenceTSByTxn := make(map[string]timestamp.Timestamp)
 	for {
 		select {
 		case <-ctx.Done():
@@ -716,12 +718,22 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 			timeoutTxns = s.activeTxnHolder.getTimeoutRemoveTxn(
 				timeoutServices,
 				timeoutTxns,
+				fenceTSByTxn,
 				s.cfg.RemoteLockTimeout.Duration)
 			if len(timeoutTxns) > 0 {
 				s.logger.Warn("found orphans txns",
 					bytesArrayField("txns", timeoutTxns))
 				for _, txnID := range timeoutTxns {
-					s.Unlock(ctx, txnID, timestamp.Timestamp{})
+					fenceTS := fenceTSByTxn[util.UnsafeBytesToString(txnID)]
+					if fenceTS.IsEmpty() {
+						s.logger.Warn("skip orphan unlock without allocator fence",
+							bytesArrayField("txn", [][]byte{txnID}))
+						continue
+					}
+					s.logger.Warn("unlock orphan txn with fence timestamp",
+						bytesArrayField("txn", [][]byte{txnID}),
+						zap.String("fence-ts", fenceTS.DebugString()))
+					s.Unlock(ctx, txnID, fenceTS)
 				}
 			}
 
@@ -742,26 +754,34 @@ func (s *service) checkTxnTimeout(ctx context.Context) {
 		txn := s.activeTxnHolder.getActiveTxn(t, false, "")
 		createOn := txn.remoteService
 		if len(createOn) == 0 {
-			if !s.isValidLocalTxn(t) {
+			if canUnlock, fenceTS := s.canUnlockLocalTxn(t); canUnlock {
 				s.logger.Warn("found timeout txn",
-					bytesArrayField("txn", [][]byte{t}))
-				_ = s.Unlock(ctx, t, timestamp.Timestamp{})
+					bytesArrayField("txn", [][]byte{t}),
+					zap.String("fence-ts", fenceTS.DebugString()))
+				_ = s.Unlock(ctx, t, fenceTS)
 			}
 			continue
 		}
 
 		waitTxn := pb.WaitTxn{TxnID: t, CreatedOn: createOn}
 		if !s.activeTxnHolder.isValidRemoteTxn(waitTxn) {
+			canUnlock, fenceTS := s.activeTxnHolder.canUnlockRemoteTxn(waitTxn)
+			if !canUnlock {
+				s.logger.Warn("found timeout txn but cannot confirm it is safe to unlock",
+					bytesArrayField("txn", [][]byte{t}))
+				continue
+			}
 			s.logger.Warn("found timeout txn",
-				bytesArrayField("txn", [][]byte{t}))
-			_ = s.Unlock(ctx, t, timestamp.Timestamp{})
+				bytesArrayField("txn", [][]byte{t}),
+				zap.String("fence-ts", fenceTS.DebugString()))
+			_ = s.Unlock(ctx, t, fenceTS)
 		}
 	}
 }
 
-func (s *service) isValidLocalTxn(t []byte) bool {
+func (s *service) canUnlockLocalTxn(t []byte) (bool, timestamp.Timestamp) {
 	if s.cfg.TxnIterFunc == nil {
-		return true
+		return false, timestamp.Timestamp{}
 	}
 	valid := false
 	s.cfg.TxnIterFunc(func(txnID []byte) bool {
@@ -772,7 +792,7 @@ func (s *service) isValidLocalTxn(t []byte) bool {
 		return true
 	})
 	if valid {
-		return valid
+		return false, timestamp.Timestamp{}
 	}
 
 	cannotCommit := []pb.OrphanTxn{
@@ -784,15 +804,16 @@ func (s *service) isValidLocalTxn(t []byte) bool {
 
 	h, ok := s.activeTxnHolder.(*mapBasedTxnHolder)
 	if !ok {
-		return true
+		return false, timestamp.Timestamp{}
 	}
 	committing, err := h.notify(cannotCommit)
 	if err != nil {
 		// any error, we cannot make txn as a invalid txn
-		return true
+		return false, timestamp.Timestamp{}
 	}
-	// the target txn is committing, valid
-	return len(committing) != 0
+	// The target txn is safe to unlock only when TN confirms it is not
+	// committing and returns an allocator fence that dominates future commits.
+	return len(committing.CommittingTxn) == 0 && !committing.FenceTS.IsEmpty(), committing.FenceTS
 }
 
 type allocatorState struct {
