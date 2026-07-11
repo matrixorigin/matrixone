@@ -665,6 +665,9 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 	if scanNode == nil || len(scanNode.OrderBy) != 0 {
 		return nil
 	}
+	if !builder.regularIndexScanAllowedByOrderHints(scanNode) {
+		return nil
+	}
 
 	if len(sortNode.Children) != 1 {
 		return nil
@@ -1841,6 +1844,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 		ScanSnapshot:  node.ScanSnapshot,
 	}
 	idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[node.NodeId])
+	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
 	forceScanNodeStatsTP(idxTableNodeID, builder)
 
 	pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
@@ -2010,7 +2014,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		return nodeID, nil
 	}
 
-	indexes := leftChild.TableDef.Indexes
+	indexes := builder.filterRegularIndexesByJoinHints(leftChild, leftChild.TableDef.Indexes)
 	condIdx := make([]int, 0, len(col2Cond))
 	for _, idxDef := range indexes {
 		if !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
@@ -2109,6 +2113,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			ScanSnapshot:           leftChild.ScanSnapshot,
 			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter},
 		}, builder.ctxByNode[nodeID])
+		builder.inheritIndexHints(idxTableNodeID, leftChild.NodeId)
 
 		nodeBuildRuntimeFilter := MakeRuntimeFilter(rfTag, len(condIdx) < numParts, GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), rfBuildExpr, false)
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)

@@ -32,9 +32,11 @@ type indexHintSet struct {
 }
 
 type indexHintScopeSet struct {
-	use    map[string]struct{}
-	force  map[string]struct{}
-	ignore map[string]struct{}
+	useSpecified   bool
+	forceSpecified bool
+	use            map[string]struct{}
+	force          map[string]struct{}
+	ignore         map[string]struct{}
 }
 
 func (builder *QueryBuilder) recordIndexHints(nodeID int32, tableDef *plan.TableDef, hints []*tree.IndexHint) error {
@@ -51,14 +53,11 @@ func (builder *QueryBuilder) recordIndexHints(nodeID int32, tableDef *plan.Table
 		if err != nil {
 			return err
 		}
-		scope := hintSet.scope(hint.HintScope)
-		switch hint.HintType {
-		case tree.HintUse:
-			addIndexHintNames(&scope.use, names)
-		case tree.HintForce:
-			addIndexHintNames(&scope.force, names)
-		case tree.HintIgnore:
-			addIndexHintNames(&scope.ignore, names)
+		scopes := hintSet.scopes(hint.HintScope)
+		for _, scope := range scopes {
+			if err := addIndexHint(scope, hint.HintType, names); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -72,16 +71,16 @@ func (builder *QueryBuilder) recordIndexHints(nodeID int32, tableDef *plan.Table
 	return nil
 }
 
-func (hintSet *indexHintSet) scope(scope tree.IndexHintScope) *indexHintScopeSet {
+func (hintSet *indexHintSet) scopes(scope tree.IndexHintScope) []*indexHintScopeSet {
 	switch scope {
 	case tree.HintForOrderBy:
-		return &hintSet.order
+		return []*indexHintScopeSet{&hintSet.order}
 	case tree.HintForGroupBy:
-		return &hintSet.group
+		return []*indexHintScopeSet{&hintSet.group}
 	case tree.HintForJoin:
-		return &hintSet.join
+		return []*indexHintScopeSet{&hintSet.join}
 	default:
-		return &hintSet.scan
+		return []*indexHintScopeSet{&hintSet.scan, &hintSet.join, &hintSet.order, &hintSet.group}
 	}
 }
 
@@ -91,38 +90,75 @@ func (hintSet *indexHintSet) empty() bool {
 }
 
 func (scope indexHintScopeSet) empty() bool {
-	return len(scope.use) == 0 && len(scope.force) == 0 && len(scope.ignore) == 0
+	return !scope.useSpecified && !scope.forceSpecified && len(scope.ignore) == 0
 }
 
 func validateIndexHintNames(ctx context.Context, tableDef *plan.TableDef, names []string) ([]string, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
-	existing := make(map[string]struct{}, len(tableDef.Indexes))
+	existing := make(map[string]string, len(tableDef.Indexes))
 	if tableDef.Pkey != nil && !strings.EqualFold(tableDef.Pkey.PkeyColName, catalog.FakePrimaryKeyColName) {
-		existing[strings.ToLower(PrimaryKeyName)] = struct{}{}
+		existing[strings.ToLower(PrimaryKeyName)] = strings.ToLower(PrimaryKeyName)
 	}
 	for _, idx := range tableDef.Indexes {
 		if idx == nil {
 			continue
 		}
-		existing[strings.ToLower(idx.IndexName)] = struct{}{}
+		lowerName := strings.ToLower(idx.IndexName)
+		existing[lowerName] = lowerName
 	}
 	normalized := make([]string, 0, len(names))
 	for _, name := range names {
 		lowerName := strings.ToLower(name)
-		if _, ok := existing[lowerName]; !ok {
+		if exact, ok := existing[lowerName]; ok {
+			normalized = append(normalized, exact)
+			continue
+		}
+		var match string
+		for existingName := range existing {
+			if strings.HasPrefix(existingName, lowerName) {
+				if match != "" {
+					return nil, moerr.NewSyntaxErrorf(ctx, "index hint %q is ambiguous", name)
+				}
+				match = existingName
+			}
+		}
+		if match == "" {
 			return nil, moerr.NewErrKeyDoesNotExist(ctx, name, tableDef.Name)
 		}
-		normalized = append(normalized, lowerName)
+		normalized = append(normalized, match)
 	}
 	return normalized, nil
 }
 
-func addIndexHintNames(dst *map[string]struct{}, names []string) {
-	if len(names) == 0 {
-		return
+func addIndexHint(scope *indexHintScopeSet, hintType tree.IndexHintType, names []string) error {
+	switch hintType {
+	case tree.HintUse:
+		if scope.forceSpecified {
+			return moerr.NewSyntaxErrorNoCtx("USE INDEX and FORCE INDEX cannot be used together")
+		}
+		scope.useSpecified = true
+		addIndexHintNames(&scope.use, names)
+	case tree.HintForce:
+		if len(names) == 0 {
+			return moerr.NewSyntaxErrorNoCtx("FORCE INDEX requires at least one index")
+		}
+		if scope.useSpecified {
+			return moerr.NewSyntaxErrorNoCtx("USE INDEX and FORCE INDEX cannot be used together")
+		}
+		scope.forceSpecified = true
+		addIndexHintNames(&scope.force, names)
+	case tree.HintIgnore:
+		if len(names) == 0 {
+			return moerr.NewSyntaxErrorNoCtx("IGNORE INDEX requires at least one index")
+		}
+		addIndexHintNames(&scope.ignore, names)
 	}
+	return nil
+}
+
+func addIndexHintNames(dst *map[string]struct{}, names []string) {
 	if *dst == nil {
 		*dst = make(map[string]struct{}, len(names))
 	}
@@ -132,14 +168,30 @@ func addIndexHintNames(dst *map[string]struct{}, names []string) {
 }
 
 func (builder *QueryBuilder) filterRegularIndexesByScanHints(node *plan.Node, indexes []*plan.IndexDef) []*plan.IndexDef {
+	return builder.filterRegularIndexesByHints(node, indexes, func(hintSet *indexHintSet) indexHintScopeSet {
+		return hintSet.scan
+	})
+}
+
+func (builder *QueryBuilder) filterRegularIndexesByJoinHints(node *plan.Node, indexes []*plan.IndexDef) []*plan.IndexDef {
+	return builder.filterRegularIndexesByHints(node, indexes, func(hintSet *indexHintSet) indexHintScopeSet {
+		return hintSet.join
+	})
+}
+
+func (builder *QueryBuilder) filterRegularIndexesByHints(node *plan.Node, indexes []*plan.IndexDef, getScope func(*indexHintSet) indexHintScopeSet) []*plan.IndexDef {
 	if builder == nil || node == nil || len(indexes) == 0 {
 		return indexes
 	}
 	hintSet := builder.indexHintsByScan[node.NodeId]
-	if hintSet == nil || hintSet.scan.empty() {
+	if hintSet == nil {
 		return indexes
 	}
-	return filterIndexesByHintScope(indexes, hintSet.scan)
+	scope := getScope(hintSet)
+	if scope.empty() {
+		return indexes
+	}
+	return filterIndexesByHintScope(indexes, scope)
 }
 
 func filterIndexesByHintScope(indexes []*plan.IndexDef, scope indexHintScopeSet) []*plan.IndexDef {
@@ -155,11 +207,11 @@ func filterIndexesByHintScope(indexes []*plan.IndexDef, scope indexHintScopeSet)
 		if _, ignored := scope.ignore[name]; ignored {
 			continue
 		}
-		if len(scope.force) > 0 {
+		if scope.forceSpecified {
 			if _, ok := scope.force[name]; !ok {
 				continue
 			}
-		} else if len(scope.use) > 0 {
+		} else if scope.useSpecified {
 			if _, ok := scope.use[name]; !ok {
 				continue
 			}
@@ -167,4 +219,38 @@ func filterIndexesByHintScope(indexes []*plan.IndexDef, scope indexHintScopeSet)
 		filtered = append(filtered, idx)
 	}
 	return filtered
+}
+
+func (builder *QueryBuilder) regularIndexScanAllowedByOrderHints(node *plan.Node) bool {
+	if builder == nil || node == nil || !node.IndexScanInfo.IsIndexScan {
+		return true
+	}
+	hintSet := builder.indexHintsByScan[node.NodeId]
+	if hintSet == nil || hintSet.order.empty() {
+		return true
+	}
+	name := strings.ToLower(node.IndexScanInfo.IndexName)
+	if _, ignored := hintSet.order.ignore[name]; ignored {
+		return false
+	}
+	if hintSet.order.forceSpecified {
+		_, ok := hintSet.order.force[name]
+		return ok
+	}
+	if hintSet.order.useSpecified {
+		_, ok := hintSet.order.use[name]
+		return ok
+	}
+	return true
+}
+
+func (builder *QueryBuilder) inheritIndexHints(dstNodeID, srcNodeID int32) {
+	if builder == nil || builder.indexHintsByScan == nil {
+		return
+	}
+	hintSet := builder.indexHintsByScan[srcNodeID]
+	if hintSet == nil {
+		return
+	}
+	builder.indexHintsByScan[dstNodeID] = hintSet
 }

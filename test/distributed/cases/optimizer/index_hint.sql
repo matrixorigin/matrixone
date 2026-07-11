@@ -30,13 +30,43 @@ insert into t values
 select mo_ctl('dn', 'flush', 'mysql_compat_index_hint.t');
 select Sleep(1);
 
+-- @separator:table
+-- @regex("Index Table Scan.*idx_b_a_id",true)
+explain select id,a,b,c
+from t use index(idx_b_a)
+where b = 7 and a in ('g01','g03','g05')
+order by a,id;
+
 select id,a,b,c
 from t use index(idx_b_a_id)
 where b = 7 and a in ('g01','g03','g05')
 order by a,id;
 
+-- @separator:table
+-- @regex("Index Table Scan",false)
+explain select id,a,b,c
+from t use index()
+where b = 7 and a in ('g01','g03','g05')
+order by a,id;
+
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",true)
+explain select id,a,b,c
+from t force index for order by(idx_a_b_c_id)
+where a in ('g02','g04')
+order by a,b,c,id
+limit 8;
+
 select id,a,b,c
 from t force index for order by(idx_a_b_c_id)
+where a in ('g02','g04')
+order by a,b,c,id
+limit 8;
+
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",false)
+explain select id,a,b,c
+from t ignore index(idx_a_b_c_id)
 where a in ('g02','g04')
 order by a,b,c,id
 limit 8;
