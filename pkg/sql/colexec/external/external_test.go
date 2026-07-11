@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -471,6 +472,72 @@ func TestGetColDataLoadDataYear(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not Year type")
+}
+
+// TestGetColDataGeometry exercises the geometry/geography branch of the external
+// CSV loader: WKT fields are parsed and stored as bare WKB (float64 for GEOMETRY,
+// float32 for GEOMETRY32), an unconstrained GEOMETRY column accepts any subtype,
+// and a subtype-constrained column rejects a mismatching value the same way an
+// INSERT does.
+func TestGetColDataGeometry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	load := func(colTyp plan.Type, val string) (*batch.Batch, error) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.New(types.T(colTyp.Id), colTyp.Width, colTyp.Scale))
+		param := &ExternalParam{
+			ExParamConst: ExParamConst{
+				Ctx:  context.Background(),
+				Cols: []*plan.ColDef{{Name: "g", Typ: colTyp}},
+				Extern: &tree.ExternParam{
+					ExParam: tree.ExParam{ExternType: int32(plan.ExternType_EXTERNAL_TB)},
+				},
+			},
+			ExParam: ExParam{Fileparam: &ExFileparam{}},
+		}
+		attr := plan.ExternAttr{ColName: "g", ColIndex: 0, ColFieldIndex: 0}
+		err := getColData(bat, []csvparser.Field{{Val: val}}, 0, param, proc.Mp(), attr, proc)
+		return bat, err
+	}
+
+	// GEOMETRY column with a POINT subtype constraint: WKT -> float64 WKB.
+	geomPoint := plan.Type{Id: int32(types.T_geometry), Scale: int32(geo.POINT)}
+	bat, err := load(geomPoint, "POINT (1 2)")
+	require.NoError(t, err)
+	stored := bat.Vecs[0].GetBytesAt(0)
+	require.True(t, len(stored) > 0 && (stored[0] == 0 || stored[0] == 1), "geometry must be stored as WKB")
+	g, err := geo.ReadWKB(stored)
+	require.NoError(t, err)
+	require.Equal(t, "POINT(1 2)", geo.WriteWKT(g))
+	bat.Clean(proc.Mp())
+
+	// Unconstrained GEOMETRY column accepts a different subtype.
+	geomGeneric := plan.Type{Id: int32(types.T_geometry), Scale: int32(geo.GENERIC)}
+	bat, err = load(geomGeneric, "LINESTRING (0 0, 1 1)")
+	require.NoError(t, err)
+	bat.Clean(proc.Mp())
+
+	// GEOMETRY32 stores float32-coordinate WKB, distinct from the float64 form.
+	geom32 := plan.Type{Id: int32(types.T_geometry32), Scale: int32(geo.POINT)}
+	bat, err = load(geom32, "POINT (0.1 0.2)")
+	require.NoError(t, err)
+	stored32 := bat.Vecs[0].GetBytesAt(0)
+	_, err = geo.ReadWKBFloat32(stored32)
+	require.NoError(t, err)
+	bat.Clean(proc.Mp())
+
+	// Subtype constraint is enforced: a LINESTRING cannot land in a POINT column.
+	bat, err = load(geomPoint, "LINESTRING (0 0, 1 1)")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot store LINESTRING in POINT column")
+	bat.Clean(proc.Mp())
+
+	// Malformed WKT is rejected with a clear error, not stored silently.
+	bat, err = load(geomGeneric, "not-a-geometry")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a valid geometry")
+	bat.Clean(proc.Mp())
 }
 
 func TestGetOneRowDataLoadDataNonStrictAdjustedValues(t *testing.T) {

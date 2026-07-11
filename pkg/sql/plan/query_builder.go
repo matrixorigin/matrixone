@@ -2532,43 +2532,17 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	// append limit / rank option
-	var unionRankOption *plan.RankOption
-	if astRankOption != nil {
-		if unionRankOption, err = parseRankOption(astRankOption.Option, builder.GetContext()); err != nil {
-			return 0, err
-		}
+	boundOffset, boundLimit, unionRankOption, err := builder.bindLimit(ctx, astLimit, astRankOption)
+	if err != nil {
+		return 0, err
 	}
-
-	if astLimit != nil {
+	if boundLimit != nil || boundOffset != nil || unionRankOption != nil {
 		node := builder.qry.Nodes[lastNodeID]
-
-		if astLimit.Offset != nil {
-			offsetBinder := NewLimitBinder(builder, ctx, true)
-			node.Offset, err = offsetBinder.BindExpr(astLimit.Offset, 0, true)
-			if err != nil {
-				return 0, err
-			}
-		}
-		if astLimit.Count != nil {
-			limitBinder := NewLimitBinder(builder, ctx, false)
-			node.Limit, err = limitBinder.BindExpr(astLimit.Count, 0, true)
-			if err != nil {
-				return 0, err
-			}
-
-			if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-					ctx.hasSingleRow = c.U64Val == 1
-				}
-			}
-		}
-
+		node.Limit = boundLimit
+		node.Offset = boundOffset
 		if unionRankOption != nil && unionRankOption.Mode != "" {
 			node.RankOption = unionRankOption
 		}
-	} else if unionRankOption != nil && unionRankOption.Mode != "" {
-		node := builder.qry.Nodes[lastNodeID]
-		node.RankOption = unionRankOption
 	}
 
 	// append result PROJECT node
@@ -2766,29 +2740,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	}
 
 	// union all statement
-	var limitExpr *Expr
-	var offsetExpr *Expr
-	if s.Limit != nil {
-		if s.Limit.Offset != nil {
-			offsetBinder := NewLimitBinder(builder, ctx, true)
-			offsetExpr, err = offsetBinder.BindExpr(s.Limit.Offset, 0, true)
-			if err != nil {
-				return 0, err
-			}
-		}
-		if s.Limit.Count != nil {
-			limitBinder := NewLimitBinder(builder, ctx, false)
-			limitExpr, err = limitBinder.BindExpr(s.Limit.Count, 0, true)
-			if err != nil {
-				return 0, err
-			}
-
-			if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-					ctx.hasSingleRow = c.U64Val == 1
-				}
-			}
-		}
+	offsetExpr, limitExpr, _, err := builder.bindLimit(ctx, s.Limit, nil)
+	if err != nil {
+		return 0, err
 	}
 
 	//4. add CTE Scan Node
@@ -3925,6 +3879,9 @@ func (builder *QueryBuilder) bindLimit(
 				}
 			}
 		}
+	}
+	if offset, ok := getLiteralUint64(boundOffsetExpr); ok && offset == 0 {
+		boundOffsetExpr = nil
 	}
 
 	if astRankOption != nil && astRankOption.Option != nil {

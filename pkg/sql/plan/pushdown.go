@@ -626,12 +626,12 @@ func (builder *QueryBuilder) pushdownTopThroughLeftJoin(nodeID int32) {
 	nodePushDown = DeepCopyNode(node)
 
 	if nodePushDown.Offset != nil {
-		newExpr, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "+", []*Expr{nodePushDown.Limit, nodePushDown.Offset})
-		if err != nil {
+		candidateLimit, ok := buildCandidateLimit(nodePushDown.Limit, nodePushDown.Offset)
+		if !ok {
 			goto END
 		}
 		nodePushDown.Offset = nil
-		nodePushDown.Limit = newExpr
+		nodePushDown.Limit = candidateLimit
 	}
 	newNodeID = builder.appendNode(nodePushDown, nil)
 	nodePushDown.Children[0] = joinnode.Children[0]
@@ -658,24 +658,6 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.Limit, child.Offset = node.Limit, node.Offset
 			node.Limit, node.Offset = nil, nil
-
-			// if there is a limit, outcnt is limit number
-			if child.Limit != nil {
-				if cExpr, ok := child.Limit.Expr.(*plan.Expr_Lit); ok {
-					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-						child.Stats.Outcnt = float64(c.U64Val)
-						if child.Stats.Selectivity < 0.5 {
-							newblockNum := int32(c.U64Val / 2)
-							if newblockNum < child.Stats.BlockNum {
-								child.Stats.BlockNum = newblockNum
-							}
-						} else {
-							child.Stats.BlockNum = 1
-						}
-						child.Stats.Cost = float64(child.Stats.BlockNum * objectio.BlockMaxRows)
-					}
-				}
-			}
 		}
 	}
 }
@@ -717,8 +699,8 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	if scanNode.NodeType != plan.Node_TABLE_SCAN || scanNode.Offset != nil || scanNode.OrderBy != nil {
 		return
 	}
-	limitVal := node.Limit.GetLit().GetU64Val()
-	if limitVal == 0 {
+	limitVal, literal := getLiteralUint64(node.Limit)
+	if !literal || limitVal == 0 {
 		return
 	}
 	if limitVal > maxVectorIndexTopPushdownLimit {
