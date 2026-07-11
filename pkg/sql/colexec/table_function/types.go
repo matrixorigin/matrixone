@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -103,6 +104,42 @@ type container struct {
 
 	// opaque, each table function has its own state.
 	state tvfState
+}
+
+// evalLimitExpression evaluates a LIMIT expression once during Prepare. The
+// executor is intentionally short-lived: LIMIT is constant for one execution,
+// and freeing it here avoids adding another resource to every table-function
+// state's Reset/Free lifecycle.
+func evalLimitExpression(proc *process.Process, expr *plan.Expr, defaultValue uint64) (uint64, error) {
+	if expr == nil {
+		return defaultValue, nil
+	}
+	if literal := expr.GetLit(); literal != nil {
+		if literal.Isnull {
+			return 0, moerr.NewInvalidInput(proc.Ctx, "LIMIT cannot be NULL")
+		}
+		if value, ok := literal.Value.(*plan.Literal_U64Val); ok {
+			return value.U64Val, nil
+		}
+		return 0, moerr.NewInvalidInputf(proc.Ctx, "LIMIT must evaluate to uint64, got %s", expr.Typ.String())
+	}
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	if err != nil {
+		return 0, err
+	}
+	defer executor.Free()
+
+	vec, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return 0, err
+	}
+	if vec == nil || vec.Length() == 0 || vec.IsNull(0) {
+		return 0, moerr.NewInvalidInput(proc.Ctx, "LIMIT cannot be NULL")
+	}
+	if vec.GetType().Oid != types.T_uint64 {
+		return 0, moerr.NewInvalidInputf(proc.Ctx, "LIMIT must evaluate to uint64, got %s", vec.GetType().String())
+	}
+	return vector.MustFixedColWithTypeCheck[uint64](vec)[0], nil
 }
 
 func (tableFunction *TableFunction) Reset(proc *process.Process, pipelineFailed bool, err error) {

@@ -1923,11 +1923,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
 			var tp = types.T_date
+			var fsp int
 			if exprC := args[1].GetLit(); exprC != nil {
 				sval := exprC.Value.(*plan.Literal_Sval)
-				tp, _ = ExtractToDateReturnType(sval.Sval)
+				tp, fsp = ExtractToDateReturnType(sval.Sval)
 			}
-			args = append(args, makePlan2DateConstNullExpr(tp))
+			args = append(args, makePlan2DateConstNullExprWithScale(tp, int32(fsp)))
 
 		} else if args[1].Typ.Id == int32(types.T_any) {
 			args = append(args, makePlan2DateConstNullExpr(types.T_datetime))
