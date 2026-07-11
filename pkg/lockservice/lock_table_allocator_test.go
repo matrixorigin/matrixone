@@ -394,6 +394,7 @@ func TestCleanCommitStateDefersRetryableErrorToNextSweep(t *testing.T) {
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
@@ -495,6 +496,68 @@ func TestCleanCommitStateExpiresRetryableServiceState(t *testing.T) {
 			t.Fatal("cleanCommitState did not stop after cancellation")
 		}
 	})
+}
+
+func TestCleanCommitStateExpiresPersistentDisconnectState(t *testing.T) {
+	runtime.RunTest("", func(_ runtime.Runtime) {
+		lta := &lockTableAllocator{
+			logger:          getLogger("").Named("clean-commit-state-disconnect-expiry-test"),
+			keepBindTimeout: time.Millisecond,
+		}
+		lta.options.removeDisconnectDuration = 20 * time.Millisecond
+		ctl := lta.getCtl("disconnected-service")
+		require.Equal(t, cannotCommitState, ctl.tryCannotCommit("t1"))
+
+		var calls atomic.Int64
+		lta.options.getActiveTxnFunc = func(context.Context, string) (bool, [][]byte, error) {
+			calls.Add(1)
+			return false, nil, moerr.NewBackendClosedNoCtx()
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			lta.cleanCommitState(ctx)
+		}()
+
+		require.Eventually(t, func() bool {
+			_, exists := lta.ctl.Load("disconnected-service")
+			return calls.Load() > 1 && !exists
+		}, time.Second, 5*time.Millisecond)
+
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("cleanCommitState did not stop after cancellation")
+		}
+	})
+}
+
+func TestExpireInactiveServicePreservesFreshDisconnectEpoch(t *testing.T) {
+	lta := &lockTableAllocator{}
+	sid := "reconnected-service"
+	oldInactiveAt := time.Now().Add(-time.Hour)
+	lta.inactiveService.Store(sid, oldInactiveAt)
+
+	// The expiry sweep observed the old epoch, then the service resumed and
+	// disconnected again before the sweep attempted to delete its marker.
+	observed, ok := lta.inactiveService.Load(sid)
+	require.True(t, ok)
+	lta.inactiveService.Delete(sid)
+	lta.markInactiveService(sid)
+
+	require.False(t, lta.expireInactiveService(
+		sid,
+		observed.(time.Time),
+		time.Now(),
+		time.Minute,
+	))
+	fresh, ok := lta.inactiveService.Load(sid)
+	require.True(t, ok)
+	require.True(t, fresh.(time.Time).After(oldInactiveAt))
 }
 
 func TestCannotCommitGenerationRefresh(t *testing.T) {

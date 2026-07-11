@@ -186,7 +186,28 @@ func (l *lockTableAllocator) FinishCommit(serviceID string, txnID []byte) {
 }
 
 func (l *lockTableAllocator) AddInvalidService(serviceID string) {
-	l.inactiveService.Store(serviceID, time.Now())
+	l.markInactiveService(serviceID)
+}
+
+func (l *lockTableAllocator) markInactiveService(serviceID string) {
+	// Retention starts at the first failure in the current disconnected epoch.
+	// Repeated probes must not extend it forever. ResumeInvalidCN deletes the
+	// marker, so a later disconnect naturally starts a new epoch.
+	l.inactiveService.LoadOrStore(serviceID, time.Now())
+}
+
+func (l *lockTableAllocator) expireInactiveService(
+	serviceID string,
+	inactiveAt time.Time,
+	now time.Time,
+	retention time.Duration,
+) bool {
+	if now.Sub(inactiveAt) <= retention {
+		return false
+	}
+	// Only delete the epoch observed by the expiry sweep. The service may have
+	// resumed and disconnected again after the marker was loaded.
+	return l.inactiveService.CompareAndDelete(serviceID, inactiveAt)
 }
 
 func (l *lockTableAllocator) HasInvalidService(serviceID string) bool {
@@ -651,13 +672,18 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 			})
 			l.ctlMu.RUnlock()
 
+			now := time.Now()
 			l.inactiveService.Range(func(key, value any) bool {
-				if time.Since(value.(time.Time)) > removeDisconnectDuration {
-					sid := key.(string)
+				sid := key.(string)
+				if l.expireInactiveService(
+					sid,
+					value.(time.Time),
+					now,
+					removeDisconnectDuration,
+				) {
 					l.logger.Error("remove inactive service",
 						zap.String("serviceID", sid))
 					expiredUnknownServices[sid] = struct{}{}
-					l.inactiveService.Delete(key)
 				}
 				return true
 			})
@@ -710,7 +736,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 				l.logger.Error("get active txn failed",
 					zap.String("serviceID", sid),
 					zap.Error(err))
-				l.inactiveService.Store(sid, time.Now())
+				l.markInactiveService(sid)
 				unknownServices = append(unknownServices, sid)
 			}
 
