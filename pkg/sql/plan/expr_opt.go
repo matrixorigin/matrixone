@@ -20,8 +20,10 @@ import (
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -327,6 +329,149 @@ func blockFilterEquivalent(left, right *plan.Expr) bool {
 	return exprStructuralEqual(left, right)
 }
 
+// blockFilterSemanticallyEquivalent handles the two representation changes a
+// block predicate can undergo between stats passes: constant IN lists are
+// folded into vectors, and logical expressions can be flattened. Keep this
+// deliberately narrower than general expression equivalence so deduplication
+// can never discard two different range predicates on the same column.
+func blockFilterSemanticallyEquivalent(left, right *plan.Expr) bool {
+	if exprStructuralEqual(left, right) {
+		return true
+	}
+	if left == nil || right == nil {
+		return false
+	}
+	leftFn, rightFn := left.GetF(), right.GetF()
+	if leftFn == nil || rightFn == nil || leftFn.Func == nil || rightFn.Func == nil ||
+		leftFn.Func.ObjName != rightFn.Func.ObjName {
+		return false
+	}
+
+	switch leftFn.Func.ObjName {
+	case "and", "or":
+		var leftArgs, rightArgs []*plan.Expr
+		flattenLogicalExpressions(left, leftFn.Func.ObjName, &leftArgs)
+		flattenLogicalExpressions(right, rightFn.Func.ObjName, &rightArgs)
+		if len(leftArgs) != len(rightArgs) {
+			return false
+		}
+		// Flattening preserves operand order. Comparing positionally keeps this
+		// linear for large OR trees and avoids a matched-object allocation.
+		for i := range leftArgs {
+			if !blockFilterSemanticallyEquivalent(leftArgs[i], rightArgs[i]) {
+				return false
+			}
+		}
+		return true
+	case "in", "not_in", "prefix_in":
+		if len(leftFn.Args) != 2 || len(rightFn.Args) != 2 ||
+			!exprStructuralEqual(leftFn.Args[0], rightFn.Args[0]) {
+			return false
+		}
+		return blockFilterConstantSetsEqual(leftFn.Args[1], rightFn.Args[1])
+	default:
+		return false
+	}
+}
+
+func blockFilterConstantSetsEqual(left, right *plan.Expr) bool {
+	// Build value maps only after structural equality failed. The one-time O(n)
+	// comparison is cheaper than retaining an O(n) IN predicate for every block.
+	leftSet, ok := blockFilterConstantSet(left)
+	if !ok {
+		return false
+	}
+	rightSet, ok := blockFilterConstantSet(right)
+	if !ok || len(leftSet) != len(rightSet) {
+		return false
+	}
+	for key := range leftSet {
+		if _, ok = rightSet[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func blockFilterConstantSet(expr *plan.Expr) (map[string]struct{}, bool) {
+	if expr == nil {
+		return nil, false
+	}
+	if list := expr.GetList(); list != nil {
+		ret := make(map[string]struct{}, len(list.List))
+		for _, item := range list.List {
+			lit, typ, ok := blockFilterConstLiteral(item)
+			if !ok {
+				return nil, false
+			}
+			key, ok := blockFilterLiteralKey(lit, typ)
+			if !ok {
+				return nil, false
+			}
+			ret[key] = struct{}{}
+		}
+		return ret, true
+	}
+
+	literalVec := expr.GetVec()
+	if literalVec == nil {
+		return nil, false
+	}
+	var vec vector.Vector
+	if err := vec.UnmarshalBinary(literalVec.Data); err != nil || vec.Length() != int(literalVec.Len) {
+		return nil, false
+	}
+	typ := plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale}
+	ret := make(map[string]struct{}, vec.Length())
+	for i := 0; i < vec.Length(); i++ {
+		lit := rule.GetConstantValue(&vec, true, uint64(i))
+		key, ok := blockFilterLiteralKey(lit, typ)
+		if !ok {
+			return nil, false
+		}
+		ret[key] = struct{}{}
+	}
+	return ret, true
+}
+
+func blockFilterConstLiteral(expr *plan.Expr) (*plan.Literal, plan.Type, bool) {
+	if expr == nil {
+		return nil, plan.Type{}, false
+	}
+	effectiveTyp := expr.Typ
+	for {
+		if lit := expr.GetLit(); lit != nil {
+			return lit, effectiveTyp, true
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
+			return nil, plan.Type{}, false
+		}
+		expr = fn.Args[0]
+	}
+}
+
+func blockFilterLiteralKey(lit *plan.Literal, typ plan.Type) (string, bool) {
+	if lit == nil {
+		return "", false
+	}
+	litBytes, err := lit.Marshal()
+	if err != nil {
+		return "", false
+	}
+	key := make([]byte, 8+len(litBytes))
+	key[0] = byte(typ.Id)
+	key[1] = byte(typ.Id >> 8)
+	key[2] = byte(typ.Id >> 16)
+	key[3] = byte(typ.Id >> 24)
+	key[4] = byte(typ.Scale)
+	key[5] = byte(typ.Scale >> 8)
+	key[6] = byte(typ.Scale >> 16)
+	key[7] = byte(typ.Scale >> 24)
+	copy(key[8:], litBytes)
+	return string(key), true
+}
+
 // Compound IN predicates can alternate between Expr_List and folded Expr_Vec
 // across stats passes.  The compound rewrite produces at most one predicate of
 // a given operation for the hidden key, so operation+target is the stable
@@ -366,7 +511,9 @@ func (builder *QueryBuilder) deduplicateBlockFilters(nodeID int32) {
 		for _, filter := range node.BlockFilterList {
 			duplicate := false
 			for _, existing := range unique {
-				if blockFilterEquivalent(existing, filter) || sameGeneratedCompoundFilter(node, existing, filter) {
+				if blockFilterEquivalent(existing, filter) ||
+					blockFilterSemanticallyEquivalent(existing, filter) ||
+					sameGeneratedCompoundFilter(node, existing, filter) {
 					duplicate = true
 					break
 				}

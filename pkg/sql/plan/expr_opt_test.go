@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -181,6 +182,47 @@ func TestCompositeKeyPartBlockFiltersTrackCanonicalizedPredicateIdentity(t *test
 	require.Empty(t, candidates, "an in-place canonicalized predicate was not consumed")
 }
 
+func TestDeduplicateBlockFiltersAcrossPlannerRepresentations(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	tag := int32(1)
+	a := makeExprOptBinaryInt64Expr(t, ctx, ">", makeExprOptInt64Col(tag, 0, "a"), 1)
+	b := makeExprOptBinaryInt64Expr(t, ctx, ">", makeExprOptInt64Col(tag, 0, "a"), 2)
+	c := makeExprOptBinaryInt64Expr(t, ctx, ">", makeExprOptInt64Col(tag, 0, "a"), 3)
+	leftOr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "or", []*planpb.Expr{a, b})
+	require.NoError(t, err)
+	nestedOr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "or", []*planpb.Expr{leftOr, c})
+	require.NoError(t, err)
+	flatOr := &planpb.Expr{
+		Typ: nestedOr.Typ,
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: nestedOr.GetF().Func,
+			Args: []*planpb.Expr{DeepCopyExpr(a), DeepCopyExpr(b), DeepCopyExpr(c)},
+		}},
+	}
+
+	listIn := makeExprOptInExpr(t, ctx, tag, 1, 11, 15, 110, 210)
+	mp := mpool.MustNew(t.Name())
+	vectorIn := DeepCopyExpr(listIn)
+	vectorIn.GetF().Args[1] = MakePlan2Int64VecExprWithType(mp, 11, 15, 110, 210)
+	differentIn := DeepCopyExpr(listIn)
+	differentIn.GetF().Args[1] = MakePlan2Int64VecExprWithType(mp, 11, 15, 110, 211)
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	builder.qry.Nodes = []*planpb.Node{{
+		NodeType: planpb.Node_TABLE_SCAN,
+		BlockFilterList: []*planpb.Expr{
+			nestedOr, flatOr,
+			listIn, vectorIn, differentIn,
+		},
+	}}
+	builder.deduplicateBlockFilters(0)
+
+	require.Len(t, builder.qry.Nodes[0].BlockFilterList, 3)
+	require.Same(t, nestedOr, builder.qry.Nodes[0].BlockFilterList[0])
+	require.Same(t, listIn, builder.qry.Nodes[0].BlockFilterList[1])
+	require.Same(t, differentIn, builder.qry.Nodes[0].BlockFilterList[2])
+}
+
 func makeExprOptCompositeSortKeyTableDef() *planpb.TableDef {
 	return &planpb.TableDef{
 		Cols: []*planpb.ColDef{
@@ -221,6 +263,23 @@ func makeExprOptBinaryInt64Expr(t *testing.T, ctx *MockCompilerContext, op strin
 	expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), op, []*planpb.Expr{
 		col,
 		MakePlan2Int64ConstExprWithType(val),
+	})
+	require.NoError(t, err)
+	return expr
+}
+
+func makeExprOptInExpr(t *testing.T, ctx *MockCompilerContext, tag, pos int32, values ...int64) *planpb.Expr {
+	t.Helper()
+	items := make([]*planpb.Expr, len(values))
+	for i, value := range values {
+		items[i] = MakePlan2Int64ConstExprWithType(value)
+	}
+	expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "in", []*planpb.Expr{
+		makeExprOptInt64Col(tag, pos, "b"),
+		{
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_List{List: &planpb.ExprList{List: items}},
+		},
 	})
 	require.NoError(t, err)
 	return expr
