@@ -23,7 +23,7 @@ import (
 	"os"
 	"path"
 	runtime2 "runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -556,8 +556,14 @@ func copyFileAndGetMetaFiles(
 	if len(metaFiles) == 0 {
 		return taeFileList, metaFiles, mFiles, nil
 	}
-	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
+	slices.SortFunc(metaFiles, func(a, b ioutil.TSRangeFile) int {
+		if a.GetEnd().LT(b.GetEnd()) {
+			return -1
+		}
+		if b.GetEnd().LT(a.GetEnd()) {
+			return 1
+		}
+		return 0
 	})
 
 	return taeFileList, metaFiles, mFiles, nil

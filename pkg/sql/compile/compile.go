@@ -15,12 +15,13 @@
 package compile
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -779,9 +780,7 @@ func (c *Compile) lockTable() error {
 	for tableID := range c.lockTables {
 		tableIDs = append(tableIDs, tableID)
 	}
-	sort.Slice(tableIDs, func(i, j int) bool {
-		return tableIDs[i] < tableIDs[j]
-	})
+	slices.Sort(tableIDs)
 	for _, tableID := range tableIDs {
 		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
@@ -2313,8 +2312,8 @@ func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Nod
 	for i := range indices {
 		indices[i] = i
 	}
-	sort.SliceStable(indices, func(i, j int) bool {
-		return hiveFileSizeAt(fileSize, indices[i]) > hiveFileSizeAt(fileSize, indices[j])
+	slices.SortStableFunc(indices, func(a, b int) int {
+		return cmp.Compare(hiveFileSizeAt(fileSize, b), hiveFileSizeAt(fileSize, a))
 	})
 
 	for _, fileIdx := range indices {
@@ -2364,16 +2363,16 @@ func splitParquetRowGroupShards(
 	for i := range indices {
 		indices[i] = i
 	}
-	sort.SliceStable(indices, func(i, j int) bool {
-		left := rowGroups[indices[i]]
-		right := rowGroups[indices[j]]
-		if parquetRowGroupLoad(left) != parquetRowGroupLoad(right) {
-			return parquetRowGroupLoad(left) > parquetRowGroupLoad(right)
+	slices.SortStableFunc(indices, func(a, b int) int {
+		left := rowGroups[a]
+		right := rowGroups[b]
+		if c := cmp.Compare(parquetRowGroupLoad(right), parquetRowGroupLoad(left)); c != 0 {
+			return c
 		}
-		if left.fileIndex != right.fileIndex {
-			return left.fileIndex < right.fileIndex
+		if c := cmp.Compare(left.fileIndex, right.fileIndex); c != 0 {
+			return c
 		}
-		return left.rowGroupIndex < right.rowGroupIndex
+		return cmp.Compare(left.rowGroupIndex, right.rowGroupIndex)
 	})
 
 	for _, rowGroupIdx := range indices {
@@ -2415,13 +2414,11 @@ func splitParquetRowGroupShards(
 		if len(shard.rowGroupShards) == 0 {
 			continue
 		}
-		sort.SliceStable(shard.rowGroupShards, func(i, j int) bool {
-			left := shard.rowGroupShards[i]
-			right := shard.rowGroupShards[j]
-			if left.FileIndex != right.FileIndex {
-				return left.FileIndex < right.FileIndex
+		slices.SortStableFunc(shard.rowGroupShards, func(left, right *pipeline.ParquetRowGroupShard) int {
+			if c := cmp.Compare(left.FileIndex, right.FileIndex); c != 0 {
+				return c
 			}
-			return left.RowGroupStart < right.RowGroupStart
+			return cmp.Compare(left.RowGroupStart, right.RowGroupStart)
 		})
 		shard.rowGroupShards = mergeAdjacentParquetRowGroupShards(shard.rowGroupShards)
 		shard.originalToLocal = nil

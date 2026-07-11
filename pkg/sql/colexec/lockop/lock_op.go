@@ -20,7 +20,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -1448,8 +1448,8 @@ func dedupLockRows(rows [][]byte) [][]byte {
 	if len(rows) <= 1 {
 		return rows
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		return bytes.Compare(rows[i], rows[j]) < 0
+	slices.SortFunc(rows, func(a, b []byte) int {
+		return bytes.Compare(a, b)
 	})
 	deduped := rows[:1]
 	for i := 1; i < len(rows); i++ {

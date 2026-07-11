@@ -16,13 +16,14 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"io"
 	"iter"
 	pathpkg "path"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -429,8 +430,8 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 
 	// sort
-	sort.Slice(vector.Entries, func(i, j int) bool {
-		return vector.Entries[i].Offset < vector.Entries[j].Offset
+	slices.SortFunc(vector.Entries, func(a, b IOEntry) int {
+		return cmp.Compare(a.Offset, b.Offset)
 	})
 
 	// reader

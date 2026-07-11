@@ -19,7 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -1069,10 +1069,20 @@ func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil && len(node.FilterList) >= 1 {
-			sort.Slice(node.FilterList, func(i, j int) bool {
-				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
-				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
-				return cost1 <= cost2
+			// Filter evaluation order here is semantically significant: it decides
+			// which predicate a vector/IVF index probes with and which value a
+			// runtime error reports (see operator/is_not_operator,
+			// vector/vector_ivf_mode). The original sort.Slice comparator was
+			// non-strict (cost1 <= cost2); a strict cmp.Compare (0 on ties) would
+			// reorder equal-cost filters and change results. Reproduce the exact
+			// original ordering here while avoiding sort.Slice's interface{} boxing.
+			slices.SortFunc(node.FilterList, func(a, b *plan.Expr) int {
+				cost1 := estimateFilterWeight(a, 0) * a.Selectivity
+				cost2 := estimateFilterWeight(b, 0) * b.Selectivity
+				if cost1 <= cost2 {
+					return -1
+				}
+				return 1
 			})
 		}
 	}

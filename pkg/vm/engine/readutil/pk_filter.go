@@ -16,7 +16,7 @@ package readutil
 
 import (
 	"bytes"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -290,7 +290,7 @@ func combineOffsetFuncs(funcs []func(*vector.Vector) []int64) func(*vector.Vecto
 				out = append(out, off)
 			}
 		}
-		sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+		slices.Sort(out)
 		return out
 	}
 }

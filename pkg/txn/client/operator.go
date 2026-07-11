@@ -16,11 +16,12 @@ package client
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -469,8 +470,8 @@ func (t *runSQLTracker) waitingInfo(keepToken uint64, skipToken uint64) []string
 			infos = append(infos, waitInfo{token: token, sql: info.sql, start: info.start})
 		}
 	}
-	sort.Slice(infos, func(i, j int) bool {
-		return infos[i].token < infos[j].token
+	slices.SortFunc(infos, func(a, b waitInfo) int {
+		return cmp.Compare(a.token, b.token)
 	})
 	sqls := make([]string, 0, len(infos))
 	for _, info := range infos {

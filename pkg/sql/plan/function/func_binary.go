@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -27,6 +28,7 @@ import (
 	"math"
 	"math/big"
 	"math/bits"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -10483,11 +10485,11 @@ func parameterIntervalsCoverSegment(intervals []geometryParamInterval) bool {
 		return false
 	}
 
-	sort.Slice(intervals, func(i, j int) bool {
-		if sameGeometryCoordinate(intervals[i].start, intervals[j].start) {
-			return intervals[i].end < intervals[j].end
+	slices.SortFunc(intervals, func(a, b geometryParamInterval) int {
+		if sameGeometryCoordinate(a.start, b.start) {
+			return cmp.Compare(a.end, b.end)
 		}
-		return intervals[i].start < intervals[j].start
+		return cmp.Compare(a.start, b.start)
 	})
 
 	coveredEnd := intervals[0].end

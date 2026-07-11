@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -338,28 +337,46 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 	ls.rangeSlice = make(objectio.BlockInfoSlice, ls.rangeSlice.Size())
 
 	if ls.desc {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
+		less := func(a, b *blockSortHelper) bool {
+			zm1 := a.zm
 			if !zm1.IsInited() {
 				return true
 			}
-			zm2 := helper[j].zm
+			zm2 := b.zm
 			if !zm2.IsInited() {
 				return false
 			}
 			return zm1.CompareMax(zm2) > 0
+		}
+		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+			if less(a, b) {
+				return -1
+			}
+			if less(b, a) {
+				return 1
+			}
+			return 0
 		})
 	} else {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
+		less := func(a, b *blockSortHelper) bool {
+			zm1 := a.zm
 			if !zm1.IsInited() {
 				return true
 			}
-			zm2 := helper[j].zm
+			zm2 := b.zm
 			if !zm2.IsInited() {
 				return false
 			}
 			return zm1.CompareMin(zm2) < 0
+		}
+		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+			if less(a, b) {
+				return -1
+			}
+			if less(b, a) {
+				return 1
+			}
+			return 0
 		})
 	}
 

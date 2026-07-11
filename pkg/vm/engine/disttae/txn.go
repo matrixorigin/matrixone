@@ -15,12 +15,13 @@
 package disttae
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"fmt"
 	"math"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -792,8 +793,8 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	for k := range tbSize {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		return tbSize[keys[i]] < tbSize[keys[j]]
+	slices.SortFunc(keys, func(a, b uint64) int {
+		return cmp.Compare(tbSize[a], tbSize[b])
 	})
 
 	// Skip the skipTable logic if force flush is enabled
@@ -1536,9 +1537,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
 				txn.approximateInMemInsertCnt -= len(sels)
-				sort.Slice(sels, func(i, j int) bool {
-					return sels[i] < (sels[j])
-				})
+				slices.Sort(sels)
 				shrinkBatchWithRowids(e.bat, sels)
 				delete(txn.batchSelectList, e.bat)
 			}

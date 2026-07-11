@@ -15,8 +15,9 @@
 package clusterservice
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -372,8 +373,8 @@ func (c *cluster) refresh() {
 		}
 	}
 	// sort as the tick, with the bigger one at the front.
-	sort.Slice(details.TNStores, func(i, j int) bool {
-		return details.TNStores[i].Tick > details.TNStores[j].Tick
+	slices.SortFunc(details.TNStores, func(a, b logpb.TNStore) int {
+		return cmp.Compare(b.Tick, a.Tick)
 	})
 	for _, tn := range details.TNStores {
 		v := newTNService(tn)
