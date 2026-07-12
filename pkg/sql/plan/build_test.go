@@ -919,9 +919,10 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 func TestRollupWindowAliasCollisionsPreserveSourceScope(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tests := []struct {
-		name             string
-		sql              string
-		expectedHeadings []string
+		name               string
+		sql                string
+		expectedHeadings   []string
+		expectedProjectLen int
 	}{
 		{
 			name: "select alias collides with source column",
@@ -930,7 +931,8 @@ func TestRollupWindowAliasCollisionsPreserveSourceScope(t *testing.T) {
 				       row_number() over (order by n_regionkey) as rn
 				from nation
 				group by n_name, n_regionkey with rollup`,
-			expectedHeadings: []string{"n_regionkey", "n_regionkey", "sum(n_nationkey)", "rn"},
+			expectedHeadings:   []string{"n_regionkey", "n_regionkey", "sum(n_nationkey)", "rn"},
+			expectedProjectLen: 4,
 		},
 		{
 			name: "window output alias collides with source column",
@@ -939,7 +941,18 @@ func TestRollupWindowAliasCollisionsPreserveSourceScope(t *testing.T) {
 				       row_number() over (order by n_regionkey) as n_regionkey
 				from nation
 				group by n_name, n_regionkey with rollup`,
-			expectedHeadings: []string{"n_name", "n_regionkey", "sum(n_nationkey)", "n_regionkey"},
+			expectedHeadings:   []string{"n_name", "n_regionkey", "sum(n_nationkey)", "n_regionkey"},
+			expectedProjectLen: 4,
+		},
+		{
+			name: "final order by window keeps source scope",
+			sql: `
+				select n_name as n_regionkey, n_regionkey, sum(n_nationkey)
+				from nation
+				group by n_name, n_regionkey with rollup
+				order by row_number() over (order by n_regionkey)`,
+			expectedHeadings:   []string{"n_regionkey", "n_regionkey", "sum(n_nationkey)"},
+			expectedProjectLen: 3,
 		},
 	}
 
@@ -953,7 +966,7 @@ func TestRollupWindowAliasCollisionsPreserveSourceScope(t *testing.T) {
 			require.NotEmpty(t, query.Steps)
 
 			root := query.Nodes[query.Steps[len(query.Steps)-1]]
-			require.Len(t, root.ProjectList, 4)
+			require.Len(t, root.ProjectList, test.expectedProjectLen)
 			require.Equal(t, int32(types.T_int32), root.ProjectList[1].Typ.Id)
 
 			foundRowNumber := false
