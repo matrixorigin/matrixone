@@ -829,6 +829,7 @@ func (ses *Session) Close() {
 	ses.rs = nil
 	ses.queryId = nil
 	ses.p = nil
+	ses.releasePlanCache()
 	ses.planCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
@@ -910,6 +911,12 @@ func (ses *Session) cleanCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.planCache.clean()
+}
+
+func (ses *Session) releasePlanCache() {
+	if ses.planCache != nil {
+		ses.planCache.clean()
+	}
 }
 
 func (ses *Session) UpdateDebugString() {

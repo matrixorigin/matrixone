@@ -93,12 +93,13 @@ func (pc *planCache) isCached(sql string) bool {
 
 func (pc *planCache) clean() {
 	if pc.lruList != nil {
-		for i := 0; i < pc.lruList.Len(); i++ {
+		for pc.lruList.Len() > 0 {
 			toRemove := pc.lruList.Front()
 			toRemoveStmts := toRemove.Value.(*cachedPlan).stmts
 			for _, stmt := range toRemoveStmts {
 				stmt.Free()
 			}
+			pc.lruList.Remove(toRemove)
 		}
 	}
 	pc.lruList = nil
