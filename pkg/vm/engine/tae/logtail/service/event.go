@@ -51,6 +51,22 @@ func (n *Notifier) NotifyLogtail(
 	return nil
 }
 
+// Drain releases events which were accepted by the notifier but cannot be
+// published because the server is shutting down. Call it only after all event
+// consumers have stopped, otherwise ownership would race with publication.
+func (n *Notifier) Drain() {
+	for {
+		select {
+		case event := <-n.C:
+			if event.closeCB != nil {
+				event.closeCB()
+			}
+		default:
+			return
+		}
+	}
+}
+
 type event struct {
 	from, to timestamp.Timestamp
 	closeCB  func()

@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,8 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+const maxSegmentedLogtailResponseSize = math.MaxInt32
+
 type TableState int
 
 const (
@@ -40,6 +43,11 @@ const (
 	TableSubscribed
 	TableNotFound
 )
+
+type tableSubscription struct {
+	state      TableState
+	generation uint64
+}
 
 var (
 	// responseBufferSize is the buffer channel capacity for every morpc stream.
@@ -177,6 +185,9 @@ func (s *morpcStream) write(
 	ctx context.Context, response *LogtailResponse,
 ) error {
 	size := response.ProtoSize()
+	if err := validateSegmentedResponseSize(size); err != nil {
+		return err
+	}
 	buf := make([]byte, size)
 	n, err := response.MarshalToSizedBuffer(buf[:size])
 	if err != nil {
@@ -212,6 +223,16 @@ func (s *morpcStream) write(
 	return nil
 }
 
+func validateSegmentedResponseSize(size int) error {
+	if size < 0 || size > maxSegmentedLogtailResponseSize {
+		return moerr.NewInvalidInputNoCtxf(
+			"logtail response size %d exceeds segmented protocol limit %d",
+			size, maxSegmentedLogtailResponseSize,
+		)
+	}
+	return nil
+}
+
 // Session manages subscription for logtail client.
 type Session struct {
 	sessionCtx context.Context
@@ -229,11 +250,13 @@ type Session struct {
 
 	active int32
 
-	mu     sync.RWMutex
-	tables map[TableID]TableState
+	mu             sync.RWMutex
+	tables         map[TableID]tableSubscription
+	nextGeneration uint64
 
 	heartbeatInterval time.Duration
 	heartbeatTimer    *time.Timer
+	publishMu         sync.Mutex
 	exactFrom         timestamp.Timestamp
 	publishInit       sync.Once
 
@@ -271,18 +294,24 @@ func NewSession(
 		stream:            stream,
 		poisonTime:        poisonTime,
 		sendChan:          make(chan message, responseBufferSize), // buffer response for morpc client session
-		tables:            make(map[TableID]TableState),
+		tables:            make(map[TableID]tableSubscription),
 		heartbeatInterval: heartbeatInterval,
 		heartbeatTimer:    time.NewTimer(heartbeatInterval),
 	}
 
 	ss.logger.Info("initialize new session for morpc stream")
+	transportCtx := stream.cs.SessionCtx()
+	if transportCtx == nil {
+		// Test and legacy ClientSession implementations may not expose a
+		// transport context. A nil channel keeps this select case disabled.
+		transportCtx = context.Background()
+	}
 
 	sender := func() {
 		defer ss.wg.Done()
 
 		var cnt int64
-		timer := time.NewTimer(100 * time.Second)
+		timer := time.NewTimer(ss.heartbeatInterval)
 
 		for {
 			select {
@@ -290,14 +319,27 @@ func NewSession(
 				ss.logger.Error("stop session sender", zap.Error(ss.sessionCtx.Err()))
 				return
 
+			case <-transportCtx.Done():
+				err := transportCtx.Err()
+				ss.logger.Info("transport session closed", zap.Error(err))
+				// The logtail session is owned by the transport connection. Cancel
+				// it before notifying the server reaper so no publisher can enqueue
+				// more responses while the session is being removed.
+				ss.cancelFunc()
+				ss.notifier.NotifySessionError(ss, err)
+				return
+
 			case <-timer.C:
-				ss.logger.Info("send logtail channel blocked", zap.Int64("sendRound", cnt))
 				if ss.TableCount() == 0 {
 					ss.logger.Error("no tables are subscribed yet, close this session")
 					ss.notifier.NotifySessionError(ss, moerr.NewInternalError(ctx, "no tables are subscribed"))
 					return
 				}
-				timer.Reset(10 * time.Second)
+				if err := ss.sendHeartbeat(); err != nil {
+					ss.notifier.NotifySessionError(ss, err)
+					return
+				}
+				timer.Reset(ss.heartbeatInterval)
 
 			case msg, ok := <-ss.sendChan:
 				if !ok {
@@ -346,7 +388,7 @@ func NewSession(
 					return
 				}
 				cnt++
-				timer.Reset(10 * time.Second)
+				timer.Reset(ss.heartbeatInterval)
 			}
 		}
 	}
@@ -355,6 +397,18 @@ func NewSession(
 	go sender()
 
 	return ss
+}
+
+func (ss *Session) sendHeartbeat() error {
+	ss.publishMu.Lock()
+	from := ss.exactFrom
+	ss.publishMu.Unlock()
+	resp := ss.responses.Acquire()
+	resp.Response = newUpdateResponse(from, from)
+	defer ss.responses.Release(resp)
+	ctx, cancel := context.WithTimeout(ss.sessionCtx, ss.sendTimeout)
+	defer cancel()
+	return ss.stream.write(ctx, resp)
 }
 
 // Drop closes sender goroutine.
@@ -389,14 +443,26 @@ func (ss *Session) PostClean() {
 //
 // The returned true value indicates repeated subscription.
 func (ss *Session) Register(id TableID, table api.TableID) bool {
+	repeated, _ := ss.RegisterWithGeneration(id, table)
+	return repeated
+}
+
+// RegisterWithGeneration starts one logical subscription attempt. A table may
+// be subscribed again after cancellation, so completion must carry this token
+// rather than relying on the table ID alone.
+func (ss *Session) RegisterWithGeneration(id TableID, table api.TableID) (bool, uint64) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
-	if _, ok := ss.tables[id]; ok {
-		return true
+	if entry, ok := ss.tables[id]; ok {
+		return true, entry.generation
 	}
-	ss.tables[id] = TableOnSubscription
-	return false
+	ss.nextGeneration++
+	ss.tables[id] = tableSubscription{
+		state:      TableOnSubscription,
+		generation: ss.nextGeneration,
+	}
+	return false, ss.nextGeneration
 }
 
 // Unsubscribe unsubscribes table.
@@ -404,12 +470,12 @@ func (ss *Session) Unregister(id TableID) TableState {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
-	state, ok := ss.tables[id]
+	entry, ok := ss.tables[id]
 	if !ok {
 		return TableNotFound
 	}
 	delete(ss.tables, id)
-	return state
+	return entry.state
 }
 
 // ListTable takes a snapshot of all
@@ -418,8 +484,8 @@ func (ss *Session) ListSubscribedTable() []TableID {
 	defer ss.mu.RUnlock()
 
 	ids := make([]TableID, 0, len(ss.tables))
-	for id, state := range ss.tables {
-		if state == TableSubscribed {
+	for id, entry := range ss.tables {
+		if entry.state == TableSubscribed {
 			ids = append(ids, id)
 		}
 	}
@@ -433,7 +499,7 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 
 	qualified := make([]logtail.TableLogtail, 0, 4)
 	for _, t := range tails {
-		if state, ok := ss.tables[t.id]; ok && state == TableSubscribed {
+		if entry, ok := ss.tables[t.id]; ok && entry.state == TableSubscribed {
 			qualified = append(qualified, t.tail)
 		} else {
 			ss.logger.Debug("table not subscribed, filter out",
@@ -458,9 +524,12 @@ func (ss *Session) Publish(
 	}
 
 	// keep `logtail.UpdateResponse.From` monotonous
+	ss.publishMu.Lock()
 	ss.publishInit.Do(func() {
 		ss.exactFrom = from
 	})
+	exactFrom := ss.exactFrom
+	ss.publishMu.Unlock()
 
 	qualified := ss.FilterLogtail(wraps...)
 	// if there's no incremental logtail, heartbeat by interval
@@ -480,10 +549,12 @@ func (ss *Session) Publish(
 	defer cancel()
 
 	beforeSend := time.Now()
-	err := ss.SendUpdateResponse(sendCtx, ss.exactFrom, to, closeCB, qualified...)
+	err := ss.TrySendUpdateResponse(sendCtx, exactFrom, to, closeCB, qualified...)
 	if err == nil {
 		ss.heartbeatTimer.Reset(ss.heartbeatInterval)
+		ss.publishMu.Lock()
 		ss.exactFrom = to
+		ss.publishMu.Unlock()
 	} else {
 		err = moerr.AttachCause(sendCtx, err)
 		ss.logger.Error("send update response failed",
@@ -503,10 +574,38 @@ func (ss *Session) AdvanceState(id TableID) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
-	if _, ok := ss.tables[id]; !ok {
+	entry, ok := ss.tables[id]
+	if !ok {
 		return
 	}
-	ss.tables[id] = TableSubscribed
+	entry.state = TableSubscribed
+	ss.tables[id] = entry
+}
+
+// CompleteSubscription is the only transition from a pull result to an active
+// table. It holds the state lock through enqueueing the response, making an
+// unsubscribe linearizable with respect to a late phase result.
+func (ss *Session) CompleteSubscription(
+	sendCtx context.Context, id TableID, generation uint64,
+	tail logtail.TableLogtail, closeCB func(),
+) (bool, error) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	entry, ok := ss.tables[id]
+	if !ok || entry.state != TableOnSubscription || entry.generation != generation {
+		if closeCB != nil {
+			closeCB()
+		}
+		return false, nil
+	}
+	if err := ss.SendSubscriptionResponse(sendCtx, tail, closeCB); err != nil {
+		delete(ss.tables, id)
+		return true, err
+	}
+	entry.state = TableSubscribed
+	ss.tables[id] = entry
+	return true, nil
 }
 
 // SendErrorResponse sends error response to logtail client.
@@ -544,8 +643,16 @@ func (ss *Session) SendUnsubscriptionResponse(
 
 	resp := ss.responses.Acquire()
 	resp.Response = newUnsubscriptionResponse(table)
-	err := ss.SendResponse(sendCtx, resp)
-	if err == nil {
+	return ss.SendResponse(sendCtx, resp)
+}
+
+// CompleteUnsubscription sends the protocol response and updates the session
+// activity count only when a previously active table was actually removed.
+func (ss *Session) CompleteUnsubscription(
+	sendCtx context.Context, table api.TableID, state TableState,
+) error {
+	err := ss.SendUnsubscriptionResponse(sendCtx, table)
+	if err == nil && state == TableSubscribed {
 		atomic.AddInt32(&ss.active, -1)
 	}
 	return err
@@ -563,12 +670,30 @@ func (ss *Session) SendUpdateResponse(
 	return ss.SendResponse(sendCtx, resp)
 }
 
+// TrySendUpdateResponse never waits for a congested session. Incremental
+// publication is global progress: a slow consumer must reconnect and take a
+// snapshot rather than delaying healthy consumers.
+func (ss *Session) TrySendUpdateResponse(
+	sendCtx context.Context, from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail,
+) error {
+	resp := ss.responses.Acquire()
+	resp.closeCB = closeCB
+	resp.Response = newUpdateResponse(from, to, tails...)
+	return ss.sendResponse(sendCtx, resp, false)
+}
+
 // SendResponse sends response.
 //
 // If the sender of Session finished, it would block until
 // sendCtx/sessionCtx cancelled or timeout.
 func (ss *Session) SendResponse(
 	sendCtx context.Context, response *LogtailResponse,
+) error {
+	return ss.sendResponse(sendCtx, response, true)
+}
+
+func (ss *Session) sendResponse(
+	sendCtx context.Context, response *LogtailResponse, wait bool,
 ) error {
 	select {
 	case <-ss.sessionCtx.Done():
@@ -581,8 +706,24 @@ func (ss *Session) SendResponse(
 		return sendCtx.Err()
 	default:
 	}
+	if !wait {
+		select {
+		case ss.sendChan <- message{timeout: ContextTimeout(sendCtx, ss.sendTimeout), response: response, createAt: time.Now()}:
+			return nil
+		default:
+			ss.responses.Release(response)
+			if err := ss.stream.Close(); err != nil {
+				ss.logger.Error("fail to close congested morpc client session", zap.Error(err))
+			}
+			return moerr.NewStreamClosedNoCtx()
+		}
+	}
 
 	select {
+	case <-ss.sessionCtx.Done():
+		ss.logger.Error("session context done", zap.Error(ss.sessionCtx.Err()))
+		ss.responses.Release(response)
+		return ss.sessionCtx.Err()
 	case <-time.After(ss.poisonTime):
 		ss.logger.Error("poison morpc client session detected, close it",
 			zap.Int("buffer-capacity", cap(ss.sendChan)),
@@ -607,7 +748,7 @@ func (ss *Session) Tables() map[TableID]TableState {
 	defer ss.mu.Unlock()
 	tables := make(map[TableID]TableState, len(ss.tables))
 	for k, v := range ss.tables {
-		tables[k] = v
+		tables[k] = v.state
 	}
 	return tables
 }
