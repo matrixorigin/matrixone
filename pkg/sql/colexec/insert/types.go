@@ -137,7 +137,6 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 	if insert.ctr.buf != nil {
 		insert.ctr.buf.CleanOnlyData()
 	}
-	insert.ctr.source = nil
 }
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
