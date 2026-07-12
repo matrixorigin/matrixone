@@ -916,6 +916,66 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 	}
 }
 
+func TestRollupWindowAliasCollisionsPreserveSourceScope(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name             string
+		sql              string
+		expectedHeadings []string
+	}{
+		{
+			name: "select alias collides with source column",
+			sql: `
+				select n_name as n_regionkey, n_regionkey, sum(n_nationkey),
+				       row_number() over (order by n_regionkey) as rn
+				from nation
+				group by n_name, n_regionkey with rollup`,
+			expectedHeadings: []string{"n_regionkey", "n_regionkey", "sum(n_nationkey)", "rn"},
+		},
+		{
+			name: "window output alias collides with source column",
+			sql: `
+				select n_name, n_regionkey, sum(n_nationkey),
+				       row_number() over (order by n_regionkey) as n_regionkey
+				from nation
+				group by n_name, n_regionkey with rollup`,
+			expectedHeadings: []string{"n_name", "n_regionkey", "sum(n_nationkey)", "n_regionkey"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+			require.Equal(t, test.expectedHeadings, query.Headings)
+			require.NotEmpty(t, query.Steps)
+
+			root := query.Nodes[query.Steps[len(query.Steps)-1]]
+			require.Len(t, root.ProjectList, 4)
+			require.Equal(t, int32(types.T_int32), root.ProjectList[1].Typ.Id)
+
+			foundRowNumber := false
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_WINDOW {
+					continue
+				}
+				for _, winExpr := range node.WinSpecList {
+					spec := winExpr.GetW()
+					if spec == nil || spec.Name != "row_number" {
+						continue
+					}
+					foundRowNumber = true
+					require.Len(t, spec.OrderBy, 1)
+					require.Equal(t, int32(types.T_int32), spec.OrderBy[0].Expr.Typ.Id)
+				}
+			}
+			require.True(t, foundRowNumber)
+		})
+	}
+}
+
 func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
 	stmt := mustParseRollupWindowSelect(t, `
 		select
@@ -952,15 +1012,20 @@ func TestRewriteRollupWindowSelectHelpers(t *testing.T) {
 	alias, ok := state.lookupExprAlias(tree.NewUnresolvedColName("l_returnflag"))
 	require.True(t, ok)
 	require.True(t, strings.HasPrefix(alias, rollupWindowInternalAliasPrefix))
-	flagAlias, ok := state.lookupExprAlias(tree.NewUnresolvedColName("flag"))
+	_, ok = state.lookupExprAlias(tree.NewUnresolvedColName("flag"))
+	require.False(t, ok)
+	rewrittenFlag, ok := rewriteRollupWindowExprWithNameAliases(
+		tree.NewUnresolvedColName("flag"), state, state.havingAliases)
 	require.True(t, ok)
-	require.Equal(t, alias, flagAlias)
-	upperFlagAlias, ok := state.lookupExprAlias(tree.NewUnresolvedColName("FLAG"))
+	require.Equal(t, alias, tree.String(rewrittenFlag, dialect.MYSQL))
+	rewrittenFlag, ok = rewriteRollupWindowExprWithNameAliases(
+		tree.NewUnresolvedColName("FLAG"), state, state.havingAliases)
 	require.True(t, ok)
-	require.Equal(t, alias, upperFlagAlias)
-	alias, ok = state.lookupExprAlias(tree.NewUnresolvedColName("total_qty"))
+	require.Equal(t, alias, tree.String(rewrittenFlag, dialect.MYSQL))
+	rewrittenTotal, ok := rewriteRollupWindowExprWithNameAliases(
+		tree.NewUnresolvedColName("total_qty"), state, state.havingAliases)
 	require.True(t, ok)
-	require.True(t, strings.HasPrefix(alias, rollupWindowInternalAliasPrefix))
+	require.True(t, strings.HasPrefix(tree.String(rewrittenTotal, dialect.MYSQL), rollupWindowInternalAliasPrefix))
 }
 
 func TestRewriteRollupWindowSelectGuards(t *testing.T) {
@@ -1014,8 +1079,12 @@ func TestRewriteRollupWindowSelectGuards(t *testing.T) {
 	state = newRollupWindowRewriteState(windowBeforeAliasExprs)
 	outerExprs, ok := buildRollupWindowSelectExprs(windowBeforeAliasExprs, state)
 	require.True(t, ok)
-	require.Len(t, state.innerExprs, 1)
-	require.Contains(t, tree.String(outerExprs[0].Expr, dialect.MYSQL), state.innerExprs[0].As.Origin())
+	require.Len(t, state.innerExprs, 2)
+	sourceAlias := state.exprAliases[rollupWindowExprKey(tree.NewUnresolvedColName("total"))]
+	aggregateAlias := state.exprAliases[rollupWindowExprKey(mustParseRollupWindowExpr(t, "sum(a)"))]
+	rewrittenWindow := tree.String(outerExprs[0].Expr, dialect.MYSQL)
+	require.Contains(t, rewrittenWindow, sourceAlias)
+	require.NotContains(t, rewrittenWindow, aggregateAlias)
 
 	duplicateAlias := mustParseRollupWindowSelect(t, "select a as x, b as x, row_number() over () from t")
 	duplicateExprs := duplicateAlias.Select.(*tree.SelectClause).Exprs
