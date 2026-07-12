@@ -5149,7 +5149,7 @@ func integerStringForCast(s string, mode castMode) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		integer, err := decimal.Scale(-scale)
+		integer, err := truncateDecimalToInteger(decimal, scale)
 		if err != nil {
 			return "", err
 		}
@@ -5163,7 +5163,7 @@ func integerStringForCast(s string, mode castMode) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		integer, err := decimal.Scale(-scale)
+		integer, err := truncateDecimalToInteger(decimal, scale)
 		if err != nil {
 			return "", err
 		}
@@ -5171,6 +5171,16 @@ func integerStringForCast(s string, mode castMode) (string, error) {
 	default:
 		return s, nil
 	}
+}
+
+// truncateDecimalToInteger divides d by 10^scale and truncates toward
+// zero, matching MySQL's CAST-to-integer truncation semantics.
+// types.Decimal128.Scale(-scale) rounds half-away-from-zero instead.
+func truncateDecimalToInteger(d types.Decimal128, scale int32) (types.Decimal128, error) {
+	if scale == 0 {
+		return d, nil
+	}
+	return d.ScaleTruncate(-scale)
 }
 
 func strToSigned[T constraints.Signed](

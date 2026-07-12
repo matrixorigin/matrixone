@@ -297,7 +297,9 @@ CREATE TABLE t2 (name VARCHAR(100));
 INSERT INTO t1 VALUES (1), (2);
 INSERT INTO t2 VALUES ('abc'), ('123');
 SELECT * FROM t1 LEFT JOIN t2 ON t1.id = t2.name;
-invalid argument cast to int, bad value abc
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists item;

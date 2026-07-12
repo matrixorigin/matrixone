@@ -106,6 +106,15 @@ SELECT * from t_bigint WHERE id BETWEEN 1.1 AND 1.9;
 SELECT * from t_bigint WHERE id BETWEEN 1.1e0 AND 1.9e0;
 SELECT * from t_bigint WHERE id BETWEEN '1.1' AND '1.9';
 SELECT * from t_bigint WHERE id BETWEEN '1.1e0' AND '1.9e0';
+#String constants compare by exact numeric value, not through float64
+INSERT INTO t_bigint VALUES (9007199254740992), (9007199254740993), (-9007199254740993);
+SELECT * from t_bigint WHERE id = '9007199254740993';
+SELECT * from t_bigint WHERE id = '9007199254740992';
+SELECT * from t_bigint WHERE id = '-9007199254740993';
+SELECT * from t_bigint WHERE id > '9007199254740992.5';
+SELECT * from t_bigint WHERE id IN ('9007199254740993', '1.5');
+SELECT * from t_bigint WHERE id BETWEEN '9007199254740992.5' AND '9007199254740993.5';
+DELETE FROM t_bigint WHERE id > 2 or id < 0;
 drop table t1;
 CREATE TABLE t1 (a BIGINT);
 insert INTO t1 VALUES (1);

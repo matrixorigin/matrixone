@@ -1664,6 +1664,97 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 	return args[0], true, nil
 }
 
+// isPlainNumericLiteral reports whether s (already trimmed) is a plain
+// decimal numeric literal: an optional sign, digits with at most one
+// decimal point, and an optional exponent.  Hex forms, inner spaces and
+// trailing garbage are excluded so constant folding stays conservative.
+func isPlainNumericLiteral(s string) bool {
+	i, n := 0, len(s)
+	if n == 0 {
+		return false
+	}
+	if s[i] == '+' || s[i] == '-' {
+		i++
+	}
+	digits, dot := 0, false
+	for i < n && (s[i] >= '0' && s[i] <= '9' || s[i] == '.') {
+		if s[i] == '.' {
+			if dot {
+				return false
+			}
+			dot = true
+		} else {
+			digits++
+		}
+		i++
+	}
+	if digits == 0 {
+		return false
+	}
+	if i == n {
+		return true
+	}
+	if s[i] != 'e' && s[i] != 'E' {
+		return false
+	}
+	i++
+	if i < n && (s[i] == '+' || s[i] == '-') {
+		i++
+	}
+	expDigits := 0
+	for i < n && s[i] >= '0' && s[i] <= '9' {
+		expDigits++
+		i++
+	}
+	return i == n && expDigits > 0
+}
+
+// tryFoldNumericStringConst folds a string literal compared against an
+// integer or decimal value into an exact numeric constant, following
+// MySQL 8.0.28 semantics (Bug #101806): int_col = '1.7' compares against
+// 1.7 rather than truncating to 1.  Integer-valued strings that fit in
+// 64 bits become integer literals, which keeps integer comparisons exact
+// above 2^53 and index-friendly; other numeric strings become decimal
+// literals with their natural scale.  Strings that are not plain numeric
+// literals are left untouched and take the non-constant string path
+// (DOUBLE comparison).  Returns nil when no folding applies.
+func tryFoldNumericStringConst(ctx context.Context, strExpr *plan.Expr, otherType types.Type) *plan.Expr {
+	if !otherType.Oid.IsInteger() && !otherType.Oid.IsDecimal() {
+		return nil
+	}
+	if !types.T(strExpr.Typ.Id).IsMySQLString() {
+		return nil
+	}
+	lit := strExpr.GetLit()
+	if lit == nil || lit.Isnull {
+		return nil
+	}
+	sval, ok := lit.Value.(*plan.Literal_Sval)
+	if !ok {
+		return nil
+	}
+	s := strings.TrimSpace(sval.Sval)
+	if !isPlainNumericLiteral(s) {
+		return nil
+	}
+	// Parse128 only accepts a lowercase exponent marker.
+	s = strings.ReplaceAll(s, "E", "e")
+	if d, scale, err := types.Parse128(s); err == nil && scale == 0 {
+		formatted := d.Format(0)
+		if v, err := strconv.ParseInt(formatted, 10, 64); err == nil {
+			return makePlan2Int64ConstExprWithType(v)
+		}
+		if v, err := strconv.ParseUint(formatted, 10, 64); err == nil {
+			return makePlan2Uint64ConstExprWithType(v)
+		}
+	}
+	expr, err := makePlan2DecimalExprWithType(ctx, s)
+	if err != nil {
+		return nil
+	}
+	return expr
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
@@ -1695,6 +1786,20 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, err
 		}
 
+		// Fold numeric-string literals against integer/decimal operands
+		// before any further analysis, so the decimal early-detection
+		// below sees the folded constant.  Both folds check the other
+		// side's original type: two string literals never fold.
+		if len(args) == 2 {
+			t0, t1 := makeTypeByPlan2Expr(args[0]), makeTypeByPlan2Expr(args[1])
+			if folded := tryFoldNumericStringConst(ctx, args[0], t1); folded != nil {
+				args[0] = folded
+			}
+			if folded := tryFoldNumericStringConst(ctx, args[1], t0); folded != nil {
+				args[1] = folded
+			}
+		}
+
 		// Early detection for decimal comparisons
 		if len(args) == 2 {
 			if name == "=" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
@@ -1704,6 +1809,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			if name == "<>" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
 				// Inequality with incompatible precision is always true
 				return makePlan2BoolConstExprWithType(true), nil
+			}
+		}
+	case "between":
+		// Same numeric-string literal folding as the comparison
+		// operators above: col BETWEEN '1.1' AND '1.9' compares the
+		// bounds as 1.1 and 1.9, not truncated integers.
+		if len(args) == 3 {
+			t0 := makeTypeByPlan2Expr(args[0])
+			for i := 1; i <= 2; i++ {
+				if folded := tryFoldNumericStringConst(ctx, args[i], t0); folded != nil {
+					args[i] = folded
+				}
 			}
 		}
 	case "date_add", "date_sub":

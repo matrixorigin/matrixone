@@ -389,7 +389,7 @@ insert into t10 values (10, 'aabsdfsb', 'aabdsfsfsdb');
 insert into t10 values (10, 'aa,bb', 'aa,bb');
 insert into t10 values (10, 'aa%bb', 'aa%bb');
 
--- echo error
+-- text compared with a number follows MySQL double semantics
 select * from t10 where c=1;
 update t10 set c=10000 where a=10;
 update t10 set c=true where a=10;

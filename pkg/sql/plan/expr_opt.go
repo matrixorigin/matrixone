@@ -17,7 +17,9 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1006,11 +1008,57 @@ func constLiteralKeyForOperand(expr *plan.Expr, operand *domainFilterOperand) (s
 }
 
 func integralCastLiteralKey(lit *plan.Literal, typ plan.Type, target plan.Type) (string, bool) {
+	if types.T(target.Id) == types.T_float64 {
+		// String columns compared with numeric constants go through
+		// DOUBLE, so the domain key is the literal's exact float64 bit
+		// pattern: two literals get the same key iff they compare equal
+		// at runtime after the cast.
+		v, ok := float64LiteralValue(lit, typ)
+		if !ok {
+			return "", false
+		}
+		return fmt.Sprintf("%d/%x", target.Id, math.Float64bits(v)), true
+	}
 	normalized, ok := normalizedIntegralLiteral(lit, typ, types.T(target.Id))
 	if !ok {
 		return "", false
 	}
 	return fmt.Sprintf("%d/%s", target.Id, normalized), true
+}
+
+// float64LiteralValue evaluates a literal as float64 for domain-key
+// purposes.  It is conservative: any literal whose runtime double value
+// is not fully determined by a strict parse (trailing garbage, overflow,
+// NaN/Inf) makes the whole domain rewrite bail out.
+func float64LiteralValue(lit *plan.Literal, typ plan.Type) (float64, bool) {
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	var v float64
+	if s, ok := literalStringValue(lit, typ); ok {
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		if err != nil {
+			return 0, false
+		}
+		v = parsed
+	} else if i, ok := literalSignedValue(lit); ok {
+		v = float64(i)
+	} else if u, ok := literalUnsignedValue(lit); ok {
+		v = float64(u)
+	} else {
+		switch lit.Value.(type) {
+		case *plan.Literal_Fval:
+			v = float64(lit.GetFval())
+		case *plan.Literal_Dval:
+			v = lit.GetDval()
+		default:
+			return 0, false
+		}
+	}
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
 }
 
 func normalizedIntegralLiteral(lit *plan.Literal, typ plan.Type, target types.T) (string, bool) {
@@ -1141,7 +1189,9 @@ func normalizeUnsignedIntegralLiteral(v uint64, target types.T) (string, bool) {
 }
 
 func isSupportedIntegralDomainCast(typ plan.Type) bool {
-	return isSupportedIntegralType(types.T(typ.Id))
+	// float64 covers string columns compared with numeric constants,
+	// which route through DOUBLE (see comparisonTypeCastRule).
+	return isSupportedIntegralType(types.T(typ.Id)) || types.T(typ.Id) == types.T_float64
 }
 
 func isSupportedIntegralType(t types.T) bool {

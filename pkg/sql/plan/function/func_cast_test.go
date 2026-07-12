@@ -2518,8 +2518,8 @@ func TestStrToSignedStringPrefix(t *testing.T) {
 		wantErr string
 	}{
 		{name: "scientific notation", input: "7e0", bitSize: 64, want: 7},
-		{name: "exponent is not evaluated", input: "7e+2", bitSize: 64, want: 7},
-		{name: "fractional suffix", input: "1.5e0", bitSize: 64, want: 1},
+		{name: "exponent is evaluated", input: "7e+2", bitSize: 64, want: 700},
+		{name: "fraction truncates toward zero", input: "1.5e0", bitSize: 64, want: 1},
 		{name: "negative prefix", input: "-10a", bitSize: 64, want: -10},
 		{name: "whitespace and positive sign", input: "  +42suffix  ", bitSize: 64, want: 42},
 		{name: "plain integer", input: "42", bitSize: 64, want: 42},
@@ -2563,17 +2563,17 @@ func TestStringToIntegerCastModes(t *testing.T) {
 		want    any
 		wantErr bool
 	}{
-		{name: "implicit signed reads integer prefix", input: "7e2", toType: types.T_int64.ToType(), fn: NewCast, want: []int64{7}},
-		{name: "explicit signed reads integer prefix", input: "7e2", toType: types.T_int64.ToType(), fn: NewExplicitCast, want: []int64{7}},
-		{name: "explicit unsigned reads integer prefix", input: "7e2", toType: types.T_uint64.ToType(), fn: NewExplicitCast, want: []uint64{7}},
+		{name: "implicit signed evaluates exponent", input: "7e2", toType: types.T_int64.ToType(), fn: NewCast, want: []int64{700}},
+		{name: "explicit signed evaluates exponent", input: "7e2", toType: types.T_int64.ToType(), fn: NewExplicitCast, want: []int64{700}},
+		{name: "explicit unsigned evaluates exponent", input: "7e2", toType: types.T_uint64.ToType(), fn: NewExplicitCast, want: []uint64{700}},
 		{name: "assignment evaluates exponent", input: "7e2", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{700}},
-		{name: "assignment rounds fraction", input: "1.5", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{2}},
+		{name: "assignment truncates fraction", input: "1.5", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{1}},
 		{name: "assignment rejects suffix", input: "1a", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{}, wantErr: true},
 		{name: "assignment rejects internal space", input: "1 2", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{}, wantErr: true},
 		{name: "assignment rejects internal plus", input: "1+2", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{}, wantErr: true},
 		{name: "assignment rejects exponent without digits", input: "1e", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{}, wantErr: true},
-		{name: "assignment accepts leading plus", input: "+1.5", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{2}},
-		{name: "assignment accepts leading decimal point", input: ".5", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{1}},
+		{name: "assignment truncates leading plus", input: "+1.5", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{1}},
+		{name: "assignment truncates leading decimal point", input: ".5", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{0}},
 		{name: "assignment accepts uppercase exponent", input: "7E2", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{700}},
 		{name: "assignment preserves large scientific integer", input: "9.007199254740993e15", toType: types.T_int64.ToType(), fn: NewStrictCast, want: []int64{9007199254740993}},
 	}
@@ -3986,11 +3986,10 @@ func TestDecimal64ToDecimal128FastPaths(t *testing.T) {
 }
 
 // TestImplicitCastLargeIntStringPreservesPrecision verifies that the
-// implicit varchar→integer cast (used in comparison paths that resolve
-// to an integer common type via comparisonTypeCastRule) preserves 64-bit
-// integer precision.  float64 has a 53-bit mantissa and collapses
-// distinct values above 2^53; the integer cast path uses decimal
-// arithmetic (Parse128) to avoid that.
+// implicit varchar→integer cast preserves 64-bit integer precision.
+// float64 has a 53-bit mantissa and collapses distinct values above
+// 2^53; the integer cast path uses decimal arithmetic (Parse128) to
+// avoid that.
 func TestImplicitCastLargeIntStringPreservesPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

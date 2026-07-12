@@ -298,12 +298,12 @@ create table issue_25216_assignment (id int);
 insert into issue_25216_assignment values ('7e2'), ('1.5');
 select * from issue_25216_assignment order by id;
 ➤ id[4,32,0]  𝄀
-2  𝄀
+1  𝄀
 700
 update issue_25216_assignment set id = '2.5' where id = 2;
 select * from issue_25216_assignment order by id;
 ➤ id[4,32,0]  𝄀
-3  𝄀
+1  𝄀
 700
 insert into issue_25216_assignment values ('1a');
 invalid argument cast to int, bad value 1a
@@ -393,11 +393,11 @@ drop table t1;
 CREATE TABLE t1 (v varchar(10), tt char(255), t char(255),mt char(255), lt char(255));
 INSERT INTO t1 VALUES ('1.01', '2.02', '3.03', '4.04', '5.05');
 SELECT CAST(v AS DECIMAL), CAST(tt AS DECIMAL), CAST(t AS DECIMAL), CAST(mt AS DECIMAL), CAST(lt AS DECIMAL) from t1;
-➤ cast(v as decimal(38))[3,39,0]  ¦  cast(tt as decimal(38))[3,39,0]  ¦  cast(t as decimal(38))[3,39,0]  ¦  cast(mt as decimal(38))[3,39,0]  ¦  cast(lt as decimal(38))[3,39,0]  𝄀
+➤ cast(v as decimal(38))[3,38,0]  ¦  cast(tt as decimal(38))[3,38,0]  ¦  cast(t as decimal(38))[3,38,0]  ¦  cast(mt as decimal(38))[3,38,0]  ¦  cast(lt as decimal(38))[3,38,0]  𝄀
 1  ¦  2  ¦  3  ¦  4  ¦  5
 DROP TABLE t1;
 select cast(NULL as decimal(6)) as t1;
-➤ t1[3,7,0]  𝄀
+➤ t1[3,6,0]  𝄀
 null
 CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL), ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
