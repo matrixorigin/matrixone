@@ -664,7 +664,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		builder.InputBatchRowCount += bat.RowCount()
 
 		if bucket.Depth < SpillMaxPass && e.cfg.SpillThreshold > 0 &&
-			(builderMemSize(builder) > e.cfg.SpillThreshold) {
+			ShouldSpill(builderMemSize(builder), int64(builder.InputBatchRowCount), e.cfg.SpillThreshold) {
 			subBuckets, err := e.reSpillBucket(proc, analyzer, bucket, builder, &e.buildReader)
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
