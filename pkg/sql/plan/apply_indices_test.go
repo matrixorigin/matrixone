@@ -478,7 +478,7 @@ func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
 	}
 }
 
-func TestForceIndexForJoinFollowsRightScanAfterReorder(t *testing.T) {
+func TestForceIndexForJoinBuildsRightAccessWithoutReorder(t *testing.T) {
 	builder, joinID, leftScanID, _ := makeIndexHintJoinBuilder(t)
 	joinNode := builder.qry.Nodes[joinID]
 	rightScanID := joinNode.Children[1]
@@ -502,11 +502,31 @@ func TestForceIndexForJoinFollowsRightScanAfterReorder(t *testing.T) {
 	newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 	require.NoError(t, err)
 	require.Equal(t, joinID, newID)
-	require.Equal(t, leftScanID, joinNode.Children[1])
-	require.NotEqual(t, rightScanID, joinNode.Children[0])
-	indexJoin := builder.qry.Nodes[joinNode.Children[0]]
+	require.Equal(t, leftScanID, joinNode.Children[0])
+	require.NotEqual(t, rightScanID, joinNode.Children[1])
+	indexJoin := builder.qry.Nodes[joinNode.Children[1]]
 	require.Equal(t, planpb.Node_INDEX, indexJoin.JoinType)
 	require.Equal(t, rightScanID, indexJoin.Children[0])
+}
+
+func TestForcePrimaryForJoinPreservesHashOnPKDirection(t *testing.T) {
+	builder, joinID, leftScanID, _ := makeIndexHintJoinBuilder(t)
+	joinNode := builder.qry.Nodes[joinID]
+	rightScanID := joinNode.Children[1]
+	rightScan := builder.qry.Nodes[rightScanID]
+	rightScan.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "b", Names: []string{"b"}}
+	require.NoError(t, builder.recordIndexHints(rightScanID, rightScan.TableDef, []*tree.IndexHint{{
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{PrimaryKeyName},
+	}}))
+	joinNode.Stats.HashmapStats.HashOnPK = true
+	onList := DeepCopyExprList(joinNode.OnList)
+
+	newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, []int32{leftScanID, rightScanID}, joinNode.Children)
+	require.Equal(t, onList, joinNode.OnList)
+	require.True(t, joinNode.Stats.HashmapStats.HashOnPK)
 }
 
 func TestForceIndexForJoinReturnsMetadataErrorsAtomically(t *testing.T) {
@@ -663,9 +683,9 @@ func TestForceIndexForJoinIsConsumedInsideThreeTableTree(t *testing.T) {
 	newID, err := builder.applyIndices(outerJoinID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 	require.NoError(t, err)
 	require.Equal(t, outerJoinID, newID)
-	require.NotEqual(t, targetScanID, innerJoin.Children[0])
-	require.Equal(t, planpb.Node_INDEX, builder.qry.Nodes[innerJoin.Children[0]].JoinType)
-	require.Equal(t, targetScanID, builder.qry.Nodes[innerJoin.Children[0]].Children[0])
+	require.NotEqual(t, targetScanID, innerJoin.Children[1])
+	require.Equal(t, planpb.Node_INDEX, builder.qry.Nodes[innerJoin.Children[1]].JoinType)
+	require.Equal(t, targetScanID, builder.qry.Nodes[innerJoin.Children[1]].Children[0])
 }
 
 func TestForceIndexPrepassStopsAtQueryBlockBoundary(t *testing.T) {

@@ -276,4 +276,14 @@ Project  𝄀
 select count(*) from owner_tasks force index(idx_score_owner) where score = 20;
 ➤ count(*)[-5,64,0]  𝄀
 2
+create table join_dup_l(x int);
+create table join_pk_r(id int primary key);
+insert into join_dup_l values (1),(1),(2);
+insert into join_pk_r values (1),(2);
+select count(*)
+from join_dup_l l
+join join_pk_r r force index for join(primary)
+on l.x = r.id;
+➤ count(*)[-5,64,0]  𝄀
+3
 drop database mysql_compat_index_hint;

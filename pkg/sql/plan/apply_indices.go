@@ -2482,25 +2482,17 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		(node.JoinType != plan.Node_ANTI || !node.IsRightJoin) {
 		return nodeID, nil
 	}
-	if node.JoinType == plan.Node_INNER && builder.scanForcesJoinIndex(node.Children[0]) && builder.scanForcesJoinIndex(node.Children[1]) {
+	leftForcesJoin := builder.scanForcesJoinIndex(node.Children[0])
+	rightForcesJoin := builder.scanForcesJoinIndex(node.Children[1])
+	if node.JoinType == plan.Node_INNER && rightForcesJoin {
 		rightAccess, err := builder.applyForcedJoinAccess(node.Children[1])
 		if err != nil {
 			return -1, err
 		}
 		node.Children[1] = rightAccess
 	}
-
-	// An INNER JOIN is symmetric. Put a directly hinted scan on the index-access
-	// side before applying the existing rewrite, independent of join reorder.
-	swappedForHint := false
-	if node.JoinType == plan.Node_INNER && builder.scanForcesJoinIndex(node.Children[1]) && !builder.scanForcesJoinIndex(node.Children[0]) {
-		swappedForHint = true
-		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
-		for _, cond := range node.OnList {
-			if fn := cond.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "=" && len(fn.Args) == 2 {
-				fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
-			}
-		}
+	if rightForcesJoin && !leftForcesJoin {
+		return nodeID, nil
 	}
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
@@ -2606,23 +2598,14 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
 		if err != nil {
-			if swappedForHint {
-				restoreJoinHintSwap(node)
-			}
 			return -1, err
 		}
 		if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 || leftChild.ObjRef == nil ||
 			leftChild.TableDef.Pkey == nil || len(leftChild.BindingTags) == 0 {
-			if swappedForHint {
-				restoreJoinHintSwap(node)
-			}
 			return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid metadata for index %s", idxDef.IndexName)
 		}
 		pkIdx, ok := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
 		if !ok || pkIdx < 0 || int(pkIdx) >= len(leftChild.TableDef.Cols) {
-			if swappedForHint {
-				restoreJoinHintSwap(node)
-			}
 			return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid primary key metadata for index %s", idxDef.IndexName)
 		}
 
@@ -2770,13 +2753,4 @@ func (builder *QueryBuilder) applyForcedJoinAccess(scanID int32) (int32, error) 
 		}
 	}
 	return scanID, nil
-}
-
-func restoreJoinHintSwap(node *plan.Node) {
-	node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
-	for _, cond := range node.OnList {
-		if fn := cond.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "=" && len(fn.Args) == 2 {
-			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
-		}
-	}
 }
