@@ -329,11 +329,11 @@ func TestIndexHintGroupScopeSelectsAndIgnoresCoveringIndex(t *testing.T) {
 
 	queryPlan, err = runOneStmt(mock, t, "select a, count(*) from index_hint_t use index for group by(idx_ab) where a = 1 group by a")
 	require.NoError(t, err)
-	require.Equal(t, "idx_ab", findFirstIndexScanName(queryPlan))
+	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
 
 	queryPlan, err = runOneStmt(mock, t, "select a, count(*) from index_hint_t ignore index for group by(idx_a) where a = 1 group by a")
 	require.NoError(t, err)
-	require.NotEqual(t, "idx_a", findFirstIndexScanName(queryPlan))
+	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
 
 	queryPlan, err = runOneStmt(mock, t, "select a, count(*) from index_hint_t force index for group by(idx_a) group by a")
 	require.NoError(t, err)
@@ -558,7 +558,7 @@ func TestRightForceIndexForJoinRollsBackSwapOnMetadataError(t *testing.T) {
 	require.Equal(t, onList, joinNode.OnList)
 }
 
-func TestForceIndexForJoinRejectsForcingBothSides(t *testing.T) {
+func TestForceIndexForJoinAllowsForcingBothSides(t *testing.T) {
 	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
 	joinNode := builder.qry.Nodes[joinID]
 	rightScanID := joinNode.Children[1]
@@ -574,11 +574,34 @@ func TestForceIndexForJoinRejectsForcingBothSides(t *testing.T) {
 		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_b"},
 	}}))
 
-	children := slices.Clone(joinNode.Children)
 	newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
-	require.Error(t, err)
-	require.Equal(t, int32(-1), newID)
-	require.Equal(t, children, joinNode.Children)
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.NotEqual(t, leftScanID, joinNode.Children[0])
+	indexJoin := builder.qry.Nodes[joinNode.Children[0]]
+	require.Equal(t, planpb.Node_INDEX, indexJoin.JoinType)
+	require.Equal(t, "idx_a", builder.qry.Nodes[indexJoin.Children[1]].IndexScanInfo.IndexName)
+}
+
+func TestForceIndexForJoinDoesNotBlockOuterJoinFilterAccess(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select l.a
+		from index_hint_t l force index for join(idx_a)
+		left join index_hint_t r on l.a = r.a
+		where l.a = 1`)
+	require.NoError(t, err)
+	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
+
+	queryPlan, err = runOneStmt(mock, t, `
+		select r.a
+		from index_hint_t l
+		right join index_hint_t r force index for join(idx_a) on l.a = r.a
+		where r.a = 1`)
+	require.NoError(t, err)
+	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
 }
 
 func TestForceIndexForJoinIsConsumedInsideThreeTableTree(t *testing.T) {

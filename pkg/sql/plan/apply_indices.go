@@ -468,9 +468,6 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
-		if builder.scanForcesJoinIndex(nodeID) {
-			return nodeID, nil
-		}
 		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
 
 	case plan.Node_JOIN:
@@ -927,9 +924,6 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		}
 		if !matchesScan {
 			continue
-		}
-		if requirement.scope == forceIndexForGroup && !scope.empty() {
-			builder.groupHintScans[scanNode.NodeId] = struct{}{}
 		}
 		if !scope.forceSpecified {
 			continue
@@ -2487,10 +2481,6 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	if node.JoinType != plan.Node_INNER && node.JoinType != plan.Node_RIGHT && node.JoinType != plan.Node_SEMI &&
 		(node.JoinType != plan.Node_ANTI || !node.IsRightJoin) {
 		return nodeID, nil
-	}
-
-	if node.JoinType == plan.Node_INNER && builder.scanForcesJoinIndex(node.Children[0]) && builder.scanForcesJoinIndex(node.Children[1]) {
-		return -1, moerr.NewNotSupported(builder.GetContext(), "FORCE INDEX FOR JOIN on both sides of the same join")
 	}
 
 	// An INNER JOIN is symmetric. Put a directly hinted scan on the index-access

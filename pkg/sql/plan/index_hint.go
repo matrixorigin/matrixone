@@ -181,15 +181,9 @@ func addIndexHintNames(dst *map[string]struct{}, names []string) {
 }
 
 func (builder *QueryBuilder) filterRegularIndexesByScanHints(node *plan.Node, indexes []*plan.IndexDef) []*plan.IndexDef {
-	indexes = builder.filterRegularIndexesByHints(node, indexes, func(hintSet *indexHintSet) indexHintScopeSet {
+	return builder.filterRegularIndexesByHints(node, indexes, func(hintSet *indexHintSet) indexHintScopeSet {
 		return hintSet.scan
 	})
-	if _, applies := builder.groupHintScans[node.NodeId]; applies {
-		indexes = builder.filterRegularIndexesByHints(node, indexes, func(hintSet *indexHintSet) indexHintScopeSet {
-			return hintSet.group
-		})
-	}
-	return indexes
 }
 
 func (builder *QueryBuilder) filterIndexesByScanHints(node *plan.Node, indexes []*plan.IndexDef) []*plan.IndexDef {
