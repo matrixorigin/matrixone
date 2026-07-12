@@ -149,6 +149,7 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	c.SetSchedulingTraceRecorder(nil)
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
 		c.proc.ResetCloneTxnOperator()
@@ -226,6 +227,13 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	} else {
 		c.TxnOffset = 0
 	}
+
+	// A reused prepared pipeline runs directly after Reset. Only retries compile
+	// again, so the cached placement is this execution's first real attempt.
+	c.beginSchedulingTraceAttempt()
+	if c.queryPlacement.Reason != "" {
+		c.recordQuerySchedulingTrace(c.queryPlacement)
+	}
 }
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
@@ -261,11 +269,18 @@ func (c *Compile) clear() {
 	c.anal = nil
 	c.e = nil
 
+	if c.lockMeta != nil {
+		c.lockMeta.clear(c.proc)
+		c.lockMeta = nil
+	}
+
 	c.proc.Free()
 	c.proc = nil
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
+	c.schedulingTrace = nil
+	c.schedulingAttempt = 0
 	c.stmt = nil
 	c.startAt = time.Time{}
 	c.needLockMeta = false
@@ -278,11 +293,6 @@ func (c *Compile) clear() {
 	c.disableDropAutoIncrement = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
-
-	if c.lockMeta != nil {
-		c.lockMeta.clear(c.proc)
-		c.lockMeta = nil
-	}
 
 	for _, exe := range c.filterExprExes {
 		exe.Free()
@@ -520,6 +530,15 @@ func (c *Compile) runOnce() (err error) {
 			}
 		}
 	}
+
+	// Publish every dispatch receiver that will execute on this CN before any
+	// scope goroutine starts. Remote consumers can otherwise notify while a
+	// local source is still blocked before vm.Prepare reaches its Dispatch.
+	registrations, err := registerLocalDispatchReceivers(c.scopes, c.addr)
+	if err != nil {
+		return err
+	}
+	defer registrations.cleanup()
 
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
@@ -2901,17 +2920,13 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		}
 		rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
 		if err != nil {
-			if txnOp.IsSnapOp() {
-				return err
-			}
 			return err
 		}
-		tblDef = rel.GetTableDef(ctx)
-		s.DataSource.Rel = rel
-	} else {
-		s.DataSource.Rel.Reset(txnOp)
-		tblDef = s.DataSource.Rel.GetTableDef(ctx)
+		s.DataSource.Rel = engine.NewRelationHandle(rel)
+	} else if err = s.DataSource.Rel.Reset(txnOp); err != nil {
+		return err
 	}
+	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
 	if len(node.FilterList) != len(s.DataSource.FilterList) {
 		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
@@ -4665,18 +4680,27 @@ func (c *Compile) newScopeListOnSingleWorkerStage(childrenCount int, mcpu int) [
 }
 
 func (c *Compile) singleWorkerStageNode() engine.Node {
+	queryWorkers := c.scheduledQueryWorkers()
 	decision := schedule.DecideSingleWorkerStagePlacement(schedule.StageRequest{
-		QueryWorkers: c.scheduledQueryWorkers(),
+		QueryWorkers: queryWorkers,
 		CurrentCN:    c.currentCNWorker(),
 	})
+	c.schedulingTrace.RecordSingleWorkerStage(c.schedulingAttempt, queryWorkers, decision)
 	return c.materializeScheduledWorker(decision.Worker)
 }
 
 func (c *Compile) queryWorkerStageNodes() engine.Nodes {
+	queryWorkers := c.scheduledQueryWorkers()
 	decision := schedule.DecideQueryWorkerStagePlacement(schedule.StageRequest{
-		QueryWorkers: c.scheduledQueryWorkers(),
+		QueryWorkers: queryWorkers,
 		CurrentCN:    c.currentCNWorker(),
 	})
+	c.schedulingTrace.RecordStage(
+		c.schedulingAttempt,
+		schedule.StageKindQueryWorkerSet,
+		queryWorkers,
+		decision,
+	)
 	return c.materializeScheduledWorkers(decision.Workers)
 }
 

@@ -650,6 +650,10 @@ func TestCommitWithLockTables(t *testing.T) {
 	wTxn.LockTables = append(wTxn.LockTables, bind)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 0))
 	checkResponses(t, commitWriteData(t, sender, wTxn))
+	require.Empty(t, allocator.AddCannotCommit([]lock.OrphanTxn{{
+		Service: wTxn.LockService,
+		Txn:     [][]byte{wTxn.ID},
+	}}))
 
 	var values [][]byte
 	var timestamps []timestamp.Timestamp

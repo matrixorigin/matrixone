@@ -1275,6 +1275,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	selectTag := selectNode.BindingTags[0]
 	scanTag := builder.genNewBindTag()
 	updateExprs := make(map[string]*plan.Expr)
+	autoUpdateCols := make(map[string]bool)
 
 	if len(astUpdateExprs) == 0 {
 		onDupAction = plan.Node_FAIL
@@ -1343,6 +1344,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 
 				updateExprs[col.Name] = newDefExpr
+				autoUpdateCols[col.Name] = true
 			}
 		}
 
@@ -1997,6 +1999,119 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
+	// ODKU no-op guard: drop rows where every column the update actually writes
+	// is NULL-safe-equal between the old image (scanTag) and the final written
+	// value the dedup-update join materialized into the new image (selectTag).
+	// MySQL returns affected-rows=0 for such rows.
+	// Placed before the final PROJECT so scanTag columns survive column remapping.
+	if onDupAction == plan.Node_UPDATE {
+		// Columns excluded from the no-op equality chain: implicit ON UPDATE
+		// columns (whose new value always advances) plus any generated column
+		// that transitively derives from such a column — otherwise the recomputed
+		// generated value would defeat the no-op guard even when the user's
+		// explicit update changed nothing. A generated column whose source is a
+		// user-updated column is still caught by that source column's own <=>.
+		noopSkipCols := make(map[string]bool, len(autoUpdateCols))
+		for name := range autoUpdateCols {
+			noopSkipCols[name] = true
+		}
+		for changed := true; changed; {
+			changed = false
+			for _, col := range tableDef.Cols {
+				if col.GeneratedCol == nil || noopSkipCols[col.Name] {
+					continue
+				}
+				for _, pos := range collectRefColPos(col.GeneratedCol.Expr) {
+					if int(pos) < len(tableDef.Cols) && noopSkipCols[tableDef.Cols[pos].Name] {
+						noopSkipCols[col.Name] = true
+						changed = true
+						break
+					}
+				}
+			}
+		}
+		var allColsEqual *plan.Expr
+		for i, col := range tableDef.Cols {
+			if col.Name == catalog.Row_ID || col.Hidden {
+				continue
+			}
+			if noopSkipCols[col.Name] {
+				continue
+			}
+			// Only compare columns the update actually writes. A column absent from
+			// updateExprs keeps its old value and is trivially unchanged, so it must
+			// be excluded — otherwise an immutable key column resolved through a
+			// secondary UNIQUE conflict (where the incoming PK differs from the
+			// existing row's PK) would spuriously fail the equality chain and turn a
+			// no-op update into a counted one.
+			if _, written := updateExprs[col.Name]; !written {
+				continue
+			}
+			// Compare the old value against the FINAL written value already
+			// materialized by the dedup-update join, not a fresh evaluation of the
+			// assignment expression. The join evaluates each update expression once
+			// and writes the result back into the new-image (selectTag) column at
+			// colName2Idx; re-executing it here would double-evaluate non-
+			// deterministic assignments (e.g. v = floor(rand()*2)), so the no-op
+			// check could disagree with the value actually stored.
+			newColPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+			if !ok {
+				continue
+			}
+			oldColExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanTag,
+						ColPos: int32(i),
+					},
+				},
+			}
+			newColExpr := &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: selectTag,
+						ColPos: newColPos,
+					},
+				},
+			}
+			eqExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldColExpr, newColExpr})
+			if allColsEqual == nil {
+				allColsEqual = eqExpr
+			} else {
+				allColsEqual, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{allColsEqual, eqExpr})
+			}
+		}
+		if allColsEqual != nil {
+			// The dedup-join output also carries non-conflicting rows, whose old
+			// image is all-NULL. Such a row must always be inserted, yet every
+			// NULL <=> NULL comparison above yields true (e.g. an all-NULL row
+			// into a nullable UNIQUE key never conflicts but would match the
+			// equality chain). Gate the no-op check on the old row actually
+			// existing: keep the row when old __mo_rowid IS NULL (fresh insert)
+			// or when any compared column differs (real update).
+			rowIDIdx := tableDef.Name2ColIndex[catalog.Row_ID]
+			oldRowIDExpr := &plan.Expr{
+				Typ: tableDef.Cols[rowIDIdx].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanTag,
+						ColPos: rowIDIdx,
+					},
+				},
+			}
+			noOldRowExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{oldRowIDExpr})
+			notEqualExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allColsEqual})
+			keepExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{noOldRowExpr, notEqualExpr})
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{lastNodeID},
+				FilterList: []*plan.Expr{keepExpr},
+			}, bindCtx)
+		}
+	}
+
 	newProjLen := len(selectNode.ProjectList) + len(appendedUniqueProjs)
 	for _, idxDef := range tableDef.Indexes {
 		if !idxDef.Unique {
@@ -2347,6 +2462,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	if onDupAction == plan.Node_UPDATE {
+		updateCtx.CountDeleteAffectRows = true
+
 		deleteCols := make([]plan.ColRef, 2)
 		updateCtx.DeleteCols = deleteCols
 
