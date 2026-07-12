@@ -36,7 +36,7 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 	}
 
 	stats := toScheduleScanStats(node)
-	scanPlacement := schedule.DecideScanPlacement(schedule.ScanRequest{
+	scanRequest := schedule.ScanRequest{
 		QueryWorkers:         c.scheduledQueryWorkers(),
 		CurrentCN:            c.currentCNWorker(),
 		QueryPlacementReason: c.queryPlacement.Reason,
@@ -44,7 +44,10 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 		ForceSingle:          forceSingle,
 		ForceMultiCN:         plan2.GetForceScanOnMultiCN() || plan2.IsIvfSearchEntriesInternalScan(node),
 		OneCNBlockThreshold:  int32(plan2.BlockThresholdForOneCN),
-	})
+	}
+	scanPlacement := schedule.DecideScanPlacement(scanRequest)
+	c.schedulingTrace.RecordScan(c.schedulingAttempt, scanRequest, scanPlacement)
+	c.recordScanSchedulingMetrics(scanPlacement, stats, forceSingle)
 	c.maybeLogScanPlacement(scanPlacement, stats, forceSingle)
 	if scanPlacement.LocalOnly {
 		return c.localScanNodes(scanPlacement.Workers, stats, forceSingle, node, rel)

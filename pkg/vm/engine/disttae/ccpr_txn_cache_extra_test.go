@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -133,6 +134,7 @@ func TestCCPRTxnCache_OnTxnUnknownResultRemovesTrackingWithoutGC(t *testing.T) {
 
 func TestTransactionFinalizeCommitUnknownCleansCCPRCache(t *testing.T) {
 	ctx := context.Background()
+	colexec.NewServer(nil)
 	fs := newCleanFS(t)
 	gcPool, err := ants.NewPool(2)
 	require.NoError(t, err)

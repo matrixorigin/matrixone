@@ -1226,6 +1226,43 @@ func TestQueryBuilder_bindLimit(t *testing.T) {
 	require.Equal(t, uint64(5), countExpr.Lit.Value.(*plan.Literal_U64Val).U64Val)
 }
 
+func TestQueryBuilderBindLimitFoldsAndNormalizesConstants(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 2 + 3 offset 0 + 0", 1)
+	require.NoError(t, err)
+	astLimit := stmts[0].(*tree.Select).Limit
+
+	offset, limit, _, err := builder.bindLimit(bindCtx, astLimit, nil)
+	require.NoError(t, err)
+	require.Nil(t, offset, "constant OFFSET 0 should not disable no-offset optimization paths")
+	require.Equal(t, uint64(5), limit.GetLit().GetU64Val())
+}
+
+func TestQueryBuilderBindLimitReportsConstantOverflow(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 18446744073709551615 + 1", 1)
+	require.NoError(t, err)
+	astLimit := stmts[0].(*tree.Select).Limit
+
+	_, _, _, err = builder.bindLimit(bindCtx, astLimit, nil)
+	require.Error(t, err)
+}
+
+func TestQueryBuilderBindLimitKeepsVariableDynamic(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit @page_size", 1)
+	require.NoError(t, err)
+	astLimit := stmts[0].(*tree.Select).Limit
+
+	_, limit, _, err := builder.bindLimit(bindCtx, astLimit, nil)
+	require.NoError(t, err)
+	require.NotNil(t, limit.GetF())
+	require.True(t, containsDynamicParam(limit))
+}
+
 func TestQueryBuilder_bindValues(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)

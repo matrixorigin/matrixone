@@ -97,6 +97,10 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 }
 
 func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
+	return makePlan2DateConstNullExprWithScale(t, 0)
+}
+
+func makePlan2DateConstNullExprWithScale(t types.T, scale int32) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_Lit{
 			Lit: &Const{
@@ -105,6 +109,7 @@ func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
 		},
 		Typ: plan.Type{
 			Id:          int32(t),
+			Scale:       scale,
 			NotNullable: false,
 		},
 	}
@@ -549,6 +554,17 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 			Id:          id,
 			NotNullable: true,
 			Width:       width,
+		},
+	}
+}
+
+func makePlan2VarBinaryConstExprWithType(v string) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2StringConstExpr(v, false),
+		Typ: plan.Type{
+			Id:          int32(types.T_varbinary),
+			NotNullable: true,
+			Width:       int32(len(v)),
 		},
 	}
 }

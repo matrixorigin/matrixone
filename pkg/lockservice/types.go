@@ -193,8 +193,11 @@ type LockTableAllocator interface {
 	// periodically to keep the binding in place. If no heartbeat is sent for a long
 	// period of time to maintain the binding, the binding will become invalid.
 	KeepLockTableBind(serviceID string) bool
-	// Valid check for changes in the binding relationship of a specific lock-table.
+	// Valid checks lock-table bindings and registers a successful commit attempt.
+	// Every successful call must be paired with exactly one FinishCommit call.
 	Valid(serviceID string, txnID []byte, binds []pb.LockTable) ([]uint64, error)
+	// FinishCommit marks the end of a commit attempt registered by Valid.
+	FinishCommit(serviceID string, txnID []byte)
 	// AddCannotCommit add cannot commit txn.
 	AddCannotCommit(values []pb.OrphanTxn) [][]byte
 	// AddInvalidService add invalid service

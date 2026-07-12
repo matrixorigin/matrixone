@@ -148,12 +148,19 @@ func TestQueryWorkerStageNodesKeepsScheduledWorkers(t *testing.T) {
 		{Id: "cn-local", Mcpu: 0},
 		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
 	}
+	recorder := new(schedule.TraceRecorder)
+	c.SetSchedulingTraceRecorder(recorder)
+	c.beginSchedulingTraceAttempt()
 
 	nodes := c.queryWorkerStageNodes()
 	require.Equal(t, engine.Nodes{
 		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1},
 		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
 	}, nodes)
+	trace := recorder.Snapshot()
+	require.Equal(t, 1, trace.Attempts[0].StageCount)
+	require.Equal(t, schedule.StageKindQueryWorkerSet, trace.Attempts[0].Stages[0].Kind)
+	require.Equal(t, 2, trace.Attempts[0].Stages[0].SelectedCount)
 }
 
 func TestQueryWorkerStageNodesCanonicalizesCurrentCNAddress(t *testing.T) {
@@ -273,6 +280,44 @@ func TestScopeIpAddrMatchDoesNotTreatEmptyLocalAddressAsRemoteMatch(t *testing.T
 
 	scope.NodeInfo.Addr = ""
 	require.True(t, scope.ipAddrMatch(""))
+
+	scope.NodeInfo.Addr = "malformed-remote-address"
+	require.False(t, scope.ipAddrMatch("local:6001"))
+}
+
+func TestValidateRemoteRunAddressRejectsMalformedRemote(t *testing.T) {
+	valid := []struct {
+		scopeAddr string
+		localAddr string
+	}{
+		{scopeAddr: "", localAddr: "local:6001"},
+		{scopeAddr: "remote:6001", localAddr: "local:6001"},
+		{scopeAddr: "127.0.0.1:6001", localAddr: "local:6001"},
+		{scopeAddr: "[2001:db8::1]:6001", localAddr: "local:6001"},
+		{scopeAddr: "local:6001", localAddr: "local:6001"},
+		// A local sentinel never reaches RPC dialing, so legacy test/local
+		// identities remain valid when both sides are exactly equal.
+		{scopeAddr: "local", localAddr: "local"},
+	}
+	for _, tt := range valid {
+		require.NoError(t, validateRemoteRunAddress(tt.scopeAddr, tt.localAddr), tt.scopeAddr)
+	}
+
+	invalid := []string{
+		"malformed-remote-address",
+		"remote:",
+		":6001",
+		":",
+		"remote:not-a-port",
+		"remote:0",
+		"remote:65536",
+		"2001:db8::1:6001",
+	}
+	for _, addr := range invalid {
+		err := validateRemoteRunAddress(addr, "local:6001")
+		require.Error(t, err, addr)
+		require.Contains(t, err.Error(), "malformed remote CN address", addr)
+	}
 }
 
 func TestGenerateNodesRespectsNodeDOPOnMultiCN(t *testing.T) {
@@ -313,6 +358,9 @@ func TestGenerateNodesKeepsScheduledLocalWorkerWithoutAddress(t *testing.T) {
 		{Id: "cn-local", Mcpu: 8},
 		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 12},
 	}
+	recorder := new(schedule.TraceRecorder)
+	c.SetSchedulingTraceRecorder(recorder)
+	c.beginSchedulingTraceAttempt()
 
 	node := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -344,6 +392,10 @@ func TestGenerateNodesKeepsScheduledLocalWorkerWithoutAddress(t *testing.T) {
 	require.Equal(t, int32(2), nodes[1].CNCNT)
 	require.Equal(t, int32(1), nodes[1].CNIDX)
 	require.NotNil(t, nodes[1].Data)
+	trace := recorder.Snapshot()
+	require.Equal(t, 1, trace.Attempts[0].ScanCount)
+	require.Equal(t, schedule.ReasonScanMultiCN, trace.Attempts[0].Scans[0].Reason)
+	require.Equal(t, 2, trace.Attempts[0].Scans[0].SelectedCount)
 }
 
 func TestGenerateNodesCapsByCNMcpuWhenDOPIsLarger(t *testing.T) {

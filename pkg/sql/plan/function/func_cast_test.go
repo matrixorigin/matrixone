@@ -2778,6 +2778,37 @@ func TestInternalCastOperatorErrorsUsePublicName(t *testing.T) {
 	}
 }
 
+func Test_strToUnsigned_BinaryIntroducedHexText(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	run := func(t *testing.T, isBin bool, want uint64) {
+		inputVec := testutil.MakeVarlenaVector([][]byte{[]byte("12")}, nil, types.T_varbinary.ToType(), mp)
+		defer inputVec.Free(mp)
+		inputVec.SetIsBin(isBin)
+
+		from := vector.GenerateFunctionStrParameter(inputVec)
+		to := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp).(*vector.FunctionResult[uint64])
+		defer to.Free()
+		require.NoError(t, to.PreExtendAndReset(1))
+
+		require.NoError(t, strToUnsigned(ctx, from, to, 64, 1, nil))
+
+		resultVec := to.GetResultVector()
+		result := vector.GenerateFunctionFixedTypeParameter[uint64](resultVec)
+		got, null := result.GetValue(0)
+		require.False(t, null)
+		require.Equal(t, want, got)
+	}
+
+	t.Run("varbinary text parses string content", func(t *testing.T) {
+		run(t, false, 12)
+	})
+	t.Run("raw binary hex path keeps big-endian integer behavior", func(t *testing.T) {
+		run(t, true, 0x3132)
+	})
+}
+
 func contains(slice []uint64, item uint64) bool {
 	for _, s := range slice {
 		if s == item {
