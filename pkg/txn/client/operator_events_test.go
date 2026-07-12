@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/assert"
@@ -48,23 +49,35 @@ func TestCommitClosedEventAfterRunningSQLCleanup(t *testing.T) {
 			commitCtx, cancelCommit := context.WithCancel(ctx)
 			cancelCommit()
 
-			cnt := 0
+			closedC := make(chan TxnEvent, 1)
 			tc.AppendEventCallback(ClosedEvent,
 				TxnEventCallback{
 					Func: func(ctx context.Context, tc TxnOperator, event TxnEvent, value any) error {
-						cnt++
-						assert.Equal(t, txn.TxnStatus_Aborted, event.Txn.Status)
-						assert.Error(t, event.Err)
+						closedC <- event
 						return nil
 					},
 				})
 
 			require.Error(t, tc.Commit(commitCtx))
-			assert.Zero(t, cnt)
+			select {
+			case event := <-closedC:
+				t.Fatalf("transaction closed before running SQL exited: %+v", event)
+			default:
+			}
+			tc.mu.RLock()
 			assert.False(t, tc.mu.closed)
+			tc.mu.RUnlock()
 			tc.ExitRunSqlWithToken(token)
-			assert.Equal(t, 1, cnt)
+			select {
+			case event := <-closedC:
+				assert.Equal(t, txn.TxnStatus_Aborted, event.Txn.Status)
+				assert.Error(t, event.Err)
+			case <-time.After(time.Second):
+				t.Fatal("transaction did not close after running SQL exited")
+			}
+			tc.mu.RLock()
 			assert.True(t, tc.mu.closed)
+			tc.mu.RUnlock()
 		})
 }
 
@@ -79,23 +92,35 @@ func TestRollbackClosedEventAfterRunningSQLCleanup(t *testing.T) {
 			rollbackCtx, cancelRollback := context.WithCancel(ctx)
 			cancelRollback()
 
-			cnt := 0
+			closedC := make(chan TxnEvent, 1)
 			tc.AppendEventCallback(ClosedEvent,
 				TxnEventCallback{
 					Func: func(ctx context.Context, tc TxnOperator, event TxnEvent, value any) error {
-						cnt++
-						assert.Equal(t, txn.TxnStatus_Aborted, event.Txn.Status)
-						assert.Error(t, event.Err)
+						closedC <- event
 						return nil
 					},
 				})
 
 			require.Error(t, tc.Rollback(rollbackCtx))
-			assert.Zero(t, cnt)
+			select {
+			case event := <-closedC:
+				t.Fatalf("transaction closed before running SQL exited: %+v", event)
+			default:
+			}
+			tc.mu.RLock()
 			assert.False(t, tc.mu.closed)
+			tc.mu.RUnlock()
 			tc.ExitRunSqlWithToken(token)
-			assert.Equal(t, 1, cnt)
+			select {
+			case event := <-closedC:
+				assert.Equal(t, txn.TxnStatus_Aborted, event.Txn.Status)
+				assert.Error(t, event.Err)
+			case <-time.After(time.Second):
+				t.Fatal("transaction did not close after running SQL exited")
+			}
+			tc.mu.RLock()
 			assert.True(t, tc.mu.closed)
+			tc.mu.RUnlock()
 		})
 }
 

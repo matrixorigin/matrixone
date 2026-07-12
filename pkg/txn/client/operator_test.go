@@ -86,6 +86,26 @@ type trackingWorkspace struct {
 	syncJobID       string
 }
 
+type blockingRollbackWorkspace struct {
+	trackingWorkspace
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w *blockingRollbackWorkspace) Rollback(ctx context.Context) error {
+	w.rollbackCount++
+	select {
+	case w.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-w.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (w *trackingWorkspace) Readonly() bool {
 	return w.readonly
 }
@@ -1264,6 +1284,11 @@ func TestCommitAndRollbackTimeoutDeferFullCleanupUntilRunningSQLExits(t *testing
 	} {
 		t.Run(action.name, func(t *testing.T) {
 			runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+				closedC := make(chan struct{})
+				tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error {
+					close(closedC)
+					return nil
+				}})
 				workspace := &trackingWorkspace{}
 				lockService := &trackingUnlockLockService{}
 				tc.AddWorkspace(workspace)
@@ -1290,6 +1315,11 @@ func TestCommitAndRollbackTimeoutDeferFullCleanupUntilRunningSQLExits(t *testing
 
 				tc.ExitRunSqlWithToken(token)
 
+				select {
+				case <-closedC:
+				case <-time.After(time.Second):
+					t.Fatal("deferred rollback did not close the transaction")
+				}
 				require.Equal(t, 1, workspace.rollbackCount)
 				require.Equal(t, 1, lockService.unlockCount)
 				requests := ts.getLastRequests()
@@ -1305,6 +1335,11 @@ func TestCommitAndRollbackTimeoutDeferFullCleanupUntilRunningSQLExits(t *testing
 
 func TestRunningSQLTimeoutSealsNewSQLUntilRollbackCompletes(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		closedC := make(chan struct{})
+		tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error {
+			close(closedC)
+			return nil
+		}})
 		workspace := &trackingWorkspace{}
 		lockService := &trackingUnlockLockService{}
 		tc.AddWorkspace(workspace)
@@ -1336,11 +1371,107 @@ func TestRunningSQLTimeoutSealsNewSQLUntilRollbackCompletes(t *testing.T) {
 		tc.ExitRunSqlWithToken(rejectedToken)
 		tc.ExitRunSqlWithToken(runningToken)
 
+		select {
+		case <-closedC:
+		case <-time.After(time.Second):
+			t.Fatal("deferred rollback did not close the transaction")
+		}
 		require.Equal(t, 1, workspace.rollbackCount)
 		require.Equal(t, 1, lockService.unlockCount)
 		requests := ts.getLastRequests()
 		require.Len(t, requests, 1)
 		require.Equal(t, txn.TxnMethod_Rollback, requests[0].Method)
+	})
+}
+
+func TestConcurrentRunningSQLTimeoutSchedulesOneRollback(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		closedC := make(chan struct{})
+		tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error {
+			close(closedC)
+			return nil
+		}})
+		workspace := &trackingWorkspace{}
+		lockService := &trackingUnlockLockService{}
+		tc.AddWorkspace(workspace)
+		tc.lockService = lockService
+		tc.mu.Lock()
+		tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.mu.Unlock()
+
+		_, runningCancel := context.WithCancel(context.Background())
+		runningToken := tc.EnterRunSqlWithTokenAndSQL(runningCancel, "stuck sql")
+		require.NotZero(t, runningToken)
+
+		errC := make(chan error, 2)
+		for _, action := range []func(context.Context) error{tc.Commit, tc.Rollback} {
+			go func(action func(context.Context) error) {
+				timeoutCtx, cancel := context.WithCancel(ctx)
+				cancel()
+				errC <- action(timeoutCtx)
+			}(action)
+		}
+		for range 2 {
+			require.ErrorIs(t, <-errC, context.Canceled)
+		}
+
+		tc.ExitRunSqlWithToken(runningToken)
+		select {
+		case <-closedC:
+		case <-time.After(time.Second):
+			t.Fatal("deferred rollback did not close the transaction")
+		}
+		require.Equal(t, 1, workspace.rollbackCount)
+		require.Equal(t, 1, lockService.unlockCount)
+		requests := ts.getLastRequests()
+		require.Len(t, requests, 1)
+		require.Equal(t, txn.TxnMethod_Rollback, requests[0].Method)
+	})
+}
+
+func TestRunSQLExitDoesNotBlockDeferredRollback(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		closedC := make(chan struct{})
+		tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error {
+			close(closedC)
+			return nil
+		}})
+		workspace := &blockingRollbackWorkspace{
+			started: make(chan struct{}, 1),
+			release: make(chan struct{}),
+		}
+		tc.AddWorkspace(workspace)
+
+		_, runningCancel := context.WithCancel(context.Background())
+		runningToken := tc.EnterRunSqlWithTokenAndSQL(runningCancel, "stuck sql")
+		commitCtx, cancelCommit := context.WithCancel(ctx)
+		cancelCommit()
+		require.ErrorIs(t, tc.Commit(commitCtx), context.Canceled)
+
+		exitC := make(chan struct{})
+		go func() {
+			tc.ExitRunSqlWithToken(runningToken)
+			close(exitC)
+		}()
+		select {
+		case <-workspace.started:
+		case <-time.After(time.Second):
+			t.Fatal("deferred rollback did not start")
+		}
+		select {
+		case <-exitC:
+		case <-time.After(time.Second):
+			t.Fatal("SQL exit blocked on deferred rollback")
+		}
+
+		close(workspace.release)
+		select {
+		case <-closedC:
+		case <-time.After(time.Second):
+			t.Fatal("deferred rollback did not finish")
+		}
+		require.Equal(t, 1, workspace.rollbackCount)
 	})
 }
 

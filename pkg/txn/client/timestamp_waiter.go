@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -35,6 +36,7 @@ type timestampWaiter struct {
 	notifiedC chan struct{}
 	latestTS  atomic.Pointer[timestamp.Timestamp]
 	notified  atomic.Pointer[timestamp.Timestamp]
+	closed    atomic.Bool
 	mu        struct {
 		sync.Mutex
 		waiters      []*timestampWaiterEntry
@@ -59,6 +61,25 @@ func NewTimestampWaiter(
 }
 
 func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return tw.getTimestamp(ctx, ts, nil)
+}
+
+func (tw *timestampWaiter) GetTimestampWithClose(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+	closeC <-chan struct{},
+) (timestamp.Timestamp, error) {
+	return tw.getTimestamp(ctx, ts, closeC)
+}
+
+func (tw *timestampWaiter) getTimestamp(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+	closeC <-chan struct{},
+) (timestamp.Timestamp, error) {
+	if tw.closed.Load() {
+		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
+	}
 	latest := tw.latestTS.Load()
 	if latest != nil && latest.GreaterEq(ts) {
 		return latest.Next(), nil
@@ -70,9 +91,12 @@ func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timest
 	}
 	if w != nil {
 		defer tw.finishWaiter(w)
-		if err := w.wait(ctx); err != nil {
+		if err := w.wait(ctx, closeC); err != nil {
 			return timestamp.Timestamp{}, err
 		}
+	}
+	if tw.closed.Load() {
+		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
 	}
 	v := tw.latestTS.Load()
 	return v.Next(), nil
@@ -103,6 +127,9 @@ func (tw *timestampWaiter) finishWaiter(target *timestampWaiterEntry) {
 }
 
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
+	if tw.closed.Load() {
+		return
+	}
 	util.LogTxnPushedTimestampUpdated(tw.logger, ts)
 	if !tw.storeNotified(ts) {
 		return
@@ -114,7 +141,18 @@ func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
 }
 
 func (tw *timestampWaiter) Close() {
+	if !tw.closed.CompareAndSwap(false, true) {
+		return
+	}
 	tw.stopper.Stop()
+	tw.mu.Lock()
+	for _, waiter := range tw.mu.waiters {
+		waiter.index = -1
+		waiter.notify()
+	}
+	clear(tw.mu.waiters)
+	tw.mu.waiters = nil
+	tw.mu.Unlock()
 }
 
 func (tw *timestampWaiter) LatestTS() timestamp.Timestamp {
@@ -131,6 +169,9 @@ func (tw *timestampWaiter) LatestTS() timestamp.Timestamp {
 func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) (*timestampWaiterEntry, error) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
+	if tw.closed.Load() {
+		return nil, moerr.NewClientClosedNoCtx()
+	}
 	if !tw.mu.lastNotified.IsEmpty() &&
 		tw.mu.lastNotified.GreaterEq(ts) {
 		return nil, nil
@@ -249,10 +290,12 @@ func (w *timestampWaiterEntry) init(ts timestamp.Timestamp) {
 	w.index = -1
 }
 
-func (w *timestampWaiterEntry) wait(ctx context.Context) error {
+func (w *timestampWaiterEntry) wait(ctx context.Context, closeC <-chan struct{}) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-closeC:
+		return moerr.NewClientClosedNoCtx()
 	case <-w.notifyC:
 		return nil
 	}

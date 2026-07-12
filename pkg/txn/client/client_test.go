@@ -37,7 +37,75 @@ type blockingTimestampWaiter struct {
 	entered chan struct{}
 }
 
+type legacyBlockingTimestampWaiter struct {
+	entered chan struct{}
+}
+
+type observedWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *observedWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() {
+		close(c.waiting)
+	})
+	return c.Context.Done()
+}
+
+type blockingCloseTxnSender struct {
+	*testTxnSender
+	closeStarted chan struct{}
+	closeRelease chan struct{}
+	mu           sync.Mutex
+	closeCalls   int
+}
+
+func (s *blockingCloseTxnSender) Close() error {
+	s.mu.Lock()
+	s.closeCalls++
+	s.mu.Unlock()
+	select {
+	case s.closeStarted <- struct{}{}:
+	default:
+	}
+	<-s.closeRelease
+	return nil
+}
+
+func (s *blockingCloseTxnSender) calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeCalls
+}
+
 func (w *blockingTimestampWaiter) GetTimestamp(ctx context.Context, _ timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return w.GetTimestampWithClose(ctx, timestamp.Timestamp{}, nil)
+}
+
+func (w *blockingTimestampWaiter) GetTimestampWithClose(
+	ctx context.Context,
+	_ timestamp.Timestamp,
+	closeC <-chan struct{},
+) (timestamp.Timestamp, error) {
+	select {
+	case w.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return timestamp.Timestamp{}, ctx.Err()
+	case <-closeC:
+		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
+	}
+}
+
+func (w *blockingTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
+func (w *blockingTimestampWaiter) Close()                                   {}
+func (w *blockingTimestampWaiter) LatestTS() timestamp.Timestamp            { return timestamp.Timestamp{} }
+
+func (w *legacyBlockingTimestampWaiter) GetTimestamp(ctx context.Context, _ timestamp.Timestamp) (timestamp.Timestamp, error) {
 	select {
 	case w.entered <- struct{}{}:
 	default:
@@ -46,9 +114,9 @@ func (w *blockingTimestampWaiter) GetTimestamp(ctx context.Context, _ timestamp.
 	return timestamp.Timestamp{}, ctx.Err()
 }
 
-func (w *blockingTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
-func (w *blockingTimestampWaiter) Close()                                   {}
-func (w *blockingTimestampWaiter) LatestTS() timestamp.Timestamp            { return timestamp.Timestamp{} }
+func (w *legacyBlockingTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
+func (w *legacyBlockingTimestampWaiter) Close()                                   {}
+func (w *legacyBlockingTimestampWaiter) LatestTS() timestamp.Timestamp            { return timestamp.Timestamp{} }
 
 func TestAdjustClient(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
@@ -167,6 +235,47 @@ func TestNewTxnAndReset(t *testing.T) {
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
 }
 
+func TestRestartTxnRejectsPendingRunningSQLCleanup(t *testing.T) {
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client := c.(*txnClient)
+		op, err := c.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		closedC := make(chan struct{})
+		tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error {
+			close(closedC)
+			return nil
+		}})
+
+		_, runningCancel := context.WithCancel(context.Background())
+		runningToken := tc.EnterRunSqlWithTokenAndSQL(runningCancel, "stuck sql")
+		commitCtx, cancelCommit := context.WithCancel(ctx)
+		cancelCommit()
+		require.ErrorIs(t, tc.Commit(commitCtx), context.Canceled)
+
+		_, err = client.RestartTxn(ctx, op, timestamp.Timestamp{})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+
+		tc.ExitRunSqlWithToken(runningToken)
+		select {
+		case <-closedC:
+		case <-time.After(time.Second):
+			t.Fatal("deferred rollback did not close the transaction")
+		}
+		require.Eventually(t, func() bool {
+			tc.mu.RLock()
+			defer tc.mu.RUnlock()
+			return tc.mu.terminalCleanupDone
+		}, time.Second, time.Millisecond)
+
+		restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, restarted.Rollback(ctx))
+	})
+}
+
 func TestNewTxnWithNormalStateWait(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
@@ -182,14 +291,21 @@ func TestNewTxnWithNormalStateWait(t *testing.T) {
 
 	// Do not resume the txn client for now.
 	// c.Resume()
+	const waiters = 4
 	var wg sync.WaitGroup
-	errs := make(chan error, 20)
-	for i := 0; i < 20; i++ {
+	errs := make(chan error, waiters)
+	waitContexts := make([]*observedWaitContext, 0, waiters)
+	for i := 0; i < waiters; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		waitCtx := &observedWaitContext{
+			Context: ctx,
+			waiting: make(chan struct{}),
+		}
+		waitContexts = append(waitContexts, waitCtx)
 		wg.Add(1)
-		go func() {
+		go func(ctx context.Context) {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
 			tx, err := c.New(ctx, newTestTimestamp(0))
 			if err != nil {
 				errs <- err
@@ -199,7 +315,14 @@ func TestNewTxnWithNormalStateWait(t *testing.T) {
 			if txnMeta.SnapshotTS.PhysicalTime != 0 || len(txnMeta.ID) == 0 || txnMeta.Status != txn.TxnStatus_Active {
 				errs <- assert.AnError
 			}
-		}()
+		}(waitCtx)
+	}
+	for _, waitCtx := range waitContexts {
+		select {
+		case <-waitCtx.waiting:
+		case <-time.After(time.Second):
+			t.Fatal("New did not reach the paused wait")
+		}
 	}
 	// Resume it now.
 	c.Resume()
@@ -419,6 +542,45 @@ func TestCloseUnblocksMaxActiveNew(t *testing.T) {
 	)
 }
 
+func TestCloseUnblocksAllMaxActiveWaiters(t *testing.T) {
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			_, err := tc.New(context.Background(), timestamp.Timestamp{}, WithUserTxn())
+			require.NoError(t, err)
+
+			const waiters = 8
+			errs := make(chan error, waiters)
+			for range waiters {
+				go func() {
+					_, err := tc.New(context.Background(), timestamp.Timestamp{}, WithUserTxn())
+					errs <- err
+				}()
+			}
+
+			client := tc.(*txnClient)
+			require.Eventually(t, func() bool {
+				client.mu.RLock()
+				defer client.mu.RUnlock()
+				return len(client.mu.waitActiveTxns) == waiters
+			}, time.Second, time.Millisecond)
+
+			require.NoError(t, tc.Close())
+			for range waiters {
+				select {
+				case err := <-errs:
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+				case <-time.After(time.Second):
+					t.Fatal("queued New did not return after client close")
+				}
+			}
+			client.mu.RLock()
+			defer client.mu.RUnlock()
+			require.Empty(t, client.mu.waitActiveTxns)
+		},
+		WithMaxActiveTxn(1),
+	)
+}
+
 func TestCloseCancelsQueuedSnapshotWait(t *testing.T) {
 	waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
 	RunTxnTests(
@@ -451,6 +613,165 @@ func TestCloseCancelsQueuedSnapshotWait(t *testing.T) {
 			}
 		},
 		WithMaxActiveTxn(1),
+		WithTimestampWaiter(waiter),
+	)
+}
+
+func TestCloseCancelsAdmittedSnapshotWait(t *testing.T) {
+	waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			errC := make(chan error, 1)
+			go func() {
+				_, err := tc.New(context.Background(), timestamp.Timestamp{}, WithUserTxn())
+				errC <- err
+			}()
+
+			select {
+			case <-waiter.entered:
+			case <-time.After(time.Second):
+				t.Fatal("admitted transaction did not enter snapshot wait")
+			}
+
+			require.NoError(t, tc.Close())
+			select {
+			case err := <-errC:
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+			case <-time.After(time.Second):
+				t.Fatal("admitted snapshot wait did not return after client close")
+			}
+			require.Zero(t, tc.(*txnClient).atomic.activeTxnCount.Load())
+		},
+		WithTimestampWaiter(waiter),
+	)
+}
+
+func TestCloseCancelsRealTimestampWait(t *testing.T) {
+	tw := NewTimestampWaiter(runtime.DefaultRuntime().Logger()).(*timestampWaiter)
+	defer tw.Close()
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			errC := make(chan error, 1)
+			go func() {
+				_, err := tc.New(context.Background(), timestamp.Timestamp{}, WithUserTxn())
+				errC <- err
+			}()
+
+			require.Eventually(t, func() bool {
+				tw.mu.Lock()
+				defer tw.mu.Unlock()
+				return len(tw.mu.waiters) == 1
+			}, time.Second, time.Millisecond)
+			require.NoError(t, tc.Close())
+			select {
+			case err := <-errC:
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+			case <-time.After(time.Second):
+				t.Fatal("real timestamp wait did not return after client close")
+			}
+			tw.mu.Lock()
+			defer tw.mu.Unlock()
+			require.Empty(t, tw.mu.waiters)
+		},
+		WithTimestampWaiter(tw),
+	)
+}
+
+func TestCloseDuringAdmittedNewCleansActiveState(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	opened := make(chan struct{}, 1)
+	release := make(chan struct{})
+	c := NewTxnClient(
+		"",
+		newTestTxnSender(),
+		WithTxnOpenedCallback([]func(TxnOperator){func(TxnOperator) {
+			opened <- struct{}{}
+			<-release
+		}}),
+	)
+	c.Resume()
+
+	errC := make(chan error, 1)
+	go func() {
+		_, err := c.New(context.Background(), timestamp.Timestamp{}, WithUserTxn())
+		errC <- err
+	}()
+	select {
+	case <-opened:
+	case <-time.After(time.Second):
+		t.Fatal("New did not finish admission")
+	}
+
+	require.NoError(t, c.Close())
+	close(release)
+	select {
+	case err := <-errC:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+	case <-time.After(time.Second):
+		t.Fatal("admitted New did not return after client close")
+	}
+
+	client := c.(*txnClient)
+	require.Zero(t, client.atomic.activeTxnCount.Load())
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+	require.Zero(t, client.mu.users)
+	require.Empty(t, client.mu.waitActiveTxns)
+}
+
+func TestCloseCancelsLegacySnapshotWait(t *testing.T) {
+	waiter := &legacyBlockingTimestampWaiter{entered: make(chan struct{}, 1)}
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			errC := make(chan error, 1)
+			go func() {
+				_, err := tc.New(context.Background(), timestamp.Timestamp{}, WithUserTxn())
+				errC <- err
+			}()
+
+			select {
+			case <-waiter.entered:
+			case <-time.After(time.Second):
+				t.Fatal("legacy waiter did not enter snapshot wait")
+			}
+
+			require.NoError(t, tc.Close())
+			select {
+			case err := <-errC:
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+			case <-time.After(time.Second):
+				t.Fatal("legacy snapshot wait did not return after client close")
+			}
+		},
+		WithTimestampWaiter(waiter),
+	)
+}
+
+func TestCloseCancelsWaitLogTailAppliedAt(t *testing.T) {
+	waiter := &legacyBlockingTimestampWaiter{entered: make(chan struct{}, 1)}
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			client := tc.(*txnClient)
+			errC := make(chan error, 1)
+			go func() {
+				_, err := client.WaitLogTailAppliedAt(context.Background(), timestamp.Timestamp{})
+				errC <- err
+			}()
+
+			select {
+			case <-waiter.entered:
+			case <-time.After(time.Second):
+				t.Fatal("WaitLogTailAppliedAt did not enter timestamp wait")
+			}
+
+			require.NoError(t, tc.Close())
+			select {
+			case err := <-errC:
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+			case <-time.After(time.Second):
+				t.Fatal("WaitLogTailAppliedAt did not return after client close")
+			}
+		},
 		WithTimestampWaiter(waiter),
 	)
 }
@@ -594,12 +915,21 @@ func TestOpenTxnReturnsWhenPausedContextCanceled(t *testing.T) {
 func TestCloseUnblocksPausedNew(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := NewTxnClient("", newTestTxnSender())
+	ctx := &observedWaitContext{
+		Context: context.Background(),
+		waiting: make(chan struct{}),
+	}
 	errC := make(chan error, 1)
 	go func() {
-		_, err := c.New(context.Background(), timestamp.Timestamp{})
+		_, err := c.New(ctx, timestamp.Timestamp{})
 		errC <- err
 	}()
 
+	select {
+	case <-ctx.waiting:
+	case <-time.After(time.Second):
+		t.Fatal("paused New did not reach the wait")
+	}
 	require.NoError(t, c.Close())
 	select {
 	case err := <-errC:
@@ -607,6 +937,80 @@ func TestCloseUnblocksPausedNew(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("paused New did not return after client close")
 	}
+}
+
+func TestCloseUnblocksAbortMarkingNew(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := NewTxnClient("", newTestTxnSender())
+	c.Resume()
+	client := c.(*txnClient)
+	client.mu.Lock()
+	client.mu.waitMarkAllActiveAbortedC = make(chan struct{})
+	client.mu.Unlock()
+
+	ctx := &observedWaitContext{
+		Context: context.Background(),
+		waiting: make(chan struct{}),
+	}
+	errC := make(chan error, 1)
+	go func() {
+		_, err := c.New(ctx, timestamp.Timestamp{})
+		errC <- err
+	}()
+
+	select {
+	case <-ctx.waiting:
+	case <-time.After(time.Second):
+		t.Fatal("New did not reach the abort-marking wait")
+	}
+	require.NoError(t, c.Close())
+	select {
+	case err := <-errC:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+	case <-time.After(time.Second):
+		t.Fatal("abort-marking New did not return after client close")
+	}
+}
+
+func TestClosedClientRejectsNewAndSnapshot(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := NewTxnClient("", newTestTxnSender())
+	require.NoError(t, c.Close())
+
+	_, err := c.New(context.Background(), timestamp.Timestamp{})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+	_, err = c.NewWithSnapshot(txn.CNTxnSnapshot{})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+}
+
+func TestConcurrentCloseClosesSenderOnce(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	sender := &blockingCloseTxnSender{
+		testTxnSender: newTestTxnSender(),
+		closeStarted:  make(chan struct{}, 1),
+		closeRelease:  make(chan struct{}),
+	}
+	c := NewTxnClient("", sender)
+
+	first := make(chan error, 1)
+	second := make(chan error, 1)
+	go func() { first <- c.Close() }()
+	select {
+	case <-sender.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first Close did not reach sender close")
+	}
+	go func() { second <- c.Close() }()
+
+	select {
+	case err := <-second:
+		t.Fatalf("concurrent Close returned before the owner completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(sender.closeRelease)
+	require.NoError(t, <-first)
+	require.NoError(t, <-second)
+	require.Equal(t, 1, sender.calls())
 }
 
 func TestOpenTxnReturnsWhenAbortMarkingContextCanceled(t *testing.T) {

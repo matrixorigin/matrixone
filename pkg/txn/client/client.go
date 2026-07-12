@@ -215,10 +215,12 @@ type txnClient struct {
 	mu struct {
 		sync.RWMutex
 		// indicate whether the CN can provide service normally.
-		state   status
-		pausedC chan struct{}
-		closed  bool
-		closedC chan struct{}
+		state     status
+		pausedC   chan struct{}
+		closed    bool
+		closedC   chan struct{}
+		closeDone chan struct{}
+		closeErr  error
 		// user active txns
 		users int
 		// FIFO queue for ready to active txn
@@ -228,7 +230,9 @@ type txnClient struct {
 
 	// abortC only carries wakeups. latestAbortAt retains the newest invalid-CN
 	// observation while the worker is scanning active transactions.
-	abortC chan struct{}
+	abortC      chan struct{}
+	closeCtx    context.Context
+	closeCancel context.CancelFunc
 }
 
 // getActiveTxnShard returns the shard for a given txnID.
@@ -240,6 +244,12 @@ func (client *txnClient) getActiveTxnShard(txnID string) *activeTxnShard {
 		h *= 16777619
 	}
 	return &client.activeTxns[h%activeTxnShards]
+}
+
+func (client *txnClient) isClosed() bool {
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+	return client.mu.closed
 }
 
 // addActiveTxn adds a transaction to the sharded map.
@@ -355,9 +365,11 @@ func NewTxnClient(
 		abortC: make(chan struct{}, 1),
 	}
 	c.stopper = stopper.NewStopper("txn-client", stopper.WithLogger(c.logger.RawLogger()))
+	c.closeCtx, c.closeCancel = context.WithCancel(context.Background())
 	c.mu.state = paused
 	c.mu.pausedC = make(chan struct{})
 	c.mu.closedC = make(chan struct{})
+	c.mu.closeDone = make(chan struct{})
 	// Initialize sharded activeTxns
 	for i := range c.activeTxns {
 		c.activeTxns[i].txns = make(map[string]*txnOperator, 100000/activeTxnShards)
@@ -420,6 +432,9 @@ func (client *txnClient) RestartTxn(
 	options ...TxnOption,
 ) (TxnOperator, error) {
 	op := txnOp.(*txnOperator)
+	if !op.canRestart() {
+		return nil, moerr.NewTxnClosedNoCtx(op.reset.txnID)
+	}
 	op.init(
 		client.newTxnMeta(),
 		client.getTxnOptions(options)...,
@@ -477,17 +492,28 @@ func (client *txnClient) doCreateTxn(
 	ts := client.determineTxnSnapshot(minTS)
 	if !op.opts.skipWaitPushClient {
 		snapshotCtx := ctx
-		var cancelSnapshot context.CancelFunc
-		if op.reset.waiter != nil && op.timestampWaiter != nil {
-			snapshotCtx, cancelSnapshot = op.reset.waiter.withFailureContext(ctx)
-			defer cancelSnapshot()
+		var closeC <-chan struct{}
+		if op.timestampWaiter != nil {
+			client.mu.RLock()
+			closeC = client.mu.closedC
+			client.mu.RUnlock()
+			if _, ok := op.timestampWaiter.(closeAwareTimestampWaiter); !ok {
+				var cancelOnClose context.CancelFunc
+				snapshotCtx, cancelOnClose = client.withCloseContext(ctx)
+				defer cancelOnClose()
+			}
 		}
-		if err := op.UpdateSnapshot(snapshotCtx, ts); err != nil {
+		if err := op.updateSnapshotWithClose(snapshotCtx, ts, closeC); err != nil {
 			if op.reset.waiter != nil {
 				if waitErr, completed := op.reset.waiter.result(); completed && waitErr != nil {
 					op.closeAsAborted(ctx, waitErr)
 					return nil, waitErr
 				}
+			}
+			if client.isClosed() {
+				err := moerr.NewClientClosedNoCtx()
+				op.closeAsAborted(ctx, err)
+				return nil, err
 			}
 			_ = op.Rollback(ctx)
 			return nil, errors.Join(err, moerr.NewTxnError(ctx, "update txn snapshot"))
@@ -539,18 +565,30 @@ func (client *txnClient) NewWithSnapshot(
 func (client *txnClient) Close() error {
 	var waiting []*txnOperator
 	client.mu.Lock()
-	if !client.mu.closed {
-		client.mu.closed = true
-		if client.mu.pausedC != nil {
-			close(client.mu.pausedC)
-			client.mu.pausedC = nil
+	if client.mu.closed {
+		done := client.mu.closeDone
+		client.mu.Unlock()
+		if done != nil {
+			<-done
 		}
-		if client.mu.closedC != nil {
-			close(client.mu.closedC)
-		}
-		waiting = client.mu.waitActiveTxns
-		client.mu.waitActiveTxns = nil
+		client.mu.RLock()
+		err := client.mu.closeErr
+		client.mu.RUnlock()
+		return err
 	}
+	client.mu.closed = true
+	if client.mu.pausedC != nil {
+		close(client.mu.pausedC)
+		client.mu.pausedC = nil
+	}
+	if client.mu.closedC != nil {
+		close(client.mu.closedC)
+	}
+	if client.closeCancel != nil {
+		client.closeCancel()
+	}
+	waiting = client.mu.waitActiveTxns
+	client.mu.waitActiveTxns = nil
 	client.mu.Unlock()
 	for _, op := range waiting {
 		op.failActiveWait(moerr.NewClientClosedNoCtx())
@@ -560,7 +598,28 @@ func (client *txnClient) Close() error {
 	if client.leakChecker != nil {
 		client.leakChecker.close()
 	}
-	return client.sender.Close()
+	err := client.sender.Close()
+	client.mu.Lock()
+	client.mu.closeErr = err
+	if client.mu.closeDone != nil {
+		close(client.mu.closeDone)
+	}
+	client.mu.Unlock()
+	return err
+}
+
+// withCloseContext binds creation-time blocking work to the transaction
+// client's shutdown without changing the caller's context contract.
+func (client *txnClient) withCloseContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if client.closeCtx == nil {
+		return ctx, func() {}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(client.closeCtx, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 func (client *txnClient) MinTimestamp() timestamp.Timestamp {
@@ -582,7 +641,13 @@ func (client *txnClient) WaitLogTailAppliedAt(
 	if client.timestampWaiter == nil {
 		return timestamp.Timestamp{}, nil
 	}
-	return client.timestampWaiter.GetTimestamp(ctx, ts)
+	ctx, cancel := client.withCloseContext(ctx)
+	defer cancel()
+	value, err := client.timestampWaiter.GetTimestamp(ctx, ts)
+	if err != nil && client.isClosed() {
+		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
+	}
+	return value, err
 }
 
 func (client *txnClient) getTxnIsolation() txn.TxnIsolation {

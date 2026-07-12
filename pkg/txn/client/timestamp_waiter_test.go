@@ -16,11 +16,13 @@ package client
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -73,6 +75,94 @@ func TestGetTimestampCanceledWaitIsRemoved(t *testing.T) {
 	assert.Empty(t, tw.mu.waiters)
 }
 
+func TestGetTimestampCancelPreservesOtherWaiter(t *testing.T) {
+	tw := &timestampWaiter{}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstErrC := make(chan error, 1)
+	secondErrC := make(chan error, 1)
+	secondValueC := make(chan timestamp.Timestamp, 1)
+	go func() {
+		_, err := tw.GetTimestamp(firstCtx, newTestTimestamp(10))
+		firstErrC <- err
+	}()
+	go func() {
+		value, err := tw.GetTimestamp(context.Background(), newTestTimestamp(20))
+		secondValueC <- value
+		secondErrC <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		tw.mu.Lock()
+		defer tw.mu.Unlock()
+		return len(tw.mu.waiters) == 2
+	}, time.Second, time.Millisecond)
+	cancelFirst()
+	require.ErrorIs(t, <-firstErrC, context.Canceled)
+
+	tw.mu.Lock()
+	require.Len(t, tw.mu.waiters, 1)
+	require.Equal(t, newTestTimestamp(20), tw.mu.waiters[0].waitAfter)
+	tw.mu.Unlock()
+
+	ts := newTestTimestamp(20)
+	tw.latestTS.Store(&ts)
+	tw.notifyWaiters(ts)
+	require.NoError(t, <-secondErrC)
+	require.Equal(t, ts.Next(), <-secondValueC)
+}
+
+func TestGetTimestampWithCloseUnblocksWait(t *testing.T) {
+	tw := &timestampWaiter{}
+	closeC := make(chan struct{})
+	errC := make(chan error, 1)
+	go func() {
+		_, err := tw.GetTimestampWithClose(context.Background(), newTestTimestamp(10), closeC)
+		errC <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		tw.mu.Lock()
+		defer tw.mu.Unlock()
+		return len(tw.mu.waiters) == 1
+	}, time.Second, time.Millisecond)
+	close(closeC)
+
+	select {
+	case err := <-errC:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+	case <-time.After(time.Second):
+		t.Fatal("timestamp wait did not return after client close")
+	}
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	require.Empty(t, tw.mu.waiters)
+}
+
+func TestTimestampWaiterCloseUnblocksWaitsAndRejectsNewOnes(t *testing.T) {
+	tw := NewTimestampWaiter(util.GetLogger("")).(*timestampWaiter)
+	errC := make(chan error, 1)
+	go func() {
+		_, err := tw.GetTimestamp(context.Background(), newTestTimestamp(10))
+		errC <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		tw.mu.Lock()
+		defer tw.mu.Unlock()
+		return len(tw.mu.waiters) == 1
+	}, time.Second, time.Millisecond)
+	tw.Close()
+
+	select {
+	case err := <-errC:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+	case <-time.After(time.Second):
+		t.Fatal("timestamp waiter did not unblock on Close")
+	}
+	_, err := tw.GetTimestamp(context.Background(), newTestTimestamp(10))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+}
+
 func TestGetTimestampNotifyAndCancelRace(t *testing.T) {
 	for i := 0; i < 64; i++ {
 		tw := &timestampWaiter{}
@@ -120,6 +210,58 @@ func TestGetTimestampNotifyAndCancelRace(t *testing.T) {
 		tw.mu.Lock()
 		require.Empty(t, tw.mu.waiters)
 		tw.mu.Unlock()
+	}
+}
+
+func TestTimestampWaiterCloseNotifyAndCancelRace(t *testing.T) {
+	for i := 0; i < 32; i++ {
+		tw := NewTimestampWaiter(util.GetLogger("")).(*timestampWaiter)
+		ts := newTestTimestamp(int64(i + 1))
+		ctx, cancel := context.WithCancel(context.Background())
+		errC := make(chan error, 1)
+		go func() {
+			_, err := tw.GetTimestamp(ctx, ts)
+			errC <- err
+		}()
+
+		require.Eventually(t, func() bool {
+			tw.mu.Lock()
+			defer tw.mu.Unlock()
+			return len(tw.mu.waiters) == 1
+		}, time.Second, time.Millisecond)
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			<-start
+			tw.NotifyLatestCommitTS(ts)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			cancel()
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			tw.Close()
+		}()
+		close(start)
+		wg.Wait()
+
+		err := <-errC
+		require.True(t,
+			err == nil ||
+				errors.Is(err, context.Canceled) ||
+				moerr.IsMoErrCode(err, moerr.ErrClientClosed),
+		)
+		tw.mu.Lock()
+		require.Empty(t, tw.mu.waiters)
+		tw.mu.Unlock()
+		_, err = tw.GetTimestamp(context.Background(), ts)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
 	}
 }
 
@@ -198,7 +340,7 @@ func TestNotifyWaiters(t *testing.T) {
 		go func(w *timestampWaiterEntry) {
 			defer wg.Done()
 			defer tw.finishWaiter(w)
-			w.wait(context.Background())
+			w.wait(context.Background(), nil)
 		}(w)
 	}
 	tw.notifyWaiters(newTestTimestamp(4))

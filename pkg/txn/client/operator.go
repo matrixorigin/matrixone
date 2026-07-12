@@ -277,6 +277,7 @@ type txnOperator struct {
 		waitActive             bool
 		closed                 bool
 		terminalAction         txnTerminalAction
+		terminalCleanupDone    bool
 		txn                    txn.TxnMeta
 		cachedWrites           map[uint64][]txn.TxnRequest
 		lockTables             []lock.LockTable
@@ -331,6 +332,12 @@ type runSQLTracker struct {
 	cond         *sync.Cond
 	sealed       bool
 	onDrained    func()
+}
+
+// closeAwareTimestampWaiter is an optional fast path for waiters that can
+// observe txn-client shutdown without allocating a derived context per New.
+type closeAwareTimestampWaiter interface {
+	GetTimestampWithClose(context.Context, timestamp.Timestamp, <-chan struct{}) (timestamp.Timestamp, error)
 }
 
 type txnTerminalAction uint8
@@ -409,7 +416,7 @@ func (t *runSQLTracker) exitToken(token uint64) {
 	t.mu.Unlock()
 
 	if callback != nil {
-		callback()
+		go callback()
 	}
 }
 
@@ -439,7 +446,7 @@ func (t *runSQLTracker) sealAndRunWhenDrained(fn func()) {
 		for _, cancel := range cancels {
 			cancel()
 		}
-		fn()
+		go fn()
 		return
 	}
 	t.onDrained = fn
@@ -447,6 +454,20 @@ func (t *runSQLTracker) sealAndRunWhenDrained(fn func()) {
 	for _, cancel := range cancels {
 		cancel()
 	}
+}
+
+// sealForRestart prevents a restarted operator from accepting an old SQL
+// registration after its tracker has been checked. Restart is only safe after
+// every SQL token from the previous transaction has exited.
+func (t *runSQLTracker) sealForRestart() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ensureInitLocked()
+	if len(t.activeTokens) != 0 {
+		return false
+	}
+	t.sealed = true
+	return true
 }
 
 func (t *runSQLTracker) cancelAllExcept(keepToken uint64, skipToken uint64) {
@@ -621,6 +642,7 @@ func (tc *txnOperator) initProtectedFields() {
 	tc.mu.waitActive = false
 	tc.mu.closed = false
 	tc.mu.terminalAction = txnTerminalActionNone
+	tc.mu.terminalCleanupDone = false
 	tc.mu.retry = false
 	tc.mu.lockSeq = 0
 	tc.mu.txn = txn.TxnMeta{}
@@ -810,6 +832,22 @@ func (tc *txnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 func (tc *txnOperator) UpdateSnapshot(
 	ctx context.Context,
 	ts timestamp.Timestamp) error {
+	return tc.updateSnapshot(ctx, ts, nil)
+}
+
+func (tc *txnOperator) updateSnapshotWithClose(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+	closeC <-chan struct{},
+) error {
+	return tc.updateSnapshot(ctx, ts, closeC)
+}
+
+func (tc *txnOperator) updateSnapshot(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+	closeC <-chan struct{},
+) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	if err := tc.checkStatus(true); err != nil {
@@ -827,9 +865,11 @@ func (tc *txnOperator) UpdateSnapshot(
 		UpdateSnapshotEvent,
 		func() error {
 			var err error
-			tc.mu.txn.SnapshotTS, err = tc.timestampWaiter.GetTimestamp(
-				ctx,
-				ts)
+			if waiter, ok := tc.timestampWaiter.(closeAwareTimestampWaiter); ok {
+				tc.mu.txn.SnapshotTS, err = waiter.GetTimestampWithClose(ctx, ts, closeC)
+			} else {
+				tc.mu.txn.SnapshotTS, err = tc.timestampWaiter.GetTimestamp(ctx, ts)
+			}
 			return err
 		},
 		true)
@@ -1743,10 +1783,16 @@ func (tc *txnOperator) scheduleRollbackAfterRunningSQL(waitErr error) {
 		return
 	}
 	tc.mu.terminalAction = txnTerminalActionRollbackAfterRunningSQL
+	tc.mu.terminalCleanupDone = false
 	tc.reset.commitErr = waitErr
 	tc.mu.Unlock()
 
 	tc.reset.runSQLTracker.sealAndRunWhenDrained(func() {
+		defer func() {
+			tc.mu.Lock()
+			tc.mu.terminalCleanupDone = true
+			tc.mu.Unlock()
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), runningSQLWaitTimeout)
 		defer cancel()
 		if err := tc.Rollback(ctx); err != nil {
@@ -1941,6 +1987,16 @@ func (tc *txnOperator) cancelAndWaitRunningSQL(ctx context.Context, keepToken ui
 
 func (tc *txnOperator) inRunSql() bool {
 	return tc.reset.runSqlCounter.more()
+}
+
+func (tc *txnOperator) canRestart() bool {
+	tc.mu.RLock()
+	pendingTerminalCleanup := tc.mu.terminalAction != txnTerminalActionNone && !tc.mu.terminalCleanupDone
+	tc.mu.RUnlock()
+	if pendingTerminalCleanup {
+		return false
+	}
+	return tc.reset.runSQLTracker.sealForRestart()
 }
 
 func (tc *txnOperator) inCommit() bool {

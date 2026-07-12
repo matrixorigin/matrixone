@@ -49,24 +49,6 @@ func (w *activeTxnWaiter) complete(err error) {
 	})
 }
 
-// withFailureContext stops pre-admission work when the queue is failed by
-// client shutdown. It is used only by queued transactions that can block while
-// obtaining a snapshot; admitted and queue-less transactions stay on the
-// allocation-free fast path.
-func (w *activeTxnWaiter) withFailureContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(ctx)
-	go func() {
-		select {
-		case <-ctx.Done():
-		case <-w.doneC:
-			if w.err != nil {
-				cancel()
-			}
-		}
-	}()
-	return ctx, cancel
-}
-
 func (w *activeTxnWaiter) result() (error, bool) {
 	select {
 	case <-w.doneC:
