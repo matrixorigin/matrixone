@@ -5226,23 +5226,36 @@ func strToSigned[T constraints.Signed](
 					body = s[1:]
 				}
 				if len(body) >= 2 && body[0] == '0' {
+					var magnitude uint64
 					switch body[1] {
 					case 'b', 'B':
-						r, err = strconv.ParseInt(body[2:], 2, bitSize)
+						magnitude, err = strconv.ParseUint(body[2:], 2, bitSize)
 						hasRadix = true
 					case 'o', 'O':
-						r, err = strconv.ParseInt(body[2:], 8, bitSize)
+						magnitude, err = strconv.ParseUint(body[2:], 8, bitSize)
 						hasRadix = true
 					case 'x', 'X':
-						r, err = strconv.ParseInt(body[2:], 16, bitSize)
+						magnitude, err = strconv.ParseUint(body[2:], 16, bitSize)
 						hasRadix = true
 					}
-				}
-				if hasRadix {
-					if neg {
-						r = -r
+					if hasRadix && err == nil {
+						negativeLimit := uint64(1) << (bitSize - 1)
+						if neg {
+							if magnitude > negativeLimit {
+								err = strconv.ErrRange
+							} else if magnitude == negativeLimit {
+								r = -int64(negativeLimit-1) - 1
+							} else {
+								r = -int64(magnitude)
+							}
+						} else if magnitude >= negativeLimit {
+							err = strconv.ErrRange
+						} else {
+							r = int64(magnitude)
+						}
 					}
-				} else {
+				}
+				if !hasRadix {
 					integer, parseErr := integerStringForCast(s, mode)
 					if parseErr != nil {
 						return moerr.NewInvalidArg(ctx, "cast to int", s)

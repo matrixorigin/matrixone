@@ -2553,6 +2553,53 @@ func TestStrToSignedStringPrefix(t *testing.T) {
 	}
 }
 
+func TestStrToSignedRadixMinimumBoundaries(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	tests := []struct {
+		name    string
+		input   string
+		bitSize int
+		want    int64
+	}{
+		{name: "int8", input: "-0x80", bitSize: 8, want: math.MinInt8},
+		{name: "int16", input: "-0x8000", bitSize: 16, want: math.MinInt16},
+		{name: "int32", input: "-0x80000000", bitSize: 32, want: math.MinInt32},
+		{name: "int64", input: "-0x8000000000000000", bitSize: 64, want: math.MinInt64},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputVec := testutil.MakeVarlenaVector([][]byte{[]byte(tt.input)}, nil, types.T_varchar.ToType(), mp)
+			defer inputVec.Free(mp)
+			from := vector.GenerateFunctionStrParameter(inputVec)
+			to := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp).(*vector.FunctionResult[int64])
+			defer to.Free()
+			require.NoError(t, to.PreExtendAndReset(1))
+
+			require.NoError(t, strToSigned(ctx, from, to, tt.bitSize, 1, nil, castExplicit))
+			got, null := vector.GenerateFunctionFixedTypeParameter[int64](to.GetResultVector()).GetValue(0)
+			require.False(t, null)
+			require.Equal(t, tt.want, got)
+		})
+	}
+
+	for _, input := range []string{"-0x81", "-0x8001", "-0x80000001", "-0x8000000000000001"} {
+		t.Run("overflow_"+input, func(t *testing.T) {
+			bitSize := map[int]int{5: 8, 7: 16, 11: 32, 19: 64}[len(input)]
+			inputVec := testutil.MakeVarlenaVector([][]byte{[]byte(input)}, nil, types.T_varchar.ToType(), mp)
+			defer inputVec.Free(mp)
+			from := vector.GenerateFunctionStrParameter(inputVec)
+			to := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp).(*vector.FunctionResult[int64])
+			defer to.Free()
+			require.NoError(t, to.PreExtendAndReset(1))
+			require.Error(t, strToSigned(ctx, from, to, bitSize, 1, nil, castExplicit))
+		})
+	}
+}
+
 func TestStringToIntegerCastModes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {

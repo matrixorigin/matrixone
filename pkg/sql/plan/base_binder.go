@@ -1747,6 +1747,19 @@ func tryFoldNumericStringConst(ctx context.Context, strExpr *plan.Expr, otherTyp
 	return expr
 }
 
+// castStringOperandForExactNumericConst keeps string expressions compared with
+// exact integer/decimal constants off the lossy DOUBLE comparison path.
+func castStringOperandForExactNumericConst(ctx context.Context, strExpr, numericExpr *plan.Expr) (*plan.Expr, error) {
+	if !types.T(strExpr.Typ.Id).IsMySQLString() || numericExpr.GetLit() == nil || numericExpr.GetLit().Isnull {
+		return strExpr, nil
+	}
+	numericType := types.T(numericExpr.Typ.Id)
+	if !numericType.IsInteger() && !numericType.IsDecimal() {
+		return strExpr, nil
+	}
+	return appendCastBeforeExpr(ctx, strExpr, numericExpr.Typ)
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
@@ -1772,7 +1785,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err := convertValueIntoBool(name, args, true); err != nil {
 			return nil, err
 		}
-	case "=", "<", "<=", ">", ">=", "<>":
+	case "=", "<", "<=", ">", ">=", "<>", "<=>":
 		// why not append cast function?
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
@@ -1789,6 +1802,14 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if folded := tryFoldNumericStringConst(ctx, args[1], t0); folded != nil {
 				args[1] = folded
+			}
+			args[0], err = castStringOperandForExactNumericConst(ctx, args[0], args[1])
+			if err != nil {
+				return nil, err
+			}
+			args[1], err = castStringOperandForExactNumericConst(ctx, args[1], args[0])
+			if err != nil {
+				return nil, err
 			}
 		}
 

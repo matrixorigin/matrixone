@@ -1567,6 +1567,9 @@ func integralCastLiteralKey(lit *plan.Literal, typ plan.Type, target plan.Type) 
 		if !ok {
 			return "", false
 		}
+		if v == 0 {
+			v = 0
+		}
 		return fmt.Sprintf("%d/%x", target.Id, math.Float64bits(v)), true
 	}
 	normalized, ok := normalizedIntegralLiteral(lit, typ, types.T(target.Id))
@@ -1792,7 +1795,7 @@ func unwrapConstLiteral(expr *plan.Expr) (*plan.Literal, plan.Type, bool) {
 			return lit, effectiveTyp, true
 		}
 		fn := expr.GetF()
-		if fn == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
+		if fn == nil || (fn.Func.ObjName != "cast" && fn.Func.ObjName != "cast_explicit") || len(fn.Args) == 0 {
 			return nil, plan.Type{}, false
 		}
 		expr = fn.Args[0]
@@ -1846,7 +1849,7 @@ func stripConstLiteralCasts(expr *plan.Expr) *plan.Expr {
 			return cur
 		}
 		fn := cur.GetF()
-		if fn == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
+		if fn == nil || (fn.Func.ObjName != "cast" && fn.Func.ObjName != "cast_explicit") || len(fn.Args) == 0 {
 			return expr
 		}
 		cur = fn.Args[0]

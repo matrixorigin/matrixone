@@ -40,7 +40,7 @@ create table enum01 (col1 enum('red','blue','green'));
 insert into enum01 values ('red'),('blue'),('green');
 desc enum01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  ENUM('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦  
+col1  ¦  ENUM('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦
 select * from enum01;
 ➤ col1[12,-1,0]  𝄀
 red  𝄀
@@ -92,7 +92,7 @@ enum03  ¦  CREATE TABLE `enum03` (
 )
 show columns from enum03;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  ENUM('ejwuijfew','ewrwrewretr','werwre')  ¦  NO  ¦    ¦  null  ¦    ¦  
+col1  ¦  ENUM('ejwuijfew','ewrwrewretr','werwre')  ¦  NO  ¦    ¦  null  ¦    ¦
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]
 drop table enum03;
@@ -166,7 +166,7 @@ pri01  ¦  CREATE TABLE `pri01` (
 )
 show columns from pri01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  ENUM('qy4iujd3wi4fu4h3f','323242r34df432432','32e3ewfdewrew')  ¦  YES  ¦    ¦  null  ¦    ¦  
+col1  ¦  ENUM('qy4iujd3wi4fu4h3f','323242r34df432432','32e3ewfdewrew')  ¦  YES  ¦    ¦  null  ¦    ¦
 drop table pri01;
 drop table if exists pri02;
 create table pri02 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
@@ -187,7 +187,7 @@ pri02  ¦  CREATE TABLE `pri02` (
 show columns from pri02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col2  ¦  ENUM('数据库','数据库系统','数据库管理系统')  ¦  YES  ¦    ¦  null  ¦    ¦  
+col2  ¦  ENUM('数据库','数据库系统','数据库管理系统')  ¦  YES  ¦    ¦  null  ¦    ¦
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
 pri02  ¦  col1  ¦  INT  ¦  YES  𝄀
@@ -212,7 +212,7 @@ pri03  ¦  CREATE TABLE `pri03` (
 show columns from pri03;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col2  ¦  ENUM('数据库','数据库系统','数据库管理系统')  ¦  YES  ¦    ¦  null  ¦    ¦  
+col2  ¦  ENUM('数据库','数据库系统','数据库管理系统')  ¦  YES  ¦    ¦  null  ¦    ¦
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
 pri03  ¦  col1  ¦  INT  ¦  YES  𝄀
@@ -237,7 +237,7 @@ pri04  ¦  CREATE TABLE `pri04` (
 show columns from pri04;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col2  ¦  ENUM('database','database management','database management system')  ¦  YES  ¦    ¦  null  ¦    ¦  
+col2  ¦  ENUM('database','database management','database management system')  ¦  YES  ¦    ¦  null  ¦    ¦
 select * from pri04 where col2 = 'database';
 ➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
 1  ¦  database
@@ -326,7 +326,7 @@ show columns from insert01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 order_number  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-status  ¦  ENUM('Pending','Processing','Completed','Cancelled')  ¦  YES  ¦    ¦  null  ¦    ¦  
+status  ¦  ENUM('Pending','Processing','Completed','Cancelled')  ¦  YES  ¦    ¦  null  ¦    ¦
 delete from insert01 where status=3;
 update insert01 set status='Pending' where status=2;
 select * from insert01;
@@ -345,7 +345,7 @@ drop table if exists default01;
 create table default01 (`col1` enum('T', 'E') not null default 'T');
 desc default01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  ENUM('T','E')  ¦  NO  ¦    ¦  T  ¦    ¦  
+col1  ¦  ENUM('T','E')  ¦  NO  ¦    ¦  T  ¦    ¦
 insert into default01 values(default);
 select * from default01;
 ➤ col1[12,-1,0]  𝄀
@@ -355,7 +355,7 @@ drop table if exists default02;
 create table default02 (`col1` enum('T', 'E') not null default '1');
 desc default02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  ENUM('T','E')  ¦  NO  ¦    ¦  1  ¦    ¦  
+col1  ¦  ENUM('T','E')  ¦  NO  ¦    ¦  1  ¦    ¦
 insert into default02 values(default);
 select * from default02;
 ➤ col1[12,-1,0]  𝄀
@@ -365,7 +365,7 @@ drop table if exists default03;
 create table default03 (`col1` enum('T', 'E') not null default 1);
 desc default03;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  ENUM('T','E')  ¦  NO  ¦    ¦  1  ¦    ¦  
+col1  ¦  ENUM('T','E')  ¦  NO  ¦    ¦  1  ¦    ¦
 insert into default03 values(default);
 select * from default03;
 ➤ col1[12,-1,0]  𝄀
@@ -375,7 +375,7 @@ drop table if exists default04;
 create table default04 (`col1` enum('T', 'E') not null default 2);
 desc default04;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  ENUM('T','E')  ¦  NO  ¦    ¦  2  ¦    ¦  
+col1  ¦  ENUM('T','E')  ¦  NO  ¦    ¦  2  ¦    ¦
 insert into default04 values(default);
 select * from default04;
 ➤ col1[12,-1,0]  𝄀
@@ -385,7 +385,7 @@ drop table if exists default05;
 create table default05 (`col1` enum('T', 'E') not null default '2');
 desc default05;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col1  ¦  ENUM('T','E')  ¦  NO  ¦    ¦  2  ¦    ¦  
+col1  ¦  ENUM('T','E')  ¦  NO  ¦    ¦  2  ¦    ¦
 insert into default05 values(default);
 select * from default05;
 ➤ col1[12,-1,0]  𝄀
@@ -403,7 +403,7 @@ select * from enum04;
 3  ¦  矩阵起源
 select * from enum04 where col2 = '';
 ➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
-2  ¦  
+2  ¦
 select * from enum04 where col2 != '';
 ➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
 1  ¦  38921384  𝄀
@@ -418,7 +418,7 @@ select * from enum04 where col2 >= '38921384';
 select * from enum04 where col2 < '矩阵起源';
 ➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
 1  ¦  38921384  𝄀
-2  ¦  
+2  ¦
 select * from enum04 where col2 <= '矩阵起源';
 ➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
 1  ¦  38921384  𝄀
@@ -430,11 +430,11 @@ select * from enum04 where col2 between '38921384' and '矩阵起源';
 3  ¦  矩阵起源
 select * from enum04 where col2 not between '38921384' and '矩阵起源';
 ➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
-2  ¦  
+2  ¦
 select * from enum04 where col2 in('38921384','');
 ➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
 1  ¦  38921384  𝄀
-2  ¦  
+2  ¦
 select * from enum04 where col2 not in('38921384','');
 ➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
 3  ¦  矩阵起源
@@ -456,12 +456,12 @@ select * from builtin01;
 ➤ col1[12,-1,0]  ¦  col2[12,-1,0]  𝄀
   云原生数据库    ¦   database  𝄀
 存储引擎 TAE  ¦  engine   𝄀
-database system  ¦  engine 
+database system  ¦  engine
 select concat_ws(',,,',col1,col2) from builtin01;
 ➤ concat_ws(,,,, col1, col2)[12,-1,0]  𝄀
   云原生数据库  ,,, database  𝄀
 存储引擎 TAE,,,engine   𝄀
-database system,,,engine 
+database system,,,engine
 select find_in_set('  云原生数据库  ',col1) from builtin01;
 ➤ find_in_set(  云原生数据库  , col1)[-5,64,0]  𝄀
 1  𝄀
@@ -534,13 +534,13 @@ select count(col1) as count_col1 from builtin01;
 3
 select max(col1), max(col2) from builtin01;
 ➤ max(col1)[12,-1,0]  ¦  max(col2)[12,-1,0]  𝄀
-存储引擎 TAE  ¦  engine 
+存储引擎 TAE  ¦  engine
 select min(col1), min(col2) from builtin01;
 ➤ min(col1)[12,-1,0]  ¦  min(col2)[12,-1,0]  𝄀
   云原生数据库    ¦   database
 select group_concat(col1,col2) from builtin01;
 ➤ group_concat(col1, col2, ,)[12,0,0]  𝄀
-  云原生数据库   database,存储引擎 TAEengine ,database systemengine 
+  云原生数据库   database,存储引擎 TAEengine ,database systemengine
 drop table builtin01;
 drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'));

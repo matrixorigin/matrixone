@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -23,6 +25,35 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFloatDomainKeyNormalizesSignedZero(t *testing.T) {
+	operand := &domainFilterOperand{
+		hasCast: true,
+		castTyp: planpb.Type{Id: int32(types.T_float64)},
+	}
+	positiveKey, ok := constLiteralKeyForOperand(MakePlan2Float64ConstExprWithType(0), operand)
+	require.True(t, ok)
+	negativeKey, ok := constLiteralKeyForOperand(
+		MakePlan2Float64ConstExprWithType(math.Copysign(0, -1)), operand)
+	require.True(t, ok)
+	require.Equal(t, positiveKey, negativeKey)
+}
+
+func TestUnwrapConstLiteralRecognizesExplicitCast(t *testing.T) {
+	expr, err := appendCastBeforeExprWithName(
+		context.Background(),
+		MakePlan2Int64ConstExprWithType(42),
+		planpb.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 0},
+		"cast_explicit",
+	)
+	require.NoError(t, err)
+
+	lit, typ, ok := unwrapConstLiteral(expr)
+	require.True(t, ok)
+	require.NotNil(t, lit)
+	require.Equal(t, int32(types.T_decimal128), typ.Id)
+	require.Equal(t, int64(42), lit.GetI64Val())
+}
 
 func TestDoMergeFiltersOnCompositeKeyKeepsNonSortKeyRanges(t *testing.T) {
 	ctx := NewMockCompilerContext(true)

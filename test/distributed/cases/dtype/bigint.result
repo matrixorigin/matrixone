@@ -535,3 +535,15 @@ insert into t3 values(-1000);
 select maxvalue from t1;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near " maxvalue from t1;";
 drop table t3;
+drop table if exists t_numeric_string_reverse;
+create table t_numeric_string_reverse(s varchar(32), i bigint);
+insert into t_numeric_string_reverse values
+    ('9007199254740992', 9007199254740992),
+    ('9007199254740993', 9007199254740993);
+select s from t_numeric_string_reverse where s = 9007199254740993 order by s;
+s
+9007199254740993
+select i from t_numeric_string_reverse where i <=> '9007199254740993' order by i;
+i
+9007199254740993
+drop table t_numeric_string_reverse;
