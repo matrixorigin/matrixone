@@ -339,6 +339,10 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		nil,
 	)
+	// A DisableIncrStatement execution runs on the caller's transaction
+	// without opening a statement, so its compile must not advance the
+	// workspace snapshot write offset (the statement boundary).
+	proc.SetIncrStatementDisabled(exec.opts.DisableIncrStatement())
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
 	if exec.opts.ResolveVariableFunc() != nil {

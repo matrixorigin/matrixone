@@ -768,17 +768,15 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		skipTable[k] = true
 	}
 
-	// Resolve every table that will be flushed BEFORE mutating txn.writes.
-	// getTable may run internal SQL (Engine.Database -> execReadSql ->
-	// NewCompile -> UpdateSnapshotWriteOffset) which re-enters txn.Lock()
-	// on the same goroutine, so it must be called with the lock released.
-	// Releasing the lock here is safe because the workspace is still
-	// consistent: a snapshot offset captured during this window covers all
-	// current entries, and the compaction below only shrinks the workspace,
-	// so the replacement S3 entries stay within [0, offset) for any reader.
-	tables, err := txn.resolveDumpTablesLocked(offset, skipTable, INSERT)
+	// Resolve every table that will be flushed BEFORE mutating txn.writes:
+	// getTable must never run while this goroutine holds the lock. See
+	// resolveDumpTablesLocked for the window contract.
+	tables, ok, err := txn.resolveDumpTablesLocked(offset, skipTable, INSERT)
 	if err != nil {
 		return err
+	}
+	if !ok {
+		return nil
 	}
 
 	lastWriteIndex := offset
@@ -912,9 +910,12 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	// See the comment in dumpInsertBatchLocked: tables must be resolved
 	// while txn.writes is still consistent, with the lock released.
-	tables, err := txn.resolveDumpTablesLocked(offset, nil, DELETE)
+	tables, ok, err := txn.resolveDumpTablesLocked(offset, nil, DELETE)
 	if err != nil {
 		return err
+	}
+	if !ok {
+		return nil
 	}
 
 	deleteCnt := 0
@@ -1042,18 +1043,22 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 // resolveDumpTablesLocked resolves the engine.Relation of every table whose
 // workspace entries (of the given type, not yet flushed to a file) a dump is
 // about to flush. It must run BEFORE the dump mutates txn.writes: getTable
-// may run internal SQL (Engine.Database -> execReadSql -> NewCompile ->
-// UpdateSnapshotWriteOffset) that re-enters txn.Lock() on the same
-// goroutine, so the lock is released around the getTable calls, and that is
-// only safe while the workspace is still consistent — a snapshot offset
-// captured during the window then covers every current entry, and the
-// following compaction only shrinks the workspace. The lock is re-acquired
-// before returning, also on error.
+// may run internal SQL (Engine.Database -> execReadSql -> NewCompile) whose
+// read pipeline locks the workspace, so the lock is released around the
+// getTable calls, and that is only safe while the workspace is still
+// consistent. The lock is re-acquired before returning, also on error.
+//
+// While the lock is released other goroutines may mutate the workspace. The
+// caller must therefore treat the resolved map as the complete allowlist of
+// what this dump may flush (entries of unresolved tables stay raw), and must
+// give up when ok is false: a rollback truncated txn.writes below the dump
+// offset during the window, so there is nothing left this dump round may
+// safely touch.
 func (txn *Transaction) resolveDumpTablesLocked(
 	offset int,
 	skipTable map[uint64]bool,
 	typ int,
-) (map[tableKey]engine.Relation, error) {
+) (tables map[tableKey]engine.Relation, ok bool, err error) {
 	var keys []tableKey
 	seen := make(map[tableKey]bool)
 	for i := offset; i < len(txn.writes); i++ {
@@ -1082,21 +1087,31 @@ func (txn *Transaction) resolveDumpTablesLocked(
 		}
 	}
 
-	tables := make(map[tableKey]engine.Relation, len(keys))
+	tables = make(map[tableKey]engine.Relation, len(keys))
 	if len(keys) == 0 {
-		return tables, nil
+		return tables, true, nil
 	}
 
 	txn.Unlock()
-	defer txn.Lock()
 	for _, k := range keys {
-		tbl, err := txn.getTable(k.accountId, k.dbName, k.name)
-		if err != nil {
-			return nil, err
+		tbl, terr := txn.getTable(k.accountId, k.dbName, k.name)
+		if terr != nil {
+			txn.Lock()
+			return nil, false, terr
 		}
 		tables[k] = tbl
 	}
-	return tables, nil
+	// Test-only orchestration: park here (lock released) so a test can mutate
+	// the workspace while the resolution window is open.
+	objectio.CNDumpResolveWindowWait()
+	txn.Lock()
+
+	if offset > len(txn.writes) {
+		// the workspace was truncated below the dump offset while the lock
+		// was released (statement rollback): nothing to dump this round
+		return nil, false, nil
+	}
+	return tables, true, nil
 }
 
 func (txn *Transaction) getTable(
@@ -1104,12 +1119,20 @@ func (txn *Transaction) getTable(
 	dbName string,
 	tbName string,
 ) (engine.Relation, error) {
-	if injected, errorOut := objectio.CNReenterSnapshotOffsetOnGetTableInjected(); injected {
+	if injected, rogueUpdate, errorOut := objectio.CNReenterSnapshotOffsetOnGetTableInjected(); injected {
 		// Test-only fault: deterministically simulate the internal-SQL leg
 		// of the issue #25557 deadlock (getTable -> Engine.Database ->
-		// loadDatabaseFromStorage -> execReadSql -> NewCompile ->
-		// UpdateSnapshotWriteOffset) without requiring a catalog cache miss.
-		txn.UpdateSnapshotWriteOffset()
+		// loadDatabaseFromStorage -> execReadSql -> NewCompile) without
+		// requiring a catalog cache miss. The internal SQL's compile captures
+		// the workspace write offset — WriteOffset takes txn.Lock, so this
+		// self-deadlocks (and the test times out) whenever getTable is
+		// reached with the lock held.
+		_ = txn.WriteOffset()
+		if rogueUpdate {
+			// simulate a rogue statement-boundary advance that internal SQL
+			// must never perform; kept to pin down the damage it would cause
+			txn.UpdateSnapshotWriteOffset()
+		}
 		if errorOut {
 			return nil, moerr.NewInternalErrorNoCtx(
 				"fault injection: reenter snapshot write offset on getTable")
@@ -1665,9 +1688,66 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	return nil
 }
 
+// resolveCompactTablesLocked resolves the engine.Relation of every table
+// that object-deletion compaction will rewrite. The compaction workers must
+// never call getTable themselves: they run while this goroutine holds
+// txn.Lock and waits for them, and getTable may run internal SQL whose read
+// pipeline locks the workspace — the worker would then wait for the lock
+// owner that waits for the worker. So all tables are resolved up front, with
+// the lock released around the getTable calls (same contract as
+// resolveDumpTablesLocked). Because other goroutines may add deletions while
+// the lock is released, the scan-resolve cycle repeats until every table
+// referenced by txn.deletedBlocks is resolved.
+func (txn *Transaction) resolveCompactTablesLocked() (map[tableKey]engine.Relation, error) {
+	tables := make(map[tableKey]engine.Relation)
+	for {
+		var missing []tableKey
+		seen := make(map[tableKey]bool)
+		txn.deletedBlocks.iter(
+			func(blkId *types.Blockid, offsets []int64) bool {
+				summary := txn.cnObjsSummary[*blkId.Object()]
+				k := tableKey{
+					accountId: summary.accountId,
+					dbName:    summary.dbName,
+					name:      summary.tbName,
+				}
+				if _, ok := tables[k]; !ok && !seen[k] {
+					seen[k] = true
+					missing = append(missing, k)
+				}
+				return true
+			})
+		if len(missing) == 0 {
+			return tables, nil
+		}
+
+		txn.Unlock()
+		for _, k := range missing {
+			tbl, err := txn.getTable(k.accountId, k.dbName, k.name)
+			if err != nil {
+				txn.Lock()
+				return nil, err
+			}
+			tables[k] = tbl
+		}
+		txn.Lock()
+	}
+}
+
 // CN blocks compaction for txn
 func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
+	if txn.deletedBlocks.size() == 0 {
+		return nil
+	}
+
+	// resolve every affected table BEFORE building the compaction state and
+	// spawning workers; workers must not call getTable (see
+	// resolveCompactTablesLocked)
+	tables, err := txn.resolveCompactTablesLocked()
+	if err != nil {
+		return err
+	}
 	if txn.deletedBlocks.size() == 0 {
 		return nil
 	}
@@ -1731,9 +1811,12 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			)
 		}
 
-		rel, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
-		if err != nil {
-			panicWhenFailed(err, "get table failed")
+		// resolveCompactTablesLocked guarantees every table referenced by
+		// txn.deletedBlocks is in the map
+		rel, ok := tables[tbKey]
+		if !ok {
+			panicWhenFailed(moerr.NewInternalErrorNoCtx(
+				"table not pre-resolved for object compaction"), "get table failed")
 		}
 
 		tbl, ok := rel.(*txnTable)
@@ -1922,7 +2005,9 @@ func (txn *Transaction) forEachTableHasDeletesLocked(
 func (txn *Transaction) ForEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
-	for i := 0; i < offset; i++ {
+	// defensive: an offset captured before a workspace compaction may exceed
+	// the current length; never index past the end
+	for i := 0; i < offset && i < len(txn.writes); i++ {
 		e := txn.writes[i]
 		if e.databaseId != databaseId {
 			continue
@@ -1988,10 +2073,15 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, err
 	}
 
+	// mergeTxnWorkspaceLocked (and the compactDeletionOnObjsLocked call
+	// inside it) mutates txn.writes and may release/re-acquire the lock
+	// around metadata resolution, so it must run with the lock held — same
+	// as the IncrStatementID path.
+	txn.Lock()
 	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
+		txn.Unlock()
 		return nil, err
 	}
-	txn.Lock()
 	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
 		txn.Unlock()
 		return nil, err
@@ -2196,16 +2286,22 @@ func (txn *Transaction) clearTableCache() {
 	})
 }
 
+// GetSnapshotWriteOffset returns the current statement boundary of
+// txn.writes. It is lock-free on purpose: internal SQL spawned while the
+// transaction lock is held (e.g. a catalog read inside a workspace dump)
+// reads the boundary without re-entering the lock.
 func (txn *Transaction) GetSnapshotWriteOffset() int {
-	txn.Lock()
-	defer txn.Unlock()
-	return txn.snapshotWriteOffset
+	return int(txn.snapshotWriteOffset.Load())
 }
 
+// UpdateSnapshotWriteOffset advances the statement boundary to the current
+// end of txn.writes. Only statement-boundary callers may use it (a new
+// compile of a user statement); internal SQL must never advance the
+// boundary, or a mid-statement dump can compact entries covered by it.
 func (txn *Transaction) UpdateSnapshotWriteOffset() {
 	txn.Lock()
 	defer txn.Unlock()
-	txn.snapshotWriteOffset = len(txn.writes)
+	txn.snapshotWriteOffset.Store(int64(len(txn.writes)))
 }
 
 func (txn *Transaction) CloneSnapshotWS() client.Workspace {

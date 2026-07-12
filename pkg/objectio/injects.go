@@ -76,6 +76,13 @@ const (
 	// getTable -> Engine.Database -> loadDatabaseFromStorage -> execReadSql
 	// -> NewCompile -> UpdateSnapshotWriteOffset.
 	FJ_CNReenterSnapshotOffsetOnGetTable = "fj/cn/reenter_snapshot_offset_on_get_table"
+
+	// FJ_CNDumpResolveWindowWait is a test-only orchestration point inside the
+	// unlocked table-resolution window of a workspace dump. Armed with the
+	// WAIT action, it parks the dumping goroutine right before the transaction
+	// lock is re-acquired, so a test can deterministically mutate the
+	// workspace from another goroutine while the window is open.
+	FJ_CNDumpResolveWindowWait = "fj/cn/dump_resolve_window_wait"
 )
 
 const (
@@ -304,12 +311,28 @@ func SimpleInjected(key string) bool {
 
 // CNReenterSnapshotOffsetOnGetTableInjected reports whether the
 // FJ_CNReenterSnapshotOffsetOnGetTable fault is active. When it is,
-// Transaction.getTable reenters UpdateSnapshotWriteOffset; errorOut
-// additionally tells it to fail with an injected error (iarg == 0, the
-// SimpleInject default) instead of continuing the normal lookup (iarg != 0).
-func CNReenterSnapshotOffsetOnGetTableInjected() (injected bool, errorOut bool) {
+// Transaction.getTable simulates the internal-SQL leg of the issue #25557
+// deadlock chain (taking the transaction lock and capturing the workspace
+// write offset). The iarg selects the variant:
+//
+//	0 (the SimpleInject default): fail with an injected error afterwards;
+//	1: continue the normal lookup;
+//	2: additionally call UpdateSnapshotWriteOffset — a rogue boundary
+//	   advance that the fixed internal SQL never performs — then fail with
+//	   the injected error.
+func CNReenterSnapshotOffsetOnGetTableInjected() (injected bool, rogueUpdate bool, errorOut bool) {
 	iarg, _, injected := fault.TriggerFault(FJ_CNReenterSnapshotOffsetOnGetTable)
-	return injected, injected && iarg == 0
+	if !injected {
+		return false, false, false
+	}
+	return true, iarg == 2, iarg != 1
+}
+
+// CNDumpResolveWindowWait triggers FJ_CNDumpResolveWindowWait. With the WAIT
+// action armed it blocks until a test notifies the fault point; when the
+// fault is not registered it is a no-op.
+func CNDumpResolveWindowWait() {
+	fault.TriggerFault(FJ_CNDumpResolveWindowWait)
 }
 
 // inject log reader and partition state

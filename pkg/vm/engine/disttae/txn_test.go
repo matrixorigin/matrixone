@@ -1258,17 +1258,15 @@ func TestDupVectorWithoutNulls_ConcurrentSafety(t *testing.T) {
 func TestSnapshotWriteOffset_NormalPath(t *testing.T) {
 	t.Run("Update", func(t *testing.T) {
 		txn := &Transaction{
-			writes:              []Entry{{}, {}, {}, {}},
-			snapshotWriteOffset: 0,
+			writes: []Entry{{}, {}, {}, {}},
 		}
 		txn.UpdateSnapshotWriteOffset()
-		require.Equal(t, 4, txn.snapshotWriteOffset)
+		require.Equal(t, 4, txn.GetSnapshotWriteOffset())
 	})
 
 	t.Run("Get", func(t *testing.T) {
-		txn := &Transaction{
-			snapshotWriteOffset: 99,
-		}
+		txn := &Transaction{}
+		txn.snapshotWriteOffset.Store(99)
 		offset := txn.GetSnapshotWriteOffset()
 		require.Equal(t, 99, offset)
 	})
@@ -1313,9 +1311,9 @@ func TestSnapshotWriteOffset_BlocksWhenAnotherGoroutineHoldsLock(t *testing.T) {
 // calls from many goroutines are race-free. Run with -race.
 func TestSnapshotWriteOffset_ConcurrentAccess(t *testing.T) {
 	txn := &Transaction{
-		writes:              make([]Entry, 10),
-		snapshotWriteOffset: 5,
+		writes: make([]Entry, 10),
 	}
+	txn.snapshotWriteOffset.Store(5)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
@@ -1333,9 +1331,9 @@ func TestSnapshotWriteOffset_ConcurrentAccess(t *testing.T) {
 }
 
 // enableReenterSnapshotOffsetFault turns on the fault that makes getTable
-// reenter UpdateSnapshotWriteOffset and then fail with an injected error,
-// deterministically simulating the internal-SQL leg of the issue #25557
-// deadlock chain.
+// simulate the internal-SQL leg of the issue #25557 deadlock chain (locking
+// the transaction and capturing the workspace write offset) and then fail
+// with an injected error.
 func enableReenterSnapshotOffsetFault(t *testing.T) {
 	fault.Enable()
 	t.Cleanup(func() {
@@ -1348,6 +1346,24 @@ func enableReenterSnapshotOffsetFault(t *testing.T) {
 	rmFault, err := objectio.SimpleInject(objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
 	require.NoError(t, err)
 	t.Cleanup(rmFault)
+}
+
+// enableRogueUpdateOnGetTableFault turns on the iarg=2 variant of the fault:
+// besides the internal-SQL simulation, getTable performs a rogue
+// UpdateSnapshotWriteOffset — a statement-boundary advance the fixed
+// internal SQL never does — and then fails with the injected error.
+func enableRogueUpdateOnGetTableFault(t *testing.T) {
+	fault.Enable()
+	t.Cleanup(func() {
+		fault.Disable()
+	})
+	require.NoError(t, fault.AddFaultPoint(
+		context.Background(), objectio.FJ_CNReenterSnapshotOffsetOnGetTable,
+		":::", "echo", 2, "", false))
+	t.Cleanup(func() {
+		_, _ = fault.RemoveFaultPoint(
+			context.Background(), objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+	})
 }
 
 // newDumpableTxnForTest builds a minimal Transaction whose workspace holds
@@ -1383,17 +1399,14 @@ func newDumpableTxnForTest(t *testing.T) *Transaction {
 	return txn
 }
 
-// requireConsistentReenteredOffset asserts that the offset captured by the
-// reentrant UpdateSnapshotWriteOffset covers every entry that was in
-// txn.writes when the dump started. If the dump had already removed the raw
-// entries when getTable ran (inconsistent intermediate state), the captured
-// offset would be smaller, and the replacement S3 entries appended later
-// would fall outside [0, offset) — invisible to every reader of this txn.
-func requireConsistentReenteredOffset(t *testing.T, txn *Transaction, preDumpLen int) {
+// requireBoundaryUntouched asserts that the internal SQL simulated inside
+// the dump did not advance the statement boundary: boundary advances are
+// statement-boundary actions, and an advance during a dump can cover
+// workspace entries the compaction is about to rewrite.
+func requireBoundaryUntouched(t *testing.T, txn *Transaction) {
 	t.Helper()
-	require.Equal(t, preDumpLen, txn.GetSnapshotWriteOffset(),
-		"reentrant UpdateSnapshotWriteOffset observed an inconsistent "+
-			"intermediate workspace state")
+	require.Equal(t, 0, txn.GetSnapshotWriteOffset(),
+		"internal SQL must not advance snapshotWriteOffset")
 }
 
 // TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock covers the
@@ -1401,10 +1414,11 @@ func requireConsistentReenteredOffset(t *testing.T, txn *Transaction, preDumpLen
 //
 //	txnTable.Write -> dumpBatch [acquires txn.Lock()]
 //	  -> dumpBatchLocked -> dumpInsertBatchLocked -> getTable
-//	    -> internal SQL -> NewCompile -> UpdateSnapshotWriteOffset
+//	    -> internal SQL -> NewCompile [locks the workspace]
 //
 // The fault point makes the internal-SQL leg deterministic. Before the fix
-// the reentrant UpdateSnapshotWriteOffset self-deadlocked on txn.Lock().
+// the internal SQL re-entered txn.Lock() on the same goroutine and
+// self-deadlocked.
 func TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
 	enableReenterSnapshotOffsetFault(t)
 	txn := newDumpableTxnForTest(t)
@@ -1417,14 +1431,15 @@ func TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		// The injected error proves getTable was reached and the
-		// reentrant UpdateSnapshotWriteOffset returned instead of
-		// deadlocking.
+		// The injected error proves getTable was reached and the simulated
+		// internal SQL locked the workspace instead of deadlocking.
 		require.ErrorContains(t, err, "reenter snapshot write offset")
-		requireConsistentReenteredOffset(t, txn, preDumpLen)
+		requireBoundaryUntouched(t, txn)
+		require.Len(t, txn.writes, preDumpLen,
+			"an aborted dump must leave the workspace untouched")
 	case <-time.After(10 * time.Second):
-		t.Fatal("dumpBatch deadlocked when getTable reentered " +
-			"UpdateSnapshotWriteOffset with txn.Lock held")
+		t.Fatal("dumpBatch deadlocked when getTable ran the internal-SQL " +
+			"leg with txn.Lock held")
 	}
 }
 
@@ -1434,7 +1449,7 @@ func TestIssue25557_DumpBatchReentrantGetTableDoesNotDeadlock(t *testing.T) {
 //
 //	IncrStatementID [acquires txn.Lock()]
 //	  -> dumpBatchLocked -> dumpInsertBatchLocked -> getTable
-//	    -> internal SQL -> NewCompile -> UpdateSnapshotWriteOffset
+//	    -> internal SQL -> NewCompile [locks the workspace]
 //
 // This is the reproducer shape from the PR #25560 review: a fix scoped to
 // the dumpBatch wrapper does not cover this path.
@@ -1459,10 +1474,12 @@ func TestIssue25557_LockedDumpInsertBatchReentrantGetTableDoesNotDeadlock(t *tes
 	select {
 	case err := <-errCh:
 		require.ErrorContains(t, err, "reenter snapshot write offset")
-		requireConsistentReenteredOffset(t, txn, preDumpLen)
+		requireBoundaryUntouched(t, txn)
+		require.Len(t, txn.writes, preDumpLen,
+			"an aborted dump must leave the workspace untouched")
 	case <-time.After(10 * time.Second):
-		t.Fatal("dumpInsertBatchLocked deadlocked when getTable reentered " +
-			"UpdateSnapshotWriteOffset with txn.Lock held")
+		t.Fatal("dumpInsertBatchLocked deadlocked when getTable ran the " +
+			"internal-SQL leg with txn.Lock held")
 	}
 }
 
@@ -1511,9 +1528,64 @@ func TestIssue25557_DumpDeleteBatchReentrantGetTableDoesNotDeadlock(t *testing.T
 	select {
 	case err := <-errCh:
 		require.ErrorContains(t, err, "reenter snapshot write offset")
-		requireConsistentReenteredOffset(t, txn, preDumpLen)
+		requireBoundaryUntouched(t, txn)
+		require.Len(t, txn.writes, preDumpLen,
+			"an aborted dump must leave the workspace untouched")
 	case <-time.After(10 * time.Second):
-		t.Fatal("dumpDeleteBatchLocked deadlocked when getTable reentered " +
-			"UpdateSnapshotWriteOffset with txn.Lock held")
+		t.Fatal("dumpDeleteBatchLocked deadlocked when getTable ran the " +
+			"internal-SQL leg with txn.Lock held")
 	}
+}
+
+// TestIssue25557_RogueBoundaryAdvanceCapturesConsistentState pins down the
+// defense-in-depth property of the resolution window: even if some code did
+// advance the statement boundary inside the window (which the fixed internal
+// SQL never does — simulated here by the iarg=2 fault variant), it can only
+// capture a consistent pre-compaction workspace, because the dump does not
+// mutate txn.writes before the window closes.
+func TestIssue25557_RogueBoundaryAdvanceCapturesConsistentState(t *testing.T) {
+	enableRogueUpdateOnGetTableFault(t)
+	txn := newDumpableTxnForTest(t)
+	preDumpLen := len(txn.writes)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- txn.dumpBatch(context.Background(), 0)
+	}()
+
+	select {
+	case err := <-errCh:
+		require.ErrorContains(t, err, "reenter snapshot write offset")
+		require.Equal(t, preDumpLen, txn.GetSnapshotWriteOffset(),
+			"a boundary advanced inside the window must cover the complete "+
+				"pre-dump workspace")
+		require.Len(t, txn.writes, preDumpLen)
+		// the captured boundary must be safe for every reader
+		seen := 0
+		txn.ForEachTableWrites(7, 42, txn.GetSnapshotWriteOffset(), func(Entry) {
+			seen++
+		})
+		require.Equal(t, preDumpLen, seen)
+	case <-time.After(10 * time.Second):
+		t.Fatal("dumpBatch deadlocked on the rogue-update fault variant")
+	}
+}
+
+// TestForEachTableWrites_StaleOffsetBeyondLengthIsSafe verifies the
+// defensive bounds check: an offset captured before a workspace compaction
+// may exceed the current length of txn.writes and must not panic.
+func TestForEachTableWrites_StaleOffsetBeyondLengthIsSafe(t *testing.T) {
+	txn := &Transaction{
+		writes: []Entry{
+			{databaseId: 7, tableId: 42},
+		},
+	}
+
+	seen := 0
+	require.NotPanics(t, func() {
+		txn.ForEachTableWrites(7, 42, 3, func(Entry) {
+			seen++
+		})
+	})
+	require.Equal(t, 1, seen)
 }
