@@ -269,15 +269,11 @@ func (tbl *txnTable) TransferDeletes(
 			}
 		}
 		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(startTS, ts)
-		// Preserve the exact ordering of the original sort.Slice, whose comparator
-		// was non-strict (CreatedAt.LE); a strict 3-way Compare (0 on ties) would
-		// reorder objects created at the same timestamp. Keep the original order
-		// while avoiding sort.Slice's interface{} boxing.
-		slices.SortFunc(softDeleteObjects, func(a, b *catalog.ObjectEntry) int {
-			if a.CreatedAt.LE(&b.CreatedAt) {
-				return -1
-			}
-			return 1
+		// Stable sort with a strict comparator: objects created at the same
+		// timestamp keep their original relative order (the tie-breaker), instead
+		// of sort.Slice's unspecified tie ordering.
+		slices.SortStableFunc(softDeleteObjects, func(a, b *catalog.ObjectEntry) int {
+			return a.CreatedAt.Compare(&b.CreatedAt)
 		})
 		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
 		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))

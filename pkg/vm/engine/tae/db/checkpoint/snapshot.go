@@ -222,10 +222,18 @@ func filterSnapshotEntries(entries []*CheckpointEntry, snapshot *types.TS) []*Ch
 		}
 	}
 
-	// Sort by end timestamp
+	// Sort by end timestamp. nil entries are given a deterministic position
+	// (sorted first) so the comparator is a valid strict weak ordering; treating
+	// nil as equal to every entry would make incomparability non-transitive.
 	slices.SortFunc(entries, func(a, b *CheckpointEntry) int {
 		if a == nil || b == nil {
-			return 0
+			if a == b {
+				return 0
+			}
+			if a == nil {
+				return -1
+			}
+			return 1
 		}
 		return a.end.Compare(&b.end)
 	})

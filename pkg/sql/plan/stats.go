@@ -19,7 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -1069,20 +1069,18 @@ func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil && len(node.FilterList) >= 1 {
-			// Filter evaluation order here is semantically significant: it decides
-			// which predicate a vector/IVF index probes with and which value a
-			// runtime error reports (see operator/is_not_operator,
-			// vector/vector_ivf_mode). The original sort.Slice comparator was
-			// non-strict (cost1 <= cost2); a strict cmp.Compare (0 on ties) would
-			// reorder equal-cost filters and change results. Reproduce the exact
-			// original ordering here while avoiding sort.Slice's interface{} boxing.
-			slices.SortFunc(node.FilterList, func(a, b *plan.Expr) int {
-				cost1 := estimateFilterWeight(a, 0) * a.Selectivity
-				cost2 := estimateFilterWeight(b, 0) * b.Selectivity
-				if cost1 <= cost2 {
-					return -1
-				}
-				return 1
+			// NB: intentionally NOT migrated to slices.SortFunc. Filter evaluation
+			// order is semantically significant here (it decides which predicate a
+			// vector/IVF index probes with and which value a runtime error reports
+			// -- see operator/is_not_operator and vector/vector_ivf_mode, and the
+			// underlying IVF issue #25639). The comparator is non-strict (returns
+			// true on equal cost) and its exact tie ordering is an artifact of
+			// sort.Slice that no strict slices comparator reproduces, so this site
+			// is left on sort.Slice.
+			sort.Slice(node.FilterList, func(i, j int) bool {
+				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
+				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
+				return cost1 <= cost2
 			})
 		}
 	}

@@ -336,47 +336,37 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 	}
 	ls.rangeSlice = make(objectio.BlockInfoSlice, ls.rangeSlice.Size())
 
-	if ls.desc {
-		less := func(a, b *blockSortHelper) bool {
-			zm1 := a.zm
-			if !zm1.IsInited() {
-				return true
-			}
-			zm2 := b.zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMax(zm2) > 0
+	// compareInit orders uninitialized zone maps before initialized ones and
+	// treats two uninitialized zone maps as equal, so the comparator is a valid
+	// strict weak ordering (unlike a bare min/max compare, which is undefined for
+	// uninitialized zone maps). It returns (result, done): done is false only when
+	// both zone maps are initialized and the caller must compare values.
+	compareInit := func(a, b *blockSortHelper) (int, bool) {
+		ai, bi := a.zm.IsInited(), b.zm.IsInited()
+		if ai && bi {
+			return 0, false
 		}
+		if ai == bi {
+			return 0, true // both uninitialized: equal
+		}
+		if !ai {
+			return -1, true // uninitialized sorts first
+		}
+		return 1, true
+	}
+	if ls.desc {
 		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
-			if less(a, b) {
-				return -1
+			if r, done := compareInit(a, b); done {
+				return r
 			}
-			if less(b, a) {
-				return 1
-			}
-			return 0
+			return b.zm.CompareMax(a.zm) // descending by max
 		})
 	} else {
-		less := func(a, b *blockSortHelper) bool {
-			zm1 := a.zm
-			if !zm1.IsInited() {
-				return true
-			}
-			zm2 := b.zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMin(zm2) < 0
-		}
 		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
-			if less(a, b) {
-				return -1
+			if r, done := compareInit(a, b); done {
+				return r
 			}
-			if less(b, a) {
-				return 1
-			}
-			return 0
+			return a.zm.CompareMin(b.zm) // ascending by min
 		})
 	}
 
