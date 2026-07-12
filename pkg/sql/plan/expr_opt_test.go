@@ -368,24 +368,24 @@ func TestDoMergeFiltersOnCompositeKeyRetainsMalformedPredicate(t *testing.T) {
 	constant := MakePlan2Int64ConstExprWithType(2)
 
 	for _, tc := range []struct {
-		name string
-		args []*planpb.Expr
+		name     string
+		funcName string
+		args     []*planpb.Expr
 	}{
-		{name: "in", args: []*planpb.Expr{bCol}},
-		{name: "between", args: []*planpb.Expr{bCol, constant}},
-		{name: "in_range", args: []*planpb.Expr{bCol, constant, constant}},
-		{name: "range", args: []*planpb.Expr{bCol}},
+		{name: "in", funcName: "in", args: []*planpb.Expr{bCol}},
+		{name: "between", funcName: "between", args: []*planpb.Expr{bCol, constant}},
+		{name: "in_range", funcName: "in_range", args: []*planpb.Expr{bCol, constant, constant}},
+		{name: "range", funcName: ">", args: []*planpb.Expr{bCol}},
+		{name: "range-nil-left", funcName: ">", args: []*planpb.Expr{nil, constant}},
+		{name: "range-nil-right", funcName: ">", args: []*planpb.Expr{bCol, nil}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			predicate := &planpb.Expr{
 				Typ: planpb.Type{Id: int32(types.T_bool)},
 				Expr: &planpb.Expr_F{F: &planpb.Function{
-					Func: &planpb.ObjectRef{ObjName: tc.name},
+					Func: &planpb.ObjectRef{ObjName: tc.funcName},
 					Args: tc.args,
 				}},
-			}
-			if tc.name == "range" {
-				predicate.GetF().Func.ObjName = ">"
 			}
 			require.NotPanics(t, func() {
 				ret := builder.doMergeFiltersOnCompositeKey(makeExprOptCompositeSortKeyTableDef(), tag, predicate)
@@ -393,6 +393,25 @@ func TestDoMergeFiltersOnCompositeKeyRetainsMalformedPredicate(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestDoMergeFiltersOnCompositeKeyRetainsUnaryNonMergeableOr(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	arm := MakePlan2BoolConstExprWithType(true)
+	orExpr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "or"},
+			Args: []*planpb.Expr{arm},
+		}},
+	}
+
+	require.NotPanics(t, func() {
+		ret := builder.doMergeFiltersOnCompositeKey(makeExprOptCompositeSortKeyTableDef(), tag, orExpr)
+		require.Equal(t, []*planpb.Expr{arm}, ret)
+	})
 }
 
 func TestInRHSValuesMaterializesFoldedVectorValues(t *testing.T) {

@@ -2135,9 +2135,11 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 			if len(newOrArgs) == 1 {
 				filters[i] = newOrArgs[0]
-				colPos := firstEquiExpr.GetF().Args[0].GetCol().ColPos
-				if colPos != sortkeyIdx {
-					col2filter[colPos] = i
+				if firstEquiExpr != nil {
+					colPos := firstEquiExpr.GetF().Args[0].GetCol().ColPos
+					if colPos != sortkeyIdx {
+						col2filter[colPos] = i
+					}
 				}
 			} else {
 				fn.Args = newOrArgs
