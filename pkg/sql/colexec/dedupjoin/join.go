@@ -16,6 +16,9 @@ package dedupjoin
 import (
 	"bytes"
 	"context"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -29,8 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
-	"time"
 )
 
 // receiveWorkerMsg blocks until the channel yields a message or the context
