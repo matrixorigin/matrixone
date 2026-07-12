@@ -150,3 +150,39 @@ func TestSessionReleasePlanCache(t *testing.T) {
 	require.Equal(t, 1, first.freed)
 	require.Equal(t, 1, second.freed)
 }
+
+func TestFreeStmtsSkipsNil(t *testing.T) {
+	good := &trackedStatement{}
+	stmts := []tree.Statement{nil, good, nil}
+
+	freeStmts(stmts)
+
+	require.Equal(t, 1, good.freed)
+	require.Nil(t, stmts[1])
+}
+
+func Test_CleanOnEmptyCache(t *testing.T) {
+	pc := newPlanCache(3)
+	require.NotPanics(t, func() { pc.clean() })
+	require.Nil(t, pc.lruList)
+	require.Nil(t, pc.cachePool)
+
+	pc2 := newPlanCache(3)
+	pc2.cache("1", nil, nil)
+	pc2.clean()
+	require.NotPanics(t, func() { pc2.clean() }) // idempotent
+	require.Nil(t, pc2.lruList)
+	require.Nil(t, pc2.cachePool)
+}
+
+func Test_SessionAccessorsWithNilPlanCache(t *testing.T) {
+	ses := &Session{planCache: nil}
+
+	require.NotPanics(t, func() {
+		ses.cachePlan("x", []tree.Statement{&trackedStatement{}}, []*plan.Plan{{}})
+	})
+	require.Nil(t, ses.getCachedPlan("x"))
+	require.False(t, ses.isCached("x"))
+	require.NotPanics(t, func() { ses.cleanCache() })
+	require.NotPanics(t, func() { ses.releasePlanCache() })
+}
