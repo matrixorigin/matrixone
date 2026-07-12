@@ -178,8 +178,11 @@ func (d *diskObjectStorage) Read(ctx context.Context, key string, min *int64, ma
 		return nil, err
 	}
 	defer func() {
-		if err != nil {
-			err = errors.Join(err, f.Close())
+		if err == nil {
+			return
+		}
+		if closeErr := f.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
 		}
 	}()
 
