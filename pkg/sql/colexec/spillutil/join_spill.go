@@ -406,13 +406,15 @@ func (e *SpillEngine) scatterBatch(
 		&e.scatterHashValues, &e.scatterBucketRowIds)
 }
 
-// ShouldSpill returns true when memUsed exceeds the spill threshold.
-func ShouldSpill(memUsed int64, threshold int64) bool {
+// ShouldSpill returns true when memory or row count exceeds the spill threshold.
+// Matches hashbuild.shouldSpillBatches: threshold ≤ 100000 is row-count mode,
+// otherwise byte mode.
+func ShouldSpill(memUsed int64, rowCnt int64, threshold int64) bool {
 	if threshold <= 0 {
 		return false
 	}
 	if threshold <= 100000 {
-		return memUsed >= threshold
+		return rowCnt >= threshold
 	}
 	return memUsed > threshold
 }
@@ -686,7 +688,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		builder.InputBatchRowCount += bat.RowCount()
 
 		if bucket.Depth < SpillMaxPass && e.cfg.SpillThreshold > 0 &&
-			ShouldSpill(builderMemSize(builder), e.cfg.SpillThreshold) {
+			ShouldSpill(builderMemSize(builder), int64(builder.InputBatchRowCount), e.cfg.SpillThreshold) {
 			subBuckets, err := e.reSpillBucket(proc, analyzer, bucket, builder, &e.buildReader)
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)

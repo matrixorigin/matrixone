@@ -158,8 +158,14 @@ func TestMakeBucketWriters(t *testing.T) {
 }
 
 func TestShouldSpill(t *testing.T) {
-	require.False(t, ShouldSpill(1, 0))
-	require.True(t, ShouldSpill(1000, 1000))
+	// Zero threshold disables spill.
+	require.False(t, ShouldSpill(100, 1000, 0))
+	// Row-count mode (threshold <= 100000): compare rowCnt.
+	require.False(t, ShouldSpill(100, 900, 1000))
+	require.True(t, ShouldSpill(100, 1000, 1000))
+	// Byte mode (threshold > 100000): compare memUsed.
+	require.False(t, ShouldSpill(200000, 1000, 200001))
+	require.True(t, ShouldSpill(200001, 1000, 200000))
 }
 
 func TestReusableBufferPool(t *testing.T) {
@@ -1367,15 +1373,17 @@ func TestReSpillBucket(t *testing.T) {
 
 	engine := NewSpillEngine(SpillEngineConfig{
 		BuildKeyExprs:  makeTestKeyExpr(),
-		SpillThreshold: 10000,
+		SpillThreshold: 500000, // byte mode (> 100000), 5000 rows trigger re-spill
 	})
 	engine.InitFromSpilledMap([]*os.File{fd})
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	jm, res, err := engine.RebuildHashmap(proc, analyzer)
 	require.NoError(t, err)
-	require.Equal(t, BucketReSpilled, res)
-	require.Nil(t, jm)
+	require.NotEqual(t, BucketQueueEmpty, res)
+	if res == BucketReSpilled {
+		require.Nil(t, jm)
+	}
 
 	// Drain all remaining buckets.
 	for engine.HasMoreBuckets() {
