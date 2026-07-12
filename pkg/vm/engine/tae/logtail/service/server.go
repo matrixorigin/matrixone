@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -145,6 +146,10 @@ type LogtailServer struct {
 	rootCtx    context.Context
 	cancelFunc context.CancelFunc
 	stopper    *stopper.Stopper
+	// shutdownMu prevents a phase-1 worker from handing a batch to subTailChan
+	// after Close has drained it. It is held only around the channel hand-off,
+	// never while collecting logtail data.
+	shutdownMu sync.RWMutex
 }
 
 func defaultRPCServerFactory(
@@ -416,18 +421,26 @@ func (s *LogtailServer) logtailPullWorker(ctx context.Context) {
 				s.logger.Info("subscription channel closed")
 				return
 			}
-			// Start a new goroutine to handle the subscription request.
-			// There are xxx goroutines working at the same time at most.
-			go s.pullLogtailsPhase1(ctx, sub)
+			// Acquire worker pool token before spawning goroutine to bound goroutine count.
+			// This ensures goroutines are limited to PullWorkerPoolSize, not subscription count.
+			select {
+			case s.pullWorkerPool <- struct{}{}:
+				go func() {
+					defer func() { <-s.pullWorkerPool }()
+					s.pullLogtailsPhase1(ctx, sub)
+				}()
+			case <-ctx.Done():
+				s.logger.Error("context done waiting for pull worker pool", zap.Error(ctx.Err()))
+				return
+			}
 		}
 	}
 }
 
+// pullLogtailsPhase1 handles the first phase of a subscription.
+// Caller (logtailPullWorker) MUST have acquired a pullWorkerPool slot before calling
+// and will release it after this function returns via the deferred release in the spawned goroutine.
 func (s *LogtailServer) pullLogtailsPhase1(ctx context.Context, sub subscription) {
-	// Limit the pull workers.
-	s.pullWorkerPool <- struct{}{}
-	defer func() { <-s.pullWorkerPool }()
-
 	v2.LogTailSubscriptionCounter.Inc()
 	s.logger.Info("handle subscription asynchronously", zap.Any("table", sub.req.Table))
 
@@ -451,16 +464,30 @@ func (s *LogtailServer) pullLogtailsPhase1(ctx context.Context, sub subscription
 	}
 	v2.LogTailPullCollectionPhase1DurationHistogram.Observe(time.Since(start).Seconds())
 
+	s.enqueuePhase1Tail(ctx, tail)
+}
+
+// enqueuePhase1Tail transfers a successful phase-1 result to the sender. Until
+// the transfer succeeds, this worker owns tail.closeCB. shutdownMu closes the
+// hand-off race with Close: Close drains only after no worker can still enqueue.
+func (s *LogtailServer) enqueuePhase1Tail(ctx context.Context, tail *LogtailPhase) {
 	for {
+		s.shutdownMu.RLock()
+		if s.rootCtx.Err() != nil || ctx.Err() != nil {
+			s.shutdownMu.RUnlock()
+			releaseLogtailPhase(tail)
+			return
+		}
 		select {
 		case <-ctx.Done():
-			s.logger.Error("context done in pull table logtails", zap.Error(ctx.Err()))
+			s.shutdownMu.RUnlock()
+			releaseLogtailPhase(tail)
 			return
-
 		case s.subTailChan <- tail:
+			s.shutdownMu.RUnlock()
 			return
-
 		default:
+			s.shutdownMu.RUnlock()
 			s.logger.Warn("the queue of logtails of phase1 is full")
 			time.Sleep(time.Second)
 		}
@@ -491,6 +518,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				s.waterline.Waterline(),
 			)
 			if err != nil {
+				releaseLogtailPhase(tailPhase1)
 				tailPhase1.sub.session.Unregister(tailPhase1.sub.tableID)
 				s.logger.Error("fail to send subscription response", zap.Error(err))
 			} else {
@@ -625,6 +653,9 @@ func (s *LogtailServer) publishEvent(ctx context.Context, e event) {
 				s.logger.Error("fail to publish incremental logtail", zap.Error(err),
 					zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
 				)
+				// closeCB is already handled inside Publish on all error paths
+				// (see session.Publish: active check, heartbeat check, TrySendUpdateResponse).
+				// Do not call it again here — that would cause double-free.
 				continue
 			}
 		}
@@ -666,10 +697,32 @@ func (s *LogtailServer) Close() error {
 
 	s.cancelFunc()
 	s.stopper.Stop()
+	// Session senders are not stopper tasks. Stop and drain every session so
+	// responses accepted before rootCtx cancellation release their closeCBs.
+	for _, session := range s.ssmgr.ListSession() {
+		session.PostClean()
+		s.ssmgr.DeleteSession(session.stream)
+	}
+	// No pull worker can enqueue while this lock is held. Drain every phase-1
+	// batch left behind by a stopped sender before returning ownership.
+	s.shutdownMu.Lock()
+	s.drainPhase1Tails()
+	s.shutdownMu.Unlock()
 	// The sender has stopped, so no queued event can still transfer its batch
 	// ownership to a response. Release every remaining callback here.
 	s.event.Drain()
 	return s.rpc.Close()
+}
+
+func (s *LogtailServer) drainPhase1Tails() {
+	for {
+		select {
+		case tail := <-s.subTailChan:
+			releaseLogtailPhase(tail)
+		default:
+			return
+		}
+	}
 }
 
 // Start starts logtail publishment service.

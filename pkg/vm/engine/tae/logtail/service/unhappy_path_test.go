@@ -21,8 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/ratelimit"
 )
@@ -258,6 +261,67 @@ func TestLogtailServerCloseReleasesQueuedEvent(t *testing.T) {
 	require.Equal(t, int32(1), released.Load())
 }
 
+func TestLogtailServerCloseReleasesQueuedPhaseOneTail(t *testing.T) {
+	server := newUnitLogtailServerWithStart(t, &controlledLogtailer{}, false)
+	var released atomic.Int32
+	server.subTailChan <- &LogtailPhase{closeCB: func() { released.Add(1) }}
+
+	require.NoError(t, server.Close())
+	require.Equal(t, int32(1), released.Load())
+}
+
+func TestLogtailServerCloseReleasesQueuedSessionResponse(t *testing.T) {
+	server := newUnitLogtailServerWithStart(t, &controlledLogtailer{}, false)
+	transport := newCaptureSession()
+	responses := NewLogtailResponsePool()
+	session := NewSession(
+		server.rootCtx, server.logger, responses, server,
+		newCaptureStream(transport), time.Second, time.Second, time.Hour,
+	)
+	server.ssmgr.clients[session.stream] = session
+
+	var released atomic.Int32
+	response := responses.Acquire()
+	response.closeCB = func() { released.Add(1) }
+	session.sendChan <- message{response: response}
+
+	require.NoError(t, server.Close())
+	require.Equal(t, int32(1), released.Load())
+}
+
+func TestPhaseTwoFailureReleasesPhaseOneTail(t *testing.T) {
+	server := newUnitLogtailServer(t, &controlledLogtailer{
+		tableFn: func(context.Context, api.TableID, timestamp.Timestamp, timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+			return logtail.TableLogtail{}, nil, context.DeadlineExceeded
+		},
+	})
+	transport := newCaptureSession()
+	session := server.ssmgr.GetSession(
+		server.rootCtx, server.logger, server.pool.responses, server,
+		newCaptureStream(transport), time.Second, time.Second, time.Hour,
+	)
+	t.Cleanup(session.PostClean)
+
+	table := mockTable(1, 1, 1)
+	id := MarshalTableID(&table)
+	_, generation := session.RegisterWithGeneration(id, table)
+	var released atomic.Int32
+	server.subTailChan <- &LogtailPhase{
+		tail:    mockLogtail(table, timestamp.Timestamp{PhysicalTime: 1}),
+		closeCB: func() { released.Add(1) },
+		sub: subscription{
+			timeout:    time.Second,
+			tableID:    id,
+			generation: generation,
+			req:        &logtail.SubscribeRequest{Table: &table},
+			session:    session,
+		},
+	}
+
+	require.Eventually(t, func() bool { return released.Load() == 1 }, time.Second, time.Millisecond)
+	require.Equal(t, TableNotFound, session.Unregister(id))
+}
+
 func TestNotifierDrainIsIdempotent(t *testing.T) {
 	notifier := NewNotifier(context.Background(), 2)
 	var released atomic.Int32
@@ -330,4 +394,103 @@ func TestClientSubscribeHonorsCallerCancellationWhenRequestQueueIsFull(t *testin
 		<-done
 		t.Fatal("Subscribe ignored the caller cancellation while the request queue was full")
 	}
+}
+
+// TestPullWorkerPoolBoundsAndCancelExits is a regression test for the pull
+// worker pool: it verifies that (1) the number of concurrently active phase-1
+// goroutines never exceeds PullWorkerPoolSize even when far more subscriptions
+// are submitted, and (2) closing the server causes all blocked
+// workers to exit promptly.
+func TestPullWorkerPoolBoundsAndCancelExits(t *testing.T) {
+	const poolSize = 3
+	const numSubs = 20
+
+	gate := make(chan struct{}) // blocks phase-1 until closed
+	var active atomic.Int32
+
+	logtailer := &controlledLogtailer{
+		tableFn: func(ctx context.Context, table api.TableID, from, to timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+			active.Add(1)
+			defer active.Add(-1)
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return logtail.TableLogtail{}, nil, ctx.Err()
+			}
+			return mockLogtail(table, to), nil, nil
+		},
+	}
+
+	cfg := options.NewDefaultLogtailServerCfg()
+	cfg.RpcMaxMessageSize = 1024
+	cfg.PullWorkerPoolSize = int64(poolSize)
+	cfg.RPCStreamPoisonTime = 20 * time.Millisecond
+	cfg.ResponseSendTimeout = time.Second
+
+	server, err := NewLogtailServer(
+		"", cfg, logtailer, mockRuntime(),
+		func(string, string, *LogtailServer, ...morpc.ServerOption) (morpc.RPCServer, error) {
+			return &testRPCServer{}, nil
+		},
+	)
+	require.NoError(t, err)
+	require.NoError(t, server.Start())
+	closed := false
+	closeServer := func() {
+		if closed {
+			return
+		}
+		closed = true
+		require.NoError(t, server.Close())
+	}
+	t.Cleanup(closeServer)
+
+	// Create a session to own the subscriptions.
+	transport := newCaptureSession()
+	stream := newCaptureStream(transport)
+	session := server.ssmgr.GetSession(
+		server.rootCtx, server.logger, server.pool.responses, server,
+		stream, time.Second, time.Second, time.Hour,
+	)
+	t.Cleanup(session.PostClean)
+
+	// Submit far more subscriptions than the pool can hold.
+	for i := 0; i < numSubs; i++ {
+		table := mockTable(1, 1, uint64(i+1))
+		tableID := MarshalTableID(&table)
+		_, gen := session.RegisterWithGeneration(tableID, table)
+		server.subReqChan <- subscription{
+			timeout:    5 * time.Second,
+			tableID:    tableID,
+			generation: gen,
+			req:        &logtail.SubscribeRequest{Table: &table},
+			session:    session,
+		}
+	}
+
+	// Phase 1: pool saturates at exactly poolSize.
+	require.Eventually(t, func() bool {
+		return active.Load() == int32(poolSize)
+	}, 5*time.Second, 10*time.Millisecond,
+		"pool should saturate at %d workers", poolSize)
+
+	// Confirm no spike above poolSize across multiple samples.
+	for i := 0; i < 20; i++ {
+		require.LessOrEqual(t, active.Load(), int32(poolSize),
+			"active workers exceeded pool size at sample %d", i)
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// All pool tokens should be held.
+	require.Equal(t, poolSize, len(server.pullWorkerPool),
+		"all pool tokens should be acquired when saturated")
+
+	// Phase 2: Close cancels both the root context and the stopper task
+	// contexts used by phase-1 workers.
+	closeServer()
+
+	require.Eventually(t, func() bool {
+		return active.Load() == 0
+	}, 5*time.Second, 10*time.Millisecond,
+		"all phase-1 workers should exit after cancel")
 }

@@ -235,9 +235,13 @@ func validateSegmentedResponseSize(size int) error {
 
 // Session manages subscription for logtail client.
 type Session struct {
-	sessionCtx context.Context
-	cancelFunc context.CancelFunc
-	wg         sync.WaitGroup
+	sessionCtx  context.Context
+	cancelFunc  context.CancelFunc
+	wg          sync.WaitGroup
+	cleanupOnce sync.Once
+	// enqueueMu serializes the final response hand-off with PostClean. It is
+	// not held while writing to the transport.
+	enqueueMu sync.RWMutex
 
 	logger      *log.MOLogger
 	sendTimeout time.Duration
@@ -413,30 +417,37 @@ func (ss *Session) sendHeartbeat() error {
 
 // Drop closes sender goroutine.
 func (ss *Session) PostClean() {
-	ss.logger.Info("clean session for morpc stream")
+	ss.cleanupOnce.Do(func() {
+		ss.logger.Info("clean session for morpc stream")
 
-	// close morpc stream, maybe verbose
-	if err := ss.stream.Close(); err != nil {
-		ss.logger.Error("fail to close morpc client session", zap.Error(err))
-	}
-
-	ss.cancelFunc()
-	ss.wg.Wait()
-
-	left := len(ss.sendChan)
-
-	// release all left responses in sendChan
-	if left > 0 {
-		i := 0
-		for resp := range ss.sendChan {
-			ss.responses.Release(resp.response)
-			i++
-			if i >= left {
-				break
-			}
+		// close morpc stream, maybe verbose
+		if err := ss.stream.Close(); err != nil {
+			ss.logger.Error("fail to close morpc client session", zap.Error(err))
 		}
-		ss.logger.Info("release left responses", zap.Int("left", left))
-	}
+
+		ss.cancelFunc()
+		// Wait for any in-flight response hand-off that began before cancel.
+		// Subsequent senders observe sessionCtx cancellation while holding the
+		// read lock and cannot add an item after this point.
+		ss.enqueueMu.Lock()
+		ss.enqueueMu.Unlock()
+		ss.wg.Wait()
+
+		left := len(ss.sendChan)
+
+		// release all left responses in sendChan
+		if left > 0 {
+			i := 0
+			for resp := range ss.sendChan {
+				ss.responses.Release(resp.response)
+				i++
+				if i >= left {
+					break
+				}
+			}
+			ss.logger.Info("release left responses", zap.Int("left", left))
+		}
+	})
 }
 
 // Register registers table for client.
@@ -695,6 +706,8 @@ func (ss *Session) SendResponse(
 func (ss *Session) sendResponse(
 	sendCtx context.Context, response *LogtailResponse, wait bool,
 ) error {
+	ss.enqueueMu.RLock()
+	defer ss.enqueueMu.RUnlock()
 	select {
 	case <-ss.sessionCtx.Done():
 		ss.logger.Error("session context done", zap.Error(ss.sessionCtx.Err()))
@@ -708,6 +721,14 @@ func (ss *Session) sendResponse(
 	}
 	if !wait {
 		select {
+		case <-ss.sessionCtx.Done():
+			ss.logger.Error("session context done", zap.Error(ss.sessionCtx.Err()))
+			ss.responses.Release(response)
+			return ss.sessionCtx.Err()
+		case <-sendCtx.Done():
+			ss.logger.Error("send context done", zap.Error(sendCtx.Err()))
+			ss.responses.Release(response)
+			return sendCtx.Err()
 		case ss.sendChan <- message{timeout: ContextTimeout(sendCtx, ss.sendTimeout), response: response, createAt: time.Now()}:
 			return nil
 		default:

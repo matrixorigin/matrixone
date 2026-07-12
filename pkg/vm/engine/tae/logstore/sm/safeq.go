@@ -154,6 +154,10 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 			q.pending.Add(-1)
 			return item, ErrClose
 		}
+		// A blocking send intentionally has no cancellation branch: Stop waits for
+		// pending to reach zero before canceling q.ctx, and this producer contributes
+		// to pending until its item has been handled. Adding q.ctx.Done() here would
+		// therefore not unblock a sender and would obscure that shutdown contract.
 		q.queue <- item
 		return item, nil
 	} else {
