@@ -197,11 +197,8 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 				return err
 			}
 			insert.ctr.source = rel
-		} else {
-			err := insert.ctr.source.Reset(proc.GetTxnOperator())
-			if err != nil {
-				return err
-			}
+		} else if err := insert.ctr.source.Reset(proc.GetTxnOperator()); err != nil {
+			return err
 		}
 
 		if insert.ctr.buf == nil {

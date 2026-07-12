@@ -269,6 +269,11 @@ func (c *Compile) clear() {
 	c.anal = nil
 	c.e = nil
 
+	if c.lockMeta != nil {
+		c.lockMeta.clear(c.proc)
+		c.lockMeta = nil
+	}
+
 	c.proc.Free()
 	c.proc = nil
 
@@ -288,11 +293,6 @@ func (c *Compile) clear() {
 	c.disableDropAutoIncrement = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
-
-	if c.lockMeta != nil {
-		c.lockMeta.clear(c.proc)
-		c.lockMeta = nil
-	}
 
 	for _, exe := range c.filterExprExes {
 		exe.Free()
@@ -2920,17 +2920,13 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 		}
 		rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
 		if err != nil {
-			if txnOp.IsSnapOp() {
-				return err
-			}
 			return err
 		}
-		tblDef = rel.GetTableDef(ctx)
-		s.DataSource.Rel = rel
-	} else {
-		s.DataSource.Rel.Reset(txnOp)
-		tblDef = s.DataSource.Rel.GetTableDef(ctx)
+		s.DataSource.Rel = engine.NewRelationHandle(rel)
+	} else if err = s.DataSource.Rel.Reset(txnOp); err != nil {
+		return err
 	}
+	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
 	if len(node.FilterList) != len(s.DataSource.FilterList) {
 		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)

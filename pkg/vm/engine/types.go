@@ -1032,6 +1032,7 @@ var DefaultRangesParam RangesParam = RangesParam{
 	DontSupportRelData: true,
 }
 
+// Relation is bound to the transaction operator used to open its Database.
 type Relation interface {
 	Statistics
 
@@ -1138,8 +1139,26 @@ type Relation interface {
 	// GetFlushTS returns the flush timestamp of the relation.
 	GetFlushTS(ctx context.Context) (types.TS, error)
 
-	// Reset resets the relation.
+	// Reset rebinds an exclusively owned relation handle to op. Reset must not
+	// be called on a relation shared by multiple operators.
 	Reset(op client.TxnOperator) error
+}
+
+// RelationHandleFactory is implemented by engines whose cached relations are
+// shared and therefore cannot be reset directly. NewRelationHandle returns an
+// exclusively owned, reusable handle over the shared relation.
+type RelationHandleFactory interface {
+	NewRelationHandle() Relation
+}
+
+// NewRelationHandle returns an exclusively owned handle when the engine
+// supports one. Engines with immutable or already-exclusive relations may
+// return the relation itself by not implementing RelationHandleFactory.
+func NewRelationHandle(rel Relation) Relation {
+	if factory, ok := rel.(RelationHandleFactory); ok {
+		return factory.NewRelationHandle()
+	}
+	return rel
 }
 
 type BaseReader interface {

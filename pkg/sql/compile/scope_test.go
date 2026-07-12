@@ -175,6 +175,34 @@ func checkScopeRoot(t *testing.T, s *Scope) {
 	}
 }
 
+func TestScopeResetKeepsReusableRelationHandle(t *testing.T) {
+	rel := &mockRelationForMembershipFilter{}
+	s := &Scope{
+		RootOp: colexec.NewMockOperator(),
+		DataSource: &Source{
+			R:   &struct{ engine.Reader }{},
+			Rel: rel,
+		},
+	}
+
+	require.NoError(t, s.Reset(NewMockCompile(t)))
+	require.Nil(t, s.DataSource.R)
+	require.Same(t, rel, s.DataSource.Rel)
+}
+
+func TestLockMetaResetKeepsReusableRelationHandles(t *testing.T) {
+	l := NewLockMeta()
+	databaseRel := &mockRelationForMembershipFilter{}
+	tableRel := &mockRelationForMembershipFilter{}
+	l.database_rel = databaseRel
+	l.table_rel = tableRel
+
+	l.reset(nil)
+
+	require.Same(t, databaseRel, l.database_rel)
+	require.Same(t, tableRel, l.table_rel)
+}
+
 func TestScopeSerialization2(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	var reg process.WaitRegister
