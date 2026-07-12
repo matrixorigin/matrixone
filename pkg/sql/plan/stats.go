@@ -16,10 +16,11 @@ package plan
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -1069,18 +1070,18 @@ func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil && len(node.FilterList) >= 1 {
-			// NB: intentionally NOT migrated to slices.SortFunc. Filter evaluation
-			// order is semantically significant here (it decides which predicate a
-			// vector/IVF index probes with and which value a runtime error reports
-			// -- see operator/is_not_operator and vector/vector_ivf_mode, and the
-			// underlying IVF issue #25639). The comparator is non-strict (returns
-			// true on equal cost) and its exact tie ordering is an artifact of
-			// sort.Slice that no strict slices comparator reproduces, so this site
-			// is left on sort.Slice.
-			sort.Slice(node.FilterList, func(i, j int) bool {
-				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
-				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
-				return cost1 <= cost2
+			// Use a STABLE sort with a strict comparator, deliberately not a plain
+			// (unstable) sort. Filter evaluation order is semantically significant
+			// here: it decides which predicate a vector/IVF index probes with (see
+			// #25639) and which value a runtime bool error reports. A stable sort
+			// keeps equal-cost filters in their original, as-written relative order,
+			// which is a deterministic and well-defined tie order; an unstable sort
+			// would reorder equal-cost filters arbitrarily and make those results
+			// depend on the sort implementation's internals.
+			slices.SortStableFunc(node.FilterList, func(a, b *plan.Expr) int {
+				cost1 := estimateFilterWeight(a, 0) * a.Selectivity
+				cost2 := estimateFilterWeight(b, 0) * b.Selectivity
+				return cmp.Compare(cost1, cost2)
 			})
 		}
 	}

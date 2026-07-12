@@ -718,46 +718,43 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 			goto NO_RANGE
 		}
 
+		// Fold every matching bound into the range, keeping the tightest bound per
+		// side so the index enforces the intersection of all predicates regardless
+		// of filter order (a looser same-side bound is redundant and dropped). If a
+		// bound is not a comparable literal, the predicate is kept as a residual
+		// filter instead. See issue #25639.
 		switch f.Func.ObjName {
 		case "<":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
-			if distRange.UpperBoundType != plan.BoundType_UNBOUNDED {
+			if !mergeUpperBound(distRange, f.Args[1], plan.BoundType_EXCLUSIVE) {
 				goto NO_RANGE
 			}
-			distRange.UpperBoundType = plan.BoundType_EXCLUSIVE
-			distRange.UpperBound = f.Args[1]
 
 		case "<=":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
-			if distRange.UpperBoundType != plan.BoundType_UNBOUNDED {
+			if !mergeUpperBound(distRange, f.Args[1], plan.BoundType_INCLUSIVE) {
 				goto NO_RANGE
 			}
-			distRange.UpperBoundType = plan.BoundType_INCLUSIVE
-			distRange.UpperBound = f.Args[1]
 
 		case ">":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
-			if distRange.LowerBoundType != plan.BoundType_UNBOUNDED {
+			if !mergeLowerBound(distRange, f.Args[1], plan.BoundType_EXCLUSIVE) {
 				goto NO_RANGE
 			}
-			distRange.LowerBoundType = plan.BoundType_EXCLUSIVE
-			distRange.LowerBound = f.Args[1]
 
 		case ">=":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
-			if distRange.LowerBoundType != plan.BoundType_UNBOUNDED {
+			if !mergeLowerBound(distRange, f.Args[1], plan.BoundType_INCLUSIVE) {
 				goto NO_RANGE
 			}
-			distRange.LowerBoundType = plan.BoundType_INCLUSIVE
-			distRange.LowerBound = f.Args[1]
 
 		default:
 			goto NO_RANGE
@@ -771,6 +768,83 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 	}
 
 	return filters[:currIdx], distRange
+}
+
+// distBoundLiteralFloat64 extracts a comparable float64 from a distance-bound
+// literal expression. It accepts the same numeric literal kinds the index reader
+// accepts (getLiteralFloat64), returning ok=false for anything that is not a
+// plain numeric literal.
+func distBoundLiteralFloat64(expr *plan.Expr) (float64, bool) {
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	switch v := lit.Value.(type) {
+	case *plan.Literal_Fval:
+		return float64(v.Fval), true
+	case *plan.Literal_Dval:
+		return v.Dval, true
+	case *plan.Literal_I8Val:
+		return float64(v.I8Val), true
+	case *plan.Literal_I16Val:
+		return float64(v.I16Val), true
+	case *plan.Literal_I32Val:
+		return float64(v.I32Val), true
+	case *plan.Literal_I64Val:
+		return float64(v.I64Val), true
+	case *plan.Literal_U8Val:
+		return float64(v.U8Val), true
+	case *plan.Literal_U16Val:
+		return float64(v.U16Val), true
+	case *plan.Literal_U32Val:
+		return float64(v.U32Val), true
+	case *plan.Literal_U64Val:
+		return float64(v.U64Val), true
+	default:
+		return 0, false
+	}
+}
+
+// mergeUpperBound folds a new upper bound into dr, keeping the tighter (smaller,
+// or exclusive on an equal value) bound so the range is the intersection of all
+// upper bounds. It returns false when the bounds cannot be compared as numeric
+// literals, in which case the caller keeps the predicate as a residual filter.
+func mergeUpperBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundType) bool {
+	if dr.UpperBoundType == plan.BoundType_UNBOUNDED {
+		dr.UpperBoundType = boundType
+		dr.UpperBound = bound
+		return true
+	}
+	newVal, ok1 := distBoundLiteralFloat64(bound)
+	curVal, ok2 := distBoundLiteralFloat64(dr.UpperBound)
+	if !ok1 || !ok2 {
+		return false
+	}
+	if newVal < curVal || (newVal == curVal && boundType == plan.BoundType_EXCLUSIVE) {
+		dr.UpperBoundType = boundType
+		dr.UpperBound = bound
+	}
+	return true
+}
+
+// mergeLowerBound folds a new lower bound into dr, keeping the tighter (larger,
+// or exclusive on an equal value) bound. See mergeUpperBound.
+func mergeLowerBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundType) bool {
+	if dr.LowerBoundType == plan.BoundType_UNBOUNDED {
+		dr.LowerBoundType = boundType
+		dr.LowerBound = bound
+		return true
+	}
+	newVal, ok1 := distBoundLiteralFloat64(bound)
+	curVal, ok2 := distBoundLiteralFloat64(dr.LowerBound)
+	if !ok1 || !ok2 {
+		return false
+	}
+	if newVal > curVal || (newVal == curVal && boundType == plan.BoundType_EXCLUSIVE) {
+		dr.LowerBoundType = boundType
+		dr.LowerBound = bound
+	}
+	return true
 }
 
 // peelAndRewriteDistFnFilters scans `filters` for predicates of shape
