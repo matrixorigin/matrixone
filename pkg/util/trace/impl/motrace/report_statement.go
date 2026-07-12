@@ -393,6 +393,7 @@ func (s *StatementInfo) free() {
 	s.jsonByte = nil
 	s.statsArray.Reset()
 	s.stated = false
+	s.disableAgg = false
 	// clean skipTxn ctrl
 	s.skipTxnOnce = false
 	s.skipTxnID = nil

@@ -16,10 +16,12 @@ package table_function
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -58,6 +60,42 @@ func TestPrepare(t *testing.T) {
 	arg.FuncName = "not_exist"
 	err = arg.Prepare(testutil.NewProc(t))
 	require.Error(t, err)
+}
+
+func TestEvalLimitExpression(t *testing.T) {
+	proc := testutil.NewProc(t)
+	params := testutil.NewVector(1, types.T_text.ToType(), proc.Mp(), false, []string{"17"})
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() { params.Free(proc.Mp()) })
+
+	param := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	targetType := plan.Type{Id: int32(types.T_uint64), NotNullable: true}
+	limitExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		param,
+		{Typ: targetType, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+	})
+	require.NoError(t, err)
+
+	value, err := evalLimitExpression(proc, limitExpr, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(17), value)
+
+	value, err = evalLimitExpression(proc, nil, 3)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), value)
+
+	_, err = evalLimitExpression(proc, plan2.MakePlan2Int64ConstExprWithType(1), 0)
+	require.ErrorContains(t, err, "LIMIT must evaluate to uint64")
+
+	nullLimit := &plan.Expr{
+		Typ:  targetType,
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+	}
+	_, err = evalLimitExpression(proc, nullLimit, 0)
+	require.ErrorContains(t, err, "LIMIT cannot be NULL")
 }
 
 func TestParseTablePathWithAccount(t *testing.T) {

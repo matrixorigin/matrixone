@@ -17,6 +17,7 @@ package logtailreplay
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math/rand"
 	"testing"
 
@@ -566,6 +567,67 @@ func TestPrefixIn(t *testing.T) {
 	require.Equal(t, []byte{2}, pkIter.iter.Item().Bytes)
 	spec.Move(pkIter)
 	require.Equal(t, []byte{4}, pkIter.iter.Item().Bytes)
+}
+
+func TestPrefixBetweenOpenBounds(t *testing.T) {
+	pkTree := btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, btree.Options{Degree: 64})
+	for _, key := range []string{"aa1", "aa2", "ab1", "ab2", "ac1"} {
+		pkTree.Set(&PrimaryIndexEntry{Bytes: []byte(key)})
+	}
+
+	tests := []struct {
+		kind int
+		want []string
+	}{
+		{kind: 4, want: []string{"aa1", "aa2", "ab1", "ab2"}},
+		{kind: 5, want: []string{"ab1", "ab2"}},
+		{kind: 6, want: []string{"aa1", "aa2"}},
+		{kind: 7, want: nil},
+	}
+	for _, test := range tests {
+		spec := BetweenKind([]byte("aa"), []byte("ab"), test.kind)
+		iter := &primaryKeyIter{primaryIndex: pkTree, iter: pkTree.Iter()}
+		var got []string
+		for spec.Move(iter) {
+			got = append(got, string(iter.iter.Item().Bytes))
+		}
+		require.Equal(t, test.want, got, "kind %d", test.kind)
+		iter.iter.Release()
+	}
+
+	for _, kind := range []int{5, 7} {
+		t.Run(fmt.Sprintf("empty lower prefix kind %d", kind), func(t *testing.T) {
+			spec := BetweenKind(nil, []byte("ab"), kind)
+			iter := &primaryKeyIter{primaryIndex: pkTree, iter: pkTree.Iter()}
+			require.False(t, spec.Move(iter))
+			iter.iter.Release()
+		})
+	}
+}
+
+func TestPrefixBetweenStopsAtDeletedEntryPastUpperBound(t *testing.T) {
+	for _, iterDeleted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deleted=%t", iterDeleted), func(t *testing.T) {
+			pkTree := btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, btree.Options{Degree: 64})
+			pkTree.Set(&PrimaryIndexEntry{Bytes: []byte("aa1"), Deleted: iterDeleted})
+			pkTree.Set(&PrimaryIndexEntry{Bytes: []byte("ac1"), Deleted: !iterDeleted})
+			pkTree.Set(&PrimaryIndexEntry{Bytes: []byte("ad1"), Deleted: iterDeleted})
+
+			spec := BetweenKind([]byte("aa"), []byte("ab"), 4)
+			iter := &primaryKeyIter{
+				primaryIndex: pkTree,
+				iter:         pkTree.Iter(),
+			}
+			iter.specHint.isDelIter = iterDeleted
+			require.True(t, spec.Move(iter))
+			require.Equal(t, []byte("aa1"), iter.iter.Item().Bytes)
+			require.False(t, spec.Move(iter))
+			// The range check must terminate on the first out-of-range entry,
+			// even when that entry belongs to the other insert/delete stream.
+			require.Equal(t, []byte("ac1"), iter.iter.Item().Bytes)
+			iter.iter.Release()
+		})
+	}
 }
 
 func TestExactPrimaryKeyReplayIter(t *testing.T) {

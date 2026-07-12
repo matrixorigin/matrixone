@@ -17,6 +17,8 @@
 package ivfpq
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -54,9 +56,20 @@ func (s *IvfpqSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfpqSearch: query type mismatch")
 	}
 
-	limit := rt.Limit
-
 	if s.MultiIndex == nil {
+		return []int64{}, []float64{}, nil
+	}
+	var cardinality uint64
+	for _, index := range s.Indexes {
+		if index.Len > 0 {
+			cardinality = vectorindex.SaturatingAddUint64(cardinality, uint64(index.Len))
+		}
+	}
+	if s.Overflow != nil {
+		cardinality = vectorindex.SaturatingAddUint64(cardinality, s.Overflow.Len())
+	}
+	limit := vectorindex.ClampSearchLimit(rt.Limit, cardinality, math.MaxUint32)
+	if limit == 0 {
 		return []int64{}, []float64{}, nil
 	}
 
@@ -86,8 +99,9 @@ func (s *IvfpqSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt ve
 		return nil, nil, err
 	}
 
-	reskeys := make([]int64, 0, limit)
-	resdistances := make([]float64, 0, limit)
+	resultCapacity := vectorindex.SearchResultPreallocate(limit)
+	reskeys := make([]int64, 0, resultCapacity)
+	resdistances := make([]float64, 0, resultCapacity)
 	for i, k := range neighbors64 {
 		if k == -1 {
 			continue
