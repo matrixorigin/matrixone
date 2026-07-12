@@ -146,9 +146,21 @@ select mo_ctl('dn', 'flush', 'mysql_compat_index_hint.owner_tasks');
 select Sleep(1);
 
 select count(*) from owner_tasks where status = 'active';
+-- @separator:table
+-- @regex("Index Table Scan.*idx_status_due_owner",true)
+explain select count(*) from owner_tasks force index(idx_status_due_owner) where status = 'active';
 select count(*) from owner_tasks force index(idx_status_due_owner) where status = 'active';
+-- @separator:table
+-- @regex("Index Table Scan.*idx_status_due_owner",false)
+explain select count(*) from owner_tasks ignore index(idx_status_due_owner) where status = 'active';
 select count(*) from owner_tasks ignore index(idx_status_due_owner) where status = 'active';
+-- @separator:table
+-- @regex("Index Table Scan.*idx_policy_owner",true)
+explain select count(*) from owner_tasks force index(idx_policy_owner) where policy = 'keep';
 select count(*) from owner_tasks force index(idx_policy_owner) where policy = 'keep';
+-- @separator:table
+-- @regex("Index Table Scan.*idx_score_owner",true)
+explain select count(*) from owner_tasks force index(idx_score_owner) where score = 20;
 select count(*) from owner_tasks force index(idx_score_owner) where score = 20;
 
 drop database mysql_compat_index_hint;

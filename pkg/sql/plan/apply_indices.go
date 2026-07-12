@@ -2482,6 +2482,13 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		(node.JoinType != plan.Node_ANTI || !node.IsRightJoin) {
 		return nodeID, nil
 	}
+	if node.JoinType == plan.Node_INNER && builder.scanForcesJoinIndex(node.Children[0]) && builder.scanForcesJoinIndex(node.Children[1]) {
+		rightAccess, err := builder.applyForcedJoinAccess(node.Children[1])
+		if err != nil {
+			return -1, err
+		}
+		node.Children[1] = rightAccess
+	}
 
 	// An INNER JOIN is symmetric. Put a directly hinted scan on the index-access
 	// side before applying the existing rewrite, independent of join reorder.
@@ -2739,6 +2746,30 @@ func (builder *QueryBuilder) scanForcesJoinIndex(nodeID int32) bool {
 	}
 	hints := builder.indexHintsByScan[node.NodeId]
 	return hints != nil && hints.join.forceSpecified
+}
+
+func (builder *QueryBuilder) applyForcedJoinAccess(scanID int32) (int32, error) {
+	if scanID < 0 || int(scanID) >= len(builder.qry.Nodes) {
+		return scanID, nil
+	}
+	scan := builder.qry.Nodes[scanID]
+	if scan == nil || scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil {
+		return scanID, nil
+	}
+	for _, idxDef := range builder.filterRegularIndexesByJoinHints(scan, scan.TableDef.Indexes) {
+		if !usableRegularHintIndex(idxDef) {
+			continue
+		}
+		accessID, _, err := builder.buildHintedIndexBackfillJoin(idxDef, scan)
+		if err != nil {
+			return -1, err
+		}
+		if accessID != -1 {
+			builder.protectedScans[scanID]++
+			return accessID, nil
+		}
+	}
+	return scanID, nil
 }
 
 func restoreJoinHintSwap(node *plan.Node) {

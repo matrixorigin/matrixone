@@ -565,8 +565,10 @@ func TestForceIndexForJoinAllowsForcingBothSides(t *testing.T) {
 	rightDef := builder.qry.Nodes[rightScanID].TableDef
 	rightDef.Indexes = []*planpb.IndexDef{{
 		IndexName: "idx_b", IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
-		IndexTableName: "idx_join_b_table", Parts: []string{"b"}, TableExist: true,
+		IndexTableName: "idx_join_b_table", Parts: []string{"b", catalog.CreateAlias("a")}, TableExist: true,
 	}}
+	rightDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
+	builder.qry.Nodes[rightScanID].ObjRef = &planpb.ObjectRef{ObjName: "right_t"}
 	require.NoError(t, builder.recordIndexHints(leftScanID, leftDef, []*tree.IndexHint{{
 		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_a"},
 	}}))
@@ -581,27 +583,52 @@ func TestForceIndexForJoinAllowsForcingBothSides(t *testing.T) {
 	indexJoin := builder.qry.Nodes[joinNode.Children[0]]
 	require.Equal(t, planpb.Node_INDEX, indexJoin.JoinType)
 	require.Equal(t, "idx_a", builder.qry.Nodes[indexJoin.Children[1]].IndexScanInfo.IndexName)
+	require.Equal(t, "idx_b", findIndexScanNameForTable(builder.qry, "right_t"))
+}
+
+func findIndexScanNameForTable(query *planpb.Query, table string) string {
+	for _, node := range query.Nodes {
+		if node.IndexScanInfo.IsIndexScan && node.IndexScanInfo.BelongToTable == table {
+			return node.IndexScanInfo.IndexName
+		}
+	}
+	return ""
 }
 
 func TestForceIndexForJoinDoesNotBlockOuterJoinFilterAccess(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
+	addOuterJoinHintTable := func(name, indexName string, tableID uint64) {
+		tableDef := DeepCopyTableDef(mock.ctxt.tables["index_hint_t"], true)
+		tableDef.Name = name
+		tableDef.TblId = tableID
+		tableDef.Indexes = []*planpb.IndexDef{{
+			IndexName: indexName, IndexTableName: "idx_hint_a",
+			Parts: []string{"a", catalog.CreateAlias("id")}, TableExist: true,
+		}}
+		mock.ctxt.objects[name] = &ObjectRef{SchemaName: "tpch", ObjName: name, Obj: int64(tableID)}
+		mock.ctxt.tables[name] = tableDef
+		mock.ctxt.id2name[tableID] = name
+		mock.ctxt.pks[name] = []int{0}
+	}
+	addOuterJoinHintTable("left_hint_t", "idx_left_a", 25361)
+	addOuterJoinHintTable("right_hint_t", "idx_right_a", 25362)
 
 	queryPlan, err := runOneStmt(mock, t, `
 		select l.a
-		from index_hint_t l force index for join(idx_a)
-		left join index_hint_t r on l.a = r.a
+		from left_hint_t l force index for join(idx_left_a)
+		left join right_hint_t r on l.a = r.a
 		where l.a = 1`)
 	require.NoError(t, err)
-	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
+	require.Equal(t, "idx_left_a", findIndexScanNameForTable(queryPlan.GetQuery(), "left_hint_t"))
 
 	queryPlan, err = runOneStmt(mock, t, `
 		select r.a
-		from index_hint_t l
-		right join index_hint_t r force index for join(idx_a) on l.a = r.a
+		from left_hint_t l
+		right join right_hint_t r force index for join(idx_right_a) on l.a = r.a
 		where r.a = 1`)
 	require.NoError(t, err)
-	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
+	require.Equal(t, "idx_right_a", findIndexScanNameForTable(queryPlan.GetQuery(), "right_hint_t"))
 }
 
 func TestForceIndexForJoinIsConsumedInsideThreeTableTree(t *testing.T) {

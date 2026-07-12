@@ -135,6 +135,7 @@ Project  𝄀
         Sort Key: serial_extract(__mo_index_idx_col, 0, VARCHAR)) INTERNAL  𝄀
         Limit: 1  𝄀
         ->  Index Table Scan on t.idx_a_b_c_id  𝄀
+              Sort Key: __mo_index_idx_col INTERNAL  𝄀
               Filter Cond: (serial_extract(__mo_index_idx_col, 1, INT)) = 1)
 select id,a,b
 from t force index for order by(idx_a_b_c_id)
@@ -231,15 +232,47 @@ select Sleep(1);
 select count(*) from owner_tasks where status = 'active';
 ➤ count(*)[-5,64,0]  𝄀
 4
+explain select count(*) from owner_tasks force index(idx_status_due_owner) where status = 'active';
+-- @regex("Index Table Scan.*idx_status_due_owner", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Index Table Scan on owner_tasks.idx_status_due_owner  𝄀
+              Filter Cond: prefix_eq(__mo_index_idx_col)
 select count(*) from owner_tasks force index(idx_status_due_owner) where status = 'active';
 ➤ count(*)[-5,64,0]  𝄀
 4
+explain select count(*) from owner_tasks ignore index(idx_status_due_owner) where status = 'active';
+-- @regex("Index Table Scan.*idx_status_due_owner", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on mysql_compat_index_hint.owner_tasks  𝄀
+              Filter Cond: (owner_tasks.status = 'active')
 select count(*) from owner_tasks ignore index(idx_status_due_owner) where status = 'active';
 ➤ count(*)[-5,64,0]  𝄀
 4
+explain select count(*) from owner_tasks force index(idx_policy_owner) where policy = 'keep';
+-- @regex("Index Table Scan.*idx_policy_owner", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Index Table Scan on owner_tasks.idx_policy_owner  𝄀
+              Filter Cond: prefix_eq(__mo_index_idx_col)
 select count(*) from owner_tasks force index(idx_policy_owner) where policy = 'keep';
 ➤ count(*)[-5,64,0]  𝄀
 4
+explain select count(*) from owner_tasks force index(idx_score_owner) where score = 20;
+-- @regex("Index Table Scan.*idx_score_owner", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Index Table Scan on owner_tasks.idx_score_owner  𝄀
+              Filter Cond: prefix_eq(__mo_index_idx_col)
 select count(*) from owner_tasks force index(idx_score_owner) where score = 20;
 ➤ count(*)[-5,64,0]  𝄀
 2
