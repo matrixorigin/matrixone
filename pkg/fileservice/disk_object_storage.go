@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"iter"
 	"os"
@@ -176,6 +177,11 @@ func (d *diskObjectStorage) Read(ctx context.Context, key string, min *int64, ma
 		}
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, f.Close())
+		}
+	}()
 
 	var reader io.Reader
 	reader = f
