@@ -1746,3 +1746,48 @@ func TestCleanupDoubleSafe(t *testing.T) {
 
 	require.Nil(t, engine.buckets)
 }
+
+// TestRebuildHashmapPrepareError covers the builder.Free(proc) path
+// when HashmapBuilder.Prepare fails (e.g., with an invalid key expression).
+func TestRebuildHashmapPrepareError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := makeInt32Batch(proc, []int32{1, 2, 3})
+	fd := writeBuildFile(proc, "test_prep_err", bat)
+
+	// Use an expression that will fail in Prepare (nil Expr field).
+	badExpr := []*plan.Expr{{}}
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: badExpr,
+	})
+	engine.InitFromSpilledMap([]*os.File{fd})
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	_, res, err := engine.RebuildHashmap(proc, analyzer)
+	require.Error(t, err)
+	require.Equal(t, BucketSkip, res)
+
+	engine.Cleanup(proc)
+}
+
+// TestFlushBucketBatchShortWriteCheck verifies the short-write guard.
+func TestFlushBucketBatchShortWriteCheck(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	f, err := spillfs.CreateAndRemoveFile(context.Background(), "test_short")
+	require.NoError(t, err)
+
+	// Write a batch — this should succeed without short write.
+	var buf bytes.Buffer
+	w := BucketWriter{Name: "test_short", Fd: f}
+	bat := makeInt32Batch(proc, []int32{1, 2, 3})
+	err = FlushBucketBatch(proc, bat, &w, &buf, nil)
+	require.NoError(t, err)
+
+	f.Close()
+}
