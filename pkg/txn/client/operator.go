@@ -276,6 +276,7 @@ type txnOperator struct {
 		sync.RWMutex
 		waitActive             bool
 		closed                 bool
+		terminalAction         txnTerminalAction
 		txn                    txn.TxnMeta
 		cachedWrites           map[uint64][]txn.TxnRequest
 		lockTables             []lock.LockTable
@@ -291,7 +292,7 @@ type txnOperator struct {
 	reset struct {
 		txnID                []byte
 		parent               atomic.Pointer[txnOperator]
-		waiter               *waiter
+		waiter               *activeTxnWaiter
 		waitActiveCost       time.Duration
 		sequence             atomic.Uint64
 		commitSeq            uint64
@@ -328,7 +329,16 @@ type runSQLTracker struct {
 	activeTokens map[uint64]runSQLInfo
 	nextID       uint64
 	cond         *sync.Cond
+	sealed       bool
+	onDrained    func()
 }
+
+type txnTerminalAction uint8
+
+const (
+	txnTerminalActionNone txnTerminalAction = iota
+	txnTerminalActionRollbackAfterRunningSQL
+)
 
 type runSQLInfo struct {
 	cancel context.CancelFunc
@@ -352,6 +362,8 @@ func (t *runSQLTracker) reset() {
 		}
 	}
 	t.nextID = 0
+	t.sealed = false
+	t.onDrained = nil
 	// Keep cond, no need to recreate
 }
 
@@ -361,8 +373,14 @@ func (t *runSQLTracker) notifyLocked() {
 
 func (t *runSQLTracker) enterTokenWithSQL(cancel context.CancelFunc, sql string) uint64 {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.ensureInitLocked()
+	if t.sealed {
+		t.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return 0
+	}
 	t.nextID++
 	token := t.nextID
 	t.activeTokens[token] = runSQLInfo{
@@ -371,15 +389,64 @@ func (t *runSQLTracker) enterTokenWithSQL(cancel context.CancelFunc, sql string)
 		start:  time.Now(),
 	}
 	t.notifyLocked()
+	t.mu.Unlock()
 	return token
 }
 
 func (t *runSQLTracker) exitToken(token uint64) {
+	if token == 0 {
+		return
+	}
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.ensureInitLocked()
 	delete(t.activeTokens, token)
+	var callback func()
+	if t.sealed && len(t.activeTokens) == 0 {
+		callback = t.onDrained
+		t.onDrained = nil
+	}
 	t.notifyLocked()
+	t.mu.Unlock()
+
+	if callback != nil {
+		callback()
+	}
+}
+
+// sealAndRunWhenDrained permanently rejects new SQL tokens and runs fn once
+// every previously registered token has exited. Sealing and registration share
+// one lock, so cleanup cannot race a new SQL statement into the workspace.
+func (t *runSQLTracker) sealAndRunWhenDrained(fn func()) {
+	if fn == nil {
+		return
+	}
+
+	t.mu.Lock()
+	t.ensureInitLocked()
+	if t.sealed {
+		t.mu.Unlock()
+		return
+	}
+	t.sealed = true
+	cancels := make([]context.CancelFunc, 0, len(t.activeTokens))
+	for _, info := range t.activeTokens {
+		if info.cancel != nil {
+			cancels = append(cancels, info.cancel)
+		}
+	}
+	if len(t.activeTokens) == 0 {
+		t.mu.Unlock()
+		for _, cancel := range cancels {
+			cancel()
+		}
+		fn()
+		return
+	}
+	t.onDrained = fn
+	t.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 }
 
 func (t *runSQLTracker) cancelAllExcept(keepToken uint64, skipToken uint64) {
@@ -553,6 +620,7 @@ func (tc *txnOperator) initReset() {
 func (tc *txnOperator) initProtectedFields() {
 	tc.mu.waitActive = false
 	tc.mu.closed = false
+	tc.mu.terminalAction = txnTerminalActionNone
 	tc.mu.retry = false
 	tc.mu.lockSeq = 0
 	tc.mu.txn = txn.TxnMeta{}
@@ -628,7 +696,6 @@ func (tc *txnOperator) waitActive(ctx context.Context) error {
 	}
 
 	defer func() {
-		tc.reset.waiter.close()
 		tc.setWaitActive(false)
 	}()
 
@@ -659,11 +726,18 @@ func LockWaitTimeoutFromTxn(op TxnOperator) time.Duration {
 }
 
 func (tc *txnOperator) notifyActive() {
+	tc.completeActiveWait(nil)
+}
+
+func (tc *txnOperator) failActiveWait(err error) {
+	tc.completeActiveWait(err)
+}
+
+func (tc *txnOperator) completeActiveWait(err error) {
 	if tc.reset.waiter == nil {
 		panic("BUG: notify active on non-waiter txn operator")
 	}
-	defer tc.reset.waiter.close()
-	tc.reset.waiter.notify()
+	tc.reset.waiter.complete(err)
 }
 
 func (tc *txnOperator) AddWorkspace(workspace Workspace) {
@@ -839,9 +913,7 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<commit>"); err != nil {
-		// Commit can be called with an already-canceled context while SQL is still running.
-		// The commit has not been sent yet, so close locally as aborted to release active/leak state.
-		tc.closeAsAborted(ctx, err)
+		tc.scheduleRollbackAfterRunningSQL(err)
 		return err
 	}
 
@@ -893,9 +965,7 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
 	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<rollback>"); err != nil {
-		// Rollback can be called from connection cleanup with an already-canceled context.
-		// Still close the operator locally so txnClient active/leak-check state is released.
-		tc.closeAsAborted(ctx, err)
+		tc.scheduleRollbackAfterRunningSQL(err)
 		return err
 	}
 
@@ -1266,7 +1336,7 @@ func (tc *txnOperator) checkStatus(locked bool) error {
 		defer tc.mu.RUnlock()
 	}
 
-	if tc.mu.closed {
+	if tc.mu.closed || tc.mu.terminalAction != txnTerminalActionNone {
 		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 	}
 	return nil
@@ -1660,6 +1730,34 @@ func (tc *txnOperator) closeAsAborted(ctx context.Context, err error) {
 	}
 }
 
+// scheduleRollbackAfterRunningSQL preserves the transaction's cleanup owner when
+// a caller gives up waiting for another SQL statement. Closing the operator at
+// that point would skip workspace rollback, TN rollback, and lock release;
+// cleaning concurrently is unsafe because the running SQL still owns the
+// workspace. Sealing rejects new SQL before the final exit performs one
+// detached, bounded rollback.
+func (tc *txnOperator) scheduleRollbackAfterRunningSQL(waitErr error) {
+	tc.mu.Lock()
+	if tc.mu.closed || tc.mu.terminalAction != txnTerminalActionNone {
+		tc.mu.Unlock()
+		return
+	}
+	tc.mu.terminalAction = txnTerminalActionRollbackAfterRunningSQL
+	tc.reset.commitErr = waitErr
+	tc.mu.Unlock()
+
+	tc.reset.runSQLTracker.sealAndRunWhenDrained(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), runningSQLWaitTimeout)
+		defer cancel()
+		if err := tc.Rollback(ctx); err != nil {
+			tc.logger.Error("rollback after running SQL wait failed",
+				util.TxnIDField(tc.getTxnMeta(false)),
+				zap.Error(waitErr),
+				zap.Error(err))
+		}
+	})
+}
+
 func (tc *txnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -1770,12 +1868,19 @@ func (tc *txnOperator) doCostAction(
 }
 
 func (tc *txnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64 {
+	token := tc.reset.runSQLTracker.enterTokenWithSQL(cancel, sql)
+	if token == 0 {
+		return 0
+	}
 	tc.reset.runningSQL.Store(true)
 	tc.reset.runSqlCounter.addEnter()
-	return tc.reset.runSQLTracker.enterTokenWithSQL(cancel, sql)
+	return token
 }
 
 func (tc *txnOperator) ExitRunSqlWithToken(token uint64) {
+	if token == 0 {
+		return
+	}
 	tc.reset.runSqlCounter.addExit()
 	tc.reset.runSQLTracker.exitToken(token)
 	if !tc.reset.runSqlCounter.more() {

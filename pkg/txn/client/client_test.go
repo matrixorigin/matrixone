@@ -33,6 +33,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type blockingTimestampWaiter struct {
+	entered chan struct{}
+}
+
+func (w *blockingTimestampWaiter) GetTimestamp(ctx context.Context, _ timestamp.Timestamp) (timestamp.Timestamp, error) {
+	select {
+	case w.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return timestamp.Timestamp{}, ctx.Err()
+}
+
+func (w *blockingTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
+func (w *blockingTimestampWaiter) Close()                                   {}
+func (w *blockingTimestampWaiter) LatestTS() timestamp.Timestamp            { return timestamp.Timestamp{} }
+
 func TestAdjustClient(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := &txnClient{}
@@ -95,6 +112,31 @@ func TestIterTxnIDs(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestWaitActiveQueueClearsRemovedSlots(t *testing.T) {
+	first := &txnOperator{}
+	first.reset.txnID = []byte("first")
+	second := &txnOperator{}
+	second.reset.txnID = []byte("second")
+	c := &txnClient{}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mu.waitActiveTxns = make([]*txnOperator, 2, 4)
+	c.mu.waitActiveTxns[0] = first
+	c.mu.waitActiveTxns[1] = second
+	require.Same(t, first, c.fetchWaitActiveOpLocked())
+	require.Len(t, c.mu.waitActiveTxns, 1)
+	require.Nil(t, c.mu.waitActiveTxns[:cap(c.mu.waitActiveTxns)][1])
+
+	c.mu.waitActiveTxns = make([]*txnOperator, 2, 4)
+	c.mu.waitActiveTxns[0] = first
+	c.mu.waitActiveTxns[1] = second
+	require.True(t, c.removeFromWaitActiveLocked(first.reset.txnID))
+	require.Len(t, c.mu.waitActiveTxns, 1)
+	require.Same(t, second, c.mu.waitActiveTxns[0])
+	require.Nil(t, c.mu.waitActiveTxns[:cap(c.mu.waitActiveTxns)][1])
+}
+
 func TestNewTxnAndReset(t *testing.T) {
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
 		logutil.GetPanicLogger(),
@@ -141,23 +183,31 @@ func TestNewTxnWithNormalStateWait(t *testing.T) {
 	// Do not resume the txn client for now.
 	// c.Resume()
 	var wg sync.WaitGroup
+	errs := make(chan error, 20)
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			tx, err := c.New(ctx, newTestTimestamp(0))
-			assert.Nil(t, err)
+			if err != nil {
+				errs <- err
+				return
+			}
 			txnMeta := tx.(*txnOperator).mu.txn
-			assert.Equal(t, int64(0), txnMeta.SnapshotTS.PhysicalTime)
-			assert.NotEmpty(t, txnMeta.ID)
-			assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
+			if txnMeta.SnapshotTS.PhysicalTime != 0 || len(txnMeta.ID) == 0 || txnMeta.Status != txn.TxnStatus_Active {
+				errs <- assert.AnError
+			}
 		}()
 	}
 	// Resume it now.
 	c.Resume()
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
 }
 
 func TestNewTxnWithNormalStateNoWait(t *testing.T) {
@@ -326,6 +376,122 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 			v.mu.Lock()
 			defer v.mu.Unlock()
 			require.Equal(t, 0, len(v.mu.waitActiveTxns))
+		},
+		WithMaxActiveTxn(1),
+	)
+}
+
+func TestCloseUnblocksMaxActiveNew(t *testing.T) {
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			_, err := tc.New(ctx, timestamp.Timestamp{}, WithUserTxn())
+			require.NoError(t, err)
+
+			errC := make(chan error, 1)
+			go func() {
+				_, err := tc.New(context.Background(), timestamp.Timestamp{}, WithUserTxn())
+				errC <- err
+			}()
+
+			client := tc.(*txnClient)
+			require.Eventually(t, func() bool {
+				client.mu.RLock()
+				defer client.mu.RUnlock()
+				return len(client.mu.waitActiveTxns) == 1
+			}, time.Second, time.Millisecond)
+
+			require.NoError(t, tc.Close())
+			select {
+			case err := <-errC:
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+			case <-time.After(time.Second):
+				t.Fatal("max-active New did not return after client close")
+			}
+
+			client.mu.RLock()
+			defer client.mu.RUnlock()
+			require.Empty(t, client.mu.waitActiveTxns)
+		},
+		WithMaxActiveTxn(1),
+	)
+}
+
+func TestCloseCancelsQueuedSnapshotWait(t *testing.T) {
+	waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			_, err := tc.New(
+				context.Background(),
+				timestamp.Timestamp{},
+				WithUserTxn(),
+				WithSkipPushClientReady())
+			require.NoError(t, err)
+
+			errC := make(chan error, 1)
+			go func() {
+				_, err := tc.New(context.Background(), timestamp.Timestamp{}, WithUserTxn())
+				errC <- err
+			}()
+
+			select {
+			case <-waiter.entered:
+			case <-time.After(time.Second):
+				t.Fatal("queued transaction did not enter snapshot wait")
+			}
+
+			require.NoError(t, tc.Close())
+			select {
+			case err := <-errC:
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+			case <-time.After(time.Second):
+				t.Fatal("queued snapshot wait did not return after client close")
+			}
+		},
+		WithMaxActiveTxn(1),
+		WithTimestampWaiter(waiter),
+	)
+}
+
+func TestCanceledMaxActiveWaitRemovesQueueEntry(t *testing.T) {
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			_, err := tc.New(context.Background(), timestamp.Timestamp{}, WithUserTxn())
+			require.NoError(t, err)
+
+			client := tc.(*txnClient)
+			op := newTxnOperator(
+				client.sid,
+				client.clock,
+				client.sender,
+				client.newTxnMeta(),
+				client.getTxnOptions([]TxnOption{WithUserTxn()})...)
+			waitCtx, cancel := context.WithCancel(context.Background())
+			errC := make(chan error, 1)
+			go func() {
+				_, err := client.doCreateTxn(waitCtx, op, timestamp.Timestamp{})
+				errC <- err
+			}()
+
+			require.Eventually(t, func() bool {
+				client.mu.RLock()
+				defer client.mu.RUnlock()
+				return len(client.mu.waitActiveTxns) == 1
+			}, time.Second, time.Millisecond)
+			cancel()
+
+			select {
+			case err = <-errC:
+			case <-time.After(time.Second):
+				t.Fatal("canceled max-active New did not return")
+			}
+			require.ErrorIs(t, err, context.Canceled)
+
+			client.mu.RLock()
+			defer client.mu.RUnlock()
+			require.Empty(t, client.mu.waitActiveTxns)
 		},
 		WithMaxActiveTxn(1),
 	)

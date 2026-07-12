@@ -73,6 +73,79 @@ func TestGetTimestampCanceledWaitIsRemoved(t *testing.T) {
 	assert.Empty(t, tw.mu.waiters)
 }
 
+func TestGetTimestampNotifyAndCancelRace(t *testing.T) {
+	for i := 0; i < 64; i++ {
+		tw := &timestampWaiter{}
+		ts := newTestTimestamp(int64(i + 1))
+		ctx, cancel := context.WithCancel(context.Background())
+		errC := make(chan error, 1)
+		go func() {
+			_, err := tw.GetTimestamp(ctx, ts)
+			errC <- err
+		}()
+
+		require.Eventually(t, func() bool {
+			tw.mu.Lock()
+			defer tw.mu.Unlock()
+			return len(tw.mu.waiters) == 1
+		}, time.Second, time.Millisecond)
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			<-start
+			tw.latestTS.Store(&ts)
+			tw.notifyWaiters(ts)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			cancel()
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 64; j++ {
+				w := newTimestampWaiterEntry(newTestTimestamp(int64(j + 1)))
+				w.release()
+			}
+		}()
+		close(start)
+		wg.Wait()
+
+		err := <-errC
+		require.True(t, err == nil || err == context.Canceled)
+		tw.mu.Lock()
+		require.Empty(t, tw.mu.waiters)
+		tw.mu.Unlock()
+	}
+}
+
+func TestNotifyWaitersClearsReleasedReferences(t *testing.T) {
+	tw := &timestampWaiter{}
+	entries := make([]*timestampWaiterEntry, 0, 4)
+	for i := 0; i < 4; i++ {
+		w, err := tw.addToWait(newTestTimestamp(int64(i + 1)))
+		require.NoError(t, err)
+		entries = append(entries, w)
+	}
+
+	tw.notifyWaiters(newTestTimestamp(4))
+	func() {
+		tw.mu.Lock()
+		defer tw.mu.Unlock()
+		require.Empty(t, tw.mu.waiters)
+		for _, w := range tw.mu.waiters[:cap(tw.mu.waiters)] {
+			require.Nil(t, w)
+		}
+	}()
+	for _, w := range entries {
+		tw.finishWaiter(w)
+	}
+}
+
 func TestGetTimestampWithNotified(t *testing.T) {
 	runTimestampWaiterTests(
 		t,
@@ -97,7 +170,7 @@ func TestGetTimestampWithNotified(t *testing.T) {
 
 func TestNotifyWaiters(t *testing.T) {
 	tw := &timestampWaiter{}
-	var values []*waiter
+	var values []*timestampWaiterEntry
 
 	w, err := tw.addToWait(newTestTimestamp(1))
 	assert.NoError(t, err)
@@ -122,8 +195,9 @@ func TestNotifyWaiters(t *testing.T) {
 	var wg sync.WaitGroup
 	for _, w := range values {
 		wg.Add(1)
-		go func(w *waiter) {
+		go func(w *timestampWaiterEntry) {
 			defer wg.Done()
+			defer tw.finishWaiter(w)
 			w.wait(context.Background())
 		}(w)
 	}

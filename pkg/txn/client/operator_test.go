@@ -44,6 +44,16 @@ type checkLockTableBindLockService struct {
 	cancel context.CancelFunc
 }
 
+type trackingUnlockLockService struct {
+	lockservice.LockService
+	unlockCount int
+}
+
+func (s *trackingUnlockLockService) Unlock(context.Context, []byte, timestamp.Timestamp, ...lock.ExtraMutation) error {
+	s.unlockCount++
+	return nil
+}
+
 func (s *checkLockTableBindLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
 	s.calls++
 	if s.cancel != nil {
@@ -1104,6 +1114,39 @@ func TestCommitSendErrorSetsCommitTSWorkaround(t *testing.T) {
 	})
 }
 
+func TestRunSQLTrackerSealCancelsExistingAndRejectsNewTokens(t *testing.T) {
+	var tracker runSQLTracker
+	runningCtx, runningCancel := context.WithCancel(context.Background())
+	runningToken := tracker.enterTokenWithSQL(runningCancel, "running sql")
+	require.NotZero(t, runningToken)
+
+	drained := make(chan struct{})
+	tracker.sealAndRunWhenDrained(func() {
+		close(drained)
+	})
+
+	select {
+	case <-runningCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("sealing did not cancel an already registered SQL token")
+	}
+
+	rejectedCtx, rejectedCancel := context.WithCancel(context.Background())
+	require.Zero(t, tracker.enterTokenWithSQL(rejectedCancel, "new sql"))
+	select {
+	case <-rejectedCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("sealing did not reject a new SQL token")
+	}
+
+	tracker.exitToken(runningToken)
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup did not run after the final SQL token exited")
+	}
+}
+
 func TestCancelAndWaitRunningSQL(t *testing.T) {
 	runOperatorTests(
 		t,
@@ -1205,7 +1248,7 @@ func TestCancelAndWaitRunningSQL_Timeout(t *testing.T) {
 	)
 }
 
-func TestCommitAndRollbackDoNotProceedAfterRunningSQLTimeout(t *testing.T) {
+func TestCommitAndRollbackTimeoutDeferFullCleanupUntilRunningSQLExits(t *testing.T) {
 	old := runningSQLWaitTimeout
 	runningSQLWaitTimeout = time.Second
 	defer func() {
@@ -1221,13 +1264,17 @@ func TestCommitAndRollbackDoNotProceedAfterRunningSQLTimeout(t *testing.T) {
 	} {
 		t.Run(action.name, func(t *testing.T) {
 			runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+				workspace := &trackingWorkspace{}
+				lockService := &trackingUnlockLockService{}
+				tc.AddWorkspace(workspace)
+				tc.lockService = lockService
 				tc.mu.Lock()
 				tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
 				tc.mu.Unlock()
 
 				_, sqlCancel := context.WithCancel(context.Background())
 				token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "stuck sql")
-				defer tc.ExitRunSqlWithToken(token)
 
 				// Keep the test context well beyond the injected running-SQL
 				// timeout so a slow scheduler cannot turn this into a false pass.
@@ -1236,9 +1283,65 @@ func TestCommitAndRollbackDoNotProceedAfterRunningSQLTimeout(t *testing.T) {
 				err := action.run(tc, waitCtx)
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 				assert.Empty(t, ts.getLastRequests())
+				require.Zero(t, workspace.rollbackCount)
+				require.Zero(t, lockService.unlockCount)
+				_, err = tc.Read(waitCtx, nil)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+
+				tc.ExitRunSqlWithToken(token)
+
+				require.Equal(t, 1, workspace.rollbackCount)
+				require.Equal(t, 1, lockService.unlockCount)
+				requests := ts.getLastRequests()
+				require.Len(t, requests, 1)
+				require.Equal(t, txn.TxnMethod_Rollback, requests[0].Method)
+				tc.mu.RLock()
+				require.True(t, tc.mu.closed)
+				tc.mu.RUnlock()
 			})
 		})
 	}
+}
+
+func TestRunningSQLTimeoutSealsNewSQLUntilRollbackCompletes(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		workspace := &trackingWorkspace{}
+		lockService := &trackingUnlockLockService{}
+		tc.AddWorkspace(workspace)
+		tc.lockService = lockService
+		tc.mu.Lock()
+		tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.mu.Unlock()
+
+		_, runningCancel := context.WithCancel(context.Background())
+		runningToken := tc.EnterRunSqlWithTokenAndSQL(runningCancel, "stuck sql")
+		require.NotZero(t, runningToken)
+
+		commitCtx, cancelCommit := context.WithCancel(ctx)
+		cancelCommit()
+		require.ErrorIs(t, tc.Commit(commitCtx), context.Canceled)
+
+		rejectedCtx, rejectedCancel := context.WithCancel(context.Background())
+		rejectedToken := tc.EnterRunSqlWithTokenAndSQL(rejectedCancel, "new sql")
+		require.Zero(t, rejectedToken)
+		select {
+		case <-rejectedCtx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("new SQL was not canceled after rollback was scheduled")
+		}
+
+		// A rejected token has no registration and must not alter the running-SQL
+		// counters when the compile cleanup calls ExitRunSqlWithToken.
+		tc.ExitRunSqlWithToken(rejectedToken)
+		tc.ExitRunSqlWithToken(runningToken)
+
+		require.Equal(t, 1, workspace.rollbackCount)
+		require.Equal(t, 1, lockService.unlockCount)
+		requests := ts.getLastRequests()
+		require.Len(t, requests, 1)
+		require.Equal(t, txn.TxnMethod_Rollback, requests[0].Method)
+	})
 }
 
 func TestMalformedTNResponsesReturnErrors(t *testing.T) {

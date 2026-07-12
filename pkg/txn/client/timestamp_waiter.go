@@ -16,7 +16,6 @@ package client
 
 import (
 	"context"
-	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -38,7 +37,7 @@ type timestampWaiter struct {
 	notified  atomic.Pointer[timestamp.Timestamp]
 	mu        struct {
 		sync.Mutex
-		waiters      []*waiter
+		waiters      []*timestampWaiterEntry
 		lastNotified timestamp.Timestamp
 	}
 }
@@ -70,8 +69,7 @@ func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timest
 		return timestamp.Timestamp{}, err
 	}
 	if w != nil {
-		defer tw.removeWaiter(w)
-		defer w.close()
+		defer tw.finishWaiter(w)
 		if err := w.wait(ctx); err != nil {
 			return timestamp.Timestamp{}, err
 		}
@@ -80,15 +78,16 @@ func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timest
 	return v.Next(), nil
 }
 
-// removeWaiter drops the waiter's list reference when its caller stops
-// waiting. Without this, canceled waits remain reachable until an unrelated
-// future timestamp notification arrives.
-func (tw *timestampWaiter) removeWaiter(target *waiter) {
+// finishWaiter removes a canceled entry from the registry and returns it to
+// the pool. A timestamp waiter has exactly one owner: its GetTimestamp call.
+// Notification only detaches and wakes the entry; it never returns it to the
+// pool, so a pooled entry cannot be reused while the caller still examines it.
+func (tw *timestampWaiter) finishWaiter(target *timestampWaiterEntry) {
 	tw.mu.Lock()
-	defer tw.mu.Unlock()
-
 	i := target.index
 	if i < 0 || i >= len(tw.mu.waiters) || tw.mu.waiters[i] != target {
+		tw.mu.Unlock()
+		target.release()
 		return
 	}
 	last := len(tw.mu.waiters) - 1
@@ -99,7 +98,8 @@ func (tw *timestampWaiter) removeWaiter(target *waiter) {
 	tw.mu.waiters[last] = nil
 	tw.mu.waiters = tw.mu.waiters[:last]
 	target.index = -1
-	target.unref()
+	tw.mu.Unlock()
+	target.release()
 }
 
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
@@ -128,7 +128,7 @@ func (tw *timestampWaiter) LatestTS() timestamp.Timestamp {
 	return *ts
 }
 
-func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) (*waiter, error) {
+func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) (*timestampWaiterEntry, error) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
 	if !tw.mu.lastNotified.IsEmpty() &&
@@ -136,8 +136,7 @@ func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) (*waiter, error) {
 		return nil, nil
 	}
 
-	w := newWaiter(ts)
-	w.ref()
+	w := newTimestampWaiterEntry(ts)
 	w.index = len(tw.mu.waiters)
 	tw.mu.waiters = append(tw.mu.waiters, w)
 	return w, nil
@@ -151,7 +150,6 @@ func (tw *timestampWaiter) notifyWaiters(ts timestamp.Timestamp) {
 		if w != nil && ts.GreaterEq(w.waitAfter) {
 			w.notify()
 			w.index = -1
-			w.unref()
 			w = nil
 		}
 		if w != nil {
@@ -160,6 +158,7 @@ func (tw *timestampWaiter) notifyWaiters(ts timestamp.Timestamp) {
 		}
 	}
 
+	clear(tw.mu.waiters[len(waiters):])
 	tw.mu.waiters = waiters
 	tw.mu.lastNotified = ts
 }
@@ -223,42 +222,34 @@ func (tw *timestampWaiter) takeNotified() timestamp.Timestamp {
 }
 
 var (
-	waitersPool = sync.Pool{
+	timestampWaitersPool = sync.Pool{
 		New: func() any {
-			w := &waiter{
+			return &timestampWaiterEntry{
 				notifyC: make(chan struct{}, 1),
 			}
-			runtime.SetFinalizer(w, func(w *waiter) {
-				close(w.notifyC)
-			})
-			return w
 		},
 	}
 )
 
-type waiter struct {
+type timestampWaiterEntry struct {
 	waitAfter timestamp.Timestamp
 	notifyC   chan struct{}
-	refCount  atomic.Int32
 	// index is guarded by timestampWaiter.mu while the waiter is registered.
 	index int
 }
 
-func newWaiter(ts timestamp.Timestamp) *waiter {
-	w := waitersPool.Get().(*waiter)
+func newTimestampWaiterEntry(ts timestamp.Timestamp) *timestampWaiterEntry {
+	w := timestampWaitersPool.Get().(*timestampWaiterEntry)
 	w.init(ts)
 	return w
 }
 
-func (w *waiter) init(ts timestamp.Timestamp) {
+func (w *timestampWaiterEntry) init(ts timestamp.Timestamp) {
 	w.waitAfter = ts
 	w.index = -1
-	if w.ref() != 1 {
-		panic("BUG: waiter init must has ref count 1")
-	}
 }
 
-func (w *waiter) wait(ctx context.Context) error {
+func (w *timestampWaiterEntry) wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -267,34 +258,18 @@ func (w *waiter) wait(ctx context.Context) error {
 	}
 }
 
-func (w *waiter) notify() {
+func (w *timestampWaiterEntry) notify() {
 	w.notifyC <- struct{}{}
 }
 
-func (w *waiter) ref() int32 {
-	return w.refCount.Add(1)
-}
-
-func (w *waiter) unref() {
-	n := w.refCount.Add(-1)
-	if n < 0 {
-		panic("BUG: negative ref count")
-	}
-	if n == 0 {
-		w.reset()
-		waitersPool.Put(w)
-	}
-}
-
-func (w *waiter) close() {
-	w.unref()
-}
-
-func (w *waiter) reset() {
+func (w *timestampWaiterEntry) release() {
+	w.waitAfter = timestamp.Timestamp{}
+	w.index = -1
 	for {
 		select {
 		case <-w.notifyC:
 		default:
+			timestampWaitersPool.Put(w)
 			return
 		}
 	}
