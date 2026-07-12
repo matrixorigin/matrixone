@@ -641,6 +641,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 
 	if bucket.BuildFd == nil {
 		// Empty build bucket.
+		e.buckets[0].ProbeFd = nil // transferred to reader below; prevent Cleanup double-close
 		e.buckets = e.buckets[1:]
 		if e.cfg.NeedsProbeForEmptyBuild && bucket.ProbeFd != nil {
 			e.probeReader.ResetForFd(bucket.ProbeFd)
@@ -665,6 +666,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	}
 
 	e.buildReader.ResetForFd(bucket.BuildFd)
+	e.buckets[0].BuildFd = nil // prevent Cleanup double-close on error
 	defer e.buildReader.Close()
 	if e.buildReadBatch == nil {
 		e.buildReadBatch = batch.NewOffHeapWithSize(0)
@@ -689,6 +691,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 
 		if bucket.Depth < SpillMaxPass && e.cfg.SpillThreshold > 0 &&
 			ShouldSpill(builderMemSize(builder), int64(builder.InputBatchRowCount), e.cfg.SpillThreshold) {
+			e.buckets[0].ProbeFd = nil // reSpillBucket takes ownership via reader.ResetForFd
 			subBuckets, err := e.reSpillBucket(proc, analyzer, bucket, builder, &e.buildReader)
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
@@ -709,6 +712,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 
 	jm := builder.GetJoinMap(proc.Mp())
 	if jm == nil {
+		e.buckets[0].ProbeFd = nil // transferred to reader below; prevent Cleanup double-close
 		e.buckets = e.buckets[1:]
 		if e.cfg.NeedsProbeForEmptyBuild && bucket.ProbeFd != nil {
 			e.probeReader.ResetForFd(bucket.ProbeFd)

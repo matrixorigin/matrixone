@@ -177,7 +177,6 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.state = Build
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
-	ctr.cleanupSpillFiles(proc)
 
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
@@ -193,15 +192,6 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanEqCondExecutors()
-	ctr.cleanupSpillFiles(proc)
-}
-
-func (ctr *container) cleanupSpillFiles(proc *process.Process) {
-	ctr.probeBucketActive = false
-	if ctr.spillEngine != nil {
-		ctr.spillEngine.Cleanup(proc)
-		ctr.spillEngine = nil
-	}
 }
 
 func (ctr *container) resetNonEqCondExecutor() {
