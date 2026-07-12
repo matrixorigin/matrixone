@@ -1284,7 +1284,7 @@ func genParentSideReplaceFKSqls(ctx CompilerContext, parent *plan.TableDef, stmt
 			table := quoteIdentifier(childRef.SchemaName) + "." + quoteIdentifier(child.Name)
 			col := quoteIdentifier(childCols[0])
 			switch fk.OnDelete {
-			case plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_NO_ACTION:
+			case plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_NO_ACTION, plan.ForeignKeyDef_SET_DEFAULT:
 				checks = append(checks, fmt.Sprintf("select count(*) = 0 from %s where %s in (%s)", table, col, inList))
 			case plan.ForeignKeyDef_CASCADE:
 				actions = append(actions, fmt.Sprintf("delete from %s where %s in (%s)", table, col, inList))

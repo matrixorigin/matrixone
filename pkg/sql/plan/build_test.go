@@ -2918,6 +2918,33 @@ func TestReplaceParentSideFKNoAction(t *testing.T) {
 	}
 }
 
+func TestReplaceParentSideFKSetDefault(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO replace_fk_dp VALUES (1, 'p1_new')")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	query := logicPlan.GetQuery()
+	assert.NotNil(t, query)
+
+	var preCheck string
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			preCheck = strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")
+			break
+		}
+	}
+	assert.NotEmpty(t, preCheck,
+		"SET DEFAULT parent-side FK REPLACE should generate a REPLACE_PARENT_CHK: pre-check SQL")
+	assert.Contains(t, preCheck, "replace_fk_dc", "pre-check SQL should target the child table")
+	for _, sql := range query.DetectSqls {
+		assert.False(t, strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:"),
+			"SET DEFAULT parent-side FK must NOT generate an action SQL, got: %s", sql)
+	}
+}
+
 func TestReplaceParentSideFKMultiRow(t *testing.T) {
 	mock := NewMockOptimizer(true)
 

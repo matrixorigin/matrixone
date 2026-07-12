@@ -337,6 +337,24 @@ id    pid
 10    null
 drop table fk_sc;
 drop table fk_sp;
+drop table if exists fk_dc;
+drop table if exists fk_dp;
+create table fk_dp(id int primary key, v varchar(20));
+create table fk_dc(id int primary key, pid int default 2,
+foreign key(pid) references fk_dp(id) on delete set default);
+insert into fk_dp values (1,'p1'),(2,'p2');
+insert into fk_dc values (10,1);
+replace into fk_dp values (1,'p1_new');
+Cannot delete or update a parent row: a foreign key constraint fails
+select * from fk_dp order by id;
+id    v
+1    p1
+2    p2
+select * from fk_dc order by id;
+id    pid
+10    1
+drop table fk_dc;
+drop table fk_dp;
 drop table if exists fk_mc;
 drop table if exists fk_mp;
 create table fk_mp(id int primary key, v varchar(20));

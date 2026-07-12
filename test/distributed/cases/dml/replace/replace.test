@@ -281,6 +281,20 @@ select * from fk_sc order by id;
 drop table fk_sc;
 drop table fk_sp;
 
+-- ON DELETE SET DEFAULT follows DELETE semantics and restricts referenced parents
+drop table if exists fk_dc;
+drop table if exists fk_dp;
+create table fk_dp(id int primary key, v varchar(20));
+create table fk_dc(id int primary key, pid int default 2,
+  foreign key(pid) references fk_dp(id) on delete set default);
+insert into fk_dp values (1,'p1'),(2,'p2');
+insert into fk_dc values (10,1);
+replace into fk_dp values (1,'p1_new');
+select * from fk_dp order by id;
+select * from fk_dc order by id;
+drop table fk_dc;
+drop table fk_dp;
+
 -- multi-row REPLACE: every conflicting parent row applies its child action (CASCADE)
 drop table if exists fk_mc;
 drop table if exists fk_mp;

@@ -1175,6 +1175,37 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		outcnt: 4,
 	}
+	constraintTestSchema["replace_fk_dp"] = &Schema{
+		tblId: 77009,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77010},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_dc"] = &Schema{
+		tblId: 77010,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_dc",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77009,
+				ForeignCols: []uint64{0}, // replace_fk_dp.id
+				OnDelete:    plan.ForeignKeyDef_SET_DEFAULT,
+				OnUpdate:    plan.ForeignKeyDef_SET_DEFAULT,
+			},
+		},
+		outcnt: 4,
+	}
 
 	/*
 		create table products (
