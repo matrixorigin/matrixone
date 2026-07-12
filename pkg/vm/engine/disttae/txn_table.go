@@ -2764,6 +2764,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	if err != nil {
 		return false, err
 	}
+	if filter.Cleanup != nil {
+		defer filter.Cleanup()
+	}
 
 	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
 		inner := LinearSearchOffsetByValFactory(keys)
