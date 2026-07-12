@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -25,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/assert"
@@ -151,44 +154,109 @@ func TestInitExecuteStmtParamSkipsPrepareCompileWithoutCache(t *testing.T) {
 	require.Nil(t, prepareStmt.compile)
 }
 
-// A cached compile must be dropped and rebuilt from the plan on every execute
-// so no stale operator state (hashbuild ctr, dispatch channels) survives into
-// the next run. See https://github.com/matrixorigin/matrixone/issues/25526.
-func TestInitExecuteStmtParamRecreatesCachedCompileOnEachExecute(t *testing.T) {
-	_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
+// Without a schema change the cached compile must be reused as-is instead of
+// being released and rebuilt on every execute: the per-execution recompilation
+// regressed TPCC by 25%. Stale pipeline state is cleared by Compile.Reset
+// (see Scope.resetForReuse) before the reused compile runs.
+// See https://github.com/matrixorigin/matrixone/issues/25614.
+func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
 	defer prepareStmt.Close()
 
-	// The sentinel cached compile carries no plan; only a freshly built
-	// compile can have one.
+	// The sentinel cached compile carries no plan; a recompilation would
+	// replace it with a freshly built compile.
 	sentinel := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.compile = sentinel
 
-	ret, err := cw.Compile(execCtx, nil)
+	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.NotNil(t, ret)
-	require.NotNil(t, prepareStmt.compile)
-	require.NotNil(t, prepareStmt.compile.GetPlan())
+	require.Same(t, sentinel, retComp)
+	require.Same(t, sentinel, prepareStmt.compile)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
 }
 
-// When rebuilding the cached compile fails with a real error (not
-// ErrCantCompileForPrepare), execute must surface it and the stale compile
-// must not survive in the cache.
-func TestInitExecuteStmtParamReturnsRecompileError(t *testing.T) {
-	_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 102)
-	defer prepareStmt.Close()
+func TestTxnComputationWrapperRunPanicStillReleases(t *testing.T) {
+	var released bool
+	mockComp := &mockCompile{
+		runFunc: func(uint64) (*util2.RunResult, error) {
+			panic("run panic")
+		},
+		getPlanFunc: func() *plan.Plan {
+			return nil
+		},
+		releaseFunc: func() {
+			released = true
+		},
+	}
+	cwft := &TxnComputationWrapper{compile: mockComp}
 
-	prepareStmt.compile = compile.NewCompile(
-		"", "", prepareStmt.Sql, "", "", nil,
-		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	assert.PanicsWithValue(t, "run panic", func() {
+		_, _ = cwft.Run(100)
+	})
+	assert.True(t, released)
+	assert.Nil(t, cwft.compile)
+}
 
-	// An unsupported node type makes compilePlanScope fail with NYI.
-	qry := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery()
-	require.NotEmpty(t, qry.Nodes)
-	qry.Nodes[len(qry.Nodes)-1].NodeType = plan.Node_UNKNOWN
+func TestTxnComputationWrapperPreservesSchedulingTraceOnCompileError(t *testing.T) {
+	const failureCategory = "candidate-discovery"
+	stmt := &motrace.StatementInfo{
+		RequestAt:     time.Now(),
+		Status:        motrace.StatementStatusSuccess,
+		StatementType: "Select",
+		SqlSourceType: "external_sql",
+	}
+	assert.True(t, motrace.StatementInfoFilter(stmt))
+	ses := &Session{}
+	ses.SetTStmt(stmt)
+	cwft := &TxnComputationWrapper{ses: ses}
+	attempt := cwft.schedulingTrace.StartAttempt()
+	cwft.schedulingTrace.RecordFailure(attempt, failureCategory, schedule.Worker{})
 
-	_, err := cw.Compile(execCtx, nil)
-	require.Error(t, err)
-	require.Nil(t, prepareStmt.compile)
+	cwft.recordSchedulingTraceOnCompileError(context.Background())
+	if assert.NotNil(t, stmt.ExecPlan) {
+		defer stmt.ExecPlan.Free()
+		jsonBytes := stmt.ExecPlan.Marshal(context.Background())
+		var payload struct {
+			Scheduling schedule.Trace `json:"scheduling"`
+		}
+		assert.NoError(t, json.Unmarshal(jsonBytes, &payload))
+		assert.Equal(t, failureCategory, payload.Scheduling.Attempts[0].Failures[0].Category)
+		assert.Nil(t, payload.Scheduling.Attempts[0].Failures[0].Worker)
+	}
+	assert.True(t, stmt.ResponseAt.IsZero())
+	assert.False(t, motrace.StatementInfoFilter(stmt))
+}
+
+func TestTxnComputationWrapperDoesNotPersistNormalLocalTraceOnCompileError(t *testing.T) {
+	stmt := &motrace.StatementInfo{
+		RequestAt:     time.Now(),
+		Status:        motrace.StatementStatusSuccess,
+		StatementType: "Select",
+		SqlSourceType: "external_sql",
+	}
+	assert.True(t, motrace.StatementInfoFilter(stmt))
+	ses := &Session{}
+	ses.SetTStmt(stmt)
+	cwft := &TxnComputationWrapper{ses: ses}
+	attempt := cwft.schedulingTrace.StartAttempt()
+	cwft.schedulingTrace.RecordQuery(attempt, schedule.QueryDecision{
+		ExecKind:  schedule.QueryExecTP,
+		CurrentCN: schedule.Worker{ID: "local"},
+		Workers:   schedule.Workers{{ID: "local"}},
+		Reason:    schedule.ReasonLocalExecType,
+		CandidateResolution: schedule.CandidateResolution{
+			DiscoverySource: schedule.CandidateSourceNotRequired,
+			PoolResolution:  schedule.PoolResolutionNotRequired,
+		},
+		CurrentCNPolicy: schedule.CurrentCNAllowed,
+		Satisfied:       true,
+	})
+
+	cwft.recordSchedulingTraceOnCompileError(context.Background())
+	assert.Nil(t, stmt.ExecPlan)
+	assert.True(t, motrace.StatementInfoFilter(stmt))
 }

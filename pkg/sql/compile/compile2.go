@@ -61,6 +61,8 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	c.beginSchedulingTraceAttempt()
+
 	// clear the last query context to avoid process reuse.
 	c.proc.ResetQueryContext()
 
@@ -573,6 +575,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {
 		if e != nil {

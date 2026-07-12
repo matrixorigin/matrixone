@@ -265,11 +265,13 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		if terminalSignal.EventType == process.EventEnd && allTerminalSignalsDelivered(terminalDelivered) {
 			dispatch.cleanupSpool = sp
 		} else {
+			abortErr := terminalErr
 			if terminalSignal.EventType == process.EventEnd {
 				fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
 				sendAbortSignalsToFailedLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalDelivered, fallbackErr)
+				abortErr = fallbackErr
 			}
-			sp.Abort()
+			sp.Abort(abortErr)
 			dispatch.cleanupSpool = nil
 		}
 		dispatch.ctr.sp = nil

@@ -572,6 +572,29 @@ func TestWindowNonPartitionFilterNotPushedDown(t *testing.T) {
 	require.Empty(t, builder.qry.Nodes[1].FilterList)
 }
 
+func TestFunctionScanDoesNotDropMixedTagFilter(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	childTag := builder.GenNewBindTag()
+	functionTag := builder.GenNewBindTag()
+	intType := Type{Id: int32(types.T_int64)}
+	childCol := GetColExpr(intType, childTag, 0)
+	functionCol := GetColExpr(intType, functionTag, 0)
+	filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{childCol, functionCol})
+	require.NoError(t, err)
+
+	builder.qry.Nodes = []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{childTag}},
+		{NodeType: plan.Node_FUNCTION_SCAN, BindingTags: []int32{functionTag}, Children: []int32{0}},
+	}
+
+	_, cantPushdown := builder.pushdownFilters(1, []*plan.Expr{filter}, false)
+	require.Len(t, cantPushdown, 1)
+	require.True(t, exprStructuralEqual(filter, cantPushdown[0]))
+	require.Empty(t, builder.qry.Nodes[0].FilterList)
+	require.Empty(t, builder.qry.Nodes[1].FilterList)
+}
+
 func makeVectorTopPushdownBuilder(limit uint64) (*QueryBuilder, *plan.Node, *plan.Node) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	scanTag := builder.GenNewBindTag()

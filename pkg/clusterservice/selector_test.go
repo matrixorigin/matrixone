@@ -38,6 +38,35 @@ func TestSelectByLabel(t *testing.T) {
 		NewSelector().SelectByLabel(map[string]string{"l1": "v1"}, EQ))
 }
 
+func TestSelectWithoutLabelDoesNotMutateSourceSelector(t *testing.T) {
+	labels := map[string]string{"account": "sys", "role": "ap"}
+	selector := NewSelector().SelectByLabel(labels, EQ)
+
+	withoutAccount := selector.SelectWithoutLabel(map[string]string{"account": "sys"})
+
+	assert.Equal(t, map[string]string{"account": "sys", "role": "ap"}, labels)
+	assert.True(t, selector.Match(map[string]metadata.LabelList{
+		"account": {Labels: []string{"sys"}},
+		"role":    {Labels: []string{"ap"}},
+	}))
+	assert.True(t, withoutAccount.Match(map[string]metadata.LabelList{
+		"role": {Labels: []string{"ap"}},
+	}))
+}
+
+func TestSelectorMatcherReusesGlobbingPattern(t *testing.T) {
+	selector := NewSelector().SelectByLabel(map[string]string{"role": "ap-1"}, EQ_Globbing)
+	matcher := new(SelectorMatcher)
+	candidate := metadata.CNService{Labels: map[string]metadata.LabelList{
+		"role": {Labels: []string{"ap-*"}},
+	}}
+
+	assert.True(t, matcher.MatchCN(selector, candidate))
+	assert.True(t, matcher.MatchCN(selector, candidate))
+	assert.NotNil(t, matcher.regexpCache)
+	assert.Equal(t, 1, matcher.regexpCache.count())
+}
+
 func TestFilterWithServiceID(t *testing.T) {
 	assert.True(t,
 		NewSelector().filter("", nil))
