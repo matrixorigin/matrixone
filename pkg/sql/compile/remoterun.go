@@ -792,10 +792,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
 		for i, muCtx := range t.MultiUpdateCtx {
 			updateCtxList[i] = &plan.UpdateCtx{
-				ObjRef:             muCtx.ObjRef,
-				TableDef:           muCtx.TableDef,
-				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
-				InsertPkColIdx:     int32(muCtx.InsertPkColIdx),
+				ObjRef:                muCtx.ObjRef,
+				TableDef:              muCtx.TableDef,
+				SkipInsertOnNullPk:    muCtx.SkipInsertOnNullPk,
+				InsertPkColIdx:        int32(muCtx.InsertPkColIdx),
+				CountDeleteAffectRows: t.CountDeleteAffectRows,
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1273,6 +1274,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 
 		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))
 		for i, muCtx := range t.UpdateCtxList {
+			if muCtx.CountDeleteAffectRows {
+				arg.CountDeleteAffectRows = true
+			}
 
 			arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
 				ObjRef:             muCtx.ObjRef,

@@ -1050,6 +1050,8 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 }
 
 // definitions of system variables
+const enableExplainScheduling = "enable_explain_scheduling"
+
 var gSysVarsDefs = map[string]SystemVariable{
 	"port": {
 		Name:              "port",
@@ -3582,6 +3584,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("enable_remap_hint"),
+		Default:           int64(0),
+	},
+	enableExplainScheduling: {
+		Name:              enableExplainScheduling,
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType(enableExplainScheduling),
 		Default:           int64(0),
 	},
 	// remap_rewrites holds a JSON object of table-rewrite rules that apply to
