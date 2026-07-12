@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 
@@ -192,7 +193,7 @@ func MakeBucketWriters(prefix string) []BucketWriter {
 	uid := uuid.New().String()
 	writers := make([]BucketWriter, SpillNumBuckets)
 	for i := range writers {
-		writers[i].Name = prefix + "_" + uid + "_" + string(rune('0'+i%10)) + string(rune('0'+i/10))
+		writers[i].Name = fmt.Sprintf("%s_%s_%02d", prefix, uid, i)
 	}
 	return writers
 }
