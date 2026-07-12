@@ -761,13 +761,40 @@ type forceIndexRequirement struct {
 	orderFlag  plan.OrderBySpec_OrderByFlag
 	limit      *plan.Expr
 	canPushLim bool
+	block      *BindContext
 }
 
 func (builder *QueryBuilder) applyForceIndexHints(nodeID int32, requirements []forceIndexRequirement, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyForceIndexHintsWithMemo(nodeID, requirements, colRefCnt, idxColMap, make(map[forceIndexMemoKey]int32))
+}
+
+type forceIndexMemoKey struct {
+	nodeID      int32
+	requirement string
+}
+
+func forceIndexRequirementKey(requirements []forceIndexRequirement) string {
+	var key strings.Builder
+	for _, requirement := range requirements {
+		fmt.Fprintf(&key, "%d:%p:", requirement.scope, requirement.block)
+		for _, expr := range requirement.columns {
+			if col := expr.GetCol(); col != nil {
+				fmt.Fprintf(&key, "%d/%d,", col.RelPos, col.ColPos)
+			} else {
+				fmt.Fprintf(&key, "%s,", expr.String())
+			}
+		}
+		key.WriteByte(';')
+	}
+	return key.String()
+}
+
+func (builder *QueryBuilder) applyForceIndexHintsWithMemo(nodeID int32, requirements []forceIndexRequirement, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, memo map[forceIndexMemoKey]int32) (int32, error) {
 	node := builder.qry.Nodes[nodeID]
 	if node == nil {
 		return nodeID, nil
 	}
+	nodeBlock := builder.ctxByNode[nodeID]
 
 	localRequirements := requirements
 	switch node.NodeType {
@@ -783,7 +810,7 @@ func (builder *QueryBuilder) applyForceIndexHints(nodeID int32, requirements []f
 			if sameDirection {
 				localRequirements = append(slices.Clone(requirements), forceIndexRequirement{
 					scope: forceIndexForOrder, columns: columns, orderFlag: flag,
-					limit: node.Limit, canPushLim: node.Offset == nil && node.RankOption == nil,
+					limit: node.Limit, canPushLim: node.Offset == nil && node.RankOption == nil, block: nodeBlock,
 				})
 			}
 		}
@@ -794,13 +821,22 @@ func (builder *QueryBuilder) applyForceIndexHints(nodeID int32, requirements []f
 				columns[i] = DeepCopyExpr(groupBy)
 			}
 			localRequirements = append(slices.Clone(requirements), forceIndexRequirement{
-				scope: forceIndexForGroup, columns: columns,
+				scope: forceIndexForGroup, columns: columns, block: nodeBlock,
 			})
 		}
 	}
 
+	key := forceIndexMemoKey{nodeID: nodeID, requirement: forceIndexRequirementKey(localRequirements)}
+	if rewritten, ok := memo[key]; ok {
+		return rewritten, nil
+	}
+
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		return builder.applyForceIndexHintToScan(node, localRequirements, colRefCnt, idxColMap)
+		rewritten, err := builder.applyForceIndexHintToScan(node, localRequirements, colRefCnt, idxColMap)
+		if err == nil {
+			memo[key] = rewritten
+		}
+		return rewritten, err
 	}
 
 	childRequirements := localRequirements
@@ -808,13 +844,18 @@ func (builder *QueryBuilder) applyForceIndexHints(nodeID int32, requirements []f
 		childRequirements = translateForceIndexRequirementsThroughProject(node, localRequirements)
 	}
 	for i, childID := range node.Children {
-		newChildID, err := builder.applyForceIndexHints(childID, childRequirements, colRefCnt, idxColMap)
+		if node.NodeType == plan.Node_PROJECT && len(childRequirements) > 0 && childRequirements[0].block != nil &&
+			builder.ctxByNode[childID] != childRequirements[0].block {
+			continue
+		}
+		newChildID, err := builder.applyForceIndexHintsWithMemo(childID, childRequirements, colRefCnt, idxColMap, memo)
 		if err != nil {
 			return -1, err
 		}
 		node.Children[i] = newChildID
 	}
 	replaceColumnsForNode(node, idxColMap)
+	memo[key] = nodeID
 	return nodeID, nil
 }
 
@@ -2434,6 +2475,17 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		return nodeID, nil
 	}
 
+	// An INNER JOIN is symmetric. Put a directly hinted scan on the index-access
+	// side before applying the existing rewrite, independent of join reorder.
+	if node.JoinType == plan.Node_INNER && builder.scanForcesJoinIndex(node.Children[1]) && !builder.scanForcesJoinIndex(node.Children[0]) {
+		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+		for _, cond := range node.OnList {
+			if fn := cond.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "=" && len(fn.Args) == 2 {
+				fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
+			}
+		}
+	}
+
 	leftChild := builder.qry.Nodes[node.Children[0]]
 	if leftChild.NodeType != plan.Node_TABLE_SCAN {
 		return nodeID, nil
@@ -2648,4 +2700,16 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	}
 
 	return nodeID, nil
+}
+
+func (builder *QueryBuilder) scanForcesJoinIndex(nodeID int32) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.NodeType != plan.Node_TABLE_SCAN {
+		return false
+	}
+	hints := builder.indexHintsByScan[node.NodeId]
+	return hints != nil && hints.join.forceSpecified
 }
