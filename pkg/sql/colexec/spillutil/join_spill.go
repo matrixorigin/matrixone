@@ -665,7 +665,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 
 		if bucket.Depth < SpillMaxPass && e.cfg.SpillThreshold > 0 &&
 			(builderMemSize(builder) > e.cfg.SpillThreshold) {
-			e.buckets[0].ProbeFd = nil // reSpillBucket takes ownership via reader.ResetForFd
 			subBuckets, err := e.reSpillBucket(proc, analyzer, bucket, builder, &e.buildReader)
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
@@ -719,12 +718,16 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 	probeBuffers := e.probePool.Acquire(len(probeWriters))
 	seed := uint64(bucket.Depth + 1)
 
+	probeFdConsumed := false
 	defer func() {
 		for i := range buildWriters {
 			buildWriters[i].Close()
 		}
 		for i := range probeWriters {
 			probeWriters[i].Close()
+		}
+		if !probeFdConsumed && bucket.ProbeFd != nil {
+			bucket.ProbeFd.Close()
 		}
 	}()
 
@@ -793,6 +796,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 	// Scatter probe file. Reuse reader's 4 MiB buffer from the build pass.
 	if bucket.ProbeFd != nil {
 		reader.ResetForFd(bucket.ProbeFd)
+		probeFdConsumed = true
 		// Disable probe writers for empty sub-build buckets (unless outer join).
 		if !e.cfg.NeedsProbeForEmptyBuild {
 			for i := range probeWriters {
