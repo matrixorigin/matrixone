@@ -285,7 +285,9 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				},
 				analyzer,
 				func(bat *batch.Batch) ([]*vector.Vector, error) {
-					ctr.evalJoinCondition(bat, proc)
+					if err := ctr.evalJoinCondition(bat, proc); err != nil {
+						return nil, err
+					}
 					return ctr.eqCondVecs, nil
 				},
 			); err != nil {

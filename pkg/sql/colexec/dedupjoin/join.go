@@ -263,7 +263,9 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				},
 				analyzer,
 				func(bat *batch.Batch) ([]*vector.Vector, error) {
-					ctr.evalJoinCondition(bat, proc)
+					if err := ctr.evalJoinCondition(bat, proc); err != nil {
+						return nil, err
+					}
 					return ctr.vecs, nil
 				},
 			); err != nil {

@@ -230,6 +230,9 @@ func FlushBucketBatch(proc *process.Process, bat *batch.Batch, w *BucketWriter, 
 	if err != nil {
 		return err
 	}
+	if written != bucketBuf.Len() {
+		return io.ErrShortWrite
+	}
 	if analyzer != nil {
 		analyzer.Spill(int64(written))
 		analyzer.SpillRows(cnt)
@@ -655,6 +658,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	builder.DedupColName = e.cfg.DedupColName
 	builder.DedupColTypes = e.cfg.DedupColTypes
 	if err := builder.Prepare(e.cfg.BuildKeyExprs, e.cfg.DelColIdx, e.cfg.DedupDeleteMarkerColIdx, e.cfg.DedupDeleteKeepColIdxList, proc); err != nil {
+		builder.Free(proc)
 		return nil, BucketSkip, err
 	}
 
