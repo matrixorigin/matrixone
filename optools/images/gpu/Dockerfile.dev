@@ -44,7 +44,15 @@ ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CONDA_PREFIX}/lib"
 ARG GOPROXY="https://proxy.golang.org,direct"
 RUN go env -w GOPROXY=${GOPROXY}
 
-RUN cd matrixone && go mod download
+# This development image intentionally builds the matrixone + cuvs workspace.
+# Keep workspace checksums in the guard alongside MatrixOne's module metadata.
+RUN cd matrixone && \
+    module_files="$(sha256sum go.mod go.sum ../go.work ../go.work.sum)" && \
+    go mod download && \
+    if [ "$module_files" != "$(sha256sum go.mod go.sum ../go.work ../go.work.sum)" ]; then \
+        echo "go mod download changed module or workspace metadata; synchronize go.mod/go.sum/go.work/go.work.sum before building"; \
+        exit 1; \
+    fi
 
 ENV MO_CL_CUDA=1
 RUN cd matrixone && make clean && make
@@ -76,4 +84,3 @@ EXPOSE 6001
 
 #ENTRYPOINT ["bash"]
 ENTRYPOINT [ "/mo-service", "-debug-http=:12345", "-launch", "/etc/quickstart/launch.toml"]
-

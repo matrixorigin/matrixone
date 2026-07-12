@@ -12,12 +12,18 @@ program_exists() {
   fi
 }
 
-VENDOR_DIR="$PWD/vendor"
+PROTO_VENDOR_DIR="${PROTO_VENDOR_DIR:-$PWD/.proto-vendor}"
 PB_DIR="$PWD/pkg/pb"
 PROTOC_DIR="$PWD/proto"
 PROTO_SYNTAX_VERSION='3'
 PROTOC_VERSION='21.1'
 GOGOPROTOBUF_VERSION='1.'
+export PROTO_VENDOR_DIR
+
+if [ ! -f "${PROTO_VENDOR_DIR}/github.com/gogo/protobuf/gogoproto/gogo.proto" ]; then
+  echo "protobuf imports are missing; run 'make proto-vendor' first"
+  exit 1
+fi
 
 if [ "${GOPATH}" == "" ];then
   GOPATH=`go env GOPATH`
@@ -105,26 +111,26 @@ else
 fi
 
 
-for file in `ls $PROTOC_DIR/*.proto`
+for file in "${PROTOC_DIR}"/*.proto
 do
   outArgName="gogofast_out"
   # For query.proto and statsinfo.proto, extra fields are redundant.
-  if echo $file | egrep "query.proto|statsinfo.proto" >/dev/null; then
-    outArgName="gogofaster_out"
-  fi
-	dir=$(basename $file .proto)
-	mkdir -p $PB_DIR/$dir
-	${GOPATH}/bin/protoc -I=.:$PROTOC_DIR:$VENDOR_DIR --$outArgName=paths=source_relative:./pkg/pb/$dir  $file
-    goimports -w $PB_DIR/$dir/*pb.go
+  case "$file" in
+    *query.proto|*statsinfo.proto) outArgName="gogofaster_out" ;;
+  esac
+	dir=$(basename "$file" .proto)
+	mkdir -p "${PB_DIR}/${dir}"
+	"${GOPATH}/bin/protoc" "-I=.:${PROTOC_DIR}:${PROTO_VENDOR_DIR}" "--${outArgName}=paths=source_relative:./pkg/pb/${dir}" "$file"
+    goimports -w "${PB_DIR}/${dir}"/*pb.go
 done
 
 
 # Generate pb file for each package's own
-for fp in $(find pkg -name protogen.sh)
+while IFS= read -r fp
 do
-    cd $(dirname ${fp})
-    bash $(basename ${fp})
+    cd "$(dirname "${fp}")"
+    bash "$(basename "${fp}")"
     cd - > /dev/null
-done
+done < <(find pkg -name protogen.sh)
 
-if [ -f protobuf/ ];then rm -rf protobuf/;fi
+if [ -d protobuf/ ];then rm -rf protobuf/;fi
