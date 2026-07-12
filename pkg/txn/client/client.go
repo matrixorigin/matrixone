@@ -204,6 +204,8 @@ type txnClient struct {
 		forceSyncCommitTimes atomic.Uint64
 		// activeTxnCount is the total count of active transactions across all shards.
 		activeTxnCount atomic.Int64
+		// latestAbortAt is the newest invalid-CN observation awaiting handling.
+		latestAbortAt atomic.Int64
 	}
 
 	// activeTxns is sharded to reduce lock contention.
@@ -212,11 +214,11 @@ type txnClient struct {
 
 	mu struct {
 		sync.RWMutex
-		// cond is used to control if we can create new txn and notify
-		// if the state is changed.
-		cond *sync.Cond
 		// indicate whether the CN can provide service normally.
-		state status
+		state   status
+		pausedC chan struct{}
+		closed  bool
+		closedC chan struct{}
 		// user active txns
 		users int
 		// FIFO queue for ready to active txn
@@ -224,7 +226,9 @@ type txnClient struct {
 		waitMarkAllActiveAbortedC chan struct{}
 	}
 
-	abortC chan time.Time
+	// abortC only carries wakeups. latestAbortAt retains the newest invalid-CN
+	// observation while the worker is scanning active transactions.
+	abortC chan struct{}
 }
 
 // getActiveTxnShard returns the shard for a given txnID.
@@ -348,11 +352,12 @@ func NewTxnClient(
 		logger: util.GetLogger(sid),
 		clock:  runtime.ServiceRuntime(sid).Clock(),
 		sender: sender,
-		abortC: make(chan time.Time, 1),
+		abortC: make(chan struct{}, 1),
 	}
 	c.stopper = stopper.NewStopper("txn-client", stopper.WithLogger(c.logger.RawLogger()))
 	c.mu.state = paused
-	c.mu.cond = sync.NewCond(&c.mu)
+	c.mu.pausedC = make(chan struct{})
+	c.mu.closedC = make(chan struct{})
 	// Initialize sharded activeTxns
 	for i := range c.activeTxns {
 		c.activeTxns[i].txns = make(map[string]*txnOperator, 100000/activeTxnShards)
@@ -450,7 +455,7 @@ func (client *txnClient) doCreateTxn(
 		},
 	)
 
-	if err := client.openTxn(op); err != nil {
+	if err := client.openTxn(ctx, op); err != nil {
 		return nil, err
 	}
 
@@ -482,6 +487,12 @@ func (client *txnClient) doCreateTxn(
 func (client *txnClient) NewWithSnapshot(
 	snapshot txn.CNTxnSnapshot,
 ) (TxnOperator, error) {
+	client.mu.RLock()
+	closed := client.mu.closed
+	client.mu.RUnlock()
+	if closed {
+		return nil, moerr.NewClientClosedNoCtx()
+	}
 	op := newTxnOperatorWithSnapshot(
 		client.logger,
 		client.sender,
@@ -492,6 +503,19 @@ func (client *txnClient) NewWithSnapshot(
 }
 
 func (client *txnClient) Close() error {
+	client.mu.Lock()
+	if !client.mu.closed {
+		client.mu.closed = true
+		if client.mu.pausedC != nil {
+			close(client.mu.pausedC)
+			client.mu.pausedC = nil
+		}
+		if client.mu.closedC != nil {
+			close(client.mu.closedC)
+		}
+	}
+	client.mu.Unlock()
+
 	client.stopper.Stop()
 	if client.leakChecker != nil {
 		client.leakChecker.close()
@@ -610,13 +634,28 @@ func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
 	return client.atomic.forceSyncCommitTimes.Load()
 }
 
-func (client *txnClient) openTxn(op *txnOperator) error {
+func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 	client.mu.Lock()
+	if client.mu.closed {
+		client.mu.Unlock()
+		return moerr.NewClientClosedNoCtx()
+	}
 
-	client.waitMarkAllActiveAbortedLocked()
+	if err := client.waitMarkAllActiveAbortedLocked(ctx); err != nil {
+		client.mu.Unlock()
+		return err
+	}
 
 	if !op.opts.skipWaitPushClient {
 		for client.mu.state == paused {
+			if client.mu.closed {
+				client.mu.Unlock()
+				return moerr.NewClientClosedNoCtx()
+			}
+			if err := ctx.Err(); err != nil {
+				client.mu.Unlock()
+				return err
+			}
 			if client.normalStateNoWait {
 				activeCount := client.atomic.activeTxnCount.Load()
 				waitQueueSize := len(client.mu.waitActiveTxns)
@@ -637,9 +676,30 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 
 			client.logger.Warn("txn client is in pause state, wait for it to be ready",
 				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
-			client.mu.cond.Wait()
+			if client.mu.pausedC == nil {
+				client.mu.pausedC = make(chan struct{})
+			}
+			pausedC := client.mu.pausedC
+			closedC := client.mu.closedC
+			client.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-closedC:
+				return moerr.NewClientClosedNoCtx()
+			case <-pausedC:
+			}
+			client.mu.Lock()
 			client.logger.Warn("txn client is in ready state",
 				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
+		}
+		if client.mu.closed {
+			client.mu.Unlock()
+			return moerr.NewClientClosedNoCtx()
+		}
+		if err := ctx.Err(); err != nil {
+			client.mu.Unlock()
+			return err
 		}
 	}
 
@@ -757,20 +817,24 @@ func (client *txnClient) Pause() {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	client.logger.Info("txn client status changed to paused")
-	client.mu.state = paused
+	if !client.mu.closed && client.mu.state != paused {
+		client.logger.Info("txn client status changed to paused")
+		client.mu.state = paused
+		client.mu.pausedC = make(chan struct{})
+	}
 }
 
 func (client *txnClient) Resume() {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	client.logger.Info("txn client status changed to normal")
-	client.mu.state = normal
-
-	// Notify all waiting transactions to goon with the opening operation.
-	if !client.normalStateNoWait {
-		client.mu.cond.Broadcast()
+	if !client.mu.closed && client.mu.state != normal {
+		client.logger.Info("txn client status changed to normal")
+		client.mu.state = normal
+		if client.mu.pausedC != nil {
+			close(client.mu.pausedC)
+			client.mu.pausedC = nil
+		}
 	}
 }
 
@@ -868,8 +932,15 @@ func (client *txnClient) getTxnOptions(
 }
 
 func (client *txnClient) markAllActiveTxnAborted() {
+	now := time.Now().UnixNano()
+	for {
+		latest := client.atomic.latestAbortAt.Load()
+		if latest >= now || client.atomic.latestAbortAt.CompareAndSwap(latest, now) {
+			break
+		}
+	}
 	select {
-	case client.abortC <- time.Now():
+	case client.abortC <- struct{}{}:
 	default:
 	}
 }
@@ -883,8 +954,9 @@ func (client *txnClient) handleMarkActiveTxnAborted(
 		select {
 		case <-ctx.Done():
 			return
-		case from := <-client.abortC:
+		case <-client.abortC:
 			fn := func() {
+				from := time.Unix(0, client.atomic.latestAbortAt.Load())
 				client.mu.Lock()
 				client.mu.waitMarkAllActiveAbortedC = make(chan struct{})
 				client.mu.Unlock()
@@ -909,11 +981,13 @@ func (client *txnClient) handleMarkActiveTxnAborted(
 			}
 			fn()
 
-			if err := client.lockService.(lockservice.ResumeLockService).Resume(); err != nil {
-				client.logger.Error(
-					"resume lock service failed",
-					zap.Error(err),
-				)
+			if service, ok := client.lockService.(lockservice.ResumeLockService); ok {
+				if err := service.Resume(); err != nil {
+					client.logger.Error(
+						"resume lock service failed",
+						zap.Error(err),
+					)
+				}
 			}
 		}
 	}
@@ -933,11 +1007,21 @@ func (client *txnClient) removeFromWaitActiveLocked(txnID []byte) bool {
 	return ok
 }
 
-func (client *txnClient) waitMarkAllActiveAbortedLocked() {
-	if client.mu.waitMarkAllActiveAbortedC != nil {
+func (client *txnClient) waitMarkAllActiveAbortedLocked(ctx context.Context) error {
+	for client.mu.waitMarkAllActiveAbortedC != nil {
 		c := client.mu.waitMarkAllActiveAbortedC
+		closedC := client.mu.closedC
 		client.mu.Unlock()
-		<-c
+		select {
+		case <-c:
+		case <-ctx.Done():
+			client.mu.Lock()
+			return ctx.Err()
+		case <-closedC:
+			client.mu.Lock()
+			return moerr.NewClientClosedNoCtx()
+		}
 		client.mu.Lock()
 	}
+	return nil
 }

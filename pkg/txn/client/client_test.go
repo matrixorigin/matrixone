@@ -340,7 +340,7 @@ func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
 	op := &txnOperator{}
 	op.opts.options = op.opts.options.WithDisableWaitPaused()
 
-	require.Error(t, c.openTxn(op))
+	require.Error(t, c.openTxn(context.Background(), op))
 }
 
 func TestCloseTxnWithAbortAllCheck(t *testing.T) {
@@ -411,5 +411,57 @@ func TestWaitAbortMarked(t *testing.T) {
 		close(c)
 	}()
 	op := &txnOperator{}
-	require.NoError(t, tc.openTxn(op))
+	require.NoError(t, tc.openTxn(context.Background(), op))
+}
+
+func TestOpenTxnReturnsWhenPausedContextCanceled(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := NewTxnClient("", newTestTxnSender())
+	defer func() { require.NoError(t, c.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := c.New(ctx, timestamp.Timestamp{})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestCloseUnblocksPausedNew(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := NewTxnClient("", newTestTxnSender())
+	errC := make(chan error, 1)
+	go func() {
+		_, err := c.New(context.Background(), timestamp.Timestamp{})
+		errC <- err
+	}()
+
+	require.NoError(t, c.Close())
+	select {
+	case err := <-errC:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+	case <-time.After(time.Second):
+		t.Fatal("paused New did not return after client close")
+	}
+}
+
+func TestOpenTxnReturnsWhenAbortMarkingContextCanceled(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := &txnClient{}
+	c.adjust()
+	c.mu.state = normal
+	c.mu.waitMarkAllActiveAbortedC = make(chan struct{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, c.openTxn(ctx, &txnOperator{}), context.DeadlineExceeded)
+}
+
+func TestMarkAllActiveTxnAbortedRetainsLatestObservation(t *testing.T) {
+	c := &txnClient{abortC: make(chan struct{}, 1)}
+	c.markAllActiveTxnAborted()
+	latest := time.Now().Add(time.Hour).UnixNano()
+	c.atomic.latestAbortAt.Store(latest)
+	c.markAllActiveTxnAborted()
+
+	require.Len(t, c.abortC, 1)
+	require.Equal(t, latest, c.atomic.latestAbortAt.Load())
 }

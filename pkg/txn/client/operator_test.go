@@ -1178,7 +1178,7 @@ func TestCancelAndWaitRunningSQL_WithKeepToken(t *testing.T) {
 
 func TestCancelAndWaitRunningSQL_Timeout(t *testing.T) {
 	old := runningSQLWaitTimeout
-	runningSQLWaitTimeout = 10 * time.Millisecond
+	runningSQLWaitTimeout = time.Second
 	defer func() {
 		runningSQLWaitTimeout = old
 	}()
@@ -1194,10 +1194,66 @@ func TestCancelAndWaitRunningSQL_Timeout(t *testing.T) {
 			token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "test sql")
 			defer tc.ExitRunSqlWithToken(token)
 
-			err := tc.CancelAndWaitRunningSQL(ctx, 0)
-			require.NoError(t, err)
+			// Do not share the helper's one-second setup deadline with the
+			// timeout being tested. Slow CI must observe this timeout, not an
+			// unrelated parent-context expiration.
+			waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err := tc.CancelAndWaitRunningSQL(waitCtx, 0)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
 		},
 	)
+}
+
+func TestCommitAndRollbackDoNotProceedAfterRunningSQLTimeout(t *testing.T) {
+	old := runningSQLWaitTimeout
+	runningSQLWaitTimeout = time.Second
+	defer func() {
+		runningSQLWaitTimeout = old
+	}()
+
+	for _, action := range []struct {
+		name string
+		run  func(*txnOperator, context.Context) error
+	}{
+		{name: "commit", run: (*txnOperator).Commit},
+		{name: "rollback", run: (*txnOperator).Rollback},
+	} {
+		t.Run(action.name, func(t *testing.T) {
+			runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+				tc.mu.Lock()
+				tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+				tc.mu.Unlock()
+
+				_, sqlCancel := context.WithCancel(context.Background())
+				token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "stuck sql")
+				defer tc.ExitRunSqlWithToken(token)
+
+				// Keep the test context well beyond the injected running-SQL
+				// timeout so a slow scheduler cannot turn this into a false pass.
+				waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				err := action.run(tc, waitCtx)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.Empty(t, ts.getLastRequests())
+			})
+		})
+	}
+}
+
+func TestMalformedTNResponsesReturnErrors(t *testing.T) {
+	tc := &txnOperator{}
+
+	require.Error(t, tc.checkTxnError(&txn.TxnError{TxnErrCode: ^uint32(0)}, nil))
+	require.Error(t, tc.checkResponseTxnStatusForReadWrite(txn.TxnResponse{
+		Txn: &txn.TxnMeta{Status: txn.TxnStatus(99)},
+	}))
+	require.Error(t, tc.checkResponseTxnStatusForCommit(txn.TxnResponse{
+		Txn: &txn.TxnMeta{Status: txn.TxnStatus_Active},
+	}))
+	require.Error(t, tc.checkResponseTxnStatusForRollback(txn.TxnResponse{
+		Txn: &txn.TxnMeta{Status: txn.TxnStatus_Active},
+	}))
 }
 
 func TestWithTxnLockWaitTimeout(t *testing.T) {

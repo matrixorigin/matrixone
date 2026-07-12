@@ -285,9 +285,7 @@ type txnOperator struct {
 		waitLocks              map[uint64]Lock
 		lastLockTableBindCheck time.Time
 		lockTableBindChanged   bool
-		//read-only txn operators for supporting snapshot read feature.
-		children []*txnOperator
-		flag     uint32
+		flag                   uint32
 	}
 
 	reset struct {
@@ -561,7 +559,6 @@ func (tc *txnOperator) initProtectedFields() {
 	tc.mu.lastLockTableBindCheck = time.Time{}
 	tc.mu.lockTableBindChanged = false
 	tc.mu.lockTables = tc.mu.lockTables[:0]
-	tc.mu.children = tc.mu.children[:0]
 	if tc.mu.cachedWrites != nil {
 		for k := range tc.mu.cachedWrites {
 			delete(tc.mu.cachedWrites, k)
@@ -597,10 +594,6 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 	op.logger = tc.logger
 	op.sender = tc.sender
 	op.timestampWaiter = tc.timestampWaiter
-
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.mu.children = append(tc.mu.children, op)
 
 	op.reset.parent.Store(tc)
 	return op
@@ -1261,7 +1254,7 @@ func (tc *txnOperator) addPartitionLocked(tn metadata.TNShard) {
 
 func (tc *txnOperator) validate(ctx context.Context, locked bool) error {
 	if _, ok := ctx.Deadline(); !ok {
-		tc.logger.Fatal("context deadline set")
+		tc.logger.Fatal("context deadline not set")
 	}
 
 	return tc.checkStatus(locked)
@@ -1503,10 +1496,9 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 		txn.TxnStatus_Committed, txn.TxnStatus_Committing:
 		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 	default:
-		tc.logger.Fatal("invalid response status for read or write",
-			util.TxnField(*txnMeta))
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid response status for read or write: %v", txnMeta.Status)
 	}
-	return nil
 }
 
 func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap map[uint16]struct{}) error {
@@ -1525,7 +1517,8 @@ func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap ma
 		return txnError.UnwrapError()
 	}
 
-	panic(moerr.NewInternalErrorNoCtxf("invalid txn error, code %d, msg %s", txnCode, txnError.DebugString()))
+	return moerr.NewInternalErrorNoCtxf(
+		"invalid txn error, code %d, msg %s", txnCode, txnError.DebugString())
 }
 
 func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) error {
@@ -1542,7 +1535,7 @@ func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) err
 	case txn.TxnStatus_Committed, txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalErrorNoCtxf("invalid response status for commit, %v", txnMeta.Status))
+		return moerr.NewInternalErrorNoCtxf("invalid response status for commit, %v", txnMeta.Status)
 	}
 }
 
@@ -1560,7 +1553,7 @@ func (tc *txnOperator) checkResponseTxnStatusForRollback(resp txn.TxnResponse) e
 	case txn.TxnStatus_Aborted:
 		return nil
 	default:
-		panic(moerr.NewInternalErrorNoCtxf("invalid response status for rollback %v", txnMeta.Status))
+		return moerr.NewInternalErrorNoCtxf("invalid response status for rollback %v", txnMeta.Status)
 	}
 }
 
@@ -1834,7 +1827,7 @@ func (tc *txnOperator) cancelAndWaitRunningSQL(ctx context.Context, keepToken ui
 			}
 			tc.logger.Error("wait running sql timeout",
 				fields...)
-			return nil
+			return err
 		}
 		return err
 	}

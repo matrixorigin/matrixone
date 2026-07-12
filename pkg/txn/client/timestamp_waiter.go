@@ -70,6 +70,7 @@ func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timest
 		return timestamp.Timestamp{}, err
 	}
 	if w != nil {
+		defer tw.removeWaiter(w)
 		defer w.close()
 		if err := w.wait(ctx); err != nil {
 			return timestamp.Timestamp{}, err
@@ -77,6 +78,28 @@ func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timest
 	}
 	v := tw.latestTS.Load()
 	return v.Next(), nil
+}
+
+// removeWaiter drops the waiter's list reference when its caller stops
+// waiting. Without this, canceled waits remain reachable until an unrelated
+// future timestamp notification arrives.
+func (tw *timestampWaiter) removeWaiter(target *waiter) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+
+	i := target.index
+	if i < 0 || i >= len(tw.mu.waiters) || tw.mu.waiters[i] != target {
+		return
+	}
+	last := len(tw.mu.waiters) - 1
+	if i != last {
+		tw.mu.waiters[i] = tw.mu.waiters[last]
+		tw.mu.waiters[i].index = i
+	}
+	tw.mu.waiters[last] = nil
+	tw.mu.waiters = tw.mu.waiters[:last]
+	target.index = -1
+	target.unref()
 }
 
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
@@ -115,6 +138,7 @@ func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) (*waiter, error) {
 
 	w := newWaiter(ts)
 	w.ref()
+	w.index = len(tw.mu.waiters)
 	tw.mu.waiters = append(tw.mu.waiters, w)
 	return w, nil
 }
@@ -123,14 +147,15 @@ func (tw *timestampWaiter) notifyWaiters(ts timestamp.Timestamp) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
 	waiters := tw.mu.waiters[:0]
-	for idx, w := range tw.mu.waiters {
+	for _, w := range tw.mu.waiters {
 		if w != nil && ts.GreaterEq(w.waitAfter) {
 			w.notify()
+			w.index = -1
 			w.unref()
-			tw.mu.waiters[idx] = nil
 			w = nil
 		}
 		if w != nil {
+			w.index = len(waiters)
 			waiters = append(waiters, w)
 		}
 	}
@@ -215,6 +240,8 @@ type waiter struct {
 	waitAfter timestamp.Timestamp
 	notifyC   chan struct{}
 	refCount  atomic.Int32
+	// index is guarded by timestampWaiter.mu while the waiter is registered.
+	index int
 }
 
 func newWaiter(ts timestamp.Timestamp) *waiter {
@@ -225,6 +252,7 @@ func newWaiter(ts timestamp.Timestamp) *waiter {
 
 func (w *waiter) init(ts timestamp.Timestamp) {
 	w.waitAfter = ts
+	w.index = -1
 	if w.ref() != 1 {
 		panic("BUG: waiter init must has ref count 1")
 	}

@@ -60,6 +60,19 @@ func TestGetTimestampWithWaitTimeout(t *testing.T) {
 	)
 }
 
+func TestGetTimestampCanceledWaitIsRemoved(t *testing.T) {
+	tw := &timestampWaiter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := tw.GetTimestamp(ctx, newTestTimestamp(10))
+	require.ErrorIs(t, err, context.Canceled)
+
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	assert.Empty(t, tw.mu.waiters)
+}
+
 func TestGetTimestampWithNotified(t *testing.T) {
 	runTimestampWaiterTests(
 		t,
