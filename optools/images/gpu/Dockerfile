@@ -39,6 +39,7 @@ ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CONDA_PREFIX}/lib"
 
 # goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"
+ENV GOWORK=off
 RUN go env -w GOPROXY=${GOPROXY}
 
 RUN module_files="$(sha256sum go.mod go.sum)" && \

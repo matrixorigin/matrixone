@@ -49,6 +49,8 @@ RAW_COVERAGE="coverage.out"
 IS_BUILD_FAIL=""
 TAGS="matrixone_test"
 GO_MODULE_MODE="-mod=readonly"
+# CI runs the checked-out MatrixOne module, never a caller's Go workspace.
+export GOWORK=off
 
 THIRDPARTIES_INSTALL_DIR=${BUILD_WKSP}/thirdparties/install
 CGO_CFLAGS="-I${BUILD_WKSP}/cgo -I${THIRDPARTIES_INSTALL_DIR}/include"

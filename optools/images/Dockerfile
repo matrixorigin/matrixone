@@ -2,6 +2,7 @@ FROM matrixorigin/golang:1.26.4-ubuntu22.04 AS builder
 
 # goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"
+ENV GOWORK=off
 RUN go env -w GOPROXY=${GOPROXY}
 
 # Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2

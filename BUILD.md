@@ -42,9 +42,12 @@ cd matrixone
 ### Step 2: Prepare Dependencies
 
 ```bash
-# Verify and download the read-only module graph
+# Verify and download the read-only production/test package graph
 make config
 ```
+
+Official Make targets set `GOWORK=off`, so a parent-directory or user-selected
+Go workspace cannot replace MatrixOne dependencies during a normal build.
 
 ### Step 3: Build
 

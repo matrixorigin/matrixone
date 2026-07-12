@@ -1,6 +1,7 @@
 FROM matrixorigin/tester:go1.26.4-jdk8
 
 ARG GOPROXY="https://proxy.golang.org,direct"
+ENV GOWORK=off
 
 ENV UT_PARALLEL=1
 ENV LC_ALL="C.UTF-8"

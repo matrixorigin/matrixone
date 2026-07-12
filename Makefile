@@ -52,6 +52,10 @@
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
+# MatrixOne is a single-module repository. Official Make targets must not
+# inherit a parent or user-selected go.work that can replace dependencies.
+override GOWORK := off
+export GOWORK
 UNAME_S := $(shell uname -s | tr A-Z a-z)
 UNAME_M := $(shell uname -m)
 GOPATH := $(shell go env GOPATH)
@@ -143,7 +147,7 @@ help:
 	@echo "  make static-check       - Run static analysis"
 	@echo ""
 	@echo "Other:"
-	@echo "  make config             - Verify the read-only module graph"
+	@echo "  make config             - Verify the read-only production/test package graph"
 	@echo "  make mod-tidy           - Synchronize go.mod and go.sum"
 	@echo "  make proto-vendor       - Stage protobuf imports for code generation"
 	@echo "  make vendor-build       - Alias for proto-vendor"
@@ -171,13 +175,13 @@ vendor-build: proto-vendor
 
 .PHONY: config
 config:
-	$(info [Verify Go module graph])
+	$(info [Verify Go package graph])
 	@for i in 1 2 3; do \
-		GOPROXY="$(GOPROXY)" go list $(GO_MODULE_MODE) -m all >/dev/null && exit 0; \
-		echo "go module verification failed (attempt $$i/3), retrying..."; \
+		GOPROXY="$(GOPROXY)" go list $(GO_MODULE_MODE) -test ./... >/dev/null && exit 0; \
+		echo "go package graph verification failed (attempt $$i/3), retrying..."; \
 		sleep $$((i * 5)); \
 	done; \
-	echo "go module verification failed after 3 attempts"; \
+	echo "go package graph verification failed after 3 attempts"; \
 	exit 1
 
 .PHONY: mod-tidy

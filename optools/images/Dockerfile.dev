@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
 
 # Set working directory
 WORKDIR /matrixone
+ENV GOWORK=off
 
 # Pre-download dependencies (this layer is cached).
 # Copy only go.mod and go.sum first for better caching
