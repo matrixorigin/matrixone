@@ -84,7 +84,7 @@
 # pkg/container
 /pkg/container @XuPeng-SH
 /pkg/container/vector @aunjgr @XuPeng-SH
-/pkg/container/pSpool @aunjgr @ouyuanning @iamlinjunhong
+/pkg/container/pSpool @aunjgr @iamlinjunhong
 
 # pkg/defines
 /pkg/defines @XuPeng-SH
@@ -134,8 +134,8 @@
 /pkg/pb/logservice @volgariver6 @LeftHandCold
 /pkg/pb/metadata @XuPeng-SH @aptend
 /pkg/pb/metric @aptend
-/pkg/pb/pipeline @ouyuanning @aunjgr
-/pkg/pb/plan @ouyuanning @aunjgr
+/pkg/pb/pipeline @XuPeng-SH @aunjgr
+/pkg/pb/plan @XuPeng-SH @aunjgr
 /pkg/pb/timestamp @XuPeng-SH
 /pkg/pb/txn @iamlinjunhong
 
@@ -150,13 +150,13 @@
 
 # pkg/sql
 /pkg/sql @aunjgr
-/pkg/sql/colexec @ouyuanning @aunjgr
-/pkg/sql/compile @ouyuanning @aunjgr
+/pkg/sql/colexec @XuPeng-SH @aunjgr
+/pkg/sql/compile @XuPeng-SH @aunjgr
 /pkg/sql/models @aptend
 /pkg/sql/parsers @iamlinjunhong
-/pkg/sql/plan @ouyuanning @aunjgr
-/pkg/sql/plan/function @ouyuanning @aunjgr
-/pkg/sql/plan/explain @ouyuanning @aunjgr
+/pkg/sql/plan @XuPeng-SH @aunjgr
+/pkg/sql/plan/function @XuPeng-SH @aunjgr
+/pkg/sql/plan/explain @XuPeng-SH @aunjgr
 /pkg/sql/plan/tools @gouhongshen
 /pkg/sql/colexec/indexjoin @aunjgr
 /pkg/sql/colexec/indexbuild @aunjgr
@@ -180,7 +180,7 @@
 /pkg/sql/colexec/shuffle @aunjgr
 /pkg/sql/colexec/shuffleV2 @aunjgr
 /pkg/sql/colexec/shufflebuild @aunjgr
-/pkg/sql/colexec/multi_update @ouyuanning
+/pkg/sql/colexec/multi_update @XuPeng
 
 # pkg/taskservice
 /pkg/taskservice @XuPeng-SH
@@ -191,7 +191,7 @@
 /pkg/tests/txn @XuPeng-SH @iamlinjunhong
 
 # pkg/testutil
-/pkg/testutil @ouyuanning @XuPeng-SH
+/pkg/testutil @XuPeng-SH
 
 # pkg/txn
 /pkg/txn @iamlinjunhong
@@ -213,7 +213,7 @@
 # engines and engine related stuff
 /pkg/vm @XuPeng-SH
 /pkg/vm/engine @XuPeng-SH
-/pkg/vm/pipeline @ouyuanning @aunjgr
+/pkg/vm/pipeline @XuPeng-SH @aunjgr
 /pkg/vm/process @aunjgr @XuPeng-SH
 /pkg/vm/message @aunjgr
 /pkg/vm/engine/disttae @XuPeng-SH @gouhongshen
@@ -227,7 +227,7 @@
 
 
 # proxy
-/pkg/proxy @volgariver6 @gouhongshen
+/pkg/proxy @XuPeng-SH @gouhongshen
 
 /pkg/stream @fengttt
 
@@ -240,7 +240,7 @@
 /proto/logservice.proto @XuPeng-SH
 /proto/metadata.proto @XuPeng-SH
 /proto/metric.proto @aptend
-/proto/pipeline.proto @ouyuanning @aunjgr
+/proto/pipeline.proto @XuPeng-SH @aunjgr
 /proto/plan.proto @aunjgr
 /proto/timestamp.proto @iamlinjunhong
 /proto/txn.proto @iamlinjunhong

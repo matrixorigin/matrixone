@@ -16,6 +16,7 @@ package clusterservice
 
 import (
 	"context"
+	"sync"
 
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -52,6 +53,14 @@ type Selector struct {
 	all bool
 
 	// regexCache is the cache for compiled regexp item.
+	regexpCache *regexpCache
+}
+
+// SelectorMatcher reuses glob regular expressions while matching one service
+// snapshot. Its zero value is ready to use and its cache is bounded by the
+// patterns encountered during that snapshot resolution.
+type SelectorMatcher struct {
+	once        sync.Once
 	regexpCache *regexpCache
 }
 

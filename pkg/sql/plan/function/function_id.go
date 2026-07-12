@@ -760,9 +760,10 @@ const (
 	ST_POINT32 = 540
 
 	// function `cast_strict`
-	CAST_STRICT = 541
-	DATE_TRUNC  = 542
-	// 543 and 544 are reserved by JSON_CONTAINS and JSON_REMOVE on main.
+	CAST_STRICT                  = 541
+	DATE_TRUNC                   = 542
+	JSON_CONTAINS                = 543
+	JSON_REMOVE                  = 544
 	INTERNAL_JSON_ORDERING_PARAM = 545
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
@@ -1046,10 +1047,12 @@ var functionIdRegister = map[string]int32{
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
+	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,
 	"json_valid":                     JSON_VALID,
 	"json_length":                    JSON_LENGTH,
+	"json_contains":                  JSON_CONTAINS,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
 	"json_schema_valid":              JSON_SCHEMA_VALID,

@@ -673,15 +673,17 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 	txn := event.Txn
 	key := string(txn.ID)
 
-	client.mu.Lock()
-
-	// Check abort-all condition before removing from map
-	// to ensure this txn is also marked if needed
+	// markAllActiveTxnAborted only sends a non-blocking signal to abortC and
+	// does not touch client.mu, so no need to hold the lock here. Holding it
+	// on every close caused heavy mutex contention under high-concurrency
+	// autocommit workloads (sysbench point_select 1000vu). Preserve the
+	// original signal-before-remove ordering. The abort signal is
+	// asynchronous, so correctness does not rely on the closing txn being
+	// observed by the later active-txn traversal. removeActiveTxn uses its
+	// own sharded lock.
 	if moerr.IsMoErrCode(event.Err, moerr.ErrCannotCommitOnInvalidCN) {
 		client.markAllActiveTxnAborted()
 	}
-
-	client.mu.Unlock()
 
 	// Remove from sharded map after abort check
 	op, ok := client.removeActiveTxn(key)
