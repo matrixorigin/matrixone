@@ -75,6 +75,41 @@ func (p *MySQLParser) ParseWithSQLMode(ctx context.Context, sql string, lower in
 	return p.lexer.stmts, nil
 }
 
+// ParseFirstWithSQLMode parses the first top-level statement and returns the
+// byte offset immediately after its delimiter. It stops the lexer as soon as
+// the first statement is reduced, so compound statements are scanned once.
+func (p *MySQLParser) ParseFirstWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (tree.Statement, int, error) {
+	p.scanner.setSql(sql)
+	p.scanner.setSQLMode(ParseSQLModeFlags(sqlMode))
+	p.lexer.setScanner(&p.scanner, lower, ParseSQLModeFlags(sqlMode))
+	p.lexer.parseFirst = true
+
+	if yyParse(&p.lexer) != 0 {
+		for _, s := range p.lexer.stmts {
+			s.Free()
+		}
+		return nil, 0, p.lexer.scanner.LastError
+	}
+	if len(p.lexer.stmts) == 0 {
+		return &tree.EmptyStmt{}, len(sql), nil
+	}
+	end := p.lexer.statementEnd
+	if p.lexer.lastToken != int(';') && end < len(sql) {
+		token, _ := p.scanner.Scan()
+		switch token {
+		case int(';'):
+			end = p.scanner.Pos
+		case 0, EofChar():
+			end = len(sql)
+		default:
+			p.lexer.stmts[0].Free()
+			p.lexer.Error("syntax error")
+			return nil, 0, p.lexer.scanner.LastError
+		}
+	}
+	return p.lexer.stmts[0], end, nil
+}
+
 func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
 	return ParseWithSQLMode(ctx, sql, lower, "")
 }
@@ -123,12 +158,15 @@ func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode s
 }
 
 type Lexer struct {
-	scanner    *Scanner
-	stmts      []tree.Statement
-	paramIndex int
-	lower      int64
-	lastToken  int
-	sqlMode    SQLModeFlags
+	scanner      *Scanner
+	stmts        []tree.Statement
+	paramIndex   int
+	lower        int64
+	lastToken    int
+	sqlMode      SQLModeFlags
+	parseFirst   bool
+	stopLexing   bool
+	statementEnd int
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -164,6 +202,9 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.lower = lower
 	l.lastToken = 0
 	l.sqlMode = sqlMode
+	l.parseFirst = false
+	l.stopLexing = false
+	l.statementEnd = 0
 }
 
 func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
@@ -176,6 +217,9 @@ func (l *Lexer) GetParamIndex() int {
 }
 
 func (l *Lexer) Lex(lval *yySymType) int {
+	if l.stopLexing {
+		return 0
+	}
 	typ, str := l.scanner.Scan()
 	l.scanner.LastToken = str
 
@@ -224,6 +268,10 @@ func (l *Lexer) Error(err string) {
 
 func (l *Lexer) AppendStmt(stmt tree.Statement) {
 	l.stmts = append(l.stmts, stmt)
+	if l.parseFirst && len(l.stmts) == 1 {
+		l.statementEnd = l.scanner.Pos
+		l.stopLexing = true
+	}
 }
 
 func (l *Lexer) toInt(lval *yySymType, str string) int {

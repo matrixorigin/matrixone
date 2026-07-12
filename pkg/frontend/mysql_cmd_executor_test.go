@@ -1308,102 +1308,101 @@ func requirePreparedSelectConcat(t *testing.T, preStmt *PrepareStmt) {
 	require.Equal(t, "concat", name.ColName())
 }
 
-func Test_ParseSqlUsesSQLModeSetEarlierInSamePacket(t *testing.T) {
+func TestPrepareSQLModeStagedExecution(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
-
-	t.Run("ansi quotes", func(t *testing.T) {
-		stmts := parseSQLModePacket(t, ctx, ses, `set sql_mode=ANSI_QUOTES; select "c"`)
-		defer freeStatements(stmts)
-		require.Len(t, stmts, 2)
-
-		selectStmt, ok := stmts[1].(*tree.Select)
-		require.True(t, ok)
-		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
-		require.True(t, ok)
-		require.Len(t, selectClause.Exprs, 1)
-		name, ok := selectClause.Exprs[0].Expr.(*tree.UnresolvedName)
-		require.True(t, ok)
-		require.Equal(t, "c", name.ColName())
-	})
-
-	t.Run("real as float", func(t *testing.T) {
-		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
-		stmts := parseSQLModePacket(t, ctx, ses, "set sql_mode=REAL_AS_FLOAT; create table t(r real)")
-		defer freeStatements(stmts)
-		require.Len(t, stmts, 2)
-
-		createStmt, ok := stmts[1].(*tree.CreateTable)
-		require.True(t, ok)
-		require.Len(t, createStmt.Defs, 1)
-		col, ok := createStmt.Defs[0].(*tree.ColumnTableDef)
-		require.True(t, ok)
-		require.Equal(t, uint32(defines.MYSQL_TYPE_FLOAT), col.Type.(*tree.T).InternalType.Oid)
-	})
-
-	t.Run("no backslash escapes", func(t *testing.T) {
-		stmts := parseSQLModePacket(t, ctx, ses, `set sql_mode=NO_BACKSLASH_ESCAPES; select 'a\'; select 1`)
-		defer freeStatements(stmts)
-		require.Len(t, stmts, 3)
-
-		selectStmt, ok := stmts[1].(*tree.Select)
-		require.True(t, ok)
-		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
-		require.True(t, ok)
-		require.Len(t, selectClause.Exprs, 1)
-		lit, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
-		require.True(t, ok)
-		require.Equal(t, `a\`, lit.String())
-	})
-
-	t.Run("disable no backslash escapes", func(t *testing.T) {
-		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "NO_BACKSLASH_ESCAPES"))
-		execCtx := &ExecCtx{
-			reqCtx: ctx,
-			ses:    ses,
-			input: &UserInput{
-				sql: `set sql_mode=''; select 'a\'; select 1`,
-			},
-		}
-		_, err := parseSql(execCtx, ses.GetMySQLParser())
-		require.Error(t, err)
-	})
-
-	t.Run("compound statement keeps internal semicolons", func(t *testing.T) {
-		stmts := parseSQLModePacket(t, ctx, ses, `set sql_mode=ANSI_QUOTES; begin select if(1, 2, 3); end; select "c"`)
-		defer freeStatements(stmts)
-		require.Len(t, stmts, 3)
-
-		compoundStmt, ok := stmts[1].(*tree.CompoundStmt)
-		require.True(t, ok)
-		require.NotEmpty(t, compoundStmt.Stmts)
-		require.NotNil(t, compoundStmt.Stmts[0])
-
-		selectStmt, ok := stmts[2].(*tree.Select)
-		require.True(t, ok)
-		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
-		require.True(t, ok)
-		require.Len(t, selectClause.Exprs, 1)
-		name, ok := selectClause.Exprs[0].Expr.(*tree.UnresolvedName)
-		require.True(t, ok)
-		require.Equal(t, "c", name.ColName())
-	})
-}
-
-func parseSQLModePacket(t *testing.T, ctx context.Context, ses *Session, sql string) []tree.Statement {
-	t.Helper()
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
-	execCtx := &ExecCtx{
-		reqCtx: ctx,
-		ses:    ses,
-		input: &UserInput{
-			sql: sql,
+
+	tests := []struct {
+		name      string
+		sql       string
+		staged    bool
+		wantError bool
+		first     string
+	}{
+		{
+			name:   "expression value",
+			sql:    `set sql_mode=concat('ANSI_','QUOTES'); select "c"`,
+			staged: true,
+			first:  `set sql_mode=concat('ANSI_','QUOTES');`,
+		},
+		{
+			name:   "user variable value",
+			sql:    `set @mode='ANSI_QUOTES'; set sql_mode=@mode; select "c"`,
+			staged: true,
+			first:  `set @mode='ANSI_QUOTES';`,
+		},
+		{
+			name:   "failing expression precedes mode-sensitive syntax error",
+			sql:    `set sql_mode=unknown_function(); select 'a\'; select 1`,
+			staged: true,
+			first:  `set sql_mode=unknown_function();`,
+		},
+		{
+			name:   "compound statement",
+			sql:    `set sql_mode='ANSI_QUOTES'; begin select 1; end; select "c"`,
+			staged: true,
+			first:  `set sql_mode='ANSI_QUOTES';`,
+		},
+		{
+			name:   "mode set is final statement",
+			sql:    `select 1; set sql_mode='ANSI_QUOTES'`,
+			staged: false,
+		},
+		{
+			name:   "global mode does not affect session parser",
+			sql:    `set global sql_mode='ANSI_QUOTES'; select "c"`,
+			staged: false,
+		},
+		{
+			name:      "unrelated parse error",
+			sql:       `select from`,
+			wantError: true,
 		},
 	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			first, _, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), test.sql)
+			if test.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.staged, staged)
+			require.Equal(t, test.first, first)
+		})
+	}
+}
+
+func TestNextSQLModeStatementUsesCurrentSessionMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+
+	input := &UserInput{sql: `set sql_mode=concat('ANSI_','QUOTES'); select "c"`}
+	first, remaining, staged, err := prepareSQLModeStagedExecution(ctx, ses, ses.GetMySQLParser(), input.sql)
+	require.NoError(t, err)
+	require.True(t, staged)
+	require.NotEmpty(t, first)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
+	nextInput, rest, err := nextSQLModeStatementInput(ctx, ses, ses.GetMySQLParser(), input, remaining)
+	require.NoError(t, err)
+	require.Empty(t, rest)
+
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: nextInput}
 	stmts, err := parseSql(execCtx, ses.GetMySQLParser())
 	require.NoError(t, err)
-	return stmts
+	defer freeStatements(stmts)
+	require.Len(t, stmts, 1)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	name, ok := selectClause.Exprs[0].Expr.(*tree.UnresolvedName)
+	require.True(t, ok)
+	require.Equal(t, "c", name.ColName())
 }
 
 func Test_HandleDeallocate(t *testing.T) {

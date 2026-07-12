@@ -26,3 +26,21 @@ NO_UNSIGNED_SUBTRACTION
 commit;
 set @@sql_mode=default;
 set autocommit=1;
+set sql_mode='';
+set sql_mode=concat('PIPES_','AS_CONCAT');
+select 'a'||'b';
+concat(a, b)
+ab
+select @@sql_mode;
+@@sql_mode
+PIPES_AS_CONCAT
+set sql_mode='';
+set @stage_mode='PIPES_AS_CONCAT';
+set sql_mode=@stage_mode;
+select 'c'||'d';
+concat(c, d)
+cd
+select @@sql_mode;
+@@sql_mode
+PIPES_AS_CONCAT
+set sql_mode=default;

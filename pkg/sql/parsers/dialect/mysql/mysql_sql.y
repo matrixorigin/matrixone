@@ -931,11 +931,7 @@ start_command:
     stmt_type
 
 stmt_type:
-    block_stmt
-    {
-        yylex.(*Lexer).AppendStmt($1)
-    }
-|   stmt_list
+    stmt_list
 
 stmt_list:
     stmt
@@ -987,7 +983,11 @@ block_type_stmt:
     }
 
 stmt:
-    normal_stmt
+    block_stmt
+    {
+        $$ = $1
+    }
+|   normal_stmt
     {
         $$ = $1
     }

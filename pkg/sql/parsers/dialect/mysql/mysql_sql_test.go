@@ -16,6 +16,8 @@ package mysql
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -166,6 +168,89 @@ func TestSQLModeParserModes(t *testing.T) {
 		require.Equal(t, uint32(defines.MYSQL_TYPE_FLOAT), firstColumnType(t, stmt).Oid)
 		require.Equal(t, int32(32), firstColumnType(t, stmt).Width)
 	})
+}
+
+func TestParseFirstWithSQLMode(t *testing.T) {
+	ctx := context.Background()
+	parser := &MySQLParser{}
+
+	tests := []struct {
+		name    string
+		sql     string
+		sqlMode string
+		first   string
+	}{
+		{name: "simple statement", sql: "select 1; select 2", first: "select 1;"},
+		{name: "leading empty statements", sql: ";; select 1; select 2", first: ";; select 1;"},
+		{
+			name:  "nested compound statement",
+			sql:   "begin select 1; begin select 2; end; end; select 3",
+			first: "begin select 1; begin select 2; end; end;",
+		},
+		{
+			name:    "mode-sensitive string",
+			sql:     `select 'a\'; select 2`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			first:   `select 'a\';`,
+		},
+		{
+			name:  "statement without delimiter",
+			sql:   "select 1 /* trailing comment */",
+			first: "select 1 /* trailing comment */",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, end, err := parser.ParseFirstWithSQLMode(ctx, test.sql, 1, test.sqlMode)
+			require.NoError(t, err)
+			require.NotNil(t, stmt)
+			defer stmt.Free()
+			require.Equal(t, test.first, test.sql[:end])
+		})
+	}
+}
+
+func TestParseCompoundStatementList(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "begin select 1; end;", 1)
+	require.NoError(t, err)
+	stmt.Free()
+
+	stmts, err := Parse(context.Background(), "begin select 1; end; select 2", 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	require.Len(t, stmts, 2)
+	require.IsType(t, &tree.CompoundStmt{}, stmts[0])
+	require.IsType(t, &tree.Select{}, stmts[1])
+}
+
+func BenchmarkParseFirstCompoundStatement(b *testing.B) {
+	for _, statementCount := range []int{10, 100, 1000} {
+		b.Run(strconv.Itoa(statementCount), func(b *testing.B) {
+			var sql strings.Builder
+			sql.WriteString("begin ")
+			for i := 0; i < statementCount; i++ {
+				sql.WriteString("select 1;")
+			}
+			sql.WriteString("end; select 2")
+			input := sql.String()
+			ctx := context.Background()
+			parser := &MySQLParser{}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				stmt, _, err := parser.ParseFirstWithSQLMode(ctx, input, 1, "")
+				if err != nil {
+					b.Fatal(err)
+				}
+				stmt.Free()
+			}
+		})
+	}
 }
 
 func firstSelectExpr(t *testing.T, stmt tree.Statement) tree.Expr {
