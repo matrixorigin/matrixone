@@ -1600,59 +1600,6 @@ func TestCleanupSpillEngine(t *testing.T) {
 	require.Error(t, err, "fd2 should be closed")
 }
 
-func TestResetForFile(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-
-	spillfs, err := proc.GetSpillFileService()
-	require.NoError(t, err)
-
-	// Use CreateFile (not CreateAndRemoveFile) so the file persists.
-	f, err := spillfs.CreateFile(context.Background(), "test_rff")
-	require.NoError(t, err)
-
-	var buf bytes.Buffer
-	bat := makeInt32Batch(proc, []int32{10, 20, 30})
-	w := BucketWriter{Name: "test_rff", Fd: f}
-	err = FlushBucketBatch(proc, bat, &w, &buf, nil)
-	require.NoError(t, err)
-	// Close the fd before opening via file name.
-	w.Close()
-
-	reader := BucketReader{}
-	err = reader.ResetForFile(context.Background(), spillfs, "test_rff")
-	require.NoError(t, err)
-	require.False(t, reader.Empty)
-
-	reuseBat := batch.NewOffHeapWithSize(0)
-	got, err := reader.ReadBatch(proc, reuseBat)
-	require.NoError(t, err)
-	require.Equal(t, 3, got.RowCount())
-
-	_, err = reader.ReadBatch(proc, reuseBat)
-	require.Equal(t, io.EOF, err)
-
-	reader.Close()
-	spillfs.RemoveFile(context.Background(), "test_rff")
-}
-
-func TestResetForFileEmptyName(t *testing.T) {
-	reader := BucketReader{}
-	err := reader.ResetForFile(context.Background(), nil, "")
-	require.NoError(t, err)
-	require.True(t, reader.Empty)
-}
-
-func TestResetForFileMissingFile(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-	spillfs, _ := proc.GetSpillFileService()
-
-	reader := BucketReader{}
-	err := reader.ResetForFile(context.Background(), spillfs, "nonexistent_file_12345")
-	require.Error(t, err)
-}
-
 func TestScatterProbeFunctionUsesStoredEval(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

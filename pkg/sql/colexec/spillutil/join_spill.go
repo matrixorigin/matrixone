@@ -18,7 +18,6 @@ package spillutil
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -54,10 +53,11 @@ type SpillBucket struct {
 
 // BucketReader reads serialized batch records from an fd.
 type BucketReader struct {
-	fd     *os.File
-	reader *bufio.Reader
-	buf    []byte
-	Empty  bool // true when no file exists (lazy-created file was never written)
+	fd          *os.File
+	reader      *bufio.Reader
+	buf         []byte
+	limitReader io.LimitedReader
+	Empty       bool // true when no file exists (lazy-created file was never written)
 }
 
 func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (*batch.Batch, error) {
@@ -68,40 +68,35 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 		r.reader = bufio.NewReaderSize(r.fd, 4*1024*1024)
 	}
 	if r.buf == nil {
-		r.buf = make([]byte, 8)
+		r.buf = make([]byte, 16)
 	}
-	// Read count
 	if _, err := io.ReadFull(r.reader, r.buf); err != nil {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
 		return nil, err
 	}
-	cnt := types.DecodeInt64(r.buf)
-
-	// Read batch size
-	if _, err := io.ReadFull(r.reader, r.buf); err != nil {
-		return nil, err
-	}
-	batchSize := types.DecodeInt64(r.buf)
+	cnt := types.DecodeInt64(r.buf[:8])
+	batchSize := types.DecodeInt64(r.buf[8:16])
 
 	reuseBat.CleanOnlyData()
 
-	limitedReader := io.LimitReader(r.reader, batchSize)
-	if err := reuseBat.UnmarshalFromReader(limitedReader, proc.Mp()); err != nil {
+	r.limitReader.R = r.reader
+	r.limitReader.N = batchSize
+	if err := reuseBat.UnmarshalFromReader(&r.limitReader, proc.Mp()); err != nil {
 		return nil, err
 	}
 
 	// Verify the batch unmarshal consumed exactly batchSize bytes.
-	if n, _ := io.Copy(io.Discard, limitedReader); n > 0 {
-		return nil, moerr.NewInternalErrorf(proc.Ctx, "batch unmarshal did not consume all bytes: %d remaining", n)
+	if r.limitReader.N > 0 {
+		return nil, moerr.NewInternalErrorf(proc.Ctx, "batch unmarshal did not consume all bytes: %d remaining", r.limitReader.N)
 	}
 
-	// Read magic
-	if _, err := io.ReadFull(r.reader, r.buf); err != nil {
+	// Read magic (8 bytes)
+	if _, err := io.ReadFull(r.reader, r.buf[:8]); err != nil {
 		return nil, err
 	}
-	if types.DecodeUint64(r.buf) != SpillMagic {
+	if types.DecodeUint64(r.buf[:8]) != SpillMagic {
 		return nil, moerr.NewInternalError(proc.Ctx, "corrupted spill file")
 	}
 
@@ -122,37 +117,10 @@ func (r *BucketReader) ResetForFd(fd *os.File) {
 	r.fd = fd
 	if r.reader == nil {
 		r.reader = bufio.NewReaderSize(fd, 4*1024*1024)
-		r.buf = make([]byte, 8)
+		r.buf = make([]byte, 16)
 	} else {
 		r.reader.Reset(fd)
 	}
-}
-
-// ResetForFile opens a spill file by name from the given fileservice and points
-// r at it, reusing the existing bufio.Reader buffer. Pass bucketName="" for an
-// immediately-EOF (empty) reader.
-func (r *BucketReader) ResetForFile(ctx context.Context, fs fileservice.MutableFileService, bucketName string) error {
-	r.Close()
-	r.Empty = false
-
-	if bucketName == "" {
-		r.Empty = true
-		return nil
-	}
-
-	file, err := fs.OpenFile(ctx, bucketName)
-	if err != nil {
-		return err
-	}
-	r.fd = file
-
-	if r.reader == nil {
-		r.reader = bufio.NewReaderSize(file, 4*1024*1024)
-		r.buf = make([]byte, 8)
-	} else {
-		r.reader.Reset(file)
-	}
-	return nil
 }
 
 func (r *BucketReader) Close() {
@@ -351,11 +319,16 @@ func scatterImpl(
 	} else {
 		bucketRowIds = make([][]int32, len(writers))
 	}
+	estPerBucket := rowCount/len(writers) + rowCount/len(writers)/4 + 1
 	for i := range bucketRowIds {
-		bucketRowIds[i] = bucketRowIds[i][:0]
+		if cap(bucketRowIds[i]) < estPerBucket {
+			bucketRowIds[i] = make([]int32, 0, estPerBucket)
+		} else {
+			bucketRowIds[i] = bucketRowIds[i][:0]
+		}
 	}
 	for row := 0; row < rowCount; row++ {
-		b := int(hashValues[row] % uint64(len(writers)))
+		b := int(hashValues[row] & (uint64(len(writers)) - 1))
 		bucketRowIds[b] = append(bucketRowIds[b], int32(row))
 	}
 
@@ -691,7 +664,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		builder.InputBatchRowCount += bat.RowCount()
 
 		if bucket.Depth < SpillMaxPass && e.cfg.SpillThreshold > 0 &&
-			ShouldSpill(builderMemSize(builder), int64(builder.InputBatchRowCount), e.cfg.SpillThreshold) {
+			(builderMemSize(builder) > e.cfg.SpillThreshold) {
 			e.buckets[0].ProbeFd = nil // reSpillBucket takes ownership via reader.ResetForFd
 			subBuckets, err := e.reSpillBucket(proc, analyzer, bucket, builder, &e.buildReader)
 			builder.FreeHashMapAndBatches(proc)

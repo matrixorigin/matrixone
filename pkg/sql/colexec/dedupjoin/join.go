@@ -146,6 +146,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			} else if ctr.spillEngine != nil {
 				ctr.state = Finalize
+				dedupJoin.ctr.cleanBuf(proc)
 				dedupJoin.ctr.buf = nil
 				continue
 			} else {
