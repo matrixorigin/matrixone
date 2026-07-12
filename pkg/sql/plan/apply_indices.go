@@ -468,6 +468,9 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
+		if builder.scanForcesJoinIndex(nodeID) {
+			return nodeID, nil
+		}
 		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
 
 	case plan.Node_JOIN:
@@ -776,7 +779,10 @@ type forceIndexMemoKey struct {
 func forceIndexRequirementKey(requirements []forceIndexRequirement) string {
 	var key strings.Builder
 	for _, requirement := range requirements {
-		fmt.Fprintf(&key, "%d:%p:", requirement.scope, requirement.block)
+		fmt.Fprintf(&key, "%d:%p:%d:%t:", requirement.scope, requirement.block, requirement.orderFlag, requirement.canPushLim)
+		if requirement.limit != nil {
+			fmt.Fprintf(&key, "limit=%s:", requirement.limit.String())
+		}
 		for _, expr := range requirement.columns {
 			if col := expr.GetCol(); col != nil {
 				fmt.Fprintf(&key, "%d/%d,", col.RelPos, col.ColPos)
@@ -846,6 +852,11 @@ func (builder *QueryBuilder) applyForceIndexHintsWithMemo(nodeID int32, requirem
 	for i, childID := range node.Children {
 		if node.NodeType == plan.Node_PROJECT && len(childRequirements) > 0 && childRequirements[0].block != nil &&
 			builder.ctxByNode[childID] != childRequirements[0].block {
+			newChildID, err := builder.applyForceIndexHintsWithMemo(childID, nil, colRefCnt, idxColMap, memo)
+			if err != nil {
+				return -1, err
+			}
+			node.Children[i] = newChildID
 			continue
 		}
 		newChildID, err := builder.applyForceIndexHintsWithMemo(childID, childRequirements, colRefCnt, idxColMap, memo)
@@ -904,9 +915,6 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		if requirement.scope == forceIndexForGroup {
 			scope = hintSet.group
 		}
-		if !scope.forceSpecified {
-			continue
-		}
 		colPositions := make([]int32, len(requirement.columns))
 		matchesScan := true
 		for i, expr := range requirement.columns {
@@ -918,6 +926,12 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 			colPositions[i] = col.ColPos
 		}
 		if !matchesScan {
+			continue
+		}
+		if requirement.scope == forceIndexForGroup && !scope.empty() {
+			builder.groupHintScans[scanNode.NodeId] = struct{}{}
+		}
+		if !scope.forceSpecified {
 			continue
 		}
 
@@ -2475,9 +2489,15 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		return nodeID, nil
 	}
 
+	if node.JoinType == plan.Node_INNER && builder.scanForcesJoinIndex(node.Children[0]) && builder.scanForcesJoinIndex(node.Children[1]) {
+		return -1, moerr.NewNotSupported(builder.GetContext(), "FORCE INDEX FOR JOIN on both sides of the same join")
+	}
+
 	// An INNER JOIN is symmetric. Put a directly hinted scan on the index-access
 	// side before applying the existing rewrite, independent of join reorder.
+	swappedForHint := false
 	if node.JoinType == plan.Node_INNER && builder.scanForcesJoinIndex(node.Children[1]) && !builder.scanForcesJoinIndex(node.Children[0]) {
+		swappedForHint = true
 		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 		for _, cond := range node.OnList {
 			if fn := cond.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "=" && len(fn.Args) == 2 {
@@ -2587,11 +2607,29 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			continue
 		}
 
-		idxTag := builder.genNewBindTag()
 		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
 		if err != nil {
-			panic(err)
+			if swappedForHint {
+				restoreJoinHintSwap(node)
+			}
+			return -1, err
 		}
+		if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 || leftChild.ObjRef == nil ||
+			leftChild.TableDef.Pkey == nil || len(leftChild.BindingTags) == 0 {
+			if swappedForHint {
+				restoreJoinHintSwap(node)
+			}
+			return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid metadata for index %s", idxDef.IndexName)
+		}
+		pkIdx, ok := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
+		if !ok || pkIdx < 0 || int(pkIdx) >= len(leftChild.TableDef.Cols) {
+			if swappedForHint {
+				restoreJoinHintSwap(node)
+			}
+			return -1, moerr.NewInternalErrorf(builder.GetContext(), "invalid primary key metadata for index %s", idxDef.IndexName)
+		}
+
+		idxTag := builder.genNewBindTag()
 		builder.addNameByColRef(idxTag, idxTableDef)
 
 		rfTag := builder.genNewMsgTag()
@@ -2660,7 +2698,6 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
 		recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
 
-		pkIdx := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
 			Typ: leftChild.TableDef.Cols[pkIdx].Typ,
 			Expr: &plan.Expr_Col{
@@ -2712,4 +2749,13 @@ func (builder *QueryBuilder) scanForcesJoinIndex(nodeID int32) bool {
 	}
 	hints := builder.indexHintsByScan[node.NodeId]
 	return hints != nil && hints.join.forceSpecified
+}
+
+func restoreJoinHintSwap(node *plan.Node) {
+	node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
+	for _, cond := range node.OnList {
+		if fn := cond.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "=" && len(fn.Args) == 2 {
+			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
+		}
+	}
 }

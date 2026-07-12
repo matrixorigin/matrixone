@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -322,7 +323,19 @@ func TestIndexHintGroupScopeSelectsAndIgnoresCoveringIndex(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
 
-	queryPlan, err := runOneStmt(mock, t, "select a, count(*) from index_hint_t force index for group by(idx_a) group by a")
+	queryPlan, err := runOneStmt(mock, t, "select a, count(*) from index_hint_t where a = 1 group by a")
+	require.NoError(t, err)
+	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
+
+	queryPlan, err = runOneStmt(mock, t, "select a, count(*) from index_hint_t use index for group by(idx_ab) where a = 1 group by a")
+	require.NoError(t, err)
+	require.Equal(t, "idx_ab", findFirstIndexScanName(queryPlan))
+
+	queryPlan, err = runOneStmt(mock, t, "select a, count(*) from index_hint_t ignore index for group by(idx_a) where a = 1 group by a")
+	require.NoError(t, err)
+	require.NotEqual(t, "idx_a", findFirstIndexScanName(queryPlan))
+
+	queryPlan, err = runOneStmt(mock, t, "select a, count(*) from index_hint_t force index for group by(idx_a) group by a")
 	require.NoError(t, err)
 	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
 
@@ -496,6 +509,115 @@ func TestForceIndexForJoinFollowsRightScanAfterReorder(t *testing.T) {
 	require.Equal(t, rightScanID, indexJoin.Children[0])
 }
 
+func TestForceIndexForJoinReturnsMetadataErrorsAtomically(t *testing.T) {
+	for _, nilMetadata := range []bool{false, true} {
+		builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+		builder.compCtx = &indexHintResolveFailureContext{
+			MockCompilerContext: NewMockCompilerContext(true), nilMetadata: nilMetadata,
+		}
+		require.NoError(t, builder.recordIndexHints(leftScanID, leftDef, []*tree.IndexHint{{
+			HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_a"},
+		}}))
+		joinNode := builder.qry.Nodes[joinID]
+		children := slices.Clone(joinNode.Children)
+		onList := DeepCopyExprList(joinNode.OnList)
+		nodeCount := len(builder.qry.Nodes)
+
+		newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+		require.Error(t, err)
+		require.Equal(t, int32(-1), newID)
+		require.Equal(t, nodeCount, len(builder.qry.Nodes))
+		require.Equal(t, children, joinNode.Children)
+		require.Equal(t, onList, joinNode.OnList)
+		require.Empty(t, joinNode.RuntimeFilterBuildList)
+	}
+}
+
+func TestRightForceIndexForJoinRollsBackSwapOnMetadataError(t *testing.T) {
+	builder, joinID, _, _ := makeIndexHintJoinBuilder(t)
+	builder.compCtx = &indexHintResolveFailureContext{MockCompilerContext: NewMockCompilerContext(true)}
+	joinNode := builder.qry.Nodes[joinID]
+	rightScanID := joinNode.Children[1]
+	rightScan := builder.qry.Nodes[rightScanID]
+	rightScan.TableDef.Indexes = []*planpb.IndexDef{{
+		IndexName: "idx_b", IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+		IndexTableName: "idx_join_b_table", Parts: []string{"b", catalog.CreateAlias("a")}, TableExist: true,
+	}}
+	rightScan.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
+	rightScan.ObjRef = &planpb.ObjectRef{ObjName: "right_t"}
+	require.NoError(t, builder.recordIndexHints(rightScanID, rightScan.TableDef, []*tree.IndexHint{{
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_b"},
+	}}))
+	children := slices.Clone(joinNode.Children)
+	onList := DeepCopyExprList(joinNode.OnList)
+
+	newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.Error(t, err)
+	require.Equal(t, int32(-1), newID)
+	require.Equal(t, children, joinNode.Children)
+	require.Equal(t, onList, joinNode.OnList)
+}
+
+func TestForceIndexForJoinRejectsForcingBothSides(t *testing.T) {
+	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+	joinNode := builder.qry.Nodes[joinID]
+	rightScanID := joinNode.Children[1]
+	rightDef := builder.qry.Nodes[rightScanID].TableDef
+	rightDef.Indexes = []*planpb.IndexDef{{
+		IndexName: "idx_b", IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+		IndexTableName: "idx_join_b_table", Parts: []string{"b"}, TableExist: true,
+	}}
+	require.NoError(t, builder.recordIndexHints(leftScanID, leftDef, []*tree.IndexHint{{
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_a"},
+	}}))
+	require.NoError(t, builder.recordIndexHints(rightScanID, rightDef, []*tree.IndexHint{{
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_b"},
+	}}))
+
+	children := slices.Clone(joinNode.Children)
+	newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.Error(t, err)
+	require.Equal(t, int32(-1), newID)
+	require.Equal(t, children, joinNode.Children)
+}
+
+func TestForceIndexForJoinIsConsumedInsideThreeTableTree(t *testing.T) {
+	builder, innerJoinID, _, _ := makeIndexHintJoinBuilder(t)
+	innerJoin := builder.qry.Nodes[innerJoinID]
+	targetScanID := innerJoin.Children[1]
+	targetScan := builder.qry.Nodes[targetScanID]
+	targetScan.TableDef.Indexes = []*planpb.IndexDef{{
+		IndexName: "idx_b", IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+		IndexTableName: "idx_join_b_table", Parts: []string{"b", catalog.CreateAlias("a")}, TableExist: true,
+	}}
+	targetScan.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
+	targetScan.ObjRef = &planpb.ObjectRef{ObjName: "target_t"}
+	targetScan.Stats = &planpb.Stats{TableCnt: 1000, Cost: 1000}
+	require.NoError(t, builder.recordIndexHints(targetScanID, targetScan.TableDef, []*tree.IndexHint{{
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_b"},
+	}}))
+
+	ctx := builder.ctxByNode[innerJoinID]
+	thirdTag := builder.genNewBindTag()
+	thirdDef := &planpb.TableDef{
+		Name: "third_t", Cols: []*planpb.ColDef{{Name: "a", Typ: planpb.Type{Id: int32(types.T_int32)}}},
+		Name2ColIndex: map[string]int32{"a": 0},
+	}
+	thirdScanID := builder.appendNode(makeJoinIndexTestScan(thirdDef, thirdTag), ctx)
+	outerCond := ftjMakeEqExpr(t, ftjColExpr(targetScan.TableDef, targetScan.BindingTags[0], 0), ftjColExpr(thirdDef, thirdTag, 0))
+	outerJoinID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+		Children: []int32{innerJoinID, thirdScanID}, OnList: []*planpb.Expr{outerCond},
+	}, ctx)
+
+	newID, err := builder.applyIndices(outerJoinID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, outerJoinID, newID)
+	require.NotEqual(t, targetScanID, innerJoin.Children[0])
+	require.Equal(t, planpb.Node_INDEX, builder.qry.Nodes[innerJoin.Children[0]].JoinType)
+	require.Equal(t, targetScanID, builder.qry.Nodes[innerJoin.Children[0]].Children[0])
+}
+
 func TestForceIndexPrepassStopsAtQueryBlockBoundary(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	outerCtx := NewBindContext(builder, nil)
@@ -507,6 +629,7 @@ func TestForceIndexPrepassStopsAtQueryBlockBoundary(t *testing.T) {
 		Name:          "t",
 		Cols:          []*planpb.ColDef{{Name: "a", Typ: typ}},
 		Name2ColIndex: map[string]int32{"a": 0},
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
 		Indexes: []*planpb.IndexDef{{
 			IndexName: "idx_a", IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
 			IndexTableName: "idx_a_table", Parts: []string{"a"}, TableExist: true,
@@ -516,11 +639,15 @@ func TestForceIndexPrepassStopsAtQueryBlockBoundary(t *testing.T) {
 		NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{scanTag}, TableDef: tableDef,
 		ObjRef: &planpb.ObjectRef{ObjName: "t"},
 	}, innerCtx)
-	require.NoError(t, builder.recordIndexHints(scanID, tableDef, []*tree.IndexHint{{
-		HintType: tree.HintForce, HintScope: tree.HintForOrderBy, IndexNames: []string{"idx_a"},
-	}}))
+	require.NoError(t, builder.recordIndexHints(scanID, tableDef, []*tree.IndexHint{
+		{HintType: tree.HintForce, HintScope: tree.HintForOrderBy, IndexNames: []string{"idx_a"}},
+		{HintType: tree.HintForce, HintScope: tree.HintForGroupBy, IndexNames: []string{PrimaryKeyName}},
+	}))
+	aggID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_AGG, Children: []int32{scanID}, GroupBy: []*planpb.Expr{GetColExpr(typ, scanTag, 0)},
+	}, innerCtx)
 	projectID := builder.appendNode(&planpb.Node{
-		NodeType: planpb.Node_PROJECT, Children: []int32{scanID}, BindingTags: []int32{projectTag},
+		NodeType: planpb.Node_PROJECT, Children: []int32{aggID}, BindingTags: []int32{projectTag},
 		ProjectList: []*planpb.Expr{GetColExpr(typ, scanTag, 0)},
 	}, outerCtx)
 	sortID := builder.appendNode(&planpb.Node{
@@ -531,9 +658,11 @@ func TestForceIndexPrepassStopsAtQueryBlockBoundary(t *testing.T) {
 	newID, err := builder.applyForceIndexHints(sortID, nil, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 	require.NoError(t, err)
 	require.Equal(t, sortID, newID)
-	require.Equal(t, scanID, builder.qry.Nodes[projectID].Children[0])
-	require.False(t, builder.isScanProtected(scanID))
-	require.Len(t, builder.qry.Nodes, 3)
+	require.Equal(t, aggID, builder.qry.Nodes[projectID].Children[0])
+	require.Equal(t, scanID, builder.qry.Nodes[aggID].Children[0])
+	require.True(t, builder.isScanProtected(scanID))
+	require.Empty(t, findFirstIndexScanName(&planpb.Plan{Plan: &planpb.Plan_Query{Query: builder.qry}}))
+	require.Len(t, builder.qry.Nodes, 4)
 }
 
 func makeIndexHintJoinBuilder(t *testing.T) (*QueryBuilder, int32, int32, *planpb.TableDef) {

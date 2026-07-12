@@ -184,6 +184,7 @@ type QueryBuilder struct {
 	protectedScans       map[int32]int
 	projectSpecialGuards map[int32]*specialIndexGuard
 	indexHintsByScan     map[int32]*indexHintSet
+	groupHintScans       map[int32]struct{}
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
