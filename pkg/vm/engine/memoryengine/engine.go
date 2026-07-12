@@ -199,36 +199,104 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 }
 
 func (e *Engine) Nodes(isInternal bool, tenant string, _ string, cnLabel map[string]string) (engine.Nodes, error) {
-	var nodes engine.Nodes
-	cluster := clusterservice.GetMOCluster(e.sid)
+	candidates, err := e.DiscoverQueryCandidates(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	return e.ResolveQueryCandidatePool(context.Background(), candidates, engine.QueryCandidatePoolRequest{
+		IsInternal: isInternal,
+		Tenant:     tenant,
+		CNLabel:    cnLabel,
+	})
+}
+
+var _ engine.QueryCandidateDiscoverer = (*Engine)(nil)
+var _ engine.QueryCandidatePoolResolver = (*Engine)(nil)
+
+func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandidates, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cluster := e.cluster
+	if cluster == nil {
+		var err error
+		cluster, err = clusterservice.GetMOClusterWithContext(ctx, e.sid)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var candidates engine.QueryCandidates
+	err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+		ctx,
+		cluster,
+		clusterservice.NewSelector(),
+		func(c metadata.CNService) bool {
+			if ctx.Err() != nil {
+				return false
+			}
+			candidates = append(candidates, engine.QueryCandidate{Service: c, Mcpu: 1})
+			return true
+		})
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+func (e *Engine) ResolveQueryCandidatePool(
+	ctx context.Context,
+	candidates engine.QueryCandidates,
+	request engine.QueryCandidatePoolRequest,
+) (engine.Nodes, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	var selector clusterservice.Selector
-	if isInternal || strings.ToLower(tenant) == "sys" {
+	if request.IsInternal || strings.ToLower(request.Tenant) == "sys" {
 		selector = clusterservice.NewSelector()
 	} else {
-		selector = selector.SelectByLabel(cnLabel, clusterservice.EQ)
+		selector = selector.SelectByLabel(request.CNLabel, clusterservice.EQ)
 	}
-	cluster.GetCNService(selector,
-		func(c metadata.CNService) bool {
+	var nodes engine.Nodes
+	appendMatching := func(states ...metadata.WorkState) {
+		for _, candidate := range candidates {
+			if ctx.Err() != nil {
+				return
+			}
+			matchedState := false
+			for _, state := range states {
+				if candidate.Service.WorkState == state {
+					matchedState = true
+					break
+				}
+			}
+			if !matchedState || !selector.Match(candidate.Service.Labels) {
+				continue
+			}
 			nodes = append(nodes, engine.Node{
-				Mcpu:      1,
-				Id:        c.ServiceID,
-				Addr:      c.PipelineServiceAddress,
-				WorkState: c.WorkState,
+				Mcpu:      candidate.Mcpu,
+				Id:        candidate.Service.ServiceID,
+				Addr:      candidate.Service.PipelineServiceAddress,
+				WorkState: candidate.Service.WorkState,
 			})
-			return true
-		})
-	cluster.GetCNServiceWithoutWorkingState(selector, func(c metadata.CNService) bool {
-		if c.WorkState != metadata.WorkState_Draining && c.WorkState != metadata.WorkState_Drained {
-			return true
 		}
-		nodes = append(nodes, engine.Node{
-			Mcpu:      1,
-			Id:        c.ServiceID,
-			Addr:      c.PipelineServiceAddress,
-			WorkState: c.WorkState,
-		})
-		return true
-	})
+	}
+	appendMatching(metadata.WorkState_Working, metadata.WorkState_Unknown)
+	appendMatching(metadata.WorkState_Draining, metadata.WorkState_Drained)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nodes, nil
 }
 
