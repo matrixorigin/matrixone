@@ -129,6 +129,101 @@ func addTextCastTableForTest(mock *MockOptimizer) {
 	mock.ctxt.pks[tableName] = []int{0}
 }
 
+// addArithCtxTableForTest registers a table with exact-numeric columns so the
+// INSERT/UPDATE context-backfill path (forceCastExprWithName) can be exercised
+// for dual-param arithmetic like "insert into t(dec) values(? + ?)".
+func addArithCtxTableForTest(mock *MockOptimizer) {
+	const tableName = "arith_ctx_t"
+	const tblID = 23177
+	idType := plan.Type{Id: int32(types.T_int32), NotNullable: true}
+	decType := plan.Type{Id: int32(types.T_decimal128), Width: 30, Scale: 2}
+	i64Type := plan.Type{Id: int32(types.T_int64)}
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
+
+	cols := []*ColDef{
+		{ColId: 0, Name: "id", OriginName: "id", Typ: idType, Primary: true, Pkidx: 1, Default: &plan.Default{}},
+		{ColId: 1, Name: "dec", OriginName: "dec", Typ: decType, Default: &plan.Default{NullAbility: true}},
+		{ColId: 2, Name: "i64", OriginName: "i64", Typ: i64Type, Default: &plan.Default{NullAbility: true}},
+		{ColId: 3, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &plan.Default{}},
+	}
+	tableDef := &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     tblID,
+		Name:      tableName,
+		Cols:      cols,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+			CompPkeyCol: cols[0],
+		},
+		Defs: []*plan.TableDef_DefType{
+			{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: []*plan.Property{
+							{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel},
+						},
+					},
+				},
+			},
+		},
+	}
+	mock.ctxt.objects[tableName] = &ObjectRef{SchemaName: "tpch", ObjName: tableName, Obj: tblID}
+	mock.ctxt.tables[tableName] = tableDef
+	mock.ctxt.id2name[tblID] = tableName
+	mock.ctxt.pks[tableName] = []int{0}
+}
+
+// collectParamCastTargetIds returns the target type ids of every
+// cast(ParamRef -> X) wrapper in expr, so tests can assert what exact type a
+// prepared param is materialized as under a given context.
+func collectParamCastTargetIds(expr *plan.Expr) []int32 {
+	var ids []int32
+	var walk func(e *plan.Expr)
+	walk = func(e *plan.Expr) {
+		if e == nil {
+			return
+		}
+		if f := e.GetF(); f != nil {
+			if f.Func.GetObjName() == "cast" && len(f.Args) == 2 && f.Args[0].GetP() != nil {
+				ids = append(ids, e.Typ.Id)
+			}
+			for _, a := range f.Args {
+				walk(a)
+			}
+		}
+		if list := e.GetList(); list != nil {
+			for _, item := range list.List {
+				walk(item)
+			}
+		}
+	}
+	walk(expr)
+	return ids
+}
+
+// allParamCastTargetIds collects param cast target ids across every node's
+// ProjectList and INSERT VALUES rowset data in a plan (UPDATE SET lands in a
+// PROJECT node's ProjectList; INSERT ... VALUES lands in a VALUE_SCAN's
+// RowsetData).
+func allParamCastTargetIds(q *plan.Plan) []int32 {
+	var ids []int32
+	for _, node := range q.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			ids = append(ids, collectParamCastTargetIds(expr)...)
+		}
+		if rd := node.GetRowsetData(); rd != nil {
+			for _, col := range rd.GetCols() {
+				for _, re := range col.GetData() {
+					ids = append(ids, collectParamCastTargetIds(re.GetExpr())...)
+				}
+			}
+		}
+	}
+	return ids
+}
+
 // resolveQueryPlan unwraps a PREPARE plan to the inner prepared query plan so
 // prepare-specific assertions inspect the real query instead of the outer DCL
 // node (whose GetQuery() is nil).
@@ -546,6 +641,111 @@ func topArithFuncExpr(q *plan.Plan) *plan.Expr {
 		}
 	}
 	return nil
+}
+
+// TestPrepareArithCastContextBackfill verifies that when a dual-param arithmetic
+// expression is wrapped by an exact-numeric CAST, the prepared params are cast
+// directly to the exact type (no intermediate float64 rounding). Per MySQL 8.0's
+// PREPARE rules the parameter type is determined by the arithmetic's context.
+func TestPrepareArithCastContextBackfill(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	tests := []struct {
+		sql       string
+		wantParam int32 // exact type each param must be cast to
+	}{
+		{"prepare s from select cast(? + ? as decimal(30,0))", int32(types.T_decimal128)},
+		{"prepare s from select cast(? - ? as decimal(30,0))", int32(types.T_decimal128)},
+		{"prepare s from select cast(? * ? as decimal(30,0))", int32(types.T_decimal128)},
+		{"prepare s from select cast(? / ? as decimal(30,0))", int32(types.T_decimal128)},
+		{"prepare s from select cast(? % ? as decimal(30,0))", int32(types.T_decimal128)},
+		{"prepare s from select cast(? div ? as decimal(30,0))", int32(types.T_decimal128)},
+		{"prepare s from select cast(? mod ? as decimal(30,0))", int32(types.T_decimal128)},
+		{"prepare s from select cast(? + ? as signed)", int32(types.T_int64)},
+		// nested: outer exact context propagates to the inner promoted params.
+		{"prepare s from select cast((? + ?) + 1 as decimal(20,2))", int32(types.T_decimal128)},
+	}
+	for _, tc := range tests {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		assert.NoErrorf(t, err, "%s should succeed", tc.sql)
+
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		ids := allParamCastTargetIds(q)
+		assert.NotEmptyf(t, ids, "%s should cast prepared params", tc.sql)
+		for _, id := range ids {
+			assert.Equalf(t, tc.wantParam, id,
+				"%s: prepared param must be cast to %d (exact context), not %d",
+				tc.sql, tc.wantParam, id)
+			assert.NotEqualf(t, int32(types.T_float64), id,
+				"%s: prepared param must not be routed through float64", tc.sql)
+		}
+	}
+}
+
+// TestPrepareArithInsertUpdateContextBackfill verifies the INSERT/UPDATE target
+// column supplies the exact type context for dual-param arithmetic, so params
+// are not routed through float64 (forceCastExprWithName backfill path).
+func TestPrepareArithInsertUpdateContextBackfill(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addArithCtxTableForTest(mock)
+
+	tests := []struct {
+		sql       string
+		wantParam int32
+	}{
+		{"prepare s from insert into arith_ctx_t(id, dec) values(1, ? + ?)", int32(types.T_decimal128)},
+		{"prepare s from insert into arith_ctx_t(id, i64) values(1, ? + ?)", int32(types.T_int64)},
+		{"prepare s from update arith_ctx_t set dec = ? + ? where id = 1", int32(types.T_decimal128)},
+		{"prepare s from update arith_ctx_t set i64 = ? + ? where id = 1", int32(types.T_int64)},
+	}
+	for _, tc := range tests {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		assert.NoErrorf(t, err, "%s should succeed", tc.sql)
+
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		ids := allParamCastTargetIds(q)
+		assert.NotEmptyf(t, ids, "%s should cast prepared params", tc.sql)
+		for _, id := range ids {
+			assert.NotEqualf(t, int32(types.T_float64), id,
+				"%s: prepared param must not be routed through float64", tc.sql)
+		}
+		assert.Containsf(t, ids, tc.wantParam,
+			"%s: prepared param should be cast to exact column type %d", tc.sql, tc.wantParam)
+	}
+}
+
+// TestPrepareArithNonExactContextKeepsDouble verifies the backfill does NOT fire
+// for no-context or non-exact contexts: top-level "? + ?", nested arithmetic
+// with a literal peer, and an explicit CAST AS DOUBLE all keep float64 params.
+func TestPrepareArithNonExactContextKeepsDouble(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	tests := []string{
+		"prepare s from select ? + ?",
+		"prepare s from select (? + ?) + 1",
+		"prepare s from select cast(? + ? as double)",
+	}
+	for _, sql := range tests {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		assert.NoErrorf(t, err, "%s should succeed", sql)
+
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		ids := allParamCastTargetIds(q)
+		assert.NotEmptyf(t, ids, "%s should cast prepared params", sql)
+		for _, id := range ids {
+			assert.Equalf(t, int32(types.T_float64), id,
+				"%s: no exact context, param should stay float64, got %d", sql, id)
+		}
+	}
 }
 
 // countDoubleCasts counts cast(arg, T_float64) wrappers in expr.

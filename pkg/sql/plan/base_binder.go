@@ -1667,28 +1667,129 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 // promoteTextParamsForArith promotes each T_text prepared-statement parameter
 // reference to DOUBLE when BOTH operands are unresolved ParamRefs (e.g.
 // "? + ?").  Per MySQL 8.0's PREPARE parameter-marker rules, when both operands
-// of a binary arithmetic operator are parameters and the operator has no
-// type-determining context, the derived type is DOUBLE PRECISION.  That is
-// exactly this case: a top-level "? + ?" in a protocol prepared statement, for
-// which MySQL returns floating metadata/values (e.g. "select ? + ?" → 3.0).
-// The precision loss above 2^53 is the standard IEEE 754 tradeoff and matches
-// MySQL's binary-protocol behaviour.  Mixed cases (e.g. "0 + ?", "? + 5",
-// assignment/update contexts) keep a type-determining peer, so they fall
-// through to the existing initFixed1/initFixed2 exact coercion tables and are
-// not promoted here.
+// of a binary arithmetic operator are parameters, their type is determined by
+// context; only when the arithmetic has no type-determining context is the
+// derived type DOUBLE PRECISION.
+//
+// Because expression binding is bottom-up, this helper cannot see the outer
+// context (a surrounding CAST, an INSERT/UPDATE target column, ...) when it
+// runs.  It therefore always promotes to DOUBLE here, which is correct for the
+// no-context case (a top-level "? + ?", for which MySQL returns floating
+// values, e.g. "select ? + ?" → 3.0).  When a precise-numeric type context
+// DOES exist, it later wraps this expression in a cast to the exact type; that
+// cast site (appendCastBeforeExpr / forceCastExprWithName) calls
+// rebindPromotedParamArithToType to rewrite the DOUBLE promotion back onto the
+// exact type, so no float64 rounding happens for decimal/integer contexts.
+//
+// Mixed cases (e.g. "0 + ?", "? + 5") keep a type-determining literal peer, so
+// they never reach this dual-ParamRef guard and stay on the existing
+// initFixed1/initFixed2 exact coercion tables.
 func promoteTextParamsForArith(ctx context.Context, args []*plan.Expr) {
 	if len(args) != 2 ||
 		args[0].Typ.Id != int32(types.T_text) || args[0].GetP() == nil ||
 		args[1].Typ.Id != int32(types.T_text) || args[1].GetP() == nil {
 		return
 	}
-	// DOUBLE is the MySQL-derived type for no-context arithmetic parameters;
-	// its range (≈1e308) also avoids the overflow windows that fixed-scale
-	// decimals have for large or scientific-notation inputs.
 	doubleType := plan.Type{Id: int32(types.T_float64), NotNullable: true}
 	for i := range args {
 		args[i], _ = appendCastBeforeExpr(ctx, args[i], doubleType)
 	}
+}
+
+// arithOpNames is the set of binary arithmetic operators whose unresolved
+// dual-ParamRef form is promoted to DOUBLE by promoteTextParamsForArith.
+var arithOpNames = map[string]bool{
+	"+": true, "-": true, "*": true, "/": true, "%": true, "mod": true, "div": true,
+}
+
+// isPreciseNumericType reports whether t is an exact numeric type (decimal or
+// integer) for which float64 promotion of prepared params would lose precision.
+func isPreciseNumericType(t Type) bool {
+	oid := types.T(t.Id)
+	return oid.IsDecimal() || oid.IsInteger()
+}
+
+// paramRefUnderFloatCast returns the inner ParamRef expr when e is exactly
+// cast(ParamRef -> float64) (the shape promoteTextParamsForArith produces),
+// otherwise nil.
+func paramRefUnderFloatCast(e *Expr) *Expr {
+	f := e.GetF()
+	if f == nil || f.Func.GetObjName() != "cast" || len(f.Args) != 2 {
+		return nil
+	}
+	if e.Typ.Id != int32(types.T_float64) || f.Args[0].GetP() == nil {
+		return nil
+	}
+	return f.Args[0]
+}
+
+// isPromotedParamArith reports whether e is a binary arithmetic expression
+// produced by DOUBLE-promoting unresolved prepared params, i.e. every operand
+// is either cast(ParamRef -> float64), a nested promoted-param arithmetic, or a
+// numeric literal peer, and at least one operand is a promoted param.
+func isPromotedParamArith(e *Expr) bool {
+	f := e.GetF()
+	if f == nil || !arithOpNames[f.Func.GetObjName()] || len(f.Args) != 2 {
+		return false
+	}
+	hasParam := false
+	for _, arg := range f.Args {
+		switch {
+		case paramRefUnderFloatCast(arg) != nil:
+			hasParam = true
+		case isPromotedParamArith(arg):
+			hasParam = true
+		case arg.GetLit() != nil:
+			// literal peer (e.g. the "1" in "(? + ?) + 1") — allowed
+		default:
+			return false
+		}
+	}
+	return hasParam
+}
+
+// rebindPromotedParamArithToType rewrites a promoted-param arithmetic expression
+// (see isPromotedParamArith) so that its prepared params and literal peers are
+// cast to target — an exact numeric type supplied by the surrounding context —
+// instead of float64, then re-resolves the arithmetic operator on the exact
+// types.  This removes the intermediate float64 rounding for contexts like
+// "cast(? + ? as decimal(30,0))" or "insert into t(dec) values(? + ?)".
+//
+// It returns (rewritten, true, nil) on success, or (e, false, nil) when e turns
+// out not to be rewritable.  Callers guard with isPromotedParamArith(e) first.
+func rebindPromotedParamArithToType(ctx context.Context, e *Expr, target Type) (*Expr, bool, error) {
+	f := e.GetF()
+	op := f.Func.GetObjName()
+	newArgs := make([]*Expr, len(f.Args))
+	for i, arg := range f.Args {
+		switch {
+		case paramRefUnderFloatCast(arg) != nil:
+			c, err := appendCastBeforeExpr(ctx, paramRefUnderFloatCast(arg), target)
+			if err != nil {
+				return nil, false, err
+			}
+			newArgs[i] = c
+		case isPromotedParamArith(arg):
+			r, _, err := rebindPromotedParamArithToType(ctx, arg, target)
+			if err != nil {
+				return nil, false, err
+			}
+			newArgs[i] = r
+		case arg.GetLit() != nil:
+			c, err := appendCastBeforeExpr(ctx, arg, target)
+			if err != nil {
+				return nil, false, err
+			}
+			newArgs[i] = c
+		default:
+			return e, false, nil
+		}
+	}
+	newExpr, err := BindFuncExprImplByPlanExpr(ctx, op, newArgs)
+	if err != nil {
+		return nil, false, err
+	}
+	return newExpr, true, nil
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
@@ -2617,6 +2718,19 @@ func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 // --- util functions ----
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
+	// When an exact-numeric context wraps a DOUBLE-promoted dual-param
+	// arithmetic (e.g. "cast(? + ? as decimal(30,0))"), rebind the arithmetic
+	// onto the exact type so prepared params are not routed through float64.
+	if isPreciseNumericType(toType) && isPromotedParamArith(expr) {
+		if rebuilt, ok, err := rebindPromotedParamArithToType(ctx, expr, toType); err != nil {
+			return nil, err
+		} else if ok {
+			expr = rebuilt
+			if expr.Typ.Id == toType.Id && expr.Typ.Width == toType.Width && expr.Typ.Scale == toType.Scale {
+				return expr, nil
+			}
+		}
+	}
 	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
