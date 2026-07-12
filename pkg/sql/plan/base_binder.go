@@ -2419,22 +2419,14 @@ func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args [
 		return nil
 	}
 
-	floatType := types.T_float64.ToType()
-	targetType := makePlan2Type(&floatType)
 	if args[0].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[1]) {
 		var err error
-		args[0], err = appendCastBeforeExpr(ctx, args[0], targetType)
-		if err == nil {
-			args[1], err = appendCastBeforeExpr(ctx, args[1], targetType)
-		}
+		args[1], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[1]})
 		return err
 	}
 	if args[1].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[0]) {
 		var err error
-		args[0], err = appendCastBeforeExpr(ctx, args[0], targetType)
-		if err == nil {
-			args[1], err = appendCastBeforeExpr(ctx, args[1], targetType)
-		}
+		args[0], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[0]})
 		return err
 	}
 	return nil

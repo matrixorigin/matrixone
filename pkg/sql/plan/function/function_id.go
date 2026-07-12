@@ -762,10 +762,12 @@ const (
 	// function `cast_strict`
 	CAST_STRICT = 541
 	DATE_TRUNC  = 542
+	// 543 and 544 are reserved by JSON_CONTAINS and JSON_REMOVE on main.
+	INTERNAL_JSON_ORDERING_PARAM = 545
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 543
+	FUNCTION_END_NUMBER = 546
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1039,6 +1041,7 @@ var functionIdRegister = map[string]int32{
 	"json_objectagg":                 JSON_OBJECTAGG,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
+	JsonOrderingParamFunctionName:    INTERNAL_JSON_ORDERING_PARAM,
 	"json_row":                       JSON_ROW,
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
