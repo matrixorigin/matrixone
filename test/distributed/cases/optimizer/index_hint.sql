@@ -74,6 +74,8 @@ from t ignore index for group by(idx_a_b_c_id)
 group by a;
 
 -- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",true)
+-- @regex("Index Table Scan.*idx_b_a_id",false)
 -- @regex("Filter Cond",true)
 -- @regex("Index Reader Param",false)
 explain select id,a,b

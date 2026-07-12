@@ -2419,7 +2419,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
 		builder.prepareSpecialIndexGuards(rootID)
-		rootID, err = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		idxColMap := make(map[[2]int32]*plan.Expr)
+		rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
+		if err == nil {
+			rootID, err = builder.applyIndices(rootID, colRefCnt, idxColMap)
+		}
 		builder.resetSpecialIndexGuards()
 		if err != nil {
 			return nil, err

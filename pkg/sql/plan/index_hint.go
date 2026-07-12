@@ -198,18 +198,6 @@ func (builder *QueryBuilder) scanHintsForceIndexes(node *plan.Node) bool {
 	return hintSet != nil && hintSet.scan.forceSpecified
 }
 
-func (builder *QueryBuilder) filterRegularIndexesByOrderHints(node *plan.Node, indexes []*plan.IndexDef) []*plan.IndexDef {
-	return builder.filterRegularIndexesByHints(node, indexes, func(hintSet *indexHintSet) indexHintScopeSet {
-		return hintSet.order
-	})
-}
-
-func (builder *QueryBuilder) filterRegularIndexesByGroupHints(node *plan.Node, indexes []*plan.IndexDef) []*plan.IndexDef {
-	return builder.filterRegularIndexesByHints(node, indexes, func(hintSet *indexHintSet) indexHintScopeSet {
-		return hintSet.group
-	})
-}
-
 func (builder *QueryBuilder) filterRegularIndexesByJoinHints(node *plan.Node, indexes []*plan.IndexDef) []*plan.IndexDef {
 	return builder.filterRegularIndexesByHints(node, indexes, func(hintSet *indexHintSet) indexHintScopeSet {
 		return hintSet.join

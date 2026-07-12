@@ -292,6 +292,15 @@ func TestIndexHintOrderScopeBuildsNonCoveringBackfillJoin(t *testing.T) {
 	require.True(t, planHasIndexJoin(queryPlan))
 }
 
+func TestIndexHintOrderScopeFindsScanBelowJoin(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, "select t1.a from index_hint_t t1 force index for order by(idx_a) join index_hint_t t2 on t1.id = t2.id order by t1.a")
+	require.NoError(t, err)
+	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
+}
+
 func TestIndexHintPrimaryOrderAndGroupScopes(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -302,11 +311,11 @@ func TestIndexHintPrimaryOrderAndGroupScopes(t *testing.T) {
 
 	queryPlan, err = runOneStmt(mock, t, "select id from index_hint_t ignore index for order by(primary) order by id")
 	require.NoError(t, err)
-	require.Equal(t, "idx_id", findFirstIndexScanName(queryPlan))
+	require.Empty(t, findFirstIndexScanName(queryPlan))
 
 	queryPlan, err = runOneStmt(mock, t, "select id,count(*) from index_hint_t ignore index for group by(primary) group by id")
 	require.NoError(t, err)
-	require.Equal(t, "idx_id", findFirstIndexScanName(queryPlan))
+	require.Empty(t, findFirstIndexScanName(queryPlan))
 }
 
 func TestIndexHintGroupScopeSelectsAndIgnoresCoveringIndex(t *testing.T) {
@@ -356,20 +365,90 @@ func TestIndexHintRejectsInvalidCombinations(t *testing.T) {
 	require.Error(t, err)
 }
 
+type indexHintResolveFailureContext struct {
+	*MockCompilerContext
+	nilMetadata bool
+}
+
+func (c *indexHintResolveFailureContext) ResolveIndexTableByRef(_ *ObjectRef, _ string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+	if c.nilMetadata {
+		return nil, nil, nil
+	}
+	return nil, nil, moerr.NewInternalErrorNoCtx("injected index metadata failure")
+}
+
+func TestHintedIndexAccessReturnsMetadataErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		nilMetadata bool
+	}{
+		{name: "resolve error"},
+		{name: "nil metadata", nilMetadata: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &indexHintResolveFailureContext{MockCompilerContext: NewMockCompilerContext(true), nilMetadata: tc.nilMetadata}
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+			tag := builder.genNewBindTag()
+			idxDef := &planpb.IndexDef{
+				IndexName: "idx_a", IndexTableName: "idx_a_table", Parts: []string{"a", catalog.CreateAlias("id")}, TableExist: true,
+			}
+			tableDef := &planpb.TableDef{
+				Name: "t",
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+					{Name: "a", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+				Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				Indexes:       []*planpb.IndexDef{idxDef},
+			}
+			scanNode := &planpb.Node{
+				NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, TableDef: tableDef,
+				ObjRef: &planpb.ObjectRef{ObjName: "t"}, BindingTags: []int32{tag},
+			}
+			idxColMap := make(map[[2]int32]*planpb.Expr)
+			_, _, _, err := builder.tryHintedIndexAccess(idxDef, scanNode, map[[2]int32]int{{tag, 1}: 1}, idxColMap)
+			require.Error(t, err)
+			require.Empty(t, builder.qry.Nodes)
+			require.Empty(t, idxColMap)
+		})
+	}
+}
+
 func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		ignore      bool
+		force       bool
+		selectivity float64
+		outcnt      float64
 		wantRewrite bool
 	}{
 		{name: "control rewrites", wantRewrite: true},
 		{name: "join ignore prevents rewrite", ignore: true, wantRewrite: false},
+		{name: "high selectivity skips without force", selectivity: 0.8},
+		{name: "force bypasses selectivity gate", force: true, selectivity: 0.8, wantRewrite: true},
+		{name: "high outcnt skips without force", outcnt: 1000},
+		{name: "force bypasses outcnt gate", force: true, outcnt: 1000, wantRewrite: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+			rightScan := builder.qry.Nodes[builder.qry.Nodes[joinID].Children[1]]
+			if tc.selectivity > 0 {
+				rightScan.Stats.Selectivity = tc.selectivity
+			}
+			if tc.outcnt > 0 {
+				rightScan.Stats.Outcnt = tc.outcnt
+			}
 			if tc.ignore {
 				err := builder.recordIndexHints(leftScanID, leftDef, []*tree.IndexHint{
 					{HintType: tree.HintIgnore, HintScope: tree.HintForJoin, IndexNames: []string{"idx_a"}},
+				})
+				require.NoError(t, err)
+			}
+			if tc.force {
+				err := builder.recordIndexHints(leftScanID, leftDef, []*tree.IndexHint{
+					{HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_a"}},
 				})
 				require.NoError(t, err)
 			}

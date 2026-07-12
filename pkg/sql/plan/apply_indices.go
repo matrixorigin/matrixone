@@ -18,8 +18,10 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
@@ -475,10 +477,6 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 		//NOTE: This is the entry point for vector index rule on SORT NODE.
 		return builder.applyIndicesForProject(nodeID, node, colRefCnt, idxColMap)
 
-	case plan.Node_AGG:
-		builder.applyGroupHintIndexScan(node, colRefCnt, idxColMap)
-		return nodeID, nil
-
 	}
 
 	return nodeID, nil
@@ -627,7 +625,6 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		}
 	}
 END_FULLTEXT:
-	builder.applyOrderHintIndexScan(projNode, colRefCnt, idxColMap)
 
 	// 1. Vector Index Check
 	// Handle Queries like
@@ -735,119 +732,6 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 	}
 }
 
-func (builder *QueryBuilder) applyOrderHintIndexScan(projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) {
-	sortNode := builder.resolveSortNode(projNode, 1)
-	if sortNode == nil || len(sortNode.OrderBy) == 0 || len(sortNode.Children) != 1 {
-		return
-	}
-	sortChild := builder.qry.Nodes[sortNode.Children[0]]
-	var sortProjectNode *plan.Node
-	var scanNode *plan.Node
-	if sortChild.NodeType == plan.Node_PROJECT && len(sortChild.Children) == 1 && len(sortChild.BindingTags) > 0 {
-		sortProjectNode = sortChild
-		scanNode = builder.qry.Nodes[sortChild.Children[0]]
-	} else if sortChild.NodeType == plan.Node_TABLE_SCAN {
-		scanNode = sortChild
-	} else {
-		return
-	}
-	if scanNode.NodeType != plan.Node_TABLE_SCAN || scanNode.IndexScanInfo.IsIndexScan || scanNode.TableDef == nil {
-		return
-	}
-	hintSet := builder.indexHintsByScan[scanNode.NodeId]
-	if hintSet == nil || hintSet.order.empty() {
-		return
-	}
-
-	baseCols := make([]int32, len(sortNode.OrderBy))
-	orderFlag := sortNode.OrderBy[0].Flag
-	for i, orderBy := range sortNode.OrderBy {
-		if orderBy.Flag != orderFlag {
-			return
-		}
-		baseCol := orderBy.Expr.GetCol()
-		if sortProjectNode != nil {
-			if baseCol == nil || baseCol.RelPos != sortProjectNode.BindingTags[0] || int(baseCol.ColPos) >= len(sortProjectNode.ProjectList) {
-				return
-			}
-			baseCol = sortProjectNode.ProjectList[baseCol.ColPos].GetCol()
-		}
-		if baseCol == nil || len(scanNode.BindingTags) == 0 || baseCol.RelPos != scanNode.BindingTags[0] {
-			return
-		}
-		baseCols[i] = baseCol.ColPos
-	}
-
-	indexes := builder.filterRegularIndexesByOrderHints(scanNode, scanNode.TableDef.Indexes)
-	for _, idxDef := range indexes {
-		if !usableRegularHintIndex(idxDef) || !indexLeadingColumnsMatch(idxDef, scanNode.TableDef, baseCols) {
-			continue
-		}
-		accessNodeID, idxNodeID, covering := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
-		if accessNodeID == -1 {
-			continue
-		}
-		if sortProjectNode != nil {
-			sortProjectNode.Children[0] = accessNodeID
-			if covering {
-				replaceColumnsForNode(sortProjectNode, idxColMap)
-			}
-		} else {
-			sortNode.Children[0] = accessNodeID
-		}
-		if covering {
-			replaceColumnsForNode(sortNode, idxColMap)
-			replaceColumnsForNode(projNode, idxColMap)
-		}
-		idxNode := builder.qry.Nodes[idxNodeID]
-		idxNode.OrderBy = []*plan.OrderBySpec{{
-			Expr: GetColExpr(idxNode.TableDef.Cols[0].Typ, idxNode.BindingTags[0], 0),
-			Flag: orderFlag,
-		}}
-		if covering && len(idxNode.FilterList) == 0 && sortNode.Limit != nil && sortNode.Offset == nil && sortNode.RankOption == nil {
-			applyRegularIndexOrderedLimitParam(idxNode, idxNode.OrderBy[0], sortNode.Limit)
-		}
-		return
-	}
-}
-
-func (builder *QueryBuilder) applyGroupHintIndexScan(aggNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) {
-	if aggNode == nil || len(aggNode.GroupBy) == 0 || len(aggNode.Children) != 1 {
-		return
-	}
-	scanNode := builder.qry.Nodes[aggNode.Children[0]]
-	if scanNode.NodeType != plan.Node_TABLE_SCAN || scanNode.IndexScanInfo.IsIndexScan || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
-		return
-	}
-	hintSet := builder.indexHintsByScan[scanNode.NodeId]
-	if hintSet == nil || hintSet.group.empty() {
-		return
-	}
-	groupCols := make([]int32, len(aggNode.GroupBy))
-	for i, expr := range aggNode.GroupBy {
-		col := expr.GetCol()
-		if col == nil || col.RelPos != scanNode.BindingTags[0] {
-			return
-		}
-		groupCols[i] = col.ColPos
-	}
-	indexes := builder.filterRegularIndexesByGroupHints(scanNode, scanNode.TableDef.Indexes)
-	for _, idxDef := range indexes {
-		if !usableRegularHintIndex(idxDef) || !indexLeadingColumnsMatch(idxDef, scanNode.TableDef, groupCols) {
-			continue
-		}
-		accessNodeID, _, covering := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
-		if accessNodeID == -1 {
-			continue
-		}
-		aggNode.Children[0] = accessNodeID
-		if covering {
-			replaceColumnsForNode(aggNode, idxColMap)
-		}
-		return
-	}
-}
-
 func usableRegularHintIndex(idxDef *plan.IndexDef) bool {
 	return idxDef != nil && idxDef.TableExist && catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef)
 }
@@ -864,17 +748,191 @@ func indexLeadingColumnsMatch(idxDef *plan.IndexDef, tableDef *plan.TableDef, co
 	return true
 }
 
-func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, int32, bool) {
-	if idxNodeID := builder.tryHintedCoveringIndexScan(idxDef, node, colRefCnt, idxColMap); idxNodeID != -1 {
-		return idxNodeID, idxNodeID, true
-	}
-	accessNodeID, idxNodeID := builder.buildHintedIndexBackfillJoin(idxDef, node)
-	return accessNodeID, idxNodeID, false
+type forceIndexScope int
+
+const (
+	forceIndexForOrder forceIndexScope = iota
+	forceIndexForGroup
+)
+
+type forceIndexRequirement struct {
+	scope      forceIndexScope
+	columns    []*plan.Expr
+	orderFlag  plan.OrderBySpec_OrderByFlag
+	limit      *plan.Expr
+	canPushLim bool
 }
 
-func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef, node *plan.Node) (int32, int32) {
+func (builder *QueryBuilder) applyForceIndexHints(nodeID int32, requirements []forceIndexRequirement, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return nodeID, nil
+	}
+
+	localRequirements := requirements
+	switch node.NodeType {
+	case plan.Node_SORT:
+		if len(node.OrderBy) > 0 {
+			columns := make([]*plan.Expr, len(node.OrderBy))
+			flag := node.OrderBy[0].Flag
+			sameDirection := true
+			for i, orderBy := range node.OrderBy {
+				columns[i] = DeepCopyExpr(orderBy.Expr)
+				sameDirection = sameDirection && orderBy.Flag == flag
+			}
+			if sameDirection {
+				localRequirements = append(slices.Clone(requirements), forceIndexRequirement{
+					scope: forceIndexForOrder, columns: columns, orderFlag: flag,
+					limit: node.Limit, canPushLim: node.Offset == nil && node.RankOption == nil,
+				})
+			}
+		}
+	case plan.Node_AGG:
+		if len(node.GroupBy) > 0 {
+			columns := make([]*plan.Expr, len(node.GroupBy))
+			for i, groupBy := range node.GroupBy {
+				columns[i] = DeepCopyExpr(groupBy)
+			}
+			localRequirements = append(slices.Clone(requirements), forceIndexRequirement{
+				scope: forceIndexForGroup, columns: columns,
+			})
+		}
+	}
+
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		return builder.applyForceIndexHintToScan(node, localRequirements, colRefCnt, idxColMap)
+	}
+
+	childRequirements := localRequirements
+	if node.NodeType == plan.Node_PROJECT {
+		childRequirements = translateForceIndexRequirementsThroughProject(node, localRequirements)
+	}
+	for i, childID := range node.Children {
+		newChildID, err := builder.applyForceIndexHints(childID, childRequirements, colRefCnt, idxColMap)
+		if err != nil {
+			return -1, err
+		}
+		node.Children[i] = newChildID
+	}
+	replaceColumnsForNode(node, idxColMap)
+	return nodeID, nil
+}
+
+func translateForceIndexRequirementsThroughProject(projectNode *plan.Node, requirements []forceIndexRequirement) []forceIndexRequirement {
+	if projectNode == nil || len(projectNode.BindingTags) == 0 {
+		return requirements
+	}
+	translated := make([]forceIndexRequirement, 0, len(requirements))
+	projectTag := projectNode.BindingTags[0]
+	for _, requirement := range requirements {
+		copyRequirement := requirement
+		copyRequirement.columns = make([]*plan.Expr, len(requirement.columns))
+		valid := true
+		for i, expr := range requirement.columns {
+			col := expr.GetCol()
+			if col != nil && col.RelPos == projectTag {
+				if col.ColPos < 0 || int(col.ColPos) >= len(projectNode.ProjectList) {
+					valid = false
+					break
+				}
+				copyRequirement.columns[i] = DeepCopyExpr(projectNode.ProjectList[col.ColPos])
+			} else {
+				copyRequirement.columns[i] = DeepCopyExpr(expr)
+			}
+		}
+		if valid {
+			translated = append(translated, copyRequirement)
+		}
+	}
+	return translated
+}
+
+func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requirements []forceIndexRequirement, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	if scanNode == nil {
+		return -1, nil
+	}
+	if scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 || scanNode.IndexScanInfo.IsIndexScan {
+		return scanNode.NodeId, nil
+	}
+	hintSet := builder.indexHintsByScan[scanNode.NodeId]
+	if hintSet == nil {
+		return scanNode.NodeId, nil
+	}
+	for _, requirement := range requirements {
+		scope := hintSet.order
+		if requirement.scope == forceIndexForGroup {
+			scope = hintSet.group
+		}
+		if !scope.forceSpecified {
+			continue
+		}
+		colPositions := make([]int32, len(requirement.columns))
+		matchesScan := true
+		for i, expr := range requirement.columns {
+			col := expr.GetCol()
+			if col == nil || col.RelPos != scanNode.BindingTags[0] {
+				matchesScan = false
+				break
+			}
+			colPositions[i] = col.ColPos
+		}
+		if !matchesScan {
+			continue
+		}
+
+		// FORCE PRIMARY keeps the base-table access and blocks ordinary secondary-index rewrites.
+		if _, forcePrimary := scope.force[strings.ToLower(PrimaryKeyName)]; forcePrimary {
+			builder.protectedScans[scanNode.NodeId]++
+			return scanNode.NodeId, nil
+		}
+		indexes := filterIndexesByHintScope(scanNode.TableDef.Indexes, scope)
+		for _, idxDef := range indexes {
+			if !usableRegularHintIndex(idxDef) || !indexLeadingColumnsMatch(idxDef, scanNode.TableDef, colPositions) {
+				continue
+			}
+			accessNodeID, idxNodeID, covering, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
+			if err != nil {
+				return -1, err
+			}
+			if accessNodeID == -1 {
+				continue
+			}
+			builder.protectedScans[scanNode.NodeId]++
+			if requirement.scope == forceIndexForOrder {
+				idxNode := builder.qry.Nodes[idxNodeID]
+				idxNode.OrderBy = []*plan.OrderBySpec{{
+					Expr: GetColExpr(idxNode.TableDef.Cols[0].Typ, idxNode.BindingTags[0], 0),
+					Flag: requirement.orderFlag,
+				}}
+				if covering && len(idxNode.FilterList) == 0 && requirement.limit != nil && requirement.canPushLim {
+					applyRegularIndexOrderedLimitParam(idxNode, idxNode.OrderBy[0], requirement.limit)
+				}
+			}
+			return accessNodeID, nil
+		}
+		// A FORCE hint that cannot provide the requested ordering/grouping still
+		// excludes other secondary indexes from replacing the base scan.
+		builder.protectedScans[scanNode.NodeId]++
+		return scanNode.NodeId, nil
+	}
+	return scanNode.NodeId, nil
+}
+
+func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, int32, bool, error) {
+	idxNodeID, err := builder.tryHintedCoveringIndexScan(idxDef, node, colRefCnt, idxColMap)
+	if err != nil {
+		return -1, -1, false, err
+	}
+	if idxNodeID != -1 {
+		return idxNodeID, idxNodeID, true, nil
+	}
+	accessNodeID, idxNodeID, err := builder.buildHintedIndexBackfillJoin(idxDef, node)
+	return accessNodeID, idxNodeID, false, err
+}
+
+func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef, node *plan.Node) (int32, int32, error) {
 	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
-		return -1, -1
+		return -1, -1, nil
 	}
 	snapshot := node.ScanSnapshot
 	if snapshot == nil {
@@ -882,15 +940,18 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 	}
 	pkIdx, ok := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 	if !ok {
-		return -1, -1
+		return -1, -1, nil
 	}
 	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, snapshot)
 	if err != nil {
-		panic(err)
+		return -1, -1, err
+	}
+	if idxObjRef == nil || idxTableDef == nil {
+		return -1, -1, moerr.NewInternalErrorf(builder.GetContext(), "index table metadata for %s is unavailable", idxDef.IndexName)
 	}
 	if len(idxTableDef.Cols) < 2 {
-		return -1, -1
+		return -1, -1, moerr.NewInternalErrorf(builder.GetContext(), "index table metadata for %s has invalid columns", idxDef.IndexName)
 	}
 	pkExpr := GetColExpr(node.TableDef.Cols[pkIdx].Typ, node.BindingTags[0], pkIdx)
 	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
@@ -898,7 +959,7 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 		GetColExpr(pkExpr.Typ, idxTag, 1),
 	})
 	if err != nil {
-		return -1, -1
+		return -1, -1, err
 	}
 	builder.addNameByColRef(idxTag, idxTableDef)
 	idxNodeID := builder.appendNode(&plan.Node{
@@ -921,12 +982,12 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 		JoinType: plan.Node_INDEX,
 		OnList:   []*plan.Expr{joinCond},
 	}, builder.ctxByNode[node.NodeId])
-	return joinNodeID, idxNodeID
+	return joinNodeID, idxNodeID, nil
 }
 
-func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	if !usableRegularHintIndex(idxDef) || node == nil || len(node.BindingTags) == 0 {
-		return -1
+		return -1, nil
 	}
 	for i, col := range node.TableDef.Cols {
 		if colRefCnt[[2]int32{node.BindingTags[0], int32(i)}] == 0 {
@@ -943,7 +1004,7 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 			covered = true
 		}
 		if !covered {
-			return -1
+			return -1, nil
 		}
 	}
 
@@ -954,10 +1015,13 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, snapshot)
 	if err != nil {
-		panic(err)
+		return -1, err
+	}
+	if idxObjRef == nil || idxTableDef == nil {
+		return -1, moerr.NewInternalErrorf(builder.GetContext(), "index table metadata for %s is unavailable", idxDef.IndexName)
 	}
 	if len(idxTableDef.Cols) < 2 {
-		return -1
+		return -1, moerr.NewInternalErrorf(builder.GetContext(), "index table metadata for %s has invalid columns", idxDef.IndexName)
 	}
 	hiddenKey := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 	colMap := make(map[[2]int32]*plan.Expr, len(idxDef.Parts))
@@ -974,7 +1038,7 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 		} else {
 			mappedExpr, bindErr := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(hiddenKey), node.TableDef.Cols[colIdx].Typ, int64(i))
 			if bindErr != nil {
-				return -1
+				return -1, bindErr
 			}
 			colMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
 		}
@@ -986,7 +1050,7 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 	newFilters := make([]*plan.Expr, len(node.FilterList))
 	for i, filter := range node.FilterList {
 		if !exprUsesOnlyMappedCols(filter, colMap) {
-			return -1
+			return -1, nil
 		}
 		newFilters[i] = replaceColumnsForExpr(DeepCopyExpr(filter), colMap)
 	}
@@ -1010,7 +1074,7 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 	}, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxNodeID, node.NodeId)
 	forceScanNodeStatsTP(idxNodeID, builder)
-	return idxNodeID
+	return idxNodeID, nil
 }
 
 func canUseRegularIndexHiddenSortKey(scanNode *plan.Node, orderByCol *plan.ColRef) bool {
@@ -2388,12 +2452,16 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	//----------------------------------------------------------------------
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
+	forceJoinIndex := false
+	if hintSet := builder.indexHintsByScan[leftChild.NodeId]; hintSet != nil {
+		forceJoinIndex = hintSet.join.forceSpecified
+	}
 
-	if rightChild.Stats.Selectivity > 0.5 {
+	if !forceJoinIndex && rightChild.Stats.Selectivity > 0.5 {
 		return nodeID, nil
 	}
 
-	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
+	if !forceJoinIndex && (rightChild.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1) {
 		return nodeID, nil
 	}
 
