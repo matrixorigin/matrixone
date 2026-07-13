@@ -196,6 +196,32 @@ order by id;
 ➤ id[4,32,0]  ¦  bl_eq_bin_a[-7,1,0]  ¦  bin_a_eq_bl[-7,1,0]  ¦  bl_eq_b[-7,1,0]  ¦  b_eq_bl[-7,1,0]  ¦  tx_eq_bin_a[-7,1,0]  ¦  bin_a_eq_tx[-7,1,0]  ¦  tx_eq_b[-7,1,0]  ¦  b_eq_tx[-7,1,0]  𝄀
 1  ¦  1  ¦  1  ¦  0  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  𝄀
 2  ¦  0  ¦  0  ¦  1  ¦  1  ¦  0  ¦  0  ¦  1  ¦  1
+select id
+from t_binary_blob_text_cmp
+where bl in (select b from t_binary_blob_text_cmp)
+order by id;
+➤ id[4,32,0]  𝄀
+2
+select id
+from t_binary_blob_text_cmp
+where tx in (select b from t_binary_blob_text_cmp)
+order by id;
+➤ id[4,32,0]  𝄀
+2
+select id
+from t_binary_blob_text_cmp
+where b in (select bl from t_binary_blob_text_cmp)
+order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id
+from t_binary_blob_text_cmp
+where b in (select tx from t_binary_blob_text_cmp)
+order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
 drop table t_binary_blob_text_cmp;
 drop table if exists t_binary_varbinary_subquery_cmp;
 create table t_binary_varbinary_subquery_cmp (

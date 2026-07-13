@@ -173,6 +173,28 @@ select id,
 from t_binary_blob_text_cmp
 order by id;
 
+-- Follow MySQL Bug #28076's subquery-IN shape. The variable-length value
+-- must not be zero-padded merely to compare it with BINARY(4).
+select id
+from t_binary_blob_text_cmp
+where bl in (select b from t_binary_blob_text_cmp)
+order by id;
+
+select id
+from t_binary_blob_text_cmp
+where tx in (select b from t_binary_blob_text_cmp)
+order by id;
+
+select id
+from t_binary_blob_text_cmp
+where b in (select bl from t_binary_blob_text_cmp)
+order by id;
+
+select id
+from t_binary_blob_text_cmp
+where b in (select tx from t_binary_blob_text_cmp)
+order by id;
+
 drop table t_binary_blob_text_cmp;
 
 -- MySQL Bug #28076: BINARY(N) padding must remain significant when an IN
