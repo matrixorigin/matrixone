@@ -16,9 +16,11 @@ package plan
 
 import (
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -73,9 +75,10 @@ type specialIndexGuard struct {
 }
 
 type regularIndexTopSortContext struct {
-	sortNode        *plan.Node
-	sortProjectNode *plan.Node
-	scanNode        *plan.Node
+	sortNode         *plan.Node
+	sortProjectNode  *plan.Node
+	scanNode         *plan.Node
+	pushOrderedLimit bool
 }
 
 // calculatePostFilterOverFetchFactor returns the over-fetch multiplier based on limit size
@@ -108,6 +111,32 @@ func calculateFilteredPostModeOverFetchFactor(originalLimit uint64) float64 {
 	} else {
 		return 1.3
 	}
+}
+
+func calculateOverFetchLimit(originalLimit uint64, factor float64) uint64 {
+	if originalLimit == 0 {
+		return 0
+	}
+	if factor < 1 {
+		factor = 1
+	}
+	multiplied := originalLimit
+	if factor > 1 {
+		product := float64(originalLimit) * factor
+		if product >= float64(math.MaxUint64) {
+			multiplied = math.MaxUint64
+		} else {
+			multiplied = uint64(product)
+		}
+	}
+
+	withFloor := originalLimit
+	if originalLimit > math.MaxUint64-10 {
+		withFloor = math.MaxUint64
+	} else {
+		withFloor += 10
+	}
+	return max(multiplied, withFloor)
 }
 
 func containsDynamicParam(expr *plan.Expr) bool {
@@ -684,11 +713,16 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 	if !canUseRegularIndexHiddenSortKey(scanNode, orderExprCol) {
 		return nil
 	}
+	pushOrderedLimit := canPushRegularIndexOrderedLimit(scanNode)
+	if !pushOrderedLimit && isPositiveLiteralLimit(sortNode.Limit) {
+		pushOrderedLimit = builder.rewriteRegularIndexCursorRangeFilter(scanNode)
+	}
 
 	return &regularIndexTopSortContext{
-		sortNode:        sortNode,
-		sortProjectNode: sortProjectNode,
-		scanNode:        scanNode,
+		sortNode:         sortNode,
+		sortProjectNode:  sortProjectNode,
+		scanNode:         scanNode,
+		pushOrderedLimit: pushOrderedLimit,
 	}
 }
 
@@ -740,6 +774,105 @@ func isRegularIndexFullPrefixEquality(expr *plan.Expr, numKeyParts int) bool {
 	return serialFn != nil && serialFn.Func.ObjName == "serial_full" && len(serialFn.Args) == numKeyParts
 }
 
+func (builder *QueryBuilder) rewriteRegularIndexCursorRangeFilter(scanNode *plan.Node) bool {
+	if scanNode == nil || scanNode.TableDef == nil || !scanNode.IndexScanInfo.IsIndexScan || scanNode.IndexScanInfo.IsUnique ||
+		len(scanNode.BindingTags) == 0 || len(scanNode.IndexScanInfo.Parts) < 2 || len(scanNode.TableDef.Cols) < 2 ||
+		len(scanNode.FilterList) != 2 || scanNode.TableDef.Cols[0].Name != catalog.IndexTableIndexColName ||
+		scanNode.TableDef.Cols[1].Name != catalog.IndexTablePrimaryColName {
+		return false
+	}
+
+	numKeyParts := len(scanNode.IndexScanInfo.Parts) - 1
+	prefixFilter := scanNode.FilterList[0]
+	if !isRegularIndexFullPrefixEquality(prefixFilter, numKeyParts) {
+		return false
+	}
+	prefixFn := prefixFilter.GetF()
+	prefixSerial := prefixFn.Args[1].GetF()
+
+	cursorFilter := scanNode.FilterList[1]
+	cursorFn := cursorFilter.GetF()
+	if cursorFn == nil {
+		return false
+	}
+	cursorCol, _ := classifyRangeBound(cursorFn)
+	cursorValue := rangeFilterConstValue(cursorFn)
+	if cursorCol == nil || cursorCol.RelPos != scanNode.BindingTags[0] || cursorCol.ColPos != 1 ||
+		!isStableRegularIndexCursor(cursorValue) {
+		return false
+	}
+	pkType := scanNode.TableDef.Cols[1].Typ
+	if !regularIndexCursorTypeMatches(cursorValue.Typ, pkType) {
+		return false
+	}
+
+	boundArgs := append(DeepCopyExprList(prefixSerial.Args), DeepCopyExpr(cursorValue))
+	bound, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", boundArgs)
+	if err != nil {
+		return false
+	}
+	prefix := DeepCopyExpr(prefixFn.Args[1])
+
+	var left, right *plan.Expr
+	var flag uint8
+	switch canonicalRangeOp(cursorFn) {
+	case "<":
+		left, right, flag = prefix, bound, 2
+	case "<=":
+		left, right = prefix, bound
+	case ">":
+		left, right, flag = bound, prefix, 1
+	case ">=":
+		left, right = bound, prefix
+	default:
+		return false
+	}
+
+	rangeFilter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in_range", []*plan.Expr{
+		DeepCopyExpr(prefixFn.Args[0]),
+		left,
+		right,
+		MakePlan2Uint8ConstExprWithType(flag),
+	})
+	if err != nil {
+		return false
+	}
+	rangeFilter.Selectivity = prefixFilter.Selectivity * cursorFilter.Selectivity
+	scanNode.FilterList[0] = rangeFilter
+	return true
+}
+
+func regularIndexCursorTypeMatches(cursorType, pkType plan.Type) bool {
+	if cursorType.Id != pkType.Id {
+		return false
+	}
+	switch types.T(pkType.Id) {
+	case types.T_float32, types.T_float64:
+		// NaN does not form the same total order under SQL comparison and serialized-key ordering.
+		return false
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return cursorType.Width == pkType.Width && cursorType.Scale == pkType.Scale
+	default:
+		return true
+	}
+}
+
+func isStableRegularIndexCursor(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
+		return true
+	case *plan.Expr_F:
+		return exprImpl.F != nil && exprImpl.F.Func != nil &&
+			(exprImpl.F.Func.ObjName == "cast" || exprImpl.F.Func.ObjName == "cast_strict") &&
+			len(exprImpl.F.Args) > 0 && isStableRegularIndexCursor(exprImpl.F.Args[0])
+	default:
+		return false
+	}
+}
+
 func hasTopValueMessage(node *plan.Node) bool {
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgTopValue) {
@@ -773,7 +906,7 @@ func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortCo
 		Expr: scanHiddenKeyExpr,
 		Flag: ctx.sortNode.OrderBy[0].Flag,
 	})
-	if ctx.sortNode.Offset == nil && ctx.sortNode.RankOption == nil && canPushRegularIndexOrderedLimit(ctx.scanNode) {
+	if ctx.sortNode.Offset == nil && ctx.sortNode.RankOption == nil && ctx.pushOrderedLimit {
 		applyRegularIndexOrderedLimitParam(ctx.scanNode, ctx.scanNode.OrderBy[len(ctx.scanNode.OrderBy)-1], ctx.sortNode.Limit)
 	}
 
@@ -788,16 +921,18 @@ func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortCo
 }
 
 func applyRegularIndexOrderedLimitParam(scanNode *plan.Node, orderBy *plan.OrderBySpec, limit *plan.Expr) {
-	if scanNode == nil || orderBy == nil || limit == nil {
-		return
-	}
-	if limitLit := limit.GetLit(); limitLit == nil || limitLit.GetU64Val() == 0 {
+	if scanNode == nil || orderBy == nil || !isPositiveLiteralLimit(limit) {
 		return
 	}
 	scanNode.IndexReaderParam = &plan.IndexReaderParam{
 		OrderBy: []*plan.OrderBySpec{DeepCopyOrderBySpec(orderBy)},
 		Limit:   DeepCopyExpr(limit),
 	}
+}
+
+func isPositiveLiteralLimit(limit *plan.Expr) bool {
+	limitValue, literal := getLiteralUint64(limit)
+	return literal && limitValue > 0 && limitValue <= maxVectorIndexTopPushdownLimit
 }
 
 func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
@@ -1589,7 +1724,7 @@ func isUpperBoundOp(name string) bool {
 // classifyRangeBound returns the column and whether the filter is a lower bound.
 // Returns nil if the filter is not a range comparison with a column and constant.
 func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
-	if fn == nil || len(fn.Args) < 2 {
+	if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil || fn.Args[1] == nil {
 		return nil, false
 	}
 	op := canonicalRangeOp(fn)
@@ -1719,7 +1854,10 @@ func isRangeOp(fn *plan.Function) bool {
 }
 
 func canonicalRangeOp(fn *plan.Function) string {
-	if len(fn.Args) < 2 {
+	if fn == nil || fn.Func == nil {
+		return ""
+	}
+	if len(fn.Args) < 2 || fn.Args[0] == nil || fn.Args[1] == nil {
 		return fn.Func.ObjName
 	}
 	if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {

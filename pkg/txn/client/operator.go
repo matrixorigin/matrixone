@@ -300,7 +300,7 @@ type txnOperator struct {
 		createAt             time.Time
 		commitAt             time.Time
 		createTs             timestamp.Timestamp
-		cannotCleanWorkspace bool
+		cannotCleanWorkspace atomic.Bool
 		workspace            Workspace
 		commitCounter        counter
 		rollbackCounter      counter
@@ -538,7 +538,7 @@ func (tc *txnOperator) initReset() {
 	tc.reset.createAt = time.Time{}
 	tc.reset.commitAt = time.Time{}
 	tc.reset.createTs = timestamp.Timestamp{}
-	tc.reset.cannotCleanWorkspace = false
+	tc.reset.cannotCleanWorkspace.Store(false)
 	tc.reset.workspace = nil
 	tc.reset.commitCounter = counter{}
 	tc.reset.rollbackCounter = counter{}
@@ -912,7 +912,7 @@ func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnRollback(tc.logger, txnMeta)
 
-	if tc.reset.workspace != nil && !tc.reset.cannotCleanWorkspace {
+	if tc.reset.workspace != nil && !tc.reset.cannotCleanWorkspace.Load() {
 		if err = tc.reset.workspace.Rollback(ctx); err != nil {
 			tc.logger.Error("rollback workspace failed",
 				util.TxnIDField(txnMeta), zap.Error(err))
@@ -1145,6 +1145,7 @@ func (tc *txnOperator) doWrite(
 				}
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+						tc.reset.cannotCleanWorkspace.Store(true)
 						tc.reset.workspace.FinalizeCommitWithUnknownResult(ctx)
 						return
 					}
@@ -1160,6 +1161,12 @@ func (tc *txnOperator) doWrite(
 		}
 		tc.mu.Lock()
 		defer func() {
+			// Set the guard before releasing the operator lock. A later Rollback
+			// must not delete objects when the Commit result is unknown and TN
+			// may already have committed them.
+			if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+				tc.reset.cannotCleanWorkspace.Store(true)
+			}
 			if err != nil && tc.reset.commitErr == nil {
 				tc.reset.commitErr = err
 			}
@@ -1633,7 +1640,10 @@ func (tc *txnOperator) needUnlockLocked() bool {
 func (tc *txnOperator) closeLocked(ctx context.Context) {
 	if !tc.mu.closed {
 		tc.mu.closed = true
-		if tc.reset.commitErr != nil {
+		// ErrTxnUnknown only describes the CN's observation of Commit. TN may
+		// already have committed, so do not rewrite the status to Aborted.
+		if tc.reset.commitErr != nil &&
+			!moerr.IsMoErrCode(tc.reset.commitErr, moerr.ErrTxnUnknown) {
 			tc.mu.txn.Status = txn.TxnStatus_Aborted
 		}
 		tc.triggerEventLocked(

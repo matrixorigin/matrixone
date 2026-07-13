@@ -19,27 +19,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
-func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32) int32 {
+func (builder *QueryBuilder) gatherLeavesForMessageFromTopToScan(nodeID int32, orderExpr *plan.Expr) (scanID int32, scanOrderExpr *plan.Expr, staticLimitSafe bool, shuffleJoins []int32) {
 	node := builder.qry.Nodes[nodeID]
 	switch node.NodeType {
+	case plan.Node_PROJECT:
+		if len(node.Children) != 1 || len(node.BindingTags) == 0 {
+			return -1, nil, false, nil
+		}
+		orderCol := orderExpr.GetCol()
+		if orderCol == nil || orderCol.RelPos != node.BindingTags[0] || orderCol.ColPos < 0 || int(orderCol.ColPos) >= len(node.ProjectList) {
+			return -1, nil, false, nil
+		}
+		projectedExpr := node.ProjectList[orderCol.ColPos]
+		if projectedExpr.GetCol() == nil {
+			return -1, nil, false, nil
+		}
+		return builder.gatherLeavesForMessageFromTopToScan(node.Children[0], projectedExpr)
 	case plan.Node_JOIN:
 		if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_SEMI {
 			// for now, only support inner join and semi join.
 			// for left join, top operator can directly push down over this
-			if node.Stats.HashmapStats.Shuffle {
-				// don't need to go shuffle join for this
-				node.Stats.HashmapStats.Shuffle = false
-				node.RuntimeFilterProbeList = nil
-				node.RuntimeFilterBuildList = nil
+			scanID, scanOrderExpr, _, shuffleJoins = builder.gatherLeavesForMessageFromTopToScan(node.Children[0], orderExpr)
+			if scanID == -1 {
+				return -1, nil, false, nil
 			}
-			return builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
+			if node.Stats.HashmapStats.Shuffle {
+				shuffleJoins = append(shuffleJoins, nodeID)
+			}
+			return scanID, scanOrderExpr, false, shuffleJoins
 		}
 	case plan.Node_FILTER:
-		return builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
+		scanID, scanOrderExpr, _, shuffleJoins = builder.gatherLeavesForMessageFromTopToScan(node.Children[0], orderExpr)
+		return scanID, scanOrderExpr, false, shuffleJoins
 	case plan.Node_TABLE_SCAN:
-		return nodeID
+		return nodeID, DeepCopyExpr(orderExpr), true, nil
 	}
-	return -1
+	return -1, nil, false, nil
 }
 
 // send message from top to scan. if block node(like group or window), no need to send this message
@@ -59,16 +74,20 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	if node.Limit == nil {
 		return
 	}
-	if len(node.OrderBy) > 1 {
+	if len(node.OrderBy) != 1 {
 		// for now ,only support order by one column
-		return
-	}
-	scanID := builder.gatherLeavesForMessageFromTopToScan(node.Children[0])
-	if scanID == -1 {
 		return
 	}
 	orderByCol := node.OrderBy[0].Expr.GetCol()
 	if orderByCol == nil {
+		return
+	}
+	scanID, scanOrderExpr, staticLimitSafe, shuffleJoins := builder.gatherLeavesForMessageFromTopToScan(node.Children[0], node.OrderBy[0].Expr)
+	if scanID == -1 || scanOrderExpr == nil {
+		return
+	}
+	scanOrderByCol := scanOrderExpr.GetCol()
+	if scanOrderByCol == nil {
 		return
 	}
 	scanNode := builder.qry.Nodes[scanID]
@@ -76,13 +95,21 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 		return
 	}
 	scanOrderBy := DeepCopyOrderBySpec(node.OrderBy[0])
+	scanOrderBy.Expr = scanOrderExpr
 	enableOrderedLimit := false
-	if canUseRegularIndexHiddenSortKey(scanNode, orderByCol) {
+	if canUseRegularIndexHiddenSortKey(scanNode, scanOrderByCol) {
+		eligibleOrderedLimit := staticLimitSafe && node.Offset == nil && node.RankOption == nil && isPositiveLiteralLimit(node.Limit)
+		if eligibleOrderedLimit {
+			enableOrderedLimit = canPushRegularIndexOrderedLimit(scanNode)
+			if !enableOrderedLimit {
+				enableOrderedLimit = builder.rewriteRegularIndexCursorRangeFilter(scanNode)
+			}
+		}
 		orderByName := orderByCol.Name
 		hiddenKeyExpr := GetColExpr(scanNode.TableDef.Cols[0].Typ, scanNode.BindingTags[0], 0)
 		hiddenKeyExpr.GetCol().Name = orderByName
 		node.OrderBy[0].Expr = hiddenKeyExpr
-		orderByCol = hiddenKeyExpr.GetCol()
+		scanOrderByCol = hiddenKeyExpr.GetCol()
 
 		scanHiddenKeyExpr := GetColExpr(scanNode.TableDef.Cols[0].Typ, scanNode.BindingTags[0], 0)
 		scanHiddenKeyExpr.GetCol().Name = scanNode.TableDef.Cols[0].Name
@@ -90,10 +117,15 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 			Expr: scanHiddenKeyExpr,
 			Flag: node.OrderBy[0].Flag,
 		}
-		enableOrderedLimit = node.Offset == nil && node.RankOption == nil && canPushRegularIndexOrderedLimit(scanNode)
 	}
-	if orderByCol.RelPos != scanNode.BindingTags[0] {
+	if scanOrderByCol.RelPos != scanNode.BindingTags[0] {
 		return
+	}
+	for _, joinID := range shuffleJoins {
+		joinNode := builder.qry.Nodes[joinID]
+		joinNode.Stats.HashmapStats.Shuffle = false
+		joinNode.RuntimeFilterProbeList = nil
+		joinNode.RuntimeFilterBuildList = nil
 	}
 
 	msgTag := builder.genNewMsgTag()
