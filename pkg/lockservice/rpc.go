@@ -41,6 +41,7 @@ import (
 var (
 	defaultRPCTimeout          = time.Second * 10
 	defaultRPCWriteTimeout     = time.Second * 3
+	defaultRPCEnqueueTimeout   = time.Second * 5
 	defaultHandleWorkers       = 12
 	defaultHandleGetTxnWorkers = 4
 	// Recovery endpoints are hints: eviction safely falls back to service
@@ -376,8 +377,34 @@ func (c *client) activeTxnTransport() morpc.RPCClient {
 // ResetBackend detaches the pooled connection for one CN incarnation. The
 // address can remain unchanged across a hot recreate, so service discovery
 // refresh alone is insufficient to prevent reuse of the stale backend.
-func (c *client) ResetBackend(parent context.Context, serviceID string) error {
+func (c *client) ResetBackend(parent context.Context, serviceID string) (err error) {
 	sid := getUUIDFromServiceIdentifier(serviceID)
+	started := time.Now()
+	var staleAddress, address, endpoint string
+	defer func() {
+		result := "success"
+		if err != nil {
+			result = "failure"
+		}
+		v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("backend-reset-" + result).Inc()
+		if c.logger == nil {
+			return
+		}
+		fields := []zap.Field{
+			zap.String("service-id", serviceID),
+			zap.String("cn-id", sid),
+			zap.String("stale-address", staleAddress),
+			zap.String("discovered-address", address),
+			zap.String("resolved-endpoint", endpoint),
+			zap.Duration("duration", time.Since(started)),
+		}
+		if err != nil {
+			c.logger.Warn("active-txn recovery backend reset failed",
+				append(fields, zap.Error(err))...)
+			return
+		}
+		c.logger.Info("active-txn recovery backend reset completed", fields...)
+	}()
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -422,7 +449,7 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) error {
 	// stale even when the cached address is non-empty. Refresh synchronously so
 	// the confirming request cannot be sent to an old CN address after a hot
 	// recreate or address reassignment.
-	staleAddress, err := lookupAddress()
+	staleAddress, err = lookupAddress()
 	if err != nil {
 		return err
 	}
@@ -434,12 +461,11 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) error {
 	if err := refresher.Refresh(ctx); err != nil {
 		return err
 	}
-	address, err := lookupAddress()
+	address, err = lookupAddress()
 	if err != nil {
 		return err
 	}
 
-	var endpoint string
 	var resolveErr error
 	if address != "" {
 		if c.resolveBackend == nil {
@@ -604,9 +630,10 @@ type server struct {
 	rpc      morpc.RPCServer
 	handlers map[pb.Method]RequestHandleFunc
 
-	requests             chan requestCtx
-	getActiveTxnRequests chan requestCtx
-	stopper              *stopper.Stopper
+	requests              chan requestCtx
+	getActiveTxnRequests  chan requestCtx
+	requestEnqueueTimeout time.Duration
+	stopper               *stopper.Stopper
 
 	options struct {
 		filter func(*pb.Request) bool
@@ -622,12 +649,13 @@ func NewServer(
 ) (Server, error) {
 	logger := getLogger(service)
 	s := &server{
-		logger:               logger,
-		cfg:                  &cfg,
-		address:              address,
-		handlers:             make(map[pb.Method]RequestHandleFunc),
-		requests:             make(chan requestCtx, 10240),
-		getActiveTxnRequests: make(chan requestCtx, 10240),
+		logger:                logger,
+		cfg:                   &cfg,
+		address:               address,
+		handlers:              make(map[pb.Method]RequestHandleFunc),
+		requests:              make(chan requestCtx, 10240),
+		getActiveTxnRequests:  make(chan requestCtx, 10240),
+		requestEnqueueTimeout: defaultRPCEnqueueTimeout,
 		stopper: stopper.NewStopper("lock-service-rpc-server",
 			stopper.WithLogger(logger.RawLogger())),
 	}
@@ -662,6 +690,8 @@ func (s *server) Close() error {
 		return err
 	}
 	s.stopper.Stop()
+	releaseQueuedRequests(s.requests)
+	releaseQueuedRequests(s.getActiveTxnRequests)
 	close(s.requests)
 	close(s.getActiveTxnRequests)
 	return nil
@@ -727,6 +757,9 @@ func (s *server) onMessage(
 			s.logger.Debug("skip request by timeout",
 				zap.String("request", req.DebugString()))
 		}
+		if msg.Cancel != nil {
+			msg.Cancel()
+		}
 		releaseRequest(req)
 		return nil
 	default:
@@ -737,15 +770,77 @@ func (s *server) onMessage(
 		req.Method == pb.Method_CheckActiveTxn {
 		c = s.getActiveTxnRequests
 	}
-	c <- requestCtx{
+	queuedRequest := requestCtx{
 		req:     req,
 		handler: handler,
 		cs:      cs,
 		cancel:  msg.Cancel,
 		ctx:     ctx,
 	}
-	v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
-	return nil
+	select {
+	case c <- queuedRequest:
+		v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
+		return nil
+	default:
+	}
+
+	// Keep the connection read goroutine bounded when all workers and the
+	// request queue are saturated. Returning an error from this handler would
+	// close the shared MORPC session, so reject only this request with a normal
+	// RPC error response instead.
+	timer := time.NewTimer(s.requestEnqueueTimeout)
+	defer timer.Stop()
+	var sessionDone <-chan struct{}
+	if sessionCtx := cs.SessionCtx(); sessionCtx != nil {
+		sessionDone = sessionCtx.Done()
+	}
+	select {
+	case c <- queuedRequest:
+		v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
+		return nil
+	case <-ctx.Done():
+		v2.TxnLockRPCQueueRejectCounter.WithLabelValues("request-canceled").Inc()
+		if msg.Cancel != nil {
+			msg.Cancel()
+		}
+		releaseRequest(req)
+		return nil
+	case <-sessionDone:
+		v2.TxnLockRPCQueueRejectCounter.WithLabelValues("session-closed").Inc()
+		if msg.Cancel != nil {
+			msg.Cancel()
+		}
+		releaseRequest(req)
+		return nil
+	case <-timer.C:
+		v2.TxnLockRPCQueueRejectCounter.WithLabelValues("queue-timeout").Inc()
+		writeResponse(
+			s.logger,
+			msg.Cancel,
+			getResponse(req),
+			moerr.NewInternalErrorNoCtx("lock service request queue full"),
+			cs,
+		)
+		releaseRequest(req)
+		return nil
+	}
+}
+
+func releaseQueuedRequests(requests chan requestCtx) {
+	for {
+		select {
+		case request, ok := <-requests:
+			if !ok {
+				return
+			}
+			if request.cancel != nil {
+				request.cancel()
+			}
+			releaseRequest(request.req)
+		default:
+			return
+		}
+	}
 }
 
 func (s *server) handle(

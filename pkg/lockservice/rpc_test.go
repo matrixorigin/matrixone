@@ -130,6 +130,7 @@ type testClientSession struct {
 	writeCalled bool
 	asyncCalled bool
 	closeCalled bool
+	response    morpc.Message
 }
 
 func TestLockserviceRemoteRPCErrorType(t *testing.T) {
@@ -164,7 +165,88 @@ func (s *testClientSession) SessionCtx() context.Context { return s.ctx }
 func (s *testClientSession) Write(ctx context.Context, response morpc.Message) error {
 	s.writeCtx = ctx
 	s.writeCalled = true
+	s.response = response
 	return s.writeErr
+}
+
+func TestServerQueueAdmissionTimeoutIsBounded(t *testing.T) {
+	requests := make(chan requestCtx, 1)
+	requests <- requestCtx{}
+	s := &server{
+		logger:                getLogger(""),
+		handlers:              map[lock.Method]RequestHandleFunc{lock.Method_Lock: func(context.Context, context.CancelFunc, *lock.Request, *lock.Response, morpc.ClientSession) {}},
+		requests:              requests,
+		getActiveTxnRequests:  make(chan requestCtx, 1),
+		requestEnqueueTimeout: 10 * time.Millisecond,
+	}
+	req := acquireRequest()
+	req.Method = lock.Method_Lock
+	var canceled bool
+	cs := &testClientSession{ctx: context.Background()}
+	started := time.Now()
+	err := s.onMessage(
+		context.Background(),
+		morpc.RPCMessage{
+			Message: req,
+			Cancel:  func() { canceled = true },
+		},
+		0,
+		cs,
+	)
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), time.Second)
+	require.True(t, canceled)
+	require.True(t, cs.writeCalled)
+	require.False(t, cs.closeCalled, "one saturated request must not close the shared session")
+	resp := cs.response.(*lock.Response)
+	require.ErrorContains(t, resp.UnwrapError(), "request queue full")
+	releaseResponse(resp)
+}
+
+func TestServerQueueAdmissionStopsWithSession(t *testing.T) {
+	requests := make(chan requestCtx, 1)
+	requests <- requestCtx{}
+	s := &server{
+		logger:                getLogger(""),
+		handlers:              map[lock.Method]RequestHandleFunc{lock.Method_Lock: func(context.Context, context.CancelFunc, *lock.Request, *lock.Response, morpc.ClientSession) {}},
+		requests:              requests,
+		getActiveTxnRequests:  make(chan requestCtx, 1),
+		requestEnqueueTimeout: time.Second,
+	}
+	sessionCtx, closeSession := context.WithCancel(context.Background())
+	closeSession()
+	cs := &testClientSession{ctx: sessionCtx}
+	req := acquireRequest()
+	req.Method = lock.Method_Lock
+	var canceled bool
+
+	require.NoError(t, s.onMessage(
+		context.Background(),
+		morpc.RPCMessage{
+			Message: req,
+			Cancel:  func() { canceled = true },
+		},
+		0,
+		cs,
+	))
+	require.True(t, canceled)
+	require.False(t, cs.writeCalled)
+	require.Len(t, requests, 1)
+}
+
+func TestReleaseQueuedRequestsCancelsAndDrains(t *testing.T) {
+	requests := make(chan requestCtx, 2)
+	var canceled int
+	for range 2 {
+		requests <- requestCtx{
+			req:    acquireRequest(),
+			cancel: func() { canceled++ },
+		}
+	}
+
+	releaseQueuedRequests(requests)
+	require.Equal(t, 2, canceled)
+	require.Empty(t, requests)
 }
 
 func (s *testClientSession) AsyncWrite(response morpc.Message) error {

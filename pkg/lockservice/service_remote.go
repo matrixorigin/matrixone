@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var methodVersions = map[pb.Method]int64{
@@ -150,14 +151,31 @@ func checkRemoteActiveTxn(client Client, txn pb.WaitTxn) (bool, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		valid, active, err := sendRemoteActiveTxnCheck(ctx, client, txn)
 		if err != nil {
+			if attempt > 0 {
+				v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("confirmation-failure").Inc()
+			}
 			return false, moerr.AttachCause(ctx, err)
 		}
 		if valid {
+			if attempt > 0 {
+				result := "confirmed-inactive"
+				if active {
+					result = "confirmed-active"
+				}
+				v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues(result).Inc()
+			}
 			return active, nil
 		}
 		if attempt == 1 {
+			// A lockservice identifier includes the process start version. After
+			// authoritative discovery and a fresh connection, another identity
+			// mismatch means that the old incarnation which owned this txn has
+			// been replaced. This relies on the process manager terminating the
+			// old listener before publishing its replacement.
+			v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("incarnation-replaced").Inc()
 			return false, nil
 		}
+		v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("confirmation-started").Inc()
 		resetter, ok := client.(interface {
 			ResetBackend(context.Context, string) error
 		})
