@@ -691,6 +691,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		db.IsReplayMode(),
 		checkpoint.WithFlusherInterval(db.Opts.CheckpointCfg.FlushInterval),
 		checkpoint.WithFlusherCronPeriod(db.Opts.CheckpointCfg.ScanInterval),
+		checkpoint.WithStalledCheckpointFlushAge(db.Opts.CheckpointCfg.IncrementalInterval),
 	)
 
 	// TODO: WithGCInterval requires configuration parameters

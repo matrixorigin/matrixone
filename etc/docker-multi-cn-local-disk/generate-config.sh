@@ -439,7 +439,7 @@ log-backend = "logservice"
 flush-interval = "60s"
 min-count = 100
 scan-interval = "5s"
-incremental-interval = "60s"
+incremental-interval = "300s"
 global-interval = "100000s"
 EOF
 
