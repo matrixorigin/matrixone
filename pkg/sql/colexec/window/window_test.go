@@ -48,8 +48,24 @@ func makeTestCases(t *testing.T) []winTestCase {
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Window{
 				WinSpecList: []*plan.Expr{makeWindowSpec()},
-				Types:       []types.Type{types.T_int32.ToType()},
 				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+		},
+		{
+			// Multi-argument window aggregate (json_objectagg): the operator must
+			// derive one argument type per argument. Guards against regressing the
+			// fix for issue #25483 where only a single type was passed to MakeAgg.
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			arg: &Window{
+				WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
+				Aggs:        []aggexec.AggFuncExecExpression{newJsonObjectAggExpr(t)},
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -102,8 +118,8 @@ func resetChildren(arg *Window, m *mpool.MPool) {
 	arg.AppendChild(op)
 }
 
-func makeWindowSpec() *plan.Expr {
-	f := &plan.FrameClause{
+func makeFullFrame() *plan.FrameClause {
+	return &plan.FrameClause{
 		Type: plan.FrameClause_ROWS,
 		Start: &plan.FrameBound{
 			Type:      plan.FrameBound_PRECEDING,
@@ -114,21 +130,45 @@ func makeWindowSpec() *plan.Expr {
 			UnBounded: true,
 		},
 	}
+}
+
+func makeWindowSpec() *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{},
 		Expr: &plan.Expr_W{
 			W: &plan.WindowSpec{
 				//OrderBy:    []*plan.OrderBySpec{&plan.OrderBySpec{Expr: newColExpr(0)}},
-				WindowFunc: newFunExpr(),
-				Frame:      f,
+				WindowFunc: newFunExpr("sum"),
+				Frame:      makeFullFrame(),
+			},
+		},
+	}
+}
+
+// makeAggWindowSpec builds a window spec for a generic (non win-value) aggregate
+// window function such as json_objectagg.
+func makeAggWindowSpec(name string) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{},
+		Expr: &plan.Expr_W{
+			W: &plan.WindowSpec{
+				Name:       name,
+				WindowFunc: newFunExpr(name),
+				Frame:      makeFullFrame(),
 			},
 		},
 	}
 }
 
 func newColExpr(pos int32) *plan.Expr {
+	// col 0 of the mock batch is int32; keep the arg type in sync so the window
+	// operator can build the aggregate executor from the argument expression.
+	return newColExprWithType(pos, types.T_int32.ToType())
+}
+
+func newColExprWithType(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
-		Typ: plan.Type{},
+		Typ: plan.Type{Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				ColPos: pos,
@@ -143,12 +183,24 @@ func newAggExpr() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(id, false, []*plan.Expr{newColExpr(0)}, nil)
 }
 
-func newFunExpr() *plan.Expr {
+// newJsonObjectAggExpr builds a two-argument aggregate expression:
+// json_objectagg(varchar_key, int32_value), using mock batch col 2 (varchar) and col 0 (int32).
+func newJsonObjectAggExpr(t *testing.T) aggexec.AggFuncExecExpression {
+	keyType := types.T_varchar.ToType()
+	valType := types.T_int32.ToType()
+	e, err := function.GetFunctionByName(context.Background(), "json_objectagg", []types.Type{keyType, valType})
+	require.NoError(t, err)
+	id := e.GetEncodedOverloadID()
+	return aggexec.MakeAggFunctionExpression(id, false,
+		[]*plan.Expr{newColExprWithType(2, keyType), newColExprWithType(0, valType)}, nil)
+}
+
+func newFunExpr(name string) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					ObjName: "sum",
+					ObjName: name,
 				},
 			},
 		},
