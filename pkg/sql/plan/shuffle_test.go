@@ -280,7 +280,8 @@ func productionShapedObjectID(rng *rand.Rand, sequence uint64) types.Objectid {
 	var objectID types.Objectid
 
 	// Object IDs use a UUIDv7 segment ID followed by a uint16 object number.
-	// Model a production stream with four objects per millisecond/segment.
+	// Model slowly changing UUIDv7 timestamps plus an object-number suffix;
+	// the UUIDv7 random bits still vary for every generated ObjectID.
 	timestamp := uint64(1_752_422_400_000) + sequence/4
 	var encodedTimestamp [8]byte
 	binary.BigEndian.PutUint64(encodedTimestamp[:], timestamp)
