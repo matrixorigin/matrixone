@@ -611,6 +611,62 @@ func TestReloadAfterSetOffsetDropsStalePreAllocatedRange(t *testing.T) {
 	})
 }
 
+func TestSetOffsetRollbackKeepsCommittedOffsetAndSafelyRebuildsCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		const tableVersion = 7
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		lastBeforeAlter, err := s.InsertValues(ctx, 0, tableVersion, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+
+		// Drain any background pre-allocation before recording the durable
+		// high-water mark that rollback must preserve.
+		require.NoError(t, s.allocator.updateMinValue(ctx, 0, def[0].ColName, 0, nil))
+		store.Lock()
+		committedCols := append([]AutoColumn(nil), store.caches[0]...)
+		store.Unlock()
+		committedOffset := committedCols[0].Offset
+		require.Greater(t, committedOffset, lastBeforeAlter)
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		// The mem store models the SQL transaction's private view by copying the
+		// committed auto-increment row into this transaction.
+		require.NoError(t, store.Create(ctx, 0, committedCols, alterTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 50, alterTxn))
+
+		store.Lock()
+		uncommittedCols := append([]AutoColumn(nil), store.uncommitted[string(alterTxn.Txn().ID)][0]...)
+		store.Unlock()
+		require.Equal(t, uint64(50), uncommittedCols[0].Offset)
+		require.NoError(t, alterTxn.Rollback(ctx))
+
+		store.Lock()
+		committedCols = append([]AutoColumn(nil), store.caches[0]...)
+		store.Unlock()
+		require.Equal(t, committedOffset, committedCols[0].Offset)
+
+		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		lastAfterRollback, err := s.InsertValues(ctx, 0, tableVersion, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Greater(t, lastAfterRollback, committedOffset)
+		require.Greater(t, lastAfterRollback, lastBeforeAlter)
+	})
+}
+
 func TestInsertValuesReplacesCacheOnTableVersionChange(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		defer leaktest.AfterTest(t)()
