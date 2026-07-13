@@ -327,10 +327,10 @@ select * from issue_25216_assignment order by id;
 ➤ id[4,32,0]  𝄀
 1  𝄀
 700
-update issue_25216_assignment set id = '2.5' where id = 2;
+update issue_25216_assignment set id = '2.5' where id = 1;
 select * from issue_25216_assignment order by id;
 ➤ id[4,32,0]  𝄀
-1  𝄀
+2  𝄀
 700
 insert into issue_25216_assignment values ('1a');
 invalid argument cast to int, bad value 1a

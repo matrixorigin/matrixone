@@ -53,6 +53,42 @@ func TestUnwrapConstLiteralRecognizesExplicitCast(t *testing.T) {
 	require.NotNil(t, lit)
 	require.Equal(t, int32(types.T_decimal128), typ.Id)
 	require.Equal(t, int64(42), lit.GetI64Val())
+	require.Same(t, expr, stripConstLiteralCasts(expr))
+
+	col := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_int64)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "a"}},
+	}
+	rebuilt, err := buildColumnDomainExpr(context.Background(), col, []*planpb.Expr{
+		expr,
+		MakePlan2Int64ConstExprWithType(2),
+	})
+	require.NoError(t, err)
+	require.True(t, exprContainsFunction(rebuilt, "cast_explicit"))
+}
+
+func exprContainsFunction(expr *planpb.Expr, name string) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func.ObjName == name {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if exprContainsFunction(arg, name) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprContainsFunction(item, name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestDoMergeFiltersOnCompositeKeyKeepsNonSortKeyRanges(t *testing.T) {

@@ -189,7 +189,7 @@ func TestBindComparisonFoldsNumericString(t *testing.T) {
 		}
 	})
 
-	t.Run("string column uses exact integer constant type", func(t *testing.T) {
+	t.Run("string column preserves fractions on exact numeric path", func(t *testing.T) {
 		stringCol := &plan.Expr{
 			Typ:  makePlan2Type(&types.Type{Oid: types.T_varchar}),
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "s"}},
@@ -200,9 +200,58 @@ func TestBindComparisonFoldsNumericString(t *testing.T) {
 		})
 		require.NoError(t, err)
 		for _, arg := range expr.GetF().GetArgs() {
-			require.Equal(t, int32(types.T_int64), arg.Typ.Id)
+			require.Equal(t, int32(types.T_decimal256), arg.Typ.Id)
+			require.Equal(t, int32(38), arg.Typ.Scale)
 		}
 		require.Equal(t, "cast", expr.GetF().GetArgs()[0].GetF().GetFunc().GetObjName())
+	})
+
+	t.Run("string column between uses same exact type", func(t *testing.T) {
+		stringCol := &plan.Expr{
+			Typ:  makePlan2Type(&types.Type{Oid: types.T_varchar}),
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "s"}},
+		}
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*plan.Expr{
+			stringCol,
+			makePlan2Int64ConstExprWithType(9007199254740993),
+			makePlan2Int64ConstExprWithType(9007199254740993),
+		})
+		require.NoError(t, err)
+		for _, arg := range expr.GetF().GetArgs() {
+			require.Equal(t, int32(types.T_decimal256), arg.Typ.Id)
+		}
+	})
+
+	t.Run("string column in uses same exact type", func(t *testing.T) {
+		stringCol := &plan.Expr{
+			Typ:  makePlan2Type(&types.Type{Oid: types.T_varchar}),
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "s"}},
+		}
+		values := &plan.Expr{
+			Typ: makePlan2Type(&types.Type{Oid: types.T_int64}),
+			Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+				makePlan2Int64ConstExprWithType(9007199254740993),
+				makePlan2Int64ConstExprWithType(9007199254740994),
+			}}},
+		}
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "in", []*plan.Expr{stringCol, values})
+		require.NoError(t, err)
+		var checkComparisons func(*plan.Expr)
+		checkComparisons = func(current *plan.Expr) {
+			fn := current.GetF()
+			require.NotNil(t, fn)
+			if fn.Func.ObjName == "=" {
+				for _, arg := range fn.Args {
+					require.Equal(t, int32(types.T_decimal256), arg.Typ.Id)
+				}
+				return
+			}
+			require.Equal(t, "or", fn.Func.ObjName)
+			for _, arg := range fn.Args {
+				checkComparisons(arg)
+			}
+		}
+		checkComparisons(expr)
 	})
 
 	t.Run("between folds both bounds", func(t *testing.T) {

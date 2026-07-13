@@ -1849,7 +1849,7 @@ func stripConstLiteralCasts(expr *plan.Expr) *plan.Expr {
 			return cur
 		}
 		fn := cur.GetF()
-		if fn == nil || (fn.Func.ObjName != "cast" && fn.Func.ObjName != "cast_explicit") || len(fn.Args) == 0 {
+		if fn == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
 			return expr
 		}
 		cur = fn.Args[0]
