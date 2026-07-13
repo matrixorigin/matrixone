@@ -100,8 +100,9 @@ func (info *runningPipelineInfo) cancelPipeline() {
 }
 
 type uuidProcMapItem struct {
-	proc *process.Process
-	ch   process.RemotePipelineInformationChannel
+	proc    *process.Process
+	ch      process.RemotePipelineInformationChannel
+	ownerCh process.RemotePipelineInformationChannel
 }
 
 type UuidProcMap struct {

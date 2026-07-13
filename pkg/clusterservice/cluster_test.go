@@ -46,6 +46,29 @@ func TestClusterReady(t *testing.T) {
 		})
 }
 
+func TestGetMOClusterWithContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := GetMOClusterWithContext(ctx, t.Name())
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestCNServiceSnapshotHonorsCancellationWhileClusterStarts(t *testing.T) {
+	c := &cluster{readyC: make(chan struct{})}
+	c.services.Store(&services{})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := GetCNServiceWithoutWorkingStateWithContext(
+		ctx,
+		c,
+		NewSelector(),
+		func(metadata.CNService) bool { return true },
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
 func TestClusterForceRefresh(t *testing.T) {
 	runClusterTest(
 		time.Hour,

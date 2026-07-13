@@ -2466,6 +2466,38 @@ func TestIssue5176_2(t *testing.T) {
 	)
 }
 
+func TestCheckTxnTimeoutSkipRemoteTxnIfSecondCannotCommitReportsCommitting(t *testing.T) {
+	txn := []byte("remote-committing")
+	var notifyCalls atomic.Int32
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(sid string) (bool, error) { return false, nil },
+		func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			if notifyCalls.Add(1) == 1 {
+				return pb.CannotCommitResponse{
+					FenceTS: timestamp.Timestamp{PhysicalTime: 10},
+				}, nil
+			}
+			return pb.CannotCommitResponse{CommittingTxn: [][]byte{txn}}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) { return false, nil },
+	)
+	hold.getActiveTxn(txn, true, "s2")
+
+	s := &service{
+		serviceID:       "s1",
+		activeTxnHolder: hold,
+		logger:          getLogger(""),
+	}
+	s.setStatus(pb.Status_ServiceLockWaiting)
+	s.checkTxnTimeout(context.Background())
+
+	require.Equal(t, int32(2), notifyCalls.Load())
+	require.NotNil(t, hold.getActiveTxn(txn, false, ""))
+}
+
 func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
@@ -5420,24 +5452,59 @@ func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
 			require.NoError(t, err)
 
 			option2 := option
-			option2.LockWaitTimeout = 3 // 3 seconds, more than enough
+			option2.LockWaitTimeout = 20 // long enough to keep scheduler pauses out of this test
 
-			var wg sync.WaitGroup
-			wg.Add(1)
+			row := []byte{1}
+			lockErrC := make(chan error, 1)
 			go func() {
-				defer wg.Done()
-				time.Sleep(200 * time.Millisecond)
-				require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+				_, err := l.Lock(ctx, 0, [][]byte{row}, []byte("txn2"), option2)
+				lockErrC <- err
 			}()
 
-			start := time.Now()
-			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
-			elapsed := time.Since(start)
+			hasWaiter := func() bool {
+				v, err := l.getLockTable(0, 0)
+				require.NoError(t, err)
+				lt := v.(*localLockTable)
+				lt.mu.Lock()
+				defer lt.mu.Unlock()
 
-			wg.Wait()
-			require.NoError(t, err)
-			require.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
-			require.Less(t, elapsed, 2*time.Second) // well within LockWaitTimeout
+				lock, ok := lt.mu.store.Get(row)
+				if !ok {
+					return false
+				}
+				return lock.waiters.size() == 1
+			}
+
+			waiterDeadline := time.NewTimer(10 * time.Second)
+			defer waiterDeadline.Stop()
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			for !hasWaiter() {
+				select {
+				case err := <-lockErrC:
+					require.FailNowf(t, "txn2 lock returned before txn1 unlock", "err: %v", err)
+				case <-waiterDeadline.C:
+					require.FailNow(t, "txn2 did not enter the wait queue before timeout")
+				case <-ticker.C:
+				}
+			}
+
+			select {
+			case err := <-lockErrC:
+				require.FailNowf(t, "txn2 lock returned before txn1 unlock", "err: %v", err)
+			default:
+			}
+
+			const postUnlockAcquireTimeout = 5 * time.Second
+			require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+			select {
+			case err := <-lockErrC:
+				require.NoError(t, err)
+			case <-time.After(postUnlockAcquireTimeout):
+				require.FailNowf(t, "txn2 did not acquire the lock promptly after txn1 unlocked",
+					"timeout: %s", postUnlockAcquireTimeout)
+			}
+			require.NoError(t, l.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
 		},
 	)
 }

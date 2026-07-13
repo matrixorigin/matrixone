@@ -214,6 +214,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 			response.TxnError = txn.WrapError(moerr.NewLockTableBindChanged(ctx), 0)
 			return nil
 		}
+		defer s.allocator.FinishCommit(request.Txn.LockService, request.Txn.ID)
 	}
 
 	txnID := request.Txn.ID

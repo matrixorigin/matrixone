@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/panjf2000/ants/v2"
@@ -340,8 +341,9 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 	liveBat.Clean(proc.Mp())
 }
 
-func TestCloneTxnUnknownCommitPreservesRollbackCleanup(t *testing.T) {
+func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
 	ctx := context.Background()
+	colexec.NewServer(nil)
 	fs := newCleanFS(t)
 
 	gcPool, err := ants.NewPool(1)
@@ -379,14 +381,11 @@ func TestCloneTxnUnknownCommitPreservesRollbackCleanup(t *testing.T) {
 	})
 
 	txn.FinalizeCommitWithUnknownResult(ctx)
+	require.True(t, txn.removed)
 	require.NotNil(t, txn.writes[0].bat)
-	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
-	require.NoError(t, txn.gcObjsByIdxRange(0, 0, cloneGCTxnRollback))
-	require.Eventually(t, func() bool {
-		return !objectExistsInFS(ctx, fs, name)
-	}, time.Second, 10*time.Millisecond)
-	txn.writes[0].bat.Clean(proc.Mp())
-	txn.writes[0].bat = nil
+	require.Empty(t, txn.writes[0].bat.Vecs)
+	require.False(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
+	require.True(t, objectExistsInFS(ctx, fs, name))
 }
 
 func cloneObjectStatsBatchForTest(

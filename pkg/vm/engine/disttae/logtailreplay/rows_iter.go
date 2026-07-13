@@ -344,7 +344,10 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 	// 1: (,]
 	// 2: [,)
 	// 3: (,)
-	// 4: prefix between
+	// 4: prefix between [,]
+	// 5: prefix between (,]
+	// 6: prefix between [,)
+	// 7: prefix between (,)
 	var validCheck func(bb []byte) bool
 	var seek2First func(iter *btree.IterG[*PrimaryIndexEntry]) bool
 	switch kind {
@@ -379,6 +382,35 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 	case 4:
 		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) <= 0 }
 		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
+	case 5:
+		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) <= 0 }
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
+			if len(lb) == 0 {
+				return false
+			}
+			for types.PrefixCompare(iter.Item().Bytes, lb) == 0 {
+				if ok := iter.Next(); !ok {
+					return false
+				}
+			}
+			return true
+		}
+	case 6:
+		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) < 0 }
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
+	case 7:
+		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) < 0 }
+		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
+			if len(lb) == 0 {
+				return false
+			}
+			for types.PrefixCompare(iter.Item().Bytes, lb) == 0 {
+				if ok := iter.Next(); !ok {
+					return false
+				}
+			}
+			return true
+		}
 	default:
 		logutil.Infof("between kind missed: kind: %d, lb=%v, ub=%v\n", kind, lb, ub)
 		validCheck = func(bb []byte) bool { return true }
@@ -423,12 +455,14 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 				return false
 			}
 
-			if p.specHint.isDelIter != p.iter.Item().Deleted {
+			item := p.iter.Item()
+			if !validCheck(item.Bytes) {
+				return false
+			}
+			if p.specHint.isDelIter != item.Deleted {
 				continue
 			}
-
-			item := p.iter.Item()
-			return validCheck(item.Bytes)
+			return true
 		}
 	}
 
@@ -737,7 +771,8 @@ func buildSpec(op int, keys [][]byte) PrimaryKeyMatchSpec {
 		return GreatKind(keys[0], op == function.GREAT_EQUAL)
 
 	case function.BETWEEN, readutil.RangeLeftOpen,
-		readutil.RangeRightOpen, readutil.RangeBothOpen, function.PREFIX_BETWEEN:
+		readutil.RangeRightOpen, readutil.RangeBothOpen, function.PREFIX_BETWEEN,
+		readutil.PrefixRangeLeftOpen, readutil.PrefixRangeRightOpen, readutil.PrefixRangeBothOpen:
 		var kind int
 		switch op {
 		case function.BETWEEN:
@@ -750,6 +785,12 @@ func buildSpec(op int, keys [][]byte) PrimaryKeyMatchSpec {
 			kind = 3
 		case function.PREFIX_BETWEEN:
 			kind = 4
+		case readutil.PrefixRangeLeftOpen:
+			kind = 5
+		case readutil.PrefixRangeRightOpen:
+			kind = 6
+		case readutil.PrefixRangeBothOpen:
+			kind = 7
 		}
 
 		return BetweenKind(keys[0], keys[1], kind)

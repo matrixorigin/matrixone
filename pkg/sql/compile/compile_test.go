@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -500,6 +501,56 @@ func TestLockMeta_doLock(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 
 	assert.Error(t, lm.doLock(eng, proc))
+}
+
+func TestLockMetaInitRetriesAfterPartialFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Ctx = defines.AttachAccountId(context.Background(), catalog.System_Account)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	databaseRel := mock_frontend.NewMockRelation(ctrl)
+	tableRel := mock_frontend.NewMockRelation(ctrl)
+	lookupErr := moerr.NewInternalErrorNoCtx("lookup mo_tables")
+
+	eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, gomock.Any()).Return(database, nil).Times(2)
+	database.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(databaseRel, nil).Times(2)
+	database.EXPECT().Relation(gomock.Any(), catalog.MO_TABLES, gomock.Any()).Return(nil, lookupErr).Times(1)
+	database.EXPECT().Relation(gomock.Any(), catalog.MO_TABLES, gomock.Any()).Return(tableRel, nil).Times(1)
+	databaseRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).Times(1)
+	tableRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(2)).Times(1)
+	tableRel.EXPECT().Reset(gomock.Any()).Return(nil).Times(1)
+	databaseRel.EXPECT().Reset(gomock.Any()).Return(nil).Times(1)
+
+	lm := NewLockMeta()
+	require.ErrorIs(t, lm.initLockExe(eng, proc), lookupErr)
+	require.Nil(t, lm.lockDbExe)
+	require.Nil(t, lm.lockTableExe)
+	require.Nil(t, lm.database_rel)
+	require.Nil(t, lm.table_rel)
+
+	require.NoError(t, lm.initLockExe(eng, proc))
+	require.NotNil(t, lm.lockDbExe)
+	require.NotNil(t, lm.lockTableExe)
+	require.Same(t, databaseRel, lm.database_rel)
+	require.Same(t, tableRel, lm.table_rel)
+	require.NoError(t, lm.initLockExe(eng, proc))
+
+	lm.clear(proc)
+	proc.Free()
+}
+
+func TestCompileClearReleasesLockMetaBeforeProcess(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := allocateNewCompile(proc)
+	c.lockMeta = NewLockMeta()
+	c.lockMeta.lockMetaVecs = []*vector.Vector{vector.NewVec(types.T_uint32.ToType())}
+
+	require.NotPanics(t, c.clear)
+	require.Nil(t, c.proc)
+	require.Nil(t, c.lockMeta)
 }
 
 func TestCompileShuffleGroupV2FallbackWhenScopeMcpuDiffersFromDop(t *testing.T) {

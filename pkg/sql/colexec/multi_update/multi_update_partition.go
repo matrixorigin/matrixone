@@ -62,6 +62,7 @@ func NewPartitionMultiUpdateFrom(
 	op.MultiUpdateCtx = from.raw.MultiUpdateCtx
 	op.Action = from.raw.Action
 	op.IsOnduplicateKeyUpdate = from.raw.IsOnduplicateKeyUpdate
+	op.CountDeleteAffectRows = from.raw.CountDeleteAffectRows
 	op.Engine = from.raw.Engine
 	return NewPartitionMultiUpdate(op, from.tableID)
 }
