@@ -15,14 +15,27 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type fixedProcessCompilerContext struct {
+	*MockCompilerContext
+	proc *process.Process
+}
+
+func (c *fixedProcessCompilerContext) GetProcess() *process.Process {
+	return c.proc
+}
 
 func setupLeftJoinBase(t *testing.T) (*MockCompilerContext, *QueryBuilder, *plan.Expr, *plan.Expr, *plan.Expr) {
 	t.Helper()
@@ -649,23 +662,36 @@ func TestPushdownVectorIndexTopToTableScanKeepsSupportedLimit(t *testing.T) {
 	require.NotNil(t, projNode.ProjectList[0].GetCol())
 }
 
-func TestApplyIvfReaderParamToExactPkEntriesScan(t *testing.T) {
+func TestPushdownVectorIndexTopToTableScanPropagatesExactPkIvfReaderParam(t *testing.T) {
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
 		TableDef: &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
 	}
 	readerParam := &plan.IndexReaderParam{
-		Limit:          MakePlan2Uint64ConstExprWithType(10),
-		OrigFuncName:   metric.DistFn_L2Distance,
+		Limit:        MakePlan2Uint64ConstExprWithType(10),
+		OrigFuncName: metric.DistFn_L2Distance,
+		DistRange: &plan.DistRange{
+			LowerBoundType: plan.BoundType_INCLUSIVE,
+			LowerBound:     MakePlan2Int64ConstExprWithType(7),
+		},
 		PartitionCnCnt: 2,
 		PartitionCnIdx: 1,
 	}
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.IvfReaderParam{}, readerParam)
+	compilerCtx := &fixedProcessCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		proc:                proc,
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, compilerCtx, false, true)
+	builder.qry.Nodes = []*plan.Node{scanNode}
 
-	applyIvfReaderParamToEntriesScan(scanNode, readerParam)
+	builder.pushdownVectorIndexTopToTableScan(0)
 
 	require.NotNil(t, scanNode.IndexReaderParam)
 	require.Nil(t, scanNode.IndexReaderParam.Limit)
 	require.Equal(t, metric.DistFn_L2Distance, scanNode.IndexReaderParam.OrigFuncName)
+	require.Equal(t, readerParam.DistRange, scanNode.IndexReaderParam.DistRange)
 	require.Equal(t, int32(2), scanNode.IndexReaderParam.PartitionCnCnt)
 	require.Equal(t, int32(1), scanNode.IndexReaderParam.PartitionCnIdx)
 	require.True(t, IsIvfSearchEntriesInternalScan(scanNode))
