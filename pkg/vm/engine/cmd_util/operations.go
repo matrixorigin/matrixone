@@ -163,10 +163,12 @@ type WriteReq struct {
 	DatabaseName string
 	TableName    string
 	// TableDefVersion is the schema version used by CN to plan the write.
-	// Zero is accepted for old-CN compatibility.
-	TableDefVersion uint32
-	Schema          *catalog2.Schema
-	Batch           *batch.Batch
+	// TableDefVersionKnown distinguishes a valid initial zero version from an
+	// old CN that did not send the dependency.
+	TableDefVersion      uint32
+	TableDefVersionKnown bool
+	Schema               *catalog2.Schema
+	Batch                *batch.Batch
 	//[IncrementalDedup|FullSkipWorkspaceDedup|FullDedup], default is IncrementalDedup.
 	//If incremental-dedup in dn.toml is false, IncrementalDedup will be treated as FullSkipWorkspaceDedup.
 	//IncrementalDedup do not check uniqueness of PK before txn's snapshot TS.

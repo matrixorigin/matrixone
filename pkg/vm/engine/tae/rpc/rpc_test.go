@@ -24,9 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -46,21 +46,52 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAPIEntryTableDefVersionIsModeIndependent(t *testing.T) {
-	h := new(Handle)
-	cnBatch := batch.NewWithSize(1)
-	cnBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	pbBatch, err := batch.BatchToProtoBatch(cnBatch)
-	require.NoError(t, err)
-	for _, mode := range []string{"optimistic", "pessimistic"} {
-		t.Run(mode, func(t *testing.T) {
-			req := h.apiEntryToWriteEntry(context.Background(), txnpb.TxnMeta{}, &api.Entry{
-				EntryType:       api.Entry_Insert,
-				Bat:             pbBatch,
-				TableDefVersion: 7,
-			}, false)
-			require.NotNil(t, req)
-			require.Equal(t, uint32(7), req.TableDefVersion)
+func TestTableDefVersionFenceIsModeIndependent(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	for _, mode := range []txnpb.TxnMode{txnpb.TxnMode_Optimistic, txnpb.TxnMode_Pessimistic} {
+		t.Run(mode.String(), func(t *testing.T) {
+			ctx := context.Background()
+			h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
+			defer h.HandleClose(ctx)
+
+			schema := catalog.MockSchemaAll(3, 1)
+			schema.Name = "mode_fence"
+			_, createdRel := testutil.CreateRelation(t, h.db, testutil.DefaultTestDB, schema, true)
+			tableID := createdRel.ID()
+			databaseID := createdRel.GetMeta().(*catalog.TableEntry).GetDB().ID
+
+			alterTxn, alterRel := testutil.GetDefaultRelation(t, h.db, schema.Name)
+			require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, tableID, 10)))
+			require.NoError(t, alterTxn.Commit(ctx))
+
+			insertBatch := catalog.MockBatch(schema, 1)
+			defer insertBatch.Close()
+			entry, err := makePBEntry(INSERT, databaseID, tableID, testutil.DefaultTestDB,
+				schema.Name, "", containers.ToCNBatch(insertBatch))
+			require.NoError(t, err)
+			entry.TableDefVersion = 0
+			entry.TableDefVersionKnown = true
+			payload, err := (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
+			require.NoError(t, err)
+			commitReq := &txnpb.TxnCommitRequest{Payload: []*txnpb.TxnRequest{{
+				CNRequest: &txnpb.CNOpRequest{OpCode: uint32(api.OpCode_OpPreCommit), Payload: payload},
+			}}}
+			meta := mock1PCTxn(h.db)
+			meta.Mode = mode
+
+			_, err = h.HandleCommit(ctx, meta, nil, commitReq)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+
+			// The same raw V0 from an old CN has no presence bit and therefore
+			// remains wire-compatible after the ALTER.
+			entry.TableDefVersionKnown = false
+			payload, err = (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
+			require.NoError(t, err)
+			commitReq.Payload[0].CNRequest.Payload = payload
+			meta = mock1PCTxn(h.db)
+			meta.Mode = mode
+			_, err = h.HandleCommit(ctx, meta, nil, commitReq)
+			require.NoError(t, err)
 		})
 	}
 }

@@ -2099,16 +2099,17 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 
 	// Create entry with EntrySoftDeleteObject type
 	entry := Entry{
-		typ:             SOFT_DELETE_OBJECT,
-		bat:             bat,
-		tnStore:         tbl.getTxn().tnStores[0],
-		tableId:         tbl.tableId,
-		databaseId:      tbl.db.databaseId,
-		tableName:       tbl.tableName,
-		databaseName:    tbl.db.databaseName,
-		accountId:       tbl.accountId,
-		fileName:        makeSoftDeleteFileName(isTombstone),
-		tableDefVersion: tbl.version,
+		typ:                  SOFT_DELETE_OBJECT,
+		bat:                  bat,
+		tnStore:              tbl.getTxn().tnStores[0],
+		tableId:              tbl.tableId,
+		databaseId:           tbl.db.databaseId,
+		tableName:            tbl.tableName,
+		databaseName:         tbl.db.databaseName,
+		accountId:            tbl.accountId,
+		fileName:             makeSoftDeleteFileName(isTombstone),
+		tableDefVersion:      tbl.version,
+		tableDefVersionKnown: true,
 	}
 
 	tbl.getTxn().writes = append(tbl.getTxn().writes, entry)

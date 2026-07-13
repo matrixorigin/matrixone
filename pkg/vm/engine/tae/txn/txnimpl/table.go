@@ -119,28 +119,23 @@ type txnTable struct {
 
 	idx int
 
-	// expectedTableDefVersion is the CN schema version this transaction's
-	// user-table writes were planned against. Zero means old-CN compatibility.
-	expectedTableDefVersion uint32
+	// expectedTableDefVersions are the known CN schema versions this
+	// transaction's user-table writes were planned against. A transaction can
+	// legitimately use both the committed version and the version created by
+	// its own ALTER TABLE.
+	expectedTableDefVersions map[uint32]struct{}
 }
 
 func (tbl *txnTable) setExpectedTableDefVersion(version uint32) error {
-	if version == 0 {
-		return nil
+	if tbl.expectedTableDefVersions == nil {
+		tbl.expectedTableDefVersions = make(map[uint32]struct{}, 2)
 	}
-	if tbl.expectedTableDefVersion == 0 {
-		tbl.expectedTableDefVersion = version
-		return nil
-	}
-	if tbl.expectedTableDefVersion != version {
-		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
-	}
+	tbl.expectedTableDefVersions[version] = struct{}{}
 	return nil
 }
 
 func (tbl *txnTable) validateTableDefVersion() error {
-	expected := tbl.expectedTableDefVersion
-	if expected == 0 {
+	if len(tbl.expectedTableDefVersions) == 0 {
 		return nil
 	}
 
@@ -156,12 +151,16 @@ func (tbl *txnTable) validateTableDefVersion() error {
 			}
 		}
 
-		actual := uint32(0)
+		baseVersion := uint32(0)
+		localVersion := uint32(0)
+		hasLocalVersion := false
 		tbl.entry.LoopChainLocked(func(node *catalog.MVCCNode[*catalog.TableMVCCNode]) bool {
-			// An ALTER in this same transaction cannot be ordered around this DML.
+			// A same-transaction ALTER is unordered with the transaction's DML.
+			// Keep scanning for the committed base version as both are valid.
 			if node.IsSameTxn(tbl.store.txn) {
-				actual = node.BaseNode.Schema.Version
-				return false
+				localVersion = node.BaseNode.Schema.Version
+				hasLocalVersion = true
+				return true
 			}
 			if node.IsActive() || node.IsCommitting() || node.IsAborted() {
 				return true
@@ -172,13 +171,15 @@ func (tbl *txnTable) validateTableDefVersion() error {
 			if nodePrepareTS.GT(&prepareTS) {
 				return true
 			}
-			actual = node.BaseNode.Schema.Version
+			baseVersion = node.BaseNode.Schema.Version
 			return false
 		})
 		tbl.entry.RUnlock()
 
-		if actual != expected {
-			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		for expected := range tbl.expectedTableDefVersions {
+			if expected != baseVersion && (!hasLocalVersion || expected != localVersion) {
+				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
 		}
 		return nil
 	}

@@ -97,9 +97,9 @@ func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 			assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(4, 0)))
 			dmlTxn.Unlock()
 			tbl := &txnTable{
-				store:                   &txnStore{txn: dmlTxn},
-				entry:                   entry,
-				expectedTableDefVersion: 7,
+				store:                    &txnStore{txn: dmlTxn},
+				entry:                    entry,
+				expectedTableDefVersions: map[uint32]struct{}{7: {}},
 			}
 
 			result := make(chan error, 1)
@@ -133,13 +133,13 @@ func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
 	}
 }
 
-func TestTableDefVersionDependencyRejectsConflictingExpectations(t *testing.T) {
+func TestTableDefVersionDependencyRecordsMultipleExpectations(t *testing.T) {
 	tbl := new(txnTable)
 	assert.NoError(t, tbl.setExpectedTableDefVersion(0))
 	assert.NoError(t, tbl.setExpectedTableDefVersion(7))
 	assert.NoError(t, tbl.setExpectedTableDefVersion(7))
-	err := tbl.setExpectedTableDefVersion(8)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	assert.NoError(t, tbl.setExpectedTableDefVersion(8))
+	assert.Equal(t, map[uint32]struct{}{0: {}, 7: {}, 8: {}}, tbl.expectedTableDefVersions)
 }
 
 func TestTableDefVersionFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
@@ -168,11 +168,32 @@ func TestTableDefVersionFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
 	assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(4, 0)))
 	dmlTxn.Unlock()
 	tbl := &txnTable{
-		store:                   &txnStore{txn: dmlTxn},
-		entry:                   entry,
-		expectedTableDefVersion: 7,
+		store:                    &txnStore{txn: dmlTxn},
+		entry:                    entry,
+		expectedTableDefVersions: map[uint32]struct{}{7: {}},
 	}
 	assert.NoError(t, tbl.validateTableDefVersion())
+}
+
+func TestTableDefVersionFenceRejectsMultipleVersionsWithoutLocalAlter(t *testing.T) {
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Version = 7
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
+		Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
+	})
+
+	dmlTxn := txnbase.NewTxn(nil, nil, []byte("dml"), types.BuildTS(2, 0), types.TS{})
+	dmlTxn.Lock()
+	assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(3, 0)))
+	dmlTxn.Unlock()
+	tbl := &txnTable{
+		store:                    &txnStore{txn: dmlTxn},
+		entry:                    entry,
+		expectedTableDefVersions: map[uint32]struct{}{7: {}, 8: {}},
+	}
+	err := tbl.validateTableDefVersion()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
 }
 
 // 1. 30 concurrency
