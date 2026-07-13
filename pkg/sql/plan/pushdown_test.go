@@ -648,3 +648,25 @@ func TestPushdownVectorIndexTopToTableScanKeepsSupportedLimit(t *testing.T) {
 	require.Equal(t, uint64(8), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
 	require.NotNil(t, projNode.ProjectList[0].GetCol())
 }
+
+func TestApplyIvfReaderParamToExactPkEntriesScan(t *testing.T) {
+	scanNode := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+	}
+	readerParam := &plan.IndexReaderParam{
+		Limit:          MakePlan2Uint64ConstExprWithType(10),
+		OrigFuncName:   metric.DistFn_L2Distance,
+		PartitionCnCnt: 2,
+		PartitionCnIdx: 1,
+	}
+
+	applyIvfReaderParamToEntriesScan(scanNode, readerParam)
+
+	require.NotNil(t, scanNode.IndexReaderParam)
+	require.Nil(t, scanNode.IndexReaderParam.Limit)
+	require.Equal(t, metric.DistFn_L2Distance, scanNode.IndexReaderParam.OrigFuncName)
+	require.Equal(t, int32(2), scanNode.IndexReaderParam.PartitionCnCnt)
+	require.Equal(t, int32(1), scanNode.IndexReaderParam.PartitionCnIdx)
+	require.True(t, IsIvfSearchEntriesInternalScan(scanNode))
+}

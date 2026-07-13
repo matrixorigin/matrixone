@@ -329,8 +329,9 @@ func makeFunctionScanForStatsTest(funcName string, limit *planpb.Expr) *planpb.N
 
 func makeIvfEntriesOrderByLimitParamForStatsTest() *planpb.IndexReaderParam {
 	return &planpb.IndexReaderParam{
-		OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-		Limit:   makeLimitExprForStatsTest(),
+		OrderBy:      []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
+		Limit:        makeLimitExprForStatsTest(),
+		OrigFuncName: "l2_distance",
 	}
 }
 
@@ -604,7 +605,7 @@ func TestIsIvfEntriesIndexReaderScan_UnhappyPaths(t *testing.T) {
 	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{
 		IndexReaderParam: &planpb.IndexReaderParam{OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}}},
 	}))
-	require.True(t, isIvfEntriesIndexReaderScan(&planpb.Node{
+	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{
 		IndexReaderParam: &planpb.IndexReaderParam{
 			OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
 			Limit:   makeLimitExprForStatsTest(),
@@ -612,7 +613,6 @@ func TestIsIvfEntriesIndexReaderScan_UnhappyPaths(t *testing.T) {
 	}))
 	require.True(t, isIvfEntriesIndexReaderScan(&planpb.Node{
 		IndexReaderParam: &planpb.IndexReaderParam{
-			Limit:        makeLimitExprForStatsTest(),
 			OrigFuncName: "l2_distance",
 		},
 	}))
@@ -658,7 +658,7 @@ func TestIsIvfSearchEntriesInternalScan(t *testing.T) {
 			},
 		},
 		{
-			name: "valid order by limit",
+			name: "order by limit without ivf marker",
 			node: &planpb.Node{
 				NodeType: planpb.Node_TABLE_SCAN,
 				TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
@@ -667,15 +667,13 @@ func TestIsIvfSearchEntriesInternalScan(t *testing.T) {
 					Limit:   makeLimitExprForStatsTest(),
 				},
 			},
-			want: true,
 		},
 		{
-			name: "valid original distance function",
+			name: "valid original distance function without limit",
 			node: &planpb.Node{
 				NodeType: planpb.Node_TABLE_SCAN,
 				TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
 				IndexReaderParam: &planpb.IndexReaderParam{
-					Limit:        makeLimitExprForStatsTest(),
 					OrigFuncName: "l2_distance",
 				},
 			},

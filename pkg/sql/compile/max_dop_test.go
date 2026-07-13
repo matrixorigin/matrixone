@@ -405,7 +405,8 @@ func TestGenerateNodesUsesMultiCNForSmallIvfEntriesInternalScan(t *testing.T) {
 			Dop:      1,
 		},
 		IndexReaderParam: &plan.IndexReaderParam{
-			OrderBy: []*plan.OrderBySpec{{Expr: &plan.Expr{}}},
+			OrderBy:      []*plan.OrderBySpec{{Expr: &plan.Expr{}}},
+			OrigFuncName: "l2_distance",
 			Limit: &plan.Expr{
 				Expr: &plan.Expr_Lit{
 					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},

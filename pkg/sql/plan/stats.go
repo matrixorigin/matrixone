@@ -2173,10 +2173,7 @@ func IsIvfSearchEntriesInternalScan(node *plan.Node) bool {
 
 func isIvfEntriesIndexReaderScan(node *plan.Node) bool {
 	param := node.GetIndexReaderParam()
-	if param.GetLimit() == nil {
-		return false
-	}
-	return param.GetOrigFuncName() != "" || len(param.GetOrderBy()) > 0
+	return param.GetOrigFuncName() != ""
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
