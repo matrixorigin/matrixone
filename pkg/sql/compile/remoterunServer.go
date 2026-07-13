@@ -292,7 +292,10 @@ func registerLocalDispatchReceivers(scopes []*Scope, localAddr string) (*remoteD
 		if _, ok := s.RootOp.(*dispatch.Dispatch); ok {
 			return registerDispatchReceiverRoot
 		}
-		return skipDispatchReceivers
+		// The tree runs on another CN, so its own operators must not be
+		// registered here. Its descendants can still RemoteRun back to this CN;
+		// visit them to publish those local return dispatches early.
+		return traverseDispatchReceiverChildren
 	})
 }
 
@@ -302,6 +305,7 @@ const (
 	skipDispatchReceivers dispatchReceiverRegistrationMode = iota
 	registerDispatchReceiverRoot
 	registerDispatchReceiverTree
+	traverseDispatchReceiverChildren
 )
 
 func registerDispatchReceivers(
@@ -348,10 +352,10 @@ func registerDispatchReceivers(
 		}
 
 		if mode == registerDispatchReceiverRoot {
-			return registerDispatch(s.RootOp.(*dispatch.Dispatch))
-		}
-
-		if s.RootOp != nil {
+			if err := registerDispatch(s.RootOp.(*dispatch.Dispatch)); err != nil {
+				return err
+			}
+		} else if mode == registerDispatchReceiverTree && s.RootOp != nil {
 			if err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
 				d, ok := op.(*dispatch.Dispatch)
 				if !ok {

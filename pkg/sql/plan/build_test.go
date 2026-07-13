@@ -1533,6 +1533,89 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 	}
 }
 
+func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
+	t.Run("ordinary child update keeps prepare cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set deptno = ? where empno = ?")
+		require.False(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("parent update cascade marks prepare uncacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update dept set deptno = deptno + 10 where deptno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("parent delete set null marks prepare uncacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_RESTRICT)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from delete from dept where deptno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("parent delete restrict keeps prepare cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_RESTRICT)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from delete from dept where deptno = ?")
+		require.False(t, query.GetHasForeignKeyAction())
+	})
+}
+
+func buildPreparedQuery(t *testing.T, mock *MockOptimizer, sql string) *plan.Query {
+	t.Helper()
+
+	logicPlan, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+	queryPlan := resolveQueryPlan(logicPlan)
+	require.NotNil(t, queryPlan.GetQuery())
+	return queryPlan.GetQuery()
+}
+
+func setMockEmpDeptForeignKeyAction(
+	t *testing.T,
+	mock *MockOptimizer,
+	onDelete plan.ForeignKeyDef_RefAction,
+	onUpdate plan.ForeignKeyDef_RefAction,
+) {
+	t.Helper()
+
+	const (
+		mockDeptTableID uint64 = 88888
+		mockEmpTableID  uint64 = 88889
+	)
+
+	empTable := mock.ctxt.tables["emp"]
+	require.NotNil(t, empTable)
+	require.NotEmpty(t, empTable.Fkeys)
+
+	deptTable := mock.ctxt.tables["dept"]
+	require.NotNil(t, deptTable)
+
+	delete(mock.ctxt.id2name, empTable.TblId)
+	delete(mock.ctxt.id2name, deptTable.TblId)
+	empTable.TblId = mockEmpTableID
+	deptTable.TblId = mockDeptTableID
+	mock.ctxt.id2name[mockEmpTableID] = "emp"
+	mock.ctxt.id2name[mockDeptTableID] = "dept"
+	require.NotNil(t, mock.ctxt.objects["emp"])
+	require.NotNil(t, mock.ctxt.objects["dept"])
+	mock.ctxt.objects["emp"].Obj = int64(mockEmpTableID)
+	mock.ctxt.objects["dept"].Obj = int64(mockDeptTableID)
+
+	empTable.Fkeys[0].ForeignTbl = deptTable.TblId
+	empTable.Fkeys[0].ForeignCols = []uint64{0}
+	empTable.Fkeys[0].OnDelete = onDelete
+	empTable.Fkeys[0].OnUpdate = onUpdate
+
+	deptTable.RefChildTbls = []uint64{empTable.TblId}
+}
+
 func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// Generate dname from loc on the second table (dept).

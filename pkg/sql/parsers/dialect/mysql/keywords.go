@@ -280,6 +280,8 @@ func init() {
 		"internal":                   INTERNAL,
 		"join":                       JOIN,
 		"json":                       JSON,
+		"json_arrayagg":              JSON_ARRAYAGG,
+		"json_objectagg":             JSON_OBJECTAGG,
 		"jsontype":                   JSONTYPE,
 		"uuid":                       UUID,
 		"key":                        KEY,
