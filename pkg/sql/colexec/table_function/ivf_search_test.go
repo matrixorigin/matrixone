@@ -461,9 +461,9 @@ func TestIvfSearchCallReturnsIncludeColumnsAndLazyFetchesMoreRounds(t *testing.T
 			rt.IncludeResult.Nulls["rank"] = []bool{false}
 			return []any{int64(1)}, []float64{2.0}, nil
 		}
-		rt.IncludeResult.Data["rank"] = []any{int32(7), int32(9)}
-		rt.IncludeResult.Nulls["rank"] = []bool{false, false}
-		return []any{int64(1), int64(2)}, []float64{2.0, 3.0}, nil
+		rt.IncludeResult.Data["rank"] = []any{int32(9)}
+		rt.IncludeResult.Nulls["rank"] = []bool{false}
+		return []any{int64(2)}, []float64{3.0}, nil
 	}
 
 	newIvfAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (cache.VectorIndexSearchIf, error) {
@@ -512,6 +512,90 @@ func TestIvfSearchCallReturnsIncludeColumnsAndLazyFetchesMoreRounds(t *testing.T
 	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 1))
 	require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](result.Batch.Vecs[2], 0))
 	require.Equal(t, int32(9), vector.GetFixedAtNoTypeCheck[int32](result.Batch.Vecs[2], 1))
+}
+
+func TestIvfSearchManyDisjointRoundsRetainOnlyCurrentRound(t *testing.T) {
+	oldNewIvfAlgo := newIvfAlgo
+	oldGetVersion := getVersion
+	defer func() {
+		newIvfAlgo = oldNewIvfAlgo
+		getVersion = oldGetVersion
+	}()
+
+	const (
+		centroidCount = uint(200000)
+		rowsPerRound  = 256
+	)
+	var searchCalls int
+	var nextPK int64
+	mock := &MockIvfSearch[float32]{}
+	mock.searchFn = func(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+		if len(rt.SearchCursor.RankedCentroidIDs) == 0 {
+			rt.SearchCursor.RankedCentroidIDs = makeRankedCentroidIDsForTest(centroidCount)
+		}
+		if rt.SearchCursor.CurrentBucketCount == 0 {
+			rt.SearchCursor.CurrentBucketCount = 1
+		}
+		rt.SearchCursor.Round++
+		rt.SearchCursor.Exhausted = rt.SearchCursor.NextBucketOffset+rt.SearchCursor.CurrentBucketCount >= centroidCount
+
+		roundKeys := make([]any, rowsPerRound)
+		roundDistances := make([]float64, rowsPerRound)
+		for i := range roundKeys {
+			nextPK++
+			roundKeys[i] = nextPK
+			roundDistances[i] = float64(nextPK)
+		}
+		searchCalls++
+		return roundKeys, roundDistances, nil
+	}
+
+	newIvfAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (cache.VectorIndexSearchIf, error) {
+		return mock, nil
+	}
+	getVersion = mockVersion
+	cache.Cache = cache.NewVectorIndexCache()
+
+	param := `{"op_type":"vector_l2_ops","lists":"200000"}`
+	ut := newIvfSearchTestCase(t, mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+	inbat := makeBatchIvfSearch(ut.proc)
+	ut.arg.Args = append(
+		makeConstInputExprsIvfSearchWithConfig(
+			fmt.Sprintf(`{"db":"db","src":"src","metadata":"__metadata","index":"__index_many_rounds","entries":"__entries","parttype":%d}`, int32(types.T_array_float32)),
+		),
+		plan2.MakePlan2StringConstExprWithType(""),
+		plan2.MakePlan2Uint64ConstExprWithType(rowsPerRound),
+		plan2.MakePlan2Uint64ConstExprWithType(1),
+	)
+	ut.arg.Limit = plan2.MakePlan2Uint64ConstExprWithType(50000)
+	ut.arg.IndexReaderParam = &plan.IndexReaderParam{Limit: plan2.MakePlan2Uint64ConstExprWithType(50000)}
+
+	err := ut.arg.Prepare(ut.proc)
+	require.NoError(t, err)
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.NoError(t, err)
+	}
+	require.NoError(t, ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil))
+
+	state := ut.arg.ctr.state.(*ivfSearchState)
+	totalRows := 0
+	for {
+		result, callErr := state.call(ut.arg, ut.proc)
+		require.NoError(t, callErr)
+		if result.Status == vm.ExecStop {
+			break
+		}
+		totalRows += result.Batch.RowCount()
+		// Centroid slices are disjoint, so only the current SQL round needs to
+		// remain resident regardless of how many rows earlier rounds returned.
+		require.LessOrEqual(t, len(state.keys), rowsPerRound)
+		require.LessOrEqual(t, cap(state.keys), 2*rowsPerRound)
+	}
+
+	require.Greater(t, searchCalls, 32)
+	require.Greater(t, totalRows, 8192)
+	require.Equal(t, searchCalls*rowsPerRound, totalRows)
 }
 
 func TestIvfSearchCallPreservesNullableIncludeColumn(t *testing.T) {

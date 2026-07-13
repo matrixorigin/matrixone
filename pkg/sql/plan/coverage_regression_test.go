@@ -46,7 +46,7 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeOffsetCompensationUsesCompensat
 	}
 
 	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 2, 4)
-	vecCtx.sortNode.Offset = makePlan2Uint64ConstExprWithType(1)
+	setIvfIncludeModeTestPagination(vecCtx, 2, 1)
 
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
@@ -62,7 +62,7 @@ func TestApplyIndicesForSortUsingIvfflat_DistRangeOnlyFilterCompensatesOffset(t 
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 2, 4)
-	vecCtx.sortNode.Offset = makePlan2Uint64ConstExprWithType(1)
+	setIvfIncludeModeTestPagination(vecCtx, 2, 1)
 	scanNode.FilterList = []*planpb.Expr{
 		{
 			Typ: planpb.Type{Id: int32(types.T_bool)},
