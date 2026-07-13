@@ -534,6 +534,7 @@ func buildSnapshotBlockFilter(
 		colIdx, ok = tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 	}
 	if !ok || colIdx < 0 || int(colIdx) >= len(tableDef.Cols) {
+		baseFilter.Cleanup()
 		return objectio.BlockReadFilter{}, 0, types.Type{}, false, moerr.NewInternalErrorNoCtxf(
 			"snapshot scan: cannot resolve primary key column %q",
 			tableDef.Pkey.PkeyColName,
