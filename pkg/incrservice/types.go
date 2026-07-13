@@ -127,6 +127,7 @@ type valueAllocator interface {
 	allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error)
 	asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, timestamp.Timestamp, error)) error
 	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
+	forceSetOffset(ctx context.Context, tableID uint64, col string, offset uint64, txnOp client.TxnOperator) error
 	close()
 }
 

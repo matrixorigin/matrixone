@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,6 +61,75 @@ type blockingGetColumnsStore struct {
 	started chan struct{}
 	release chan struct{}
 }
+
+type blockingAllocateStore struct {
+	IncrValueStore
+
+	mu      sync.Mutex
+	block   bool
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingAllocateStore) blockNext() (<-chan struct{}, func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.block = true
+	s.started = make(chan struct{})
+	s.release = make(chan struct{})
+	var once sync.Once
+	return s.started, func() { once.Do(func() { close(s.release) }) }
+}
+
+func (s *blockingAllocateStore) Allocate(
+	ctx context.Context,
+	tableID uint64,
+	col string,
+	count int,
+	txnOp client.TxnOperator,
+) (uint64, uint64, timestamp.Timestamp, error) {
+	s.mu.Lock()
+	block := s.block
+	started := s.started
+	release := s.release
+	if block {
+		s.block = false
+	}
+	s.mu.Unlock()
+	if block {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return 0, 0, timestamp.Timestamp{}, context.Cause(ctx)
+		}
+	}
+	return s.IncrValueStore.Allocate(ctx, tableID, col, count, txnOp)
+}
+
+type countingAllocator struct {
+	asyncCalls atomic.Int64
+	asyncErr   error
+}
+
+func (a *countingAllocator) allocate(context.Context, uint64, string, int, client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error) {
+	return 0, 0, timestamp.Timestamp{}, nil
+}
+
+func (a *countingAllocator) asyncAllocate(context.Context, uint64, string, int, client.TxnOperator, func(uint64, uint64, timestamp.Timestamp, error)) error {
+	a.asyncCalls.Add(1)
+	return a.asyncErr
+}
+
+func (a *countingAllocator) updateMinValue(context.Context, uint64, string, uint64, client.TxnOperator) error {
+	return nil
+}
+
+func (a *countingAllocator) forceSetOffset(context.Context, uint64, string, uint64, client.TxnOperator) error {
+	return nil
+}
+
+func (a *countingAllocator) close() {}
 
 func (s *blockingGetColumnsStore) blockNext() (<-chan struct{}, chan<- struct{}) {
 	s.mu.Lock()
@@ -273,7 +343,9 @@ func TestSetOffset(t *testing.T) {
 func TestSetOffsetDoesNotReadCommittedColumns(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	store := &setOffsetStore{t: t}
-	s := &service{store: store}
+	allocator := newValueAllocator("", store)
+	defer allocator.close()
+	s := &service{store: store, allocator: allocator}
 
 	require.NoError(t, s.SetOffset(ctx, 10, "auto_col", 99, nil))
 	require.True(t, store.forceCalled)
@@ -717,6 +789,113 @@ func TestInsertValuesBuilderCannotReviveCacheAfterReload(t *testing.T) {
 
 func TestInsertValuesBuilderCannotReviveCacheAfterClose(t *testing.T) {
 	testBlockedBuilderInvalidation(t, true)
+}
+
+func TestSetOffsetWaitsForQueuedOldAllocation(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		store := &blockingAllocateStore{IncrValueStore: NewMemStore()}
+		s := NewIncrService("", store, Config{CountPerAllocate: 2, LowCapacity: 1}).(*service)
+		defer s.Close()
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+
+		started, release := store.blockNext()
+		defer release()
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 0, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), last)
+		<-started
+
+		setResult := make(chan error, 1)
+		go func() { setResult <- s.SetOffset(ctx, 0, def[0].ColName, 99, nil) }()
+		require.Eventually(t, func() bool {
+			return len(s.allocator.(*allocator).c) == 1
+		}, time.Second, time.Millisecond)
+		release()
+		require.NoError(t, <-setResult)
+
+		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err = s.InsertValues(ctx, 0, 1, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(100), last)
+	})
+}
+
+func TestCanceledSetOffsetDoesNotRunQueuedForceUpdate(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		mem := NewMemStore().(*memStore)
+		store := &blockingAllocateStore{IncrValueStore: mem}
+		s := NewIncrService("", store, Config{CountPerAllocate: 2, LowCapacity: 1}).(*service)
+		defer s.Close()
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+
+		started, release := store.blockNext()
+		defer release()
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		_, err = s.InsertValues(ctx, 0, 0, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		<-started
+
+		setCtx, cancelSet := context.WithCancel(ctx)
+		setResult := make(chan error, 1)
+		go func() { setResult <- s.SetOffset(setCtx, 0, def[0].ColName, 99, nil) }()
+		require.Eventually(t, func() bool {
+			return len(s.allocator.(*allocator).c) == 1
+		}, time.Second, time.Millisecond)
+		cancelSet()
+		require.ErrorIs(t, <-setResult, context.Canceled)
+		release()
+
+		require.NoError(t, s.allocator.updateMinValue(ctx, 0, def[0].ColName, 0, nil))
+		mem.Lock()
+		offset := mem.caches[0][0].Offset
+		mem.Unlock()
+		require.Equal(t, uint64(4), offset)
+	})
+}
+
+func TestRetiredTableCacheCannotQueueAllocation(t *testing.T) {
+	allocator := &countingAllocator{}
+	col := &columnCache{
+		col:       AutoColumn{TableID: 1, ColName: "auto", Step: 1},
+		cfg:       Config{CountPerAllocate: 2, LowCapacity: 1},
+		ranges:    &ranges{step: 1},
+		allocator: allocator,
+		committed: true,
+	}
+	c := &tableCache{}
+	c.mu.cols = map[string]*columnCache{"auto": col}
+	c.retire()
+	col.preAllocate(context.Background(), 1, 2, nil)
+	require.Zero(t, allocator.asyncCalls.Load())
+}
+
+func TestPreAllocateClearsStateWhenEnqueueFails(t *testing.T) {
+	allocator := &countingAllocator{asyncErr: context.Canceled}
+	col := &columnCache{
+		col:       AutoColumn{TableID: 1, ColName: "auto", Step: 1},
+		cfg:       Config{CountPerAllocate: 2, LowCapacity: 1},
+		ranges:    &ranges{step: 1},
+		allocator: allocator,
+		committed: true,
+	}
+	col.preAllocate(context.Background(), 1, 2, nil)
+	col.Lock()
+	allocating := col.allocating
+	col.Unlock()
+	require.False(t, allocating)
 }
 
 func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {

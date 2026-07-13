@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,7 +38,10 @@ type allocator struct {
 	logger  *log.MOLogger
 	store   IncrValueStore
 	c       chan action
+	done    chan struct{}
 	stopper *stopper.Stopper
+	mu      sync.RWMutex
+	closed  bool
 }
 
 func newValueAllocator(
@@ -47,6 +51,7 @@ func newValueAllocator(
 	a := &allocator{
 		logger:  getLogger(sid).Named("incrservice"),
 		c:       make(chan action, 1024),
+		done:    make(chan struct{}),
 		stopper: stopper.NewStopper("valueAllocator"),
 		store:   store,
 	}
@@ -96,7 +101,13 @@ func (a *allocator) allocate(
 	if err != nil {
 		return 0, 0, timestamp.Timestamp{}, err
 	}
-	<-c
+	select {
+	case <-c:
+	case <-ctx.Done():
+		return 0, 0, timestamp.Timestamp{}, context.Cause(ctx)
+	case <-a.done:
+		return 0, 0, timestamp.Timestamp{}, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
 	if v := err2.Load(); v != nil {
 		if e, ok := v.(error); ok && e != nil {
 			return 0, 0, timestamp.Timestamp{}, e
@@ -116,7 +127,7 @@ func (a *allocator) asyncAllocate(
 	if err != nil {
 		return err
 	}
-	a.c <- action{
+	return a.enqueue(ctx, action{
 		ctx:           ctx,
 		txnOp:         txnOp,
 		accountID:     accountId,
@@ -124,8 +135,7 @@ func (a *allocator) asyncAllocate(
 		tableID:       tableID,
 		col:           col,
 		count:         count,
-		applyAllocate: apply}
-	return nil
+		applyAllocate: apply})
 }
 
 func (a *allocator) updateMinValue(
@@ -145,7 +155,7 @@ func (a *allocator) updateMinValue(
 		err = e
 		close(c)
 	}
-	a.c <- action{
+	if err := a.enqueue(ctx, action{
 		ctx:         ctx,
 		txnOp:       txnOp,
 		accountID:   accountId,
@@ -154,9 +164,68 @@ func (a *allocator) updateMinValue(
 		col:         col,
 		minValue:    minValue,
 		applyUpdate: fn,
+	}); err != nil {
+		return err
 	}
-	<-c
+	select {
+	case <-c:
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-a.done:
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
 	return err
+}
+
+func (a *allocator) forceSetOffset(
+	ctx context.Context,
+	tableID uint64,
+	col string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	accountID, err := getAccountID(ctx)
+	if err != nil {
+		return err
+	}
+	done := make(chan struct{})
+	if err := a.enqueue(ctx, action{
+		ctx:         ctx,
+		txnOp:       txnOp,
+		accountID:   accountID,
+		actionType:  forceUpdateType,
+		tableID:     tableID,
+		col:         col,
+		minValue:    offset,
+		applyUpdate: func(e error) { err = e; close(done) },
+	}); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return err
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-a.done:
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+}
+
+func (a *allocator) enqueue(ctx context.Context, act action) error {
+	a.mu.RLock()
+	closed := a.closed
+	a.mu.RUnlock()
+	if closed {
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	select {
+	case a.c <- act:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-a.done:
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
 }
 
 func (a *allocator) run(ctx context.Context) {
@@ -170,9 +239,21 @@ func (a *allocator) run(ctx context.Context) {
 				a.doAllocate(act)
 			case updateType:
 				a.doUpdate(act)
+			case forceUpdateType:
+				a.doForceSetOffset(act)
 			}
 		}
 	}
+}
+
+func (a *allocator) doForceSetOffset(act action) {
+	ctx := defines.AttachAccountId(act.ctx, act.accountID)
+	if err := context.Cause(ctx); err != nil {
+		act.applyUpdate(err)
+		return
+	}
+	err := a.store.ForceSetOffset(ctx, act.tableID, act.col, act.minValue, act.txnOp)
+	act.applyUpdate(err)
 }
 
 func (a *allocator) doAllocate(act action) {
@@ -232,13 +313,21 @@ func (a *allocator) doUpdate(act action) {
 }
 
 func (a *allocator) close() {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return
+	}
+	a.closed = true
+	close(a.done)
+	a.mu.Unlock()
 	a.stopper.Stop()
-	close(a.c)
 }
 
 var (
-	allocType  = 0
-	updateType = 1
+	allocType       = 0
+	updateType      = 1
+	forceUpdateType = 2
 )
 
 type action struct {

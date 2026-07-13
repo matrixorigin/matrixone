@@ -57,6 +57,7 @@ type columnCache struct {
 	concurrencyApply atomic.Uint64
 	allocateCount    atomic.Uint64
 	committed        bool
+	retired          bool
 }
 
 func newColumnCache(
@@ -349,6 +350,9 @@ func (col *columnCache) preAllocate(
 	txnOp client.TxnOperator) {
 	col.Lock()
 	defer col.Unlock()
+	if col.retired {
+		return
+	}
 
 	if col.ranges.left() >= count {
 		return
@@ -363,7 +367,7 @@ func (col *columnCache) preAllocate(
 	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
 	}
-	col.allocator.asyncAllocate(
+	err := col.allocator.asyncAllocate(
 		ctx,
 		tableID,
 		col.col.ColName,
@@ -376,6 +380,9 @@ func (col *columnCache) preAllocate(
 				col.applyAllocate(0, 0, timestamp.Timestamp{}, err)
 			}
 		})
+	if err != nil {
+		col.applyAllocateLocked(0, 0, timestamp.Timestamp{}, err)
+	}
 }
 
 func (col *columnCache) allocateLocked(
@@ -386,6 +393,9 @@ func (col *columnCache) allocateLocked(
 	txnOp client.TxnOperator) error {
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return err
+	}
+	if col.retired {
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
 
 	col.allocating = true
@@ -426,8 +436,9 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp
 	col.Lock()
 	committed := col.committed
 	low := col.ranges.left() <= col.cfg.LowCapacity
+	retired := col.retired
 	col.Unlock()
-	if low && committed {
+	if low && committed && !retired {
 		accountId, err := defines.GetAccountId(ctx)
 		if err != nil {
 			return err
@@ -438,6 +449,12 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp
 			txnOp)
 	}
 	return nil
+}
+
+func (col *columnCache) retire() {
+	col.Lock()
+	col.retired = true
+	col.Unlock()
 }
 
 func (col *columnCache) applyAllocate(

@@ -196,6 +196,12 @@ func (c *tableCache) release() {
 }
 
 func (c *tableCache) retire() {
+	c.mu.RLock()
+	for _, col := range c.mu.cols {
+		col.retire()
+	}
+	c.mu.RUnlock()
+
 	c.lifecycle.Lock()
 	c.lifecycle.retired = true
 	closeNow := c.lifecycle.users == 0 && !c.lifecycle.closed

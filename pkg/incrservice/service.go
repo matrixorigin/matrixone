@@ -308,7 +308,7 @@ func (s *service) SetOffset(
 	// ALTER TABLE AUTO_INCREMENT explicitly resets the next value. The caller
 	// has already checked table data and holds the DDL lock, so bypass the
 	// store-level monotonic guard that protects normal pre-allocation updates.
-	return s.store.ForceSetOffset(ctx, tableID, colName, offset, txnOp)
+	return s.allocator.forceSetOffset(ctx, tableID, colName, offset, txnOp)
 }
 
 func (s *service) Close() {
