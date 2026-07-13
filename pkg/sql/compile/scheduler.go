@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -134,6 +135,15 @@ func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
 	if err != nil {
 		return schedule.QueryDecision{}, err
 	}
+	var qry *plan.Query
+	if c.pn != nil {
+		qry = c.pn.GetQuery()
+	}
+	if hasMixedCommit(candidates) && queryHasIvfSearchEntriesInternalScan(qry) {
+		c.execType = plan2.ExecTypeAP_ONECN
+		req.ExecKind = schedule.QueryExecAPOneCN
+		return schedule.DecideQueryPlacement(req), nil
+	}
 
 	rawCandidateCount := len(candidates)
 	req.Candidates = toScheduleCandidateWorkers(candidates)
@@ -151,6 +161,27 @@ func (c *Compile) decideQueryPlacement() (schedule.QueryDecision, error) {
 			zap.Bool("is-internal", c.isInternal))
 	}
 	return schedule.DecideQueryPlacement(req), nil
+}
+
+func hasMixedCommit(nodes engine.Nodes) bool {
+	for i := range nodes {
+		if nodes[i].HasMixedCommit {
+			return true
+		}
+	}
+	return false
+}
+
+func queryHasIvfSearchEntriesInternalScan(qry *plan.Query) bool {
+	if qry == nil {
+		return false
+	}
+	for _, node := range qry.GetNodes() {
+		if plan2.IsIvfSearchEntriesInternalScan(node) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compile) currentCNWorker() schedule.Worker {

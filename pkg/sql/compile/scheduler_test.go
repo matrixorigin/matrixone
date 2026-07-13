@@ -23,10 +23,12 @@ import (
 	"github.com/golang/mock/gomock"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -105,6 +107,35 @@ func TestScheduleQueryWorkersSortsMultiCNCandidates(t *testing.T) {
 	nodes, err := c.scheduleQueryWorkers()
 	require.NoError(t, err)
 	require.Equal(t, []string{"a:6001", "z:6001"}, []string{nodes[0].Addr, nodes[1].Addr})
+}
+
+func TestScheduleQueryWorkersKeepsIvfLocalDuringMixedCommitTopology(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.ncpu = 6
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_FUNCTION_SCAN,
+			TableDef: &plan.TableDef{
+				TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+			},
+			IndexReaderParam: &plan.IndexReaderParam{
+				OrigFuncName: "l2_distance",
+			},
+		}},
+	}}}
+	c.e = &schedulerTestEngine{
+		nodes: engine.Nodes{
+			{Id: "cn-1", Addr: "one:6001", Mcpu: 4, HasMixedCommit: true},
+			{Id: "cn-2", Addr: "two:6001", Mcpu: 4, HasMixedCommit: true},
+		},
+	}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	require.Equal(t, engine.Nodes{{Addr: "local:6001", Mcpu: 6}}, nodes)
 }
 
 func TestScheduleQueryWorkersForwardsCandidateFilters(t *testing.T) {

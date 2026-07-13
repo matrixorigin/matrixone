@@ -822,6 +822,20 @@ func (e *Engine) Nodes(
 
 	cluster := clusterservice.GetMOCluster(e.service)
 	var selector clusterservice.Selector
+	hasMixedCommit := false
+	cluster.GetCNService(selector, func(c metadata.CNService) bool {
+		if c.CommitID != version.CommitID {
+			hasMixedCommit = true
+		}
+		return true
+	})
+	defer func() {
+		if hasMixedCommit {
+			for i := range nodes {
+				nodes[i].HasMixedCommit = true
+			}
+		}
+	}()
 
 	// If the requested labels are empty, return all CN servers.
 	if len(cnLabel) == 0 {

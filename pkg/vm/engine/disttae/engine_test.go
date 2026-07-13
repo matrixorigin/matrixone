@@ -217,18 +217,23 @@ func TestEngineNodesUsesClusterServiceWorkingState(t *testing.T) {
 			"working-pipeline",
 			"unknown-pipeline",
 		}, nodeAddresses(nodes))
+		require.True(t, nodes[0].HasMixedCommit)
+		require.True(t, nodes[1].HasMixedCommit)
 	})
 
 	t.Run("common tenant label route", func(t *testing.T) {
 		accountLabel := map[string]metadata.LabelList{
 			"account": {Labels: []string{"app"}},
 		}
+		otherAccountLabel := map[string]metadata.LabelList{
+			"account": {Labels: []string{"other"}},
+		}
 		e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
 			CNStores: []logpb.CNStore{
 				newEngineNodesCNStore("working-cn", "working-pipeline", accountLabel, metadata.WorkState_Working, version.CommitID),
 				newEngineNodesCNStore("draining-cn", "draining-pipeline", accountLabel, metadata.WorkState_Draining, version.CommitID),
 				newEngineNodesCNStore("unknown-cn", "unknown-pipeline", accountLabel, metadata.WorkState_Unknown, version.CommitID),
-				newEngineNodesCNStore("old-binary-cn", "old-binary-pipeline", accountLabel, metadata.WorkState_Working, "different-commit"),
+				newEngineNodesCNStore("old-binary-cn", "old-binary-pipeline", otherAccountLabel, metadata.WorkState_Working, "different-commit"),
 			},
 		})
 
@@ -238,6 +243,8 @@ func TestEngineNodesUsesClusterServiceWorkingState(t *testing.T) {
 			"working-pipeline",
 			"unknown-pipeline",
 		}, nodeAddresses(nodes))
+		require.True(t, nodes[0].HasMixedCommit)
+		require.True(t, nodes[1].HasMixedCommit)
 	})
 
 	t.Run("super tenant label route", func(t *testing.T) {
@@ -269,6 +276,8 @@ func TestEngineNodesUsesClusterServiceWorkingState(t *testing.T) {
 					"working-pipeline",
 					"unknown-pipeline",
 				}, nodeAddresses(nodes))
+				require.True(t, nodes[0].HasMixedCommit)
+				require.True(t, nodes[1].HasMixedCommit)
 			})
 		}
 	})

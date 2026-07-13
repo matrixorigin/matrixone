@@ -449,6 +449,7 @@ func TestGenerateNodesUsesMultiCNForSmallIvfSearchFunctionScan(t *testing.T) {
 			Dop:      1,
 		},
 		IndexReaderParam: &plan.IndexReaderParam{
+			OrigFuncName: "l2_distance",
 			Limit: &plan.Expr{
 				Expr: &plan.Expr_Lit{
 					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},
@@ -537,6 +538,7 @@ func TestCompileTableFunctionDispatchesIvfSearchToAllCNs(t *testing.T) {
 		},
 		Stats: &plan.Stats{BlockNum: 1, Dop: 1},
 		IndexReaderParam: &plan.IndexReaderParam{
+			OrigFuncName: "l2_distance",
 			Limit: &plan.Expr{
 				Expr: &plan.Expr_Lit{
 					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},
@@ -580,6 +582,7 @@ func TestShouldDispatchIvfSearchMultiCNRejectsWritableWorkspace(t *testing.T) {
 			TableType: "func_table",
 			TblFunc:   &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
 		},
+		IndexReaderParam: &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
 	}
 	cnList := engine.Nodes{{Addr: "cn1:6001"}, {Addr: "cn2:6001"}}
 

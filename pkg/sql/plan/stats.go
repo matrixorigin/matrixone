@@ -2056,9 +2056,13 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	// We detect this by inspecting the actual join condition expression: if either side of
 	// the equi-join condition is a function expression (not a plain column ref), it's expr-based.
 	hasExprBasedShuffle := false
+	hasForceOneCN := false
 	for _, node := range qry.GetNodes() {
 		if node == nil {
 			continue
+		}
+		if node.GetStats().GetForceOneCN() {
+			hasForceOneCN = true
 		}
 		if node.Stats == nil || node.Stats.HashmapStats == nil {
 			continue
@@ -2085,7 +2089,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			break
 		}
 	}
-	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle
+	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle && !hasForceOneCN
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		if node == nil {
@@ -2097,20 +2101,18 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 		stats := node.Stats
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) && stats.Cost > float64(costThresholdForOneCN) {
-			if txnHaveDDL {
-				return ExecTypeAP_ONECN
-			} else if stats != nil && hasExprBasedShuffle {
+			if !canUseMultiCN {
 				return ExecTypeAP_ONECN
 			} else {
 				return ExecTypeAP_MULTICN
 			}
 		}
 		if isPrepare {
-			if stats.BlockNum > blockThresholdForTpQuery*4 || stats.Cost > costThresholdForTpQuery*4 {
+			if ret != ExecTypeAP_MULTICN && (stats.BlockNum > blockThresholdForTpQuery*4 || stats.Cost > costThresholdForTpQuery*4) {
 				ret = ExecTypeAP_ONECN
 			}
 		} else {
-			if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+			if ret != ExecTypeAP_MULTICN && (stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery) {
 				ret = ExecTypeAP_ONECN
 			}
 		}
@@ -2166,7 +2168,7 @@ func isIvfSearchFunctionScan(node *plan.Node) bool {
 // path and the legacy TABLE_SCAN form used by unit tests.
 func IsIvfSearchEntriesInternalScan(node *plan.Node) bool {
 	if isIvfSearchFunctionScan(node) {
-		return true
+		return isIvfEntriesIndexReaderScan(node)
 	}
 	return isIvfSearchEntriesTableScan(node) && isIvfEntriesIndexReaderScan(node)
 }
