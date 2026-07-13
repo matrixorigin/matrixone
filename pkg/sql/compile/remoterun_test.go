@@ -1026,6 +1026,53 @@ func TestRegisterLocalDispatchReceiversRegistersRetainedRemoteRootOnly(t *testin
 	require.Nil(t, notifyCh)
 }
 
+func TestRegisterLocalDispatchReceiversTraversesRemoteAncestorForNestedLocalReturn(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	for _, tc := range []struct {
+		name string
+		root vm.Operator
+	}{
+		{name: "remote non-dispatch root", root: merge.NewArgument()},
+		{name: "retained remote dispatch root", root: dispatch.NewArgument()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			uid, err := uuid.NewV7()
+			require.NoError(t, err)
+			rootProc := testutil.NewProcess(t)
+			outerProc := rootProc.NewNoContextChildProc(0)
+			localProc := rootProc.NewNoContextChildProc(0)
+			localDispatch := dispatch.NewArgument()
+			localDispatch.FuncId = dispatch.SendToAllFunc
+			localDispatch.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+			localReturn := &Scope{
+				Magic:    Remote,
+				Proc:     localProc,
+				RootOp:   localDispatch,
+				NodeInfo: engine.Node{Addr: "local-cn:6002"},
+			}
+			outerRemote := &Scope{
+				Magic:     Remote,
+				Proc:      outerProc,
+				RootOp:    tc.root,
+				NodeInfo:  engine.Node{Addr: "remote-cn:6002"},
+				PreScopes: []*Scope{localReturn},
+			}
+			// The remote tree is valid to execute on remote-cn. When it does, its child
+			// RemoteRun comes back to local-cn and needs this dispatch receiver before
+			// the remote sender can notify it.
+			require.True(t, checkPipelineStandaloneExecutableAtRemote(outerRemote))
+
+			registrations, err := registerLocalDispatchReceivers([]*Scope{outerRemote}, "local-cn:6002")
+			require.NoError(t, err)
+			defer registrations.cleanup()
+			registeredProc, _, ok := colexec.Get().GetProcByUuid(uid, false)
+			require.True(t, ok)
+			require.Same(t, localProc, registeredProc)
+		})
+	}
+}
+
 func TestRegisterLocalDispatchReceiversSkipsGuaranteedRemoteRunFailures(t *testing.T) {
 	_ = colexec.NewServer(nil)
 

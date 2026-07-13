@@ -91,6 +91,9 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 		return
 	}
 	scanNode := builder.qry.Nodes[scanID]
+	if !builder.regularIndexScanAllowedByOrderHints(scanNode) {
+		return
+	}
 	if len(scanNode.OrderBy) != 0 {
 		return
 	}
