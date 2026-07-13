@@ -1923,7 +1923,11 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
-	ctx.WriteString(node.Pattern)
+	// Pattern is stored unquoted (search_pattern: STRING strips the quotes). Re-emit it
+	// as a properly-quoted/escaped string literal, matching NumVal, so a deparsed
+	// statement (e.g. CREATE TABLE AS SELECT, which re-serializes the query) round-trips
+	// and re-parses. Raw WriteString here dropped the quotes -> syntax error (#24823).
+	ctx.WriteValue(P_char, FormatString(node.Pattern))
 
 	if node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")

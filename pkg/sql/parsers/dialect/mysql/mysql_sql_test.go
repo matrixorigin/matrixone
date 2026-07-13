@@ -3629,6 +3629,17 @@ var (
 		output string
 	}{
 		{
+			// #24823: MATCH ... AGAINST pattern must keep its quotes when the query is
+			// re-serialized (e.g. CREATE TABLE AS SELECT), else the re-parse syntax-errors.
+			input:  "select id, MATCH (body) AGAINST ('防水' IN BOOLEAN MODE) as sc from ft where MATCH (body) AGAINST ('防水' IN BOOLEAN MODE)",
+			output: "select id, MATCH (body) AGAINST ('防水' IN BOOLEAN MODE) as sc from ft where MATCH (body) AGAINST ('防水' IN BOOLEAN MODE)",
+		},
+		{
+			// embedded single quote in the pattern must be escaped ('' ) on restore.
+			input:  "select * from t where MATCH (body) AGAINST ('a''b')",
+			output: "select * from t where MATCH (body) AGAINST ('a''b')",
+		},
+		{
 			input:  "create table pt1 (id int, category varchar(50)) partition by list columns(category) (partition p1 values in ('A', 'B') comment 'Category A and B', partition p2 values in ('C', 'D') comment 'Category C and D')",
 			output: "create table pt1 (id int, category varchar(50)) partition by list columns (category) (partition p1 values in ('A', 'B') comment = 'Category A and B', partition p2 values in ('C', 'D') comment = 'Category C and D')",
 		},
