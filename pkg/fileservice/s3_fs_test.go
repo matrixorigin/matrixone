@@ -57,6 +57,13 @@ type blockingReadObjectStorage struct {
 	readCount   atomic.Int64
 }
 
+type blockingDataCache struct {
+	fscache.DataCache
+	updateStarted chan struct{}
+	releaseUpdate chan struct{}
+	updateCount   atomic.Int64
+}
+
 func (b *blockingReadObjectStorage) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
 	if b.readCount.Add(1) == 1 {
 		close(b.readStarted)
@@ -67,6 +74,18 @@ func (b *blockingReadObjectStorage) Read(ctx context.Context, key string, min *i
 		}
 	}
 	return b.ObjectStorage.Read(ctx, key, min, max)
+}
+
+func (b *blockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) error {
+	if b.updateCount.Add(1) == 1 {
+		close(b.updateStarted)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-b.releaseUpdate:
+		}
+	}
+	return b.DataCache.Set(ctx, key, data)
 }
 
 func (r *readRangeRecordingObjectStorage) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
@@ -1396,16 +1415,12 @@ func TestS3FSIOMerger(t *testing.T) {
 		},
 		CacheConfig{
 			MemoryCapacity: ptrTo(toml.ByteSize(1 << 20)),
-			DiskPath:       ptrTo(t.TempDir()),
-			DiskCapacity:   ptrTo(toml.ByteSize(10 * (1 << 20))),
-			CheckOverlaps:  false,
 		},
 		nil,
 		false,
 		false,
 	)
-	assert.Nil(t, err)
-	defer fs.Close(ctx)
+	require.NoError(t, err)
 
 	err = fs.Write(ctx, IOVector{
 		FilePath: "foo",
@@ -1419,24 +1434,32 @@ func TestS3FSIOMerger(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	cache := &blockingDataCache{
+		DataCache:     fs.memCache.cache,
+		updateStarted: make(chan struct{}),
+		releaseUpdate: make(chan struct{}),
+	}
+	fs.memCache.cache = cache
 	storage := &blockingReadObjectStorage{
 		ObjectStorage: fs.storage,
 		readStarted:   make(chan struct{}),
 		releaseRead:   make(chan struct{}),
 	}
-	defer func() {
-		select {
-		case <-storage.releaseRead:
-		default:
-			close(storage.releaseRead)
-		}
-	}()
 	fs.storage = storage
 	readCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	releaseRead := sync.OnceFunc(func() { close(storage.releaseRead) })
+	releaseUpdate := sync.OnceFunc(func() { close(cache.releaseUpdate) })
+	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		cancel()
+		releaseRead()
+		releaseUpdate()
+		wg.Wait()
+		fs.Close(ctx)
+	})
 
-	read := func(ctx context.Context) error {
-		vec := &IOVector{
+	newReadVector := func() *IOVector {
+		return &IOVector{
 			FilePath: "foo",
 			Policy:   SkipFullFilePreloads,
 			Entries: []IOEntry{
@@ -1446,6 +1469,9 @@ func TestS3FSIOMerger(t *testing.T) {
 				},
 			},
 		}
+	}
+	read := func(ctx context.Context) error {
+		vec := newReadVector()
 		defer vec.Release()
 		if err := fs.Read(ctx, vec); err != nil {
 			return err
@@ -1457,11 +1483,35 @@ func TestS3FSIOMerger(t *testing.T) {
 	}
 
 	results := make(chan error, 2)
-	go func() { results <- read(readCtx) }()
-	<-storage.readStarted
+	startRead := func(ctx context.Context) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- read(ctx)
+		}()
+	}
+	waitForSignal := func(ch <-chan struct{}, name string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-readCtx.Done():
+			t.Fatalf("timed out waiting for %s: %v", name, readCtx.Err())
+		}
+	}
+
+	startRead(readCtx)
+	waitForSignal(storage.readStarted, "object read")
+	releaseRead()
+	waitForSignal(cache.updateStarted, "cache update")
+
+	// The cache update is deliberately blocked. The merge must still be active
+	// at this point, otherwise a waiter can become a second merge leader before
+	// the first leader's cache contents are visible. This assertion is
+	// deterministically false with defer done() at the Merge call site.
+	require.True(t, fs.ioMerger.IsMerging(newReadVector().ioMergeKey()))
 
 	waiterCtx := WithEventLogger(readCtx)
-	go func() { results <- read(waiterCtx) }()
+	startRead(waiterCtx)
 	waiterLogger := waiterCtx.Value(EventLoggerKey).(*eventLogger)
 	require.Eventually(t, func() bool {
 		waiterLogger.mu.Lock()
@@ -1474,11 +1524,10 @@ func TestS3FSIOMerger(t *testing.T) {
 		return false
 	}, 5*time.Second, time.Millisecond)
 
-	close(storage.releaseRead)
+	releaseUpdate()
 	require.NoError(t, <-results)
 	require.NoError(t, <-results)
 	require.Equal(t, int64(1), storage.readCount.Load())
-
 }
 
 func BenchmarkS3FSAllocateCacheData(b *testing.B) {
