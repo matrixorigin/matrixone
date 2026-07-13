@@ -256,7 +256,7 @@ DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 CREATE TABLE t1(
 id INT,
-str1 VARCHAR(10),
+str1 VARCHAR(20),
 PRIMARY KEY (id)
 );
 CREATE TABLE t2(
@@ -270,16 +270,15 @@ SELECT str1 | n1 FROM t1, t2 WHERE t1.id = t2.id AND t1.id = 1;
 ➤ str1 | n1[-5,64,0]  𝄀
 101
 UPDATE t1 JOIN t2 ON t1.id = t2.id SET str1 = n1 << 2;
-internal error: Can't cast column from BIGINT UNSIGNED type to VARCHAR type because of one or more values in that column. 18446744073709551612 is larger than Dest length 10
 UPDATE t1,t2 SET str1 = 2 >> str1, n1 = 3 >> 3 WHERE t1.id = 1;
 INSERT INTO t1() VALUES(2 << 4, 'shift'), (3 & 0, 'bit');
 INSERT INTO t1 SELECT 2 << 8, 'UK';
 SELECT * FROM t1;
 ➤ id[4,32,0]  ¦  str1[12,-1,0]  𝄀
-2  ¦  red  𝄀
 3  ¦  United  𝄀
-4  ¦  0  𝄀
-1  ¦  1  𝄀
+2  ¦  4040  𝄀
+4  ¦  18446744073709551612  𝄀
+1  ¦  0  𝄀
 32  ¦  shift  𝄀
 0  ¦  bit  𝄀
 512  ¦  UK
