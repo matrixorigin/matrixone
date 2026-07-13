@@ -63,6 +63,17 @@ func writeUint64(h writeByter, v uint64) {
 	_, _ = h.Write(tmp[:])
 }
 
+func writeString(h writeByter, value string) {
+	writeUint64(h, uint64(len(value)))
+	_, _ = h.Write([]byte(value))
+}
+
+func hashString(value string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(value))
+	return h.Sum64()
+}
+
 const (
 	tagNil uint8 = iota
 	tagLit

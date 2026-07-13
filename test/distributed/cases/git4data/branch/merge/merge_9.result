@@ -1,0 +1,31 @@
+drop database if exists data_branch_blob_merge;
+create database data_branch_blob_merge;
+use data_branch_blob_merge;
+create table t_src (
+id bigint primary key,
+v int,
+bin binary(5),
+vbin varbinary(5),
+b blob
+);
+insert into t_src values
+(1, 10, x'61005c27ff', x'61005c27ff', x'61005c27ff'),
+(2, 20, x'000102', x'000102', x'000102'),
+(3, 30, null, null, null),
+(4, 40, x'', x'', x'');
+data branch create table t_branch from t_src;
+update t_branch set v = v + 1 where id in (1, 2, 4);
+data branch diff t_branch against t_src output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+3
+data branch merge t_branch into t_src when conflict accept;
+select id, v, hex(bin), hex(vbin), hex(b), ifnull(length(b), -1) as b_len from t_src order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  ¦  hex(bin)[12,-1,0]  ¦  hex(vbin)[12,-1,0]  ¦  hex(b)[12,-1,0]  ¦  b_len[-5,64,0]  𝄀
+1  ¦  11  ¦  61005C27FF  ¦  61005C27FF  ¦  61005C27FF  ¦  5  𝄀
+2  ¦  21  ¦  0001020000  ¦  000102  ¦  000102  ¦  3  𝄀
+3  ¦  30  ¦  null  ¦  null  ¦  null  ¦  -1  𝄀
+4  ¦  41  ¦  0000000000  ¦    ¦    ¦  0
+data branch diff t_branch against t_src output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+0
+drop database data_branch_blob_merge;

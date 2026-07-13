@@ -453,6 +453,21 @@ type DefaultBinder struct {
 	cols []string
 }
 
+// ReplaceValueBinder binds the RHS value expressions of a `REPLACE ... SET`
+// statement. MySQL evaluates an RHS reference to a target-table column as
+// DEFAULT(col), so this binder resolves every column reference to that
+// column's default expression instead of an actual row value.
+//
+// The typ field carries the destination column type so that literal values
+// (especially DECIMAL / scientific-notation) bind with the same precision as
+// DefaultBinder. BindExpr delegates to baseBindExpr which uses this typ to
+// drive type-aware numeric binding.
+type ReplaceValueBinder struct {
+	baseBinder
+	typ      plan.Type
+	tableDef *plan.TableDef
+}
+
 type UpdateBinder struct {
 	baseBinder
 	cols []*ColDef
@@ -515,6 +530,7 @@ var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
 var _ Binder = (*OndupUpdateBinder)(nil)
+var _ Binder = (*ReplaceValueBinder)(nil)
 
 var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}
 

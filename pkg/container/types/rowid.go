@@ -114,7 +114,11 @@ func (r *Rowid) ComparePrefix(to []byte) int {
 	if toLen == SegmentidSize {
 		return bytes.Compare(r[:toLen], to)
 	}
-	panic(fmt.Sprintf("invalid prefix length %d:%X", toLen, to))
+	// Format a copy (string(to)) rather than `to` itself: passing the slice
+	// directly to fmt.Sprintf's ...any boxes it, marking `to` as leaking for
+	// the whole method and forcing every caller's prefix slice onto the heap,
+	// even though this Sprintf only runs on the (never-taken) panic path.
+	panic(fmt.Sprintf("invalid prefix length %d:%X", toLen, string(to)))
 }
 
 func (r *Rowid) Compare(other *Rowid) int {

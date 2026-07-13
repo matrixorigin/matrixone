@@ -354,7 +354,7 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 			getLogger(""),
 			newFixedSlicePool(16),
 			func(sid string) (bool, error) { return true, nil },
-			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+			func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 			func(txn pb.WaitTxn) (bool, error) { return true, nil },
 		).(*mapBasedTxnHolder)
 		defer hold.close()
@@ -372,6 +372,131 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 	})
 }
 
+func TestHandleCheckActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			visited := 0
+			s.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				for _, txnID := range [][]byte{
+					[]byte("txn1"),
+					[]byte("txn2"),
+					[]byte("txn3"),
+				} {
+					visited++
+					if !fn(txnID) {
+						return
+					}
+				}
+			}
+
+			req := &pb.Request{
+				Method: pb.Method_CheckActiveTxn,
+				CheckActiveTxn: pb.CheckActiveTxnRequest{
+					ServiceID: s.serviceID,
+					Txn:       []byte("txn2"),
+				},
+			}
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+
+			require.True(t, cs.writeCalled)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.True(t, resp.CheckActiveTxn.Active)
+			require.Equal(t, 2, visited)
+		},
+	)
+}
+
+func TestValidRemoteTxnUsesCheckActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.False(t, fn([]byte("txn1")))
+			}
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.True(t, valid)
+		},
+	)
+}
+
+func TestValidRemoteTxnFallsBackToGetActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.True(t, fn([]byte("txn1")))
+			}
+			target.remote.server.RegisterMethodHandler(
+				pb.Method_CheckActiveTxn,
+				func(_ context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+					writeResponse(
+						target.logger,
+						cancel,
+						resp,
+						moerr.NewNotSupportedNoCtx("check active txn"),
+						cs,
+					)
+				},
+			)
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.True(t, valid)
+		},
+	)
+}
+
+func TestValidRemoteTxnFallsBackToGetActiveTxnMiss(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.True(t, fn([]byte("txn2")))
+			}
+			target.remote.server.RegisterMethodHandler(
+				pb.Method_CheckActiveTxn,
+				func(_ context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+					writeResponse(
+						target.logger,
+						cancel,
+						resp,
+						moerr.NewNotSupportedNoCtx("check active txn"),
+						cs,
+					)
+				},
+			)
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.False(t, valid)
+		},
+	)
+}
+
 func TestKeepRemoteActiveTxn(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
@@ -379,7 +504,7 @@ func TestKeepRemoteActiveTxn(t *testing.T) {
 			getLogger(""),
 			newFixedSlicePool(16),
 			func(sid string) (bool, error) { return false, nil },
-			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+			func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 			func(txn pb.WaitTxn) (bool, error) { return true, nil },
 		).(*mapBasedTxnHolder)
 		defer hold.close()
