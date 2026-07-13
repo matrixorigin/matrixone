@@ -540,12 +540,9 @@ func TestGetBackendWithCreateBackend(t *testing.T) {
 }
 
 func TestCloseIdleBackends(t *testing.T) {
-	// Event-driven: factory signals on Create so we wait for 2 backends without Sleep.
-	created := make(chan struct{}, 2)
-	factory := &createNotifyFactory{inner: newTestBackendFactory(), created: created}
 	rc, err := NewClient(
 		"",
-		factory,
+		newTestBackendFactory(),
 		WithClientMaxBackendPerHost(2),
 		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
 		WithClientCreateTaskChanSize(1),
@@ -570,29 +567,18 @@ func TestCloseIdleBackends(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, b, "timeout waiting for first backend")
 
-	// Trigger second create; wait for two Create() completions (event-driven, with timeout)
-	_, _ = c.getBackend("b1", false)
-	for _, ch := range []chan struct{}{created, created} {
-		select {
-		case <-ch:
-		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for backend create (second backend may not have been created)")
-		}
-	}
+	// Create the second backend synchronously through the complete bookkeeping
+	// path. A factory-level Create notification is too early for this assertion:
+	// the backend is published to the pool only after Create returns and the
+	// client re-acquires c.mu.
+	activeBackend, err := c.createBackendWithBookkeeping("b1", false)
+	require.NoError(t, err)
+	require.NotNil(t, activeBackend)
+	require.NotSame(t, b, activeBackend)
 	c.mu.Lock()
 	backendCount := len(c.mu.backends["b1"])
-	// b is the locked backend returned by getBackend; find the active (non-b) backend
-	// without assuming slice order, since concurrent creation may append in any order.
-	var activeBackend Backend
-	for _, bk := range c.mu.backends["b1"] {
-		if bk != b {
-			activeBackend = bk
-			break
-		}
-	}
 	c.mu.Unlock()
 	require.Equal(t, 2, backendCount, "second backend must be created")
-	require.NotNil(t, activeBackend, "active backend not found")
 
 	// b is the idle backend: unlock it and zero activeTime so GC will close it
 	b.Unlock()
