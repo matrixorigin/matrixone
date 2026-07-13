@@ -61,6 +61,22 @@ where t.reldatabase = 'cg_src'
   and rp.role_name like 'cg_r_%'
 order by rp.role_name, rp.privilege_name;
 
+-- Regression: a failing COPY GRANTS clone into an existing destination must
+-- leave the existing destination grants unchanged.
+create table cg_src.dst_already_exists(a int primary key, b varchar(20));
+grant select on table cg_src.dst_already_exists to cg_r_existing_dst;
+-- @regex("table .* already exists",true)
+create table cg_src.dst_already_exists clone cg_src.src copy grants;
+select t.reldatabase, t.relname, rp.role_name, rp.privilege_name, rp.privilege_level, rp.with_grant_option
+from mo_catalog.mo_tables t
+join mo_catalog.mo_role_privs rp
+  on rp.obj_type = 'table'
+ and rp.obj_id = t.rel_logical_id
+where t.reldatabase = 'cg_src'
+  and t.relname = 'dst_already_exists'
+  and rp.role_name like 'cg_r_%'
+order by rp.role_name, rp.privilege_name;
+
 -- Structural check: plain clone should have no copied grants; every COPY GRANTS
 -- target should get the same number of table-level grants as the source table.
 select t.reldatabase, t.relname, count(rp.role_name) as copied_grants

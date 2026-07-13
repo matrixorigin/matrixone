@@ -661,7 +661,11 @@ func genTableDefOfColumn(col catalog.Column) engine.TableDef {
 	attr.AutoIncrement = col.IsAutoIncrement == 1
 	attr.Seqnum = col.Seqnum
 	attr.EnumVlaues = col.EnumValues
-	if err := types.Decode(col.Typ, &attr.Type); err != nil {
+	// Call the concrete Unmarshal method rather than types.Decode: passing
+	// &attr.Type through the encoding.BinaryUnmarshaler interface forces the
+	// whole attr local to escape to the heap. The direct method call avoids
+	// the extra standalone allocation per column.
+	if err := attr.Type.Unmarshal(col.Typ); err != nil {
 		panic(err)
 	}
 	attr.Default = new(plan.Default)

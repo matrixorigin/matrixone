@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -132,8 +133,18 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			},
 		}, nil
 	} else {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
+		if expr, err := b.baseBindColRef(astExpr, depth, isRoot); err == nil {
+			if corr, ok := expr.Expr.(*plan.Expr_Corr); ok &&
+				(b.corrColRefTargetsCurrentGroup(corr.Corr) || b.corrColRefTargetsGroup(corr.Corr)) {
+				return expr, nil
+			}
+		}
+		return nil, b.newGroupByColumnError(astExpr)
 	}
+}
+
+func (b *HavingBinder) newGroupByColumnError(astExpr *tree.UnresolvedName) error {
+	return moerr.NewSyntaxErrorf(b.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
 }
 
 // validateCountArgs validates COUNT function arguments against MySQL semantics.
@@ -264,6 +275,18 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 
 	funcId, _ := function.DecodeOverloadID(obj.Obj)
 	switch funcId {
+	case function.SUM:
+		arg := expr.GetF().Args[0]
+		typ := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+		fGet, err := function.GetFunctionByName(b.GetContext(), "sum", []types.Type{typ})
+		if err != nil {
+			return nil, err
+		}
+		obj.Obj = fGet.GetEncodedOverloadID()
+		obj.ObjName = "sum"
+		expr.Typ.Id = int32(fGet.GetReturnType().Oid)
+		expr.Typ.Width = fGet.GetReturnType().Width
+		expr.Typ.Scale = fGet.GetReturnType().Scale
 	case function.COUNT:
 		fGet, err := function.GetFunctionByName(b.GetContext(), "sum", []types.Type{types.T_int64.ToType()})
 		if err != nil {
@@ -271,6 +294,9 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 		}
 		obj.Obj = fGet.GetEncodedOverloadID()
 		obj.ObjName = "sum"
+		expr.Typ.Id = int32(fGet.GetReturnType().Oid)
+		expr.Typ.Width = fGet.GetReturnType().Width
+		expr.Typ.Scale = fGet.GetReturnType().Scale
 	case function.AVG_TW_CACHE:
 		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
 		fGet, err := function.GetFunctionByName(b.GetContext(), "avg_tw_result", []types.Type{typ})
@@ -284,6 +310,32 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 		expr.Typ.Scale = fGet.GetReturnType().Scale
 	}
 	return expr, nil
+}
+
+func makeTimeWindowProjectionExpr(ctx context.Context, bindCtx *BindContext, astExpr tree.Expr, colPos int32) (*plan.Expr, error) {
+	expr := &plan.Expr{
+		Typ: bindCtx.times[colPos].Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: bindCtx.timeTag,
+				ColPos: colPos,
+			},
+		},
+	}
+	if bindCtx.sliding && isCountFuncExpr(astExpr) && types.T(expr.Typ.Id) != types.T_int64 {
+		int64Type := types.T_int64.ToType()
+		return appendCastBeforeExpr(ctx, expr, makePlan2Type(&int64Type))
+	}
+	return expr, nil
+}
+
+func isCountFuncExpr(astExpr tree.Expr) bool {
+	funcExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok {
+		return false
+	}
+	funcRef, ok := funcExpr.Func.FunctionReference.(*tree.UnresolvedName)
+	return ok && strings.EqualFold(funcRef.ColName(), "count")
 }
 
 // processGroupConcatOrderBy processes the ORDER BY clause in group_concat.
@@ -411,13 +463,5 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 	astStr := tree.String(astExpr, dialect.MYSQL)
 	b.ctx.timeByAst[astStr] = colPos
 
-	return &plan.Expr{
-		Typ: expr.Typ,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: b.ctx.timeTag,
-				ColPos: colPos,
-			},
-		},
-	}, nil
+	return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
 }

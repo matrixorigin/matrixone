@@ -141,4 +141,5 @@ TP QUERY PLAN
 Project
   ->  Table Scan on d_indomain.t3
         Filter Cond: (((prefix_in(t3.__mo_cpkey_col) or prefix_eq(t3.__mo_cpkey_col)) and (t3.bveh = 'TFUA1000')) or (prefix_eq(t3.__mo_cpkey_col) and (t3.code IS NOT NULL))), prefix_in(t3.__mo_cpkey_col)
+        Block Filter Cond: prefix_in(t3.__mo_cpkey_col), t3.code in ([4999999010 5001010000 5001020000 6401010000])
 drop database if exists d_indomain;

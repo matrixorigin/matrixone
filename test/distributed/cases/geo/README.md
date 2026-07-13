@@ -16,6 +16,7 @@ the column/expression type.
 | `geo_validity.sql` | `ST_IsSimple`, `ST_IsRing`, `ST_IsValid`. |
 | `geo_srid.sql` | SRID carried by the type: `ST_GeomFromText(wkt, srid)` + `ST_SRID`, SRID propagation through derived geometries, `SRID` columns, and binary-function SRID-mismatch rejection. |
 | `geo_geometry32.sql` | `GEOMETRY32` (float32-coordinate) DDL, storage round-trips (float32 WKB), spatial functions, and `geometry`↔`geometry32` casts. |
+| `geo_load.sql` | Loading GEOMETRY from CSV via all three paths — external table, `LOAD DATA INFILE`, and `LOAD DATA INLINE`; WKT fields parse to WKB, generic `GEOMETRY` accepts any subtype, subtype-constrained columns enforce their subtype, and the `GEOMETRY32`/`GEOGRAPHY` aliases work. |
 | `geo_geodetic.sql` | SRID 4326 measures (`ST_Length`, `ST_Distance`, `ST_Area`) return meters / m² (geodesic) vs Cartesian for SRID 0, incl. a `GEOGRAPHY` column. |
 | `geo_geohash.sql` | `ST_GeoHash` (point and lon/lat forms), `ST_LatFromGeoHash`, `ST_LongFromGeoHash`, `ST_PointFromGeoHash`. |
 | `geo_mbr.sql` | MBR bounding-box predicates: `MBRContains`, `MBRCoveredBy`, `MBRCovers`, `MBRDisjoint`, `MBREquals`, `MBRIntersects`, `MBROverlaps`, `MBRTouches`, `MBRWithin`. |
