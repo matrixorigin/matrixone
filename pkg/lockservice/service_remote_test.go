@@ -458,7 +458,7 @@ func (c *scriptedActiveTxnClient) Send(
 	return resp, nil
 }
 
-func (c *scriptedActiveTxnClient) ResetBackend(string) error {
+func (c *scriptedActiveTxnClient) ResetBackend(context.Context, string) error {
 	c.resets.Add(1)
 	return c.resetErr
 }

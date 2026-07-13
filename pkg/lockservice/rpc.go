@@ -80,10 +80,11 @@ type client struct {
 	// interrupt concurrent Lock/Unlock traffic on the normal client.
 	activeTxnClient morpc.RPCClient
 
-	recoveryResetMu  sync.Mutex // serializes slow reset work without blocking request reads
-	recoveryMu       sync.RWMutex
-	recoveryBackends map[string]recoveryBackend // CN UUID -> recovery endpoint
-	resolveBackend   func(context.Context, string) (string, error)
+	recoveryResetOnce sync.Once
+	recoveryResetC    chan struct{} // context-aware serialization of slow reset work
+	recoveryMu        sync.RWMutex
+	recoveryBackends  map[string]recoveryBackend // CN UUID -> recovery endpoint
+	resolveBackend    func(context.Context, string) (string, error)
 }
 
 type recoveryBackend struct {
@@ -375,14 +376,25 @@ func (c *client) activeTxnTransport() morpc.RPCClient {
 // ResetBackend detaches the pooled connection for one CN incarnation. The
 // address can remain unchanged across a hot recreate, so service discovery
 // refresh alone is insufficient to prevent reuse of the stale backend.
-func (c *client) ResetBackend(serviceID string) error {
+func (c *client) ResetBackend(parent context.Context, serviceID string) error {
 	sid := getUUIDFromServiceIdentifier(serviceID)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeoutCause(
+		parent,
+		defaultRPCTimeout,
+		moerr.CauseResetLockServiceBackend,
+	)
+	defer cancel()
 
 	// Discovery refresh, DNS, and backend shutdown can all be slow. Serialize
-	// resets separately so active-txn sends never wait on those operations while
-	// acquiring recoveryMu for their read-only route lookup.
-	c.recoveryResetMu.Lock()
-	defer c.recoveryResetMu.Unlock()
+	// resets separately and context-aware, so one slow recovery cannot make
+	// later probes wait past their own deadline.
+	if err := c.acquireRecoveryReset(ctx); err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	defer c.releaseRecoveryReset()
 	resetter, ok := c.activeTxnTransport().(interface {
 		CloseBackendFor(string) error
 	})
@@ -406,15 +418,16 @@ func (c *client) ResetBackend(serviceID string) error {
 	// the confirming request cannot be sent to an old CN address after a hot
 	// recreate or address reassignment.
 	staleAddress := lookupAddress()
-	c.cluster.ForceRefresh(true)
+	refresher, ok := c.cluster.(clusterservice.AuthoritativeRefresher)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(
+			"cluster service does not support authoritative refresh")
+	}
+	if err := refresher.Refresh(ctx); err != nil {
+		return err
+	}
 	address := lookupAddress()
 
-	ctx, cancel := context.WithTimeoutCause(
-		context.Background(),
-		time.Second,
-		moerr.CauseResetLockServiceBackend,
-	)
-	defer cancel()
 	var endpoint string
 	var resolveErr error
 	if address != "" {
@@ -471,6 +484,23 @@ func (c *client) ResetBackend(serviceID string) error {
 	})
 	c.recoveryMu.Unlock()
 	return nil
+}
+
+func (c *client) acquireRecoveryReset(ctx context.Context) error {
+	c.recoveryResetOnce.Do(func() {
+		c.recoveryResetC = make(chan struct{}, 1)
+		c.recoveryResetC <- struct{}{}
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.recoveryResetC:
+		return nil
+	}
+}
+
+func (c *client) releaseRecoveryReset() {
+	c.recoveryResetC <- struct{}{}
 }
 
 func (c *client) storeRecoveryBackendLocked(serviceID string, backend recoveryBackend) {

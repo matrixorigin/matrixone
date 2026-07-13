@@ -32,7 +32,7 @@ type resetTrackingClient struct {
 	resetErr error
 }
 
-func (c *resetTrackingClient) ResetBackend(string) error {
+func (c *resetTrackingClient) ResetBackend(context.Context, string) error {
 	c.resets.Add(1)
 	return c.resetErr
 }

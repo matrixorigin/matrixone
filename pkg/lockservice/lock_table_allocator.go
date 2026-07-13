@@ -747,7 +747,7 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 					// the wrong process. Refresh the endpoint once before treating
 					// a successful negative response as authoritative.
 					if attempt == 1 {
-						if l.resetActiveTxnBackend(sid) == backendResetSucceeded {
+						if l.resetActiveTxnBackend(ctx, sid) == backendResetSucceeded {
 							continue
 						}
 						// Reset failure and unsupported reset both leave the
@@ -784,7 +784,7 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 			// getter attaches its context cause, and some MORPC failures are only
 			// recognizable through that wrapped error. Resetting inside the getter
 			// can therefore miss exactly the BackendClosed path we are recovering.
-			l.resetActiveTxnBackend(sid)
+			l.resetActiveTxnBackend(ctx, sid)
 
 			l.logger.Error("get active txn failed",
 				zap.String("serviceID", sid),
@@ -831,14 +831,17 @@ const (
 	backendResetFailed
 )
 
-func (l *lockTableAllocator) resetActiveTxnBackend(serviceID string) backendResetResult {
+func (l *lockTableAllocator) resetActiveTxnBackend(
+	ctx context.Context,
+	serviceID string,
+) backendResetResult {
 	resetter, ok := l.client.(interface {
-		ResetBackend(string) error
+		ResetBackend(context.Context, string) error
 	})
 	if !ok {
 		return backendResetUnsupported
 	}
-	if err := resetter.ResetBackend(serviceID); err != nil {
+	if err := resetter.ResetBackend(ctx, serviceID); err != nil {
 		l.logger.Error("reset active-txn backend failed",
 			zap.String("serviceID", serviceID),
 			zap.Error(err))

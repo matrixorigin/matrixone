@@ -53,6 +53,7 @@ type refreshOnDemandCluster struct {
 	synchronous bool
 	refreshing  chan struct{}
 	refreshDone chan struct{}
+	refreshErr  error
 }
 
 func (c *refreshOnDemandCluster) GetCNServiceWithoutWorkingState(
@@ -68,11 +69,24 @@ func (c *refreshOnDemandCluster) GetCNServiceWithoutWorkingState(
 
 func (c *refreshOnDemandCluster) ForceRefresh(sync bool) {
 	c.synchronous = sync
+	_ = c.Refresh(context.Background())
+}
+
+func (c *refreshOnDemandCluster) Refresh(ctx context.Context) error {
+	c.synchronous = true
 	if c.refreshing != nil {
 		close(c.refreshing)
-		<-c.refreshDone
+		select {
+		case <-c.refreshDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if c.refreshErr != nil {
+		return c.refreshErr
 	}
 	c.refreshed = true
+	return nil
 }
 
 func (c *closeTrackingRPCClient) Send(
@@ -607,7 +621,7 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 	}
 	serviceID := "0000000000000000000cn-id"
 
-	require.NoError(t, c.ResetBackend(serviceID))
+	require.NoError(t, c.ResetBackend(context.Background(), serviceID))
 	require.Equal(t, "10.0.0.1:18101", c.activeTxnBackend("cn-id", "cn.example:18101"))
 	require.Empty(t, normalRPCClient.closed)
 	require.Equal(t, []string{"cn.example:18101"}, activeTxnRPCClient.closed)
@@ -629,7 +643,7 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 	require.Equal(t, []string{"cn.example:18101"}, normalRPCClient.sent)
 
 	endpoint = "10.0.0.2:18101"
-	require.NoError(t, c.ResetBackend(serviceID))
+	require.NoError(t, c.ResetBackend(context.Background(), serviceID))
 	require.Equal(t, "10.0.0.2:18101", c.activeTxnBackend("cn-id", "cn.example:18101"))
 	require.Empty(t, normalRPCClient.closed)
 	require.Equal(t, []string{
@@ -669,7 +683,7 @@ func TestResetBackendRefreshesNonEmptyStaleAddress(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, c.ResetBackend("0000000000000000000cn-id"))
+	require.NoError(t, c.ResetBackend(context.Background(), "0000000000000000000cn-id"))
 	require.Equal(t, "new.example:18101", resolvedAddress)
 	require.True(t, cluster.refreshed)
 	require.True(t, cluster.synchronous)
@@ -681,6 +695,58 @@ func TestResetBackendRefreshesNonEmptyStaleAddress(t *testing.T) {
 		"10.0.0.2:18101",
 		c.activeTxnBackend("cn-id", "new.example:18101"),
 	)
+}
+
+func TestResetBackendRejectsFailedDiscoveryRefresh(t *testing.T) {
+	refreshErr := moerr.NewInternalErrorNoCtx("injected refresh failure")
+	cluster := &refreshOnDemandCluster{
+		before: metadata.CNService{
+			ServiceID:          "cn-id",
+			LockServiceAddress: "stale.example:18101",
+		},
+		after: metadata.CNService{
+			ServiceID:          "cn-id",
+			LockServiceAddress: "new.example:18101",
+		},
+		refreshErr: refreshErr,
+	}
+	activeTxnRPCClient := &closeTrackingRPCClient{}
+	c := &client{
+		cluster:         cluster,
+		activeTxnClient: activeTxnRPCClient,
+		recoveryBackends: map[string]recoveryBackend{
+			"cn-id": {
+				discovered: "stale.example:18101",
+				endpoint:   "10.0.0.1:18101",
+			},
+		},
+		resolveBackend: func(context.Context, string) (string, error) {
+			t.Fatal("resolver must not run after a failed authoritative refresh")
+			return "", nil
+		},
+	}
+
+	err := c.ResetBackend(context.Background(), "0000000000000000000cn-id")
+	require.ErrorIs(t, err, refreshErr)
+	require.Empty(t, activeTxnRPCClient.closed)
+	require.Equal(t,
+		"10.0.0.1:18101",
+		c.activeTxnBackend("cn-id", "stale.example:18101"),
+		"a failed refresh must not publish a successful reset state",
+	)
+}
+
+func TestResetBackendWaitHonorsContext(t *testing.T) {
+	c := &client{}
+	require.NoError(t, c.acquireRecoveryReset(context.Background()))
+	defer c.releaseRecoveryReset()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := c.ResetBackend(ctx, "0000000000000000000cn-id")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), time.Second)
 }
 
 func TestResetBackendSlowRefreshDoesNotBlockActiveTxnRouteLookup(t *testing.T) {
@@ -713,7 +779,7 @@ func TestResetBackendSlowRefreshDoesNotBlockActiveTxnRouteLookup(t *testing.T) {
 
 	resetDone := make(chan error, 1)
 	go func() {
-		resetDone <- c.ResetBackend("0000000000000000000cn-id")
+		resetDone <- c.ResetBackend(context.Background(), "0000000000000000000cn-id")
 	}()
 	select {
 	case <-refreshing:
@@ -772,7 +838,7 @@ func TestResetBackendCloseFailureAttemptsAllRoutesAndClearsCache(t *testing.T) {
 		},
 	}
 
-	err := c.ResetBackend("0000000000000000000cn-id")
+	err := c.ResetBackend(context.Background(), "0000000000000000000cn-id")
 	require.ErrorIs(t, err, closeErr)
 	require.Equal(t, []string{
 		"old.example:18101",
