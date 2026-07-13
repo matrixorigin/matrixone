@@ -90,6 +90,60 @@ func TestGetTableDefAutoIncrementOffset(t *testing.T) {
 	require.Equal(t, uint64(99), tbl.GetTableDef(context.Background()).AutoIncrOffset)
 }
 
+func TestRollbackLastStatementRestoresAutoIncrementOffsetAndVersion(t *testing.T) {
+	eng := &Engine{
+		packerPool: fileservice.NewPool(
+			1,
+			func() *types.Packer { return types.NewPacker() },
+			func(packer *types.Packer) { packer.Reset() },
+			func(packer *types.Packer) { packer.Close() },
+		),
+	}
+	proc := testutil.NewProc(t)
+	txn := &Transaction{
+		proc:            proc,
+		engine:          eng,
+		tableCache:      new(sync.Map),
+		databaseOps:     newDbOps(),
+		tableOps:        newTableOps(),
+		tablesInVain:    make(map[uint64]int),
+		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		batchSelectList: make(map[*batch.Batch][]int64),
+	}
+	op, closeFn := client.NewTestTxnOperator(context.Background())
+	t.Cleanup(closeFn)
+	txn.BindTxnOp(op)
+	op.AddWorkspace(txn)
+	txn.tnStores = []DNStore{{}}
+	txn.statementID = 1
+	txn.offsets = []int{0}
+
+	db := &txnDatabase{op: op, databaseId: 7, databaseName: "db"}
+	tbl := &txnTable{
+		db:         db,
+		eng:        eng,
+		fake:       true,
+		tableId:    42,
+		tableName:  "tbl",
+		version:    5,
+		extraInfo:  &api.SchemaExtra{AutoIncrOffset: 10},
+		primaryIdx: -1,
+	}
+
+	// The missing account ID deliberately stops AlterTable after its in-memory
+	// mutation and statement-rollback hook have both been installed.
+	err := tbl.AlterTable(context.Background(), nil, []*api.AlterTableReq{
+		api.NewUpdateAutoIncrementReq(7, 42, 99),
+	})
+	require.Error(t, err)
+	require.Equal(t, uint64(99), tbl.extraInfo.AutoIncrOffset)
+	require.Equal(t, uint32(6), tbl.version)
+
+	require.NoError(t, txn.RollbackLastStatement(context.Background()))
+	require.Equal(t, uint64(10), tbl.extraInfo.AutoIncrOffset)
+	require.Equal(t, uint32(5), tbl.version)
+}
+
 func makeBatchForTest(
 	mp *mpool.MPool,
 	ints ...int64,

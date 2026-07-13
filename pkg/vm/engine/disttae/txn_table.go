@@ -1654,6 +1654,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldComment := tbl.comment
 	oldConstraint := tbl.constraint
 	oldAutoIncrOffset := tbl.extraInfo.AutoIncrOffset
+	oldVersion := tbl.version
 	// The fact that the tableDef brought by alter requests can appended to the tail of original defs presupposes:
 	// 1. late arriving tableDef will overwrite the existing tableDef
 	// 2. any TableDef about columns, like AttritebuteDef, PrimaryKeyDef, or CluterbyDef do not change, ensuring genColumnsFromDefs works well
@@ -1681,6 +1682,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			}
 		}
 		tbl.defs = olddefs
+		tbl.version = oldVersion
 		tbl.tableDef = nil
 		tbl.GetTableDef(ctx)
 	}

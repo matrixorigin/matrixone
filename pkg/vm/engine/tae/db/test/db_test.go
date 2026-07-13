@@ -6563,6 +6563,47 @@ func TestAlterFakePk(t *testing.T) {
 
 }
 
+func TestAlterAutoIncrementSchemaCommitAndRollback(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	tae := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Extra.AutoIncrOffset = 10
+	testutil.CreateRelation(t, tae, testutil.DefaultTestDB, schema, true)
+
+	txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
+	initial := rel.Schema(false).(*catalog.Schema)
+	require.Equal(t, uint64(10), initial.Extra.AutoIncrOffset)
+	require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 99)))
+	altered := rel.Schema(false).(*catalog.Schema)
+	require.Equal(t, initial.Version+1, altered.Version)
+	require.Equal(t, uint64(99), altered.Extra.AutoIncrOffset)
+	require.NoError(t, txn.Commit(ctx))
+
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
+	committed := rel.Schema(false).(*catalog.Schema)
+	committedVersion := committed.Version
+	require.Equal(t, initial.Version+1, committedVersion)
+	require.Equal(t, uint64(99), committed.Extra.AutoIncrOffset)
+	require.NoError(t, txn.Commit(ctx))
+
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
+	require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 123)))
+	uncommitted := rel.Schema(false).(*catalog.Schema)
+	require.Equal(t, committedVersion+1, uncommitted.Version)
+	require.Equal(t, uint64(123), uncommitted.Extra.AutoIncrOffset)
+	require.NoError(t, txn.Rollback(ctx))
+
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
+	afterRollback := rel.Schema(false).(*catalog.Schema)
+	require.Equal(t, committedVersion, afterRollback.Version)
+	require.Equal(t, uint64(99), afterRollback.Extra.AutoIncrOffset)
+	require.NoError(t, txn.Commit(ctx))
+}
+
 func TestAlterColumnAndFreeze(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)

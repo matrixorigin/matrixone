@@ -138,6 +138,66 @@ func TestAlterTableInplaceAppendsAutoIncrementSchemaMutation(t *testing.T) {
 	require.Equal(t, api.NewUpdateAutoIncrementReq(1, 1, effectiveOffset), rel.alterReqs[0])
 }
 
+func TestAlterTableInplaceCanceledBeforeSchemaMutation(t *testing.T) {
+	const requestedOffset = uint64(99)
+	const effectiveOffset = uint64(120)
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+	txnOp, closeTxn := client.NewTestTxnOperator(proc.Ctx)
+	t.Cleanup(closeTxn)
+	proc.Base.TxnOperator = txnOp
+
+	result := newAlterCopyFixedResult(t, proc.Mp(), types.T_uint64.ToType(), []uint64{effectiveOffset})
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		&fixedResultSQLExecutor{result: result},
+	)
+
+	ctrl := gomock.NewController(t)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(proc.Ctx, uint64(1), "id", effectiveOffset, txnOp).Return(context.Canceled)
+	incrservice.SetAutoIncrementServiceByID(proc.GetService(), autoSvc)
+
+	rel := newStubRelation("t")
+	rel.dbID = 1
+	rel.extra = &api.SchemaExtra{}
+	db := newStubDatabase("db")
+	db.rels["t"] = rel
+	eng := newStubEngine()
+	eng.dbs["db"] = db
+	lockMoDb := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	t.Cleanup(lockMoDb.Reset)
+	lockMoTbl := gostub.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	t.Cleanup(lockMoTbl.Reset)
+	lockTbl := gostub.Stub(&lockTable, func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+		return nil
+	})
+	t.Cleanup(lockTbl.Reset)
+
+	tableDef := &plan2.TableDef{
+		Name: "t",
+		Cols: []*plan2.ColDef{{
+			Name: "id",
+			Typ:  plan2.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
+			Database: "db",
+			TableDef: tableDef,
+			Actions: []*plan2.AlterTable_Action{{Action: &plan2.AlterTable_Action_AlterAutoIncrement{
+				AlterAutoIncrement: &plan2.AlterTableAutoIncrement{NewOffset: requestedOffset},
+			}}},
+		}},
+	}}}}
+
+	c := &Compile{e: eng, proc: proc, db: "db", pn: s.Plan}
+	require.ErrorIs(t, s.AlterTableInplace(c), context.Canceled)
+	require.Empty(t, rel.alterReqs)
+}
+
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 	newCompileWithStubEngine := func(t *testing.T, eng *stubEngine, sql string) *Compile {
 		t.Helper()
