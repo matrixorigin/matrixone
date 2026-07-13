@@ -427,7 +427,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 						// lock queue until the holder releases the lock. They no
 						// longer represent wait-for edges and must not participate
 						// in deadlock detection.
-						if w.getStatus() != blocking {
+						if !w.isBlocking() {
 							return true
 						}
 						hasDeadLock = !waiters(w.txn, waiterAddress)
