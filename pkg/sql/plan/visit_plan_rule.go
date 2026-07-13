@@ -19,6 +19,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -29,10 +30,17 @@ var (
 )
 
 type GetParamRule struct {
-	params     map[int]int
-	mapTypes   map[int]int32
-	paramTypes []int32
-	schemas    []*plan.ObjectRef
+	params            map[int]int
+	mapTypes          map[int]int32
+	paramTypes        []int32
+	schemas           []*plan.ObjectRef
+	indexDependencies []prepareIndexDependency
+}
+
+type prepareIndexDependency struct {
+	baseRef   *plan.ObjectRef
+	snapshot  *Snapshot
+	tableName string
 }
 
 func NewGetParamRule() *GetParamRule {
@@ -54,6 +62,17 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 			SchemaName: node.ObjRef.SchemaName,
 			ObjName:    node.ObjRef.ObjName,
 		})
+		if node.NodeType == plan.Node_TABLE_SCAN && node.ObjRef != nil && node.TableDef != nil {
+			for _, indexDef := range node.TableDef.Indexes {
+				if indexplugin.IsPluginAlgo(indexDef.IndexAlgo) && indexDef.IndexTableName != "" {
+					rule.indexDependencies = append(rule.indexDependencies, prepareIndexDependency{
+						baseRef:   node.ObjRef,
+						snapshot:  node.ScanSnapshot,
+						tableName: indexDef.IndexTableName,
+					})
+				}
+			}
+		}
 	} else if node.NodeType == plan.Node_MULTI_UPDATE {
 		for _, updateCtx := range node.UpdateCtxList {
 			rule.schemas = append(rule.schemas, &plan.ObjectRef{
