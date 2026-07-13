@@ -1011,20 +1011,6 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 		return expr, nil
 	}
 
-	// When an exact-numeric target column wraps a DOUBLE-promoted dual-param
-	// arithmetic (e.g. "insert into t(dec) values(? + ?)"), rebind the arithmetic
-	// onto the exact type so prepared params are not routed through float64.
-	if isPreciseNumericType(targetType.Typ) && isPromotedParamArith(expr) {
-		if rebuilt, ok, err := rebindPromotedParamArithToType(ctx, expr, targetType.Typ); err != nil {
-			return nil, err
-		} else if ok {
-			expr = rebuilt
-			if t1 = makeTypeByPlan2Expr(expr); t1.Eq(t2) {
-				return expr, nil
-			}
-		}
-	}
-
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
 	// Assigning a value to a real CHAR/VARCHAR(N) column must keep the strict
 	// width check: an over-length value errors instead of being silently
@@ -1070,25 +1056,6 @@ func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, fun
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if t1.Eq(t2) {
 		return expr, nil
-	}
-
-	// When an exact-numeric target column wraps a DOUBLE-promoted dual-param
-	// arithmetic (e.g. "insert into t(dec) values(? + ?)" / "update t set dec = ? + ?"),
-	// rebind the arithmetic onto the exact type so prepared params are not
-	// routed through float64. Only "cast" preserves arithmetic semantics here.
-	if funcName == "cast" && isPreciseNumericType(targetType) && isPromotedParamArith(expr) {
-		if rebuilt, ok, err := rebindPromotedParamArithToType(ctx, expr, targetType); err != nil {
-			return nil, err
-		} else if ok {
-			expr = rebuilt
-			if expr.Typ.Id == targetType.Id && expr.Typ.Width == targetType.Width && expr.Typ.Scale == targetType.Scale {
-				return expr, nil
-			}
-			t1 = makeTypeByPlan2Expr(expr)
-			if t1.Eq(t2) {
-				return expr, nil
-			}
-		}
 	}
 
 	targetType.NotNullable = expr.Typ.NotNullable
@@ -1367,6 +1334,12 @@ func buildValueScan(
 						}
 					}
 				}
+				// An exact-numeric target column is a type-determining context
+				// for bare prepared-param arithmetic (e.g. "values(? + ?)"):
+				// rebind onto the column type before the assignment cast, so it
+				// applies even when the promoted result type already equals the
+				// column type (e.g. "? div ?" into BIGINT).
+				defExpr = backfillParamArithForExactContext(builder.GetContext(), r[i], defExpr, col.Typ)
 				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
 				if err != nil {
 					return err

@@ -234,6 +234,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						return 0, err
 					}
 				} else {
+					// An exact-numeric target column is a type-determining
+					// context for bare prepared-param arithmetic (e.g.
+					// "set i64 = ? div ?"): rebind onto the column type before
+					// the assignment cast, so it applies even when the promoted
+					// result type already equals the column type.
+					if astExpr, ok := dmlCtx.updateCol2Expr[i][col.Name]; ok {
+						updateExpr = backfillParamArithForExactContext(builder.GetContext(), astExpr, updateExpr, col.Typ)
+					}
 					selectNode.ProjectList[colPos], err = forceAssignmentCastExpr(builder.GetContext(), updateExpr, col.Typ)
 					if err != nil {
 						return 0, err

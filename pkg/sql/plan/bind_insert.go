@@ -2983,6 +2983,12 @@ func (builder *QueryBuilder) buildValueScan(
 						}
 					}
 				}
+				// An exact-numeric target column is a type-determining context
+				// for bare prepared-param arithmetic (e.g. "values(? + ?)"):
+				// rebind onto the column type before the assignment cast, so it
+				// applies even when the promoted result type already equals the
+				// column type (e.g. "? div ?" into BIGINT).
+				defExpr = backfillParamArithForExactContext(builder.GetContext(), r[i], defExpr, col.Typ)
 				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
 				if err != nil {
 					return 0, err

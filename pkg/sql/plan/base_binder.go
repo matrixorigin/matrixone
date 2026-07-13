@@ -149,6 +149,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
+		// An exact-numeric CAST is a type-determining context for bare
+		// prepared-param arithmetic (MySQL PREPARE rules): rebind
+		// "cast(? + ? as decimal/int)" onto the exact type instead of
+		// keeping the automatic DOUBLE promotion.
+		expr = backfillParamArithForExactContext(b.GetContext(), exprImpl.Expr, expr, typ)
 		expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
 
 	case *tree.BitCastExpr:
@@ -1792,6 +1797,90 @@ func rebindPromotedParamArithToType(ctx context.Context, e *Expr, target Type) (
 	return newExpr, true, nil
 }
 
+// bareParamArithOps is the set of tree.BinaryOp values allowed inside a bare
+// prepared-param arithmetic AST (see isBareParamArithAst).
+var bareParamArithOps = map[tree.BinaryOp]bool{
+	tree.PLUS:        true,
+	tree.MINUS:       true,
+	tree.MULTI:       true,
+	tree.DIV:         true,
+	tree.INTEGER_DIV: true,
+	tree.MOD:         true,
+}
+
+// isBareParamArithAst reports whether the AST is a "bare" prepared-param
+// arithmetic expression: internal nodes are only parentheses and binary
+// arithmetic operators, leaves are only bare parameter markers and numeric
+// literals, and at least one parameter marker is present.  Any other node —
+// in particular an explicit tree.CastExpr such as "CAST(? AS DOUBLE)" — makes
+// it non-bare.  This is the only reliable way to tell a user-written cast from
+// the binder's automatic DOUBLE promotion, whose plan shapes are identical.
+func isBareParamArithAst(e tree.Expr) bool {
+	hasParam := false
+	var walk func(e tree.Expr) bool
+	walk = func(e tree.Expr) bool {
+		switch n := e.(type) {
+		case *tree.ParenExpr:
+			return walk(n.Expr)
+		case *tree.BinaryExpr:
+			return bareParamArithOps[n.Op] && walk(n.Left) && walk(n.Right)
+		case *tree.ParamExpr:
+			hasParam = true
+			return true
+		case *tree.NumVal:
+			return true
+		default:
+			return false
+		}
+	}
+	return walk(e) && hasParam
+}
+
+// hasFloatParamCast reports whether any cast(ParamRef -> float64) survives in
+// expr.  Used as a safety net after rebinding: if the arithmetic could not be
+// fully resolved on the exact type and some operand fell back to float64, the
+// rewrite is discarded.
+func hasFloatParamCast(e *Expr) bool {
+	if e == nil {
+		return false
+	}
+	if paramRefUnderFloatCast(e) != nil {
+		return true
+	}
+	if f := e.GetF(); f != nil {
+		for _, arg := range f.Args {
+			if hasFloatParamCast(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// backfillParamArithForExactContext applies MySQL's context-derived typing for
+// prepared params: when target is an exact numeric type, the AST is a bare
+// dual-param arithmetic (no explicit user casts), and bound is its
+// DOUBLE-promoted plan form, the arithmetic is rebound onto target so params
+// are not routed through float64.  Callers invoke it right before casting
+// bound to target (CAST expressions, INSERT VALUES, UPDATE SET), so it runs
+// regardless of whether the arithmetic's result type already equals the target.
+//
+// Any failure — including a rebind that leaves a float64 param cast behind —
+// falls back to the original expression: the DOUBLE promotion is always a
+// valid (if less precise) binding, so this rewrite must never turn a working
+// statement into an error.
+func backfillParamArithForExactContext(ctx context.Context, ast tree.Expr, bound *Expr, target Type) *Expr {
+	if ast == nil || bound == nil ||
+		!isPreciseNumericType(target) || !isBareParamArithAst(ast) || !isPromotedParamArith(bound) {
+		return bound
+	}
+	rebuilt, ok, err := rebindPromotedParamArithToType(ctx, bound, target)
+	if err != nil || !ok || hasFloatParamCast(rebuilt) {
+		return bound
+	}
+	return rebuilt
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
@@ -2718,19 +2807,6 @@ func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 // --- util functions ----
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
-	// When an exact-numeric context wraps a DOUBLE-promoted dual-param
-	// arithmetic (e.g. "cast(? + ? as decimal(30,0))"), rebind the arithmetic
-	// onto the exact type so prepared params are not routed through float64.
-	if isPreciseNumericType(toType) && isPromotedParamArith(expr) {
-		if rebuilt, ok, err := rebindPromotedParamArithToType(ctx, expr, toType); err != nil {
-			return nil, err
-		} else if ok {
-			expr = rebuilt
-			if expr.Typ.Id == toType.Id && expr.Typ.Width == toType.Width && expr.Typ.Scale == toType.Scale {
-				return expr, nil
-			}
-		}
-	}
 	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),

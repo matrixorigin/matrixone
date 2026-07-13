@@ -748,6 +748,71 @@ func TestPrepareArithNonExactContextKeepsDouble(t *testing.T) {
 	}
 }
 
+// TestPrepareArithExplicitCastPreserved verifies that a user-written explicit
+// CAST(? AS DOUBLE) is never rewritten by the exact-context backfill: the
+// backfill is gated on the AST being a bare param arithmetic (only bare "?"
+// and numeric literals), so any explicit cast keeps its DOUBLE semantics —
+// the param value must round through float64 first, then convert to the
+// exact target (MySQL behaviour for explicit casts).
+func TestPrepareArithExplicitCastPreserved(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addArithCtxTableForTest(mock)
+
+	tests := []string{
+		"prepare s from select cast(cast(? as double) + 0 as decimal(30,0))",
+		"prepare s from select cast(cast(? as double) + cast(? as double) as decimal(30,0))",
+		"prepare s from insert into arith_ctx_t(id, dec) values(1, cast(? as double) + cast(? as double))",
+		"prepare s from update arith_ctx_t set dec = cast(? as double) + 0 where id = 1",
+	}
+	for _, sql := range tests {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		assert.NoErrorf(t, err, "%s should succeed", sql)
+
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		ids := allParamCastTargetIds(q)
+		assert.NotEmptyf(t, ids, "%s should cast prepared params", sql)
+		for _, id := range ids {
+			assert.Equalf(t, int32(types.T_float64), id,
+				"%s: explicit CAST AS DOUBLE must be preserved, param got cast to %d", sql, id)
+		}
+	}
+}
+
+// TestPrepareArithDivModIntoBigint verifies the backfill fires even when the
+// promoted arithmetic's result type already equals the target column type:
+// "? div ?" yields T_int64 which equals a BIGINT column, but the params must
+// still be rebound from float64 onto int64 so large integers (> 2^53) keep
+// exact DIV/MOD semantics.
+func TestPrepareArithDivModIntoBigint(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addArithCtxTableForTest(mock)
+
+	tests := []string{
+		"prepare s from insert into arith_ctx_t(id, i64) values(1, ? div ?)",
+		"prepare s from update arith_ctx_t set i64 = ? div ? where id = 1",
+		"prepare s from update arith_ctx_t set i64 = ? % ? where id = 1",
+		"prepare s from insert into arith_ctx_t(id, i64) values(1, ? % ?)",
+	}
+	for _, sql := range tests {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		assert.NoErrorf(t, err, "%s should succeed", sql)
+
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		ids := allParamCastTargetIds(q)
+		assert.NotEmptyf(t, ids, "%s should cast prepared params", sql)
+		for _, id := range ids {
+			assert.Equalf(t, int32(types.T_int64), id,
+				"%s: param must be cast to int64 (exact column context), got %d", sql, id)
+		}
+	}
+}
+
 // countDoubleCasts counts cast(arg, T_float64) wrappers in expr.
 func countDoubleCasts(expr *plan.Expr) int {
 	if expr == nil {
