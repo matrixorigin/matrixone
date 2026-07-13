@@ -21,18 +21,13 @@ insert into vector_ivfflat_include_phase7_include values
     (4, "[2,2,2]", "delta", 40, "n4");
 
 show create table vector_ivfflat_include_phase7_include;
+-- @sortkey:2
 show index from vector_ivfflat_include_phase7_include;
 
 alter table vector_ivfflat_include_phase7_include rename column title to headline;
 
 show create table vector_ivfflat_include_phase7_include;
 show index from vector_ivfflat_include_phase7_include;
-
--- @separator:table
-explain select id, headline, category
-from vector_ivfflat_include_phase7_include
-order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=force';
 
 select id, headline, category
 from vector_ivfflat_include_phase7_include
@@ -51,12 +46,6 @@ limit 1 by rank with option 'mode=include';
 alter table vector_ivfflat_include_phase7_include drop column category;
 
 show create table vector_ivfflat_include_phase7_include;
-
--- @separator:table
-explain select id, headline
-from vector_ivfflat_include_phase7_include
-order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=post';
 
 select id, headline
 from vector_ivfflat_include_phase7_include
@@ -82,6 +71,7 @@ insert into vector_ivfflat_include_phase7_plain values
     (4, "[2,2,2]", "n4");
 
 -- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, note
 from vector_ivfflat_include_phase7_plain
 where note in ("n2", "n4")

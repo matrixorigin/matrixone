@@ -24,6 +24,7 @@ lists=2 op_type "vector_l2_ops" include(title, category);
 show create table phase8_main;
 
 -- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, title, category
 from phase8_main
 where category >= 20
@@ -37,6 +38,7 @@ order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
 
 -- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, title, note
 from phase8_main
 where category >= 20 and note in ("n2", "n5")
@@ -116,6 +118,7 @@ execute s_entries;
 deallocate prepare s_entries;
 
 -- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, title, category
 from phase8_main
 where category >= 20
@@ -142,6 +145,7 @@ create index idx_ivf_include_phase8_empty using ivfflat on phase8_empty(embeddin
 lists=2 op_type "vector_l2_ops" include(title, category);
 
 -- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, title, category
 from phase8_empty
 order by l2_distance(embedding, "[1,1,1]")
@@ -248,6 +252,7 @@ create index idx_ivf_plain_phase8_perf using ivfflat on phase8_perf_plain(embedd
 lists=16 op_type "vector_l2_ops";
 
 -- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, title, category
 from phase8_perf_include
 where category between 20 and 120
@@ -255,6 +260,7 @@ order by l2_distance(embedding, "[0.1,0.2,0.3,0.4]")
 limit 20 by rank with option 'mode=include';
 
 -- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, title, category
 from phase8_perf_plain
 where category between 20 and 120

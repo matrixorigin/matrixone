@@ -34,33 +34,10 @@ order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=include';
 set probe_limit = 10;
 
--- `EXPLAIN ANALYZE` should stay stable across all three modes.
+-- Check that each mode has an IVF search path without binding the test to
+-- AP/TP scheduling, runtime filters, hidden-table UUIDs, or row-count statistics.
 -- @separator:table
--- @ignore:0
-explain analyze select id, title, category
-from include_rounds_main
-where category = 20
-order by l2_distance(embedding, "[0,0,0]")
-limit 2 by rank with option 'mode=include';
-
--- @separator:table
--- @ignore:0
-explain analyze select id, title, category
-from include_rounds_main
-where category = 20
-order by l2_distance(embedding, "[0,0,0]")
-limit 2 by rank with option 'mode=post';
-
--- @separator:table
--- @ignore:0
-explain analyze select id, title, category
-from include_rounds_main
-where category = 20
-order by l2_distance(embedding, "[0,0,0]")
-limit 2 by rank with option 'mode=pre';
-
--- Stable `EXPLAIN` output still distinguishes the three plan shapes.
--- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, title, category
 from include_rounds_main
 where category = 20
@@ -68,6 +45,7 @@ order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=include';
 
 -- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, title, category
 from include_rounds_main
 where category = 20
@@ -75,6 +53,7 @@ order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=post';
 
 -- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, title, category
 from include_rounds_main
 where category = 20

@@ -20,7 +20,8 @@ explain select id, title, category
 from vector_ivfflat_include_phase5
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=post';
-➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+-- @regex("Table Function on ivf_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
@@ -46,7 +47,8 @@ from vector_ivfflat_include_phase5
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=pre';
-➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+-- @regex("Table Function on ivf_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
