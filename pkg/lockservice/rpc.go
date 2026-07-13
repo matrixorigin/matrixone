@@ -75,6 +75,10 @@ type client struct {
 	cfg     *morpc.Config
 	cluster clusterservice.MOCluster
 	client  morpc.RPCClient
+	// Active-txn identity probes may deliberately reset their transport after
+	// detecting a stale CN incarnation. Keep them isolated so recovery cannot
+	// interrupt concurrent Lock/Unlock traffic on the normal client.
+	activeTxnClient morpc.RPCClient
 
 	recoveryMu       sync.RWMutex
 	recoveryBackends map[string]recoveryBackend // CN UUID -> recovery endpoint
@@ -138,6 +142,15 @@ func NewClient(
 		return nil, err
 	}
 	c.client = client
+	activeTxnClient, err := c.cfg.NewClient(
+		service,
+		"lock-active-txn-client",
+		func() morpc.Message { return acquireResponse() })
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	c.activeTxnClient = activeTxnClient
 	return c, nil
 }
 
@@ -273,11 +286,12 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			zap.String("request", request.DebugString()))
 
 	}
-	if request.Method == pb.Method_GetActiveTxn ||
-		request.Method == pb.Method_CheckActiveTxn {
+	transport := c.client
+	if isActiveTxnMethod(request.Method) {
 		address = c.activeTxnBackend(sid, address)
+		transport = c.activeTxnTransport()
 	}
-	f, err := c.client.Send(ctx, address, request)
+	f, err := transport.Send(ctx, address, request)
 	if err != nil {
 		observeLockserviceRemoteRPCError(request.Method, err)
 	}
@@ -334,7 +348,27 @@ func lockserviceRemoteRPCErrorType(err error) string {
 }
 
 func (c *client) Close() error {
-	return c.client.Close()
+	var normalErr, activeTxnErr error
+	if c.client != nil {
+		normalErr = c.client.Close()
+	}
+	if c.activeTxnClient != nil && c.activeTxnClient != c.client {
+		activeTxnErr = c.activeTxnClient.Close()
+	}
+	return errors.Join(normalErr, activeTxnErr)
+}
+
+func isActiveTxnMethod(method pb.Method) bool {
+	return method == pb.Method_GetActiveTxn || method == pb.Method_CheckActiveTxn
+}
+
+func (c *client) activeTxnTransport() morpc.RPCClient {
+	if c.activeTxnClient != nil {
+		return c.activeTxnClient
+	}
+	// Preserve compatibility for tests and embedders that construct client
+	// directly. Production NewClient always installs the isolated transport.
+	return c.client
 }
 
 // ResetBackend detaches the pooled connection for one CN incarnation. The
@@ -361,7 +395,7 @@ func (c *client) ResetBackend(serviceID string) error {
 
 	c.recoveryMu.Lock()
 	defer c.recoveryMu.Unlock()
-	resetter, ok := c.client.(interface {
+	resetter, ok := c.activeTxnTransport().(interface {
 		CloseBackendFor(string) error
 	})
 	if !ok {
@@ -442,6 +476,14 @@ func (c *client) activeTxnBackend(serviceID, discovered string) string {
 }
 
 func resolveTCP4Endpoint(ctx context.Context, address string) (string, error) {
+	return resolveTCP4EndpointWithLookup(ctx, address, recoveryResolver.LookupIP)
+}
+
+func resolveTCP4EndpointWithLookup(
+	ctx context.Context,
+	address string,
+	lookup func(context.Context, string, string) ([]net.IP, error),
+) (string, error) {
 	if strings.Contains(address, "://") {
 		return address, nil
 	}
@@ -449,17 +491,28 @@ func resolveTCP4Endpoint(ctx context.Context, address string) (string, error) {
 	if err != nil || net.ParseIP(host) != nil {
 		return address, err
 	}
-	ips, err := recoveryResolver.LookupIP(ctx, "ip4", host)
-	if err != nil || len(ips) == 0 {
+	ips, err := lookup(ctx, "ip4", host)
+	if err != nil {
 		return address, err
 	}
-	// A multi-address name is commonly a load-balanced service. Pinning one
-	// member would discard net.Dial's fallback semantics and can make recovery
-	// worse, so only incarnation-pin an unambiguous endpoint.
+	// Without a concrete service-identity endpoint, a second Valid=false may
+	// still come from a stale or different CN behind the same multi-A name.
+	// Preserve the caller's unknown state instead of claiming reset success.
 	if len(ips) != 1 {
-		return address, nil
+		return address, moerr.NewInternalErrorNoCtxf(
+			"lockservice recovery requires one IPv4 endpoint for %s, got %d",
+			host,
+			len(ips),
+		)
 	}
-	return net.JoinHostPort(ips[0].String(), port), nil
+	ip := ips[0].To4()
+	if ip == nil {
+		return address, moerr.NewInternalErrorNoCtxf(
+			"lockservice recovery requires a valid IPv4 endpoint for %s",
+			host,
+		)
+	}
+	return net.JoinHostPort(ip.String(), port), nil
 }
 
 // WithServerMessageFilter set filter func. Requests can be modified or filtered out by the filter

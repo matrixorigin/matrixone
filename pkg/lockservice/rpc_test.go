@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -561,11 +562,13 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 			nil))
 	defer cluster.Close()
 
-	rpcClient := &closeTrackingRPCClient{}
+	normalRPCClient := &closeTrackingRPCClient{}
+	activeTxnRPCClient := &closeTrackingRPCClient{}
 	endpoint := "10.0.0.1:18101"
 	c := &client{
 		cluster:          cluster,
-		client:           rpcClient,
+		client:           normalRPCClient,
+		activeTxnClient:  activeTxnRPCClient,
 		recoveryBackends: make(map[string]recoveryBackend),
 		resolveBackend: func(context.Context, string) (string, error) {
 			return endpoint, nil
@@ -575,7 +578,8 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 
 	require.NoError(t, c.ResetBackend(serviceID))
 	require.Equal(t, "10.0.0.1:18101", c.activeTxnBackend("cn-id", "cn.example:18101"))
-	require.Equal(t, []string{"cn.example:18101"}, rpcClient.closed)
+	require.Empty(t, normalRPCClient.closed)
+	require.Equal(t, []string{"cn.example:18101"}, activeTxnRPCClient.closed)
 	_, err := c.AsyncSend(context.Background(), &lock.Request{
 		Method: lock.Method_CheckActiveTxn,
 		CheckActiveTxn: lock.CheckActiveTxnRequest{
@@ -583,16 +587,25 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{"10.0.0.1:18101"}, rpcClient.sent)
+	require.Empty(t, normalRPCClient.sent)
+	require.Equal(t, []string{"10.0.0.1:18101"}, activeTxnRPCClient.sent)
+
+	_, err = c.AsyncSend(context.Background(), &lock.Request{
+		Method:    lock.Method_Unlock,
+		LockTable: lock.LockTable{ServiceID: serviceID},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"cn.example:18101"}, normalRPCClient.sent)
 
 	endpoint = "10.0.0.2:18101"
 	require.NoError(t, c.ResetBackend(serviceID))
 	require.Equal(t, "10.0.0.2:18101", c.activeTxnBackend("cn-id", "cn.example:18101"))
+	require.Empty(t, normalRPCClient.closed)
 	require.Equal(t, []string{
 		"cn.example:18101",
 		"cn.example:18101",
 		"10.0.0.1:18101",
-	}, rpcClient.closed)
+	}, activeTxnRPCClient.closed)
 
 	// A service-discovery address change invalidates the recovery override.
 	require.Equal(t, "other.example:18101", c.activeTxnBackend("cn-id", "other.example:18101"))
@@ -600,6 +613,53 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 	_, ok := c.recoveryBackends["cn-id"]
 	c.recoveryMu.RUnlock()
 	require.False(t, ok)
+}
+
+func TestResolveTCP4EndpointRequiresOneValidIPv4(t *testing.T) {
+	tests := []struct {
+		name     string
+		ips      []net.IP
+		expected string
+		wantErr  bool
+	}{
+		{name: "no address", wantErr: true},
+		{
+			name: "multiple addresses",
+			ips: []net.IP{
+				net.ParseIP("10.0.0.1"),
+				net.ParseIP("10.0.0.2"),
+			},
+			wantErr: true,
+		},
+		{
+			name:    "non IPv4 address",
+			ips:     []net.IP{net.ParseIP("2001:db8::1")},
+			wantErr: true,
+		},
+		{
+			name:     "one IPv4 address",
+			ips:      []net.IP{net.ParseIP("10.0.0.1")},
+			expected: "10.0.0.1:18101",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			endpoint, err := resolveTCP4EndpointWithLookup(
+				context.Background(),
+				"cn.example:18101",
+				func(context.Context, string, string) ([]net.IP, error) {
+					return test.ips, nil
+				},
+			)
+			if test.wantErr {
+				require.Equal(t, "cn.example:18101", endpoint)
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.expected, endpoint)
+		})
+	}
 }
 
 func TestRecoveryBackendCacheIsBounded(t *testing.T) {
