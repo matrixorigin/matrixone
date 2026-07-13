@@ -1493,6 +1493,40 @@ func TestCommitAndRollbackTimeoutDeferFullCleanupUntilRunningSQLExits(t *testing
 	}
 }
 
+func TestCloseAsAbortedAndRunSQLExitDoNotDeadlock(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		_, sqlCancel := context.WithCancel(context.Background())
+		token := mustEnterRunSQL(t, tc, sqlCancel, "concurrent close")
+		start := make(chan struct{})
+		done := make(chan struct{}, 2)
+
+		go func() {
+			<-start
+			tc.closeAsAborted(ctx, assert.AnError)
+			done <- struct{}{}
+		}()
+		go func() {
+			<-start
+			tc.ExitRunSqlWithToken(token)
+			done <- struct{}{}
+		}()
+		close(start)
+		for i := 0; i < cap(done); i++ {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("closeAsAborted and SQL exit deadlocked")
+			}
+		}
+
+		tc.mu.RLock()
+		require.True(t, tc.mu.closed)
+		tc.mu.RUnlock()
+		_, err := tc.EnterRunSqlWithTokenAndSQL(nil, "after close")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+	})
+}
+
 func TestRunningSQLTimeoutSealsNewSQLUntilRollbackCompletes(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		closedC := make(chan struct{})

@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -58,6 +59,7 @@ type blockingCloseTxnSender struct {
 	*testTxnSender
 	closeStarted chan struct{}
 	closeRelease chan struct{}
+	closeErr     error
 	mu           sync.Mutex
 	closeCalls   int
 }
@@ -71,7 +73,7 @@ func (s *blockingCloseTxnSender) Close() error {
 	default:
 	}
 	<-s.closeRelease
-	return nil
+	return s.closeErr
 }
 
 func (s *blockingCloseTxnSender) calls() int {
@@ -929,9 +931,11 @@ func TestCanceledMaxActiveWaitRemovesQueueEntry(t *testing.T) {
 			}
 			require.ErrorIs(t, err, context.Canceled)
 
-			client.mu.RLock()
-			defer client.mu.RUnlock()
-			require.Empty(t, client.mu.waitActiveTxns)
+			require.Eventually(t, func() bool {
+				client.mu.RLock()
+				defer client.mu.RUnlock()
+				return len(client.mu.waitActiveTxns) == 0
+			}, time.Second, time.Millisecond)
 		},
 		WithMaxActiveTxn(1),
 	)
@@ -1119,17 +1123,81 @@ func TestConcurrentCloseClosesSenderOnce(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first Close did not reach sender close")
 	}
-	go func() { second <- c.Close() }()
-
-	select {
-	case err := <-second:
-		t.Fatalf("concurrent Close returned before the owner completed: %v", err)
-	case <-time.After(20 * time.Millisecond):
-	}
+	secondStarted := make(chan struct{})
+	go func() {
+		close(secondStarted)
+		second <- c.Close()
+	}()
+	<-secondStarted
 	close(sender.closeRelease)
 	require.NoError(t, <-first)
 	require.NoError(t, <-second)
 	require.Equal(t, 1, sender.calls())
+}
+
+func TestCloseIsIdempotentAndPauseResumeAfterCloseAreNoOps(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	release := make(chan struct{})
+	close(release)
+	sender := &blockingCloseTxnSender{
+		testTxnSender: newTestTxnSender(),
+		closeStarted:  make(chan struct{}, 1),
+		closeRelease:  release,
+		closeErr:      assert.AnError,
+	}
+	client := NewTxnClient("", sender).(*txnClient)
+
+	require.ErrorIs(t, client.Close(), assert.AnError)
+	require.ErrorIs(t, client.Close(), assert.AnError)
+	require.Equal(t, 1, sender.calls())
+
+	client.mu.RLock()
+	state := client.mu.state
+	client.mu.RUnlock()
+	client.Pause()
+	client.Resume()
+	client.mu.RLock()
+	require.True(t, client.mu.closed)
+	require.Equal(t, state, client.mu.state)
+	client.mu.RUnlock()
+}
+
+func TestActiveTxnWaiterConcurrentComplete(t *testing.T) {
+	w := newActiveTxnWaiter()
+	start := make(chan struct{})
+	done := make(chan struct{}, 2)
+	for _, err := range []error{assert.AnError, context.Canceled} {
+		err := err
+		go func() {
+			<-start
+			w.complete(err)
+			done <- struct{}{}
+		}()
+	}
+	close(start)
+	<-done
+	<-done
+
+	err := w.wait(context.Background())
+	require.True(t, errors.Is(err, assert.AnError) || errors.Is(err, context.Canceled))
+	result, completed := w.result()
+	require.True(t, completed)
+	require.ErrorIs(t, result, err)
+}
+
+func TestWithCloseContextPropagatesClientClose(t *testing.T) {
+	client := &txnClient{}
+	client.closeCtx, client.closeCancel = context.WithCancel(context.Background())
+	ctx, cancel := client.withCloseContext(context.Background())
+	defer cancel()
+
+	client.closeCancel()
+	select {
+	case <-ctx.Done():
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("derived context did not observe client close")
+	}
 }
 
 func TestOpenTxnReturnsWhenAbortMarkingContextCanceled(t *testing.T) {

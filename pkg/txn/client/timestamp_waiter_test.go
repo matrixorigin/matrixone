@@ -164,7 +164,7 @@ func TestTimestampWaiterCloseUnblocksWaitsAndRejectsNewOnes(t *testing.T) {
 }
 
 func TestGetTimestampNotifyAndCancelRace(t *testing.T) {
-	for i := 0; i < 64; i++ {
+	for i := 0; i < 256; i++ {
 		tw := &timestampWaiter{}
 		ts := newTestTimestamp(int64(i + 1))
 		ctx, cancel := context.WithCancel(context.Background())
@@ -214,7 +214,7 @@ func TestGetTimestampNotifyAndCancelRace(t *testing.T) {
 }
 
 func TestTimestampWaiterCloseNotifyAndCancelRace(t *testing.T) {
-	for i := 0; i < 32; i++ {
+	for i := 0; i < 256; i++ {
 		tw := NewTimestampWaiter(util.GetLogger("")).(*timestampWaiter)
 		ts := newTestTimestamp(int64(i + 1))
 		ctx, cancel := context.WithCancel(context.Background())
