@@ -1327,8 +1327,13 @@ func resolveTableVisibleColumns(ses *Session, ctx context.Context, tbl *tree.Tab
 	}
 	tblName := string(tbl.Name())
 
+	snapshot, err := resolveSnapshot(ses, tbl.AtTsExpr)
+	if err != nil {
+		return nil, err
+	}
+
 	tcc := ses.GetTxnCompileCtx()
-	_, tableDef, err := tcc.Resolve(dbName, tblName, nil)
+	_, tableDef, err := tcc.Resolve(dbName, tblName, snapshot)
 	if err != nil {
 		return nil, err
 	}
