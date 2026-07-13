@@ -398,6 +398,7 @@ func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, dat
 		err := c.flushCdc(ctx, errch)
 		if err != nil {
 			reportIndexConsumerErr(errch, err)
+			return true
 		}
 		objectio.ISCPIndexCloseBlockInjected()
 		close(c.sqlBufSendCh)
@@ -419,6 +420,7 @@ func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, dat
 		err := c.flushCdc(ctx, errch)
 		if err != nil {
 			reportIndexConsumerErr(errch, err)
+			return true
 		}
 		objectio.ISCPIndexCloseBlockInjected()
 		close(c.sqlBufSendCh)

@@ -57,6 +57,7 @@ type flushEveryRowWriter struct {
 	seq       int
 	toSqlErr  error
 	failAtSeq int
+	neverFull bool
 }
 
 func (w *flushEveryRowWriter) CheckLastOp(string) bool { return true }
@@ -76,7 +77,7 @@ func (w *flushEveryRowWriter) Delete(context.Context, []any) error {
 	return nil
 }
 
-func (w *flushEveryRowWriter) Full() bool { return w.rows > 0 }
+func (w *flushEveryRowWriter) Full() bool { return w.rows > 0 && !w.neverFull }
 
 func (w *flushEveryRowWriter) ToSql() ([]byte, error) {
 	if w.toSqlErr != nil {
@@ -377,6 +378,57 @@ func TestIndexConsumerSendSqlReturnsContextErrorWhenBlocked(t *testing.T) {
 	}
 	err := consumer.sendSql(ctx, make(chan error, 1), &flushEveryRowWriter{rows: 1})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestIndexConsumerTerminalFlushErrorDoesNotCloseChannel(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := context.Background()
+	errch := make(chan error, 2)
+
+	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	consumer := &IndexConsumer{
+		sqlBufSendCh: make(chan []byte),
+		sqlWriter:    &flushEveryRowWriter{failAtSeq: 1, neverFull: true},
+		rowdata:      make([]any, len(tblDef.Cols)),
+	}
+
+	bat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1}),
+			testutil.NewVector(1, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}}),
+			testutil.NewVector(1, types.T_int32.ToType(), proc.Mp(), false, []int32{1}),
+		}, nil)
+	defer bat.Clean(proc.Mp())
+
+	insertAtomicBat := &AtomicBatch{
+		Batches: []*batch.Batch{bat},
+		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+
+	done := consumer.processISCPData(ctx, &ISCPData{
+		insertBatch: insertAtomicBat,
+		deleteBatch: nil,
+		noMoreData:  false,
+	}, ISCPDataType_Snapshot, errch)
+	require.False(t, done)
+
+	done = consumer.processISCPData(ctx, &ISCPData{
+		noMoreData: true,
+	}, ISCPDataType_Snapshot, errch)
+	require.True(t, done)
+
+	select {
+	case err := <-errch:
+		require.ErrorContains(t, err, "flush failure at sql-1")
+	default:
+		t.Fatal("terminal flush failure was not reported")
+	}
+
+	select {
+	case _, ok := <-consumer.sqlBufSendCh:
+		require.True(t, ok, "terminal flush failure must not close sqlBufSendCh as a clean EOF")
+	default:
+	}
 }
 
 func TestIndexConsumerTailProducerErrorRollsBackPartialSQL(t *testing.T) {
