@@ -17,113 +17,138 @@ insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
 select count(*) from t;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 8192
 select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
-mo_ctl(dn, flush, table_func_metadata_scan.t)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, table_func_metadata_scan.t)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select sleep(1);
-sleep(1)
+➤ sleep(1)[-6,8,0]  𝄀
 0
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts <= NOW();
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 5
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts = "0-0";
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts > 0;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 5
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts > 9.9;
 invalid argument operator >, bad value [TRANSACTION TIMESTAMP DECIMAL64]
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cast(create_ts as float) > 9.9;
 invalid argument operator cast, bad value [TRANSACTION TIMESTAMP FLOAT]
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cast(create_ts as TIMESTAMP) <= NOW();
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 5
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts) <= NOW();
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 5
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts, 2) <= NOW();
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 5
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(1) <= NOW();
 invalid argument function ts_to_time, bad value [BIGINT]
 select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 5
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'a') g;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'f') g;
 invalid input: bad input column name f
 select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_metadata_scan.t', 'a') g;
-col_name    rows_cnt    null_cnt    origin_size
-a    8192    0    32806
+➤ col_name[12,-1,0]  ¦  rows_cnt[-5,64,0]  ¦  null_cnt[-5,64,0]  ¦  origin_size[-5,64,0]  𝄀
+a  ¦  8192  ¦  0  ¦  32806
 select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_metadata_scan.t', '*') g;
-col_name    rows_cnt    null_cnt    origin_size
-a    8192    0    429915
-b    8192    0    429915
-c    8192    0    429915
-d    8192    0    429915
-e    8192    0    429915
+➤ col_name[12,-1,0]  ¦  rows_cnt[-5,64,0]  ¦  null_cnt[-5,64,0]  ¦  origin_size[-5,64,0]  𝄀
+a  ¦  8192  ¦  0  ¦  528569  𝄀
+b  ¦  8192  ¦  0  ¦  528569  𝄀
+c  ¦  8192  ¦  0  ¦  528569  𝄀
+d  ¦  8192  ¦  0  ¦  528569  𝄀
+e  ¦  8192  ¦  0  ¦  528569
 select sum(origin_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
-sum(origin_size)
-2149575
+➤ sum(origin_size)[3,38,0]  𝄀
+2642845
 select min(bit_cast(`min` as int)), max(bit_cast(`max` as int)), sum(bit_cast(`sum` as bigint)) from metadata_scan('table_func_metadata_scan.t', 'a') g;
-min(bit_cast(min as int))    max(bit_cast(max as int))    sum(bit_cast(sum as bigint))
-1    2    12288
+➤ min(bit_cast(min as int))[4,32,0]  ¦  max(bit_cast(max as int))[4,32,0]  ¦  sum(bit_cast(sum as bigint))[3,38,0]  𝄀
+1  ¦  2  ¦  12288
 select sum(bit_cast(`sum` as double)) from metadata_scan('table_func_metadata_scan.t', 'c') g;
-sum(bit_cast(sum as double))
+➤ sum(bit_cast(sum as double))[8,54,0]  𝄀
 12697.60009765625
 select sum(c) from t;
-sum(c)
+➤ sum(c)[8,54,0]  𝄀
 12697.60009765625
 select sum(bit_cast(`sum` as decimal(10, 8))) from metadata_scan('table_func_metadata_scan.t', 'd') g;
-sum(bit_cast(sum as decimal(10, 8)))
+➤ sum(bit_cast(sum as decimal(10, 8)))[3,38,8]  𝄀
 12288.00000000
 select sum(d) from t;
-sum(d)
+➤ sum(d)[3,38,8]  𝄀
 12288.00000000
 select sum(bit_cast(`sum` as double)) from metadata_scan('table_func_metadata_scan.t', 'e') g;
-sum(bit_cast(sum as double))
+➤ sum(bit_cast(sum as double))[8,54,0]  𝄀
 13639.68017578125
 select sum(e) from t;
-sum(e)
+➤ sum(e)[8,54,0]  𝄀
 13639.68017578125
 select approx_count(*) from t;
-approx_count(*)
+➤ approx_count(*)[-5,64,0]  𝄀
 8192
 insert into t select * from t;
 insert into t select * from t;
 select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
-mo_ctl(dn, flush, table_func_metadata_scan.t)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, table_func_metadata_scan.t)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select approx_count(*) from t;
-approx_count(*)
+➤ approx_count(*)[-5,64,0]  𝄀
 32768
 drop table if exists t;
 create table t(a int, b bigint);
 insert into t values(2147483647, 9223372036854775807);
 insert into t values(1, 1);
 select count(*) from t;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
-mo_ctl(dn, flush, table_func_metadata_scan.t)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, table_func_metadata_scan.t)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select sleep(1);
-sleep(1)
+➤ sleep(1)[-6,8,0]  𝄀
 0
 select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'a') g;
-bit_cast(sum as bigint)
+➤ bit_cast(sum as bigint)[-5,64,0]  𝄀
 2147483648
 select sum(a) from t;
-sum(a)
+➤ sum(a)[-5,64,0]  𝄀
 2147483648
 select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'b') g;
-bit_cast(sum as bigint)
+➤ bit_cast(sum as bigint)[-5,64,0]  𝄀
 0
 select sum(b) from t;
-Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+➤ sum(b)[3,38,0]  𝄀
+9223372036854775808
 drop table if exists t;

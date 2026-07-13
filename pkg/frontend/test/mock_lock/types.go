@@ -434,6 +434,18 @@ func (mr *MockLockTableAllocatorMockRecorder) Close() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockLockTableAllocator)(nil).Close))
 }
 
+// FinishCommit mocks base method.
+func (m *MockLockTableAllocator) FinishCommit(serviceID string, txnID []byte) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "FinishCommit", serviceID, txnID)
+}
+
+// FinishCommit indicates an expected call of FinishCommit.
+func (mr *MockLockTableAllocatorMockRecorder) FinishCommit(serviceID, txnID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinishCommit", reflect.TypeOf((*MockLockTableAllocator)(nil).FinishCommit), serviceID, txnID)
+}
+
 // Get mocks base method.
 func (m *MockLockTableAllocator) Get(serviceID string, group uint32, tableID, originTableID uint64, sharding lock.Sharding) lock.LockTable {
 	m.ctrl.T.Helper()

@@ -17,8 +17,21 @@ package frontend
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
+
+type trackedStatement struct {
+	freed int
+}
+
+func (s *trackedStatement) String() string           { return "" }
+func (s *trackedStatement) Format(*tree.FmtCtx)      {}
+func (s *trackedStatement) GetStatementType() string { return "" }
+func (s *trackedStatement) GetQueryType() string     { return "" }
+func (s *trackedStatement) StmtKind() tree.StmtKind  { return 0 }
+func (s *trackedStatement) Free()                    { s.freed++ }
 
 func Test_BasicGet(t *testing.T) {
 	pc := newPlanCache(5)
@@ -91,4 +104,85 @@ func Test_CleanCache(t *testing.T) {
 	require.NotNil(t, pc.get("2"))
 	require.NotNil(t, pc.get("3"))
 	require.NotNil(t, pc.get("4"))
+}
+
+func Test_CleanCacheRemovesEntriesAndFreesStatements(t *testing.T) {
+	pc := newPlanCache(3)
+	entries := []struct {
+		sql  string
+		stmt *trackedStatement
+	}{
+		{sql: "1", stmt: &trackedStatement{}},
+		{sql: "2", stmt: &trackedStatement{}},
+		{sql: "3", stmt: &trackedStatement{}},
+	}
+
+	for _, entry := range entries {
+		pc.cache(entry.sql, []tree.Statement{entry.stmt}, []*plan.Plan{{}})
+	}
+
+	lruList := pc.lruList
+	pc.clean()
+
+	require.Zero(t, lruList.Len())
+	require.Nil(t, pc.lruList)
+	require.Nil(t, pc.cachePool)
+	for _, entry := range entries {
+		require.Equal(t, 1, entry.stmt.freed)
+	}
+
+	pc.clean()
+}
+
+func TestSessionReleasePlanCache(t *testing.T) {
+	pc := newPlanCache(2)
+	first := &trackedStatement{}
+	second := &trackedStatement{}
+	pc.cache("1", []tree.Statement{first, second}, []*plan.Plan{{}, {}})
+	lruList := pc.lruList
+
+	ses := &Session{planCache: pc}
+	ses.releasePlanCache()
+
+	require.Zero(t, lruList.Len())
+	require.Nil(t, pc.lruList)
+	require.Nil(t, pc.cachePool)
+	require.Equal(t, 1, first.freed)
+	require.Equal(t, 1, second.freed)
+}
+
+func TestFreeStmtsSkipsNil(t *testing.T) {
+	good := &trackedStatement{}
+	stmts := []tree.Statement{nil, good, nil}
+
+	freeStmts(stmts)
+
+	require.Equal(t, 1, good.freed)
+	require.Nil(t, stmts[1])
+}
+
+func Test_CleanOnEmptyCache(t *testing.T) {
+	pc := newPlanCache(3)
+	require.NotPanics(t, func() { pc.clean() })
+	require.Nil(t, pc.lruList)
+	require.Nil(t, pc.cachePool)
+
+	pc2 := newPlanCache(3)
+	pc2.cache("1", nil, nil)
+	pc2.clean()
+	require.NotPanics(t, func() { pc2.clean() }) // idempotent
+	require.Nil(t, pc2.lruList)
+	require.Nil(t, pc2.cachePool)
+}
+
+func Test_SessionAccessorsWithNilPlanCache(t *testing.T) {
+	ses := &Session{planCache: nil}
+
+	require.NotPanics(t, func() {
+		ses.cachePlan("x", []tree.Statement{&trackedStatement{}}, []*plan.Plan{{}})
+	})
+	require.Nil(t, ses.getCachedPlan("x"))
+	require.False(t, ses.isCached("x"))
+	require.NotPanics(t, func() { ses.cleanCache() })
+	require.NotPanics(t, func() { ses.releasePlanCache() })
 }

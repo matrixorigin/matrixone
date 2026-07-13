@@ -1165,21 +1165,30 @@ func CastGeometryToSubtype(ivecs []*vector.Vector, result vector.FunctionResultW
 		if strings.HasPrefix(columnSubtype, "SRID=") {
 			columnSubtype = ""
 		}
-
-		wkt, valueSubtype, _, _, err := validateGeometryPayload(payload, maxPointsInGeometryLimit(proc))
-		if err != nil {
-			return nil, err
-		}
-		if columnSubtype != "" && columnSubtype != "GEOMETRY" && valueSubtype != "GEOMETRY" && valueSubtype != columnSubtype {
-			return nil, moerr.NewInvalidInputNoCtxf("cannot store %s in %s column", valueSubtype, columnSubtype)
-		}
-		// Store bare WKB — float32 coordinates for a GEOMETRY32 column, float64
-		// otherwise — regardless of whether the input was WKB or (legacy) WKT.
-		if float32Column {
-			return encodeGeometryPayloadFloat32(wkt), nil
-		}
-		return encodeGeometryPayload(wkt, 0, false), nil
+		return NormalizeGeometryForStorage(proc, payload, columnSubtype, float32Column)
 	}, selectList)
+}
+
+// NormalizeGeometryForStorage validates a geometry payload (WKB or legacy WKT)
+// against a column's subtype constraint and returns the bare WKB to store:
+// float32-coordinate WKB when float32Column is set, float64 otherwise. It is the
+// shared core of the cast_geometry_to_subtype runtime cast and the external-table
+// CSV loader, so both produce byte-identical, validated geometry. columnSubtype is
+// the upper-cased subtype keyword (e.g. "POINT"); "" or "GEOMETRY" accepts any
+// subtype. SRID is enforced at bind time from the value/column types, not here,
+// because the WKB payload does not carry an SRID.
+func NormalizeGeometryForStorage(proc *process.Process, payload []byte, columnSubtype string, float32Column bool) ([]byte, error) {
+	wkt, valueSubtype, _, _, err := validateGeometryPayload(payload, maxPointsInGeometryLimit(proc))
+	if err != nil {
+		return nil, err
+	}
+	if columnSubtype != "" && columnSubtype != "GEOMETRY" && valueSubtype != "GEOMETRY" && valueSubtype != columnSubtype {
+		return nil, moerr.NewInvalidInputNoCtxf("cannot store %s in %s column", valueSubtype, columnSubtype)
+	}
+	if float32Column {
+		return encodeGeometryPayloadFloat32(wkt), nil
+	}
+	return encodeGeometryPayload(wkt, 0, false), nil
 }
 
 func CastJsonToArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
