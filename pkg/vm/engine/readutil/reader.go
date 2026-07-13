@@ -428,6 +428,7 @@ func NewReader(
 		filterHint,
 	)
 	if err != nil {
+		baseFilter.Cleanup()
 		return nil, err
 	}
 
@@ -474,70 +475,142 @@ func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
 }
 
 func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
-	if param == nil || len(param.OrderBy) == 0 || param.Limit == nil {
+	r.orderByLimit = nil
+	if param == nil || len(param.OrderBy) == 0 || param.OrderBy[0] == nil ||
+		param.OrderBy[0].Expr == nil || param.Limit == nil {
 		return
 	}
-	if r.orderByLimit == nil {
-		r.orderByLimit = &objectio.IndexReaderTopOp{}
+	limitLiteral := param.Limit.GetLit()
+	if limitLiteral == nil || limitLiteral.Isnull {
+		return
+	}
+	limitValue, ok := limitLiteral.Value.(*plan.Literal_U64Val)
+	if !ok || limitValue.U64Val == 0 || limitValue.U64Val > uint64(^uint(0)>>1) {
+		return
 	}
 
 	if col := param.OrderBy[0].Expr.GetCol(); col != nil {
-		r.orderByLimit.Typ = types.T(param.OrderBy[0].Expr.Typ.Id)
-		r.orderByLimit.ColPos = col.ColPos
-		r.orderByLimit.Limit = param.Limit.GetLit().GetU64Val()
-		r.orderByLimit.OrderedLimit = true
-		r.orderByLimit.Desc = param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
-		r.orderByLimit.NumVec = nil
-		r.orderByLimit.DistHeap = nil
-		r.orderByLimit.LowerBoundType = 0
-		r.orderByLimit.UpperBoundType = 0
-		r.orderByLimit.LowerBound = 0
-		r.orderByLimit.UpperBound = 0
+		r.orderByLimit = &objectio.IndexReaderTopOp{
+			Typ:          types.T(param.OrderBy[0].Expr.Typ.Id),
+			ColPos:       col.ColPos,
+			Limit:        limitValue.U64Val,
+			OrderedLimit: true,
+			Desc:         param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0,
+		}
 		return
 	}
 
 	orderFunc := param.OrderBy[0].Expr.GetF()
-	if orderFunc == nil {
-		panic("order function is nil")
+	if orderFunc == nil || len(orderFunc.Args) != 2 {
+		return
 	}
 
 	col := orderFunc.Args[0].GetCol()
 	if col == nil {
-		panic("column is nil")
+		return
 	}
 
-	numVec := orderFunc.Args[1].GetLit().GetVecVal()
+	vecLiteral := orderFunc.Args[1].GetLit()
+	if vecLiteral == nil {
+		return
+	}
+	numVec := vecLiteral.GetVecVal()
 	if len(numVec) == 0 {
 		return
 	}
 
-	metricType, ok := metric.DistFuncNameToMetricType[orderFunc.Func.ObjName]
+	metricType, ok := metric.DistFuncNameToMetricType[orderFunc.GetFunc().GetObjName()]
 	if !ok {
-		panic("unsupported order function")
+		return
 	}
 
-	r.orderByLimit.Typ = types.T(orderFunc.Args[0].Typ.Id)
-	r.orderByLimit.MetricType = metricType
-	r.orderByLimit.ColPos = col.ColPos
-	r.orderByLimit.NumVec = []byte(numVec)
-	r.orderByLimit.Limit = param.Limit.GetLit().GetU64Val()
-	r.orderByLimit.OrderedLimit = false
-	r.orderByLimit.Desc = param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
+	indexTop := &objectio.IndexReaderTopOp{
+		Typ:          types.T(orderFunc.Args[0].Typ.Id),
+		MetricType:   metricType,
+		ColPos:       col.ColPos,
+		NumVec:       []byte(numVec),
+		Limit:        limitValue.U64Val,
+		OrderedLimit: false,
+		Desc:         param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0,
+	}
 
 	if param.DistRange != nil {
-		r.orderByLimit.LowerBoundType = param.DistRange.LowerBoundType
-		r.orderByLimit.LowerBound = param.DistRange.LowerBound.GetLit().GetDval()
-		r.orderByLimit.UpperBoundType = param.DistRange.UpperBoundType
-		r.orderByLimit.UpperBound = param.DistRange.UpperBound.GetLit().GetDval()
+		indexTop.LowerBoundType = param.DistRange.LowerBoundType
+		indexTop.UpperBoundType = param.DistRange.UpperBoundType
+		if !validBoundType(indexTop.LowerBoundType) || !validBoundType(indexTop.UpperBoundType) {
+			return
+		}
+		if indexTop.LowerBoundType != plan.BoundType_UNBOUNDED {
+			var valid bool
+			indexTop.LowerBound, valid = getLiteralFloat64(param.DistRange.LowerBound)
+			if !valid {
+				return
+			}
+		}
+		if indexTop.UpperBoundType != plan.BoundType_UNBOUNDED {
+			var valid bool
+			indexTop.UpperBound, valid = getLiteralFloat64(param.DistRange.UpperBound)
+			if !valid {
+				return
+			}
+		}
 
 		if param.OrigFuncName == metric.DistFn_L2Distance {
-			r.orderByLimit.LowerBound *= r.orderByLimit.LowerBound
-			r.orderByLimit.UpperBound *= r.orderByLimit.UpperBound
+			if indexTop.LowerBoundType != plan.BoundType_UNBOUNDED {
+				if indexTop.LowerBound < 0 {
+					// L2 distance is non-negative, so a negative lower bound
+					// cannot exclude any row.
+					indexTop.LowerBoundType = plan.BoundType_UNBOUNDED
+					indexTop.LowerBound = 0
+				} else {
+					indexTop.LowerBound *= indexTop.LowerBound
+				}
+			}
+			if indexTop.UpperBoundType != plan.BoundType_UNBOUNDED && indexTop.UpperBound >= 0 {
+				indexTop.UpperBound *= indexTop.UpperBound
+			}
 		}
 	}
 
 	// Avoid eager O(limit) allocation; blockio grows the heap as rows are accepted.
-	r.orderByLimit.DistHeap = nil
+	indexTop.DistHeap = nil
+	r.orderByLimit = indexTop
+}
+
+func validBoundType(boundType plan.BoundType) bool {
+	return boundType == plan.BoundType_UNBOUNDED ||
+		boundType == plan.BoundType_INCLUSIVE ||
+		boundType == plan.BoundType_EXCLUSIVE
+}
+
+func getLiteralFloat64(expr *plan.Expr) (float64, bool) {
+	if expr == nil || expr.GetLit() == nil || expr.GetLit().Isnull {
+		return 0, false
+	}
+	switch value := expr.GetLit().Value.(type) {
+	case *plan.Literal_Fval:
+		return float64(value.Fval), true
+	case *plan.Literal_Dval:
+		return value.Dval, true
+	case *plan.Literal_I8Val:
+		return float64(value.I8Val), true
+	case *plan.Literal_I16Val:
+		return float64(value.I16Val), true
+	case *plan.Literal_I32Val:
+		return float64(value.I32Val), true
+	case *plan.Literal_I64Val:
+		return float64(value.I64Val), true
+	case *plan.Literal_U8Val:
+		return float64(value.U8Val), true
+	case *plan.Literal_U16Val:
+		return float64(value.U16Val), true
+	case *plan.Literal_U32Val:
+		return float64(value.U32Val), true
+	case *plan.Literal_U64Val:
+		return float64(value.U64Val), true
+	default:
+		return 0, false
+	}
 }
 
 func (r *reader) GetOrderBy() []*plan.OrderBySpec {

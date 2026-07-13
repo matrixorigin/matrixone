@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -124,17 +123,15 @@ func cagraSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 	var err error
 	st := &cagraSearchState{}
 
+	st.limit, err = evalLimitExpression(proc, arg.Limit, 1)
+	if err != nil {
+		return nil, err
+	}
+
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
-
-	if arg.Limit != nil {
-		if cExpr, ok := arg.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				st.limit = c.U64Val
-			}
-		}
-	} else {
-		st.limit = uint64(1)
+	if err != nil {
+		return nil, err
 	}
 
 	return st, err

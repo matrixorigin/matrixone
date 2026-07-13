@@ -65,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -79,6 +80,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const schedulingPreviewTimeout = 100 * time.Millisecond
 
 func createDropDatabaseErrorInfo() string {
 	return "CREATE/DROP of database is not supported in transactions"
@@ -1235,6 +1238,12 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	if exPlan.GetQuery() == nil {
 		return moerr.NewNotSupported(reqCtx, "the sql query plan does not support explain.")
 	}
+	txnHaveDDL := false
+	if txnOperator := ses.proc.GetTxnOperator(); txnOperator != nil {
+		if ws := txnOperator.GetWorkspace(); ws != nil {
+			txnHaveDDL = ws.GetHaveDDL()
+		}
+	}
 	// generator query explain
 	explainQuery := explain.NewExplainQueryImpl(exPlan.GetQuery())
 
@@ -1244,14 +1253,16 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	if err != nil {
 		return err
 	}
+	if explainSchedulingEnabled(ses) {
+		schedulingPreview := previewQueryScheduling(reqCtx, ses, exPlan.GetQuery(), txnHaveDDL)
+		appendSchedulingExplain(buffer, schedulingPreview)
+	}
+	if err = reqCtx.Err(); err != nil {
+		return err
+	}
 
 	//2. fill the result set
 	//column
-	txnHaveDDL := false
-	ws := ses.proc.GetTxnOperator().GetWorkspace()
-	if ws != nil {
-		txnHaveDDL = ws.GetHaveDDL()
-	}
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
@@ -1264,6 +1275,62 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	}
 
 	return trySaveQueryResult(reqCtx, ses, mrs)
+}
+
+func previewQueryScheduling(
+	ctx context.Context,
+	ses *Session,
+	query *plan.Query,
+	txnHaveDDL bool,
+) schedule.Trace {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	previewCtx, cancel := context.WithTimeout(ctx, schedulingPreviewTimeout)
+	defer cancel()
+	if ses == nil {
+		return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
+			Context: previewCtx,
+			Query:   query,
+		})
+	}
+	tenant := ""
+	if info := ses.GetTenantInfo(); info != nil {
+		tenant = info.GetTenant()
+	}
+	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
+		Context:    previewCtx,
+		Query:      query,
+		Engine:     ses.GetTxnHandler().GetStorage(),
+		Process:    ses.GetProc(),
+		Address:    currentCNPipelineAddress(ses),
+		IsInternal: ses.GetIsInternal(),
+		Tenant:     tenant,
+		Username:   ses.GetUserName(),
+		CNLabel:    ses.getCNLabels(),
+		TxnHasDDL:  txnHaveDDL,
+	})
+}
+
+func appendSchedulingExplain(buffer *explain.ExplainDataBuffer, trace schedule.Trace) {
+	if buffer == nil {
+		return
+	}
+	for _, line := range schedule.ExplainLines(trace) {
+		buffer.PushNewLine(line, false, 0)
+	}
+}
+
+func explainSchedulingEnabled(ses *Session) bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar(enableExplainScheduling)
+	if err != nil {
+		return false
+	}
+	boolType, ok := gSysVarsDefs[enableExplainScheduling].Type.(SystemVariableBoolType)
+	return ok && boolType.IsTrue(value)
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
@@ -1344,9 +1411,10 @@ func createPrepareStmt(
 	}
 
 	var comp *compile.Compile
-	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok {
+	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok &&
+		shouldCachePrepareCompile(preparePlan.GetDcl().GetPrepare().Plan) {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true)
+		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -2161,7 +2229,14 @@ func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explai
 	return err
 }
 
-func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufio.Reader, session *Session, fill outputCallBackFunc) error {
+func buildMoExplainPhyPlan(
+	execCtx *ExecCtx,
+	explainColName string,
+	reader *bufio.Reader,
+	session *Session,
+	fill outputCallBackFunc,
+	trace schedule.Trace,
+) error {
 	bat := batch.New([]string{explainColName})
 	vs := make([][]byte, 0)
 	count := 0
@@ -2177,6 +2252,10 @@ func buildMoExplainPhyPlan(execCtx *ExecCtx, explainColName string, reader *bufi
 		}
 
 		vs = append(vs, []byte(strings.TrimSuffix(line, "\n")))
+		count++
+	}
+	for _, line := range schedule.ExplainLines(trace) {
+		vs = append(vs, []byte(line))
 		count++
 	}
 
@@ -3973,10 +4052,11 @@ func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, ms
 }
 
 type jsonPlanHandler struct {
-	jsonBytes  []byte
-	statsBytes statistic.StatsArray
-	stats      motrace.Statistic
-	buffer     *bytes.Buffer
+	jsonBytes              []byte
+	statsBytes             statistic.StatsArray
+	stats                  motrace.Statistic
+	buffer                 *bytes.Buffer
+	persistSchedulingTrace bool
 }
 
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
@@ -3984,9 +4064,25 @@ func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses Fe
 	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx, ses)
 	return &jsonPlanHandler{
+		jsonBytes:              jsonBytes,
+		statsBytes:             statsBytes,
+		stats:                  stats,
+		buffer:                 h.handoverBuffer(),
+		persistSchedulingTrace: h.persistSchedulingTrace,
+	}
+}
+
+func newSchedulingTracePlanHandler(ctx context.Context, trace schedule.Trace) *jsonPlanHandler {
+	trace = trace.Clone()
+	h := &marshalPlanHandler{
+		marshalPlanConfig: marshalPlanConfig{
+			schedulingTrace: &trace,
+		},
+	}
+	jsonBytes := h.Marshal(ctx)
+	return &jsonPlanHandler{
 		jsonBytes:  jsonBytes,
-		statsBytes: statsBytes,
-		stats:      stats,
+		statsBytes: statistic.DefaultStatsArray,
 		buffer:     h.handoverBuffer(),
 	}
 }
@@ -4008,7 +4104,9 @@ func (h *jsonPlanHandler) Free() {
 }
 
 type marshalPlanConfig struct {
-	waitActiveCost time.Duration
+	waitActiveCost          time.Duration
+	schedulingTrace         *schedule.Trace
+	schedulingTraceRecorder *schedule.TraceRecorder
 }
 
 type marshalPlanOptions func(*marshalPlanConfig)
@@ -4016,6 +4114,22 @@ type marshalPlanOptions func(*marshalPlanConfig)
 func WithWaitActiveCost(cost time.Duration) marshalPlanOptions {
 	return func(h *marshalPlanConfig) {
 		h.waitActiveCost = cost
+	}
+}
+
+func WithSchedulingTrace(trace schedule.Trace) marshalPlanOptions {
+	return func(h *marshalPlanConfig) {
+		if trace.Empty() {
+			return
+		}
+		cloned := trace.Clone()
+		h.schedulingTrace = &cloned
+	}
+}
+
+func withSchedulingTraceRecorder(recorder *schedule.TraceRecorder) marshalPlanOptions {
+	return func(h *marshalPlanConfig) {
+		h.schedulingTraceRecorder = recorder
 	}
 }
 
@@ -4028,6 +4142,8 @@ type marshalPlanHandler struct {
 	// internal sub statements, such as sub statements of compound statements, is not user SQL requests,
 	isInternalSubStmt bool
 
+	persistSchedulingTrace bool
+
 	marshalPlanConfig
 }
 
@@ -4035,37 +4151,44 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 	// TODO: need mem improvement
 	uuid := uuid.UUID(stmt.StatementID)
 	stmt.MarkResponseAt()
-	if plan == nil || plan.GetQuery() == nil {
-		return &marshalPlanHandler{
-			query:       nil,
-			marshalPlan: nil,
-			stmt:        stmt,
-			uuid:        uuid,
-			buffer:      nil,
-		}
-	}
-	query := plan.GetQuery()
 	h := &marshalPlanHandler{
-		query:  query,
-		stmt:   stmt,
-		uuid:   uuid,
-		buffer: nil,
+		stmt: stmt,
+		uuid: uuid,
 	}
-	// END> new marshalPlanHandler
-
-	// SET options
 	for _, opt := range opts {
 		opt(&h.marshalPlanConfig)
 	}
+	if plan != nil && plan.GetQuery() != nil {
+		h.query = plan.GetQuery()
+	}
+	needFullPlan := h.query != nil && h.needMarshalPlan()
+	h.resolveSchedulingTrace(needFullPlan)
 
-	if h.needMarshalPlan() {
+	if needFullPlan {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
 		if phyPlan != nil {
 			h.marshalPlan.PhyPlan = *phyPlan
 		}
+		if h.schedulingTrace != nil {
+			h.marshalPlan.Scheduling = h.schedulingTrace
+		}
 	}
 	return h
+}
+
+func (h *marshalPlanHandler) resolveSchedulingTrace(includeNormalLocal bool) {
+	if h.schedulingTrace == nil && h.schedulingTraceRecorder != nil {
+		trace := h.schedulingTraceRecorder.SnapshotForExport(includeNormalLocal)
+		if !trace.Empty() {
+			h.schedulingTrace = &trace
+		}
+	}
+	if h.schedulingTrace != nil {
+		h.persistSchedulingTrace = h.schedulingTrace.PersistStandalone()
+	}
+	// The recorder is only needed while constructing the synchronous handler.
+	h.schedulingTraceRecorder = nil
 }
 
 // NewMarshalPlanHandlerCompositeSubStmt MarshalHandler for child statements of composite statements
@@ -4160,6 +4283,18 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 		if jsonBytesLen > 0 {
 			jsonBytes = h.buffer.Next(jsonBytesLen)
 		}
+	} else if h.schedulingTrace != nil && h.schedulingTrace.PersistStandalone() {
+		h.allocBufferIfNeeded()
+		h.buffer.Reset()
+		encoder := json.NewEncoder(h.buffer)
+		encoder.SetEscapeHTML(false)
+		if err = encoder.Encode(struct {
+			Scheduling *schedule.Trace `json:"scheduling"`
+		}{Scheduling: h.schedulingTrace}); err != nil {
+			h.buffer.Reset()
+			return sqlQueryIgnoreExecPlan
+		}
+		return h.buffer.Next(h.buffer.Len())
 	} else if h.query != nil {
 		// DO NOT use h.buffer
 		return sqlQueryIgnoreExecPlan

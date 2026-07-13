@@ -61,15 +61,38 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 
 	// check equal fulltext_match func and only compute once for equal function()
 	eqmap := builder.findEqualMatchFunc(projNode, scanNode, projids, filterids)
+	var paginationLimit, paginationOffset *plan.Expr
+	if projNode.Limit != nil || projNode.Offset != nil {
+		paginationLimit, paginationOffset = projNode.Limit, projNode.Offset
+	}
+	if scanNode.Limit != nil || scanNode.Offset != nil {
+		paginationLimit, paginationOffset = scanNode.Limit, scanNode.Offset
+	}
+	if sortNode != nil && (sortNode.Limit != nil || sortNode.Offset != nil) {
+		paginationLimit, paginationOffset = sortNode.Limit, sortNode.Offset
+	}
+	internalLimit, internalOffset := paginationLimit, paginationOffset
+	if sortNode != nil {
+		// The fulltext function returns relevance order. It is not safe to
+		// truncate that stream before an explicit sort on another expression.
+		internalLimit, internalOffset = nil, nil
+	}
 
 	idxID, filter_node_ids, proj_node_ids, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
+		internalLimit, internalOffset, filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
 	}
+	// Pagination belongs to the result of the base-table/fulltext join, never
+	// to the base scan and fulltext stream independently. Both inputs are
+	// unordered, so paginating them separately can select disjoint subsets.
+	scanNode.Limit = nil
+	scanNode.Offset = nil
 
 	if sortNode != nil {
 		sortNode.Children[0] = idxID
+		sortNode.Limit = DeepCopyExpr(paginationLimit)
+		sortNode.Offset = DeepCopyExpr(paginationOffset)
 
 	} else {
 
@@ -117,14 +140,10 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			NodeType: plan.Node_SORT,
 			Children: []int32{idxID},
 			OrderBy:  orderByScore,
-			Limit:    DeepCopyExpr(scanNode.Limit),
-			Offset:   DeepCopyExpr(scanNode.Offset),
+			Limit:    DeepCopyExpr(paginationLimit),
+			Offset:   DeepCopyExpr(paginationOffset),
 			SpillMem: builder.sortSpillMem,
 		}, ctx)
-
-		// move scanNode.Limit to sortNode
-		scanNode.Limit = nil
-		scanNode.Offset = nil
 
 		projNode.Children[0] = sortByID
 	}
@@ -171,10 +190,15 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	eqmap := make(map[int32]int32)
 
 	idxID, _, _, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
+		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
 	}
+	joinNode := builder.qry.Nodes[idxID]
+	joinNode.Limit = DeepCopyExpr(scanNode.Limit)
+	joinNode.Offset = DeepCopyExpr(scanNode.Offset)
+	scanNode.Limit = nil
+	scanNode.Offset = nil
 
 	aggNode.Children[0] = idxID
 
@@ -182,6 +206,7 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 }
 
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
+	paginationLimit, paginationOffset *plan.Expr,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
 	projids []int32, proj_indexDefs []*plan.IndexDef, eqmap map[int32]int32,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32, error) {
@@ -207,12 +232,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		scanNode.FilterList = append(scanNode.FilterList[:ftid], scanNode.FilterList[ftid+1:]...)
 	}
 
-	// apply pushdown limit when no filter
-	var limitExpr *plan.Expr
-	if len(scanNode.FilterList) == 0 && scanNode.Limit != nil {
-		limitExpr = scanNode.Limit
-	}
-
 	indexDefs = append(indexDefs, filter_indexDefs...)
 
 	// Check Equal fulltext_match function
@@ -233,6 +252,15 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			ft_filters = append(ft_filters, projNode.ProjectList[id])
 			indexDefs = append(indexDefs, proj_indexDefs[i])
 		}
+	}
+
+	// A single fulltext stream can safely keep LIMIT+OFFSET candidates. With
+	// multiple streams, limiting each input before their intersection can drop
+	// documents that belong to the final top page, so leave those inputs
+	// unbounded until a joint top-k implementation exists.
+	var limitExpr *plan.Expr
+	if len(scanNode.FilterList) == 0 && len(ft_filters) == 1 {
+		limitExpr, _ = buildCandidateLimit(paginationLimit, paginationOffset)
 	}
 
 	// buildFullTextIndexScan
@@ -659,6 +687,8 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 		ctxNodeID,
 		nil,
 		scanNode,
+		scanNode.Limit,
+		scanNode.Offset,
 		filterids,
 		filterIndexDefs,
 		nil,
@@ -670,6 +700,11 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 	if err != nil {
 		return -1, false, err
 	}
+	joinNode := builder.qry.Nodes[newNodeID]
+	joinNode.Limit = DeepCopyExpr(scanNode.Limit)
+	joinNode.Offset = DeepCopyExpr(scanNode.Offset)
+	scanNode.Limit = nil
+	scanNode.Offset = nil
 
 	return newNodeID, true, nil
 }
