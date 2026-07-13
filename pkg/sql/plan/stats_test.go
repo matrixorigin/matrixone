@@ -327,6 +327,46 @@ func makeFunctionScanForStatsTest(funcName string, limit *planpb.Expr) *planpb.N
 	}
 }
 
+func makeShuffleJoinForStatsTest(exprBased bool) *planpb.Node {
+	right := &planpb.Expr{
+		Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{ColPos: 1},
+		},
+	}
+	if exprBased {
+		right = &planpb.Expr{
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}},
+			},
+		}
+	}
+	return &planpb.Node{
+		NodeType: planpb.Node_JOIN,
+		Stats: &planpb.Stats{
+			HashmapStats: &planpb.HashMapStats{
+				Shuffle:       true,
+				ShuffleColIdx: 0,
+			},
+		},
+		OnList: []*planpb.Expr{
+			{
+				Expr: &planpb.Expr_F{
+					F: &planpb.Function{
+						Args: []*planpb.Expr{
+							{
+								Expr: &planpb.Expr_Col{
+									Col: &planpb.ColRef{ColPos: 0},
+								},
+							},
+							right,
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func makeIvfEntriesOrderByLimitParamForStatsTest() *planpb.IndexReaderParam {
 	return &planpb.IndexReaderParam{
 		OrderBy:      []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
@@ -461,6 +501,60 @@ func TestGetExecType_IvfSearchFunctionScanRespectsForceOneCN(t *testing.T) {
 	got := GetExecType(q, false, false)
 
 	require.Equal(t, ExecTypeAP_ONECN, got)
+}
+
+func TestGetExecType_IvfSearchFunctionScanWithNormalShuffleIsTraversalOrderIndependent(t *testing.T) {
+	tests := []struct {
+		name     string
+		ivfFirst bool
+	}{
+		{name: "ivf before shuffle", ivfFirst: true},
+		{name: "shuffle before ivf"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ivf := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
+			shuffle := makeShuffleJoinForStatsTest(false)
+			nodes := []*planpb.Node{shuffle, ivf}
+			if tt.ivfFirst {
+				nodes = []*planpb.Node{ivf, shuffle}
+			}
+			q := &planpb.Query{Nodes: nodes, Steps: []int32{0}}
+
+			got := GetExecType(q, false, false)
+
+			require.Equal(t, ExecTypeAP_MULTICN, got)
+		})
+	}
+}
+
+func TestGetExecType_IvfSearchFunctionScanWithShuffleKeepsHardOneCNBlockers(t *testing.T) {
+	tests := []struct {
+		name             string
+		txnHaveDDL       bool
+		exprBasedShuffle bool
+		forceOneCN       bool
+	}{
+		{name: "transaction DDL or write restriction", txnHaveDDL: true},
+		{name: "expression based shuffle", exprBasedShuffle: true},
+		{name: "explicit ForceOneCN", forceOneCN: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ivf := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
+			ivf.Stats.ForceOneCN = tt.forceOneCN
+			q := &planpb.Query{
+				Nodes: []*planpb.Node{ivf, makeShuffleJoinForStatsTest(tt.exprBasedShuffle)},
+				Steps: []int32{0},
+			}
+
+			got := GetExecType(q, tt.txnHaveDDL, false)
+
+			require.Equal(t, ExecTypeAP_ONECN, got)
+		})
+	}
 }
 
 func TestGetExecType_IvfSearchEntries_MultiCNCappedForExprBasedShuffle(t *testing.T) {

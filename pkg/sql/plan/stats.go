@@ -2137,7 +2137,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				}
 			}
 		}
-		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
+		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle && ret != ExecTypeAP_MULTICN {
 			ret = ExecTypeAP_ONECN
 		}
 	}
