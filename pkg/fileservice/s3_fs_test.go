@@ -24,6 +24,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -46,6 +48,25 @@ type readRangeRecordingObjectStorage struct {
 	ObjectStorage
 	mu    sync.Mutex
 	reads []objectStorageReadRange
+}
+
+type blockingReadObjectStorage struct {
+	ObjectStorage
+	readStarted chan struct{}
+	releaseRead chan struct{}
+	readCount   atomic.Int64
+}
+
+func (b *blockingReadObjectStorage) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+	if b.readCount.Add(1) == 1 {
+		close(b.readStarted)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-b.releaseRead:
+		}
+	}
+	return b.ObjectStorage.Read(ctx, key, min, max)
 }
 
 func (r *readRangeRecordingObjectStorage) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
@@ -1386,9 +1407,6 @@ func TestS3FSIOMerger(t *testing.T) {
 	assert.Nil(t, err)
 	defer fs.Close(ctx)
 
-	var counterSet perfcounter.CounterSet
-	ctx = perfcounter.WithCounterSet(context.Background(), &counterSet)
-
 	err = fs.Write(ctx, IOVector{
 		FilePath: "foo",
 		Policy:   SkipDiskCache, // skip disk cache
@@ -1399,33 +1417,67 @@ func TestS3FSIOMerger(t *testing.T) {
 			},
 		},
 	})
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
-	nThreads := 256
-	wg := new(sync.WaitGroup)
-	wg.Add(nThreads)
-	for range nThreads {
-		go func() {
-			defer wg.Done()
-			vec := &IOVector{
-				FilePath: "foo",
-				Entries: []IOEntry{
-					{
-						Size:        3,
-						ToCacheData: CacheOriginalData,
-					},
-				},
-			}
-			err := fs.Read(ctx, vec)
-			assert.Nil(t, err)
-			assert.Equal(t, []byte("foo"), vec.Entries[0].CachedData.Bytes())
-			vec.Release()
-		}()
+	storage := &blockingReadObjectStorage{
+		ObjectStorage: fs.storage,
+		readStarted:   make(chan struct{}),
+		releaseRead:   make(chan struct{}),
 	}
-	wg.Wait()
+	defer func() {
+		select {
+		case <-storage.releaseRead:
+		default:
+			close(storage.releaseRead)
+		}
+	}()
+	fs.storage = storage
+	readCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	assert.Equal(t, int64(1), counterSet.FileService.S3.Put.Load())
-	assert.True(t, counterSet.FileService.S3.Get.Load() < int64(nThreads))
+	read := func(ctx context.Context) error {
+		vec := &IOVector{
+			FilePath: "foo",
+			Policy:   SkipFullFilePreloads,
+			Entries: []IOEntry{
+				{
+					Size:        3,
+					ToCacheData: CacheOriginalData,
+				},
+			},
+		}
+		defer vec.Release()
+		if err := fs.Read(ctx, vec); err != nil {
+			return err
+		}
+		if !bytes.Equal([]byte("foo"), vec.Entries[0].CachedData.Bytes()) {
+			return errors.New("unexpected read data")
+		}
+		return nil
+	}
+
+	results := make(chan error, 2)
+	go func() { results <- read(readCtx) }()
+	<-storage.readStarted
+
+	waiterCtx := WithEventLogger(readCtx)
+	go func() { results <- read(waiterCtx) }()
+	waiterLogger := waiterCtx.Value(EventLoggerKey).(*eventLogger)
+	require.Eventually(t, func() bool {
+		waiterLogger.mu.Lock()
+		defer waiterLogger.mu.Unlock()
+		for _, ev := range *waiterLogger.events {
+			if ev.ev == str_ioMerger_Merge_wait {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, time.Millisecond)
+
+	close(storage.releaseRead)
+	require.NoError(t, <-results)
+	require.NoError(t, <-results)
+	require.Equal(t, int64(1), storage.readCount.Load())
 
 }
 
