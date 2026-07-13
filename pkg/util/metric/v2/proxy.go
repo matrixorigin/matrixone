@@ -114,4 +114,29 @@ var (
 			Name:      "connections_transfer_intent",
 			Help:      "Proxy connections in transfer intent state",
 		})
+
+	ProxyCNHealthCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "proxy",
+			Name:      "cn_health_total",
+			Help:      "Total number of proxy CN health checker events.",
+		}, []string{"event"})
+
+	ProxyBackendHandshakeDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "proxy",
+			Name:      "backend_handshake_duration_seconds",
+			Help:      "Bucketed histogram of proxy backend CN handshake duration.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"result"})
+
+	ProxyBackendHandshakeInflightGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "proxy",
+			Name:      "backend_handshake_inflight",
+			Help:      "Current number of proxy backend CN handshakes in flight.",
+		})
 )
