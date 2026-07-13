@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -61,8 +60,7 @@ type Window struct {
 	// sort and partition
 	Fs []*plan.OrderBySpec
 	// agg func
-	Types []types.Type
-	Aggs  []aggexec.AggFuncExecExpression
+	Aggs []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
 }
@@ -103,6 +101,11 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 
 	ctr.resetParam()
 	ctr.resetVectors()
+	// Release aggregators here too: on an error exit from Call the normal
+	// freeAggFun() at the end of the eval loop is skipped, so batAggs would
+	// otherwise keep their accumulated state (e.g. json payloads, distinct
+	// hashes) in the mpool until the next reuse.
+	ctr.freeAggFun()
 	if ctr.bat != nil {
 		ctr.bat.CleanOnlyData()
 	}
@@ -116,6 +119,9 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &window.ctr
 
+	// Free aggregators before the batch so an error exit from Call (which skips
+	// the normal freeAggFun()) does not leak their mpool-held state.
+	ctr.freeAggFun()
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
@@ -152,14 +158,13 @@ func (ctr *container) freeBatch(mp *mpool.MPool) {
 }
 
 func (ctr *container) freeAggFun() {
-	if ctr.bat != nil {
-		for _, a := range ctr.batAggs {
-			if a != nil {
-				a.Free()
-			}
+	for i, a := range ctr.batAggs {
+		if a != nil {
+			a.Free()
+			ctr.batAggs[i] = nil
 		}
-		ctr.batAggs = nil
 	}
+	ctr.batAggs = nil
 }
 
 func (ctr *container) freeExes() {

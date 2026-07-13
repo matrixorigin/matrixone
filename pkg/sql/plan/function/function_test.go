@@ -47,6 +47,42 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 
 		{
 			shouldCast: true,
+			in:         [2]types.Type{types.T_binary.ToType(), types.T_varbinary.ToType()},
+			want:       [2]types.Type{types.T_varbinary.ToType(), types.T_varbinary.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_varbinary.ToType(), types.T_binary.ToType()},
+			want:       [2]types.Type{types.T_varbinary.ToType(), types.T_varbinary.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_binary.ToType(), types.T_blob.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_blob.ToType(), types.T_binary.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_binary.ToType(), types.T_text.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_text.ToType(), types.T_binary.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
+		},
+
+		{
+			shouldCast: true,
 			in: [2]types.Type{
 				{Oid: types.T_decimal64, Width: 38, Size: 16, Scale: 6},
 				{Oid: types.T_decimal128, Width: 38, Size: 16, Scale: 4},
