@@ -98,6 +98,10 @@ func ModifyColumn(
 		return false, err
 	}
 
+	if err := checkColumnWithCheckDependency(cctx.GetContext(), tableDef, nColName); err != nil {
+		return false, err
+	}
+
 	pkAffected, err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
 	if err != nil {
 		return false, err
@@ -135,6 +139,7 @@ func modifyColPosition(
 		})
 		if oldPos >= 0 {
 			remapGeneratedColExprsAfterDrop(tableDef, oldPos)
+			remapCheckExprsAfterDrop(tableDef, oldPos)
 		}
 
 		targetPos, err := findPositionRelativeColumn(ctx, tableDef.Cols, pos)
@@ -146,6 +151,7 @@ func modifyColPosition(
 			append([]*ColDef{nCol}, tableDef.Cols[targetPos:]...)...,
 		)
 		remapGeneratedColExprsAfterInsert(tableDef, int32(targetPos))
+		remapCheckExprsAfterInsert(tableDef, int32(targetPos))
 	} else {
 		for i, col := range tableDef.Cols {
 			if strings.EqualFold(col.Name, oCol.Name) {

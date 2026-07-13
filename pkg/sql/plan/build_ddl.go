@@ -35,6 +35,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
@@ -1762,12 +1763,41 @@ func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExp
 	if err != nil {
 		return err
 	}
-	if name == "" {
-		name = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+
+	// Reject non-deterministic (volatile) functions in CHECK expressions
+	if err := checkExprForVolatileFuncWithScope(ctx.GetContext(), checkExpr, "check constraint"); err != nil {
+		return err
 	}
+
+	// Format the original SQL expression text for SHOW CREATE TABLE output
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	astExpr.Format(fmtCtx)
+	originSql := fmtCtx.String()
+
+	// Build a set of existing check constraint names for deduplication
+	checkNameSet := make(map[string]bool, len(tableDef.Checks))
+	for _, chk := range tableDef.Checks {
+		checkNameSet[chk.Name] = true
+	}
+
+	// Assign or validate the constraint name
+	if name == "" {
+		// Anonymous constraint: generate __mo_chk_N, skipping already-occupied names
+		for i := len(tableDef.Checks) + 1; ; i++ {
+			candidate := fmt.Sprintf("__mo_chk_%d", i)
+			if !checkNameSet[candidate] {
+				name = candidate
+				break
+			}
+		}
+	} else if checkNameSet[name] {
+		return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", name)
+	}
+
 	tableDef.Checks = append(tableDef.Checks, &plan.CheckDef{
-		Name:  name,
-		Check: checkExpr,
+		Name:      name,
+		Check:     checkExpr,
+		OriginSql: originSql,
 	})
 	return nil
 }
@@ -1785,6 +1815,74 @@ func bindCheckExpr(ctx CompilerContext, astExpr tree.Expr, cols []*ColDef) (*pla
 
 	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
 	return binder.BindExpr(astExpr, 0, true)
+}
+
+// RecoverCheckConstraintsFromCreateSql is an upgrade-compatibility fallback for
+// tables created before CHECK constraints were persisted structurally under the
+// hidden __mo_check_constraints config key. Such tables come back from the
+// engine with an empty TableDef.Checks even though their CHECK clauses are still
+// recorded verbatim in Createsql. Without this recovery, INSERT/REPLACE/UPDATE
+// on those tables would silently bypass CHECK enforcement after a restart.
+//
+// When TableDef.Checks is already populated (tables created on the new version)
+// this is a no-op. On any parse/bind failure it logs and leaves Checks empty so
+// a malformed Createsql can never break an otherwise valid query. Recovery is
+// atomic: either all CHECK clauses are recovered or none.
+func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDef) {
+	if tableDef == nil || len(tableDef.Checks) > 0 || tableDef.Createsql == "" {
+		return
+	}
+	if tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemViewRel {
+		return
+	}
+	// Cheap pre-filter: skip the parse for the overwhelming majority of tables
+	// that have no CHECK clause at all.
+	if !containsKeywordOutsideQuotes(tableDef.Createsql, "CHECK") {
+		return
+	}
+
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, tableDef.Createsql, ctx.GetLowerCaseTableNames())
+	if err != nil {
+		logutil.Errorf("recover check constraints: parse createsql for table %s failed: %v", tableDef.Name, err)
+		return
+	}
+	ct, ok := stmt.(*tree.CreateTable)
+	if !ok {
+		return
+	}
+
+	type recoveredCheck struct {
+		name string
+		expr tree.Expr
+	}
+	var checks []recoveredCheck
+	for _, def := range ct.Defs {
+		switch d := def.(type) {
+		case *tree.CheckIndex:
+			checks = append(checks, recoveredCheck{name: d.ConstraintSymbol, expr: d.Expr})
+		case *tree.ColumnTableDef:
+			for _, attr := range d.Attributes {
+				if ca, ok := attr.(*tree.AttributeCheckConstraint); ok {
+					checks = append(checks, recoveredCheck{name: ca.Name, expr: ca.Expr})
+				}
+			}
+		}
+	}
+	if len(checks) == 0 {
+		return
+	}
+
+	// Bind into a scratch TableDef so a mid-way failure leaves the original
+	// untouched (all-or-nothing recovery). appendCheckDef reuses the exact
+	// binding, naming and OriginSql formatting used by CREATE TABLE.
+	scratch := &TableDef{Name: tableDef.Name, Cols: tableDef.Cols}
+	for _, c := range checks {
+		if err := appendCheckDef(ctx, scratch, c.name, c.expr); err != nil {
+			logutil.Errorf("recover check constraints: bind check for table %s failed: %v", tableDef.Name, err)
+			return
+		}
+	}
+	tableDef.Checks = scratch.Checks
 }
 
 func restoreIntervalSyntaxForCTAS(sql string) string {

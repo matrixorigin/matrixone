@@ -305,6 +305,65 @@ insert into t_column_check_cross values (2, 3, 2);
 select * from t_column_check_cross order by id;
 drop table t_column_check_cross;
 
+-- truthiness: numeric CHECK (a) — 1 passes, 0 fails, null passes
+drop table if exists t_chk_truth;
+create table t_chk_truth(a int, check (a));
+insert into t_chk_truth values (1);
+insert into t_chk_truth values (null);
+select * from t_chk_truth order by a;
+drop table t_chk_truth;
+
+-- truthiness: zero should fail
+drop table if exists t_chk_fail;
+create table t_chk_fail(a int, check (a));
+insert into t_chk_fail values (0);
+select * from t_chk_fail;
+drop table t_chk_fail;
+
+-- UPDATE must enforce CHECK
+drop table if exists t_chk_update;
+create table t_chk_update(a int, check (a > 0));
+insert into t_chk_update values (1);
+update t_chk_update set a = a + 1;
+select * from t_chk_update;
+drop table t_chk_update;
+
+-- UPDATE violates CHECK
+drop table if exists t_chk_update_fail;
+create table t_chk_update_fail(a int, check (a > 0));
+insert into t_chk_update_fail values (1);
+update t_chk_update_fail set a = -1;
+select * from t_chk_update_fail;
+drop table t_chk_update_fail;
+
+-- REPLACE must enforce CHECK
+drop table if exists t_chk_replace;
+create table t_chk_replace(id int primary key, a int, check (a > 0));
+replace into t_chk_replace values (1, 1);
+select * from t_chk_replace;
+drop table t_chk_replace;
+
+-- REPLACE violates CHECK
+drop table if exists t_chk_replace_fail;
+create table t_chk_replace_fail(id int primary key, a int, check (a > 0));
+replace into t_chk_replace_fail values (1, -1);
+select * from t_chk_replace_fail;
+drop table t_chk_replace_fail;
+
+-- duplicate check constraint name should fail at DDL
+drop table if exists t_chk_dup_name;
+create table t_chk_dup_name(
+    a int,
+    constraint chk_pos check (a > 0),
+    constraint chk_pos check (a < 10)
+);
+drop table if exists t_chk_dup_name;
+
+-- non-deterministic function should be rejected in CHECK
+drop table if exists t_chk_volatile;
+create table t_chk_volatile(a int, check (rand() > 0));
+drop table if exists t_chk_volatile;
+
 -- fake-PK table with a composite nullable unique key: a REPLACE whose composite
 -- unique-key part is statically NULL (column a omitted -> NULL) serializes to a NULL
 -- key, can never conflict, and behaves like a plain INSERT (no existing row deleted;

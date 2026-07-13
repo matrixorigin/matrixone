@@ -685,6 +685,142 @@ func TestBuildCreateTableKeepsNamedTableCheckConstraint(t *testing.T) {
 	require.Equal(t, "chk_v", checks[0].GetName())
 }
 
+func TestBuildCreateTableCheckConstraintVolatileFuncRejection(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	sqlerrs := []string{
+		"CREATE TABLE t_chk_volatile_1 (a INT, CHECK (rand() > 0));",
+		"CREATE TABLE t_chk_volatile_2 (a INT, CHECK (uuid() IS NOT NULL));",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
+func TestBuildCreateTableCheckConstraintNameDeduplication(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	t.Run("duplicate user names reject", func(t *testing.T) {
+		_, err := runOneStmt(mock, t,
+			"CREATE TABLE t_chk_dup_name (a INT, CONSTRAINT chk_pos CHECK (a > 0), CONSTRAINT chk_pos CHECK (a < 10));")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "duplicate check constraint name")
+	})
+
+	t.Run("anonymous names skip occupied", func(t *testing.T) {
+		// Create a table with a user-named constraint that uses an anonymous-like name.
+		// The anonymous generator must skip it.
+		logicPlan, err := runOneStmt(mock, t,
+			"CREATE TABLE t_chk_anon_name (a INT, CONSTRAINT __mo_chk_1 CHECK (a > 0), b INT CHECK (b > 0));")
+		require.NoError(t, err)
+		checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+		require.Len(t, checks, 2)
+		require.Equal(t, "__mo_chk_1", checks[0].GetName())
+		require.Equal(t, "__mo_chk_2", checks[1].GetName())
+	})
+}
+
+func TestBuildCreateTableCheckConstraintOriginSql(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	t.Run("origin sql stored for check", func(t *testing.T) {
+		logicPlan, err := runOneStmt(mock, t,
+			"CREATE TABLE t_chk_origin_sql (a INT, CHECK (a > 0));")
+		require.NoError(t, err)
+		checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+		require.Len(t, checks, 1)
+		require.Equal(t, "a > 0", checks[0].OriginSql)
+	})
+
+	t.Run("named check stores origin sql", func(t *testing.T) {
+		logicPlan, err := runOneStmt(mock, t,
+			"CREATE TABLE t_chk_origin_named (a INT, b INT, CONSTRAINT chk_ab CHECK (a < b));")
+		require.NoError(t, err)
+		checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+		require.Len(t, checks, 1)
+		require.Equal(t, "chk_ab", checks[0].GetName())
+		require.Equal(t, "a < b", checks[0].OriginSql)
+	})
+}
+
+func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext()
+
+	intTyp := plan.Type{Id: int32(types.T_int64)}
+	newTableDef := func(createSql string) *plan.TableDef {
+		return &plan.TableDef{
+			Name:      "t",
+			TableType: catalog.SystemOrdinaryRel,
+			Cols: []*plan.ColDef{
+				{Name: "a", Typ: intTyp},
+				{Name: "b", Typ: intTyp},
+			},
+			Createsql: createSql,
+		}
+	}
+
+	t.Run("recovers table-level check", func(t *testing.T) {
+		td := newTableDef("CREATE TABLE t (a INT, b INT, CHECK (a > 0))")
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+		require.Equal(t, "a > 0", td.Checks[0].OriginSql)
+		require.True(t, exprContainsFuncName(td.Checks[0].GetCheck(), ">"))
+	})
+
+	t.Run("recovers column-level check", func(t *testing.T) {
+		td := newTableDef("CREATE TABLE t (a INT, b INT CHECK (b > a))")
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+		require.True(t, exprContainsFuncName(td.Checks[0].GetCheck(), ">"))
+	})
+
+	t.Run("recovers named check", func(t *testing.T) {
+		td := newTableDef("CREATE TABLE t (a INT, b INT, CONSTRAINT chk_ab CHECK (a < b))")
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+		require.Equal(t, "chk_ab", td.Checks[0].GetName())
+	})
+
+	t.Run("recovers multiple checks", func(t *testing.T) {
+		td := newTableDef("CREATE TABLE t (a INT CHECK (a > 0), b INT, CHECK (b < 100))")
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 2)
+	})
+
+	t.Run("no-op when checks already present", func(t *testing.T) {
+		td := newTableDef("CREATE TABLE t (a INT, b INT, CHECK (a > 0))")
+		existing := &plan.CheckDef{Name: "keep", OriginSql: "b > 0"}
+		td.Checks = []*plan.CheckDef{existing}
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+		require.Same(t, existing, td.Checks[0])
+	})
+
+	t.Run("no-op when createsql empty", func(t *testing.T) {
+		td := newTableDef("")
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Empty(t, td.Checks)
+	})
+
+	t.Run("no-op when no check clause", func(t *testing.T) {
+		td := newTableDef("CREATE TABLE t (a INT, b INT)")
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Empty(t, td.Checks)
+	})
+
+	t.Run("no-op for external table", func(t *testing.T) {
+		td := newTableDef("CREATE EXTERNAL TABLE t (a INT, b INT, CHECK (a > 0))")
+		td.TableType = catalog.SystemExternalRel
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Empty(t, td.Checks)
+	})
+
+	t.Run("no-op on unparseable createsql", func(t *testing.T) {
+		td := newTableDef("this is not valid sql with CHECK keyword")
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Empty(t, td.Checks)
+	})
+}
+
 func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{

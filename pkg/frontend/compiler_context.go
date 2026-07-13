@@ -444,6 +444,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 		Obj:        returnTableID,
 	}
 	tableDef := table.CopyTableDef(tempCtx)
+	plan2.RecoverCheckConstraintsFromCreateSql(tcc, tableDef)
 	return obj, tableDef, nil
 }
 
@@ -469,6 +470,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		Obj:        returnTableID,
 	}
 	tableDef := table.CopyTableDef(pubContext)
+	plan2.RecoverCheckConstraintsFromCreateSql(tcc, tableDef)
 	return obj, tableDef, nil
 }
 
@@ -516,6 +518,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	}
 	tableDef := table.CopyTableDef(ctx)
 	tableDef.IsTemporary = isTmpTable
+
+	// Upgrade compatibility: tables created before CHECK constraints were
+	// persisted structurally carry them only in Createsql. Recover them so
+	// DML enforcement and SHOW CREATE keep working after a restart.
+	plan2.RecoverCheckConstraintsFromCreateSql(tcc, tableDef)
 
 	// convert
 	var subscriptionName string

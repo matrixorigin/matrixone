@@ -46,7 +46,6 @@ func ConstructCreateTableSQL(
 		display string
 		rewrite string
 	}, 0)
-	checkDefs := extractTopLevelCheckDefs(tableDef)
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
@@ -463,8 +462,19 @@ func ConstructCreateTableSQL(
 			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
-	for _, checkDef := range checkDefs {
-		createStr += ",\n  " + checkDef
+	// Render CHECK constraints from the structured table definition so that the
+	// output stays correct after ALTER ADD/DROP CHECK (which updates Checks but
+	// not Createsql). OriginSql holds the formatted predicate text.
+	for _, chk := range tableDef.Checks {
+		if chk.OriginSql == "" {
+			continue
+		}
+		if strings.HasPrefix(chk.Name, "__mo_chk_") {
+			// Anonymous constraint: MO auto-generated the name, so omit it.
+			createStr += ",\n  CHECK (" + chk.OriginSql + ")"
+		} else {
+			createStr += ",\n  CONSTRAINT `" + formatStr(chk.Name) + "` CHECK (" + chk.OriginSql + ")"
+		}
 	}
 
 	if rowCount != 0 {

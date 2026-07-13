@@ -153,11 +153,12 @@ func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bin
 				"check constraint %q references synthetic column %s", check.Name, colName)
 		}
 		checkExpr := substituteColRefsInExpr(check.Check, tableColProjList, 0)
-		isNullExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(checkExpr)})
-		if err != nil {
-			return 0, err
-		}
-		passExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{checkExpr, isNullExpr})
+		// A CHECK passes when the predicate is TRUE or NULL (MySQL semantics).
+		// coalesce(checkExpr, true) expresses this while evaluating the check
+		// expression exactly once, avoiding the double evaluation that an
+		// explicit `checkExpr OR checkExpr IS NULL` would incur.
+		passExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
+			[]*plan.Expr{checkExpr, makePlan2BoolConstExprWithType(true)})
 		if err != nil {
 			return 0, err
 		}

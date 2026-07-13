@@ -88,6 +88,7 @@ func handleAddColumnPosition(ctx context.Context, tableDef *TableDef, newCol *Co
 		tableDef.Cols = append(tableDef.Cols[:targetPos], append([]*ColDef{newCol}, tableDef.Cols[targetPos:]...)...)
 		// Remap ColPos in all generated column expressions after the insertion
 		remapGeneratedColExprsAfterInsert(tableDef, int32(targetPos))
+		remapCheckExprsAfterInsert(tableDef, int32(targetPos))
 	} else {
 		tableDef.Cols = append(tableDef.Cols, newCol)
 	}
@@ -191,6 +192,11 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCheckConstraint:
+			if err := appendCheckDef(ctx, alterPlan.CopyTableDef, attribute.Name, attribute.Expr); err != nil {
+				return nil, err
+			}
+
 			//default:
 			//	return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
@@ -396,6 +402,10 @@ func DropColumn(
 		return column.Primary, err
 	}
 
+	if err := checkColumnWithCheckDependency(ctx.GetContext(), tableDef, colName); err != nil {
+		return column.Primary, err
+	}
+
 	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, column); err != nil {
 		return column.Primary, err
 	}
@@ -555,6 +565,7 @@ func handleDropColumnPosition(ctx context.Context, tableDef *TableDef, col *ColD
 	})
 	if dropPos >= 0 {
 		remapGeneratedColExprsAfterDrop(tableDef, dropPos)
+		remapCheckExprsAfterDrop(tableDef, dropPos)
 	}
 	return nil
 }
@@ -630,6 +641,40 @@ func remapGeneratedColExprsAfterDrop(tableDef *TableDef, dropPos int32) {
 			shiftColPosInExpr(col.GeneratedCol.Expr, dropPos+1, -1)
 		}
 	}
+}
+
+// remapCheckExprsAfterInsert adjusts all check constraint expressions
+// after a new column is inserted at insertPos. ColPos >= insertPos shift up by 1.
+func remapCheckExprsAfterInsert(tableDef *TableDef, insertPos int32) {
+	for _, chk := range tableDef.Checks {
+		if chk.Check != nil {
+			shiftColPosInExpr(chk.Check, insertPos, 1)
+		}
+	}
+}
+
+// remapCheckExprsAfterDrop adjusts all check constraint expressions
+// after a column is removed from dropPos. ColPos > dropPos shift down by 1.
+func remapCheckExprsAfterDrop(tableDef *TableDef, dropPos int32) {
+	for _, chk := range tableDef.Checks {
+		if chk.Check != nil {
+			shiftColPosInExpr(chk.Check, dropPos+1, -1)
+		}
+	}
+}
+
+// checkColumnWithCheckDependency checks if the column is referenced
+// by any check constraint expression. If so, the operation is rejected.
+func checkColumnWithCheckDependency(ctx context.Context, tableDef *TableDef, colName string) error {
+	for _, chk := range tableDef.Checks {
+		if chk.Check != nil {
+			if exprReferencesColumn(chk.Check, colName, tableDef.Cols) {
+				return moerr.NewInvalidInputf(ctx,
+					"Cannot drop or modify column '%s': check constraint '%s' depends on it", colName, chk.Name)
+			}
+		}
+	}
+	return nil
 }
 
 // checkColumnWithGeneratedDependency checks if the column is referenced

@@ -559,6 +559,13 @@ func checkGeneratedExprReferences(ctx context.Context, expr *plan.Expr, currentC
 // if any function call is volatile or real-time related, which is not allowed
 // in generated column expressions.
 func checkExprForVolatileFunc(ctx context.Context, expr *plan.Expr) error {
+	return checkExprForVolatileFuncWithScope(ctx, expr, "generated column")
+}
+
+// checkExprForVolatileFuncWithScope walks a plan expression tree and reports an error
+// if any function call is volatile or real-time related. The scope parameter identifies
+// the constraint type for the error message (e.g. "generated column", "check constraint").
+func checkExprForVolatileFuncWithScope(ctx context.Context, expr *plan.Expr, scope string) error {
 	if expr == nil {
 		return nil
 	}
@@ -567,16 +574,16 @@ func checkExprForVolatileFunc(ctx context.Context, expr *plan.Expr) error {
 		ov, exists := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
 		if exists && (ov.CannotFold() || ov.IsRealTimeRelated()) {
 			return moerr.NewInvalidInputf(ctx,
-				"expression of generated column cannot refer to a non-deterministic function '%s'", e.F.Func.ObjName)
+				"expression of %s cannot refer to a non-deterministic function '%s'", scope, e.F.Func.ObjName)
 		}
 		for _, arg := range e.F.Args {
-			if err := checkExprForVolatileFunc(ctx, arg); err != nil {
+			if err := checkExprForVolatileFuncWithScope(ctx, arg, scope); err != nil {
 				return err
 			}
 		}
 	case *plan.Expr_List:
 		for _, item := range e.List.List {
-			if err := checkExprForVolatileFunc(ctx, item); err != nil {
+			if err := checkExprForVolatileFuncWithScope(ctx, item, scope); err != nil {
 				return err
 			}
 		}

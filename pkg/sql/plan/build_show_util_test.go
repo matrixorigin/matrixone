@@ -202,7 +202,12 @@ func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
 	require.Contains(t, got, "KEY `idx_mix` (`name`,`t`(30))")
 }
 
-func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
+func Test_ShowCreateTableRendersStructuredChecks(t *testing.T) {
+	// SHOW CREATE renders CHECK constraints from the structured TableDef.Checks
+	// (each check's formatted OriginSql), not from the raw Createsql text. This
+	// keeps the output correct after ALTER ADD/DROP CHECK, which updates Checks
+	// but leaves Createsql untouched. The tradeoff is that the predicate is
+	// re-rendered in the binder's normalized form (lowercase keywords).
 	const sql = `CREATE TABLE t_numeric_types (
 		id BIGINT NOT NULL AUTO_INCREMENT,
 		c_age INT NULL,
@@ -223,14 +228,43 @@ func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct show create failed: %+v", err)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_age` CHECK (c_age is null or (c_age >= 0 and c_age <= 200))") {
 		t.Fatalf("expected chk_age check constraint in show create output: %s", showSQL)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_score` CHECK (c_score is null or (c_score >= 0 and c_score <= 100))") {
 		t.Fatalf("expected chk_score check constraint in show create output: %s", showSQL)
 	}
 	if !strings.Contains(showSQL, "PRIMARY KEY (`id`)") {
 		t.Fatalf("expected canonical primary key output to be preserved: %s", showSQL)
+	}
+}
+
+func Test_ShowCreateTableRendersAnonymousCheck(t *testing.T) {
+	// An anonymous CHECK is stored under a MO-generated __mo_chk_N name, which
+	// must be omitted from SHOW CREATE so the output round-trips as an anonymous
+	// constraint rather than leaking the internal name.
+	const sql = `CREATE TABLE t_anon_chk (
+		id INT NOT NULL,
+		v INT NULL,
+		PRIMARY KEY (id),
+		CHECK (v > 0)
+	) ENGINE=InnoDB`
+
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, sql)
+	if err != nil {
+		t.Fatalf("build create table failed: %+v", err)
+	}
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	if err != nil {
+		t.Fatalf("construct show create failed: %+v", err)
+	}
+	if !strings.Contains(showSQL, "CHECK (v > 0)") {
+		t.Fatalf("expected anonymous check clause in show create output: %s", showSQL)
+	}
+	if strings.Contains(showSQL, "__mo_chk_") {
+		t.Fatalf("anonymous check must not leak its internal __mo_chk_ name: %s", showSQL)
 	}
 }
 
