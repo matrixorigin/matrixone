@@ -26,6 +26,7 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -44,6 +45,25 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestAPIEntryTableDefVersionIsModeIndependent(t *testing.T) {
+	h := new(Handle)
+	cnBatch := batch.NewWithSize(1)
+	cnBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	pbBatch, err := batch.BatchToProtoBatch(cnBatch)
+	require.NoError(t, err)
+	for _, mode := range []string{"optimistic", "pessimistic"} {
+		t.Run(mode, func(t *testing.T) {
+			req := h.apiEntryToWriteEntry(context.Background(), txnpb.TxnMeta{}, &api.Entry{
+				EntryType:       api.Entry_Insert,
+				Bat:             pbBatch,
+				TableDefVersion: 7,
+			}, false)
+			require.NotNil(t, req)
+			require.Equal(t, uint32(7), req.TableDefVersion)
+		})
+	}
+}
 
 func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	defer testutils.AfterTest(t)()

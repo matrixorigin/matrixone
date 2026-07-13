@@ -115,6 +115,11 @@ type txnRelation struct {
 	table *txnTable
 }
 
+// SetTableDefVersion records the CN schema dependency for this relation.
+func (h *txnRelation) SetTableDefVersion(version uint32) error {
+	return h.table.setExpectedTableDefVersion(version)
+}
+
 func newRelation(table *txnTable) *txnRelation {
 	rel := &txnRelation{
 		TxnRelation: &txnbase.TxnRelation{

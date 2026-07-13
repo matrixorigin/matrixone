@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,6 +44,136 @@ import (
 const (
 	ModuleName = "TAETXN"
 )
+
+type waitingSchemaTxn struct {
+	txnif.TxnReader
+	prepareTS types.TS
+	waited    chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
+func (txn *waitingSchemaTxn) GetPrepareTS() types.TS { return txn.prepareTS }
+func (txn *waitingSchemaTxn) GetCommitTS() types.TS  { return txn.prepareTS }
+func (txn *waitingSchemaTxn) GetTxnState(wait bool) txnif.TxnState {
+	if !wait {
+		return txnif.TxnStatePreparing
+	}
+	txn.once.Do(func() { close(txn.waited) })
+	<-txn.release
+	return txnif.TxnStateCommitted
+}
+
+func TestTableDefVersionFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		rollback bool
+	}{
+		{name: "commit retries"},
+		{name: "rollback continues", rollback: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			schema := catalog.MockSchemaAll(3, 1)
+			schema.Version = 7
+			entry := catalog.MockTableEntryWithDB(nil, 42)
+			entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
+				Schema:          schema,
+				TombstoneSchema: catalog.GetTombstoneSchema(schema),
+			})
+
+			alterBase := txnbase.NewTxn(nil, nil, []byte("alter"), types.BuildTS(2, 0), types.TS{})
+			alterTxn := &waitingSchemaTxn{
+				TxnReader: alterBase,
+				prepareTS: types.BuildTS(3, 0),
+				waited:    make(chan struct{}),
+				release:   make(chan struct{}),
+			}
+			_, _, err := entry.AlterTable(context.Background(), alterTxn,
+				apipb.NewUpdateAutoIncrementReq(0, 42, 20))
+			assert.NoError(t, err)
+
+			dmlTxn := txnbase.NewTxn(nil, nil, []byte("dml"), types.BuildTS(2, 1), types.TS{})
+			dmlTxn.Lock()
+			assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(4, 0)))
+			dmlTxn.Unlock()
+			tbl := &txnTable{
+				store:                   &txnStore{txn: dmlTxn},
+				entry:                   entry,
+				expectedTableDefVersion: 7,
+			}
+
+			result := make(chan error, 1)
+			go func() { result <- tbl.validateTableDefVersion() }()
+			select {
+			case <-alterTxn.waited:
+			case <-time.After(5 * time.Second):
+				t.Fatal("version fence did not wait for earlier schema prepare")
+			}
+
+			if tc.rollback {
+				_, err = entry.BaseEntryImpl.PrepareRollback()
+				assert.NoError(t, err)
+			} else {
+				assert.NoError(t, entry.BaseEntryImpl.PrepareCommit())
+				assert.NoError(t, entry.BaseEntryImpl.ApplyCommit(alterTxn.GetID()))
+			}
+			close(alterTxn.release)
+
+			select {
+			case err = <-result:
+			case <-time.After(5 * time.Second):
+				t.Fatal("version fence did not resume after schema transaction finished")
+			}
+			if tc.rollback {
+				assert.NoError(t, err)
+			} else {
+				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+			}
+		})
+	}
+}
+
+func TestTableDefVersionDependencyRejectsConflictingExpectations(t *testing.T) {
+	tbl := new(txnTable)
+	assert.NoError(t, tbl.setExpectedTableDefVersion(0))
+	assert.NoError(t, tbl.setExpectedTableDefVersion(7))
+	assert.NoError(t, tbl.setExpectedTableDefVersion(7))
+	err := tbl.setExpectedTableDefVersion(8)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+}
+
+func TestTableDefVersionFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Version = 7
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
+		Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
+	})
+
+	alterBase := txnbase.NewTxn(nil, nil, []byte("later-alter"), types.BuildTS(2, 0), types.TS{})
+	alterTxn := &waitingSchemaTxn{
+		TxnReader: alterBase,
+		prepareTS: types.BuildTS(5, 0),
+		waited:    make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	_, _, err := entry.AlterTable(context.Background(), alterTxn,
+		apipb.NewUpdateAutoIncrementReq(0, 42, 20))
+	assert.NoError(t, err)
+	assert.NoError(t, entry.BaseEntryImpl.PrepareCommit())
+	assert.NoError(t, entry.BaseEntryImpl.ApplyCommit(alterTxn.GetID()))
+
+	dmlTxn := txnbase.NewTxn(nil, nil, []byte("earlier-dml"), types.BuildTS(2, 1), types.TS{})
+	dmlTxn.Lock()
+	assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(4, 0)))
+	dmlTxn.Unlock()
+	tbl := &txnTable{
+		store:                   &txnStore{txn: dmlTxn},
+		entry:                   entry,
+		expectedTableDefVersion: 7,
+	}
+	assert.NoError(t, tbl.validateTableDefVersion())
+}
 
 // 1. 30 concurrency
 // 2. 10000 node
