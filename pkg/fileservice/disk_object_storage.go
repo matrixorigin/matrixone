@@ -176,6 +176,7 @@ func (d *diskObjectStorage) Read(ctx context.Context, key string, min *int64, ma
 		}
 		return nil, err
 	}
+	defer closeOnError(&err, f)
 
 	var reader io.Reader
 	reader = f

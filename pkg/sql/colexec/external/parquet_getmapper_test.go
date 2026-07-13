@@ -60,10 +60,10 @@ func TestGetMapper_TypeMismatch(t *testing.T) {
 		parquetTyp parquet.Type
 		moType     types.T
 	}{
-		{name: "int32_to_bool", parquetTyp: parquet.Int32Type, moType: types.T_bool},
-		{name: "int64_to_bool", parquetTyp: parquet.Int64Type, moType: types.T_bool},
-		{name: "float_to_bool", parquetTyp: parquet.FloatType, moType: types.T_bool},
-		{name: "string_to_bool", parquetTyp: parquet.String().Type(), moType: types.T_bool},
+		{name: "bool_to_datetime", parquetTyp: parquet.BooleanType, moType: types.T_datetime},
+		{name: "int32_to_date", parquetTyp: parquet.Int32Type, moType: types.T_date},
+		{name: "float_to_datetime", parquetTyp: parquet.FloatType, moType: types.T_datetime},
+		{name: "int32_to_uuid", parquetTyp: parquet.Int32Type, moType: types.T_uuid},
 	}
 
 	for _, tc := range tests {
