@@ -35,14 +35,7 @@ delete from t where a=9 and b=90;
 select count(*) from t;
 count(*)
 1
-create table ti(
-  rid int,
-  a int,
-  b int,
-  payload varchar(20),
-  unique key uk_ab(a,b),
-  key idx_payload(payload)
-) cluster by(a,b);
+create table ti(rid int,a int,b int,payload varchar(20),unique key uk_ab(a,b),key idx_payload(payload)) cluster by(a,b);
 insert into ti values(1,1,10,'old'),(2,2,20,'keep');
 update ti set a=a+8,b=b+80,payload='new' where a=1 and b=10;
 select count(*) from ti where a=1 and b=10;
