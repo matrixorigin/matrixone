@@ -1591,7 +1591,31 @@ func TestBuildAnalyzeDerivedSQLQuotesIdentifiers(t *testing.T) {
 type countingMysqlWriter struct {
 	*testMysqlWriter
 	responses int
+	strProps  map[PropertyID]string
+	u32Props  map[PropertyID]uint32
+	u8Props   map[PropertyID]uint8
+	boolProps map[PropertyID]bool
 }
+
+func (w *countingMysqlWriter) GetStr(id PropertyID) string    { return w.strProps[id] }
+func (w *countingMysqlWriter) GetU32(id PropertyID) uint32    { return w.u32Props[id] }
+func (w *countingMysqlWriter) GetU8(id PropertyID) uint8      { return w.u8Props[id] }
+func (w *countingMysqlWriter) GetBool(id PropertyID) bool     { return w.boolProps[id] }
+func (w *countingMysqlWriter) SetStr(id PropertyID, v string) { w.strProps[id] = v }
+func (w *countingMysqlWriter) SetU32(id PropertyID, v uint32) { w.u32Props[id] = v }
+func (w *countingMysqlWriter) SetU8(id PropertyID, v uint8)   { w.u8Props[id] = v }
+func (w *countingMysqlWriter) SetBool(id PropertyID, v bool)  { w.boolProps[id] = v }
+func (w *countingMysqlWriter) GetCapability() uint32          { return w.u32Props[CAPABILITY] }
+func (w *countingMysqlWriter) ConnectionID() uint32           { return w.u32Props[CONNID] }
+func (w *countingMysqlWriter) Peer() string                   { return w.strProps[PEER] }
+func (w *countingMysqlWriter) GetSequenceId() uint8           { return w.u8Props[SEQUENCEID] }
+func (w *countingMysqlWriter) IsEstablished() bool            { return w.boolProps[ESTABLISHED] }
+func (w *countingMysqlWriter) IsTlsEstablished() bool         { return w.boolProps[TLS_ESTABLISHED] }
+
+type propertyMysqlResp struct{ *MysqlResp }
+
+func (r *propertyMysqlResp) GetU8(id PropertyID) uint8  { return r.MysqlRrWr().GetU8(id) }
+func (r *propertyMysqlResp) GetBool(id PropertyID) bool { return r.MysqlRrWr().GetBool(id) }
 
 func (w *countingMysqlWriter) WriteResponse(context.Context, *Response) error {
 	w.responses++
@@ -1645,6 +1669,66 @@ func TestExecuteAnalyzeDerivedQueryRestoresResponderOnSuccess(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, live, ses.GetResponser())
 	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
+	require.Zero(t, writer.responses)
+}
+
+func TestExecuteAnalyzeDerivedQueryPreservesResponderProperties(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{
+		testMysqlWriter: &testMysqlWriter{},
+		strProps:        map[PropertyID]string{USERNAME: "caller", DBNAME: "db", PEER: "192.0.2.1:6001", AuthString: "auth"},
+		u32Props:        map[PropertyID]uint32{CONNID: 24659, CAPABILITY: CLIENT_MULTI_RESULTS},
+		u8Props:         map[PropertyID]uint8{SEQUENCEID: 7},
+		boolProps:       map[PropertyID]bool{ESTABLISHED: true, TLS_ESTABLISHED: true},
+	}
+	live := &propertyMysqlResp{MysqlResp: NewMysqlResp(writer)}
+	ses.ReplaceResponser(live)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	outerExecCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).DoAndReturn(func(context.CancelFunc, string) uint64 {
+		derived := ses.GetResponser()
+		require.Equal(t, uint32(24659), derived.GetU32(CONNID))
+		require.Equal(t, "192.0.2.1:6001", derived.GetStr(PEER))
+		require.Equal(t, "auth", derived.GetStr(AuthString))
+		require.Equal(t, uint32(CLIENT_MULTI_RESULTS), derived.GetU32(CAPABILITY))
+		require.Equal(t, uint8(7), derived.GetU8(SEQUENCEID))
+		require.True(t, derived.GetBool(ESTABLISHED))
+		require.True(t, derived.GetBool(TLS_ESTABLISHED))
+		proto := derived.MysqlRrWr()
+		require.Equal(t, uint32(24659), proto.GetU32(CONNID))
+		require.Equal(t, "192.0.2.1:6001", proto.GetStr(PEER))
+		require.Equal(t, uint32(CLIENT_MULTI_RESULTS), proto.GetU32(CAPABILITY))
+		derived.SetStr(DBNAME, "derived")
+		derived.SetU32(CONNID, 1)
+		derived.SetU8(SEQUENCEID, 1)
+		derived.SetBool(ESTABLISHED, false)
+		return 0
+	}).AnyTimes()
+	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
+	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	ses.txnHandler.storage = eng
+	ses.txnHandler.txnOp = txnOperator
+	ses.txnHandler.txnCtx = outerExecCtx.reqCtx
+
+	require.NoError(t, executeAnalyzeDerivedQuery(ses, outerExecCtx, "select 1"))
+	require.Equal(t, uint64(24659), ses.proc.Base.SessionInfo.ConnectionID)
+	require.Same(t, live, ses.GetResponser())
+	require.Equal(t, "db", writer.strProps[DBNAME])
+	require.Equal(t, uint32(24659), writer.u32Props[CONNID])
+	require.Equal(t, uint8(7), writer.u8Props[SEQUENCEID])
+	require.True(t, writer.boolProps[ESTABLISHED])
 	require.Zero(t, writer.responses)
 }
 

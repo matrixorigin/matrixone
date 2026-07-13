@@ -1212,10 +1212,14 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 
 func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string) error {
 	liveResponder := ses.GetResponser()
-	proto := &internalProtocol{result: &internalExecResult{}}
-	proto.SetStr(USERNAME, liveResponder.GetStr(USERNAME))
-	proto.SetStr(DBNAME, liveResponder.GetStr(DBNAME))
-	ses.ReplaceResponser(NewMysqlResp(proto))
+	proto := &analyzeDerivedProtocol{
+		internalProtocol: &internalProtocol{result: &internalExecResult{}},
+		live:             liveResponder,
+	}
+	ses.ReplaceResponser(&analyzeDerivedResponder{
+		MysqlResp: NewMysqlResp(proto),
+		live:      liveResponder,
+	})
 	defer ses.ReplaceResponser(liveResponder)
 
 	tempExecCtx := ExecCtx{ses: ses, reqCtx: outerExecCtx.reqCtx}
@@ -1227,6 +1231,38 @@ func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string)
 	}()
 	return doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
 }
+
+// analyzeDerivedProtocol keeps the internal protocol's output sink while exposing
+// the live connection properties to code executing the derived statement.
+type analyzeDerivedProtocol struct {
+	*internalProtocol
+	live Property
+}
+
+var _ MysqlRrWr = (*analyzeDerivedProtocol)(nil)
+
+func (p *analyzeDerivedProtocol) GetStr(id PropertyID) string { return p.live.GetStr(id) }
+func (p *analyzeDerivedProtocol) GetU32(id PropertyID) uint32 { return p.live.GetU32(id) }
+func (p *analyzeDerivedProtocol) GetU8(id PropertyID) uint8   { return p.live.GetU8(id) }
+func (p *analyzeDerivedProtocol) GetBool(id PropertyID) bool  { return p.live.GetBool(id) }
+func (p *analyzeDerivedProtocol) ConnectionID() uint32        { return p.live.GetU32(CONNID) }
+func (p *analyzeDerivedProtocol) Peer() string                { return p.live.GetStr(PEER) }
+func (p *analyzeDerivedProtocol) GetCapability() uint32       { return p.live.GetU32(CAPABILITY) }
+func (p *analyzeDerivedProtocol) GetSequenceId() uint8        { return p.live.GetU8(SEQUENCEID) }
+func (p *analyzeDerivedProtocol) IsEstablished() bool         { return p.live.GetBool(ESTABLISHED) }
+func (p *analyzeDerivedProtocol) IsTlsEstablished() bool      { return p.live.GetBool(TLS_ESTABLISHED) }
+
+type analyzeDerivedResponder struct {
+	*MysqlResp
+	live Property
+}
+
+var _ Responser = (*analyzeDerivedResponder)(nil)
+
+func (r *analyzeDerivedResponder) GetStr(id PropertyID) string { return r.live.GetStr(id) }
+func (r *analyzeDerivedResponder) GetU32(id PropertyID) uint32 { return r.live.GetU32(id) }
+func (r *analyzeDerivedResponder) GetU8(id PropertyID) uint8   { return r.live.GetU8(id) }
+func (r *analyzeDerivedResponder) GetBool(id PropertyID) bool  { return r.live.GetBool(id) }
 
 func buildAnalyzeDerivedSQL(entry *tree.AnalyzeTableEntry, cols tree.IdentifierList) string {
 	ctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
