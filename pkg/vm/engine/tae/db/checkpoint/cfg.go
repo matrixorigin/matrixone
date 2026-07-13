@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type CheckpointCfg struct {
@@ -57,7 +58,7 @@ func (cfg CheckpointCfg) String() string {
 
 func (cfg *CheckpointCfg) FillDefaults() {
 	if cfg.IncrementalInterval <= 0 {
-		cfg.IncrementalInterval = time.Minute
+		cfg.IncrementalInterval = options.DefaultCheckpointIncrementalInterval
 	}
 	if cfg.MinCount <= 0 {
 		cfg.MinCount = 10000
@@ -74,4 +75,15 @@ func (cfg *CheckpointCfg) FillDefaults() {
 	if cfg.TableIDSinkerThreshold <= 0 {
 		cfg.TableIDSinkerThreshold = 64 * mpool.MB
 	}
+}
+
+func checkpointIntentOldAge(incrementalInterval time.Duration) time.Duration {
+	if incrementalInterval <= 0 {
+		return options.DefaultCheckpointIncrementalInterval
+	}
+	return incrementalInterval
+}
+
+func checkpointArenaDrainDelay(incrementalInterval time.Duration) time.Duration {
+	return checkpointIntentOldAge(incrementalInterval) * 2
 }

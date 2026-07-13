@@ -42,10 +42,6 @@ import (
 
 var ErrFlusherStopped = moerr.NewInternalErrorNoCtx("flusher stopped")
 
-const (
-	stalledCheckpointFlushAge = checkpointIntentOldAge
-)
-
 type FlushCfg struct {
 	ForceFlushTimeout       time.Duration
 	ForceFlushCheckInterval time.Duration
@@ -126,6 +122,12 @@ func WithFlusherInterval(interval time.Duration) FlusherOption {
 func WithFlusherQueueSize(size int) FlusherOption {
 	return func(flusher *flushImpl) {
 		flusher.flushQueueSize = size
+	}
+}
+
+func WithStalledCheckpointFlushAge(age time.Duration) FlusherOption {
+	return func(flusher *flushImpl) {
+		flusher.stalledCheckpointFlushAge = age
 	}
 }
 
@@ -331,6 +333,7 @@ type flushImpl struct {
 
 	objMemSizeList []tableAndSize
 
+	stalledCheckpointFlushAge    time.Duration
 	stalledCheckpointPickBounded bool
 
 	// Log throttling for collectTableMemUsage
@@ -408,6 +411,9 @@ func (flusher *flushImpl) fillDefaults() {
 	if flusher.flushQueueSize <= 0 {
 		flusher.flushQueueSize = 1000
 	}
+	if flusher.stalledCheckpointFlushAge <= 0 {
+		flusher.stalledCheckpointFlushAge = checkpointIntentOldAge(0)
+	}
 }
 
 func (flusher *flushImpl) triggerJob(ctx context.Context) {
@@ -433,8 +439,15 @@ func (flusher *flushImpl) triggerJob(ctx context.Context) {
 	flusher.checkpointSchduler.TryScheduleCheckpoint(ts, false)
 }
 
+func (flusher *flushImpl) getStalledCheckpointFlushAge() time.Duration {
+	if flusher.stalledCheckpointFlushAge <= 0 {
+		return checkpointIntentOldAge(0)
+	}
+	return flusher.stalledCheckpointFlushAge
+}
+
 func (flusher *flushImpl) pickStalledCheckpointFlushEntry(intent *CheckpointEntry) bool {
-	if !shouldScheduleStalledCheckpointFlush(intent, stalledCheckpointFlushAge) {
+	if !shouldScheduleStalledCheckpointFlush(intent, flusher.getStalledCheckpointFlushAge()) {
 		flusher.stalledCheckpointPickBounded = false
 		return false
 	}
@@ -526,7 +539,7 @@ func (flusher *flushImpl) makeStalledCheckpointFlushEntry() *logtail.DirtyTreeEn
 		return nil
 	}
 	intent := flusher.checkpointSchduler.PendingIncrementalCheckpoint()
-	return makeStalledCheckpointFlushEntry(flusher.sourcer, intent, stalledCheckpointFlushAge)
+	return makeStalledCheckpointFlushEntry(flusher.sourcer, intent, flusher.getStalledCheckpointFlushAge())
 }
 
 func makeStalledCheckpointFlushEntry(

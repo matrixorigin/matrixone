@@ -29,6 +29,19 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestRunnerThresholdsTrackIncrementalInterval(t *testing.T) {
+	interval := 7 * time.Minute
+	r := NewRunner(
+		context.Background(),
+		nil, nil, nil, nil,
+		&CheckpointCfg{IncrementalInterval: interval},
+	)
+	defer r.Stop()
+
+	assert.Equal(t, interval, r.store.intentOldAge)
+	assert.Equal(t, 2*interval, r.checkpointArenaDrainDelay)
+}
+
 func TestCkpCheck(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
