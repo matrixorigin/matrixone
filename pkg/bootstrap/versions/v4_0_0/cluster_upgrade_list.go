@@ -25,7 +25,6 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
-	upg_mo_indexes_add_included_columns_for_cluster,
 	upg_create_mo_task_sql_task,
 	upg_create_mo_task_sql_task_run,
 	upg_mo_iscp_log_new,
@@ -35,6 +34,10 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_ccpr_tables_new,
 	upg_mo_ccpr_dbs_new,
 	upg_mo_index_update_new,
+	// ALTER TABLE replaces mo_indexes through a copy-and-drop path. Create the
+	// CCPR metadata first so the drop hook can check mo_ccpr_tables on upgrades
+	// from releases that predate CCPR.
+	upg_mo_indexes_add_included_columns_for_cluster,
 	upg_create_mo_branch_metadata,
 	upg_rename_system_stmt_info_4000,
 	upg_create_system_stmt_info_4000,
