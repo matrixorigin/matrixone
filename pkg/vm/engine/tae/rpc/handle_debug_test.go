@@ -50,7 +50,7 @@ func TestHandleBackup(t *testing.T) {
 	h := mockTAEHandle(context.Background(), t, &options.Options{})
 
 	req := &cmd_util.Checkpoint{
-		FlushDuration: time.Second,
+		FlushDuration: 10 * time.Second,
 	}
 	resp := &api.SyncLogTailResp{}
 
