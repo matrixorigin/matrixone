@@ -126,6 +126,11 @@ const (
 	IndexAlgoParamMaxIndexCapacity   = "max_index_capacity"
 
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
+
+	// IndexAlgoParamVersion selects the index engine version. Currently fulltext
+	// only: unset/1 = classic SQL engine, 2 = WAND-based fulltext v2. The fulltext
+	// plugin routes each hook to the matching engine by this value.
+	IndexAlgoParamVersion = "version"
 )
 
 /* 1. ToString Functions */
@@ -219,6 +224,10 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[IndexAlgoParamMaxIndexCapacity]; ok {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxIndexCapacity, val)
+	}
+
+	if val, ok := result[IndexAlgoParamVersion]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamVersion, val)
 	}
 
 	if val, ok := result[IncludedColumns]; ok && len(val) > 0 {

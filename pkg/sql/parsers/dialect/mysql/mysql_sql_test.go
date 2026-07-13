@@ -1885,6 +1885,12 @@ var (
 			input:  "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {
+			input:  "create fulltext index ft on t (body) with parser gojieba VERSION 2",
+			output: "create fulltext index ft on t (body) with parser gojieba VERSION 2 ",
+		}, {
+			input:  "create fulltext index ft on t (body) VERSION=2",
+			output: "create fulltext index ft on t (body) VERSION 2 ",
+		}, {
 			input:  "create index idx1 using btree on A (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 using btree on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -45,6 +46,12 @@ func buildFullTextParams(idx *tree.FullTextIndex) (string, error) {
 		}
 		if idx.IndexOption.Async {
 			res[catalog.Async] = "true"
+		}
+		// VERSION selects the fulltext engine (unset/1 = classic SQL, 2 = WAND v2).
+		// Only recorded when explicitly >= 2 so classic indexes carry no version and
+		// SHOW CREATE stays unchanged for them.
+		if idx.IndexOption.Version >= 2 {
+			res[catalog.IndexAlgoParamVersion] = strconv.FormatInt(idx.IndexOption.Version, 10)
 		}
 	}
 	if len(res) == 0 {
