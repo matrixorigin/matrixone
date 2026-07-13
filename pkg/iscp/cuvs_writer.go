@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -328,11 +329,11 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 		if sync != nil {
 			sync.Destroy()
 		}
-		errch <- err
+		reportIndexConsumerErr(errch, err)
 		return
 	}
 	if sync == nil {
-		errch <- moerr.NewInternalErrorNoCtx("RunCuvs: factory returned nil sync")
+		reportIndexConsumerErr(errch, moerr.NewInternalErrorNoCtx("RunCuvs: factory returned nil sync"))
 		return
 	}
 	defer sync.Destroy()
@@ -347,26 +348,35 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 		case recordBytes, open := <-c.sqlBufSendCh:
 			if !open {
 				err := c.RunTxn(ctx, r, time.Hour, func(sqlproc *sqlexec.SqlProcess) error {
+					if objectio.ISCPIndexCuvsSaveErrInjected() {
+						return injectedISCPIndexErr("cuvs save")
+					}
 					if e := sync.Save(sqlproc); e != nil {
 						return e
 					}
 					if datatype == ISCPDataType_Tail {
+						if objectio.ISCPIndexWatermarkErrInjected() {
+							return injectedISCPIndexErr("watermark")
+						}
 						sqlctx := sqlproc.SqlCtx
 						return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 					}
 					return nil
 				})
 				if err != nil {
-					errch <- err
+					reportIndexConsumerErr(errch, err)
 				}
 				return
 			}
 
 			err := c.RunTxn(ctx, r, 30*time.Minute, func(sqlproc *sqlexec.SqlProcess) error {
+				if objectio.ISCPIndexCuvsAppendErrInjected() {
+					return injectedISCPIndexErr("cuvs append")
+				}
 				return sync.AppendRecords(sqlproc, recordBytes)
 			})
 			if err != nil {
-				errch <- err
+				reportIndexConsumerErr(errch, err)
 				return
 			}
 		}

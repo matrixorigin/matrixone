@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -168,6 +169,9 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 						sqlctx := sqlproc.SqlCtx
 
+						if objectio.ISCPIndexExecErrorInjected() {
+							return injectedISCPIndexErr("exec")
+						}
 						res, err := ExecWithResult(sqlproc.GetContext(), string(sql), sqlctx.GetService(), sqlctx.Txn())
 						if err != nil {
 							logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.info, err, string(sql))
@@ -204,11 +208,17 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 					case sql, ok := <-c.sqlBufSendCh:
 						if !ok {
 							// channel closed
+							if objectio.ISCPIndexWatermarkErrInjected() {
+								return injectedISCPIndexErr("watermark")
+							}
 							return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 						}
 
 						// update SQL
 						var res executor.Result
+						if objectio.ISCPIndexExecErrorInjected() {
+							return injectedISCPIndexErr("exec")
+						}
 						res, err = ExecWithResult(sqlproc.GetContext(), string(sql), sqlctx.GetService(), sqlctx.Txn())
 						if err != nil {
 							return err
@@ -296,6 +306,9 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 						sqlctx := sqlproc.SqlCtx
 
 						// save model to db
+						if objectio.ISCPIndexHnswSaveErrInjected() {
+							return injectedISCPIndexErr("hnsw save")
+						}
 						err = sync.Save(sqlproc)
 						if err != nil {
 							return
@@ -303,6 +316,9 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 
 						// update watermark
 						if datatype == ISCPDataType_Tail {
+							if objectio.ISCPIndexWatermarkErrInjected() {
+								return injectedISCPIndexErr("watermark")
+							}
 							err = r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 							if err != nil {
 								return
@@ -330,6 +346,9 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 			// HNSW models are already in local so hnsw Update should not require executing SQL or should be read-only. No transaction required.
 			err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
 				func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+					if objectio.ISCPIndexHnswUpdateErrInjected() {
+						return injectedISCPIndexErr("hnsw update")
+					}
 					return sync.Update(sqlproc, &cdc)
 				})
 
@@ -366,6 +385,10 @@ func reportIndexConsumerErr(errch chan error, err error) {
 	}
 }
 
+func injectedISCPIndexErr(point string) error {
+	return moerr.NewInternalErrorNoCtx("injected ISCP index " + point + " failure")
+}
+
 func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, datatype int8, errch chan error) bool {
 	// release the data
 
@@ -374,6 +397,7 @@ func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, dat
 		if err != nil {
 			reportIndexConsumerErr(errch, err)
 		}
+		objectio.ISCPIndexCloseBlockInjected()
 		close(c.sqlBufSendCh)
 		return true
 	}
@@ -394,6 +418,7 @@ func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, dat
 		if err != nil {
 			reportIndexConsumerErr(errch, err)
 		}
+		objectio.ISCPIndexCloseBlockInjected()
 		close(c.sqlBufSendCh)
 		return noMoreData
 	}
@@ -610,6 +635,11 @@ func (c *IndexConsumer) sendSql(ctx context.Context, errch chan error, writer In
 	sql, err := writer.ToSql()
 	if err != nil {
 		return err
+	}
+
+	objectio.ISCPIndexSendBlockInjected()
+	if objectio.ISCPIndexSendErrorInjected() {
+		return injectedISCPIndexErr("send")
 	}
 
 	select {
