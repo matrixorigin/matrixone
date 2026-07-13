@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"testing"
 	"time"
@@ -179,6 +180,81 @@ func TestCloseBackendForRejectsConcurrentSynchronousCreate(t *testing.T) {
 	factory.backend.RWMutex.RLock()
 	require.True(t, factory.backend.closed)
 	factory.backend.RWMutex.RUnlock()
+}
+
+func TestQueueFullFallbackRejectsGenerationCapturedBeforeReset(t *testing.T) {
+	factory := &createNotifyFactory{
+		inner:   newTestBackendFactory(),
+		created: make(chan struct{}, 1),
+	}
+	rc, err := NewClient("", factory, WithClientMaxBackendPerHost(1))
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	c.mu.Lock()
+	staleGeneration := c.backendGenerationLocked("target")
+	c.mu.Unlock()
+	require.NoError(t, c.CloseBackendFor("target"))
+
+	_, err = c.createBackendWithBookkeepingAtGeneration(
+		"target",
+		false,
+		staleGeneration,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+	select {
+	case <-factory.created:
+		t.Fatal("stale queue-full fallback reached backend factory")
+	default:
+	}
+	c.mu.Lock()
+	require.Empty(t, c.mu.backends["target"])
+	c.mu.Unlock()
+}
+
+func TestBackendGenerationIsBoundedAndDoesNotABA(t *testing.T) {
+	rc, err := NewClient("", newTestBackendFactory(), WithClientMaxBackendPerHost(1))
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	c.mu.Lock()
+	old := c.backendGenerationLocked("target")
+	c.mu.Unlock()
+	require.NoError(t, c.CloseBackendFor("target"))
+	c.mu.Lock()
+	current := c.backendGenerationLocked("target")
+	require.NotSame(t, old, current)
+	c.mu.backendGeneration = make(map[string]*backendGeneration)
+	generations := make(map[string]*backendGeneration, maxBackendGenerationEntries)
+	for i := 0; i < maxBackendGenerationEntries; i++ {
+		remote := fmt.Sprintf("remote-%d", i)
+		generations[remote] = c.backendGenerationLocked(remote)
+	}
+	c.backendGenerationLocked("overflow")
+	require.LessOrEqual(t, len(c.mu.backendGeneration), maxBackendGenerationEntries)
+	var evictedRemote string
+	var evictedGeneration *backendGeneration
+	for remote, generation := range generations {
+		if c.mu.backendGeneration[remote] != generation {
+			evictedRemote = remote
+			evictedGeneration = generation
+			break
+		}
+	}
+	c.mu.Unlock()
+	require.NotEmpty(t, evictedRemote)
+
+	_, err = c.createBackendWithBookkeepingAtGeneration(
+		evictedRemote,
+		false,
+		evictedGeneration,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed),
+		"evicted generation was re-admitted")
 }
 
 // TestGetBackendLockedDoesNotCreateWhenAvailable covers the fix: maybeCreateLocked must only

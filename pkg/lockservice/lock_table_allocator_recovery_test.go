@@ -28,12 +28,13 @@ import (
 
 type resetTrackingClient struct {
 	Client
-	resets atomic.Int32
+	resets   atomic.Int32
+	resetErr error
 }
 
 func (c *resetTrackingClient) ResetBackend(string) error {
 	c.resets.Add(1)
-	return nil
+	return c.resetErr
 }
 
 func (c *resetTrackingClient) Close() error { return nil }
@@ -116,6 +117,32 @@ func TestCleanCommitStateAcceptsConfirmedInvalidService(t *testing.T) {
 		require.Equal(t, int32(1), client.resets.Load())
 		_, ok := ctl.getCommitState("old")
 		require.False(t, ok)
+	})
+}
+
+func TestCleanCommitStatePreservesStateWhenNegativeConfirmationResetFails(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		client := &resetTrackingClient{resetErr: moerr.NewBackendClosedNoCtx()}
+		require.NoError(t, a.client.Close())
+		a.client = client
+		ctl := a.getCtl("s1")
+		require.Equal(t, cannotCommitState, ctl.tryCannotCommit("live"))
+
+		var calls atomic.Int32
+		a.cleanCommitStateOnce(
+			context.Background(),
+			func(context.Context, string) (bool, [][]byte, error) {
+				calls.Add(1)
+				return false, nil, nil
+			},
+			time.Hour,
+		)
+
+		require.Equal(t, int32(1), calls.Load())
+		require.Equal(t, int32(1), client.resets.Load())
+		require.False(t, a.HasInvalidService("s1"))
+		_, ok := ctl.getCommitState("live")
+		require.True(t, ok, "failed reset must leave control state unknown")
 	})
 }
 

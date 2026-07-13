@@ -433,6 +433,94 @@ func TestValidRemoteTxnUsesCheckActiveTxn(t *testing.T) {
 	)
 }
 
+type scriptedActiveTxnClient struct {
+	Client
+	calls      atomic.Int32
+	resets     atomic.Int32
+	resetErr   error
+	afterReset pb.CheckActiveTxnResponse
+}
+
+func (c *scriptedActiveTxnClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	if req.Method != pb.Method_CheckActiveTxn {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected active-txn method")
+	}
+	resp := acquireResponse()
+	if c.calls.Add(1) == 1 {
+		// The stale endpoint belongs to a different CN incarnation.
+		resp.CheckActiveTxn.Valid = false
+		return resp, nil
+	}
+	resp.CheckActiveTxn = c.afterReset
+	return resp, nil
+}
+
+func (c *scriptedActiveTxnClient) ResetBackend(string) error {
+	c.resets.Add(1)
+	return c.resetErr
+}
+
+func (c *scriptedActiveTxnClient) Close() error { return nil }
+
+func TestValidRemoteTxnRecoversStaleCheckActiveTxnEndpoint(t *testing.T) {
+	client := &scriptedActiveTxnClient{
+		afterReset: pb.CheckActiveTxnResponse{Valid: true, Active: true},
+	}
+	var notified atomic.Int32
+	holder := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) {
+			return checkRemoteActiveTxn(client, txn)
+		},
+	).(*mapBasedTxnHolder)
+	defer holder.close()
+
+	require.True(t, holder.isValidRemoteTxn(pb.WaitTxn{
+		TxnID:     []byte("live"),
+		CreatedOn: "target",
+	}))
+	require.Equal(t, int32(2), client.calls.Load())
+	require.Equal(t, int32(1), client.resets.Load())
+	require.Zero(t, notified.Load(), "recovered live txn reached unlock fencing")
+}
+
+func TestValidRemoteTxnStaysLiveWhenEndpointResetFails(t *testing.T) {
+	client := &scriptedActiveTxnClient{resetErr: moerr.NewBackendClosedNoCtx()}
+	var notified atomic.Int32
+	holder := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) {
+			return checkRemoteActiveTxn(client, txn)
+		},
+	).(*mapBasedTxnHolder)
+	defer holder.close()
+
+	require.True(t, holder.isValidRemoteTxn(pb.WaitTxn{
+		TxnID:     []byte("live"),
+		CreatedOn: "target",
+	}))
+	require.Equal(t, int32(1), client.calls.Load())
+	require.Equal(t, int32(1), client.resets.Load())
+	require.Zero(t, notified.Load(), "unknown routing must not reach unlock fencing")
+}
+
 func TestValidRemoteTxnFallsBackToGetActiveTxn(t *testing.T) {
 	runLockServiceTests(
 		t,

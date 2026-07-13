@@ -40,6 +40,16 @@ const rpcTestResponseTimeout = 10 * time.Second
 type closeTrackingRPCClient struct {
 	morpc.RPCClient
 	closed []string
+	sent   []string
+}
+
+func (c *closeTrackingRPCClient) Send(
+	_ context.Context,
+	remote string,
+	_ morpc.Message,
+) (*morpc.Future, error) {
+	c.sent = append(c.sent, remote)
+	return nil, nil
 }
 
 func (c *closeTrackingRPCClient) CloseBackendFor(remote string) error {
@@ -566,6 +576,14 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 	require.NoError(t, c.ResetBackend(serviceID))
 	require.Equal(t, "10.0.0.1:18101", c.activeTxnBackend("cn-id", "cn.example:18101"))
 	require.Equal(t, []string{"cn.example:18101"}, rpcClient.closed)
+	_, err := c.AsyncSend(context.Background(), &lock.Request{
+		Method: lock.Method_CheckActiveTxn,
+		CheckActiveTxn: lock.CheckActiveTxnRequest{
+			ServiceID: serviceID,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"10.0.0.1:18101"}, rpcClient.sent)
 
 	endpoint = "10.0.0.2:18101"
 	require.NoError(t, c.ResetBackend(serviceID))

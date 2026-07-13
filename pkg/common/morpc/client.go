@@ -309,10 +309,10 @@ type client struct {
 		closed   bool // true when Close() is completed
 		backends map[string][]Backend
 		ops      map[string]*op
-		// backendEpoch invalidates asynchronous create requests queued before a
-		// targeted backend reset. Without it, an old request can repopulate the
-		// pool after CloseBackendFor returns.
-		backendEpoch map[string]uint64
+		// backendGeneration invalidates create requests captured before a
+		// targeted reset. Pointer identity avoids ABA when an entry is evicted
+		// and later recreated for the same remote.
+		backendGeneration map[string]*backendGeneration
 	}
 
 	circuitBreakers *CircuitBreakerManager
@@ -346,7 +346,7 @@ func NewClient(
 	}
 	c.mu.backends = make(map[string][]Backend)
 	c.mu.ops = make(map[string]*op)
-	c.mu.backendEpoch = make(map[string]uint64)
+	c.mu.backendGeneration = make(map[string]*backendGeneration)
 
 	for _, opt := range options {
 		opt(c)
@@ -848,7 +848,7 @@ func (c *client) CloseBackend() error {
 func (c *client) CloseBackendFor(remote string) error {
 	c.mu.Lock()
 	backends := c.mu.backends[remote]
-	c.mu.backendEpoch[remote]++
+	delete(c.mu.backendGeneration, remote)
 	delete(c.mu.backends, remote)
 	delete(c.mu.ops, remote)
 	c.updatePoolSizeMetricsLocked()
@@ -884,9 +884,12 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 
 	// No backend available in pool
 	canCreate := c.canCreateLocked(backend)
-	backendEpoch := c.mu.backendEpoch[backend]
 	enableAutoCreate := c.options.enableAutoCreate
 	hasBackends := poolSize > 0
+	var generation *backendGeneration
+	if canCreate && enableAutoCreate {
+		generation = c.backendGenerationLocked(backend)
+	}
 	c.mu.Unlock() // Release lock before any potentially blocking operation
 
 	// If pool has backends but all are busy, wait for one to become available
@@ -905,9 +908,9 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	creationQueued := false
 	if canCreate {
 		// Try to enqueue creation task with backpressure handling
-		if !globalClientGC.triggerCreateAtEpoch(c, backend, backendEpoch) {
+		if !globalClientGC.triggerCreateAtGeneration(c, backend, generation) {
 			// Queue is full - fallback to existing creation path with proper bookkeeping
-			return c.createBackendWithBookkeeping(backend, lock)
+			return c.createBackendWithBookkeepingAtGeneration(backend, lock, generation)
 		}
 		creationQueued = true
 	}
@@ -999,10 +1002,25 @@ func (c *client) tryCreate(backend string) bool {
 		return false
 	}
 
-	return globalClientGC.triggerCreateAtEpoch(c, backend, c.mu.backendEpoch[backend])
+	return globalClientGC.triggerCreateAtGeneration(
+		c,
+		backend,
+		c.backendGenerationLocked(backend),
+	)
 }
 
 func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backend, error) {
+	c.mu.Lock()
+	generation := c.backendGenerationLocked(backend)
+	c.mu.Unlock()
+	return c.createBackendWithBookkeepingAtGeneration(backend, lock, generation)
+}
+
+func (c *client) createBackendWithBookkeepingAtGeneration(
+	backend string,
+	lock bool,
+	generation *backendGeneration,
+) (Backend, error) {
 	// Use existing creation path with proper bookkeeping, but avoid holding the lock
 	// during network I/O. We double-check limits after creation to avoid overfilling
 	// if another goroutine created a backend in the meantime.
@@ -1011,11 +1029,14 @@ func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backen
 		c.mu.Unlock()
 		return nil, moerr.NewClientClosedNoCtx()
 	}
+	if c.mu.backendGeneration[backend] != generation {
+		c.mu.Unlock()
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
 	if !c.canCreateLocked(backend) {
 		c.mu.Unlock()
 		return nil, moerr.NewBackendClosedNoCtx()
 	}
-	backendEpoch := c.mu.backendEpoch[backend]
 	c.mu.Unlock()
 
 	// Create backend using factory with metrics (same as doCreate) without holding the lock.
@@ -1032,7 +1053,7 @@ func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backen
 		b.Close()
 		return nil, moerr.NewClientClosedNoCtx()
 	}
-	if c.mu.backendEpoch[backend] != backendEpoch {
+	if c.mu.backendGeneration[backend] != generation {
 		b.Close()
 		return nil, moerr.NewBackendClosedNoCtx()
 	}
@@ -1059,6 +1080,35 @@ func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backen
 	c.updatePoolSizeMetricsLocked()
 
 	return b, nil
+}
+
+const maxBackendGenerationEntries = 4096
+
+type backendGeneration struct {
+	// Keep the allocation non-zero-sized so distinct generations always have
+	// distinct pointer identities.
+	value byte
+}
+
+func (c *client) backendGenerationLocked(remote string) *backendGeneration {
+	if c.mu.backendGeneration == nil {
+		c.mu.backendGeneration = make(map[string]*backendGeneration)
+	}
+	if generation := c.mu.backendGeneration[remote]; generation != nil {
+		return generation
+	}
+	if len(c.mu.backendGeneration) >= maxBackendGenerationEntries {
+		// Eviction invalidates outstanding creates for the victim. A later request
+		// allocates a distinct token, so an evicted stale request cannot be
+		// re-admitted even when the same address returns (no ABA).
+		for victim := range c.mu.backendGeneration {
+			delete(c.mu.backendGeneration, victim)
+			break
+		}
+	}
+	generation := &backendGeneration{}
+	c.mu.backendGeneration[remote] = generation
+	return generation
 }
 
 func (c *client) triggerGCInactive(remote string) {

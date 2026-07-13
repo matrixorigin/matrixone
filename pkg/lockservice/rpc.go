@@ -273,7 +273,8 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			zap.String("request", request.DebugString()))
 
 	}
-	if request.Method == pb.Method_GetActiveTxn {
+	if request.Method == pb.Method_GetActiveTxn ||
+		request.Method == pb.Method_CheckActiveTxn {
 		address = c.activeTxnBackend(sid, address)
 	}
 	f, err := c.client.Send(ctx, address, request)
@@ -382,7 +383,11 @@ func (c *client) ResetBackend(serviceID string) error {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		time.Second,
+		moerr.CauseResetLockServiceBackend,
+	)
 	defer cancel()
 	if c.resolveBackend == nil {
 		return moerr.NewInternalErrorNoCtx("lockservice recovery resolver is not configured")

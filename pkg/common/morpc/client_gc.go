@@ -177,9 +177,9 @@ type gcInactiveRequest struct {
 }
 
 type createRequest struct {
-	c       *client
-	backend string
-	epoch   uint64
+	c          *client
+	backend    string
+	generation *backendGeneration
 }
 
 func newClientGCManager() *clientGCManager {
@@ -300,9 +300,13 @@ func (m *clientGCManager) triggerGCInactive(c *client, remote string) {
 
 // triggerCreate triggers create task for a specific client and backend.
 // Returns true if the request was successfully queued, false if channel was full.
-func (m *clientGCManager) triggerCreateAtEpoch(c *client, backend string, epoch uint64) bool {
+func (m *clientGCManager) triggerCreateAtGeneration(
+	c *client,
+	backend string,
+	generation *backendGeneration,
+) bool {
 	select {
-	case m.createC <- createRequest{c: c, backend: backend, epoch: epoch}:
+	case m.createC <- createRequest{c: c, backend: backend, generation: generation}:
 		return true
 	default:
 		// Channel is full, skip to avoid blocking
@@ -433,7 +437,8 @@ func (m *clientGCManager) runCreateLoop() {
 			if registered {
 				// createBackendLocked is called under lock, check closed there
 				req.c.mu.Lock()
-				if !req.c.mu.closed && req.c.mu.backendEpoch[req.backend] == req.epoch {
+				if !req.c.mu.closed && req.generation != nil &&
+					req.c.mu.backendGeneration[req.backend] == req.generation {
 					if _, err := req.c.createBackendLocked(req.backend); err != nil {
 						req.c.logger.Error("create backend failed",
 							zap.String("backend", req.backend),

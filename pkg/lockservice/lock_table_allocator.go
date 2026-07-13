@@ -746,8 +746,14 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 					// Valid=false for this incarnation, but the response came from
 					// the wrong process. Refresh the endpoint once before treating
 					// a successful negative response as authoritative.
-					if attempt == 1 && l.resetActiveTxnBackend(sid) {
-						continue
+					if attempt == 1 {
+						if l.resetActiveTxnBackend(sid) == backendResetSucceeded {
+							continue
+						}
+						// Reset failure and unsupported reset both leave the
+						// observation tied to a potentially stale endpoint. Its
+						// negative reply is not evidence that the service is inactive.
+						break
 					}
 					invalidServices = append(invalidServices, sid)
 				} else {
@@ -817,19 +823,28 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 	l.ctlMu.Unlock()
 }
 
-func (l *lockTableAllocator) resetActiveTxnBackend(serviceID string) bool {
+type backendResetResult uint8
+
+const (
+	backendResetUnsupported backendResetResult = iota
+	backendResetSucceeded
+	backendResetFailed
+)
+
+func (l *lockTableAllocator) resetActiveTxnBackend(serviceID string) backendResetResult {
 	resetter, ok := l.client.(interface {
 		ResetBackend(string) error
 	})
 	if !ok {
-		return false
+		return backendResetUnsupported
 	}
 	if err := resetter.ResetBackend(serviceID); err != nil {
 		l.logger.Error("reset active-txn backend failed",
 			zap.String("serviceID", serviceID),
 			zap.Error(err))
+		return backendResetFailed
 	}
-	return true
+	return backendResetSucceeded
 }
 
 // serviceBinds an instance of serviceBinds, recording the bindings of a lockservice

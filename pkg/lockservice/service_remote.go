@@ -103,52 +103,7 @@ func (s *service) initRemote() {
 			return resp.CannotCommit, nil
 		},
 		func(txn pb.WaitTxn) (bool, error) {
-			req := acquireRequest()
-			defer releaseRequest(req)
-
-			req.Method = pb.Method_CheckActiveTxn
-			req.CheckActiveTxn.ServiceID = txn.CreatedOn
-			req.CheckActiveTxn.Txn = txn.TxnID
-
-			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseInitRemote2)
-			defer cancel()
-
-			resp, err := s.remote.client.Send(ctx, req)
-			if err != nil {
-				if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
-					req = acquireRequest()
-					defer releaseRequest(req)
-
-					req.Method = pb.Method_GetActiveTxn
-					req.GetActiveTxn.ServiceID = txn.CreatedOn
-
-					resp, err = s.remote.client.Send(ctx, req)
-					if err != nil {
-						return false, moerr.AttachCause(ctx, err)
-					}
-					defer releaseResponse(resp)
-
-					if !resp.GetActiveTxn.Valid {
-						return false, nil
-					}
-
-					for _, v := range resp.GetActiveTxn.Txn {
-						if bytes.Equal(v, txn.TxnID) {
-							return true, nil
-						}
-					}
-					return false, nil
-				}
-				return false, moerr.AttachCause(ctx, err)
-			}
-			defer releaseResponse(resp)
-
-			// cn restarted
-			if !resp.CheckActiveTxn.Valid {
-				return false, nil
-			}
-
-			return resp.CheckActiveTxn.Active, nil
+			return checkRemoteActiveTxn(s.remote.client, txn)
 		},
 	)
 
@@ -178,6 +133,91 @@ func (s *service) initRemote() {
 	if err := s.stopper.RunTask(s.unlockTimeoutRemoteTxn); err != nil {
 		panic(err)
 	}
+}
+
+// checkRemoteActiveTxn treats a service-identity mismatch as a routing signal,
+// not as proof that the transaction is inactive. A negative identity response
+// becomes authoritative only after the old backend was successfully detached
+// and the request was repeated through freshly resolved routing.
+func checkRemoteActiveTxn(client Client, txn pb.WaitTxn) (bool, error) {
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		defaultRPCTimeout,
+		moerr.CauseInitRemote2,
+	)
+	defer cancel()
+
+	for attempt := 0; attempt < 2; attempt++ {
+		valid, active, err := sendRemoteActiveTxnCheck(ctx, client, txn)
+		if err != nil {
+			return false, moerr.AttachCause(ctx, err)
+		}
+		if valid {
+			return active, nil
+		}
+		if attempt == 1 {
+			return false, nil
+		}
+		resetter, ok := client.(interface {
+			ResetBackend(string) error
+		})
+		if !ok {
+			return false, moerr.NewInternalErrorNoCtx(
+				"lockservice client does not support active-txn backend reset")
+		}
+		if err := resetter.ResetBackend(txn.CreatedOn); err != nil {
+			// Normalize reset failures to an indeterminate/retryable lockservice
+			// error. In particular, a BackendClosed reset error must not flow into
+			// isValidRemoteTxn's definitive-inactive branch.
+			return false, moerr.NewInternalErrorNoCtx(
+				"failed to reset active-txn backend: " + err.Error())
+		}
+	}
+	return false, nil
+}
+
+func sendRemoteActiveTxnCheck(
+	ctx context.Context,
+	client Client,
+	txn pb.WaitTxn,
+) (bool, bool, error) {
+	req := acquireRequest()
+	req.Method = pb.Method_CheckActiveTxn
+	req.CheckActiveTxn.ServiceID = txn.CreatedOn
+	req.CheckActiveTxn.Txn = txn.TxnID
+	resp, err := client.Send(ctx, req)
+	releaseRequest(req)
+	if err == nil {
+		valid, active := resp.CheckActiveTxn.Valid, resp.CheckActiveTxn.Active
+		releaseResponse(resp)
+		return valid, active, nil
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+		return false, false, err
+	}
+
+	// Older peers do not support CheckActiveTxn. GetActiveTxn has the same
+	// service-identity bit, so it follows the same reset-and-confirm contract.
+	req = acquireRequest()
+	req.Method = pb.Method_GetActiveTxn
+	req.GetActiveTxn.ServiceID = txn.CreatedOn
+	resp, err = client.Send(ctx, req)
+	releaseRequest(req)
+	if err != nil {
+		return false, false, err
+	}
+	valid := resp.GetActiveTxn.Valid
+	active := false
+	if valid {
+		for _, txnID := range resp.GetActiveTxn.Txn {
+			if bytes.Equal(txnID, txn.TxnID) {
+				active = true
+				break
+			}
+		}
+	}
+	releaseResponse(resp)
+	return valid, active, nil
 }
 
 func (s *service) initRemoteHandler() {
