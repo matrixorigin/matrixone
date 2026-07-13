@@ -1008,6 +1008,135 @@ func TestFullTextStartResetsStateForLaterRowsStreaming(t *testing.T) {
 	requireStateFreeReturns(t, st, tf, ut.proc)
 }
 
+func TestFullTextStartRejectsInvalidDynamicPatternAndResetsState(t *testing.T) {
+	tests := []struct {
+		name        string
+		mode        int64
+		valid       string
+		invalidNull bool
+		wantErr     string
+	}{
+		{
+			name:    "boolean empty",
+			mode:    int64(tree.FULLTEXT_BOOLEAN),
+			valid:   "+Matrix",
+			wantErr: "fulltext search pattern must not be empty",
+		},
+		{
+			name:        "boolean null",
+			mode:        int64(tree.FULLTEXT_BOOLEAN),
+			valid:       "+Matrix",
+			invalidNull: true,
+			wantErr:     "fulltext search pattern must not be NULL",
+		},
+		{
+			name:    "natural language empty",
+			mode:    int64(tree.FULLTEXT_NL),
+			valid:   "Matrix",
+			wantErr: "fulltext search pattern must not be empty",
+		},
+		{
+			name:        "natural language null",
+			mode:        int64(tree.FULLTEXT_NL),
+			valid:       "Matrix",
+			invalidNull: true,
+			wantErr:     "fulltext search pattern must not be NULL",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(0))
+			require.NoError(t, ut.arg.Prepare(ut.proc))
+
+			tf := ut.arg
+			tf.ctr.argVecs = makeMultiRowArgVecsFT(ut.proc,
+				fulltextInputRow{source: "src0", index: "idx0", pattern: test.valid, mode: test.mode},
+				fulltextInputRow{source: "src1", index: "idx1", patternNull: test.invalidNull, mode: test.mode},
+				fulltextInputRow{source: "src2", index: "idx2", pattern: test.valid, mode: test.mode},
+			)
+			st := tf.ctr.state.(*fulltextState)
+
+			prevRunSQL := ft_runSql
+			prevRunStreaming := ft_runSql_streaming
+			defer func() {
+				ft_runSql = prevRunSQL
+				ft_runSql_streaming = prevRunStreaming
+			}()
+
+			var gotSQL []string
+			ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				gotSQL = append(gotSQL, sql)
+				return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
+			}
+			ft_runSql_streaming = func(
+				ctx context.Context,
+				sqlproc *sqlexec.SqlProcess,
+				sql string,
+				ch chan executor.Result,
+				errChan chan error,
+			) (executor.Result, error) {
+				gotSQL = append(gotSQL, sql)
+				ch <- executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeSmallTextBatchFT(sqlproc.Proc)}}
+				return executor.Result{}, nil
+			}
+
+			runValidRow := func(row int) {
+				t.Helper()
+				require.NoError(t, st.start(tf, ut.proc, row, nil))
+				result, err := st.call(tf, ut.proc)
+				require.NoError(t, err)
+				require.Equal(t, vm.ExecNext, result.Status)
+				result, err = st.call(tf, ut.proc)
+				require.NoError(t, err)
+				require.Equal(t, vm.ExecStop, result.Status)
+			}
+
+			runValidRow(0)
+
+			var invalidErr error
+			require.NotPanics(t, func() {
+				invalidErr = st.start(tf, ut.proc, 1, nil)
+			})
+			require.ErrorContains(t, invalidErr, test.wantErr)
+			require.False(t, st.streamingStarted)
+			require.Nil(t, st.sacc)
+
+			runValidRow(2)
+
+			require.Len(t, gotSQL, 4)
+			require.Contains(t, gotSQL[0], "idx0")
+			require.Contains(t, gotSQL[1], "idx0")
+			require.Contains(t, gotSQL[2], "idx2")
+			require.Contains(t, gotSQL[3], "idx2")
+
+			requireStateFreeReturns(t, st, tf, ut.proc)
+		})
+	}
+}
+
+func TestFullTextStartRejectsConstNullPattern(t *testing.T) {
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(0))
+	require.NoError(t, ut.arg.Prepare(ut.proc))
+
+	tf := ut.arg
+	tf.ctr.argVecs = makeMultiRowArgVecsFT(ut.proc,
+		fulltextInputRow{source: "src", index: "idx", pattern: "unused", mode: int64(tree.FULLTEXT_BOOLEAN)},
+	)
+	tf.ctr.argVecs[2] = vector.NewConstNull(types.T_varchar.ToType(), 1, ut.proc.Mp())
+	st := tf.ctr.state.(*fulltextState)
+
+	var err error
+	require.NotPanics(t, func() {
+		err = st.start(tf, ut.proc, 0, nil)
+	})
+	require.ErrorContains(t, err, "fulltext search pattern must not be NULL")
+	require.False(t, st.streamingStarted)
+	require.Nil(t, st.sacc)
+
+	requireStateFreeReturns(t, st, tf, ut.proc)
+}
+
 // create const input exprs
 func makeConstInputExprsFT() []*plan.Expr {
 	return makeConstInputExprsFTWithPattern("pattern", 0)
@@ -1069,10 +1198,11 @@ func makeConstInputExprsFTWithPattern(pattern string, mode int64) []*plan.Expr {
 }
 
 type fulltextInputRow struct {
-	source  string
-	index   string
-	pattern string
-	mode    int64
+	source      string
+	index       string
+	pattern     string
+	patternNull bool
+	mode        int64
 }
 
 func makeMultiRowArgVecsFT(proc *process.Process, rows ...fulltextInputRow) []*vector.Vector {
@@ -1084,7 +1214,7 @@ func makeMultiRowArgVecsFT(proc *process.Process, rows ...fulltextInputRow) []*v
 	for _, row := range rows {
 		vector.AppendBytes(srcVec, []byte(row.source), false, proc.Mp())
 		vector.AppendBytes(idxVec, []byte(row.index), false, proc.Mp())
-		vector.AppendBytes(patternVec, []byte(row.pattern), false, proc.Mp())
+		vector.AppendBytes(patternVec, []byte(row.pattern), row.patternNull, proc.Mp())
 		vector.AppendFixed[int64](modeVec, row.mode, false, proc.Mp())
 	}
 

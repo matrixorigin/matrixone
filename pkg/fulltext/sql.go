@@ -550,6 +550,9 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 
 // API for generate SQL from pattern
 func PatternToSql(ps []*Pattern, mode int64, idxTable string, parser string, algo FullTextScoreAlgo) (string, error) {
+	if len(ps) == 0 {
+		return "", moerr.NewInvalidInputNoCtx("fulltext search pattern must not be empty")
+	}
 	sql, err := patternToSql(ps, mode, idxTable, parser)
 	if err != nil {
 		return "", err

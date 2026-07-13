@@ -329,7 +329,13 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	if v.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Third argument (pattern) must be string, but got %s", v.GetType().String()))
 	}
+	if v.IsConstNull() || v.GetNulls().Contains(uint64(nthRow)) {
+		return moerr.NewInvalidInput(proc.Ctx, "fulltext search pattern must not be NULL")
+	}
 	pattern := v.GetStringAt(nthRow)
+	if len(pattern) == 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "fulltext search pattern must not be empty")
+	}
 
 	v = tf.ctr.argVecs[3]
 	if v.GetType().Oid != types.T_int64 {

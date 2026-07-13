@@ -456,9 +456,25 @@ select id from src where match(body) against('+读书会 +提效 +社群 +案例
 prepare ft_stmt from 'select id from src where match(body) against(? IN BOOLEAN MODE) order by id';
 set @q = '+读书会 +提效 +社群 +案例 +运营';
 execute ft_stmt using @q;
+set @q = '';
+execute ft_stmt using @q;
+set @q = '+读书会';
+execute ft_stmt using @q;
+set @q = null;
+execute ft_stmt using @q;
+set @q = '+读书会 +提效 +社群 +案例 +运营';
+execute ft_stmt using @q;
 deallocate prepare ft_stmt;
 
 prepare ft_nl_stmt from 'select id from src where match(body) against(? IN NATURAL LANGUAGE MODE) order by id';
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_nl_stmt using @q;
+set @q = '';
+execute ft_nl_stmt using @q;
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_nl_stmt using @q;
+set @q = null;
+execute ft_nl_stmt using @q;
 set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
 execute ft_nl_stmt using @q;
 deallocate prepare ft_nl_stmt;
