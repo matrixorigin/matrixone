@@ -232,6 +232,7 @@ func (m *MockAutoIncrementService) Close() {
 func (m *MockAutoIncrementService) GetLastAllocateTS(
 	ctx context.Context,
 	tableID uint64,
+	tableVersion uint32,
 	colName string,
 ) (timestamp.Timestamp, error) {
 	return timestamp.Timestamp{}, nil

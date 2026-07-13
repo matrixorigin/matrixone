@@ -212,11 +212,13 @@ func (s *service) Delete(
 func (s *service) GetLastAllocateTS(
 	ctx context.Context,
 	tableID uint64,
+	tableVersion uint32,
 	colName string,
 ) (timestamp.Timestamp, error) {
-	tc, err := s.acquireCommittedTableCache(
+	tc, err := s.getCommittedTableCacheForVersion(
 		ctx,
-		tableID)
+		tableID,
+		tableVersion)
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}

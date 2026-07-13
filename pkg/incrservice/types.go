@@ -74,7 +74,7 @@ type AutoIncrementService interface {
 	Close()
 	// GetLastAllocateTS gets the oldest allocation timestamp that can still
 	// issue a value from the column cache.
-	GetLastAllocateTS(ctx context.Context, tableID uint64, colName string) (timestamp.Timestamp, error)
+	GetLastAllocateTS(ctx context.Context, tableID uint64, tableVersion uint32, colName string) (timestamp.Timestamp, error)
 }
 
 // incrTableCache a cache containing auto-incremented columns of a table, an incrCache may

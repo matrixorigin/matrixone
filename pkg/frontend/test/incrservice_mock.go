@@ -94,18 +94,18 @@ func (mr *MockAutoIncrementServiceMockRecorder) Delete(ctx, tableID, txn interfa
 }
 
 // GetLastAllocateTS mocks base method.
-func (m *MockAutoIncrementService) GetLastAllocateTS(ctx context.Context, tableID uint64, colName string) (timestamp.Timestamp, error) {
+func (m *MockAutoIncrementService) GetLastAllocateTS(ctx context.Context, tableID uint64, tableVersion uint32, colName string) (timestamp.Timestamp, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetLastAllocateTS", ctx, tableID, colName)
+	ret := m.ctrl.Call(m, "GetLastAllocateTS", ctx, tableID, tableVersion, colName)
 	ret0, _ := ret[0].(timestamp.Timestamp)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetLastAllocateTS indicates an expected call of GetLastAllocateTS.
-func (mr *MockAutoIncrementServiceMockRecorder) GetLastAllocateTS(ctx, tableID, colName interface{}) *gomock.Call {
+func (mr *MockAutoIncrementServiceMockRecorder) GetLastAllocateTS(ctx, tableID, tableVersion, colName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastAllocateTS", reflect.TypeOf((*MockAutoIncrementService)(nil).GetLastAllocateTS), ctx, tableID, colName)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastAllocateTS", reflect.TypeOf((*MockAutoIncrementService)(nil).GetLastAllocateTS), ctx, tableID, tableVersion, colName)
 }
 
 // InsertValues mocks base method.

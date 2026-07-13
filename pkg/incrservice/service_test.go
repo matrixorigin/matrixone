@@ -827,6 +827,29 @@ func TestSetOffsetWaitsForQueuedOldAllocation(t *testing.T) {
 	})
 }
 
+func TestGetLastAllocateTSUsesRequestedVersionCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		store := NewMemStore()
+		s := NewIncrService("", store, Config{CountPerAllocate: 2, LowCapacity: 1}).(*service)
+		defer s.Close()
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 99, nil))
+
+		_, err = s.GetLastAllocateTS(ctx, 0, 1, def[0].ColName)
+		require.NoError(t, err)
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 1, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(100), last)
+	})
+}
+
 func TestCanceledSetOffsetDoesNotRunQueuedForceUpdate(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
