@@ -833,6 +833,11 @@ func TestAlterTableAutoIncrementCopyPath(t *testing.T) {
 			sql:  `ALTER TABLE simple_auto ADD COLUMN c int, AUTO_INCREMENT = 100, ALGORITHM = COPY;`,
 			want: 99,
 		},
+		{
+			name: "schema change does not inherit source allocation metadata",
+			sql:  `ALTER TABLE simple_auto ADD COLUMN c int, ALGORITHM = COPY;`,
+			want: 0,
+		},
 	}
 
 	for _, tt := range tests {

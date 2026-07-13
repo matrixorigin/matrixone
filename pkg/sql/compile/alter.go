@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -447,6 +448,9 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.Error(err))
 		return err
 	}
+	if err = c.reconcileAlterCopyAutoIncrement(dbName, qry.CopyTableDef, newRel); err != nil {
+		return err
+	}
 
 	//6. copy on writing unaffected index table
 	if err = cloneUnaffectedIndexes(
@@ -699,6 +703,52 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.Uint64("copy table id", newId),
 			zap.Error(err))
 		return err
+	}
+	return nil
+}
+
+// reconcileAlterCopyAutoIncrement replaces any range preallocated while the
+// temporary table was created with the offset implied by the completed copy.
+// Both the MAX query and SetOffset use the ALTER transaction, so the query sees
+// the rows just inserted into the temporary table without consulting stale
+// source-table allocation metadata.
+func (c *Compile) reconcileAlterCopyAutoIncrement(
+	dbName string,
+	copyDef *plan.TableDef,
+	newRel engine.Relation,
+) error {
+	if err := c.proc.Ctx.Err(); err != nil {
+		return err
+	}
+	autoCols := incrservice.GetAutoColumnFromDef(copyDef)
+	if len(autoCols) == 0 {
+		return nil
+	}
+
+	tableID := newRel.GetTableID(c.proc.Ctx)
+	svc := incrservice.GetAutoIncrementService(c.proc.GetService())
+	for _, col := range autoCols {
+		if err := c.proc.Ctx.Err(); err != nil {
+			return err
+		}
+		effectiveOffset, err := c.getAlterAutoIncrementOffset(
+			dbName,
+			copyDef.Name,
+			col.ColName,
+			copyDef.AutoIncrOffset,
+		)
+		if err != nil {
+			return err
+		}
+		if err := svc.SetOffset(
+			c.proc.Ctx,
+			tableID,
+			col.ColName,
+			effectiveOffset,
+			c.proc.GetTxnOperator(),
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }

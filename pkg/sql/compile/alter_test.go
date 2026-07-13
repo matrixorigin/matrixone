@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -63,6 +64,7 @@ type alterCopyInsertSpyExecutor struct {
 	results      map[string]executor.Result
 	errs         map[string]error
 	executedSQLs []string
+	afterInsert  func()
 }
 
 const (
@@ -79,6 +81,9 @@ func (e *alterCopyInsertSpyExecutor) Exec(
 	if sql == e.insertSQL {
 		e.insertCtx = ctx
 		e.insertOption = opts.StatementOption()
+		if e.afterInsert != nil {
+			e.afterInsert()
+		}
 		return executor.Result{}, e.insertErr
 	}
 	if e.errs != nil {
@@ -92,6 +97,117 @@ func (e *alterCopyInsertSpyExecutor) Exec(
 		}
 	}
 	return executor.Result{}, nil
+}
+
+func TestScopeAlterTableCopyReconcilesAutoIncrementAfterDataCopy(t *testing.T) {
+	const (
+		requestedOffset = uint64(99)
+		copyTableID     = uint64(2)
+	)
+
+	for _, tc := range []struct {
+		name            string
+		copiedMax       uint64
+		wantOffset      uint64
+		cancelAfterCopy bool
+	}{
+		{name: "empty table keeps requested offset", copiedMax: 0, wantOffset: requestedOffset},
+		{name: "copied maximum wins", copiedMax: 500, wantOffset: 500},
+		{name: "cancellation stops reconciliation", cancelAfterCopy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.Buf = buffer.New()
+			proc.Base.SessionInfo.TimeZone = time.Local
+
+			serviceID := "alter-copy-auto-increment-" + tc.name
+			lockSvc := mock_lock.NewMockLockService(ctrl)
+			lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: serviceID}).AnyTimes()
+			proc.Base.LockService = lockSvc
+
+			ctx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
+			t.Cleanup(cancel)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+			proc.Base.TxnClient = txnCli
+			proc.Base.TxnOperator = txnOp
+
+			copyTableDef := &plan.TableDef{
+				TblId:          copyTableID,
+				Name:           "dept_copy",
+				AutoIncrOffset: requestedOffset,
+				Cols: []*plan.ColDef{{
+					Name: "id",
+					Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+				}},
+			}
+			alterTable := &plan2.AlterTable{
+				Database:          "test",
+				TableDef:          &plan.TableDef{TblId: 1, Name: "dept"},
+				CopyTableDef:      copyTableDef,
+				CreateTmpTableSql: "create table dept_copy",
+				InsertTmpDataSql:  "insert into dept_copy select * from dept",
+				Options:           &plan2.AlterCopyOpt{},
+			}
+			s := &Scope{Magic: AlterTable, Plan: &plan.Plan{Plan: &plan2.Plan_Ddl{
+				Ddl: &plan2.DataDefinition{
+					DdlType: plan2.DataDefinition_ALTER_TABLE,
+					Definition: &plan2.DataDefinition_AlterTable{
+						AlterTable: alterTable,
+					},
+				},
+			}}}
+
+			originRel := mock_frontend.NewMockRelation(ctrl)
+			originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+			copyRel := mock_frontend.NewMockRelation(ctrl)
+			copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(copyTableDef).AnyTimes()
+			copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyTableDef).AnyTimes()
+			copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyTableID).AnyTimes()
+			mockDb := mock_frontend.NewMockDatabase(ctrl)
+			mockDb.EXPECT().Relation(gomock.Any(), "dept", gomock.Any()).Return(originRel, nil).AnyTimes()
+			mockDb.EXPECT().Relation(gomock.Any(), "dept_copy", gomock.Any()).Return(copyRel, nil).AnyTimes()
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(mockDb, nil).AnyTimes()
+
+			maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+			resultMP := mpool.MustNewZero()
+			result := newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{tc.copiedMax})
+			spyExec := &alterCopyInsertSpyExecutor{
+				insertSQL: alterTable.InsertTmpDataSql,
+				results:   map[string]executor.Result{maxSQL: result},
+			}
+			if tc.cancelAfterCopy {
+				spyExec.afterInsert = cancel
+			}
+			rt := moruntime.DefaultRuntime()
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
+			moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+
+			autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+			stopAfterSet := errors.New("stop after setting copy offset")
+			if tc.cancelAfterCopy {
+				autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+			} else {
+				autoSvc.EXPECT().SetOffset(ctx, copyTableID, "id", tc.wantOffset, txnOp).Return(stopAfterSet)
+			}
+			incrservice.SetAutoIncrementServiceByID(proc.GetService(), autoSvc)
+
+			c := NewCompile("test", "test", "alter table dept", "", "", eng, proc, nil, false, nil, time.Now())
+			c.pn = s.Plan
+			err := s.AlterTableCopy(c)
+			if tc.cancelAfterCopy {
+				require.ErrorIs(t, err, context.Canceled)
+				assert.Equal(t, []string{alterTable.CreateTmpTableSql, alterTable.InsertTmpDataSql}, spyExec.executedSQLs)
+			} else {
+				require.ErrorIs(t, err, stopAfterSet)
+				assert.Equal(t, []string{alterTable.CreateTmpTableSql, alterTable.InsertTmpDataSql, maxSQL}, spyExec.executedSQLs)
+				assert.Zero(t, resultMP.CurrNB(), "MAX query result must be closed")
+			}
+		})
+	}
 }
 
 func (e *alterCopyInsertSpyExecutor) ExecTxn(

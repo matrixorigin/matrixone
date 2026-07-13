@@ -126,6 +126,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if err != nil {
 		return nil, err
 	}
+	// The copied definition contains the source allocator's cached offset. It
+	// is not a user request and can be far ahead of the actual rows, so start
+	// the temporary table at zero. An explicit AUTO_INCREMENT option below
+	// replaces this with its requested internal offset.
+	copyTableDef.AutoIncrOffset = 0
 	alterTableCtx := initAlterTableContext(tableDef, copyTableDef, schemaName)
 
 	// 3. check alter_option list
