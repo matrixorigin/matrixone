@@ -588,7 +588,7 @@ func TestShouldDispatchIvfSearchMultiCNRejectsWritableWorkspace(t *testing.T) {
 	require.True(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, nil))
 }
 
-func TestCompileTableFunctionUsesSingleCNWhenRollingUpgradeLeavesOneEligibleWorker(t *testing.T) {
+func TestCompileTableFunctionUsesSingleCNWithOneEligibleWorker(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "current-pipeline"
 	c.execType = plan2.ExecTypeAP_MULTICN

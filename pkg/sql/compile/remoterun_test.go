@@ -401,7 +401,14 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, int32(128), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetUpperLimit())
 		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetNotOnPk())
 
-		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+		require.NotSame(t, pipeInstr.TableFunction.IndexReaderParam, wireInstr.TableFunction.IndexReaderParam)
+		require.NotSame(t, pipeInstr.TableFunction.RuntimeFilterProbeList[0], wireInstr.TableFunction.RuntimeFilterProbeList[0])
+
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
 		require.NoError(t, err)
 		restoredOp := restored.(*table_function.TableFunction)
 		require.Equal(t, int32(2), restoredOp.IndexReaderParam.GetPartitionCnCnt())
