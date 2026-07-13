@@ -225,9 +225,9 @@ insert into t1 values (2,3,"c");
 insert into t1 values (3,4,"E");
 insert into t1 values (3,5,"C");
 insert into t1 values (3,6,"D");
--- @bvt:issue#3344
+
 select sum(all a),count(all a),avg(all a),std(all a),variance(all a),bit_or(all a),bit_and(all a),min(all a),max(all a),min(all c),max(all c) from t1;
--- @bvt:issue
+
 select grp, sum(a),count(a),avg(a),std(a),variance(a),bit_or(a),bit_and(a),min(a),max(a),min(c),max(c) from t1 group by grp;
 select grp, sum(a)+count(a)+avg(a)+std(a)+variance(a)+bit_or(a)+bit_and(a)+min(a)+max(a)+min(c)+max(c) as sum from t1 group by grp;
 create table t2 (grp int, a bigint unsigned, c char(10));
@@ -269,3 +269,41 @@ create table d1 (i1 int);
 insert into d1 select * from generate_series(0, 999) g;
 select avg(distinct i1) from d1;
 drop table d1;
+
+
+drop table if exists t_bigint_avg_decimal128_state;
+create table t_bigint_avg_decimal128_state(id int, grp varchar(8), v bigint, u bigint unsigned);
+insert into t_bigint_avg_decimal128_state values
+  (1,'P',9223372036854775807,1),
+  (2,'P',1,18446744073709551615),
+  (3,'P',-2,3),
+  (4,'N',-9223372036854775807,4),
+  (5,'N',-2,5),
+  (6,'N',2,6);
+select 'plain_avg_int_pos' q, avg(v) v from t_bigint_avg_decimal128_state where grp = 'P';
+select 'plain_avg_int_neg' q, avg(v) v from t_bigint_avg_decimal128_state where grp = 'N';
+select 'plain_avg_uint_pos' q, avg(u) v from t_bigint_avg_decimal128_state where grp = 'P';
+select 'group_avg' q, grp, avg(v) av, avg(u) au from t_bigint_avg_decimal128_state group by grp order by grp;
+select 'window_avg_partition' q, id, grp,
+  avg(v) over (partition by grp) av,
+  avg(u) over (partition by grp) au
+from t_bigint_avg_decimal128_state
+order by grp, id;
+select 'window_avg_running' q, id, grp,
+  avg(v) over (
+    partition by grp
+    order by id
+    rows between unbounded preceding and current row
+  ) av,
+  avg(u) over (
+    partition by grp
+    order by id
+    rows between unbounded preceding and current row
+  ) au
+from t_bigint_avg_decimal128_state
+order by grp, id;
+insert into t_bigint_avg_decimal128_state values
+  (7,'P',1,1),
+  (8,'N',-2,4);
+select 'group_avg_distinct' q, grp, avg(distinct v) av, avg(distinct u) au from t_bigint_avg_decimal128_state group by grp order by grp;
+drop table t_bigint_avg_decimal128_state;

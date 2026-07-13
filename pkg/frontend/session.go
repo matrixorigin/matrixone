@@ -838,6 +838,7 @@ func (ses *Session) Close() {
 	ses.rs = nil
 	ses.queryId = nil
 	ses.p = nil
+	ses.releasePlanCache()
 	ses.planCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
@@ -894,6 +895,10 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		freeStmts(stmts)
+		return
+	}
 	ses.planCache.cache(sql, stmts, plans)
 }
 
@@ -903,6 +908,9 @@ func (ses *Session) getCachedPlan(sql string) *cachedPlan {
 	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return nil
+	}
 	return ses.planCache.get(sql)
 }
 
@@ -912,13 +920,26 @@ func (ses *Session) isCached(sql string) bool {
 	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return false
+	}
 	return ses.planCache.isCached(sql)
 }
 
 func (ses *Session) cleanCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.planCache.clean()
+	if ses.planCache != nil {
+		ses.planCache.clean()
+	}
+}
+
+// releasePlanCache is an internal method. The caller MUST hold ses.mu
+// (currently only called from Session.Close which holds the lock).
+func (ses *Session) releasePlanCache() {
+	if ses.planCache != nil {
+		ses.planCache.clean()
+	}
 }
 
 func (ses *Session) UpdateDebugString() {

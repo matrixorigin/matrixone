@@ -237,6 +237,62 @@ insert into t_replace_multi_uk_batch (name, email, value) values ('a', 'x@a.com'
 replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com', 111), ('b', 'z@a.com', 222);
 select name, email, value from t_replace_multi_uk_batch order by name;
 drop table t_replace_multi_uk_batch;
+-- child-side foreign key check during REPLACE: an inserted/replaced child row
+-- must reference an existing parent row, otherwise REPLACE fails and the
+-- previous conflicting row stays intact
+drop table if exists replace_fk_c;
+drop table if exists replace_fk_p;
+create table replace_fk_p(id int primary key);
+create table replace_fk_c(id int primary key, pid int, foreign key(pid) references replace_fk_p(id));
+insert into replace_fk_p values (1);
+replace into replace_fk_c values (10,1);
+select * from replace_fk_c order by id;
+-- replacing an existing child row to reference a missing parent must fail
+replace into replace_fk_c values (10,2);
+select * from replace_fk_c order by id;
+-- inserting a new child row referencing a missing parent must fail
+replace into replace_fk_c values (11,99);
+select * from replace_fk_c order by id;
+-- NULL foreign key value is allowed and needs no parent row
+replace into replace_fk_c values (12,null);
+select * from replace_fk_c order by id;
+-- a valid replace referencing an existing parent succeeds and replaces the old row
+insert into replace_fk_p values (2);
+replace into replace_fk_c values (10,2);
+select * from replace_fk_c order by id;
+drop table replace_fk_c;
+drop table replace_fk_p;
+
+-- REPLACE ... SET evaluates an RHS column reference as DEFAULT(col), and
+-- omitted columns fall back to their defaults (MySQL-compatible).
+drop table if exists t_set_default;
+create table t_set_default(id int primary key, v int default 5, note varchar(20) default 'd');
+insert into t_set_default values (1, 10, 'old');
+replace into t_set_default set id = 1, v = v + 1;
+select * from t_set_default order by id;
+replace into t_set_default set id = 2, v = v * 2;
+select * from t_set_default order by id;
+drop table t_set_default;
+
+-- RHS references another column, also resolved to that column's DEFAULT value
+drop table if exists t_set_default2;
+create table t_set_default2(id int primary key, a int default 3, b int default 7);
+insert into t_set_default2 values (1, 100, 200);
+replace into t_set_default2 set id = 1, a = b + 1;
+select * from t_set_default2 order by id;
+drop table t_set_default2;
+
+-- RHS column reference inside a function expression is also resolved to DEFAULT(col)
+drop table if exists t_set_func;
+create table t_set_func(id int primary key, dname varchar(50) default 'hello', suffix varchar(20) default '_mo');
+insert into t_set_func values (1, 'world', '_x');
+replace into t_set_func set id = 1, dname = upper(dname);
+select * from t_set_func order by id;
+replace into t_set_func set id = 2, dname = concat(dname, '_mo');
+select * from t_set_func order by id;
+replace into t_set_func set id = 3, dname = concat(upper(dname), suffix);
+select * from t_set_func order by id;
+drop table t_set_func;
 
 -- MySQL-compatible REPLACE syntax variants: TABLE source (with/without column list), LOW_PRIORITY, DELAYED
 drop table if exists t_replace_src;
@@ -277,19 +333,3 @@ select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
 replace into t_replace_fakepk_comp_null (a, b, c) values (1, 1, 'one-replaced');
 select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
 drop table t_replace_fakepk_comp_null;
-
--- REPLACE enforces the child->parent foreign key on the inserted row (modern path).
--- An orphan reference fails for both insert-only REPLACE and conflict REPLACE; a valid
--- parent succeeds.
-drop table if exists t_replace_fk_child;
-drop table if exists t_replace_fk_parent;
-create table t_replace_fk_parent(id int primary key);
-create table t_replace_fk_child(id int primary key, pid int, foreign key(pid) references t_replace_fk_parent(id));
-insert into t_replace_fk_parent values (1), (2);
-replace into t_replace_fk_child values (1, 999);
-insert into t_replace_fk_child values (1, 1);
-replace into t_replace_fk_child values (1, 888);
-replace into t_replace_fk_child values (2, 2);
-select id, pid from t_replace_fk_child order by id;
-drop table if exists t_replace_fk_child;
-drop table if exists t_replace_fk_parent;

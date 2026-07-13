@@ -73,11 +73,8 @@ func (deletion *Deletion) Prepare(proc *process.Process) error {
 				return err
 			}
 			deletion.ctr.source = rel
-		} else {
-			err := deletion.ctr.source.Reset(proc.GetTxnOperator())
-			if err != nil {
-				return err
-			}
+		} else if err := deletion.ctr.source.Reset(proc.GetTxnOperator()); err != nil {
+			return err
 		}
 
 	}
