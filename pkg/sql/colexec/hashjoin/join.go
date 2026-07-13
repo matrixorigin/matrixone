@@ -155,7 +155,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 
-				if ctr.mp == nil && !hashJoin.EmitUnmatchedProbe() {
+				if ctr.mp == nil && !ctr.probeEmitUnmatched {
 					continue
 				}
 
@@ -265,6 +265,15 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		return err
 	}
 
+	// Pre-compute per-query flags for the probe loop.
+	ctr.probeEmitUnmatched = hashJoin.EmitUnmatchedProbe()
+	ctr.probeRightSemiAnti = !hashJoin.IsRightSemi() && !hashJoin.IsAnti()
+	ctr.probeRightJoin = hashJoin.IsRightJoin
+	ctr.probeSingle = hashJoin.IsSingle()
+	ctr.probeLeftSingle = hashJoin.IsLeftSingle()
+	ctr.probeLeftSemi = hashJoin.IsLeftSemi()
+	ctr.probeLeftAnti = hashJoin.IsLeftAnti()
+
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 
@@ -302,8 +311,12 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		}
 	}
 
+	if ctr.mp == nil {
+		return
+	}
 	ctr.rightBats = ctr.mp.GetBatches()
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
+	ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 
 	if hashJoin.EmitUnmatchedBuild() {
 		if ctr.rightRowCnt > 0 {
@@ -355,6 +368,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 						ctr.mp = jm
 						ctr.rightBats = jm.GetBatches()
 						ctr.rightRowCnt = jm.GetRowCount()
+						ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
 							ctr.rightRowsMatched = &bitmap.Bitmap{}
 							ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
@@ -426,7 +440,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			ctr.vsIdx++
 
 			if z == 0 || v == 0 {
-				if hashJoin.EmitUnmatchedProbe() {
+				if ctr.probeEmitUnmatched {
 					ctr.appendOneNotMatch(hashJoin, proc, row)
 					resRowCnt++
 				}
@@ -444,9 +458,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				continue
 			}
 
-			if hashJoin.HashOnPK || ctr.mp.HashOnUnique() {
+			if ctr.probeHashOnPK {
 				if hashJoin.NonEqCond == nil {
-					if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+					if ctr.probeRightSemiAnti {
 						err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
 						if err != nil {
 							return err
@@ -455,8 +469,8 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						resRowCnt++
 					}
 
-					if hashJoin.IsRightJoin {
-						if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(idx)) {
+					if ctr.probeRightJoin {
+						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
 							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 						}
 
@@ -469,7 +483,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					}
 
 					if ok {
-						if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+						if ctr.probeRightSemiAnti {
 							err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
 							if err != nil {
 								return err
@@ -478,14 +492,14 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							resRowCnt++
 						}
 
-						if hashJoin.IsRightJoin {
-							if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(idx)) {
+						if ctr.probeRightJoin {
+							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
 								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 							}
 
 							ctr.rightRowsMatched.Add(uint64(idx))
 						}
-					} else if hashJoin.EmitUnmatchedProbe() {
+					} else if ctr.probeEmitUnmatched {
 						err = ctr.appendOneNotMatch(hashJoin, proc, row)
 						if err != nil {
 							return err
@@ -498,15 +512,15 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				ctr.leftRowMatched = false
 
 				if hashJoin.NonEqCond == nil {
-					if hashJoin.IsLeftSingle() {
+					if ctr.probeLeftSingle {
 						if len(ctr.sels) > 1 {
 							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 						}
-					} else if hashJoin.IsLeftSemi() {
+					} else if ctr.probeLeftSemi {
 						ctr.appendOneNotMatch(hashJoin, proc, row)
 						resRowCnt++
 						ctr.sels = nil
-					} else if hashJoin.IsLeftAnti() {
+					} else if ctr.probeLeftAnti {
 						ctr.sels = nil
 					}
 				}
@@ -533,9 +547,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			// remove processed sels
 			ctr.sels = ctr.sels[processCount:]
 			if hashJoin.NonEqCond == nil {
-				if hashJoin.IsRightJoin {
+				if ctr.probeRightJoin {
 					for _, sel := range sels {
-						if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(sel)) {
+						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
 							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 						}
 
@@ -543,7 +557,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					}
 				}
 
-				if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+				if ctr.probeRightSemiAnti {
 					for j, rp := range hashJoin.ResultCols {
 						if rp.Rel == 0 {
 							err = ctr.resBat.Vecs[j].UnionMulti(ctr.leftBat.Vecs[rp.Pos], row, processCount, proc.Mp())
@@ -574,26 +588,26 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					}
 
 					if ok {
-						if hashJoin.IsRightJoin {
-							if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(sel)) {
+						if ctr.probeRightJoin {
+							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
 								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 							}
 
 							ctr.rightRowsMatched.Add(uint64(sel))
 						} else {
-							if hashJoin.IsSingle() && ctr.leftRowMatched {
+							if ctr.probeSingle && ctr.leftRowMatched {
 								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 							}
 						}
 
 						ctr.leftRowMatched = true
 
-						if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+						if ctr.probeRightSemiAnti {
 							ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2)
 							resRowCnt++
 						}
 
-						if hashJoin.IsLeftSemi() {
+						if ctr.probeLeftSemi {
 							ctr.sels = nil
 							break
 						}
@@ -601,7 +615,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				}
 
 				if len(ctr.sels) == 0 &&
-					!ctr.leftRowMatched && hashJoin.EmitUnmatchedProbe() {
+					!ctr.leftRowMatched && ctr.probeEmitUnmatched {
 					ctr.appendOneNotMatch(hashJoin, proc, int64(row))
 					resRowCnt++
 				}
@@ -669,7 +683,7 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 				}
 			}
 
-			if hashJoin.IsSingle() && matchedCnt > ctr.rightRowsMatched.Count() {
+			if ctr.probeSingle && matchedCnt > ctr.rightRowsMatched.Count() {
 				return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 			}
 
