@@ -15,21 +15,25 @@
 package schedule
 
 const (
-	ReasonScanNoWorkers    = "no-workers"
-	ReasonScanSingleWorker = "single-worker"
-	ReasonScanMissingStats = "missing-stats"
-	ReasonScanForceOneCN   = "force-one-cn"
-	ReasonScanForceSingle  = "force-single"
-	ReasonScanSmallBlocks  = "small-blocks"
-	ReasonScanMultiCN      = "multi-cn-scan"
+	ReasonScanNoWorkers       = "no-workers"
+	ReasonScanSingleWorker    = "single-worker"
+	ReasonScanMissingStats    = "missing-stats"
+	ReasonScanForceOneCN      = "force-one-cn"
+	ReasonScanForceSingle     = "force-single"
+	ReasonScanSmallBlocks     = "small-blocks"
+	ReasonScanMultiCN         = "multi-cn-scan"
+	ReasonScanQueryLocalExec  = "query-local-exec-type"
+	ReasonScanQueryFallbackCN = "query-no-candidate-cn"
 )
 
 type ScanRequest struct {
-	QueryWorkers        Workers
-	Stats               *ScanStats
-	ForceSingle         bool
-	ForceMultiCN        bool
-	OneCNBlockThreshold int32
+	QueryWorkers         Workers
+	CurrentCN            Worker
+	QueryPlacementReason string
+	Stats                *ScanStats
+	ForceSingle          bool
+	ForceMultiCN         bool
+	OneCNBlockThreshold  int32
 }
 
 type ScanStats struct {
@@ -45,25 +49,26 @@ type ScanDecision struct {
 }
 
 func DecideScanPlacement(req ScanRequest) ScanDecision {
+	if reason, ok := inheritedLocalScanReason(req.QueryPlacementReason); ok {
+		return localScanDecision(reason, pickLocalScanWorkers(req.QueryWorkers, req.CurrentCN))
+	}
 	if len(req.QueryWorkers) == 1 {
-		return localScanDecision(ReasonScanSingleWorker)
+		return localScanDecision(ReasonScanSingleWorker, pickLocalScanWorkers(req.QueryWorkers, req.CurrentCN))
 	}
 	if req.Stats == nil {
-		return localScanDecision(ReasonScanMissingStats)
+		return localScanDecision(ReasonScanMissingStats, pickLocalScanWorkers(req.QueryWorkers, req.CurrentCN))
 	}
 	if req.Stats.ForceOneCN {
-		return localScanDecision(ReasonScanForceOneCN)
+		return localScanDecision(ReasonScanForceOneCN, pickLocalScanWorkers(req.QueryWorkers, req.CurrentCN))
 	}
 	if req.ForceSingle {
-		return localScanDecision(ReasonScanForceSingle)
+		return localScanDecision(ReasonScanForceSingle, pickLocalScanWorkers(req.QueryWorkers, req.CurrentCN))
 	}
 	if !req.ForceMultiCN && req.Stats.BlockNum <= req.OneCNBlockThreshold {
-		return localScanDecision(ReasonScanSmallBlocks)
+		return localScanDecision(ReasonScanSmallBlocks, pickLocalScanWorkers(req.QueryWorkers, req.CurrentCN))
 	}
 	if len(req.QueryWorkers) == 0 {
-		return ScanDecision{
-			Reason: ReasonScanNoWorkers,
-		}
+		return localScanDecision(ReasonScanNoWorkers, nil)
 	}
 	return ScanDecision{
 		Workers: cloneWorkers(req.QueryWorkers),
@@ -71,9 +76,35 @@ func DecideScanPlacement(req ScanRequest) ScanDecision {
 	}
 }
 
-func localScanDecision(reason string) ScanDecision {
+func localScanDecision(reason string, workers Workers) ScanDecision {
 	return ScanDecision{
+		Workers:   workers,
 		LocalOnly: true,
 		Reason:    reason,
 	}
+}
+
+func inheritedLocalScanReason(reason string) (string, bool) {
+	switch reason {
+	case ReasonLocalExecType:
+		return ReasonScanQueryLocalExec, true
+	case ReasonNoCandidateCN:
+		return ReasonScanQueryFallbackCN, true
+	default:
+		return "", false
+	}
+}
+
+func pickLocalScanWorkers(workers Workers, current Worker) Workers {
+	if len(workers) == 0 {
+		return nil
+	}
+	if hasWorkerIdentity(current) {
+		for _, worker := range workers {
+			if sameWorker(worker, current) {
+				return cloneWorkers(Workers{worker})
+			}
+		}
+	}
+	return cloneWorkers(workers[:1])
 }

@@ -193,7 +193,7 @@ func (m *ObjectUnifiedModel) ClearObjectToOpen() {
 
 // RunUnified runs the object viewer using the unified GenericPage framework
 func RunUnified(ctx context.Context, path string, opts *ViewOptions) error {
-	reader, err := objecttool.Open(ctx, path)
+	reader, err := objecttool.OpenWithKind(ctx, path, optsKind(opts))
 	if err != nil {
 		return err
 	}
@@ -217,8 +217,8 @@ func RunUnified(ctx context.Context, path string, opts *ViewOptions) error {
 		if um.GetObjectToOpen() != "" {
 			nestedPath := um.GetObjectToOpen()
 			um.ClearObjectToOpen()
-			// Open nested object with no special options
-			if err := RunUnified(ctx, nestedPath, nil); err != nil {
+			// Open nested object, preserving the data dir's on-disk format
+			if err := RunUnified(ctx, nestedPath, &ViewOptions{Kind: optsKind(opts)}); err != nil {
 				return err
 			}
 			// Continue with current viewer after returning

@@ -40,6 +40,16 @@ func newPlanCache(capacity int) *planCache {
 	}
 }
 
+func freeStmts(stmts []tree.Statement) {
+	for i, stmt := range stmts {
+		if stmt == nil {
+			continue
+		}
+		stmt.Free()
+		stmts[i] = nil
+	}
+}
+
 func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Plan) {
 	if pc.cachePool == nil {
 		pc.cachePool = make(map[string]*list.Element)
@@ -48,11 +58,7 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 	for i := range stmts {
 		if plans[i] == nil {
 			// can not cache and clean all stmts
-			for _, stmt := range stmts {
-				if stmt != nil {
-					stmt.Free()
-				}
-			}
+			freeStmts(stmts)
 			return
 		}
 	}
@@ -60,13 +66,9 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 	pc.cachePool[sql] = element
 	if pc.lruList.Len() > pc.capacity {
 		toRemove := pc.lruList.Back()
-		toRemoveStmts := toRemove.Value.(*cachedPlan).stmts
-		for _, stmt := range toRemoveStmts {
-			stmt.Free()
-		}
-
 		pc.lruList.Remove(toRemove)
 		delete(pc.cachePool, toRemove.Value.(*cachedPlan).sql)
+		freeStmts(toRemove.Value.(*cachedPlan).stmts)
 	}
 }
 
@@ -92,14 +94,15 @@ func (pc *planCache) isCached(sql string) bool {
 }
 
 func (pc *planCache) clean() {
-	if pc.lruList != nil {
-		for i := 0; i < pc.lruList.Len(); i++ {
-			toRemove := pc.lruList.Front()
-			toRemoveStmts := toRemove.Value.(*cachedPlan).stmts
-			for _, stmt := range toRemoveStmts {
-				stmt.Free()
-			}
-		}
+	if pc.lruList == nil {
+		pc.cachePool = nil
+		return
+	}
+	for pc.lruList.Len() > 0 {
+		toRemove := pc.lruList.Front()
+		pc.lruList.Remove(toRemove)
+		delete(pc.cachePool, toRemove.Value.(*cachedPlan).sql)
+		freeStmts(toRemove.Value.(*cachedPlan).stmts)
 	}
 	pc.lruList = nil
 	pc.cachePool = nil

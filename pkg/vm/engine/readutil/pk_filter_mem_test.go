@@ -15,6 +15,7 @@
 package readutil
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -99,6 +100,8 @@ func TestNewMemPKFilter(t *testing.T) {
 	ubUUID := encodeIntToUUID(int32(ub))
 
 	baseFilters := []BasePKFilter{
+		{Op: function.BETWEEN, Valid: true, Oid: types.T_bool, LB: types.EncodeFixed(false), UB: types.EncodeFixed(true)},
+		{Op: function.BETWEEN, Valid: true, Oid: types.T_bit, LB: types.EncodeFixed(uint64(lb)), UB: types.EncodeFixed(uint64(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_int8, LB: types.EncodeFixed(int8(lb)), UB: types.EncodeFixed(int8(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_int16, LB: types.EncodeFixed(int16(lb)), UB: types.EncodeFixed(int16(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_int32, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
@@ -109,6 +112,8 @@ func TestNewMemPKFilter(t *testing.T) {
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_uint64, LB: types.EncodeFixed(uint64(lb)), UB: types.EncodeFixed(uint64(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_float32, LB: types.EncodeFixed(float32(lb)), UB: types.EncodeFixed(float32(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_float64, LB: types.EncodeFixed(float64(lb)), UB: types.EncodeFixed(float64(ub))},
+		{Op: function.BETWEEN, Valid: true, Oid: types.T_year, LB: types.EncodeFixed(types.MoYear(lb)), UB: types.EncodeFixed(types.MoYear(ub))},
+		{Op: function.BETWEEN, Valid: true, Oid: types.T_varbinary, LB: []byte("a"), UB: []byte("z")},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_enum, LB: types.EncodeFixed(types.Enum(lb)), UB: types.EncodeFixed(types.Enum(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_uuid, LB: lbUUID[:], UB: ubUUID[:]},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_blob, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
@@ -186,6 +191,10 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 		{Op: function.IN, Valid: true, Oid: types.T_int32, Vec: inVec},
 		{Op: function.PREFIX_IN, Valid: true, Oid: types.T_varchar, Vec: prefixInVec},
 		{Op: function.PREFIX_EQ, Valid: true, Oid: types.T_varchar, LB: []byte("aa")},
+		{Op: function.PREFIX_BETWEEN, Valid: true, Oid: types.T_varchar, LB: []byte("aa"), UB: []byte("bb")},
+		{Op: PrefixRangeLeftOpen, Valid: true, Oid: types.T_varchar, LB: []byte("aa"), UB: []byte("bb")},
+		{Op: PrefixRangeRightOpen, Valid: true, Oid: types.T_varchar, LB: []byte("aa"), UB: []byte("bb")},
+		{Op: PrefixRangeBothOpen, Valid: true, Oid: types.T_varchar, LB: []byte("aa"), UB: []byte("bb")},
 	}
 
 	skipCnt := []int{
@@ -197,11 +206,17 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 		3, // in
 		0, // prefix in
 		2, // prefix eq
+		1, // prefix between [,]
+		2, // prefix between (,]
+		2, // prefix between [,)
+		3, // prefix between (,)
 	}
 
 	vecs := make([]*vector.Vector, 0, len(baseFilters))
 	for _, f := range baseFilters {
-		if f.Op != function.PREFIX_IN && f.Op != function.PREFIX_EQ {
+		if f.Op != function.PREFIX_IN && f.Op != function.PREFIX_EQ &&
+			f.Op != function.PREFIX_BETWEEN && f.Op != PrefixRangeLeftOpen &&
+			f.Op != PrefixRangeRightOpen && f.Op != PrefixRangeBothOpen {
 			vec := vector.NewVec(types.T_int32.ToType())
 			vector.AppendFixed[int32](vec, int32(9), false, mp)
 			vector.AppendFixed[int32](vec, int32(10), false, mp)
@@ -272,4 +287,124 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 
 		skipMask.Release()
 	}
+}
+
+func TestPKFiltersUseSameFailOpenValidation(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	packerPool := fileservice.NewPool(
+		8,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) { packer.Close() },
+	)
+	ts := types.MaxTs().ToTimestamp()
+
+	makeTable := func(oid types.T) *plan.TableDef {
+		return &plan.TableDef{
+			Name: "test",
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"pk"}, PkeyColName: "pk"},
+			Cols: []*plan.ColDef{{
+				Name: "pk",
+				Typ:  plan.Type{Id: int32(oid)},
+			}},
+		}
+	}
+	assertFailOpen := func(t *testing.T, tableOID types.T, base BasePKFilter) {
+		t.Helper()
+		block, err := ConstructBlockPKFilter(false, base, nil)
+		require.NoError(t, err)
+		require.False(t, block.Valid)
+		require.Nil(t, block.SortedSearchFunc)
+		require.Nil(t, block.UnSortedSearchFunc)
+
+		memory, err := NewMemPKFilter(makeTable(tableOID), ts, packerPool, base, engine.FilterHint{})
+		require.NoError(t, err)
+		require.False(t, memory.Valid())
+	}
+
+	t.Run("IN type mismatch", func(t *testing.T) {
+		values := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(values, []byte("1"), false, mp))
+		defer values.Free(mp)
+		assertFailOpen(t, types.T_int64, BasePKFilter{
+			Valid: true,
+			Op:    function.IN,
+			Oid:   types.T_int64,
+			Vec:   values,
+		})
+	})
+
+	t.Run("PREFIX_IN type mismatch", func(t *testing.T) {
+		values := vector.NewVec(types.T_varbinary.ToType())
+		require.NoError(t, vector.AppendBytes(values, []byte("prefix"), false, mp))
+		defer values.Free(mp)
+		assertFailOpen(t, types.T_varchar, BasePKFilter{
+			Valid: true,
+			Op:    function.PREFIX_IN,
+			Oid:   types.T_varchar,
+			Vec:   values,
+		})
+	})
+
+	for _, test := range []struct {
+		name string
+		oid  types.T
+		add  func(*vector.Vector)
+		lb   []byte
+		inf  []byte
+	}{
+		{
+			name: "float32",
+			oid:  types.T_float32,
+			add: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixedList(vec, []float32{1, float32(math.NaN())}, nil, mp))
+			},
+			lb:  types.EncodeFixed(float32(math.NaN())),
+			inf: types.EncodeFixed(float32(math.Inf(1))),
+		},
+		{
+			name: "float64",
+			oid:  types.T_float64,
+			add: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixedList(vec, []float64{1, math.NaN()}, nil, mp))
+			},
+			lb:  types.EncodeFixed(math.NaN()),
+			inf: types.EncodeFixed(math.Inf(1)),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertFailOpen(t, test.oid, BasePKFilter{
+				Valid: true,
+				Op:    function.GREAT_EQUAL,
+				Oid:   test.oid,
+				LB:    test.lb,
+			})
+
+			values := vector.NewVec(test.oid.ToType())
+			test.add(values)
+			defer values.Free(mp)
+			assertFailOpen(t, test.oid, BasePKFilter{
+				Valid: true,
+				Op:    function.IN,
+				Oid:   test.oid,
+				Vec:   values,
+			})
+
+			infinity := BasePKFilter{
+				Valid: true,
+				Op:    function.GREAT_EQUAL,
+				Oid:   test.oid,
+				LB:    test.inf,
+			}
+			sorted, unsorted, err := buildBlockPKSearchFuncs(infinity)
+			require.NoError(t, err)
+			require.NotNil(t, sorted)
+			require.NotNil(t, unsorted)
+			memory, err := NewMemPKFilter(makeTable(test.oid), ts, packerPool, infinity, engine.FilterHint{})
+			require.NoError(t, err)
+			require.True(t, memory.Valid())
+		})
+	}
+
+	require.Zero(t, mp.CurrNB())
 }

@@ -210,6 +210,14 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 					address = s.LockServiceAddress
 					return false
 				})
+		case pb.Method_CheckActiveTxn:
+			sid = getUUIDFromServiceIdentifier(request.CheckActiveTxn.ServiceID)
+			c.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
 		case pb.Method_AbortRemoteDeadlockTxn:
 			sid = getUUIDFromServiceIdentifier(request.AbortRemoteDeadlockTxn.Txn.WaiterAddress)
 			c.cluster.GetCNServiceWithoutWorkingState(
@@ -449,7 +457,8 @@ func (s *server) onMessage(
 	}
 
 	c := s.requests
-	if req.Method == pb.Method_GetActiveTxn {
+	if req.Method == pb.Method_GetActiveTxn ||
+		req.Method == pb.Method_CheckActiveTxn {
 		c = s.getActiveTxnRequests
 	}
 	c <- requestCtx{

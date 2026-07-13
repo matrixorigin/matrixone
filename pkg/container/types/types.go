@@ -335,7 +335,7 @@ type BuiltinNumber interface {
 }
 
 type Times interface {
-	Date | Time | Datetime | Timestamp
+	Date | Time | Datetime | Timestamp | MoYear
 }
 
 type OrderedT interface {
@@ -564,6 +564,8 @@ func (t Type) DescString() string {
 	case T_decimal64:
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	case T_decimal128:
+		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
+	case T_decimal256:
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	case T_array_float32:
 		return fmt.Sprintf("VECF32(%d)", t.Width)
