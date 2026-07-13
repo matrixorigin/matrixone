@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
@@ -25,4 +26,15 @@ func TestCheckpointCfgFillDefaultsIncrementalInterval(t *testing.T) {
 	cfg := new(CheckpointCfg)
 	cfg.FillDefaults()
 	require.Equal(t, options.DefaultCheckpointIncrementalInterval, cfg.IncrementalInterval)
+}
+
+func TestCheckpointIntentOldAgeTracksIncrementalInterval(t *testing.T) {
+	interval := 7 * time.Minute
+	require.Equal(t, interval, checkpointIntentOldAge(interval))
+	require.Equal(t, options.DefaultCheckpointIncrementalInterval, checkpointIntentOldAge(0))
+}
+
+func TestCheckpointArenaDrainDelayTracksIncrementalInterval(t *testing.T) {
+	interval := 7 * time.Minute
+	require.Equal(t, 2*interval, checkpointArenaDrainDelay(interval))
 }

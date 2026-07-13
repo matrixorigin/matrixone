@@ -76,3 +76,14 @@ func (cfg *CheckpointCfg) FillDefaults() {
 		cfg.TableIDSinkerThreshold = 64 * mpool.MB
 	}
 }
+
+func checkpointIntentOldAge(incrementalInterval time.Duration) time.Duration {
+	if incrementalInterval <= 0 {
+		return options.DefaultCheckpointIncrementalInterval
+	}
+	return incrementalInterval
+}
+
+func checkpointArenaDrainDelay(incrementalInterval time.Duration) time.Duration {
+	return checkpointIntentOldAge(incrementalInterval) * 2
+}

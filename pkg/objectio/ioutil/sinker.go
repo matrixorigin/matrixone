@@ -179,8 +179,8 @@ func (s *FSinkerImpl) Close() error {
 		s.arena = nil
 		// Debounce the idle-drain timer so pools stay warm during
 		// active CN pipeline execution.  When CN (and TN) are both
-		// idle for arenaDrainDelay the pools will drain automatically.
-		objectio.ScheduleArenaDrain()
+		// idle for the objectio default delay the pools will drain automatically.
+		objectio.ScheduleArenaDrain(objectio.DefaultArenaDrainDelay)
 	}
 	return nil
 }
