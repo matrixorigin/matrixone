@@ -1357,22 +1357,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 	tblCfgStr := string(tblCfgBytes)
 
-	// The IVF reader must fetch enough candidates for the outer sort window.
-	// OFFSET rows also have to survive the index scan so the final sort can
-	// discard them correctly; filter pressure adds over-fetch on top of this
-	// base LIMIT+OFFSET candidate budget below.
+	// vectorSortContext.limit already contains the outer LIMIT+OFFSET window.
+	// Filter pressure adds over-fetch on top of that candidate budget below.
 	outerResultNeedExpr := DeepCopyExpr(limit)
-	if outerResultNeedExpr != nil && sortNode.Offset != nil {
-		outerResultNeedExpr, err = bindFuncExprAndConstFold(
-			builder.GetContext(),
-			builder.compCtx.GetProcess(),
-			"+",
-			[]*Expr{outerResultNeedExpr, DeepCopyExpr(sortNode.Offset)},
-		)
-		if err != nil {
-			return 0, err
-		}
-	}
 
 	firstRoundLimit := uint64(0)
 	bucketExpandStep := uint64(0)

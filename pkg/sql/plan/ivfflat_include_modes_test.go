@@ -157,6 +157,14 @@ func newIvfIncludeModeVectorSortContext(scanNode *plan.Node, scanNodeID int32, m
 	}
 }
 
+func setIvfIncludeModeTestPagination(vecCtx *vectorSortContext, limit, offset uint64) {
+	vecCtx.limit = makePlan2Uint64ConstExprWithType(limit + offset)
+	vecCtx.resultLimit = makePlan2Uint64ConstExprWithType(limit)
+	vecCtx.resultOffset = makePlan2Uint64ConstExprWithType(offset)
+	vecCtx.sortNode.Limit = makePlan2Uint64ConstExprWithType(limit)
+	vecCtx.sortNode.Offset = makePlan2Uint64ConstExprWithType(offset)
+}
+
 func findIvfTableFunctionNode(builder *QueryBuilder, nodeID int32) *plan.Node {
 	if int(nodeID) >= len(builder.qry.Nodes) || builder.qry.Nodes[nodeID] == nil {
 		return nil
@@ -326,11 +334,11 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeDoesNotAutoUseIncludePushdown(t 
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 }
 
-func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersAddsOffsetToCandidateLimit(t *testing.T) {
+func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersUsesCandidateWindow(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "pre", 0, 2, 3)
-	vecCtx.sortNode.Offset = makePlan2Uint64ConstExprWithType(1)
+	setIvfIncludeModeTestPagination(vecCtx, 2, 1)
 
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
@@ -347,7 +355,7 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersAddsOffsetToCandid
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 }
 
-func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersAddsOffsetToCandidateLimit(t *testing.T) {
+func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersUsesCandidateWindow(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 	scanTag := scanNode.BindingTags[0]
@@ -367,7 +375,7 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersAddsOffsetToCandidate
 	}
 
 	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "pre", 0, 2, 3)
-	vecCtx.sortNode.Offset = makePlan2Uint64ConstExprWithType(1)
+	setIvfIncludeModeTestPagination(vecCtx, 2, 1)
 
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
@@ -469,7 +477,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffset
 	}
 
 	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "include", 0, 2, 3)
-	vecCtx.sortNode.Offset = makePlan2Uint64ConstExprWithType(3)
+	setIvfIncludeModeTestPagination(vecCtx, 2, 3)
 
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
@@ -487,11 +495,11 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffset
 	assert.Equal(t, uint64(10), tableFuncNode.TblFuncExprList[4].GetLit().GetU64Val())
 }
 
-func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutFiltersAddsOffsetToCandidateLimit(t *testing.T) {
+func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutFiltersDoesNotDoubleCountOffset(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "include", 0, 2, 3)
-	vecCtx.sortNode.Offset = makePlan2Uint64ConstExprWithType(1)
+	setIvfIncludeModeTestPagination(vecCtx, 2, 3)
 
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
@@ -501,11 +509,11 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutFiltersAddsOffsetToCa
 
 	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
-	require.Equal(t, uint64(3), tableFuncNode.Limit.GetLit().GetU64Val())
-	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(5), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(5), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 5)
 	assert.Empty(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval())
-	assert.Equal(t, uint64(3), tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
+	assert.Equal(t, uint64(5), tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
 	assert.Equal(t, uint64(10), tableFuncNode.TblFuncExprList[4].GetLit().GetU64Val())
 }
 

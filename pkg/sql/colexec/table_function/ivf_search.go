@@ -54,7 +54,6 @@ type ivfSearchState struct {
 	includeData          map[string][]any
 	includeNulls         map[string][]bool
 	pushdownFilterSQL    string
-	seenPK               map[string]struct{}
 	cursor               *vectorindex.IvfSearchCursor
 	multiRoundEnabled    bool
 	baseSearchRoundLimit uint
@@ -102,7 +101,6 @@ func (u *ivfSearchState) reset(tf *TableFunction, proc *process.Process) {
 	u.distances = nil
 	u.includeData = nil
 	u.includeNulls = nil
-	u.seenPK = nil
 	u.cursor = nil
 	// Note: runtimeFilterData is kept across resets as it's only set once during initialization
 	// It will be cleared in free() method
@@ -193,7 +191,6 @@ func (u *ivfSearchState) free(tf *TableFunction, proc *process.Process, pipeline
 	u.includeData = nil
 	u.includeNulls = nil
 	u.cursor = nil
-	u.seenPK = nil
 }
 
 // waitRuntimeFilterDataForTableFunction blocks until it receives a membership runtime
@@ -385,7 +382,6 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.includeData[col] = nil
 		u.includeNulls[col] = nil
 	}
-	u.seenPK = make(map[string]struct{})
 	u.searchRoundLimit = u.baseSearchRoundLimit
 	if u.searchRoundLimit == 0 {
 		u.searchRoundLimit = uint(u.limit)
@@ -424,10 +420,6 @@ func requestedIvfIncludeColumns(attrs []string) []string {
 		}
 	}
 	return cols
-}
-
-func ivfSearchSeenKey(v any) string {
-	return fmt.Sprintf("%T:%v", v, v)
 }
 
 const defaultIvfIncludeCentroidBatchCap = uint(4096)
@@ -608,12 +600,10 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 	}
 	u.offset = 0
 
+	// Search rounds cover disjoint centroid slices, and current-version entries
+	// assign each PK to one centroid. Retaining PKs across rounds would therefore
+	// add table-cardinality memory without deduplicating healthy index data.
 	for i, keyAny := range keySlice {
-		seenKey := ivfSearchSeenKey(keyAny)
-		if _, ok := u.seenPK[seenKey]; ok {
-			continue
-		}
-		u.seenPK[seenKey] = struct{}{}
 		u.keys = append(u.keys, keyAny)
 		u.distances = append(u.distances, distances[i])
 		for _, col := range u.includeColumns {
