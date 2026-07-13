@@ -13,7 +13,7 @@ insert into ft values
 (2, '普通 塑料 制品'),
 (3, '防水 涂料 施工');
 
-create fulltext index ftidx on ft (body) with parser gojieba;
+create fulltext index ftidx on ft (body) with parser ngram;
 
 -- exact #24823 repro: MATCH in the projection (scored) AND in WHERE, inside CTAS.
 create table ctas_t as
