@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -79,7 +80,7 @@ func TestInternalSQLExecutorAdapterErrorBranches(t *testing.T) {
 	if _, err := (InternalSQLExecutorAdapter{}).Exec(ctx, "select 1"); err == nil {
 		t.Fatalf("expected nil executor exec error")
 	}
-	execErr := errors.New("executor unavailable")
+	execErr := moerr.NewInternalError(ctx, "executor unavailable")
 	if _, err := (InternalSQLExecutorAdapter{Executor: &fakeInternalSQLExecutor{err: execErr}}).Exec(ctx, "select 1"); !errors.Is(err, execErr) {
 		t.Fatalf("expected executor error %v, got %v", execErr, err)
 	}
