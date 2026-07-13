@@ -155,7 +155,8 @@ create table t_binary_blob_text_cmp (
 
 insert into t_binary_blob_text_cmp values
   (1, 'a', 'a', 'a'),
-  (2, x'61000000', x'61000000', 'a');
+  (2, x'61000000', x'61000000', 'a'),
+  (3, 'a ', 'a ', 'a ');
 
 select id, hex(bl) as bl_hex, hex(tx) as tx_hex, hex(b) as b_hex
 from t_binary_blob_text_cmp
@@ -169,7 +170,9 @@ select id,
        tx = binary 'a' as tx_eq_bin_a,
        binary 'a' = tx as bin_a_eq_tx,
        tx = b as tx_eq_b,
-       b = tx as b_eq_tx
+       b = tx as b_eq_tx,
+       bl > binary 'a' as bl_gt_bin_a,
+       tx > binary 'a' as tx_gt_bin_a
 from t_binary_blob_text_cmp
 order by id;
 
@@ -183,6 +186,16 @@ order by id;
 select id
 from t_binary_blob_text_cmp
 where tx in (select b from t_binary_blob_text_cmp)
+order by id;
+
+select id
+from t_binary_blob_text_cmp
+where (bl, 10) in (select b, 10 from t_binary_blob_text_cmp)
+order by id;
+
+select id
+from t_binary_blob_text_cmp
+where (tx, 10) in (select b, 10 from t_binary_blob_text_cmp)
 order by id;
 
 select id
