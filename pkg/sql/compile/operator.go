@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -2225,6 +2226,12 @@ func constructTableClone(
 ) (*table_clone.TableClone, error) {
 
 	metaCopy := table_clone.NewTableClone()
+	success := false
+	defer func() {
+		if !success {
+			metaCopy.Release()
+		}
+	}()
 
 	metaCopy.Ctx = &table_clone.TableCloneCtx{
 		Eng:       c.e,
@@ -2235,6 +2242,12 @@ func constructTableClone(
 		DstTblName:      clonePlan.DstTableName,
 		DstDatabaseName: clonePlan.DstDatabaseName,
 	}
+	metaCopy.Ctx.RequestedAutoIncrOffset = clonePlan.SrcTableDef.AutoIncrOffset
+	if createPlan := clonePlan.GetCreateTable(); createPlan != nil {
+		if createTable := createPlan.GetDdl().GetCreateTable(); createTable != nil && createTable.TableDef != nil {
+			metaCopy.Ctx.RequestedAutoIncrOffset = createTable.TableDef.AutoIncrOffset
+		}
+	}
 
 	var (
 		err error
@@ -2242,7 +2255,7 @@ func constructTableClone(
 		sql string
 
 		account     = uint32(math.MaxUint32)
-		colOffset   map[int32]uint64
+		colMaxValue map[int32]uint64
 		hasAutoIncr bool
 	)
 
@@ -2254,24 +2267,15 @@ func constructTableClone(
 	}
 
 	if !hasAutoIncr {
+		success = true
 		return metaCopy, nil
 	}
 
-	sql = fmt.Sprintf(
-		"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
-		clonePlan.SrcTableDef.TblId,
-	)
-
-	if clonePlan.ScanSnapshot != nil {
+	if clonePlan.SrcObjDef != nil && clonePlan.SrcObjDef.PubInfo != nil {
+		account = uint32(clonePlan.SrcObjDef.PubInfo.TenantId)
+	} else if clonePlan.ScanSnapshot != nil {
 		if clonePlan.ScanSnapshot.Tenant != nil {
 			account = clonePlan.ScanSnapshot.Tenant.TenantID
-		}
-
-		if clonePlan.ScanSnapshot.TS != nil {
-			sql = fmt.Sprintf(
-				"select col_index, offset from mo_catalog.mo_increment_columns {MO_TS = %d} where table_id = %d",
-				clonePlan.ScanSnapshot.TS.PhysicalTime, clonePlan.SrcTableDef.TblId,
-			)
 		}
 	}
 
@@ -2281,32 +2285,48 @@ func constructTableClone(
 		}
 	}
 
-	if ret, err = c.runSqlWithResultAndOptions(
-		sql,
-		int32(account),
-		executor.StatementOption{}.WithDisableLog(),
-	); err != nil {
-		return nil, err
+	colMaxValue = make(map[int32]uint64)
+	for colIdx, colDef := range clonePlan.SrcTableDef.Cols {
+		if !colDef.Typ.AutoIncr {
+			continue
+		}
+
+		colIdent := sqlquote.Ident(colDef.Name)
+		tableIdent := sqlquote.QualifiedIdent(clonePlan.SrcTableDef.DbName, clonePlan.SrcTableDef.Name)
+		if (clonePlan.SrcObjDef == nil || clonePlan.SrcObjDef.PubInfo == nil) &&
+			clonePlan.ScanSnapshot != nil &&
+			clonePlan.ScanSnapshot.TS != nil {
+			tableIdent += fmt.Sprintf(" {MO_TS = %d}", clonePlan.ScanSnapshot.TS.PhysicalTime)
+		}
+		sql = fmt.Sprintf(
+			"select cast(coalesce(max(case when %s > 0 then %s else 0 end), 0) as unsigned) from %s",
+			colIdent,
+			colIdent,
+			tableIdent,
+		)
+
+		if ret, err = c.runSqlWithResultAndOptions(
+			sql,
+			int32(account),
+			executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
+			ret.Close()
+			return nil, err
+		}
+
+		func() {
+			defer ret.Close()
+			ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				if rows > 0 && len(cols) > 0 && !cols[0].IsNull(0) {
+					colMaxValue[int32(colIdx)] = executor.GetFixedRows[uint64](cols[0])[0]
+				}
+				return false
+			})
+		}()
 	}
 
-	ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if colOffset == nil {
-			colOffset = make(map[int32]uint64)
-		}
+	metaCopy.Ctx.SrcAutoIncrMaxValues = colMaxValue
 
-		colIdxes := vector.MustFixedColWithTypeCheck[int32](cols[0])
-		offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
-
-		for i := 0; i < rows; i++ {
-			colOffset[colIdxes[i]] = offsets[i]
-		}
-
-		return true
-	})
-
-	ret.Close()
-
-	metaCopy.Ctx.SrcAutoIncrOffsets = colOffset
-
+	success = true
 	return metaCopy, nil
 }

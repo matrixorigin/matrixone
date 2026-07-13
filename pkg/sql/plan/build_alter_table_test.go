@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -786,7 +787,7 @@ func TestAlterTableAutoIncrementCopyPath(t *testing.T) {
 		TableType:      catalog.SystemOrdinaryRel,
 		TblId:          24531,
 		Name:           "simple_auto",
-		AutoIncrOffset: 2,
+		AutoIncrOffset: 999,
 		Cols: []*ColDef{
 			{
 				ColId:   0,
@@ -812,10 +813,37 @@ func TestAlterTableAutoIncrementCopyPath(t *testing.T) {
 		},
 	}
 
-	sqls := []string{
-		`ALTER TABLE simple_auto ADD COLUMN c int, AUTO_INCREMENT = 5;`,
+	tests := []struct {
+		name string
+		sql  string
+		want uint64
+	}{
+		{
+			name: "explicit copy lowers source metadata offset",
+			sql:  `ALTER TABLE simple_auto AUTO_INCREMENT = 100, ALGORITHM = COPY;`,
+			want: 99,
+		},
+		{
+			name: "zero remains zero",
+			sql:  `ALTER TABLE simple_auto AUTO_INCREMENT = 0, ALGORITHM = COPY;`,
+			want: 0,
+		},
+		{
+			name: "schema change copy preserves request",
+			sql:  `ALTER TABLE simple_auto ADD COLUMN c int, AUTO_INCREMENT = 100, ALGORITHM = COPY;`,
+			want: 99,
+		},
 	}
-	runTestShouldPass(mock, t, sqls, false, false)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := buildSingleStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+			copyTableDef := p.GetDdl().GetAlterTable().GetCopyTableDef()
+			require.NotNil(t, copyTableDef)
+			require.Equal(t, tt.want, copyTableDef.AutoIncrOffset)
+		})
+	}
 }
 
 func TestAlterTableAutoIncrementRejectNoAutoColumn(t *testing.T) {

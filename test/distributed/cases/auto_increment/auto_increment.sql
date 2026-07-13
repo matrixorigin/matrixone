@@ -477,3 +477,19 @@ alter table auto_increment_alter_quoted AUTO_INCREMENT = 10;
 insert into auto_increment_alter_quoted(col2) values (10);
 select * from auto_increment_alter_quoted order by `1id`;
 drop table auto_increment_alter_quoted;
+
+-- COPY should lower from unused preallocation after all rows are deleted.
+drop table if exists ai_copy_lower;
+create table ai_copy_lower(id bigint primary key auto_increment, v int) auto_increment = 1000;
+insert into ai_copy_lower(v) values (1);
+delete from ai_copy_lower;
+alter table ai_copy_lower auto_increment = 100, algorithm = copy;
+insert into ai_copy_lower(v) values (2);
+select id from ai_copy_lower;
+
+-- The maximum row copied by a schema-changing COPY wins over a lower request.
+insert into ai_copy_lower(id, v) values (500, 3);
+alter table ai_copy_lower add column extra int, auto_increment = 100, algorithm = copy;
+insert into ai_copy_lower(v) values (4);
+select id from ai_copy_lower order by id;
+drop table ai_copy_lower;

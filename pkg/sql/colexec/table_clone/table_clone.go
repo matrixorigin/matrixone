@@ -101,8 +101,8 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 	tc.dstRel = nil
 	tc.dstIdxRel = nil
 
-	if tc.Ctx.SrcAutoIncrOffsets != nil {
-		clear(tc.Ctx.SrcAutoIncrOffsets)
+	if tc.Ctx.SrcAutoIncrMaxValues != nil {
+		clear(tc.Ctx.SrcAutoIncrMaxValues)
 	}
 }
 
@@ -470,7 +470,7 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 	proc *process.Process,
 ) error {
 
-	if tc.Ctx.SrcAutoIncrOffsets == nil {
+	if tc.Ctx.SrcAutoIncrMaxValues == nil {
 		return nil
 	}
 
@@ -479,7 +479,7 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		typs     []types.Type
 		incrCols []incrservice.AutoColumn
 
-		maxVal int64
+		maxVal uint64
 
 		dstTblDef *plan.TableDef
 	)
@@ -501,7 +501,10 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 
 	rows := 0
 	for _, col := range incrCols {
-		maxVal = int64(tc.Ctx.SrcAutoIncrOffsets[int32(col.ColIndex)])
+		maxVal = max(
+			tc.Ctx.RequestedAutoIncrOffset,
+			tc.Ctx.SrcAutoIncrMaxValues[int32(col.ColIndex)],
+		)
 
 		var val any
 		switch typs[col.ColIndex].Oid {

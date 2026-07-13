@@ -16,6 +16,7 @@ package table_clone
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -37,7 +38,8 @@ type TableCloneCtx struct {
 	SrcCtx       context.Context
 	ScanSnapshot *plan.Snapshot
 
-	SrcAutoIncrOffsets map[int32]uint64
+	RequestedAutoIncrOffset uint64
+	SrcAutoIncrMaxValues    map[int32]uint64
 }
 
 type TableClone struct {

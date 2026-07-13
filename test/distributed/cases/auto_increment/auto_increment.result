@@ -734,3 +734,21 @@ select * from auto_increment_alter_quoted order by `1id`;
 1    1
 10    10
 drop table auto_increment_alter_quoted;
+drop table if exists ai_copy_lower;
+create table ai_copy_lower(id bigint primary key auto_increment, v int) auto_increment = 1000;
+insert into ai_copy_lower(v) values (1);
+delete from ai_copy_lower;
+alter table ai_copy_lower auto_increment = 100, algorithm = copy;
+insert into ai_copy_lower(v) values (2);
+select id from ai_copy_lower;
+id
+100
+insert into ai_copy_lower(id, v) values (500, 3);
+alter table ai_copy_lower add column extra int, auto_increment = 100, algorithm = copy;
+insert into ai_copy_lower(v) values (4);
+select id from ai_copy_lower order by id;
+id
+100
+500
+501
+drop table ai_copy_lower;
