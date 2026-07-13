@@ -194,12 +194,16 @@ tokenization by the index's parser). Only *execution* moves to WAND.
 
 ## 8. Phasing
 
-- **P0 — `VERSION` param + router + engine skeleton.** Grammar: `VERSION equal_opt INTEGRAL`
-  index-option (goyacc regen, 0 conflicts) + `Version` on `tree.IndexOption`; plugin
-  `ParamsFromTree` writes `version` to algo_params; add the thin **version-router** at each
-  fulltext-plugin hook (v1 verbatim, else v2); `pkg/fulltext2/` package with the segment format
-  (FST term dict + positional postings + per-doc length + docmap + serialize/load on the shared
-  framing). v1 code path untouched; `version` defaults to 1.
+- **P0 — `VERSION` param + router + engine skeleton.**
+  - ✅ **`VERSION` index-option → algo_params** — *done, commit `13ff1e48d`.* Grammar `VERSION
+    equal_opt INTEGRAL` (non-reserved keyword, goyacc regen 0 conflicts) + `tree.IndexOption.Version`
+    + Format/merge; `catalog.IndexAlgoParamVersion` + SHOW CREATE rendering; `buildFullTextParams`
+    records `version` only when `>=2`. Parser round-trip + plumbing unit tests green. Classic
+    fulltext (unset/1) byte-for-byte unchanged.
+  - ☐ **thin version-router** at each fulltext-plugin hook (schema/build/search/maintenance) —
+    `if version>=2 { fulltext2.X() } else { <v1 verbatim> }`.
+  - ☐ **`pkg/fulltext2/` package** — segment format (FST term dict + positional postings + per-doc
+    length + docmap + serialize/load on the shared CDC framing).
 - **P1 — NL exact-phrase.** Positional two-phase conjunctive + **TF-IDF and BM25** top-k, cached,
   early-terminating. gojieba + ngram. **A/B parity** vs `VERSION=1` on the same data (below).
 - **P2 — Boolean operators.** OR-WAND + `+ - > < ~ ( )` + `"…"` phrase.
