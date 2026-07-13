@@ -513,6 +513,54 @@ func TestAcquireSQLTaskRunReapsStaleRunningRun(t *testing.T) {
 	}
 }
 
+func TestCompleteSQLTaskRunRejectsReapedRun(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			sqlTask := newTestSQLTask("task-stale-completion", 1)
+			sqlTask.TimeoutSeconds = 1
+			mustAddTestSQLTask(t, s, 1, sqlTask)
+			sqlTask = mustGetTestSQLTask(t, s, 1)[0]
+
+			stale := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+			stale.StartedAt = time.Now().Add(-10 * time.Minute)
+			mustAddTestSQLTaskRun(t, s, 1, stale)
+			stale = mustGetTestSQLTaskRun(t, s, 1, WithTaskIDCond(EQ, sqlTask.TaskID))[0]
+
+			current := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+			current.RunnerCN = "cn2"
+			current.AttemptNumber = stale.AttemptNumber + 1
+			currentID, err := s.AcquireSQLTaskRun(context.Background(), sqlTask, current)
+			require.NoError(t, err)
+			require.NotZero(t, currentID)
+
+			stale.Status = SQLTaskStatusSuccess
+			stale.FinishedAt = time.Now()
+			updated, err := s.CompleteSQLTaskRun(context.Background(), stale)
+			require.NoError(t, err)
+			require.Zero(t, updated)
+
+			staleAfterCompletion := mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskRunIDCond(EQ, stale.RunID))[0]
+			require.Equal(t, SQLTaskStatusTimeout, staleAfterCompletion.Status)
+			require.Contains(t, staleAfterCompletion.ErrorMessage, "exceeding timeout")
+
+			current.RunID = currentID
+			current.Status = SQLTaskStatusSuccess
+			current.FinishedAt = time.Now()
+			updated, err = s.CompleteSQLTaskRun(context.Background(), current)
+			require.NoError(t, err)
+			require.Equal(t, 1, updated)
+
+			currentAfterCompletion := mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskRunIDCond(EQ, currentID))[0]
+			require.Equal(t, SQLTaskStatusSuccess, currentAfterCompletion.Status)
+		})
+	}
+}
+
 func mustGetTestAsyncTask(t *testing.T, s TaskStorage, expectCount int, conds ...Condition) []task.AsyncTask {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
