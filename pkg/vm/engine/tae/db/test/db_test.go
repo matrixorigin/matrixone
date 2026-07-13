@@ -6649,14 +6649,89 @@ func TestTableDefVersionCommitFence(t *testing.T) {
 		return txn
 	}
 
-	t.Run("matching and zero compatibility", func(t *testing.T) {
+	t.Run("known initial zero retries after first alter", func(t *testing.T) {
+		tae := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+		defer tae.Close()
+		schema := catalog.MockSchemaAll(3, 1)
+		testutil.CreateRelation(t, tae, testutil.DefaultTestDB, schema, true)
+		dmlTxn := appendWithVersion(t, tae, schema, 0)
+
+		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 10)))
+		require.NoError(t, alterTxn.Commit(ctx))
+		err := dmlTxn.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	})
+
+	t.Run("unknown initial zero remains compatible", func(t *testing.T) {
+		tae := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+		defer tae.Close()
+		schema := catalog.MockSchemaAll(3, 1)
+		testutil.CreateRelation(t, tae, testutil.DefaultTestDB, schema, true)
+		unknownTxn, _ := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, unknownTxn.MockIncWriteCnt())
+
+		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 10)))
+		require.NoError(t, alterTxn.Commit(ctx))
+		require.NoError(t, unknownTxn.Commit(ctx))
+	})
+
+	t.Run("matching version", func(t *testing.T) {
 		tae, schema, version := newVersionedTable(t)
 		defer tae.Close()
 		require.NoError(t, appendWithVersion(t, tae, schema, version).Commit(ctx))
+	})
 
+	t.Run("same txn dml then alter", func(t *testing.T) {
+		tae, schema, version := newVersionedTable(t)
+		defer tae.Close()
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(0))
-		require.NoError(t, txn.MockIncWriteCnt())
+		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(version))
+		bat := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
+		defer bat.Close()
+		require.NoError(t, rel.Append(ctx, bat))
+		_, _, err := rel.GetByFilter(ctx, handle.NewEQFilter(bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)))
+		require.NoError(t, err)
+		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20)))
+		require.NoError(t, txn.Commit(ctx))
+	})
+
+	t.Run("same txn alter then dml", func(t *testing.T) {
+		tae, schema, version := newVersionedTable(t)
+		defer tae.Close()
+		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20)))
+		localVersion := rel.Schema(false).(*catalog.Schema).Version
+		require.Equal(t, version+1, localVersion)
+		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(localVersion))
+		bat := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
+		defer bat.Close()
+		require.NoError(t, rel.Append(ctx, bat))
+		_, _, err := rel.GetByFilter(ctx, handle.NewEQFilter(bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)))
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctx))
+	})
+
+	t.Run("same txn dml alter dml", func(t *testing.T) {
+		tae, schema, version := newVersionedTable(t)
+		defer tae.Close()
+		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(version))
+		before := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
+		defer before.Close()
+		require.NoError(t, rel.Append(ctx, before))
+		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 20)))
+		localVersion := rel.Schema(false).(*catalog.Schema).Version
+		require.Equal(t, version+1, localVersion)
+		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(localVersion))
+		after := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 10)
+		defer after.Close()
+		require.NoError(t, rel.Append(ctx, after))
+		_, _, err := rel.GetByFilter(ctx, handle.NewEQFilter(before.Vecs[schema.GetSingleSortKeyIdx()].Get(0)))
+		require.NoError(t, err)
+		_, _, err = rel.GetByFilter(ctx, handle.NewEQFilter(after.Vecs[schema.GetSingleSortKeyIdx()].Get(0)))
+		require.NoError(t, err)
 		require.NoError(t, txn.Commit(ctx))
 	})
 

@@ -52,17 +52,20 @@ func TestPrecommitEntryCarriesTableDefVersion(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		version uint32
+		known   bool
 	}{
-		{name: "known", version: 7},
-		{name: "old cn compatibility", version: 0},
+		{name: "known", version: 7, known: true},
+		{name: "known zero", version: 0, known: true},
+		{name: "old cn compatibility", version: 0, known: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			encoded, err := toPBEntry(Entry{
-				typ:             DELETE,
-				tableId:         42,
-				databaseId:      7,
-				bat:             bat,
-				tableDefVersion: tc.version,
+				typ:                  DELETE,
+				tableId:              42,
+				databaseId:           7,
+				bat:                  bat,
+				tableDefVersion:      tc.version,
+				tableDefVersionKnown: tc.known,
 			})
 			require.NoError(t, err)
 
@@ -71,6 +74,7 @@ func TestPrecommitEntryCarriesTableDefVersion(t *testing.T) {
 			decoded := new(api.Entry)
 			require.NoError(t, decoded.Unmarshal(data))
 			require.Equal(t, tc.version, decoded.TableDefVersion)
+			require.Equal(t, tc.known, decoded.TableDefVersionKnown)
 		})
 	}
 }
@@ -78,8 +82,8 @@ func TestPrecommitEntryCarriesTableDefVersion(t *testing.T) {
 func TestWorkspaceFlushKeySeparatesTableDefVersions(t *testing.T) {
 	base := tableKey{accountId: 1, databaseId: 7, dbName: "db", name: "tbl"}
 	batches := map[workspaceTableKey]int{
-		{tableKey: base, tableDefVersion: 7}: 1,
-		{tableKey: base, tableDefVersion: 8}: 1,
+		{tableKey: base, tableDefVersion: 0, tableDefVersionKnown: false}: 1,
+		{tableKey: base, tableDefVersion: 0, tableDefVersionKnown: true}:  1,
 	}
 	require.Len(t, batches, 2)
 }
@@ -221,6 +225,7 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 		require.Len(t, txn.writes, 1)
 		require.False(t, txn.writes[0].pkCheckReady)
 		require.Equal(t, -1, txn.writes[0].pkCheckPos)
+		require.False(t, txn.writes[0].tableDefVersionKnown)
 
 		bat.Clean(proc.Mp())
 	})
@@ -259,6 +264,7 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, txn.writes, 1)
 		require.Equal(t, uint32(7), txn.writes[0].tableDefVersion)
+		require.True(t, txn.writes[0].tableDefVersionKnown)
 
 		bat.Clean(txn.proc.Mp())
 	})

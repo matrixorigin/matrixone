@@ -416,8 +416,8 @@ type tableDefVersionRecorder interface {
 	SetTableDefVersion(uint32) error
 }
 
-func setTableDefVersionDependency(rel handle.Relation, version uint32) error {
-	if version == 0 {
+func setTableDefVersionDependency(rel handle.Relation, version uint32, known bool) error {
+	if !known {
 		return nil
 	}
 	recorder, ok := rel.(tableDefVersionRecorder)
@@ -428,7 +428,7 @@ func setTableDefVersionDependency(rel handle.Relation, version uint32) error {
 }
 
 func (h *Handle) registerWriteTableDefVersion(txn txnif.AsyncTxn, req *cmd_util.WriteReq) error {
-	if req.TableDefVersion == 0 {
+	if !req.TableDefVersionKnown {
 		return nil
 	}
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
@@ -439,7 +439,7 @@ func (h *Handle) registerWriteTableDefVersion(txn txnif.AsyncTxn, req *cmd_util.
 	if err != nil {
 		return err
 	}
-	return setTableDefVersionDependency(rel, req.TableDefVersion)
+	return setTableDefVersionDependency(rel, req.TableDefVersion, req.TableDefVersionKnown)
 }
 
 //#endregion
@@ -460,15 +460,16 @@ func (h *Handle) apiEntryToWriteEntry(
 	}
 
 	req := &cmd_util.WriteReq{
-		Type:            cmd_util.EntryType(pe.EntryType),
-		DatabaseId:      pe.GetDatabaseId(),
-		TableID:         pe.GetTableId(),
-		DatabaseName:    pe.GetDatabaseName(),
-		TableName:       pe.GetTableName(),
-		TableDefVersion: pe.GetTableDefVersion(),
-		FileName:        pe.GetFileName(),
-		Batch:           moBat,
-		PkCheck:         cmd_util.PKCheckType(pe.GetPkCheckByTn()),
+		Type:                 cmd_util.EntryType(pe.EntryType),
+		DatabaseId:           pe.GetDatabaseId(),
+		TableID:              pe.GetTableId(),
+		DatabaseName:         pe.GetDatabaseName(),
+		TableName:            pe.GetTableName(),
+		TableDefVersion:      pe.GetTableDefVersion(),
+		TableDefVersionKnown: pe.GetTableDefVersionKnown(),
+		FileName:             pe.GetFileName(),
+		Batch:                moBat,
+		PkCheck:              cmd_util.PKCheckType(pe.GetPkCheckByTn()),
 	}
 
 	// Handle soft delete object: parse ObjectID from batch and IsTombstone from FileName
@@ -936,7 +937,7 @@ func (h *Handle) HandleWrite(
 			fmt.Sprintf("%d-%s", req.TableID, req.TableName)))
 		return
 	}
-	if err = setTableDefVersionDependency(tb, req.TableDefVersion); err != nil {
+	if err = setTableDefVersionDependency(tb, req.TableDefVersion, req.TableDefVersionKnown); err != nil {
 		return
 	}
 
