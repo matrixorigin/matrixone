@@ -511,9 +511,7 @@ func TestCloseIdleBackends(t *testing.T) {
 	// b is the idle backend: unlock it and zero activeTime so GC will close it
 	b.Unlock()
 	tb := b.(*testBackend)
-	tb.RWMutex.Lock()
-	tb.activeTime = time.Time{}
-	tb.RWMutex.Unlock()
+	tb.setActiveTime(time.Time{})
 
 	gcDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(gcDeadline) {
@@ -548,35 +546,26 @@ func TestLockedBackendCannotClosedWithGCIdleTask(t *testing.T) {
 		"",
 		newTestBackendFactory(),
 		WithClientMaxBackendPerHost(2),
-		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
-		WithClientCreateTaskChanSize(1),
-		WithClientEnableAutoCreateBackend())
+		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100))
 	assert.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
+	// This unit test exercises idle GC directly. Do not let the independent
+	// global inactive-GC loop remove the zero-active-time backend first.
+	globalClientGC.unregister(c)
 
-	// Get backend with lock, may need retry
-	var b Backend
-	for i := 0; i < 10; i++ {
-		b, err = c.getBackend("b1", true)
-		if err == nil && b != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	c.mu.Lock()
+	b, err := c.createBackendLocked("b1")
+	c.mu.Unlock()
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
+	b.Lock()
 	assert.True(t, b.Locked())
-	b.(*testBackend).RWMutex.Lock()
-	tb := b.(*testBackend)
-	tb.RWMutex.Lock()
-	tb.activeTime = time.Time{}
-	tb.RWMutex.Unlock()
-	b.(*testBackend).RWMutex.Unlock()
+	b.(*testBackend).setActiveTime(time.Time{})
 
-	time.Sleep(time.Second * 1)
+	assert.Zero(t, c.closeIdleBackends())
 	c.mu.Lock()
 	assert.Equal(t, 1, len(c.mu.backends["b1"]))
 	c.mu.Unlock()
@@ -605,7 +594,7 @@ func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
 
-	b.(*testBackend).activeTime = time.Time{}
+	b.(*testBackend).setActiveTime(time.Time{})
 
 	// Backend is now inactive, next call triggers async recreation
 	b, err = c.getBackend("b1", false)
