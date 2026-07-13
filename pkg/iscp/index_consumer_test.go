@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,6 +141,44 @@ func (r *MockRetriever) GetTableID() uint64 {
 }
 
 var _ DataRetriever = new(MockRetriever)
+
+type blockingAfterFirstRetriever struct {
+	first   *ISCPData
+	errCh   chan error
+	errOnce sync.Once
+	err     error
+	dtype   int8
+}
+
+func (r *blockingAfterFirstRetriever) Next() *ISCPData {
+	if r.first != nil {
+		data := r.first
+		r.first = nil
+		return data
+	}
+	err := <-r.errCh
+	return &ISCPData{noMoreData: true, err: err}
+}
+
+func (r *blockingAfterFirstRetriever) UpdateWatermark(context.Context, string, client.TxnOperator) error {
+	return nil
+}
+
+func (r *blockingAfterFirstRetriever) GetDataType() int8 { return r.dtype }
+func (r *blockingAfterFirstRetriever) GetAccountID() uint32 {
+	return 0
+}
+func (r *blockingAfterFirstRetriever) GetTableID() uint64 {
+	return 0
+}
+func (r *blockingAfterFirstRetriever) SetError(err error) {
+	r.errOnce.Do(func() {
+		r.err = err
+		r.errCh <- err
+	})
+}
+
+var _ DataRetriever = new(blockingAfterFirstRetriever)
 
 func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
 	return &plan.TableDef{
@@ -378,6 +417,230 @@ func TestIndexConsumerSendSqlReturnsContextErrorWhenBlocked(t *testing.T) {
 	}
 	err := consumer.sendSql(ctx, make(chan error, 1), &flushEveryRowWriter{rows: 1})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestIndexConsumerWorkerErrorCancelsBlockedNext(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	execErr := errors.New("worker failed after first chunk")
+	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		return executor.Result{}, execErr
+	})
+	defer stubExec.Reset()
+	stubRunTxn := gostub.Stub(&runTxnWithSqlContext, func(
+		ctx context.Context,
+		_ engine.Engine,
+		_ client.TxnClient,
+		cnUUID string,
+		accountID uint32,
+		_ time.Duration,
+		resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error),
+		cbdata any,
+		f func(sqlproc *sqlexec.SqlProcess, data any) error,
+	) error {
+		sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(ctx, cnUUID, nil, accountID, resolveVariableFunc))
+		return f(sqlproc, cbdata)
+	})
+	defer stubRunTxn.Reset()
+
+	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	consumer := &IndexConsumer{
+		cnUUID:    "a-b-c-d",
+		info:      newTestIvfConsumerInfo(),
+		tableDef:  tblDef,
+		sqlWriter: &flushEveryRowWriter{},
+		rowdata:   make([]any, len(tblDef.Cols)),
+		algo:      testDeadlockAlgo,
+	}
+
+	bat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1}),
+			testutil.NewVector(1, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}}),
+			testutil.NewVector(1, types.T_int32.ToType(), proc.Mp(), false, []int32{1}),
+		}, nil)
+	defer bat.Clean(proc.Mp())
+
+	first := &ISCPData{
+		insertBatch: &AtomicBatch{
+			Batches: []*batch.Batch{bat},
+			Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+		},
+		noMoreData: false,
+	}
+	first.Set(0)
+	retriever := &blockingAfterFirstRetriever{
+		first: first,
+		errCh: make(chan error, 1),
+		dtype: ISCPDataType_Snapshot,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.Consume(ctx, retriever)
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, execErr)
+	case <-ctx.Done():
+		t.Fatal("Consume stayed blocked in DataRetriever.Next after worker failure")
+	}
+}
+
+func TestIndexConsumerCanceledContextReturnsErrorWithEmptyWriter(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	consumer := &IndexConsumer{
+		sqlWriter: &flushEveryRowWriter{},
+		algo:      testDeadlockAlgo,
+	}
+	retriever := &MockRetriever{
+		dtype:      ISCPDataType_Snapshot,
+		noMoreData: true,
+	}
+
+	err := consumer.Consume(ctx, retriever)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestIndexConsumerContextCancelUnblocksRetrieverNext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	consumer := &IndexConsumer{
+		sqlWriter: &flushEveryRowWriter{},
+		algo:      testDeadlockAlgo,
+	}
+	retriever := NewDataRetriever(ctx, 0, 0, "job", 0, &JobStatus{}, 0, ISCPDataType_Snapshot)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.Consume(ctx, retriever)
+	}()
+
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Consume stayed blocked in DataRetriever.Next after context cancellation")
+	}
+}
+
+func TestIndexConsumerInFlightSnapshotExecUsesParentContext(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		cancel()
+		select {
+		case <-execCtx.Done():
+			return executor.Result{}, execCtx.Err()
+		case <-time.After(time.Second):
+			return executor.Result{}, errors.New("sql execution context was not canceled")
+		}
+	})
+	defer stubExec.Reset()
+
+	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(context.Background())
+	consumer := &IndexConsumer{
+		cnUUID:      "a-b-c-d",
+		cnEngine:    cnEngine,
+		cnTxnClient: cnClient,
+		info:        newTestIvfConsumerInfo(),
+		tableDef:    tblDef,
+		sqlWriter:   &flushEveryRowWriter{},
+		rowdata:     make([]any, len(tblDef.Cols)),
+		algo:        testDeadlockAlgo,
+	}
+
+	bat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1}),
+			testutil.NewVector(1, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}}),
+			testutil.NewVector(1, types.T_int32.ToType(), proc.Mp(), false, []int32{1}),
+		}, nil)
+	defer bat.Clean(proc.Mp())
+
+	insertAtomicBat := &AtomicBatch{
+		Batches: []*batch.Batch{bat},
+		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+	retriever := &MockRetriever{
+		dtype:       ISCPDataType_Snapshot,
+		insertBatch: insertAtomicBat,
+	}
+
+	err := consumer.Consume(ctx, retriever)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestIndexConsumerTailFinalizationUsesParentContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(context.Background())
+	consumer := &IndexConsumer{
+		cnUUID:      "a-b-c-d",
+		cnEngine:    cnEngine,
+		cnTxnClient: cnClient,
+		info:        newTestIvfConsumerInfo(),
+		tableDef:    tblDef,
+		sqlWriter:   &flushEveryRowWriter{},
+		rowdata:     make([]any, len(tblDef.Cols)),
+		rowdelete:   make([]any, 1),
+		algo:        testDeadlockAlgo,
+	}
+
+	insertAtomicBat := &AtomicBatch{
+		Rows: btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+	deleteAtomicBat := &AtomicBatch{
+		Rows: btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+	retriever := &MockRetriever{
+		dtype:       ISCPDataType_Tail,
+		insertBatch: insertAtomicBat,
+		deleteBatch: deleteAtomicBat,
+	}
+	retriever.updateWatermark = func(watermarkCtx context.Context, _ string, _ client.TxnOperator) error {
+		cancel()
+		select {
+		case <-watermarkCtx.Done():
+			return watermarkCtx.Err()
+		case <-time.After(time.Second):
+			return errors.New("watermark context was not canceled")
+		}
+	}
+
+	err := consumer.Consume(ctx, retriever)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDataRetrieverSetNextBatchReleasesRejectedData(t *testing.T) {
+	ctx := context.Background()
+	status := &JobStatus{}
+	retriever := NewDataRetriever(ctx, 0, 0, "job", 0, status, 0, ISCPDataType_Snapshot)
+	retriever.SetError(errors.New("consumer failed"))
+
+	data := &ISCPData{
+		insertBatch: &AtomicBatch{
+			Rows: btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+		},
+	}
+	data.Set(1)
+
+	retriever.SetNextBatch(data)
+	require.Nil(t, data.insertBatch)
 }
 
 func TestIndexConsumerTerminalFlushErrorDoesNotCloseChannel(t *testing.T) {

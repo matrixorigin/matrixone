@@ -60,6 +60,10 @@ var _ Consumer = new(IndexConsumer)
 
 var runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
 
+type errorAwareDataRetriever interface {
+	SetError(error)
+}
+
 // SqlWriter returns the writer this consumer is paired with. Used by
 // plugin Hooks.Run impls that need to dispatch on the writer's
 // concrete type (e.g. HNSW picking RunHnsw[float32] vs [float64]).
@@ -155,11 +159,16 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 	if datatype == ISCPDataType_Snapshot {
 		// SNAPSHOT
 		for {
+			if err := ctx.Err(); err != nil {
+				reportIndexConsumerErr(errch, err)
+				return
+			}
 			select {
 			case <-ctx.Done():
+				reportIndexConsumerErr(errch, ctx.Err())
 				return
 			case e2 := <-errch:
-				errch <- e2
+				reportIndexConsumerErr(errch, e2)
 				return
 			case sql, ok := <-c.sqlBufSendCh:
 				if !ok {
@@ -201,6 +210,9 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 
 				// TAIL
 				for {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
 					select {
 					case <-ctx.Done():
 						return ctx.Err()
@@ -292,11 +304,16 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 	}()
 
 	for {
+		if err := ctx.Err(); err != nil {
+			reportIndexConsumerErr(errch, err)
+			return
+		}
 		select {
 		case <-ctx.Done():
+			reportIndexConsumerErr(errch, ctx.Err())
 			return
 		case e2 := <-errch:
-			errch <- e2
+			reportIndexConsumerErr(errch, e2)
 			return
 		case sql, ok := <-c.sqlBufSendCh:
 			if !ok {
@@ -469,6 +486,14 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	go func() {
 		defer wg.Done()
 		c.run(ctx, errch, r)
+		select {
+		case err := <-errch:
+			if errSetter, ok := r.(errorAwareDataRetriever); ok {
+				errSetter.SetError(err)
+			}
+			reportIndexConsumerErr(errch, err)
+		default:
+		}
 	}()
 
 	// read data

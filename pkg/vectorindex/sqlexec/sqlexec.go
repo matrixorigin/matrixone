@@ -347,7 +347,7 @@ func RunTxnWithSqlContext(ctx context.Context,
 	cbdata any,
 	f func(sqlproc *SqlProcess, data any) error) (err error) {
 
-	newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	newctx := context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 	newctx, cancel := context.WithTimeout(newctx, duration)
 	defer cancel()
 

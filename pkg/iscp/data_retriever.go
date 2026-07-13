@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -133,9 +132,15 @@ func (r *DataRetrieverImpl) Next() *ISCPData {
 	var data *ISCPData
 	select {
 	case <-r.ctx.Done():
+		r.mu.Lock()
+		err := r.err
+		r.mu.Unlock()
+		if err == nil {
+			err = r.ctx.Err()
+		}
 		return &ISCPData{
 			noMoreData: true,
-			err:        moerr.NewInternalErrorNoCtx("context cancelled"),
+			err:        err,
 		}
 	case data = <-r.insertDataCh:
 	}
@@ -190,12 +195,14 @@ func (r *DataRetrieverImpl) GetTableID() uint64 {
 
 func (r *DataRetrieverImpl) SetNextBatch(data *ISCPData) {
 	if r.hasError() {
+		data.Done()
 		return
 	}
 	select {
 	case r.insertDataCh <- data:
 		return
 	case <-r.ctx.Done():
+		data.Done()
 		return
 	}
 }

@@ -339,11 +339,16 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 	defer sync.Destroy()
 
 	for {
+		if err := ctx.Err(); err != nil {
+			reportIndexConsumerErr(errch, err)
+			return
+		}
 		select {
 		case <-ctx.Done():
+			reportIndexConsumerErr(errch, ctx.Err())
 			return
 		case e2 := <-errch:
-			errch <- e2
+			reportIndexConsumerErr(errch, e2)
 			return
 		case recordBytes, open := <-c.sqlBufSendCh:
 			if !open {
