@@ -16,7 +16,10 @@ package iscp
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,6 +37,59 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/btree"
 )
+
+const testDeadlockAlgo = "test-deadlock-algo"
+
+type flushEveryRowHooks struct{}
+
+func (flushEveryRowHooks) NewSqlWriter(JobID, *ConsumerInfo, *plan.TableDef, []*plan.IndexDef) (IndexSqlWriter, error) {
+	return &flushEveryRowWriter{}, nil
+}
+
+func (flushEveryRowHooks) Run(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+	runIndex(c, ctx, errch, r)
+}
+
+type flushEveryRowWriter struct {
+	rows     int
+	seq      int
+	toSqlErr error
+}
+
+func (w *flushEveryRowWriter) CheckLastOp(string) bool { return true }
+
+func (w *flushEveryRowWriter) Upsert(context.Context, []any) error {
+	w.rows++
+	return nil
+}
+
+func (w *flushEveryRowWriter) Insert(context.Context, []any) error {
+	w.rows++
+	return nil
+}
+
+func (w *flushEveryRowWriter) Delete(context.Context, []any) error {
+	w.rows++
+	return nil
+}
+
+func (w *flushEveryRowWriter) Full() bool { return w.rows > 0 }
+
+func (w *flushEveryRowWriter) ToSql() ([]byte, error) {
+	if w.toSqlErr != nil {
+		return nil, w.toSqlErr
+	}
+	w.seq++
+	return []byte(fmt.Sprintf("sql-%d", w.seq)), nil
+}
+
+func (w *flushEveryRowWriter) Reset() { w.rows = 0 }
+
+func (w *flushEveryRowWriter) Empty() bool { return w.rows == 0 }
+
+func init() {
+	Register(testDeadlockAlgo, flushEveryRowHooks{})
+}
 
 type MockRetriever struct {
 	insertBatch *AtomicBatch
@@ -219,6 +275,98 @@ func TestConsumer(t *testing.T) {
 	require.NoError(t, err)
 	err = consumer.Consume(ctx, r)
 	require.NoError(t, err)
+}
+
+func TestIndexConsumerConsumeReturnsExecErrorAfterRunnerExit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	injectedErr := errors.New("injected index SQL failure")
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		return executor.Result{}, injectedErr
+	})
+	defer stub1.Reset()
+
+	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	cnUUID := "a-b-c-d"
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(ctx)
+
+	consumer := &IndexConsumer{
+		cnUUID:      cnUUID,
+		cnEngine:    cnEngine,
+		cnTxnClient: cnClient,
+		info:        newTestIvfConsumerInfo(),
+		tableDef:    tblDef,
+		sqlWriter:   &flushEveryRowWriter{},
+		rowdata:     make([]any, len(tblDef.Cols)),
+		rowdelete:   make([]any, 1),
+		algo:        testDeadlockAlgo,
+	}
+
+	bat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
+			testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
+			testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int32{1, 2}),
+		}, nil)
+	defer bat.Clean(proc.Mp())
+
+	insertAtomicBat := &AtomicBatch{
+		Mp:      nil,
+		Batches: []*batch.Batch{bat},
+		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+
+	output := &MockRetriever{
+		dtype:       ISCPDataType_Snapshot,
+		insertBatch: insertAtomicBat,
+		deleteBatch: nil,
+		noMoreData:  false,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.Consume(ctx, output)
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, injectedErr)
+	case <-ctx.Done():
+		t.Fatal("Consume deadlocked after index SQL executor returned an error")
+	}
+}
+
+func TestIndexConsumerSinkTailReturnsFinalFlushError(t *testing.T) {
+	ctx := context.Background()
+	injectedErr := errors.New("final flush failure")
+	emptyBatch := &AtomicBatch{
+		Rows: btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+
+	consumer := &IndexConsumer{
+		sqlBufSendCh: make(chan []byte, 1),
+		sqlWriter: &flushEveryRowWriter{
+			rows:     1,
+			toSqlErr: injectedErr,
+		},
+	}
+
+	err := consumer.sinkTail(ctx, make(chan error, 1), emptyBatch, emptyBatch)
+	require.ErrorIs(t, err, injectedErr)
+}
+
+func TestIndexConsumerSendSqlReturnsContextErrorWhenBlocked(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	consumer := &IndexConsumer{
+		sqlBufSendCh: make(chan []byte),
+	}
+	err := consumer.sendSql(ctx, make(chan error, 1), &flushEveryRowWriter{rows: 1})
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestIvfSnapshot(t *testing.T) {

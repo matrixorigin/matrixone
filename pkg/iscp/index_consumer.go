@@ -180,7 +180,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 					})
 
 				if err != nil {
-					errch <- err
+					reportIndexConsumerErr(errch, err)
 					return
 				}
 			}
@@ -219,7 +219,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 			})
 
 		if err != nil {
-			errch <- err
+			reportIndexConsumerErr(errch, err)
 			return
 		}
 	}
@@ -264,12 +264,12 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 		if sync != nil {
 			sync.Destroy()
 		}
-		errch <- err
+		reportIndexConsumerErr(errch, err)
 		return
 	}
 
 	if sync == nil {
-		errch <- moerr.NewInternalErrorNoCtx("failed create HnswSync")
+		reportIndexConsumerErr(errch, moerr.NewInternalErrorNoCtx("failed create HnswSync"))
 		return
 	}
 
@@ -313,7 +313,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 					})
 
 				if err != nil {
-					errch <- err
+					reportIndexConsumerErr(errch, err)
 					return
 				}
 				return
@@ -323,7 +323,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 			var cdc vectorindex.VectorIndexCdc[T]
 			err = sonic.Unmarshal(sql, &cdc)
 			if err != nil {
-				errch <- err
+				reportIndexConsumerErr(errch, err)
 				return
 			}
 
@@ -334,7 +334,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 				})
 
 			if err != nil {
-				errch <- err
+				reportIndexConsumerErr(errch, err)
 				return
 			}
 
@@ -350,19 +350,29 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 	// Replaces the hardcoded switch that previously lived here.
 	h, ok := GetHooks(c.algo)
 	if !ok {
-		errch <- moerr.NewInternalError(ctx, "iscp: no Hooks registered for algo "+c.algo)
+		reportIndexConsumerErr(errch, moerr.NewInternalError(ctx, "iscp: no Hooks registered for algo "+c.algo))
 		return
 	}
 	h.Run(c, ctx, errch, r)
+}
+
+func reportIndexConsumerErr(errch chan error, err error) {
+	if err == nil {
+		return
+	}
+	select {
+	case errch <- err:
+	default:
+	}
 }
 
 func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, datatype int8, errch chan error) bool {
 	// release the data
 
 	if data == nil {
-		err := c.flushCdc()
+		err := c.flushCdc(ctx, errch)
 		if err != nil {
-			errch <- err
+			reportIndexConsumerErr(errch, err)
 		}
 		close(c.sqlBufSendCh)
 		return true
@@ -375,14 +385,14 @@ func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, dat
 	noMoreData := data.noMoreData
 	err := data.err
 	if err != nil {
-		errch <- err
+		reportIndexConsumerErr(errch, err)
 		return true
 	}
 
 	if noMoreData {
-		err := c.flushCdc()
+		err := c.flushCdc(ctx, errch)
 		if err != nil {
-			errch <- err
+			reportIndexConsumerErr(errch, err)
 		}
 		close(c.sqlBufSendCh)
 		return noMoreData
@@ -392,19 +402,19 @@ func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, dat
 
 	if datatype == ISCPDataType_Snapshot {
 		// SNAPSHOT
-		err := c.sinkSnapshot(ctx, insertBatch)
+		err := c.sinkSnapshot(ctx, errch, insertBatch)
 		if err != nil {
 			// error out
-			errch <- err
+			reportIndexConsumerErr(errch, err)
 			noMoreData = true
 		}
 
 	} else {
 		// sinkTail will save sql to the slice
-		err := c.sinkTail(ctx, insertBatch, deleteBatch)
+		err := c.sinkTail(ctx, errch, insertBatch, deleteBatch)
 		if err != nil {
 			// error out
-			errch <- err
+			reportIndexConsumerErr(errch, err)
 			noMoreData = true
 		}
 	}
@@ -447,7 +457,7 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	return nil
 }
 
-func (c *IndexConsumer) sinkSnapshot(ctx context.Context, upsertBatch *AtomicBatch) error {
+func (c *IndexConsumer) sinkSnapshot(ctx context.Context, errch chan error, upsertBatch *AtomicBatch) error {
 	var err error
 
 	for _, bat := range upsertBatch.Batches {
@@ -462,7 +472,7 @@ func (c *IndexConsumer) sinkSnapshot(ctx context.Context, upsertBatch *AtomicBat
 			}
 
 			if c.sqlWriter.Full() {
-				err = c.sendSql(c.sqlWriter)
+				err = c.sendSql(ctx, errch, c.sqlWriter)
 				if err != nil {
 					return err
 				}
@@ -475,7 +485,7 @@ func (c *IndexConsumer) sinkSnapshot(ctx context.Context, upsertBatch *AtomicBat
 
 // upsertBatch and deleteBatch is sorted by ts
 // for the same ts, delete first, then upsert
-func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *AtomicBatch) error {
+func (c *IndexConsumer) sinkTail(ctx context.Context, errch chan error, upsertBatch, deleteBatch *AtomicBatch) error {
 	var err error
 
 	upsertIter := upsertBatch.GetRowIterator().(*atomicBatchRowIter)
@@ -491,13 +501,13 @@ func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *
 		upsertItem, deleteItem := upsertIter.Item(), deleteIter.Item()
 		// compare ts, ignore pk
 		if upsertItem.Ts.LT(&deleteItem.Ts) {
-			if err = c.sinkInsert(ctx, upsertIter); err != nil {
+			if err = c.sinkInsert(ctx, errch, upsertIter); err != nil {
 				return err
 			}
 			// get next item
 			upsertIterHasNext = upsertIter.Next()
 		} else {
-			if err = c.sinkDelete(ctx, deleteIter); err != nil {
+			if err = c.sinkDelete(ctx, errch, deleteIter); err != nil {
 				return err
 			}
 			// get next item
@@ -507,7 +517,7 @@ func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *
 
 	// output the rest of upsert iterator
 	for upsertIterHasNext {
-		if err = c.sinkInsert(ctx, upsertIter); err != nil {
+		if err = c.sinkInsert(ctx, errch, upsertIter); err != nil {
 			return err
 		}
 		// get next item
@@ -516,17 +526,16 @@ func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *
 
 	// output the rest of delete iterator
 	for deleteIterHasNext {
-		if err = c.sinkDelete(ctx, deleteIter); err != nil {
+		if err = c.sinkDelete(ctx, errch, deleteIter); err != nil {
 			return err
 		}
 		// get next item
 		deleteIterHasNext = deleteIter.Next()
 	}
-	c.flushCdc()
-	return nil
+	return c.flushCdc(ctx, errch)
 }
 
-func (c *IndexConsumer) sinkInsert(ctx context.Context, upsertIter *atomicBatchRowIter) (err error) {
+func (c *IndexConsumer) sinkInsert(ctx context.Context, errch chan error, upsertIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
 	if err = upsertIter.Row(ctx, c.rowdata); err != nil {
@@ -536,7 +545,7 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, upsertIter *atomicBatchR
 	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_INSERT) {
 		// last op is not INSERT, sendSql first
 		// send SQL
-		err = c.sendSql(c.sqlWriter)
+		err = c.sendSql(ctx, errch, c.sqlWriter)
 		if err != nil {
 			return err
 		}
@@ -550,7 +559,7 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, upsertIter *atomicBatchR
 
 	if c.sqlWriter.Full() {
 		// send SQL
-		err = c.sendSql(c.sqlWriter)
+		err = c.sendSql(ctx, errch, c.sqlWriter)
 		if err != nil {
 			return err
 		}
@@ -559,7 +568,7 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, upsertIter *atomicBatchR
 	return nil
 }
 
-func (c *IndexConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
+func (c *IndexConsumer) sinkDelete(ctx context.Context, errch chan error, deleteIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
 	if err = deleteIter.Row(ctx, c.rowdelete); err != nil {
@@ -569,7 +578,7 @@ func (c *IndexConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchR
 	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_DELETE) {
 		// last op is not DELETE, sendSql first
 		// send SQL
-		err = c.sendSql(c.sqlWriter)
+		err = c.sendSql(ctx, errch, c.sqlWriter)
 		if err != nil {
 			return err
 		}
@@ -583,7 +592,7 @@ func (c *IndexConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchR
 
 	if c.sqlWriter.Full() {
 		// send SQL
-		err = c.sendSql(c.sqlWriter)
+		err = c.sendSql(ctx, errch, c.sqlWriter)
 		if err != nil {
 			return err
 		}
@@ -592,7 +601,7 @@ func (c *IndexConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchR
 	return nil
 }
 
-func (c *IndexConsumer) sendSql(writer IndexSqlWriter) error {
+func (c *IndexConsumer) sendSql(ctx context.Context, errch chan error, writer IndexSqlWriter) error {
 	if writer.Empty() {
 		return nil
 	}
@@ -603,7 +612,13 @@ func (c *IndexConsumer) sendSql(writer IndexSqlWriter) error {
 		return err
 	}
 
-	c.sqlBufSendCh <- sql
+	select {
+	case c.sqlBufSendCh <- sql:
+	case err := <-errch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	//os.Stderr.WriteString(string(sql))
 	//os.Stderr.WriteString("\n")
 
@@ -613,6 +628,6 @@ func (c *IndexConsumer) sendSql(writer IndexSqlWriter) error {
 	return nil
 }
 
-func (c *IndexConsumer) flushCdc() error {
-	return c.sendSql(c.sqlWriter)
+func (c *IndexConsumer) flushCdc(ctx context.Context, errch chan error) error {
+	return c.sendSql(ctx, errch, c.sqlWriter)
 }
