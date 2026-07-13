@@ -25,13 +25,29 @@ insert into t_analyze_02 values
     (3, 30),
     (4, 40);
 
+drop table if exists quoted_cols;
+create table quoted_cols(`select` int, `a-b` int, `tick``name` int);
+insert into quoted_cols values (1, 2, 3), (1, 3, 4);
+
 -- ANALYZE TABLE single table (existing behavior)
 analyze table t_analyze_01(a, b);
 
 -- ANALYZE TABLE without column list (issue #23122 core case)
--- Note: multi-table no-column form (analyze table t1, t2) is covered by
--- parser tests; BVT framework does not support multi-result-set statements.
 analyze table t_analyze_01;
+
+-- quoted explicit and catalog-expanded column names
+analyze table quoted_cols(`select`, `a-b`, `tick``name`);
+select 'AFTER_EXPLICIT_QUOTED';
+analyze table quoted_cols;
+select 'AFTER_EXPANDED_QUOTED';
+
+-- persistent connection after single-table, multi-table, and mid-list error
+analyze table t_analyze_01;
+select 'AFTER_SINGLE';
+analyze table t_analyze_01, t_analyze_02;
+select 'AFTER_MULTI';
+analyze table t_analyze_01, t_analyze_nonexistent, t_analyze_02;
+select 'AFTER_MID_LIST_ERROR';
 
 -- ANALYZE TABLE without column list: non-existent table
 analyze table t_analyze_nonexistent;
@@ -61,6 +77,11 @@ analyze table t_analyze_01;
 commit;
 
 begin;
+analyze table t_analyze_01, t_analyze_02;
+select 'AFTER_TXN_MULTI';
+rollback;
+
+begin;
 check table t_analyze_01;
 rollback;
 
@@ -71,4 +92,5 @@ rollback;
 -- cleanup
 drop table t_analyze_01;
 drop table t_analyze_02;
+drop table quoted_cols;
 drop database db_analyze_stmt;

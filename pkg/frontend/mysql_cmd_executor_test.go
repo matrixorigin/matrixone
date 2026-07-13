@@ -1573,6 +1573,81 @@ func TestHandleAnalyzeStmtRestoresOuterExecCtxOnError(t *testing.T) {
 	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
 }
 
+func TestBuildAnalyzeDerivedSQLQuotesIdentifiers(t *testing.T) {
+	entry := &tree.AnalyzeTableEntry{
+		Table: tree.NewTableName(
+			tree.Identifier("quoted_cols"),
+			tree.ObjectNamePrefix{SchemaName: tree.Identifier("db"), ExplicitSchema: true},
+			nil,
+		),
+		Cols: tree.IdentifierList{"select", "a-b", "tick`name"},
+	}
+	require.Equal(t,
+		"select approx_count_distinct(`select`),approx_count_distinct(`a-b`),approx_count_distinct(`tick``name`) from db.quoted_cols",
+		buildAnalyzeDerivedSQL(entry, entry.Cols),
+	)
+}
+
+type countingMysqlWriter struct {
+	*testMysqlWriter
+	responses int
+}
+
+func (w *countingMysqlWriter) WriteResponse(context.Context, *Response) error {
+	w.responses++
+	return nil
+}
+
+func TestExecuteAnalyzeDerivedQueryRestoresResponderOnError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+	live := NewMysqlResp(writer)
+	ses.ReplaceResponser(live)
+	outerExecCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
+
+	err := executeAnalyzeDerivedQuery(ses, outerExecCtx, "select from")
+	require.Error(t, err)
+	require.Same(t, live, ses.GetResponser())
+	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
+	require.Zero(t, writer.responses)
+}
+
+func TestExecuteAnalyzeDerivedQueryRestoresResponderOnSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+	live := NewMysqlResp(writer)
+	ses.ReplaceResponser(live)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	outerExecCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
+	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	ses.txnHandler.storage = eng
+	ses.txnHandler.txnOp = txnOperator
+	ses.txnHandler.txnCtx = outerExecCtx.reqCtx
+
+	err := executeAnalyzeDerivedQuery(ses, outerExecCtx, "select 1")
+	require.NoError(t, err)
+	require.Same(t, live, ses.GetResponser())
+	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
+	require.Zero(t, writer.responses)
+}
+
 func Test_convert_type(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("type conversion", t, func() {

@@ -1202,33 +1202,48 @@ func handleAnalyzeStmt(ses *Session, execCtx *ExecCtx, stmt *tree.AnalyzeStmt) e
 			}
 			cols = resolved
 		}
-		ctx := tree.NewFmtCtx(dialect.MYSQL)
-		ctx.WriteString("select ")
-		for i, ident := range cols {
-			if i > 0 {
-				ctx.WriteByte(',')
-			}
-			ctx.WriteString("approx_count_distinct(")
-			ctx.WriteString(string(ident))
-			ctx.WriteByte(')')
-		}
-		ctx.WriteString(" from ")
-		entry.Table.Format(ctx)
-		sql := ctx.String()
-		tempExecCtx := ExecCtx{
-			ses:    ses,
-			reqCtx: execCtx.reqCtx,
-		}
-		err := doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
-		if tcc := ses.GetTxnCompileCtx(); tcc != nil {
-			tcc.SetExecCtx(execCtx)
-		}
-		tempExecCtx.Close()
-		if err != nil {
+		sql := buildAnalyzeDerivedSQL(entry, cols)
+		if err := executeAnalyzeDerivedQuery(ses, execCtx, sql); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string) error {
+	liveResponder := ses.GetResponser()
+	proto := &internalProtocol{result: &internalExecResult{}}
+	proto.SetStr(USERNAME, liveResponder.GetStr(USERNAME))
+	proto.SetStr(DBNAME, liveResponder.GetStr(DBNAME))
+	ses.ReplaceResponser(NewMysqlResp(proto))
+	defer ses.ReplaceResponser(liveResponder)
+
+	tempExecCtx := ExecCtx{ses: ses, reqCtx: outerExecCtx.reqCtx}
+	defer func() {
+		tempExecCtx.Close()
+		if tcc := ses.GetTxnCompileCtx(); tcc != nil {
+			tcc.SetExecCtx(outerExecCtx)
+		}
+	}()
+	return doComQuery(ses, &tempExecCtx, &UserInput{sql: sql})
+}
+
+func buildAnalyzeDerivedSQL(entry *tree.AnalyzeTableEntry, cols tree.IdentifierList) string {
+	ctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+	ctx.WriteString("select ")
+	for i, ident := range cols {
+		if i > 0 {
+			ctx.WriteByte(',')
+		}
+		ctx.WriteString("approx_count_distinct(")
+		ctx.WriteIdentifier(ident)
+		ctx.WriteByte(')')
+	}
+	ctx.WriteString(" from ")
+	tableCtx := tree.NewFmtCtx(dialect.MYSQL)
+	entry.Table.Format(tableCtx)
+	ctx.WriteString(tableCtx.String())
+	return ctx.String()
 }
 
 // resolveTableVisibleColumns returns the names of all visible (non-hidden) columns

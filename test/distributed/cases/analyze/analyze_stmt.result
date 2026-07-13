@@ -21,12 +21,32 @@ insert into t_analyze_02 values
 (2, 20),
 (3, 30),
 (4, 40);
+drop table if exists quoted_cols;
+create table quoted_cols(`select` int, `a-b` int, `tick``name` int);
+insert into quoted_cols values (1, 2, 3), (1, 3, 4);
 analyze table t_analyze_01(a, b);
-approx_count_distinct(a)    approx_count_distinct(b)
-2    3
 analyze table t_analyze_01;
-approx_count_distinct(a)    approx_count_distinct(b)
-2    3
+analyze table quoted_cols(`select`, `a-b`, `tick``name`);
+select 'AFTER_EXPLICIT_QUOTED';
+AFTER_EXPLICIT_QUOTED
+AFTER_EXPLICIT_QUOTED
+analyze table quoted_cols;
+select 'AFTER_EXPANDED_QUOTED';
+AFTER_EXPANDED_QUOTED
+AFTER_EXPANDED_QUOTED
+analyze table t_analyze_01;
+select 'AFTER_SINGLE';
+AFTER_SINGLE
+AFTER_SINGLE
+analyze table t_analyze_01, t_analyze_02;
+select 'AFTER_MULTI';
+AFTER_MULTI
+AFTER_MULTI
+analyze table t_analyze_01, t_analyze_nonexistent, t_analyze_02;
+no such table db_analyze_stmt.t_analyze_nonexistent
+select 'AFTER_MID_LIST_ERROR';
+AFTER_MID_LIST_ERROR
+AFTER_MID_LIST_ERROR
 analyze table t_analyze_nonexistent;
 no such table db_analyze_stmt.t_analyze_nonexistent
 check table t_analyze_01;
@@ -51,14 +71,16 @@ show profile for query 2 limit 10 offset 5;
 not supported: SHOW PROFILE FOR QUERY 2 is not supported in MatrixOne
 begin;
 analyze table t_analyze_01(a, b);
-approx_count_distinct(a)    approx_count_distinct(b)
-2    3
 commit;
 begin;
 analyze table t_analyze_01;
-approx_count_distinct(a)    approx_count_distinct(b)
-2    3
 commit;
+begin;
+analyze table t_analyze_01, t_analyze_02;
+select 'AFTER_TXN_MULTI';
+AFTER_TXN_MULTI
+AFTER_TXN_MULTI
+rollback;
 begin;
 check table t_analyze_01;
 not supported: CHECK TABLE is not supported in MatrixOne
@@ -69,4 +91,5 @@ not supported: SHOW PROFILE is not supported in MatrixOne
 rollback;
 drop table t_analyze_01;
 drop table t_analyze_02;
+drop table quoted_cols;
 drop database db_analyze_stmt;
