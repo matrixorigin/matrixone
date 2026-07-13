@@ -117,7 +117,6 @@ desc	mo_catalog.mo_database                ;
 desc	mo_catalog.mo_tables                  ;
 -- @regex("Field", true)
 desc	mo_catalog.mo_columns                 ;
--- @regex("Field", true)
 desc	mo_catalog.mo_account                 ;
 -- @regex("Field", true)
 desc	mo_catalog.mo_user                    ;
@@ -143,7 +142,6 @@ desc	mo_catalog.mo_indexes                 ;
 -- @regex("Field", true)
 desc	mo_catalog.mo_table_partitions        ;
 -- @bvt:issue
--- @regex("Field", true)
 desc	mo_catalog.mo_pubs                    ;
 -- @regex("Field", true)
 desc	mo_catalog.mo_stages                  ;
@@ -171,7 +169,6 @@ show columns from	mo_catalog.mo_database                ;
 show columns from	mo_catalog.mo_tables                  ;
 -- @regex("Field", true)
 show columns from	mo_catalog.mo_columns                 ;
--- @regex("Field", true)
 show columns from	mo_catalog.mo_account                 ;
 -- @regex("Field", true)
 show columns from	mo_catalog.mo_user                    ;
@@ -197,7 +194,6 @@ show columns from	mo_catalog.mo_indexes                 ;
 -- @regex("Field", true)
 show columns from	mo_catalog.mo_table_partitions        ;
 -- @bvt:issue
--- @regex("Field", true)
 show columns from	mo_catalog.mo_pubs                    ;
 -- @regex("Field", true)
 show columns from	mo_catalog.mo_stages                  ;
