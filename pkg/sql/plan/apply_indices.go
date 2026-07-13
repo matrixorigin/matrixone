@@ -1724,7 +1724,7 @@ func isUpperBoundOp(name string) bool {
 // classifyRangeBound returns the column and whether the filter is a lower bound.
 // Returns nil if the filter is not a range comparison with a column and constant.
 func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
-	if fn == nil || len(fn.Args) < 2 {
+	if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil || fn.Args[1] == nil {
 		return nil, false
 	}
 	op := canonicalRangeOp(fn)
@@ -1854,7 +1854,10 @@ func isRangeOp(fn *plan.Function) bool {
 }
 
 func canonicalRangeOp(fn *plan.Function) string {
-	if len(fn.Args) < 2 {
+	if fn == nil || fn.Func == nil {
+		return ""
+	}
+	if len(fn.Args) < 2 || fn.Args[0] == nil || fn.Args[1] == nil {
 		return fn.Func.ObjName
 	}
 	if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
