@@ -470,7 +470,9 @@ func TestCleanCommitStateExpiresRetryableServiceState(t *testing.T) {
 		lta.options.removeDisconnectDuration = 10 * time.Millisecond
 		ctl := lta.getCtl("expired-service")
 		require.Equal(t, cannotCommitState, ctl.tryCannotCommit("t1"))
-		lta.inactiveService.Store("expired-service", time.Now().Add(-time.Second))
+		lta.inactiveService.Store("expired-service", &inactiveServiceEpoch{
+			inactiveAt: time.Now().Add(-time.Second),
+		})
 		lta.options.getActiveTxnFunc = func(context.Context, string) (bool, [][]byte, error) {
 			return false, nil, assert.AnError
 		}
@@ -540,24 +542,96 @@ func TestExpireInactiveServicePreservesFreshDisconnectEpoch(t *testing.T) {
 	lta := &lockTableAllocator{}
 	sid := "reconnected-service"
 	oldInactiveAt := time.Now().Add(-time.Hour)
-	lta.inactiveService.Store(sid, oldInactiveAt)
+	lta.inactiveService.Store(sid, &inactiveServiceEpoch{
+		inactiveAt: oldInactiveAt,
+	})
 
 	// The expiry sweep observed the old epoch, then the service resumed and
 	// disconnected again before the sweep attempted to delete its marker.
 	observed, ok := lta.inactiveService.Load(sid)
 	require.True(t, ok)
-	lta.inactiveService.Delete(sid)
+	lta.resumeInactiveService(sid)
 	lta.markInactiveService(sid)
 
 	require.False(t, lta.expireInactiveService(
 		sid,
-		observed.(time.Time),
+		observed.(*inactiveServiceEpoch),
 		time.Now(),
 		time.Minute,
 	))
 	fresh, ok := lta.inactiveService.Load(sid)
 	require.True(t, ok)
-	require.True(t, fresh.(time.Time).After(oldInactiveAt))
+	require.True(t, fresh.(*inactiveServiceEpoch).inactiveAt.After(oldInactiveAt))
+}
+
+func TestCleanCommitStatePreservesTombstoneForFreshDisconnectEpoch(t *testing.T) {
+	for name, probeErr := range map[string]error{
+		"retryable":     assert.AnError,
+		"non-retryable": moerr.NewBackendClosedNoCtx(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			runtime.RunTest("", func(_ runtime.Runtime) {
+				lta := &lockTableAllocator{
+					logger:          getLogger("").Named("clean-commit-state-epoch-test"),
+					keepBindTimeout: time.Millisecond,
+				}
+				lta.options.removeDisconnectDuration = time.Minute
+				const sid = "reconnected-service"
+				ctl := lta.getCtl(sid)
+				require.Equal(t, cannotCommitState, ctl.tryCannotCommit("t1"))
+				oldEpoch := &inactiveServiceEpoch{inactiveAt: time.Now().Add(-time.Hour)}
+				lta.inactiveService.Store(sid, oldEpoch)
+
+				var calls atomic.Int64
+				releaseLaterProbes := make(chan struct{})
+				lta.options.getActiveTxnFunc = func(ctx context.Context, _ string) (bool, [][]byte, error) {
+					if calls.Add(1) == 1 {
+						// This is the race: the old epoch expired before the probe,
+						// then the service resumed and disconnected again while it
+						// was in flight.
+						lta.resumeInactiveService(sid)
+						lta.markInactiveService(sid)
+						return false, nil, probeErr
+					}
+					select {
+					case <-releaseLaterProbes:
+						return false, nil, probeErr
+					case <-ctx.Done():
+						return false, nil, ctx.Err()
+					}
+				}
+
+				ctx, cancel := context.WithCancel(context.Background())
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					lta.cleanCommitState(ctx)
+				}()
+				defer func() {
+					cancel()
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Fatal("cleanCommitState did not stop after cancellation")
+					}
+				}()
+
+				// A second probe cannot begin until the first sweep has completed
+				// its final cleanup. Hold it so later sweeps cannot affect the
+				// assertion.
+				require.Eventually(t, func() bool {
+					return calls.Load() >= 2
+				}, time.Second, time.Millisecond)
+
+				state, ok := ctl.getCommitState("t1")
+				require.True(t, ok, "fresh epoch must retain the existing tombstone")
+				require.Equal(t, cannotCommitState, state.state)
+				current, ok := lta.inactiveService.Load(sid)
+				require.True(t, ok, "fresh disconnect marker must remain")
+				require.NotSame(t, oldEpoch, current)
+			})
+		})
+	}
 }
 
 func TestCannotCommitGenerationRefresh(t *testing.T) {

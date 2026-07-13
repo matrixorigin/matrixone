@@ -3282,7 +3282,9 @@ func TestResumeInvalidService(t *testing.T) {
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
-			alloc.inactiveService.Store(s[0].serviceID, time.Now())
+			alloc.inactiveService.Store(s[0].serviceID, &inactiveServiceEpoch{
+				inactiveAt: time.Now(),
+			})
 			_, err := alloc.Valid(s[0].serviceID, []byte("testTxn"), nil)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
 

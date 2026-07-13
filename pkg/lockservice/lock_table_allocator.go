@@ -48,10 +48,15 @@ type lockTableAllocator struct {
 	address         string
 	server          Server
 	client          Client
-	inactiveService sync.Map // lock service id -> inactive time
-	ctl             sync.Map // lock service id -> *commitCtl
-	ctlMu           sync.RWMutex
-	allocatorID     string
+	// inactiveService contains *inactiveServiceEpoch values. The mutex makes an
+	// expiry decision and the corresponding commit-state cleanup one lifecycle
+	// transition: a resumed service that disconnects again must start a new epoch
+	// before an older one can be expired.
+	inactiveService   sync.Map // lock service id -> *inactiveServiceEpoch
+	inactiveServiceMu sync.Mutex
+	ctl               sync.Map // lock service id -> *commitCtl
+	ctlMu             sync.RWMutex
+	allocatorID       string
 	// version is the allocator process epoch. It is set once when the
 	// allocator is constructed; production code must not mutate it at runtime.
 	version uint64
@@ -69,6 +74,10 @@ type lockTableAllocator struct {
 }
 
 type AllocatorOption func(*lockTableAllocator)
+
+type inactiveServiceEpoch struct {
+	inactiveAt time.Time
+}
 
 // NewLockTableAllocator create a memory based lock table allocator.
 func NewLockTableAllocator(
@@ -193,21 +202,33 @@ func (l *lockTableAllocator) markInactiveService(serviceID string) {
 	// Retention starts at the first failure in the current disconnected epoch.
 	// Repeated probes must not extend it forever. ResumeInvalidCN deletes the
 	// marker, so a later disconnect naturally starts a new epoch.
-	l.inactiveService.LoadOrStore(serviceID, time.Now())
+	l.inactiveServiceMu.Lock()
+	defer l.inactiveServiceMu.Unlock()
+	l.inactiveService.LoadOrStore(serviceID, &inactiveServiceEpoch{
+		inactiveAt: time.Now(),
+	})
 }
 
 func (l *lockTableAllocator) expireInactiveService(
 	serviceID string,
-	inactiveAt time.Time,
+	epoch *inactiveServiceEpoch,
 	now time.Time,
 	retention time.Duration,
 ) bool {
-	if now.Sub(inactiveAt) <= retention {
+	if now.Sub(epoch.inactiveAt) <= retention {
 		return false
 	}
 	// Only delete the epoch observed by the expiry sweep. The service may have
 	// resumed and disconnected again after the marker was loaded.
-	return l.inactiveService.CompareAndDelete(serviceID, inactiveAt)
+	l.inactiveServiceMu.Lock()
+	defer l.inactiveServiceMu.Unlock()
+	return l.inactiveService.CompareAndDelete(serviceID, epoch)
+}
+
+func (l *lockTableAllocator) resumeInactiveService(serviceID string) {
+	l.inactiveServiceMu.Lock()
+	defer l.inactiveServiceMu.Unlock()
+	l.inactiveService.Delete(serviceID)
 }
 
 func (l *lockTableAllocator) HasInvalidService(serviceID string) bool {
@@ -663,7 +684,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 			var unknownServices []string
 			activeTxnMap := make(map[string]map[string]struct{})
 			cleanupWatermarks := make(map[string]uint64)
-			expiredUnknownServices := make(map[string]struct{})
+			expiredInactiveEpochs := make(map[string]*inactiveServiceEpoch)
 
 			l.ctlMu.RLock()
 			l.ctl.Range(func(key, value any) bool {
@@ -673,20 +694,16 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 			l.ctlMu.RUnlock()
 
 			now := time.Now()
+			l.inactiveServiceMu.Lock()
 			l.inactiveService.Range(func(key, value any) bool {
 				sid := key.(string)
-				if l.expireInactiveService(
-					sid,
-					value.(time.Time),
-					now,
-					removeDisconnectDuration,
-				) {
-					l.logger.Error("remove inactive service",
-						zap.String("serviceID", sid))
-					expiredUnknownServices[sid] = struct{}{}
+				epoch := value.(*inactiveServiceEpoch)
+				if now.Sub(epoch.inactiveAt) > removeDisconnectDuration {
+					expiredInactiveEpochs[sid] = epoch
 				}
 				return true
 			})
+			l.inactiveServiceMu.Unlock()
 
 			for _, sid := range services {
 				if ctx.Err() != nil {
@@ -724,10 +741,10 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 					l.logger.Error("retry to check service if alive on next sweep",
 						zap.String("serviceID", sid),
 						zap.Error(err))
-					if _, expired := expiredUnknownServices[sid]; expired {
+					if _, expired := expiredInactiveEpochs[sid]; expired {
 						// The disconnected-service retention already elapsed before this
-						// probe. Preserve the existing expiry policy even if the current
-						// probe failed with a retryable error.
+						// probe. The final cleanup rechecks that this exact epoch is still
+						// current before applying the expiry policy.
 						unknownServices = append(unknownServices, sid)
 					}
 					continue
@@ -738,6 +755,20 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 					zap.Error(err))
 				l.markInactiveService(sid)
 				unknownServices = append(unknownServices, sid)
+			}
+
+			// Keep expiry and cleanup in the same inactive-service lifecycle
+			// transition. In particular, if the service resumed and disconnected
+			// again while a probe was in flight, its new epoch prevents cleanup of
+			// tombstones retained for that disconnect.
+			l.inactiveServiceMu.Lock()
+			expiredUnknownServices := make(map[string]struct{}, len(expiredInactiveEpochs))
+			for sid, epoch := range expiredInactiveEpochs {
+				if l.inactiveService.CompareAndDelete(sid, epoch) {
+					l.logger.Error("remove inactive service",
+						zap.String("serviceID", sid))
+					expiredUnknownServices[sid] = struct{}{}
+				}
 			}
 
 			l.ctlMu.Lock()
@@ -755,6 +786,7 @@ func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
 				l.cleanCtlLocked(sid, activeTxns, false, cleanupWatermarks[sid])
 			}
 			l.ctlMu.Unlock()
+			l.inactiveServiceMu.Unlock()
 
 			timer.Reset(l.keepBindTimeout * 2)
 		}
@@ -1088,7 +1120,7 @@ func (l *lockTableAllocator) handleResumeInvalidCN(
 	resp *pb.Response,
 	cs morpc.ClientSession,
 ) {
-	l.inactiveService.Delete(req.ResumeInvalidCN.ServiceID)
+	l.resumeInactiveService(req.ResumeInvalidCN.ServiceID)
 	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
