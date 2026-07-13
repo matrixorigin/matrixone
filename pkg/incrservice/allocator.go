@@ -213,9 +213,8 @@ func (a *allocator) forceSetOffset(
 
 func (a *allocator) enqueue(ctx context.Context, act action) error {
 	a.mu.RLock()
-	closed := a.closed
-	a.mu.RUnlock()
-	if closed {
+	defer a.mu.RUnlock()
+	if a.closed {
 		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
 	select {
@@ -241,6 +240,8 @@ func (a *allocator) run(ctx context.Context) {
 				a.doUpdate(act)
 			case forceUpdateType:
 				a.doForceSetOffset(act)
+			case barrierType:
+				act.applyUpdate(nil)
 			}
 		}
 	}
@@ -318,6 +319,12 @@ func (a *allocator) close() {
 		a.mu.Unlock()
 		return
 	}
+	drained := make(chan struct{})
+	a.c <- action{
+		actionType:  barrierType,
+		applyUpdate: func(error) { close(drained) },
+	}
+	<-drained
 	a.closed = true
 	close(a.done)
 	a.mu.Unlock()
@@ -328,6 +335,7 @@ var (
 	allocType       = 0
 	updateType      = 1
 	forceUpdateType = 2
+	barrierType     = 3
 )
 
 type action struct {
