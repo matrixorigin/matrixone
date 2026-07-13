@@ -3791,6 +3791,17 @@ var (
 			output: "select count(*) from t",
 		},
 		{
+			// #24823: MATCH ... AGAINST pattern must keep its quotes when the query is
+			// re-serialized (e.g. CREATE TABLE AS SELECT), else the re-parse syntax-errors.
+			input:  "select id, MATCH (body) AGAINST ('防水' IN BOOLEAN MODE) as sc from ft where MATCH (body) AGAINST ('防水' IN BOOLEAN MODE)",
+			output: "select id, MATCH (body) AGAINST ('防水' IN BOOLEAN MODE) as sc from ft where MATCH (body) AGAINST ('防水' IN BOOLEAN MODE)",
+		},
+		{
+			// embedded single quote in the pattern must be escaped ('' ) on restore.
+			input:  "select * from t where MATCH (body) AGAINST ('a''b')",
+			output: "select * from t where MATCH (body) AGAINST ('a''b')",
+		},
+		{
 			input:  "select count(*) as cnt, sum(a) from t group by b having count(*) > 1",
 			output: "select count(*) as cnt, sum(a) from t group by b having count(*) > 1",
 		},
