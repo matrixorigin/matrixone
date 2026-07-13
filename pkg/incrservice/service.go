@@ -44,14 +44,16 @@ type service struct {
 	store     IncrValueStore
 	allocator valueAllocator
 	stopper   *stopper.Stopper
+	builders  sync.WaitGroup
 
 	mu struct {
 		sync.Mutex
-		closed    bool
-		destroyed map[uint64]deleteCtx
-		tables    map[uint64]incrTableCache
-		creates   map[string][]uint64
-		deletes   map[string][]deleteCtx
+		closed     bool
+		destroyed  map[uint64]deleteCtx
+		tables     map[uint64]incrTableCache
+		generation map[uint64]uint64
+		creates    map[string][]uint64
+		deletes    map[string][]deleteCtx
 	}
 }
 
@@ -72,6 +74,7 @@ func NewIncrService(
 	}
 	s.mu.destroyed = make(map[uint64]deleteCtx)
 	s.mu.tables = make(map[uint64]incrTableCache, 1024)
+	s.mu.generation = make(map[uint64]uint64, 1024)
 	s.mu.creates = make(map[string][]uint64, 1024)
 	s.mu.deletes = make(map[string][]deleteCtx, 1024)
 	if err := s.stopper.RunTask(s.destroyTables); err != nil {
@@ -270,6 +273,14 @@ func (s *service) Reload(
 	tableID uint64,
 ) error {
 	s.mu.Lock()
+	if s.mu.closed {
+		s.mu.Unlock()
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	if s.mu.generation == nil {
+		s.mu.generation = make(map[uint64]uint64)
+	}
+	s.mu.generation[tableID]++
 	c, ok := s.mu.tables[tableID]
 	if !ok {
 		s.mu.Unlock()
@@ -301,14 +312,18 @@ func (s *service) SetOffset(
 }
 
 func (s *service) Close() {
-	s.stopper.Stop()
-
 	s.mu.Lock()
 	if s.mu.closed {
 		s.mu.Unlock()
 		return
 	}
 	s.mu.closed = true
+	s.mu.Unlock()
+
+	s.stopper.Stop()
+	s.builders.Wait()
+
+	s.mu.Lock()
 	for _, tc := range s.mu.tables {
 		if err := tc.close(); err != nil {
 			panic(err)
@@ -381,17 +396,28 @@ func (s *service) getCommittedTableCacheForVersion(
 	tableVersion uint32,
 ) (incrTableCache, error) {
 	s.mu.Lock()
+	if s.mu.closed {
+		s.mu.Unlock()
+		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
 	c, ok := s.mu.tables[tableID]
 	if ok && c.version() == tableVersion {
 		c.acquire()
 		s.mu.Unlock()
 		return c, nil
 	}
+	if ok && c.version() > tableVersion {
+		s.mu.Unlock()
+		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
 	if _, ok := s.mu.destroyed[tableID]; ok {
 		s.mu.Unlock()
 		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
+	generation := s.mu.generation[tableID]
+	s.builders.Add(1)
 	s.mu.Unlock()
+	defer s.builders.Done()
 
 	cols, err := s.store.GetColumns(ctx, tableID, nil)
 	if err != nil {
@@ -400,6 +426,24 @@ func (s *service) getCommittedTableCacheForVersion(
 	if len(cols) == 0 {
 		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
+
+	s.mu.Lock()
+	if s.mu.closed || s.mu.generation[tableID] != generation {
+		s.mu.Unlock()
+		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	if current, ok := s.mu.tables[tableID]; ok {
+		if current.version() == tableVersion {
+			current.acquire()
+			s.mu.Unlock()
+			return current, nil
+		}
+		if current.version() > tableVersion {
+			s.mu.Unlock()
+			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+	}
+	s.mu.Unlock()
 
 	replacement, err := newTableCache(
 		ctx,
@@ -417,6 +461,11 @@ func (s *service) getCommittedTableCacheForVersion(
 	}
 
 	s.mu.Lock()
+	if s.mu.closed || s.mu.generation[tableID] != generation {
+		s.mu.Unlock()
+		_ = replacement.close()
+		return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
 	if _, ok := s.mu.destroyed[tableID]; ok {
 		s.mu.Unlock()
 		_ = replacement.close()
@@ -428,6 +477,11 @@ func (s *service) getCommittedTableCacheForVersion(
 			s.mu.Unlock()
 			_ = replacement.close()
 			return current, nil
+		}
+		if current.version() > tableVersion {
+			s.mu.Unlock()
+			_ = replacement.close()
+			return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
 		}
 		c = current
 	} else {

@@ -24,6 +24,7 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -49,6 +50,48 @@ type failingGetColumnsStore struct {
 
 	mu  sync.Mutex
 	err error
+}
+
+type blockingGetColumnsStore struct {
+	IncrValueStore
+
+	mu      sync.Mutex
+	block   bool
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingGetColumnsStore) blockNext() (<-chan struct{}, chan<- struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.block = true
+	s.started = make(chan struct{})
+	s.release = make(chan struct{})
+	return s.started, s.release
+}
+
+func (s *blockingGetColumnsStore) GetColumns(
+	ctx context.Context,
+	tableID uint64,
+	txnOp client.TxnOperator,
+) ([]AutoColumn, error) {
+	s.mu.Lock()
+	block := s.block
+	started := s.started
+	release := s.release
+	if block {
+		s.block = false
+	}
+	s.mu.Unlock()
+	if block {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
+	}
+	return s.IncrValueStore.GetColumns(ctx, tableID, txnOp)
 }
 
 func (s *failingGetColumnsStore) GetColumns(
@@ -619,6 +662,113 @@ func TestTableCacheRetireWaitsForActiveUsers(t *testing.T) {
 	c.lifecycle.Lock()
 	require.True(t, c.lifecycle.closed)
 	c.lifecycle.Unlock()
+}
+
+func TestInsertValuesRejectsOlderVersion(t *testing.T) {
+	runServiceTests(t, 1, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+		s := ss[0]
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, ops[0]))
+		require.NoError(t, ops[0].Commit(ctx))
+		vecType := types.New(types.T_uint64, 0, 0)
+		input := newTestVector[uint64](1, vecType, nil, nil)
+		_, err := s.InsertValues(ctx, 0, 8, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		_, err = s.InsertValues(ctx, 0, 7, []*vector.Vector{input}, 1, 0)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+		require.Equal(t, uint32(8), s.getTableCache(0).version())
+	})
+}
+
+func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerVersion(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		store := &blockingGetColumnsStore{IncrValueStore: NewMemStore()}
+		s := NewIncrService("", store, Config{CountPerAllocate: 10}).(*service)
+		defer s.Close()
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Create(ctx, 0, newTestTableDef(1), op))
+		require.NoError(t, op.Commit(ctx))
+
+		started, release := store.blockNext()
+		oldErr := make(chan error, 1)
+		go func() {
+			input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+			_, err := s.InsertValues(ctx, 0, 7, []*vector.Vector{input}, 1, 0)
+			oldErr <- err
+		}()
+		<-started
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		_, err = s.InsertValues(ctx, 0, 8, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		close(release)
+		require.True(t, moerr.IsMoErrCode(<-oldErr, moerr.ErrTxnNeedRetryWithDefChanged))
+		require.Equal(t, uint32(8), s.getTableCache(0).version())
+	})
+}
+
+func TestInsertValuesBuilderCannotReviveCacheAfterReload(t *testing.T) {
+	testBlockedBuilderInvalidation(t, false)
+}
+
+func TestInsertValuesBuilderCannotReviveCacheAfterClose(t *testing.T) {
+	testBlockedBuilderInvalidation(t, true)
+}
+
+func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		store := &blockingGetColumnsStore{IncrValueStore: NewMemStore()}
+		s := NewIncrService("", store, Config{CountPerAllocate: 10}).(*service)
+		if !closeService {
+			defer s.Close()
+		}
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Create(ctx, 0, newTestTableDef(1), op))
+		require.NoError(t, op.Commit(ctx))
+
+		started, release := store.blockNext()
+		result := make(chan error, 1)
+		go func() {
+			input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+			_, err := s.InsertValues(ctx, 0, 8, []*vector.Vector{input}, 1, 0)
+			result <- err
+		}()
+		<-started
+		if closeService {
+			closed := make(chan struct{})
+			go func() {
+				s.Close()
+				close(closed)
+			}()
+			require.Eventually(t, func() bool {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				return s.mu.closed
+			}, time.Second, time.Millisecond)
+			close(release)
+			<-closed
+		} else {
+			require.NoError(t, s.Reload(ctx, 0))
+			close(release)
+		}
+		require.True(t, moerr.IsMoErrCode(<-result, moerr.ErrTxnNeedRetryWithDefChanged))
+		s.mu.Lock()
+		cache, installed := s.mu.tables[0]
+		s.mu.Unlock()
+		if closeService {
+			require.True(t, installed)
+			require.Equal(t, uint32(0), cache.version())
+		} else {
+			require.False(t, installed)
+		}
+	})
 }
 
 func TestMemStoreForceSetOffset(t *testing.T) {
