@@ -75,6 +75,7 @@ func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
 }
 
 type Ws struct {
+	advanceSnapshot func(context.Context, timestamp.Timestamp) error
 }
 
 func (w *Ws) SetCloneTxn(snapshot int64) {}
@@ -100,6 +101,13 @@ func (w *Ws) Snapshot() bool {
 }
 
 func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
+	return nil
+}
+
+func (w *Ws) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	if w.advanceSnapshot != nil {
+		return w.advanceSnapshot(ctx, ts)
+	}
 	return nil
 }
 

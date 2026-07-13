@@ -695,6 +695,29 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	return nil
 }
 
+func (txn *Transaction) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	txn.op.EnterIncrStmt()
+	defer txn.op.ExitIncrStmt()
+
+	txn.Lock()
+	defer txn.Unlock()
+
+	if !txn.op.Txn().IsRCIsolation() {
+		return txn.advanceSnapshot(ctx, ts)
+	}
+
+	if txn.transfer.lastTransferred.IsEmpty() {
+		txn.start = time.Now()
+		txn.transfer.lastTransferred = types.TimestampToTS(txn.op.SnapshotTS())
+	}
+
+	if err := txn.advanceSnapshot(ctx, ts); err != nil {
+		return err
+	}
+
+	return txn.transferTombstones(ctx)
+}
+
 // writeOffset returns the offset of the first write in the workspace
 func (txn *Transaction) WriteOffset() uint64 {
 	txn.Lock()
