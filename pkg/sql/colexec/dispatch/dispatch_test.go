@@ -35,7 +35,7 @@ import (
 )
 
 func TestPrepareRemote(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 
@@ -53,14 +53,14 @@ func TestPrepareRemote(t *testing.T) {
 	// uuid map should have this pipeline information after prepare remote.
 	require.NoError(t, d.prepareRemote(proc))
 
-	p, c, b := colexec.Get().GetProcByUuid(uid, false)
+	p, c, b := colexec.GetServer("").GetProcByUuid(uid, false)
 	require.True(t, b)
 	require.Equal(t, proc, p)
 	require.Equal(t, d.ctr.remoteInfo, c)
 }
 
 func TestRegisterRemoteReceiversBeforePrepare(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 
@@ -85,16 +85,16 @@ func TestRegisterRemoteReceiversBeforePrepare(t *testing.T) {
 	require.NoError(t, d.Prepare(proc))
 	require.Equal(t, earlyNotifyCh, d.ctr.remoteInfo)
 
-	p, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+	p, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
 	require.True(t, ok)
 	require.Same(t, proc, p)
 	require.Equal(t, earlyNotifyCh, notifyCh)
 
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 }
 
 func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 
@@ -103,7 +103,7 @@ func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
 	uid2, err := uuid.NewV7()
 	require.NoError(t, err)
 
-	colexec.Get().GetProcByUuid(uid2, true)
+	colexec.GetServer("").GetProcByUuid(uid2, true)
 	d := Dispatch{
 		FuncId: SendToAllFunc,
 		RemoteRegs: []colexec.ReceiveInfo{
@@ -115,14 +115,14 @@ func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
 	require.Error(t, d.RegisterRemoteReceivers(proc))
 	require.Nil(t, d.ctr.remoteInfo)
 
-	p, notifyCh, ok := colexec.Get().GetProcByUuid(uid1, false)
+	p, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid1, false)
 	require.False(t, ok)
 	require.Nil(t, p)
 	require.Nil(t, notifyCh)
 }
 
 func TestRegisterRemoteReceiversRollbackPreservesConflictingLiveOwner(t *testing.T) {
-	server := colexec.NewServer(nil)
+	server := colexec.NewServer("")
 	proc := testutil.NewProcess(t)
 	ownerProc := &process.Process{}
 	ownerCh := make(process.RemotePipelineInformationChannel)
@@ -156,7 +156,7 @@ func TestRegisterRemoteReceiversRollbackPreservesConflictingLiveOwner(t *testing
 }
 
 func TestRegisterRemoteReceiversRollbackPreservesConflictingAttachedOwner(t *testing.T) {
-	server := colexec.NewServer(nil)
+	server := colexec.NewServer("")
 	proc := testutil.NewProcess(t)
 	ownerProc := &process.Process{}
 	ownerCh := make(process.RemotePipelineInformationChannel)
@@ -198,7 +198,7 @@ func TestRegisterRemoteReceiversRollbackPreservesConflictingAttachedOwner(t *tes
 }
 
 func TestRemoteReceiverRegistrationCleanupChecksOwner(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 	uid, err := uuid.NewV7()
@@ -222,7 +222,7 @@ func TestRemoteReceiverRegistrationCleanupChecksOwner(t *testing.T) {
 	// A delayed cleanup from the previous registration must not remove or
 	// clear the current owner, even though the UUID and process are reused.
 	first.Cleanup()
-	registeredProc, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+	registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
 	require.True(t, ok)
 	require.Same(t, proc, registeredProc)
 	require.Equal(t, secondCh, notifyCh)
@@ -294,7 +294,7 @@ func TestDispatchAdoptCleanupState_NilSafe(t *testing.T) {
 }
 
 func TestDispatchResetDoesNotBlockWhenRemoteErrChannelIsFull(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 	uid, err := uuid.NewV7()
@@ -325,7 +325,7 @@ func TestDispatchResetDoesNotBlockWhenRemoteErrChannelIsFull(t *testing.T) {
 }
 
 func TestDispatchResetFailedNilErrorNotifiesRemoteWithCause(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)
