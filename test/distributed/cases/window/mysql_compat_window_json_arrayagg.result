@@ -1,0 +1,80 @@
+drop database if exists mysql_compat_window_json_arrayagg;
+create database mysql_compat_window_json_arrayagg;
+use mysql_compat_window_json_arrayagg;
+create table orders (
+id int primary key,
+customer_id int,
+status varchar(16)
+);
+insert into orders values
+(1,10,'paid'),(2,10,'paid'),(3,10,'refund'),
+(4,20,'paid'),(5,20,'paid'),(6,20,'pending'),
+(7,30,'paid'),(8,30,'refund');
+select id, customer_id,
+json_arrayagg(status) over (partition by customer_id order by id) v
+from orders order by id;
+➤ id[4,32,0]  ¦  customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
+1  ¦  10  ¦  ["paid"]  𝄀
+2  ¦  10  ¦  ["paid", "paid"]  𝄀
+3  ¦  10  ¦  ["paid", "paid", "refund"]  𝄀
+4  ¦  20  ¦  ["paid"]  𝄀
+5  ¦  20  ¦  ["paid", "paid"]  𝄀
+6  ¦  20  ¦  ["paid", "paid", "pending"]  𝄀
+7  ¦  30  ¦  ["paid"]  𝄀
+8  ¦  30  ¦  ["paid", "refund"]
+select id, customer_id,
+json_arrayagg(status) over (partition by customer_id order by id
+rows between unbounded preceding and unbounded following) v
+from orders order by id;
+➤ id[4,32,0]  ¦  customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
+1  ¦  10  ¦  ["paid", "paid", "refund"]  𝄀
+2  ¦  10  ¦  ["paid", "paid", "refund"]  𝄀
+3  ¦  10  ¦  ["paid", "paid", "refund"]  𝄀
+4  ¦  20  ¦  ["paid", "paid", "pending"]  𝄀
+5  ¦  20  ¦  ["paid", "paid", "pending"]  𝄀
+6  ¦  20  ¦  ["paid", "paid", "pending"]  𝄀
+7  ¦  30  ¦  ["paid", "refund"]  𝄀
+8  ¦  30  ¦  ["paid", "refund"]
+select id, customer_id,
+json_arrayagg(status) over (partition by customer_id order by id rows between 1 preceding and current row) v
+from orders order by id;
+➤ id[4,32,0]  ¦  customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
+1  ¦  10  ¦  ["paid"]  𝄀
+2  ¦  10  ¦  ["paid", "paid"]  𝄀
+3  ¦  10  ¦  ["paid", "refund"]  𝄀
+4  ¦  20  ¦  ["paid"]  𝄀
+5  ¦  20  ¦  ["paid", "paid"]  𝄀
+6  ¦  20  ¦  ["paid", "pending"]  𝄀
+7  ¦  30  ¦  ["paid"]  𝄀
+8  ¦  30  ¦  ["paid", "refund"]
+select id, customer_id,
+json_objectagg(cast(id as char), status) over (partition by customer_id order by id) v
+from orders order by id;
+➤ id[4,32,0]  ¦  customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
+1  ¦  10  ¦  {"1": "paid"}  𝄀
+2  ¦  10  ¦  {"1": "paid", "2": "paid"}  𝄀
+3  ¦  10  ¦  {"1": "paid", "2": "paid", "3": "refund"}  𝄀
+4  ¦  20  ¦  {"4": "paid"}  𝄀
+5  ¦  20  ¦  {"4": "paid", "5": "paid"}  𝄀
+6  ¦  20  ¦  {"4": "paid", "5": "paid", "6": "pending"}  𝄀
+7  ¦  30  ¦  {"7": "paid"}  𝄀
+8  ¦  30  ¦  {"7": "paid", "8": "refund"}
+select customer_id, json_arrayagg(status) v
+from orders where id in (1, 4, 7) group by customer_id order by customer_id;
+➤ customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
+10  ¦  ["paid"]  𝄀
+20  ¦  ["paid"]  𝄀
+30  ¦  ["paid"]
+select customer_id, json_objectagg(cast(id as char), status) v
+from orders where id in (1, 4, 7) group by customer_id order by customer_id;
+➤ customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
+10  ¦  {"1": "paid"}  𝄀
+20  ¦  {"4": "paid"}  𝄀
+30  ¦  {"7": "paid"}
+create table t_ident (json_arrayagg int, json_objectagg int);
+insert into t_ident values (1, 2);
+select json_arrayagg, json_objectagg from t_ident;
+➤ json_arrayagg[4,32,0]  ¦  json_objectagg[4,32,0]  𝄀
+1  ¦  2
+drop table t_ident;
+drop database mysql_compat_window_json_arrayagg;
