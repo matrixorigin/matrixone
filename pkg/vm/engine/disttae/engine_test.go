@@ -297,6 +297,29 @@ func TestEngineNodesRollingUpgradeReturnsOnlyCurrentCommit(t *testing.T) {
 	require.Equal(t, []string{"current-pipeline"}, nodeAddresses(nodes))
 }
 
+func TestEngineNodesRollingUpgradeMarksOldCommitOutsideWorkingSet(t *testing.T) {
+	for _, state := range []metadata.WorkState{
+		metadata.WorkState_Draining,
+		metadata.WorkState_Drained,
+	} {
+		t.Run(state.String(), func(t *testing.T) {
+			e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+				CNStores: []logpb.CNStore{
+					newEngineNodesCNStore("current-cn-1", "current-pipeline-1", nil, metadata.WorkState_Working, version.CommitID),
+					newEngineNodesCNStore("current-cn-2", "current-pipeline-2", nil, metadata.WorkState_Working, version.CommitID),
+					newEngineNodesCNStore("old-cn", "old-pipeline", nil, state, "old-commit"),
+				},
+			})
+
+			nodes, err := e.Nodes(false, "", "", nil)
+			require.NoError(t, err)
+			require.Equal(t, []string{"current-pipeline-1", "current-pipeline-2"}, nodeAddresses(nodes))
+			require.True(t, nodes[0].HasMixedCommit)
+			require.True(t, nodes[1].HasMixedCommit)
+		})
+	}
+}
+
 func newEngineWithClusterDetails(t *testing.T, details logpb.ClusterDetails) *Engine {
 	t.Helper()
 

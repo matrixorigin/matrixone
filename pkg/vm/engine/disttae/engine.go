@@ -823,7 +823,10 @@ func (e *Engine) Nodes(
 	cluster := clusterservice.GetMOCluster(e.service)
 	var selector clusterservice.Selector
 	hasMixedCommit := false
-	cluster.GetCNService(selector, func(c metadata.CNService) bool {
+	// Use the full cluster snapshot for rolling-upgrade compatibility. A CN
+	// remains incompatible while it is present as draining or drained, even
+	// though it is not eligible for new query work.
+	cluster.GetCNServiceWithoutWorkingState(clusterservice.NewSelectAll(), func(c metadata.CNService) bool {
 		if c.CommitID != version.CommitID {
 			hasMixedCommit = true
 		}

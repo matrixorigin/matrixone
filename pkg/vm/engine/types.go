@@ -46,8 +46,8 @@ type Node struct {
 	Mcpu int
 	Id   string `json:"id"`
 	Addr string `json:"address"`
-	// HasMixedCommit is scheduling-only topology metadata. It is true when
-	// discovery saw an eligible CN running a different binary commit.
+	// HasMixedCommit is scheduling-only topology metadata. It is true when the
+	// cluster snapshot contains a CN running a different binary commit.
 	HasMixedCommit bool `json:"-"`
 	//TODO::change RelData to Tombstoner, since only Tombstones ned to be serialized.
 	Data  RelData
