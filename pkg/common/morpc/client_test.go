@@ -115,18 +115,23 @@ func TestCloseBackendForSynchronouslyDetachesOnlyTarget(t *testing.T) {
 	require.NoError(t, c.CloseBackendFor("target"))
 
 	c.mu.Lock()
-	require.Empty(t, c.mu.backends["target"])
-	require.Nil(t, c.mu.ops["target"])
-	require.Equal(t, []Backend{other}, c.mu.backends["other"])
+	targetBackends := append([]Backend(nil), c.mu.backends["target"]...)
+	targetOp := c.mu.ops["target"]
+	otherBackends := append([]Backend(nil), c.mu.backends["other"]...)
 	c.mu.Unlock()
+	require.Empty(t, targetBackends)
+	require.Nil(t, targetOp)
+	require.Equal(t, []Backend{other}, otherBackends)
 	require.NotContains(t, c.circuitBreakers.Stats(), "target")
 
 	target.RWMutex.RLock()
-	require.True(t, target.closed)
+	targetClosed := target.closed
 	target.RWMutex.RUnlock()
 	other.RWMutex.RLock()
-	require.False(t, other.closed)
+	otherClosed := other.closed
 	other.RWMutex.RUnlock()
+	require.True(t, targetClosed)
+	require.False(t, otherClosed)
 
 	c.mu.Lock()
 	replacement, err := c.createBackendLocked("target")
@@ -175,11 +180,13 @@ func TestCloseBackendForRejectsConcurrentSynchronousCreate(t *testing.T) {
 	}
 
 	c.mu.Lock()
-	require.Empty(t, c.mu.backends["target"])
+	targetBackends := append([]Backend(nil), c.mu.backends["target"]...)
 	c.mu.Unlock()
 	factory.backend.RWMutex.RLock()
-	require.True(t, factory.backend.closed)
+	backendClosed := factory.backend.closed
 	factory.backend.RWMutex.RUnlock()
+	require.Empty(t, targetBackends)
+	require.True(t, backendClosed)
 }
 
 func TestQueueFullFallbackRejectsGenerationCapturedBeforeReset(t *testing.T) {
@@ -210,8 +217,9 @@ func TestQueueFullFallbackRejectsGenerationCapturedBeforeReset(t *testing.T) {
 	default:
 	}
 	c.mu.Lock()
-	require.Empty(t, c.mu.backends["target"])
+	targetBackends := append([]Backend(nil), c.mu.backends["target"]...)
 	c.mu.Unlock()
+	require.Empty(t, targetBackends)
 }
 
 func TestBackendGenerationIsBoundedAndDoesNotABA(t *testing.T) {
@@ -226,7 +234,6 @@ func TestBackendGenerationIsBoundedAndDoesNotABA(t *testing.T) {
 	require.NoError(t, c.CloseBackendFor("target"))
 	c.mu.Lock()
 	current := c.backendGenerationLocked("target")
-	require.NotSame(t, old, current)
 	c.mu.backendGeneration = make(map[string]*backendGeneration)
 	generations := make(map[string]*backendGeneration, maxBackendGenerationEntries)
 	for i := 0; i < maxBackendGenerationEntries; i++ {
@@ -234,7 +241,7 @@ func TestBackendGenerationIsBoundedAndDoesNotABA(t *testing.T) {
 		generations[remote] = c.backendGenerationLocked(remote)
 	}
 	c.backendGenerationLocked("overflow")
-	require.LessOrEqual(t, len(c.mu.backendGeneration), maxBackendGenerationEntries)
+	generationCount := len(c.mu.backendGeneration)
 	var evictedRemote string
 	var evictedGeneration *backendGeneration
 	for remote, generation := range generations {
@@ -245,6 +252,8 @@ func TestBackendGenerationIsBoundedAndDoesNotABA(t *testing.T) {
 		}
 	}
 	c.mu.Unlock()
+	require.NotSame(t, old, current)
+	require.LessOrEqual(t, generationCount, maxBackendGenerationEntries)
 	require.NotEmpty(t, evictedRemote)
 
 	_, err = c.createBackendWithBookkeepingAtGeneration(
@@ -571,7 +580,7 @@ func TestCloseIdleBackends(t *testing.T) {
 		}
 	}
 	c.mu.Lock()
-	require.Equal(t, 2, len(c.mu.backends["b1"]), "second backend must be created")
+	backendCount := len(c.mu.backends["b1"])
 	// b is the locked backend returned by getBackend; find the active (non-b) backend
 	// without assuming slice order, since concurrent creation may append in any order.
 	var activeBackend Backend
@@ -582,6 +591,7 @@ func TestCloseIdleBackends(t *testing.T) {
 		}
 	}
 	c.mu.Unlock()
+	require.Equal(t, 2, backendCount, "second backend must be created")
 	require.NotNil(t, activeBackend, "active backend not found")
 
 	// b is the idle backend: unlock it and zero activeTime so GC will close it

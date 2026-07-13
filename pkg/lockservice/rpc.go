@@ -80,6 +80,7 @@ type client struct {
 	// interrupt concurrent Lock/Unlock traffic on the normal client.
 	activeTxnClient morpc.RPCClient
 
+	recoveryResetMu  sync.Mutex // serializes slow reset work without blocking request reads
 	recoveryMu       sync.RWMutex
 	recoveryBackends map[string]recoveryBackend // CN UUID -> recovery endpoint
 	resolveBackend   func(context.Context, string) (string, error)
@@ -376,25 +377,12 @@ func (c *client) activeTxnTransport() morpc.RPCClient {
 // refresh alone is insufficient to prevent reuse of the stale backend.
 func (c *client) ResetBackend(serviceID string) error {
 	sid := getUUIDFromServiceIdentifier(serviceID)
-	var address string
-	for i := 0; i < 2; i++ {
-		c.cluster.GetCNServiceWithoutWorkingState(
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			})
-		if address != "" {
-			break
-		}
-		c.cluster.ForceRefresh(true)
-	}
-	if address == "" {
-		return moerr.NewInternalErrorNoCtx("cannot find lockservice address for " + sid)
-	}
 
-	c.recoveryMu.Lock()
-	defer c.recoveryMu.Unlock()
+	// Discovery refresh, DNS, and backend shutdown can all be slow. Serialize
+	// resets separately so active-txn sends never wait on those operations while
+	// acquiring recoveryMu for their read-only route lookup.
+	c.recoveryResetMu.Lock()
+	defer c.recoveryResetMu.Unlock()
 	resetter, ok := c.activeTxnTransport().(interface {
 		CloseBackendFor(string) error
 	})
@@ -402,20 +390,24 @@ func (c *client) ResetBackend(serviceID string) error {
 		return moerr.NewInternalErrorNoCtx("morpc client does not support targeted backend reset")
 	}
 
-	// Detach both forms: requests normally use the discovered hostname, while
-	// a prior recovery may have pinned the then-current IP endpoint.
-	if err := resetter.CloseBackendFor(address); err != nil {
-		return err
+	lookupAddress := func() string {
+		var address string
+		c.cluster.GetCNServiceWithoutWorkingState(
+			clusterservice.NewServiceIDSelector(sid),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			})
+		return address
 	}
-	if old, ok := c.recoveryBackends[sid]; ok {
-		delete(c.recoveryBackends, sid)
-		endpoint := old.endpoint
-		if endpoint != address {
-			if err := resetter.CloseBackendFor(endpoint); err != nil {
-				return err
-			}
-		}
-	}
+
+	// A negative response proves that the route used for the first check may be
+	// stale even when the cached address is non-empty. Refresh synchronously so
+	// the confirming request cannot be sent to an old CN address after a hot
+	// recreate or address reassignment.
+	staleAddress := lookupAddress()
+	c.cluster.ForceRefresh(true)
+	address := lookupAddress()
 
 	ctx, cancel := context.WithTimeoutCause(
 		context.Background(),
@@ -423,20 +415,61 @@ func (c *client) ResetBackend(serviceID string) error {
 		moerr.CauseResetLockServiceBackend,
 	)
 	defer cancel()
-	if c.resolveBackend == nil {
-		return moerr.NewInternalErrorNoCtx("lockservice recovery resolver is not configured")
+	var endpoint string
+	var resolveErr error
+	if address != "" {
+		if c.resolveBackend == nil {
+			resolveErr = moerr.NewInternalErrorNoCtx("lockservice recovery resolver is not configured")
+		} else {
+			endpoint, resolveErr = c.resolveBackend(ctx, address)
+		}
 	}
-	endpoint, err := c.resolveBackend(ctx, address)
-	if err != nil {
-		return err
+
+	// Detach every route that may still identify this CN incarnation: the
+	// pre-refresh address, the refreshed address, and a prior pinned recovery
+	// endpoint. Continue after individual close failures so reset performs as
+	// much cleanup as possible, then preserve the indeterminate result.
+	c.recoveryMu.Lock()
+	old, hadOld := c.recoveryBackends[sid]
+	if hadOld {
+		delete(c.recoveryBackends, sid)
 	}
+	c.recoveryMu.Unlock()
+	candidates := []string{staleAddress, address}
+	if hadOld {
+		candidates = append(candidates, old.discovered, old.endpoint)
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	var closeErr error
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		closeErr = errors.Join(closeErr, resetter.CloseBackendFor(candidate))
+	}
+	if address == "" {
+		return errors.Join(
+			closeErr,
+			moerr.NewInternalErrorNoCtx("cannot find lockservice address for "+sid),
+		)
+	}
+	if resolveErr != nil || closeErr != nil {
+		return errors.Join(resolveErr, closeErr)
+	}
+
 	if endpoint == address {
 		return nil
 	}
+	c.recoveryMu.Lock()
 	c.storeRecoveryBackendLocked(sid, recoveryBackend{
 		discovered: address,
 		endpoint:   endpoint,
 	})
+	c.recoveryMu.Unlock()
 	return nil
 }
 
