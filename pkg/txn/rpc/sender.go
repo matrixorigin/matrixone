@@ -174,6 +174,10 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 	return sr, nil
 }
 
+func newTxnUnknownError(ctx context.Context, txnID []byte) error {
+	return moerr.NewTxnUnknown(ctx, hex.EncodeToString(txnID))
+}
+
 func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnResponse, error) {
 	ctx, span := trace.Debug(ctx, "sender.doSend")
 	defer span.End()
@@ -235,17 +239,19 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	defer f.Close()
 	v, err := f.Get()
 	if err != nil {
+		// Once morpc accepted a Commit and returned a Future, a transport or
+		// response-wait error cannot prove whether TN applied it. This includes a
+		// context deadline after the request was written, not only EOF/reset.
+		if request.Method == txn.TxnMethod_Commit {
+			return txn.TxnResponse{}, newTxnUnknownError(ctx, request.Txn.ID)
+		}
 		// if the error is io.EOF or "connection is reset by peer",
 		// means the connection to TN node is ended, but no response
 		// is returned from TN txn service. In this case, the result
 		// of the txn status is unknown.
 		if errors.Is(err, io.EOF) ||
 			strings.Contains(err.Error(), "connection reset by peer") {
-			return txn.TxnResponse{},
-				moerr.NewTxnUnknown(
-					ctx,
-					hex.EncodeToString(request.Txn.ID),
-				)
+			return txn.TxnResponse{}, newTxnUnknownError(ctx, request.Txn.ID)
 		}
 		return txn.TxnResponse{}, err
 	}

@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -239,6 +240,26 @@ func exprCanRemoveProject(expr *Expr) bool {
 				return canRemove
 			}
 		}
+	case *plan.Expr_List:
+		for _, item := range ne.List.List {
+			if !exprCanRemoveProject(item) {
+				return false
+			}
+		}
+	case *plan.Expr_W:
+		if !exprCanRemoveProject(ne.W.WindowFunc) {
+			return false
+		}
+		for _, partitionBy := range ne.W.PartitionBy {
+			if !exprCanRemoveProject(partitionBy) {
+				return false
+			}
+		}
+		for _, orderBy := range ne.W.OrderBy {
+			if !exprCanRemoveProject(orderBy.Expr) {
+				return false
+			}
+		}
 	}
 	return true
 }
@@ -361,23 +382,71 @@ func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
 	}
 }
 
-func (builder *QueryBuilder) remapHavingClause(expr *plan.Expr, groupTag, aggregateTag int32, groupSize int32) {
+func (builder *QueryBuilder) remapHavingClause(
+	expr *plan.Expr,
+	groupTag, aggregateTag int32,
+	groupSize, aggregateSize int32,
+	aggPos []int32,
+) error {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		if exprImpl.Col.RelPos == groupTag {
+			if exprImpl.Col.ColPos < 0 || exprImpl.Col.ColPos >= groupSize {
+				return moerr.NewInternalErrorf(
+					builder.GetContext(),
+					"invalid group column %d in HAVING during column pruning",
+					exprImpl.Col.ColPos,
+				)
+			}
 			exprImpl.Col.Name = builder.nameByColRef[[2]int32{groupTag, exprImpl.Col.ColPos}]
 			exprImpl.Col.RelPos = -1
-		} else {
-			exprImpl.Col.Name = builder.nameByColRef[[2]int32{aggregateTag, exprImpl.Col.ColPos}]
+		} else if exprImpl.Col.RelPos == aggregateTag {
+			oldPos := exprImpl.Col.ColPos
+			if oldPos < 0 || oldPos >= aggregateSize {
+				return moerr.NewInternalErrorf(
+					builder.GetContext(),
+					"invalid aggregate column %d in HAVING during column pruning",
+					oldPos,
+				)
+			}
+			newPos := oldPos
+			if aggPos != nil {
+				if int(oldPos) >= len(aggPos) || aggPos[oldPos] < 0 {
+					return moerr.NewInternalErrorf(
+						builder.GetContext(),
+						"invalid aggregate column %d in HAVING during column pruning",
+						oldPos,
+					)
+				}
+				newPos = aggPos[oldPos]
+			}
+			exprImpl.Col.Name = builder.nameByColRef[[2]int32{aggregateTag, oldPos}]
 			exprImpl.Col.RelPos = -2
-			exprImpl.Col.ColPos += groupSize
+			exprImpl.Col.ColPos = newPos + groupSize
+		} else {
+			return moerr.NewInternalErrorf(
+				builder.GetContext(),
+				"invalid relation tag %d in HAVING during column pruning",
+				exprImpl.Col.RelPos,
+			)
 		}
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			builder.remapHavingClause(arg, groupTag, aggregateTag, groupSize)
+			if err := builder.remapHavingClause(arg, groupTag, aggregateTag, groupSize, aggregateSize, aggPos); err != nil {
+				return err
+			}
+		}
+
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			if err := builder.remapHavingClause(item, groupTag, aggregateTag, groupSize, aggregateSize, aggPos); err != nil {
+				return err
+			}
 		}
 	}
+
+	return nil
 }
 
 func (builder *QueryBuilder) remapWindowClause(
@@ -1147,11 +1216,15 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
+	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
 	builder.mergeFiltersOnCompositeKey(rootID)
+	builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)
 	builder.optimizeLikeExpr(rootID)
 	ReCalcNodeStats(rootID, builder, false, true, true)
+	builder.appendCompoundKeyBlockFilters(rootID)
+	builder.appendCompositePartBlockFilters(compositePartBlockFilters)
 	sortFilterListByStats(builder.GetContext(), rootID, builder)
 	return rootID
 }

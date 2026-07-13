@@ -385,6 +385,17 @@ func TestCalculateAggrMemoryBytes(t *testing.T) {
 	}
 }
 
+func TestStatementInfoFreeResetsDisableAgg(t *testing.T) {
+	stmt := NewStatementInfo()
+	stmt.DisableAgg()
+	stmt.free()
+	require.False(t, stmt.disableAgg)
+
+	reused := NewStatementInfo()
+	require.False(t, reused.disableAgg)
+	reused.free()
+}
+
 func TestStatementInfo_Key(t *testing.T) {
 
 	now := time.Now()

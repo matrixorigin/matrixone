@@ -555,6 +555,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Action = t.Action
 		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
+		op.CountDeleteAffectRows = t.CountDeleteAffectRows
 		op.Engine = t.Engine
 		op.SetInfo(&info)
 		return op
@@ -805,6 +806,13 @@ func constructMultiUpdate(
 	arg := multi_update.NewArgument()
 	arg.Engine = eng
 	arg.IsRemote = isRemote
+
+	for _, updateCtx := range node.UpdateCtxList {
+		if updateCtx.CountDeleteAffectRows {
+			arg.CountDeleteAffectRows = true
+			break
+		}
+	}
 
 	arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(node.UpdateCtxList))
 	for i, updateCtx := range node.UpdateCtxList {
@@ -1390,14 +1398,12 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 
 func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) *window.Window {
 	aggregationExpressions := make([]aggexec.AggFuncExecExpression, len(node.WinSpecList))
-	typs := make([]types.Type, len(node.WinSpecList))
 
 	for i, expr := range node.WinSpecList {
 		f := expr.Expr.(*plan.Expr_W).W.WindowFunc.Expr.(*plan.Expr_F)
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-		var e *plan.Expr = nil
 		var cfg []byte = nil
 		var args = f.F.Args
 		if len(f.F.Args) > 0 {
@@ -1416,18 +1422,11 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 
 				args = f.F.Args[:len(f.F.Args)-1]
 			}
-
-			e = f.F.Args[0]
 		}
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 			functionID, isDistinct, args, cfg)
-
-		if e != nil {
-			typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
-		}
 	}
 	arg := window.NewArgument()
-	arg.Types = typs
 	arg.Aggs = aggregationExpressions
 	arg.WinSpecList = node.WinSpecList
 	return arg

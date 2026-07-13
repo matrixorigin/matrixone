@@ -74,7 +74,10 @@ func TestRegisterRemoteReceiversBeforePrepare(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, d.RegisterRemoteReceivers(proc))
+	registration, err := d.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, registration)
+	defer registration.Cleanup()
 	require.NotNil(t, d.ctr)
 	earlyNotifyCh := d.ctr.remoteInfo
 	require.NotNil(t, earlyNotifyCh)
@@ -116,6 +119,113 @@ func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
 	require.False(t, ok)
 	require.Nil(t, p)
 	require.Nil(t, notifyCh)
+}
+
+func TestRegisterRemoteReceiversRollbackPreservesConflictingLiveOwner(t *testing.T) {
+	server := colexec.NewServer(nil)
+	proc := testutil.NewProcess(t)
+	ownerProc := &process.Process{}
+	ownerCh := make(process.RemotePipelineInformationChannel)
+	uid1 := uuid.Must(uuid.NewV7())
+	uid2 := uuid.Must(uuid.NewV7())
+	t.Cleanup(func() {
+		server.RemoveUuidsOwned([]uuid.UUID{uid2}, ownerCh)
+	})
+
+	require.NoError(t, server.PutProcIntoUuidMap(uid2, ownerProc, ownerCh))
+	d := Dispatch{
+		FuncId: SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: uid1},
+			{Uuid: uid2},
+		},
+	}
+
+	require.Error(t, d.RegisterRemoteReceivers(proc))
+	require.Nil(t, d.ctr.remoteInfo)
+
+	registeredProc, notifyCh, ok := server.GetProcByUuid(uid1, false)
+	require.False(t, ok)
+	require.Nil(t, registeredProc)
+	require.Nil(t, notifyCh)
+
+	registeredProc, notifyCh, ok = server.GetProcByUuid(uid2, false)
+	require.True(t, ok)
+	require.Same(t, ownerProc, registeredProc)
+	require.Equal(t, ownerCh, notifyCh)
+}
+
+func TestRegisterRemoteReceiversRollbackPreservesConflictingAttachedOwner(t *testing.T) {
+	server := colexec.NewServer(nil)
+	proc := testutil.NewProcess(t)
+	ownerProc := &process.Process{}
+	ownerCh := make(process.RemotePipelineInformationChannel)
+	probeCh := make(process.RemotePipelineInformationChannel)
+	uid1 := uuid.Must(uuid.NewV7())
+	uid2 := uuid.Must(uuid.NewV7())
+	t.Cleanup(func() {
+		server.RemoveUuidsOwned([]uuid.UUID{uid2}, ownerCh)
+		server.RemoveUuidsOwned([]uuid.UUID{uid2}, probeCh)
+	})
+
+	require.NoError(t, server.PutProcIntoUuidMap(uid2, ownerProc, ownerCh))
+	registeredProc, notifyCh, ok := server.GetProcByUuid(uid2, false)
+	require.True(t, ok)
+	require.Same(t, ownerProc, registeredProc)
+	require.Equal(t, ownerCh, notifyCh)
+
+	d := Dispatch{
+		FuncId: SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: uid1},
+			{Uuid: uid2},
+		},
+	}
+
+	require.Error(t, d.RegisterRemoteReceivers(proc))
+	require.Nil(t, d.ctr.remoteInfo)
+
+	registeredProc, notifyCh, ok = server.GetProcByUuid(uid1, false)
+	require.False(t, ok)
+	require.Nil(t, registeredProc)
+	require.Nil(t, notifyCh)
+
+	// A second non-destructive conflict proves the attached owner survived;
+	// calling GetProcByUuid again would consume the attached entry.
+	err := server.PutProcIntoUuidMap(uid2, &process.Process{}, probeCh)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "state: attached")
+}
+
+func TestRemoteReceiverRegistrationCleanupChecksOwner(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	proc := testutil.NewProcess(t)
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	d := Dispatch{
+		FuncId:     SendToAllFunc,
+		RemoteRegs: []colexec.ReceiveInfo{{Uuid: uid}},
+	}
+
+	first, err := d.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	first.Cleanup()
+
+	second, err := d.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	defer second.Cleanup()
+	secondCh := d.ctr.remoteInfo
+
+	// A delayed cleanup from the previous registration must not remove or
+	// clear the current owner, even though the UUID and process are reused.
+	first.Cleanup()
+	registeredProc, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+	require.True(t, ok)
+	require.Same(t, proc, registeredProc)
+	require.Equal(t, secondCh, notifyCh)
 }
 
 func TestWaitRemoteRegsReadyPropagatesCancelCause(t *testing.T) {
@@ -307,10 +417,11 @@ func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
 		ctr:       &container{sp: sp},
 		LocalRegs: []*process.WaitRegister{fullReg, healthyReg},
 	}
+	sourceErr := moerr.NewCheckRecursiveLevel(context.Background())
 
 	done := make(chan struct{})
 	go func() {
-		d.Reset(nil, true, moerr.NewInternalErrorNoCtx("cleanup"))
+		d.Reset(nil, true, sourceErr)
 		close(done)
 	}()
 
@@ -335,7 +446,7 @@ func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
 	staleSignal := <-fullReg.Ch2
 	got, info := staleSignal.Action()
 	require.Nil(t, got)
-	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+	require.Same(t, sourceErr, info)
 
 	select {
 	case signal := <-healthyReg.Ch2:
@@ -410,12 +521,12 @@ func TestDispatchResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.
 	staleSignal := <-fullReg.Ch2
 	got, info := staleSignal.Action()
 	require.Nil(t, got)
-	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
 
 	staleSignal = <-healthyReg.Ch2
 	got, info = staleSignal.Action()
 	require.Nil(t, got)
-	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
 
 	terminalSignal := <-healthyReg.Ch2
 	require.Equal(t, process.EventEnd, terminalSignal.EventType)

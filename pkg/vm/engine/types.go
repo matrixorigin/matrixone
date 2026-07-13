@@ -54,6 +54,39 @@ type Node struct {
 	CNIDX int32 // cn index , starts from 0
 }
 
+// QueryCandidate is a CN discovered before tenant and label pool resolution.
+// Service keeps the control-plane metadata needed by pool policy; Mcpu keeps
+// the legacy execution-capacity value until a real resource model replaces it.
+type QueryCandidate struct {
+	Service metadata.CNService
+	Mcpu    int
+}
+
+type QueryCandidates []QueryCandidate
+
+// QueryCandidatePoolRequest contains statement/session constraints used to
+// resolve the allowed CN pool. It deliberately contains no worker-selection
+// policy such as subset size or ranking.
+type QueryCandidatePoolRequest struct {
+	IsInternal bool
+	Tenant     string
+	Username   string
+	CNLabel    map[string]string
+}
+
+// QueryCandidateDiscoverer is an optional engine capability. Implementations
+// return an unpooled cluster snapshot and must not apply tenant or label policy.
+type QueryCandidateDiscoverer interface {
+	DiscoverQueryCandidates(context.Context) (QueryCandidates, error)
+}
+
+// QueryCandidatePoolResolver is the matching optional capability that applies
+// tenant and label policy to an already-discovered candidate snapshot.
+// Implementations must treat candidates and request.CNLabel as read-only.
+type QueryCandidatePoolResolver interface {
+	ResolveQueryCandidatePool(context.Context, QueryCandidates, QueryCandidatePoolRequest) (Nodes, error)
+}
+
 func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 	planDefs := tableDef.GetDefs()
 	c := new(ConstraintDef)
@@ -999,6 +1032,7 @@ var DefaultRangesParam RangesParam = RangesParam{
 	DontSupportRelData: true,
 }
 
+// Relation is bound to the transaction operator used to open its Database.
 type Relation interface {
 	Statistics
 
@@ -1105,8 +1139,26 @@ type Relation interface {
 	// GetFlushTS returns the flush timestamp of the relation.
 	GetFlushTS(ctx context.Context) (types.TS, error)
 
-	// Reset resets the relation.
+	// Reset rebinds an exclusively owned relation handle to op. Reset must not
+	// be called on a relation shared by multiple operators.
 	Reset(op client.TxnOperator) error
+}
+
+// RelationHandleFactory is implemented by engines whose cached relations are
+// shared and therefore cannot be reset directly. NewRelationHandle returns an
+// exclusively owned, reusable handle over the shared relation.
+type RelationHandleFactory interface {
+	NewRelationHandle() Relation
+}
+
+// NewRelationHandle returns an exclusively owned handle when the engine
+// supports one. Engines with immutable or already-exclusive relations may
+// return the relation itself by not implementing RelationHandleFactory.
+func NewRelationHandle(rel Relation) Relation {
+	if factory, ok := rel.(RelationHandleFactory); ok {
+		return factory.NewRelationHandle()
+	}
+	return rel
 }
 
 type BaseReader interface {
