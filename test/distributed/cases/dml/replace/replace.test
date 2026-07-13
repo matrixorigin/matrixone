@@ -237,7 +237,6 @@ insert into t_replace_multi_uk_batch (name, email, value) values ('a', 'x@a.com'
 replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com', 111), ('b', 'z@a.com', 222);
 select name, email, value from t_replace_multi_uk_batch order by name;
 drop table t_replace_multi_uk_batch;
-
 -- parent-side foreign key actions during REPLACE (delete-then-insert semantics)
 -- ON DELETE RESTRICT: replacing a referenced parent row must fail and leave it unchanged
 drop table if exists fk_c;
@@ -362,6 +361,33 @@ replace into `fk``tick_p` values (1);
 select * from `fk``tick_c`;
 drop table `fk``tick_c`;
 drop table `fk``tick_p`;
+
+-- child-side foreign key check during REPLACE: an inserted/replaced child row
+-- must reference an existing parent row, otherwise REPLACE fails and the
+-- previous conflicting row stays intact
+drop table if exists replace_fk_c;
+drop table if exists replace_fk_p;
+create table replace_fk_p(id int primary key);
+create table replace_fk_c(id int primary key, pid int, foreign key(pid) references replace_fk_p(id));
+insert into replace_fk_p values (1);
+replace into replace_fk_c values (10,1);
+select * from replace_fk_c order by id;
+-- replacing an existing child row to reference a missing parent must fail
+replace into replace_fk_c values (10,2);
+select * from replace_fk_c order by id;
+-- inserting a new child row referencing a missing parent must fail
+replace into replace_fk_c values (11,99);
+select * from replace_fk_c order by id;
+-- NULL foreign key value is allowed and needs no parent row
+replace into replace_fk_c values (12,null);
+select * from replace_fk_c order by id;
+-- a valid replace referencing an existing parent succeeds and replaces the old row
+insert into replace_fk_p values (2);
+replace into replace_fk_c values (10,2);
+select * from replace_fk_c order by id;
+drop table replace_fk_c;
+drop table replace_fk_p;
+
 -- REPLACE ... SET evaluates an RHS column reference as DEFAULT(col), and
 -- omitted columns fall back to their defaults (MySQL-compatible).
 drop table if exists t_set_default;
@@ -432,19 +458,3 @@ select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
 replace into t_replace_fakepk_comp_null (a, b, c) values (1, 1, 'one-replaced');
 select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
 drop table t_replace_fakepk_comp_null;
-
--- REPLACE enforces the child->parent foreign key on the inserted row (modern path).
--- An orphan reference fails for both insert-only REPLACE and conflict REPLACE; a valid
--- parent succeeds.
-drop table if exists t_replace_fk_child;
-drop table if exists t_replace_fk_parent;
-create table t_replace_fk_parent(id int primary key);
-create table t_replace_fk_child(id int primary key, pid int, foreign key(pid) references t_replace_fk_parent(id));
-insert into t_replace_fk_parent values (1), (2);
-replace into t_replace_fk_child values (1, 999);
-insert into t_replace_fk_child values (1, 1);
-replace into t_replace_fk_child values (1, 888);
-replace into t_replace_fk_child values (2, 2);
-select id, pid from t_replace_fk_child order by id;
-drop table if exists t_replace_fk_child;
-drop table if exists t_replace_fk_parent;
