@@ -267,6 +267,22 @@ order by id;
 ➤ id[4,32,0]
 create index idx_binary_varbinary_subquery_b on t_binary_varbinary_subquery_cmp(b);
 create index idx_binary_varbinary_subquery_vb on t_binary_varbinary_subquery_cmp(vb);
+explain select id
+from t_binary_varbinary_subquery_cmp
+where vb = binary x'41';
+-- @regex("Index Table Scan.*idx_binary_varbinary_subquery_vb", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_binary_varbinary_subquery_cmp.idx_binary_varbinary_subquery_vb  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)
+explain select id
+from t_binary_varbinary_subquery_cmp
+where binary x'41' = vb;
+-- @regex("Index Table Scan.*idx_binary_varbinary_subquery_vb", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Index Table Scan on t_binary_varbinary_subquery_cmp.idx_binary_varbinary_subquery_vb  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)
 select id
 from t_binary_varbinary_subquery_cmp
 where vb in (select b from t_binary_varbinary_subquery_cmp)

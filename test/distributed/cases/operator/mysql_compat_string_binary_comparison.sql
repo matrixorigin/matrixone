@@ -244,6 +244,20 @@ order by id;
 create index idx_binary_varbinary_subquery_b on t_binary_varbinary_subquery_cmp(b);
 create index idx_binary_varbinary_subquery_vb on t_binary_varbinary_subquery_cmp(vb);
 
+-- BINARY literals must be cast to VARBINARY so the indexed column remains
+-- directly usable, regardless of operand order.
+-- @separator:table
+-- @regex("Index Table Scan.*idx_binary_varbinary_subquery_vb",true)
+explain select id
+from t_binary_varbinary_subquery_cmp
+where vb = binary x'41';
+
+-- @separator:table
+-- @regex("Index Table Scan.*idx_binary_varbinary_subquery_vb",true)
+explain select id
+from t_binary_varbinary_subquery_cmp
+where binary x'41' = vb;
+
 -- Index availability must not change the comparison result.
 select id
 from t_binary_varbinary_subquery_cmp
