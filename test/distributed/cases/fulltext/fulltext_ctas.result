@@ -6,7 +6,7 @@ insert into ft values
 (1, '防水 材料 测试'),
 (2, '普通 塑料 制品'),
 (3, '防水 涂料 施工');
-create fulltext index ftidx on ft (body) with parser gojieba;
+create fulltext index ftidx on ft (body) with parser ngram;
 create table ctas_t as
 select id, match(body) against('防水' in boolean mode) as sc
 from ft where match(body) against('防水' in boolean mode);
