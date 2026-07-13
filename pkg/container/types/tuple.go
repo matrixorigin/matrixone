@@ -93,6 +93,8 @@ func (tp Tuple) ErrString(scales []int32) string {
 			res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
 		case Decimal128:
 			res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
+		case Decimal256:
+			res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
 		default:
 			res.WriteString(fmt.Sprintf("%v", t))
 		}
@@ -132,6 +134,12 @@ func (tp Tuple) SQLStrings(scales []int32) []string {
 				res = append(res, fmt.Sprintf("%v", t.Format(defaultScale)))
 			}
 		case Decimal128:
+			if len(scales) > i {
+				res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
+			} else {
+				res = append(res, fmt.Sprintf("%v", t.Format(defaultScale)))
+			}
+		case Decimal256:
 			if len(scales) > i {
 				res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
 			} else {
@@ -178,6 +186,8 @@ func printTuple(tuple Tuple) string {
 			res.WriteString(fmt.Sprintf("(decimal64: %v)", t.Format(0)))
 		case Decimal128:
 			res.WriteString(fmt.Sprintf("(decimal128: %v)", t.Format(0)))
+		case Decimal256:
+			res.WriteString(fmt.Sprintf("(decimal256: %v)", t.Format(0)))
 		case []byte:
 			res.WriteString(fmt.Sprintf("([]byte: %v)", t))
 		case float32:
@@ -219,6 +229,7 @@ const (
 	decimal128Code = 0x45
 	stringTypeCode = 0x46
 	timeCode       = 0x47
+	decimal256Code = 0x48
 	enumCode       = 0x50 // TODO: reorder the list to put timeCode next to date type code?
 	bitCode        = 0x51
 	uuidCode       = 0x52
@@ -443,6 +454,19 @@ func decodeDecimal128(b []byte) (Decimal128, int) {
 	return ret, 17
 }
 
+func decodeDecimal256(b []byte) (Decimal256, int) {
+	bp := make([]byte, 32)
+	copy(bp, b[:])
+	bp[0] ^= 0x80
+	for i := 0; i < 16; i++ {
+		bp[i] ^= bp[31-i]
+		bp[31-i] ^= bp[i]
+		bp[i] ^= bp[31-i]
+	}
+	ret := *(*Decimal256)(unsafe.Pointer(&bp[0]))
+	return ret, 33
+}
+
 func decodeUuid(b []byte) (Uuid, int) {
 	var ret Uuid
 	copy(ret[:], b[1:])
@@ -585,6 +609,13 @@ func decodeTupleTo(b []byte, t Tuple, schema []T) (Tuple, int, []T, error) {
 			schema = append(schema, T_decimal128)
 			el, off = decodeDecimal128(b[i+1:])
 
+		case decimal256Code:
+			if err = checkBytes(i, 33); err != nil {
+				return nil, i, nil, err
+			}
+			schema = append(schema, T_decimal256)
+			el, off = decodeDecimal256(b[i+1:])
+
 		case stringTypeCode:
 			if err = checkBytes(i, 2); err != nil { // At least type code + terminator
 				return nil, i, nil, err
@@ -599,7 +630,9 @@ func decodeTupleTo(b []byte, t Tuple, schema []T) (Tuple, int, []T, error) {
 
 		case enumCode:
 			schema = append(schema, T_enum)
-			el, off, err = decodeWithOffset(i, decodeUint, uint16Code)
+			// EncodeEnum emits [enumCode, uint16Code, ...]: skip the nested uint16Code byte.
+			el, off, err = decodeWithOffset(i+1, decodeUint, uint16Code)
+			off += 1
 
 		case uuidCode:
 			if err = checkBytes(i, 17); err != nil {
@@ -743,6 +776,12 @@ func UnpackNthElement(b []byte, n int) (any, T, error) {
 			}
 			schema = T_decimal128
 			el, off = decodeDecimal128(b[i+1:])
+		case decimal256Code:
+			if err = checkBytes(i, 33); err != nil {
+				return nil, 0, err
+			}
+			schema = T_decimal256
+			el, off = decodeDecimal256(b[i+1:])
 		case stringTypeCode:
 			if err = checkBytes(i, 2); err != nil {
 				return nil, 0, err
@@ -755,7 +794,9 @@ func UnpackNthElement(b []byte, n int) (any, T, error) {
 			el, off, err = decodeWithOffset(i, decodeUint, uint64Code)
 		case enumCode:
 			schema = T_enum
-			el, off, err = decodeWithOffset(i, decodeUint, uint16Code)
+			// EncodeEnum emits [enumCode, uint16Code, ...]: skip the nested uint16Code byte.
+			el, off, err = decodeWithOffset(i+1, decodeUint, uint16Code)
+			off += 1
 		case uuidCode:
 			if err = checkBytes(i, 17); err != nil {
 				return nil, 0, err
@@ -854,6 +895,8 @@ func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
 			item, itemLen = stringifyDecimal64(b[offset+1:], types[i].Scale)
 		case b[offset] == decimal128Code:
 			item, itemLen = stringifyDecimal128(b[offset+1:], types[i].Scale)
+		case b[offset] == decimal256Code:
+			item, itemLen = stringifyDecimal256(b[offset+1:], types[i].Scale)
 		case b[offset] == stringTypeCode:
 			item, itemLen = stringifyBytes(b[offset+1:])
 			itemLen += 1
@@ -861,9 +904,10 @@ func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
 			item, itemLen = stringifyUint(uint64Code, b[offset+1:])
 			itemLen += 1
 		case b[offset] == enumCode:
-			// TODO: need to verify @YANGGMM
-			item, itemLen = stringifyUint(uint16Code, b[offset+1:])
-			itemLen += 1
+			// EncodeEnum emits [enumCode, uint16Code, ...]: skip both the enumCode and
+			// the nested uint16Code byte before reading the uint payload.
+			item, itemLen = stringifyUint(uint16Code, b[offset+2:])
+			itemLen += 2
 		case b[offset] == uuidCode:
 			item, itemLen = stringifyUuid(b[offset:])
 			// off += 1
@@ -1007,6 +1051,19 @@ func stringifyDecimal128(b []byte, scale int32) (string, int) {
 	}
 	ret := *(*Decimal128)(unsafe.Pointer(&bp[0]))
 	return ret.Format(scale), 17
+}
+
+func stringifyDecimal256(b []byte, scale int32) (string, int) {
+	bp := make([]byte, 32)
+	copy(bp, b[:])
+	bp[0] ^= 0x80
+	for i := 0; i < 16; i++ {
+		bp[i] ^= bp[31-i]
+		bp[31-i] ^= bp[i]
+		bp[i] ^= bp[31-i]
+	}
+	ret := *(*Decimal256)(unsafe.Pointer(&bp[0]))
+	return ret.Format(scale), 33
 }
 
 func stringifyUuid(b []byte) (string, int) {

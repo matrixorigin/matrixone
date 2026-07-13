@@ -2,6 +2,7 @@ FROM matrixorigin/golang:1.26.4-ubuntu22.04 AS builder
 
 # goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"
+ENV GOWORK=off
 RUN go env -w GOPROXY=${GOPROXY}
 
 # Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
@@ -17,7 +18,12 @@ COPY go.sum go.sum
 
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
-RUN go mod download
+RUN module_files="$(sha256sum go.mod go.sum)" && \
+    go mod download && \
+    if [ "$module_files" != "$(sha256sum go.mod go.sum)" ]; then \
+        echo "go mod download changed go.mod/go.sum; run make mod-tidy"; \
+        exit 1; \
+    fi
 
 COPY . .
 

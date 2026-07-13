@@ -31,6 +31,11 @@ type Replace struct {
 	PartitionNames IdentifierList
 	Columns        IdentifierList
 	Rows           *Select
+	// IsSetFormat marks the `REPLACE ... SET col = expr` form. The parser
+	// lowers it to the same Columns + ValuesClause shape as the VALUES form,
+	// so this flag is needed to keep the SET-only semantics where an RHS
+	// column reference is evaluated as DEFAULT(col), matching MySQL.
+	IsSetFormat bool
 }
 
 func (node *Replace) Format(ctx *FmtCtx) {

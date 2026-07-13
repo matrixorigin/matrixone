@@ -592,6 +592,11 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		}
 		execCtx.ses.updateLastCommitTS(commitTs)
 		if commitResultUnknown {
+			// ErrTxnUnknown is terminal for this frontend handle. The operator
+			// has already finalized its workspace non-destructively; retaining it
+			// lets later rollback/connection cleanup reach destructive cleanup.
+			th.invalidateTxnUnsafe()
+			execCtx.ses.SetTxnId(dumpUUID[:])
 			return err
 		}
 	}

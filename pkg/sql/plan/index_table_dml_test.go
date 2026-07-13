@@ -117,7 +117,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
-		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false,
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
 
@@ -157,7 +157,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *t
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
-		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false,
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
 
@@ -190,7 +190,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
-		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false,
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
 
@@ -231,7 +231,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
-		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false,
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
 
@@ -270,7 +270,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
-		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false,
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
 
@@ -444,7 +444,7 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	require.True(t, hasUnique, "dept table is expected to have a unique secondary index")
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
-		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true,
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 	)
 	require.NoError(t, err)
 
@@ -498,7 +498,7 @@ func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
-		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true,
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 	)
 	require.NoError(t, err)
 
@@ -558,7 +558,7 @@ func TestBindReplaceSkipsUniqueIndexForStaticNull(t *testing.T) {
 	require.True(t, tableDef.Indexes[0].Unique)
 
 	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
-		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true,
+		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 	)
 	require.NoError(t, err)
 	require.Len(t, skipUniqueIdx, 1)
@@ -620,7 +620,7 @@ func TestBindReplaceSkipsCompositeUniqueIndexForAnyStaticNull(t *testing.T) {
 			require.True(t, tableDef.Indexes[0].Unique)
 
 			lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
-				bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true,
+				bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 			)
 			require.NoError(t, err)
 			require.Len(t, skipUniqueIdx, 1)
