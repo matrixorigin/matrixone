@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -44,6 +45,29 @@ import (
 // high bits - partition id
 var LOWER_BIT_MASK = uint64(0xffffff)
 var LOWER_BIT_SHIFT = uint64(24)
+
+// memGolang reports live Go-heap bytes (runtime Alloc); memTotal reports total node
+// memory (cgroup limit inside a container, host total on bare metal). Both indirected as
+// vars so tests can stub them. We gate growth on live HEAP vs a fraction of total, NOT on
+// instantaneous free memory (system.MemoryAvailable): that number fails open at the cgroup
+// limit (total-used underflows/hits 0) and false-aborts under reclaimable page cache, which
+// fulltext's index scans generate. Live Go heap INCLUDES the non-spillable side maps that
+// actually OOM the CN, and is immune to page-cache noise.
+var memGolang = system.MemoryGolang
+var memTotal = system.MemoryTotal
+
+// HeapBudgetPct is the fraction (percent) of total node memory the fulltext pool is allowed
+// to project its Go heap to before it refuses to grow by another partition. Leaves headroom
+// for the rest of the CN. Tunable.
+var HeapBudgetPct uint64 = 80
+
+// MapMemPerItem is the estimated Go-heap footprint, per pooled item (= per matched
+// document), of the fulltext TVF's NON-spillable side maps (agghtab + docLenMap +
+// docIDMap). Those maps grow one entry per doc and cannot spill, so the pool factors
+// them into the per-partition memory estimate that gates growth (#25638). Doc IDs are
+// int64 (docIDMap stays empty), so this covers agghtab (~64B) + the BM25 docLen entry
+// (~55B); tunable.
+var MapMemPerItem uint64 = 128
 
 // Least recently use
 type Lru struct {
@@ -282,7 +306,13 @@ func (part *Partition) LastUpdate() time.Time {
 // FixedBytePool
 func NewFixedBytePool(proc *process.Process, dsize uint64, partition_cap uint64, mem_limit uint64) *FixedBytePool {
 	if partition_cap == 0 {
-		partition_cap = LOWER_BIT_MASK
+		// Target ~1M items per partition, so the common case (fewer matched docs than that)
+		// fits in a SINGLE partition and never triggers the per-new-partition memory gate.
+		// Capped at the 24-bit partition offset limit (16MB).
+		partition_cap = (1 << 20) * dsize
+		if partition_cap == 0 || partition_cap > LOWER_BIT_MASK {
+			partition_cap = LOWER_BIT_MASK
+		}
 	}
 
 	if mem_limit == 0 {
@@ -312,6 +342,26 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 		err := pool.Spill()
 		if err != nil {
 			return 0, nil, err
+		}
+	}
+
+	// Before growing PAST the first partition, make sure the next block fits the Go-heap
+	// budget. The common case (a single partition's worth of matched docs) is never gated.
+	// Estimate what the new partition adds to the heap: the docvec block + the NON-spillable
+	// per-doc side maps (agghtab/docLenMap/docIDMap in the fulltext TVF) for the docs it will
+	// hold. Those maps grow one entry per matched doc and cannot spill, so a query matching
+	// far more docs than its LIMIT would otherwise exhaust the CN heap. We compare projected
+	// live heap (memGolang, which already includes those maps) against a fraction of total
+	// memory; if it would exceed the budget, fail cleanly instead (#25638).
+	if len(pool.partitions) > 0 && pool.dsize > 0 {
+		est := pool.partition_cap + (pool.partition_cap/pool.dsize)*MapMemPerItem
+		if total := memTotal(); total > 0 {
+			used := uint64(memGolang())
+			budget := total / 100 * HeapBudgetPct
+			if used+est > budget {
+				return 0, nil, moerr.NewInternalError(pool.proc.Ctx,
+					fmt.Sprintf("fulltext search aborted: the next batch of matched documents needs ~%d bytes but the Go heap is already at %d bytes of a %d-byte budget; the query matched too many documents, add a more selective filter or predicate", est, used, budget))
+			}
 		}
 	}
 

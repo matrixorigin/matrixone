@@ -100,6 +100,40 @@ func TestPool(t *testing.T) {
 	require.NotNil(t, err)
 }
 
+// TestPoolMemAvailGate covers #25638: growing the pool by another partition also grows the
+// fulltext TVF's non-spillable per-doc maps. Before creating a new block the pool estimates
+// that block's footprint (docvec + map entries) and, if it will not fit in currently-available
+// memory, fails cleanly instead of OOMing the CN.
+func TestPoolMemAvailGate(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	defer func() { memGolang = origHeap; memTotal = origTotal }()
+
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+	proc.SetMPool(m)
+
+	// dsize=2, partition_cap=6 -> 3 items per partition; est per new block = 6 + (6/2)*MapMemPerItem.
+	mp := NewFixedBytePool(proc, 2, 6, 0)
+
+	// ~1 TiB total, heap ~empty: the first block (3 items) is created and filled fine.
+	// (partition 0 is never gated; the gate only fires when growing PAST it.)
+	memTotal = func() uint64 { return 1 << 40 }
+	memGolang = func() int { return 0 }
+	for i := 0; i < 3; i++ {
+		_, _, err := mp.NewItem()
+		require.NoError(t, err)
+	}
+
+	// heap now at total (well over the 80% budget): creating the next block fails cleanly.
+	memGolang = func() int { return 1 << 40 }
+	_, _, err := mp.NewItem()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "too many documents")
+
+	mp.Close()
+}
+
 func TestPoolSpill(t *testing.T) {
 
 	addrs := make([]uint64, 10)
