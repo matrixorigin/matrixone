@@ -172,6 +172,9 @@ func validateWindowFuncNoNested(ctx context.Context, astExpr *tree.FuncExpr) err
 			return err
 		}
 	}
+	if name, ok := findNestedWindowFuncNameInOrderBy(astExpr.OrderBy); ok {
+		return moerr.NewSyntaxErrorf(ctx, "You cannot use the window function '%s' in this context", name)
+	}
 
 	ws := astExpr.WindowSpec
 	if ws == nil {
@@ -200,6 +203,13 @@ func validateWindowFuncNoNested(ctx context.Context, astExpr *tree.FuncExpr) err
 	return nil
 }
 
+func rejectWindowResultDependency(ctx context.Context, expr *plan.Expr, windowTag int32) error {
+	if HasTag(expr, windowTag) {
+		return moerr.NewSyntaxError(ctx, "You cannot use a window function result in another window function in the same query block")
+	}
+	return nil
+}
+
 func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		return nil, moerr.NewNYI(b.GetContext(), "DISTINCT in window function")
@@ -210,6 +220,9 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	}
 	if err := validateWindowFuncNoNested(b.GetContext(), astExpr); err != nil {
 		return nil, err
+	}
+	if len(astExpr.OrderBy) > 0 {
+		return nil, moerr.NewNYI(b.GetContext(), "function-local ORDER BY in window function")
 	}
 
 	astStr := windowExprAstKey(astExpr)
@@ -224,6 +237,9 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	// window function
 	windowFunc, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 	if err != nil {
+		return nil, err
+	}
+	if err = rejectWindowResultDependency(b.GetContext(), windowFunc, ctx.windowTag); err != nil {
 		return nil, err
 	}
 	w.WindowFunc = windowFunc
@@ -241,6 +257,9 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		if err != nil {
 			return nil, err
 		}
+		if err = rejectWindowResultDependency(b.GetContext(), expr, ctx.windowTag); err != nil {
+			return nil, err
+		}
 		w.PartitionBy = append(w.PartitionBy, expr)
 	}
 
@@ -249,6 +268,9 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		for _, order := range ws.OrderBy {
 			expr, err := b.BindExpr(order.Expr, depth, isRoot)
 			if err != nil {
+				return nil, err
+			}
+			if err = rejectWindowResultDependency(b.GetContext(), expr, ctx.windowTag); err != nil {
 				return nil, err
 			}
 
@@ -334,10 +356,16 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		if err != nil {
 			return nil, err
 		}
+		if err = rejectWindowResultDependency(b.GetContext(), w.Frame.Start.Val, ctx.windowTag); err != nil {
+			return nil, err
+		}
 	}
 	if ws.Frame.End.Expr != nil {
 		w.Frame.End.Val, err = b.makeFrameConstValue(ws.Frame.End.Expr, typ)
 		if err != nil {
+			return nil, err
+		}
+		if err = rejectWindowResultDependency(b.GetContext(), w.Frame.End.Val, ctx.windowTag); err != nil {
 			return nil, err
 		}
 	}

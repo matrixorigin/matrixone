@@ -226,6 +226,63 @@ func TestProjectionBinderRejectsNestedWindowFuncFromSQL(t *testing.T) {
 	require.ErrorContains(t, err, "You cannot use the window function 'row_number' in this context")
 }
 
+func TestBuildPlanWindowDependencyValidation(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr string
+	}{
+		{
+			name:    "alias in argument",
+			sql:     "select row_number() over () as rn, sum(rn) over () from select_test.bind_select",
+			wantErr: "window function result in another window function",
+		},
+		{
+			name:    "alias in partition by",
+			sql:     "select row_number() over () as rn, sum(a) over (partition by rn) from select_test.bind_select",
+			wantErr: "window function result in another window function",
+		},
+		{
+			name:    "alias in window order by",
+			sql:     "select row_number() over () as rn, sum(a) over (order by rn) from select_test.bind_select",
+			wantErr: "window function result in another window function",
+		},
+		{
+			name:    "nested window in function-local order by",
+			sql:     "select group_concat(a order by row_number() over ()) over () from select_test.bind_select",
+			wantErr: "You cannot use the window function 'row_number' in this context",
+		},
+		{
+			name:    "function-local order by is explicit unsupported behavior",
+			sql:     "select group_concat(a order by a) over () from select_test.bind_select",
+			wantErr: "function-local ORDER BY in window function",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			_, err = BuildPlan(ctx, stmts[0], false)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+
+	positiveSQL := []string{
+		"select row_number() over (order by a), sum(a) over () from select_test.bind_select",
+		"select sum(sum(a)) over () from select_test.bind_select group by b",
+		"select sum((select row_number() over ())) over () from select_test.bind_select",
+	}
+	for _, sql := range positiveSQL {
+		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmts[0], false)
+		require.NoError(t, err, sql)
+	}
+}
+
 func TestHavingBinderBindWinFuncCoversFrameAndGuard(t *testing.T) {
 	t.Run("inside aggregate rejects window func", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
@@ -412,6 +469,33 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 				require.ErrorContains(t, err, "You cannot use the window function 'row_number' in this context")
 			})
 		}
+	})
+
+	t.Run("bound window result in frame is rejected", func(t *testing.T) {
+		binder := testWindowValidationBinder()
+		binder.makeFrameValueFunc = func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+			return &planpb.Expr{
+				Typ: planpb.Type{Id: int32(types.T_int64)},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+					RelPos: 9,
+					ColPos: 0,
+				}},
+			}, nil
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		ws := testRowsWindowSpec()
+		ws.Frame.Start.Expr = testNumVal(1)
+		ws.Frame.Start.UnBounded = false
+
+		_, err := bindWindowFuncExpr(
+			binder,
+			ctx,
+			"sum",
+			testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT, ws, testNumVal(1)),
+			0,
+			true,
+		)
+		require.ErrorContains(t, err, "window function result in another window function")
 	})
 
 	t.Run("distinct window func is rejected", func(t *testing.T) {

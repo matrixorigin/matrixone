@@ -5,8 +5,26 @@ select row_number() over (order by id) as rn, sum(amt) over () as total from wf_
 rn	total
 1	30
 2	30
+select row_number() over () as rn, sum(rn) over () from wf_nested_guard;
+SQL syntax error: You cannot use a window function result in another window function in the same query block
+select row_number() over () as rn, sum(amt) over (partition by rn) from wf_nested_guard;
+SQL syntax error: You cannot use a window function result in another window function in the same query block
+select row_number() over () as rn, sum(amt) over (order by rn) from wf_nested_guard;
+SQL syntax error: You cannot use a window function result in another window function in the same query block
 select sum(row_number() over (order by id)) over () from wf_nested_guard;
 SQL syntax error: You cannot use the window function 'row_number' in this context
 select sum(amt) over (order by row_number() over (order by id)) from wf_nested_guard;
 SQL syntax error: You cannot use the window function 'row_number' in this context
+select group_concat(amt order by row_number() over ()) over () from wf_nested_guard;
+SQL syntax error: You cannot use the window function 'row_number' in this context
+select group_concat(amt order by amt) over () from wf_nested_guard;
+NYI: function-local ORDER BY in window function is not yet implemented
+select row_number() over (order by id), sum(amt) over () from wf_nested_guard order by id;
+row_number() over (order by id)	sum(amt) over ()
+1	30
+2	30
+select sum((select row_number() over ())) over () from wf_nested_guard;
+sum((select row_number() over ())) over ()
+2
+2
 drop table wf_nested_guard;
