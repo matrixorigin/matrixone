@@ -223,6 +223,20 @@ func fixedDirectlyTypeMatch(overload []overload, inputs []types.Type) checkResul
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
+func unaryTildeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		switch inputs[0].Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			for i, overload := range overloads {
+				if len(overload.args) == 1 && overload.args[0] == types.T_int64 {
+					return newCheckResultWithCast(i, []types.Type{types.T_int64.ToType()})
+				}
+			}
+		}
+	}
+	return fixedDirectlyTypeMatch(overloads, inputs)
+}
+
 // return whether `from` can match `to` implicitly, and match cost.
 func tryToMatch(from []types.Type, to []types.T) (sta matchCheckStatus, cost int) {
 	if len(from) != len(to) {
