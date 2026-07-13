@@ -239,9 +239,21 @@ func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 	var err error
 	st := &ivfSearchState{}
 
-	st.limit, err = evalLimitExpression(proc, arg.IndexReaderParam.GetLimit(), 1)
+	var indexReaderLimit *plan.Expr
+	if arg.IndexReaderParam != nil {
+		indexReaderLimit = arg.IndexReaderParam.GetLimit()
+	}
+	st.limit, err = evalLimitExpression(proc, indexReaderLimit, 0)
 	if err != nil {
 		return nil, err
+	}
+	if arg.Limit != nil {
+		var tableFuncLimit uint64
+		tableFuncLimit, err = evalLimitExpression(proc, arg.Limit, 1)
+		if err != nil {
+			return nil, err
+		}
+		st.limit = max(st.limit, tableFuncLimit)
 	}
 
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)

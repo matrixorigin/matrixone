@@ -150,9 +150,10 @@ func newIvfIncludeModeVectorSortContext(scanNode *plan.Node, scanNodeID int32, m
 			Children:    []int32{scanNodeID},
 			ProjectList: projectList,
 		},
-		distFnExpr: distFnExpr,
-		limit:      makePlan2Uint64ConstExprWithType(2),
-		rankOption: &plan.RankOption{Mode: mode},
+		distFnExpr:  distFnExpr,
+		limit:       makePlan2Uint64ConstExprWithType(2),
+		resultLimit: makePlan2Uint64ConstExprWithType(2),
+		rankOption:  &plan.RankOption{Mode: mode},
 	}
 }
 
