@@ -511,9 +511,9 @@ func TestCloseIdleBackends(t *testing.T) {
 	// b is the idle backend: unlock it and zero activeTime so GC will close it
 	b.Unlock()
 	tb := b.(*testBackend)
-	tb.Lock()
+	tb.RWMutex.Lock()
 	tb.activeTime = time.Time{}
-	tb.Unlock()
+	tb.RWMutex.Unlock()
 
 	gcDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(gcDeadline) {
@@ -570,7 +570,10 @@ func TestLockedBackendCannotClosedWithGCIdleTask(t *testing.T) {
 	assert.NotNil(t, b)
 	assert.True(t, b.Locked())
 	b.(*testBackend).RWMutex.Lock()
-	b.(*testBackend).activeTime = time.Time{}
+	tb := b.(*testBackend)
+	tb.RWMutex.Lock()
+	tb.activeTime = time.Time{}
+	tb.RWMutex.Unlock()
 	b.(*testBackend).RWMutex.Unlock()
 
 	time.Sleep(time.Second * 1)
