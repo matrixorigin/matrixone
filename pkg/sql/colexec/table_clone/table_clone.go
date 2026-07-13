@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -507,22 +508,52 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		)
 
 		var val any
-		switch typs[col.ColIndex].Oid {
+		typ := typs[col.ColIndex]
+		outOfRange := func() error {
+			return moerr.NewOutOfRangef(
+				dstCtx,
+				typ.String(),
+				"AUTO_INCREMENT value %d",
+				maxVal,
+			)
+		}
+		switch typ.Oid {
 		case types.T_uint8:
+			if maxVal > math.MaxUint8 {
+				return outOfRange()
+			}
 			val = uint8(maxVal)
 		case types.T_uint16:
+			if maxVal > math.MaxUint16 {
+				return outOfRange()
+			}
 			val = uint16(maxVal)
 		case types.T_uint32:
+			if maxVal > math.MaxUint32 {
+				return outOfRange()
+			}
 			val = uint32(maxVal)
 		case types.T_uint64:
-			val = uint64(maxVal)
+			val = maxVal
 		case types.T_int8:
+			if maxVal > math.MaxInt8 {
+				return outOfRange()
+			}
 			val = int8(maxVal)
 		case types.T_int16:
+			if maxVal > math.MaxInt16 {
+				return outOfRange()
+			}
 			val = int16(maxVal)
 		case types.T_int32:
+			if maxVal > math.MaxInt32 {
+				return outOfRange()
+			}
 			val = int32(maxVal)
 		case types.T_int64:
+			if maxVal > math.MaxInt64 {
+				return outOfRange()
+			}
 			val = int64(maxVal)
 		}
 
