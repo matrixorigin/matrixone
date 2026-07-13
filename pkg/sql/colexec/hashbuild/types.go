@@ -68,7 +68,6 @@ type HashBuild struct {
 	NeedBatches       bool
 	NeedAllocateSels  bool
 	IsShuffle         bool
-	CanSpill          bool
 	Conditions        []*plan.Expr
 	JoinMapTag        int32
 	JoinMapRefCnt     int32

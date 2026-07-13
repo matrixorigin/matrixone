@@ -139,7 +139,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.NeedBatches = t.NeedBatches
 		op.NeedAllocateSels = t.NeedAllocateSels
 		op.IsShuffle = t.IsShuffle
-		op.CanSpill = t.CanSpill
 		op.Conditions = t.Conditions
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinMapRefCnt = t.JoinMapRefCnt
@@ -1895,7 +1894,6 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = !arg.HashOnPK
-		ret.CanSpill = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
@@ -1938,7 +1936,6 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
 		ret.JoinMapTag = arg.JoinMapTag
-		ret.CanSpill = true
 
 	case vm.RightDedupJoin:
 		arg := op.(*rightdedupjoin.RightDedupJoin)
@@ -1955,7 +1952,6 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
 		ret.JoinMapTag = arg.JoinMapTag
-		ret.CanSpill = true
 
 	default:
 		ret.Release()
@@ -1993,7 +1989,6 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = !arg.HashOnPK
-		ret.CanSpill = true
 		if len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
@@ -2018,7 +2013,6 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		}
 		ret.JoinMapTag = arg.JoinMapTag
 		ret.ShuffleIdx = arg.ShuffleIdx
-		ret.CanSpill = true
 
 	case vm.RightDedupJoin:
 		arg := op.(*rightdedupjoin.RightDedupJoin)
@@ -2035,7 +2029,6 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		}
 		ret.JoinMapTag = arg.JoinMapTag
 		ret.ShuffleIdx = arg.ShuffleIdx
-		ret.CanSpill = true
 
 	default:
 		ret.Release()

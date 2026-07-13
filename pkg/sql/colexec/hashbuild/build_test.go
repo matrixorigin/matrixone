@@ -526,7 +526,8 @@ func TestHashBuildIsShuffle(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.IsShuffle = true
 	tc.arg.ShuffleIdx = 0
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 1}
+	tc.arg.SpillThreshold = 1
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 2}
 	err := tc.marg.Prepare(tc.proc)
 	require.NoError(t, err)
 	err = tc.arg.Prepare(tc.proc)
@@ -538,6 +539,11 @@ func TestHashBuildIsShuffle(t *testing.T) {
 	ok, err := vm.Exec(tc.arg, tc.proc)
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecStop, ok.Status)
+	jm, err := message.ReceiveJoinMap(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	require.NotNil(t, jm)
+	require.True(t, jm.IsSpilled(), "shuffle hash build must publish a spilled join map")
+	jm.Free()
 	tc.arg.Free(tc.proc, false, nil)
 	tc.proc.Free()
 }

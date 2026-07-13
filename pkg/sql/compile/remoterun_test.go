@@ -463,6 +463,19 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, planpb.OrderBySpec_DESC, restoredOp.OrderBySpecs[0].Flag)
 	})
 
+	t.Run("HashBuild_SpillThreshold", func(t *testing.T) {
+		for _, threshold := range []int64{0, 4096} {
+			op := &hashbuild.HashBuild{SpillThreshold: threshold}
+			_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+			require.NoError(t, err)
+			require.Equal(t, threshold, pipeInstr.SpillMem)
+
+			restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+			require.NoError(t, err)
+			require.Equal(t, threshold, restored.(*hashbuild.HashBuild).SpillThreshold)
+		}
+	})
+
 	t.Run("Deletion_Engine", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()

@@ -271,7 +271,7 @@ func (ctr *container) rowCnt() int64 {
 }
 
 func (hashBuild *HashBuild) shouldSpillBatches() bool {
-	if !hashBuild.CanSpill || !hashBuild.IsShuffle || !hashBuild.NeedHashMap {
+	if !hashBuild.IsShuffle || !hashBuild.NeedHashMap {
 		return false
 	}
 	ctr := &hashBuild.ctr

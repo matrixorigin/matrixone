@@ -106,16 +106,24 @@ func TestShouldSpillBatches(t *testing.T) {
 
 	t.Run("not_shuffle", func(t *testing.T) {
 		hb := &HashBuild{
-			IsShuffle: false,
+			IsShuffle:   false,
+			NeedHashMap: true,
 		}
+		hb.ctr.setSpillThreshold(1)
+		bat := batch.NewWithSize(0)
+		bat.SetRowCount(1)
+		hb.ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{bat}
 		require.False(t, hb.shouldSpillBatches())
 	})
 
-	t.Run("no_threshold", func(t *testing.T) {
+	t.Run("no_hashmap", func(t *testing.T) {
 		hb := &HashBuild{
-			IsShuffle:      true,
-			SpillThreshold: 0,
+			IsShuffle: true,
 		}
+		hb.ctr.setSpillThreshold(1)
+		bat := batch.NewWithSize(0)
+		bat.SetRowCount(1)
+		hb.ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{bat}
 		require.False(t, hb.shouldSpillBatches())
 	})
 
@@ -123,7 +131,9 @@ func TestShouldSpillBatches(t *testing.T) {
 		hb := &HashBuild{
 			IsShuffle:      true,
 			SpillThreshold: 1024 * 1024, // 1MB
+			NeedHashMap:    true,
 		}
+		hb.ctr.setSpillThreshold(1024 * 1024)
 		hb.ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{
 			{Vecs: []*vector.Vector{testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())}},
 		}
@@ -134,7 +144,6 @@ func TestShouldSpillBatches(t *testing.T) {
 		hb := &HashBuild{
 			IsShuffle:      true,
 			SpillThreshold: 1, // 1 byte
-			CanSpill:       true,
 			NeedHashMap:    true,
 		}
 		hb.ctr.setSpillThreshold(1)
@@ -502,7 +511,6 @@ func TestShouldSpillBatchesRowThreshold(t *testing.T) {
 	hb := &HashBuild{
 		IsShuffle:      true,
 		SpillThreshold: 10, // Small row threshold
-		CanSpill:       true,
 		NeedHashMap:    true,
 	}
 	hb.ctr.setSpillThreshold(10)
@@ -532,6 +540,7 @@ func TestShouldSpillBatchesMemThreshold(t *testing.T) {
 	hb := &HashBuild{
 		IsShuffle:      true,
 		SpillThreshold: 1024 * 1024, // 1MB
+		NeedHashMap:    true,
 	}
 	hb.ctr.setSpillThreshold(1024 * 1024)
 
