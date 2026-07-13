@@ -33,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/btree"
@@ -51,9 +53,10 @@ func (flushEveryRowHooks) Run(c *IndexConsumer, ctx context.Context, errch chan 
 }
 
 type flushEveryRowWriter struct {
-	rows     int
-	seq      int
-	toSqlErr error
+	rows      int
+	seq       int
+	toSqlErr  error
+	failAtSeq int
 }
 
 func (w *flushEveryRowWriter) CheckLastOp(string) bool { return true }
@@ -79,6 +82,9 @@ func (w *flushEveryRowWriter) ToSql() ([]byte, error) {
 	if w.toSqlErr != nil {
 		return nil, w.toSqlErr
 	}
+	if w.failAtSeq > 0 && w.seq+1 == w.failAtSeq {
+		return nil, fmt.Errorf("flush failure at sql-%d", w.failAtSeq)
+	}
 	w.seq++
 	return []byte(fmt.Sprintf("sql-%d", w.seq)), nil
 }
@@ -92,10 +98,11 @@ func init() {
 }
 
 type MockRetriever struct {
-	insertBatch *AtomicBatch
-	deleteBatch *AtomicBatch
-	noMoreData  bool
-	dtype       int8
+	insertBatch     *AtomicBatch
+	deleteBatch     *AtomicBatch
+	noMoreData      bool
+	dtype           int8
+	updateWatermark func(context.Context, string, client.TxnOperator) error
 }
 
 func (r *MockRetriever) Next() *ISCPData {
@@ -113,6 +120,9 @@ func (r *MockRetriever) Next() *ISCPData {
 
 func (r *MockRetriever) UpdateWatermark(ctx context.Context, cnUUID string, txn client.TxnOperator) error {
 	logutil.Infof("TxnRetriever.UpdateWatermark()")
+	if r.updateWatermark != nil {
+		return r.updateWatermark(ctx, cnUUID, txn)
+	}
 	return nil
 }
 
@@ -367,6 +377,86 @@ func TestIndexConsumerSendSqlReturnsContextErrorWhenBlocked(t *testing.T) {
 	}
 	err := consumer.sendSql(ctx, make(chan error, 1), &flushEveryRowWriter{rows: 1})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestIndexConsumerTailProducerErrorRollsBackPartialSQL(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	sqls := make([]string, 0, 1)
+	watermarkAdvanced := false
+	var callbackErr error
+
+	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		return executor.Result{}, nil
+	})
+	defer stubExec.Reset()
+
+	stubRunTxn := gostub.Stub(&runTxnWithSqlContext, func(
+		ctx context.Context,
+		_ engine.Engine,
+		_ client.TxnClient,
+		cnUUID string,
+		accountID uint32,
+		_ time.Duration,
+		resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error),
+		cbdata any,
+		f func(sqlproc *sqlexec.SqlProcess, data any) error,
+	) error {
+		sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(ctx, cnUUID, nil, accountID, resolveVariableFunc))
+		callbackErr = f(sqlproc, cbdata)
+		return callbackErr
+	})
+	defer stubRunTxn.Reset()
+
+	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	consumer := &IndexConsumer{
+		cnUUID:    "a-b-c-d",
+		info:      newTestIvfConsumerInfo(),
+		tableDef:  tblDef,
+		sqlWriter: &flushEveryRowWriter{toSqlErr: nil, failAtSeq: 2},
+		rowdata:   make([]any, len(tblDef.Cols)),
+		rowdelete: make([]any, 1),
+		algo:      testDeadlockAlgo,
+	}
+
+	bat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
+			testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
+			testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int32{1, 2}),
+		}, nil)
+	defer bat.Clean(proc.Mp())
+
+	insertAtomicBat := &AtomicBatch{
+		Batches: []*batch.Batch{bat},
+		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+	fromTs := types.BuildTS(1, 0)
+	insertAtomicBat.Rows.Set(AtomicBatchRow{Ts: fromTs, Pk: []byte{1}, Offset: 0, Src: bat})
+	insertAtomicBat.Rows.Set(AtomicBatchRow{Ts: fromTs, Pk: []byte{2}, Offset: 1, Src: bat})
+	emptyDeleteBatch := &AtomicBatch{
+		Rows: btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+
+	output := &MockRetriever{
+		dtype:       ISCPDataType_Tail,
+		insertBatch: insertAtomicBat,
+		deleteBatch: emptyDeleteBatch,
+	}
+	output.updateWatermark = func(context.Context, string, client.TxnOperator) error {
+		watermarkAdvanced = true
+		return nil
+	}
+
+	err := consumer.Consume(ctx, output)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "flush failure at sql-2")
+	require.ErrorContains(t, callbackErr, "flush failure at sql-2")
+	require.Equal(t, []string{"sql-1"}, sqls)
+	require.False(t, watermarkAdvanced, "tail producer failure must not advance watermark")
 }
 
 func TestIvfSnapshot(t *testing.T) {

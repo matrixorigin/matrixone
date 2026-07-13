@@ -58,6 +58,8 @@ type IndexConsumer struct {
 
 var _ Consumer = new(IndexConsumer)
 
+var runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
+
 // SqlWriter returns the writer this consumer is paired with. Used by
 // plugin Hooks.Run impls that need to dispatch on the writer's
 // concrete type (e.g. HNSW picking RunHnsw[float32] vs [float64]).
@@ -83,7 +85,7 @@ func (c *IndexConsumer) RunTxn(
 	timeout time.Duration,
 	cb func(sqlproc *sqlexec.SqlProcess) error,
 ) error {
-	return sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), timeout, nil, nil,
+	return runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), timeout, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
 			return cb(sqlproc)
 		})
@@ -165,7 +167,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				}
 
 				// no transaction required and commit every time.
-				err := sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
+				err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
 					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 						sqlctx := sqlproc.SqlCtx
 
@@ -193,7 +195,7 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 	} else {
 
 		// all updates under same transaction and transaction can last very long so set timeout to 24 hours
-		err := sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 24*time.Hour, nil, nil,
+		err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 24*time.Hour, nil, nil,
 			func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 				sqlctx := sqlproc.SqlCtx
 
@@ -201,10 +203,10 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				for {
 					select {
 					case <-ctx.Done():
-						return
+						return ctx.Err()
 					case e2 := <-errch:
-						errch <- e2
-						return
+						reportIndexConsumerErr(errch, e2)
+						return e2
 					case sql, ok := <-c.sqlBufSendCh:
 						if !ok {
 							// channel closed
@@ -259,7 +261,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 	var sync *hnsw.HnswSync[T]
 
 	// read-only sql so no need transaction here.  All models are loaded at startup.
-	err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
+	err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 
 			w := c.sqlWriter.(*HnswSqlWriter[T])
@@ -301,7 +303,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 				// channel closed
 
 				// we need a transaction here to save model files and update watermark
-				err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
+				err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
 					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 						sqlctx := sqlproc.SqlCtx
 
@@ -344,7 +346,7 @@ func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch c
 			}
 
 			// HNSW models are already in local so hnsw Update should not require executing SQL or should be read-only. No transaction required.
-			err = sqlexec.RunTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
+			err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
 				func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
 					if objectio.ISCPIndexHnswUpdateErrInjected() {
 						return injectedISCPIndexErr("hnsw update")
