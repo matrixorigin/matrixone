@@ -17,11 +17,14 @@ package plan
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -43,6 +46,637 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 	node.FilterList = newFilterList
 	node.Stats = calcScanStats(node, builder)
 	resetHashMapStats(node.Stats)
+}
+
+// collectCompositePartBlockFilters preserves zonemappable predicates on the
+// physical columns that make up a composite primary/cluster key.  The regular
+// filter rewrite replaces a useful equality/range prefix with one predicate on
+// the hidden compound column.  That compound predicate is ideal for the read
+// filter and sorted-key pruning, but ranges can additionally prune blocks with
+// the zonemap of every constituent column.
+type compositePartBlockFilter struct {
+	original *plan.Expr
+	copy     *plan.Expr
+}
+
+func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32) map[int32][]compositePartBlockFilter {
+	ret := make(map[int32][]compositePartBlockFilter)
+	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
+		return ret
+	}
+	visited := make(map[int32]struct{})
+	var visit func(int32)
+	visit = func(id int32) {
+		if _, ok := visited[id]; ok {
+			return
+		}
+		visited[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		if node.NodeType != plan.Node_TABLE_SCAN {
+			for _, childID := range node.Children {
+				visit(childID)
+			}
+			return
+		}
+
+		partCols := compositeKeyPartColumns(node.TableDef)
+		if len(partCols) < 2 || len(node.BindingTags) == 0 {
+			return
+		}
+		filters := make([]*plan.Expr, 0, len(node.FilterList)+len(node.BlockFilterList))
+		filters = append(filters, node.FilterList...)
+		// A high-cost/AP optimization can revisit an already rewritten scan.  In
+		// that case the constituent predicates only survive in BlockFilterList;
+		// preserve them before the next stats pass rebuilds that list.
+		filters = append(filters, node.BlockFilterList...)
+		for _, filter := range filters {
+			if ExprIsZonemappable(builder.GetContext(), filter) &&
+				exprOnlyReferencesColumns(filter, node.BindingTags[0], partCols) {
+				ret[id] = append(ret[id], compositePartBlockFilter{original: filter, copy: DeepCopyExpr(filter)})
+			}
+		}
+	}
+	visit(nodeID)
+	return ret
+}
+
+func compositeKeyPartColumns(tableDef *plan.TableDef) map[int32]struct{} {
+	if tableDef == nil {
+		return nil
+	}
+	var parts []string
+	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		parts = util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+	} else if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
+		parts = tableDef.Pkey.Names
+	}
+	if len(parts) < 2 {
+		return nil
+	}
+	cols := make(map[int32]struct{}, len(parts))
+	for _, part := range parts {
+		if pos, ok := tableDef.Name2ColIndex[part]; ok {
+			cols[pos] = struct{}{}
+		}
+	}
+	return cols
+}
+
+// exprOnlyReferencesColumns accepts constants nested in the predicate but
+// requires at least one column and rejects any column outside allowed.
+func exprOnlyReferencesColumns(expr *plan.Expr, tableTag int32, allowed map[int32]struct{}) bool {
+	found := false
+	var visit func(*plan.Expr) bool
+	visit = func(e *plan.Expr) bool {
+		if e == nil {
+			return true
+		}
+		switch impl := e.Expr.(type) {
+		case *plan.Expr_Col:
+			if impl.Col.RelPos != tableTag {
+				return false
+			}
+			if _, ok := allowed[impl.Col.ColPos]; !ok {
+				return false
+			}
+			found = true
+			return true
+		case *plan.Expr_F:
+			for _, arg := range impl.F.Args {
+				if !visit(arg) {
+					return false
+				}
+			}
+			return true
+		case *plan.Expr_List:
+			for _, item := range impl.List.List {
+				if !visit(item) {
+					return false
+				}
+			}
+			return true
+		case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw,
+			*plan.Expr_Vec, *plan.Expr_Max, *plan.Expr_T, *plan.Expr_Fold:
+			return true
+		default:
+			return false
+		}
+	}
+	return visit(expr) && found
+}
+
+func (builder *QueryBuilder) appendCompositePartBlockFilters(filters map[int32][]compositePartBlockFilter) {
+	for nodeID, candidates := range filters {
+		node := builder.qry.Nodes[nodeID]
+		for _, candidate := range candidates {
+			duplicate := false
+			for _, existing := range node.BlockFilterList {
+				if blockFilterEquivalent(existing, candidate.copy) {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				node.BlockFilterList = append(node.BlockFilterList, candidate.copy)
+			}
+		}
+	}
+}
+
+// retainConsumedCompositePartBlockFilters keeps only predicates removed by the
+// compound-key rewrite.  Predicates that remain in FilterList will be handled
+// by the later date/LIKE rewrites and ReCalcNodeStats; re-appending their stale
+// pre-rewrite form could disable the ranges fast compiler for the entire list.
+func (builder *QueryBuilder) retainConsumedCompositePartBlockFilters(filters map[int32][]compositePartBlockFilter) {
+	for nodeID, candidates := range filters {
+		node := builder.qry.Nodes[nodeID]
+		remaining := node.FilterList
+		if !hasCompoundKeyFilter(remaining, node) {
+			delete(filters, nodeID)
+			continue
+		}
+		partCols := compositeKeyPartColumns(node.TableDef)
+		tableTag := node.BindingTags[0]
+		kept := candidates[:0]
+		for _, candidate := range candidates {
+			stillPresent := false
+			for _, filter := range remaining {
+				if candidate.original == filter && exprOnlyReferencesColumns(filter, tableTag, partCols) {
+					stillPresent = true
+					break
+				}
+			}
+			if !stillPresent {
+				kept = append(kept, candidate)
+			}
+		}
+		if len(kept) == 0 {
+			delete(filters, nodeID)
+		} else {
+			filters[nodeID] = kept
+		}
+	}
+}
+
+func hasCompoundKeyFilter(filters []*plan.Expr, node *plan.Node) bool {
+	if node.TableDef == nil || len(node.BindingTags) == 0 {
+		return false
+	}
+	compoundPos, ok := compoundKeyColumn(node.TableDef)
+	if !ok {
+		return false
+	}
+	allowed := map[int32]struct{}{compoundPos: {}}
+	for _, filter := range filters {
+		if exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+			return true
+		}
+	}
+	return false
+}
+
+func compoundKeyColumn(tableDef *plan.TableDef) (int32, bool) {
+	if tableDef == nil {
+		return 0, false
+	}
+	compoundName := ""
+	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		compoundName = tableDef.ClusterBy.Name
+	} else if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
+		compoundName = tableDef.Pkey.PkeyColName
+	}
+	if compoundName == "" {
+		return 0, false
+	}
+	pos, ok := tableDef.Name2ColIndex[compoundName]
+	return pos, ok
+}
+
+// appendCompoundKeyBlockFilters keeps the generated compound predicate in the
+// block-pruning set even when estimates are unavailable or selectivity rounds
+// to one.  Compound-key filters are sort-key predicates and use the ranges fast
+// path, so skipping them loses the cheapest pruning opportunity.
+func (builder *QueryBuilder) appendCompoundKeyBlockFilters(nodeID int32) {
+	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
+		return
+	}
+	visited := make(map[int32]struct{})
+	var visit func(int32)
+	visit = func(id int32) {
+		if _, ok := visited[id]; ok {
+			return
+		}
+		visited[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		if node.NodeType != plan.Node_TABLE_SCAN {
+			for _, childID := range node.Children {
+				visit(childID)
+			}
+			return
+		}
+		if node.TableDef == nil || len(node.BindingTags) == 0 {
+			return
+		}
+		compoundPos, ok := compoundKeyColumn(node.TableDef)
+		if !ok {
+			return
+		}
+		allowed := map[int32]struct{}{compoundPos: {}}
+		for _, filter := range node.FilterList {
+			if !ExprIsZonemappable(builder.GetContext(), filter) ||
+				!exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+				continue
+			}
+			duplicate := false
+			for _, existing := range node.BlockFilterList {
+				if blockFilterEquivalent(existing, filter) {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(filter))
+			}
+		}
+	}
+	visit(nodeID)
+}
+
+func existingCompositeBlockFilters(node *plan.Node) []*plan.Expr {
+	if node.TableDef == nil || len(node.BindingTags) == 0 {
+		return nil
+	}
+	allowed := compositeKeyPartColumns(node.TableDef)
+	if allowed == nil {
+		return nil
+	}
+	if compoundPos, ok := compoundKeyColumn(node.TableDef); ok {
+		allowed[compoundPos] = struct{}{}
+	}
+	ret := node.BlockFilterList[:0]
+	for _, filter := range node.BlockFilterList {
+		if exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+			// calcScanStats replaces BlockFilterList at the end of the pass and
+			// does not mutate preserved entries. Transfer the already-independent
+			// block-filter expression instead of deep-copying it on every stats
+			// recalculation; the initial FilterList boundary is still copied.
+			ret = append(ret, filter)
+		}
+	}
+	return ret
+}
+
+func blockFilterEquivalent(left, right *plan.Expr) bool {
+	return exprStructuralEqual(left, right)
+}
+
+// blockFilterSemanticallyEquivalent handles the two representation changes a
+// block predicate can undergo between stats passes: constant IN lists are
+// folded into vectors, and logical expressions can be flattened. Keep this
+// deliberately narrower than general expression equivalence so deduplication
+// can never discard two different range predicates on the same column.
+func blockFilterSemanticallyEquivalent(left, right *plan.Expr) bool {
+	if exprStructuralEqual(left, right) {
+		return true
+	}
+	if left == nil || right == nil {
+		return false
+	}
+	leftFn, rightFn := left.GetF(), right.GetF()
+	if leftFn == nil || rightFn == nil || leftFn.Func == nil || rightFn.Func == nil ||
+		leftFn.Func.ObjName != rightFn.Func.ObjName {
+		return false
+	}
+
+	switch leftFn.Func.ObjName {
+	case "and", "or":
+		var leftArgs, rightArgs []*plan.Expr
+		flattenLogicalExpressions(left, leftFn.Func.ObjName, &leftArgs)
+		flattenLogicalExpressions(right, rightFn.Func.ObjName, &rightArgs)
+		if len(leftArgs) != len(rightArgs) {
+			return false
+		}
+		// Flattening preserves operand order. Comparing positionally keeps this
+		// linear for large OR trees and avoids a matched-object allocation.
+		for i := range leftArgs {
+			if !blockFilterSemanticallyEquivalent(leftArgs[i], rightArgs[i]) {
+				return false
+			}
+		}
+		return true
+	case "in", "not_in", "prefix_in":
+		if len(leftFn.Args) != 2 || len(rightFn.Args) != 2 ||
+			!exprStructuralEqual(leftFn.Args[0], rightFn.Args[0]) {
+			return false
+		}
+		return blockFilterConstantSetsEqual(leftFn.Args[1], rightFn.Args[1])
+	default:
+		return false
+	}
+}
+
+func blockFilterConstantSetsEqual(left, right *plan.Expr) bool {
+	// Build value maps only after structural equality failed. The one-time O(n)
+	// comparison is cheaper than retaining an O(n) IN predicate for every block.
+	leftSet, ok := blockFilterConstantSet(left)
+	if !ok {
+		return false
+	}
+	rightSet, ok := blockFilterConstantSet(right)
+	if !ok || len(leftSet) != len(rightSet) {
+		return false
+	}
+	for key := range leftSet {
+		if _, ok = rightSet[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func blockFilterConstantSet(expr *plan.Expr) (map[string]struct{}, bool) {
+	if expr == nil {
+		return nil, false
+	}
+	if list := expr.GetList(); list != nil {
+		ret := make(map[string]struct{}, len(list.List))
+		for _, item := range list.List {
+			lit, typ, ok := blockFilterConstLiteral(item)
+			if !ok {
+				return nil, false
+			}
+			key, ok := blockFilterLiteralKey(lit, typ)
+			if !ok {
+				return nil, false
+			}
+			ret[key] = struct{}{}
+		}
+		return ret, true
+	}
+
+	return blockFilterConstantVectorSet(expr.GetVec())
+}
+
+func blockFilterConstantVectorSet(literalVec *plan.LiteralVec) (ret map[string]struct{}, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ret = nil
+			ok = false
+		}
+	}()
+
+	vec, physicalLength, ok := decodeLiteralVec(literalVec)
+	if !ok {
+		return nil, false
+	}
+	typ := plan.Type{
+		Id:    int32(vec.GetType().Oid),
+		Scale: vec.GetType().Scale,
+		Width: vec.GetType().Width,
+	}
+	if physicalLength == 0 {
+		return make(map[string]struct{}), true
+	}
+	ret = make(map[string]struct{}, physicalLength)
+	for i := 0; i < physicalLength; i++ {
+		lit := rule.GetConstantValue(&vec, true, uint64(i))
+		key, ok := blockFilterLiteralKey(lit, typ)
+		if !ok {
+			return nil, false
+		}
+		ret[key] = struct{}{}
+	}
+	return ret, true
+}
+
+// inRHSValues returns the individual constants represented by an IN RHS.
+// Constant folding changes Expr_List into Expr_Vec, but composite-key rewrites
+// need individual values to serialize each compound key. A serialized vector
+// must match the comparison column's type: its payload type is executable data,
+// so accepting inconsistent plan metadata could encode a different compound key.
+func inRHSValues(expr *plan.Expr, expectedType plan.Type) (values []*plan.Expr, ok bool) {
+	if expr == nil {
+		return nil, false
+	}
+	if list := expr.GetList(); list != nil {
+		return list.List, true
+	}
+
+	defer func() {
+		if recover() != nil {
+			values = nil
+			ok = false
+		}
+	}()
+
+	vec, physicalLength, ok := decodeLiteralVec(expr.GetVec())
+	if !ok {
+		return nil, false
+	}
+	if !literalVecMatchesType(vec.GetType(), expectedType) {
+		return nil, false
+	}
+
+	typ := makePlan2Type(vec.GetType())
+	values = make([]*plan.Expr, physicalLength)
+	for i := range physicalLength {
+		lit := rule.GetConstantValue(&vec, true, uint64(i))
+		if lit == nil {
+			return nil, false
+		}
+		literalTyp := typ
+		literalTyp.NotNullable = !lit.Isnull
+		values[i] = &plan.Expr{
+			Typ:  literalTyp,
+			Expr: &plan.Expr_Lit{Lit: lit},
+		}
+	}
+	return values, true
+}
+
+func literalVecMatchesType(vecType *types.Type, expectedType plan.Type) bool {
+	return vecType != nil &&
+		int32(vecType.Oid) == expectedType.Id &&
+		vecType.Width == expectedType.Width &&
+		vecType.Scale == expectedType.Scale
+}
+
+// decodeLiteralVec validates the minimum structural invariants needed before
+// reading a serialized literal vector. UnmarshalBinary is intentionally no-copy
+// and trusts encoded lengths, so an invalid plan must disable an optimization
+// rather than panic or allocate from an untrusted logical length. Callers own
+// the panic boundary because malformed varlen metadata can also fail while
+// materializing individual values after decoding.
+func decodeLiteralVec(literalVec *plan.LiteralVec) (vec vector.Vector, physicalLength int, ok bool) {
+	if literalVec == nil || literalVec.Len < 0 {
+		return vector.Vector{}, 0, false
+	}
+	if err := vec.UnmarshalBinary(literalVec.Data); err != nil || int64(vec.Length()) != int64(literalVec.Len) {
+		return vector.Vector{}, 0, false
+	}
+
+	physicalLength = vec.Length()
+	if vec.IsConst() && physicalLength > 0 {
+		// A const vector stores one physical value for every logical row. IN has
+		// set semantics, so one value is sufficient for the compound predicate.
+		return vec, 1, true
+	}
+	if physicalLength == 0 {
+		return vec, 0, true
+	}
+
+	typeSize := vec.GetType().TypeSize()
+	if typeSize <= 0 || physicalLength > len(vec.GetData())/typeSize {
+		return vector.Vector{}, 0, false
+	}
+	return vec, physicalLength, true
+}
+
+func blockFilterConstLiteral(expr *plan.Expr) (*plan.Literal, plan.Type, bool) {
+	if expr == nil {
+		return nil, plan.Type{}, false
+	}
+	effectiveTyp := expr.Typ
+	for {
+		if lit := expr.GetLit(); lit != nil {
+			return lit, effectiveTyp, true
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
+			return nil, plan.Type{}, false
+		}
+		expr = fn.Args[0]
+	}
+}
+
+func blockFilterLiteralKey(lit *plan.Literal, typ plan.Type) (string, bool) {
+	if lit == nil {
+		return "", false
+	}
+	litBytes, err := lit.Marshal()
+	if err != nil {
+		return "", false
+	}
+	key := make([]byte, 12+len(litBytes))
+	key[0] = byte(typ.Id)
+	key[1] = byte(typ.Id >> 8)
+	key[2] = byte(typ.Id >> 16)
+	key[3] = byte(typ.Id >> 24)
+	key[4] = byte(typ.Scale)
+	key[5] = byte(typ.Scale >> 8)
+	key[6] = byte(typ.Scale >> 16)
+	key[7] = byte(typ.Scale >> 24)
+	key[8] = byte(typ.Width)
+	key[9] = byte(typ.Width >> 8)
+	key[10] = byte(typ.Width >> 16)
+	key[11] = byte(typ.Width >> 24)
+	copy(key[12:], litBytes)
+	return string(key), true
+}
+
+// blockFilterSemanticHash buckets expressions that can be equal under
+// blockFilterSemanticallyEquivalent. Collisions are resolved with that exact
+// comparison. Unsupported expression forms retain their structural hash.
+func blockFilterSemanticHash(expr *plan.Expr) uint64 {
+	h := fnv.New64a()
+	hashBlockFilterSemanticInto(h, expr)
+	return h.Sum64()
+}
+
+func hashBlockFilterSemanticInto(h writeByter, expr *plan.Expr) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		writeByte(h, 0)
+		writeUint64(h, exprStructuralHash(expr))
+		return
+	}
+
+	switch fn.Func.ObjName {
+	case "and", "or":
+		writeByte(h, 1)
+		writeString(h, fn.Func.ObjName)
+		var args []*plan.Expr
+		flattenLogicalExpressions(expr, fn.Func.ObjName, &args)
+		writeUint64(h, uint64(len(args)))
+		for _, arg := range args {
+			hashBlockFilterSemanticInto(h, arg)
+		}
+	case "in", "not_in", "prefix_in":
+		if len(fn.Args) != 2 {
+			writeByte(h, 0)
+			writeUint64(h, exprStructuralHash(expr))
+			return
+		}
+		set, ok := blockFilterConstantSet(fn.Args[1])
+		if !ok {
+			writeByte(h, 0)
+			writeUint64(h, exprStructuralHash(expr))
+			return
+		}
+		writeByte(h, 2)
+		writeString(h, fn.Func.ObjName)
+		writeUint64(h, exprStructuralHash(fn.Args[0]))
+		writeUint64(h, uint64(len(set)))
+		// Two order-independent accumulators keep key construction linear. A
+		// collision only adds an exact comparison; it cannot remove a filter.
+		var xor, sum uint64
+		for value := range set {
+			valueHash := hashString(value)
+			xor ^= valueHash
+			sum += valueHash
+		}
+		writeUint64(h, xor)
+		writeUint64(h, sum)
+	default:
+		writeByte(h, 0)
+		writeUint64(h, exprStructuralHash(expr))
+	}
+}
+
+func deduplicateBlockFilterList(filters []*plan.Expr) []*plan.Expr {
+	if len(filters) < 2 {
+		return filters
+	}
+	originalLength := len(filters)
+	unique := filters[:0]
+	buckets := make(map[uint64][]*plan.Expr, len(filters))
+	for _, filter := range filters {
+		hash := blockFilterSemanticHash(filter)
+		duplicate := false
+		for _, existing := range buckets[hash] {
+			if blockFilterSemanticallyEquivalent(existing, filter) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		unique = append(unique, filter)
+		buckets[hash] = append(buckets[hash], filter)
+	}
+	clear(filters[len(unique):originalLength])
+	return unique
+}
+
+func (builder *QueryBuilder) deduplicateBlockFilters(nodeID int32) {
+	visited := make(map[int32]struct{})
+	var visit func(int32)
+	visit = func(id int32) {
+		if _, ok := visited[id]; ok {
+			return
+		}
+		visited[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+		if len(node.BlockFilterList) < 2 {
+			return
+		}
+		node.BlockFilterList = deduplicateBlockFilterList(node.BlockFilterList)
+	}
+	visit(nodeID)
 }
 
 func (builder *QueryBuilder) rewriteInDomainNotInFilters(nodeID int32) {
@@ -1253,6 +1887,28 @@ func stripConstLiteralCasts(expr *plan.Expr) *plan.Expr {
 	}
 }
 
+func hasNonNilFunctionArgs(fn *plan.Function, argCount int) bool {
+	if fn == nil || fn.Func == nil || len(fn.Args) != argCount {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if arg == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func (builder *QueryBuilder) bindCompositeKeySerial(args []*plan.Expr) (*plan.Expr, bool) {
+	expr, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", args)
+	return expr, err == nil && expr != nil
+}
+
+func (builder *QueryBuilder) bindCompositeKeyPredicate(name string, args ...*plan.Expr) (*plan.Expr, bool) {
+	expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, args)
+	return expr, err == nil && expr != nil
+}
+
 func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {
 	sortkeyIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 	col2filter := make(map[int32]int)
@@ -1265,13 +1921,19 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	}
 
 	for i, expr := range filters {
+		if expr == nil {
+			continue
+		}
 		fn := expr.GetF()
-		if fn == nil {
+		if fn == nil || fn.Func == nil {
 			continue
 		}
 
 		funcName := fn.Func.ObjName
 		if funcName == "=" {
+			if !hasNonNilFunctionArgs(fn, 2) {
+				continue
+			}
 			if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
 				fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 			}
@@ -1283,6 +1945,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 			col2filter[col.ColPos] = i
 		} else if funcName == "between" {
+			if !hasNonNilFunctionArgs(fn, 3) {
+				continue
+			}
 			col := fn.Args[0].GetCol()
 			if col == nil || !isRuntimeConstExpr(fn.Args[1]) || !isRuntimeConstExpr(fn.Args[2]) {
 				continue
@@ -1290,6 +1955,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 			col2filter[col.ColPos] = i
 		} else if funcName == "<" || funcName == "<=" || funcName == ">" || funcName == ">=" {
+			if !hasNonNilFunctionArgs(fn, 2) {
+				continue
+			}
 			col := fn.Args[0].GetCol()
 			if col == nil || !isRuntimeConstExpr(fn.Args[1]) {
 				continue
@@ -1299,6 +1967,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				col2filter[col.ColPos] = i
 			}
 		} else if funcName == "in_range" {
+			if !hasNonNilFunctionArgs(fn, 4) {
+				continue
+			}
 			col := fn.Args[0].GetCol()
 			if col == nil || !isRuntimeConstExpr(fn.Args[1]) || !isRuntimeConstExpr(fn.Args[2]) {
 				continue
@@ -1308,7 +1979,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				col2filter[col.ColPos] = i
 			}
 		} else if funcName == "in" {
-			if fn.Args[0].GetCol() == nil {
+			if !hasNonNilFunctionArgs(fn, 2) || fn.Args[0].GetCol() == nil {
 				continue
 			}
 
@@ -1332,8 +2003,12 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 			currColPos := int32(-1)
 			for _, subExpr := range orArgs {
+				if subExpr == nil {
+					newOrArgs = append(newOrArgs, subExpr)
+					continue
+				}
 				subFn := subExpr.GetF()
-				if subFn == nil {
+				if subFn == nil || subFn.Func == nil {
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
@@ -1341,6 +2016,10 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				if subFn.Func.ObjName == "=" || subFn.Func.ObjName == "in" {
 					if numParts > 1 {
 						newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
+						if len(newArgs) == 0 {
+							newOrArgs = append(newOrArgs, subExpr)
+							continue
+						}
 						subExpr = newArgs[0]
 					}
 				} else if subFn.Func.ObjName == "and" {
@@ -1356,7 +2035,25 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				}
 
 				mergedFn := subExpr.GetF()
-				if mergedFn == nil || len(mergedFn.Args) != 2 || mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
+				if !hasNonNilFunctionArgs(mergedFn, 2) || mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
+					newOrArgs = append(newOrArgs, subExpr)
+					continue
+				}
+
+				var candidateValues []*plan.Expr
+				switch mergedFn.Func.ObjName {
+				case "=", "prefix_eq":
+					candidateValues = []*plan.Expr{mergedFn.Args[1]}
+				case "in":
+					var ok bool
+					candidateValues, ok = inRHSValues(mergedFn.Args[1], mergedFn.Args[0].Typ)
+					if !ok || len(candidateValues) == 0 {
+						// Preserve an unsupported or empty IN arm. It is safer to
+						// forgo this optional OR merge than to change its semantics.
+						newOrArgs = append(newOrArgs, subExpr)
+						continue
+					}
+				default:
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
@@ -1374,23 +2071,20 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 				switch mergedFn.Func.ObjName {
 				case "=":
-					inArgs = append(inArgs, mergedFn.Args[1])
+					inArgs = append(inArgs, candidateValues...)
 					mergeCandidates = append(mergeCandidates, subExpr)
 					hasEquality = true
 
 				case "prefix_eq":
-					inArgs = append(inArgs, mergedFn.Args[1])
+					inArgs = append(inArgs, candidateValues...)
 					mergeCandidates = append(mergeCandidates, subExpr)
 					pkFnName = "prefix_in"
 					hasPrefixEq = true
 
 				case "in":
-					inArgs = append(inArgs, mergedFn.Args[1].GetList().List...)
+					inArgs = append(inArgs, candidateValues...)
 					mergeCandidates = append(mergeCandidates, subExpr)
 					hasEquality = true
-
-				default:
-					newOrArgs = append(newOrArgs, subExpr)
 				}
 			}
 
@@ -1406,41 +2100,46 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				leftExpr := firstEquiExpr.GetF().Args[0]
 				leftType := makeTypeByPlan2Expr(leftExpr)
 				argsType := []types.Type{leftType, leftType}
-				fGet, _ := function.GetFunctionByName(builder.GetContext(), pkFnName, argsType)
-
-				funcID := fGet.GetEncodedOverloadID()
-				returnType := fGet.GetReturnType()
-				exprType := makePlan2Type(&returnType)
-				args := []*plan.Expr{
-					leftExpr,
-					{
-						Typ: leftExpr.Typ,
-						Expr: &plan.Expr_List{
-							List: &plan.ExprList{
-								List: inArgs,
+				fGet, err := function.GetFunctionByName(builder.GetContext(), pkFnName, argsType)
+				if err != nil {
+					newOrArgs = append(newOrArgs, mergeCandidates...)
+				} else {
+					funcID := fGet.GetEncodedOverloadID()
+					returnType := fGet.GetReturnType()
+					exprType := makePlan2Type(&returnType)
+					args := []*plan.Expr{
+						leftExpr,
+						{
+							Typ: leftExpr.Typ,
+							Expr: &plan.Expr_List{
+								List: &plan.ExprList{
+									List: inArgs,
+								},
 							},
 						},
-					},
-				}
-				exprType.NotNullable = function.DeduceNotNullable(funcID, args)
-				inExpr := &plan.Expr{
-					Typ: exprType,
-					Expr: &plan.Expr_F{
-						F: &plan.Function{
-							Func: getFunctionObjRef(funcID, pkFnName),
-							Args: args,
+					}
+					exprType.NotNullable = function.DeduceNotNullable(funcID, args)
+					inExpr := &plan.Expr{
+						Typ: exprType,
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: getFunctionObjRef(funcID, pkFnName),
+								Args: args,
+							},
 						},
-					},
-				}
+					}
 
-				newOrArgs = append(newOrArgs, inExpr)
+					newOrArgs = append(newOrArgs, inExpr)
+				}
 			}
 
 			if len(newOrArgs) == 1 {
 				filters[i] = newOrArgs[0]
-				colPos := firstEquiExpr.GetF().Args[0].GetCol().ColPos
-				if colPos != sortkeyIdx {
-					col2filter[colPos] = i
+				if firstEquiExpr != nil {
+					colPos := firstEquiExpr.GetF().Args[0].GetCol().ColPos
+					if colPos != sortkeyIdx {
+						col2filter[colPos] = i
+					}
 				}
 			} else {
 				fn.Args = newOrArgs
@@ -1464,8 +2163,11 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	colLowerBounds := make(map[int32]int) // colPos -> filter index
 	colUpperBounds := make(map[int32]int) // colPos -> filter index
 	for i, expr := range filters {
+		if expr == nil {
+			continue
+		}
 		fn := expr.GetF()
-		if fn == nil {
+		if fn == nil || fn.Func == nil {
 			continue
 		}
 		col, isLower := classifyRangeBound(fn)
@@ -1558,7 +2260,11 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 
 		filterIdx = append(filterIdx, idx)
-		funcName := filters[idx].GetF().Func.ObjName
+		fn := filters[idx].GetF()
+		if fn == nil || fn.Func == nil {
+			return filters
+		}
+		funcName := fn.Func.ObjName
 		if funcName == "in" || funcName == "between" ||
 			funcName == "<" || funcName == "<=" || funcName == ">" || funcName == ">=" ||
 			funcName == "in_range" {
@@ -1587,18 +2293,33 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	}
 
 	lastFilter := filters[filterIdx[len(filterIdx)-1]]
-	lastFuncName := lastFilter.GetF().Func.ObjName
+	lastFn := lastFilter.GetF()
+	if lastFn == nil || lastFn.Func == nil {
+		return filters
+	}
+	lastFuncName := lastFn.Func.ObjName
 	if lastFuncName == "in" {
+		if !hasNonNilFunctionArgs(lastFn, 2) {
+			return filters
+		}
+		lastArgs, ok := inRHSValues(lastFn.Args[1], lastFn.Args[0].Typ)
+		if !ok {
+			return filters
+		}
+
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
 			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
 		}
 
-		inArgs := make([]*plan.Expr, len(lastFilter.GetF().Args[1].GetList().List))
-		for i, lastArg := range lastFilter.GetF().Args[1].GetList().List {
+		inArgs := make([]*plan.Expr, len(lastArgs))
+		for i, lastArg := range lastArgs {
 			tmpSerialArgs := DeepCopyExprList(serialArgs)
 			tmpSerialArgs = append(tmpSerialArgs, lastArg)
-			rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+			rightArg, ok := builder.bindCompositeKeySerial(tmpSerialArgs)
+			if !ok {
+				return filters
+			}
 			inArgs[i] = rightArg
 		}
 
@@ -1607,9 +2328,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			funcName = "prefix_in"
 		}
 
-		compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
+		compositePKFilter, ok = builder.bindCompositeKeyPredicate(funcName,
 			pkExpr,
-			{
+			&plan.Expr{
 				Typ: pkExpr.Typ,
 				Expr: &plan.Expr_List{
 					List: &plan.ExprList{
@@ -1617,32 +2338,49 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 					},
 				},
 			},
-		})
+		)
+		if !ok {
+			return filters
+		}
 	} else if lastFuncName == "between" {
+		if !hasNonNilFunctionArgs(lastFn, 3) {
+			return filters
+		}
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
 			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
 		}
 
 		tmpSerialArgs := DeepCopyExprList(serialArgs)
-		tmpSerialArgs = append(tmpSerialArgs, lastFilter.GetF().Args[1])
-		leftArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+		tmpSerialArgs = append(tmpSerialArgs, lastFn.Args[1])
+		leftArg, ok := builder.bindCompositeKeySerial(tmpSerialArgs)
+		if !ok {
+			return filters
+		}
 
-		tmpSerialArgs = serialArgs
-		tmpSerialArgs = append(tmpSerialArgs, lastFilter.GetF().Args[2])
-		rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+		tmpSerialArgs = append(DeepCopyExprList(serialArgs), lastFn.Args[2])
+		rightArg, ok := builder.bindCompositeKeySerial(tmpSerialArgs)
+		if !ok {
+			return filters
+		}
 
 		funcName := "between"
 		if len(filterIdx) < numParts {
 			funcName = "prefix_between"
 		}
 
-		compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
+		compositePKFilter, ok = builder.bindCompositeKeyPredicate(funcName,
 			pkExpr,
 			leftArg,
 			rightArg,
-		})
+		)
+		if !ok {
+			return filters
+		}
 	} else if lastFuncName == "in_range" {
+		if !hasNonNilFunctionArgs(lastFn, 4) {
+			return filters
+		}
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
 			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
@@ -1653,25 +2391,36 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 
 		tmpSerialArgs := DeepCopyExprList(serialArgs)
-		tmpSerialArgs = append(tmpSerialArgs, lastFilter.GetF().Args[1])
-		leftArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+		tmpSerialArgs = append(tmpSerialArgs, lastFn.Args[1])
+		leftArg, ok := builder.bindCompositeKeySerial(tmpSerialArgs)
+		if !ok {
+			return filters
+		}
 
-		tmpSerialArgs = serialArgs
-		tmpSerialArgs = append(tmpSerialArgs, lastFilter.GetF().Args[2])
-		rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+		tmpSerialArgs = append(DeepCopyExprList(serialArgs), lastFn.Args[2])
+		rightArg, ok := builder.bindCompositeKeySerial(tmpSerialArgs)
+		if !ok {
+			return filters
+		}
 
 		funcName := "in_range"
 		if len(filterIdx) < numParts {
 			funcName = "prefix_in_range"
 		}
 
-		compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
+		compositePKFilter, ok = builder.bindCompositeKeyPredicate(funcName,
 			pkExpr,
 			leftArg,
 			rightArg,
-			lastFilter.GetF().Args[3],
-		})
+			lastFn.Args[3],
+		)
+		if !ok {
+			return filters
+		}
 	} else if lastFuncName == "<" || lastFuncName == "<=" || lastFuncName == ">" || lastFuncName == ">=" {
+		if !hasNonNilFunctionArgs(lastFn, 2) {
+			return filters
+		}
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
 			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
@@ -1681,10 +2430,16 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			return filters
 		}
 
-		tmpSerialArgs := append(DeepCopyExprList(serialArgs), lastFilter.GetF().Args[1])
-		boundArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+		tmpSerialArgs := append(DeepCopyExprList(serialArgs), lastFn.Args[1])
+		boundArg, ok := builder.bindCompositeKeySerial(tmpSerialArgs)
+		if !ok {
+			return filters
+		}
 
-		prefixArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
+		prefixArg, ok := builder.bindCompositeKeySerial(DeepCopyExprList(serialArgs))
+		if !ok {
+			return filters
+		}
 
 		var flag byte
 		var leftArg, rightArg *plan.Expr
@@ -1709,28 +2464,40 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 		flagExpr := makePlan2Uint8ConstExprWithType(flag)
 
-		compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in_range", []*plan.Expr{
+		compositePKFilter, ok = builder.bindCompositeKeyPredicate("prefix_in_range",
 			pkExpr,
 			leftArg,
 			rightArg,
 			flagExpr,
-		})
+		)
+		if !ok {
+			return filters
+		}
 	} else {
 		serialArgs := make([]*plan.Expr, len(filterIdx))
 		for i := range filterIdx {
 			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
 		}
-		rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", serialArgs)
+		rightArg, ok := builder.bindCompositeKeySerial(serialArgs)
+		if !ok {
+			return filters
+		}
 
 		funcName := "="
 		if len(filterIdx) < numParts {
 			funcName = "prefix_eq"
 		}
 
-		compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
+		compositePKFilter, ok = builder.bindCompositeKeyPredicate(funcName,
 			pkExpr,
 			rightArg,
-		})
+		)
+		if !ok {
+			return filters
+		}
+	}
+	if compositePKFilter == nil {
+		return filters
 	}
 	compositePKFilter.Selectivity = compositePKFilterSel
 
@@ -1752,7 +2519,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 func flattenLogicalExpressions(expr *plan.Expr, opName string, args *[]*plan.Expr) {
 	fn := expr.GetF()
-	if fn == nil || fn.Func.ObjName != opName {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != opName {
 		*args = append(*args, expr)
 		return
 	}

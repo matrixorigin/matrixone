@@ -1308,7 +1308,7 @@ SELECT 1e18 * CAST('1.2' as decimal(3,2));
 ➤ 1e18 * cast(1.2 as decimal(3, 2))[8,54,0]  𝄀
 1.2E18
 SELECT CAST(CAST('1.234221421' AS decimal(3,2)) AS signed);
-➤ cast(cast(1.234221421 as decimal(3, 2)) as as)[-5,64,0]  𝄀
+➤ cast(cast(1.234221421 as decimal(3, 2)) as signed)[-5,64,0]  𝄀
 1
 set @v1=null;
 SELECT CAST(@v1 as decimal(22, 2));
@@ -1332,7 +1332,7 @@ SELECT CAST('0101010' AS decimal);
 ➤ cast(0101010 as decimal(38))[3,39,0]  𝄀
 101010
 SELECT CAST('' AS decimal);
-invalid input: can't cast empty string to Decimal128
+invalid input: "" is invalid numeric string
 DROP TABLE IF EXISTS decimal20;
 CREATE TABLE decimal20(v varchar(40), tt tinytext, t text, mt mediumtext, lt longtext);
 INSERT INTO decimal20 VALUES('1.01415', '2.02115', '-3.03', '444.04', '4515.05');
@@ -1674,3 +1674,63 @@ SELECT * FROM float_precision_test WHERE f64_col = 1000000;
 ➤ id[4,32,0]  ¦  f32_col[7,24,0]  ¦  f64_col[8,54,0]  𝄀
 1  ¦  1000000.0  ¦  1000000.0
 DROP TABLE float_precision_test;
+SELECT CAST(8000.00 AS DECIMAL(12,2)) - 1299 AS dec_minus_int_positive;
+➤ dec_minus_int_positive[3,38,2]  𝄀
+6701.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 300 AS dec_minus_int_zero;
+➤ dec_minus_int_zero[3,38,2]  𝄀
+0.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 301 AS dec_minus_int_negative_one;
+➤ dec_minus_int_negative_one[3,38,2]  𝄀
+-1.00
+SELECT CAST(100.00 AS DECIMAL(12,2)) - 200 AS dec_minus_int_negative_hundred;
+➤ dec_minus_int_negative_hundred[3,38,2]  𝄀
+-100.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999 AS dec_minus_int_large_negative;
+➤ dec_minus_int_large_negative[3,38,2]  𝄀
+-3699.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999.00 AS dec_minus_decimal_large_negative;
+➤ dec_minus_decimal_large_negative[3,18,2]  𝄀
+-3699.00
+DROP TABLE IF EXISTS decimal_minus_int_regression;
+CREATE TABLE decimal_minus_int_regression(bal DECIMAL(12,2));
+INSERT INTO decimal_minus_int_regression VALUES (300.00);
+SELECT bal - 3999 AS bal_minus_int FROM decimal_minus_int_regression;
+➤ bal_minus_int[3,38,2]  𝄀
+-3699.00
+DROP TABLE decimal_minus_int_regression;
+DROP TABLE IF EXISTS decimal_minus_int_rhs_vector;
+CREATE TABLE decimal_minus_int_rhs_vector(i INT);
+INSERT INTO decimal_minus_int_rhs_vector VALUES (300), (301), (3999);
+SELECT CAST(300.00 AS DECIMAL(12,2)) - i AS dec_minus_int_col
+FROM decimal_minus_int_rhs_vector
+ORDER BY i;
+➤ dec_minus_int_col[3,38,2]  𝄀
+0.00  𝄀
+-1.00  𝄀
+-3699.00
+DROP TABLE decimal_minus_int_rhs_vector;
+DROP TABLE IF EXISTS decimal_minus_int_rhs_null;
+CREATE TABLE decimal_minus_int_rhs_null(id INT, i INT);
+INSERT INTO decimal_minus_int_rhs_null VALUES (1, 300), (2, NULL), (3, 301), (4, 3999);
+SELECT id, CAST(300.00 AS DECIMAL(12,2)) - i AS dec_minus_nullable_int_col
+FROM decimal_minus_int_rhs_null
+ORDER BY id;
+➤ id[4,32,0]  ¦  dec_minus_nullable_int_col[3,38,2]  𝄀
+1  ¦  0.00  𝄀
+2  ¦  null  𝄀
+3  ¦  -1.00  𝄀
+4  ¦  -3699.00
+DROP TABLE decimal_minus_int_rhs_null;
+SELECT CAST(300.00 AS DECIMAL(20,2)) - 301 AS dec128_minus_int_negative_one;
+➤ dec128_minus_int_negative_one[3,38,2]  𝄀
+-1.00
+SELECT CAST(300.00 AS DECIMAL(20,2)) - 3999 AS dec128_minus_int_large_negative;
+➤ dec128_minus_int_large_negative[3,38,2]  𝄀
+-3699.00
+SELECT 301 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_positive_one;
+➤ int_minus_decimal_positive_one[3,38,2]  𝄀
+1.00
+SELECT 200 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_negative_hundred;
+➤ int_minus_decimal_negative_hundred[3,38,2]  𝄀
+-100.00

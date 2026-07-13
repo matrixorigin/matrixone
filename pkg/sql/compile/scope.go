@@ -16,13 +16,16 @@ package compile
 
 import (
 	"context"
+	"net"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -114,6 +117,18 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 
 	if s.DataSource != nil && !s.DataSource.isConst {
 		s.DataSource.R = nil
+	}
+
+	// The previous execution's cleanup delivered terminal signals into this
+	// scope's pipeline edges and marked them done (doneClosed/endDelivered).
+	// A done edge silently rejects both data and End signals, so a reused
+	// pipeline would leave its receivers waiting forever. Clear the terminal
+	// state so the edges can carry the next execution's signals.
+	// See: https://github.com/matrixorigin/matrixone/issues/25614
+	if s.Proc != nil {
+		for _, reg := range s.Proc.Reg.MergeReceivers {
+			reg.ResetTerminalStateForReuse()
+		}
 	}
 
 	if s.ScopeAnalyzer != nil {
@@ -396,11 +411,14 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
+	if err := validateRemoteRunAddress(s.NodeInfo.Addr, c.addr); err != nil {
+		return s.failRemoteRunBeforeStart(c, err)
+	}
 	if s.ipAddrMatch(c.addr) {
 		return s.MergeRun(c)
 	}
 	if err := s.holdAnyCannotRemoteOperator(); err != nil {
-		return err
+		return s.failRemoteRunBeforeStart(c, err)
 	}
 
 	// In fact, it's not a safe way to convert this pipeline to run at local.
@@ -426,6 +444,13 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	runErr := err
 	runErr = suppressRemoteRunCancelError(s.Proc.Ctx, runErr)
+	if err != nil && s.Proc.Cancel != nil {
+		cancelErr := runErr
+		if cancelErr == nil {
+			cancelErr = err
+		}
+		s.Proc.Cancel(cancelErr)
+	}
 	// this clean-up action shouldn't be called before context check.
 	// because the clean-up action will cancel the context, and error will be suppressed.
 	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, runErr)
@@ -435,6 +460,29 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		sender.close()
 	}
 	return runErr
+}
+
+func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
+	cleanPipelineWitchStartFail(s, err, c.isPrepare)
+	return err
+}
+
+func validateRemoteRunAddress(scopeAddr, localAddr string) error {
+	if scopeAddr == "" || scopeAddr == localAddr {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(scopeAddr)
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: %v", scopeAddr, err)
+	}
+	if host == "" {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: host is empty", scopeAddr)
+	}
+	portNumber, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || portNumber == 0 {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: invalid port %q", scopeAddr, port)
+	}
+	return nil
 }
 
 // ParallelRun run a pipeline in parallel.
@@ -801,6 +849,18 @@ type notifyMessageResult struct {
 	err    error
 }
 
+const notifyMessageRetryInterval = 200 * time.Millisecond
+
+var notifyMessageWaitRegistrationTimeout = waitRegistrationTimeout
+
+type notifyMessageSenderFactory func(
+	ctx context.Context,
+	sid string,
+	toAddr string,
+	mp *mpool.MPool,
+	analyzeModule *AnalyzeModule,
+) (*messageSenderOnClient, error)
+
 // clean do final work for a notifyMessageResult.
 func (r *notifyMessageResult) clean(proc *process.Process) {
 	if r.sender != nil {
@@ -814,6 +874,14 @@ func (r *notifyMessageResult) clean(proc *process.Process) {
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
 // and keep receiving the data until the query was done or data is ended.
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
+	s.sendNotifyMessageWithFactory(wg, resultChan, newMessageSenderOnClient)
+}
+
+func (s *Scope) sendNotifyMessageWithFactory(
+	wg *sync.WaitGroup,
+	resultChan chan notifyMessageResult,
+	newSender notifyMessageSenderFactory,
+) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
@@ -837,34 +905,54 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 
 		errSubmit := ants.Submit(
 			func() {
+				deadline := time.NewTimer(notifyMessageWaitRegistrationTimeout)
+				defer deadline.Stop()
 
-				sender, err := newMessageSenderOnClient(
-					s.Proc.Ctx,
-					s.Proc.GetService(),
-					fromAddr,
-					s.Proc.Mp(),
-					nil,
-				)
-				if err != nil {
-					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
-					return
+				for {
+					sender, err := newSender(
+						s.Proc.Ctx,
+						s.Proc.GetService(),
+						fromAddr,
+						s.Proc.Mp(),
+						nil,
+					)
+					if err != nil {
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						return
+					}
+
+					message := cnclient.AcquireMessage()
+					message.SetID(sender.streamSender.ID())
+					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
+					message.NeedNotReply = false
+					message.Uuid = uuid
+
+					if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
+						closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+						return
+					}
+					sender.safeToClose = false
+					sender.alreadyClose = false
+
+					err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
+					if !isRemoteDispatchNotRegisteredYetError(err) {
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+						return
+					}
+					sender.close()
+
+					select {
+					case <-s.Proc.Ctx.Done():
+						closeWithError(s.Proc.Ctx.Err(), s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						return
+					case <-deadline.C:
+						err = moerr.NewInternalErrorf(s.Proc.Ctx,
+							"dispatch process not registered within %s, remote CN may have failed", notifyMessageWaitRegistrationTimeout)
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						return
+					case <-time.After(notifyMessageRetryInterval):
+					}
 				}
-
-				message := cnclient.AcquireMessage()
-				message.SetID(sender.streamSender.ID())
-				message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
-				message.NeedNotReply = false
-				message.Uuid = uuid
-
-				if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
-					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
-					return
-				}
-				sender.safeToClose = false
-				sender.alreadyClose = false
-
-				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
-				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
 

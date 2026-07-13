@@ -278,6 +278,7 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 		return err
 	}
 	dispatchRunner := buildRemoteDispatchReceiverRoot(arg, fakeValueScanOperator)
+	dispatchRunner.AdoptCleanupState(arg)
 	defer func() {
 		arg.AdoptCleanupState(dispatchRunner)
 		dispatchRunner.Release()
