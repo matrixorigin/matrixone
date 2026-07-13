@@ -994,12 +994,15 @@ func retry(
 	firstInterval time.Duration,
 	totalDuration time.Duration,
 ) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	interval := firstInterval
 	startTime := time.Now()
 	for i := 0; i < retryTimes; i++ {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		default:
 		}
 		if time.Since(startTime) > totalDuration {
@@ -1009,7 +1012,16 @@ func retry(
 		if err == nil {
 			return
 		}
-		time.Sleep(interval)
+		if i == retryTimes-1 {
+			break
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 		interval *= 2
 	}
 	logutil.Errorf("ISCP-Task retry failed, err: %v", err)
