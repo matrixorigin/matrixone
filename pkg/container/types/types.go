@@ -372,7 +372,7 @@ type BuiltinNumber interface {
 }
 
 type Times interface {
-	Date | Time | Datetime | Timestamp
+	Date | Time | Datetime | Timestamp | MoYear
 }
 
 type OrderedT interface {

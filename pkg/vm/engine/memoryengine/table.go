@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -498,6 +499,10 @@ func (t *Table) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.Obj
 }
 
 func (t *Table) Reset(op client.TxnOperator) error {
+	if op == nil {
+		return moerr.NewInternalErrorNoCtx("txn operator is nil when resetting relation")
+	}
+	t.txnOperator = op
 	return nil
 }
 

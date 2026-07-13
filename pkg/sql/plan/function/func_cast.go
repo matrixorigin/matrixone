@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -2624,14 +2625,19 @@ func bitToStr(
 	from vector.FunctionParameterWrapper[uint64],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 
+	// Encode into a buffer captured once per call rather than types.EncodeUint64(&v),
+	// which returns a slice aliasing the closure's local v and forces v onto the heap
+	// on every row. PutUint64 takes v by value, so its address is never taken.
+	// (little-endian layout matches types.EncodeUint64 on MO's supported platforms.)
+	var buf [8]byte
 	uint64ToBytes := func(v uint64) []byte {
-		b := types.EncodeUint64(&v)
+		binary.LittleEndian.PutUint64(buf[:], v)
 		// remove leading zero bytes
-		l := len(b)
-		for l > 1 && b[l-1] == byte(0) {
+		l := len(buf)
+		for l > 1 && buf[l-1] == byte(0) {
 			l -= 1
 		}
-		return b[:l]
+		return buf[:l]
 	}
 
 	if toType.Oid == types.T_binary && toType.Scale == -1 {

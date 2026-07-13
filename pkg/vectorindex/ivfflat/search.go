@@ -412,8 +412,9 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		rt.BackgroundQueries[0] = res.LogicalPlan
 	}
 
-	distances = make([]float64, 0, rt.Limit)
-	resid := make([]any, 0, rt.Limit)
+	resultCapacity := vectorindex.SearchResultPreallocate(uint64(rt.Limit))
+	distances = make([]float64, 0, resultCapacity)
+	resid := make([]any, 0, resultCapacity)
 
 	if len(res.Batches) == 0 {
 		return resid, distances, nil

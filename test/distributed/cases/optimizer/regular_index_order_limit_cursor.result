@@ -46,6 +46,19 @@ select id
 from t
 where user_id = 'u1'
 and is_active = 1
+and id <= 'id_00000040'
+order by id desc
+limit 5;
+➤ id[12,-1,0]  𝄀
+id_00000040  𝄀
+id_00000039  𝄀
+id_00000038  𝄀
+id_00000037  𝄀
+id_00000036
+select id
+from t
+where user_id = 'u1'
+and is_active = 1
 and id > 'id_00000010'
 order by id asc
 limit 5;
@@ -55,6 +68,19 @@ id_00000012  𝄀
 id_00000013  𝄀
 id_00000014  𝄀
 id_00000015
+select id
+from t
+where user_id = 'u1'
+and is_active = 1
+and id >= 'id_00000010'
+order by id asc
+limit 5;
+➤ id[12,-1,0]  𝄀
+id_00000010  𝄀
+id_00000011  𝄀
+id_00000012  𝄀
+id_00000013  𝄀
+id_00000014
 select id
 from t
 where user_id = 'u1'

@@ -28,7 +28,9 @@ type vectorSortContext struct {
 	orderExpr     *plan.Expr
 	distFnExpr    *plan.Function
 	sortDirection plan.OrderBySpec_OrderByFlag
-	limit         *plan.Expr
+	limit         *plan.Expr // internal candidate budget (LIMIT + OFFSET)
+	resultLimit   *plan.Expr
+	resultOffset  *plan.Expr
 	rankOption    *plan.RankOption
 
 	providerNodeID int32
@@ -81,8 +83,12 @@ func (builder *QueryBuilder) buildVectorSortContext(projNode *plan.Node) *vector
 		}
 	}
 
-	limit, rankOption := pickVectorLimit(sortNode, scanNode, projNode)
+	limit, offset, rankOption := pickVectorPagination(sortNode, scanNode, projNode)
 	if limit == nil {
+		return nil
+	}
+	candidateLimit, ok := buildCandidateLimit(limit, offset)
+	if !ok {
 		return nil
 	}
 
@@ -94,7 +100,9 @@ func (builder *QueryBuilder) buildVectorSortContext(projNode *plan.Node) *vector
 		orderExpr:     orderExpr,
 		distFnExpr:    distFnExpr,
 		sortDirection: sortNode.OrderBy[0].Flag,
-		limit:         limit,
+		limit:         candidateLimit,
+		resultLimit:   DeepCopyExpr(limit),
+		resultOffset:  DeepCopyExpr(offset),
 		rankOption:    rankOption,
 	}
 }
@@ -144,8 +152,12 @@ func (builder *QueryBuilder) buildVectorSortContextThroughJoin(projNode *plan.No
 		return nil
 	}
 
-	limit, rankOption := pickVectorLimit(sortNode, scanNode, projNode)
+	limit, offset, rankOption := pickVectorPagination(sortNode, scanNode, projNode)
 	if limit == nil {
+		return nil
+	}
+	candidateLimit, ok := buildCandidateLimit(limit, offset)
+	if !ok {
 		return nil
 	}
 
@@ -157,7 +169,9 @@ func (builder *QueryBuilder) buildVectorSortContextThroughJoin(projNode *plan.No
 		orderExpr:      orderExpr,
 		distFnExpr:     distFnExpr,
 		sortDirection:  sortNode.OrderBy[0].Flag,
-		limit:          limit,
+		limit:          candidateLimit,
+		resultLimit:    DeepCopyExpr(limit),
+		resultOffset:   DeepCopyExpr(offset),
 		rankOption:     rankOption,
 		providerNodeID: providerNodeID,
 		vecArgExpr:     vecArgExpr,
@@ -513,17 +527,33 @@ func vectorSearchProviderChildren(vecCtx *vectorSortContext) []int32 {
 	return []int32{vecCtx.providerNodeID}
 }
 
+func vectorResultPagination(vecCtx *vectorSortContext) (*plan.Expr, *plan.Expr) {
+	if vecCtx == nil || vecCtx.resultLimit == nil {
+		return nil, nil
+	}
+	return DeepCopyExpr(vecCtx.resultLimit), DeepCopyExpr(vecCtx.resultOffset)
+}
+
+func hasCompleteVectorPagination(vecCtx *vectorSortContext) bool {
+	return vecCtx != nil && vecCtx.limit != nil && vecCtx.resultLimit != nil
+}
+
 func pickVectorLimit(sortNode, scanNode, projNode *plan.Node) (*plan.Expr, *plan.RankOption) {
+	limit, _, rankOption := pickVectorPagination(sortNode, scanNode, projNode)
+	return limit, rankOption
+}
+
+func pickVectorPagination(sortNode, scanNode, projNode *plan.Node) (*plan.Expr, *plan.Expr, *plan.RankOption) {
 	if sortNode.Limit != nil {
-		return sortNode.Limit, sortNode.RankOption
+		return sortNode.Limit, sortNode.Offset, sortNode.RankOption
 	}
 	if scanNode.Limit != nil {
-		return scanNode.Limit, scanNode.RankOption
+		return scanNode.Limit, scanNode.Offset, scanNode.RankOption
 	}
 	if projNode.Limit != nil {
-		return projNode.Limit, projNode.RankOption
+		return projNode.Limit, projNode.Offset, projNode.RankOption
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 func (builder *QueryBuilder) resolveSortNode(node *plan.Node, depth int32) *plan.Node {
@@ -561,7 +591,10 @@ func isDescendingVectorSort(flag plan.OrderBySpec_OrderByFlag) bool {
 }
 
 func (builder *QueryBuilder) validateVectorIndexSortRewrite(vecCtx *vectorSortContext) (bool, error) {
-	if vecCtx == nil || !isDescendingVectorSort(vecCtx.sortDirection) {
+	if vecCtx == nil {
+		return true, nil
+	}
+	if !isDescendingVectorSort(vecCtx.sortDirection) {
 		return true, nil
 	}
 
@@ -690,12 +723,18 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
+			if distRange.UpperBoundType != plan.BoundType_UNBOUNDED {
+				goto NO_RANGE
+			}
 			distRange.UpperBoundType = plan.BoundType_EXCLUSIVE
 			distRange.UpperBound = f.Args[1]
 
 		case "<=":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
+			}
+			if distRange.UpperBoundType != plan.BoundType_UNBOUNDED {
+				goto NO_RANGE
 			}
 			distRange.UpperBoundType = plan.BoundType_INCLUSIVE
 			distRange.UpperBound = f.Args[1]
@@ -704,12 +743,18 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 			if distRange == nil {
 				distRange = &plan.DistRange{}
 			}
+			if distRange.LowerBoundType != plan.BoundType_UNBOUNDED {
+				goto NO_RANGE
+			}
 			distRange.LowerBoundType = plan.BoundType_EXCLUSIVE
 			distRange.LowerBound = f.Args[1]
 
 		case ">=":
 			if distRange == nil {
 				distRange = &plan.DistRange{}
+			}
+			if distRange.LowerBoundType != plan.BoundType_UNBOUNDED {
+				goto NO_RANGE
 			}
 			distRange.LowerBoundType = plan.BoundType_INCLUSIVE
 			distRange.LowerBound = f.Args[1]

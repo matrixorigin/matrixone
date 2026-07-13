@@ -252,10 +252,15 @@ func (ps *PipelineSpool) ForceCleanupAfterTerminalSignal() {
 
 // Abort terminates the spool without waiting for receiver acknowledgement.
 // Pending, not-yet-consumed slots are released immediately. Slots already handed
-// to receivers stay valid until their receiver calls ReleaseCurrent.
-func (ps *PipelineSpool) Abort() {
+// to receivers stay valid until their receiver calls ReleaseCurrent. The first
+// abort cause is returned to receivers whose queued spool signals race with the
+// terminal signal. A nil cause falls back to ErrPipelineSpoolAborted.
+func (ps *PipelineSpool) Abort(cause error) {
 	if ps == nil {
 		return
+	}
+	if cause == nil {
+		cause = ErrPipelineSpoolAborted
 	}
 
 	ps.abortOnce.Do(func() {
@@ -263,7 +268,7 @@ func (ps *PipelineSpool) Abort() {
 		defer ps.mu.Unlock()
 
 		ps.aborted = true
-		ps.abortErr = ErrPipelineSpoolAborted
+		ps.abortErr = cause
 		close(ps.abortDone)
 		ps.abortLocked()
 	})

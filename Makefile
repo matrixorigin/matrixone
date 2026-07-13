@@ -34,8 +34,9 @@
 # make install-static-check-tools
 # make static-check
 #
-# To construct a directory named vendor in the main module’s root directory that contains copies of all packages needed to support builds and tests of packages in the main module.
-# make vendor
+# To stage protobuf imports without changing Go package resolution -
+#
+# make proto-vendor
 #
 # To compile mo-service with GPU support,
 # 1. install CUDA toolkit (version 12.0, 13.0, or above)
@@ -57,6 +58,10 @@ endif
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
+# MatrixOne is a single-module repository. Official Make targets must not
+# inherit a parent or user-selected go.work that can replace dependencies.
+override GOWORK := off
+export GOWORK
 UNAME_S := $(shell uname -s | tr A-Z a-z)
 UNAME_M := $(shell uname -m)
 GOPATH := $(shell go env GOPATH)
@@ -65,7 +70,11 @@ BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
 MO_VERSION=$(shell git symbolic-ref -q --short HEAD || git describe --tags --exact-match)
-GO_MODULE=$(shell go list -m)
+# Resolve packages from the checksummed module graph. Generated vendor trees can
+# omit non-Go assets such as C and C++ header-only dependencies.
+GO_MODULE_MODE := -mod=readonly
+GO_MODULE=$(shell go list $(GO_MODULE_MODE) -m)
+PROTO_VENDOR_DIR := $(ROOT_DIR)/.proto-vendor
 
 # check the MUSL_TARGET from https://musl.cc
 # make MUSL_TARGET=aarch64-linux musl to cross make the aarch64 linux executable
@@ -144,7 +153,10 @@ help:
 	@echo "  make static-check       - Run static analysis"
 	@echo ""
 	@echo "Other:"
-	@echo "  make vendor-build       - Build vendor directory"
+	@echo "  make config             - Verify the read-only production/test package graph"
+	@echo "  make mod-tidy           - Synchronize go.mod and go.sum"
+	@echo "  make proto-vendor       - Stage protobuf imports for code generation"
+	@echo "  make vendor-build       - Alias for proto-vendor"
 	@echo "  make pb                 - Generate protobuf files"
 	@echo ""
 	@echo "For more details:"
@@ -152,13 +164,16 @@ help:
 	@echo "  See README.md and BUILD.md for full documentation"
 
 ###############################################################################
-# build vendor directory
+# stage protobuf imports outside the module's vendor directory
 ###############################################################################
 
-.PHONY: vendor-build
-vendor-build:
-	$(info [go mod vendor])
-	@go mod vendor
+.PHONY: proto-vendor vendor-build
+proto-vendor: config
+	$(info [Stage protobuf imports])
+	rm -rf "$(PROTO_VENDOR_DIR)"
+	@GOFLAGS="$(GOFLAGS) $(GO_MODULE_MODE)" GOPROXY="$(GOPROXY)" go mod vendor -o "$(PROTO_VENDOR_DIR)"
+
+vendor-build: proto-vendor
 
 ###############################################################################
 # code generation
@@ -166,23 +181,28 @@ vendor-build:
 
 .PHONY: config
 config:
-	$(info [Create build config])
+	$(info [Verify Go package graph])
 	@for i in 1 2 3; do \
-		mod_cmd=$${CI:+download}; mod_cmd=$${mod_cmd:-tidy}; \
-		GOPROXY="$(GOPROXY)" go mod $$mod_cmd && exit 0; \
-		echo "go mod $$mod_cmd failed (attempt $$i/3), retrying..."; \
+		GOPROXY="$(GOPROXY)" go list $(GO_MODULE_MODE) -test ./... >/dev/null && exit 0; \
+		echo "go package graph verification failed (attempt $$i/3), retrying..."; \
 		sleep $$((i * 5)); \
 	done; \
-	echo "go mod failed after 3 attempts"; \
+	echo "go package graph verification failed after 3 attempts"; \
 	exit 1
 
+.PHONY: mod-tidy
+mod-tidy:
+	$(info [Synchronize Go module metadata])
+	@GOPROXY="$(GOPROXY)" go mod tidy
+
 .PHONY: generate-pb
-generate-pb:
-	$(ROOT_DIR)/proto/gen.sh
+generate-pb: proto-vendor
+	PROTO_VENDOR_DIR="$(PROTO_VENDOR_DIR)" "$(ROOT_DIR)/proto/gen.sh"
 
 # Generate protobuf files
 .PHONY: pb
-pb: vendor-build generate-pb fmt
+pb: generate-pb
+	@$(MAKE) fmt
 	$(info all protos are generated)
 
 ###############################################################################
@@ -270,7 +290,7 @@ jieba-dict:
 .PHONY: build
 build: config cgo thirdparties jieba-dict
 	$(info [Build binary])
-	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -300,13 +320,13 @@ musl: override TAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties jieba-dict
 musl:
 	$(info [Build binary(musl)])
-	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-tool
 .PHONY: mo-tool
 mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
-	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -1059,6 +1079,7 @@ clean:
 	@go clean -testcache
 	rm -f $(BIN_NAME)
 	rm -rf $(ROOT_DIR)/vendor
+	rm -rf "$(PROTO_VENDOR_DIR)"
 	rm -rf $(MUSL_DIR)
 	rm -rf /tmp/$(MUSL_TAR)
 	$(MAKE) -C cgo clean
@@ -1082,7 +1103,7 @@ install-static-check-tools:
 
 .PHONY: static-check
 static-check: config err-check
-	$(CGO_OPTS) go vet -vettool=`which molint` ./...
+	$(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
