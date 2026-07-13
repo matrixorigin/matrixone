@@ -1167,7 +1167,6 @@ func TestActiveTxnWaiterConcurrentComplete(t *testing.T) {
 	start := make(chan struct{})
 	done := make(chan struct{}, 2)
 	for _, err := range []error{assert.AnError, context.Canceled} {
-		err := err
 		go func() {
 			<-start
 			w.complete(err)
