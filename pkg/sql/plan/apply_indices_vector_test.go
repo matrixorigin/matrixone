@@ -57,6 +57,75 @@ func TestPickVectorLimit(t *testing.T) {
 	require.Nil(t, gotRank)
 }
 
+func TestVectorResultPaginationIsSeparateFromCandidateBudget(t *testing.T) {
+	candidate := makePlan2Uint64ConstExprWithType(5)
+	resultLimit := makePlan2Uint64ConstExprWithType(3)
+	resultOffset := makePlan2Uint64ConstExprWithType(2)
+	ctx := &vectorSortContext{
+		limit:        candidate,
+		resultLimit:  resultLimit,
+		resultOffset: resultOffset,
+	}
+
+	limit, offset := vectorResultPagination(ctx)
+	require.Equal(t, uint64(3), limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(2), offset.GetLit().GetU64Val())
+	require.Equal(t, uint64(5), ctx.limit.GetLit().GetU64Val())
+}
+
+func TestVectorResultPaginationRejectsMissingResultLimit(t *testing.T) {
+	ctx := &vectorSortContext{
+		limit:    makePlan2Uint64ConstExprWithType(15),
+		sortNode: &plan.Node{Offset: makePlan2Uint64ConstExprWithType(5)},
+	}
+	limit, offset := vectorResultPagination(ctx)
+	require.Nil(t, limit)
+	require.Nil(t, offset)
+	require.False(t, hasCompleteVectorPagination(ctx))
+}
+
+func TestVectorRewritesRejectMissingResultPagination(t *testing.T) {
+	builder := &QueryBuilder{}
+	ctx := &vectorSortContext{
+		sortNode: &plan.Node{},
+		scanNode: &plan.Node{},
+		limit:    makePlan2Uint64ConstExprWithType(15),
+	}
+
+	tests := []struct {
+		name  string
+		apply func() (int32, error)
+	}{
+		{name: "hnsw", apply: func() (int32, error) { return builder.applyIndicesForSortUsingHnsw(7, ctx, nil) }},
+		{name: "cagra", apply: func() (int32, error) { return builder.applyIndicesForSortUsingCagra(7, ctx, nil) }},
+		{name: "ivfpq", apply: func() (int32, error) { return builder.applyIndicesForSortUsingIvfpq(7, ctx, nil) }},
+		{name: "ivfflat", apply: func() (int32, error) { return builder.applyIndicesForSortUsingIvfflat(7, ctx, nil, nil, nil) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.apply()
+			require.NoError(t, err)
+			require.Equal(t, int32(7), got)
+		})
+	}
+}
+
+func TestVectorPaginationSurvivesPluginRoundTrip(t *testing.T) {
+	ctx := &vectorSortContext{
+		limit:        makePlan2Uint64ConstExprWithType(3),
+		resultLimit:  makePlan2Uint64ConstExprWithType(2),
+		resultOffset: makePlan2Uint64ConstExprWithType(1),
+	}
+
+	pluginCtx, _ := toPlanplugin(ctx, nil)
+	roundTrip, _ := fromPlanplugin(pluginCtx, nil)
+	limit, offset := vectorResultPagination(roundTrip)
+
+	require.Equal(t, uint64(3), roundTrip.limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(2), limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(1), offset.GetLit().GetU64Val())
+}
+
 func TestValidateVectorIndexSortRewrite(t *testing.T) {
 	// nil context: rewrite is allowed (no-op path).
 	b := &QueryBuilder{}
@@ -64,15 +133,24 @@ func TestValidateVectorIndexSortRewrite(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	// ASC ordering: allowed.
-	asc := &vectorSortContext{sortDirection: plan.OrderBySpec_ASC}
+	// ASC ordering with complete pagination ownership: allowed.
+	asc := &vectorSortContext{
+		sortDirection: plan.OrderBySpec_ASC,
+		limit:         makePlan2Uint64ConstExprWithType(15),
+		resultLimit:   makePlan2Uint64ConstExprWithType(10),
+		resultOffset:  makePlan2Uint64ConstExprWithType(5),
+	}
 	ok, err = b.validateVectorIndexSortRewrite(asc)
 	require.NoError(t, err)
 	require.True(t, ok)
 
 	// DESC ordering: rewrite blocked, no error (caller leaves the original
 	// exact path in place rather than failing the query).
-	desc := &vectorSortContext{sortDirection: plan.OrderBySpec_DESC}
+	desc := &vectorSortContext{
+		sortDirection: plan.OrderBySpec_DESC,
+		limit:         makePlan2Uint64ConstExprWithType(10),
+		resultLimit:   makePlan2Uint64ConstExprWithType(10),
+	}
 	ok, err = b.validateVectorIndexSortRewrite(desc)
 	require.NoError(t, err)
 	require.False(t, ok)
@@ -250,6 +328,26 @@ func TestGetDistRangeFromFilters_NonMatching(t *testing.T) {
 	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{f32Lit(0.5)}, partPos, "l2_distance", vecLitArg)
 	require.Len(t, rem, 1)
 	require.Nil(t, dr)
+}
+
+func TestGetDistRangeFromFiltersKeepsDuplicateSideAsResidual(t *testing.T) {
+	const scanTag int32 = 11
+	const partPos int32 = 1
+	const vecVal = "[1,2,3]"
+	vecLitArg := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: vecVal}}},
+	}
+	first := makeDistFnFilter(">", "l2_distance", scanTag, partPos, vecVal, f32Lit(1))
+	second := makeDistFnFilter(">=", "l2_distance", scanTag, partPos, vecVal, f32Lit(10))
+
+	var builder *QueryBuilder
+	remaining, distRange := builder.getDistRangeFromFilters(
+		[]*plan.Expr{first, second}, partPos, "l2_distance", vecLitArg,
+	)
+
+	require.Equal(t, plan.BoundType_EXCLUSIVE, distRange.LowerBoundType)
+	require.Equal(t, first.GetF().Args[1], distRange.LowerBound)
+	require.Equal(t, []*plan.Expr{second}, remaining)
 }
 
 func TestPeelAndRewriteDistFnFilters_AllOps(t *testing.T) {

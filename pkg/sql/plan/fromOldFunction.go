@@ -15,8 +15,9 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"unicode"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // From old function code, and they were only used by plan.
@@ -35,10 +36,25 @@ func ExtractToDateReturnType(format string) (tp types.T, fsp int) {
 	} else {
 		tp = types.T_datetime
 	}
-	//if strings.Contains(format, "%f") {
-	//	fsp = MaxFsp
-	//}
-	return tp, MaxFsp
+	if containsMicrosecondFormat(format) {
+		fsp = MaxFsp
+	}
+	return tp, fsp
+}
+
+func containsMicrosecondFormat(format string) bool {
+	format = trimWhiteSpace(format)
+	var token string
+	var succ bool
+	for {
+		token, format, succ = nextFormatToken(format)
+		if len(token) == 0 || !succ {
+			return false
+		}
+		if token == "%f" {
+			return true
+		}
+	}
 }
 
 // getTimeFormatType checks the type(Time, Date or Datetime) of a format string.

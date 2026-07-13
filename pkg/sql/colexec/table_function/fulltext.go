@@ -195,7 +195,7 @@ func (u *fulltextState) returnResultFromBuffer(proc *process.Process, limit uint
 	blocksz := 8192
 	nres := len(u.resbuf)
 	n := nres
-	if n > int(limit) {
+	if uint64(n) > limit {
 		n = int(limit)
 	}
 	if n > blocksz {
@@ -253,11 +253,9 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 	var err error
 	u.batch.CleanOnlyData()
 	limit := u.limit
-	topk := limit
+	topk := fulltextTopKLimit(limit, u.ranking)
 
-	if u.ranking {
-		topk = 3 * limit
-	} else {
+	if !u.ranking {
 
 		// number of result more than pushdown limit and exit
 		if limit > 0 && u.n_result >= limit {
@@ -357,13 +355,13 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	st := &fulltextState{}
 	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
 	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
+	if err != nil {
+		return nil, err
+	}
 
-	if tableFunction.Limit != nil {
-		if cExpr, ok := tableFunction.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				st.limit = c.U64Val
-			}
-		}
+	st.limit, err = evalLimitExpression(proc, tableFunction.Limit, 0)
+	if err != nil {
+		return nil, err
 	}
 
 	// TODO: LIMIT BY RANK should set ranking to true
@@ -446,10 +444,14 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 }
 
 func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (err error) {
+	if limit == 0 {
+		return nil
+	}
 	aggcnt := u.aggcnt
 	if u.minheap == nil {
-		u.minheap = make(vectorindex.SearchResultHeap, 0, limit)
-		u.resbuf = make([]*vectorindex.SearchResultAnyKey, 0, limit)
+		capacity := vectorindex.SearchResultPreallocate(limit)
+		u.minheap = make(vectorindex.SearchResultHeap, 0, capacity)
+		u.resbuf = make([]*vectorindex.SearchResultAnyKey, 0, capacity)
 	}
 	heap.Init(&u.minheap)
 
@@ -472,7 +474,7 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 
 		if len(score) > 0 {
 			scoref64 := float64(score[0])
-			if len(u.minheap) >= int(limit) {
+			if uint64(len(u.minheap)) >= limit {
 				if u.minheap[0].GetDistance() < scoref64 {
 					if u.ranking {
 						// In ranking mode, free the evicted document's resources immediately
@@ -534,6 +536,16 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 	}
 
 	return nil
+}
+
+func fulltextTopKLimit(limit uint64, ranking bool) uint64 {
+	if !ranking {
+		return limit
+	}
+	if limit > ^uint64(0)/3 {
+		return ^uint64(0)
+	}
+	return 3 * limit
 }
 
 // result from SQL is (doc_id, index constant (refer to Pattern.Index))

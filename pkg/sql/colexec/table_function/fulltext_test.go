@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,6 +41,25 @@ import (
 type fulltextTestCase struct {
 	arg  *TableFunction
 	proc *process.Process
+}
+
+func TestFulltextTopKLimitBounds(t *testing.T) {
+	maxLimit := ^uint64(0)
+	require.Equal(t, maxLimit, fulltextTopKLimit(maxLimit, true))
+	require.Equal(t, uint64(30), fulltextTopKLimit(10, true))
+	require.Equal(t, 1<<20, vectorindex.SearchResultPreallocate(maxLimit))
+
+	proc := testutil.NewProc(t)
+	state := &fulltextState{
+		batch:  batch.NewWithSize(1),
+		resbuf: []*vectorindex.SearchResultAnyKey{{Id: int64(7)}},
+	}
+	state.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	result, err := state.returnResultFromBuffer(proc, maxLimit)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Empty(t, state.resbuf)
+	result.Batch.Clean(proc.Mp())
 }
 
 var (
