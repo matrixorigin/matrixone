@@ -428,7 +428,7 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 		case parquet.Double:
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (float32, error) {
-					return float32(v.Double()), nil
+					return parquetFloat64ToFloat32(proc.Ctx, v.Double())
 				})
 			}
 		default:
@@ -965,8 +965,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, float32(0), func(v parquet.Value) (float32, error) {
-				val, err := parquetValueToFloat64(proc.Ctx, st, v)
-				return float32(val), err
+				return parquetValueToFloat32(proc.Ctx, st, v)
 			})
 		}
 	case types.T_float64:
@@ -1265,65 +1264,14 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			break
 		}
-		dtT := lt.Timestamp
-		if dtT == nil {
+		if lt.Timestamp == nil {
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			data := page.Data()
-			dict := page.Dictionary()
-			switch {
-			case dtT.Unit.Nanos != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Datetime, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.Datetime(types.UnixNanoToTimestamp(v))
-					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Datetime {
-						return converted[int(idx)]
-					})
-				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
-					return types.Datetime(types.UnixNanoToTimestamp(v))
-				})
-			case dtT.Unit.Micros != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Datetime, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.Datetime(types.UnixMicroToTimestamp(v))
-					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Datetime {
-						return converted[int(idx)]
-					})
-				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
-					return types.Datetime(types.UnixMicroToTimestamp(v))
-				})
-			case dtT.Unit.Millis != nil:
-				if dict != nil {
-					dictData := dict.Page().Data()
-					dictValues := dictData.Int64()
-					converted := make([]types.Datetime, len(dictValues))
-					for i, v := range dictValues {
-						converted[i] = types.Datetime(types.UnixMicroToTimestamp(v * 1000))
-					}
-					indexes := data.Int32()
-					return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Datetime {
-						return converted[int(idx)]
-					})
-				}
-				return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Datetime {
-					return types.Datetime(types.UnixMicroToTimestamp(v * 1000))
-				})
-			default:
-				return moerr.NewInternalError(proc.Ctx, "unknown unit")
-			}
+			loc := parquetSessionLocation(proc)
+			return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Datetime(0), func(v parquet.Value) (types.Datetime, error) {
+				return parquetTimestampValueToDatetime(proc.Ctx, st, v, loc)
+			})
 		}
 	case types.T_time:
 		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
@@ -2811,6 +2759,21 @@ func parquetValueToFloat64(ctx context.Context, st parquet.Type, v parquet.Value
 	default:
 		return 0, moerr.NewInvalidInputf(ctx, "cannot convert parquet %s to floating point", st.Kind())
 	}
+}
+
+func parquetValueToFloat32(ctx context.Context, st parquet.Type, v parquet.Value) (float32, error) {
+	val, err := parquetValueToFloat64(ctx, st, v)
+	if err != nil {
+		return 0, err
+	}
+	return parquetFloat64ToFloat32(ctx, val)
+}
+
+func parquetFloat64ToFloat32(ctx context.Context, val float64) (float32, error) {
+	if val > math.MaxFloat32 || val < -math.MaxFloat32 {
+		return 0, moerr.NewInvalidInputf(ctx, "parquet value %v overflows FLOAT", val)
+	}
+	return float32(val), nil
 }
 
 func parquetValueToString(ctx context.Context, st parquet.Type, v parquet.Value) (string, error) {
