@@ -725,7 +725,10 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 	require.NoError(t, c.ResetBackend(context.Background(), serviceID))
 	require.Equal(t, "10.0.0.1:18101", c.activeTxnBackend("cn-id", "cn.example:18101"))
 	require.Empty(t, normalRPCClient.closed)
-	require.Equal(t, []string{"cn.example:18101"}, activeTxnRPCClient.closed)
+	require.Equal(t, []string{
+		"cn.example:18101",
+		"10.0.0.1:18101",
+	}, activeTxnRPCClient.closed)
 	_, err := c.AsyncSend(context.Background(), &lock.Request{
 		Method: lock.Method_CheckActiveTxn,
 		CheckActiveTxn: lock.CheckActiveTxnRequest{
@@ -749,8 +752,10 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 	require.Empty(t, normalRPCClient.closed)
 	require.Equal(t, []string{
 		"cn.example:18101",
+		"10.0.0.1:18101",
 		"cn.example:18101",
 		"10.0.0.1:18101",
+		"10.0.0.2:18101",
 	}, activeTxnRPCClient.closed)
 
 	// A service-discovery address change invalidates the recovery override.
@@ -791,6 +796,7 @@ func TestResetBackendRefreshesNonEmptyStaleAddress(t *testing.T) {
 	require.Equal(t, []string{
 		"old.example:18101",
 		"new.example:18101",
+		"10.0.0.2:18101",
 	}, activeTxnRPCClient.closed)
 	require.Equal(t,
 		"10.0.0.2:18101",
@@ -829,11 +835,14 @@ func TestResetBackendRejectsFailedDiscoveryRefresh(t *testing.T) {
 
 	err := c.ResetBackend(context.Background(), "0000000000000000000cn-id")
 	require.ErrorIs(t, err, refreshErr)
-	require.Empty(t, activeTxnRPCClient.closed)
-	require.Equal(t,
+	require.Equal(t, []string{
+		"stale.example:18101",
 		"10.0.0.1:18101",
+	}, activeTxnRPCClient.closed)
+	require.Equal(t,
+		"stale.example:18101",
 		c.activeTxnBackend("cn-id", "stale.example:18101"),
-		"a failed refresh must not publish a successful reset state",
+		"a failed refresh must preserve unknown state without a stale route override",
 	)
 }
 
@@ -873,6 +882,12 @@ func TestResetBackendClusterStartupWaitHonorsContext(t *testing.T) {
 	c := &client{
 		cluster:         cluster,
 		activeTxnClient: activeTxnRPCClient,
+		recoveryBackends: map[string]recoveryBackend{
+			"cn-id": {
+				discovered: "stale.example:18101",
+				endpoint:   "10.0.0.1:18101",
+			},
+		},
 		resolveBackend: func(context.Context, string) (string, error) {
 			t.Fatal("resolver must not run before the cluster snapshot is ready")
 			return "", nil
@@ -884,7 +899,14 @@ func TestResetBackendClusterStartupWaitHonorsContext(t *testing.T) {
 	err := c.ResetBackend(ctx, "0000000000000000000cn-id")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Less(t, time.Since(started), time.Second)
-	require.Empty(t, activeTxnRPCClient.closed)
+	require.Equal(t, []string{
+		"stale.example:18101",
+		"10.0.0.1:18101",
+	}, activeTxnRPCClient.closed)
+	require.Equal(t,
+		"stale.example:18101",
+		c.activeTxnBackend("cn-id", "stale.example:18101"),
+	)
 
 	gateCtx, gateCancel := context.WithTimeout(context.Background(), time.Second)
 	defer gateCancel()
@@ -937,7 +959,7 @@ func TestResetBackendSlowRefreshDoesNotBlockActiveTxnRouteLookup(t *testing.T) {
 	}()
 	select {
 	case endpoint := <-lookupDone:
-		require.Equal(t, "10.0.0.1:18101", endpoint)
+		require.Equal(t, "old.example:18101", endpoint)
 	case <-time.After(time.Second):
 		close(refreshDone)
 		t.Fatal("active-txn route lookup blocked on slow discovery refresh")
@@ -984,10 +1006,11 @@ func TestResetBackendCloseFailureAttemptsAllRoutesAndClearsCache(t *testing.T) {
 	err := c.ResetBackend(context.Background(), "0000000000000000000cn-id")
 	require.ErrorIs(t, err, closeErr)
 	require.Equal(t, []string{
-		"old.example:18101",
-		"new.example:18101",
 		"prior.example:18101",
 		"10.0.0.1:18101",
+		"old.example:18101",
+		"new.example:18101",
+		"10.0.0.2:18101",
 	}, activeTxnRPCClient.closed)
 	c.recoveryMu.RLock()
 	_, cached := c.recoveryBackends["cn-id"]

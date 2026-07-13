@@ -429,6 +429,34 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) (err err
 		return moerr.NewInternalErrorNoCtx("morpc client does not support targeted backend reset")
 	}
 
+	// A reset is triggered only after the current active-txn route has become
+	// suspect. Remove the pinned override before any discovery operation that
+	// can fail, so an early return cannot keep routing later probes to a
+	// known-stale endpoint.
+	c.recoveryMu.Lock()
+	old, hadOld := c.recoveryBackends[sid]
+	if hadOld {
+		delete(c.recoveryBackends, sid)
+	}
+	c.recoveryMu.Unlock()
+
+	seen := make(map[string]struct{}, 5)
+	var closeErr error
+	closeCandidate := func(candidate string) {
+		if candidate == "" {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		closeErr = errors.Join(closeErr, resetter.CloseBackendFor(candidate))
+	}
+	if hadOld {
+		closeCandidate(old.discovered)
+		closeCandidate(old.endpoint)
+	}
+
 	lookupAddress := func() (string, error) {
 		var address string
 		err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
@@ -451,19 +479,25 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) (err err
 	// recreate or address reassignment.
 	staleAddress, err = lookupAddress()
 	if err != nil {
-		return err
+		return errors.Join(closeErr, err)
 	}
+	// Detach the pre-refresh hostname backend before refreshing. Even without a
+	// pinned IP, the first negative response proves this connection is suspect.
+	closeCandidate(staleAddress)
 	refresher, ok := c.cluster.(clusterservice.AuthoritativeRefresher)
 	if !ok {
-		return moerr.NewInternalErrorNoCtx(
-			"cluster service does not support authoritative refresh")
+		return errors.Join(
+			closeErr,
+			moerr.NewInternalErrorNoCtx(
+				"cluster service does not support authoritative refresh"),
+		)
 	}
 	if err := refresher.Refresh(ctx); err != nil {
-		return err
+		return errors.Join(closeErr, err)
 	}
 	address, err = lookupAddress()
 	if err != nil {
-		return err
+		return errors.Join(closeErr, err)
 	}
 
 	var resolveErr error
@@ -475,32 +509,11 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) (err err
 		}
 	}
 
-	// Detach every route that may still identify this CN incarnation: the
-	// pre-refresh address, the refreshed address, and a prior pinned recovery
-	// endpoint. Continue after individual close failures so reset performs as
-	// much cleanup as possible, then preserve the indeterminate result.
-	c.recoveryMu.Lock()
-	old, hadOld := c.recoveryBackends[sid]
-	if hadOld {
-		delete(c.recoveryBackends, sid)
-	}
-	c.recoveryMu.Unlock()
-	candidates := []string{staleAddress, address}
-	if hadOld {
-		candidates = append(candidates, old.discovered, old.endpoint)
-	}
-	seen := make(map[string]struct{}, len(candidates))
-	var closeErr error
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if _, ok := seen[candidate]; ok {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		closeErr = errors.Join(closeErr, resetter.CloseBackendFor(candidate))
-	}
+	// Detach both names accepted by MORPC before publishing the replacement
+	// override. The resolved endpoint can already have a pooled backend from an
+	// earlier recovery, even when it is not the currently cached hint.
+	closeCandidate(address)
+	closeCandidate(endpoint)
 	if address == "" {
 		return errors.Join(
 			closeErr,
