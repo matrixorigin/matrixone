@@ -1367,7 +1367,7 @@ var functionIdRegister = map[string]int32{
 	// match function
 	"fulltext_match":       FULLTEXT_MATCH,
 	"fulltext_match_score": FULLTEXT_MATCH_SCORE,
-	"bm25_match": BM25_MATCH,
+	"bm25_match":           BM25_MATCH,
 
 	// starlark function
 	"starlark":     STARLARK,
