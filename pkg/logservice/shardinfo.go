@@ -68,6 +68,9 @@ func GetShardInfo(
 	if err != nil || !ok {
 		return ShardInfo{}, false, err
 	}
+	if si.LeaderID == 0 {
+		return ShardInfo{}, false, nil
+	}
 	leader, present := si.Replicas[si.LeaderID]
 	if !present || leader.ServiceAddress == "" {
 		// When the leader entry is absent from Replicas because the
@@ -233,16 +236,15 @@ func (s *Service) getShardInfo(
 		if excludeHardDownReplicaAddresses && isHardDownReplica(r, uuid) {
 			continue
 		}
+		if !includeExpiredReplicaAddresses &&
+			isExpiredLogStoreInState(s.cfg.GetHAKeeperConfig(), expiredState, uuid) {
+			continue
+		}
 		replica := pb.ReplicaInfo{UUID: uuid}
 		if data, ok := r.GetMeta(uuid); ok {
 			var md storeMeta
 			md.unmarshal(data)
-			replica.ServiceAddress = s.filterExpiredReplicaAddress(
-				md.serviceAddress,
-				uuid,
-				includeExpiredReplicaAddresses,
-				expiredState,
-			)
+			replica.ServiceAddress = md.serviceAddress
 		}
 		// Record every membership entry from the authoritative shard view,
 		// even when gossip has not yet carried that node's metadata. The
@@ -264,19 +266,6 @@ func isHardDownReplica(r dragonboat.INodeHostRegistry, uuid string) bool {
 	}
 	return state == dragonboat.NodeHostStateDead ||
 		state == dragonboat.NodeHostStateLeft
-}
-
-func (s *Service) filterExpiredReplicaAddress(
-	address string,
-	uuid string,
-	includeExpiredReplicaAddresses bool,
-	state *pb.CheckerState,
-) string {
-	if includeExpiredReplicaAddresses ||
-		!isExpiredLogStoreInState(s.cfg.GetHAKeeperConfig(), state, uuid) {
-		return address
-	}
-	return ""
 }
 
 func (s *Service) getExpiredLogStoreState(

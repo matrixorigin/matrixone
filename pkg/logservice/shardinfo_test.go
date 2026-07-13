@@ -94,6 +94,34 @@ func TestGetShardInfo_LeaderAddressEmptyReturnsNotReady(t *testing.T) {
 		"leader entry without a resolved address must be treated as leader-unknown")
 }
 
+func TestGetShardInfo_NoLeaderReturnsNotReady(t *testing.T) {
+	orig := queryShardInfoRawFn
+	defer func() { queryShardInfoRawFn = orig }()
+	queryShardInfoRawFn = func(
+		ctx context.Context,
+		sid string,
+		address string,
+		shardID uint64,
+		includeExpiredReplicaAddresses bool,
+		excludeHardDownReplicaAddresses bool,
+	) (pb.ShardInfoQueryResult, bool, error) {
+		assert.False(t, includeExpiredReplicaAddresses)
+		assert.True(t, excludeHardDownReplicaAddresses)
+		return pb.ShardInfoQueryResult{
+			ShardID:  shardID,
+			LeaderID: 0,
+			Replicas: map[uint64]pb.ReplicaInfo{
+				1: {UUID: "uuid-1", ServiceAddress: "10.0.0.1:1"},
+				2: {UUID: "uuid-2", ServiceAddress: "10.0.0.2:1"},
+			},
+		}, true, nil
+	}
+
+	_, ok, err := GetShardInfo("", "doesnt-matter", 3)
+	require.NoError(t, err)
+	assert.False(t, ok, "LeaderID == 0 means no or unknown leader")
+}
+
 // TestGetShardInfo_OmitsUnreachableFollowers makes sure address-less
 // follower entries do not leak into the addresses GetShardInfo's callers
 // iterate to reach the raft shard.
@@ -257,6 +285,36 @@ func TestGetShardInfo_StaleDeadLeaderFallsBackToSurvivingFollowers(t *testing.T)
 	assert.False(t, leaderPresent)
 }
 
+func TestGetShardInfo_StaleExpiredLeaderFallsBackToSurvivingFollowers(t *testing.T) {
+	orig := queryShardInfoRawFn
+	defer func() { queryShardInfoRawFn = orig }()
+	queryShardInfoRawFn = func(
+		ctx context.Context,
+		sid string,
+		address string,
+		shardID uint64,
+		includeExpiredReplicaAddresses bool,
+		excludeHardDownReplicaAddresses bool,
+	) (pb.ShardInfoQueryResult, bool, error) {
+		assert.False(t, includeExpiredReplicaAddresses)
+		assert.True(t, excludeHardDownReplicaAddresses)
+		return pb.ShardInfoQueryResult{
+			ShardID:  shardID,
+			LeaderID: 1, // stale leader, filtered out by HAKeeper expiry
+			Replicas: map[uint64]pb.ReplicaInfo{
+				2: {UUID: "uuid-2", ServiceAddress: "10.0.0.2:1"},
+			},
+		}, true, nil
+	}
+
+	info, ok, err := GetShardInfo("", "doesnt-matter", 3)
+	require.NoError(t, err)
+	require.True(t, ok, "stale expired leader with live followers must return ok=true")
+	assert.Equal(t, "10.0.0.2:1", info.Replicas[2])
+	_, leaderPresent := info.Replicas[1]
+	assert.False(t, leaderPresent)
+}
+
 func TestGetShardMembership_IncludesExpiredReplicaAddresses(t *testing.T) {
 	orig := queryShardInfoRawFn
 	defer func() { queryShardInfoRawFn = orig }()
@@ -284,6 +342,49 @@ func TestGetShardMembership_IncludesExpiredReplicaAddresses(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "10.0.0.1:1", members[1])
 	assert.Equal(t, "10.0.0.2:1", members[2])
+}
+
+func TestServiceGetShardInfoOmitsExpiredReplicasByDefault(t *testing.T) {
+	orig := getCheckerStateForShardInfo
+	defer func() { getCheckerStateForShardInfo = orig }()
+
+	runServiceTest(t, false, true, func(t *testing.T, s *Service) {
+		var info pb.ShardInfoQueryResult
+		var ok bool
+		for i := 0; i < 1000; i++ {
+			info, ok = s.getShardInfo(context.Background(), 1, true, true)
+			if ok {
+				if _, present := info.Replicas[1]; present {
+					break
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		require.True(t, ok)
+		_, present := info.Replicas[1]
+		require.True(t, present)
+
+		getCheckerStateForShardInfo = func(ctx context.Context, l *store) (*pb.CheckerState, error) {
+			return &pb.CheckerState{
+				Tick: 100000,
+				LogState: pb.LogState{
+					Stores: map[string]pb.LogStoreInfo{
+						s.ID(): {Tick: 0},
+					},
+				},
+			}, nil
+		}
+
+		info, ok = s.getShardInfo(context.Background(), 1, false, true)
+		require.True(t, ok)
+		assert.Empty(t, info.Replicas, "default discovery should omit known-expired replicas")
+
+		info, ok = s.getShardInfo(context.Background(), 1, true, true)
+		require.True(t, ok)
+		replica, ok := info.Replicas[1]
+		require.True(t, ok)
+		assert.Equal(t, s.cfg.LogServiceServiceAddr(), replica.ServiceAddress)
+	})
 }
 
 func TestIsHardDownReplica(t *testing.T) {
