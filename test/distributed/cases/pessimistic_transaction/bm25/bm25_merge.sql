@@ -4,6 +4,7 @@
 drop database if exists bm25_merge;
 create database bm25_merge;
 use bm25_merge;
+set experimental_bm25_index = 1;
 create table t (id bigint primary key, txt text);
 insert into t values (1,'apple red'),(2,'apple green'),(3,'apple blue');
 create index ft using bm25 on t(txt) with parser gojieba;

@@ -4,6 +4,7 @@
 drop database if exists bm25_multibase;
 create database bm25_multibase;
 use bm25_multibase;
+set experimental_bm25_index = 1;
 create table t (id bigint primary key, txt text);
 insert into t values
  (1,'apple banana'),

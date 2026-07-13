@@ -3,6 +3,7 @@
 drop database if exists bm25_uuid;
 create database bm25_uuid;
 use bm25_uuid;
+set experimental_bm25_index = 1;
 create table t (id uuid primary key, txt text);
 insert into t values
  ('00000000-0000-0000-0000-000000000001', '孩子 营养 早餐 视频 文案'),

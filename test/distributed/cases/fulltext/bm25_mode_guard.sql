@@ -7,6 +7,7 @@
 drop database if exists bm25_mode;
 create database bm25_mode;
 use bm25_mode;
+set experimental_bm25_index = 1;
 create table t (id bigint primary key, txt text);
 insert into t values (1,'apple banana'),(2,'banana cherry'),(3,'cherry date');
 create index ft using bm25 on t(txt) with parser gojieba;

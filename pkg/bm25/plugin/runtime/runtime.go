@@ -46,12 +46,19 @@ const actionBm25Reindex = "bm25_reindex"
 // only parser wired end-to-end until the word-id layer is generalized).
 const DefaultParser = "gojieba"
 
-// supportedParsers is the set of tokenizers a bm25 index accepts. gojieba
-// works today; ngram/default are accepted at DDL time but only become
-// functional once the engine word-id layer is generalized (Phase 5).
+// Bm25IndexFlag gates bm25 DDL behind the experimental_bm25_index session var
+// (mirrors HNSW's HnswIndexFlag). Both the framework gate (pkg/sql/compile/util.go,
+// via ExperimentalFlag()) and the per-plugin HandleCreateIndex gate reference it.
+const Bm25IndexFlag = "experimental_bm25_index"
+
+// supportedParsers is the set of tokenizers a bm25 index accepts. Both the build
+// (bm25_create) and query (bm25_search) paths tokenize with the shared jieba
+// tokenizer and never read the parser param, so gojieba is the only real tokenizer;
+// "default" is an accepted alias for it (omitting WITH PARSER also defaults to
+// gojieba). Other parsers (e.g. ngram) are rejected rather than silently tokenized as
+// jieba — accepting them would mislead the user into thinking ngrams are in effect.
 var supportedParsers = map[string]struct{}{
 	"gojieba": {},
-	"ngram":   {},
 	"default": {},
 }
 
@@ -99,8 +106,8 @@ func (CatalogHooks) DefaultOptions() map[string]string {
 	return map[string]string{"parser": DefaultParser}
 }
 
-// ExperimentalFlag — bm25 is not feature-gated.
-func (CatalogHooks) ExperimentalFlag() string { return "" }
+// ExperimentalFlag — bm25 DDL is gated by experimental_bm25_index.
+func (CatalogHooks) ExperimentalFlag() string { return Bm25IndexFlag }
 
 // SupportedOpTypes — bm25 is text ranking, not a vector metric; no op_types.
 func (CatalogHooks) SupportedOpTypes() map[string]string { return nil }
@@ -151,7 +158,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if _, ok := supportedParsers[parser]; !ok {
 		return nil, moerr.NewNotSupportedNoCtxf(
-			"bm25 parser %q (supported: gojieba, ngram, default)", parser)
+			"bm25 parser %q (supported: gojieba, default)", parser)
 	}
 	res["parser"] = parser
 

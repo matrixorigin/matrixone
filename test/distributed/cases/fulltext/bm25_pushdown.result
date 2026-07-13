@@ -1,6 +1,7 @@
 drop database if exists bm25_pushdown;
 create database bm25_pushdown;
 use bm25_pushdown;
+set experimental_bm25_index = 1;
 create table docs (id bigint primary key, body text, cat int);
 insert into docs values
 (1,'apple banana cherry',10),

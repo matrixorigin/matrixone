@@ -6,6 +6,7 @@ drop database if exists bm25_restore;
 drop snapshot if exists sn_bm25_restore;
 create database bm25_restore;
 use bm25_restore;
+set experimental_bm25_index = 1;
 create table t (id bigint primary key, txt text);
 insert into t values (1,'apple banana'),(2,'banana cherry'),(3,'cherry date'),(4,'date apple');
 create index ft using bm25 on t(txt) with parser gojieba max_index_capacity=100;

@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 
+	bm25runtime "github.com/matrixorigin/matrixone/pkg/bm25/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/bm25/wand"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -53,6 +54,17 @@ var _ compileplugin.Hooks = Hooks{}
 type Hooks struct{}
 
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	// Gate CREATE INDEX ... USING bm25 behind experimental_bm25_index. Frontend-only:
+	// re-checking here (in addition to the framework gate in pkg/sql/compile/util.go)
+	// catches a flag toggled off since the original CREATE; the background CDC/reindex
+	// context may not surface the user's session value, so skip the check there.
+	if ctx.IsFrontend() {
+		if ok, err := ctx.IsExperimentalEnabled(bm25runtime.Bm25IndexFlag); err != nil {
+			return err
+		} else if !ok {
+			return moerr.NewInternalErrorNoCtx("experimental_bm25_index is not enabled")
+		}
+	}
 	return handleCreate(ctx, indexDefs, false)
 }
 

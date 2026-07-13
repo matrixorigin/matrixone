@@ -1,6 +1,7 @@
 drop database if exists bm25_coexist;
 create database bm25_coexist;
 use bm25_coexist;
+set experimental_bm25_index = 1;
 create table t (id bigint primary key, txt text);
 insert into t values (1,'apple banana cherry'),(2,'apple banana'),(3,'apple'),(4,'durian'),(5,'apple apple apple banana');
 create fulltext index ftc on t(txt);

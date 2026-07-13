@@ -5,6 +5,7 @@
 drop database if exists bm25_mixed;
 create database bm25_mixed;
 use bm25_mixed;
+set experimental_bm25_index = 1;
 create table t (id bigint primary key, a text, b text);
 insert into t values
 (1,'apple banana','cat dog'),

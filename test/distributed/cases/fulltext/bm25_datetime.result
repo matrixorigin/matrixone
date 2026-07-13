@@ -1,6 +1,7 @@
 drop database if exists bm25_datetime;
 create database bm25_datetime;
 use bm25_datetime;
+set experimental_bm25_index = 1;
 create table t (id datetime primary key, txt text);
 insert into t values
 ('2020-06-01 10:00:01', '孩子 营养 早餐 视频 文案'),

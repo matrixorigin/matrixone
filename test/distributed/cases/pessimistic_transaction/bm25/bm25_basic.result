@@ -1,6 +1,7 @@
 drop database if exists bm25_basic;
 create database bm25_basic;
 use bm25_basic;
+set experimental_bm25_index = 1;
 create table docs (id bigint primary key, body text);
 insert into docs values (1,'apple banana cherry'),(2,'apple banana'),(3,'apple'),(4,'durian mango'),(5,'apple apple apple banana');
 create index ftx using bm25 on docs(body) with parser gojieba;

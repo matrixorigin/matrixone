@@ -34,7 +34,7 @@ func TestParamsFromTree_DefaultParser(t *testing.T) {
 
 func TestParamsFromTree_ExplicitAndFlags(t *testing.T) {
 	res, err := CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{
-		ParserName:       "ngram",
+		ParserName:       "default",
 		Async:            true,
 		AutoUpdate:       true,
 		Day:              3,
@@ -43,7 +43,7 @@ func TestParamsFromTree_ExplicitAndFlags(t *testing.T) {
 		MaxIndexCapacity: 100000,
 	}})
 	require.NoError(t, err)
-	require.Equal(t, "ngram", res["parser"])
+	require.Equal(t, "default", res["parser"])
 	require.Equal(t, "true", res[catalog.Async])
 	require.Equal(t, "true", res[catalog.AutoUpdate])
 	require.Equal(t, "3", res[catalog.Day])
@@ -53,8 +53,17 @@ func TestParamsFromTree_ExplicitAndFlags(t *testing.T) {
 }
 
 func TestParamsFromTree_UnsupportedParser(t *testing.T) {
-	_, err := CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{ParserName: "bogus"}})
-	require.Error(t, err)
+	// bm25 only tokenizes with jieba, so only gojieba/default are accepted; ngram (and
+	// any other name) is rejected rather than silently tokenized as jieba.
+	for _, p := range []string{"bogus", "ngram"} {
+		_, err := CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{ParserName: p}})
+		require.Error(t, err, "parser %q must be rejected", p)
+	}
+}
+
+func TestExperimentalFlag(t *testing.T) {
+	require.Equal(t, "experimental_bm25_index", CatalogHooks{}.ExperimentalFlag())
+	require.Equal(t, Bm25IndexFlag, CatalogHooks{}.ExperimentalFlag())
 }
 
 func TestParamsFromTree_OmitsUnsetFlags(t *testing.T) {

@@ -1,6 +1,7 @@
 drop database if exists bm25_reindex;
 create database bm25_reindex;
 use bm25_reindex;
+set experimental_bm25_index = 1;
 create table t (id bigint primary key, txt text);
 insert into t values (1,'apple banana'),(2,'banana cherry'),(3,'cherry date'),(4,'date apple');
 create index ft using bm25 on t(txt) with parser gojieba max_index_capacity=2;

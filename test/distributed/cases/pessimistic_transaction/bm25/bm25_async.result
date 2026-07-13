@@ -1,6 +1,7 @@
 drop database if exists bm25_async;
 create database bm25_async;
 use bm25_async;
+set experimental_bm25_index = 1;
 create table t (id bigint primary key, txt text);
 create index ft using bm25 on t(txt) with parser gojieba;
 insert into t values (1, '营养 早餐'), (2, '视频 文案');

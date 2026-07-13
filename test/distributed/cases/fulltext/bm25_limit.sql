@@ -3,6 +3,7 @@
 drop database if exists bm25_limit;
 create database bm25_limit;
 use bm25_limit;
+set experimental_bm25_index = 1;
 create table t (id bigint primary key, txt text);
 insert into t values
  (1, '营养 天气 城市'),
