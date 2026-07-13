@@ -22,18 +22,19 @@ from orders order by id;
 6  ¦  20  ¦  ["paid", "paid", "pending"]  𝄀
 7  ¦  30  ¦  ["paid"]  𝄀
 8  ¦  30  ¦  ["paid", "refund"]
-select customer_id,
-json_arrayagg(status) over (partition by customer_id) v
-from orders order by customer_id, id;
-➤ customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
-10  ¦  ["paid", "paid", "refund"]  𝄀
-10  ¦  ["paid", "paid", "refund"]  𝄀
-10  ¦  ["paid", "paid", "refund"]  𝄀
-20  ¦  ["paid", "paid", "pending"]  𝄀
-20  ¦  ["paid", "paid", "pending"]  𝄀
-20  ¦  ["paid", "paid", "pending"]  𝄀
-30  ¦  ["paid", "refund"]  𝄀
-30  ¦  ["paid", "refund"]
+select id, customer_id,
+json_arrayagg(status) over (partition by customer_id order by id
+rows between unbounded preceding and unbounded following) v
+from orders order by id;
+➤ id[4,32,0]  ¦  customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
+1  ¦  10  ¦  ["paid", "paid", "refund"]  𝄀
+2  ¦  10  ¦  ["paid", "paid", "refund"]  𝄀
+3  ¦  10  ¦  ["paid", "paid", "refund"]  𝄀
+4  ¦  20  ¦  ["paid", "paid", "pending"]  𝄀
+5  ¦  20  ¦  ["paid", "paid", "pending"]  𝄀
+6  ¦  20  ¦  ["paid", "paid", "pending"]  𝄀
+7  ¦  30  ¦  ["paid", "refund"]  𝄀
+8  ¦  30  ¦  ["paid", "refund"]
 select id, customer_id,
 json_arrayagg(status) over (partition by customer_id order by id rows between 1 preceding and current row) v
 from orders order by id;
@@ -59,17 +60,17 @@ from orders order by id;
 7  ¦  30  ¦  {"7": "paid"}  𝄀
 8  ¦  30  ¦  {"7": "paid", "8": "refund"}
 select customer_id, json_arrayagg(status) v
-from orders group by customer_id order by customer_id;
+from orders where id in (1, 4, 7) group by customer_id order by customer_id;
 ➤ customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
-10  ¦  ["paid", "paid", "refund"]  𝄀
-20  ¦  ["paid", "paid", "pending"]  𝄀
-30  ¦  ["paid", "refund"]
+10  ¦  ["paid"]  𝄀
+20  ¦  ["paid"]  𝄀
+30  ¦  ["paid"]
 select customer_id, json_objectagg(cast(id as char), status) v
-from orders group by customer_id order by customer_id;
+from orders where id in (1, 4, 7) group by customer_id order by customer_id;
 ➤ customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
-10  ¦  {"1": "paid", "2": "paid", "3": "refund"}  𝄀
-20  ¦  {"4": "paid", "5": "paid", "6": "pending"}  𝄀
-30  ¦  {"7": "paid", "8": "refund"}
+10  ¦  {"1": "paid"}  𝄀
+20  ¦  {"4": "paid"}  𝄀
+30  ¦  {"7": "paid"}
 create table t_ident (json_arrayagg int, json_objectagg int);
 insert into t_ident values (1, 2);
 select json_arrayagg, json_objectagg from t_ident;

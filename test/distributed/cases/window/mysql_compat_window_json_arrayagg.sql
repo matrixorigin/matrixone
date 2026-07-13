@@ -19,32 +19,35 @@ insert into orders values
 (4,20,'paid'),(5,20,'paid'),(6,20,'pending'),
 (7,30,'paid'),(8,30,'refund');
 
--- json_arrayagg as a cumulative window aggregate
+-- json_arrayagg as a cumulative window aggregate.
+-- id is the (unique) primary key, so ORDER BY id makes the aggregation order deterministic.
 select id, customer_id,
        json_arrayagg(status) over (partition by customer_id order by id) v
 from orders order by id;
 
--- json_arrayagg over the whole partition (no order by)
-select customer_id,
-       json_arrayagg(status) over (partition by customer_id) v
-from orders order by customer_id, id;
+-- json_arrayagg over the whole partition. ORDER BY id + a full ROWS frame keeps the
+-- element order deterministic while still aggregating every row of the partition.
+select id, customer_id,
+       json_arrayagg(status) over (partition by customer_id order by id
+                                   rows between unbounded preceding and unbounded following) v
+from orders order by id;
 
--- json_arrayagg with an explicit frame
+-- json_arrayagg with an explicit rows frame.
 select id, customer_id,
        json_arrayagg(status) over (partition by customer_id order by id rows between 1 preceding and current row) v
 from orders order by id;
 
--- json_objectagg as a cumulative window aggregate (key must be a string type in MO)
+-- json_objectagg as a cumulative window aggregate (key must be a string type in MO).
 select id, customer_id,
        json_objectagg(cast(id as char), status) over (partition by customer_id order by id) v
 from orders order by id;
 
--- plain aggregate still works
+-- plain aggregates still work; use single-row groups so the output is order-independent.
 select customer_id, json_arrayagg(status) v
-from orders group by customer_id order by customer_id;
+from orders where id in (1, 4, 7) group by customer_id order by customer_id;
 
 select customer_id, json_objectagg(cast(id as char), status) v
-from orders group by customer_id order by customer_id;
+from orders where id in (1, 4, 7) group by customer_id order by customer_id;
 
 -- json_arrayagg / json_objectagg remain usable as identifiers (non-reserved)
 create table t_ident (json_arrayagg int, json_objectagg int);

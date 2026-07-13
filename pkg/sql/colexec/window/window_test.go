@@ -97,14 +97,16 @@ func TestWin(t *testing.T) {
 		resetChildren(tc.arg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
+		_, err = vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
 
 		tc.arg.Reset(tc.proc, false, nil)
 
 		resetChildren(tc.arg, tc.proc.Mp())
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
+		_, err = vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -186,13 +188,97 @@ func newAggExpr() aggexec.AggFuncExecExpression {
 // newJsonObjectAggExpr builds a two-argument aggregate expression:
 // json_objectagg(varchar_key, int32_value), using mock batch col 2 (varchar) and col 0 (int32).
 func newJsonObjectAggExpr(t *testing.T) aggexec.AggFuncExecExpression {
+	return jsonObjectAggColExpr(t, 2, 0)
+}
+
+// jsonObjectAggColExpr builds json_objectagg(varchar@keyPos, int32@valPos).
+func jsonObjectAggColExpr(t *testing.T, keyPos, valPos int32) aggexec.AggFuncExecExpression {
 	keyType := types.T_varchar.ToType()
 	valType := types.T_int32.ToType()
 	e, err := function.GetFunctionByName(context.Background(), "json_objectagg", []types.Type{keyType, valType})
 	require.NoError(t, err)
 	id := e.GetEncodedOverloadID()
 	return aggexec.MakeAggFunctionExpression(id, false,
-		[]*plan.Expr{newColExprWithType(2, keyType), newColExprWithType(0, valType)}, nil)
+		[]*plan.Expr{newColExprWithType(keyPos, keyType), newColExprWithType(valPos, valType)}, nil)
+}
+
+// makeKeyValBatch builds a batch of (varchar key, int32 value) columns for
+// json_objectagg tests. keyNullPos lists the NULL key row positions (may be nil).
+func makeKeyValBatch(mp *mpool.MPool, keys []string, keyNullPos []uint64, vals []int32) *batch.Batch {
+	bat := batch.New([]string{"k", "v"})
+	bat.Vecs[0] = testutil.MakeVarcharVector(keys, keyNullPos, mp)
+	bat.Vecs[1] = testutil.MakeInt32Vector(vals, nil, mp)
+	bat.SetRowCount(len(keys))
+	return bat
+}
+
+// TestWindowJsonObjectAggOutput drives the window operator end-to-end for a
+// two-argument aggregate and asserts the actual JSON output, so a regression in
+// multi-argument passing (issue #25483) cannot pass silently.
+func TestWindowJsonObjectAggOutput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeKeyValBatch(proc.Mp(), []string{"k1", "k2", "k3"}, nil, []int32{10, 20, 30})
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
+		Aggs:        []aggexec.AggFuncExecExpression{jsonObjectAggColExpr(t, 0, 1)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+
+	resVec := result.Batch.Vecs[len(result.Batch.Vecs)-1]
+	require.Equal(t, 3, resVec.Length())
+	// Full frame over a single partition: every row aggregates the whole partition.
+	want := `{"k1": 10, "k2": 20, "k3": 30}`
+	for i := 0; i < resVec.Length(); i++ {
+		require.Equal(t, want, types.DecodeJson(resVec.GetBytesAt(i)).String(), "row %d", i)
+	}
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+}
+
+// TestWindowJsonObjectAggNullKeyNoLeak reproduces the NULL-key error exit
+// (json_objectagg key cannot be NULL) mid-aggregation and asserts that Reset/Free
+// release the aggregators, guarding the error-path mpool leak fix.
+func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	// Row 1 has a NULL key: json_objectagg errors while filling the frame.
+	bat := makeKeyValBatch(proc.Mp(), []string{"k1", ""}, []uint64{1}, []int32{10, 20})
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
+		Aggs:        []aggexec.AggFuncExecExpression{jsonObjectAggColExpr(t, 0, 1)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	_, err := vm.Exec(arg, proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key cannot be NULL")
+	// Aggregators were allocated during the failed eval and would leak without the fix.
+	require.NotNil(t, arg.ctr.batAggs)
+
+	arg.Reset(proc, true, err)
+	require.Nil(t, arg.ctr.batAggs, "Reset must release window aggregators after an error")
+
+	arg.Free(proc, true, err)
+	op.Free(proc, true, err)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB(), "no mpool leak on the json_objectagg error path")
 }
 
 func newFunExpr(name string) *plan.Expr {
