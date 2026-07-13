@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -79,6 +80,14 @@ func newTxnTableForTest() *txnTable {
 		eng:        engine,
 	}
 	return table
+}
+
+func TestGetTableDefAutoIncrementOffset(t *testing.T) {
+	tbl := &txnTable{
+		db:        &txnDatabase{databaseId: 1, databaseName: "db"},
+		extraInfo: &api.SchemaExtra{AutoIncrOffset: 99},
+	}
+	require.Equal(t, uint64(99), tbl.GetTableDef(context.Background()).AutoIncrOffset)
 }
 
 func makeBatchForTest(

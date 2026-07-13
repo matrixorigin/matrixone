@@ -150,7 +150,8 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag: tableDef.FeatureFlag,
+		FeatureFlag:    tableDef.FeatureFlag,
+		AutoIncrOffset: tableDef.AutoIncrOffset,
 	}
 	propDef.Properties = append(
 		propDef.Properties,

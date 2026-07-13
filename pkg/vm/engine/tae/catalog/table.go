@@ -833,6 +833,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			BlockMaxRows:      newSchema.Extra.BlockMaxRows,
 			ObjectMaxBlocks:   newSchema.Extra.ObjectMaxBlocks,
 			Hints:             hints,
+			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
 		}
 
 	}

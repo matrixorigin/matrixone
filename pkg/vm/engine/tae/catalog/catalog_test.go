@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -418,6 +420,32 @@ func TestAlterSchema(t *testing.T) {
 	require.Equal(t, uint16(5), schema.GetSingleSortKey().SeqNum)
 	require.Equal(t, 5, schema.GetSingleSortKeyIdx())
 
+}
+
+func TestAlterSchemaAutoIncrementOffset(t *testing.T) {
+	schema := MockSchema(1, 0)
+	schema.Version = 7
+	original := schema.Clone()
+
+	req := api.NewUpdateAutoIncrementReq(1, 2, 99)
+	require.NoError(t, schema.ApplyAlterTable(req))
+	require.Equal(t, uint64(99), schema.Extra.AutoIncrOffset)
+	require.Equal(t, uint32(7), schema.Version)
+	require.Zero(t, original.Extra.AutoIncrOffset)
+}
+
+func TestAutoIncrementOffsetSchemaRoundTrip(t *testing.T) {
+	_, extra, err := engine.PlanDefsToExeDefs(&plan.TableDef{AutoIncrOffset: 99})
+	require.NoError(t, err)
+	require.Equal(t, uint64(99), extra.AutoIncrOffset)
+
+	encoded := api.MustMarshalTblExtra(extra)
+	restored := api.MustUnmarshalTblExtra(encoded)
+	require.Equal(t, uint64(99), restored.AutoIncrOffset)
+
+	schema := MockSchema(1, 0)
+	schema.Extra = api.CloneExtra(restored)
+	require.Equal(t, uint64(99), schema.Clone().Extra.AutoIncrOffset)
 }
 
 func randomTxnID(t *testing.T) []byte {

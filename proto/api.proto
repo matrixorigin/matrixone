@@ -296,6 +296,7 @@ enum AlterKind {
     AddPartition     = 7;
     RenameColumn     = 8;
     ReplaceDef       = 9;
+    UpdateAutoIncrement = 10;
 }
 
 message AlterTablePolicy {
@@ -340,6 +341,10 @@ message AlterTableDropColumn {
     uint32 sequence_num = 2;  // used to double check
 }
 
+message AlterTableAutoIncrement {
+    uint64 offset = 1;
+}
+
 message AlterTableReq {
     uint64 table_id = 1;
     uint64 db_id    = 2;
@@ -354,6 +359,7 @@ message AlterTableReq {
         AlterTablePolicy update_policy       = 9;
         AlterTableRenameCol rename_col       = 11;
         AlterTableReplaceDef replace_def     = 12;
+        AlterTableAutoIncrement update_auto_increment = 13;
     }
 }
 
@@ -385,6 +391,7 @@ message SchemaExtra {
     uint64 ParentTableID = 14;
     // mark if table is created by publication (CCPR), should skip merge
     bool FromPublication = 15;
+    uint64 auto_incr_offset = 16;
 }
 
 // Int64Map mainly used in unit test

@@ -1595,6 +1595,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		}
 		if tbl.extraInfo != nil {
 			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
+			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
 		}
 	}
 	return tbl.tableDef
@@ -1652,6 +1653,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldPartInfo := tbl.partition
 	oldComment := tbl.comment
 	oldConstraint := tbl.constraint
+	oldAutoIncrOffset := tbl.extraInfo.AutoIncrOffset
 	// The fact that the tableDef brought by alter requests can appended to the tail of original defs presupposes:
 	// 1. late arriving tableDef will overwrite the existing tableDef
 	// 2. any TableDef about columns, like AttritebuteDef, PrimaryKeyDef, or CluterbyDef do not change, ensuring genColumnsFromDefs works well
@@ -1674,6 +1676,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				// Rollback for ReplaceDef is handled by restoring defs
 			case api.AlterKind_RenameColumn:
 				// RenameColumn takes effect in form of ReplaceDef
+			case api.AlterKind_UpdateAutoIncrement:
+				tbl.extraInfo.AutoIncrOffset = oldAutoIncrOffset
 			}
 		}
 		tbl.defs = olddefs
@@ -1711,6 +1715,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			hasReplaceDef = true
 			re := req.GetRenameCol()
 			renameColMap[re.OldName] = re.NewName
+		case api.AlterKind_UpdateAutoIncrement:
+			tbl.extraInfo.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
 		default:
 			panic("not supported")
 		}

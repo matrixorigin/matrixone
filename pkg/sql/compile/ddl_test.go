@@ -33,23 +33,37 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type fixedResultSQLExecutor struct {
+	result executor.Result
+	err    error
+}
+
+func (e *fixedResultSQLExecutor) Exec(context.Context, string, executor.Options) (executor.Result, error) {
+	return e.result, e.err
+}
+
+func (e *fixedResultSQLExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
+	return e.err
+}
 
 func TestConvertDBEOBToNoSuchTable(t *testing.T) {
 	err := convertDBEOBToNoSuchTable(context.Background(), moerr.GetOkExpectedEOB(), "db1", "t2")
@@ -63,24 +77,65 @@ func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
 	require.Same(t, want, got)
 }
 
-func TestReloadAutoIncrementCacheOnAllCNDoesNotNeedProcess(t *testing.T) {
-	const serviceID = "fake-query-client"
-	rt := moruntime.DefaultRuntime()
-	moruntime.SetupServiceBasedRuntime(serviceID, rt)
-	cluster := clusterservice.NewMOCluster(
-		serviceID,
-		nil,
-		time.Second,
-		clusterservice.WithDisableRefresh(),
-	)
-	defer cluster.Close()
-	moruntime.ServiceRuntime(serviceID).SetGlobalVariables(moruntime.ClusterService, cluster)
+func TestAlterTableInplaceAppendsAutoIncrementSchemaMutation(t *testing.T) {
+	const requestedOffset = uint64(99)
+	const effectiveOffset = uint64(120)
 
 	proc := testutil.NewProcess(t)
-	qc := fakeQueryClient{}
-	proc.Free()
+	proc.Base.SessionInfo.Buf = buffer.New()
+	proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+	txnOp, closeTxn := client.NewTestTxnOperator(proc.Ctx)
+	t.Cleanup(closeTxn)
+	proc.Base.TxnOperator = txnOp
 
-	require.NoError(t, reloadAutoIncrementCacheOnAllCN(context.Background(), qc, 42))
+	result := newAlterCopyFixedResult(t, proc.Mp(), types.T_uint64.ToType(), []uint64{effectiveOffset})
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		&fixedResultSQLExecutor{result: result},
+	)
+
+	ctrl := gomock.NewController(t)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(proc.Ctx, uint64(1), "id", effectiveOffset, txnOp).Return(nil)
+	incrservice.SetAutoIncrementServiceByID(proc.GetService(), autoSvc)
+
+	rel := newStubRelation("t")
+	rel.dbID = 1
+	rel.extra = &api.SchemaExtra{}
+	db := newStubDatabase("db")
+	db.rels["t"] = rel
+	eng := newStubEngine()
+	eng.dbs["db"] = db
+	lockMoDb := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	t.Cleanup(lockMoDb.Reset)
+	lockMoTbl := gostub.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	t.Cleanup(lockMoTbl.Reset)
+	lockTbl := gostub.Stub(&lockTable, func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+		return nil
+	})
+	t.Cleanup(lockTbl.Reset)
+
+	tableDef := &plan2.TableDef{
+		Name: "t",
+		Cols: []*plan2.ColDef{{
+			Name: "id",
+			Typ:  plan2.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
+			Database: "db",
+			TableDef: tableDef,
+			Actions: []*plan2.AlterTable_Action{{Action: &plan2.AlterTable_Action_AlterAutoIncrement{
+				AlterAutoIncrement: &plan2.AlterTableAutoIncrement{NewOffset: requestedOffset},
+			}}},
+		}},
+	}}}}
+
+	c := &Compile{e: eng, proc: proc, db: "db", pn: s.Plan}
+	require.NoError(t, s.AlterTableInplace(c))
+	require.Len(t, rel.alterReqs, 1)
+	require.Equal(t, api.NewUpdateAutoIncrementReq(1, 1, effectiveOffset), rel.alterReqs[0])
 }
 
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {

@@ -76,6 +76,18 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		FeatureFlag:       info.FeatureFlag,
 		IndexTables:       append([]uint64{}, info.IndexTables...),
 		ParentTableID:     info.ParentTableID,
+		AutoIncrOffset:    info.AutoIncrOffset,
+	}
+}
+
+func NewUpdateAutoIncrementReq(did, tid, offset uint64) *AlterTableReq {
+	return &AlterTableReq{
+		DbId:    did,
+		TableId: tid,
+		Kind:    AlterKind_UpdateAutoIncrement,
+		Operation: &AlterTableReq_UpdateAutoIncrement{
+			UpdateAutoIncrement: &AlterTableAutoIncrement{Offset: offset},
+		},
 	}
 }
 

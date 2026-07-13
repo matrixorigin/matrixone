@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -96,6 +97,10 @@ func (db *stubDatabase) GetDatabaseId(ctx context.Context) string {
 type stubRelation struct {
 	engine.Relation
 	name                  string
+	dbID                  uint64
+	extra                 *api.SchemaExtra
+	alterReqs             []*api.AlterTableReq
+	alterErr              error
 	tombstones            engine.Tombstoner
 	collectTombstonesErr  error
 	collectTombstonesCall int
@@ -107,6 +112,19 @@ func newStubRelation(name string) *stubRelation {
 
 func (r *stubRelation) GetTableID(ctx context.Context) uint64 {
 	return 1
+}
+
+func (r *stubRelation) GetDBID(ctx context.Context) uint64 {
+	return r.dbID
+}
+
+func (r *stubRelation) GetExtraInfo() *api.SchemaExtra {
+	return r.extra
+}
+
+func (r *stubRelation) AlterTable(ctx context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+	r.alterReqs = append(r.alterReqs, reqs...)
+	return r.alterErr
 }
 
 func (r *stubRelation) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
