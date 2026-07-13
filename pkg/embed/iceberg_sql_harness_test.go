@@ -1063,8 +1063,22 @@ func fixedInt64At(t *testing.T, vec *vector.Vector, row int) int64 {
 		return int64(executor.GetFixedRows[uint32](vec)[row])
 	case types.T_uint64:
 		return int64(executor.GetFixedRows[uint64](vec)[row])
+	case types.T_decimal64:
+		require.Zero(t, vec.GetType().Scale, "expected integral decimal64 vector")
+		return int64(executor.GetFixedRows[types.Decimal64](vec)[row])
+	case types.T_decimal128:
+		require.Zero(t, vec.GetType().Scale, "expected integral decimal128 vector")
+		value := executor.GetFixedRows[types.Decimal128](vec)[row]
+		if value.B64_127 == 0 && value.B0_63 <= uint64(1)<<63-1 {
+			return int64(value.B0_63)
+		}
+		if value.B64_127 == ^uint64(0) && value.B0_63 >= uint64(1)<<63 {
+			return int64(value.B0_63)
+		}
+		t.Fatalf("decimal128 value %s overflows int64", value.Format(vec.GetType().Scale))
+		return 0
 	default:
-		t.Fatalf("expected integer vector, got %s", vec.GetType().String())
+		t.Fatalf("expected integer-compatible vector, got %s", vec.GetType().String())
 		return 0
 	}
 }
