@@ -52,6 +52,18 @@ select 'AFTER_MID_LIST_ERROR';
 -- ANALYZE TABLE without column list: non-existent table
 analyze table t_analyze_nonexistent;
 
+-- implicit columns must be resolved from the same historical schema
+drop snapshot if exists analyze_schema_snapshot;
+drop table if exists snapshot_cols;
+create table snapshot_cols(old_col int);
+insert into snapshot_cols values (1), (2);
+create snapshot analyze_schema_snapshot for account;
+alter table snapshot_cols add column current_only int;
+analyze table snapshot_cols {snapshot = 'analyze_schema_snapshot'};
+select 'AFTER_SNAPSHOT_ANALYZE';
+drop snapshot analyze_schema_snapshot;
+drop table snapshot_cols;
+
 -- CHECK TABLE: returns not-supported error
 check table t_analyze_01;
 check table t_analyze_01 extended;

@@ -49,6 +49,18 @@ AFTER_MID_LIST_ERROR
 AFTER_MID_LIST_ERROR
 analyze table t_analyze_nonexistent;
 no such table db_analyze_stmt.t_analyze_nonexistent
+drop snapshot if exists analyze_schema_snapshot;
+drop table if exists snapshot_cols;
+create table snapshot_cols(old_col int);
+insert into snapshot_cols values (1), (2);
+create snapshot analyze_schema_snapshot for account;
+alter table snapshot_cols add column current_only int;
+analyze table snapshot_cols {snapshot = 'analyze_schema_snapshot'};
+select 'AFTER_SNAPSHOT_ANALYZE';
+AFTER_SNAPSHOT_ANALYZE
+AFTER_SNAPSHOT_ANALYZE
+drop snapshot analyze_schema_snapshot;
+drop table snapshot_cols;
 check table t_analyze_01;
 not supported: CHECK TABLE is not supported in MatrixOne
 check table t_analyze_01 extended;
