@@ -309,6 +309,10 @@ type client struct {
 		closed   bool // true when Close() is completed
 		backends map[string][]Backend
 		ops      map[string]*op
+		// backendEpoch invalidates asynchronous create requests queued before a
+		// targeted backend reset. Without it, an old request can repopulate the
+		// pool after CloseBackendFor returns.
+		backendEpoch map[string]uint64
 	}
 
 	circuitBreakers *CircuitBreakerManager
@@ -342,6 +346,7 @@ func NewClient(
 	}
 	c.mu.backends = make(map[string][]Backend)
 	c.mu.ops = make(map[string]*op)
+	c.mu.backendEpoch = make(map[string]uint64)
 
 	for _, opt := range options {
 		opt(c)
@@ -838,6 +843,26 @@ func (c *client) CloseBackend() error {
 	return nil
 }
 
+// CloseBackendFor synchronously detaches one remote and invalidates any
+// asynchronous create requests queued before this call.
+func (c *client) CloseBackendFor(remote string) error {
+	c.mu.Lock()
+	backends := c.mu.backends[remote]
+	c.mu.backendEpoch[remote]++
+	delete(c.mu.backends, remote)
+	delete(c.mu.ops, remote)
+	c.updatePoolSizeMetricsLocked()
+	c.mu.Unlock()
+
+	// Close outside c.mu: backend shutdown can wait for worker goroutines, and
+	// no new caller should be blocked from creating the replacement meanwhile.
+	for _, backend := range backends {
+		backend.Close()
+	}
+	c.circuitBreakers.RemoveBreaker(remote)
+	return nil
+}
+
 func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	// Fast-fail: check circuit breaker before acquiring lock
 	// This prevents blocking on lock acquisition for known-bad backends
@@ -859,6 +884,7 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 
 	// No backend available in pool
 	canCreate := c.canCreateLocked(backend)
+	backendEpoch := c.mu.backendEpoch[backend]
 	enableAutoCreate := c.options.enableAutoCreate
 	hasBackends := poolSize > 0
 	c.mu.Unlock() // Release lock before any potentially blocking operation
@@ -879,7 +905,7 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	creationQueued := false
 	if canCreate {
 		// Try to enqueue creation task with backpressure handling
-		if !globalClientGC.triggerCreate(c, backend) {
+		if !globalClientGC.triggerCreateAtEpoch(c, backend, backendEpoch) {
 			// Queue is full - fallback to existing creation path with proper bookkeeping
 			return c.createBackendWithBookkeeping(backend, lock)
 		}
@@ -973,7 +999,7 @@ func (c *client) tryCreate(backend string) bool {
 		return false
 	}
 
-	return globalClientGC.triggerCreate(c, backend)
+	return globalClientGC.triggerCreateAtEpoch(c, backend, c.mu.backendEpoch[backend])
 }
 
 func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backend, error) {
@@ -989,6 +1015,7 @@ func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backen
 		c.mu.Unlock()
 		return nil, moerr.NewBackendClosedNoCtx()
 	}
+	backendEpoch := c.mu.backendEpoch[backend]
 	c.mu.Unlock()
 
 	// Create backend using factory with metrics (same as doCreate) without holding the lock.
@@ -1004,6 +1031,10 @@ func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backen
 	if c.mu.closed {
 		b.Close()
 		return nil, moerr.NewClientClosedNoCtx()
+	}
+	if c.mu.backendEpoch[backend] != backendEpoch {
+		b.Close()
+		return nil, moerr.NewBackendClosedNoCtx()
 	}
 	if !c.canCreateLocked(backend) {
 		// Another goroutine may have filled the pool while we were creating.

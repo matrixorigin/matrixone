@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -42,6 +43,14 @@ var (
 	defaultRPCWriteTimeout     = time.Second * 3
 	defaultHandleWorkers       = 12
 	defaultHandleGetTxnWorkers = 4
+	// Recovery endpoints are hints: eviction safely falls back to service
+	// discovery and the negative-response confirmation path. Keep a hard bound
+	// so historical CN UUID churn cannot grow the client for its whole lifetime.
+	maxRecoveryBackendEntries = 4096
+	// The system resolver may retain a container hostname across endpoint
+	// recreation in a long-lived CGO process. Recovery must query DNS again;
+	// the pure-Go resolver has no cross-request result cache.
+	recoveryResolver = &net.Resolver{PreferGo: true, StrictErrors: true}
 )
 
 func acquireRequest() *pb.Request {
@@ -66,6 +75,15 @@ type client struct {
 	cfg     *morpc.Config
 	cluster clusterservice.MOCluster
 	client  morpc.RPCClient
+
+	recoveryMu       sync.RWMutex
+	recoveryBackends map[string]recoveryBackend // CN UUID -> recovery endpoint
+	resolveBackend   func(context.Context, string) (string, error)
+}
+
+type recoveryBackend struct {
+	discovered string
+	endpoint   string
 }
 
 type ClientOption func(c *client)
@@ -82,10 +100,12 @@ func NewClient(
 	opts ...ClientOption,
 ) (Client, error) {
 	c := &client{
-		logger:  getLogger(service),
-		service: service,
-		cfg:     &cfg,
+		logger:           getLogger(service),
+		service:          service,
+		cfg:              &cfg,
+		recoveryBackends: make(map[string]recoveryBackend),
 	}
+	c.resolveBackend = resolveTCP4Endpoint
 	for _, applyFn := range opts {
 		applyFn(c)
 	}
@@ -253,6 +273,9 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			zap.String("request", request.DebugString()))
 
 	}
+	if request.Method == pb.Method_GetActiveTxn {
+		address = c.activeTxnBackend(sid, address)
+	}
 	f, err := c.client.Send(ctx, address, request)
 	if err != nil {
 		observeLockserviceRemoteRPCError(request.Method, err)
@@ -311,6 +334,127 @@ func lockserviceRemoteRPCErrorType(err error) string {
 
 func (c *client) Close() error {
 	return c.client.Close()
+}
+
+// ResetBackend detaches the pooled connection for one CN incarnation. The
+// address can remain unchanged across a hot recreate, so service discovery
+// refresh alone is insufficient to prevent reuse of the stale backend.
+func (c *client) ResetBackend(serviceID string) error {
+	sid := getUUIDFromServiceIdentifier(serviceID)
+	var address string
+	for i := 0; i < 2; i++ {
+		c.cluster.GetCNServiceWithoutWorkingState(
+			clusterservice.NewServiceIDSelector(sid),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			})
+		if address != "" {
+			break
+		}
+		c.cluster.ForceRefresh(true)
+	}
+	if address == "" {
+		return moerr.NewInternalErrorNoCtx("cannot find lockservice address for " + sid)
+	}
+
+	c.recoveryMu.Lock()
+	defer c.recoveryMu.Unlock()
+	resetter, ok := c.client.(interface {
+		CloseBackendFor(string) error
+	})
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("morpc client does not support targeted backend reset")
+	}
+
+	// Detach both forms: requests normally use the discovered hostname, while
+	// a prior recovery may have pinned the then-current IP endpoint.
+	if err := resetter.CloseBackendFor(address); err != nil {
+		return err
+	}
+	if old, ok := c.recoveryBackends[sid]; ok {
+		delete(c.recoveryBackends, sid)
+		endpoint := old.endpoint
+		if endpoint != address {
+			if err := resetter.CloseBackendFor(endpoint); err != nil {
+				return err
+			}
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if c.resolveBackend == nil {
+		return moerr.NewInternalErrorNoCtx("lockservice recovery resolver is not configured")
+	}
+	endpoint, err := c.resolveBackend(ctx, address)
+	if err != nil {
+		return err
+	}
+	if endpoint == address {
+		return nil
+	}
+	c.storeRecoveryBackendLocked(sid, recoveryBackend{
+		discovered: address,
+		endpoint:   endpoint,
+	})
+	return nil
+}
+
+func (c *client) storeRecoveryBackendLocked(serviceID string, backend recoveryBackend) {
+	if c.recoveryBackends == nil {
+		c.recoveryBackends = make(map[string]recoveryBackend)
+	}
+	if _, exists := c.recoveryBackends[serviceID]; !exists &&
+		len(c.recoveryBackends) >= maxRecoveryBackendEntries {
+		// Any victim is safe: this cache is only a recovery hint, and a miss
+		// re-enters discovery plus the reset/confirmation path.
+		for victim := range c.recoveryBackends {
+			delete(c.recoveryBackends, victim)
+			break
+		}
+	}
+	c.recoveryBackends[serviceID] = backend
+}
+
+func (c *client) activeTxnBackend(serviceID, discovered string) string {
+	c.recoveryMu.RLock()
+	backend, ok := c.recoveryBackends[serviceID]
+	if ok && backend.discovered == discovered {
+		endpoint := backend.endpoint
+		c.recoveryMu.RUnlock()
+		return endpoint
+	}
+	c.recoveryMu.RUnlock()
+	if ok {
+		c.recoveryMu.Lock()
+		if current, exists := c.recoveryBackends[serviceID]; exists && current == backend {
+			delete(c.recoveryBackends, serviceID)
+		}
+		c.recoveryMu.Unlock()
+	}
+	return discovered
+}
+
+func resolveTCP4Endpoint(ctx context.Context, address string) (string, error) {
+	if strings.Contains(address, "://") {
+		return address, nil
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || net.ParseIP(host) != nil {
+		return address, err
+	}
+	ips, err := recoveryResolver.LookupIP(ctx, "ip4", host)
+	if err != nil || len(ips) == 0 {
+		return address, err
+	}
+	// A multi-address name is commonly a load-balanced service. Pinning one
+	// member would discard net.Dial's fallback semantics and can make recovery
+	// worse, so only incarnation-pin an unambiguous endpoint.
+	if len(ips) != 1 {
+		return address, nil
+	}
+	return net.JoinHostPort(ips[0].String(), port), nil
 }
 
 // WithServerMessageFilter set filter func. Requests can be modified or filtered out by the filter

@@ -37,6 +37,16 @@ import (
 
 const rpcTestResponseTimeout = 10 * time.Second
 
+type closeTrackingRPCClient struct {
+	morpc.RPCClient
+	closed []string
+}
+
+func (c *closeTrackingRPCClient) CloseBackendFor(remote string) error {
+	c.closed = append(c.closed, remote)
+	return nil
+}
+
 type testClientSession struct {
 	ctx         context.Context
 	writeCtx    context.Context
@@ -524,6 +534,73 @@ func TestNewClientWithMOCluster(t *testing.T) {
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
+}
+
+func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("reset-backend-test", runtime.DefaultRuntime())
+	cluster := clusterservice.NewMOCluster(
+		"reset-backend-test",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(
+			[]metadata.CNService{{
+				ServiceID:          "cn-id",
+				LockServiceAddress: "cn.example:18101",
+			}},
+			nil))
+	defer cluster.Close()
+
+	rpcClient := &closeTrackingRPCClient{}
+	endpoint := "10.0.0.1:18101"
+	c := &client{
+		cluster:          cluster,
+		client:           rpcClient,
+		recoveryBackends: make(map[string]recoveryBackend),
+		resolveBackend: func(context.Context, string) (string, error) {
+			return endpoint, nil
+		},
+	}
+	serviceID := "0000000000000000000cn-id"
+
+	require.NoError(t, c.ResetBackend(serviceID))
+	require.Equal(t, "10.0.0.1:18101", c.activeTxnBackend("cn-id", "cn.example:18101"))
+	require.Equal(t, []string{"cn.example:18101"}, rpcClient.closed)
+
+	endpoint = "10.0.0.2:18101"
+	require.NoError(t, c.ResetBackend(serviceID))
+	require.Equal(t, "10.0.0.2:18101", c.activeTxnBackend("cn-id", "cn.example:18101"))
+	require.Equal(t, []string{
+		"cn.example:18101",
+		"cn.example:18101",
+		"10.0.0.1:18101",
+	}, rpcClient.closed)
+
+	// A service-discovery address change invalidates the recovery override.
+	require.Equal(t, "other.example:18101", c.activeTxnBackend("cn-id", "other.example:18101"))
+	c.recoveryMu.RLock()
+	_, ok := c.recoveryBackends["cn-id"]
+	c.recoveryMu.RUnlock()
+	require.False(t, ok)
+}
+
+func TestRecoveryBackendCacheIsBounded(t *testing.T) {
+	c := &client{recoveryBackends: make(map[string]recoveryBackend)}
+	c.recoveryMu.Lock()
+	for i := 0; i < maxRecoveryBackendEntries; i++ {
+		c.recoveryBackends[fmt.Sprintf("cn-%d", i)] = recoveryBackend{
+			discovered: "cn.example:18101",
+			endpoint:   "10.0.0.1:18101",
+		}
+	}
+	c.storeRecoveryBackendLocked("new-cn", recoveryBackend{
+		discovered: "new.example:18101",
+		endpoint:   "10.0.0.2:18101",
+	})
+	require.LessOrEqual(t, len(c.recoveryBackends), maxRecoveryBackendEntries)
+	_, ok := c.recoveryBackends["new-cn"]
+	c.recoveryMu.Unlock()
+	require.True(t, ok)
 }
 
 func runRPCTests(

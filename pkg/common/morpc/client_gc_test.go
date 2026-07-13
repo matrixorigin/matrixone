@@ -200,7 +200,7 @@ func TestGlobalClientGC_CreateLoop(t *testing.T) {
 	assert.Equal(t, 0, len(backends))
 
 	// Trigger create
-	mgr.triggerCreate(client, "b1")
+	mgr.triggerCreateAtEpoch(client, "b1", 0)
 
 	// Wait for processing
 	time.Sleep(time.Millisecond * 100)
@@ -213,6 +213,54 @@ func TestGlobalClientGC_CreateLoop(t *testing.T) {
 
 	mgr.unregister(client)
 	mgr.stop()
+}
+
+func TestGlobalClientGC_DropsCreateQueuedBeforeBackendReset(t *testing.T) {
+	mgr := newClientGCManager()
+	factory := &createNotifyFactory{
+		inner:   newTestBackendFactory(),
+		created: make(chan struct{}, 2),
+	}
+	rc, err := NewClient("test-stale-create",
+		factory,
+		WithClientMaxBackendPerHost(2),
+		WithClientEnableAutoCreateBackend())
+	require.NoError(t, err)
+	client := rc.(*client)
+	defer func() {
+		mgr.unregister(client)
+		mgr.stop()
+		require.NoError(t, client.Close())
+	}()
+	mgr.register(client)
+
+	// A reset advances b1 to epoch 1. Simulate a create request that was
+	// already queued with epoch 0, then use another remote as a FIFO barrier.
+	require.NoError(t, client.CloseBackendFor("b1"))
+	require.True(t, mgr.triggerCreateAtEpoch(client, "b1", 0))
+	require.True(t, mgr.triggerCreateAtEpoch(client, "barrier", 0))
+	select {
+	case <-factory.created:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for create-loop barrier")
+	}
+
+	client.mu.Lock()
+	require.Empty(t, client.mu.backends["b1"])
+	require.Len(t, client.mu.backends["barrier"], 1)
+	epoch := client.mu.backendEpoch["b1"]
+	client.mu.Unlock()
+
+	// A request from the current epoch is still admitted normally.
+	require.True(t, mgr.triggerCreateAtEpoch(client, "b1", epoch))
+	select {
+	case <-factory.created:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for current-epoch create")
+	}
+	client.mu.Lock()
+	require.Len(t, client.mu.backends["b1"], 1)
+	client.mu.Unlock()
 }
 
 func TestGlobalClientGC_ConcurrentClients(t *testing.T) {
@@ -273,7 +321,7 @@ func TestGlobalClientGC_ChannelFull(t *testing.T) {
 	// Fill up the channels
 	for i := 0; i < 1025; i++ {
 		mgr.triggerGCInactive(client, "b1")
-		mgr.triggerCreate(client, "b1")
+		mgr.triggerCreateAtEpoch(client, "b1", 0)
 	}
 
 	// Should not block or panic
@@ -298,7 +346,7 @@ func TestGlobalClientGC_UnregisteredClientIgnored(t *testing.T) {
 
 	// Try to trigger GC on unregistered client
 	mgr.triggerGCInactive(client, "b1")
-	mgr.triggerCreate(client, "b1")
+	mgr.triggerCreateAtEpoch(client, "b1", 0)
 
 	// Wait a bit
 	time.Sleep(time.Millisecond * 100)
@@ -479,7 +527,7 @@ func TestGlobalClientGC_StressTest(t *testing.T) {
 			for j := 0; j < numOpsPerClient; j++ {
 				mgr.triggerGCInactive(client, "b1")
 				atomic.AddInt64(&opsCount, 1)
-				mgr.triggerCreate(client, "b1")
+				mgr.triggerCreateAtEpoch(client, "b1", 0)
 				atomic.AddInt64(&opsCount, 1)
 			}
 		}(i)
@@ -513,19 +561,19 @@ func TestGlobalClientGC_TriggerCreateReturnValue(t *testing.T) {
 	mgr.register(client)
 
 	// First request should succeed (channel is empty)
-	ok := mgr.triggerCreate(client, "b1")
+	ok := mgr.triggerCreateAtEpoch(client, "b1", 0)
 	assert.True(t, ok, "first triggerCreate should succeed")
 
 	// Fill up the channel to test failure case
 	channelCap := cap(mgr.createC)
 	for i := 0; i < channelCap-1; i++ {
-		mgr.triggerCreate(client, "b1")
+		mgr.triggerCreateAtEpoch(client, "b1", 0)
 	}
 
 	// Now channel should be full, next request should fail
 	// Note: we need to ensure the channel is full by filling it completely
 	for i := 0; i < channelCap; i++ {
-		mgr.triggerCreate(client, "b1")
+		mgr.triggerCreateAtEpoch(client, "b1", 0)
 	}
 
 	// The last few should have returned false (channel full)
@@ -838,7 +886,7 @@ func TestGlobalClientGC_CreateOnClosedClient(t *testing.T) {
 	client.mu.Unlock()
 
 	// Trigger create - should be safely ignored
-	mgr.triggerCreate(client, "b1")
+	mgr.triggerCreateAtEpoch(client, "b1", 0)
 
 	// Give time for the create loop to process
 	time.Sleep(time.Millisecond * 50)

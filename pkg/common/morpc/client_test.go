@@ -40,6 +40,18 @@ func (f *createNotifyFactory) Create(backend string, opts ...BackendOption) (Bac
 	return b, err
 }
 
+type blockingCreateFactory struct {
+	entered chan struct{}
+	release chan struct{}
+	backend *testBackend
+}
+
+func (f *blockingCreateFactory) Create(string, ...BackendOption) (Backend, error) {
+	close(f.entered)
+	<-f.release
+	return f.backend, nil
+}
+
 func TestCreateBackendLocked(t *testing.T) {
 	rc, err := NewClient("", newTestBackendFactory(), WithClientMaxBackendPerHost(1))
 	assert.NoError(t, err)
@@ -81,6 +93,92 @@ func TestGetBackendLockedWithEmptyBackends(t *testing.T) {
 	b, err := c.getBackendLocked("b1", false)
 	assert.NoError(t, err)
 	assert.Nil(t, b)
+}
+
+func TestCloseBackendForSynchronouslyDetachesOnlyTarget(t *testing.T) {
+	rc, err := NewClient("", newTestBackendFactory(), WithClientMaxBackendPerHost(1))
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	target := &testBackend{id: 1, activeTime: time.Now()}
+	other := &testBackend{id: 2, activeTime: time.Now()}
+	c.mu.Lock()
+	c.mu.backends["target"] = []Backend{target}
+	c.mu.backends["other"] = []Backend{other}
+	c.mu.ops["target"] = &op{}
+	c.mu.ops["other"] = &op{}
+	c.mu.Unlock()
+	c.circuitBreakers.RecordFailure("target")
+
+	require.NoError(t, c.CloseBackendFor("target"))
+
+	c.mu.Lock()
+	require.Empty(t, c.mu.backends["target"])
+	require.Nil(t, c.mu.ops["target"])
+	require.Equal(t, []Backend{other}, c.mu.backends["other"])
+	c.mu.Unlock()
+	require.NotContains(t, c.circuitBreakers.Stats(), "target")
+
+	target.RWMutex.RLock()
+	require.True(t, target.closed)
+	target.RWMutex.RUnlock()
+	other.RWMutex.RLock()
+	require.False(t, other.closed)
+	other.RWMutex.RUnlock()
+
+	c.mu.Lock()
+	replacement, err := c.createBackendLocked("target")
+	c.mu.Unlock()
+	require.NoError(t, err)
+	require.NotNil(t, replacement)
+}
+
+func TestCloseBackendForRejectsConcurrentSynchronousCreate(t *testing.T) {
+	factory := &blockingCreateFactory{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		backend: &testBackend{id: 1, activeTime: time.Now()},
+	}
+	defer func() {
+		select {
+		case <-factory.release:
+		default:
+			close(factory.release)
+		}
+	}()
+	rc, err := NewClient("", factory, WithClientMaxBackendPerHost(1))
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := c.createBackendWithBookkeeping("target", false)
+		result <- err
+	}()
+	select {
+	case <-factory.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend creation did not start")
+	}
+
+	require.NoError(t, c.CloseBackendFor("target"))
+	close(factory.release)
+	select {
+	case err := <-result:
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend creation did not finish")
+	}
+
+	c.mu.Lock()
+	require.Empty(t, c.mu.backends["target"])
+	c.mu.Unlock()
+	factory.backend.RWMutex.RLock()
+	require.True(t, factory.backend.closed)
+	factory.backend.RWMutex.RUnlock()
 }
 
 // TestGetBackendLockedDoesNotCreateWhenAvailable covers the fix: maybeCreateLocked must only
