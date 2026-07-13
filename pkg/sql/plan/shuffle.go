@@ -163,6 +163,10 @@ func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.O
 		return false
 	}
 	if objstats.GetAppendable() {
+		if rsp.ShuffleAppendableByObjectID {
+			objID := objstats.ObjectLocation().ObjectId()
+			return SimpleCharHashToRange(objID[:], uint64(rsp.CNCNT)) != uint64(rsp.CNIDX)
+		}
 		//aobj always shuffle to local CN
 		return !rsp.IsLocalCN
 	}

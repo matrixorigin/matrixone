@@ -602,10 +602,11 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 
 	//need to shuffle blocks when cncnt>1
 	rsp := &engine.RangesShuffleParam{
-		Node:  s.DataSource.node,
-		CNCNT: s.NodeInfo.CNCNT,
-		CNIDX: s.NodeInfo.CNIDX,
-		Init:  false,
+		Node:                        s.DataSource.node,
+		CNCNT:                       s.NodeInfo.CNCNT,
+		CNIDX:                       s.NodeInfo.CNIDX,
+		ShuffleAppendableByObjectID: plan2.IsIvfSearchEntriesInternalScan(s.DataSource.node),
+		Init:                        false,
 	}
 	if !s.IsRemote { // this is local CN
 		rsp.IsLocalCN = true

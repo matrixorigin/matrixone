@@ -971,13 +971,16 @@ type ChangesHandle interface {
 
 type RangesShuffleParam struct {
 	// these are for shuffle objects
-	Node               *plan.Node
-	CNCNT              int32 // number of all cns
-	CNIDX              int32 // cn index , starts from 0
-	IsLocalCN          bool
-	ShuffleRangeUint64 []uint64
-	ShuffleRangeInt64  []int64
-	Init               bool
+	Node      *plan.Node
+	CNCNT     int32 // number of all cns
+	CNIDX     int32 // cn index , starts from 0
+	IsLocalCN bool
+	// ShuffleAppendableByObjectID assigns appendable objects to one CN by
+	// ObjectID instead of applying the ordinary local-CN ownership policy.
+	ShuffleAppendableByObjectID bool
+	ShuffleRangeUint64          []uint64
+	ShuffleRangeInt64           []int64
+	Init                        bool
 }
 
 type RangesParam struct {

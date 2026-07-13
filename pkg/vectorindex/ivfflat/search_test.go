@@ -44,7 +44,7 @@ func mock_runSql_parser_error(
 	return executor.Result{}, moerr.NewInternalErrorNoCtx("sql parser error")
 }
 
-func TestIvfflatSearchAddsPartitionFilterToEntriesSQL(t *testing.T) {
+func TestIvfflatSearchDoesNotAddRowPartitionFilterToEntriesSQL(t *testing.T) {
 	oldRunSql := runSql
 	defer func() { runSql = oldRunSql }()
 
@@ -75,11 +75,12 @@ func TestIvfflatSearchAddsPartitionFilterToEntriesSQL(t *testing.T) {
 	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, []float32{0, 1, 2}, vectorindex.RuntimeConfig{Limit: 4}, 1)
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
-	require.Contains(t, statements[0], "mod(crc32(cast(`__mo_index_pri_col` as varchar)), 2) = 1")
+	require.NotContains(t, statements[0], "crc32")
+	require.NotContains(t, statements[0], "mod(")
 	require.Contains(t, statements[0], "ORDER BY vec_dist LIMIT 4")
 }
 
-func TestIvfflatSearchAddsPartitionFilterToExactPkSQL(t *testing.T) {
+func TestIvfflatSearchDoesNotAddRowPartitionFilterToExactPkSQL(t *testing.T) {
 	oldRunSql := runSql
 	defer func() { runSql = oldRunSql }()
 
@@ -111,7 +112,8 @@ func TestIvfflatSearchAddsPartitionFilterToExactPkSQL(t *testing.T) {
 	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, []float32{0, 1, 2}, vectorindex.RuntimeConfig{Limit: 4}, 1)
 	require.NoError(t, err)
 	require.Contains(t, statement, "`__mo_index_pri_col` IN (1,2,3)")
-	require.Contains(t, statement, "mod(crc32(cast(`__mo_index_pri_col` as varchar)), 4) = 3")
+	require.NotContains(t, statement, "crc32")
+	require.NotContains(t, statement, "mod(")
 	require.False(t, strings.Contains(statement, "ORDER BY vec_dist"), statement)
 }
 

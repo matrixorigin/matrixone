@@ -242,6 +242,39 @@ func TestShouldSkipObjByShuffle(t *testing.T) {
 	ShouldSkipObjByShuffle(rsp, stats)
 }
 
+func TestShouldSkipAppendableObjByShuffleKeepsDefaultLocalBehavior(t *testing.T) {
+	row := types.RandomRowid()
+	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), true, false, true)
+	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
+
+	for cnidx := int32(0); cnidx < 3; cnidx++ {
+		rsp := &engine.RangesShuffleParam{Node: node, CNCNT: 3, CNIDX: cnidx}
+		require.True(t, ShouldSkipObjByShuffle(rsp, stats))
+		rsp.IsLocalCN = true
+		require.False(t, ShouldSkipObjByShuffle(rsp, stats))
+	}
+}
+
+func TestShouldSkipAppendableObjByShuffleCanAssignUniqueObjectOwner(t *testing.T) {
+	row := types.RandomRowid()
+	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), true, false, true)
+	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
+	owners := 0
+
+	for cnidx := int32(0); cnidx < 3; cnidx++ {
+		rsp := &engine.RangesShuffleParam{
+			Node:                        node,
+			CNCNT:                       3,
+			CNIDX:                       cnidx,
+			ShuffleAppendableByObjectID: true,
+		}
+		if !ShouldSkipObjByShuffle(rsp, stats) {
+			owners++
+		}
+	}
+	require.Equal(t, 1, owners)
+}
+
 func TestDetermineShuffleForDedupJoin(t *testing.T) {
 	cases := []struct {
 		name        string
