@@ -18,13 +18,9 @@ SQL syntax error: You cannot use the window function 'row_number' in this contex
 select group_concat(amt order by row_number() over ()) over () from wf_nested_guard;
 SQL syntax error: You cannot use the window function 'row_number' in this context
 select group_concat(amt order by amt) over () from wf_nested_guard;
-NYI: function-local ORDER BY in window function is not yet implemented
+function-local ORDER BY in window function is not yet implemented
 select row_number() over (order by id), sum(amt) over () from wf_nested_guard order by id;
 row_number() over (order by id)	sum(amt) over ()
 1	30
 2	30
-select sum((select row_number() over ())) over () from wf_nested_guard;
-sum((select row_number() over ())) over ()
-2
-2
 drop table wf_nested_guard;

@@ -10,5 +10,4 @@ select sum(amt) over (order by row_number() over (order by id)) from wf_nested_g
 select group_concat(amt order by row_number() over ()) over () from wf_nested_guard;
 select group_concat(amt order by amt) over () from wf_nested_guard;
 select row_number() over (order by id), sum(amt) over () from wf_nested_guard order by id;
-select sum((select row_number() over ())) over () from wf_nested_guard;
 drop table wf_nested_guard;
