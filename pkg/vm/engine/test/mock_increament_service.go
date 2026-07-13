@@ -114,6 +114,7 @@ func (m *MockAutoIncrementService) Delete(
 func (m *MockAutoIncrementService) InsertValues(
 	ctx context.Context,
 	tableID uint64,
+	tableVersion uint32,
 	vecs []*vector.Vector,
 	rows int,
 	estimate int64,

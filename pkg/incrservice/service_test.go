@@ -16,7 +16,9 @@ package incrservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +42,33 @@ type setOffsetStore struct {
 	tableID     uint64
 	colName     string
 	offset      uint64
+}
+
+type failingGetColumnsStore struct {
+	IncrValueStore
+
+	mu  sync.Mutex
+	err error
+}
+
+func (s *failingGetColumnsStore) GetColumns(
+	ctx context.Context,
+	tableID uint64,
+	txnOp client.TxnOperator,
+) ([]AutoColumn, error) {
+	s.mu.Lock()
+	err := s.err
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return s.IncrValueStore.GetColumns(ctx, tableID, txnOp)
+}
+
+func (s *failingGetColumnsStore) failWith(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
 }
 
 func (s *setOffsetStore) GetColumns(
@@ -453,7 +482,7 @@ func TestReloadAfterSetOffsetDropsStalePreAllocatedRange(t *testing.T) {
 
 		vecType := types.New(types.T_uint64, 0, 0)
 		input := newTestVector[uint64](1, vecType, nil, nil)
-		last, err := cn1.InsertValues(ctx, 0, []*vector.Vector{input}, 1, 0)
+		last, err := cn1.InsertValues(ctx, 0, 0, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), last)
 
@@ -461,10 +490,135 @@ func TestReloadAfterSetOffsetDropsStalePreAllocatedRange(t *testing.T) {
 		require.NoError(t, cn1.Reload(ctx, 0))
 
 		input = newTestVector[uint64](1, vecType, nil, nil)
-		last, err = cn1.InsertValues(ctx, 0, []*vector.Vector{input}, 1, 0)
+		last, err = cn1.InsertValues(ctx, 0, 0, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(101), last)
 	})
+}
+
+func TestInsertValuesReplacesCacheOnTableVersionChange(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore()
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+
+		vecType := types.New(types.T_uint64, 0, 0)
+		input := newTestVector[uint64](1, vecType, nil, nil)
+		last, err := s.InsertValues(ctx, 0, 7, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(101), last)
+
+		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 1000, nil))
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		last, err = s.InsertValues(ctx, 0, 8, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1001), last)
+
+		s.mu.Lock()
+		cached := s.mu.tables[0]
+		s.mu.Unlock()
+		require.Equal(t, uint32(8), cached.version())
+	})
+}
+
+func TestInsertValuesVersionChangeReloadsBothServices(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore()
+		cn1 := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		cn2 := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer cn1.Close()
+		defer cn2.Close()
+
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, cn1.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+
+		vecType := types.New(types.T_uint64, 0, 0)
+		input1 := newTestVector[uint64](1, vecType, nil, nil)
+		last1, err := cn1.InsertValues(ctx, 0, 7, []*vector.Vector{input1}, 1, 0)
+		require.NoError(t, err)
+		input2 := newTestVector[uint64](1, vecType, nil, nil)
+		last2, err := cn2.InsertValues(ctx, 0, 7, []*vector.Vector{input2}, 1, 0)
+		require.NoError(t, err)
+		require.Less(t, last1, uint64(1000))
+		require.Less(t, last2, uint64(1000))
+
+		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 1000, nil))
+		input1 = newTestVector[uint64](1, vecType, nil, nil)
+		last1, err = cn1.InsertValues(ctx, 0, 8, []*vector.Vector{input1}, 1, 0)
+		require.NoError(t, err)
+		input2 = newTestVector[uint64](1, vecType, nil, nil)
+		last2, err = cn2.InsertValues(ctx, 0, 8, []*vector.Vector{input2}, 1, 0)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, last1, uint64(1001))
+		require.GreaterOrEqual(t, last2, uint64(1001))
+	})
+}
+
+func TestInsertValuesFailedVersionReplacementPreservesOldCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := &failingGetColumnsStore{IncrValueStore: NewMemStore()}
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+
+		vecType := types.New(types.T_uint64, 0, 0)
+		input := newTestVector[uint64](1, vecType, nil, nil)
+		last, err := s.InsertValues(ctx, 0, 7, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+
+		loadErr := errors.New("load version 8")
+		store.failWith(loadErr)
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		_, err = s.InsertValues(ctx, 0, 8, []*vector.Vector{input}, 1, 0)
+		require.ErrorIs(t, err, loadErr)
+
+		store.failWith(nil)
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		next, err := s.InsertValues(ctx, 0, 7, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, last+1, next)
+	})
+}
+
+func TestTableCacheRetireWaitsForActiveUsers(t *testing.T) {
+	c := &tableCache{}
+	c.acquire()
+	c.retire()
+
+	c.lifecycle.Lock()
+	require.False(t, c.lifecycle.closed)
+	c.lifecycle.Unlock()
+
+	c.release()
+	c.lifecycle.Lock()
+	require.True(t, c.lifecycle.closed)
+	c.lifecycle.Unlock()
 }
 
 func TestMemStoreForceSetOffset(t *testing.T) {

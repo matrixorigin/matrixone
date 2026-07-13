@@ -28,7 +28,15 @@ import (
 type tableCache struct {
 	logger  *log.MOLogger
 	tableID uint64
+	ver     uint32
 	cols    []AutoColumn
+
+	lifecycle struct {
+		sync.Mutex
+		users   int
+		retired bool
+		closed  bool
+	}
 
 	mu struct {
 		sync.RWMutex
@@ -42,6 +50,7 @@ func newTableCache(
 	ctx context.Context,
 	sid string,
 	tableID uint64,
+	version uint32,
 	cols []AutoColumn,
 	cfg Config,
 	allocator valueAllocator,
@@ -50,6 +59,7 @@ func newTableCache(
 	c := &tableCache{
 		logger:  getLogger(sid).Named("incrservice"),
 		tableID: tableID,
+		ver:     version,
 		cols:    cols,
 	}
 	c.mu.cols = make(map[string]*columnCache, 1)
@@ -160,6 +170,42 @@ func (c *tableCache) currentValue(
 
 func (c *tableCache) table() uint64 {
 	return c.tableID
+}
+
+func (c *tableCache) version() uint32 {
+	return c.ver
+}
+
+func (c *tableCache) acquire() {
+	c.lifecycle.Lock()
+	defer c.lifecycle.Unlock()
+	c.lifecycle.users++
+}
+
+func (c *tableCache) release() {
+	c.lifecycle.Lock()
+	c.lifecycle.users--
+	closeNow := c.lifecycle.retired && c.lifecycle.users == 0 && !c.lifecycle.closed
+	if closeNow {
+		c.lifecycle.closed = true
+	}
+	c.lifecycle.Unlock()
+	if closeNow {
+		_ = c.close()
+	}
+}
+
+func (c *tableCache) retire() {
+	c.lifecycle.Lock()
+	c.lifecycle.retired = true
+	closeNow := c.lifecycle.users == 0 && !c.lifecycle.closed
+	if closeNow {
+		c.lifecycle.closed = true
+	}
+	c.lifecycle.Unlock()
+	if closeNow {
+		_ = c.close()
+	}
 }
 
 func (c *tableCache) columns() []AutoColumn {

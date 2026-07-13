@@ -394,6 +394,7 @@ retryInsertValues:
 	lastInsertValue, err := proc.GetIncrService().InsertValues(
 		proc.Ctx,
 		tableID,
+		preInsert.TableDef.Version,
 		bat.Vecs[preInsert.ColOffset:int(preInsert.ColOffset)+len(preInsert.Attrs)],
 		bat.RowCount(),
 		preInsert.EstimatedRowCount,

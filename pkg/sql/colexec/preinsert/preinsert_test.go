@@ -228,7 +228,7 @@ func TestPreInsertHasAutoCol(t *testing.T) {
 	}).AnyTimes()
 
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
+	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
 
 	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
@@ -339,7 +339,7 @@ func TestPreInsertIsUpdate(t *testing.T) {
 	}).AnyTimes()
 
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
+	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
 
 	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
@@ -513,9 +513,9 @@ func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
 
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
 	gomock.InOrder(
-		incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), 1, int64(1)).
+		incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), uint32(17), gomock.Any(), 1, int64(1)).
 			Return(uint64(0), moerr.NewNoSuchTableNoCtx("", "100")),
-		incrService.EXPECT().InsertValues(gomock.Any(), uint64(200), gomock.Any(), 1, int64(1)).
+		incrService.EXPECT().InsertValues(gomock.Any(), uint64(200), uint32(17), gomock.Any(), 1, int64(1)).
 			Return(uint64(111111), nil),
 	)
 
@@ -530,8 +530,9 @@ func TestGenAutoIncrColRefreshesStaleTableID(t *testing.T) {
 		HasAutoCol: true,
 		SchemaName: "testDb",
 		TableDef: &plan.TableDef{
-			Name:  "idx_tbl",
-			TblId: 100,
+			Name:    "idx_tbl",
+			TblId:   100,
+			Version: 17,
 			Cols: []*plan.ColDef{
 				{Name: catalog.FakePrimaryKeyColName, Typ: i32typ},
 			},
@@ -574,7 +575,7 @@ func TestGenAutoIncrColReturnsRetryWhenDefinitionStillChanged(t *testing.T) {
 	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(100))
 
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), 1, int64(1)).
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), gomock.Any(), 1, int64(1)).
 		Return(uint64(0), moerr.NewNoSuchTableNoCtx("", "100"))
 
 	proc := testutil.NewProc(t)
@@ -622,7 +623,7 @@ func TestGenAutoIncrColKeepsTemporaryTableBehavior(t *testing.T) {
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), 1, int64(1)).
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), gomock.Any(), 1, int64(1)).
 		Return(uint64(0), moerr.NewNoSuchTableNoCtx("", "100"))
 
 	proc := testutil.NewProc(t)

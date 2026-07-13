@@ -109,18 +109,18 @@ func (mr *MockAutoIncrementServiceMockRecorder) GetLastAllocateTS(ctx, tableID, 
 }
 
 // InsertValues mocks base method.
-func (m *MockAutoIncrementService) InsertValues(ctx context.Context, tableID uint64, vecs []*vector.Vector, rows int, estimate int64) (uint64, error) {
+func (m *MockAutoIncrementService) InsertValues(ctx context.Context, tableID uint64, tableVersion uint32, vecs []*vector.Vector, rows int, estimate int64) (uint64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InsertValues", ctx, tableID, vecs, rows, estimate)
+	ret := m.ctrl.Call(m, "InsertValues", ctx, tableID, tableVersion, vecs, rows, estimate)
 	ret0, _ := ret[0].(uint64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // InsertValues indicates an expected call of InsertValues.
-func (mr *MockAutoIncrementServiceMockRecorder) InsertValues(ctx, tableID, vecs, rows, estimate interface{}) *gomock.Call {
+func (mr *MockAutoIncrementServiceMockRecorder) InsertValues(ctx, tableID, tableVersion, vecs, rows, estimate interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertValues", reflect.TypeOf((*MockAutoIncrementService)(nil).InsertValues), ctx, tableID, vecs, rows, estimate)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertValues", reflect.TypeOf((*MockAutoIncrementService)(nil).InsertValues), ctx, tableID, tableVersion, vecs, rows, estimate)
 }
 
 // Reload mocks base method.

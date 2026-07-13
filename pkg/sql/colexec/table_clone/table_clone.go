@@ -538,7 +538,7 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 	}
 
 	if _, err = proc.GetIncrService().InsertValues(
-		dstCtx, tc.dstMasterRel.GetTableID(dstCtx), vecs, rows, int64(rows),
+		dstCtx, tc.dstMasterRel.GetTableID(dstCtx), dstTblDef.Version, vecs, rows, int64(rows),
 	); err != nil {
 		return err
 	}

@@ -112,6 +112,7 @@ func (s *service) Create(
 		ctx,
 		s.sid,
 		tableID,
+		0,
 		cols,
 		s.cfg,
 		s.allocator,
@@ -210,12 +211,13 @@ func (s *service) GetLastAllocateTS(
 	tableID uint64,
 	colName string,
 ) (timestamp.Timestamp, error) {
-	tc, err := s.getCommittedTableCache(
+	tc, err := s.acquireCommittedTableCache(
 		ctx,
 		tableID)
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
+	defer tc.release()
 	ts, err := tc.getLastAllocateTS(colName)
 	if err != nil {
 		return timestamp.Timestamp{}, err
@@ -227,16 +229,19 @@ func (s *service) GetLastAllocateTS(
 func (s *service) InsertValues(
 	ctx context.Context,
 	tableID uint64,
+	tableVersion uint32,
 	vecs []*vector.Vector,
 	rows int,
 	estimate int64,
 ) (uint64, error) {
-	ts, err := s.getCommittedTableCache(
+	ts, err := s.getCommittedTableCacheForVersion(
 		ctx,
-		tableID)
+		tableID,
+		tableVersion)
 	if err != nil {
 		return 0, err
 	}
+	defer ts.release()
 	return ts.insertAutoValues(
 		ctx,
 		tableID,
@@ -250,12 +255,13 @@ func (s *service) CurrentValue(
 	ctx context.Context,
 	tableID uint64,
 	col string) (uint64, error) {
-	ts, err := s.getCommittedTableCache(
+	ts, err := s.acquireCommittedTableCache(
 		ctx,
 		tableID)
 	if err != nil {
 		return 0, err
 	}
+	defer ts.release()
 	return ts.currentValue(ctx, tableID, col)
 }
 
@@ -264,19 +270,16 @@ func (s *service) Reload(
 	tableID uint64,
 ) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	c, ok := s.mu.tables[tableID]
 	if !ok {
+		s.mu.Unlock()
 		return nil
-	}
-
-	if err := c.close(); err != nil {
-		return err
 	}
 
 	// drop cache, will be reloaded when next query
 	delete(s.mu.tables, tableID)
+	s.mu.Unlock()
+	c.retire()
 	return nil
 }
 
@@ -358,6 +361,7 @@ func (s *service) getCommittedTableCache(
 		ctx,
 		s.sid,
 		tableID,
+		0,
 		cols,
 		s.cfg,
 		s.allocator,
@@ -369,6 +373,92 @@ func (s *service) getCommittedTableCache(
 	}
 	s.doCreateLocked(tableID, c, nil)
 	return c, nil
+}
+
+func (s *service) getCommittedTableCacheForVersion(
+	ctx context.Context,
+	tableID uint64,
+	tableVersion uint32,
+) (incrTableCache, error) {
+	s.mu.Lock()
+	c, ok := s.mu.tables[tableID]
+	if ok && c.version() == tableVersion {
+		c.acquire()
+		s.mu.Unlock()
+		return c, nil
+	}
+	if _, ok := s.mu.destroyed[tableID]; ok {
+		s.mu.Unlock()
+		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
+	}
+	s.mu.Unlock()
+
+	cols, err := s.store.GetColumns(ctx, tableID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(cols) == 0 {
+		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
+	}
+
+	replacement, err := newTableCache(
+		ctx,
+		s.sid,
+		tableID,
+		tableVersion,
+		cols,
+		s.cfg,
+		s.allocator,
+		nil,
+		true,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	if _, ok := s.mu.destroyed[tableID]; ok {
+		s.mu.Unlock()
+		_ = replacement.close()
+		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
+	}
+	if current, ok := s.mu.tables[tableID]; ok {
+		if current.version() == tableVersion {
+			current.acquire()
+			s.mu.Unlock()
+			_ = replacement.close()
+			return current, nil
+		}
+		c = current
+	} else {
+		c = nil
+	}
+	s.mu.tables[tableID] = replacement
+	replacement.acquire()
+	s.mu.Unlock()
+	if c != nil {
+		c.retire()
+	}
+	return replacement, nil
+}
+
+func (s *service) acquireCommittedTableCache(
+	ctx context.Context,
+	tableID uint64,
+) (incrTableCache, error) {
+	for {
+		c, err := s.getCommittedTableCache(ctx, tableID)
+		if err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		if s.mu.tables[tableID] == c {
+			c.acquire()
+			s.mu.Unlock()
+			return c, nil
+		}
+		s.mu.Unlock()
+	}
 }
 
 func (s *service) txnClosed(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
@@ -392,7 +482,7 @@ func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) {
 			if txnMeta.Status == txn.TxnStatus_Committed {
 				tc.commit()
 			} else {
-				_ = tc.close()
+				tc.retire()
 				delete(s.mu.tables, id)
 				s.logger.Info(
 					"incrservice.cache.destroyed",
@@ -416,7 +506,7 @@ func (s *service) handleDeletesLocked(txnMeta txn.TxnMeta) {
 	if txnMeta.Status == txn.TxnStatus_Committed {
 		for _, ctx := range tables {
 			if tc, ok := s.mu.tables[ctx.tableID]; ok {
-				_ = tc.close()
+				tc.retire()
 				delete(s.mu.tables, ctx.tableID)
 				s.mu.destroyed[ctx.tableID] = ctx
 				s.logger.Info(

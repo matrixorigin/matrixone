@@ -63,7 +63,7 @@ type AutoIncrementService interface {
 	// delete operation is triggered.
 	Delete(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// InsertValues insert auto columns values into bat.
-	InsertValues(ctx context.Context, tableID uint64, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
+	InsertValues(ctx context.Context, tableID uint64, tableVersion uint32, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
 	// CurrentValue return current incr column value.
 	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	// Reload reload auto increment cache.
@@ -110,6 +110,10 @@ type AutoIncrementService interface {
 // allocations for one write.
 type incrTableCache interface {
 	table() uint64
+	version() uint32
+	acquire()
+	release()
+	retire()
 	commit()
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
