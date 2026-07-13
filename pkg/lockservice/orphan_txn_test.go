@@ -668,7 +668,10 @@ func TestCannotHungWithUnstableNetwork(t *testing.T) {
 			require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 
 			var wg sync.WaitGroup
-			n := 10000
+			// This is a hang guard. With disconnectAfterRead=5, 1000 rounds
+			// still force hundreds of reconnects without exhausting the package
+			// test timeout budget.
+			n := 1000
 			fn := func(s *service, idx int) {
 				defer wg.Done()
 				for i := 0; i < n; i++ {
