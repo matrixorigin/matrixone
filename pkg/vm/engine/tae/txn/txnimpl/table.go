@@ -118,6 +118,70 @@ type txnTable struct {
 	dedupTS types.TS
 
 	idx int
+
+	// expectedTableDefVersion is the CN schema version this transaction's
+	// user-table writes were planned against. Zero means old-CN compatibility.
+	expectedTableDefVersion uint32
+}
+
+func (tbl *txnTable) setExpectedTableDefVersion(version uint32) error {
+	if version == 0 {
+		return nil
+	}
+	if tbl.expectedTableDefVersion == 0 {
+		tbl.expectedTableDefVersion = version
+		return nil
+	}
+	if tbl.expectedTableDefVersion != version {
+		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	return nil
+}
+
+func (tbl *txnTable) validateTableDefVersion() error {
+	expected := tbl.expectedTableDefVersion
+	if expected == 0 {
+		return nil
+	}
+
+	prepareTS := tbl.store.txn.GetPrepareTS()
+	for {
+		tbl.entry.RLock()
+		latest := tbl.entry.GetLatestNodeLocked()
+		if latest != nil && !latest.IsSameTxn(tbl.store.txn) {
+			if needWait, txnToWait := latest.NeedWaitCommitting(prepareTS); needWait {
+				tbl.entry.RUnlock()
+				txnToWait.GetTxnState(true)
+				continue
+			}
+		}
+
+		actual := uint32(0)
+		tbl.entry.LoopChainLocked(func(node *catalog.MVCCNode[*catalog.TableMVCCNode]) bool {
+			// An ALTER in this same transaction cannot be ordered around this DML.
+			if node.IsSameTxn(tbl.store.txn) {
+				actual = node.BaseNode.Schema.Version
+				return false
+			}
+			if node.IsActive() || node.IsCommitting() || node.IsAborted() {
+				return true
+			}
+			// A schema committed with a later prepare timestamp is ordered after
+			// this DML and must not invalidate it.
+			nodePrepareTS := node.GetPrepare()
+			if nodePrepareTS.GT(&prepareTS) {
+				return true
+			}
+			actual = node.BaseNode.Schema.Version
+			return false
+		})
+		tbl.entry.RUnlock()
+
+		if actual != expected {
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		return nil
+	}
 }
 
 func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) {
@@ -1444,6 +1508,9 @@ func (tbl *txnTable) dumpCore(errMsg string) {
 }
 
 func (tbl *txnTable) PrepareCommit() (err error) {
+	if err = tbl.validateTableDefVersion(); err != nil {
+		return err
+	}
 	nodeCount := len(tbl.txnEntries.entries)
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {

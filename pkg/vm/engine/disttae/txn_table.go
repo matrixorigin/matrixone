@@ -1875,7 +1875,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.getTxn().hasS3Op.Store(true)
 		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
 		fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
-		return tbl.getTxn().WriteFile(
+		return tbl.getTxn().writeFileWithVersion(
 			INSERT,
 			tbl.accountId,
 			tbl.db.databaseId,
@@ -1884,13 +1884,13 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			tbl.tableName,
 			fileName,
 			bat,
-			tbl.getTxn().tnStores[0])
+			tbl.getTxn().tnStores[0], tbl.version)
 	}
 	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
 	if err != nil {
 		return err
 	}
-	if _, err := tbl.getTxn().WriteBatch(
+	if _, err := tbl.getTxn().writeBatchWithVersion(
 		INSERT,
 		"",
 		tbl.accountId,
@@ -1900,6 +1900,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.tableName,
 		ibat,
 		tbl.getTxn().tnStores[0],
+		tbl.version,
 	); err != nil {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
@@ -2065,14 +2066,14 @@ func (tbl *txnTable) Delete(
 		skipTransfer := ctx.Value(defines.SkipTransferKey{}) != nil
 		if skipTransfer {
 			tbl.getTxn().Lock()
-			err := tbl.getTxn().WriteFileLockedSkipTransfer(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-				tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0])
+			err := tbl.getTxn().writeFileLockedSkipTransferWithVersion(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+				tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.version)
 			tbl.getTxn().Unlock()
 			return err
 		}
 
-		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0]); err != nil {
+		if err := tbl.getTxn().writeFileWithVersion(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.version); err != nil {
 			return err
 		}
 
@@ -2106,15 +2107,16 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 
 	// Create entry with EntrySoftDeleteObject type
 	entry := Entry{
-		typ:          SOFT_DELETE_OBJECT,
-		bat:          bat,
-		tnStore:      tbl.getTxn().tnStores[0],
-		tableId:      tbl.tableId,
-		databaseId:   tbl.db.databaseId,
-		tableName:    tbl.tableName,
-		databaseName: tbl.db.databaseName,
-		accountId:    tbl.accountId,
-		fileName:     makeSoftDeleteFileName(isTombstone),
+		typ:             SOFT_DELETE_OBJECT,
+		bat:             bat,
+		tnStore:         tbl.getTxn().tnStores[0],
+		tableId:         tbl.tableId,
+		databaseId:      tbl.db.databaseId,
+		tableName:       tbl.tableName,
+		databaseName:    tbl.db.databaseName,
+		accountId:       tbl.accountId,
+		fileName:        makeSoftDeleteFileName(isTombstone),
+		tableDefVersion: tbl.version,
 	}
 
 	tbl.getTxn().writes = append(tbl.getTxn().writes, entry)
@@ -2126,8 +2128,8 @@ func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error
 	if err != nil {
 		return err
 	}
-	if _, err := tbl.getTxn().WriteBatch(DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0]); err != nil {
+	if _, err := tbl.getTxn().writeBatchWithVersion(DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0], tbl.version); err != nil {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
 	}

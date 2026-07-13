@@ -94,6 +94,21 @@ func (txn *Transaction) WriteBatch(
 	tableName string,
 	bat *batch.Batch,
 	tnStore DNStore) (genRowidVec *vector.Vector, err error) {
+	return txn.writeBatchWithVersion(typ, note, accountId, databaseId, tableId,
+		databaseName, tableName, bat, tnStore, 0)
+}
+
+func (txn *Transaction) writeBatchWithVersion(
+	typ int, note string,
+	accountId uint32,
+	databaseId uint64,
+	tableId uint64,
+	databaseName string,
+	tableName string,
+	bat *batch.Batch,
+	tnStore DNStore,
+	tableDefVersion uint32,
+) (genRowidVec *vector.Vector, err error) {
 	start := time.Now()
 	seq := txn.op.NextSequence()
 	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
@@ -235,17 +250,18 @@ func (txn *Transaction) WriteBatch(
 	}
 
 	e := Entry{
-		typ:          typ,
-		accountId:    accountId,
-		bat:          bat,
-		tableId:      tableId,
-		databaseId:   databaseId,
-		tableName:    tableName,
-		databaseName: databaseName,
-		tnStore:      tnStore,
-		note:         note,
-		pkCheckPos:   pkCheckPos,
-		pkCheckReady: pkCheckReady,
+		typ:             typ,
+		accountId:       accountId,
+		bat:             bat,
+		tableId:         tableId,
+		databaseId:      databaseId,
+		tableName:       tableName,
+		databaseName:    databaseName,
+		tnStore:         tnStore,
+		tableDefVersion: tableDefVersion,
+		note:            note,
+		pkCheckPos:      pkCheckPos,
+		pkCheckReady:    pkCheckReady,
 	}
 	txn.writes = append(txn.writes, e)
 	txn.pkCount += bat.RowCount()
@@ -824,7 +840,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	lastWriteIndex := offset
 	writes := txn.writes
-	mp := make(map[tableKey][]*batch.Batch)
+	mp := make(map[workspaceTableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if skipTable[txn.writes[i].tableId] {
 			writes[lastWriteIndex] = writes[i]
@@ -844,11 +860,14 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 		keepElement := true
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			tbKey := tableKey{
-				accountId:  txn.writes[i].accountId,
-				databaseId: txn.writes[i].databaseId,
-				dbName:     txn.writes[i].databaseName,
-				name:       txn.writes[i].tableName,
+			tbKey := workspaceTableKey{
+				tableKey: tableKey{
+					accountId:  txn.writes[i].accountId,
+					databaseId: txn.writes[i].databaseId,
+					dbName:     txn.writes[i].databaseName,
+					name:       txn.writes[i].tableName,
+				},
+				tableDefVersion: txn.writes[i].tableDefVersion,
 			}
 			// Tables not resolved in the pre-resolution pass were appended
 			// to the workspace while the lock was released; keep them in
@@ -922,7 +941,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			table = tbl.(*txnTable)
 		}
 
-		if err = table.getTxn().WriteFileLocked(
+		if err = table.getTxn().writeFileLockedWithVersion(
 			INSERT,
 			table.accountId,
 			table.db.databaseId,
@@ -932,6 +951,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			fileName,
 			bat,
 			table.getTxn().tnStores[0],
+			tbKey.tableDefVersion,
 		); err != nil {
 			return err
 		}
@@ -964,7 +984,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 	deleteCnt := 0
 	lastWriteIndex := offset
 	writes := txn.writes
-	mp := make(map[tableKey][]*batch.Batch)
+	mp := make(map[workspaceTableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].isCatalog() {
 			writes[lastWriteIndex] = writes[i]
@@ -979,11 +999,14 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 		keepElement := true
 		if txn.writes[i].typ == DELETE && txn.writes[i].fileName == "" {
-			tbKey := tableKey{
-				accountId:  txn.writes[i].accountId,
-				databaseId: txn.writes[i].databaseId,
-				dbName:     txn.writes[i].databaseName,
-				name:       txn.writes[i].tableName,
+			tbKey := workspaceTableKey{
+				tableKey: tableKey{
+					accountId:  txn.writes[i].accountId,
+					databaseId: txn.writes[i].databaseId,
+					dbName:     txn.writes[i].databaseName,
+					name:       txn.writes[i].tableName,
+				},
+				tableDefVersion: txn.writes[i].tableDefVersion,
 			}
 			// Tables not resolved in the pre-resolution pass were appended
 			// to the workspace while the lock was released; keep them in
@@ -1061,7 +1084,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			table = tbl.(*txnTable)
 		}
 
-		if err = table.getTxn().WriteFileLocked(
+		if err = table.getTxn().writeFileLockedWithVersion(
 			DELETE,
 			table.accountId,
 			table.db.databaseId,
@@ -1071,6 +1094,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			fileName,
 			bat,
 			table.getTxn().tnStores[0],
+			tbKey.tableDefVersion,
 		); err != nil {
 			return err
 		}
@@ -1288,12 +1312,14 @@ func (txn *Transaction) registerCNObjects(
 	objBat *batch.Batch,
 	dbName string,
 	tbName string,
+	tableDefVersion uint32,
 ) {
 	txn.cnObjsSummary[objId] = Summary{
-		objBat:    objBat,
-		accountId: accountId,
-		dbName:    dbName,
-		tbName:    tbName,
+		objBat:          objBat,
+		accountId:       accountId,
+		dbName:          dbName,
+		tbName:          tbName,
+		tableDefVersion: tableDefVersion,
 	}
 }
 
@@ -1307,6 +1333,22 @@ func (txn *Transaction) WriteFileLocked(
 	fileName string,
 	inputBat *batch.Batch,
 	tnStore DNStore,
+) (err error) {
+	return txn.writeFileLockedWithVersion(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, inputBat, tnStore, 0)
+}
+
+func (txn *Transaction) writeFileLockedWithVersion(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	inputBat *batch.Batch,
+	tnStore DNStore,
+	tableDefVersion uint32,
 ) (err error) {
 
 	txn.hasS3Op.Store(true)
@@ -1328,7 +1370,7 @@ func (txn *Transaction) WriteFileLocked(
 			sid := oid.Segment()
 
 			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName)
+			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, tableDefVersion)
 		}
 	}
 
@@ -1344,17 +1386,18 @@ func (txn *Transaction) WriteFileLocked(
 	}
 
 	entry := Entry{
-		typ:          typ,
-		accountId:    accountId,
-		tableId:      tableId,
-		databaseId:   databaseId,
-		tableName:    tableName,
-		databaseName: databaseName,
-		fileName:     fileName,
-		bat:          copied,
-		tnStore:      tnStore,
-		pkCheckPos:   -1,
-		pkCheckReady: true,
+		typ:             typ,
+		accountId:       accountId,
+		tableId:         tableId,
+		databaseId:      databaseId,
+		tableName:       tableName,
+		databaseName:    databaseName,
+		fileName:        fileName,
+		bat:             copied,
+		tnStore:         tnStore,
+		pkCheckPos:      -1,
+		pkCheckReady:    true,
+		tableDefVersion: tableDefVersion,
 	}
 
 	txn.writes = append(txn.writes, entry)
@@ -1375,6 +1418,22 @@ func (txn *Transaction) WriteFileLockedSkipTransfer(
 	inputBat *batch.Batch,
 	tnStore DNStore,
 ) (err error) {
+	return txn.writeFileLockedSkipTransferWithVersion(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, inputBat, tnStore, 0)
+}
+
+func (txn *Transaction) writeFileLockedSkipTransferWithVersion(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	inputBat *batch.Batch,
+	tnStore DNStore,
+	tableDefVersion uint32,
+) (err error) {
 
 	txn.hasS3Op.Store(true)
 
@@ -1395,7 +1454,7 @@ func (txn *Transaction) WriteFileLockedSkipTransfer(
 			sid := oid.Segment()
 
 			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName)
+			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, tableDefVersion)
 		}
 	}
 
@@ -1411,16 +1470,17 @@ func (txn *Transaction) WriteFileLockedSkipTransfer(
 	}
 
 	entry := Entry{
-		typ:          typ,
-		accountId:    accountId,
-		tableId:      tableId,
-		databaseId:   databaseId,
-		tableName:    tableName,
-		databaseName: databaseName,
-		fileName:     fileName,
-		bat:          copied,
-		tnStore:      tnStore,
-		skipTransfer: true,
+		typ:             typ,
+		accountId:       accountId,
+		tableId:         tableId,
+		databaseId:      databaseId,
+		tableName:       tableName,
+		databaseName:    databaseName,
+		fileName:        fileName,
+		bat:             copied,
+		tnStore:         tnStore,
+		skipTransfer:    true,
+		tableDefVersion: tableDefVersion,
 	}
 
 	txn.writes = append(txn.writes, entry)
@@ -1441,11 +1501,27 @@ func (txn *Transaction) WriteFile(
 	bat *batch.Batch,
 	tnStore DNStore,
 ) error {
+	return txn.writeFileWithVersion(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, bat, tnStore, 0)
+}
+
+func (txn *Transaction) writeFileWithVersion(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	bat *batch.Batch,
+	tnStore DNStore,
+	tableDefVersion uint32,
+) error {
 
 	txn.Lock()
 	defer txn.Unlock()
 
-	return txn.WriteFileLocked(
+	return txn.writeFileLockedWithVersion(
 		typ,
 		accountId,
 		databaseId,
@@ -1455,6 +1531,7 @@ func (txn *Transaction) WriteFile(
 		fileName,
 		bat,
 		tnStore,
+		tableDefVersion,
 	)
 }
 
@@ -1886,7 +1963,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 	// object --> blk id --> deletion
 	objBlkDeletion := make(map[objectio.ObjectId]map[objectio.Blockid][]int64)
-	objTables := make(map[objectio.ObjectId]tableKey)
+	objTables := make(map[objectio.ObjectId]workspaceTableKey)
 
 	affectedBats := make(map[*batch.Batch]struct{})
 
@@ -1909,10 +1986,13 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			blkDel[*blkId] = offsets
 
 			if _, ok := objTables[*blkId.Object()]; !ok {
-				objTables[*blkId.Object()] = tableKey{
-					accountId: summary.accountId,
-					dbName:    summary.dbName,
-					name:      summary.tbName,
+				objTables[*blkId.Object()] = workspaceTableKey{
+					tableKey: tableKey{
+						accountId: summary.accountId,
+						dbName:    summary.dbName,
+						name:      summary.tbName,
+					},
+					tableDefVersion: summary.tableDefVersion,
 				}
 			}
 
@@ -1968,7 +2048,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 		locker.Lock()
 		defer locker.Unlock()
-		if err = txn.WriteFileLocked(
+		if err = txn.writeFileLockedWithVersion(
 			INSERT,
 			tbl.accountId,
 			tbl.db.databaseId,
@@ -1978,6 +2058,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			fileName,
 			bat,
 			txn.tnStores[0],
+			tbKey.tableDefVersion,
 		); err != nil {
 			bat.Clean(txn.proc.Mp())
 			panicWhenFailed(err, "write txn file failed")
@@ -2025,7 +2106,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 				bat.SetRowCount(bat.Vecs[0].Length())
 
-				if err := txn.WriteFileLocked(
+				if err := txn.writeFileLockedWithVersion(
 					INSERT,
 					entry.accountId,
 					entry.databaseId,
@@ -2035,6 +2116,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 					stats.ObjectName().String(),
 					bat,
 					entry.tnStore,
+					entry.tableDefVersion,
 				); err != nil {
 					bat.Clean(txn.proc.Mp())
 					return err

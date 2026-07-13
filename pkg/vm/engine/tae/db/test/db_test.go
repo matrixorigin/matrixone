@@ -6604,6 +6604,137 @@ func TestAlterAutoIncrementSchemaCommitAndRollback(t *testing.T) {
 	require.NoError(t, txn.Commit(ctx))
 }
 
+type tableDefVersionSetter interface {
+	SetTableDefVersion(uint32) error
+}
+
+func waitTableVersionBarrier(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", name)
+	}
+}
+
+func TestTableDefVersionCommitFence(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	newVersionedTable := func(t *testing.T) (*db.DB, *catalog.Schema, uint32) {
+		t.Helper()
+		tae := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+		schema := catalog.MockSchemaAll(3, 1)
+		testutil.CreateRelation(t, tae, testutil.DefaultTestDB, schema, true)
+
+		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, rel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, rel.ID(), 10)))
+		require.NoError(t, txn.Commit(ctx))
+
+		txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
+		version := rel.Schema(false).(*catalog.Schema).Version
+		require.NotZero(t, version)
+		require.NoError(t, txn.Commit(ctx))
+		return tae, schema, version
+	}
+
+	appendWithVersion := func(t *testing.T, tae *db.DB, schema *catalog.Schema, version uint32) txnif.AsyncTxn {
+		t.Helper()
+		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(version))
+		bat := catalog.MockBatch(schema, 1)
+		t.Cleanup(bat.Close)
+		require.NoError(t, rel.Append(ctx, bat))
+		return txn
+	}
+
+	t.Run("matching and zero compatibility", func(t *testing.T) {
+		tae, schema, version := newVersionedTable(t)
+		defer tae.Close()
+		require.NoError(t, appendWithVersion(t, tae, schema, version).Commit(ctx))
+
+		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, rel.(tableDefVersionSetter).SetTableDefVersion(0))
+		require.NoError(t, txn.MockIncWriteCnt())
+		require.NoError(t, txn.Commit(ctx))
+	})
+
+	t.Run("committed newer schema retries", func(t *testing.T) {
+		tae, schema, version := newVersionedTable(t)
+		defer tae.Close()
+		dmlTxn := appendWithVersion(t, tae, schema, version)
+
+		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 20)))
+		require.NoError(t, alterTxn.Commit(ctx))
+
+		err := dmlTxn.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	})
+
+	t.Run("alter prepared first is ordered before dml", func(t *testing.T) {
+		tae, schema, version := newVersionedTable(t)
+		defer tae.Close()
+		dmlTxn := appendWithVersion(t, tae, schema, version)
+
+		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 20)))
+		alterPrepared, releaseAlter := make(chan struct{}), make(chan struct{})
+		alterTxn.SetPrepareCommitFn(func(txn txnif.AsyncTxn) error {
+			close(alterPrepared)
+			<-releaseAlter
+			return txn.GetStore().PrepareCommit()
+		})
+		alterResult := make(chan error, 1)
+		go func() { alterResult <- alterTxn.Commit(ctx) }()
+		waitTableVersionBarrier(t, alterPrepared, "ALTER prepare")
+
+		dmlStarted := make(chan struct{})
+		dmlResult := make(chan error, 1)
+		go func() {
+			close(dmlStarted)
+			dmlResult <- dmlTxn.Commit(ctx)
+		}()
+		waitTableVersionBarrier(t, dmlStarted, "DML commit start")
+		close(releaseAlter)
+
+		require.NoError(t, <-alterResult)
+		err := <-dmlResult
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	})
+
+	t.Run("dml prepared first may commit before alter", func(t *testing.T) {
+		tae, schema, version := newVersionedTable(t)
+		defer tae.Close()
+		dmlTxn := appendWithVersion(t, tae, schema, version)
+
+		dmlPrepared, releaseDML := make(chan struct{}), make(chan struct{})
+		dmlTxn.SetPrepareCommitFn(func(txn txnif.AsyncTxn) error {
+			close(dmlPrepared)
+			<-releaseDML
+			return txn.GetStore().PrepareCommit()
+		})
+		dmlResult := make(chan error, 1)
+		go func() { dmlResult <- dmlTxn.Commit(ctx) }()
+		waitTableVersionBarrier(t, dmlPrepared, "DML prepare")
+
+		alterTxn, alterRel := testutil.GetDefaultRelation(t, tae, schema.Name)
+		require.NoError(t, alterRel.AlterTable(ctx, api.NewUpdateAutoIncrementReq(0, alterRel.ID(), 20)))
+		alterStarted := make(chan struct{})
+		alterResult := make(chan error, 1)
+		go func() {
+			close(alterStarted)
+			alterResult <- alterTxn.Commit(ctx)
+		}()
+		waitTableVersionBarrier(t, alterStarted, "ALTER commit start")
+
+		close(releaseDML)
+		require.NoError(t, <-dmlResult)
+		require.NoError(t, <-alterResult)
+	})
+}
+
 func TestAlterColumnAndFreeze(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)

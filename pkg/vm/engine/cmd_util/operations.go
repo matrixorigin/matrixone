@@ -162,8 +162,11 @@ type WriteReq struct {
 	TableID      uint64
 	DatabaseName string
 	TableName    string
-	Schema       *catalog2.Schema
-	Batch        *batch.Batch
+	// TableDefVersion is the schema version used by CN to plan the write.
+	// Zero is accepted for old-CN compatibility.
+	TableDefVersion uint32
+	Schema          *catalog2.Schema
+	Batch           *batch.Batch
 	//[IncrementalDedup|FullSkipWorkspaceDedup|FullDedup], default is IncrementalDedup.
 	//If incremental-dedup in dn.toml is false, IncrementalDedup will be treated as FullSkipWorkspaceDedup.
 	//IncrementalDedup do not check uniqueness of PK before txn's snapshot TS.

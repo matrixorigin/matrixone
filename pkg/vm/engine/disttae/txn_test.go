@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -42,6 +43,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPrecommitEntryCarriesTableDefVersion(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bat := newDeleteBatchForTest(t, proc, []int64{1})
+	defer bat.Clean(proc.Mp())
+
+	for _, tc := range []struct {
+		name    string
+		version uint32
+	}{
+		{name: "known", version: 7},
+		{name: "old cn compatibility", version: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := toPBEntry(Entry{
+				typ:             DELETE,
+				tableId:         42,
+				databaseId:      7,
+				bat:             bat,
+				tableDefVersion: tc.version,
+			})
+			require.NoError(t, err)
+
+			data, err := encoded.Marshal()
+			require.NoError(t, err)
+			decoded := new(api.Entry)
+			require.NoError(t, decoded.Unmarshal(data))
+			require.Equal(t, tc.version, decoded.TableDefVersion)
+		})
+	}
+}
+
+func TestWorkspaceFlushKeySeparatesTableDefVersions(t *testing.T) {
+	base := tableKey{accountId: 1, databaseId: 7, dbName: "db", name: "tbl"}
+	batches := map[workspaceTableKey]int{
+		{tableKey: base, tableDefVersion: 7}: 1,
+		{tableKey: base, tableDefVersion: 8}: 1,
+	}
+	require.Len(t, batches, 2)
+}
 
 func Test_GetUncommittedS3Tombstone(t *testing.T) {
 	var statsList []objectio.ObjectStats
@@ -206,6 +247,18 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 		require.Len(t, txn.writes, 1)
 		require.True(t, txn.writes[0].pkCheckReady)
 		require.Equal(t, 1, txn.writes[0].pkCheckPos)
+
+		bat.Clean(txn.proc.Mp())
+	})
+
+	t.Run("user write records planned table version", func(t *testing.T) {
+		txn := newTransactionWithActivePKTableForTest(t, "pk")
+		bat := newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1})
+
+		_, err := txn.writeBatchWithVersion(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{}, 7)
+		require.NoError(t, err)
+		require.Len(t, txn.writes, 1)
+		require.Equal(t, uint32(7), txn.writes[0].tableDefVersion)
 
 		bat.Clean(txn.proc.Mp())
 	})

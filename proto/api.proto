@@ -244,6 +244,9 @@ message Entry {
     Batch bat            = 7;
     // whether TN do the PK uniqueness check against txn's workspace or not.
     int32 pk_check_by_tn = 8;
+    // table definition version used by the CN when planning this write.
+    // Zero is reserved for compatibility with old CNs.
+    uint32 table_def_version = 9;
 };
 
 // There are two kinds of checkpoint: delta checkpoint and base checkpoint,

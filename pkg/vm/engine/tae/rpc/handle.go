@@ -316,6 +316,9 @@ func (h *Handle) handleRequests(
 				wr = h.apiEntryToWriteEntry(ctx, txnMeta, ae, true)
 				// Check if this is a soft delete object request
 				if wr.FileName != "" && isSoftDeleteEntry(wr.FileName) {
+					if err = h.registerWriteTableDefVersion(txn, wr); err != nil {
+						return
+					}
 					// Handle soft delete object separately
 					err = h.HandleSoftDeleteObject(ctx, txn, wr)
 					if err != nil {
@@ -327,6 +330,9 @@ func (h *Handle) handleRequests(
 				wr = req.(*cmd_util.WriteReq)
 				// Check if this is a soft delete object request
 				if wr.Type == cmd_util.EntrySoftDeleteObject {
+					if err = h.registerWriteTableDefVersion(txn, wr); err != nil {
+						return
+					}
 					err = h.HandleSoftDeleteObject(ctx, txn, wr)
 					if err != nil {
 						return
@@ -406,6 +412,36 @@ func (h *Handle) handleRequests(
 	return
 }
 
+type tableDefVersionRecorder interface {
+	SetTableDefVersion(uint32) error
+}
+
+func setTableDefVersionDependency(rel handle.Relation, version uint32) error {
+	if version == 0 {
+		return nil
+	}
+	recorder, ok := rel.(tableDefVersionRecorder)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("relation %T cannot record table definition version", rel)
+	}
+	return recorder.SetTableDefVersion(version)
+}
+
+func (h *Handle) registerWriteTableDefVersion(txn txnif.AsyncTxn, req *cmd_util.WriteReq) error {
+	if req.TableDefVersion == 0 {
+		return nil
+	}
+	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
+	if err != nil {
+		return err
+	}
+	rel, err := dbase.GetRelationByID(req.TableID)
+	if err != nil {
+		return err
+	}
+	return setTableDefVersionDependency(rel, req.TableDefVersion)
+}
+
 //#endregion
 
 //#region Impl TxnStorage interface
@@ -424,14 +460,15 @@ func (h *Handle) apiEntryToWriteEntry(
 	}
 
 	req := &cmd_util.WriteReq{
-		Type:         cmd_util.EntryType(pe.EntryType),
-		DatabaseId:   pe.GetDatabaseId(),
-		TableID:      pe.GetTableId(),
-		DatabaseName: pe.GetDatabaseName(),
-		TableName:    pe.GetTableName(),
-		FileName:     pe.GetFileName(),
-		Batch:        moBat,
-		PkCheck:      cmd_util.PKCheckType(pe.GetPkCheckByTn()),
+		Type:            cmd_util.EntryType(pe.EntryType),
+		DatabaseId:      pe.GetDatabaseId(),
+		TableID:         pe.GetTableId(),
+		DatabaseName:    pe.GetDatabaseName(),
+		TableName:       pe.GetTableName(),
+		TableDefVersion: pe.GetTableDefVersion(),
+		FileName:        pe.GetFileName(),
+		Batch:           moBat,
+		PkCheck:         cmd_util.PKCheckType(pe.GetPkCheckByTn()),
 	}
 
 	// Handle soft delete object: parse ObjectID from batch and IsTombstone from FileName
@@ -897,6 +934,9 @@ func (h *Handle) HandleWrite(
 		err = errors.Join(err, moerr.NewNoSuchTable(ctx,
 			fmt.Sprintf("%d-%s", req.DatabaseId, req.DatabaseName),
 			fmt.Sprintf("%d-%s", req.TableID, req.TableName)))
+		return
+	}
+	if err = setTableDefVersionDependency(tb, req.TableDefVersion); err != nil {
 		return
 	}
 
