@@ -368,6 +368,30 @@ func TestRestartTxnCannotReopenRunSQLAfterConcurrentClose(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 }
 
+func TestRestartTxnClaimsClosedOperatorOnce(t *testing.T) {
+	op := &txnOperator{}
+	op.reset.runSQLTracker.seal()
+	op.mu.closed = true
+
+	start := make(chan struct{})
+	results := make(chan bool, 2)
+	for i := 0; i < cap(results); i++ {
+		go func() {
+			<-start
+			results <- op.canRestart()
+		}()
+	}
+	close(start)
+
+	successes := 0
+	for i := 0; i < cap(results); i++ {
+		if <-results {
+			successes++
+		}
+	}
+	require.Equal(t, 1, successes)
+}
+
 func TestNewTxnWithNormalStateWait(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",

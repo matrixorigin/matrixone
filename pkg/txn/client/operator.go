@@ -276,6 +276,7 @@ type txnOperator struct {
 		sync.RWMutex
 		waitActive             bool
 		closed                 bool
+		restarting             bool
 		terminalAction         txnTerminalAction
 		terminalCleanupDone    bool
 		txn                    txn.TxnMeta
@@ -692,6 +693,7 @@ func (tc *txnOperator) initReset(sealRunSQL bool) {
 func (tc *txnOperator) initProtectedFields() {
 	tc.mu.waitActive = false
 	tc.mu.closed = false
+	tc.mu.restarting = false
 	tc.mu.terminalAction = txnTerminalActionNone
 	tc.mu.terminalCleanupDone = false
 	tc.mu.retry = false
@@ -2079,13 +2081,17 @@ func (tc *txnOperator) inRunSql() bool {
 }
 
 func (tc *txnOperator) canRestart() bool {
-	tc.mu.RLock()
-	defer tc.mu.RUnlock()
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
 	pendingTerminalCleanup := tc.mu.terminalAction != txnTerminalActionNone && !tc.mu.terminalCleanupDone
-	if !tc.mu.closed || pendingTerminalCleanup {
+	if !tc.mu.closed || tc.mu.restarting || pendingTerminalCleanup {
 		return false
 	}
-	return tc.reset.runSQLTracker.sealForRestart()
+	if !tc.reset.runSQLTracker.sealForRestart() {
+		return false
+	}
+	tc.mu.restarting = true
+	return true
 }
 
 // openRunSQLAfterRestart completes restart admission without racing a

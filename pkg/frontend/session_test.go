@@ -43,6 +43,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+func TestEnterFrontendRunSQLRejectsSealedTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	expectedErr := moerr.NewTxnClosedNoCtx([]byte("sealed"))
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), "select 1").
+		Return(uint64(0), expectedErr)
+
+	ses := &Session{}
+	ses.txnHandler = InitTxnHandler("", nil, ctx, txnOperator)
+	defer ses.txnHandler.txnCtxCancel()
+	finish, err := enterFrontendRunSQL(ses, &ExecCtx{
+		reqCtx:    ctx,
+		sqlOfStmt: "select 1",
+	})
+
+	assert.ErrorIs(t, err, expectedErr)
+	assert.NotNil(t, finish)
+	assert.Empty(t, ses.runSQLTokens)
+}
+
 func TestTxnHandler_NewTxn(t *testing.T) {
 	convey.Convey("new txn", t, func() {
 		ctrl := gomock.NewController(t)

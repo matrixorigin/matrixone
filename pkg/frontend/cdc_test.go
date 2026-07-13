@@ -3795,8 +3795,8 @@ func setupCDCTestStubs(t *testing.T) []*gostub.Stubs {
 	}))
 
 	// Stub EnterRunSql to avoid touching real txn state in tests.
-	stubs = append(stubs, gostub.Stub(&cdc.EnterRunSql, func(context.Context, client.TxnOperator, string) func() {
-		return func() {}
+	stubs = append(stubs, gostub.Stub(&cdc.EnterRunSql, func(context.Context, client.TxnOperator, string) (func(), error) {
+		return func() {}, nil
 	}))
 
 	return stubs
