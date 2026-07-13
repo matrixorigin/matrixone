@@ -144,6 +144,37 @@ order by id;
 
 drop table t_varbinary_binary_cmp;
 
+-- BLOB/TEXT must retain byte semantics when compared with BINARY values.
+drop table if exists t_binary_blob_text_cmp;
+create table t_binary_blob_text_cmp (
+  id int primary key,
+  bl blob,
+  tx text,
+  b binary(4)
+);
+
+insert into t_binary_blob_text_cmp values
+  (1, 'a', 'a', 'a'),
+  (2, x'61000000', x'61000000', 'a');
+
+select id, hex(bl) as bl_hex, hex(tx) as tx_hex, hex(b) as b_hex
+from t_binary_blob_text_cmp
+order by id;
+
+select id,
+       bl = binary 'a' as bl_eq_bin_a,
+       binary 'a' = bl as bin_a_eq_bl,
+       bl = b as bl_eq_b,
+       b = bl as b_eq_bl,
+       tx = binary 'a' as tx_eq_bin_a,
+       binary 'a' = tx as bin_a_eq_tx,
+       tx = b as tx_eq_b,
+       b = tx as b_eq_tx
+from t_binary_blob_text_cmp
+order by id;
+
+drop table t_binary_blob_text_cmp;
+
 -- MySQL Bug #28076: BINARY(N) padding must remain significant when an IN
 -- predicate or a scalar subquery compares it with an unpadded VARBINARY(N).
 drop table if exists t_binary_varbinary_subquery_cmp;
