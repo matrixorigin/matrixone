@@ -22,7 +22,10 @@ import (
 )
 
 func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray, err error) {
-	finishRunSQL := enterFrontendRunSQL(ses, execCtx)
+	finishRunSQL, err := enterFrontendRunSQL(ses, execCtx)
+	if err != nil {
+		return stats, err
+	}
 	defer finishRunSQL()
 	ses.EnterFPrint(FPExecInFrontEnd)
 	defer ses.ExitFPrint(FPExecInFrontEnd)
@@ -707,17 +710,17 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	return
 }
 
-func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) func() {
+func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) (func(), error) {
 	if ses == nil || execCtx == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	txnHandler := ses.GetTxnHandler()
 	if txnHandler == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	txnOp := txnHandler.GetTxn()
 	if txnOp == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	sqlText := execCtx.sqlOfStmt
 	if sqlText == "" {
@@ -728,15 +731,15 @@ func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) func() {
 		ctx = context.Background()
 	}
 	_, cancel := context.WithCancel(ctx)
-	token := txnOp.EnterRunSqlWithTokenAndSQL(cancel, sqlText)
-	if token != 0 {
-		ses.pushRunSQLToken(token)
+	token, err := txnOp.EnterRunSqlWithTokenAndSQL(cancel, sqlText)
+	if err != nil {
+		cancel()
+		return func() {}, err
 	}
+	ses.pushRunSQLToken(token)
 	return func() {
 		txnOp.ExitRunSqlWithToken(token)
-		if token != 0 {
-			ses.popRunSQLToken()
-		}
+		ses.popRunSQLToken()
 		cancel()
-	}
+	}, nil
 }

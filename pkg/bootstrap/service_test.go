@@ -201,9 +201,9 @@ func (tTxnOp *testTxnOperator) NextSequence() uint64 {
 	panic("implement me")
 }
 
-func (tTxnOp *testTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
+func (tTxnOp *testTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) (uint64, error) {
 	//TODO implement me
-	panic("implement me")
+	return 1, nil
 }
 
 func (tTxnOp *testTxnOperator) ExitRunSqlWithToken(_ uint64) {

@@ -36,6 +36,19 @@ import (
 	"go.uber.org/zap"
 )
 
+func mustEnterRunSQL(
+	t *testing.T,
+	tc *txnOperator,
+	cancel context.CancelFunc,
+	sql string,
+) uint64 {
+	t.Helper()
+	token, err := tc.EnterRunSqlWithTokenAndSQL(cancel, sql)
+	require.NoError(t, err)
+	require.NotZero(t, token)
+	return token
+}
+
 type checkLockTableBindLockService struct {
 	lockservice.LockService
 	binds  []lock.LockTable
@@ -967,7 +980,7 @@ func TestCannotCommitRunningSQLTxn(t *testing.T) {
 
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
-			tc.EnterRunSqlWithTokenAndSQL(cancel, "test")
+			mustEnterRunSQL(t, tc, cancel, "test")
 			_ = tc.Commit(ctx)
 		},
 	)
@@ -989,7 +1002,7 @@ func TestCannotRollbackRunningSQLTxn(t *testing.T) {
 
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
-			tc.EnterRunSqlWithTokenAndSQL(cancel, "test")
+			mustEnterRunSQL(t, tc, cancel, "test")
 			_ = tc.Rollback(ctx)
 		},
 	)
@@ -1180,7 +1193,7 @@ func TestCancelAndWaitRunningSQL(t *testing.T) {
 
 			c := make(chan struct{})
 			sqlCancelCtx, sqlCancel := context.WithCancel(context.Background())
-			token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "test sql")
+			token := mustEnterRunSQL(t, tc, sqlCancel, "test sql")
 
 			go func() {
 				defer close(c)
@@ -1195,6 +1208,146 @@ func TestCancelAndWaitRunningSQL(t *testing.T) {
 	)
 }
 
+func TestCommitSealsRunSQLRegistrationBeforeWaiting(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		runningCtx, runningCancel := context.WithCancel(context.Background())
+		runningToken := mustEnterRunSQL(t, tc, runningCancel, "running sql")
+
+		commitErr := make(chan error, 1)
+		go func() {
+			commitErr <- tc.Commit(ctx)
+		}()
+
+		select {
+		case <-runningCtx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("commit did not cancel the registered SQL")
+		}
+
+		lateCtx, lateCancel := context.WithCancel(context.Background())
+		lateToken, err := tc.EnterRunSqlWithTokenAndSQL(lateCancel, "late sql")
+		require.Zero(t, lateToken)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+		select {
+		case <-lateCtx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("commit did not reject the late SQL registration")
+		}
+
+		tc.ExitRunSqlWithToken(runningToken)
+		require.NoError(t, <-commitErr)
+	})
+}
+
+func TestCommitSealPreservesCurrentRunSQLToken(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		currentCtx, currentCancel := context.WithCancel(context.Background())
+		currentToken := mustEnterRunSQL(t, tc, currentCancel, "commit statement")
+
+		commitCtx := WithRunSQLSkipToken(ctx, currentToken)
+		require.NoError(t, tc.Commit(commitCtx))
+		select {
+		case <-currentCtx.Done():
+			t.Fatal("commit canceled its own run-SQL token")
+		default:
+		}
+
+		tc.ExitRunSqlWithToken(currentToken)
+		currentCancel()
+	})
+}
+
+func TestWriteAndCommitSealsAndWaitsForRunningSQL(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		currentCtx, currentCancel := context.WithCancel(context.Background())
+		currentToken := mustEnterRunSQL(t, tc, currentCancel, "write-and-commit")
+		otherCtx, otherCancel := context.WithCancel(context.Background())
+		otherToken := mustEnterRunSQL(t, tc, otherCancel, "other sql")
+
+		resultC := make(chan *rpc.SendResult, 1)
+		errC := make(chan error, 1)
+		go func() {
+			result, err := tc.WriteAndCommit(
+				WithRunSQLSkipToken(ctx, currentToken),
+				[]txn.TxnRequest{newTNRequest(1, 1)},
+			)
+			resultC <- result
+			errC <- err
+		}()
+
+		select {
+		case <-otherCtx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("WriteAndCommit did not cancel the other SQL")
+		}
+		select {
+		case <-currentCtx.Done():
+			t.Fatal("WriteAndCommit canceled its own SQL token")
+		default:
+		}
+
+		lateCtx, lateCancel := context.WithCancel(context.Background())
+		lateToken, err := tc.EnterRunSqlWithTokenAndSQL(lateCancel, "late sql")
+		require.Zero(t, lateToken)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+		select {
+		case <-lateCtx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("WriteAndCommit did not reject the late SQL")
+		}
+
+		tc.ExitRunSqlWithToken(otherToken)
+		require.NoError(t, <-errC)
+		if result := <-resultC; result != nil {
+			result.Release()
+		}
+		tc.ExitRunSqlWithToken(currentToken)
+		currentCancel()
+	})
+}
+
+func TestRunSQLFastRejectDoesNotWaitForCommitLock(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		tc.mu.Lock()
+		tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+		tc.mu.Unlock()
+
+		sendStarted := make(chan struct{}, 1)
+		releaseSend := make(chan struct{})
+		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			sendStarted <- struct{}{}
+			<-releaseSend
+			return result, err
+		})
+
+		commitErr := make(chan error, 1)
+		go func() {
+			commitErr <- tc.Commit(ctx)
+		}()
+		select {
+		case <-sendStarted:
+		case <-time.After(time.Second):
+			t.Fatal("commit did not reach the blocking sender")
+		}
+
+		rejected := make(chan error, 1)
+		go func() {
+			_, cancel := context.WithCancel(context.Background())
+			_, err := tc.EnterRunSqlWithTokenAndSQL(cancel, "late sql")
+			rejected <- err
+		}()
+		select {
+		case err := <-rejected:
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("late SQL waited for the commit operator lock")
+		}
+
+		close(releaseSend)
+		require.NoError(t, <-commitErr)
+	})
+}
+
 func TestCancelAndWaitRunningSQL_WithKeepToken(t *testing.T) {
 	runOperatorTests(
 		t,
@@ -1207,10 +1360,10 @@ func TestCancelAndWaitRunningSQL_WithKeepToken(t *testing.T) {
 			defer cancel()
 
 			sqlCancelCtx1, sqlCancel1 := context.WithCancel(context.Background())
-			token1 := tc.EnterRunSqlWithTokenAndSQL(sqlCancel1, "test sql 1")
+			token1 := mustEnterRunSQL(t, tc, sqlCancel1, "test sql 1")
 
 			sqlCancelCtx2, sqlCancel2 := context.WithCancel(context.Background())
-			token2 := tc.EnterRunSqlWithTokenAndSQL(sqlCancel2, "test sql 2")
+			token2 := mustEnterRunSQL(t, tc, sqlCancel2, "test sql 2")
 
 			c1 := make(chan struct{})
 			go func() {
@@ -1254,7 +1407,7 @@ func TestCancelAndWaitRunningSQL_Timeout(t *testing.T) {
 			_ *testTxnSender,
 		) {
 			_, sqlCancel := context.WithCancel(context.Background())
-			token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "test sql")
+			token := mustEnterRunSQL(t, tc, sqlCancel, "test sql")
 			defer tc.ExitRunSqlWithToken(token)
 
 			// Do not share the helper's one-second setup deadline with the
@@ -1281,6 +1434,13 @@ func TestCommitAndRollbackTimeoutDeferFullCleanupUntilRunningSQLExits(t *testing
 	}{
 		{name: "commit", run: (*txnOperator).Commit},
 		{name: "rollback", run: (*txnOperator).Rollback},
+		{name: "write-and-commit", run: func(tc *txnOperator, ctx context.Context) error {
+			result, err := tc.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+			if result != nil {
+				result.Release()
+			}
+			return err
+		}},
 	} {
 		t.Run(action.name, func(t *testing.T) {
 			runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
@@ -1299,7 +1459,7 @@ func TestCommitAndRollbackTimeoutDeferFullCleanupUntilRunningSQLExits(t *testing
 				tc.mu.Unlock()
 
 				_, sqlCancel := context.WithCancel(context.Background())
-				token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "stuck sql")
+				token := mustEnterRunSQL(t, tc, sqlCancel, "stuck sql")
 
 				// Keep the test context well beyond the injected running-SQL
 				// timeout so a slow scheduler cannot turn this into a false pass.
@@ -1350,7 +1510,7 @@ func TestRunningSQLTimeoutSealsNewSQLUntilRollbackCompletes(t *testing.T) {
 		tc.mu.Unlock()
 
 		_, runningCancel := context.WithCancel(context.Background())
-		runningToken := tc.EnterRunSqlWithTokenAndSQL(runningCancel, "stuck sql")
+		runningToken := mustEnterRunSQL(t, tc, runningCancel, "stuck sql")
 		require.NotZero(t, runningToken)
 
 		commitCtx, cancelCommit := context.WithCancel(ctx)
@@ -1358,8 +1518,9 @@ func TestRunningSQLTimeoutSealsNewSQLUntilRollbackCompletes(t *testing.T) {
 		require.ErrorIs(t, tc.Commit(commitCtx), context.Canceled)
 
 		rejectedCtx, rejectedCancel := context.WithCancel(context.Background())
-		rejectedToken := tc.EnterRunSqlWithTokenAndSQL(rejectedCancel, "new sql")
+		rejectedToken, err := tc.EnterRunSqlWithTokenAndSQL(rejectedCancel, "new sql")
 		require.Zero(t, rejectedToken)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		select {
 		case <-rejectedCtx.Done():
 		case <-time.After(time.Second):
@@ -1401,7 +1562,7 @@ func TestConcurrentRunningSQLTimeoutSchedulesOneRollback(t *testing.T) {
 		tc.mu.Unlock()
 
 		_, runningCancel := context.WithCancel(context.Background())
-		runningToken := tc.EnterRunSqlWithTokenAndSQL(runningCancel, "stuck sql")
+		runningToken := mustEnterRunSQL(t, tc, runningCancel, "stuck sql")
 		require.NotZero(t, runningToken)
 
 		errC := make(chan error, 2)
@@ -1444,7 +1605,7 @@ func TestRunSQLExitDoesNotBlockDeferredRollback(t *testing.T) {
 		tc.AddWorkspace(workspace)
 
 		_, runningCancel := context.WithCancel(context.Background())
-		runningToken := tc.EnterRunSqlWithTokenAndSQL(runningCancel, "stuck sql")
+		runningToken := mustEnterRunSQL(t, tc, runningCancel, "stuck sql")
 		commitCtx, cancelCommit := context.WithCancel(ctx)
 		cancelCommit()
 		require.ErrorIs(t, tc.Commit(commitCtx), context.Canceled)
@@ -1473,6 +1634,45 @@ func TestRunSQLExitDoesNotBlockDeferredRollback(t *testing.T) {
 		}
 		require.Equal(t, 1, workspace.rollbackCount)
 	})
+}
+
+func BenchmarkRunSQLTrackerEnterExit(b *testing.B) {
+	tc := &txnOperator{}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		token, err := tc.EnterRunSqlWithTokenAndSQL(nil, "select 1")
+		if err != nil {
+			b.Fatal(err)
+		}
+		tc.ExitRunSqlWithToken(token)
+	}
+}
+
+func BenchmarkRunSQLTrackerEnterExitParallel(b *testing.B) {
+	tc := &txnOperator{}
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			token, err := tc.EnterRunSqlWithTokenAndSQL(nil, "select 1")
+			if err != nil {
+				b.Fatal(err)
+			}
+			tc.ExitRunSqlWithToken(token)
+		}
+	})
+}
+
+func BenchmarkRunSQLTrackerRejected(b *testing.B) {
+	tc := &txnOperator{}
+	tc.reset.runSQLTracker.seal()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := tc.EnterRunSqlWithTokenAndSQL(nil, "select 1"); err == nil {
+			b.Fatal("sealed tracker accepted SQL")
+		}
+	}
 }
 
 func TestMalformedTNResponsesReturnErrors(t *testing.T) {

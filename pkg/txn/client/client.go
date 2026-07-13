@@ -435,15 +435,22 @@ func (client *txnClient) RestartTxn(
 	if !op.canRestart() {
 		return nil, moerr.NewTxnClosedNoCtx(op.reset.txnID)
 	}
-	op.init(
+	op.initForRestart(
 		client.newTxnMeta(),
 		client.getTxnOptions(options)...,
 	)
-	return client.doCreateTxn(
+	restarted, err := client.doCreateTxn(
 		ctx,
 		op,
 		minTS,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if err := op.openRunSQLAfterRestart(); err != nil {
+		return nil, err
+	}
+	return restarted, nil
 }
 
 func (client *txnClient) doCreateTxn(
@@ -471,6 +478,7 @@ func (client *txnClient) doCreateTxn(
 	)
 
 	if err := client.openTxn(ctx, op); err != nil {
+		op.closeUnadmitted(err)
 		return nil, err
 	}
 	client.mu.RLock()

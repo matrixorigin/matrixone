@@ -330,7 +330,7 @@ type runSQLTracker struct {
 	activeTokens map[uint64]runSQLInfo
 	nextID       uint64
 	cond         *sync.Cond
-	sealed       bool
+	sealed       atomic.Bool
 	onDrained    func()
 }
 
@@ -362,16 +362,24 @@ func (t *runSQLTracker) ensureInitLocked() {
 	}
 }
 
-func (t *runSQLTracker) reset() {
+func (t *runSQLTracker) reset(sealed bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.activeTokens != nil {
 		for k := range t.activeTokens {
 			delete(t.activeTokens, k)
 		}
 	}
 	t.nextID = 0
-	t.sealed = false
+	t.sealed.Store(sealed)
 	t.onDrained = nil
 	// Keep cond, no need to recreate
+}
+
+func (t *runSQLTracker) open() {
+	t.mu.Lock()
+	t.sealed.Store(false)
+	t.mu.Unlock()
 }
 
 func (t *runSQLTracker) notifyLocked() {
@@ -379,9 +387,15 @@ func (t *runSQLTracker) notifyLocked() {
 }
 
 func (t *runSQLTracker) enterTokenWithSQL(cancel context.CancelFunc, sql string) uint64 {
+	if t.sealed.Load() {
+		if cancel != nil {
+			cancel()
+		}
+		return 0
+	}
 	t.mu.Lock()
 	t.ensureInitLocked()
-	if t.sealed {
+	if t.sealed.Load() {
 		t.mu.Unlock()
 		if cancel != nil {
 			cancel()
@@ -408,7 +422,7 @@ func (t *runSQLTracker) exitToken(token uint64) {
 	t.ensureInitLocked()
 	delete(t.activeTokens, token)
 	var callback func()
-	if t.sealed && len(t.activeTokens) == 0 {
+	if t.sealed.Load() && len(t.activeTokens) == 0 {
 		callback = t.onDrained
 		t.onDrained = nil
 	}
@@ -429,12 +443,11 @@ func (t *runSQLTracker) sealAndRunWhenDrained(fn func()) {
 	}
 
 	t.mu.Lock()
-	t.ensureInitLocked()
-	if t.sealed {
+	if t.sealed.Load() && t.onDrained != nil {
 		t.mu.Unlock()
 		return
 	}
-	t.sealed = true
+	t.sealed.Store(true)
 	cancels := make([]context.CancelFunc, 0, len(t.activeTokens))
 	for _, info := range t.activeTokens {
 		if info.cancel != nil {
@@ -456,17 +469,40 @@ func (t *runSQLTracker) sealAndRunWhenDrained(fn func()) {
 	}
 }
 
+func (t *runSQLTracker) sealAndCancelAllExcept(skipToken uint64) {
+	t.mu.Lock()
+	t.sealed.Store(true)
+	cancels := make([]context.CancelFunc, 0, len(t.activeTokens))
+	for token, info := range t.activeTokens {
+		if token == skipToken {
+			continue
+		}
+		if info.cancel != nil {
+			cancels = append(cancels, info.cancel)
+		}
+	}
+	t.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+func (t *runSQLTracker) seal() {
+	t.mu.Lock()
+	t.sealed.Store(true)
+	t.mu.Unlock()
+}
+
 // sealForRestart prevents a restarted operator from accepting an old SQL
 // registration after its tracker has been checked. Restart is only safe after
 // every SQL token from the previous transaction has exited.
 func (t *runSQLTracker) sealForRestart() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.ensureInitLocked()
 	if len(t.activeTokens) != 0 {
 		return false
 	}
-	t.sealed = true
+	t.sealed.Store(true)
 	return true
 }
 
@@ -591,10 +627,25 @@ func (tc *txnOperator) init(
 	txnMeta txn.TxnMeta,
 	options ...TxnOption,
 ) {
+	tc.initWithRunSQLGate(txnMeta, false, options...)
+}
+
+func (tc *txnOperator) initForRestart(
+	txnMeta txn.TxnMeta,
+	options ...TxnOption,
+) {
+	tc.initWithRunSQLGate(txnMeta, true, options...)
+}
+
+func (tc *txnOperator) initWithRunSQLGate(
+	txnMeta txn.TxnMeta,
+	sealRunSQL bool,
+	options ...TxnOption,
+) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	tc.initReset()
+	tc.initReset(sealRunSQL)
 	tc.initProtectedFields()
 
 	tc.mu.txn = txnMeta
@@ -614,7 +665,7 @@ func (tc *txnOperator) init(
 	}
 }
 
-func (tc *txnOperator) initReset() {
+func (tc *txnOperator) initReset(sealRunSQL bool) {
 	tc.reset.txnID = nil
 	tc.reset.parent.Store(nil)
 	tc.reset.waiter = nil
@@ -629,7 +680,7 @@ func (tc *txnOperator) initReset() {
 	tc.reset.commitCounter = counter{}
 	tc.reset.rollbackCounter = counter{}
 	tc.reset.runSqlCounter = counter{}
-	tc.reset.runSQLTracker.reset()
+	tc.reset.runSQLTracker.reset(sealRunSQL)
 	tc.reset.incrStmtCounter = counter{}
 	tc.reset.rollbackStmtCounter = counter{}
 	// fprints is external pointer, don't reset here
@@ -946,13 +997,17 @@ func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*r
 }
 
 func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
+	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<write-and-commit>"); err != nil {
+		tc.scheduleRollbackAfterRunningSQL(err)
+		return nil, err
+	}
 	util.LogTxnWrite(tc.logger, tc.getTxnMeta(false))
 	util.LogTxnCommit(tc.logger, tc.getTxnMeta(false))
 	return tc.doWrite(ctx, requests, true)
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
-	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<commit>"); err != nil {
+	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<commit>"); err != nil {
 		tc.scheduleRollbackAfterRunningSQL(err)
 		return err
 	}
@@ -1004,7 +1059,7 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
-	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<rollback>"); err != nil {
+	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<rollback>"); err != nil {
 		tc.scheduleRollbackAfterRunningSQL(err)
 		return err
 	}
@@ -1742,6 +1797,7 @@ func (tc *txnOperator) needUnlockLocked() bool {
 
 func (tc *txnOperator) closeLocked(ctx context.Context) {
 	if !tc.mu.closed {
+		tc.reset.runSQLTracker.seal()
 		tc.mu.closed = true
 		// ErrTxnUnknown only describes the CN's observation of Commit. TN may
 		// already have committed, so do not rewrite the status to Aborted.
@@ -1760,6 +1816,7 @@ func (tc *txnOperator) closeLocked(ctx context.Context) {
 }
 
 func (tc *txnOperator) closeAsAborted(ctx context.Context, err error) {
+	tc.reset.runSQLTracker.sealAndCancelAllExcept(0)
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
@@ -1768,6 +1825,21 @@ func (tc *txnOperator) closeAsAborted(ctx context.Context, err error) {
 		tc.mu.txn.Status = txn.TxnStatus_Aborted
 		tc.closeLocked(ctx)
 	}
+}
+
+// closeUnadmitted terminates an operator whose client admission failed. It
+// deliberately does not emit ClosedEvent because the operator was never added
+// to the client's active or waiting ownership graph.
+func (tc *txnOperator) closeUnadmitted(err error) {
+	tc.reset.runSQLTracker.seal()
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if tc.mu.closed {
+		return
+	}
+	tc.reset.commitErr = err
+	tc.mu.txn.Status = txn.TxnStatus_Aborted
+	tc.mu.closed = true
 }
 
 // scheduleRollbackAfterRunningSQL preserves the transaction's cleanup owner when
@@ -1913,14 +1985,14 @@ func (tc *txnOperator) doCostAction(
 	return cost, err
 }
 
-func (tc *txnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64 {
+func (tc *txnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error) {
 	token := tc.reset.runSQLTracker.enterTokenWithSQL(cancel, sql)
 	if token == 0 {
-		return 0
+		return 0, moerr.NewTxnClosedNoCtx(nil)
 	}
 	tc.reset.runningSQL.Store(true)
 	tc.reset.runSqlCounter.addEnter()
-	return token
+	return token, nil
 }
 
 func (tc *txnOperator) ExitRunSqlWithToken(token uint64) {
@@ -1943,9 +2015,26 @@ func (tc *txnOperator) CancelAndWaitRunningSQLWithSQL(ctx context.Context, keepT
 }
 
 func (tc *txnOperator) cancelAndWaitRunningSQL(ctx context.Context, keepToken uint64, currentSQL string) error {
+	return tc.waitRunningSQL(ctx, keepToken, currentSQL, true)
+}
+
+func (tc *txnOperator) sealAndWaitRunningSQLWithSQL(ctx context.Context, currentSQL string) error {
+	skipToken := runSQLSkipTokenFromCtx(ctx)
+	tc.reset.runSQLTracker.sealAndCancelAllExcept(skipToken)
+	return tc.waitRunningSQL(ctx, 0, currentSQL, false)
+}
+
+func (tc *txnOperator) waitRunningSQL(
+	ctx context.Context,
+	keepToken uint64,
+	currentSQL string,
+	cancelOthers bool,
+) error {
 	// Cancel other running SQL first, then wait for them to exit to avoid workspace races.
 	skipToken := runSQLSkipTokenFromCtx(ctx)
-	tc.reset.runSQLTracker.cancelAllExcept(keepToken, skipToken)
+	if cancelOthers {
+		tc.reset.runSQLTracker.cancelAllExcept(keepToken, skipToken)
+	}
 	waitSQL := tc.reset.runSQLTracker.waitingInfo(keepToken, skipToken)
 	if len(waitSQL) > 0 {
 		fields := []zap.Field{
@@ -1991,12 +2080,25 @@ func (tc *txnOperator) inRunSql() bool {
 
 func (tc *txnOperator) canRestart() bool {
 	tc.mu.RLock()
+	defer tc.mu.RUnlock()
 	pendingTerminalCleanup := tc.mu.terminalAction != txnTerminalActionNone && !tc.mu.terminalCleanupDone
-	tc.mu.RUnlock()
-	if pendingTerminalCleanup {
+	if !tc.mu.closed || pendingTerminalCleanup {
 		return false
 	}
 	return tc.reset.runSQLTracker.sealForRestart()
+}
+
+// openRunSQLAfterRestart completes restart admission without racing a
+// concurrent close. Both paths take tc.mu before the tracker lock, so a close
+// can never seal the tracker and then have this method reopen it.
+func (tc *txnOperator) openRunSQLAfterRestart() error {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	if tc.mu.closed {
+		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
+	}
+	tc.reset.runSQLTracker.open()
+	return nil
 }
 
 func (tc *txnOperator) inCommit() bool {

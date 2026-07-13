@@ -589,11 +589,12 @@ func (mr *MockTxnOperatorMockRecorder) EnterRollbackStmt() *gomock.Call {
 }
 
 // EnterRunSqlWithTokenAndSQL mocks base method.
-func (m *MockTxnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64 {
+func (m *MockTxnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "EnterRunSqlWithTokenAndSQL", cancel, sql)
 	ret0, _ := ret[0].(uint64)
-	return ret0
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // EnterRunSqlWithTokenAndSQL indicates an expected call of EnterRunSqlWithTokenAndSQL.

@@ -43,7 +43,7 @@ func TestCommitClosedEventAfterRunningSQLCleanup(t *testing.T) {
 		t,
 		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 			_, sqlCancel := context.WithCancel(context.Background())
-			token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "select 1")
+			token := mustEnterRunSQL(t, tc, sqlCancel, "select 1")
 			defer sqlCancel()
 
 			commitCtx, cancelCommit := context.WithCancel(ctx)
@@ -86,7 +86,7 @@ func TestRollbackClosedEventAfterRunningSQLCleanup(t *testing.T) {
 		t,
 		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 			_, sqlCancel := context.WithCancel(context.Background())
-			token := tc.EnterRunSqlWithTokenAndSQL(sqlCancel, "select 1")
+			token := mustEnterRunSQL(t, tc, sqlCancel, "select 1")
 			defer sqlCancel()
 
 			rollbackCtx, cancelRollback := context.WithCancel(ctx)

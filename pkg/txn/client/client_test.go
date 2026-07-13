@@ -250,7 +250,7 @@ func TestRestartTxnRejectsPendingRunningSQLCleanup(t *testing.T) {
 		}})
 
 		_, runningCancel := context.WithCancel(context.Background())
-		runningToken := tc.EnterRunSqlWithTokenAndSQL(runningCancel, "stuck sql")
+		runningToken := mustEnterRunSQL(t, tc, runningCancel, "stuck sql")
 		commitCtx, cancelCommit := context.WithCancel(ctx)
 		cancelCommit()
 		require.ErrorIs(t, tc.Commit(commitCtx), context.Canceled)
@@ -274,6 +274,98 @@ func TestRestartTxnRejectsPendingRunningSQLCleanup(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, restarted.Rollback(ctx))
 	})
+}
+
+func TestRestartTxnRejectsActiveOperator(t *testing.T) {
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		op, err := c.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+
+		_, err = c.(*txnClient).RestartTxn(ctx, op, timestamp.Timestamp{})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+		require.NoError(t, op.Rollback(ctx))
+	})
+}
+
+func TestRestartTxnKeepsRunSQLSealedUntilAdmissionCompletes(t *testing.T) {
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client := c.(*txnClient)
+		op, err := client.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, op.Rollback(ctx))
+
+		registrationErr := make(chan error, 1)
+		client.txnOpenedCallbacks = []func(TxnOperator){func(opened TxnOperator) {
+			_, sqlCancel := context.WithCancel(context.Background())
+			token, err := opened.EnterRunSqlWithTokenAndSQL(sqlCancel, "late old-generation sql")
+			require.Zero(t, token)
+			registrationErr <- err
+		}}
+
+		restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.True(t, moerr.IsMoErrCode(<-registrationErr, moerr.ErrTxnClosed))
+
+		_, sqlCancel := context.WithCancel(context.Background())
+		token, err := restarted.EnterRunSqlWithTokenAndSQL(sqlCancel, "new-generation sql")
+		require.NoError(t, err)
+		require.NotZero(t, token)
+		restarted.ExitRunSqlWithToken(token)
+		sqlCancel()
+		require.NoError(t, restarted.Rollback(ctx))
+	})
+}
+
+func TestRestartTxnAdmissionFailureLeavesOperatorClosed(t *testing.T) {
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client := c.(*txnClient)
+		op, err := client.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, op.Rollback(ctx))
+
+		canceledCtx, cancelRestart := context.WithCancel(ctx)
+		cancelRestart()
+		_, err = client.RestartTxn(canceledCtx, op, timestamp.Timestamp{})
+		require.ErrorIs(t, err, context.Canceled)
+
+		tc := op.(*txnOperator)
+		tc.mu.RLock()
+		require.True(t, tc.mu.closed)
+		require.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
+		tc.mu.RUnlock()
+
+		rejectedCtx, rejectedCancel := context.WithCancel(context.Background())
+		token, err := tc.EnterRunSqlWithTokenAndSQL(rejectedCancel, "sql after failed restart")
+		require.Zero(t, token)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+		select {
+		case <-rejectedCtx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("failed restart did not keep the SQL gate sealed")
+		}
+
+		restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, restarted.Rollback(ctx))
+	})
+}
+
+func TestRestartTxnCannotReopenRunSQLAfterConcurrentClose(t *testing.T) {
+	op := &txnOperator{}
+	op.reset.txnID = []byte("restart")
+	op.reset.runSQLTracker.seal()
+	op.mu.closed = true
+
+	err := op.openRunSQLAfterRestart()
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+	_, err = op.EnterRunSqlWithTokenAndSQL(nil, "select 1")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 }
 
 func TestNewTxnWithNormalStateWait(t *testing.T) {

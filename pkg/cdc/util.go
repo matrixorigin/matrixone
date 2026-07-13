@@ -660,19 +660,23 @@ var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs
 	return rel.CollectChanges(ctx, fromTs, toTs, true, mp)
 }
 
-var EnterRunSql = func(ctx context.Context, txnOp client.TxnOperator, sql string) func() {
+var EnterRunSql = func(ctx context.Context, txnOp client.TxnOperator, sql string) (func(), error) {
 	if txnOp == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	_, cancel := context.WithCancel(ctx)
-	token := txnOp.EnterRunSqlWithTokenAndSQL(cancel, sql)
+	token, err := txnOp.EnterRunSqlWithTokenAndSQL(cancel, sql)
+	if err != nil {
+		cancel()
+		return func() {}, err
+	}
 	return func() {
 		txnOp.ExitRunSqlWithToken(token)
 		cancel()
-	}
+	}, nil
 }
 
 var GetTableDef = func(

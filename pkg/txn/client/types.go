@@ -198,7 +198,10 @@ type TxnOperator interface {
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
 	NextSequence() uint64
-	EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64
+	// EnterRunSqlWithTokenAndSQL registers one SQL execution. A non-nil error
+	// means the transaction is sealed and the caller must not start or continue
+	// using its workspace.
+	EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error)
 	ExitRunSqlWithToken(token uint64)
 	EnterIncrStmt()
 	ExitIncrStmt()

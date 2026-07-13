@@ -144,14 +144,11 @@ func (s *StorageTxnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) clien
 	panic("unimplemented")
 }
 
-func (s *StorageTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
-	//TODO implement me
-	panic("implement me")
+func (s *StorageTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) (uint64, error) {
+	return 1, nil
 }
 
 func (s *StorageTxnOperator) ExitRunSqlWithToken(_ uint64) {
-	//TODO implement me
-	panic("implement me")
 }
 
 var _ client.TxnOperator = new(StorageTxnOperator)

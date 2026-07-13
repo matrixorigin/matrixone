@@ -32,18 +32,28 @@ func doCompileRelease(c *Compile) {
 	}
 }
 
-func MarkQueryRunning(c *Compile, txn txnClient.TxnOperator) {
+func MarkQueryRunning(c *Compile, txn txnClient.TxnOperator) error {
 	c.proc.SetBaseProcessRunningStatus(true)
 	if txn == nil {
 		c.runSqlToken = 0
-		return
+		return nil
 	}
 	_, cancel := process.GetQueryCtxFromProc(c.proc)
 	sqlText := c.originSQL
 	if sqlText == "" {
 		sqlText = c.sql
 	}
-	c.runSqlToken = txn.EnterRunSqlWithTokenAndSQL(cancel, sqlText)
+	token, err := txn.EnterRunSqlWithTokenAndSQL(cancel, sqlText)
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		c.runSqlToken = 0
+		c.proc.SetBaseProcessRunningStatus(false)
+		return err
+	}
+	c.runSqlToken = token
+	return nil
 }
 
 func MarkQueryDone(c *Compile, txn txnClient.TxnOperator) {
