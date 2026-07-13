@@ -588,6 +588,47 @@ func TestShouldDispatchIvfSearchMultiCNRejectsWritableWorkspace(t *testing.T) {
 	require.True(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, nil))
 }
 
+func TestCompileTableFunctionUsesSingleCNWhenRollingUpgradeLeavesOneEligibleWorker(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "current-pipeline"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{isFirst: true}
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
+	// Engine.Nodes has already excluded CNs whose CommitID differs from this binary.
+	c.cnList = engine.Nodes{{Id: "current-cn", Addr: "current-pipeline", Mcpu: 4}}
+
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		TableDef: &plan.TableDef{
+			Name:      "idx_entries",
+			TableType: "func_table",
+			Cols:      ivfSearchTestColDefs(),
+			TblFunc:   &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+		},
+		Stats: &plan.Stats{BlockNum: 1, Dop: 1},
+		IndexReaderParam: &plan.IndexReaderParam{
+			Limit: plan2.MakePlan2Int64ConstExprWithType(10),
+		},
+	}
+
+	scopes, err := c.compileTableFunction(node, nil)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	require.Equal(t, Merge, scopes[0].Magic)
+	require.Equal(t, "current-pipeline", scopes[0].NodeInfo.Addr)
+	op, ok := scopes[0].RootOp.(*table_function.TableFunction)
+	require.True(t, ok)
+	require.Equal(t, int32(0), op.IndexReaderParam.GetPartitionCnCnt())
+	require.Equal(t, int32(0), op.IndexReaderParam.GetPartitionCnIdx())
+}
+
+func ivfSearchTestColDefs() []*plan.ColDef {
+	return []*plan.ColDef{
+		{Name: "pkid", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+	}
+}
+
 func TestGenerateNodesKeepsForceOneCNIvfEntriesInternalScanOnCurrentCN(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"

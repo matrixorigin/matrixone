@@ -274,6 +274,20 @@ func TestEngineNodesUsesClusterServiceWorkingState(t *testing.T) {
 	})
 }
 
+func TestEngineNodesRollingUpgradeReturnsOnlyCurrentCommit(t *testing.T) {
+	e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+		CNStores: []logpb.CNStore{
+			newEngineNodesCNStore("current-cn", "current-pipeline", nil, metadata.WorkState_Working, version.CommitID),
+			newEngineNodesCNStore("old-cn-1", "old-pipeline-1", nil, metadata.WorkState_Working, "old-commit"),
+			newEngineNodesCNStore("old-cn-2", "old-pipeline-2", nil, metadata.WorkState_Working, "old-commit"),
+		},
+	})
+
+	nodes, err := e.Nodes(false, "", "", nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"current-pipeline"}, nodeAddresses(nodes))
+}
+
 func newEngineWithClusterDetails(t *testing.T, details logpb.ClusterDetails) *Engine {
 	t.Helper()
 

@@ -378,30 +378,40 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	})
 
 	t.Run("TableFunction_IndexReaderParam", func(t *testing.T) {
+		limit := plan.MakePlan2Int64ConstExprWithType(17)
 		op := &table_function.TableFunction{
 			FuncName: "ivf_search",
 			RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
-				{Tag: 42},
+				{Tag: 42, MatchPrefix: true, UpperLimit: 128, NotOnPk: true},
 			},
 			IndexReaderParam: &planpb.IndexReaderParam{
 				PartitionCnCnt: 2,
 				PartitionCnIdx: 1,
+				Limit:          limit,
 			},
 		}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.Equal(t, int32(2), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnCnt())
 		require.Equal(t, int32(1), pipeInstr.TableFunction.GetIndexReaderParam().GetPartitionCnIdx())
+		require.Equal(t, int64(17), pipeInstr.TableFunction.GetIndexReaderParam().GetLimit().GetLit().GetI64Val())
 		require.Len(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList(), 1)
 		require.Equal(t, int32(42), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetTag())
+		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetMatchPrefix())
+		require.Equal(t, int32(128), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetUpperLimit())
+		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetNotOnPk())
 
 		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
 		require.NoError(t, err)
 		restoredOp := restored.(*table_function.TableFunction)
 		require.Equal(t, int32(2), restoredOp.IndexReaderParam.GetPartitionCnCnt())
 		require.Equal(t, int32(1), restoredOp.IndexReaderParam.GetPartitionCnIdx())
+		require.Equal(t, int64(17), restoredOp.IndexReaderParam.GetLimit().GetLit().GetI64Val())
 		require.Len(t, restoredOp.RuntimeFilterSpecs, 1)
 		require.Equal(t, int32(42), restoredOp.RuntimeFilterSpecs[0].GetTag())
+		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetMatchPrefix())
+		require.Equal(t, int32(128), restoredOp.RuntimeFilterSpecs[0].GetUpperLimit())
+		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetNotOnPk())
 	})
 
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
