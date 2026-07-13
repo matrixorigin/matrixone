@@ -923,6 +923,7 @@ func TestRollupWindowAliasCollisionsPreserveSourceScope(t *testing.T) {
 		sql                string
 		expectedHeadings   []string
 		expectedProjectLen int
+		expectedHavingType int32
 	}{
 		{
 			name: "select alias collides with source column",
@@ -953,6 +954,18 @@ func TestRollupWindowAliasCollisionsPreserveSourceScope(t *testing.T) {
 				order by row_number() over (order by n_regionkey)`,
 			expectedHeadings:   []string{"n_regionkey", "n_regionkey", "sum(n_nationkey)"},
 			expectedProjectLen: 3,
+		},
+		{
+			name: "having alias collision keeps source scope",
+			sql: `
+				select sum(n_nationkey) as n_regionkey, n_regionkey,
+				       row_number() over (order by n_regionkey) as rn
+				from nation
+				group by n_regionkey with rollup
+				having N_REGIONKEY > 0`,
+			expectedHeadings:   []string{"n_regionkey", "n_regionkey", "rn"},
+			expectedProjectLen: 3,
+			expectedHavingType: int32(types.T_int32),
 		},
 	}
 
@@ -985,8 +998,55 @@ func TestRollupWindowAliasCollisionsPreserveSourceScope(t *testing.T) {
 				}
 			}
 			require.True(t, foundRowNumber)
+
+			if test.expectedHavingType != 0 {
+				foundHaving := false
+				for _, node := range query.Nodes {
+					if node.NodeType != plan.Node_FILTER || !node.RollupFilter {
+						continue
+					}
+					for _, filter := range node.FilterList {
+						fn := filter.GetF()
+						require.NotNil(t, fn)
+						require.Equal(t, ">", fn.Func.ObjName)
+						require.NotEmpty(t, fn.Args)
+						require.Equal(t, test.expectedHavingType, fn.Args[0].Typ.Id)
+						foundHaving = true
+					}
+				}
+				require.True(t, foundHaving)
+			}
 		})
 	}
+}
+
+func TestRollupWindowHavingAliasCollisionWithHiddenGroup(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		select sum(n_nationkey) as n_regionkey,
+		       row_number() over (order by sum(n_nationkey)) as rn
+		from nation
+		group by n_regionkey with rollup
+		having N_REGIONKEY > 0`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	foundHaving := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER || !node.RollupFilter {
+			continue
+		}
+		for _, filter := range node.FilterList {
+			fn := filter.GetF()
+			require.NotNil(t, fn)
+			require.Equal(t, ">", fn.Func.ObjName)
+			require.NotEmpty(t, fn.Args)
+			require.Equal(t, int32(types.T_int32), fn.Args[0].Typ.Id)
+			foundHaving = true
+		}
+	}
+	require.True(t, foundHaving)
 }
 
 func TestRewriteRollupWindowSelectHelpers(t *testing.T) {

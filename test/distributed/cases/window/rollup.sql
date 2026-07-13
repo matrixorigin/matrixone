@@ -642,6 +642,18 @@ group by
     region,
     product with rollup
 order by row_num;
+
+-- HAVING keeps AliasAfterColumn precedence when an aggregate alias collides
+-- with the grouped source column name
+select
+    sum(qty) as qty,
+    row_number() over (order by sum(qty), count(*)) as row_num
+from
+    rollup_window_sales
+group by
+    qty with rollup
+having qty > 0
+order by row_num;
 drop table rollup_window_sales;
 
 drop database rollup_test;
