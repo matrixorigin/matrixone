@@ -40,4 +40,13 @@ select group_concat(concat(a, ':', c) order by a) as comp_ids, count(*) as row_c
 from (select a, c from t_comp order by l2_distance(b, '[0,0,0,0]') limit 4) s;
 comp_ids	row_count	distinct_count
 1:c01,2:c02,3:c03,4:c04	4	4
+create table t_sparse(a bigint primary key, b vecf32(4));
+insert into t_sparse values
+(1, '[0,0,0,0]'),(2, '[1,0,0,0]'),(3, '[10,0,0,0]');
+create index idx_sparse_b using ivfflat on t_sparse(b) lists=8 op_type 'vector_l2_ops';
+set probe_limit = 8;
+select group_concat(a order by a) as sparse_ids, count(*) as row_count, count(distinct a) as distinct_count
+from (select a from t_sparse order by l2_distance(b, '[0,0,0,0]') limit 10) s;
+sparse_ids	row_count	distinct_count
+1,2,3	3	3
 drop database vector_ivf_multicn_search;

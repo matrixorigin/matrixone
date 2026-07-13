@@ -42,4 +42,16 @@ create index idx_comp_b using ivfflat on t_comp(b) lists=4 op_type 'vector_l2_op
 select group_concat(concat(a, ':', c) order by a) as comp_ids, count(*) as row_count, count(distinct concat(a, ':', c)) as distinct_count
 from (select a, c from t_comp order by l2_distance(b, '[0,0,0,0]') limit 4) s;
 
+-- More IVF lists than source rows creates uneven work and empty partitions.
+-- A limit larger than every local partition must still return the complete,
+-- duplicate-free global result.
+create table t_sparse(a bigint primary key, b vecf32(4));
+insert into t_sparse values
+(1, '[0,0,0,0]'),(2, '[1,0,0,0]'),(3, '[10,0,0,0]');
+create index idx_sparse_b using ivfflat on t_sparse(b) lists=8 op_type 'vector_l2_ops';
+set probe_limit = 8;
+
+select group_concat(a order by a) as sparse_ids, count(*) as row_count, count(distinct a) as distinct_count
+from (select a from t_sparse order by l2_distance(b, '[0,0,0,0]') limit 10) s;
+
 drop database vector_ivf_multicn_search;
