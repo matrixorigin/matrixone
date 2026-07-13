@@ -81,6 +81,10 @@ func (builder *QueryBuilder) recordIndexHints(nodeID int32, tableDef *plan.Table
 		builder.indexHintsByScan = make(map[int32]*indexHintSet)
 	}
 	builder.indexHintsByScan[nodeID] = hintSet
+	if builder.indexHintOwnerByNode == nil {
+		builder.indexHintOwnerByNode = make(map[int32]int32)
+	}
+	builder.indexHintOwnerByNode[nodeID] = nodeID
 	return nil
 }
 
@@ -278,4 +282,12 @@ func (builder *QueryBuilder) inheritIndexHints(dstNodeID, srcNodeID int32) {
 		return
 	}
 	builder.indexHintsByScan[dstNodeID] = hintSet
+	if builder.indexHintOwnerByNode == nil {
+		builder.indexHintOwnerByNode = make(map[int32]int32)
+	}
+	owner := srcNodeID
+	if inheritedOwner, ok := builder.indexHintOwnerByNode[srcNodeID]; ok {
+		owner = inheritedOwner
+	}
+	builder.indexHintOwnerByNode[dstNodeID] = owner
 }

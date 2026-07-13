@@ -459,6 +459,10 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 
 	node := builder.qry.Nodes[nodeID]
 	for i, childID := range node.Children {
+		if node.NodeType == plan.Node_JOIN && joinCanConsumeIndexHints(node) &&
+			builder.qry.Nodes[childID].NodeType == plan.Node_TABLE_SCAN && builder.scanForcesJoinIndex(childID) {
+			continue
+		}
 		node.Children[i], err = builder.applyIndices(childID, colRefCnt, idxColMap)
 		if err != nil {
 			return -1, err
@@ -480,6 +484,11 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	}
 
 	return nodeID, nil
+}
+
+func joinCanConsumeIndexHints(node *plan.Node) bool {
+	return node != nil && (node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT ||
+		node.JoinType == plan.Node_SEMI || (node.JoinType == plan.Node_ANTI && node.IsRightJoin))
 }
 
 func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
@@ -2741,6 +2750,9 @@ func (builder *QueryBuilder) baseScanForIndexAccess(nodeID int32) *plan.Node {
 	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
 		return nil
 	}
+	if owner := builder.indexHintOwnerScan(nodeID); owner != nil {
+		return owner
+	}
 	node := builder.qry.Nodes[nodeID]
 	if node == nil {
 		return nil
@@ -2752,6 +2764,31 @@ func (builder *QueryBuilder) baseScanForIndexAccess(nodeID int32) *plan.Node {
 		return builder.baseScanForIndexAccess(node.Children[0])
 	}
 	return nil
+}
+
+func (builder *QueryBuilder) indexHintOwnerScan(nodeID int32) *plan.Node {
+	visited := make(map[int32]struct{})
+	for {
+		ownerID, ok := builder.indexHintOwnerByNode[nodeID]
+		if !ok || ownerID == nodeID {
+			if !ok {
+				return nil
+			}
+			if ownerID < 0 || int(ownerID) >= len(builder.qry.Nodes) {
+				return nil
+			}
+			owner := builder.qry.Nodes[ownerID]
+			if owner != nil && owner.NodeType == plan.Node_TABLE_SCAN {
+				return owner
+			}
+			return nil
+		}
+		if _, seen := visited[nodeID]; seen {
+			return nil
+		}
+		visited[nodeID] = struct{}{}
+		nodeID = ownerID
+	}
 }
 
 func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error) {

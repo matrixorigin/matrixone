@@ -113,6 +113,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		nameByColRef:         make(map[[2]int32]string),
 		protectedScans:       make(map[int32]int),
 		projectSpecialGuards: make(map[int32]*specialIndexGuard),
+		indexHintOwnerByNode: make(map[int32]int32),
 		nextBindTag:          0,
 		mysqlCompatible:      mysqlCompatible,
 		aggSpillMem:          aggSpillMem,

@@ -597,6 +597,60 @@ func TestForceIndexForJoinReplacesFilterIndexWrapper(t *testing.T) {
 	require.Equal(t, "idx_join", forcedIndexScan.IndexScanInfo.IndexName)
 }
 
+func TestForceIndexForJoinReplacesRealCoveringFilterScan(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+	tableDef := mock.ctxt.tables["index_hint_t"]
+	tableDef.Indexes = append([]*planpb.IndexDef{
+		{IndexName: "idx_filter", IndexTableName: "idx_hint_filter", Parts: []string{"a", "b", catalog.CreateAlias("id")}, TableExist: true},
+		{IndexName: "idx_join", IndexTableName: "idx_hint_join", Parts: []string{"b", "a", catalog.CreateAlias("id")}, TableExist: true},
+	}, tableDef.Indexes...)
+	addIndexHintIndexTableForTest(mock, "idx_hint_filter", 25363)
+	addIndexHintIndexTableForTest(mock, "idx_hint_join", 25364)
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select l.a, r.a, r.b
+		from index_hint_t l
+		join index_hint_t r force index for join(idx_join) on l.b = r.b
+		where r.a = 1`)
+	require.NoError(t, err)
+	reachableIndexes := reachableIndexScanNames(queryPlan.GetQuery())
+	require.Contains(t, reachableIndexes, "idx_join")
+	require.NotContains(t, reachableIndexes, "idx_filter")
+}
+
+func reachableIndexScanNames(query *planpb.Query) []string {
+	if query == nil {
+		return nil
+	}
+	visited := make(map[int32]struct{})
+	var names []string
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			return
+		}
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		if node.IndexScanInfo.IsIndexScan {
+			names = append(names, node.IndexScanInfo.IndexName)
+		}
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+	}
+	for _, rootID := range query.Steps {
+		visit(rootID)
+	}
+	return names
+}
+
 func TestForcePrimaryForJoinPreservesHashOnPKDirection(t *testing.T) {
 	builder, joinID, leftScanID, _ := makeIndexHintJoinBuilder(t)
 	joinNode := builder.qry.Nodes[joinID]
