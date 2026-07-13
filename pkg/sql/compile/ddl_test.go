@@ -55,9 +55,14 @@ import (
 type fixedResultSQLExecutor struct {
 	result executor.Result
 	err    error
+	calls  int
 }
 
-func (e *fixedResultSQLExecutor) Exec(context.Context, string, executor.Options) (executor.Result, error) {
+func (e *fixedResultSQLExecutor) Exec(ctx context.Context, _ string, _ executor.Options) (executor.Result, error) {
+	e.calls++
+	if err := ctx.Err(); err != nil {
+		return executor.Result{}, err
+	}
 	return e.result, e.err
 }
 
@@ -138,7 +143,7 @@ func TestAlterTableInplaceAppendsAutoIncrementSchemaMutation(t *testing.T) {
 	require.Equal(t, api.NewUpdateAutoIncrementReq(1, 1, effectiveOffset), rel.alterReqs[0])
 }
 
-func TestAlterTableInplaceCanceledBeforeSchemaMutation(t *testing.T) {
+func TestAlterTableInplaceSetOffsetErrorBeforeSchemaMutation(t *testing.T) {
 	const requestedOffset = uint64(99)
 	const effectiveOffset = uint64(120)
 
@@ -195,6 +200,71 @@ func TestAlterTableInplaceCanceledBeforeSchemaMutation(t *testing.T) {
 
 	c := &Compile{e: eng, proc: proc, db: "db", pn: s.Plan}
 	require.ErrorIs(t, s.AlterTableInplace(c), context.Canceled)
+	require.Empty(t, rel.alterReqs)
+}
+
+func TestAlterTableInplacePreCanceledBeforeAutoIncrementSideEffects(t *testing.T) {
+	const requestedOffset = uint64(99)
+	const effectiveOffset = uint64(120)
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	baseCtx := defines.AttachAccountId(context.Background(), sysAccountId)
+	txnOp, closeTxn := client.NewTestTxnOperator(baseCtx)
+	t.Cleanup(closeTxn)
+	proc.Base.TxnOperator = txnOp
+	ctx, cancel := context.WithCancel(baseCtx)
+	cancel()
+	proc.Ctx = ctx
+
+	result := newAlterCopyFixedResult(t, proc.Mp(), types.T_uint64.ToType(), []uint64{effectiveOffset})
+	exec := &fixedResultSQLExecutor{result: result}
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		exec,
+	)
+
+	ctrl := gomock.NewController(t)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	incrservice.SetAutoIncrementServiceByID(proc.GetService(), autoSvc)
+
+	rel := newStubRelation("t")
+	rel.dbID = 1
+	rel.extra = &api.SchemaExtra{}
+	db := newStubDatabase("db")
+	db.rels["t"] = rel
+	eng := newStubEngine()
+	eng.dbs["db"] = db
+	lockMoDb := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	t.Cleanup(lockMoDb.Reset)
+	lockMoTbl := gostub.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	t.Cleanup(lockMoTbl.Reset)
+	lockTbl := gostub.Stub(&lockTable, func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+		return nil
+	})
+	t.Cleanup(lockTbl.Reset)
+
+	tableDef := &plan2.TableDef{
+		Name: "t",
+		Cols: []*plan2.ColDef{{
+			Name: "id",
+			Typ:  plan2.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
+			Database: "db",
+			TableDef: tableDef,
+			Actions: []*plan2.AlterTable_Action{{Action: &plan2.AlterTable_Action_AlterAutoIncrement{
+				AlterAutoIncrement: &plan2.AlterTableAutoIncrement{NewOffset: requestedOffset},
+			}}},
+		}},
+	}}}}
+
+	c := &Compile{e: eng, proc: proc, db: "db", pn: s.Plan}
+	require.ErrorIs(t, s.AlterTableInplace(c), context.Canceled)
+	require.Zero(t, exec.calls)
 	require.Empty(t, rel.alterReqs)
 }
 

@@ -1107,6 +1107,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				act.AlterComment.NewComment,
 			))
 		case *plan.AlterTable_Action_AlterAutoIncrement:
+			if c.proc.Ctx != nil {
+				if err := c.proc.Ctx.Err(); err != nil {
+					return err
+				}
+			}
 			autoCols := incrservice.GetAutoColumnFromDef(qry.GetTableDef())
 			sid := c.proc.GetService()
 			svc := incrservice.GetAutoIncrementService(sid)
