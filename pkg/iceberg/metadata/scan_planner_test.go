@@ -1396,7 +1396,7 @@ func newPlannerFixtureWithMetadata(t *testing.T, manifestCount int, metadataJSON
 	}
 
 	fixture := &plannerFixture{
-		cache:  NewCache(time.Minute),
+		cache:  NewCache(time.Minute, 1<<30),
 		reader: &plannerObjectReader{data: data},
 		facade: &plannerMetadataFacade{manifests: manifests, entries: entries},
 	}

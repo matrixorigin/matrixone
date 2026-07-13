@@ -100,6 +100,22 @@ func TestNewDefaultIcebergScanPlannerUsesRuntimeRefCacheRefresher(t *testing.T) 
 	require.True(t, ok)
 }
 
+func TestNewDefaultIcebergScanPlannerUsesManifestCacheBytes(t *testing.T) {
+	var params config.IcebergParameters
+	params.SetDefaultValues()
+	params.ManifestCacheBytes = 3
+
+	planner, err := NewDefaultIcebergScanPlanner(context.Background(), "", params)
+	require.NoError(t, err)
+	runtimePlanner, ok := planner.(icebergmetadata.RuntimeScanPlanner)
+	require.True(t, ok)
+	key := icebergmetadata.CacheKey{Kind: icebergmetadata.CacheKindManifest, Table: "oversized"}
+	runtimePlanner.Cache.Put(key, icebergmetadata.CacheEntry{SizeBytes: 4})
+	require.Equal(t, 0, runtimePlanner.Cache.Len())
+	runtimePlanner.Cache.Put(key, icebergmetadata.CacheEntry{SizeBytes: 3})
+	require.Equal(t, 1, runtimePlanner.Cache.Len())
+}
+
 func TestIcebergAllowPlainHTTPFromEnv(t *testing.T) {
 	t.Setenv(IcebergAllowPlainHTTPEnv, "")
 	require.False(t, IcebergAllowPlainHTTPFromEnv())

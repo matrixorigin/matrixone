@@ -15,6 +15,7 @@
 package metadata
 
 import (
+	"container/list"
 	"context"
 	"sync"
 	"time"
@@ -53,28 +54,38 @@ type CacheEntry struct {
 	Metadata         *api.TableMetadata
 	ManifestList     []api.ManifestFile
 	ManifestEntries  []api.ManifestEntry
-	SizeBytes        int64
+	SizeBytes        int64 // Positive serialized payload size used as the cache weight.
 	StoredAt         time.Time
 	ExpiresAt        time.Time
 }
 
 type Cache struct {
-	mu      sync.Mutex
-	ttl     time.Duration
-	now     func() time.Time
-	entries map[CacheKey]CacheEntry
+	mu        sync.Mutex
+	ttl       time.Duration
+	maxBytes  int64
+	usedBytes int64
+	now       func() time.Time
+	entries   map[CacheKey]*list.Element
+	lru       list.List
 }
 
-func NewCache(ttl time.Duration) *Cache {
+type cacheItem struct {
+	key    CacheKey
+	entry  CacheEntry
+	weight int64
+}
+
+func NewCache(ttl time.Duration, maxBytes int64) *Cache {
 	return &Cache{
-		ttl:     ttl,
-		now:     time.Now,
-		entries: make(map[CacheKey]CacheEntry),
+		ttl:      ttl,
+		maxBytes: maxBytes,
+		now:      time.Now,
+		entries:  make(map[CacheKey]*list.Element),
 	}
 }
 
-func NewCacheWithClock(ttl time.Duration, now func() time.Time) *Cache {
-	cache := NewCache(ttl)
+func NewCacheWithClock(ttl time.Duration, maxBytes int64, now func() time.Time) *Cache {
+	cache := NewCache(ttl, maxBytes)
 	if now != nil {
 		cache.now = now
 	}
@@ -82,67 +93,95 @@ func NewCacheWithClock(ttl time.Duration, now func() time.Time) *Cache {
 }
 
 func (c *Cache) Get(key CacheKey) (CacheEntry, bool) {
-	if c == nil || c.ttl <= 0 {
+	if c == nil || c.ttl <= 0 || c.maxBytes <= 0 {
 		return CacheEntry{}, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.entries[key]
+	element, ok := c.entries[key]
 	if !ok {
 		return CacheEntry{}, false
 	}
+	entry := element.Value.(*cacheItem).entry
 	if !entry.ExpiresAt.IsZero() && !c.now().Before(entry.ExpiresAt) {
 		if entry.ETag == "" {
-			delete(c.entries, key)
+			c.removeElement(element)
 		}
 		return CacheEntry{}, false
 	}
+	c.lru.MoveToFront(element)
 	return cloneCacheEntry(entry), true
 }
 
 func (c *Cache) GetStaleForRevalidation(key CacheKey) (CacheEntry, bool) {
-	if c == nil || c.ttl <= 0 {
+	if c == nil || c.ttl <= 0 || c.maxBytes <= 0 {
 		return CacheEntry{}, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.entries[key]
-	if !ok || entry.ETag == "" {
+	element, ok := c.entries[key]
+	if !ok {
+		return CacheEntry{}, false
+	}
+	entry := element.Value.(*cacheItem).entry
+	if entry.ETag == "" {
 		return CacheEntry{}, false
 	}
 	if entry.ExpiresAt.IsZero() || c.now().Before(entry.ExpiresAt) {
 		return CacheEntry{}, false
 	}
+	c.lru.MoveToFront(element)
 	return cloneCacheEntry(entry), true
 }
 
 func (c *Cache) Refresh(key CacheKey, etag string) bool {
-	if c == nil || c.ttl <= 0 {
+	if c == nil || c.ttl <= 0 || c.maxBytes <= 0 {
 		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.entries[key]
-	if !ok || entry.ETag == "" || entry.ETag != etag {
+	element, ok := c.entries[key]
+	if !ok {
+		return false
+	}
+	item := element.Value.(*cacheItem)
+	entry := item.entry
+	if entry.ETag == "" || entry.ETag != etag {
 		return false
 	}
 	now := c.now()
 	entry.StoredAt = now
 	entry.ExpiresAt = now.Add(c.ttl)
-	c.entries[key] = entry
+	item.entry = entry
+	c.lru.MoveToFront(element)
 	return true
 }
 
 func (c *Cache) Put(key CacheKey, entry CacheEntry) {
-	if c == nil || c.ttl <= 0 {
+	if c == nil || c.ttl <= 0 || c.maxBytes <= 0 {
 		return
 	}
+	weight := entry.SizeBytes
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if existing, ok := c.entries[key]; ok {
+		c.removeElement(existing)
+	}
+	// SizeBytes is the cache weight supplied by the loader from the serialized
+	// metadata or manifest. Refuse missing and oversized weights so neither can
+	// bypass the configured bound.
+	if weight <= 0 || weight > c.maxBytes {
+		return
+	}
+	for c.usedBytes > c.maxBytes-weight {
+		c.removeElement(c.lru.Back())
+	}
 	now := c.now()
 	entry.StoredAt = now
 	entry.ExpiresAt = now.Add(c.ttl)
-	c.entries[key] = cloneCacheEntry(entry)
+	item := &cacheItem{key: key, entry: cloneCacheEntry(entry), weight: weight}
+	c.entries[key] = c.lru.PushFront(item)
+	c.usedBytes += weight
 }
 
 func (c *Cache) Invalidate(key CacheKey) {
@@ -151,7 +190,9 @@ func (c *Cache) Invalidate(key CacheKey) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.entries, key)
+	if element, ok := c.entries[key]; ok {
+		c.removeElement(element)
+	}
 }
 
 func (c *Cache) InvalidateTable(accountID uint32, catalogID uint64, namespace, table string) int {
@@ -161,9 +202,9 @@ func (c *Cache) InvalidateTable(accountID uint32, catalogID uint64, namespace, t
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	removed := 0
-	for key := range c.entries {
+	for key, element := range c.entries {
 		if key.AccountID == accountID && key.CatalogID == catalogID && key.Namespace == namespace && key.Table == table {
-			delete(c.entries, key)
+			c.removeElement(element)
 			removed++
 		}
 	}
@@ -181,6 +222,16 @@ func (c *Cache) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.entries)
+}
+
+func (c *Cache) removeElement(element *list.Element) {
+	if element == nil {
+		return
+	}
+	item := element.Value.(*cacheItem)
+	delete(c.entries, item.key)
+	c.lru.Remove(element)
+	c.usedBytes -= item.weight
 }
 
 func cloneCacheEntry(in CacheEntry) CacheEntry {

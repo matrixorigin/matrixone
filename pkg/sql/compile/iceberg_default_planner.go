@@ -80,7 +80,7 @@ func NewDefaultIcebergScanPlanner(ctx context.Context, serviceID string, params 
 			icebergcatalog.UnsupportedAdapterFactory{Name: icebergcatalog.AdapterIcebergGo},
 		),
 	)
-	cache := icebergmetadata.NewCache(cfg.Scan.ManifestCacheTTL)
+	cache := icebergmetadata.NewCache(cfg.Scan.ManifestCacheTTL, cfg.Scan.ManifestCacheBytes)
 	if rt := moruntime.ServiceRuntime(serviceID); rt != nil {
 		rt.SetGlobalVariables(api.CacheInvalidatorRuntimeKey, cache)
 	}

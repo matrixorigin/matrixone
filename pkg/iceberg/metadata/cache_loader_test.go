@@ -28,7 +28,7 @@ import (
 func TestCachedTableMetadataLoaderFreshAndETagRevalidation(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
-	cache := NewCacheWithClock(time.Minute, func() time.Time { return now })
+	cache := NewCacheWithClock(time.Minute, 1<<20, func() time.Time { return now })
 	calls := 0
 	client := &catalog.MockClient{
 		LoadTableFunc: func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
@@ -112,7 +112,7 @@ func TestCachedTableMetadataLoaderReadsMetadataLocation(t *testing.T) {
 		Catalog:      client,
 		Metadata:     NativeFacade{},
 		ObjectReader: reader,
-		Cache:        NewCache(time.Minute),
+		Cache:        NewCache(time.Minute, 1<<20),
 		ExternalRef:  "main",
 	}
 	loaded, err := loader.Load(ctx, cacheLoadTableRequest())
@@ -129,7 +129,7 @@ func TestCachedManifestReaderCachesByCredential(t *testing.T) {
 	reader := &fakeObjectReader{data: map[string][]byte{
 		"s3://warehouse/sales/orders/metadata/snap-22.avro": []byte("manifest-list"),
 	}}
-	cache := NewCache(time.Minute)
+	cache := NewCache(time.Minute, 1<<20)
 	base := CacheKey{AccountID: 1, CatalogID: 2, Namespace: "sales", Table: "orders", Ref: "main", ExternalPrincipal: "principal", MetadataLocationHash: "meta"}
 	manifestReader := CachedManifestReader{
 		Metadata:       fakeMetadataFacade{},
@@ -203,7 +203,7 @@ func TestCachedLoaderRedactsMissingMetadataLocationReader(t *testing.T) {
 			return &api.LoadTableResponse{MetadataLocation: "s3://warehouse/sales/orders/metadata/v2.metadata.json"}, nil
 		},
 	}
-	loader := CachedTableMetadataLoader{Catalog: client, Metadata: NativeFacade{}, Cache: NewCache(time.Minute)}
+	loader := CachedTableMetadataLoader{Catalog: client, Metadata: NativeFacade{}, Cache: NewCache(time.Minute, 1<<20)}
 	_, err := loader.Load(ctx, cacheLoadTableRequest())
 	if err == nil || strings.Contains(err.Error(), "warehouse") {
 		t.Fatalf("missing reader error should redact metadata location, got %v", err)
