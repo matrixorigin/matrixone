@@ -1612,11 +1612,6 @@ func (w *countingMysqlWriter) GetSequenceId() uint8           { return w.u8Props
 func (w *countingMysqlWriter) IsEstablished() bool            { return w.boolProps[ESTABLISHED] }
 func (w *countingMysqlWriter) IsTlsEstablished() bool         { return w.boolProps[TLS_ESTABLISHED] }
 
-type propertyMysqlResp struct{ *MysqlResp }
-
-func (r *propertyMysqlResp) GetU8(id PropertyID) uint8  { return r.MysqlRrWr().GetU8(id) }
-func (r *propertyMysqlResp) GetBool(id PropertyID) bool { return r.MysqlRrWr().GetBool(id) }
-
 func (w *countingMysqlWriter) WriteResponse(context.Context, *Response) error {
 	w.responses++
 	return nil
@@ -1684,7 +1679,7 @@ func TestExecuteAnalyzeDerivedQueryPreservesResponderProperties(t *testing.T) {
 		u8Props:         map[PropertyID]uint8{SEQUENCEID: 7},
 		boolProps:       map[PropertyID]bool{ESTABLISHED: true, TLS_ESTABLISHED: true},
 	}
-	live := &propertyMysqlResp{MysqlResp: NewMysqlResp(writer)}
+	live := NewMysqlResp(writer)
 	ses.ReplaceResponser(live)
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 	outerExecCtx := &ExecCtx{reqCtx: ctx, ses: ses}
@@ -1701,13 +1696,27 @@ func TestExecuteAnalyzeDerivedQueryPreservesResponderProperties(t *testing.T) {
 		require.Equal(t, "192.0.2.1:6001", derived.GetStr(PEER))
 		require.Equal(t, "auth", derived.GetStr(AuthString))
 		require.Equal(t, uint32(CLIENT_MULTI_RESULTS), derived.GetU32(CAPABILITY))
-		require.Equal(t, uint8(7), derived.GetU8(SEQUENCEID))
-		require.True(t, derived.GetBool(ESTABLISHED))
-		require.True(t, derived.GetBool(TLS_ESTABLISHED))
+		require.Equal(t, live.GetU8(SEQUENCEID), derived.GetU8(SEQUENCEID))
+		require.Equal(t, live.GetBool(ESTABLISHED), derived.GetBool(ESTABLISHED))
+		require.Equal(t, live.GetBool(TLS_ESTABLISHED), derived.GetBool(TLS_ESTABLISHED))
 		proto := derived.MysqlRrWr()
 		require.Equal(t, uint32(24659), proto.GetU32(CONNID))
 		require.Equal(t, "192.0.2.1:6001", proto.GetStr(PEER))
 		require.Equal(t, uint32(CLIENT_MULTI_RESULTS), proto.GetU32(CAPABILITY))
+		protocolState := proto.(interface {
+			ConnectionID() uint32
+			Peer() string
+			GetCapability() uint32
+			GetSequenceId() uint8
+			IsEstablished() bool
+			IsTlsEstablished() bool
+		})
+		require.Equal(t, uint32(24659), protocolState.ConnectionID())
+		require.Equal(t, "192.0.2.1:6001", protocolState.Peer())
+		require.Equal(t, uint32(CLIENT_MULTI_RESULTS), protocolState.GetCapability())
+		require.Equal(t, uint8(7), protocolState.GetSequenceId())
+		require.True(t, protocolState.IsEstablished())
+		require.True(t, protocolState.IsTlsEstablished())
 		derived.SetStr(DBNAME, "derived")
 		derived.SetU32(CONNID, 1)
 		derived.SetU8(SEQUENCEID, 1)

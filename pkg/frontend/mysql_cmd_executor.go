@@ -1236,7 +1236,7 @@ func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string)
 // the live connection properties to code executing the derived statement.
 type analyzeDerivedProtocol struct {
 	*internalProtocol
-	live Property
+	live Responser
 }
 
 var _ MysqlRrWr = (*analyzeDerivedProtocol)(nil)
@@ -1245,12 +1245,42 @@ func (p *analyzeDerivedProtocol) GetStr(id PropertyID) string { return p.live.Ge
 func (p *analyzeDerivedProtocol) GetU32(id PropertyID) uint32 { return p.live.GetU32(id) }
 func (p *analyzeDerivedProtocol) GetU8(id PropertyID) uint8   { return p.live.GetU8(id) }
 func (p *analyzeDerivedProtocol) GetBool(id PropertyID) bool  { return p.live.GetBool(id) }
-func (p *analyzeDerivedProtocol) ConnectionID() uint32        { return p.live.GetU32(CONNID) }
-func (p *analyzeDerivedProtocol) Peer() string                { return p.live.GetStr(PEER) }
-func (p *analyzeDerivedProtocol) GetCapability() uint32       { return p.live.GetU32(CAPABILITY) }
-func (p *analyzeDerivedProtocol) GetSequenceId() uint8        { return p.live.GetU8(SEQUENCEID) }
-func (p *analyzeDerivedProtocol) IsEstablished() bool         { return p.live.GetBool(ESTABLISHED) }
-func (p *analyzeDerivedProtocol) IsTlsEstablished() bool      { return p.live.GetBool(TLS_ESTABLISHED) }
+func (p *analyzeDerivedProtocol) ConnectionID() uint32 {
+	if live, ok := p.live.MysqlRrWr().(interface{ ConnectionID() uint32 }); ok {
+		return live.ConnectionID()
+	}
+	return p.live.GetU32(CONNID)
+}
+func (p *analyzeDerivedProtocol) Peer() string {
+	if live, ok := p.live.MysqlRrWr().(interface{ Peer() string }); ok {
+		return live.Peer()
+	}
+	return p.live.GetStr(PEER)
+}
+func (p *analyzeDerivedProtocol) GetCapability() uint32 {
+	if live, ok := p.live.MysqlRrWr().(interface{ GetCapability() uint32 }); ok {
+		return live.GetCapability()
+	}
+	return p.live.GetU32(CAPABILITY)
+}
+func (p *analyzeDerivedProtocol) GetSequenceId() uint8 {
+	if live, ok := p.live.MysqlRrWr().(interface{ GetSequenceId() uint8 }); ok {
+		return live.GetSequenceId()
+	}
+	return p.live.GetU8(SEQUENCEID)
+}
+func (p *analyzeDerivedProtocol) IsEstablished() bool {
+	if live, ok := p.live.MysqlRrWr().(interface{ IsEstablished() bool }); ok {
+		return live.IsEstablished()
+	}
+	return p.live.GetBool(ESTABLISHED)
+}
+func (p *analyzeDerivedProtocol) IsTlsEstablished() bool {
+	if live, ok := p.live.MysqlRrWr().(interface{ IsTlsEstablished() bool }); ok {
+		return live.IsTlsEstablished()
+	}
+	return p.live.GetBool(TLS_ESTABLISHED)
+}
 
 type analyzeDerivedResponder struct {
 	*MysqlResp
