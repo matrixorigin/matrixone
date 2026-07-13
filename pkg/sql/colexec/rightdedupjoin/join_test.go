@@ -17,17 +17,21 @@ package rightdedupjoin
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -48,6 +52,218 @@ type joinTestCase struct {
 	proc   *process.Process
 	cancel context.CancelFunc
 	barg   *hashbuild.HashBuild
+}
+
+func newRightDedupTestProcess(t *testing.T, pessimistic bool) (*process.Process, *gomock.Controller) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	meta := txn.TxnMeta{}
+	if pessimistic {
+		meta.Mode = txn.TxnMode_Pessimistic
+	}
+	txnOp.EXPECT().Txn().Return(meta).AnyTimes()
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+	proc.Base.TxnOperator = txnOp
+	return proc, ctrl
+}
+
+func runRightDedupDuplicateCase(t *testing.T, buildVals, probeVals []int32, pessimistic bool) {
+	proc, ctrl := newRightDedupTestProcess(t, pessimistic)
+	defer ctrl.Finish()
+	typ := types.T_int32.ToType()
+	tag++
+	curTag := tag
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+
+	buildBat := batch.NewWithSize(1)
+	buildBat.Vecs[0] = testutil.MakeInt32Vector(buildVals, nil, proc.Mp())
+	buildBat.SetRowCount(len(buildVals))
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:   true,
+		Conditions:    conditions[1],
+		JoinMapTag:    curTag,
+		JoinMapRefCnt: 1,
+	}
+	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat}))
+
+	probeBat := batch.NewWithSize(1)
+	probeBat.Vecs[0] = testutil.MakeInt32Vector(probeVals, nil, proc.Mp())
+	probeBat.SetRowCount(len(probeVals))
+	arg := &RightDedupJoin{
+		LeftTypes:         []types.Type{typ},
+		RightTypes:        []types.Type{typ},
+		Conditions:        conditions,
+		Result:            []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		OnDuplicateAction: plan.Node_FAIL,
+		DedupColName:      "pk",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		JoinMapTag:        curTag,
+	}
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat}))
+
+	require.NoError(t, buildArg.Prepare(proc))
+	require.NoError(t, arg.Prepare(proc))
+	_, err := vm.Exec(buildArg, proc)
+	require.NoError(t, err)
+	_, err = vm.Exec(arg, proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Duplicate entry")
+
+	arg.Free(proc, false, nil)
+	buildArg.Free(proc, false, nil)
+	proc.Free()
+}
+
+func TestRightDedupDuplicateTracking(t *testing.T) {
+	for _, pessimistic := range []bool{false, true} {
+		t.Run(fmt.Sprintf("one_group_pessimistic_%t", pessimistic), func(t *testing.T) {
+			runRightDedupDuplicateCase(t, []int32{1}, []int32{1, 1}, pessimistic)
+		})
+		t.Run(fmt.Sprintf("bitmap_boundary_pessimistic_%t", pessimistic), func(t *testing.T) {
+			buildVals := make([]int32, 64)
+			for i := range buildVals {
+				buildVals[i] = int32(i + 1)
+			}
+			runRightDedupDuplicateCase(t, buildVals, []int32{64, 64}, pessimistic)
+		})
+		t.Run(fmt.Sprintf("watermark_pessimistic_%t", pessimistic), func(t *testing.T) {
+			buildVals := make([]int32, 100)
+			for i := range buildVals {
+				buildVals[i] = int32(i + 1)
+			}
+			runRightDedupDuplicateCase(t, buildVals, []int32{101, 5, 101}, pessimistic)
+		})
+	}
+}
+
+func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBatches bool) {
+	proc, ctrl := newRightDedupTestProcess(t, pessimistic)
+	defer ctrl.Finish()
+	typ := types.T_int32.ToType()
+	tag++
+	curTag := tag
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+	arg := &RightDedupJoin{
+		LeftTypes:         []types.Type{typ},
+		RightTypes:        []types.Type{typ},
+		Conditions:        conditions,
+		Result:            []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}},
+		IsShuffle:         true,
+		ShuffleIdx:        0,
+		OnDuplicateAction: plan.Node_FAIL,
+		DedupColName:      "pk",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		JoinMapTag:        curTag,
+		SpillThreshold:    1,
+	}
+
+	probeValues := [][]int32{{1}, {2}}
+	if duplicateAcrossBatches {
+		probeValues = [][]int32{{1}, {1}}
+	}
+	probeBatches := make([]*batch.Batch, 0, len(probeValues))
+	for _, values := range probeValues {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+		bat.SetRowCount(len(values))
+		probeBatches = append(probeBatches, bat)
+	}
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs(probeBatches))
+
+	jm := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
+	jm.Spilled = true
+	jm.SpillBuildFds = make([]*os.File, spillutil.SpillNumBuckets)
+	jm.IncRef(1)
+	message.SendMessage(message.JoinMapMsg{
+		JoinMapPtr: jm,
+		IsShuffle:  true,
+		ShuffleIdx: 0,
+		Tag:        curTag,
+		Spilled:    true,
+	}, proc.GetMessageBoard())
+
+	require.NoError(t, arg.Prepare(proc))
+	res, err := vm.Exec(arg, proc)
+	if duplicateAcrossBatches {
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Duplicate entry")
+	} else {
+		require.NoError(t, err)
+		require.NotNil(t, res.Batch)
+		require.True(t, res.Batch.Vecs[1].IsConstNull())
+		got := vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0])
+		require.Equal(t, []int32{1}, got)
+		res, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.NotNil(t, res.Batch)
+		require.Equal(t, []int32{2}, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0]))
+		require.True(t, res.Batch.Vecs[1].IsConstNull())
+		res, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecStop, res.Status)
+	}
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestRightDedupSpilledEmptyBuild(t *testing.T) {
+	for _, pessimistic := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unique_pessimistic_%t", pessimistic), func(t *testing.T) {
+			runRightDedupSpilledEmptyBuild(t, pessimistic, false)
+		})
+		t.Run(fmt.Sprintf("duplicate_pessimistic_%t", pessimistic), func(t *testing.T) {
+			runRightDedupSpilledEmptyBuild(t, pessimistic, true)
+		})
+	}
+}
+
+func TestRightDedupResetAndPrepareRetry(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := types.T_int32.ToType()
+	valid := newExpr(0, typ)
+	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
+	arg := &RightDedupJoin{
+		Conditions:        [][]*plan.Expr{{valid}, {valid}},
+		UpdateColExprList: []*plan.Expr{valid, invalid},
+	}
+
+	require.Error(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.vecs)
+	require.Nil(t, arg.ctr.evecs)
+	require.Nil(t, arg.ctr.exprExecs)
+	arg.UpdateColExprList[1] = valid
+	require.NoError(t, arg.Prepare(proc))
+
+	arg.ctr.groupCount = 10
+	arg.ctr.buildGroupCount = 10
+	arg.Reset(proc, false, nil)
+	require.Zero(t, arg.ctr.groupCount)
+	require.Zero(t, arg.ctr.buildGroupCount)
+	arg.Free(proc, false, nil)
+	proc.Free()
+}
+
+func TestRightDedupEmptyMapUsesEvaluatedKeyType(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	varcharTyp := types.T_varchar.ToType()
+	arg := &RightDedupJoin{
+		LeftTypes:  []types.Type{types.T_int32.ToType()},
+		Conditions: [][]*plan.Expr{{newExpr(0, varcharTyp)}, {newExpr(0, varcharTyp)}},
+	}
+	jm, err := arg.newEmptyJoinMap(proc)
+	require.NoError(t, err)
+	require.NoError(t, jm.PreAlloc(2))
+	keys := testutil.MakeVarcharVector([]string{"12345678a", "12345678b"}, nil, proc.Mp())
+	vals, _, err := jm.NewIterator().Insert(0, 2, []*vector.Vector{keys})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 2}, vals[:2])
+	jm.Free()
+	keys.Free(proc.Mp())
+	proc.Free()
 }
 
 var (

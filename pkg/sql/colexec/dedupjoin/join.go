@@ -92,24 +92,35 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 	} else {
 		dedupJoin.OpAnalyzer.Reset()
 	}
-	if len(dedupJoin.ctr.vecs) == 0 {
-		dedupJoin.ctr.vecs = make([]*vector.Vector, len(dedupJoin.Conditions[0]))
-		dedupJoin.ctr.evecs = make([]evalVector, len(dedupJoin.Conditions[0]))
-		for i := range dedupJoin.ctr.evecs {
-			dedupJoin.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, dedupJoin.Conditions[0][i])
-			if err != nil {
-				return err
-			}
+	dedupJoin.ctr.spillThreshold = colexec.ResolveSpillThreshold(dedupJoin.SpillThreshold)
+	newEvalVectors := len(dedupJoin.ctr.vecs) == 0
+	newUpdateExecs := len(dedupJoin.ctr.exprExecs) == 0 && len(dedupJoin.UpdateColExprList) > 0
+	var evalExecs, updateExecs []colexec.ExpressionExecutor
+	if newEvalVectors {
+		evalExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, dedupJoin.Conditions[0])
+		if err != nil {
+			return err
 		}
 	}
-	if len(dedupJoin.ctr.exprExecs) == 0 && len(dedupJoin.UpdateColExprList) > 0 {
-		dedupJoin.ctr.exprExecs = make([]colexec.ExpressionExecutor, len(dedupJoin.UpdateColExprList))
-		for i, expr := range dedupJoin.UpdateColExprList {
-			dedupJoin.ctr.exprExecs[i], err = colexec.NewExpressionExecutor(proc, expr)
-			if err != nil {
-				return err
+	if newUpdateExecs {
+		updateExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, dedupJoin.UpdateColExprList)
+		if err != nil {
+			for _, exec := range evalExecs {
+				exec.Free()
 			}
+			return err
 		}
+	}
+	if newEvalVectors {
+		evecs := make([]evalVector, len(evalExecs))
+		for i := range evalExecs {
+			evecs[i].executor = evalExecs[i]
+		}
+		dedupJoin.ctr.vecs = make([]*vector.Vector, len(evalExecs))
+		dedupJoin.ctr.evecs = evecs
+	}
+	if newUpdateExecs {
+		dedupJoin.ctr.exprExecs = updateExecs
 	}
 	return err
 }
@@ -142,13 +153,12 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if bat == nil {
 					ctr.spillEngine.FinishBucket()
 					ctr.state = Finalize
-					dedupJoin.ctr.buf = nil
+					ctr.cleanBuf(proc)
 					continue
 				}
 			} else if ctr.spillEngine != nil {
 				ctr.state = Finalize
-				dedupJoin.ctr.cleanBuf(proc)
-				dedupJoin.ctr.buf = nil
+				ctr.cleanBuf(proc)
 				continue
 			} else {
 				result, err = vm.ChildrenCall(dedupJoin.GetChildren(0), proc, analyzer)
@@ -158,7 +168,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				bat = result.Batch
 				if bat == nil {
 					ctr.state = Finalize
-					dedupJoin.ctr.buf = nil
+					ctr.cleanBuf(proc)
 					continue
 				}
 				if bat.IsEmpty() {
@@ -182,6 +192,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if dedupJoin.ctr.lastPos >= len(dedupJoin.ctr.buf) {
 				if ctr.spillEngine != nil {
+					ctr.cleanBuf(proc)
 					// Clear previous bucket state before advancing.
 					ctr.cleanBucketState(proc)
 					ok, bktErr := ctr.spillEngine.AdvanceToNextBucket(proc, analyzer,
@@ -245,8 +256,8 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 		if ctr.mp.IsSpilled() {
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:             dedupJoin.Conditions[1],
-				SpillThreshold:            dedupJoin.SpillThreshold,
-				NeedsProbeForEmptyBuild:   true,
+				SpillThreshold:            ctr.spillThreshold,
+				NeedsProbeForEmptyBuild:   false,
 				NeedsBuildForEmptyProbe:   true,
 				IsDedup:                   true,
 				OnDuplicateAction:         dedupJoin.OnDuplicateAction,
@@ -272,6 +283,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				},
 			); err != nil {
 				ctr.mp.Free()
+				ctr.mp = nil
 				engine.Cleanup(proc)
 				return err
 			}

@@ -174,3 +174,4 @@ set @@join_spill_mem = 1000;
 insert into t_dup_large select result, 0 from generate_series(1, 500000) g
 on duplicate key update val = val + 1;
 select count(*) from t_dup_large;
+select sum(val) from t_dup_large;

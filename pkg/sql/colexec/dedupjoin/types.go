@@ -110,7 +110,8 @@ type container struct {
 	buf          []*batch.Batch
 
 	// Spill support for large build sides.
-	spillEngine *spillutil.SpillEngine
+	spillEngine    *spillutil.SpillEngine
+	spillThreshold int64
 }
 
 type DedupJoin struct {
@@ -194,8 +195,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.maxAllocSize = 0
 
 	ctr.cleanBuf(proc)
-	ctr.cleanCaptured(proc)
-	ctr.cleanHashMap()
+	ctr.cleanBucketState(proc)
 	ctr.resetExprExecutor()
 	ctr.resetEvalVectors()
 	if ctr.spillEngine != nil {
@@ -210,9 +210,8 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &dedupJoin.ctr
 	ctr.cleanBuf(proc)
-	ctr.cleanCaptured(proc)
+	ctr.cleanBucketState(proc)
 	ctr.cleanBatch(proc)
-	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()
 	ctr.cleanEvalVectors()
 	if ctr.spillEngine != nil {

@@ -61,7 +61,9 @@ type container struct {
 	groupCount      uint64
 	buildGroupCount uint64
 
-	spillEngine *spillutil.SpillEngine
+	spillEngine    *spillutil.SpillEngine
+	spillThreshold int64
+	resultBatch    *batch.Batch
 }
 
 type RightDedupJoin struct {
@@ -125,9 +127,12 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 	}
 	ctr.maxAllocSize = 0
 	ctr.itr = nil
+	ctr.groupCount = 0
+	ctr.buildGroupCount = 0
 
 	ctr.cleanBitmap(proc)
 	ctr.cleanHashMap()
+	ctr.resetResultBatch()
 	ctr.resetExprExecutor()
 	ctr.resetEvalVectors()
 	if ctr.spillEngine != nil {
@@ -141,6 +146,7 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 	ctr := &rightDedupJoin.ctr
 	ctr.cleanBitmap(proc)
 	ctr.cleanHashMap()
+	ctr.cleanResultBatch(proc)
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
@@ -176,6 +182,24 @@ func (ctr *container) cleanHashMap() {
 
 func (ctr *container) cleanBitmap(proc *process.Process) {
 	ctr.matched = nil
+}
+
+func (ctr *container) resetResultBatch() {
+	if ctr.resultBatch == nil {
+		return
+	}
+	ctr.resultBatch.CleanOnlyData()
+	for _, vec := range ctr.resultBatch.Vecs {
+		vec.SetClass(vector.FLAT)
+		vec.SetLength(0)
+	}
+}
+
+func (ctr *container) cleanResultBatch(proc *process.Process) {
+	if ctr.resultBatch != nil {
+		ctr.resultBatch.Clean(proc.Mp())
+		ctr.resultBatch = nil
+	}
 }
 
 func (ctr *container) cleanEvalVectors() {

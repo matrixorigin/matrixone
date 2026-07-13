@@ -18,9 +18,7 @@ import (
 	"bytes"
 	"os"
 
-	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -53,7 +51,6 @@ type container struct {
 	spillHashValues      []uint64
 	spillBucketRowIds    [][]int32
 	spillWriteBuf        bytes.Buffer
-	spillBuffers         []*batch.Batch // pool of reusable bucket buffers
 	spillKeyVecs         []*vector.Vector
 	spillNonEmptyBuckets []int
 
@@ -142,7 +139,6 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.hashmapBuilder.Free(proc)
-	hashBuild.ctr.cleanSpillBufferPool(proc)
 	hashBuild.ctr.freeSpillExprExecs()
 	hashBuild.ctr.spillKeyVecs = nil
 	hashBuild.ctr.spillHashValues = nil
@@ -165,16 +161,5 @@ func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.B
 }
 
 func (ctr *container) setSpillThreshold(threshold int64) {
-	if threshold == 0 {
-		// 0 means auto config
-		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
-		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 8
-		// min 128MB
-		if mem < common.MiB*128 {
-			mem = common.MiB * 128
-		}
-		ctr.spillThreshold = mem
-	} else {
-		ctr.spillThreshold = threshold
-	}
+	ctr.spillThreshold = colexec.ResolveSpillThreshold(threshold)
 }

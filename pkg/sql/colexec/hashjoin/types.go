@@ -15,15 +15,12 @@
 package hashjoin
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
@@ -334,16 +331,5 @@ func (hashJoin *HashJoin) EmitUnmatchedBuild() bool {
 }
 
 func (ctr *container) setSpillThreshold(threshold int64) {
-	if threshold == 0 {
-		// 0 means auto config
-		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
-		mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 8
-		// min 128MB
-		if mem < common.MiB*128 {
-			mem = common.MiB * 128
-		}
-		ctr.spillThreshold = mem
-	} else {
-		ctr.spillThreshold = threshold
-	}
+	ctr.spillThreshold = colexec.ResolveSpillThreshold(threshold)
 }

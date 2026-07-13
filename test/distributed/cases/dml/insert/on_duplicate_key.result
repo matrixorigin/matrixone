@@ -247,3 +247,6 @@ on duplicate key update val = val + 1;
 select count(*) from t_dup_large;
 ➤ count(*)[-5,64,0]  𝄀
 500000
+select sum(val) from t_dup_large;
+➤ sum(val)[-5,64,0]  𝄀
+20012000

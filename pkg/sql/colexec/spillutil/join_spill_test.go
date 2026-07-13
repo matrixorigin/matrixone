@@ -168,6 +168,35 @@ func TestShouldSpill(t *testing.T) {
 	require.True(t, ShouldSpill(200001, 1000, 200000))
 }
 
+func TestScatterProbeTableRejectsRecursiveMarker(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	marker := batch.NewWithSize(0)
+	marker.SetRowCount(1)
+	marker.SetLast()
+	engine := NewSpillEngine(SpillEngineConfig{})
+	called := false
+	err := engine.ScatterProbeTable(
+		proc,
+		func() (*batch.Batch, error) {
+			if called {
+				return nil, nil
+			}
+			called = true
+			return marker, nil
+		},
+		nil,
+		func(*batch.Batch) ([]*vector.Vector, error) {
+			t.Fatal("recursive marker must not be evaluated as data")
+			return nil, nil
+		},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "recursive input")
+	engine.Cleanup(proc)
+}
+
 func TestReusableBufferPool(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

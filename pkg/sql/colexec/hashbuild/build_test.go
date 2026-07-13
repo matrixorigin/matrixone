@@ -528,22 +528,27 @@ func TestHashBuildIsShuffle(t *testing.T) {
 	tc.arg.ShuffleIdx = 0
 	tc.arg.SpillThreshold = 1
 	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 2}
-	err := tc.marg.Prepare(tc.proc)
-	require.NoError(t, err)
-	err = tc.arg.Prepare(tc.proc)
-	require.NoError(t, err)
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-	ok, err := vm.Exec(tc.arg, tc.proc)
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecStop, ok.Status)
-	jm, err := message.ReceiveJoinMap(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
-	require.NoError(t, err)
-	require.NotNil(t, jm)
-	require.True(t, jm.IsSpilled(), "shuffle hash build must publish a spilled join map")
-	jm.Free()
+	for cycle := 0; cycle < 2; cycle++ {
+		if cycle > 0 {
+			tc.arg.Reset(tc.proc, false, nil)
+			tc.marg.Reset(tc.proc, false, nil)
+			tc.proc.GetMessageBoard().Reset()
+		}
+		require.NoError(t, tc.marg.Prepare(tc.proc))
+		require.NoError(t, tc.arg.Prepare(tc.proc))
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+		ok, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecStop, ok.Status)
+		jm, err := message.ReceiveJoinMap(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
+		require.NoError(t, err)
+		require.NotNil(t, jm)
+		require.True(t, jm.IsSpilled(), "cycle %d must publish a spilled join map", cycle)
+		jm.Free()
+	}
 	tc.arg.Free(tc.proc, false, nil)
 	tc.proc.Free()
 }

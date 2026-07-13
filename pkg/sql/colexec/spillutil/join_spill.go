@@ -548,6 +548,9 @@ func (e *SpillEngine) ScatterProbeTable(
 		if bat == nil {
 			break
 		}
+		if bat.Last() {
+			return moerr.NewNotSupported(proc.Ctx, "join spill does not support recursive input")
+		}
 		if bat.IsEmpty() {
 			continue
 		}
@@ -700,6 +703,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	}
 	jm.SetRowCount(int64(builder.InputBatchRowCount))
 	jm.IncRef(1)
+	builder.FreeTemporaryVectors(proc)
 	builder.FreeExecutors()
 
 	// Pop the head bucket and open probe reader.
@@ -733,15 +737,12 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 
 	// Cache key executors.
 	if len(e.keyExecs) != len(e.cfg.BuildKeyExprs) {
-		e.freeKeyExecs()
-		e.keyExecs = make([]colexec.ExpressionExecutor, len(e.cfg.BuildKeyExprs))
-		for i, expr := range e.cfg.BuildKeyExprs {
-			var err error
-			e.keyExecs[i], err = colexec.NewExpressionExecutor(proc, expr)
-			if err != nil {
-				return nil, err
-			}
+		execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, e.cfg.BuildKeyExprs)
+		if err != nil {
+			return nil, err
 		}
+		e.freeKeyExecs()
+		e.keyExecs = execs
 	}
 
 	// evalAndScatter builds key vectors using the given executors and scatters.
@@ -760,11 +761,24 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		return e.scatterBatch(proc, bat, keyVecs, writers, buffers, seed, analyzer)
 	}
 
-	// Scatter builder's accumulated batches + remaining build file.
-	for _, b := range builder.Batches.Buf {
+	// Detach accumulated batches so each can be released immediately after it
+	// has been copied into the sub-bucket buffers.
+	buildBatches := builder.Batches.Buf
+	builder.Batches.Buf = nil
+	builder.Batches.MemSize = 0
+	defer func() {
+		for _, b := range buildBatches {
+			if b != nil {
+				b.Clean(proc.Mp())
+			}
+		}
+	}()
+	for i, b := range buildBatches {
 		if err := evalAndScatter(b, buildWriters, buildBuffers, e.keyExecs); err != nil {
 			return nil, err
 		}
+		b.Clean(proc.Mp())
+		buildBatches[i] = nil
 	}
 	for {
 		bat, err := reader.ReadBatch(proc, e.buildReadBatch)

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -50,6 +51,67 @@ type joinTestCase struct {
 	proc   *process.Process
 	cancel context.CancelFunc
 	barg   *hashbuild.HashBuild
+}
+
+func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseline := proc.Mp().CurrNB()
+
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
+	bat.SetRowCount(1)
+
+	arg := &DedupJoin{}
+	arg.ctr.state = Finalize
+	arg.ctr.buf = []*batch.Batch{bat}
+	arg.ctr.lastPos = 1
+	arg.ctr.spillEngine = spillutil.NewSpillEngine(spillutil.SpillEngineConfig{})
+
+	res, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, res.Status)
+	arg.Free(proc, false, nil)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	proc.Free()
+}
+
+func TestDedupResetClearsBucketState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &DedupJoin{}
+	arg.ctr.batches = []*batch.Batch{batch.EmptyBatch}
+	arg.ctr.batchRowCount = 1
+	arg.ctr.matched = &bitmap.Bitmap{}
+	arg.ctr.matched.InitWithSize(1)
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.batches)
+	require.Zero(t, arg.ctr.batchRowCount)
+	require.Nil(t, arg.ctr.matched)
+	proc.Free()
+}
+
+func TestDedupPrepareFailureCanRetry(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := types.T_int32.ToType()
+	valid := newExpr(0, typ)
+	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
+	arg := &DedupJoin{
+		Conditions:        [][]*plan.Expr{{valid}, {valid}},
+		UpdateColExprList: []*plan.Expr{valid, invalid},
+	}
+
+	require.Error(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.vecs)
+	require.Nil(t, arg.ctr.evecs)
+	require.Nil(t, arg.ctr.exprExecs)
+
+	arg.UpdateColExprList[1] = valid
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.evecs, 1)
+	require.Len(t, arg.ctr.exprExecs, 2)
+	arg.Free(proc, false, nil)
+	proc.Free()
 }
 
 var (

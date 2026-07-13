@@ -198,20 +198,12 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 // Returns the executors slice ready for use. Called once when entering spill mode.
 func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*plan.Expr) ([]colexec.ExpressionExecutor, error) {
 	if len(ctr.spillExprExecs) != len(conditions) {
-		// Clean up old executors if count changed
-		ctr.freeSpillExprExecs()
-		ctr.spillExprExecs = make([]colexec.ExpressionExecutor, len(conditions))
-		for i, expr := range conditions {
-			var err error
-			if ctr.spillExprExecs[i], err = colexec.NewExpressionExecutor(proc, expr); err != nil {
-				// Clean up what we already created
-				for j := 0; j < i; j++ {
-					ctr.spillExprExecs[j].Free()
-				}
-				ctr.spillExprExecs = nil
-				return nil, err
-			}
+		execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, conditions)
+		if err != nil {
+			return nil, err
 		}
+		ctr.freeSpillExprExecs()
+		ctr.spillExprExecs = execs
 	}
 	return ctr.spillExprExecs, nil
 }
@@ -224,31 +216,6 @@ func (ctr *container) freeSpillExprExecs() {
 		}
 	}
 	ctr.spillExprExecs = nil
-}
-
-// acquireSpillBuffers returns a slice of spillNumBuckets buffers, reusing from pool if available.
-// All returned buffers have CleanOnlyData() called to reset them for fresh use.
-func (ctr *container) acquireSpillBuffers(proc *process.Process) []*batch.Batch {
-	if len(ctr.spillBuffers) < spillNumBuckets {
-		ctr.spillBuffers = append(ctr.spillBuffers, make([]*batch.Batch, spillNumBuckets-len(ctr.spillBuffers))...)
-	}
-	bufs := ctr.spillBuffers[:spillNumBuckets]
-	for i := range bufs {
-		if bufs[i] != nil {
-			bufs[i].CleanOnlyData()
-		}
-	}
-	return bufs
-}
-
-// cleanSpillBufferPool cleans all pooled buffers.
-func (ctr *container) cleanSpillBufferPool(proc *process.Process) {
-	for _, buf := range ctr.spillBuffers {
-		if buf != nil {
-			buf.Clean(proc.Mp())
-		}
-	}
-	ctr.spillBuffers = nil
 }
 
 func (ctr *container) memUsed() int64 {

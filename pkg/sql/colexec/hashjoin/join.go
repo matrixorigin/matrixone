@@ -80,19 +80,25 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(ctr.eqCondVecs) == 0 {
-		ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.EqConds[0]))
-		ctr.eqCondExecs = make([]colexec.ExpressionExecutor, len(hashJoin.EqConds[0]))
-		ctr.eqCondExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, hashJoin.EqConds[0])
+		eqCondExecs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, hashJoin.EqConds[0])
 		if err != nil {
 			return err
 		}
 
+		var nonEqCondExec colexec.ExpressionExecutor
 		if hashJoin.NonEqCond != nil {
-			ctr.nonEqCondExec, err = colexec.NewExpressionExecutor(proc, hashJoin.NonEqCond)
+			nonEqCondExec, err = colexec.NewExpressionExecutor(proc, hashJoin.NonEqCond)
 			if err != nil {
+				for _, exec := range eqCondExecs {
+					exec.Free()
+				}
 				return err
 			}
 		}
+
+		ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.EqConds[0]))
+		ctr.eqCondExecs = eqCondExecs
+		ctr.nonEqCondExec = nonEqCondExec
 	}
 
 	return err
@@ -301,6 +307,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				},
 			); err != nil {
 				ctr.mp.Free()
+				ctr.mp = nil
 				engine.Cleanup(proc)
 				return err
 			}
