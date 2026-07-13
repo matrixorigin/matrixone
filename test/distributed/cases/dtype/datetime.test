@@ -23,6 +23,7 @@ SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 DAY) '1 day later';
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 WEEK) '1 week later';
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 13 MONTH) '1 month earlier';
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 YEAR) '1 year earlier';
+SELECT DATE_ADD('2025-12-01', INTERVAL ((5*11)%180) DAY);
 select cast(cast('2000-12-31' as date) as datetime(0));
 select cast(cast('2000-12-31' as datetime(0)) as date);
 

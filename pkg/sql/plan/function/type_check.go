@@ -223,6 +223,20 @@ func fixedDirectlyTypeMatch(overload []overload, inputs []types.Type) checkResul
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
+func unaryTildeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		switch inputs[0].Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			for i, overload := range overloads {
+				if len(overload.args) == 1 && overload.args[0] == types.T_int64 {
+					return newCheckResultWithCast(i, []types.Type{types.T_int64.ToType()})
+				}
+			}
+		}
+	}
+	return fixedDirectlyTypeMatch(overloads, inputs)
+}
+
 // return whether `from` can match `to` implicitly, and match cost.
 func tryToMatch(from []types.Type, to []types.T) (sta matchCheckStatus, cost int) {
 	if len(from) != len(to) {
@@ -1074,9 +1088,9 @@ func initFixed1() {
 		{types.T_binary, types.T_char, types.T_char, types.T_char},
 		{types.T_binary, types.T_varchar, types.T_varchar, types.T_varchar},
 		{types.T_binary, types.T_uuid, types.T_uuid, types.T_uuid},
-		{types.T_binary, types.T_varbinary, types.T_binary, types.T_binary},
-		{types.T_binary, types.T_blob, types.T_binary, types.T_binary},
-		{types.T_binary, types.T_text, types.T_binary, types.T_binary},
+		{types.T_binary, types.T_varbinary, types.T_varbinary, types.T_varbinary},
+		{types.T_binary, types.T_blob, types.T_blob, types.T_blob},
+		{types.T_binary, types.T_text, types.T_blob, types.T_blob},
 		{types.T_varbinary, types.T_any, types.T_varbinary, types.T_varbinary},
 		{types.T_varbinary, types.T_bool, types.T_bool, types.T_bool},
 		{types.T_varbinary, types.T_int8, types.T_int8, types.T_int8},
@@ -1099,7 +1113,7 @@ func initFixed1() {
 		{types.T_varbinary, types.T_char, types.T_char, types.T_char},
 		{types.T_varbinary, types.T_varchar, types.T_varchar, types.T_varchar},
 		{types.T_varbinary, types.T_uuid, types.T_uuid, types.T_uuid},
-		{types.T_varbinary, types.T_binary, types.T_binary, types.T_binary},
+		{types.T_varbinary, types.T_binary, types.T_varbinary, types.T_varbinary},
 		{types.T_varbinary, types.T_blob, types.T_varbinary, types.T_varbinary},
 		{types.T_varbinary, types.T_text, types.T_varbinary, types.T_varbinary},
 		{types.T_blob, types.T_any, types.T_blob, types.T_blob},
@@ -1124,7 +1138,7 @@ func initFixed1() {
 		{types.T_blob, types.T_char, types.T_char, types.T_char},
 		{types.T_blob, types.T_varchar, types.T_varchar, types.T_varchar},
 		{types.T_blob, types.T_uuid, types.T_uuid, types.T_uuid},
-		{types.T_blob, types.T_binary, types.T_binary, types.T_binary},
+		{types.T_blob, types.T_binary, types.T_blob, types.T_blob},
 		{types.T_blob, types.T_varbinary, types.T_varbinary, types.T_varbinary},
 		{types.T_blob, types.T_text, types.T_blob, types.T_blob},
 		{types.T_text, types.T_any, types.T_text, types.T_text},
@@ -1149,7 +1163,7 @@ func initFixed1() {
 		{types.T_text, types.T_char, types.T_char, types.T_char},
 		{types.T_text, types.T_varchar, types.T_varchar, types.T_varchar},
 		{types.T_text, types.T_uuid, types.T_uuid, types.T_uuid},
-		{types.T_text, types.T_binary, types.T_binary, types.T_binary},
+		{types.T_text, types.T_binary, types.T_blob, types.T_blob},
 		{types.T_text, types.T_varbinary, types.T_varbinary, types.T_varbinary},
 		{types.T_text, types.T_blob, types.T_blob, types.T_blob},
 		{types.T_array_float32, types.T_varchar, types.T_array_float32, types.T_array_float32},
