@@ -432,8 +432,8 @@ func (client *txnClient) RestartTxn(
 	options ...TxnOption,
 ) (TxnOperator, error) {
 	op := txnOp.(*txnOperator)
-	if !op.canRestart() {
-		return nil, moerr.NewTxnClosedNoCtx(op.reset.txnID)
+	if err := op.claimRestart(); err != nil {
+		return nil, err
 	}
 	op.initForRestart(
 		client.newTxnMeta(),

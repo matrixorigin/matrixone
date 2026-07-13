@@ -374,19 +374,22 @@ func TestRestartTxnClaimsClosedOperatorOnce(t *testing.T) {
 	op.mu.closed = true
 
 	start := make(chan struct{})
-	results := make(chan bool, 2)
+	results := make(chan error, 2)
 	for i := 0; i < cap(results); i++ {
 		go func() {
 			<-start
-			results <- op.canRestart()
+			results <- op.claimRestart()
 		}()
 	}
 	close(start)
 
 	successes := 0
 	for i := 0; i < cap(results); i++ {
-		if <-results {
+		err := <-results
+		if err == nil {
 			successes++
+		} else {
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		}
 	}
 	require.Equal(t, 1, successes)

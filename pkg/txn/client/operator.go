@@ -2080,18 +2080,18 @@ func (tc *txnOperator) inRunSql() bool {
 	return tc.reset.runSqlCounter.more()
 }
 
-func (tc *txnOperator) canRestart() bool {
+func (tc *txnOperator) claimRestart() error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	pendingTerminalCleanup := tc.mu.terminalAction != txnTerminalActionNone && !tc.mu.terminalCleanupDone
 	if !tc.mu.closed || tc.mu.restarting || pendingTerminalCleanup {
-		return false
+		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 	}
 	if !tc.reset.runSQLTracker.sealForRestart() {
-		return false
+		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 	}
 	tc.mu.restarting = true
-	return true
+	return nil
 }
 
 // openRunSQLAfterRestart completes restart admission without racing a
