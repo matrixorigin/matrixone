@@ -2097,6 +2097,7 @@ func (builder *QueryBuilder) trySpatialIndexOnlyScan(idxDef *IndexDef, node *pla
 		BindingTags:   []int32{idxTag},
 		ScanSnapshot:  node.ScanSnapshot,
 	}, builder.ctxByNode[node.NodeId])
+	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
 
 	for key, expr := range spatialColMap {
 		idxColMap[key] = expr
@@ -2485,6 +2486,13 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	}
 	leftForcesJoin := builder.scanForcesJoinIndex(node.Children[0])
 	rightForcesJoin := builder.scanForcesJoinIndex(node.Children[1])
+	if leftForcesJoin && builder.qry.Nodes[node.Children[0]].NodeType != plan.Node_TABLE_SCAN {
+		leftAccess, err := builder.applyForcedJoinAccess(node.Children[0])
+		if err != nil {
+			return -1, err
+		}
+		node.Children[0] = leftAccess
+	}
 	if node.JoinType == plan.Node_INNER && rightForcesJoin {
 		rightAccess, err := builder.applyForcedJoinAccess(node.Children[1])
 		if err != nil {
@@ -2721,37 +2729,48 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 }
 
 func (builder *QueryBuilder) scanForcesJoinIndex(nodeID int32) bool {
-	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+	scan := builder.baseScanForIndexAccess(nodeID)
+	if scan == nil {
 		return false
 	}
-	node := builder.qry.Nodes[nodeID]
-	if node == nil || node.NodeType != plan.Node_TABLE_SCAN {
-		return false
-	}
-	hints := builder.indexHintsByScan[node.NodeId]
+	hints := builder.indexHintsByScan[scan.NodeId]
 	return hints != nil && hints.join.forceSpecified
 }
 
-func (builder *QueryBuilder) applyForcedJoinAccess(scanID int32) (int32, error) {
-	if scanID < 0 || int(scanID) >= len(builder.qry.Nodes) {
-		return scanID, nil
+func (builder *QueryBuilder) baseScanForIndexAccess(nodeID int32) *plan.Node {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return nil
 	}
-	scan := builder.qry.Nodes[scanID]
-	if scan == nil || scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil {
-		return scanID, nil
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return nil
+	}
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		return node
+	}
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INDEX && len(node.Children) > 0 {
+		return builder.baseScanForIndexAccess(node.Children[0])
+	}
+	return nil
+}
+
+func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error) {
+	scan := builder.baseScanForIndexAccess(accessID)
+	if scan == nil || scan.TableDef == nil {
+		return accessID, nil
 	}
 	for _, idxDef := range builder.filterRegularIndexesByJoinHints(scan, scan.TableDef.Indexes) {
 		if !usableRegularHintIndex(idxDef) {
 			continue
 		}
-		accessID, _, err := builder.buildHintedIndexBackfillJoin(idxDef, scan)
+		forcedID, _, err := builder.buildHintedIndexBackfillJoin(idxDef, scan)
 		if err != nil {
 			return -1, err
 		}
-		if accessID != -1 {
-			builder.protectedScans[scanID]++
-			return accessID, nil
+		if forcedID != -1 {
+			builder.protectedScans[scan.NodeId]++
+			return forcedID, nil
 		}
 	}
-	return scanID, nil
+	return accessID, nil
 }

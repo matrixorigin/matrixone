@@ -554,6 +554,49 @@ func TestForceIndexForJoinBuildsRightAccessWithoutReorder(t *testing.T) {
 	require.Equal(t, rightScanID, indexJoin.Children[0])
 }
 
+func TestForceIndexForJoinReplacesFilterIndexWrapper(t *testing.T) {
+	builder, joinID, _, _ := makeIndexHintJoinBuilder(t)
+	joinNode := builder.qry.Nodes[joinID]
+	rightScanID := joinNode.Children[1]
+	rightScan := builder.qry.Nodes[rightScanID]
+	rightScan.TableDef.Indexes = []*planpb.IndexDef{
+		{IndexName: "idx_filter", IndexTableName: "idx_join_a_table", Parts: []string{"a", catalog.CreateAlias("b")}, TableExist: true},
+		{IndexName: "idx_join", IndexTableName: "idx_join_b_table", Parts: []string{"b", catalog.CreateAlias("a")}, TableExist: true},
+	}
+	rightScan.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
+	rightScan.ObjRef = &planpb.ObjectRef{ObjName: "right_t"}
+	require.NoError(t, builder.recordIndexHints(rightScanID, rightScan.TableDef, []*tree.IndexHint{{
+		HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_join"},
+	}}))
+
+	filterIndexScanID := int32(len(builder.qry.Nodes))
+	builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+		NodeId:   filterIndexScanID,
+		NodeType: planpb.Node_TABLE_SCAN,
+		IndexScanInfo: planpb.IndexScanInfo{
+			IsIndexScan: true, IndexName: "idx_filter", BelongToTable: "right_t",
+		},
+	})
+	builder.ctxByNode = append(builder.ctxByNode, builder.ctxByNode[joinID])
+	filterWrapperID := int32(len(builder.qry.Nodes))
+	builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+		NodeId:   filterWrapperID,
+		NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INDEX,
+		Children: []int32{rightScanID, filterIndexScanID},
+	})
+	builder.ctxByNode = append(builder.ctxByNode, builder.ctxByNode[joinID])
+	joinNode.Children[1] = filterWrapperID
+
+	newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.NotEqual(t, filterWrapperID, joinNode.Children[1])
+	forcedWrapper := builder.qry.Nodes[joinNode.Children[1]]
+	require.Equal(t, planpb.Node_INDEX, forcedWrapper.JoinType)
+	forcedIndexScan := builder.qry.Nodes[forcedWrapper.Children[1]]
+	require.Equal(t, "idx_join", forcedIndexScan.IndexScanInfo.IndexName)
+}
+
 func TestForcePrimaryForJoinPreservesHashOnPKDirection(t *testing.T) {
 	builder, joinID, leftScanID, _ := makeIndexHintJoinBuilder(t)
 	joinNode := builder.qry.Nodes[joinID]
@@ -3890,6 +3933,48 @@ func TestCheckSpatialIndexFilterPredicate(t *testing.T) {
 	col := checkSpatialIndexFilter(filter)
 	require.NotNil(t, col)
 	require.Equal(t, int32(1), col.ColPos)
+}
+
+func TestSpatialIndexOnlyScanInheritsOrderHints(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	tag := builder.genNewBindTag()
+	idxDef := &planpb.IndexDef{
+		IndexName: "idx_g", IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),
+		IndexTableName: "idx_g_table", Parts: []string{"g"}, TableExist: true,
+	}
+	tableDef := &planpb.TableDef{
+		Name: "spatial_t",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "g", Typ: planpb.Type{Id: int32(types.T_geometry)}},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "g": 1},
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		Indexes:       []*planpb.IndexDef{idxDef},
+	}
+	filter := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "st_intersects"},
+		Args: []*planpb.Expr{makeSpatialColExpr(1), makeSpatialConstGeometryExpr()},
+	}}}
+	filter.GetF().Args[0].GetCol().RelPos = tag
+	scanID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{ObjName: "spatial_t"},
+		TableDef: tableDef, BindingTags: []int32{tag}, FilterList: []*planpb.Expr{filter},
+	}, ctx)
+	require.NoError(t, builder.recordIndexHints(scanID, tableDef, []*tree.IndexHint{{
+		HintType: tree.HintIgnore, HintScope: tree.HintForOrderBy, IndexNames: []string{"idx_g"},
+	}}))
+	registerMockIndexTable(t, builder, idxDef.IndexTableName)
+
+	idxScanID := builder.trySpatialIndexOnlyScan(
+		idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{tag, 0}: 1, {tag, 1}: 1},
+		map[[2]int32]*planpb.Expr{}, &Snapshot{},
+	)
+	require.NotEqual(t, int32(-1), idxScanID)
+	idxScan := builder.qry.Nodes[idxScanID]
+	require.Equal(t, "idx_g", idxScan.IndexScanInfo.IndexName)
+	require.False(t, builder.regularIndexScanAllowedByOrderHints(idxScan))
 }
 
 func TestCheckSpatialIndexFilterDistanceComparison(t *testing.T) {
