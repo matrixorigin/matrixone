@@ -975,12 +975,12 @@ type RangesShuffleParam struct {
 	CNCNT     int32 // number of all cns
 	CNIDX     int32 // cn index , starts from 0
 	IsLocalCN bool
-	// ShuffleAppendableByObjectID assigns appendable objects to one CN by
-	// ObjectID instead of applying the ordinary local-CN ownership policy.
-	ShuffleAppendableByObjectID bool
-	ShuffleRangeUint64          []uint64
-	ShuffleRangeInt64           []int64
-	Init                        bool
+	// ShuffleByObjectID enables physical ObjectID ownership for IVF scans,
+	// assigning both persisted and appendable objects to the same CN.
+	ShuffleByObjectID  bool
+	ShuffleRangeUint64 []uint64
+	ShuffleRangeInt64  []int64
+	Init               bool
 }
 
 type RangesParam struct {

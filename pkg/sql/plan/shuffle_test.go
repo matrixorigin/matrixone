@@ -22,6 +22,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -263,16 +264,126 @@ func TestShouldSkipAppendableObjByShuffleCanAssignUniqueObjectOwner(t *testing.T
 
 	for cnidx := int32(0); cnidx < 3; cnidx++ {
 		rsp := &engine.RangesShuffleParam{
-			Node:                        node,
-			CNCNT:                       3,
-			CNIDX:                       cnidx,
-			ShuffleAppendableByObjectID: true,
+			Node:              node,
+			CNCNT:             3,
+			CNIDX:             cnidx,
+			ShuffleByObjectID: true,
 		}
 		if !ShouldSkipObjByShuffle(rsp, stats) {
 			owners++
 		}
 	}
 	require.Equal(t, 1, owners)
+}
+
+func productionShapedObjectID(rng *rand.Rand, sequence uint64) types.Objectid {
+	var objectID types.Objectid
+
+	// Object IDs use a UUIDv7 segment ID followed by a uint16 object number.
+	// Model a production stream with four objects per millisecond/segment.
+	timestamp := uint64(1_752_422_400_000) + sequence/4
+	var encodedTimestamp [8]byte
+	binary.BigEndian.PutUint64(encodedTimestamp[:], timestamp)
+	copy(objectID[:6], encodedTimestamp[2:])
+	_, _ = rng.Read(objectID[6:types.UuidSize])
+	objectID[6] = objectID[6]&0x0f | 0x70 // UUID version 7
+	objectID[8] = objectID[8]&0x3f | 0x80 // RFC 4122 variant
+	binary.LittleEndian.PutUint16(objectID[types.UuidSize:], uint16(sequence%4))
+	return objectID
+}
+
+func TestIVFObjectIDHashUsesCompleteObjectIDAndIsDeterministic(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	first := productionShapedObjectID(rng, 17)
+	second := first
+	second[2]++ // SimpleCharHashToRange does not sample this byte.
+
+	const cnCount = uint64(1 << 32)
+	require.Equal(t, xxhash.Sum64(first[:])%cnCount, IVFObjectIDHashToRange(first, cnCount))
+	require.Equal(t, IVFObjectIDHashToRange(first, cnCount), IVFObjectIDHashToRange(first, cnCount))
+	require.NotEqual(t, IVFObjectIDHashToRange(first, cnCount), IVFObjectIDHashToRange(second, cnCount))
+}
+
+func TestIVFObjectIDShuffleAssignsExactlyOneOwner(t *testing.T) {
+	rng := rand.New(rand.NewSource(43))
+	objectID := productionShapedObjectID(rng, 23)
+	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
+
+	owners := 0
+	for cnidx := int32(0); cnidx < 8; cnidx++ {
+		rsp := &engine.RangesShuffleParam{
+			Node:              node,
+			CNCNT:             8,
+			CNIDX:             cnidx,
+			ShuffleByObjectID: true,
+		}
+		stats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, true)
+		if !ShouldSkipObjByShuffle(rsp, stats) {
+			owners++
+		}
+	}
+	require.Equal(t, 1, owners)
+}
+
+func TestIVFObjectIDShuffleUsesSameOwnerForPersistedAndAppendable(t *testing.T) {
+	rng := rand.New(rand.NewSource(44))
+	objectID := productionShapedObjectID(rng, 29)
+	persisted := objectio.NewObjectStatsWithObjectID(&objectID, false, false, true)
+	appendable := objectio.NewObjectStatsWithObjectID(&objectID, true, false, true)
+	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+
+	for cnidx := int32(0); cnidx < 4; cnidx++ {
+		rsp := &engine.RangesShuffleParam{
+			Node:              node,
+			CNCNT:             4,
+			CNIDX:             cnidx,
+			ShuffleByObjectID: true,
+		}
+		require.Equal(t,
+			ShouldSkipObjByShuffle(rsp, persisted),
+			ShouldSkipObjByShuffle(rsp, appendable),
+		)
+	}
+}
+
+func TestIVFObjectIDShuffleDoesNotChangeOrdinaryOwnership(t *testing.T) {
+	objectID := types.Objectid{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}
+	stats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, true)
+	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+
+	const cnCount = int32(4)
+	wantOwner := int32(SimpleCharHashToRange(objectID[:], uint64(cnCount)))
+	for cnidx := int32(0); cnidx < cnCount; cnidx++ {
+		rsp := &engine.RangesShuffleParam{Node: node, CNCNT: cnCount, CNIDX: cnidx}
+		require.Equal(t, cnidx != wantOwner, ShouldSkipObjByShuffle(rsp, stats))
+	}
+}
+
+func TestIVFObjectIDHashUUIDv7Distribution(t *testing.T) {
+	const objectCount = 16_384
+	rng := rand.New(rand.NewSource(45))
+	objectIDs := make([]types.Objectid, objectCount)
+	for i := range objectIDs {
+		objectIDs[i] = productionShapedObjectID(rng, uint64(i))
+	}
+
+	for _, cnCount := range []uint64{2, 3, 4, 8} {
+		t.Run(fmt.Sprintf("%d-cns", cnCount), func(t *testing.T) {
+			counts := make([]int, cnCount)
+			for _, objectID := range objectIDs {
+				counts[IVFObjectIDHashToRange(objectID, cnCount)]++
+			}
+
+			expected := float64(objectCount) / float64(cnCount)
+			for cnidx, count := range counts {
+				deviation := float64(count)/expected - 1
+				require.InDeltaf(t, 0, deviation, 0.0625,
+					"CN %d owns %d objects; counts=%v", cnidx, count, counts)
+			}
+		})
+	}
 }
 
 func TestDetermineShuffleForDedupJoin(t *testing.T) {
