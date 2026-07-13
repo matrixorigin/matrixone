@@ -65,7 +65,7 @@ func ExecuteIteration(
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctxWithoutTimeout := ctx
-	ctx, cancel := context.WithTimeout(ctx, time.Hour)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour, moerr.NewInternalErrorNoCtx("iscp iteration timeout"))
 	defer cancel()
 
 	nowTs := cnEngine.LatestLogtailAppliedTime()
@@ -481,7 +481,7 @@ var FlushJobStatusOnIterationState = func(
 ) (err error) {
 	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush job status timeout"))
 	defer cancel()
 	txnWriter, err := getTxn(ctx, cnEngine, cnTxnClient, "iscp iteration")
 	if err != nil {
@@ -558,7 +558,7 @@ func FlushStatus(
 	}
 	defer result.Close()
 	if result.AffectedRows != 1 {
-		return fmt.Errorf("iscp flush status: update affected %d rows for job %s (id=%d), expected 1",
+		return moerr.NewInternalErrorNoCtxf("iscp flush status: update affected %d rows for job %s (id=%d), expected 1",
 			result.AffectedRows, jobName, jobID)
 	}
 	return
@@ -705,7 +705,7 @@ func FlushPermanentErrorMessage(
 		zap.Any("jobIDs", jobIDs),
 		zap.String("errMsg", errMsg),
 	)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush permanent error message timeout"))
 	defer cancel()
 	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
 	return FlushJobStatusOnIterationState(
