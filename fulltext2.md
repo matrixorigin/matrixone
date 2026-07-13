@@ -1,11 +1,14 @@
-# FULLTEXT2 — a WAND-based positional fulltext index
+# FULLTEXT v2 — a WAND-based positional fulltext engine (`VERSION=2`)
 
 ## Goal
 
 Replace classic FULLTEXT's *generated-SQL + Go-`Eval`* execution with a purpose-built,
-cached, early-terminating **WAND** engine — delivered as a **new index type `FULLTEXT2`**
-so the existing FULLTEXT index is never modified and stays as the **baseline / correctness
-oracle**. FULLTEXT2 supports **all existing fulltext behavior**:
+cached, early-terminating **WAND** engine — selected by a **`VERSION=2` index parameter** on
+the existing FULLTEXT index (**not** a new keyword/index type). `VERSION` defaults to `1`
+(classic SQL engine), so every existing index is unchanged; `VERSION=2` is opt-in and the v1
+code path stays the **baseline / correctness oracle**. The v2 engine lives in a **completely
+separate package** (`pkg/fulltext2/`); the fulltext plugin is a **thin version-router** that
+delegates each hook to v1 (called verbatim) or v2. Supports **all existing fulltext behavior**:
 
 - **Parsers:** `gojieba` **and** `ngram`/default (dictionary-free), plus json/json_value.
 - **Modes:** NATURAL LANGUAGE (= **exact contiguous phrase** in MO, *not* OR bag-of-words),
@@ -13,8 +16,10 @@ oracle**. FULLTEXT2 supports **all existing fulltext behavior**:
 - **Boolean operators:** `+` `-` `>` `<` `~` `( )` `"…"` **and `*` prefix (complete, not skipped).**
 - **Scoring:** **both TF-IDF and BM25**, selected by `ft_relevancy_algorithm` (existing session var).
 
-Query surface is unchanged: `MATCH(cols) AGAINST('q' [mode])`. FULLTEXT2 is a drop-in
-faster *engine* for the same query language, opt-in at DDL, no migration.
+DDL: `CREATE FULLTEXT INDEX ft ON t(body) WITH PARSER gojieba VERSION=2` (a numeric
+`index_option`, default 1). Query surface unchanged: `MATCH(cols) AGAINST('q' [mode])`. Same
+logical index, faster engine — **migrate in place** via `ALTER TABLE t ALTER REINDEX ft …
+VERSION=2` (rebuild into the WAND format; reversible to `VERSION=1`).
 
 ---
 
@@ -24,7 +29,7 @@ Not a shared WAND "core" (bm25 and fulltext backbones genuinely diverge), and no
 up-front component framework (the pieces are correlated bundles, not orthogonal knobs — an
 interface-with-2-impls smell, and per-posting interface dispatch is costly in Go).
 
-| | **bm25** (unchanged) | **FULLTEXT2** (new) |
+| | **bm25** (unchanged) | **fulltext v2** (`VERSION=2`) |
 |---|---|---|
 | term resolution | jieba dict-id + **unordered** overflow map | **sorted FST term dict** (mandatory for prefix) |
 | posting payload | df/impact only | **+ positions** (phrase, ngram reassembly) |
@@ -39,55 +44,64 @@ become a leaky lowest-common-denominator. **Share the framework, keep the engine
 maintenance, `VectorIndexCache`, idxcron MERGE/REBUILD, payload-agnostic CDC chunk framing
 (`FrameCdcChunk`), the unified plan routing / `(doc_id, score)` contract, the tokenizer TVF.
 
-**Build (new):** `pkg/fulltext2/plugin/` + `pkg/fulltext2/wand/` — FST term dict, positional
-postings, operator-tree evaluator, TF-IDF/BM25 scorer, build sink, search TVF.
+**Build (new):** `pkg/fulltext2/` — FST term dict, positional postings, operator-tree
+evaluator, TF-IDF/BM25 scorer, build sink, search TVF — a **completely separate package**.
+
+**Version-router (thin), not a new plugin:** the existing fulltext plugin stays the single
+registered `fulltext` algo; at each hook (schema/hidden-tables, build, search, maintenance,
+idxcron) it reads `VERSION` from algo_params and delegates in **one line** — `if version>=2 {
+fulltext2.X() } else { <existing v1 code, called verbatim> }`. v1 logic is never refactored,
+so a v2 bug is confined to `pkg/fulltext2/` + the router branch and cannot reach v1.
 
 **Share only leaf utilities** (extract on seeing duplication, rule of three): top-k heap,
 block-max posting-block reader, varint helpers. Not a "core engine."
 
 ---
 
-## 2. FULLTEXT2 as a grammar sibling of FULLTEXT (`CREATE FULLTEXT2 INDEX …`)
+## 2. DDL surface — a `VERSION` index parameter, not a new keyword
 
-Follows the **FULLTEXT SQL parser path**, not the generic `USING <algo>` seam — because it
-*is* a fulltext index. Distinguished only by keyword → algo; everything downstream dispatches
-by algo through the plugin framework.
+Stays the **classic FULLTEXT index type** (`algo="fulltext"`); a numeric `VERSION`
+`index_option` selects the engine. No new reserved keyword, no new index category/type, no
+coexistence ambiguity (one index, one version).
 
-FULLTEXT today: token `FULLTEXT` (mysql_sql.y:404) → productions at y:8262
-(`INDEX_CATEGORY_FULLTEXT`), y:10300 (`FULLTEXT key_or_index_opt name '(' cols ')'
-index_option_list`), y:10313 (`USING` variant) → `INDEX_TYPE_FULLTEXT` (tree/create.go:2062,
-`.String()="fulltext"`) → `MOIndexFullTextAlgo` (secondary_index_utils.go:37).
+- Grammar: add `VERSION` as a numeric `index_option` — the rule `VERSION equal_opt INTEGRAL`,
+  mirroring the existing numeric options (`MAX_INDEX_CAPACITY`, `SECOND`, …). `VERSION=2` is a
+  plain integer; **default 1** when absent.
+- Plumb it like other options: parse into `tree.IndexOption` → the fulltext plugin's
+  `ParamsFromTree` writes `version` into flat `algo_params` (only when explicitly set) → read
+  back at build/search/maintenance → rendered by `IndexParamsToStringList` for SHOW CREATE.
+- **No changes to the FULLTEXT keyword, `INDEX_TYPE_FULLTEXT`, `MOIndexFullTextAlgo`, or MATCH
+  routing** — a v2 index is still a `fulltext` index everywhere; only the engine behind the
+  hooks differs.
 
-FULLTEXT2 =
-1. new token `FULLTEXT2`;
-2. new enum `INDEX_TYPE_FULLTEXT2`, `.String()="fulltext2"`;
-3. mirror the FULLTEXT productions — `CREATE FULLTEXT2 INDEX …`, inline-table
-   `FULLTEXT2 [INDEX|KEY] (cols)`, `ALTER TABLE ADD FULLTEXT2` — each emitting the **same tree
-   node shape** as FULLTEXT tagged `INDEX_TYPE_FULLTEXT2`; goyacc regen (must stay 0 conflicts);
-4. catalog `MOIndexFullText2Algo = tree.INDEX_TYPE_FULLTEXT2`.
-
-Reusing the identical production shape means FULLTEXT2 **inherits every fulltext DDL behavior
-for free** (`WITH PARSER {gojieba|ngram}`, column/varchar validation, index_option handling,
-inline-table + ALTER forms). Only the keyword and resulting algo differ.
-
-**Query side unchanged:** `MATCH…AGAINST` and the mode productions (y:10939+) are untouched.
+DDL & migration:
+```sql
+CREATE FULLTEXT INDEX ft ON t(body) WITH PARSER gojieba VERSION=2   -- opt-in v2
+ALTER TABLE t ALTER REINDEX ft ... VERSION=2                        -- migrate v1 -> v2 (rebuild)
+ALTER TABLE t ALTER REINDEX ft ... VERSION=1                        -- roll back (rebuild)
+```
 
 ---
 
-## 3. Routing — plugin-framework driven, no per-algo behavior switches
+## 3. Routing — the thin version-router (v1 verbatim, v2 delegated)
 
-- Build/compile: `build_ddl` → `buildFullTextIndexTable` already delegates to
-  `indexplugin.Get(algo)`. algo=`fulltext2` lands on the fulltext2 plugin → WAND segment store
-  instead of the postings table. No `case fulltext2:` behavior switches (keeps the mo-self-review
-  §8 "no new per-algo dispatch" guard clean).
-- Two legitimately-shared seams must learn "fulltext2 is fulltext-family":
-  1. the **family-membership** check used to resolve `MATCH` to an index (today likely
-     `IsFullTextIndexAlgo`) → accept `fulltext2` too (membership, not behavior switching);
-  2. the **unified match-rewrite loop** (`applyJoinFullTextIndices`, which already branches
-     fulltext vs bm25) → route `fulltext2` to the `fulltext2_index_scan` TVF, preferably via the
-     plugin's search hook rather than a hardcoded algo compare.
-- **Coexistence policy:** reject creating both FULLTEXT and FULLTEXT2 on the same column set
-  (keeps `MATCH` routing unambiguous).
+Because `algo` stays `fulltext`, the existing resolution (`IsFullTextIndexAlgo`, the unified
+`applyJoinFullTextIndices` loop, the `(doc_id, score)` contract) is **unchanged**. The only new
+logic is a **one-line version branch at each plugin hook**, reading `version` from algo_params:
+
+| Hook | v1 (default, verbatim) | v2 (`version>=2`) |
+|---|---|---|
+| schema / hidden tables | postings table `(word,doc_id,pos)` | WAND segment store (storage+metadata) |
+| build (compile) | `INSERT … CROSS APPLY fulltext_index_tokenize` | positional segment builder |
+| search (plan → TVF) | `fulltext_index_scan` | `fulltext2_index_scan` (WAND) |
+| maintenance / CDC | PostDml / ISCP row writes | positional-frame sink |
+| idxcron | (n/a today) | MERGE / REBUILD |
+
+- Router lives in the existing fulltext plugin; each branch delegates wholesale to
+  `pkg/fulltext2/` (v2) or calls the **existing v1 code verbatim** — v1 is never refactored, so
+  its behavior is byte-for-byte preserved (the baseline/oracle guarantee).
+- Keep the branch trivial (`if version>=2 { … } else { … }`) and auditable — that thinness is
+  what preserves the isolation a separate plugin would have given.
 - Bonus: WAND unlocks proper **multi-term intersection top-k pushdown** (the planner's fulltext
   pushdown is single-stream-only today).
 
@@ -101,7 +115,7 @@ lookup **and** prefix enumeration **and** makes gojieba/ngram uniform. bm25's di
 *unordered* overflow map cannot do this — so the FST term dict is a genuinely new structure.
 
 ```
-FULLTEXT2 segment  (tag=0 base sub  /  tag=1 CDC tail frame):
+fulltext v2 segment  (tag=0 base sub  /  tag=1 CDC tail frame):
   ├─ FST term dict:  term(string) → { df, posting-offset }   ← sorted; dictionary-FREE (holds whatever was indexed)
   ├─ postings:       per term, doc-sorted, block-max (per-block max-TF) + POSITIONS list
   ├─ docmap:         ord → { pk, docLen };  N = doc count
@@ -147,8 +161,8 @@ tokenization by the index's parser). Only *execution* moves to WAND.
 
 - **Cached** in-memory segment (`VectorIndexCache`); **early termination** on top-k — the source
   of the win, independent of parser/dict.
-- **bm25 vs ngram query contract stays distinct:** bm25 = raw sentence → gojieba → bag; FULLTEXT2
-  boolean = parsed operator tree with positional phrase terms.
+- **bm25 vs fulltext query contract stays distinct:** bm25 = raw sentence → gojieba → bag; fulltext
+  v2 boolean = parsed operator tree with positional phrase terms.
 
 ### Scoring — both TF-IDF and BM25 (per query, from `ft_relevancy_algorithm`)
 
@@ -180,29 +194,30 @@ tokenization by the index's parser). Only *execution* moves to WAND.
 
 ## 8. Phasing
 
-- **P0 — Register the type + engine skeleton.** Grammar (`FULLTEXT2` token + `INDEX_TYPE_FULLTEXT2`
-  enum + mirrored productions + goyacc regen, 0 conflicts); catalog `MOIndexFullText2Algo` +
-  family-resolver recognizes both; `pkg/fulltext2/plugin/` (all hooks + `var _ AlgoPlugin` + blank
-  imports) → hidden WAND segment tables; `pkg/fulltext2/wand/` segment format (FST term dict +
-  positional postings + per-doc length + docmap + serialize/load on the shared framing). Existing
-  FULLTEXT untouched.
+- **P0 — `VERSION` param + router + engine skeleton.** Grammar: `VERSION equal_opt INTEGRAL`
+  index-option (goyacc regen, 0 conflicts) + `Version` on `tree.IndexOption`; plugin
+  `ParamsFromTree` writes `version` to algo_params; add the thin **version-router** at each
+  fulltext-plugin hook (v1 verbatim, else v2); `pkg/fulltext2/` package with the segment format
+  (FST term dict + positional postings + per-doc length + docmap + serialize/load on the shared
+  framing). v1 code path untouched; `version` defaults to 1.
 - **P1 — NL exact-phrase.** Positional two-phase conjunctive + **TF-IDF and BM25** top-k, cached,
-  early-terminating. gojieba + ngram. **A/B golden parity** vs FULLTEXT (below).
+  early-terminating. gojieba + ngram. **A/B parity** vs `VERSION=1` on the same data (below).
 - **P2 — Boolean operators.** OR-WAND + `+ - > < ~ ( )` + `"…"` phrase.
 - **P3 — Prefix `*`.** FST prefix-enumeration → disjunctive slot + min-prefix guard.
-- **P4 — Maintenance + BVT.** CDC sink, sync build, idxcron MERGE/REBUILD; multi-term pushdown;
-  BVT parity. (No deprecation/migration phase — FULLTEXT stays the baseline; FULLTEXT2 is opt-in.)
+- **P4 — Maintenance + migration + BVT.** CDC sink, sync build, idxcron MERGE/REBUILD; multi-term
+  pushdown; `ALTER … REINDEX … VERSION=2/1` migration; BVT parity. (v1 stays the default baseline;
+  v2 is opt-in per index.)
 
 ---
 
 ## 9. Validation
 
-- **A/B golden parity** — the big win of the new-index-type approach: build FULLTEXT and
-  FULLTEXT2 on the *same data*, run identical `MATCH` queries, diff doc-set + score ordering, per
-  mode (NL/boolean/phrase/prefix) × parser (gojieba/ngram) × `ft_relevancy_algorithm`
-  (TF-IDF/BM25). FULLTEXT is a **live oracle** — no hand-maintained golden files.
+- **A/B parity vs `VERSION=1`** — the payoff of keeping v1 untouched: load the same corpus into
+  two tables, index one `VERSION=1` and one `VERSION=2`, run identical `MATCH` queries, diff
+  doc-set + score ordering, per mode (NL/boolean/phrase/prefix) × parser (gojieba/ngram) ×
+  `ft_relevancy_algorithm` (TF-IDF/BM25). v1 is a **live oracle** — no hand-maintained golden files.
 - BVT parity; the segment-count / latency benchmark harness (confirm the WAND ~5× materializes;
-  FULLTEXT vs FULLTEXT2 is exactly the two-index-on-one-dataset shape it already does);
+  v1 vs v2 on one dataset is exactly the two-index shape it already runs);
   adversarial unhappy-path pass on the new engine.
 
 ---
@@ -211,9 +226,10 @@ tokenization by the index's parser). Only *execution* moves to WAND.
 
 1. **Scoring-exactness regression** → the A/B parity harness (P1), both algos, is the control.
 2. **ngram posting fan-out / vocab size** → FST compression; benchmark before recommending;
-   FULLTEXT remains the fallback.
+   `VERSION=1` remains the fallback.
 3. **Prefix expansion width** (short prefixes) → min-prefix-length (inherent wildcard cost).
 4. **`~` monotonicity** → ≤0 in the WAND bound.
-5. **Coexistence ambiguity** → reject two fulltext-family indexes on one column set.
+5. **Version-router leaking into v1** → keep the router branch trivial and call v1 verbatim; a
+   fat router is the one way v2 could destabilize v1 (the isolation a separate plugin would give).
 6. **Go hot-loop dispatch** → keep interfaces at per-query/per-segment granularity; monomorphize
    the inner traversal + scorer.
