@@ -274,6 +274,7 @@ message LogRequest {
   google.protobuf.Timestamp TS = 7
     [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
   bool IncludeExpiredReplicaAddresses = 8;
+  bool ExcludeHardDownReplicaAddresses = 9;
 }
 
 message TsoRequest {

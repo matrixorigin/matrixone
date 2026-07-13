@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 )
 
 func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
@@ -295,6 +296,7 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 		if err != nil {
 			return
 		}
+		appendSchedulingExplain(buffer, schedulingTraceForExplain(ses, execCtx.cw))
 
 		err = buildMoExplainQuery(execCtx, explainColName, buffer, ses, getDataFromPipeline)
 		if err != nil {
@@ -317,7 +319,14 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 
 		txnCompileWrapper := execCtx.cw.(*TxnComputationWrapper)
 		reader := bufio.NewReader(txnCompileWrapper.explainBuffer)
-		err = buildMoExplainPhyPlan(execCtx, explainColName, reader, ses, getDataFromPipeline)
+		err = buildMoExplainPhyPlan(
+			execCtx,
+			explainColName,
+			reader,
+			ses,
+			getDataFromPipeline,
+			schedulingTraceForExplain(ses, execCtx.cw),
+		)
 		if err != nil {
 			return
 		}
@@ -336,6 +345,20 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	}
 
 	return
+}
+
+func schedulingTraceFromComputationWrapper(cw ComputationWrapper) schedule.Trace {
+	if provider, ok := cw.(interface{ SchedulingTrace() schedule.Trace }); ok {
+		return provider.SchedulingTrace()
+	}
+	return schedule.Trace{}
+}
+
+func schedulingTraceForExplain(ses *Session, cw ComputationWrapper) schedule.Trace {
+	if !explainSchedulingEnabled(ses) {
+		return schedule.Trace{}
+	}
+	return schedulingTraceFromComputationWrapper(cw)
 }
 
 func (resper *MysqlResp) respPrebuildResultRow(ses *Session,

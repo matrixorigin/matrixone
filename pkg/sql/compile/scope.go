@@ -119,6 +119,18 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		s.DataSource.R = nil
 	}
 
+	// The previous execution's cleanup delivered terminal signals into this
+	// scope's pipeline edges and marked them done (doneClosed/endDelivered).
+	// A done edge silently rejects both data and End signals, so a reused
+	// pipeline would leave its receivers waiting forever. Clear the terminal
+	// state so the edges can carry the next execution's signals.
+	// See: https://github.com/matrixorigin/matrixone/issues/25614
+	if s.Proc != nil {
+		for _, reg := range s.Proc.Reg.MergeReceivers {
+			reg.ResetTerminalStateForReuse()
+		}
+	}
+
 	if s.ScopeAnalyzer != nil {
 		s.ScopeAnalyzer.Reset()
 	}

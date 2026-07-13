@@ -50,6 +50,93 @@ func GetMOCluster(
 	}
 }
 
+// GetMOClusterWithContext returns the service-scoped cluster without making a
+// query path wait past its cancellation or the legacy ten-second startup
+// bound. GetMOCluster remains available for callers that require its panic
+// contract.
+func GetMOClusterWithContext(ctx context.Context, service string) (MOCluster, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if cluster, ready, err := lookupMOCluster(service); ready || err != nil {
+		return cluster, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+			if cluster, ready, err := lookupMOCluster(service); ready || err != nil {
+				return cluster, err
+			}
+		}
+	}
+}
+
+// GetCNServiceWithoutWorkingStateWithContext is the context-aware snapshot
+// counterpart of MOCluster.GetCNServiceWithoutWorkingState. The built-in
+// cluster can cancel its startup wait; external implementations retain their
+// existing synchronous contract and are checked before and after the call.
+func GetCNServiceWithoutWorkingStateWithContext(
+	ctx context.Context,
+	service MOCluster,
+	selector Selector,
+	apply func(metadata.CNService) bool,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if service == nil {
+		return moerr.NewInternalErrorNoCtx("mocluster service is not initialized")
+	}
+	if builtIn, ok := service.(*cluster); ok {
+		if err := builtIn.waitReadyWithContext(ctx); err != nil {
+			return err
+		}
+		if selector.regexpCache == nil && builtIn.regexpCache != nil {
+			selector.regexpCache = builtIn.regexpCache
+		}
+		services := builtIn.services.Load()
+		for _, cn := range services.cn {
+			if selector.filterCN(cn) && !apply(cn) {
+				break
+			}
+		}
+		return ctx.Err()
+	}
+
+	service.GetCNServiceWithoutWorkingState(selector, apply)
+	return ctx.Err()
+}
+
+func lookupMOCluster(service string) (MOCluster, bool, error) {
+	rt := runtime.ServiceRuntime(service)
+	if rt == nil {
+		return nil, false, nil
+	}
+	value, ok := rt.GetGlobalVariables(runtime.ClusterService)
+	if !ok {
+		return nil, false, nil
+	}
+	cluster, ok := value.(MOCluster)
+	if !ok || cluster == nil {
+		return nil, false, moerr.NewInternalErrorNoCtxf(
+			"invalid mocluster service %s", service)
+	}
+	return cluster, true, nil
+}
+
 // Option options for create cluster
 type Option func(*cluster)
 
@@ -317,6 +404,18 @@ func (c *cluster) waitReady() {
 	}
 	// Slow path: block until first refresh completes. Only happens during startup.
 	<-c.readyC
+}
+
+func (c *cluster) waitReadyWithContext(ctx context.Context) error {
+	if c.ready.Load() {
+		return nil
+	}
+	select {
+	case <-c.readyC:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (c *cluster) refreshTask(ctx context.Context) {
