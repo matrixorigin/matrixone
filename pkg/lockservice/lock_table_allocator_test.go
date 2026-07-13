@@ -16,24 +16,39 @@ package lockservice
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"golang.org/x/exp/rand"
 )
+
+type fenceTestClock struct {
+	upper timestamp.Timestamp
+}
+
+func (c *fenceTestClock) HasNetworkLatency() bool  { return false }
+func (c *fenceTestClock) MaxOffset() time.Duration { return 0 }
+func (c *fenceTestClock) Now() (timestamp.Timestamp, timestamp.Timestamp) {
+	return timestamp.Timestamp{}, c.upper
+}
+func (c *fenceTestClock) Update(timestamp.Timestamp) {}
+func (c *fenceTestClock) SetNodeID(uint16)           {}
 
 func TestGetBindInRestartService(t *testing.T) {
 	runLockTableAllocatorTest(
@@ -238,10 +253,166 @@ func TestValid(t *testing.T) {
 			assert.Empty(t, valid)
 
 			c := a.getCtl("s1")
-			state, ok := c.states.Load(string([]byte{}))
+			state, ok := c.getCommitState(string([]byte{}))
 			require.True(t, ok)
-			require.Equal(t, committingState, state)
+			require.Equal(t, committingState, state.state)
+			require.Equal(t, uint32(1), state.inflight)
 		})
+}
+
+func TestCannotCommitWaitsForAllCommitAttempts(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			txnID := []byte("txn1")
+			bind := a.Get("s1", 0, 4, 0, pb.Sharding_None)
+			for i := 0; i < 2; i++ {
+				invalid, err := a.Valid("s1", txnID, []pb.LockTable{bind})
+				require.NoError(t, err)
+				require.Empty(t, invalid)
+			}
+
+			orphan := []pb.OrphanTxn{{Service: "s1", Txn: [][]byte{txnID}}}
+			require.Equal(t, [][]byte{txnID}, a.AddCannotCommit(orphan))
+			a.FinishCommit("s1", txnID)
+			require.Equal(t, [][]byte{txnID}, a.AddCannotCommit(orphan))
+			a.FinishCommit("s1", txnID)
+			require.Empty(t, a.AddCannotCommit(orphan))
+
+			_, err := a.Valid("s1", txnID, []pb.LockTable{bind})
+			require.Error(t, err)
+		})
+}
+
+func TestCleanCommitStateKeepsInflightCommit(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			txnID := []byte("txn1")
+			bind := a.Get("s1", 0, 4, 0, pb.Sharding_None)
+			_, err := a.Valid("s1", txnID, []pb.LockTable{bind})
+			require.NoError(t, err)
+
+			a.ctlMu.Lock()
+			a.cleanCtlLocked("s1", nil, false, a.getCtl("s1").currentGeneration())
+			a.ctlMu.Unlock()
+
+			state, ok := a.getCtl("s1").getCommitState(string(txnID))
+			require.True(t, ok)
+			require.Equal(t, uint32(1), state.inflight)
+			require.Equal(t, [][]byte{txnID}, a.AddCannotCommit([]pb.OrphanTxn{{
+				Service: "s1",
+				Txn:     [][]byte{txnID},
+			}}))
+		})
+}
+
+func TestCleanCommitStatePreservesCannotCommitWhenServiceStateUnknown(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			c := a.getCtl("s1")
+			require.Equal(t, cannotCommitState, c.tryCannotCommit("txn1"))
+
+			a.ctlMu.Lock()
+			a.cleanCtlLocked("s1", nil, true, c.currentGeneration())
+			a.ctlMu.Unlock()
+			state, ok := c.getCommitState("txn1")
+			require.True(t, ok)
+			require.Equal(t, cannotCommitState, state.state)
+
+			a.ctlMu.Lock()
+			a.cleanCtlLocked("s1", nil, false, c.currentGeneration())
+			a.ctlMu.Unlock()
+			_, ok = c.getCommitState("txn1")
+			require.False(t, ok)
+		})
+}
+
+func TestCleanerPreservesCannotCommitOnActiveTxnQueryError(t *testing.T) {
+	ready := make(chan struct{})
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			c := a.getCtl("s1")
+			require.Equal(t, cannotCommitState, c.tryCannotCommit("cannot"))
+			require.Equal(t, committingState, c.beginCommit("inflight"))
+			close(ready)
+
+			require.Eventually(t, func() bool {
+				return a.HasInvalidService("s1")
+			}, time.Second*3, time.Millisecond*10)
+			state, exists := c.getCommitState("cannot")
+			require.True(t, exists)
+			require.Equal(t, cannotCommitState, state.state)
+			require.Equal(t, [][]byte{[]byte("inflight")}, a.AddCannotCommit([]pb.OrphanTxn{{
+				Service: "s1",
+				Txn:     [][]byte{[]byte("inflight")},
+			}}))
+			a.FinishCommit("s1", []byte("inflight"))
+		},
+		func(lta *lockTableAllocator) {
+			lta.keepBindTimeout = time.Millisecond * 20
+			lta.options.getActiveTxnFunc = func(string) (bool, [][]byte, error) {
+				<-ready
+				return false, nil, moerr.NewBackendClosedNoCtx()
+			}
+		})
+}
+
+func TestCannotCommitGenerationRefresh(t *testing.T) {
+	c := &commitCtl{}
+	require.Equal(t, cannotCommitState, c.tryCannotCommit("refreshed"))
+	require.Equal(t, cannotCommitState, c.tryCannotCommit("rejected"))
+	watermark := c.currentGeneration()
+
+	require.Equal(t, cannotCommitState, c.tryCannotCommit("refreshed"))
+	require.Equal(t, cannotCommitState, c.beginCommit("rejected"))
+	c.clean(nil, false, watermark, getLogger(""))
+
+	_, ok := c.getCommitState("refreshed")
+	require.True(t, ok)
+	_, ok = c.getCommitState("rejected")
+	require.True(t, ok)
+}
+
+func TestCommitCtlGenerationOverflowFailsClosed(t *testing.T) {
+	c := &commitCtl{generation: math.MaxUint64 - 1}
+	require.Equal(t, cannotCommitState, c.tryCannotCommit("txn1"))
+	require.Equal(t, uint64(math.MaxUint64), c.currentGeneration())
+
+	c.clean(nil, false, math.MaxUint64, getLogger(""))
+	_, ok := c.getCommitState("txn1")
+	require.True(t, ok)
+	require.Equal(t, uint64(math.MaxUint64), c.currentGeneration())
+}
+
+func TestGetCtlGenerationWithMissingService(t *testing.T) {
+	a := &lockTableAllocator{}
+	_, ok := a.getCtlGeneration("missing")
+	require.False(t, ok)
+}
+
+func TestNewFenceTSDominatesUpperLogicalTimestamp(t *testing.T) {
+	upper := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7, NodeID: 3}
+	a := &lockTableAllocator{clock: &fenceTestClock{upper: upper}}
+	fenceTS := a.newFenceTS()
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 101, NodeID: 3}, fenceTS)
+	require.True(t, upper.Less(fenceTS))
+}
+
+func TestNewFenceTSFailsClosedAtPhysicalLimit(t *testing.T) {
+	a := &lockTableAllocator{clock: &fenceTestClock{
+		upper: timestamp.Timestamp{PhysicalTime: math.MaxInt64, LogicalTime: 7},
+	}}
+	require.True(t, a.newFenceTS().IsEmpty())
+
+	a.clock = nil
+	require.True(t, a.newFenceTS().IsEmpty())
 }
 
 func TestValidWithServiceInvalid(t *testing.T) {
@@ -276,7 +447,7 @@ func TestValidWithCannotCommitState(t *testing.T) {
 			txn := []byte{1}
 
 			c := a.getCtl("s1")
-			require.Equal(t, cannotCommitState, c.add(string(txn), cannotCommitState))
+			require.Equal(t, cannotCommitState, c.tryCannotCommit(string(txn)))
 
 			b := a.Get("s1", 0, 4, 0, pb.Sharding_None)
 			_, err := a.Valid("s1", txn, []pb.LockTable{b})
@@ -291,7 +462,8 @@ func TestCtlCanRemovedByInvalidService(t *testing.T) {
 		time.Hour,
 		func(a *lockTableAllocator) {
 			c := a.getCtl("s1")
-			c.add("t1", committingState)
+			c.beginCommit("t1")
+			require.True(t, c.finishCommit("t1"))
 			close(ch)
 			for {
 				n := 0
@@ -320,16 +492,11 @@ func TestCtlCanRemovedByNotActiveTxn(t *testing.T) {
 		time.Hour,
 		func(a *lockTableAllocator) {
 			c := a.getCtl("s1")
-			c.add("t1", committingState)
-			c.add("t2", committingState)
+			c.tryCannotCommit("t1")
+			c.tryCannotCommit("t2")
 			close(ch)
 			for {
-				n := 0
-				c.states.Range(func(key, value any) bool {
-					n++
-					return true
-				})
-				if n == 1 {
+				if c.size() == 1 {
 					return
 				}
 			}
