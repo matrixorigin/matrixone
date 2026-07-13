@@ -120,6 +120,20 @@ Project  𝄀
         Group Key: t.a  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on mysql_compat_index_hint.t
+explain select id,a
+from t ignore index for order by(idx_a_b_c_id)
+where a = 'g01'
+order by id
+limit 10;
+-- @regex("Index Table Scan.*idx_a_b_c_id", true)
+-- @regex("Index Reader Param", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: __mo_index_pri_col INTERNAL  𝄀
+        Limit: 10  𝄀
+        ->  Index Table Scan on t.idx_a_b_c_id  𝄀
+              Filter Cond: prefix_eq(__mo_index_idx_col)
 explain select id,a,b
 from t force index for order by(idx_a_b_c_id)
 where b = 1

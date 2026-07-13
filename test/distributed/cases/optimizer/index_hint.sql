@@ -75,6 +75,15 @@ group by a;
 
 -- @separator:table
 -- @regex("Index Table Scan.*idx_a_b_c_id",true)
+-- @regex("Index Reader Param",false)
+explain select id,a
+from t ignore index for order by(idx_a_b_c_id)
+where a = 'g01'
+order by id
+limit 10;
+
+-- @separator:table
+-- @regex("Index Table Scan.*idx_a_b_c_id",true)
 -- @regex("Index Table Scan.*idx_b_a_id",false)
 -- @regex("Filter Cond",true)
 -- @regex("Index Reader Param",false)

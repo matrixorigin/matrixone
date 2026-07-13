@@ -283,6 +283,51 @@ func TestIndexHintOrderScopePreservesCoveringIndexFilters(t *testing.T) {
 	require.Nil(t, indexScan.IndexReaderParam)
 }
 
+func TestIgnoreIndexForOrderByBlocksCoveringIndexOrderedRead(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select id, a
+		from index_hint_t ignore index for order by (idx_a)
+		where a = 1
+		order by id
+		limit 10`)
+	require.NoError(t, err)
+	indexScan := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, indexScan)
+	require.Equal(t, "idx_a", indexScan.IndexScanInfo.IndexName)
+	require.Nil(t, indexScan.IndexReaderParam)
+	require.Empty(t, indexScan.OrderBy)
+	require.False(t, hasMessageType(indexScan.RecvMsgList, int32(message.MsgTopValue)))
+	for _, node := range queryPlan.GetQuery().Nodes {
+		require.False(t, hasMessageType(node.SendMsgList, int32(message.MsgTopValue)))
+	}
+
+	queryPlan, err = runOneStmt(mock, t, `
+		select id, a
+		from index_hint_t
+		where a = 1
+		order by id
+		limit 10`)
+	require.NoError(t, err)
+	indexScan = findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, indexScan)
+	require.Equal(t, "idx_a", indexScan.IndexScanInfo.IndexName)
+	require.NotNil(t, indexScan.IndexReaderParam)
+	require.NotEmpty(t, indexScan.OrderBy)
+	require.True(t, hasMessageType(indexScan.RecvMsgList, int32(message.MsgTopValue)))
+}
+
+func hasMessageType(messages []planpb.MsgHeader, msgType int32) bool {
+	for _, msg := range messages {
+		if msg.MsgType == msgType {
+			return true
+		}
+	}
+	return false
+}
+
 func TestIndexHintOrderScopeBuildsNonCoveringBackfillJoin(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)

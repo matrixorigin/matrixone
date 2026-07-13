@@ -2025,6 +2025,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		BindingTags:   []int32{idxTag},
 		ScanSnapshot:  node.ScanSnapshot,
 	}, builder.ctxByNode[node.NodeId])
+	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
 
 	forceScanNodeStatsTP(idxTableNodeID, builder)
 	return idxTableNodeID
