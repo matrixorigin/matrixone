@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,6 +55,24 @@ type refreshOnDemandCluster struct {
 	refreshing  chan struct{}
 	refreshDone chan struct{}
 	refreshErr  error
+}
+
+type blockedClusterClient struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *blockedClusterClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
+	select {
+	case c.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-c.release:
+		return logpb.ClusterDetails{}, nil
+	case <-ctx.Done():
+		return logpb.ClusterDetails{}, ctx.Err()
+	}
 }
 
 func (c *refreshOnDemandCluster) GetCNServiceWithoutWorkingState(
@@ -747,6 +766,48 @@ func TestResetBackendWaitHonorsContext(t *testing.T) {
 	err := c.ResetBackend(ctx, "0000000000000000000cn-id")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Less(t, time.Since(started), time.Second)
+}
+
+func TestResetBackendClusterStartupWaitHonorsContext(t *testing.T) {
+	service := t.Name()
+	runtime.SetupServiceBasedRuntime(service, runtime.DefaultRuntime())
+	hakeeper := &blockedClusterClient{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	cluster := clusterservice.NewMOCluster(service, hakeeper, time.Hour)
+	defer func() {
+		close(hakeeper.release)
+		cluster.Close()
+	}()
+
+	select {
+	case <-hakeeper.started:
+	case <-time.After(time.Second):
+		t.Fatal("cluster refresh did not start")
+	}
+
+	activeTxnRPCClient := &closeTrackingRPCClient{}
+	c := &client{
+		cluster:         cluster,
+		activeTxnClient: activeTxnRPCClient,
+		resolveBackend: func(context.Context, string) (string, error) {
+			t.Fatal("resolver must not run before the cluster snapshot is ready")
+			return "", nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := c.ResetBackend(ctx, "0000000000000000000cn-id")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), time.Second)
+	require.Empty(t, activeTxnRPCClient.closed)
+
+	gateCtx, gateCancel := context.WithTimeout(context.Background(), time.Second)
+	defer gateCancel()
+	require.NoError(t, c.acquireRecoveryReset(gateCtx), "failed reset must release the global slot")
+	c.releaseRecoveryReset()
 }
 
 func TestResetBackendSlowRefreshDoesNotBlockActiveTxnRouteLookup(t *testing.T) {

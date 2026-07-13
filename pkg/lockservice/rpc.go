@@ -402,22 +402,30 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) error {
 		return moerr.NewInternalErrorNoCtx("morpc client does not support targeted backend reset")
 	}
 
-	lookupAddress := func() string {
+	lookupAddress := func() (string, error) {
 		var address string
-		c.cluster.GetCNServiceWithoutWorkingState(
+		err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+			ctx,
+			c.cluster,
 			clusterservice.NewServiceIDSelector(sid),
 			func(s metadata.CNService) bool {
 				address = s.LockServiceAddress
 				return false
 			})
-		return address
+		if err != nil {
+			return "", moerr.AttachCause(ctx, err)
+		}
+		return address, nil
 	}
 
 	// A negative response proves that the route used for the first check may be
 	// stale even when the cached address is non-empty. Refresh synchronously so
 	// the confirming request cannot be sent to an old CN address after a hot
 	// recreate or address reassignment.
-	staleAddress := lookupAddress()
+	staleAddress, err := lookupAddress()
+	if err != nil {
+		return err
+	}
 	refresher, ok := c.cluster.(clusterservice.AuthoritativeRefresher)
 	if !ok {
 		return moerr.NewInternalErrorNoCtx(
@@ -426,7 +434,10 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) error {
 	if err := refresher.Refresh(ctx); err != nil {
 		return err
 	}
-	address := lookupAddress()
+	address, err := lookupAddress()
+	if err != nil {
+		return err
+	}
 
 	var endpoint string
 	var resolveErr error
