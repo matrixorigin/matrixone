@@ -21,6 +21,7 @@ insert into vector_ivfflat_include_phase5 values
     (4, "[2,2,2]", "delta", 40, "n4");
 
 -- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, title, category
 from vector_ivfflat_include_phase5
 order by l2_distance(embedding, "[1,2,3]")
@@ -32,6 +33,7 @@ order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=post';
 
 -- @separator:table
+-- @regex("Table Function on ivf_search", true)
 explain select id, title, category
 from vector_ivfflat_include_phase5
 where category >= 20

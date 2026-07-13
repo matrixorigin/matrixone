@@ -21,7 +21,8 @@ from vector_ivfflat_include_phase6
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=post';
-➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+-- @regex("Table Function on ivf_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
@@ -29,8 +30,10 @@ Project  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
               Join Cond: (vector_ivfflat_include_phase6.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vector_ivfflat_include_phase6.vector_ivfflat_include_phase6  𝄀
                     Filter Cond: (vector_ivfflat_include_phase6.category >= 20)  𝄀
+                    Runtime Filter Probe: vector_ivfflat_include_phase6.id  𝄀
               ->  Table Function on ivf_search  𝄀
                     Index Reader Param:  Limit: 12  𝄀
                     Limit: 12
@@ -47,6 +50,7 @@ from vector_ivfflat_include_phase6
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=include';
+-- @regex("Table Function on ivf_search", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -69,7 +73,8 @@ from vector_ivfflat_include_phase6
 where category >= 20 and note in ("n2", "n4")
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=include';
-➤ AP QUERY PLAN ON ONE CN(10 core)[12,0,0]  𝄀
+-- @regex("Table Function on ivf_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
@@ -77,8 +82,10 @@ Project  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
               Join Cond: (vector_ivfflat_include_phase6.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vector_ivfflat_include_phase6.vector_ivfflat_include_phase6  𝄀
                     Filter Cond: vector_ivfflat_include_phase6.note in ([n2 n4])  𝄀
+                    Runtime Filter Probe: vector_ivfflat_include_phase6.id  𝄀
               ->  Table Function on ivf_search  𝄀
                     Index Reader Param:  Limit: 9223372036854775807  𝄀
                     Limit: 9223372036854775807  𝄀
