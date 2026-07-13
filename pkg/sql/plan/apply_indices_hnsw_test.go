@@ -620,7 +620,8 @@ func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
 				{Typ: vecTyp, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[0,1,0]"}}}},
 			},
 		},
-		limit: makePlan2Uint64ConstExprWithType(2),
+		limit:       makePlan2Uint64ConstExprWithType(2),
+		resultLimit: makePlan2Uint64ConstExprWithType(2),
 	}
 
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`

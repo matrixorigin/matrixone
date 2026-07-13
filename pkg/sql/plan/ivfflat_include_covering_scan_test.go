@@ -154,8 +154,9 @@ func TestApplyIndicesForSortUsingIvfflatBuildsDynamicColsForOptimizerPath(t *tes
 				},
 			},
 		},
-		distFnExpr: distFnExpr,
-		limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+		distFnExpr:  distFnExpr,
+		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+		resultLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
 	}
 
 	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
