@@ -1724,3 +1724,19 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 		require.Equal(t, orderBy, reader.orderBy)
 	}
 }
+
+func TestLocalRangesPolicyForPartitionedIvfEntries(t *testing.T) {
+	ivfNode := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+		IndexReaderParam: &plan.IndexReaderParam{
+			Limit:        &plan.Expr{},
+			OrigFuncName: "l2_distance",
+		},
+	}
+	ordinaryNode := &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: &plan.TableDef{}}
+
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ivfNode, 0))
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), localRangesPolicy(ivfNode, 1))
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ordinaryNode, 1))
+}

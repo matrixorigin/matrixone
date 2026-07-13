@@ -612,7 +612,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		rsp.IsLocalCN = true
 	}
 
-	policyForLocal := engine.DataCollectPolicy(engine.Policy_CollectAllData)
+	policyForLocal := localRangesPolicy(s.DataSource.node, s.NodeInfo.CNIDX)
 	policyForRemote := engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData)
 
 	// local
@@ -648,6 +648,13 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	}
 
 	return err
+}
+
+func localRangesPolicy(node *plan.Node, cnidx int32) engine.DataCollectPolicy {
+	if plan2.IsIvfSearchEntriesInternalScan(node) && cnidx > 0 {
+		return engine.Policy_CollectCommittedPersistedData
+	}
+	return engine.Policy_CollectAllData
 }
 
 func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
