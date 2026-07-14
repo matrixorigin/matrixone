@@ -296,6 +296,7 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// 1. stop the merge scheduler
 	c.db.MergeScheduler.Stop()
 	rollbackSteps.Add("stop merge scheduler", func() error {
+		c.db.Catalog.SetMergeNotifier(c.db.MergeScheduler)
 		c.db.MergeScheduler.Start()
 		return nil
 	})
@@ -342,6 +343,7 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 		// TODO: recover the previous state
 		return
 	}
+	c.db.Catalog.SetMergeNotifier(nil)
 
 	// 7. wait the logtail push queue to be flushed
 	// TODO
@@ -428,16 +430,18 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	// 3. switch the txnmgr to write mode
 	c.db.TxnMgr.ToWriteMode()
 
+	c.db.Catalog.SetMergeNotifier(c.db.MergeScheduler)
+	c.db.MergeScheduler.Start()
+	rollbackSteps.Add("stop merge scheduler", func() error {
+		c.db.MergeScheduler.Stop()
+		c.db.Catalog.SetMergeNotifier(nil)
+		return nil
+	})
+
 	// 4. unfreeze the write requests
 	if err = c.db.TxnServer.SwitchTxnHandleStateTo(rpc2.TxnLocalHandle); err != nil {
 		return
 	}
-
-	c.db.MergeScheduler.Start()
-	rollbackSteps.Add("stop merge scheduler", func() error {
-		c.db.MergeScheduler.Stop()
-		return nil
-	})
 
 	// 5. start merge scheduler|checkpoint|diskcleaner
 	// 5.1 TODO: start the merger|checkpoint|flusher
@@ -779,11 +783,15 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		merge.NewTNMergeExecutor(db.Runtime),
 		merge.NewStdClock(),
 	)
-	db.MergeScheduler.Start()
-	rollbackSteps.Add("stop merge scheduler", func() error {
-		db.MergeScheduler.Stop()
-		return nil
-	})
+	if db.IsWriteMode() {
+		db.Catalog.SetMergeNotifier(db.MergeScheduler)
+		db.MergeScheduler.Start()
+		rollbackSteps.Add("stop merge scheduler", func() error {
+			db.MergeScheduler.Stop()
+			db.Catalog.SetMergeNotifier(nil)
+			return nil
+		})
+	}
 
 	// start flusher and disk cleaner
 	db.BGFlusher.Start()

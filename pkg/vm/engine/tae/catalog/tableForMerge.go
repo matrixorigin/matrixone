@@ -87,15 +87,11 @@ type TNTombstoneItem struct {
 }
 
 func (catalog *Catalog) SetMergeNotifier(notifier MergeNotifierOnCatalog) {
-	catalog.mergeNotifier.Store(notifier)
+	catalog.mergeNotifier = notifier
 }
 
 func (catalog *Catalog) getMergeNotifier() MergeNotifierOnCatalog {
-	notifier := catalog.mergeNotifier.Load()
-	if notifier == nil {
-		return nil
-	}
-	return notifier.(MergeNotifierOnCatalog)
+	return catalog.mergeNotifier
 }
 
 func (catalog *Catalog) InitSource() iter.Seq[MergeTable] {

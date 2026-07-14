@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -61,7 +60,7 @@ type Catalog struct {
 	nodesMu   sync.RWMutex
 	gcTS      types.TS
 
-	mergeNotifier atomic.Value
+	mergeNotifier MergeNotifierOnCatalog
 }
 
 func MockCatalog(dataFactory DataFactory) *Catalog {

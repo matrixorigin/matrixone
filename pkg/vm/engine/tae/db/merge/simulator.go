@@ -896,6 +896,7 @@ func NewSimPlayer() *SimPlayer {
 		sexecutor,
 		sclock,
 	)
+	scatalog.SetMergeNotifier(sched)
 	sched.PatchTestRscController(srsc)
 
 	return &SimPlayer{

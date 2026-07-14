@@ -124,7 +124,6 @@ func NewMergeScheduler(
 			},
 		}
 	}
-	cata.SetMergeNotifier(sched)
 
 	return sched
 
