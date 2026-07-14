@@ -198,8 +198,12 @@ func ConstructCreateTableSQL(
 			}
 
 			var indexStr string
-			if !indexdef.Unique && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
-				indexStr += " FULLTEXT "
+			if !indexdef.Unique && (catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) || catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo)) {
+				if catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo) {
+					indexStr += " FULLTEXT2 "
+				} else {
+					indexStr += " FULLTEXT "
+				}
 
 				if len(indexdef.IndexName) > 0 {
 					indexStr += fmt.Sprintf("`%s`", formatStr(indexdef.IndexName))
