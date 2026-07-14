@@ -309,6 +309,13 @@ type client struct {
 		closed   bool // true when Close() is completed
 		backends map[string][]Backend
 		ops      map[string]*op
+		// backendGeneration invalidates create requests captured before a
+		// targeted reset. Pointer identity avoids ABA when an entry is evicted
+		// and later recreated for the same remote.
+		backendGeneration map[string]*backendGeneration
+		// creating deduplicates factory I/O per remote generation without
+		// holding mu across DNS or network connection work.
+		creating map[string]*backendGeneration
 	}
 
 	circuitBreakers *CircuitBreakerManager
@@ -342,6 +349,8 @@ func NewClient(
 	}
 	c.mu.backends = make(map[string][]Backend)
 	c.mu.ops = make(map[string]*op)
+	c.mu.backendGeneration = make(map[string]*backendGeneration)
+	c.mu.creating = make(map[string]*backendGeneration)
 
 	for _, opt := range options {
 		opt(c)
@@ -428,9 +437,11 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 		panic("client Send nil context")
 	}
 
-	// Check circuit breaker before attempting
-	if !c.circuitBreakers.Allow(backend) {
-		return nil, c.circuitBreakers.GetError(backend)
+	// Pin the breaker incarnation for this request. A targeted backend reset
+	// detaches it, so a late result cannot affect the replacement generation.
+	breaker := c.circuitBreakers.newHandle(backend)
+	if !breaker.Allow() {
+		return nil, breaker.Error()
 	}
 
 	policy := c.options.retryPolicy
@@ -440,9 +451,9 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 
 	for {
 		// Check circuit breaker before each retry attempt
-		if !c.circuitBreakers.Allow(backend) {
+		if !breaker.Allow() {
 			// Don't record failure - circuit is already open
-			return nil, c.circuitBreakers.GetError(backend)
+			return nil, breaker.Error()
 		}
 
 		b, err := c.getBackend(backend, false)
@@ -463,7 +474,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return nil, waitErr
 				}
 
@@ -475,7 +486,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 						zap.Int("retries", retryCount),
 						zap.Error(err))
 					// Record circuit breaker failure on max retries
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return nil, err
 				}
 
@@ -494,14 +505,14 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			// Only count backend-related errors
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
-				c.circuitBreakers.RecordFailure(backend)
+				breaker.RecordFailure()
 			}
 			return nil, err
 		}
 
 		f, err := b.Send(ctx, request)
 		if err != nil && err == backendClosed {
-			c.circuitBreakers.RecordFailure(backend)
+			breaker.RecordFailure()
 			retryCount++
 			// Check if max retries exceeded (0 means unlimited)
 			if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
@@ -513,8 +524,8 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			}
 
 			// Check circuit breaker after failure
-			if !c.circuitBreakers.Allow(backend) {
-				return nil, c.circuitBreakers.GetError(backend)
+			if !breaker.Allow() {
+				return nil, breaker.Error()
 			}
 
 			// Calculate next backoff with jitter
@@ -536,9 +547,9 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			continue
 		}
 		if err == nil {
-			c.circuitBreakers.RecordSuccess(backend)
+			breaker.RecordSuccess()
 		} else {
-			c.circuitBreakers.RecordFailure(backend)
+			breaker.RecordFailure()
 		}
 		return f, err
 	}
@@ -549,9 +560,9 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 		panic("client NewStream nil context")
 	}
 
-	// Check circuit breaker before attempting
-	if !c.circuitBreakers.Allow(backend) {
-		return nil, c.circuitBreakers.GetError(backend)
+	breaker := c.circuitBreakers.newHandle(backend)
+	if !breaker.Allow() {
+		return nil, breaker.Error()
 	}
 
 	policy := c.options.retryPolicy
@@ -561,9 +572,9 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 
 	for {
 		// Check circuit breaker before each retry attempt
-		if !c.circuitBreakers.Allow(backend) {
+		if !breaker.Allow() {
 			// Don't record failure - circuit is already open
-			return nil, c.circuitBreakers.GetError(backend)
+			return nil, breaker.Error()
 		}
 
 		// Check context before attempting
@@ -591,7 +602,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return nil, waitErr
 				}
 
@@ -603,7 +614,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 						zap.Int("retries", retryCount),
 						zap.Error(err))
 					// Record circuit breaker failure on max retries
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return nil, err
 				}
 
@@ -621,14 +632,14 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
-				c.circuitBreakers.RecordFailure(backend)
+				breaker.RecordFailure()
 			}
 			return nil, err
 		}
 
 		st, err := b.NewStream(lock)
 		if err != nil && err == backendClosed {
-			c.circuitBreakers.RecordFailure(backend)
+			breaker.RecordFailure()
 			retryCount++
 			// Check if max retries exceeded
 			if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
@@ -640,8 +651,8 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 			}
 
 			// Check circuit breaker after failure
-			if !c.circuitBreakers.Allow(backend) {
-				return nil, c.circuitBreakers.GetError(backend)
+			if !breaker.Allow() {
+				return nil, breaker.Error()
 			}
 
 			// Calculate next backoff with jitter
@@ -663,9 +674,9 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 			continue
 		}
 		if err == nil {
-			c.circuitBreakers.RecordSuccess(backend)
+			breaker.RecordSuccess()
 		} else {
-			c.circuitBreakers.RecordFailure(backend)
+			breaker.RecordFailure()
 		}
 		return st, err
 	}
@@ -676,9 +687,9 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 		panic("client Ping nil context")
 	}
 
-	// Check circuit breaker before attempting
-	if !c.circuitBreakers.Allow(backend) {
-		return c.circuitBreakers.GetError(backend)
+	breaker := c.circuitBreakers.newHandle(backend)
+	if !breaker.Allow() {
+		return breaker.Error()
 	}
 
 	policy := c.options.retryPolicy
@@ -705,7 +716,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return waitErr
 				}
 
@@ -717,7 +728,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 						zap.Int("retries", retryCount),
 						zap.Error(err))
 					// Record circuit breaker failure on max retries
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return err
 				}
 
@@ -735,7 +746,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
-				c.circuitBreakers.RecordFailure(backend)
+				breaker.RecordFailure()
 			}
 			return err
 		}
@@ -743,7 +754,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
 		if err != nil {
 			if err == backendClosed {
-				c.circuitBreakers.RecordFailure(backend)
+				breaker.RecordFailure()
 				retryCount++
 				// Check if max retries exceeded
 				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
@@ -755,8 +766,8 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 				}
 
 				// Check circuit breaker after failure
-				if !c.circuitBreakers.Allow(backend) {
-					return c.circuitBreakers.GetError(backend)
+				if !breaker.Allow() {
+					return breaker.Error()
 				}
 
 				// Calculate next backoff with jitter
@@ -777,15 +788,15 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 				}
 				continue
 			}
-			c.circuitBreakers.RecordFailure(backend)
+			breaker.RecordFailure()
 			return err
 		}
 		_, err = f.Get()
 		f.Close()
 		if err == nil {
-			c.circuitBreakers.RecordSuccess(backend)
+			breaker.RecordSuccess()
 		} else {
-			c.circuitBreakers.RecordFailure(backend)
+			breaker.RecordFailure()
 		}
 		return err
 	}
@@ -838,6 +849,30 @@ func (c *client) CloseBackend() error {
 	return nil
 }
 
+// CloseBackendFor synchronously detaches one remote and invalidates any
+// asynchronous create requests queued before this call.
+func (c *client) CloseBackendFor(remote string) error {
+	c.mu.Lock()
+	backends := c.mu.backends[remote]
+	delete(c.mu.backendGeneration, remote)
+	delete(c.mu.creating, remote)
+	delete(c.mu.backends, remote)
+	delete(c.mu.ops, remote)
+	c.updatePoolSizeMetricsLocked()
+	// Detach breaker state in the same reset critical section as the backend
+	// generation. A request either captures the complete old incarnation or a
+	// complete new one, never a new backend generation with the old breaker.
+	c.circuitBreakers.RemoveBreaker(remote)
+	c.mu.Unlock()
+
+	// Close outside c.mu: backend shutdown can wait for worker goroutines, and
+	// no new caller should be blocked from creating the replacement meanwhile.
+	for _, backend := range backends {
+		backend.Close()
+	}
+	return nil
+}
+
 func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	// Fast-fail: check circuit breaker before acquiring lock
 	// This prevents blocking on lock acquisition for known-bad backends
@@ -861,6 +896,10 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	canCreate := c.canCreateLocked(backend)
 	enableAutoCreate := c.options.enableAutoCreate
 	hasBackends := poolSize > 0
+	var generation *backendGeneration
+	if canCreate && enableAutoCreate {
+		generation = c.backendGenerationLocked(backend)
+	}
 	c.mu.Unlock() // Release lock before any potentially blocking operation
 
 	// If pool has backends but all are busy, wait for one to become available
@@ -879,9 +918,9 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	creationQueued := false
 	if canCreate {
 		// Try to enqueue creation task with backpressure handling
-		if !globalClientGC.triggerCreate(c, backend) {
+		if !globalClientGC.triggerCreateAtGeneration(c, backend, generation) {
 			// Queue is full - fallback to existing creation path with proper bookkeeping
-			return c.createBackendWithBookkeeping(backend, lock)
+			return c.createBackendWithBookkeepingAtGeneration(backend, lock, generation)
 		}
 		creationQueued = true
 	}
@@ -973,19 +1012,78 @@ func (c *client) tryCreate(backend string) bool {
 		return false
 	}
 
-	return globalClientGC.triggerCreate(c, backend)
+	return globalClientGC.triggerCreateAtGenerationLocked(
+		c,
+		backend,
+		c.backendGenerationLocked(backend),
+	)
 }
 
 func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backend, error) {
-	// Use existing creation path with proper bookkeeping, but avoid holding the lock
-	// during network I/O. We double-check limits after creation to avoid overfilling
-	// if another goroutine created a backend in the meantime.
 	c.mu.Lock()
-	if c.mu.closed {
+	generation := c.backendGenerationLocked(backend)
+	c.mu.Unlock()
+	return c.createBackendWithBookkeepingAtGeneration(backend, lock, generation)
+}
+
+func (c *client) createBackendWithBookkeepingAtGeneration(
+	backend string,
+	lock bool,
+	generation *backendGeneration,
+) (Backend, error) {
+	if generation == nil {
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	c.mu.Lock()
+	if c.mu.closing || c.mu.closed {
 		c.mu.Unlock()
 		return nil, moerr.NewClientClosedNoCtx()
 	}
+	if c.mu.backendGeneration[backend] != generation {
+		c.mu.Unlock()
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	if c.mu.creating == nil {
+		c.mu.creating = make(map[string]*backendGeneration)
+	}
+	if c.mu.creating[backend] != nil {
+		c.mu.Unlock()
+		return nil, ErrBackendCreating
+	}
 	if !c.canCreateLocked(backend) {
+		c.mu.Unlock()
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	c.mu.creating[backend] = generation
+	c.mu.Unlock()
+	return c.createBackendForClaimedGeneration(backend, lock, generation)
+}
+
+// createBackendForClaimedGeneration performs factory I/O for a create request
+// that already owns the queued/in-flight slot for this remote generation.
+func (c *client) createBackendForClaimedGeneration(
+	backend string,
+	lock bool,
+	generation *backendGeneration,
+) (Backend, error) {
+	if generation == nil {
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	c.mu.Lock()
+	if c.mu.closing || c.mu.closed {
+		if c.mu.creating[backend] == generation {
+			delete(c.mu.creating, backend)
+		}
+		c.mu.Unlock()
+		return nil, moerr.NewClientClosedNoCtx()
+	}
+	if c.mu.backendGeneration[backend] != generation ||
+		c.mu.creating[backend] != generation {
+		c.mu.Unlock()
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	if !c.canCreateLocked(backend) {
+		delete(c.mu.creating, backend)
 		c.mu.Unlock()
 		return nil, moerr.NewBackendClosedNoCtx()
 	}
@@ -993,20 +1091,30 @@ func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backen
 
 	// Create backend using factory with metrics (same as doCreate) without holding the lock.
 	b, err := c.doCreate(backend)
-	if err != nil {
-		return nil, err
-	}
 
 	// Re-acquire lock to add to pool, validating limits again.
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	if c.mu.creating[backend] == generation {
+		delete(c.mu.creating, backend)
+	}
+	if err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
 
-	if c.mu.closed {
+	if c.mu.closing || c.mu.closed {
+		c.mu.Unlock()
 		b.Close()
 		return nil, moerr.NewClientClosedNoCtx()
 	}
+	if c.mu.backendGeneration[backend] != generation {
+		c.mu.Unlock()
+		b.Close()
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
 	if !c.canCreateLocked(backend) {
 		// Another goroutine may have filled the pool while we were creating.
+		c.mu.Unlock()
 		b.Close()
 		return nil, moerr.NewBackendClosedNoCtx()
 	}
@@ -1026,8 +1134,47 @@ func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backen
 
 	// Update metrics (same as existing creation path)
 	c.updatePoolSizeMetricsLocked()
+	c.mu.Unlock()
 
 	return b, nil
+}
+
+func (c *client) releaseBackendCreate(backend string, generation *backendGeneration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mu.creating[backend] == generation {
+		delete(c.mu.creating, backend)
+	}
+}
+
+const maxBackendGenerationEntries = 4096
+
+type backendGeneration struct {
+	// Keep the allocation non-zero-sized so distinct generations always have
+	// distinct pointer identities.
+	_ byte
+}
+
+func (c *client) backendGenerationLocked(remote string) *backendGeneration {
+	if c.mu.backendGeneration == nil {
+		c.mu.backendGeneration = make(map[string]*backendGeneration)
+	}
+	if generation := c.mu.backendGeneration[remote]; generation != nil {
+		return generation
+	}
+	if len(c.mu.backendGeneration) >= maxBackendGenerationEntries {
+		// Eviction invalidates outstanding creates for the victim. A later request
+		// allocates a distinct token, so an evicted stale request cannot be
+		// re-admitted even when the same address returns (no ABA).
+		for victim := range c.mu.backendGeneration {
+			delete(c.mu.backendGeneration, victim)
+			delete(c.mu.creating, victim)
+			break
+		}
+	}
+	generation := &backendGeneration{}
+	c.mu.backendGeneration[remote] = generation
+	return generation
 }
 
 func (c *client) triggerGCInactive(remote string) {
