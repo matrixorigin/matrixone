@@ -34,6 +34,58 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 )
 
+const JsonOrderingParamFunctionName = "__mo_json_ordering_param"
+
+func normalizeJsonOrderingParam(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	_ *FunctionSelectList,
+) error {
+	from := vector.GenerateFunctionStrParameter(parameters[0])
+	to := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := from.GetStrValue(i)
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		encoded, err := encodeJsonOrderingParam(value)
+		if err != nil {
+			return err
+		}
+		if err := to.AppendBytes(encoded, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func encodeJsonOrderingParam(value []byte) ([]byte, error) {
+	trimmed := bytes.TrimSpace(value)
+	if !json.Valid(trimmed) {
+		_, err := types.ParseStringToByteJson(string(trimmed))
+		return nil, err
+	}
+
+	if len(trimmed) > 0 && (trimmed[0] == '-' || trimmed[0] >= '0' && trimmed[0] <= '9') &&
+		bytes.ContainsAny(trimmed, ".eE") {
+		data := make([]byte, binary.MaxVarintLen64+len(trimmed))
+		n := binary.PutUvarint(data, uint64(len(trimmed)))
+		copy(data[n:], trimmed)
+		return types.EncodeJson(bytejson.ByteJson{Type: bytejson.TpCodeDecimal, Data: data[:n+len(trimmed)]})
+	}
+
+	parsed, err := types.ParseStringToByteJson(string(trimmed))
+	if err != nil {
+		return nil, err
+	}
+	return types.EncodeJson(parsed)
+}
+
 type opBuiltInJsonExtract struct {
 	allConst bool
 	npath    int

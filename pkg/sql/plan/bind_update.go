@@ -23,7 +23,54 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
+
+func (builder *QueryBuilder) makeUpdatedClusterByExpr(
+	alias string,
+	tableDef *plan.TableDef,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (*plan.Expr, error) {
+	if tableDef.ClusterBy == nil || !planutil.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		return nil, nil
+	}
+
+	clusterByCols := planutil.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+	args := make([]*plan.Expr, len(clusterByCols))
+	clusterByUpdated := false
+	for i, colName := range clusterByCols {
+		qualifiedName := alias + "." + colName
+		colPos, ok := oldColName2Idx[qualifiedName]
+		if !ok {
+			return nil, moerr.NewInternalErrorf(
+				builder.GetContext(),
+				"bind update err, can not find cluster by column %s",
+				colName,
+			)
+		}
+		if updatedPos, ok := newColName2Idx[qualifiedName]; ok {
+			colPos = updatedPos
+			clusterByUpdated = true
+		}
+		args[i] = &plan.Expr{
+			Typ: selectNode.ProjectList[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: colPos,
+					Name:   colName,
+				},
+			},
+		}
+	}
+	if !clusterByUpdated {
+		return nil, nil
+	}
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+}
 
 func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext) (int32, error) {
 	dmlCtx := NewDMLContext()
@@ -80,6 +127,18 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			for colName := range dmlCtx.updateCol2Expr[i] {
 				if irregularIndexCols[colName] {
 					return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index")
+				}
+			}
+			// An UPDATE that changes a primary key column of an irregular-index table must go
+			// through the table-update path: for a synchronous FULLTEXT/IVF index that path
+			// rejects it (its hidden table is keyed by the old PK and would go stale, #25617),
+			// and for async indexes it maintains them via CDC. This binder cannot maintain
+			// either, so bail out to it (ErrUnsupportedDML triggers the fallback).
+			if tableDef.Pkey != nil {
+				for _, pkColName := range tableDef.Pkey.Names {
+					if _, ok := dmlCtx.updateCol2Expr[i][pkColName]; ok {
+						return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update primary key with vector/full-text index")
+					}
 				}
 			}
 		}
@@ -821,6 +880,17 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		alias := dmlCtx.aliases[i]
 		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
+		updatedClusterByExpr, err := builder.makeUpdatedClusterByExpr(
+			alias,
+			tableDef,
+			selectNode,
+			selectNodeTag,
+			oldColName2Idx,
+			newColName2Idx,
+		)
+		if err != nil {
+			return 0, err
+		}
 
 		for j, col := range tableDef.Cols {
 			finalColIdx := len(finalProjList)
@@ -830,21 +900,27 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				insertCols[j].ColPos = int32(finalColIdx)
 			}
 
-			colIdx := oldColName2Idx[alias+"."+col.Name]
-			if updateIdx, ok := newColName2Idx[alias+"."+col.Name]; ok {
-				colIdx = updateIdx
+			var finalExpr *plan.Expr
+			if updatedClusterByExpr != nil && col.Name == tableDef.ClusterBy.Name {
+				finalExpr = updatedClusterByExpr
+			} else {
+				colIdx := oldColName2Idx[alias+"."+col.Name]
+				if updateIdx, ok := newColName2Idx[alias+"."+col.Name]; ok {
+					colIdx = updateIdx
+				}
+				finalExpr = &plan.Expr{
+					Typ: selectNode.ProjectList[colIdx].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectNodeTag,
+							ColPos: colIdx,
+						},
+					},
+				}
 			}
 
 			finalColName2Idx[alias+"."+col.Name] = int32(finalColIdx)
-			finalProjList = append(finalProjList, &plan.Expr{
-				Typ: selectNode.ProjectList[colIdx].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectNodeTag,
-						ColPos: int32(colIdx),
-					},
-				},
-			})
+			finalProjList = append(finalProjList, finalExpr)
 		}
 
 		oldPkPos := finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]
