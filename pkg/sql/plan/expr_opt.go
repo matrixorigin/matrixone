@@ -1299,6 +1299,9 @@ func extractEqualConst(expr *plan.Expr) (*plan.Expr, *plan.Expr, bool) {
 	if fn == nil || len(fn.Args) != 2 || fn.Func.ObjName != "=" {
 		return nil, nil, false
 	}
+	if isMixedExactNumericStringExprs(fn.Args[0], fn.Args[1]) {
+		return nil, nil, false
+	}
 	if fn.Args[0].GetCol() != nil && fn.Args[1].GetLit() != nil {
 		return fn.Args[0], fn.Args[1], true
 	}
@@ -1316,6 +1319,9 @@ func extractNotEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan
 	if fn.Func.ObjName != "!=" && fn.Func.ObjName != "<>" {
 		return nil, nil, false
 	}
+	if isMixedExactNumericStringExprs(fn.Args[0], fn.Args[1]) {
+		return nil, nil, false
+	}
 	if operand, ok := extractDomainFilterOperand(fn.Args[0]); ok && fn.Args[1].GetLit() != nil {
 		return operand, fn.Args[1], true
 	}
@@ -1328,6 +1334,9 @@ func extractNotEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan
 func extractEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan.Expr, bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) != 2 || fn.Func.ObjName != "=" {
+		return nil, nil, false
+	}
+	if isMixedExactNumericStringExprs(fn.Args[0], fn.Args[1]) {
 		return nil, nil, false
 	}
 	if operand, ok := extractDomainFilterOperand(fn.Args[0]); ok && fn.Args[1].GetLit() != nil {
@@ -1482,6 +1491,9 @@ func classifyDomainConjunct(expr *plan.Expr) (*plan.Expr, domainKind, []*plan.Ex
 
 func classifyDomainEquality(fn *plan.Function, kind domainKind) (*plan.Expr, domainKind, []*plan.Expr) {
 	if len(fn.Args) != 2 {
+		return nil, domainOther, nil
+	}
+	if isMixedExactNumericStringExprs(fn.Args[0], fn.Args[1]) {
 		return nil, domainOther, nil
 	}
 	var colExpr, constExpr *plan.Expr
@@ -1879,7 +1891,7 @@ func unwrapConstLiteral(expr *plan.Expr) (*plan.Literal, plan.Type, bool) {
 			return lit, effectiveTyp, true
 		}
 		fn := expr.GetF()
-		if fn == nil || (fn.Func.ObjName != "cast" && fn.Func.ObjName != "cast_explicit") || len(fn.Args) == 0 {
+		if fn == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
 			return nil, plan.Type{}, false
 		}
 		expr = fn.Args[0]
@@ -1952,6 +1964,17 @@ func hasNonNilFunctionArgs(fn *plan.Function, argCount int) bool {
 	return true
 }
 
+func isMixedExactNumericStringExprs(left, right *plan.Expr) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	leftType, rightType := types.T(left.Typ.Id), types.T(right.Typ.Id)
+	stringAndExact := func(str, numeric types.T) bool {
+		return str.IsMySQLString() && (numeric.IsInteger() || numeric.IsDecimal())
+	}
+	return stringAndExact(leftType, rightType) || stringAndExact(rightType, leftType)
+}
+
 func (builder *QueryBuilder) bindCompositeKeySerial(args []*plan.Expr) (*plan.Expr, bool) {
 	expr, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", args)
 	return expr, err == nil && expr != nil
@@ -1989,6 +2012,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			}
 			if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
 				fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
+			}
+			if isMixedExactNumericStringExprs(fn.Args[0], fn.Args[1]) {
+				continue
 			}
 
 			col := fn.Args[0].GetCol()
@@ -2089,6 +2115,10 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 				mergedFn := subExpr.GetF()
 				if !hasNonNilFunctionArgs(mergedFn, 2) || mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
+					newOrArgs = append(newOrArgs, subExpr)
+					continue
+				}
+				if isMixedExactNumericStringExprs(mergedFn.Args[0], mergedFn.Args[1]) {
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}

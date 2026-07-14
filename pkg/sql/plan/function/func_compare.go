@@ -17,6 +17,9 @@ package function
 import (
 	"bytes"
 	"math"
+	"math/big"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -25,6 +28,183 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
+
+type exactDecimal struct {
+	negative bool
+	digits   string
+	exponent big.Int
+}
+
+func parseExactDecimal(s string) exactDecimal {
+	s = strings.TrimSpace(s)
+	s = leadingNumericString(s)
+	if s == "" {
+		return exactDecimal{digits: "0"}
+	}
+	value := exactDecimal{}
+	if s[0] == '+' || s[0] == '-' {
+		value.negative = s[0] == '-'
+		s = s[1:]
+	}
+	var exponent big.Int
+	if at := strings.IndexAny(s, "eE"); at >= 0 {
+		exponent.SetString(s[at+1:], 10)
+		s = s[:at]
+	}
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		exponent.Sub(&exponent, big.NewInt(int64(len(s)-dot-1)))
+		s = s[:dot] + s[dot+1:]
+	}
+	s = strings.TrimLeft(s, "0")
+	if s == "" {
+		return exactDecimal{digits: "0"}
+	}
+	trimmed := strings.TrimRight(s, "0")
+	if trimmed != s {
+		exponent.Add(&exponent, big.NewInt(int64(len(s)-len(trimmed))))
+		s = trimmed
+	}
+	value.digits = s
+	value.exponent.Set(&exponent)
+	return value
+}
+
+func compareExactDecimals(a, b exactDecimal) int {
+	if a.digits == "0" && b.digits == "0" {
+		return 0
+	}
+	if a.digits == "0" {
+		if b.negative {
+			return 1
+		}
+		return -1
+	}
+	if b.digits == "0" {
+		if a.negative {
+			return -1
+		}
+		return 1
+	}
+	if a.negative != b.negative {
+		if a.negative {
+			return -1
+		}
+		return 1
+	}
+	cmp := compareExactDecimalMagnitude(a, b)
+	if a.negative {
+		return -cmp
+	}
+	return cmp
+}
+
+func compareExactDecimalMagnitude(a, b exactDecimal) int {
+	var aWidth, bWidth big.Int
+	aWidth.Add(&a.exponent, big.NewInt(int64(len(a.digits))))
+	bWidth.Add(&b.exponent, big.NewInt(int64(len(b.digits))))
+	if cmp := aWidth.Cmp(&bWidth); cmp != 0 {
+		return cmp
+	}
+	maxLen := len(a.digits)
+	if len(b.digits) > maxLen {
+		maxLen = len(b.digits)
+	}
+	for i := 0; i < maxLen; i++ {
+		ad, bd := byte('0'), byte('0')
+		if i < len(a.digits) {
+			ad = a.digits[i]
+		}
+		if i < len(b.digits) {
+			bd = b.digits[i]
+		}
+		if ad < bd {
+			return -1
+		}
+		if ad > bd {
+			return 1
+		}
+	}
+	return 0
+}
+
+func exactNumericVectorString(vec *vector.Vector, row uint64) (string, bool) {
+	scale := vec.GetType().Scale
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		v, n := vector.GenerateFunctionFixedTypeParameter[int8](vec).GetValue(row)
+		return strconv.FormatInt(int64(v), 10), n
+	case types.T_int16:
+		v, n := vector.GenerateFunctionFixedTypeParameter[int16](vec).GetValue(row)
+		return strconv.FormatInt(int64(v), 10), n
+	case types.T_int32:
+		v, n := vector.GenerateFunctionFixedTypeParameter[int32](vec).GetValue(row)
+		return strconv.FormatInt(int64(v), 10), n
+	case types.T_int64:
+		v, n := vector.GenerateFunctionFixedTypeParameter[int64](vec).GetValue(row)
+		return strconv.FormatInt(v, 10), n
+	case types.T_uint8:
+		v, n := vector.GenerateFunctionFixedTypeParameter[uint8](vec).GetValue(row)
+		return strconv.FormatUint(uint64(v), 10), n
+	case types.T_uint16:
+		v, n := vector.GenerateFunctionFixedTypeParameter[uint16](vec).GetValue(row)
+		return strconv.FormatUint(uint64(v), 10), n
+	case types.T_uint32:
+		v, n := vector.GenerateFunctionFixedTypeParameter[uint32](vec).GetValue(row)
+		return strconv.FormatUint(uint64(v), 10), n
+	case types.T_uint64:
+		v, n := vector.GenerateFunctionFixedTypeParameter[uint64](vec).GetValue(row)
+		return strconv.FormatUint(v, 10), n
+	case types.T_decimal64:
+		v, n := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](vec).GetValue(row)
+		return v.Format(scale), n
+	case types.T_decimal128:
+		v, n := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](vec).GetValue(row)
+		return v.Format(scale), n
+	case types.T_decimal256:
+		v, n := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](vec).GetValue(row)
+		return v.Format(scale), n
+	default:
+		panic("unsupported exact numeric type")
+	}
+}
+
+func mixedNumericStringCompare(parameters []*vector.Vector, result vector.FunctionResultWrapper, length int,
+	selectList *FunctionSelectList, nullSafe bool, predicate func(int) bool) error {
+	stringAt := 0
+	if !parameters[0].GetType().Oid.IsMySQLString() {
+		stringAt = 1
+	}
+	stringsParam := vector.GenerateFunctionStrParameter(parameters[stringAt])
+	numeric := parameters[1-stringAt]
+	rs := vector.MustFunctionResult[bool](result)
+	rsVec := rs.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[bool](rsVec)
+	if nullSafe {
+		rsVec.GetNulls().Reset()
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			rsVec.GetNulls().Add(i)
+			continue
+		}
+		s, stringNull := stringsParam.GetStrValue(i)
+		n, numericNull := exactNumericVectorString(numeric, i)
+		if stringNull || numericNull {
+			if nullSafe {
+				values[i] = stringNull && numericNull
+			} else {
+				rsVec.GetNulls().Add(i)
+			}
+			continue
+		}
+		cmp := compareExactDecimals(parseExactDecimal(string(s)), parseExactDecimal(n))
+		if stringAt == 1 {
+			cmp = -cmp
+		}
+		values[i] = predicate(cmp)
+	}
+	return nil
+}
 
 func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
@@ -157,6 +337,9 @@ func opBinaryBytesBytesToFixedNullSafe(
 }
 
 func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if exactNumericStringComparisonSupports(*parameters[0].GetType(), *parameters[1].GetType()) {
+		return mixedNumericStringCompare(parameters, result, length, selectList, true, func(cmp int) bool { return cmp == 0 })
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 
@@ -284,6 +467,9 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 
 // should convert to c.Numeric next.
 func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if exactNumericStringComparisonSupports(*parameters[0].GetType(), *parameters[1].GetType()) {
+		return mixedNumericStringCompare(parameters, result, length, selectList, false, func(cmp int) bool { return cmp == 0 })
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 
@@ -676,6 +862,9 @@ func valueDec256Compare(
 }
 
 func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if exactNumericStringComparisonSupports(*parameters[0].GetType(), *parameters[1].GetType()) {
+		return mixedNumericStringCompare(parameters, result, length, selectList, false, func(cmp int) bool { return cmp > 0 })
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
@@ -803,6 +992,9 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if exactNumericStringComparisonSupports(*parameters[0].GetType(), *parameters[1].GetType()) {
+		return mixedNumericStringCompare(parameters, result, length, selectList, false, func(cmp int) bool { return cmp >= 0 })
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
@@ -930,6 +1122,9 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 }
 
 func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if exactNumericStringComparisonSupports(*parameters[0].GetType(), *parameters[1].GetType()) {
+		return mixedNumericStringCompare(parameters, result, length, selectList, false, func(cmp int) bool { return cmp != 0 })
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
@@ -1057,6 +1252,9 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if exactNumericStringComparisonSupports(*parameters[0].GetType(), *parameters[1].GetType()) {
+		return mixedNumericStringCompare(parameters, result, length, selectList, false, func(cmp int) bool { return cmp < 0 })
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
@@ -1184,6 +1382,9 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if exactNumericStringComparisonSupports(*parameters[0].GetType(), *parameters[1].GetType()) {
+		return mixedNumericStringCompare(parameters, result, length, selectList, false, func(cmp int) bool { return cmp <= 0 })
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {

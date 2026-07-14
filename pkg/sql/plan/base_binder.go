@@ -1747,39 +1747,6 @@ func tryFoldNumericStringConst(ctx context.Context, strExpr *plan.Expr, otherTyp
 	return expr
 }
 
-func isExactNumericConst(expr *plan.Expr) bool {
-	if expr.GetLit() == nil || expr.GetLit().Isnull {
-		return false
-	}
-	typ := types.T(expr.Typ.Id)
-	return typ.IsInteger() || typ.IsDecimal()
-}
-
-func exactNumericStringComparisonType() plan.Type {
-	typ := types.New(types.T_decimal256, 76, 38)
-	return makePlan2Type(&typ)
-}
-
-func alignStringWithExactNumericConsts(ctx context.Context, args []*plan.Expr) error {
-	if len(args) < 2 || !types.T(args[0].Typ.Id).IsMySQLString() {
-		return nil
-	}
-	for _, arg := range args[1:] {
-		if !isExactNumericConst(arg) {
-			return nil
-		}
-	}
-	target := exactNumericStringComparisonType()
-	for i := range args {
-		casted, err := appendCastBeforeExpr(ctx, args[i], target)
-		if err != nil {
-			return err
-		}
-		args[i] = casted
-	}
-	return nil
-}
-
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
@@ -1823,16 +1790,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			if folded := tryFoldNumericStringConst(ctx, args[1], t0); folded != nil {
 				args[1] = folded
 			}
-			if types.T(args[1].Typ.Id).IsMySQLString() && isExactNumericConst(args[0]) {
-				args[0], args[1] = args[1], args[0]
-				err = alignStringWithExactNumericConsts(ctx, args)
-				args[0], args[1] = args[1], args[0]
-			} else {
-				err = alignStringWithExactNumericConsts(ctx, args)
-			}
-			if err != nil {
-				return nil, err
-			}
 		}
 
 		// Early detection for decimal comparisons
@@ -1856,9 +1813,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				if folded := tryFoldNumericStringConst(ctx, args[i], t0); folded != nil {
 					args[i] = folded
 				}
-			}
-			if err = alignStringWithExactNumericConsts(ctx, args); err != nil {
-				return nil, err
 			}
 		}
 	case "date_add", "date_sub":
@@ -2148,14 +2102,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
-			if types.T(args[0].Typ.Id).IsMySQLString() {
-				comparisonArgs := append([]*plan.Expr{args[0]}, rightList.List...)
-				if err = alignStringWithExactNumericConsts(ctx, comparisonArgs); err != nil {
-					return nil, err
-				}
-				args[0] = comparisonArgs[0]
-				copy(rightList.List, comparisonArgs[1:])
-			}
 			typLeft := makeTypeByPlan2Expr(args[0])
 			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr

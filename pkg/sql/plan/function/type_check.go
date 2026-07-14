@@ -99,6 +99,9 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 
 func comparisonTypeCastRule(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	if (s1.IsNumeric() && s2.Oid.IsMySQLString()) || (s2.IsNumeric() && s1.Oid.IsMySQLString()) {
+		if exactNumericStringComparisonSupports(s1, s2) {
+			return false, s1, s2
+		}
 		// MySQL compares numeric values with non-constant strings as
 		// floating-point (double-precision) numbers.  String literals
 		// never reach this rule at plan time: the binder folds them
@@ -108,6 +111,13 @@ func comparisonTypeCastRule(s1, s2 types.Type) (bool, types.Type, types.Type) {
 		return true, types.T_float64.ToType(), types.T_float64.ToType()
 	}
 	return fixedTypeCastRule1(s1, s2)
+}
+
+func exactNumericStringComparisonSupports(s1, s2 types.Type) bool {
+	stringAndExact := func(str, numeric types.Type) bool {
+		return str.Oid.IsMySQLString() && (numeric.Oid.IsInteger() || numeric.Oid.IsDecimal())
+	}
+	return stringAndExact(s1, s2) || stringAndExact(s2, s1)
 }
 
 // a fixed type cast rule for

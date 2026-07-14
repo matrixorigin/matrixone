@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -189,7 +190,7 @@ func TestBindComparisonFoldsNumericString(t *testing.T) {
 		}
 	})
 
-	t.Run("string column preserves fractions on exact numeric path", func(t *testing.T) {
+	t.Run("dynamic string column keeps exact mixed types", func(t *testing.T) {
 		stringCol := &plan.Expr{
 			Typ:  makePlan2Type(&types.Type{Oid: types.T_varchar}),
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "s"}},
@@ -199,14 +200,29 @@ func TestBindComparisonFoldsNumericString(t *testing.T) {
 			makePlan2Int64ConstExprWithType(9007199254740993),
 		})
 		require.NoError(t, err)
-		for _, arg := range expr.GetF().GetArgs() {
-			require.Equal(t, int32(types.T_decimal256), arg.Typ.Id)
-			require.Equal(t, int32(38), arg.Typ.Scale)
-		}
-		require.Equal(t, "cast", expr.GetF().GetArgs()[0].GetF().GetFunc().GetObjName())
+		require.Equal(t, int32(types.T_varchar), expr.GetF().GetArgs()[0].Typ.Id)
+		require.Equal(t, int32(types.T_int64), expr.GetF().GetArgs()[1].Typ.Id)
 	})
 
-	t.Run("string column between uses same exact type", func(t *testing.T) {
+	checkMixedComparisons := func(t *testing.T, expr *plan.Expr) {
+		var check func(*plan.Expr)
+		check = func(current *plan.Expr) {
+			fn := current.GetF()
+			require.NotNil(t, fn)
+			if fn.Func.ObjName == "=" || fn.Func.ObjName == ">=" || fn.Func.ObjName == "<=" {
+				require.Equal(t, int32(types.T_varchar), fn.Args[0].Typ.Id)
+				require.Equal(t, int32(types.T_int64), fn.Args[1].Typ.Id)
+				return
+			}
+			require.Equal(t, "or", fn.Func.ObjName)
+			for _, arg := range fn.Args {
+				check(arg)
+			}
+		}
+		check(expr)
+	}
+
+	t.Run("string column between uses mixed comparisons", func(t *testing.T) {
 		stringCol := &plan.Expr{
 			Typ:  makePlan2Type(&types.Type{Oid: types.T_varchar}),
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "s"}},
@@ -217,12 +233,16 @@ func TestBindComparisonFoldsNumericString(t *testing.T) {
 			makePlan2Int64ConstExprWithType(9007199254740993),
 		})
 		require.NoError(t, err)
-		for _, arg := range expr.GetF().GetArgs() {
-			require.Equal(t, int32(types.T_decimal256), arg.Typ.Id)
+		fn := expr.GetF()
+		require.Equal(t, "and", fn.Func.ObjName)
+		for _, arg := range fn.Args {
+			comparison := arg.GetF()
+			require.Equal(t, int32(types.T_varchar), comparison.Args[0].Typ.Id)
+			require.Equal(t, int32(types.T_int64), comparison.Args[1].Typ.Id)
 		}
 	})
 
-	t.Run("string column in uses same exact type", func(t *testing.T) {
+	t.Run("string column in uses mixed comparisons", func(t *testing.T) {
 		stringCol := &plan.Expr{
 			Typ:  makePlan2Type(&types.Type{Oid: types.T_varchar}),
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "s"}},
@@ -236,22 +256,7 @@ func TestBindComparisonFoldsNumericString(t *testing.T) {
 		}
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "in", []*plan.Expr{stringCol, values})
 		require.NoError(t, err)
-		var checkComparisons func(*plan.Expr)
-		checkComparisons = func(current *plan.Expr) {
-			fn := current.GetF()
-			require.NotNil(t, fn)
-			if fn.Func.ObjName == "=" {
-				for _, arg := range fn.Args {
-					require.Equal(t, int32(types.T_decimal256), arg.Typ.Id)
-				}
-				return
-			}
-			require.Equal(t, "or", fn.Func.ObjName)
-			for _, arg := range fn.Args {
-				checkComparisons(arg)
-			}
-		}
-		checkComparisons(expr)
+		checkMixedComparisons(t, expr)
 	})
 
 	t.Run("between folds both bounds", func(t *testing.T) {
@@ -293,4 +298,25 @@ func TestBindComparisonFoldsNumericString(t *testing.T) {
 			require.True(t, types.T(arg.Typ.Id).IsMySQLString())
 		}
 	})
+}
+
+func TestBuildPlanKeepsMixedNumericStringComparison(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(),
+		"select n_name from nation where n_name = 9007199254740993", 1)
+	require.NoError(t, err)
+	query, err := NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false)
+	require.NoError(t, err)
+	require.NotNil(t, query)
+	var filter *plan.Expr
+	for _, node := range query.Nodes {
+		if len(node.FilterList) > 0 {
+			filter = node.FilterList[0]
+			break
+		}
+	}
+	require.NotNil(t, filter)
+	args := filter.GetF().GetArgs()
+	require.Equal(t, int32(types.T_varchar), args[0].Typ.Id)
+	require.Equal(t, int32(types.T_int64), args[1].Typ.Id)
 }

@@ -41,7 +41,7 @@ func TestFloatDomainKeyNormalizesSignedZero(t *testing.T) {
 	require.Equal(t, positiveKey, negativeKey)
 }
 
-func TestUnwrapConstLiteralRecognizesExplicitCast(t *testing.T) {
+func TestDomainLiteralRejectsUnevaluatedExplicitCast(t *testing.T) {
 	expr, err := appendCastBeforeExprWithName(
 		context.Background(),
 		MakePlan2Int64ConstExprWithType(42),
@@ -51,46 +51,42 @@ func TestUnwrapConstLiteralRecognizesExplicitCast(t *testing.T) {
 	require.NoError(t, err)
 
 	lit, typ, ok := unwrapConstLiteral(expr)
-	require.True(t, ok)
-	require.NotNil(t, lit)
-	require.Equal(t, int32(types.T_decimal128), typ.Id)
-	require.Equal(t, int64(42), lit.GetI64Val())
+	require.False(t, ok)
+	require.Nil(t, lit)
+	require.Equal(t, planpb.Type{}, typ)
 	require.Same(t, expr, stripConstLiteralCasts(expr))
-
-	col := &planpb.Expr{
-		Typ:  planpb.Type{Id: int32(types.T_int64)},
-		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "a"}},
-	}
-	rebuilt, err := buildColumnDomainExpr(context.Background(), col, []*planpb.Expr{
-		expr,
-		MakePlan2Int64ConstExprWithType(2),
-	})
-	require.NoError(t, err)
-	require.True(t, exprContainsFunction(rebuilt, "cast_explicit"))
 }
 
-func exprContainsFunction(expr *planpb.Expr, name string) bool {
-	if expr == nil {
-		return false
+func TestCompositeKeyMergeKeepsMixedNumericStringOr(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	col := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: tag, ColPos: 0, Name: "a"}},
 	}
-	if fn := expr.GetF(); fn != nil {
-		if fn.Func.ObjName == name {
-			return true
-		}
-		for _, arg := range fn.Args {
-			if exprContainsFunction(arg, name) {
-				return true
-			}
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if exprContainsFunction(item, name) {
-				return true
-			}
-		}
-	}
-	return false
+	left, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		DeepCopyExpr(col), MakePlan2Int64ConstExprWithType(9007199254740992),
+	})
+	require.NoError(t, err)
+	_, _, ok := extractEqualConstForDomain(left)
+	require.False(t, ok)
+	_, kind, values := classifyDomainConjunct(left)
+	require.Equal(t, domainOther, kind)
+	require.Nil(t, values)
+	right, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		DeepCopyExpr(col), MakePlan2Int64ConstExprWithType(9007199254740993),
+	})
+	require.NoError(t, err)
+	orExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "or", []*planpb.Expr{left, right})
+	require.NoError(t, err)
+	merged, changed := builder.mergeEqualsInOr(DeepCopyExpr(orExpr))
+	require.False(t, changed)
+	require.Equal(t, "or", merged.GetF().GetFunc().GetObjName())
+
+	ret := builder.doMergeFiltersOnCompositeKey(makeExprOptCompositeSortKeyTableDef(), tag, orExpr)
+	require.Len(t, ret, 1)
+	require.Equal(t, "or", ret[0].GetF().GetFunc().GetObjName())
 }
 
 func TestDoMergeFiltersOnCompositeKeyKeepsNonSortKeyRanges(t *testing.T) {

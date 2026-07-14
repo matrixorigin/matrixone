@@ -568,3 +568,38 @@ func TestNullSafeEqualFn(t *testing.T) {
 	s, info = fcTCArrF64.Run()
 	require.True(t, s, info, tcArrF64.info)
 }
+
+func TestMixedNumericStringComparisonExact(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	stringsInput := NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"9007199254740992", "9007199254740993", "1.7", "1abc", "1e-50", "1e999999999999999999"},
+		[]bool{false, false, false, false, false, false})
+	integersInput := NewFunctionTestInput(types.T_int64.ToType(),
+		[]int64{9007199254740993, 9007199254740993, 1, 1, 0, math.MaxInt64},
+		[]bool{false, false, false, false, false, false})
+
+	tests := []struct {
+		name   string
+		fn     fEvalFn
+		expect []bool
+	}{
+		{"equal", equalFn, []bool{false, true, false, true, false, false}},
+		{"greater", greatThanFn, []bool{false, false, true, false, true, true}},
+		{"null safe equal", nullSafeEqualFn, []bool{false, true, false, true, false, false}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{stringsInput, integersInput},
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.expect, make([]bool, len(test.expect))), test.fn)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestCompareExactDecimalsWithUnboundedExponent(t *testing.T) {
+	larger := parseExactDecimal("1e99999999999999999999999999999999999999")
+	smaller := parseExactDecimal("9e88888888888888888888888888888888888888")
+	require.Positive(t, compareExactDecimals(larger, smaller))
+	require.Negative(t, compareExactDecimals(parseExactDecimal("-1e99999999999999999999999999999999999999"), smaller))
+}

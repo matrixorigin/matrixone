@@ -21,19 +21,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestComparisonTypeCastRuleNumericString verifies that comparing a
-// numeric value with a non-constant string routes both sides through
-// DOUBLE, matching MySQL's documented comparison semantics.  String
-// literals never reach this rule: the binder folds them into exact
-// numeric constants first (tryFoldNumericStringConst).
+// TestComparisonTypeCastRuleNumericString verifies that exact numeric values
+// keep their original types for the mixed comparison kernel. Floating-point
+// operands retain the existing DOUBLE conversion semantics.
 func TestComparisonTypeCastRuleNumericString(t *testing.T) {
 	double := types.T_float64.ToType()
-	numerics := []types.Type{
+	exactNumerics := []types.Type{
 		types.T_int8.ToType(),
 		types.T_int64.ToType(),
 		types.T_uint64.ToType(),
-		types.T_float32.ToType(),
-		types.T_float64.ToType(),
 		types.T_decimal64.ToType(),
 		types.T_decimal128.ToType(),
 	}
@@ -42,18 +38,24 @@ func TestComparisonTypeCastRuleNumericString(t *testing.T) {
 		types.T_varchar.ToType(),
 		types.T_text.ToType(),
 	}
-	for _, n := range numerics {
+	for _, n := range exactNumerics {
 		for _, s := range strs {
 			has, t1, t2 := comparisonTypeCastRule(n, s)
-			require.True(t, has, "%v = %v", n, s)
-			require.Equal(t, double.Oid, t1.Oid, "%v = %v", n, s)
-			require.Equal(t, double.Oid, t2.Oid, "%v = %v", n, s)
+			require.False(t, has, "%v = %v", n, s)
+			require.Equal(t, n.Oid, t1.Oid, "%v = %v", n, s)
+			require.Equal(t, s.Oid, t2.Oid, "%v = %v", n, s)
 
 			has, t1, t2 = comparisonTypeCastRule(s, n)
-			require.True(t, has, "%v = %v", s, n)
-			require.Equal(t, double.Oid, t1.Oid, "%v = %v", s, n)
-			require.Equal(t, double.Oid, t2.Oid, "%v = %v", s, n)
+			require.False(t, has, "%v = %v", s, n)
+			require.Equal(t, s.Oid, t1.Oid, "%v = %v", s, n)
+			require.Equal(t, n.Oid, t2.Oid, "%v = %v", s, n)
 		}
+	}
+	for _, n := range []types.Type{types.T_float32.ToType(), double} {
+		has, t1, t2 := comparisonTypeCastRule(n, types.T_varchar.ToType())
+		require.True(t, has)
+		require.Equal(t, double.Oid, t1.Oid)
+		require.Equal(t, double.Oid, t2.Oid)
 	}
 
 	// Non-numeric operands keep following the fixed rule table.
