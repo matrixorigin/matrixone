@@ -37,6 +37,7 @@ const (
 
 type Worker interface {
 	Submit(iteration *IterationContext) error
+	// Stop cancels running work and discards work that has not started.
 	Stop()
 }
 
@@ -50,6 +51,39 @@ type worker struct {
 	cancel      context.CancelFunc
 	ctx         context.Context
 	closed      atomic.Bool
+	stopOnce    sync.Once
+	admissions  workerAdmissionGate
+}
+
+type workerAdmissionGate struct {
+	mu sync.RWMutex
+	wg sync.WaitGroup
+}
+
+// enter registers a sender before it can block. seal excludes new senders,
+// cancels blocked ones, and waits until no sender can arrive after draining.
+func (g *workerAdmissionGate) enter(closed *atomic.Bool) bool {
+	if closed.Load() {
+		return false
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if closed.Load() {
+		return false
+	}
+	g.wg.Add(1)
+	return true
+}
+
+func (g *workerAdmissionGate) leave() {
+	g.wg.Done()
+}
+
+func (g *workerAdmissionGate) seal(cancel context.CancelFunc) {
+	g.mu.Lock()
+	cancel()
+	g.mu.Unlock()
+	g.wg.Wait()
 }
 
 func NewWorker(cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, mp *mpool.MPool) Worker {
@@ -95,9 +129,10 @@ func (w *worker) Submit(iteration *IterationContext) error {
 	if iteration == nil {
 		return moerr.NewInternalErrorNoCtx("cannot submit a nil ISCP iteration")
 	}
-	if w.closed.Load() {
+	if !w.admissions.enter(&w.closed) {
 		return moerr.NewInternalErrorNoCtx("ISCP-Worker is closed")
 	}
+	defer w.admissions.leave()
 	select {
 	case w.taskChan <- iteration:
 		return nil
@@ -176,9 +211,16 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 }
 
 func (w *worker) Stop() {
-	if !w.closed.CompareAndSwap(false, true) {
-		return
-	}
-	w.cancel()
-	w.wg.Wait()
+	w.stopOnce.Do(func() {
+		w.closed.Store(true)
+		w.admissions.seal(w.cancel)
+		w.wg.Wait()
+		for {
+			select {
+			case <-w.taskChan:
+			default:
+				return
+			}
+		}
+	})
 }

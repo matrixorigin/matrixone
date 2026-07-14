@@ -61,6 +61,29 @@ func TestWorkerPoolsStopIdempotently(t *testing.T) {
 	}
 }
 
+func TestWorkerPoolsDrainPendingJobsOnStop(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previousProcs)
+	previousStats := globalJobStats
+	globalJobStats = &JobStats{}
+	defer func() { globalJobStats = previousStats }()
+
+	filterWorker := NewFilterObjectWorker()
+	require.NoError(t, filterWorker.SubmitFilterObject(&mockJob{}))
+	filterWorker.Stop()
+	require.Zero(t, globalJobStats.FilterObjectPending.Load())
+
+	getChunkWorker := NewGetChunkWorker()
+	require.NoError(t, getChunkWorker.SubmitGetChunk(&mockJob{}))
+	getChunkWorker.Stop()
+	require.Zero(t, globalJobStats.GetChunkPending.Load())
+
+	writeObjectWorker := NewWriteObjectWorker()
+	require.NoError(t, writeObjectWorker.SubmitWriteObject(&mockJob{}))
+	writeObjectWorker.Stop()
+	require.Zero(t, globalJobStats.WriteObjectPending.Load())
+}
+
 func TestSimpleWorkerCancellationUnblocksSubmitAndRollsBackPending(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	jobs := make(chan Job, 1)
@@ -78,6 +101,20 @@ func TestSimpleWorkerCancellationUnblocksSubmitAndRollsBackPending(t *testing.T)
 	cancel()
 	require.Error(t, w.submit(&mockJob{}))
 	require.Zero(t, pending.Load())
+}
+
+func TestWorkerStopClearsAndSealsSyncProtection(t *testing.T) {
+	w := &worker{
+		syncProtectionJobs: make(map[string]*syncProtectionEntry),
+	}
+	w.ctx, w.cancel = context.WithCancel(context.Background())
+	w.RegisterSyncProtection("before-stop", 1)
+
+	w.Stop()
+	require.Zero(t, w.GetSyncProtectionTTL("before-stop"))
+
+	w.RegisterSyncProtection("after-stop", 2)
+	require.Zero(t, w.GetSyncProtectionTTL("after-stop"))
 }
 
 func TestGetJobStats(t *testing.T) {
