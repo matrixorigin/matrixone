@@ -242,10 +242,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			})
 		}
 
-		var err error
 		for i, idxDef := range tableDef.Indexes {
 			if skipUniqueIdx[i] {
 				continue
+			}
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			if err != nil {
+				return 0, err
 			}
 			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
 			if err != nil {
@@ -255,11 +258,31 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTablePrimaryColName] = oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 
 			if !indexTableStoresSerializedKey(idxDef) {
-				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = oldColName2Idx[tableDef.Name+"."+indexPrimaryPartName(idxDef)]
+				partName := indexPrimaryPartName(idxDef)
+				if prefixLengths[partName] > 0 {
+					colIdx := tableDef.Name2ColIndex[partName]
+					partExpr := &plan.Expr{
+						Typ: tableDef.Cols[colIdx].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{RelPos: oldScanTag, ColPos: colIdx},
+						},
+					}
+					idxExpr, err := builder.makeIndexPartExprFromInputExpr(partExpr, partName, prefixLengths)
+					if err != nil {
+						return 0, err
+					}
+					oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = [2]int32{
+						fullProjTag, int32(len(fullProjList)),
+					}
+					fullProjList = append(fullProjList, idxExpr)
+				} else {
+					oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = oldColName2Idx[tableDef.Name+"."+partName]
+				}
 			} else {
 				args := make([]*plan.Expr, len(idxDef.Parts))
 				for j, part := range idxDef.Parts {
-					colIdx := tableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+					partName := catalog.ResolveAlias(part)
+					colIdx := tableDef.Name2ColIndex[partName]
 					args[j] = &plan.Expr{
 						Typ: tableDef.Cols[colIdx].Typ,
 						Expr: &plan.Expr_Col{
@@ -268,6 +291,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 								ColPos: colIdx,
 							},
 						},
+					}
+					if prefixLengths[partName] > 0 {
+						args[j], err = builder.makeIndexPartExprFromInputExpr(args[j], partName, prefixLengths)
+						if err != nil {
+							return 0, err
+						}
 					}
 				}
 
@@ -300,6 +329,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				if !idxDef.Unique || skipUniqueIdx[i] {
 					continue
 				}
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return 0, err
+				}
 				var ukPartConds []*plan.Expr
 				for _, part := range idxDef.Parts {
 					colName := catalog.ResolveAlias(part)
@@ -322,6 +355,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 								ColPos: colIdx,
 							},
 						},
+					}
+					if prefixLengths[colName] > 0 {
+						lExpr, err = builder.makeIndexPartExprFromInputExpr(lExpr, colName, prefixLengths)
+						if err != nil {
+							return 0, err
+						}
+						rExpr, err = builder.makeIndexPartExprFromInputExpr(rExpr, colName, prefixLengths)
+						if err != nil {
+							return 0, err
+						}
 					}
 					partCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{lExpr, rExpr})
 					ukPartConds = append(ukPartConds, partCond)
@@ -363,6 +406,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				if !idxDef.Unique || skipUniqueIdx[i] {
 					continue
 				}
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return 0, err
+				}
 				var ukPartConds []*plan.Expr
 				for _, part := range idxDef.Parts {
 					colName := catalog.ResolveAlias(part)
@@ -385,6 +432,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 								ColPos: colIdx,
 							},
 						},
+					}
+					if prefixLengths[colName] > 0 {
+						lExpr, err = builder.makeIndexPartExprFromInputExpr(lExpr, colName, prefixLengths)
+						if err != nil {
+							return 0, err
+						}
+						rExpr, err = builder.makeIndexPartExprFromInputExpr(rExpr, colName, prefixLengths)
+						if err != nil {
+							return 0, err
+						}
 					}
 					partCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{lExpr, rExpr})
 					ukPartConds = append(ukPartConds, partCond)
@@ -843,7 +900,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		deleteCols := make([]plan.ColRef, 2)
 
 		newIdxPos := colName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
-		if indexTableStoresSerializedKey(idxDef) {
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			return 0, err
+		}
+		partName := indexPrimaryPartName(idxDef)
+		if indexTableStoresSerializedKey(idxDef) || prefixLengths[partName] > 0 {
 			idxExpr := &plan.Expr{
 				Typ: fullProjList[newIdxPos].Typ,
 				Expr: &plan.Expr_Col{
@@ -1136,8 +1198,23 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 		idxTableName := idxDef.IndexTableName
 		colName2Idx[idxTableName+"."+catalog.IndexTablePrimaryColName] = pkPos
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			return 0, nil, nil, err
+		}
 		if !indexTableStoresSerializedKey(idxDef) {
-			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+indexPrimaryPartName(idxDef)]
+			partName := indexPrimaryPartName(idxDef)
+			partPos := colName2Idx[tableDef.Name+"."+partName]
+			if prefixLengths[partName] > 0 {
+				idxExpr, err := builder.makeIndexPartExprFromInputExpr(projList2[partPos], partName, prefixLengths)
+				if err != nil {
+					return 0, nil, nil, err
+				}
+				colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = int32(len(projList2))
+				projList2 = append(projList2, idxExpr)
+			} else {
+				colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = partPos
+			}
 		} else {
 			argsLen := len(idxDef.Parts)
 			args := make([]*plan.Expr, argsLen)
@@ -1149,7 +1226,15 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 					errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", idxDef.Parts[k])
 					return 0, nil, nil, moerr.NewInternalError(builder.GetContext(), errMsg)
 				}
-				args[k] = DeepCopyExpr(projList2[colPos])
+				partName := catalog.ResolveAlias(idxDef.Parts[k])
+				if prefixLengths[partName] > 0 {
+					args[k], err = builder.makeIndexPartExprFromInputExpr(projList2[colPos], partName, prefixLengths)
+					if err != nil {
+						return 0, nil, nil, err
+					}
+				} else {
+					args[k] = DeepCopyExpr(projList2[colPos])
+				}
 			}
 
 			funcName := "serial"

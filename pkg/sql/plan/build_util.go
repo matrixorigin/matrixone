@@ -1232,9 +1232,13 @@ func genParentSideReplaceFKSqls(
 		return quoteIdentifier(alias) + "." + quoteIdentifier(name)
 	}
 
-	uniqueKeys := make([][]string, 0, 1+len(parent.Indexes))
+	type uniqueKey struct {
+		parts         []string
+		prefixLengths map[string]int
+	}
+	uniqueKeys := make([]uniqueKey, 0, 1+len(parent.Indexes))
 	if parent.Pkey != nil && len(parent.Pkey.Names) > 0 {
-		uniqueKeys = append(uniqueKeys, parent.Pkey.Names)
+		uniqueKeys = append(uniqueKeys, uniqueKey{parts: parent.Pkey.Names})
 	}
 	for _, idx := range parent.Indexes {
 		if !idx.Unique {
@@ -1244,17 +1248,22 @@ func genParentSideReplaceFKSqls(
 		for i, part := range idx.Parts {
 			parts[i] = catalog.ResolveAlias(part)
 		}
-		uniqueKeys = append(uniqueKeys, parts)
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idx.IndexAlgoParams)
+		if err != nil {
+			return nil, nil, err
+		}
+		uniqueKeys = append(uniqueKeys, uniqueKey{parts: parts, prefixLengths: prefixLengths})
 	}
 
 	const parentAlias = "__mo_replace_parent"
+	literalFmt := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	conflictPredicates := make([]string, 0, len(values.Rows)*len(uniqueKeys))
 	for _, row := range values.Rows {
 		for _, key := range uniqueKeys {
-			parts := make([]string, 0, len(key))
+			parts := make([]string, 0, len(key.parts))
 			missing := 0
 			allMissingAutoIncrement := true
-			for _, colName := range key {
+			for _, colName := range key.parts {
 				pos, supplied := positions[colName]
 				if !supplied || pos >= len(row) {
 					missing++
@@ -1266,13 +1275,20 @@ func genParentSideReplaceFKSqls(
 				}
 				switch row[pos].(type) {
 				case *tree.NumVal, *tree.StrVal:
-					parts = append(parts, fmt.Sprintf("%s = %s",
-						qualifiedCol(parentAlias, colName), tree.String(row[pos], dialect.MYSQL)))
+					parentExpr := qualifiedCol(parentAlias, colName)
+					row[pos].Format(literalFmt)
+					incomingExpr := literalFmt.String()
+					literalFmt.Reset()
+					if length := key.prefixLengths[colName]; length > 0 {
+						parentExpr = fmt.Sprintf("substring(%s, 1, %d)", parentExpr, length)
+						incomingExpr = fmt.Sprintf("substring(%s, 1, %d)", incomingExpr, length)
+					}
+					parts = append(parts, fmt.Sprintf("%s = %s", parentExpr, incomingExpr))
 				default:
 					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE with a non-literal conflict key")
 				}
 			}
-			if missing == len(key) && allMissingAutoIncrement {
+			if missing == len(key.parts) && allMissingAutoIncrement {
 				continue
 			}
 			if missing != 0 {

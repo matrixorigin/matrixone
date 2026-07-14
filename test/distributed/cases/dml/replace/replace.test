@@ -360,6 +360,17 @@ select * from fk_fanout_c;
 drop table fk_fanout_c;
 drop table fk_fanout_p;
 
+create table fk_prefix_p(id int primary key, body varchar(64), unique key u(body(4)));
+create table fk_prefix_c(id int primary key, pid int,
+  foreign key(pid) references fk_prefix_p(id) on delete cascade);
+insert into fk_prefix_p values (1, 'abcdxxxx');
+insert into fk_prefix_c values (1, 1);
+replace into fk_prefix_p values (2, 'abcdyyyy');
+select * from fk_prefix_p;
+select * from fk_prefix_c;
+drop table fk_prefix_c;
+drop table fk_prefix_p;
+
 create table fk_param_p(id int primary key, v int);
 create table fk_param_c(id int primary key, pid int,
   foreign key(pid) references fk_param_p(id) on delete restrict);

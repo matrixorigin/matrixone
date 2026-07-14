@@ -3125,6 +3125,26 @@ func TestReplaceParentSideFKUnsupportedSources(t *testing.T) {
 	}
 }
 
+func TestReplaceParentSideFKUniquePrefixConflict(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	parent := DeepCopyTableDef(mock.ctxt.tables["replace_fk_cp"], true)
+	parent.Indexes = append(parent.Indexes, &plan.IndexDef{
+		Unique:          true,
+		Parts:           []string{"v"},
+		IndexAlgoParams: `{"prefix_lengths":"v:4"}`,
+	})
+	stmt, err := mysql.ParseOne(context.Background(),
+		"REPLACE INTO replace_fk_cp VALUES (2, 'abcdyyyy')", 1)
+	require.NoError(t, err)
+
+	_, actions, err := genParentSideReplaceFKSqls(
+		&mock.ctxt, mock.ctxt.objects["replace_fk_cp"], parent, stmt.(*tree.Replace))
+	require.NoError(t, err)
+	require.Len(t, actions, 1)
+	assert.Contains(t, actions[0], "substring(`__mo_replace_parent`.`v`, 1, 4)")
+	assert.Contains(t, actions[0], `substring("abcdyyyy", 1, 4)`)
+}
+
 func TestReplaceODKU(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// INSERT ON DUPLICATE KEY UPDATE should be rewritten to REPLACE path
