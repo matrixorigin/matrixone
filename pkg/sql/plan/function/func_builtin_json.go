@@ -44,6 +44,8 @@ type opBuiltInJsonExtract struct {
 
 type opBuiltInJsonContains struct{}
 
+type opBuiltInJsonMerge struct{}
+
 type jsonContainsPathMode uint8
 
 const (
@@ -76,6 +78,10 @@ func newOpBuiltInJsonExtract() *opBuiltInJsonExtract {
 
 func newOpBuiltInJsonContains() *opBuiltInJsonContains {
 	return &opBuiltInJsonContains{}
+}
+
+func newOpBuiltInJsonMerge() *opBuiltInJsonMerge {
+	return &opBuiltInJsonMerge{}
 }
 
 func newOpBuiltInJsonContainsPath() *opBuiltInJsonContainsPath {
@@ -1371,6 +1377,31 @@ func jsonRemoveCheckFn(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithCast(0, ts)
 }
 
+func jsonMergeCheckFn(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) < 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	ts := make([]types.Type, len(inputs))
+	allMatch := true
+	for i, input := range inputs {
+		switch {
+		case input.Oid == types.T_json || input.Oid.IsMySQLString():
+			ts[i] = input
+		case input.Oid == types.T_any:
+			ts[i] = types.T_varchar.ToType()
+			allMatch = false
+		default:
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+	}
+
+	if allMatch {
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithCast(0, ts)
+}
+
 func (op *opBuiltInJsonSet) buildJsonSet(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifySet)
 }
@@ -1451,6 +1482,127 @@ rowLoop:
 		}
 	}
 	return nil
+}
+
+func (op *opBuiltInJsonMerge) buildJsonMergePatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var merged bytejson.ByteJson
+		known := false
+		for j, parameter := range parameters {
+			document, isSQLNull, err := jsonMergeDocument(parameter, i)
+			if err != nil {
+				return err
+			}
+			if isSQLNull {
+				known = false
+				continue
+			}
+
+			if j == 0 || document.Type != bytejson.TpCodeObject {
+				merged = document
+				known = true
+				continue
+			}
+			if known {
+				merged, err = merged.MergePatch(document)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		if !known {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendByteJson(merged, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (op *opBuiltInJsonMerge) buildJsonMergePreserve(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+rowLoop:
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var merged bytejson.ByteJson
+		for j, parameter := range parameters {
+			document, isSQLNull, err := jsonMergeDocument(parameter, i)
+			if err != nil {
+				return err
+			}
+			if isSQLNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue rowLoop
+			}
+
+			if j == 0 {
+				merged = document
+				continue
+			}
+			merged, err = merged.MergePreserve(document)
+			if err != nil {
+				return err
+			}
+		}
+		if err := rs.AppendByteJson(merged, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func jsonMergeDocument(parameter *vector.Vector, row uint64) (bytejson.ByteJson, bool, error) {
+	documentBytes, isSQLNull := vector.GenerateFunctionStrParameter(parameter).GetStrValue(row)
+	if isSQLNull {
+		return bytejson.Null, true, nil
+	}
+	if parameter.GetType().Oid == types.T_json {
+		return types.DecodeJson(documentBytes), false, nil
+	}
+	document, err := types.ParseSliceToByteJson(documentBytes)
+	if err != nil {
+		return bytejson.Null, false, err
+	}
+	return document, false, nil
 }
 
 func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, jsonFuncType bytejson.JsonModifyType) error {
