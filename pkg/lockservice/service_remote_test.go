@@ -62,6 +62,97 @@ func TestLockBlockedOnRemote(t *testing.T) {
 	)
 }
 
+func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2", "s3"},
+		func(_ *lockTableAllocator, s []*service) {
+			owner := s[0]
+			holderService := s[1]
+			waiterService := s[2]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const tableID = uint64(10)
+			row := []byte("row")
+			seedTxn := []byte("seed")
+			holderTxn := []byte("remote-holder")
+			activeWaiterTxn := []byte("active-waiter")
+
+			// Bind the table to owner, then acquire it through holderService so
+			// fetchWhoWaitingMe has to query a remote lock table.
+			mustAddTestLock(t, ctx, owner, tableID, seedTxn, [][]byte{row}, pb.Granularity_Row)
+			require.NoError(t, owner.Unlock(ctx, seedTxn, timestamp.Timestamp{}))
+			mustAddTestLock(t, ctx, holderService, tableID, holderTxn, [][]byte{row}, pb.Granularity_Row)
+
+			waitResult := make(chan error, 1)
+			go func() {
+				_, err := waiterService.Lock(
+					ctx,
+					tableID,
+					[][]byte{row},
+					activeWaiterTxn,
+					newTestRowExclusiveOptions(),
+				)
+				waitResult <- err
+			}()
+			defer func() {
+				require.NoError(t, holderService.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+				require.NoError(t, <-waitResult)
+				require.NoError(t, waiterService.Unlock(ctx, activeWaiterTxn, timestamp.Timestamp{}))
+			}()
+
+			waitWaiters(t, owner, tableID, row, 1)
+			lt, err := owner.getLockTable(0, tableID)
+			require.NoError(t, err)
+			local := lt.(*localLockTable)
+			logger := getLogger("")
+
+			completedWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("completed")}, "test", logger)
+			completedWaiter.setStatus(completed)
+			notifiedWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("notified")}, "test", logger)
+			notifiedWaiter.setStatus(notified)
+			local.mu.Lock()
+			lock, ok := local.mu.store.Get(row)
+			if !ok {
+				local.mu.Unlock()
+				t.Fatal("owner lock disappeared before remote snapshot")
+			}
+			lock.addWaiter(logger, completedWaiter)
+			lock.addWaiter(logger, notifiedWaiter)
+			local.mu.Unlock()
+			defer func() {
+				local.mu.Lock()
+				lock, ok := local.mu.store.Get(row)
+				if ok {
+					removed, _ := lock.waiters.remove(completedWaiter)
+					require.True(t, removed)
+					removed, _ = lock.waiters.remove(notifiedWaiter)
+					require.True(t, removed)
+				}
+				local.mu.Unlock()
+				completedWaiter.close("test", logger)
+				notifiedWaiter.close("test", logger)
+			}()
+
+			txn := holderService.activeTxnHolder.getActiveTxn(holderTxn, false, "")
+			require.NotNil(t, txn)
+			var waitingTxnIDs [][]byte
+			require.True(t, txn.fetchWhoWaitingMe(
+				holderService.serviceID,
+				holderTxn,
+				func(waitTxn pb.WaitTxn, waiterAddress string) bool {
+					waitingTxnIDs = append(waitingTxnIDs, waitTxn.TxnID)
+					require.Equal(t, owner.serviceID, waiterAddress)
+					return true
+				},
+				holderService.getLockTable,
+			))
+			require.Equal(t, [][]byte{activeWaiterTxn}, waitingTxnIDs)
+		},
+	)
+}
+
 func TestGetLocalLockTableUsesGetLockHolderLookupInputs(t *testing.T) {
 	runLockServiceTests(
 		t,
