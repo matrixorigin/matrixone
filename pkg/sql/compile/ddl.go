@@ -179,10 +179,16 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	// whether foreign_key_checks = 0 or 1
-	err = s.removeFkeysRelationships(c, dbName)
-	if err != nil {
-		return err
+	// Internal callers such as DROP ACCOUNT remove every database in the
+	// account. In that case, rewriting cross-database FK metadata is both
+	// unnecessary and unsafe: a later DROP can observe both catalog versions
+	// produced by the rewrite in this transaction.
+	ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
+	if !ignoreForeignKey {
+		err = s.removeFkeysRelationships(c, dbName)
+		if err != nil {
+			return err
+		}
 	}
 
 	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
