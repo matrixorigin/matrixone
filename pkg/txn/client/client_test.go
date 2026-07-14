@@ -213,8 +213,8 @@ func TestClaimWaitActiveOpsSkipsCanceledAndPreservesFIFO(t *testing.T) {
 	secondCanceled := newWaiting("second-canceled")
 	second := newWaiting("second")
 	third := newWaiting("third")
-	require.True(t, firstCanceled.reset.waiter.cancel(context.Canceled))
-	require.True(t, secondCanceled.reset.waiter.cancel(context.Canceled))
+	require.ErrorIs(t, firstCanceled.reset.waiter.abort(context.Canceled), context.Canceled)
+	require.ErrorIs(t, secondCanceled.reset.waiter.abort(context.Canceled), context.Canceled)
 
 	client.mu.Lock()
 	client.mu.waitActiveTxns = make([]*txnOperator, 5, 8)
@@ -1205,6 +1205,114 @@ func TestCanceledMaxActivePromotionReleasesOwnership(t *testing.T) {
 			require.NoError(t, next.Rollback(ctx))
 		},
 		WithMaxActiveTxn(1),
+	)
+}
+
+func TestQueuedSnapshotFailureDuringPromotionReleasesOwnership(t *testing.T) {
+	waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			ctx := context.Background()
+			active, err := tc.New(
+				ctx,
+				timestamp.Timestamp{},
+				WithUserTxn(),
+				WithSkipPushClientReady())
+			require.NoError(t, err)
+
+			client := tc.(*txnClient)
+			activeShard := client.getActiveTxnShard(string(active.Txn().ID))
+			var meta txn.TxnMeta
+			for {
+				meta = client.newTxnMeta()
+				if client.getActiveTxnShard(string(meta.ID)) != activeShard {
+					break
+				}
+			}
+			waiting := newTxnOperator(
+				client.sid,
+				client.clock,
+				client.sender,
+				meta,
+				client.getTxnOptions([]TxnOption{WithUserTxn()})...)
+			waitCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			waitErrC := make(chan error, 1)
+			go func() {
+				_, err := client.doCreateTxn(waitCtx, waiting, timestamp.Timestamp{})
+				waitErrC <- err
+			}()
+
+			select {
+			case <-waiter.entered:
+			case <-time.After(time.Second):
+				t.Fatal("queued transaction did not enter snapshot acquisition")
+			}
+
+			// Hold the target shard so the active owner can claim and dequeue the
+			// transaction but cannot publish it yet.
+			waitingShard := client.getActiveTxnShard(string(meta.ID))
+			waitingShard.Lock()
+			shardLocked := true
+			defer func() {
+				if shardLocked {
+					waitingShard.Unlock()
+				}
+			}()
+
+			activeCloseErrC := make(chan error, 1)
+			go func() { activeCloseErrC <- active.Rollback(ctx) }()
+			require.Eventually(t, func() bool {
+				waiting.reset.waiter.mu.Lock()
+				defer waiting.reset.waiter.mu.Unlock()
+				return waiting.reset.waiter.mu.state == activeTxnPromoting
+			}, time.Second, time.Millisecond)
+
+			cancel()
+			require.Eventually(t, func() bool {
+				waiting.reset.waiter.mu.Lock()
+				defer waiting.reset.waiter.mu.Unlock()
+				return waiting.reset.waiter.mu.state == activeTxnPromotionCanceled
+			}, time.Second, time.Millisecond)
+			select {
+			case err := <-waitErrC:
+				t.Fatalf("snapshot failure returned before active publication: %v", err)
+			default:
+			}
+
+			waitingShard.Unlock()
+			shardLocked = false
+			select {
+			case err := <-activeCloseErrC:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("active rollback did not finish after snapshot-failure promotion")
+			}
+			select {
+			case err := <-waitErrC:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				t.Fatal("snapshot failure did not finish after active publication")
+			}
+
+			require.Zero(t, client.atomic.activeTxnCount.Load())
+			client.mu.RLock()
+			require.Zero(t, client.mu.users)
+			require.Empty(t, client.mu.waitActiveTxns)
+			client.mu.RUnlock()
+			_, exists := client.getActiveTxn(string(meta.ID))
+			require.False(t, exists)
+
+			next, err := tc.New(
+				ctx,
+				timestamp.Timestamp{},
+				WithUserTxn(),
+				WithSkipPushClientReady())
+			require.NoError(t, err)
+			require.NoError(t, next.Rollback(ctx))
+		},
+		WithMaxActiveTxn(1),
+		WithTimestampWaiter(waiter),
 	)
 }
 

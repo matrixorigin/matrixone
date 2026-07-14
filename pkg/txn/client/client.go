@@ -459,7 +459,7 @@ func (client *txnClient) doCreateTxn(
 	ctx context.Context,
 	op *txnOperator,
 	minTS timestamp.Timestamp,
-) (TxnOperator, error) {
+) (created TxnOperator, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnCreateTotalDurationHistogram.Observe(time.Since(start).Seconds())
@@ -479,10 +479,21 @@ func (client *txnClient) doCreateTxn(
 		},
 	)
 
-	if err := client.openTxn(ctx, op); err != nil {
+	if err = client.openTxn(ctx, op); err != nil {
 		op.closeUnadmitted(err)
 		return nil, err
 	}
+	// From this point until the successful return, openTxn has transferred the
+	// operator into the client's admission ownership graph. One deferred owner
+	// closes every failure/panic path and first crosses the admission barrier;
+	// future creation steps cannot accidentally add an unpaired error return.
+	admissionComplete := false
+	defer func() {
+		if !admissionComplete {
+			err = client.abortCreatedTxn(ctx, op, err)
+			created = nil
+		}
+	}()
 	client.mu.RLock()
 	closed := client.mu.closed
 	client.mu.RUnlock()
@@ -491,7 +502,6 @@ func (client *txnClient) doCreateTxn(
 	// be closed immediately.
 	if closed && op.reset.waiter == nil {
 		err := moerr.NewClientClosedNoCtx()
-		op.closeAsAborted(context.WithoutCancel(ctx), err)
 		return nil, err
 	}
 
@@ -516,13 +526,11 @@ func (client *txnClient) doCreateTxn(
 		if err := op.updateSnapshotWithClose(snapshotCtx, ts, closeC); err != nil {
 			if op.reset.waiter != nil {
 				if waitErr, completed := op.reset.waiter.result(); completed && waitErr != nil {
-					op.closeAsAborted(context.WithoutCancel(ctx), waitErr)
 					return nil, waitErr
 				}
 			}
 			if client.isClosed() {
 				err := moerr.NewClientClosedNoCtx()
-				op.closeAsAborted(context.WithoutCancel(ctx), err)
 				return nil, err
 			}
 			createErr := errors.Join(err, moerr.NewTxnError(ctx, "update txn snapshot"))
@@ -530,7 +538,6 @@ func (client *txnClient) doCreateTxn(
 			// acquisition. Creation failure owns a private abort transition: public
 			// Rollback may be sealed while RestartTxn is being admitted and cannot
 			// be relied on to release active/queued client ownership.
-			op.closeAsAborted(context.WithoutCancel(ctx), createErr)
 			return nil, createErr
 		}
 	}
@@ -545,7 +552,6 @@ func (client *txnClient) doCreateTxn(
 		// The failed creator still owns cleanup even when the public terminal
 		// gate is sealed by RestartTxn. ClosedEvent removes either direct active
 		// ownership or the queued admission entry.
-		op.closeAsAborted(context.WithoutCancel(ctx), err)
 		if moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
 			return nil, err
 		}
@@ -556,10 +562,28 @@ func (client *txnClient) doCreateTxn(
 	client.mu.RUnlock()
 	if closed {
 		err := moerr.NewClientClosedNoCtx()
-		op.closeAsAborted(context.WithoutCancel(ctx), err)
 		return nil, err
 	}
+	admissionComplete = true
 	return op, nil
+}
+
+// abortCreatedTxn closes an operator after openTxn transferred ownership to the
+// client. Admission abort is the ownership barrier: queued work becomes
+// non-promotable, while a claimed promotion must publish active ownership
+// before the sole ClosedEvent is allowed to remove it.
+func (client *txnClient) abortCreatedTxn(
+	ctx context.Context,
+	op *txnOperator,
+	err error,
+) error {
+	if op.reset.waiter != nil {
+		if admissionErr := op.reset.waiter.abort(err); admissionErr != nil {
+			err = admissionErr
+		}
+	}
+	op.closeAsAborted(context.WithoutCancel(ctx), err)
+	return err
 }
 
 func (client *txnClient) NewWithSnapshot(

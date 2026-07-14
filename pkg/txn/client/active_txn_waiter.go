@@ -52,14 +52,7 @@ func newActiveTxnWaiter() *activeTxnWaiter {
 func (w *activeTxnWaiter) wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
-		if w.cancel(ctx.Err()) {
-			return ctx.Err()
-		}
-		// Promotion already owns the operator. Do not let cancellation publish
-		// ClosedEvent until addActiveTxn has made that ownership removable.
-		<-w.doneC
-		result, _ := w.result()
-		return result
+		return w.abort(ctx.Err())
 	case <-w.doneC:
 		result, _ := w.result()
 		return result
@@ -79,23 +72,28 @@ func (w *activeTxnWaiter) claimPromotion() bool {
 	return true
 }
 
-// cancel returns true when cancellation removed the creator's queued claim.
-// If promotion already won, it records the cancellation but leaves doneC open
-// until active ownership has been published.
-func (w *activeTxnWaiter) cancel(err error) bool {
+// abort makes every post-open creation failure participate in admission
+// ownership transfer, including failures that happen before wait is called.
+// If promotion already won, abort waits for active publication so ClosedEvent
+// can remove the operator from activeTxns.
+func (w *activeTxnWaiter) abort(err error) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	switch w.mu.state {
 	case activeTxnQueued:
 		w.mu.state = activeTxnCanceled
 		w.mu.err = err
 		close(w.doneC)
-		return true
 	case activeTxnPromoting:
 		w.mu.state = activeTxnPromotionCanceled
 		w.mu.err = err
 	}
-	return false
+	w.mu.Unlock()
+
+	// doneC is already closed for every terminal state. Only a promotion that
+	// owns publication can keep it open, and that path is local and bounded.
+	<-w.doneC
+	result, _ := w.result()
+	return result
 }
 
 func (w *activeTxnWaiter) complete(err error) {
