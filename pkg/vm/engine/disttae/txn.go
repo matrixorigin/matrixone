@@ -1320,13 +1320,14 @@ func (txn *Transaction) WriteFileLocked(
 	}
 
 	if typ == INSERT {
+		server := colexec.MustGetServer(txn.engine.service)
 		col, area := vector.MustVarlenaRawData(copied.Vecs[1])
 		for i := range col {
 			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
 			oid := stats.ObjectName().ObjectId()
 			sid := oid.Segment()
 
-			colexec.RecordTxnUnCommitSegment(txn.op.Txn().ID, tableId, sid)
+			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
 			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName)
 		}
 	}
@@ -1386,13 +1387,14 @@ func (txn *Transaction) WriteFileLockedSkipTransfer(
 	}
 
 	if typ == INSERT {
+		server := colexec.MustGetServer(txn.engine.service)
 		col, area := vector.MustVarlenaRawData(copied.Vecs[1])
 		for i := range col {
 			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
 			oid := stats.ObjectName().ObjectId()
 			sid := oid.Segment()
 
-			colexec.RecordTxnUnCommitSegment(txn.op.Txn().ID, tableId, sid)
+			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
 			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName)
 		}
 	}
@@ -1489,6 +1491,7 @@ func (txn *Transaction) deleteBatch(
 		max1           = uint32(0)
 		cnRowIdOffsets = make([]int64, 0, len(rowids))
 	)
+	server := colexec.MustGetServer(txn.engine.service)
 
 	for i, rowid := range rowids {
 
@@ -1497,7 +1500,7 @@ func (txn *Transaction) deleteBatch(
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
 
-		if colexec.IsDeletionOnTxnUnCommitPersisted(nil, rowid.BorrowSegmentID(), tableId, txn.op.Txn().ID) {
+		if server.GetCnSegmentType(rowid.BorrowSegmentID(), tableId, txn.op.Txn().ID) == colexec.TxnWorkspaceUnCommitType {
 			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
@@ -2482,7 +2485,7 @@ func (txn *Transaction) delTransaction() {
 	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
-	colexec.Get().DeleteTxnSegmentIds(txn.op.Txn().ID)
+	colexec.MustGetServer(txn.engine.service).DeleteTxnSegmentIds(txn.op.Txn().ID)
 	txn.cnObjsSummary = nil
 	txn.hasS3Op.Store(false)
 	txn.removed = true
