@@ -259,6 +259,9 @@ type Workspace interface {
 	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
 	// workspace will update snapshot data for later read request.
 	IncrStatementID(ctx context.Context, commit bool) error
+	// AdvanceSnapshot advances an RC transaction's snapshot and transfers its
+	// tombstones to the newly visible objects before returning.
+	AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
 

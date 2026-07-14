@@ -712,7 +712,7 @@ func Test_Issue25557ObjectCompactionNoDeadlock(t *testing.T) {
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	schema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
 	schema.Name = tableName
@@ -2118,7 +2118,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	// mock a schema with 4 columns and the 4th column as primary key
 	// the first column is the 9th column in the predefined columns in
