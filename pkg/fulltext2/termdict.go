@@ -111,6 +111,27 @@ func prefixSuccessor(prefix []byte) []byte {
 	return nil
 }
 
+// prefixTerms collects every term with the given prefix into an ascending slice
+// (the `word*` expansion, materialized). Empty prefix returns all terms.
+func (d *termDict) prefixTerms(prefix string) ([]string, error) {
+	it, ok, err := d.prefixIter(prefix)
+	if err != nil || !ok {
+		return nil, err
+	}
+	defer func() { _ = it.Close() }()
+	var out []string
+	for {
+		term, _ := it.Current()
+		out = append(out, string(term))
+		if err := it.Next(); err == vellum.ErrIteratorDone {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 // Close releases the FST. Safe on a nil dict.
 func (d *termDict) Close() error {
 	if d == nil || d.fst == nil {

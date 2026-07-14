@@ -59,11 +59,50 @@ func (s *Segment) lookup(term string) (*termPostings, bool) {
 // lists and verifies positional adjacency exactly, without WAND block-max early
 // termination (that optimization layers on later without changing results).
 func (s *Segment) SearchPhrase(terms []string, algo ScoreAlgo, k int) []Result {
-	if len(terms) == 0 || k <= 0 || s.N == 0 {
+	if k <= 0 || s.N == 0 {
+		return nil
+	}
+	hits := s.matchPhrase(terms)
+	if len(hits) == 0 {
 		return nil
 	}
 
-	// Resolve every query term; a missing term means the phrase cannot occur.
+	// idf uses the PHRASE document frequency (number of docs the phrase occurs
+	// in), squared per MatrixOne. df <= N, so idf >= 0.
+	idf2 := idfSquared(s.N, len(hits))
+	avgDocLen := s.avgDocLenOrMean()
+
+	results := make([]Result, len(hits))
+	for i, h := range hits {
+		results[i] = Result{
+			Pk:    s.pks[h.ord],
+			Score: s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen),
+		}
+	}
+
+	// Order by score desc, ties by ascending ord (hits are already in ord order,
+	// so a stable sort on score desc keeps the ord tiebreak).
+	sort.SliceStable(results, func(a, b int) bool { return results[a].Score > results[b].Score })
+	if len(results) > k {
+		results = results[:k]
+	}
+	return results
+}
+
+// docTf is a document ord and the term/phrase occurrence count in it.
+type docTf struct {
+	ord int64
+	tf  int
+}
+
+// matchPhrase returns the documents that contain terms as a CONTIGUOUS phrase,
+// each with the phrase occurrence count, in ascending doc ord. Returns nil if
+// terms is empty or any term is absent from the segment. Shared by SearchPhrase
+// and the boolean phrase clause.
+func (s *Segment) matchPhrase(terms []string) []docTf {
+	if len(terms) == 0 {
+		return nil
+	}
 	pls := make([]*termPostings, len(terms))
 	rare := 0
 	for i, t := range terms {
@@ -76,14 +115,7 @@ func (s *Segment) SearchPhrase(terms []string, algo ScoreAlgo, k int) []Result {
 			rare = i
 		}
 	}
-
-	// Candidate docs are those in the rarest term's list; probe the others for
-	// membership + positional adjacency. (The rarest term bounds the work.)
-	type hit struct {
-		ord int64
-		tf  int // phrase occurrences in the doc
-	}
-	var hits []hit
+	var hits []docTf
 	posLists := make([][]int32, len(terms))
 	for _, ord := range pls[rare].docIDs {
 		ok := true
@@ -99,44 +131,37 @@ func (s *Segment) SearchPhrase(terms []string, algo ScoreAlgo, k int) []Result {
 			continue
 		}
 		if tf := countPhrase(posLists); tf > 0 {
-			hits = append(hits, hit{ord, tf})
+			hits = append(hits, docTf{ord, tf})
 		}
 	}
-	if len(hits) == 0 {
-		return nil
-	}
+	return hits
+}
 
-	// idf uses the PHRASE document frequency (number of docs the phrase occurs
-	// in), squared per MatrixOne. df <= N, so idf >= 0.
-	df := float64(len(hits))
-	idf := math.Log10(float64(s.N) / df)
-	idf2 := idf * idf
-
-	avgDocLen := s.AvgDocLen
-	if avgDocLen == 0 {
-		avgDocLen = meanDocLen(s.docLen)
+// idfSquared is MatrixOne's squared inverse document frequency: (log10(N/df))².
+// df is clamped to >= 1.
+func idfSquared(n int64, df int) float64 {
+	if df < 1 {
+		df = 1
 	}
+	idf := math.Log10(float64(n) / float64(df))
+	return idf * idf
+}
 
-	results := make([]Result, len(hits))
-	for i, h := range hits {
-		tf := float64(h.tf)
-		var score float64
-		switch algo {
-		case BM25:
-			score = idf2 * bm25Factor(tf, s.docLen[h.ord], avgDocLen)
-		default: // TfIdf
-			score = tf * idf2
-		}
-		results[i] = Result{Pk: s.pks[h.ord], Score: score}
+// scoreTerm scores one (tf, idf², doc) contribution under the active algorithm.
+func (s *Segment) scoreTerm(algo ScoreAlgo, tf, idf2 float64, ord int64, avgDocLen float64) float64 {
+	if algo == BM25 {
+		return idf2 * bm25Factor(tf, s.docLen[ord], avgDocLen)
 	}
+	return tf * idf2 // TfIdf
+}
 
-	// Order by score desc, ties by ascending ord (hits are already in ord order,
-	// so a stable sort on score desc keeps the ord tiebreak).
-	sort.SliceStable(results, func(a, b int) bool { return results[a].Score > results[b].Score })
-	if len(results) > k {
-		results = results[:k]
+// avgDocLenOrMean returns the segment's AvgDocLen, falling back to the
+// single-segment mean when it is unset (a lone segment queried directly).
+func (s *Segment) avgDocLenOrMean() float64 {
+	if s.AvgDocLen != 0 {
+		return s.AvgDocLen
 	}
-	return results
+	return meanDocLen(s.docLen)
 }
 
 // positionsInDoc returns the ascending token positions of the term (whose posting
