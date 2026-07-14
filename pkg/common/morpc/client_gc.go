@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/prometheus/client_golang/prometheus"
@@ -177,8 +178,9 @@ type gcInactiveRequest struct {
 }
 
 type createRequest struct {
-	c       *client
-	backend string
+	c          *client
+	backend    string
+	generation *backendGeneration
 }
 
 func newClientGCManager() *clientGCManager {
@@ -297,13 +299,43 @@ func (m *clientGCManager) triggerGCInactive(c *client, remote string) {
 	}
 }
 
-// triggerCreate triggers create task for a specific client and backend.
-// Returns true if the request was successfully queued, false if channel was full.
-func (m *clientGCManager) triggerCreate(c *client, backend string) bool {
+// triggerCreateAtGeneration records demand for a client/backend generation.
+// It returns true when creation is already pending or newly queued. It returns
+// false when admission is invalid or the queue is full; a caller may then retry
+// or use the synchronous fallback.
+func (m *clientGCManager) triggerCreateAtGeneration(
+	c *client,
+	backend string,
+	generation *backendGeneration,
+) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return m.triggerCreateAtGenerationLocked(c, backend, generation)
+}
+
+// triggerCreateAtGenerationLocked admits at most one queued or in-flight
+// factory call for a remote generation. The caller must hold c.mu.
+func (m *clientGCManager) triggerCreateAtGenerationLocked(
+	c *client,
+	backend string,
+	generation *backendGeneration,
+) bool {
+	if generation == nil || c.mu.closing || c.mu.closed ||
+		c.mu.backendGeneration[backend] != generation ||
+		!c.canCreateLocked(backend) {
+		return false
+	}
+	if pending := c.mu.creating[backend]; pending != nil {
+		// An existing request for this generation already represents the
+		// caller's demand. A different generation must never be coalesced.
+		return pending == generation
+	}
+	c.mu.creating[backend] = generation
 	select {
-	case m.createC <- createRequest{c: c, backend: backend}:
+	case m.createC <- createRequest{c: c, backend: backend, generation: generation}:
 		return true
 	default:
+		delete(c.mu.creating, backend)
 		// Channel is full, skip to avoid blocking
 		// This is acceptable because create will be retried when needed
 		m.createDropCounter.Inc()
@@ -430,18 +462,25 @@ func (m *clientGCManager) runCreateLoop() {
 			_, registered := m.clients[req.c]
 			m.mu.RUnlock()
 			if registered {
-				// createBackendLocked is called under lock, check closed there
-				req.c.mu.Lock()
-				if !req.c.mu.closed {
-					if _, err := req.c.createBackendLocked(req.backend); err != nil {
+				// Factory.Create may perform DNS and network I/O. The bookkeeping
+				// path validates the captured generation both before and after that
+				// I/O without holding c.mu, so targeted reset remains responsive.
+				if _, err := req.c.createBackendForClaimedGeneration(
+					req.backend,
+					false,
+					req.generation,
+				); err != nil {
+					if !moerr.IsMoErrCode(err, moerr.ErrBackendClosed) &&
+						!moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
 						req.c.logger.Error("create backend failed",
 							zap.String("backend", req.backend),
 							zap.Error(err))
-					} else {
-						m.createProcessedCounter.Inc()
 					}
+				} else {
+					m.createProcessedCounter.Inc()
 				}
-				req.c.mu.Unlock()
+			} else {
+				req.c.releaseBackendCreate(req.backend, req.generation)
 			}
 		}
 	}
