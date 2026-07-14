@@ -156,19 +156,20 @@ func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 }
 
 func TestBoundedHnswSearchLimits(t *testing.T) {
-	perIndex, resultLimit, heapCapacity := boundedHnswSearchLimits([]uint{3, 7}, ^uint(0))
+	// requested >= every file: each file returns its full cardinality, result = total.
+	perIndex, resultLimit := boundedHnswSearchLimits([]uint{3, 7}, ^uint(0))
 	require.Equal(t, []uint{3, 7}, perIndex)
 	require.Equal(t, uint(10), resultLimit)
-	require.Equal(t, 10, heapCapacity)
 
-	perIndex, resultLimit, heapCapacity = boundedHnswSearchLimits([]uint{3, 7}, 5)
+	// requested caps each per-file limit and the result; the heap bound is this resultLimit
+	// (5), NOT the sum of per-file limits (8) — that was the shard_count*LIMIT bug (#25637).
+	perIndex, resultLimit = boundedHnswSearchLimits([]uint{3, 7}, 5)
 	require.Equal(t, []uint{3, 5}, perIndex)
 	require.Equal(t, uint(5), resultLimit)
-	require.Equal(t, 8, heapCapacity)
 
-	_, resultLimit, heapCapacity = boundedHnswSearchLimits([]uint{^uint(0), ^uint(0)}, ^uint(0))
+	// total overflows to saturate; resultLimit is capped by requested.
+	_, resultLimit = boundedHnswSearchLimits([]uint{^uint(0), ^uint(0)}, ^uint(0))
 	require.Equal(t, ^uint(0), resultLimit)
-	require.Equal(t, 1<<20, heapCapacity)
 }
 
 func TestHnswSearchUnlockSynchronizesWithWaitPredicate(t *testing.T) {
