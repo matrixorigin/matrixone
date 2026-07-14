@@ -301,6 +301,32 @@ func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
 	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, fallback)
 	require.Error(t, err)
 	require.Nil(t, visible)
+
+	unnamed := batch.NewWithSize(3)
+	unnamed.Vecs = []*vector.Vector{idVec, regionVec, hiddenVec}
+	unnamed.SetRowCount(1)
+	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, unnamed)
+	require.NoError(t, err)
+	require.NotSame(t, unnamed, visible)
+	require.Equal(t, []string{"id", "region"}, visible.Attrs)
+	require.Equal(t, 1, visible.RowCount())
+	require.Same(t, idVec, visible.Vecs[0])
+	require.Same(t, regionVec, visible.Vecs[1])
+
+	prefixNamed := batch.New([]string{"region", "id"})
+	prefixNamed.Vecs = []*vector.Vector{regionVec, idVec, hiddenVec}
+	prefixNamed.SetRowCount(1)
+	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, prefixNamed)
+	require.NoError(t, err)
+	require.Same(t, idVec, visible.Vecs[0])
+	require.Same(t, regionVec, visible.Vecs[1])
+
+	incomplete := batch.New([]string{"id"})
+	incomplete.Vecs = []*vector.Vector{idVec, regionVec, hiddenVec}
+	incomplete.SetRowCount(1)
+	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, incomplete)
+	require.Error(t, err)
+	require.Nil(t, visible)
 }
 
 func TestAppendRuntimeVisibleBatchPreservesCaseSensitiveNames(t *testing.T) {

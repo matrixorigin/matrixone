@@ -817,11 +817,30 @@ func appendRuntimeVisibleBatch(attrs []string, bat *batch.Batch) (*batch.Batch, 
 	if len(bat.Vecs) < len(attrs) {
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch has fewer vectors than visible columns", nil)
 	}
-	if len(bat.Attrs) != len(bat.Vecs) {
+	// The insert/pre-insert contract keeps target columns at the front and
+	// appends generated or hidden vectors after them. Some pipeline batches do
+	// not carry attributes; in that case the plan-defined prefix is the only
+	// available mapping.
+	if len(bat.Attrs) == 0 {
 		if len(bat.Vecs) == len(attrs) {
 			return bat, nil
 		}
-		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch with hidden vectors requires column names", nil)
+		visible := batch.NewWithSize(len(attrs))
+		visible.Attrs = append([]string(nil), attrs...)
+		copy(visible.Vecs, bat.Vecs[:len(attrs)])
+		visible.SetRowCount(bat.RowCount())
+		return visible, nil
+	}
+	namedVecs := bat.Vecs
+	if len(bat.Attrs) != len(bat.Vecs) {
+		// A batch may name only its target-column prefix while carrying unnamed
+		// generated vectors at the end. Bind those names to that prefix, but keep
+		// using the strict name mapping below so mismatches cannot become silent
+		// positional writes.
+		if len(bat.Attrs) != len(attrs) {
+			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch has incomplete column names", nil)
+		}
+		namedVecs = bat.Vecs[:len(bat.Attrs)]
 	}
 	visible := batch.NewWithSize(len(attrs))
 	visible.Attrs = append([]string(nil), attrs...)
@@ -857,10 +876,10 @@ func appendRuntimeVisibleBatch(attrs []string, bat *batch.Batch) (*batch.Batch, 
 			}
 			pos, ok = foldedPositions[folded]
 		}
-		if !ok || pos < 0 || pos >= len(bat.Vecs) {
+		if !ok || pos < 0 || pos >= len(namedVecs) {
 			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch is missing a visible column", map[string]string{"column": attr})
 		}
-		visible.Vecs[idx] = bat.Vecs[pos]
+		visible.Vecs[idx] = namedVecs[pos]
 	}
 	if len(bat.Vecs) == len(attrs) {
 		positional := true
