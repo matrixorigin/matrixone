@@ -259,6 +259,9 @@ func (s *store) Close() error {
 		}
 		return true
 	})
+	if s.queryClient != nil {
+		err = errors.Join(err, s.queryClient.Close())
+	}
 	s.task.RLock()
 	ts := s.task.serviceHolder
 	s.task.RUnlock()

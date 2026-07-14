@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
@@ -42,6 +43,16 @@ var (
 	testTNStoreAddr      = "unix:///tmp/test-dnstore.sock"
 	testTNLogtailAddress = "127.0.0.1:22001"
 )
+
+type storeQueryClient struct {
+	client.QueryClient
+	closeCalls int
+}
+
+func (c *storeQueryClient) Close() error {
+	c.closeCalls++
+	return nil
+}
 
 func TestNewAndStartAndCloseService(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
@@ -229,6 +240,18 @@ func TestRemoveReplicaCancelsStorageCreation(t *testing.T) {
 		removed.mu.RLock()
 		require.Nil(t, removed.service)
 		removed.mu.RUnlock()
+	})
+}
+
+func TestStoreCloseClosesSharedQueryClient(t *testing.T) {
+	sharedClient := &storeQueryClient{}
+	runTNStoreTest(t, func(s *store) {
+		realClient := s.queryClient
+		s.queryClient = sharedClient
+		require.NoError(t, realClient.Close())
+		t.Cleanup(func() {
+			require.Equal(t, 1, sharedClient.closeCalls)
+		})
 	})
 }
 

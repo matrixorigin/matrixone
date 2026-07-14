@@ -30,10 +30,12 @@ type closeErrorQueryClient struct {
 	client.QueryClient
 	err        error
 	closeCalls int
+	closed     bool
 }
 
 func (c *closeErrorQueryClient) Close() error {
 	c.closeCalls++
+	c.closed = true
 	return c.err
 }
 
@@ -55,13 +57,28 @@ func TestNewTAEHandleWithErrorReturnsCanceled(t *testing.T) {
 }
 
 func TestHandleCloseClosesDBWhenQueryClientCloseFails(t *testing.T) {
-	h := mockTAEHandle(context.Background(), t, &options.Options{})
 	clientErr := errors.New("query client close failed")
 	c := &closeErrorQueryClient{err: clientErr}
-	h.client = c
+	h := NewTAEHandle(context.Background(), t.TempDir(), c, &options.Options{})
 
 	err := h.HandleClose(context.Background())
 	require.ErrorIs(t, err, clientErr)
 	require.Equal(t, 1, c.closeCalls)
 	require.NotNil(t, h.db.Closed.Load())
+}
+
+func TestHandleCloseKeepsSharedQueryClientOpen(t *testing.T) {
+	sharedClient := &closeErrorQueryClient{}
+	existing, err := NewTAEHandleWithError(
+		context.Background(), t.TempDir(), sharedClient, &options.Options{})
+	require.NoError(t, err)
+	canceled, err := NewTAEHandleWithError(
+		context.Background(), t.TempDir(), sharedClient, &options.Options{})
+	require.NoError(t, err)
+
+	require.NoError(t, canceled.HandleClose(context.Background()))
+	require.Equal(t, 0, sharedClient.closeCalls)
+	require.False(t, sharedClient.closed)
+
+	require.NoError(t, existing.HandleClose(context.Background()))
 }
