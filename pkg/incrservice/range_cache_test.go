@@ -118,6 +118,28 @@ func TestRangeAllocateTimestampTracksMutations(t *testing.T) {
 	require.Empty(t, r.allocatedAt)
 }
 
+func TestSetManualReusesRangeBackingStorage(t *testing.T) {
+	values := make([]uint64, 4, 4)
+	copy(values, []uint64{2, 5, 5, 9})
+	allocatedAt := make([]timestamp.Timestamp, 2, 2)
+	copy(allocatedAt, []timestamp.Timestamp{
+		{PhysicalTime: 1000, LogicalTime: 1},
+		{PhysicalTime: 2000, LogicalTime: 2},
+	})
+
+	r := ranges{
+		step:        1,
+		values:      values,
+		allocatedAt: allocatedAt,
+	}
+	skipped := &ranges{step: 1}
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		r.values = values
+		r.allocatedAt = allocatedAt
+		r.setManual(1, skipped)
+	}))
+}
+
 func TestUpdateTo(t *testing.T) {
 	cases := []struct {
 		values   []uint64

@@ -78,8 +78,10 @@ func (r *ranges) left() int {
 func (r *ranges) setManual(
 	value uint64,
 	skipped *ranges) {
-	newValues := make([]uint64, 0, len(r.values))
-	newAllocatedAt := make([]timestamp.Timestamp, 0, r.rangeCount())
+	// Each input range emits at most one remaining range, so compacting in
+	// place cannot overwrite a range or timestamp that the loop has not read.
+	newValues := r.values[:0]
+	newAllocatedAt := r.allocatedAt[:0]
 	n := r.rangeCount()
 	for i := 0; i < n; i++ {
 		from, to := r.values[2*i], r.values[2*i+1]
