@@ -25,6 +25,21 @@ select json_merge_patch('{"a":1}', '{"a":2}', '{"a":3,"b":4}');
 select json_merge_patch('null', '{"a":1}');
 ➤ json_merge_patch(null, {"a":1})[-1,2147483647,0]  𝄀
 {"a": 1}
+select json_merge_patch('{"a":["b"]}', '{"a":"c"}');
+➤ json_merge_patch({"a":["b"]}, {"a":"c"})[-1,2147483647,0]  𝄀
+{"a": "c"}
+select json_merge_patch('{"a":"c"}', '{"a":["b"]}');
+➤ json_merge_patch({"a":"c"}, {"a":["b"]})[-1,2147483647,0]  𝄀
+{"a": ["b"]}
+select json_merge_patch('{"a":[{"b":"c"}]}', '{"a":[1]}');
+➤ json_merge_patch({"a":[{"b":"c"}]}, {"a":[1]})[-1,2147483647,0]  𝄀
+{"a": [1]}
+select json_merge_patch('{"a":"foo"}', 'null') is null, json_type(json_merge_patch('{"a":"foo"}', 'null'));
+➤ json_merge_patch({"a":"foo"}, null) is null[-7,1,0]  ¦  json_type(json_merge_patch({"a":"foo"}, null))[12,-1,0]  𝄀
+0  ¦  NULL
+select json_merge_patch('[1,2]', '{"a":"b","c":null}');
+➤ json_merge_patch([1,2], {"a":"b","c":null})[-1,2147483647,0]  𝄀
+{"a": "b"}
 select json_merge_patch(null, '[1,2]');
 ➤ json_merge_patch(null, [1,2])[-1,2147483647,0]  𝄀
 [1, 2]
@@ -64,6 +79,18 @@ select json_merge_preserve('null', '1');
 select json_merge_preserve('{"a":1}', null);
 ➤ json_merge_preserve({"a":1}, null)[-1,2147483647,0]  𝄀
 null
+select json_merge_preserve('true', '[1,2]');
+➤ json_merge_preserve(true, [1,2])[-1,2147483647,0]  𝄀
+[true, 1, 2]
+select json_merge_preserve('[1,2]', 'true');
+➤ json_merge_preserve([1,2], true)[-1,2147483647,0]  𝄀
+[1, 2, true]
+select json_merge_preserve('{"a":["x","y"]}', '{"a":"b","c":"d"}');
+➤ json_merge_preserve({"a":["x","y"]}, {"a":"b","c":"d"})[-1,2147483647,0]  𝄀
+{"a": ["x", "y", "b"], "c": "d"}
+select json_merge_preserve('{"a":"b","c":"d"}', '{"a":["x","y"]}');
+➤ json_merge_preserve({"a":"b","c":"d"}, {"a":["x","y"]})[-1,2147483647,0]  𝄀
+{"a": ["b", "x", "y"], "c": "d"}
 select json_merge_patch(cast('{"a":1}' as json), '{"b":2}');
 ➤ json_merge_patch(cast({"a":1} as json), {"b":2})[-1,2147483647,0]  𝄀
 {"a": 1, "b": 2}
@@ -78,6 +105,8 @@ select json_merge_patch(1, '2');
 invalid argument function json_merge_patch, bad value [BIGINT VARCHAR]
 select json_merge_preserve('{', '{}');
 invalid input: json text {
+select json_merge_patch('{"a":"b"}', '[1,');
+invalid input: json text [1,
 drop table if exists json_merge_docs;
 create table json_merge_docs (
 id int primary key,

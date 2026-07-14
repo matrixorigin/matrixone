@@ -1262,6 +1262,18 @@ func TestJsonMerge(t *testing.T) {
 		require.Equal(t, `{"a": {"x": 1, "y": 2}, "array": [1, 2], "value": null}`, jsonVectorRowString(t, vec, 0))
 		require.True(t, vec.IsNull(1))
 	})
+
+	t.Run("json literal null is a non-null JSON result", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":"foo"}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`null`}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, nil)
+
+		require.False(t, vec.IsNull(0))
+		require.Equal(t, `null`, jsonVectorRowString(t, vec, 0))
+	})
 }
 
 func TestJsonMergeIgnoreAllRowsMaterializesLength(t *testing.T) {

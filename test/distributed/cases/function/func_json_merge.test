@@ -8,6 +8,11 @@ select json_merge_patch('[1,2]', '{"id":47}');
 select json_merge_patch('1', 'true');
 select json_merge_patch('{"a":1}', '{"a":2}', '{"a":3,"b":4}');
 select json_merge_patch('null', '{"a":1}');
+select json_merge_patch('{"a":["b"]}', '{"a":"c"}');
+select json_merge_patch('{"a":"c"}', '{"a":["b"]}');
+select json_merge_patch('{"a":[{"b":"c"}]}', '{"a":[1]}');
+select json_merge_patch('{"a":"foo"}', 'null') is null, json_type(json_merge_patch('{"a":"foo"}', 'null'));
+select json_merge_patch('[1,2]', '{"a":"b","c":null}');
 
 -- PATCH SQL NULL is an unknown intermediate state that a later non-object patch can replace.
 select json_merge_patch(null, '[1,2]');
@@ -25,6 +30,10 @@ select json_merge_preserve('{"a":[1]}', '{"a":[2]}');
 select json_merge_preserve('{"a":null}', '{"a":1}');
 select json_merge_preserve('null', '1');
 select json_merge_preserve('{"a":1}', null);
+select json_merge_preserve('true', '[1,2]');
+select json_merge_preserve('[1,2]', 'true');
+select json_merge_preserve('{"a":["x","y"]}', '{"a":"b","c":"d"}');
+select json_merge_preserve('{"a":"b","c":"d"}', '{"a":["x","y"]}');
 
 -- JSON and VARCHAR inputs may be mixed.
 select json_merge_patch(cast('{"a":1}' as json), '{"b":2}');
@@ -35,6 +44,7 @@ select json_merge_patch('{}');
 select json_merge_preserve('{}');
 select json_merge_patch(1, '2');
 select json_merge_preserve('{', '{}');
+select json_merge_patch('{"a":"b"}', '[1,');
 
 drop table if exists json_merge_docs;
 create table json_merge_docs (

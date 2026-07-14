@@ -52,3 +52,53 @@ func TestByteJsonMergePreserveAutowrapsScalars(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `[1,null]`, merged.String())
 }
+
+func TestByteJsonMergePatchMySQLRegressionCases(t *testing.T) {
+	tests := []struct {
+		target string
+		patch  string
+		want   string
+	}{
+		{`{"a":["b"]}`, `{"a":"c"}`, `{"a":"c"}`},
+		{`{"a":"c"}`, `{"a":["b"]}`, `{"a":["b"]}`},
+		{`{"a":[{"b":"c"}]}`, `{"a":[1]}`, `{"a":[1]}`},
+		{`{"a":"foo"}`, `null`, `null`},
+		{`[1,2]`, `{"a":"b","c":null}`, `{"a":"b"}`},
+	}
+
+	for _, tt := range tests {
+		target, err := ParseFromString(tt.target)
+		require.NoError(t, err)
+		patch, err := ParseFromString(tt.patch)
+		require.NoError(t, err)
+
+		merged, err := target.MergePatch(patch)
+		require.NoError(t, err)
+		require.JSONEq(t, tt.want, merged.String())
+	}
+}
+
+func TestByteJsonMergePreserveMySQLValueCombinations(t *testing.T) {
+	tests := []struct {
+		left  string
+		right string
+		want  string
+	}{
+		{`true`, `[1,2]`, `[true,1,2]`},
+		{`[1,2]`, `true`, `[1,2,true]`},
+		{`{"a":["x","y"]}`, `{"a":"b","c":"d"}`, `{"a":["x","y","b"],"c":"d"}`},
+		{`{"a":"b","c":"d"}`, `{"a":["x","y"]}`, `{"a":["b","x","y"],"c":"d"}`},
+		{`{"a":"b","c":"d"}`, `true`, `[{"a":"b","c":"d"},true]`},
+	}
+
+	for _, tt := range tests {
+		left, err := ParseFromString(tt.left)
+		require.NoError(t, err)
+		right, err := ParseFromString(tt.right)
+		require.NoError(t, err)
+
+		merged, err := left.MergePreserve(right)
+		require.NoError(t, err)
+		require.JSONEq(t, tt.want, merged.String())
+	}
+}
