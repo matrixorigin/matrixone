@@ -432,7 +432,6 @@ func TestDedupBuildIgnoreOnlyMarksCandidateOwnOldKey(t *testing.T) {
 
 func TestDedupBuildIgnorePrefersOriginalKeyOwner(t *testing.T) {
 	for _, oldKeys := range [][]int32{{1, 2}, {2, 1}} {
-		oldKeys := oldKeys
 		t.Run(strings.Join([]string{strconv.Itoa(int(oldKeys[0])), strconv.Itoa(int(oldKeys[1]))}, "_"), func(t *testing.T) {
 			var hb HashmapBuilder
 			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
