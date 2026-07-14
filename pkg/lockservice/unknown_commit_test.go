@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
@@ -104,5 +105,87 @@ func TestUnknownCommitBatchFencesOnlyNonCommittingTxns(t *testing.T) {
 		_, err = allocator.Valid(service.serviceID, unstartedTxn, nil)
 		require.Error(t, err, "the batch fence must reject a late Commit")
 		allocator.FinishCommit(service.serviceID, committingTxn)
+	})
+}
+
+func TestUnknownCommitFenceSurvivesLiveServiceCleanup(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
+		service := services[0]
+		txnID := []byte("late-commit")
+
+		_, _, ok := service.canUnlockUnknownCommits(
+			context.Background(),
+			[][]byte{txnID},
+		)
+		require.True(t, ok)
+
+		// The source CN is live but its TxnIterFunc no longer contains the
+		// closed operator. That is not enough to prove an already buffered
+		// Commit cannot still reach TN.
+		allocator.cleanCommitStateOnce(
+			context.Background(),
+			func(context.Context, string) (bool, [][]byte, error) {
+				return true, nil, nil
+			},
+			time.Hour,
+		)
+
+		state, exists := allocator.getCtl(service.serviceID).getCommitState(string(txnID))
+		require.True(t, exists)
+		require.Equal(t, cannotCommitState, state.state)
+		require.True(t, state.persist)
+
+		_, err := allocator.Valid(service.serviceID, txnID, nil)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan))
+	})
+}
+
+func TestUnknownCommitResolverCloseCancelsRemoteUnlock(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		service := services[0]
+		client := &blockingUnlockClient{unlockStarted: make(chan struct{}, 1)}
+		bind := pb.LockTable{
+			Group:     0,
+			Table:     100,
+			ServiceID: "unreachable",
+			Version:   1,
+			Valid:     true,
+		}
+		service.tableGroups.set(
+			bind.Group,
+			bind.Table,
+			newRemoteLockTable(
+				service.serviceID,
+				time.Second,
+				bind,
+				client,
+				service.handleBindChanged,
+				service.logger,
+			),
+		)
+
+		txnID := []byte("unknown-commit-remote-unlock")
+		txn := service.activeTxnHolder.getActiveTxn(txnID, true, "")
+		txn.Lock()
+		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, service.logger))
+		txn.Unlock()
+		require.NoError(t, service.ResolveCommitUnknown(txnID))
+
+		select {
+		case <-client.unlockStarted:
+		case <-time.After(time.Second):
+			require.FailNow(t, "unknown commit resolver did not start remote unlock")
+		}
+
+		closed := make(chan error, 1)
+		go func() {
+			closed <- service.Close()
+		}()
+		select {
+		case err := <-closed:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			require.FailNow(t, "service close blocked on remote unknown-commit unlock")
+		}
 	})
 }

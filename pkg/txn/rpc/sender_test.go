@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"runtime/debug"
 	"sync/atomic"
@@ -43,6 +44,37 @@ var (
 type backendRetryErrorClient struct {
 	sendErr   error
 	sendCalls atomic.Int32
+}
+
+type postFlushCommitStream struct{}
+
+func (s *postFlushCommitStream) ID() uint64 { return 1 }
+
+func (s *postFlushCommitStream) Send(_ context.Context, request morpc.Message) error {
+	if request.(*txn.TxnRequest).Method == txn.TxnMethod_Commit {
+		// Model a backend Flush failure after the request was handed to the
+		// transport. The caller cannot prove whether TN received it.
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (s *postFlushCommitStream) Receive() (chan morpc.Message, error) {
+	return nil, nil
+}
+
+func (s *postFlushCommitStream) Close(bool) error { return nil }
+
+type postFlushCommitClient struct {
+	backendRetryErrorClient
+}
+
+func (c *postFlushCommitClient) NewStream(
+	context.Context,
+	string,
+	bool,
+) (morpc.Stream, error) {
+	return &postFlushCommitStream{}, nil
 }
 
 func (c *backendRetryErrorClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
@@ -735,6 +767,46 @@ func TestSendMultiRequestCommitResponseLossReturnsTxnUnknown(t *testing.T) {
 		}},
 	}
 	result, err := sd.Send(ctx, []txn.TxnRequest{
+		{
+			Method: txn.TxnMethod_Write,
+			Txn:    txnMeta,
+			CNRequest: &txn.CNOpRequest{
+				Target: metadata.TNShard{Address: testTN2Addr},
+			},
+		},
+		{
+			Method:        txn.TxnMethod_Commit,
+			Txn:           txnMeta,
+			CommitRequest: &txn.TxnCommitRequest{},
+		},
+	})
+	assert.Nil(t, result)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+}
+
+func TestSendMultiRequestCommitSendCompletionFailureReturnsTxnUnknown(t *testing.T) {
+	txnSender, err := NewSender(Config{}, newTestRuntime(newTestClock(), nil))
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, txnSender.Close())
+	}()
+
+	s := txnSender.(*sender)
+	originalClient := s.client
+	s.client = &postFlushCommitClient{}
+	defer func() {
+		assert.NoError(t, originalClient.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	txnMeta := txn.TxnMeta{
+		ID: []byte("multi-commit-send-error"),
+		TNShards: []metadata.TNShard{{
+			Address: testTN2Addr,
+		}},
+	}
+	result, err := s.Send(ctx, []txn.TxnRequest{
 		{
 			Method: txn.TxnMethod_Write,
 			Txn:    txnMeta,

@@ -26,6 +26,11 @@ import (
 
 const unknownCommitResolveRetryInterval = 100 * time.Millisecond
 
+// Bound one resolver-owned remote unlock attempt. Normal transaction unlocks
+// continue to retry until they complete; an unknown result is already fenced,
+// so a failed remote cleanup can safely be finished by orphan recovery.
+var unknownCommitUnlockTimeout = defaultRPCTimeout
+
 var _ UnknownCommitResolver = (*service)(nil)
 
 // unknownCommitResolver owns lock cleanup after CN loses a Commit response.
@@ -122,9 +127,15 @@ func (r *unknownCommitResolver) resolvePending(ctx context.Context) {
 		if _, ok := committing[string(txnID)]; ok {
 			continue
 		}
-		if err := r.service.Unlock(ctx, txnID, fenceTS); err != nil {
-			continue
+		unlockCtx, cancel := context.WithTimeout(ctx, unknownCommitUnlockTimeout)
+		err := r.service.unlockUnknownCommit(unlockCtx, txnID, fenceTS)
+		cancel()
+		if err != nil && ctx.Err() != nil {
+			return
 		}
+		// unlockUnknownCommit removes the local holder before attempting a
+		// remote unlock. If the bounded attempt fails, the persistent fence
+		// makes remote orphan recovery safe, so it must not block this batch.
 		r.remove(txnID)
 	}
 }
@@ -178,6 +189,7 @@ func (s *service) canUnlockUnknownCommits(
 	resp, err := s.notifyCannotCommit(ctx, []pb.OrphanTxn{{
 		Service: s.serviceID,
 		Txn:     txnIDs,
+		Persist: true,
 	}})
 	if err != nil || resp.FenceTS.IsEmpty() {
 		return nil, timestamp.Timestamp{}, false

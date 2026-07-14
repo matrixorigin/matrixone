@@ -387,6 +387,11 @@ message CheckOrphanResponse {
 message OrphanTxn {
   string     Service = 1;
   repeated bytes Txn = 2;
+  // Persist keeps the cannot-commit tombstone until the allocator is
+  // restarted. It is used only when a Commit request may already be buffered
+  // in the source CN transport, so a live-CN active-txn sweep cannot prove
+  // that the request will never reach TN.
+  bool Persist = 3;
 }
 
 // Result result is used to tell the caller the result of the lock operation.

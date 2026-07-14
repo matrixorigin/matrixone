@@ -154,6 +154,12 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		requests[idx].RequestID = st.ID()
 		if err := st.Send(ctx, &requests[idx]); err != nil {
 			sr.Release()
+			if requests[idx].Method == txn.TxnMethod_Commit {
+				// Stream.Send waits for the backend write/flush completion. A
+				// failure here can therefore be reported after part or all of the
+				// Commit reached TN; it is not proof that Commit was not sent.
+				return nil, newTxnUnknownError(ctx, requests[idx].Txn.ID)
+			}
 			return nil, err
 		}
 		if requests[idx].Method == txn.TxnMethod_Commit {

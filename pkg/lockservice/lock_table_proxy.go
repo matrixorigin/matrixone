@@ -126,13 +126,25 @@ func (lp *localLockTableProxy) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
 	commitTS timestamp.Timestamp,
-	_ ...pb.ExtraMutation) {
+	mutations ...pb.ExtraMutation) {
+	_ = lp.unlockWithContext(context.Background(), txn, ls, commitTS, mutations...)
+}
+
+func (lp *localLockTableProxy) unlockWithContext(
+	ctx context.Context,
+	txn *activeTxn,
+	ls *cowSlice,
+	commitTS timestamp.Timestamp,
+	_ ...pb.ExtraMutation) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	rows := ls.slice()
 	defer rows.unref()
 
 	skipped := 0
 	n := rows.len()
-	var mutations []pb.ExtraMutation
+	var remoteMutations []pb.ExtraMutation
 	lp.mu.Lock()
 	defer lp.mu.Unlock()
 	rows.iter(func(key []byte) bool {
@@ -147,7 +159,7 @@ func (lp *localLockTableProxy) unlock(
 			if !isHolder {
 				skipped++
 				if n > 1 {
-					mutations = append(mutations,
+					remoteMutations = append(remoteMutations,
 						pb.ExtraMutation{
 							Key:  key,
 							Skip: true,
@@ -159,7 +171,7 @@ func (lp *localLockTableProxy) unlock(
 			// update holder to last txn
 			if !v.isEmpty() {
 				lp.mu.currentHolder[row] = v.last()
-				mutations = append(mutations,
+				remoteMutations = append(remoteMutations,
 					pb.ExtraMutation{
 						Key:       key,
 						Skip:      false,
@@ -174,10 +186,14 @@ func (lp *localLockTableProxy) unlock(
 
 	// all skipped
 	if skipped == rows.len() {
-		return
+		return nil
 	}
 
-	lp.remote.unlock(txn, ls, commitTS, mutations...)
+	if unlocker, ok := lp.remote.(contextUnlocker); ok {
+		return unlocker.unlockWithContext(ctx, txn, ls, commitTS, remoteMutations...)
+	}
+	lp.remote.unlock(txn, ls, commitTS, remoteMutations...)
+	return nil
 }
 
 func (lp *localLockTableProxy) isRemoteHolderLocked(

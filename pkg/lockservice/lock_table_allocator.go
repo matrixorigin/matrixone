@@ -163,7 +163,7 @@ func (l *lockTableAllocator) addCannotCommitLocked(values []pb.OrphanTxn) [][]by
 	for _, v := range values {
 		c := l.getCtl(v.Service)
 		for _, txn := range v.Txn {
-			state := c.tryCannotCommit(util.UnsafeBytesToString(txn))
+			state := c.tryCannotCommit(util.UnsafeBytesToString(txn), v.Persist)
 			if state == committingState {
 				committing = append(committing, txn)
 			}
@@ -1243,6 +1243,7 @@ type commitState struct {
 	state      ctlState
 	inflight   uint32
 	generation uint64
+	persist    bool
 }
 
 func (c *commitCtl) beginCommit(txnID string) ctlState {
@@ -1283,7 +1284,8 @@ func (c *commitCtl) finishCommit(txnID string) bool {
 	return true
 }
 
-func (c *commitCtl) tryCannotCommit(txnID string) ctlState {
+func (c *commitCtl) tryCannotCommit(txnID string, persists ...bool) ctlState {
+	persist := len(persists) > 0 && persists[0]
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ensureStatesLocked()
@@ -1293,12 +1295,14 @@ func (c *commitCtl) tryCannotCommit(txnID string) ctlState {
 		return committingState
 	}
 	if ok && state.state == cannotCommitState {
+		state.persist = state.persist || persist
 		state.generation = c.nextGenerationLocked()
 		c.states[txnID] = state
 		return cannotCommitState
 	}
 	state.state = cannotCommitState
 	state.inflight = 0
+	state.persist = persist
 	state.generation = c.nextGenerationLocked()
 	c.states[txnID] = state
 	return cannotCommitState
@@ -1338,7 +1342,7 @@ func (c *commitCtl) clean(
 			continue
 		}
 		_, active := activeTxns[txnID]
-		if active || state.inflight > 0 ||
+		if active || state.inflight > 0 || state.persist ||
 			(preserveCannotCommit && state.state == cannotCommitState) {
 			continue
 		}

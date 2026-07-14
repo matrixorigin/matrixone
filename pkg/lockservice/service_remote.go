@@ -892,7 +892,26 @@ func getLockTableBind(
 	originTableID uint64,
 	serviceID string,
 	sharding pb.Sharding) (pb.LockTable, allocatorState, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseGetLockTableBind)
+	return getLockTableBindWithContext(
+		context.Background(),
+		c,
+		group,
+		tableID,
+		originTableID,
+		serviceID,
+		sharding,
+	)
+}
+
+func getLockTableBindWithContext(
+	parent context.Context,
+	c Client,
+	group uint32,
+	tableID uint64,
+	originTableID uint64,
+	serviceID string,
+	sharding pb.Sharding) (pb.LockTable, allocatorState, error) {
+	ctx, cancel := context.WithTimeoutCause(parent, defaultRPCTimeout, moerr.CauseGetLockTableBind)
 	defer cancel()
 
 	req := acquireRequest()

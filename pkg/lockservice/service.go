@@ -239,12 +239,39 @@ func (s *service) Unlock(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
+	// Keep ordinary unlock behavior unchanged: it retries remote cleanup until
+	// completion even when the caller's request context has ended.
+	return s.unlockWithContext(context.Background(), txnID, commitTS, mutations...)
+}
+
+// unlockUnknownCommit is used only after Commit returned an unknown outcome.
+// The allocator fence has already made a later Commit impossible, so shutdown
+// may cancel a remote cleanup and leave orphan recovery to release its lock.
+func (s *service) unlockUnknownCommit(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
+	return s.unlockWithContext(ctx, txnID, commitTS, mutations...)
+}
+
+func (s *service) unlockWithContext(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.wait()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
 	if txn == nil {
@@ -266,13 +293,13 @@ func (s *service) Unlock(
 	}
 
 	defer logUnlockTxn(s.logger, txn)()
-	txn.close(txnID, commitTS, s.getLockTable, s.logger, mutations...)
+	err := txn.closeWithContext(ctx, txnID, commitTS, s.getLockTable, s.logger, mutations...)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
 	// needs to be notified to release memory.
 	s.deadlockDetector.txnClosed(txnID)
-	return nil
+	return err
 }
 
 func (s *service) IsOrphanTxn(
