@@ -483,7 +483,6 @@ func runISCPTaskIterationConsumers(
 				)
 				dataRetrievers[i].SetError(err)
 				statuses[i].SetError(err)
-				cancel()
 			}
 		}(i)
 	}

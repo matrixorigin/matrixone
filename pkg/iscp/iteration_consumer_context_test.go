@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/stretchr/testify/require"
 )
 
 type iterationChangesHandle struct {
@@ -71,6 +72,28 @@ func (c failingIterationConsumer) Consume(context.Context, DataRetriever) error 
 	return c.err
 }
 
+type drainingIterationConsumer struct{}
+
+func (c drainingIterationConsumer) Consume(ctx context.Context, data DataRetriever) error {
+	for {
+		d := data.Next()
+		noMoreData := d.noMoreData
+		err := d.err
+		d.Done()
+		if err != nil {
+			return err
+		}
+		if noMoreData {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+	}
+}
+
 func testIterationContext(jobNames ...string) *IterationContext {
 	if len(jobNames) == 0 {
 		jobNames = []string{"job"}
@@ -98,6 +121,18 @@ func runIterationConsumersForTest(
 	typ int8,
 	mp *mpool.MPool,
 ) <-chan struct{} {
+	done, _ := runIterationConsumersWithStatusesForTest(ctx, iterCtx, changes, consumers, typ, mp)
+	return done
+}
+
+func runIterationConsumersWithStatusesForTest(
+	ctx context.Context,
+	iterCtx *IterationContext,
+	changes engine.ChangesHandle,
+	consumers []Consumer,
+	typ int8,
+	mp *mpool.MPool,
+) (<-chan struct{}, []*JobStatus) {
 	done := make(chan struct{})
 	statuses := make([]*JobStatus, len(consumers))
 	for i := range statuses {
@@ -122,7 +157,7 @@ func runIterationConsumersForTest(
 			0,
 		)
 	}()
-	return done
+	return done, statuses
 }
 
 func TestRunISCPTaskIterationConsumersCancelSnapshotInFlightConsumer(t *testing.T) {
@@ -179,31 +214,32 @@ func TestRunISCPTaskIterationConsumersCancelTailFinalizationConsumer(t *testing.
 	}
 }
 
-func TestRunISCPTaskIterationConsumersSiblingFailureCancelsInFlightConsumer(t *testing.T) {
+func TestRunISCPTaskIterationConsumersSiblingFailureDoesNotFailHealthyConsumer(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := context.Background()
 
 	changes := &iterationChangesHandle{next: func(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
 		return nil, nil, engine.ChangesHandle_Tail_done, nil
 	}}
-	waitingConsumer := newWaitingIterationConsumer()
-	done := runIterationConsumersForTest(
+	done, statuses := runIterationConsumersWithStatusesForTest(
 		ctx,
-		testIterationContext("waiting", "failing"),
+		testIterationContext("healthy", "failing"),
 		changes,
 		[]Consumer{
-			waitingConsumer,
+			drainingIterationConsumer{},
 			failingIterationConsumer{err: errors.New("sibling failed")},
 		},
 		ISCPDataType_Tail,
 		proc.Mp(),
 	)
 
-	<-waitingConsumer.entered
-	close(waitingConsumer.once)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("sibling failure did not cancel in-flight consumer")
+		t.Fatal("shared iteration did not finish after one sibling failed")
 	}
+	require.Zero(t, statuses[0].ErrorCode)
+	require.Empty(t, statuses[0].ErrorMsg)
+	require.NotZero(t, statuses[1].ErrorCode)
+	require.Contains(t, statuses[1].ErrorMsg, "sibling failed")
 }
