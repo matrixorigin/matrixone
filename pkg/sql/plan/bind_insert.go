@@ -1327,6 +1327,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 
+			// An exact-numeric target column is a type-determining context for
+			// bare prepared-param arithmetic (e.g. "ON DUPLICATE KEY UPDATE
+			// dec = ? + ?"): rebind onto the column type before the assignment
+			// cast, so params are not routed through float64.
+			updateExpr = backfillParamArithForExactContext(builder.GetContext(), astExpr, updateExpr, colDef.Typ)
 			updateExpr, err = forceAssignmentCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
 			if err != nil {
 				return 0, err
@@ -2541,6 +2546,12 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	}
 
 	var astSelect *tree.Select
+	// Projection AST of a top-level "INSERT ... SELECT <exprs>", captured so the
+	// exact-numeric target column can retype bare prepared-param arithmetic in
+	// the sub-select projection (which the binder otherwise promotes to DOUBLE).
+	// Only the direct SelectClause form is captured; anything else (ParenSelect,
+	// UNION, ...) leaves it nil and is skipped conservatively.
+	var selectProjAst tree.SelectExprs
 	switch selectImpl := astRows.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
 	case *tree.ValuesClause:
@@ -2576,6 +2587,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 
 	case *tree.SelectClause:
 		astSelect = astRows
+		selectProjAst = selectImpl.Exprs
 
 		subCtx := NewBindContext(builder, bindCtx)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
@@ -2609,9 +2621,21 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 
 	selectTag := lastNode.BindingTags[0]
 
+	// Only retype projections when the captured projection AST aligns 1:1 with
+	// the bound projection list; a "*" (or mixed star) expansion changes the
+	// count, so a length mismatch means we cannot trust positional alignment.
+	backfillProj := selectProjAst != nil && len(selectProjAst) == len(lastNode.ProjectList)
+
 	insertColToExpr := make(map[string]*plan.Expr)
 	for i, column := range insertColumns {
 		colIdx := tableDef.Name2ColIndex[column]
+		if backfillProj {
+			// An exact-numeric target column retypes bare prepared-param
+			// arithmetic in the sub-select projection onto the column type,
+			// so params are not routed through float64.
+			lastNode.ProjectList[i] = backfillParamArithForExactContext(
+				builder.GetContext(), selectProjAst[i].Expr, lastNode.ProjectList[i], tableDef.Cols[colIdx].Typ)
+		}
 		projExpr := &plan.Expr{
 			Typ: lastNode.ProjectList[i].Typ,
 			Expr: &plan.Expr_Col{

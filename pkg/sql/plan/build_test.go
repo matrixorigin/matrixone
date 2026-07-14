@@ -203,10 +203,11 @@ func collectParamCastTargetIds(expr *plan.Expr) []int32 {
 	return ids
 }
 
-// allParamCastTargetIds collects param cast target ids across every node's
-// ProjectList and INSERT VALUES rowset data in a plan (UPDATE SET lands in a
-// PROJECT node's ProjectList; INSERT ... VALUES lands in a VALUE_SCAN's
-// RowsetData).
+// allParamCastTargetIds collects param cast target ids across the plan's
+// expression-bearing node fields:
+//   - ProjectList        — UPDATE SET, INSERT ... SELECT projection, CAST exprs
+//   - RowsetData         — INSERT ... VALUES
+//   - DedupJoinCtx       — ON DUPLICATE KEY UPDATE assignment expressions
 func allParamCastTargetIds(q *plan.Plan) []int32 {
 	var ids []int32
 	for _, node := range q.GetQuery().Nodes {
@@ -218,6 +219,11 @@ func allParamCastTargetIds(q *plan.Plan) []int32 {
 				for _, re := range col.GetData() {
 					ids = append(ids, collectParamCastTargetIds(re.GetExpr())...)
 				}
+			}
+		}
+		if dj := node.GetDedupJoinCtx(); dj != nil {
+			for _, expr := range dj.GetUpdateColExprList() {
+				ids = append(ids, collectParamCastTargetIds(expr)...)
 			}
 		}
 	}
@@ -809,6 +815,100 @@ func TestPrepareArithDivModIntoBigint(t *testing.T) {
 		for _, id := range ids {
 			assert.Equalf(t, int32(types.T_int64), id,
 				"%s: param must be cast to int64 (exact column context), got %d", sql, id)
+		}
+	}
+}
+
+// TestPrepareArithInsertSelectContextBackfill verifies that the exact-numeric
+// target column of "INSERT ... SELECT <arith>" retypes bare prepared-param
+// arithmetic in the sub-select projection onto the column type.
+func TestPrepareArithInsertSelectContextBackfill(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addArithCtxTableForTest(mock)
+
+	tests := []struct {
+		sql       string
+		wantParam int32
+	}{
+		{"prepare s from insert into arith_ctx_t(id, dec) select 1, ? + ?", int32(types.T_decimal128)},
+		{"prepare s from insert into arith_ctx_t(id, i64) select 1, ? div ?", int32(types.T_int64)},
+	}
+	for _, tc := range tests {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		assert.NoErrorf(t, err, "%s should succeed", tc.sql)
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		ids := allParamCastTargetIds(q)
+		assert.NotEmptyf(t, ids, "%s should cast prepared params", tc.sql)
+		for _, id := range ids {
+			assert.Equalf(t, tc.wantParam, id,
+				"%s: sub-select param must be retyped to exact column type %d, got %d", tc.sql, tc.wantParam, id)
+		}
+	}
+}
+
+// TestPrepareArithOnDupKeyUpdateBackfill verifies that the exact-numeric target
+// column of "ON DUPLICATE KEY UPDATE col = <arith>" retypes bare prepared-param
+// arithmetic onto the column type (assignment lands in the dedup-join ctx).
+func TestPrepareArithOnDupKeyUpdateBackfill(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addArithCtxTableForTest(mock)
+
+	tests := []struct {
+		sql       string
+		wantParam int32
+	}{
+		{"prepare s from insert into arith_ctx_t(id, dec) values(1, 0) on duplicate key update dec = ? + ?", int32(types.T_decimal128)},
+		{"prepare s from insert into arith_ctx_t(id, i64) values(1, 0) on duplicate key update i64 = ? div ?", int32(types.T_int64)},
+	}
+	for _, tc := range tests {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		assert.NoErrorf(t, err, "%s should succeed", tc.sql)
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		ids := allParamCastTargetIds(q)
+		assert.NotEmptyf(t, ids, "%s should cast prepared params", tc.sql)
+		for _, id := range ids {
+			assert.Equalf(t, tc.wantParam, id,
+				"%s: ODKU param must be retyped to exact column type %d, got %d", tc.sql, tc.wantParam, id)
+		}
+	}
+}
+
+// TestPrepareArithUnaryAndColRefContext verifies that the exact-context backfill
+// propagates through unary +/- and exact-type column-ref peers — neither is an
+// explicit cast, so they must not block context propagation. The column peer is
+// coerced to float64 by the outer operator during promotion; the backfill undoes
+// that coercion cast and retypes the params.
+func TestPrepareArithUnaryAndColRefContext(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addArithCtxTableForTest(mock)
+
+	tests := []struct {
+		sql       string
+		wantParam int32
+	}{
+		{"prepare s from select cast(-(? + ?) as decimal(30,0))", int32(types.T_decimal128)},
+		{"prepare s from select cast(-(? + ?) as signed)", int32(types.T_int64)},
+		{"prepare s from update arith_ctx_t set dec = (? + ?) + dec where id = 1", int32(types.T_decimal128)},
+		{"prepare s from update arith_ctx_t set dec = dec + (? + ?) where id = 1", int32(types.T_decimal128)},
+	}
+	for _, tc := range tests {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		assert.NoErrorf(t, err, "%s should succeed", tc.sql)
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		ids := allParamCastTargetIds(q)
+		assert.NotEmptyf(t, ids, "%s should cast prepared params", tc.sql)
+		for _, id := range ids {
+			assert.Equalf(t, tc.wantParam, id,
+				"%s: param must be retyped to exact context type %d, got %d", tc.sql, tc.wantParam, id)
 		}
 	}
 }

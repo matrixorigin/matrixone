@@ -792,6 +792,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							return false, nil, nil, err
 						}
 					}
+					// An exact-numeric target column is a type-determining
+					// context for bare prepared-param arithmetic (ON DUPLICATE
+					// KEY UPDATE): rebind onto the column type before the
+					// assignment cast so params are not routed through float64.
+					defExpr = backfillParamArithForExactContext(builder.GetContext(), updateExpr, defExpr, col.Typ)
 					defExpr, err = forceAssignmentCastExpr(builder.GetContext(), defExpr, col.Typ)
 					if err != nil {
 						return false, nil, nil, err

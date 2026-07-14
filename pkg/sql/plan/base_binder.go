@@ -1728,67 +1728,126 @@ func paramRefUnderFloatCast(e *Expr) *Expr {
 	return f.Args[0]
 }
 
-// isPromotedParamArith reports whether e is a binary arithmetic expression
-// produced by DOUBLE-promoting unresolved prepared params, i.e. every operand
-// is either cast(ParamRef -> float64), a nested promoted-param arithmetic, or a
-// numeric literal peer, and at least one operand is a promoted param.
-func isPromotedParamArith(e *Expr) bool {
+// unaryArithOpNames is the set of unary arithmetic operators that are
+// transparent to the exact-context typing of nested prepared-param arithmetic
+// (e.g. the "-" in "-(? + ?)").
+var unaryArithOpNames = map[string]bool{
+	"unary_minus": true, "unary_plus": true,
+}
+
+// exprUnderFloatCast returns the operand of a cast(X -> float64) node, else nil.
+// When binding a bare param arithmetic, DOUBLE promotion inserts such casts not
+// only over the params themselves but also over peer operands (a column, a
+// nested arithmetic) to unify the operator's operand types.  Because the caller
+// has already confirmed via isBareParamArithAst that the source AST contains no
+// explicit user cast, any float64 cast in the bound tree is binder-inserted
+// coercion and is safe to see through / undo.
+func exprUnderFloatCast(e *Expr) *Expr {
 	f := e.GetF()
-	if f == nil || !arithOpNames[f.Func.GetObjName()] || len(f.Args) != 2 {
-		return false
+	if f == nil || f.Func.GetObjName() != "cast" || len(f.Args) != 2 {
+		return nil
 	}
-	hasParam := false
-	for _, arg := range f.Args {
-		switch {
-		case paramRefUnderFloatCast(arg) != nil:
-			hasParam = true
-		case isPromotedParamArith(arg):
-			hasParam = true
-		case arg.GetLit() != nil:
-			// literal peer (e.g. the "1" in "(? + ?) + 1") — allowed
-		default:
-			return false
+	if e.Typ.Id != int32(types.T_float64) {
+		return nil
+	}
+	return f.Args[0]
+}
+
+// classifyPromotedParamArith walks a DOUBLE-promoted arithmetic tree.  It
+// returns valid=true when every leaf is a promoted param, a numeric literal, or
+// a column reference, and every internal node is a unary/binary arithmetic
+// operator or a binder-inserted float64 coercion cast; hasParam reports whether
+// at least one promoted param is present.  Literals and column refs are inert
+// peers whose type is already fixed.
+func classifyPromotedParamArith(e *Expr) (valid, hasParam bool) {
+	if inner := exprUnderFloatCast(e); inner != nil {
+		if inner.GetP() != nil {
+			return true, true
 		}
+		return classifyPromotedParamArith(inner)
 	}
-	return hasParam
+	if e.GetLit() != nil || e.GetCol() != nil {
+		return true, false
+	}
+	f := e.GetF()
+	if f == nil {
+		return false, false
+	}
+	name := f.Func.GetObjName()
+	if arithOpNames[name] && len(f.Args) == 2 {
+		v0, p0 := classifyPromotedParamArith(f.Args[0])
+		v1, p1 := classifyPromotedParamArith(f.Args[1])
+		return v0 && v1, p0 || p1
+	}
+	if unaryArithOpNames[name] && len(f.Args) == 1 {
+		return classifyPromotedParamArith(f.Args[0])
+	}
+	return false, false
+}
+
+// isPromotedParamArith reports whether e is a unary/binary arithmetic tree
+// produced by DOUBLE-promoting unresolved prepared params, whose leaves are
+// only promoted params, numeric literals, or column refs, with at least one
+// promoted param.
+func isPromotedParamArith(e *Expr) bool {
+	valid, hasParam := classifyPromotedParamArith(e)
+	return valid && hasParam
 }
 
 // rebindPromotedParamArithToType rewrites a promoted-param arithmetic expression
-// (see isPromotedParamArith) so that its prepared params and literal peers are
-// cast to target — an exact numeric type supplied by the surrounding context —
-// instead of float64, then re-resolves the arithmetic operator on the exact
-// types.  This removes the intermediate float64 rounding for contexts like
-// "cast(? + ? as decimal(30,0))" or "insert into t(dec) values(? + ?)".
+// (see isPromotedParamArith) so that its prepared params and numeric literals
+// are cast to target — an exact numeric type supplied by the surrounding
+// context — instead of float64, then re-resolves each arithmetic operator on
+// the exact types.  Binder-inserted float64 coercion casts are undone, and
+// column-ref peers keep their own type.  This removes the intermediate float64
+// rounding for contexts like "cast(? + ? as decimal(30,0))",
+// "insert into t(dec) values(? + ?)", or "set dec = (? + ?) + dec".
 //
 // It returns (rewritten, true, nil) on success, or (e, false, nil) when e turns
 // out not to be rewritable.  Callers guard with isPromotedParamArith(e) first.
 func rebindPromotedParamArithToType(ctx context.Context, e *Expr, target Type) (*Expr, bool, error) {
+	if inner := exprUnderFloatCast(e); inner != nil {
+		if inner.GetP() != nil {
+			// promoted param: cast the raw ParamRef to the exact type instead.
+			c, err := appendCastBeforeExpr(ctx, inner, target)
+			if err != nil {
+				return nil, false, err
+			}
+			return c, true, nil
+		}
+		// coercion cast over a column / nested arithmetic: drop it and rebind
+		// the operand onto the exact type.
+		return rebindPromotedParamArithToType(ctx, inner, target)
+	}
+	if e.GetLit() != nil {
+		c, err := appendCastBeforeExpr(ctx, e, target)
+		if err != nil {
+			return nil, false, err
+		}
+		return c, true, nil
+	}
+	if e.GetCol() != nil {
+		// Column-ref peer already carries its own type; leave it untouched.
+		return e, true, nil
+	}
 	f := e.GetF()
+	if f == nil {
+		return e, false, nil
+	}
 	op := f.Func.GetObjName()
+	if !arithOpNames[op] && !unaryArithOpNames[op] {
+		return e, false, nil
+	}
 	newArgs := make([]*Expr, len(f.Args))
 	for i, arg := range f.Args {
-		switch {
-		case paramRefUnderFloatCast(arg) != nil:
-			c, err := appendCastBeforeExpr(ctx, paramRefUnderFloatCast(arg), target)
-			if err != nil {
-				return nil, false, err
-			}
-			newArgs[i] = c
-		case isPromotedParamArith(arg):
-			r, _, err := rebindPromotedParamArithToType(ctx, arg, target)
-			if err != nil {
-				return nil, false, err
-			}
-			newArgs[i] = r
-		case arg.GetLit() != nil:
-			c, err := appendCastBeforeExpr(ctx, arg, target)
-			if err != nil {
-				return nil, false, err
-			}
-			newArgs[i] = c
-		default:
+		r, ok, err := rebindPromotedParamArithToType(ctx, arg, target)
+		if err != nil {
+			return nil, false, err
+		}
+		if !ok {
 			return e, false, nil
 		}
+		newArgs[i] = r
 	}
 	newExpr, err := BindFuncExprImplByPlanExpr(ctx, op, newArgs)
 	if err != nil {
@@ -1808,13 +1867,26 @@ var bareParamArithOps = map[tree.BinaryOp]bool{
 	tree.MOD:         true,
 }
 
+// bareParamUnaryOps is the set of tree.UnaryOp values that are transparent to
+// the exact-context typing of nested prepared-param arithmetic (see
+// isBareParamArithAst).  Bitwise "~" is excluded — it is not plain arithmetic.
+var bareParamUnaryOps = map[tree.UnaryOp]bool{
+	tree.UNARY_MINUS: true,
+	tree.UNARY_PLUS:  true,
+}
+
 // isBareParamArithAst reports whether the AST is a "bare" prepared-param
-// arithmetic expression: internal nodes are only parentheses and binary
-// arithmetic operators, leaves are only bare parameter markers and numeric
-// literals, and at least one parameter marker is present.  Any other node —
-// in particular an explicit tree.CastExpr such as "CAST(? AS DOUBLE)" — makes
-// it non-bare.  This is the only reliable way to tell a user-written cast from
-// the binder's automatic DOUBLE promotion, whose plan shapes are identical.
+// arithmetic expression: internal nodes are only parentheses, unary +/-, and
+// binary arithmetic operators; leaves are only bare parameter markers, numeric
+// literals, and column references; and at least one parameter marker is
+// present.  Any other node — in particular an explicit tree.CastExpr such as
+// "CAST(? AS DOUBLE)" — makes it non-bare.  This is the only reliable way to
+// tell a user-written cast (which must keep its own semantics) from the
+// binder's automatic DOUBLE promotion, whose plan shapes are identical.
+//
+// Column references and unary +/- are type-determining/-transparent contexts,
+// not explicit casts, so they are allowed: e.g. "CAST(-(? + ?) AS DECIMAL)" and
+// "SET dec = (? + ?) + dec" should still propagate the exact type to the params.
 func isBareParamArithAst(e tree.Expr) bool {
 	hasParam := false
 	var walk func(e tree.Expr) bool
@@ -1824,10 +1896,15 @@ func isBareParamArithAst(e tree.Expr) bool {
 			return walk(n.Expr)
 		case *tree.BinaryExpr:
 			return bareParamArithOps[n.Op] && walk(n.Left) && walk(n.Right)
+		case *tree.UnaryExpr:
+			return bareParamUnaryOps[n.Op] && walk(n.Expr)
 		case *tree.ParamExpr:
 			hasParam = true
 			return true
 		case *tree.NumVal:
+			return true
+		case *tree.UnresolvedName:
+			// column-ref peer — inert, keeps its own type
 			return true
 		default:
 			return false
