@@ -90,6 +90,18 @@ func (e *PipelineEdge) ResetForReuse(channelBufferSize int, nilBatchCnt int) {
 	e.terminalMu.Lock()
 	defer e.terminalMu.Unlock()
 
+	// Drain the old channel so buffered signals' resources (mpool batches,
+	// spool references) are released before we replace it. Without this,
+	// the abandoned channel would be GC'd but mpool memory would leak.
+	for {
+		select {
+		case sig := <-e.Ch2:
+			sig.release()
+		default:
+			goto done
+		}
+	}
+done:
 	e.Ch2 = make(chan PipelineSignal, channelBufferSize)
 	e.NilBatchCnt = nilBatchCnt
 	e.resetTerminalStateLocked()
@@ -112,13 +124,41 @@ func (e *PipelineEdge) SetNilBatchCntForReuse(nilBatchCnt int) {
 	e.resetTerminalStateLocked()
 }
 
+// ResetTerminalStateForReuse drains buffered stale signals and clears the
+// edge's terminal state (endDelivered/doneClosed/fatalTerminal) so a cached
+// pipeline (e.g. a prepared statement's compile) can deliver data and End
+// signals through the edge again on its next execution. The channel buffer
+// and NilBatchCnt are preserved. It is reuse-time only and must not race
+// with live senders or receivers.
+func (e *PipelineEdge) ResetTerminalStateForReuse() {
+	if e == nil {
+		return
+	}
+	e.SetNilBatchCntForReuse(e.NilBatchCnt)
+}
+
 func (e *PipelineEdge) drainChannelLocked() {
 	for {
 		select {
-		case <-e.Ch2:
+		case sig := <-e.Ch2:
+			sig.release()
 		default:
 			return
 		}
+	}
+}
+
+// release frees the resources held by a data signal (direct batch or spool
+// reference) so drainChannelLocked does not leak mpool/spool memory. Terminal
+// signals (End/Error/Abort) carry no data and are no-ops.
+func (signal *PipelineSignal) release() {
+	if signal.EventType.IsTerminal() {
+		return
+	}
+	if signal.typ == GetFromIndex && signal.source != nil {
+		signal.source.ReleaseCurrent(signal.index)
+	} else if signal.typ == GetDirectly && signal.directly != nil {
+		signal.directly.Clean(signal.mp)
 	}
 }
 

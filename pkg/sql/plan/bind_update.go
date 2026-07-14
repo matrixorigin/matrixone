@@ -239,6 +239,29 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						return 0, err
 					}
 				}
+
+				// The updated column's OLD value was appended to the project list as
+				// the raw column scan, which for ENUM/SET/geometry columns is a
+				// VARCHAR display value (cast_index_to_value for ENUM). Index tables
+				// store the typed value (e.g. the T_enum index), and INSERT casts the
+				// value before building index keys (bind_insert.go). Cast the OLD
+				// value the same way so UPDATE index-maintenance joins build keys in
+				// the stored typed representation; otherwise the join compares VARCHAR
+				// against the typed index key and either fails to bind (nil-pointer
+				// panic) or silently misses the row (update does not take effect).
+				if oldPos, ok := oldColName2Idx[alias+"."+col.Name]; ok && oldPos != colPos {
+					oldExpr := selectNode.ProjectList[oldPos]
+					if isEnumPlanType(&col.Typ) {
+						selectNode.ProjectList[oldPos], err = funcCastForEnumType(builder.GetContext(), oldExpr, col.Typ)
+					} else if isSetPlanType(&col.Typ) {
+						selectNode.ProjectList[oldPos], err = funcCastForSetType(builder.GetContext(), oldExpr, col.Typ)
+					} else if isGeometryPlanType(&col.Typ) {
+						selectNode.ProjectList[oldPos], err = funcCastForGeometryType(builder.GetContext(), oldExpr, col.Typ)
+					}
+					if err != nil {
+						return 0, err
+					}
+				}
 			} else {
 				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
 					newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)

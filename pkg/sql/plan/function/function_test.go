@@ -48,6 +48,42 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 
 		{
 			shouldCast: true,
+			in:         [2]types.Type{types.T_binary.ToType(), types.T_varbinary.ToType()},
+			want:       [2]types.Type{types.T_varbinary.ToType(), types.T_varbinary.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_varbinary.ToType(), types.T_binary.ToType()},
+			want:       [2]types.Type{types.T_varbinary.ToType(), types.T_varbinary.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_binary.ToType(), types.T_blob.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_blob.ToType(), types.T_binary.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_binary.ToType(), types.T_text.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_text.ToType(), types.T_binary.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
+		},
+
+		{
+			shouldCast: true,
 			in: [2]types.Type{
 				{Oid: types.T_decimal64, Width: 38, Size: 16, Scale: 6},
 				{Oid: types.T_decimal128, Width: 38, Size: 16, Scale: 4},
@@ -89,6 +125,16 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 			shouldCast: true,
 			in:         [2]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
 			want:       [2]types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
+		},
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_uint64.ToType(), types.T_int64.ToType()},
+			want:       [2]types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
+		},
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_int64.ToType(), types.T_uint64.ToType()},
+			want:       [2]types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
 		},
 
 		{
@@ -253,6 +299,20 @@ func Test_GetFunctionByName(t *testing.T) {
 			requireFid: DIV, requireOid: 0,
 			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
 			requireRet: types.T_float64.ToType(),
+		},
+		{
+			name: "/", args: []types.Type{types.T_uint64.ToType(), types.T_int64.ToType()},
+			shouldErr:  false,
+			requireFid: DIV, requireOid: 0,
+			shouldCast: true, requireTyp: []types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
+			requireRet: types.New(types.T_decimal128, 38, 6),
+		},
+		{
+			name: "/", args: []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()},
+			shouldErr:  false,
+			requireFid: DIV, requireOid: 0,
+			shouldCast: true, requireTyp: []types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
+			requireRet: types.New(types.T_decimal128, 38, 6),
 		},
 
 		{

@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -60,6 +61,7 @@ type ExplainData struct {
 	Uuid         string `json:"uuid"`
 	PhyPlan      PhyPlan
 	NewPlanStats statistic.StatsInfo
+	Scheduling   *schedule.Trace `json:"scheduling,omitempty"`
 }
 
 type Step struct {

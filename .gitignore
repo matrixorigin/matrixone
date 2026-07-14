@@ -36,6 +36,7 @@ grafana-local-data/
 grafana-data/
 sdk_demo/
 vendor/
+/.proto-vendor/
 gen_config
 main
 mo-tool

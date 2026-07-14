@@ -1757,17 +1757,18 @@ func (m *LogRecord) GetData() []byte {
 }
 
 type LogRequest struct {
-	Name                           string    `protobuf:"bytes,1,opt,name=Name,proto3" json:"Name,omitempty"`
-	ShardID                        uint64    `protobuf:"varint,2,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
-	Lsn                            uint64    `protobuf:"varint,3,opt,name=Lsn,proto3" json:"Lsn,omitempty"`
-	MaxSize                        uint64    `protobuf:"varint,4,opt,name=MaxSize,proto3" json:"MaxSize,omitempty"`
-	TNShardID                      uint64    `protobuf:"varint,5,opt,name=TNShardID,proto3" json:"TNShardID,omitempty"`
-	TNID                           uint64    `protobuf:"varint,6,opt,name=TNID,proto3" json:"TNID,omitempty"`
-	TS                             time.Time `protobuf:"bytes,7,opt,name=TS,proto3,stdtime" json:"TS"`
-	IncludeExpiredReplicaAddresses bool      `protobuf:"varint,8,opt,name=IncludeExpiredReplicaAddresses,proto3" json:"IncludeExpiredReplicaAddresses,omitempty"`
-	XXX_NoUnkeyedLiteral           struct{}  `json:"-"`
-	XXX_unrecognized               []byte    `json:"-"`
-	XXX_sizecache                  int32     `json:"-"`
+	Name                            string    `protobuf:"bytes,1,opt,name=Name,proto3" json:"Name,omitempty"`
+	ShardID                         uint64    `protobuf:"varint,2,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
+	Lsn                             uint64    `protobuf:"varint,3,opt,name=Lsn,proto3" json:"Lsn,omitempty"`
+	MaxSize                         uint64    `protobuf:"varint,4,opt,name=MaxSize,proto3" json:"MaxSize,omitempty"`
+	TNShardID                       uint64    `protobuf:"varint,5,opt,name=TNShardID,proto3" json:"TNShardID,omitempty"`
+	TNID                            uint64    `protobuf:"varint,6,opt,name=TNID,proto3" json:"TNID,omitempty"`
+	TS                              time.Time `protobuf:"bytes,7,opt,name=TS,proto3,stdtime" json:"TS"`
+	IncludeExpiredReplicaAddresses  bool      `protobuf:"varint,8,opt,name=IncludeExpiredReplicaAddresses,proto3" json:"IncludeExpiredReplicaAddresses,omitempty"`
+	ExcludeHardDownReplicaAddresses bool      `protobuf:"varint,9,opt,name=ExcludeHardDownReplicaAddresses,proto3" json:"ExcludeHardDownReplicaAddresses,omitempty"`
+	XXX_NoUnkeyedLiteral            struct{}  `json:"-"`
+	XXX_unrecognized                []byte    `json:"-"`
+	XXX_sizecache                   int32     `json:"-"`
 }
 
 func (m *LogRequest) Reset()         { *m = LogRequest{} }
@@ -1855,6 +1856,13 @@ func (m *LogRequest) GetTS() time.Time {
 func (m *LogRequest) GetIncludeExpiredReplicaAddresses() bool {
 	if m != nil {
 		return m.IncludeExpiredReplicaAddresses
+	}
+	return false
+}
+
+func (m *LogRequest) GetExcludeHardDownReplicaAddresses() bool {
+	if m != nil {
+		return m.ExcludeHardDownReplicaAddresses
 	}
 	return false
 }
@@ -6632,6 +6640,16 @@ func (m *LogRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.ExcludeHardDownReplicaAddresses {
+		i--
+		if m.ExcludeHardDownReplicaAddresses {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x48
+	}
 	if m.IncludeExpiredReplicaAddresses {
 		i--
 		if m.IncludeExpiredReplicaAddresses {
@@ -10238,6 +10256,9 @@ func (m *LogRequest) ProtoSize() (n int) {
 	l = github_com_gogo_protobuf_types.SizeOfStdTime(m.TS)
 	n += 1 + l + sovLogservice(uint64(l))
 	if m.IncludeExpiredReplicaAddresses {
+		n += 2
+	}
+	if m.ExcludeHardDownReplicaAddresses {
 		n += 2
 	}
 	if m.XXX_unrecognized != nil {
@@ -15213,6 +15234,26 @@ func (m *LogRequest) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.IncludeExpiredReplicaAddresses = bool(v != 0)
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ExcludeHardDownReplicaAddresses", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowLogservice
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.ExcludeHardDownReplicaAddresses = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipLogservice(dAtA[iNdEx:])
