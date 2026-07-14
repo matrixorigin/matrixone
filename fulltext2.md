@@ -1,4 +1,25 @@
-# FULLTEXT v2 — a WAND-based positional fulltext engine (`VERSION=2`)
+# FULLTEXT v2 — a WAND-based positional fulltext engine (`CREATE FULLTEXT2 INDEX`)
+
+> **ARCHITECTURE PIVOT (supersedes the `VERSION=2` framing below).** fulltext v2 is a
+> **distinct index algorithm `"fulltext2"`** with its own registered plugin (bm25-shaped), NOT a
+> version-router inside the fulltext plugin. Reason: the index-plugin framework is **algo-keyed**
+> — `indexplugin.Get(algo)` returns one plugin with **static** hooks — and v1↔v2 genuinely diverge
+> on `HiddenTableTypes` (1 postings table vs storage+metadata), `RestoreBehavior`,
+> `AlterTableCloneBehavior`, and ALTER REINDEX behavior. Threading `version` through those static
+> hooks is the same unsolvable `""`-param problem we hit on `SyncDescriptor`. A distinct algo gives
+> each hook a clean **static** answer (`AlwaysAsync=true`, `HiddenTableTypes=[storage,metadata]`, …)
+> with no version branches anywhere.
+>
+> - **DDL:** `CREATE FULLTEXT2 INDEX name ON t(col) [WITH PARSER …]` — a dedicated keyword parallel
+>   to `FULLTEXT` (NOT the vector-style `USING fulltext2`). Stamps `algo="fulltext2"`.
+> - **Query:** `MATCH(col) AGAINST(…)` reused — the router detects `algo="fulltext2"` → `fulltext2_search`.
+> - **Engine:** the entire `pkg/fulltext2` engine (segment / FST / NL+boolean+WAND / Index / sink /
+>   frames) is algo-agnostic and reused as-is; the `FullText2Index_*` catalog constants stay.
+> - The `VERSION=2` grammar/param and the `version`-aware `IsAsync` hack below are **retired**.
+>
+> The sections below describe the earlier VERSION=2 design and remain as engine/format reference.
+
+# (historical) FULLTEXT v2 — a WAND-based positional fulltext engine (`VERSION=2`)
 
 ## Goal
 

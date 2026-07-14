@@ -29,16 +29,17 @@ import (
 
 // Index Algorithm names
 const (
-	MoIndexDefaultAlgo  = tree.INDEX_TYPE_INVALID  // used by UniqueIndex or default SecondaryIndex
-	MoIndexBTreeAlgo    = tree.INDEX_TYPE_BTREE    // used for Mocking MySQL behaviour.
-	MoIndexRTreeAlgo    = tree.INDEX_TYPE_RTREE    // used for Spatial Index on GEOMETRY columns
-	MoIndexIvfFlatAlgo  = tree.INDEX_TYPE_IVFFLAT  // used for IVF flat index on Vector/Array columns
-	MOIndexMasterAlgo   = tree.INDEX_TYPE_MASTER   // used for Master Index on VARCHAR columns
-	MOIndexFullTextAlgo = tree.INDEX_TYPE_FULLTEXT // used for Fulltext Index on VARCHAR columns
-	MoIndexHnswAlgo     = tree.INDEX_TYPE_HNSW     // used for HNSW Index on Vector/Array columns
-	MoIndexCagraAlgo    = tree.INDEX_TYPE_CAGRA    // used for CAGRA Index on Vector/Array columns
-	MoIndexIvfpqAlgo    = tree.INDEX_TYPE_IVFPQ    // used for IVFPQ Index on Vector/Array columns
-	MoIndexBm25Algo     = tree.INDEX_TYPE_BM25     // used for BM25 ranked-retrieval Index on TEXT/VARCHAR columns
+	MoIndexDefaultAlgo   = tree.INDEX_TYPE_INVALID   // used by UniqueIndex or default SecondaryIndex
+	MoIndexBTreeAlgo     = tree.INDEX_TYPE_BTREE     // used for Mocking MySQL behaviour.
+	MoIndexRTreeAlgo     = tree.INDEX_TYPE_RTREE     // used for Spatial Index on GEOMETRY columns
+	MoIndexIvfFlatAlgo   = tree.INDEX_TYPE_IVFFLAT   // used for IVF flat index on Vector/Array columns
+	MOIndexMasterAlgo    = tree.INDEX_TYPE_MASTER    // used for Master Index on VARCHAR columns
+	MOIndexFullTextAlgo  = tree.INDEX_TYPE_FULLTEXT  // used for Fulltext Index on VARCHAR columns
+	MoIndexHnswAlgo      = tree.INDEX_TYPE_HNSW      // used for HNSW Index on Vector/Array columns
+	MoIndexCagraAlgo     = tree.INDEX_TYPE_CAGRA     // used for CAGRA Index on Vector/Array columns
+	MoIndexIvfpqAlgo     = tree.INDEX_TYPE_IVFPQ     // used for IVFPQ Index on Vector/Array columns
+	MoIndexBm25Algo      = tree.INDEX_TYPE_BM25      // used for BM25 ranked-retrieval Index on TEXT/VARCHAR columns
+	MoIndexFullText2Algo = tree.INDEX_TYPE_FULLTEXT2 // CREATE FULLTEXT2 INDEX: WAND positional engine on TEXT/VARCHAR columns
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -80,6 +81,14 @@ func IsMasterIndexAlgo(algo string) bool {
 func IsFullTextIndexAlgo(algo string) bool {
 	_algo := ToLower(algo)
 	return _algo == MOIndexFullTextAlgo.ToString()
+}
+
+// IsFullText2IndexAlgo reports the distinct WAND positional fulltext engine
+// (CREATE FULLTEXT2 INDEX). It is a separate algo from classic fulltext so its
+// plugin hooks stay static; query routing / MATCH detection treat both.
+func IsFullText2IndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MoIndexFullText2Algo.ToString()
 }
 
 func IsHnswIndexAlgo(algo string) bool {

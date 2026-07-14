@@ -2069,6 +2069,8 @@ func (it IndexType) ToString() string {
 		return "ivfpq"
 	case INDEX_TYPE_BM25:
 		return "bm25"
+	case INDEX_TYPE_FULLTEXT2:
+		return "fulltext2"
 	case INDEX_TYPE_INVALID:
 		return ""
 	default:
@@ -2090,6 +2092,7 @@ const (
 	INDEX_TYPE_CAGRA
 	INDEX_TYPE_IVFPQ
 	INDEX_TYPE_BM25
+	INDEX_TYPE_FULLTEXT2
 )
 
 type VisibleType int
@@ -2583,10 +2586,17 @@ type FullTextIndex struct {
 	Name        string
 	Empty       bool
 	IndexOption *IndexOption
+	// IsV2 marks a CREATE FULLTEXT2 INDEX — the distinct WAND positional engine
+	// (algo="fulltext2"), routed to the fulltext2 plugin. false is classic v1.
+	IsV2 bool
 }
 
 func (node *FullTextIndex) Format(ctx *FmtCtx) {
-	ctx.WriteString("fulltext")
+	if node.IsV2 {
+		ctx.WriteString("fulltext2")
+	} else {
+		ctx.WriteString("fulltext")
+	}
 	if node.Name != "" {
 		ctx.WriteByte(' ')
 		ctx.WriteString(node.Name)
@@ -4246,6 +4256,8 @@ func (ic IndexCategory) ToString() string {
 		return "unique"
 	case INDEX_CATEGORY_FULLTEXT:
 		return "fulltext"
+	case INDEX_CATEGORY_FULLTEXT2:
+		return "fulltext2"
 	case INDEX_CATEGORY_SPATIAL:
 		return "spatial"
 	default:
@@ -4258,6 +4270,7 @@ const (
 	INDEX_CATEGORY_UNIQUE
 	INDEX_CATEGORY_FULLTEXT
 	INDEX_CATEGORY_SPATIAL
+	INDEX_CATEGORY_FULLTEXT2
 )
 
 type CreateIndex struct {

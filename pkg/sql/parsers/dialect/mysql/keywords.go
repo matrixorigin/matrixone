@@ -216,6 +216,7 @@ func init() {
 		"from":                       FROM,
 		"full":                       FULL,
 		"fulltext":                   FULLTEXT,
+		"fulltext2":                  FULLTEXT2,
 		"function":                   FUNCTION,
 		"fields":                     FIELDS,
 		"file":                       FILE,

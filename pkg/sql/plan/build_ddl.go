@@ -1823,11 +1823,17 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 // lives at pkg/fulltext/plugin/plan/schema.go). It keeps the
 // batched, in-place-append signature the legacy callers used.
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
-	p, ok := indexplugin.Get(catalog.MOIndexFullTextAlgo.ToString())
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("fulltext plugin not registered")
-	}
 	for _, indexInfo := range indexInfos {
+		// CREATE FULLTEXT2 INDEX (IsV2) routes to the distinct fulltext2 plugin;
+		// classic CREATE FULLTEXT INDEX to the fulltext plugin.
+		algo := catalog.MOIndexFullTextAlgo.ToString()
+		if indexInfo.IsV2 {
+			algo = catalog.MoIndexFullText2Algo.ToString()
+		}
+		p, ok := indexplugin.Get(algo)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx(algo + " plugin not registered")
+		}
 		idxDefs, tblDefs, err := p.Plan().BuildFullTextIndexDefs(
 			ctx, indexInfo, colMap, existedIndexes, pkeyName,
 		)
@@ -2994,6 +3000,15 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			Name:        indexName,
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
+		}
+	case tree.INDEX_CATEGORY_FULLTEXT2:
+		// CREATE FULLTEXT2 INDEX — the distinct WAND positional engine; routed to
+		// the fulltext2 plugin by buildFullTextIndexTable via IsV2.
+		ftIdx = &tree.FullTextIndex{
+			Name:        indexName,
+			KeyParts:    stmt.KeyParts,
+			IndexOption: stmt.IndexOption,
+			IsV2:        true,
 		}
 	case tree.INDEX_CATEGORY_SPATIAL:
 		keyType := tree.INDEX_TYPE_RTREE
