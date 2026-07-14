@@ -100,8 +100,10 @@ func (c *tableCache) getLastAllocateTS(colName string) (timestamp.Timestamp, err
 	if cc == nil {
 		panic("column cache should not be nil, " + colName)
 	}
-	ts := cc.lastAllocateAt
-	// Log warning if lastAllocateAt is empty, which may cause PrimaryKeysMayBeUpserted
+	cc.RLock()
+	ts := cc.ranges.oldestAllocateAt()
+	cc.RUnlock()
+	// Log a warning if the allocation timestamp is empty, which may cause PrimaryKeysMayBeUpserted
 	// to scan a very large time range and impact performance.
 	if ts.IsEmpty() && c.logger.Enabled(zap.DebugLevel) {
 		c.logger.Debug("auto-increment getLastAllocateTS: returning empty timestamp",
