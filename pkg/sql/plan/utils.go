@@ -2765,6 +2765,21 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 		getParamRule.SetParamOrder()
 		args := getParamRule.params
 		schemas = getParamRule.schemas
+		for _, dependency := range getParamRule.indexDependencies {
+			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
+			if err != nil {
+				return nil, nil, err
+			}
+			if objRef == nil || tableDef == nil {
+				return nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "resolved index table %q without catalog metadata", dependency.tableName)
+			}
+			ref := DeepCopyObjectRef(objRef)
+			ref.Server = int64(tableDef.Version)
+			ref.Db = int64(tableDef.DbId)
+			ref.Schema = int64(tableDef.DbId)
+			ref.Obj = int64(tableDef.TblId)
+			schemas = append(schemas, ref)
+		}
 		paramTypes = getParamRule.paramTypes
 
 		// reset arg order

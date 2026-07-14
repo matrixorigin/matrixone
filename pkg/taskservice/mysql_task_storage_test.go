@@ -1040,7 +1040,7 @@ func TestAcquireAndCompleteSQLTaskRunInSqlMock(t *testing.T) {
 	run.Status = SQLTaskStatusSuccess
 	run.FinishedAt = time.Now()
 	run.DurationSeconds = 2.5
-	mock.ExpectExec(updateSQLTaskRun).
+	mock.ExpectExec(completeSQLTaskRun).
 		WithArgs(
 			run.TaskID,
 			run.TaskName,
@@ -1058,6 +1058,9 @@ func TestAcquireAndCompleteSQLTaskRunInSqlMock(t *testing.T) {
 			1,
 			run.RunnerCN,
 			run.RunID,
+			SQLTaskStatusRunning,
+			run.RunnerCN,
+			run.AttemptNumber,
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	affected, err := storage.CompleteSQLTaskRun(context.Background(), run)
@@ -1104,7 +1107,7 @@ func TestSQLTaskMySQLStorageErrorBranches(t *testing.T) {
 		require.Equal(t, 0, affected)
 
 		run := newTestSQLTaskRun(10, "task_a", SQLTaskStatusSuccess)
-		mock.ExpectExec(updateSQLTaskRun).WillReturnResult(mockRowsAffectedResult{err: assert.AnError})
+		mock.ExpectExec(completeSQLTaskRun).WillReturnResult(mockRowsAffectedResult{err: assert.AnError})
 		affected, err = storage.CompleteSQLTaskRun(context.Background(), run)
 		require.ErrorIs(t, err, assert.AnError)
 		require.Equal(t, 0, affected)
