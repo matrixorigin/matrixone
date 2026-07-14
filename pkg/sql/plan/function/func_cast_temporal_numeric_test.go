@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -140,6 +141,27 @@ func TestTemporalNumericTypeCheckUsesDecimal128ForDateTimeAndTimestamp(t *testin
 			if tc.left.Oid.IsDateRelate() && tc.left.Scale > 0 {
 				require.Equal(t, tc.left.Scale, left.Scale)
 			}
+		})
+	}
+}
+
+func TestTemporalNumericCastOverloadSupportsDateAndYearDecimal(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source types.T
+		target types.T
+	}{
+		{name: "date to decimal64", source: types.T_date, target: types.T_decimal64},
+		{name: "date to decimal128", source: types.T_date, target: types.T_decimal128},
+		{name: "year to decimal64", source: types.T_year, target: types.T_decimal64},
+		{name: "year to decimal128", source: types.T_year, target: types.T_decimal128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, IfTypeCastSupported(tc.source, tc.target))
+			_, err := GetFunctionByName(context.Background(), "cast", []types.Type{
+				tc.source.ToType(), tc.target.ToType(),
+			})
+			require.NoError(t, err)
 		})
 	}
 }
