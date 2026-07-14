@@ -443,6 +443,94 @@ func (bj ByteJson) Query(paths []*Path) ByteJson {
 	return mergeToArray(out)
 }
 
+// PathExists reports whether path selects at least one JSON value. A selected
+// JSON literal null counts as an existing path. Array index zero autowraps
+// non-array values to match JSON_CONTAINS_PATH semantics.
+func (bj ByteJson) PathExists(path *Path) bool {
+	return bj.pathExists(path)
+}
+
+func (bj ByteJson) pathExists(path *Path) bool {
+	if path.empty() {
+		return true
+	}
+
+	sub, nextPath := path.step()
+	if sub.tp == subPathDoubleStar {
+		if bj.pathExists(&nextPath) {
+			return true
+		}
+		if bj.Type == TpCodeObject {
+			for i := 0; i < bj.GetElemCnt(); i++ {
+				if bj.getObjectVal(i).pathExists(path) {
+					return true
+				}
+			}
+		} else if bj.Type == TpCodeArray {
+			for i := 0; i < bj.GetElemCnt(); i++ {
+				if bj.getArrayElem(i).pathExists(path) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	switch bj.Type {
+	case TpCodeObject:
+		switch sub.tp {
+		case subPathIdx:
+			idx, _, _ := sub.idx.genIndex(1)
+			return idx == 0 && bj.pathExists(&nextPath)
+		case subPathRange:
+			return sub.iRange.matchesIndex(0, 1) && bj.pathExists(&nextPath)
+		case subPathKey:
+			value, ok := bj.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+			return ok && value.pathExists(&nextPath)
+		case subPathKeyWildcard:
+			for i := 0; i < bj.GetElemCnt(); i++ {
+				if bj.getObjectVal(i).pathExists(&nextPath) {
+					return true
+				}
+			}
+		}
+	case TpCodeArray:
+		count := bj.GetElemCnt()
+		switch sub.tp {
+		case subPathIdx:
+			idx, _, last := sub.idx.genIndex(count)
+			if (last && idx < 0) || count <= idx {
+				return false
+			}
+			if idx == subPathIdxALL {
+				for i := 0; i < count; i++ {
+					if bj.getArrayElem(i).pathExists(&nextPath) {
+						return true
+					}
+				}
+				return false
+			}
+			return bj.getArrayElem(idx).pathExists(&nextPath)
+		case subPathRange:
+			for i := 0; i < count; i++ {
+				if sub.iRange.matchesIndex(i, count) && bj.getArrayElem(i).pathExists(&nextPath) {
+					return true
+				}
+			}
+		}
+	default:
+		if sub.tp == subPathIdx {
+			idx, _, _ := sub.idx.genIndex(1)
+			return idx == 0 && bj.pathExists(&nextPath)
+		}
+		if sub.tp == subPathRange {
+			return sub.iRange.matchesIndex(0, 1) && bj.pathExists(&nextPath)
+		}
+	}
+
+	return false
+}
+
 func (bj ByteJson) querySimple(path *Path) ByteJson {
 	val, ok := bj.querySimpleExist(path, false)
 	if !ok {

@@ -109,6 +109,7 @@ var (
 	CauseDoGetLock                 = NewInternalError(context.Background(), "doGetLock")
 	CauseInitRemote1               = NewInternalError(context.Background(), "initRemote 1")
 	CauseInitRemote2               = NewInternalError(context.Background(), "initRemote 2")
+	CauseResetLockServiceBackend   = NewInternalError(context.Background(), "resetLockServiceBackend")
 	CauseGetTxnWaitingListOnRemote = NewInternalError(context.Background(), "getTxnWaitingListOnRemote")
 	CauseGetLockTableBind          = NewInternalError(context.Background(), "getLockTableBind")
 	CauseAbortRemoteDeadlockTxn    = NewInternalError(context.Background(), "abortRemoteDeadlockTxn")

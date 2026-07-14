@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/row"
 )
@@ -39,12 +40,16 @@ func (c *DashboardCreator) initMemDashboard() error {
 		return err
 	}
 
+	rows := []dashboard.Option{
+		c.initMpoolAllocatorRow(),
+		c.initMallocRow(),
+	}
+	if c.by == "pod" {
+		rows = append([]dashboard.Option{c.initPodWorkingSetRow()}, rows...)
+	}
 	build, err := dashboard.New(
 		"Memory Metrics",
-		c.withRowOptions(
-			c.initMpoolAllocatorRow(),
-			c.initMallocRow(),
-		)...)
+		c.withRowOptions(rows...)...)
 	if err != nil {
 		return err
 	}
@@ -146,6 +151,26 @@ func (c *DashboardCreator) initMpoolAllocatorRow() dashboard.Option {
 	return dashboard.Row(
 		"TAE Mpool Allocator",
 		options...,
+	)
+}
+
+func (c *DashboardCreator) initPodWorkingSetRow() dashboard.Option {
+	return dashboard.Row(
+		"CN/DN Pod Resource",
+		c.withGraph(
+			"CN/DN Working Set",
+			6,
+			`sum(`+c.getMetricWithFilter("container_memory_working_set_bytes", `container!="",pod=~".*(cn|dn).*"`)+`) by (`+c.by+`)`,
+			"{{ "+c.by+" }}",
+			axis.Unit("decbytes"),
+			axis.Min(0)),
+		c.withGraph(
+			"CN/DN CPU Usage",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("container_cpu_usage_seconds_total", `container!="",pod=~".*(cn|dn).*"`)+`[$interval])) by (`+c.by+`)`,
+			"{{ "+c.by+" }}",
+			axis.Unit("cores"),
+			axis.Min(0)),
 	)
 }
 
