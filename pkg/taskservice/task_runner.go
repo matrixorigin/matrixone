@@ -466,16 +466,21 @@ func (r *taskRunner) retry(ctx context.Context) {
 			}
 			needRetryTasks = needRetryTasks[:0]
 			r.retryTasks.Lock()
-			for i, rt := range r.retryTasks.s {
-				if rt.retryAt.After(time.Now()) {
-					r.retryTasks.s = r.retryTasks.s[:copy(r.retryTasks.s, r.retryTasks.s[i:])]
+			now := time.Now()
+			next := 0
+			for ; next < len(r.retryTasks.s); next++ {
+				rt := r.retryTasks.s[next]
+				if rt.retryAt.After(now) {
 					break
 				}
 				needRetryTasks = append(needRetryTasks, rt)
 			}
+			remaining := copy(r.retryTasks.s, r.retryTasks.s[next:])
+			clear(r.retryTasks.s[remaining:])
+			r.retryTasks.s = r.retryTasks.s[:remaining]
 			r.retryTasks.Unlock()
 			for _, rt := range needRetryTasks {
-				r.runTask(ctx, rt)
+				r.run(rt)
 			}
 		}
 	}

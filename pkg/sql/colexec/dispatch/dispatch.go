@@ -136,6 +136,15 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 
 	whichToSend := result.Batch
 	if result.Batch == nil {
+		// A remote dispatch must attach every receiver even when its child
+		// produces no batches. Otherwise an early NotRegistered response can
+		// outlive this pipeline: cleanup removes the registration before the
+		// client's next retry, which then retries until the query timeout.
+		if dispatch.ctr.isRemote && !dispatch.ctr.prepared {
+			if _, err = dispatch.waitRemoteRegsReady(proc); err != nil {
+				return result, err
+			}
+		}
 		result.Status = vm.ExecStop
 		printShuffleResult(dispatch)
 		return result, nil
@@ -208,6 +217,7 @@ type RemoteReceiverRegistration struct {
 	proc     *process.Process
 	ch       process.RemotePipelineInformationChannel
 	uuids    []uuid.UUID
+	server   *colexec.Server
 }
 
 // Cancel stops the process that owns this registration.
@@ -223,7 +233,7 @@ func (r *RemoteReceiverRegistration) Cleanup() {
 	if r == nil {
 		return
 	}
-	colexec.Get().RemoveUuidsOwned(r.uuids, r.ch)
+	r.server.RemoveUuidsOwned(r.uuids, r.ch)
 	if r.dispatch.ctr == r.ctr && r.ctr.remoteProc == r.proc && r.ctr.remoteInfo == r.ch {
 		r.ctr.remoteInfo = nil
 		r.ctr.remoteProc = nil
@@ -266,10 +276,16 @@ func (dispatch *Dispatch) RegisterRemoteReceiversWithHandle(proc *process.Proces
 		proc:     proc,
 		ch:       dispatch.ctr.remoteInfo,
 		uuids:    uuids,
+		server:   dispatch.ctr.server,
 	}, nil
 }
 
 func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
+	server := colexec.GetServer(proc.GetService())
+	if server == nil {
+		return moerr.NewInternalErrorf(proc.Ctx, "colexec server is not initialized for CN %s", proc.GetService())
+	}
+	dispatch.ctr.server = server
 	if dispatch.ctr.remoteInfo != nil && dispatch.ctr.remoteProc != nil && dispatch.ctr.remoteProc != proc {
 		return moerr.NewInternalErrorNoCtx("remote receiver registered with a different process")
 	}
@@ -289,11 +305,11 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 			dispatch.ctr.remoteToIdx[rr.Uuid] = dispatch.ShuffleRegIdxRemote[i]
 		}
 		if needRegister {
-			if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc, dispatch.ctr.remoteInfo); err != nil {
+			if err := server.PutProcIntoUuidMap(rr.Uuid, proc, dispatch.ctr.remoteInfo); err != nil {
 				if proc != nil && proc.Cancel != nil {
 					proc.Cancel(err)
 				}
-				rollbackRemoteReceiverRegistrations(registered, dispatch.ctr.remoteInfo)
+				rollbackRemoteReceiverRegistrations(server, registered, dispatch.ctr.remoteInfo)
 				dispatch.ctr.remoteInfo = nil
 				dispatch.ctr.remoteProc = nil
 				return err
@@ -305,10 +321,11 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 }
 
 func rollbackRemoteReceiverRegistrations(
+	server *colexec.Server,
 	registered []uuid.UUID,
 	ch process.RemotePipelineInformationChannel,
 ) {
-	colexec.Get().RemoveUuidsOwned(registered, ch)
+	server.RemoveUuidsOwned(registered, ch)
 }
 
 func (dispatch *Dispatch) prepareLocal() {

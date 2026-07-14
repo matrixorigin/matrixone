@@ -386,3 +386,9 @@ func (pe subPathRangeExpr) genRange(cnt int) (ret [2]int) {
 	ret[0], ret[1] = mdf1, mdf2
 	return
 }
+
+func (pe subPathRangeExpr) matchesIndex(index, cnt int) bool {
+	start, _, _ := pe.start.genIndex(cnt)
+	end, _, _ := pe.end.genIndex(cnt)
+	return start <= end && start <= index && index <= end
+}
