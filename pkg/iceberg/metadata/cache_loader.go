@@ -16,7 +16,6 @@ package metadata
 
 import (
 	"context"
-	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
@@ -233,7 +232,7 @@ func (l CachedTableMetadataLoader) baseKey(req api.LoadTableRequest) CacheKey {
 	return CacheKey{
 		AccountID:              req.Catalog.AccountID,
 		CatalogID:              req.Catalog.CatalogID,
-		Namespace:              namespaceCacheKey(req.Namespace),
+		Namespace:              api.NamespaceCacheKey(req.Namespace),
 		Table:                  req.Table,
 		Ref:                    ref,
 		ExternalPrincipal:      req.ExternalPrincipal,
@@ -251,16 +250,6 @@ func (r CachedManifestReader) cacheKey(kind CacheKind, path string) CacheKey {
 		key.CredentialIdentityHash = r.CredentialHash
 	}
 	return key
-}
-
-func namespaceCacheKey(namespace api.Namespace) string {
-	var out strings.Builder
-	for _, segment := range namespace {
-		out.WriteString(strconv.Itoa(len(segment)))
-		out.WriteByte(':')
-		out.WriteString(segment)
-	}
-	return out.String()
 }
 
 func snapshotID(selector api.SnapshotSelector) int64 {

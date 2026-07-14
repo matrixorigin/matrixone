@@ -41,6 +41,9 @@ func (w *IcebergWrite) Prepare(proc *process.Process) error {
 	if w.Coordinator == nil {
 		w.Request.ParallelID = w.GetParalleID()
 		w.Request.MaxParallel = w.GetMaxParallel()
+		if w.Request.TimeZone == nil && proc != nil && proc.GetSessionInfo() != nil {
+			w.Request.TimeZone = proc.GetSessionInfo().TimeZone
+		}
 		if w.Factory != nil {
 			coordinator, err := w.Factory.NewCoordinator(proc.Ctx, w.Request)
 			if err != nil {

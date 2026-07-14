@@ -126,6 +126,24 @@ func TestLocalScanPlannerUsesCacheOnSecondPlanning(t *testing.T) {
 	}
 }
 
+func TestLocalScanPlannerPreservesManifestReadErrorAfterWorkerCancellation(t *testing.T) {
+	fixture := newPlannerFixture(t, 4)
+	delete(fixture.reader.data, fixture.facade.manifests[0].Path)
+	planner := fixture.planner()
+	planner.ManifestReadParallelism = 1
+
+	_, err := planner.PlanScan(context.Background(), api.ScanPlanRequest{
+		CatalogRequest: cacheLoadTableRequest().CatalogRequest,
+		Namespace:      api.Namespace{"sales"},
+		Table:          "orders",
+		Ref:            "main",
+	})
+	assertIcebergCode(t, err, api.ErrMetadataIOTimeout)
+	if strings.Contains(err.Error(), "cancel") {
+		t.Fatalf("worker cancellation masked the manifest read error: %v", err)
+	}
+}
+
 func TestLocalScanPlannerLoadsAllSnapshotsForTimeTravel(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {

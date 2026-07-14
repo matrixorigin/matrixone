@@ -50,7 +50,7 @@ func (i ClusterRemoteCacheInvalidator) InvalidateIcebergTable(ctx context.Contex
 	payload := query.IcebergCacheInvalidateRequest{
 		AccountID:            req.Catalog.AccountID,
 		CatalogID:            req.Catalog.CatalogID,
-		Namespace:            strings.Join(req.Namespace, "."),
+		Namespace:            api.NamespaceCacheKey(req.Namespace),
 		Table:                req.Table,
 		SnapshotID:           result.SnapshotID,
 		MetadataLocationHash: result.MetadataLocationHash,

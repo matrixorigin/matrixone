@@ -108,41 +108,18 @@ type AppendWorkflow struct {
 	Builder                api.WriteBuilder
 	Committer              api.Committer
 	Verifier               CommitVerifier
-	ReloadBase             ReloadBaseFunc
-	RetryPolicy            CompatibleRetryPolicy
 	OrphanRecorder         OrphanRecorder
 	OrphanCleaner          OrphanCleaner
 	ImmediateOrphanCleanup bool
 	AuditRecorder          AuditRecorder
 	CacheInvalidator       CacheInvalidator
 	MetricsReporter        api.MetricsReporter
-	MaxConflictRetry       int
 	Now                    func() time.Time
 	OrphanTTL              time.Duration
 }
 
-type CompatibleRetryPolicy struct {
-	AllowAddOptionalColumns     bool
-	AllowPartitionSpecEvolution bool
-	AllowSortOrderIDChange      bool
-}
-
 type CommitVerifier interface {
 	VerifyCommit(ctx context.Context, req api.AppendRequest, attempt *api.CommitAttempt, result *api.CommitResult) (*api.CommitResult, bool, error)
-}
-
-type ReloadBaseFunc func(context.Context, api.AppendRequest) (BaseState, error)
-
-type BaseState struct {
-	SnapshotID   int64
-	SchemaID     int
-	SpecID       int
-	SortOrderID  int
-	RefRetention api.SnapshotRef
-	MetadataHash string
-	Schema       api.Schema
-	Spec         api.PartitionSpec
-	KnownSpecs   []api.PartitionSpec
 }
 
 type OrphanRecorder interface {
@@ -212,65 +189,36 @@ func (w AppendWorkflow) CommitAppend(ctx context.Context, req api.AppendRequest)
 		w.onFailure(ctx, req, attempt, "failed", appendErrorCategory(err))
 		return nil, stderrors.Join(err, recordErr)
 	}
-	maxRetries := w.MaxConflictRetry
-	if maxRetries < 0 {
-		maxRetries = 0
+	result, err := w.Committer.CommitTable(ctx, commitRequest(req, attempt))
+	if err == nil && result != nil && !result.Unknown {
+		w.onSuccess(ctx, req, attempt, *result)
+		return result, nil
 	}
-	for retry := 0; ; retry++ {
-		result, err := w.Committer.CommitTable(ctx, commitRequest(req, attempt))
-		if err == nil && result != nil && !result.Unknown {
-			w.onSuccess(ctx, req, attempt, *result)
-			return result, nil
-		}
-		if isUnknownResult(err, result) {
-			verified, ok, verifyErr := w.verifyUnknown(ctx, req, attempt, result)
-			if verifyErr != nil {
-				_ = w.recordOrphans(ctx, req, attempt, false)
-				w.onFailure(ctx, req, attempt, "unknown", appendErrorCategory(verifyErr))
-				return nil, verifyErr
-			}
-			if ok {
-				w.onSuccess(ctx, req, attempt, *verified)
-				return verified, nil
-			}
+	if isUnknownResult(err, result) {
+		verified, ok, verifyErr := w.verifyUnknown(ctx, req, attempt, result)
+		if verifyErr != nil {
 			_ = w.recordOrphans(ctx, req, attempt, false)
-			unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg append commit result is unknown and could not be verified", map[string]string{"table": req.Table})
-			w.onFailure(ctx, req, attempt, "unknown", appendErrorCategory(unknownErr))
-			return nil, unknownErr
+			w.onFailure(ctx, req, attempt, "unknown", appendErrorCategory(verifyErr))
+			return nil, verifyErr
 		}
-		if isConflict(err) && retry < maxRetries {
-			base, reloadErr := w.reloadBase(ctx, req)
-			if reloadErr != nil {
-				_ = w.recordOrphans(ctx, req, attempt, true)
-				w.onFailure(ctx, req, attempt, "failed", appendErrorCategory(reloadErr))
-				return nil, reloadErr
-			}
-			if compatibleRetry(req, base, w.RetryPolicy) {
-				req = rebaseAppendRequest(req, base)
-				nextAttempt, buildErr := w.Builder.BuildAppend(ctx, req)
-				if buildErr != nil {
-					failedAttempt := appendBuildFailureAttempt(req, nextAttempt)
-					if nextAttempt == nil {
-						failedAttempt = attempt
-					}
-					recordErr := w.recordOrphans(ctx, req, failedAttempt, true)
-					w.onFailure(ctx, req, failedAttempt, "failed", appendErrorCategory(buildErr))
-					return nil, stderrors.Join(buildErr, recordErr)
-				}
-				attempt = nextAttempt
-				continue
-			}
-		}
-		if err != nil {
-			_ = w.recordOrphans(ctx, req, attempt, true)
-			w.onFailure(ctx, req, attempt, "failed", appendErrorCategory(err))
-			return nil, err
+		if ok {
+			w.onSuccess(ctx, req, attempt, *verified)
+			return verified, nil
 		}
 		_ = w.recordOrphans(ctx, req, attempt, false)
-		unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg append commit did not return a result", map[string]string{"table": req.Table})
+		unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg append commit result is unknown and could not be verified", map[string]string{"table": req.Table})
 		w.onFailure(ctx, req, attempt, "unknown", appendErrorCategory(unknownErr))
 		return nil, unknownErr
 	}
+	if err != nil {
+		_ = w.recordOrphans(ctx, req, attempt, true)
+		w.onFailure(ctx, req, attempt, "failed", appendErrorCategory(err))
+		return nil, err
+	}
+	_ = w.recordOrphans(ctx, req, attempt, false)
+	unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg append commit did not return a result", map[string]string{"table": req.Table})
+	w.onFailure(ctx, req, attempt, "unknown", appendErrorCategory(unknownErr))
+	return nil, unknownErr
 }
 
 func appendBuildFailureAttempt(req api.AppendRequest, attempt *api.CommitAttempt) *api.CommitAttempt {
@@ -278,13 +226,6 @@ func appendBuildFailureAttempt(req api.AppendRequest, attempt *api.CommitAttempt
 		return attempt
 	}
 	return &api.CommitAttempt{DataFiles: cloneDataFiles(req.DataFiles)}
-}
-
-func (w AppendWorkflow) reloadBase(ctx context.Context, req api.AppendRequest) (BaseState, error) {
-	if w.ReloadBase == nil {
-		return BaseState{}, api.NewError(api.ErrCommitConflict, "Iceberg append commit conflict requires metadata reload", map[string]string{"table": req.Table})
-	}
-	return w.ReloadBase(ctx, req)
 }
 
 func (w AppendWorkflow) verifyUnknown(ctx context.Context, req api.AppendRequest, attempt *api.CommitAttempt, result *api.CommitResult) (*api.CommitResult, bool, error) {
@@ -458,147 +399,6 @@ func commitRequest(req api.AppendRequest, attempt *api.CommitAttempt) api.Commit
 		IdempotencyKey: firstNonEmpty(attempt.IdempotencyKey, req.IdempotencyKey),
 		Summary:        cloneStringMap(attempt.Summary),
 	}
-}
-
-func compatibleRetry(req api.AppendRequest, base BaseState, policy CompatibleRetryPolicy) bool {
-	if req.BaseSchemaID != base.SchemaID && !compatibleSchemaEvolution(req, base, policy) {
-		return false
-	}
-	if req.BaseSpecID != base.SpecID && !compatibleSpecEvolution(req, base, policy) {
-		return false
-	}
-	if req.BaseSortOrderID != base.SortOrderID && !policy.AllowSortOrderIDChange {
-		return false
-	}
-	return true
-}
-
-func rebaseAppendRequest(req api.AppendRequest, base BaseState) api.AppendRequest {
-	req.BaseSnapshotID = base.SnapshotID
-	req.BaseSchemaID = base.SchemaID
-	req.BaseSpecID = base.SpecID
-	req.BaseSortOrderID = base.SortOrderID
-	req.TargetRefRetention = base.RefRetention
-	if len(base.Schema.Fields) > 0 {
-		req.BaseSchema = base.Schema
-	}
-	if len(base.Spec.Fields) > 0 || base.Spec.SpecID != 0 {
-		req.KnownPartitionSpecs = mergeKnownPartitionSpecs(req.BaseSpec, base.KnownSpecs)
-		req.BaseSpec = base.Spec
-	}
-	return req
-}
-
-func mergeKnownPartitionSpecs(spec api.PartitionSpec, specs []api.PartitionSpec) []api.PartitionSpec {
-	out := make([]api.PartitionSpec, 0, len(specs)+1)
-	seen := make(map[int]struct{}, len(specs)+1)
-	if len(spec.Fields) > 0 || spec.SpecID != 0 {
-		out = append(out, clonePartitionSpec(spec))
-		seen[spec.SpecID] = struct{}{}
-	}
-	for _, candidate := range specs {
-		if _, exists := seen[candidate.SpecID]; exists {
-			continue
-		}
-		out = append(out, clonePartitionSpec(candidate))
-		seen[candidate.SpecID] = struct{}{}
-	}
-	return out
-}
-
-func compatibleSchemaEvolution(req api.AppendRequest, base BaseState, policy CompatibleRetryPolicy) bool {
-	if !policy.AllowAddOptionalColumns {
-		return false
-	}
-	if len(req.BaseSchema.Fields) == 0 || len(base.Schema.Fields) == 0 {
-		return false
-	}
-	return schemaAllowsOnlyOptionalAdds(req.BaseSchema, base.Schema)
-}
-
-func schemaAllowsOnlyOptionalAdds(oldSchema, newSchema api.Schema) bool {
-	oldByID := make(map[int]api.SchemaField, len(oldSchema.Fields))
-	for _, field := range oldSchema.Fields {
-		if field.ID == 0 {
-			return false
-		}
-		oldByID[field.ID] = field
-	}
-	for _, field := range newSchema.Fields {
-		old, exists := oldByID[field.ID]
-		if !exists {
-			if field.Required {
-				return false
-			}
-			continue
-		}
-		if old.Name != field.Name || old.Required != field.Required || old.Type.String() != field.Type.String() {
-			return false
-		}
-		delete(oldByID, field.ID)
-	}
-	return len(oldByID) == 0 && sameIntSet(oldSchema.IdentifierFieldIDs, newSchema.IdentifierFieldIDs)
-}
-
-func compatibleSpecEvolution(req api.AppendRequest, base BaseState, policy CompatibleRetryPolicy) bool {
-	if !policy.AllowPartitionSpecEvolution {
-		return false
-	}
-	if !allDataFilesUseSpec(req.DataFiles, req.BaseSpecID) {
-		return false
-	}
-	if len(req.BaseSpec.Fields) == 0 && req.BaseSpec.SpecID == 0 {
-		return false
-	}
-	for _, spec := range append([]api.PartitionSpec{base.Spec}, base.KnownSpecs...) {
-		if spec.SpecID == req.BaseSpecID && partitionSpecsEqual(req.BaseSpec, spec) {
-			return true
-		}
-	}
-	return false
-}
-
-func allDataFilesUseSpec(files []api.DataFile, specID int) bool {
-	for _, file := range files {
-		if file.SpecID != 0 && file.SpecID != specID {
-			return false
-		}
-	}
-	return true
-}
-
-func partitionSpecsEqual(a, b api.PartitionSpec) bool {
-	if a.SpecID != b.SpecID || len(a.Fields) != len(b.Fields) {
-		return false
-	}
-	for i := range a.Fields {
-		if a.Fields[i] != b.Fields[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func sameIntSet(a, b []int) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	counts := make(map[int]int, len(a))
-	for _, v := range a {
-		counts[v]++
-	}
-	for _, v := range b {
-		counts[v]--
-		if counts[v] < 0 {
-			return false
-		}
-	}
-	return true
-}
-
-func isConflict(err error) bool {
-	var icebergErr *api.IcebergError
-	return stderrors.As(err, &icebergErr) && icebergErr.Code == api.ErrCommitConflict
 }
 
 func isUnknownResult(err error, result *api.CommitResult) bool {

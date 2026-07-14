@@ -762,6 +762,80 @@ func TestRESTClientCommitConflictMaps409(t *testing.T) {
 	}
 }
 
+func TestRESTClientCommitUnavailableIsUnknownAndNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"message":"busy","type":"ServiceUnavailableException","code":503}}`))
+	}))
+	defer server.Close()
+
+	client := NewRESTClient(
+		WithHTTPClient(server.Client()),
+		WithAllowPlainHTTP(true),
+		WithRetryPolicy(api.RetryPolicy{MaxAttempts: 3}),
+		WithRetrySleep(func(context.Context, time.Duration) error { return nil }),
+	)
+	result, err := client.CommitTable(context.Background(), api.CommitRequest{
+		CatalogRequest: api.CatalogRequest{Catalog: testCatalog(server.URL), Prefix: "warehouse_a"},
+		Namespace:      api.Namespace{"sales"},
+		Table:          "orders",
+	})
+	if apiErrorCode(err) != api.ErrCommitUnknown || result == nil || !result.Unknown {
+		t.Fatalf("expected unknown commit result, result=%+v err=%v", result, err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("commit POST must not be retried, calls=%d", calls.Load())
+	}
+}
+
+func TestRESTClientCommitInvalidSuccessBodyIsUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"snapshot-id":`))
+	}))
+	defer server.Close()
+
+	client := NewRESTClient(WithHTTPClient(server.Client()), WithAllowPlainHTTP(true))
+	result, err := client.CommitTable(context.Background(), api.CommitRequest{
+		CatalogRequest: api.CatalogRequest{Catalog: testCatalog(server.URL), Prefix: "warehouse_a"},
+		Namespace:      api.Namespace{"sales"},
+		Table:          "orders",
+	})
+	if apiErrorCode(err) != api.ErrCommitUnknown || result == nil || !result.Unknown {
+		t.Fatalf("expected unknown commit result, result=%+v err=%v", result, err)
+	}
+}
+
+func TestRESTClientCommitSerializesRemoveSnapshots(t *testing.T) {
+	var gotBody commitTableRequestWire
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read commit body: %v", err)
+		}
+		if err := json.Unmarshal(body, &gotBody); err != nil {
+			t.Fatalf("decode commit body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"metadata-location":"s3://warehouse/sales/orders/metadata/v3.json","snapshot-id":3}`))
+	}))
+	defer server.Close()
+
+	client := NewRESTClient(WithHTTPClient(server.Client()), WithAllowPlainHTTP(true))
+	_, err := client.CommitTable(context.Background(), api.CommitRequest{
+		CatalogRequest: api.CatalogRequest{Catalog: testCatalog(server.URL), Prefix: "warehouse_a"},
+		Namespace:      api.Namespace{"sales"},
+		Table:          "orders",
+		Updates:        []api.CommitUpdate{{Type: "remove-snapshots", SnapshotIDs: []int64{1, 2}}},
+	})
+	if err != nil {
+		t.Fatalf("commit remove snapshots: %v", err)
+	}
+	if len(gotBody.Updates) != 1 || gotBody.Updates[0].Action != "remove-snapshots" || len(gotBody.Updates[0].SnapshotIDs) != 2 || gotBody.Updates[0].SnapshotIDs[0] != 1 || gotBody.Updates[0].SnapshotIDs[1] != 2 {
+		t.Fatalf("unexpected remove-snapshots update: %+v", gotBody.Updates)
+	}
+}
+
 func TestRESTClientMaxBodyBytes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"defaults":{},"overrides":{}}`))

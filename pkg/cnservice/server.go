@@ -340,6 +340,7 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 			OrphanTTL:                 cfg.Write.OrphanTTL,
 			UseNativeRewriteManifests: true,
 			UseNativeRewriteDataFiles: true,
+			UseNativeExpireSnapshots:  true,
 		},
 	)
 	var tableCache icebergwritecore.TableCache

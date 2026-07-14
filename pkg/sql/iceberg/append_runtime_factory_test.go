@@ -287,7 +287,8 @@ func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 
-	visible := appendRuntimeVisibleBatch([]string{"id", "region"}, bat)
+	visible, err := appendRuntimeVisibleBatch([]string{"id", "region"}, bat)
+	require.NoError(t, err)
 	require.NotSame(t, bat, visible)
 	require.Equal(t, 1, visible.RowCount())
 	require.Len(t, visible.Vecs, 2)
@@ -297,10 +298,33 @@ func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
 	fallback := batch.New([]string{"missing", "also_missing", "region"})
 	fallback.Vecs = bat.Vecs
 	fallback.SetRowCount(1)
-	visible = appendRuntimeVisibleBatch([]string{"id", "region"}, fallback)
-	require.Len(t, visible.Vecs, 2)
-	require.Same(t, idVec, visible.Vecs[0])
-	require.Same(t, hiddenVec, visible.Vecs[1])
+	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, fallback)
+	require.Error(t, err)
+	require.Nil(t, visible)
+}
+
+func TestAppendRuntimeVisibleBatchPreservesCaseSensitiveNames(t *testing.T) {
+	bat := batch.New([]string{"ID", "hidden", "id"})
+	bat.Vecs = []*vector.Vector{
+		vector.NewVec(types.T_int64.ToType()),
+		vector.NewVec(types.T_int64.ToType()),
+		vector.NewVec(types.T_int64.ToType()),
+	}
+	visible, err := appendRuntimeVisibleBatch([]string{"ID", "id"}, bat)
+	require.NoError(t, err)
+	require.Same(t, bat.Vecs[0], visible.Vecs[0])
+	require.Same(t, bat.Vecs[2], visible.Vecs[1])
+
+	visible, err = appendRuntimeVisibleBatch([]string{"Id"}, bat)
+	require.Error(t, err)
+	require.Nil(t, visible)
+
+	reordered := batch.New([]string{"region", "id"})
+	reordered.Vecs = []*vector.Vector{bat.Vecs[2], bat.Vecs[0]}
+	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, reordered)
+	require.NoError(t, err)
+	require.Same(t, bat.Vecs[0], visible.Vecs[0])
+	require.Same(t, bat.Vecs[2], visible.Vecs[1])
 }
 
 func TestAppendRuntimeSharedCoordinatorCommitsOncePerStatement(t *testing.T) {

@@ -85,7 +85,7 @@ func TestCacheKeyIncludesPrincipalAndCredential(t *testing.T) {
 }
 
 func TestNamespaceCacheKeyDoesNotCollideOnDelimiters(t *testing.T) {
-	if namespaceCacheKey(api.Namespace{"a\x1fb", "c"}) == namespaceCacheKey(api.Namespace{"a", "b\x1fc"}) {
+	if api.NamespaceCacheKey(api.Namespace{"a\x1fb", "c"}) == api.NamespaceCacheKey(api.Namespace{"a", "b\x1fc"}) {
 		t.Fatal("namespace cache keys collided on namespace delimiters")
 	}
 }

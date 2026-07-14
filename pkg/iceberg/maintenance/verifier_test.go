@@ -59,7 +59,7 @@ func TestCatalogCommitVerifierChecksTargetSnapshot(t *testing.T) {
 	require.Equal(t, "commit-4", result.CommitID)
 	require.Equal(t, api.Namespace{"sales"}, loadReq.Namespace)
 	require.Equal(t, "orders", loadReq.Table)
-	require.Equal(t, "main", loadReq.Snapshots)
+	require.Equal(t, "all", loadReq.Snapshots)
 }
 
 func TestCatalogCommitVerifierReturnsUnverifiedOnSnapshotMismatch(t *testing.T) {

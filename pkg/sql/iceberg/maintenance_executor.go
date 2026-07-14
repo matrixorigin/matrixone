@@ -59,6 +59,9 @@ type MaintenanceProcedureExecutorOptions struct {
 	// stays catalog-backed. When enabled without DataFileCompactor, MO uses the
 	// built-in append-only Parquet concat compactor, which rejects delete manifests.
 	UseNativeRewriteDataFiles bool
+	// UseNativeExpireSnapshots enumerates manifest, data, delete, and deletion-vector
+	// objects before recording post-commit cleanup candidates.
+	UseNativeExpireSnapshots bool
 }
 
 func NewMaintenanceProcedureExecutor(store MaintenanceStore, opts MaintenanceProcedureExecutorOptions) maintenance.ProcedureExecutor {
@@ -114,6 +117,30 @@ func NewMaintenanceProcedureExecutor(store MaintenanceStore, opts MaintenancePro
 			OrphanTTL:              orphanTTL,
 		}
 	}
+	expireSnapshotsRunner := maintenance.Runner(maintenance.CatalogExpireSnapshotsRunner{
+		CatalogFactory:    opts.CatalogFactory,
+		OrphanRecorder:    orphanRecorder,
+		CommitVerifier:    opts.CommitVerifier,
+		Now:               opts.Now,
+		OrphanTTL:         orphanTTL,
+		DefaultRetainLast: opts.DefaultRetainLast,
+	})
+	if opts.UseNativeExpireSnapshots {
+		expireSnapshotsRunner = NativeExpireSnapshotsProcedureRunner{
+			CatalogFactory:         opts.CatalogFactory,
+			ObjectIOProvider:       opts.ObjectIOProvider,
+			ScopeForLocation:       opts.ScopeForLocation,
+			BuildFileService:       opts.BuildFileService,
+			ResidencyPolicies:      append([]model.ResidencyPolicy(nil), opts.ResidencyPolicies...),
+			ResidencyPolicyLister:  maintenanceResidencyPolicyLister(store),
+			RequireResidencyPolicy: opts.RequireResidencyPolicy,
+			OrphanRecorder:         orphanRecorder,
+			CommitVerifier:         opts.CommitVerifier,
+			Now:                    opts.Now,
+			OrphanTTL:              orphanTTL,
+			DefaultRetainLast:      opts.DefaultRetainLast,
+		}
+	}
 	return maintenance.ProcedureExecutor{
 		Resolver: MaintenanceCatalogResolver{DAO: store},
 		Authorizer: maintenance.FeatureAuthorizer{
@@ -124,14 +151,7 @@ func NewMaintenanceProcedureExecutor(store MaintenanceStore, opts MaintenancePro
 		Dispatcher: maintenance.Dispatcher{
 			Runners: map[maintenance.Operation]maintenance.Runner{
 				maintenance.OperationRewriteDataFiles: rewriteDataFilesRunner,
-				maintenance.OperationExpireSnapshots: maintenance.CatalogExpireSnapshotsRunner{
-					CatalogFactory:    opts.CatalogFactory,
-					OrphanRecorder:    orphanRecorder,
-					CommitVerifier:    opts.CommitVerifier,
-					Now:               opts.Now,
-					OrphanTTL:         orphanTTL,
-					DefaultRetainLast: opts.DefaultRetainLast,
-				},
+				maintenance.OperationExpireSnapshots:  expireSnapshotsRunner,
 				maintenance.OperationRewriteManifests: rewriteManifestsRunner,
 			},
 			Recorder: store,
@@ -167,6 +187,83 @@ var _ MaintenanceStore = (*DAO)(nil)
 var _ CatalogByNameGetter = (*DAO)(nil)
 var _ OrphanFileInserter = (*DAO)(nil)
 var _ maintenance.JobRecorder = (*DAO)(nil)
+
+type NativeExpireSnapshotsProcedureRunner struct {
+	CatalogFactory         maintenance.CatalogClientFactory
+	ObjectIOProvider       icebergio.ObjectIOProvider
+	ScopeForLocation       icebergio.ObjectScopeForLocation
+	BuildFileService       icebergio.ScopedFileServiceBuilder
+	ResidencyPolicies      []model.ResidencyPolicy
+	ResidencyPolicyLister  ResidencyPolicyLister
+	RequireResidencyPolicy bool
+	OrphanRecorder         icebergwrite.OrphanRecorder
+	CommitVerifier         maintenance.CommitResultVerifier
+	Now                    func() time.Time
+	OrphanTTL              time.Duration
+	DefaultRetainLast      int
+}
+
+func (r NativeExpireSnapshotsProcedureRunner) RunMaintenance(ctx context.Context, req maintenance.Request) (maintenance.Result, error) {
+	if r.CatalogFactory == nil {
+		return maintenance.Result{}, api.NewError(api.ErrConfigInvalid, "Iceberg native expire-snapshots runner requires a catalog client factory", map[string]string{"operation": string(req.Operation)})
+	}
+	if req.Catalog.CatalogID == 0 {
+		return maintenance.Result{}, api.NewError(api.ErrConfigInvalid, "Iceberg native expire-snapshots runner requires resolved catalog metadata", map[string]string{"operation": string(req.Operation)})
+	}
+	client, err := r.CatalogFactory.NewClient(ctx, req.Catalog)
+	if err != nil {
+		return maintenance.Result{}, err
+	}
+	catalogReq, err := resolveRuntimeCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+		Catalog:           req.Catalog,
+		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
+	})
+	if err != nil {
+		return maintenance.Result{}, err
+	}
+	loadResp, tableMeta, err := loadMaintenanceTableWithResponse(ctx, client, catalogReq, req)
+	if err != nil {
+		return maintenance.Result{}, err
+	}
+	ioCtx, err := maintenanceObjectIOContext(ctx, maintenanceObjectIORequest{
+		Client:                 client,
+		CatalogRequest:         catalogReq,
+		LoadResponse:           loadResp,
+		Namespace:              dottedNamespace(req.Namespace),
+		Table:                  req.Table,
+		Catalog:                req.Catalog,
+		ObjectIOProvider:       r.ObjectIOProvider,
+		ScopeForLocation:       r.ScopeForLocation,
+		BuildFileService:       r.BuildFileService,
+		ResidencyPolicies:      mergeMaintenanceResidencyPolicies(r.ResidencyPolicies, req.ResidencyPolicies),
+		ResidencyPolicyLister:  r.ResidencyPolicyLister,
+		RequireResidencyPolicy: r.RequireResidencyPolicy,
+		Principal:              firstNonEmpty(req.ExternalPrincipal, "matrixone-maintenance"),
+	})
+	if err != nil {
+		return maintenance.Result{}, err
+	}
+	reader := icebergio.ProviderObjectReader{
+		Provider:         ioCtx.ReaderProvider,
+		ScopeForLocation: ioCtx.ScopeForLocation,
+	}
+	return maintenance.CommitRunner{
+		Planner: maintenance.ExpireSnapshotsPlanner{
+			Catalog: catalogReq,
+			Loader: maintenance.MaintenanceTableMetadataLoaderFunc(func(context.Context, maintenance.Request) (*api.TableMetadata, error) {
+				return tableMeta, nil
+			}),
+			ObjectReader:      reader,
+			Now:               r.Now,
+			DefaultRetainLast: r.DefaultRetainLast,
+		},
+		Committer:      client,
+		Verifier:       r.CommitVerifier,
+		OrphanRecorder: r.OrphanRecorder,
+		Now:            r.Now,
+		OrphanTTL:      r.OrphanTTL,
+	}.RunMaintenance(ctx, req)
+}
 
 type NativeRewriteManifestsProcedureRunner struct {
 	CatalogFactory         maintenance.CatalogClientFactory
@@ -492,7 +589,7 @@ func loadMaintenanceTableWithResponse(ctx context.Context, client api.CatalogCli
 		CatalogRequest: catalogReq,
 		Namespace:      dottedNamespace(req.Namespace),
 		Table:          req.Table,
-		Snapshots:      firstNonEmpty(req.TargetRef, model.DefaultRefMain),
+		Snapshots:      "all",
 	})
 	if err != nil {
 		return nil, nil, err

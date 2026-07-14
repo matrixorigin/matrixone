@@ -45,6 +45,8 @@ func (f MaintenanceTableMetadataLoaderFunc) LoadMaintenanceTableMetadata(ctx con
 type ExpireSnapshotsPlanner struct {
 	Catalog           api.CatalogRequest
 	Loader            MaintenanceTableMetadataLoader
+	Metadata          api.MetadataFacade
+	ObjectReader      api.ObjectReader
 	Now               func() time.Time
 	DefaultRetainLast int
 }
@@ -89,23 +91,16 @@ func (p ExpireSnapshotsPlanner) BuildMaintenanceCommit(ctx context.Context, req 
 	if err != nil {
 		return nil, err
 	}
-	updates := make([]api.CommitUpdate, 0, len(expired)+1)
-	orphanPaths := make([]string, 0, len(expired))
-	for _, snapshot := range expired {
-		payload := map[string]string{
-			"snapshot_id": strconv.FormatInt(snapshot.SnapshotID, 10),
-			"expired_at":  strconv.FormatInt(now.UnixMilli(), 10),
-		}
-		if strings.TrimSpace(snapshot.ManifestList) != "" {
-			payload["manifest_list"] = snapshot.ManifestList
-			orphanPaths = append(orphanPaths, snapshot.ManifestList)
-		}
-		updates = append(updates, api.CommitUpdate{
-			Type:     "remove-snapshot",
-			FilePath: snapshot.ManifestList,
-			Payload:  payload,
-		})
+	updates := make([]api.CommitUpdate, 0, 1)
+	orphanPaths, err := p.expiredSnapshotFiles(ctx, expired)
+	if err != nil {
+		return nil, err
 	}
+	snapshotIDs := make([]int64, 0, len(expired))
+	for _, snapshot := range expired {
+		snapshotIDs = append(snapshotIDs, snapshot.SnapshotID)
+	}
+	updates = append(updates, api.CommitUpdate{Type: "remove-snapshots", SnapshotIDs: snapshotIDs})
 	summary := map[string]string{
 		"operation":         string(OperationExpireSnapshots),
 		"engine":            "matrixone",
@@ -114,7 +109,6 @@ func (p ExpireSnapshotsPlanner) BuildMaintenanceCommit(ctx context.Context, req 
 		"older-than-ms":     strconv.FormatInt(olderThanMS, 10),
 		"retain-last":       strconv.Itoa(retainLast),
 	}
-	updates = append(updates, api.CommitUpdate{Type: "set-snapshot-summary", Payload: cloneStringMap(summary)})
 	targetRef := firstNonEmptyString(req.TargetRef, "main")
 	return &CommitPlan{
 		Catalog: p.Catalog,
@@ -131,8 +125,72 @@ func (p ExpireSnapshotsPlanner) BuildMaintenanceCommit(ctx context.Context, req 
 			TargetRef:      targetRef,
 		},
 		PostCommitOrphans: dedupeNonEmptyStrings(orphanPaths),
-		RemovedFileCount:  uint64(len(expired)),
+		RemovedFileCount:  uint64(len(orphanPaths)),
 	}, nil
+}
+
+func (p ExpireSnapshotsPlanner) expiredSnapshotFiles(ctx context.Context, snapshots []api.Snapshot) ([]string, error) {
+	paths := make([]string, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if path := strings.TrimSpace(snapshot.ManifestList); path != "" {
+			paths = append(paths, path)
+		}
+	}
+	if p.ObjectReader == nil {
+		return dedupeNonEmptyStrings(paths), nil
+	}
+	facade := p.Metadata
+	if facade == nil {
+		facade = metadata.NativeFacade{}
+	}
+	seenManifestLists := make(map[string]struct{}, len(snapshots))
+	seenManifests := make(map[string]struct{})
+	for _, snapshot := range snapshots {
+		manifestListPath := strings.TrimSpace(snapshot.ManifestList)
+		if manifestListPath == "" {
+			continue
+		}
+		if _, seen := seenManifestLists[manifestListPath]; seen {
+			continue
+		}
+		seenManifestLists[manifestListPath] = struct{}{}
+		manifestListData, err := p.ObjectReader.Read(ctx, manifestListPath, 0, -1)
+		if err != nil {
+			return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg expire-snapshots failed to read manifest list", map[string]string{"manifest_list": api.RedactPath(manifestListPath)}, err)
+		}
+		manifests, err := facade.ReadManifestList(ctx, manifestListData)
+		if err != nil {
+			return nil, err
+		}
+		for _, manifest := range manifests {
+			manifestPath := strings.TrimSpace(manifest.Path)
+			if manifestPath == "" {
+				continue
+			}
+			paths = append(paths, manifestPath)
+			if _, seen := seenManifests[manifestPath]; seen {
+				continue
+			}
+			seenManifests[manifestPath] = struct{}{}
+			manifestData, err := p.ObjectReader.Read(ctx, manifestPath, 0, -1)
+			if err != nil {
+				return nil, api.WrapError(api.ErrMetadataIOTimeout, "Iceberg expire-snapshots failed to read manifest", map[string]string{"manifest": api.RedactPath(manifestPath)}, err)
+			}
+			entries, err := facade.ReadManifest(ctx, manifestData)
+			if err != nil {
+				return nil, err
+			}
+			for _, entry := range entries {
+				if filePath := strings.TrimSpace(entry.DataFile.FilePath); filePath != "" {
+					paths = append(paths, filePath)
+				}
+				if dvPath := strings.TrimSpace(entry.DataFile.DeletionVectorPath); dvPath != "" {
+					paths = append(paths, dvPath)
+				}
+			}
+		}
+	}
+	return dedupeNonEmptyStrings(paths), nil
 }
 
 func expireOptions(options, properties map[string]string, now time.Time, defaultRetainLast int) (int64, int, error) {

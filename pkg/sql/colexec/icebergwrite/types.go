@@ -17,6 +17,7 @@ package icebergwrite
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
@@ -55,6 +56,7 @@ type AppendRequest struct {
 	ReadMode          string
 	WriteMode         string
 	Operation         string
+	TimeZone          *time.Location
 
 	// DataFilePathColumnIndex and RowOrdinalColumnIndex are populated for
 	// row-level DML sinks. Append INSERT leaves them at -1.

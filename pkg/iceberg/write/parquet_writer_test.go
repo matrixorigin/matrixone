@@ -440,6 +440,12 @@ func TestParquetWriterPartitionTransformsAndFormatting(t *testing.T) {
 	hour, err := transformPartitionValue(ctx, api.IcebergType{Kind: api.TypeTimestamp}, "hour", time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC).UnixMicro())
 	require.NoError(t, err)
 	require.Equal(t, int32(time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC).Unix()/3600), hour)
+	preEpochDay, err := transformTemporal(ctx, "day", time.Unix(-1, 0).UTC())
+	require.NoError(t, err)
+	require.Equal(t, int32(-1), preEpochDay)
+	preEpochHour, err := transformTemporal(ctx, "hour", time.Unix(-1, 0).UTC())
+	require.NoError(t, err)
+	require.Equal(t, int32(-1), preEpochHour)
 	identity, err := transformPartitionValue(ctx, api.IcebergType{Kind: api.TypeString}, "identity", "ksa")
 	require.NoError(t, err)
 	require.Equal(t, "ksa", identity)
@@ -470,6 +476,27 @@ func TestParquetWriterPartitionTransformsAndFormatting(t *testing.T) {
 		partitionKey(map[string]any{"region": "x/bucket=y", "bucket": "z"}, spec),
 		partitionKey(map[string]any{"region": "x", "bucket": "y/bucket=z"}, spec),
 	)
+}
+
+func TestSchemaFieldLookupPreservesCaseSensitiveColumns(t *testing.T) {
+	lookup, err := newSchemaFieldLookup([]api.SchemaField{
+		{ID: 1, Name: "ID", Type: api.IcebergType{Kind: api.TypeLong}},
+		{ID: 2, Name: "id", Type: api.IcebergType{Kind: api.TypeLong}},
+		{ID: 3, Name: "Region", Type: api.IcebergType{Kind: api.TypeString}},
+	})
+	require.NoError(t, err)
+	upper, err := lookup.field("ID")
+	require.NoError(t, err)
+	require.Equal(t, 1, upper.ID)
+	lower, err := lookup.field("id")
+	require.NoError(t, err)
+	require.Equal(t, 2, lower.ID)
+	region, err := lookup.field("region")
+	require.NoError(t, err)
+	require.Equal(t, 3, region.ID)
+	_, err = lookup.field("Id")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ambiguous")
 }
 
 func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {

@@ -103,7 +103,7 @@ func TestMaintenanceProcedureExecutorRunsExpireSnapshots(t *testing.T) {
 	if loadReq.ExternalPrincipal != "maintenance-principal" || commitReq.ExternalPrincipal != "maintenance-principal" {
 		t.Fatalf("maintenance catalog requests did not carry external principal: load=%q commit=%q", loadReq.ExternalPrincipal, commitReq.ExternalPrincipal)
 	}
-	if commitReq.TargetRef != "main" || commitReq.IdempotencyKey != "stmt-1" || len(commitReq.Updates) != 2 || commitReq.Updates[0].Type != "remove-snapshot" {
+	if commitReq.TargetRef != "main" || commitReq.IdempotencyKey != "stmt-1" || len(commitReq.Updates) != 1 || commitReq.Updates[0].Type != "remove-snapshots" {
 		t.Fatalf("unexpected commit request: %+v", commitReq)
 	}
 	if len(store.jobs) != 1 || store.jobs[0].JobID != "stmt-1" || store.jobs[0].CatalogID != 42 {
@@ -170,7 +170,7 @@ func TestMaintenanceProcedureExecutorRunsRewriteManifests(t *testing.T) {
 	if result.SnapshotAfter != "55" || result.CommitID != "verified-rewrite-manifests" || !result.Verified || !verified {
 		t.Fatalf("unexpected rewrite manifests result: %+v", result)
 	}
-	if strings.Join(loadReq.Namespace, ".") != "sales" || loadReq.Table != "orders" || loadReq.Snapshots != "main" {
+	if strings.Join(loadReq.Namespace, ".") != "sales" || loadReq.Table != "orders" || loadReq.Snapshots != "all" {
 		t.Fatalf("unexpected load request: %+v", loadReq)
 	}
 	if commitReq.TargetRef != "main" || commitReq.IdempotencyKey != "stmt-1" || len(commitReq.Updates) != 2 || commitReq.Updates[0].Type != "rewrite-manifests" {
@@ -434,7 +434,7 @@ func TestMaintenanceProcedureExecutorRunsRewriteDataFiles(t *testing.T) {
 	if result.SnapshotAfter != "6" || result.CommitID != "commit-rewrite-data" || !result.Verified {
 		t.Fatalf("unexpected rewrite data files result: %+v", result)
 	}
-	if strings.Join(loadReq.Namespace, ".") != "sales" || loadReq.Table != "orders" || loadReq.Snapshots != "main" {
+	if strings.Join(loadReq.Namespace, ".") != "sales" || loadReq.Table != "orders" || loadReq.Snapshots != "all" {
 		t.Fatalf("unexpected load request: %+v", loadReq)
 	}
 	if commitReq.TargetRef != "main" || commitReq.IdempotencyKey != "stmt-1" || len(commitReq.Updates) != 2 || commitReq.Updates[0].Type != "rewrite-data-files" {

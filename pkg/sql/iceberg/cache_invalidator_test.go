@@ -58,7 +58,7 @@ func TestClusterRemoteCacheInvalidatorSendsBestEffortToOtherCNs(t *testing.T) {
 	payload := client.requests[0].IcebergCacheInvalidateRequest
 	require.Equal(t, uint32(7), payload.AccountID)
 	require.Equal(t, uint64(42), payload.CatalogID)
-	require.Equal(t, "sales", payload.Namespace)
+	require.Equal(t, api.NamespaceCacheKey(api.Namespace{"sales"}), payload.Namespace)
 	require.Equal(t, "orders", payload.Table)
 	require.Equal(t, int64(200), payload.SnapshotID)
 	require.Equal(t, "hash-200", payload.MetadataLocationHash)

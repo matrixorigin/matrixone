@@ -365,11 +365,14 @@ func (p LocalScanPlanner) readManifests(ctx context.Context, reader CachedManife
 		parallelism = len(manifests)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	parentCtx := ctx
+	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 	jobs := make(chan int)
 	results := make(chan plannedManifestReadResult, len(manifests))
 	var wg sync.WaitGroup
+	var firstReadErr error
+	var firstReadErrOnce sync.Once
 	for i := 0; i < parallelism; i++ {
 		wg.Add(1)
 		go func() {
@@ -378,9 +381,11 @@ func (p LocalScanPlanner) readManifests(ctx context.Context, reader CachedManife
 				manifest := normalizeManifestFile(manifests[idx])
 				read, err := reader.ReadManifestWithStats(ctx, manifest.Path)
 				if err != nil {
-					results <- plannedManifestReadResult{Index: idx, Err: err}
-					cancel()
-					continue
+					firstReadErrOnce.Do(func() {
+						firstReadErr = err
+						cancel()
+					})
+					return
 				}
 				results <- plannedManifestReadResult{
 					Index: idx,
@@ -394,31 +399,37 @@ func (p LocalScanPlanner) readManifests(ctx context.Context, reader CachedManife
 			}
 		}()
 	}
+	var dispatchErr error
+dispatch:
 	for idx := range manifests {
-		if err := checkPlanningContext(ctx); err != nil {
-			cancel()
-			close(jobs)
-			wg.Wait()
-			return nil, err
+		if err := checkPlanningContext(parentCtx); err != nil {
+			dispatchErr = err
+			break
 		}
 		select {
 		case jobs <- idx:
 		case <-ctx.Done():
-			cancel()
-			close(jobs)
-			wg.Wait()
-			return nil, planningContextError(ctx)
+			if parentCtx.Err() != nil {
+				dispatchErr = planningContextError(parentCtx)
+			}
+			break dispatch
 		}
 	}
 	close(jobs)
 	wg.Wait()
 	close(results)
+	if dispatchErr != nil {
+		return nil, dispatchErr
+	}
+	if err := checkPlanningContext(parentCtx); err != nil {
+		return nil, err
+	}
+	if firstReadErr != nil {
+		return nil, firstReadErr
+	}
 
 	out := make([]plannedManifestRead, len(manifests))
 	for result := range results {
-		if result.Err != nil {
-			return nil, result.Err
-		}
 		out[result.Index] = result.Read
 	}
 	return out, nil
@@ -427,7 +438,6 @@ func (p LocalScanPlanner) readManifests(ctx context.Context, reader CachedManife
 type plannedManifestReadResult struct {
 	Index int
 	Read  plannedManifestRead
-	Err   error
 }
 
 func normalizeSnapshotSelector(req api.ScanPlanRequest) api.SnapshotSelector {

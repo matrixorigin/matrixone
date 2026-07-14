@@ -210,7 +210,7 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 		DataDir:             appendDataDir(firstNonEmpty(req.StatementID, req.IdempotencyKey), snapshotID),
 		WriterID:            writerID,
 		TargetFileSizeBytes: f.opts.TargetFileSizeBytes,
-		TimeZone:            time.UTC,
+		TimeZone:            req.TimeZone,
 	}, bufferedDataFileOutputFactory{Writer: objectWriter})
 	if err != nil {
 		return nil, api.ToMOErr(ctx, err)
@@ -803,46 +803,79 @@ func (c *AppendRuntimeCoordinator) Append(ctx context.Context, bat *batch.Batch)
 			"table": c.req.Table,
 		}))
 	}
-	return api.ToMOErr(ctx, c.writer.WriteBatch(ctx, c.req.Attrs, appendRuntimeVisibleBatch(c.req.Attrs, bat)))
+	visible, err := appendRuntimeVisibleBatch(c.req.Attrs, bat)
+	if err != nil {
+		return api.ToMOErr(ctx, err)
+	}
+	return api.ToMOErr(ctx, c.writer.WriteBatch(ctx, c.req.Attrs, visible))
 }
 
-func appendRuntimeVisibleBatch(attrs []string, bat *batch.Batch) *batch.Batch {
-	if bat == nil || len(attrs) == 0 || len(bat.Vecs) == len(attrs) {
-		return bat
+func appendRuntimeVisibleBatch(attrs []string, bat *batch.Batch) (*batch.Batch, error) {
+	if bat == nil || len(attrs) == 0 {
+		return bat, nil
 	}
 	if len(bat.Vecs) < len(attrs) {
-		return bat
+		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch has fewer vectors than visible columns", nil)
+	}
+	if len(bat.Attrs) != len(bat.Vecs) {
+		if len(bat.Vecs) == len(attrs) {
+			return bat, nil
+		}
+		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch with hidden vectors requires column names", nil)
 	}
 	visible := batch.NewWithSize(len(attrs))
 	visible.Attrs = append([]string(nil), attrs...)
-	if len(bat.Attrs) == len(bat.Vecs) {
-		positions := make(map[string]int, len(bat.Attrs))
-		for idx, attr := range bat.Attrs {
-			key := strings.ToLower(strings.TrimSpace(attr))
-			if key == "" {
-				continue
-			}
-			if _, ok := positions[key]; !ok {
-				positions[key] = idx
-			}
+	exactPositions := make(map[string]int, len(bat.Attrs))
+	foldedPositions := make(map[string]int, len(bat.Attrs))
+	ambiguousFolded := make(map[string]struct{})
+	for idx, attr := range bat.Attrs {
+		name := strings.TrimSpace(attr)
+		if name == "" {
+			continue
 		}
-		matched := true
-		for idx, attr := range attrs {
-			pos, ok := positions[strings.ToLower(strings.TrimSpace(attr))]
-			if !ok || pos < 0 || pos >= len(bat.Vecs) {
-				matched = false
-				break
-			}
-			visible.Vecs[idx] = bat.Vecs[pos]
+		if _, ok := exactPositions[name]; ok {
+			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch contains duplicate column names", map[string]string{"column": attr})
 		}
-		if matched {
-			visible.SetRowCount(bat.RowCount())
-			return visible
+		exactPositions[name] = idx
+		folded := strings.ToLower(name)
+		if _, exists := foldedPositions[folded]; exists {
+			delete(foldedPositions, folded)
+			ambiguousFolded[folded] = struct{}{}
+			continue
+		}
+		if _, ambiguous := ambiguousFolded[folded]; !ambiguous {
+			foldedPositions[folded] = idx
 		}
 	}
-	copy(visible.Vecs, bat.Vecs[:len(attrs)])
+	for idx, attr := range attrs {
+		name := strings.TrimSpace(attr)
+		pos, ok := exactPositions[name]
+		if !ok {
+			folded := strings.ToLower(name)
+			if _, ambiguous := ambiguousFolded[folded]; ambiguous {
+				return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch column name is ambiguous", map[string]string{"column": attr})
+			}
+			pos, ok = foldedPositions[folded]
+		}
+		if !ok || pos < 0 || pos >= len(bat.Vecs) {
+			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch is missing a visible column", map[string]string{"column": attr})
+		}
+		visible.Vecs[idx] = bat.Vecs[pos]
+	}
+	if len(bat.Vecs) == len(attrs) {
+		positional := true
+		for idx := range visible.Vecs {
+			if visible.Vecs[idx] != bat.Vecs[idx] {
+				positional = false
+				break
+			}
+		}
+		if positional {
+			return bat, nil
+		}
+	}
 	visible.SetRowCount(bat.RowCount())
-	return visible
+	return visible, nil
 }
 
 func (c *AppendRuntimeCoordinator) Commit(ctx context.Context) error {

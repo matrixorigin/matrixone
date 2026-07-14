@@ -118,7 +118,7 @@ func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifes
 				if !deleteSequenceApplies(dataTask.DataFile, file) {
 					continue
 				}
-				if file.SpecID != 0 && dataTask.DataFile.SpecID != 0 && file.SpecID != dataTask.DataFile.SpecID {
+				if file.SpecID != dataTask.DataFile.SpecID {
 					continue
 				}
 				if !samePartitionScope(file.Partition, dataTask.DataFile.Partition) {
@@ -131,7 +131,7 @@ func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifes
 				if !deleteSequenceApplies(dataTask.DataFile, file) {
 					continue
 				}
-				if file.SpecID != 0 && dataTask.DataFile.SpecID != 0 && file.SpecID != dataTask.DataFile.SpecID {
+				if file.SpecID != dataTask.DataFile.SpecID {
 					continue
 				}
 				if !samePartitionScope(file.Partition, dataTask.DataFile.Partition) {
@@ -216,9 +216,6 @@ func addHiddenDeleteColumnMappings(mappings []api.IcebergColumnMapping, schema a
 }
 
 func deleteSequenceApplies(dataFile, deleteFile api.DataFile) bool {
-	if deleteFile.SequenceNumber == 0 || dataFile.SequenceNumber == 0 {
-		return true
-	}
 	if deleteFile.Content == api.DataFileContentPositionDelete {
 		return deleteFile.SequenceNumber >= dataFile.SequenceNumber
 	}

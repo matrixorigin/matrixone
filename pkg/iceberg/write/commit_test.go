@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergmetadata "github.com/matrixorigin/matrixone/pkg/iceberg/metadata"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 )
 
@@ -155,32 +156,6 @@ func TestAppendBuilderRejectsIncompatibleWriteMetadata(t *testing.T) {
 	require.Contains(t, err.Error(), "unknown partition spec")
 }
 
-func TestAppendWorkflowRetriesCompatibleConflictAndRunsSuccessHooks(t *testing.T) {
-	committer := &fakeCommitter{results: []commitOutcome{
-		{err: api.NewError(api.ErrCommitConflict, "snapshot changed", nil)},
-		{result: &api.CommitResult{SnapshotID: 101, MetadataLocationHash: "hash-101", CommitID: "commit-101"}},
-	}}
-	cache := &fakeCacheInvalidator{}
-	audit := &fakeAuditRecorder{}
-	workflow := AppendWorkflow{
-		Committer: committer,
-		ReloadBase: func(ctx context.Context, req api.AppendRequest) (BaseState, error) {
-			return BaseState{SnapshotID: 101, SchemaID: req.BaseSchemaID, SpecID: req.BaseSpecID}, nil
-		},
-		CacheInvalidator: cache,
-		AuditRecorder:    audit,
-		MaxConflictRetry: 1,
-	}
-	result, err := workflow.CommitAppend(context.Background(), appendRequest())
-	require.NoError(t, err)
-	require.Equal(t, int64(101), result.SnapshotID)
-	require.Len(t, committer.requests, 2)
-	require.Equal(t, int64(101), committer.requests[1].Requirements[0].SnapshotID)
-	require.Equal(t, 1, cache.calls)
-	require.Len(t, audit.audits, 1)
-	require.Equal(t, int64(2), audit.audits[0].RowCount)
-}
-
 func TestAppendWorkflowTreatsPostCommitHooksAsBestEffort(t *testing.T) {
 	committer := &fakeCommitter{results: []commitOutcome{
 		{result: &api.CommitResult{SnapshotID: 101, MetadataLocationHash: "hash-101", CommitID: "commit-101"}},
@@ -237,47 +212,12 @@ func TestAppendWorkflowSkipsWriteMetricsWithoutCapability(t *testing.T) {
 	require.Empty(t, metrics.reports)
 }
 
-func TestAppendWorkflowRetriesAddOptionalColumnWhenPolicyAllows(t *testing.T) {
-	committer := &fakeCommitter{results: []commitOutcome{
-		{err: api.NewError(api.ErrCommitConflict, "schema changed", nil)},
-		{result: &api.CommitResult{SnapshotID: 101, MetadataLocationHash: "hash-101", CommitID: "commit-101"}},
-	}}
-	workflow := AppendWorkflow{
-		Committer: committer,
-		ReloadBase: func(ctx context.Context, req api.AppendRequest) (BaseState, error) {
-			newSchema := req.BaseSchema
-			newSchema.SchemaID = req.BaseSchemaID + 1
-			newSchema.Fields = append(newSchema.Fields, api.SchemaField{
-				ID: 2, Name: "note", Type: api.IcebergType{Kind: api.TypeString}, Required: false,
-			})
-			return BaseState{SnapshotID: 101, SchemaID: newSchema.SchemaID, SpecID: req.BaseSpecID, Schema: newSchema}, nil
-		},
-		RetryPolicy:      CompatibleRetryPolicy{AllowAddOptionalColumns: true},
-		MaxConflictRetry: 1,
-	}
-	result, err := workflow.CommitAppend(context.Background(), appendRequest())
-	require.NoError(t, err)
-	require.Equal(t, int64(101), result.SnapshotID)
-	require.Len(t, committer.requests, 2)
-	require.Equal(t, 4, schemaRequirement(t, committer.requests[1]).SchemaID)
-}
-
-func TestAppendWorkflowRejectsRequiredColumnEvenWhenPolicyAllowsOptionalAdds(t *testing.T) {
+func TestAppendWorkflowDoesNotRetryConflict(t *testing.T) {
 	committer := &fakeCommitter{results: []commitOutcome{{err: api.NewError(api.ErrCommitConflict, "schema changed", nil)}}}
 	orphan := &fakeOrphanRecorder{}
 	workflow := AppendWorkflow{
-		Committer: committer,
-		ReloadBase: func(ctx context.Context, req api.AppendRequest) (BaseState, error) {
-			newSchema := req.BaseSchema
-			newSchema.SchemaID = req.BaseSchemaID + 1
-			newSchema.Fields = append(newSchema.Fields, api.SchemaField{
-				ID: 2, Name: "must_have", Type: api.IcebergType{Kind: api.TypeString}, Required: true,
-			})
-			return BaseState{SnapshotID: 101, SchemaID: newSchema.SchemaID, SpecID: req.BaseSpecID, Schema: newSchema}, nil
-		},
-		RetryPolicy:      CompatibleRetryPolicy{AllowAddOptionalColumns: true},
-		OrphanRecorder:   orphan,
-		MaxConflictRetry: 1,
+		Committer:      committer,
+		OrphanRecorder: orphan,
 	}
 	_, err := workflow.CommitAppend(context.Background(), appendRequest())
 	require.Error(t, err)
@@ -286,50 +226,18 @@ func TestAppendWorkflowRejectsRequiredColumnEvenWhenPolicyAllowsOptionalAdds(t *
 	require.Len(t, orphan.candidates, 1)
 }
 
-func TestAppendWorkflowRetriesCompatiblePartitionSpecEvolution(t *testing.T) {
-	committer := &fakeCommitter{results: []commitOutcome{
-		{err: api.NewError(api.ErrCommitConflict, "partition spec changed", nil)},
-		{result: &api.CommitResult{SnapshotID: 101, MetadataLocationHash: "hash-101", CommitID: "commit-101"}},
-	}}
-	workflow := AppendWorkflow{
-		Committer: committer,
-		ReloadBase: func(ctx context.Context, req api.AppendRequest) (BaseState, error) {
-			return BaseState{
-				SnapshotID: 101,
-				SchemaID:   req.BaseSchemaID,
-				SpecID:     req.BaseSpecID + 1,
-				Spec:       api.PartitionSpec{SpecID: req.BaseSpecID + 1, Fields: []api.PartitionField{{SourceID: 1, FieldID: 1001, Name: "id_day", Transform: "day"}}},
-				KnownSpecs: []api.PartitionSpec{req.BaseSpec},
-			}, nil
-		},
-		RetryPolicy:      CompatibleRetryPolicy{AllowPartitionSpecEvolution: true},
-		MaxConflictRetry: 1,
-	}
-	result, err := workflow.CommitAppend(context.Background(), appendRequest())
-	require.NoError(t, err)
-	require.Equal(t, int64(101), result.SnapshotID)
-	require.Len(t, committer.requests, 2)
-	require.Equal(t, 8, specRequirement(t, committer.requests[1]).SpecID)
-	require.NotNil(t, committer.requests[1].Updates[0].DataFile)
-	require.Equal(t, 7, committer.requests[1].Updates[0].DataFile.SpecID)
-}
-
 func TestAppendWorkflowStopsOnIncompatibleConflictAndRecordsOrphans(t *testing.T) {
 	committer := &fakeCommitter{results: []commitOutcome{{err: api.NewError(api.ErrCommitConflict, "schema changed", nil)}}}
 	orphan := &fakeOrphanRecorder{}
 	cleaner := &fakeOrphanCleaner{}
 	audit := &fakeAuditRecorder{}
 	workflow := AppendWorkflow{
-		Committer: committer,
-		ReloadBase: func(ctx context.Context, req api.AppendRequest) (BaseState, error) {
-			return BaseState{SnapshotID: 101, SchemaID: req.BaseSchemaID + 1, SpecID: req.BaseSpecID}, nil
-		},
-		OrphanRecorder:   orphan,
-		OrphanCleaner:    cleaner,
-		AuditRecorder:    audit,
-		MaxConflictRetry: 1,
-		Now:              func() time.Time { return time.Unix(10, 0).UTC() },
-		OrphanTTL:        time.Hour,
+		Committer:      committer,
+		OrphanRecorder: orphan,
+		OrphanCleaner:  cleaner,
+		AuditRecorder:  audit,
+		Now:            func() time.Time { return time.Unix(10, 0).UTC() },
+		OrphanTTL:      time.Hour,
 	}
 	_, err := workflow.CommitAppend(context.Background(), appendRequest())
 	require.Error(t, err)
@@ -370,14 +278,10 @@ func TestAppendWorkflowImmediateCleanupIsExplicitOptIn(t *testing.T) {
 	orphan := &fakeOrphanRecorder{}
 	cleaner := &fakeOrphanCleaner{}
 	workflow := AppendWorkflow{
-		Committer: committer,
-		ReloadBase: func(ctx context.Context, req api.AppendRequest) (BaseState, error) {
-			return BaseState{SnapshotID: 101, SchemaID: req.BaseSchemaID + 1, SpecID: req.BaseSpecID}, nil
-		},
+		Committer:              committer,
 		OrphanRecorder:         orphan,
 		OrphanCleaner:          cleaner,
 		ImmediateOrphanCleanup: true,
-		MaxConflictRetry:       1,
 	}
 	_, err := workflow.CommitAppend(context.Background(), appendRequest())
 	require.Error(t, err)
@@ -451,8 +355,26 @@ func TestMetadataCacheInvalidatorInvalidatesLocalAndIgnoresRemoteFailure(t *test
 	require.NoError(t, err)
 	require.Equal(t, uint32(7), cache.accountID)
 	require.Equal(t, uint64(42), cache.catalogID)
-	require.Equal(t, "sales", cache.namespace)
+	require.Equal(t, api.NamespaceCacheKey(api.Namespace{"sales"}), cache.namespace)
 	require.Equal(t, "orders", cache.table)
+}
+
+func TestMetadataCacheInvalidatorUsesScanCacheNamespaceEncoding(t *testing.T) {
+	cache := icebergmetadata.NewCache(time.Minute, 1024)
+	req := appendRequest()
+	key := icebergmetadata.CacheKey{
+		Kind:      icebergmetadata.CacheKindMetadataJSON,
+		AccountID: req.Catalog.AccountID,
+		CatalogID: req.Catalog.CatalogID,
+		Namespace: api.NamespaceCacheKey(req.Namespace),
+		Table:     req.Table,
+	}
+	cache.Put(key, icebergmetadata.CacheEntry{MetadataJSON: []byte(`{}`), SizeBytes: 2})
+	require.Equal(t, 1, cache.Len())
+
+	err := (MetadataCacheInvalidator{Cache: cache}).InvalidateIcebergTable(context.Background(), req, api.CommitResult{SnapshotID: 200})
+	require.NoError(t, err)
+	require.Zero(t, cache.Len())
 }
 
 func TestAppendWorkflowUnknownUnverifiedRecordsOrphans(t *testing.T) {

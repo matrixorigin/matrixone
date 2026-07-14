@@ -104,8 +104,12 @@ func (w *FanoutParquetDataWriter) WriteBatch(ctx context.Context, attrs []string
 	if len(attrs) != len(bat.Vecs) {
 		return moerr.NewInvalidInputf(ctx, "Iceberg fanout writer attrs/vector mismatch: attrs=%d vectors=%d", len(attrs), len(bat.Vecs))
 	}
+	fieldLookup, err := newSchemaFieldLookup(w.cfg.Schema.Fields)
+	if err != nil {
+		return err
+	}
 	for rowIdx := 0; rowIdx < bat.RowCount(); rowIdx++ {
-		partition, err := partitionForBatchRow(ctx, w.cfg.Schema, w.cfg.PartitionSpec, attrs, bat, rowIdx, w.cfg.TimeZone)
+		partition, err := partitionForBatchRow(ctx, w.cfg.Schema, w.cfg.PartitionSpec, fieldLookup, attrs, bat, rowIdx, w.cfg.TimeZone)
 		if err != nil {
 			return err
 		}
@@ -281,18 +285,17 @@ func (w *FanoutParquetDataWriter) nextDataFileLocation(partitionPath string) str
 	return joinObjectPath(w.cfg.TableLocation, parts...)
 }
 
-func partitionForBatchRow(ctx context.Context, schema api.Schema, spec api.PartitionSpec, attrs []string, bat *batch.Batch, rowIdx int, loc *time.Location) (map[string]any, error) {
+func partitionForBatchRow(ctx context.Context, schema api.Schema, spec api.PartitionSpec, byName schemaFieldLookup, attrs []string, bat *batch.Batch, rowIdx int, loc *time.Location) (map[string]any, error) {
 	if len(spec.Fields) == 0 {
 		return nil, nil
 	}
-	byName := make(map[string]api.SchemaField, len(schema.Fields))
-	for _, field := range schema.Fields {
-		byName[strings.ToLower(field.Name)] = field
-	}
 	rowValues := make(map[int]any, len(attrs))
 	for colIdx, attr := range attrs {
-		field, ok := byName[strings.ToLower(attr)]
-		if !ok {
+		field, err := byName.field(attr)
+		if err != nil {
+			return nil, err
+		}
+		if field.ID == 0 {
 			continue
 		}
 		value, isNull, err := vectorValue(ctx, bat.Vecs[colIdx], rowIdx, field.Type, loc)

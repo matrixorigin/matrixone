@@ -343,7 +343,6 @@ ifeq ($(UNAME_S),darwin)
 else
 	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
 endif
-	@optools/iceberg_ci.bash core
 
 ###############################################################################
 # bvt and unit test

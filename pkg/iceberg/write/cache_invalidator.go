@@ -16,7 +16,6 @@ package write
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
@@ -42,7 +41,7 @@ type MetadataCacheInvalidator struct {
 
 func (i MetadataCacheInvalidator) InvalidateIcebergTable(ctx context.Context, req api.AppendRequest, result api.CommitResult) error {
 	if i.Cache != nil {
-		i.Cache.InvalidateTable(req.Catalog.AccountID, req.Catalog.CatalogID, strings.Join(req.Namespace, "."), req.Table)
+		i.Cache.InvalidateTable(req.Catalog.AccountID, req.Catalog.CatalogID, api.NamespaceCacheKey(req.Namespace), req.Table)
 	}
 	if i.Remote != nil {
 		_ = i.Remote.InvalidateIcebergTable(ctx, req, result)

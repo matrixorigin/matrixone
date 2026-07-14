@@ -34,15 +34,13 @@ func (l CatalogMetadataLoader) LoadMaintenanceTableMetadata(ctx context.Context,
 	if strings.TrimSpace(req.Namespace) == "" || strings.TrimSpace(req.Table) == "" {
 		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg maintenance catalog metadata loader requires namespace and table", nil)
 	}
-	snapshots := firstNonEmptyString(req.TargetRef, "main")
-	if req.Operation == OperationExpireSnapshots {
-		snapshots = "all"
-	}
 	resp, err := l.Client.LoadTable(ctx, api.LoadTableRequest{
 		CatalogRequest: l.Catalog,
 		Namespace:      namespaceFromString(req.Namespace),
 		Table:          req.Table,
-		Snapshots:      snapshots,
+		// Maintenance and orphan validation need the complete snapshot/ref graph.
+		// The REST catalog parameter accepts "all" or "refs", not a ref name.
+		Snapshots: "all",
 	})
 	if err != nil {
 		return nil, err

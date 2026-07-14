@@ -417,6 +417,9 @@ func (c *RESTClient) CreateTable(ctx context.Context, req api.CreateTableRequest
 
 func (c *RESTClient) CommitTable(ctx context.Context, req api.CommitRequest) (*api.CommitResult, error) {
 	req.CatalogRequest = c.normalizeRequest(req.CatalogRequest)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	target, err := c.commitTableURL(ctx, req)
 	if err != nil {
 		return nil, err
@@ -437,14 +440,21 @@ func (c *RESTClient) CommitTable(ctx context.Context, req api.CommitRequest) (*a
 	if req.IdempotencyKey != "" {
 		headers.Set("Idempotency-Key", req.IdempotencyKey)
 	}
+	// A table commit is not safe to replay after a transport failure or a 5xx:
+	// the catalog may have applied the first request before the response was
+	// lost. Let the write workflow verify the idempotency key/snapshot instead.
+	req.Retry.MaxAttempts = 1
 	raw, err := c.doJSON(ctx, "commit_table", req.CatalogRequest, http.MethodPost, target, headers, body)
 	if err != nil {
+		if apiErrorCode(err) == api.ErrCatalogUnavailable {
+			return &api.CommitResult{Unknown: true}, api.WrapError(api.ErrCommitUnknown, "Iceberg REST commit outcome is unknown", map[string]string{"operation": "commit_table"}, err)
+		}
 		return nil, err
 	}
 	var wire commitTableResponseWire
 	if len(bytes.TrimSpace(raw.body)) > 0 {
 		if err := decodeJSON(raw.body, &wire, "commit_table"); err != nil {
-			return nil, err
+			return &api.CommitResult{Unknown: true}, api.WrapError(api.ErrCommitUnknown, "Iceberg REST commit response could not be decoded", map[string]string{"operation": "commit_table"}, err)
 		}
 	}
 	metadataLocation := wire.MetadataLocation
@@ -454,6 +464,14 @@ func (c *RESTClient) CommitTable(ctx context.Context, req api.CommitRequest) (*a
 		MetadataLocationHash: api.PathHash(metadataLocation),
 		CommitID:             firstNonEmpty(raw.headers.Get("X-Iceberg-Commit-ID"), raw.headers.Get("X-Request-ID")),
 	}, nil
+}
+
+func apiErrorCode(err error) api.ErrorCode {
+	var icebergErr *api.IcebergError
+	if stderrors.As(err, &icebergErr) {
+		return icebergErr.Code
+	}
+	return ""
 }
 
 func (c *RESTClient) PlanScan(ctx context.Context, req api.ScanPlanRequest) (*api.IcebergScanPlan, error) {
@@ -1316,12 +1334,8 @@ func commitUpdateWires(in []api.CommitUpdate) []commitUpdateWire {
 			wire.MinSnapshotsToKeep = update.MinSnapshotsToKeep
 			wire.MaxSnapshotAgeMS = update.MaxSnapshotAgeMS
 			wire.MaxRefAgeMS = update.MaxRefAgeMS
-		case "remove-snapshot":
-			if raw := firstNonEmpty(update.Payload["snapshot-id"], update.Payload["snapshot_id"]); raw != "" {
-				if snapshotID, err := strconv.ParseInt(raw, 10, 64); err == nil {
-					wire.SnapshotID = snapshotID
-				}
-			}
+		case "remove-snapshots":
+			wire.SnapshotIDs = append([]int64(nil), update.SnapshotIDs...)
 		default:
 			wire.Payload = cloneStringMap(update.Payload)
 			wire.FilePath = update.FilePath
@@ -1541,6 +1555,7 @@ type commitUpdateWire struct {
 	RefName            string            `json:"ref-name,omitempty"`
 	RefType            string            `json:"type,omitempty"`
 	SnapshotID         int64             `json:"snapshot-id,omitempty"`
+	SnapshotIDs        []int64           `json:"snapshot-ids,omitempty"`
 	MinSnapshotsToKeep int               `json:"min-snapshots-to-keep,omitempty"`
 	MaxSnapshotAgeMS   int64             `json:"max-snapshot-age-ms,omitempty"`
 	MaxRefAgeMS        int64             `json:"max-ref-age-ms,omitempty"`

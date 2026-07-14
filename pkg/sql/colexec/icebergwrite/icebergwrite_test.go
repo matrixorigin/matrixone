@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,6 +50,21 @@ func TestIcebergWriteLifecycleAbortsOpenCoordinator(t *testing.T) {
 	require.Equal(t, 1, coord.beginCalls)
 	op.Reset(proc, true, context.Canceled)
 	require.Equal(t, 1, coord.abortCalls)
+}
+
+func TestIcebergWritePassesSessionTimeZoneToCoordinatorFactory(t *testing.T) {
+	proc := testutil.NewProc(t)
+	loc := time.FixedZone("UTC+03", 3*60*60)
+	proc.GetSessionInfo().TimeZone = loc
+	var got AppendRequest
+	op := NewArgument(AppendRequest{Operation: OperationAppend})
+	op.Factory = CoordinatorFactoryFunc(func(ctx context.Context, req AppendRequest) (Coordinator, error) {
+		got = req
+		return &testCoordinator{}, nil
+	})
+
+	require.NoError(t, op.Prepare(proc))
+	require.Same(t, loc, got.TimeZone)
 }
 
 func TestIcebergWriteAbortsCoordinatorWhenBeginFails(t *testing.T) {

@@ -325,6 +325,7 @@ type CommitUpdate struct {
 	Ref                string
 	RefType            string
 	SnapshotID         int64
+	SnapshotIDs        []int64
 	MinSnapshotsToKeep int
 	MaxSnapshotAgeMS   int64
 	MaxRefAgeMS        int64

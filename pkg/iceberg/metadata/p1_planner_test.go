@@ -125,6 +125,41 @@ func TestPairDeleteTasksPositionAndEquality(t *testing.T) {
 	}
 }
 
+func TestPairDeleteTasksTreatsZeroSpecAndSequenceAsValid(t *testing.T) {
+	dataTasks := []api.DataFileTask{
+		{DataFile: api.DataFile{FilePath: "s3://warehouse/t/data/spec-zero.parquet", FileFormat: "parquet", SpecID: 0, SequenceNumber: 0}},
+		{DataFile: api.DataFile{FilePath: "s3://warehouse/t/data/spec-one.parquet", FileFormat: "parquet", SpecID: 1, SequenceNumber: 0}},
+	}
+	deleteEntries := []deleteManifestEntry{
+		{manifestPath: "pos", file: api.DataFile{Content: api.DataFileContentPositionDelete, FilePath: "pos.parquet", FileFormat: "parquet", SpecID: 0, SequenceNumber: 0}},
+		{manifestPath: "eq-zero", file: api.DataFile{Content: api.DataFileContentEqualityDelete, FilePath: "eq-zero.parquet", FileFormat: "parquet", EqualityIDs: []int{1}, SpecID: 0, SequenceNumber: 0}},
+		{manifestPath: "eq-one", file: api.DataFile{Content: api.DataFileContentEqualityDelete, FilePath: "eq-one.parquet", FileFormat: "parquet", EqualityIDs: []int{1}, SpecID: 0, SequenceNumber: 1}},
+	}
+	tasks, err := pairDeleteTasks(dataTasks, deleteEntries, "")
+	if err != nil {
+		t.Fatalf("pair delete tasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected position seq=0 and equality seq=1 only on spec 0 data, got %+v", tasks)
+	}
+	byPath := make(map[string]api.DeleteFileTask, len(tasks))
+	for _, task := range tasks {
+		byPath[task.DataFile.FilePath] = task
+		if task.AppliesToPath != dataTasks[0].DataFile.FilePath {
+			t.Fatalf("delete crossed partition spec boundary: %+v", task)
+		}
+	}
+	if _, ok := byPath["pos.parquet"]; !ok {
+		t.Fatalf("position delete at sequence zero must apply: %+v", tasks)
+	}
+	if _, ok := byPath["eq-zero.parquet"]; ok {
+		t.Fatalf("equality delete at the same sequence must not apply: %+v", tasks)
+	}
+	if _, ok := byPath["eq-one.parquet"]; !ok {
+		t.Fatalf("later equality delete must apply: %+v", tasks)
+	}
+}
+
 func TestValidateP1DeleteFileRejectsInvalidDeleteMetadata(t *testing.T) {
 	valid := api.DataFile{
 		Content:          api.DataFileContentEqualityDelete,

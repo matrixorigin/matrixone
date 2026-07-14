@@ -255,6 +255,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 			PartitionSpec:     partitionSpec,
 			Scope:             scope,
 			Partition:         cloneDMLAnyMap(req.DMLScan.OverwritePartition),
+			TimeZone:          req.TimeZone,
 		}), nil
 	}
 	if req.Operation == icebergwrite.OperationMerge {
@@ -266,6 +267,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 			ObjectWriter:   objectWriter,
 			DataFiles:      append([]api.DataFile(nil), req.DMLScan.DataFiles...),
 			PartitionSpec:  partitionSpec,
+			TimeZone:       req.TimeZone,
 		}), nil
 	}
 	if req.Operation == icebergwrite.OperationUpdate {
@@ -277,6 +279,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 			ObjectWriter:   objectWriter,
 			DataFiles:      append([]api.DataFile(nil), req.DMLScan.DataFiles...),
 			PartitionSpec:  partitionSpec,
+			TimeZone:       req.TimeZone,
 		}), nil
 	}
 	spec := DMLDeleteCoordinatorSpec{

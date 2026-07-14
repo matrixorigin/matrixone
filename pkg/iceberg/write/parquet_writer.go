@@ -45,7 +45,7 @@ type ParquetDataWriter struct {
 	writer  *parquet.GenericWriter[any]
 	out     *countingWriter
 	fields  []api.SchemaField
-	byName  map[string]api.SchemaField
+	byName  schemaFieldLookup
 	metrics map[int]*columnMetrics
 
 	partitionSet bool
@@ -67,14 +67,16 @@ func NewParquetDataWriter(ctx context.Context, cfg DataWriterConfig, dst io.Writ
 		cfg.TimeZone = time.UTC
 	}
 	group := make(parquet.Group, len(cfg.Schema.Fields))
-	byName := make(map[string]api.SchemaField, len(cfg.Schema.Fields))
+	byName, err := newSchemaFieldLookup(cfg.Schema.Fields)
+	if err != nil {
+		return nil, err
+	}
 	for _, field := range cfg.Schema.Fields {
 		node, err := parquetNodeForField(ctx, field)
 		if err != nil {
 			return nil, err
 		}
 		group[field.Name] = parquet.FieldID(node, field.ID)
-		byName[strings.ToLower(field.Name)] = field
 	}
 	cw := &countingWriter{writer: dst}
 	return &ParquetDataWriter{
@@ -119,8 +121,11 @@ func (w *ParquetDataWriter) WriteRows(ctx context.Context, attrs []string, bat *
 		rowValues := make(map[int]any, len(w.fields))
 		seenFieldIDs := make(map[int]struct{}, len(attrs))
 		for colIdx, attr := range attrs {
-			field, ok := w.byName[strings.ToLower(attr)]
-			if !ok {
+			field, err := w.byName.field(attr)
+			if err != nil {
+				return err
+			}
+			if field.ID == 0 {
 				return api.NewError(api.ErrMetadataInvalid, "Iceberg writer column is not present in schema", map[string]string{"column": attr})
 			}
 			seenFieldIDs[field.ID] = struct{}{}
@@ -707,9 +712,9 @@ func transformTemporal(ctx context.Context, transform string, ts time.Time) (any
 	case "month":
 		return int32((ts.Year()-1970)*12 + int(ts.Month()) - 1), nil
 	case "day":
-		return int32(ts.Unix() / 86400), nil
+		return int32(floorDiv(ts.Unix(), 86400)), nil
 	case "hour":
-		hour := ts.Unix() / 3600
+		hour := floorDiv(ts.Unix(), 3600)
 		if hour < math.MinInt32 || hour > math.MaxInt32 {
 			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg hour partition value is outside int32 range", nil)
 		}
@@ -717,6 +722,55 @@ func transformTemporal(ctx context.Context, transform string, ts time.Time) (any
 	default:
 		return nil, api.NewError(api.ErrUnsupportedFeature, "Iceberg writer partition transform is unsupported", map[string]string{"transform": transform})
 	}
+}
+
+func floorDiv(value, divisor int64) int64 {
+	quotient := value / divisor
+	if value%divisor < 0 {
+		quotient--
+	}
+	return quotient
+}
+
+type schemaFieldLookup struct {
+	exact     map[string]api.SchemaField
+	folded    map[string]api.SchemaField
+	ambiguous map[string]struct{}
+}
+
+func newSchemaFieldLookup(fields []api.SchemaField) (schemaFieldLookup, error) {
+	lookup := schemaFieldLookup{
+		exact:     make(map[string]api.SchemaField, len(fields)),
+		folded:    make(map[string]api.SchemaField, len(fields)),
+		ambiguous: make(map[string]struct{}),
+	}
+	for _, field := range fields {
+		if _, exists := lookup.exact[field.Name]; exists {
+			return schemaFieldLookup{}, api.NewError(api.ErrMetadataInvalid, "Iceberg schema contains duplicate column names", map[string]string{"column": field.Name})
+		}
+		lookup.exact[field.Name] = field
+		folded := strings.ToLower(field.Name)
+		if prior, exists := lookup.folded[folded]; exists && prior.Name != field.Name {
+			delete(lookup.folded, folded)
+			lookup.ambiguous[folded] = struct{}{}
+			continue
+		}
+		if _, ambiguous := lookup.ambiguous[folded]; !ambiguous {
+			lookup.folded[folded] = field
+		}
+	}
+	return lookup, nil
+}
+
+func (l schemaFieldLookup) field(name string) (api.SchemaField, error) {
+	if field, ok := l.exact[name]; ok {
+		return field, nil
+	}
+	folded := strings.ToLower(name)
+	if _, ambiguous := l.ambiguous[folded]; ambiguous {
+		return api.SchemaField{}, api.NewError(api.ErrMetadataInvalid, "Iceberg writer column name is ambiguous", map[string]string{"column": name})
+	}
+	return l.folded[folded], nil
 }
 
 func partitionKey(values map[string]any, spec api.PartitionSpec) string {

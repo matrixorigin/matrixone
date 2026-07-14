@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergmetadata "github.com/matrixorigin/matrixone/pkg/iceberg/metadata"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 )
 
@@ -43,10 +44,9 @@ func TestExpireSnapshotsPlannerBuildsCommitPlan(t *testing.T) {
 	require.Equal(t, "idem-1", plan.Attempt.IdempotencyKey)
 	require.Equal(t, int64(4), plan.Attempt.BaseSnapshotID)
 	require.Equal(t, []api.CommitRequirement{{Type: "assert-ref-snapshot-id", Ref: "main", SnapshotID: 4}}, plan.Attempt.Requirements)
-	require.Len(t, plan.Attempt.Updates, 2)
-	require.Equal(t, "remove-snapshot", plan.Attempt.Updates[0].Type)
-	require.Equal(t, "1", plan.Attempt.Updates[0].Payload["snapshot_id"])
-	require.Equal(t, "set-snapshot-summary", plan.Attempt.Updates[1].Type)
+	require.Len(t, plan.Attempt.Updates, 1)
+	require.Equal(t, "remove-snapshots", plan.Attempt.Updates[0].Type)
+	require.Equal(t, []int64{1}, plan.Attempt.Updates[0].SnapshotIDs)
 	require.Equal(t, "1", plan.Attempt.Summary["expired-snapshots"])
 	require.Equal(t, "3", plan.Attempt.Summary["retain-last"])
 }
@@ -59,9 +59,55 @@ func TestExpireSnapshotsPlannerProtectsRefsAndRetainLast(t *testing.T) {
 		Loader: MaintenanceTableMetadataLoaderFunc(func(ctx context.Context, req Request) (*api.TableMetadata, error) { return meta, nil }),
 	}).BuildMaintenanceCommit(context.Background(), expireRequest("older_than=2026-01-05 00:00:00,retain_last=1"))
 	require.NoError(t, err)
-	require.Len(t, plan.Attempt.Updates, 2)
-	require.Equal(t, "remove-snapshot", plan.Attempt.Updates[0].Type)
-	require.Equal(t, "1", plan.Attempt.Updates[0].Payload["snapshot_id"], "snapshot 3 and its parent are protected by ref lineage, current/newest are protected by retain/current")
+	require.Len(t, plan.Attempt.Updates, 1)
+	require.Equal(t, "remove-snapshots", plan.Attempt.Updates[0].Type)
+	require.Equal(t, []int64{1}, plan.Attempt.Updates[0].SnapshotIDs, "snapshot 3 and its parent are protected by ref lineage, current/newest are protected by retain/current")
+}
+
+func TestExpireSnapshotsPlannerEnumeratesExpiredSnapshotFiles(t *testing.T) {
+	current := int64(4)
+	meta := expireMetadata(current)
+	manifestPath := "s3://warehouse/orders/metadata/manifest-1.avro"
+	dataPath := "s3://warehouse/orders/data/part-1.parquet"
+	manifestBytes, err := icebergmetadata.EncodeManifest([]api.ManifestEntry{{
+		Status:         api.ManifestEntryAdded,
+		SnapshotID:     1,
+		SequenceNumber: 0,
+		DataFile: api.DataFile{
+			Content:         api.DataFileContentData,
+			FilePath:        dataPath,
+			FileFormat:      "parquet",
+			RecordCount:     1,
+			FileSizeInBytes: 10,
+			SpecID:          0,
+			Partition:       map[string]any{"region": "ksa"},
+		},
+	}}, icebergmetadata.ManifestWriteOptions{
+		FormatVersion: 2,
+		Schema:        meta.Schemas[0],
+		PartitionSpec: meta.PartitionSpecs[0],
+		Content:       api.ManifestContentData,
+	})
+	require.NoError(t, err)
+	manifestListBytes, err := icebergmetadata.EncodeManifestList([]api.ManifestFile{{
+		Path:            manifestPath,
+		Length:          int64(len(manifestBytes)),
+		PartitionSpecID: 0,
+		Content:         api.ManifestContentData,
+	}}, icebergmetadata.ManifestListWriteOptions{FormatVersion: 2, SnapshotID: 1})
+	require.NoError(t, err)
+	reader := expireObjectReader{objects: map[string][]byte{
+		meta.Snapshots[0].ManifestList: manifestListBytes,
+		manifestPath:                   manifestBytes,
+	}}
+
+	plan, err := (ExpireSnapshotsPlanner{
+		Loader:       MaintenanceTableMetadataLoaderFunc(func(ctx context.Context, req Request) (*api.TableMetadata, error) { return meta, nil }),
+		ObjectReader: reader,
+	}).BuildMaintenanceCommit(context.Background(), expireRequest("older_than=2026-01-04 00:00:00,retain_last=3"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), plan.RemovedFileCount)
+	require.ElementsMatch(t, []string{meta.Snapshots[0].ManifestList, manifestPath, dataPath}, plan.PostCommitOrphans)
 }
 
 func TestExpireSnapshotsPlannerHonorsTableRetentionProperties(t *testing.T) {
@@ -75,7 +121,7 @@ func TestExpireSnapshotsPlannerHonorsTableRetentionProperties(t *testing.T) {
 	}).BuildMaintenanceCommit(context.Background(), expireRequest(""))
 	require.NoError(t, err)
 	require.Equal(t, "2", plan.Attempt.Summary["retain-last"])
-	require.Equal(t, "1", plan.Attempt.Updates[0].Payload["snapshot_id"])
+	require.Equal(t, []int64{1, 2}, plan.Attempt.Updates[0].SnapshotIDs)
 
 	_, err = (ExpireSnapshotsPlanner{
 		Loader: MaintenanceTableMetadataLoaderFunc(func(ctx context.Context, req Request) (*api.TableMetadata, error) { return meta, nil }),
@@ -168,4 +214,16 @@ func expireMetadata(currentID int64) *api.TableMetadata {
 			{SnapshotID: 4, ParentSnapshotID: &parent3, TimestampMS: time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC).UnixMilli(), ManifestList: "s3://warehouse/orders/metadata/snap-4.avro"},
 		},
 	}
+}
+
+type expireObjectReader struct {
+	objects map[string][]byte
+}
+
+func (r expireObjectReader) Read(ctx context.Context, location string, offset, length int64) ([]byte, error) {
+	data := r.objects[location]
+	if data == nil {
+		return nil, api.NewError(api.ErrObjectIO, "missing expire test object", nil)
+	}
+	return append([]byte(nil), data...), nil
 }

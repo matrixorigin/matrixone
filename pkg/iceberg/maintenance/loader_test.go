@@ -63,7 +63,7 @@ func TestCatalogMetadataLoaderLoadsAndParsesMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, api.Namespace{"sales", "orders_ns"}, got.Namespace)
 	require.Equal(t, "orders", got.Table)
-	require.Equal(t, "dev", got.Snapshots)
+	require.Equal(t, "all", got.Snapshots)
 	require.Equal(t, current, *meta.CurrentSnapshotID)
 	require.Equal(t, "main", meta.Refs["main"].Name)
 	require.NotEmpty(t, meta.MetadataLocationHash)
