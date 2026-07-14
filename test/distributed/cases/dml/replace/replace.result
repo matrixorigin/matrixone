@@ -287,6 +287,38 @@ name    email    value
 a    y@a.com    111
 b    z@a.com    222
 drop table t_replace_multi_uk_batch;
+drop table if exists replace_fk_c;
+drop table if exists replace_fk_p;
+create table replace_fk_p(id int primary key);
+create table replace_fk_c(id int primary key, pid int, foreign key(pid) references replace_fk_p(id));
+insert into replace_fk_p values (1);
+replace into replace_fk_c values (10,1);
+select * from replace_fk_c order by id;
+id    pid
+10    1
+replace into replace_fk_c values (10,2);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select * from replace_fk_c order by id;
+id    pid
+10    1
+replace into replace_fk_c values (11,99);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select * from replace_fk_c order by id;
+id    pid
+10    1
+replace into replace_fk_c values (12,null);
+select * from replace_fk_c order by id;
+id    pid
+10    1
+12    null
+insert into replace_fk_p values (2);
+replace into replace_fk_c values (10,2);
+select * from replace_fk_c order by id;
+id    pid
+10    2
+12    null
+drop table replace_fk_c;
+drop table replace_fk_p;
 drop table if exists t_set_default;
 create table t_set_default(id int primary key, v int default 5, note varchar(20) default 'd');
 insert into t_set_default values (1, 10, 'old');
@@ -389,20 +421,3 @@ null    1    null-a-2
 1    1    one-replaced
 2    2    two
 drop table t_replace_fakepk_comp_null;
-drop table if exists t_replace_fk_child;
-drop table if exists t_replace_fk_parent;
-create table t_replace_fk_parent(id int primary key);
-create table t_replace_fk_child(id int primary key, pid int, foreign key(pid) references t_replace_fk_parent(id));
-insert into t_replace_fk_parent values (1), (2);
-replace into t_replace_fk_child values (1, 999);
-internal error: Cannot add or update a child row: a foreign key constraint fails
-insert into t_replace_fk_child values (1, 1);
-replace into t_replace_fk_child values (1, 888);
-internal error: Cannot add or update a child row: a foreign key constraint fails
-replace into t_replace_fk_child values (2, 2);
-select id, pid from t_replace_fk_child order by id;
-id    pid
-1    1
-2    2
-drop table if exists t_replace_fk_child;
-drop table if exists t_replace_fk_parent;

@@ -1,0 +1,57 @@
+-- @suite
+
+-- @case
+-- @desc: MySQL-compatible signed integer bit-pattern behavior
+-- @label:bvt
+
+-- Each negative operand is kept in a separate statement so failures identify
+-- the exact signed bit-pattern operator path.
+select '-1' & 3 as bit_and_result;
+select '-1' | 8 as bit_or_result;
+select '-1' ^ 8 as bit_xor_result;
+select '-1' << 1 as bit_left_shift_result;
+select '-1' >> 1 as bit_right_shift_result;
+
+select -1 & 3 as bit_and_result;
+select -1 | 8 as bit_or_result;
+select -1 ^ 8 as bit_xor_result;
+select -1 << 1 as bit_left_shift_result;
+select -1 >> 1 as bit_right_shift_result;
+
+select ~'7' as string_bit_not;
+select ~'-1' as negative_string_bit_not;
+
+select '+7' & 3 as positive_string_bit_and,
+       '+7' | 8 as positive_string_bit_or,
+       '+7' << 2 as positive_string_bit_left_shift;
+
+select '-2' & 3 as negative_bit_and;
+select '-2' | 1 as negative_bit_or;
+select '-2' >> 1 as negative_bit_right_shift;
+
+select -1 >> 0 as zero_shift;
+select -1 >> 63 as max_valid_shift;
+select -1 >> 64 as oversized_shift;
+select -1 >> -1 as negative_shift;
+select null | 1 as null_bit_or;
+
+select X'40' | X'01' as numeric_hex_or,
+       hex(_binary X'40' | X'01') as binary_hex_or,
+       length(_binary X'40' | X'01') as binary_hex_or_length;
+
+drop table if exists mysql_compat_bitwise_unsigned;
+create table mysql_compat_bitwise_unsigned (u bigint unsigned, s bigint);
+insert into mysql_compat_bitwise_unsigned values
+    (9223372036854775808, -1),
+    (18446744073709551615, -2);
+
+select u | 8 as unsigned_or_result,
+       u >> 63 as unsigned_right_shift
+from mysql_compat_bitwise_unsigned
+order by u;
+
+select s >> 1 as signed_right_shift
+from mysql_compat_bitwise_unsigned
+order by u;
+
+drop table mysql_compat_bitwise_unsigned;
