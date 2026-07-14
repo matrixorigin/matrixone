@@ -201,7 +201,7 @@ func TestFlushErrorMsg(t *testing.T) {
 		[]*iscp.JobStatus{{}},
 		types.MaxTs(),
 		"test",
-		[]uint64{1},
+		[]uint64{0},
 	)
 	require.NoError(t, err)
 }
