@@ -200,6 +200,7 @@ var (
 				args     text,
 				lang     text,
 				body     text,
+				sql_mode varchar(1024) not null default 'PIPES_AS_CONCAT',
 				db       varchar(100),
 				definer  varchar(50),
 				modified_time timestamp,

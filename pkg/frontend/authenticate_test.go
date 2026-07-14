@@ -9144,15 +9144,17 @@ func Test_doInterpretCall(t *testing.T) {
 	})
 }
 
-func TestParseStoredProcedureBodyUsesSessionSQLMode(t *testing.T) {
+func TestParseStoredProcedureBodyUsesCreationSQLMode(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
 	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", "PIPES_AS_CONCAT"))
+	creationSQLMode := sessionSQLModeForParser(ses)
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", ""))
 
-	stmts, err := parseStoredProcedureBody(context.Background(), ses, "begin select 'a'||'b' as c; end")
+	stmts, err := parseStoredProcedureBody(context.Background(), ses, "begin select 'a'||'b' as c; end", creationSQLMode)
 	require.NoError(t, err)
 	defer freeStatements(stmts)
 	require.NotEmpty(t, stmts)
@@ -9173,6 +9175,39 @@ func TestParseStoredProcedureBodyUsesSessionSQLMode(t *testing.T) {
 	name, ok := fn.Func.FunctionReference.(*tree.UnresolvedName)
 	require.True(t, ok)
 	require.Equal(t, "concat", name.ColName())
+}
+
+func TestInitProcedurePersistsCreationSQLMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	cp := &tree.CreateProcedure{
+		Name: tree.NewProcedureName("procedure_sql_mode", tree.ObjectNamePrefix{}),
+		Lang: "sql",
+		Body: "begin select 'a'||'b' as c; end",
+	}
+	ses := newSes(determinePrivilegeSetOfStatement(cp), ctrl)
+	ses.SetDatabaseName("test_procedure")
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", "PIPES_AS_CONCAT"))
+
+	bh.sql2result[getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), ses.GetDatabaseName())] =
+		newMrsForPasswordOfUser([][]interface{}{})
+	require.NoError(t, InitProcedure(ses.GetTxnHandler().GetConnCtx(), ses, ses.GetTenantInfo(), cp))
+
+	var createSQL string
+	for _, sql := range bh.executedSQLs {
+		if strings.HasPrefix(sql, "insert into mo_catalog.mo_stored_procedure") {
+			createSQL = sql
+			break
+		}
+	}
+	require.NotEmpty(t, createSQL)
+	require.Contains(t, createSQL, "'PIPES_AS_CONCAT'")
 }
 
 func Test_initProcedure(t *testing.T) {

@@ -15,8 +15,31 @@
 package v4_0_1
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-// No cluster-level upgrades for v4.0.1.
-var clusterUpgEntries = []versions.UpgradeEntry{}
+var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_mo_stored_procedure_add_sql_mode,
+}
+
+var upg_mo_stored_procedure_add_sql_mode = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_STORED_PROCEDURE,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql: fmt.Sprintf(
+		"alter table %s.%s add column sql_mode varchar(1024) not null default 'PIPES_AS_CONCAT'",
+		catalog.MO_CATALOG,
+		catalog.MO_STORED_PROCEDURE,
+	),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		info, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_STORED_PROCEDURE, "sql_mode")
+		if err != nil {
+			return false, err
+		}
+		return info.IsExits, nil
+	},
+}

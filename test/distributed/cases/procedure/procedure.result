@@ -94,4 +94,13 @@ select @id;
 @id
 1000
 drop procedure test_inout_param;
+
+set sql_mode = 'PIPES_AS_CONCAT';
+create procedure test_sql_mode_pipes() 'begin select ''a''||''b'' as c; end';
+set sql_mode = '';
+call test_sql_mode_pipes();
+c
+ab
+drop procedure test_sql_mode_pipes;
+
 drop database if exists procedure_test;

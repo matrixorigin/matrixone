@@ -1130,6 +1130,7 @@ var (
 		args,
 		lang,
 		body,
+		sql_mode,
 		db,
 		definer,
 		modified_time,
@@ -1139,13 +1140,14 @@ var (
 		comment,
 		character_set_client,
 		collation_connection,
-		database_collation) values ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s', '%s');`
+		database_collation) values ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s', '%s');`
 
 	updateMoStoredProcedureFormat = `update mo_catalog.mo_stored_procedure
 			set 
 			    args = '%s',
 				lang = '%s',
 			    body = '%s',
+				sql_mode = '%s',
 				db = '%s',
 			    definer = '%s',
 			    modified_time = '%s',
@@ -1587,7 +1589,7 @@ const (
 
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 
-	fetchSqlOfSpFormat = `select lang, body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
+	fetchSqlOfSpFormat = `select lang, body, args, sql_mode from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 
 	getTableColumnDefFormat = `select attname, atttyp, attnum, attnotnull, att_default, att_is_auto_increment, att_is_hidden from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' order by attnum;`
 )
@@ -10937,6 +10939,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	var initMoProcedure string
 	var dbName string
 	var checkExistence string
+	parserSQLMode := sessionSQLModeForParser(ses)
 	var argsJson []byte
 	// var fmtctx *tree.FmtCtx
 	var erArray []ExecResult
@@ -11012,14 +11015,14 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		}
 		initMoProcedure = fmt.Sprintf(updateMoStoredProcedureFormat,
 			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), dbName,
+			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else {
 		initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
 			string(cp.Name.Name.ObjectName),
 			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), dbName,
+			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
 	err = bh.Exec(ctx, initMoProcedure)
@@ -11313,6 +11316,7 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	// fetch related
 	var spLang string
 	var spBody string
+	var spSQLMode string
 	var dbName string
 	var sql string
 	var argstr string
@@ -11373,6 +11377,10 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 		if err != nil {
 			return nil, err
 		}
+		spSQLMode, err = erArray[0].GetString(ctx, 0, 3)
+		if err != nil {
+			return nil, err
+		}
 
 		// perform argument length validation
 		// postpone argument type check until actual execution of its procedure body. This will be handled by the binder.
@@ -11413,7 +11421,7 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 
 	switch spLang {
 	case "sql":
-		stmt, err := parseStoredProcedureBody(ctx, ses, spBody)
+		stmt, err := parseStoredProcedureBody(ctx, ses, spBody, spSQLMode)
 		if err != nil {
 			return nil, err
 		}
@@ -11437,13 +11445,13 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	}
 }
 
-func parseStoredProcedureBody(ctx context.Context, ses FeSession, sql string) ([]tree.Statement, error) {
+func parseStoredProcedureBody(ctx context.Context, ses FeSession, sql string, sqlMode string) ([]tree.Statement, error) {
 	return parsers.ParseWithSQLMode(
 		ctx,
 		dialect.MYSQL,
 		sql,
 		parserLowerCaseTableNames(ses),
-		sessionSQLModeForParser(ses),
+		sqlMode,
 	)
 }
 

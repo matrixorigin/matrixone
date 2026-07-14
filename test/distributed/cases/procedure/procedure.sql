@@ -110,4 +110,13 @@ call test_inout_param(@id);
 select @id;
 drop procedure test_inout_param;
 
+-- @case
+-- @desc:procedure parser SQL mode is retained after caller mode changes
+-- @label:bvt
+set sql_mode = 'PIPES_AS_CONCAT';
+create procedure test_sql_mode_pipes() 'begin select ''a''||''b'' as c; end';
+set sql_mode = '';
+call test_sql_mode_pipes();
+drop procedure test_sql_mode_pipes;
+
 drop database if exists procedure_test;
