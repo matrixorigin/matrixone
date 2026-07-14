@@ -217,8 +217,15 @@ tokenization by the index's parser). Only *execution* moves to WAND.
       unchanged (`IsAsync` ≡ the param there). *(only fulltext behavior changes, and only for v2)*
     - ☐ engine-swap hooks (schema → WAND segment store, build → positional builder, search →
       `fulltext2_index_scan`) — per-hook `version>=2` branches, once `pkg/fulltext2/` exists.
-  - ☐ **`pkg/fulltext2/` package** — segment format (FST term dict + positional postings + per-doc
-    length + docmap + serialize/load on the shared CDC framing).
+  - ✅ **`pkg/fulltext2/` package — segment format** — *done (P0.3a/b).* `Segment` (positional
+    analogue of bm25's `WandModel`): docmap (`pks`/`docLen`) + `AvgDocLen` + `Recency`;
+    `termPostings` with per-doc positions and raw `maxTf`/block-max (scorer-agnostic).
+    Dictionary-free term dict keyed by term string; on disk a **vellum FST** (`term → ordinal`,
+    byte-oriented so CJK/Unicode needs no special handling) — exact `get` + `word*` prefix range.
+    `Serialize`/`Deserialize` on the same multi-member tar shape as bm25 (docmap + FST + positional
+    postings), docmap + PK codec byte-identical to bm25's. Round-trip + FST + CJK unit tests green.
+    Adds `blevesearch/vellum` dep. (Storage/CDC-chunk streaming reuse — bm25's `storage.go` shape —
+    lands with P4 maintenance.)
 - **P1 — NL exact-phrase.** Positional two-phase conjunctive + **TF-IDF and BM25** top-k, cached,
   early-terminating. gojieba + ngram. **A/B parity** vs `VERSION=1` on the same data (below).
 - **P2 — Boolean operators.** OR-WAND + `+ - > < ~ ( )` + `"…"` phrase.
