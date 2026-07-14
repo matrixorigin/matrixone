@@ -16,6 +16,7 @@ package tnservice
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -129,13 +130,14 @@ func (r *replica) close(destroy bool) error {
 	if !starting {
 		return nil
 	}
-	if err := r.waitStarted(context.Background()); err != nil {
-		return err
-	}
+	startErr := r.waitStarted(context.Background())
 	r.mu.RLock()
 	txnService := r.service
 	r.mu.RUnlock()
-	return txnService.Close(destroy)
+	if txnService == nil {
+		return startErr
+	}
+	return errors.Join(startErr, txnService.Close(destroy))
 }
 
 func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {

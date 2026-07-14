@@ -16,14 +16,40 @@ package tnservice
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type startErrorStorage struct {
+	storage.TxnStorage
+	startErr     error
+	closeErr     error
+	destroyErr   error
+	closeCalls   int
+	destroyCalls int
+}
+
+func (s *startErrorStorage) Start() error {
+	return s.startErr
+}
+
+func (s *startErrorStorage) Close(context.Context) error {
+	s.closeCalls++
+	return s.closeErr
+}
+
+func (s *startErrorStorage) Destroy(context.Context) error {
+	s.destroyCalls++
+	return s.destroyErr
+}
 
 func TestNewReplica(t *testing.T) {
 	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
@@ -37,6 +63,52 @@ func TestNewReplica(t *testing.T) {
 func TestCloseNotStartedReplica(t *testing.T) {
 	r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
 	assert.NoError(t, r.close(false))
+}
+
+func TestCloseFailedStartReplica(t *testing.T) {
+	startErr := errors.New("storage start failed")
+	runtime.SetupServiceBasedRuntime("test", runtime.DefaultRuntime())
+	for _, test := range []struct {
+		name    string
+		destroy bool
+	}{
+		{name: "close", destroy: false},
+		{name: "destroy", destroy: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cleanupErr := errors.New("storage cleanup failed")
+			storage := &startErrorStorage{startErr: startErr}
+			if test.destroy {
+				storage.destroyErr = cleanupErr
+			} else {
+				storage.closeErr = cleanupErr
+			}
+			txnService := service.NewTxnService(
+				"test", newTestTNShard(1, 2, 3), storage, service.NewTestSender(), time.Hour, nil)
+			r := newReplica(newTestTNShard(1, 2, 3), runtime.DefaultRuntime())
+
+			require.ErrorIs(t, r.start(txnService), startErr)
+			closed := make(chan error, 1)
+			go func() {
+				closed <- r.close(test.destroy)
+			}()
+
+			select {
+			case err := <-closed:
+				require.ErrorIs(t, err, startErr)
+				require.ErrorIs(t, err, cleanupErr)
+				if test.destroy {
+					require.Equal(t, 0, storage.closeCalls)
+					require.Equal(t, 1, storage.destroyCalls)
+				} else {
+					require.Equal(t, 1, storage.closeCalls)
+					require.Equal(t, 0, storage.destroyCalls)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("close hung after failed start")
+			}
+		})
+	}
 }
 
 func TestWaitStarted(t *testing.T) {
