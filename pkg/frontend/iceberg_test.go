@@ -34,6 +34,10 @@ func TestIcebergCatalogSecretRefValidation(t *testing.T) {
 	require.Contains(t, err.Error(), "secret://")
 }
 
+func TestIcebergParameterUnitForUninitializedService(t *testing.T) {
+	require.Nil(t, icebergParameterUnitForService("iceberg-uninitialized-service"))
+}
+
 func TestIcebergCatalogStatementLoggingRedactsSecret(t *testing.T) {
 	tests := []struct {
 		name string

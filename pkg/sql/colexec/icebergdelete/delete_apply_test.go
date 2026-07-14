@@ -108,6 +108,46 @@ func TestEqualityDeleteLayoutsAreIndependent(t *testing.T) {
 	}
 }
 
+func TestEqualityDeleteCompositeKeyEncodingDoesNotCollide(t *testing.T) {
+	idx := NewEqualityIndex()
+	idx.AddKey("a\x00s:b")
+	if idx.ShouldDelete("a", "b") {
+		t.Fatal("single string containing the old separator collided with a two-column tuple")
+	}
+	if !idx.ShouldDelete("a\x00s:b") {
+		t.Fatal("the exact equality-delete tuple was not found")
+	}
+}
+
+func TestDeleteApplyMemoryLimitCoversPathsLayoutsAndAggregateBudget(t *testing.T) {
+	position := NewApplyState(Options{MaxMemoryBytes: 80})
+	position.Position.Add(strings.Repeat("p", 64), 1)
+	if err := position.CheckMemory(context.Background()); err == nil {
+		t.Fatal("position delete path memory must count toward the limit")
+	}
+
+	layout := NewApplyState(Options{MaxMemoryBytes: 80})
+	layout.AddEqualityKey(strings.Repeat("l", 64), int64(1))
+	if err := layout.CheckMemory(context.Background()); err == nil {
+		t.Fatal("equality layout key memory must count toward the limit")
+	}
+
+	left := NewApplyState(Options{MaxMemoryBytes: 256})
+	right := NewApplyState(Options{MaxMemoryBytes: 256})
+	left.Equality.AddKey("left")
+	right.Equality.AddKey("right")
+	if err := left.CheckMemory(context.Background()); err != nil {
+		t.Fatalf("left state should fit independently: %v", err)
+	}
+	if err := right.CheckMemory(context.Background()); err != nil {
+		t.Fatalf("right state should fit independently: %v", err)
+	}
+	aggregate := left.MemoryBytes() + right.MemoryBytes()
+	if err := CheckMemoryLimit(context.Background(), Options{MaxMemoryBytes: aggregate - 1}, aggregate); err == nil {
+		t.Fatal("aggregate delete state memory must be checked against one operator budget")
+	}
+}
+
 func TestPositionDeleteMemoryLimit(t *testing.T) {
 	state := NewApplyState(Options{MaxMemoryBytes: 1})
 	state.Position.Add("data.parquet", 12)

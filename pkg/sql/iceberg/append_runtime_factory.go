@@ -554,7 +554,7 @@ func appendRuntimeCoordinatorCacheKey(req icebergwrite.AppendRequest) string {
 		return ""
 	}
 	ref := strings.TrimSpace(firstNonEmpty(req.DefaultRef, model.DefaultRefMain))
-	return strings.Join([]string{
+	return lengthPrefixedKey(
 		strconv.FormatUint(uint64(req.AccountID), 10),
 		strconv.FormatUint(req.RoleID, 10),
 		strconv.FormatUint(req.UserID, 10),
@@ -565,7 +565,7 @@ func appendRuntimeCoordinatorCacheKey(req icebergwrite.AppendRequest) string {
 		strings.TrimSpace(req.Table),
 		ref,
 		statementKey,
-	}, "\x1f")
+	)
 }
 
 func (f AppendRuntimeCoordinatorFactory) validateRuntimeRequest(ctx context.Context, req icebergwrite.AppendRequest) error {

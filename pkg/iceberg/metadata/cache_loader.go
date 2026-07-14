@@ -16,12 +16,11 @@ package metadata
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
-
-const cacheNamespaceSep = "\x1f"
 
 type CachedTableMetadataLoader struct {
 	Catalog          api.CatalogClient
@@ -255,7 +254,13 @@ func (r CachedManifestReader) cacheKey(kind CacheKind, path string) CacheKey {
 }
 
 func namespaceCacheKey(namespace api.Namespace) string {
-	return strings.Join([]string(namespace), cacheNamespaceSep)
+	var out strings.Builder
+	for _, segment := range namespace {
+		out.WriteString(strconv.Itoa(len(segment)))
+		out.WriteByte(':')
+		out.WriteString(segment)
+	}
+	return out.String()
 }
 
 func snapshotID(selector api.SnapshotSelector) int64 {

@@ -22,7 +22,9 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -533,6 +535,7 @@ func TestCompileIcebergScanReplansWithFieldIDsFromColumnMapping(t *testing.T) {
 	testCompile.execType = plan2.ExecTypeAP_ONECN
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	firstPlan := &api.IcebergScanPlan{
+		ObjectIORef: registerCompileTestObjectIO(t),
 		DataTasks: []api.DataFileTask{
 			{DataFile: api.DataFile{FilePath: "warehouse/iceberg/orders/part-old.parquet", FileFormat: "parquet", FileSizeInBytes: 100, RecordCount: 2}},
 			{DataFile: api.DataFile{FilePath: "warehouse/iceberg/orders/part-new.parquet", FileFormat: "parquet", FileSizeInBytes: 100, RecordCount: 2}},
@@ -543,6 +546,7 @@ func TestCompileIcebergScanReplansWithFieldIDsFromColumnMapping(t *testing.T) {
 		},
 	}
 	secondPlan := *firstPlan
+	secondPlan.ObjectIORef = registerCompileTestObjectIO(t)
 	secondPlan.DataTasks = []api.DataFileTask{
 		{DataFile: api.DataFile{FilePath: "warehouse/iceberg/orders/part-new.parquet", FileFormat: "parquet", FileSizeInBytes: 100, RecordCount: 2}},
 	}
@@ -563,6 +567,10 @@ func TestCompileIcebergScanReplansWithFieldIDsFromColumnMapping(t *testing.T) {
 
 	_, err := testCompile.compileIcebergScan(node, true)
 	require.NoError(t, err)
+	_, _, err = icebergio.ResolveObjectIORef(context.Background(), firstPlan.ObjectIORef, "s3://warehouse/orders/data/old.parquet")
+	require.Error(t, err, "the superseded planning object IO ref must be released")
+	_, _, err = icebergio.ResolveObjectIORef(context.Background(), secondPlan.ObjectIORef, "s3://warehouse/orders/data/new.parquet")
+	require.NoError(t, err, "the final planning object IO ref must be retained by the scan operator")
 	require.Equal(t, 2, planner.calls)
 	require.Empty(t, planner.reqs[0].PrunePredicates)
 	require.Empty(t, planner.reqs[0].ProjectionIDs)
@@ -573,6 +581,37 @@ func TestCompileIcebergScanReplansWithFieldIDsFromColumnMapping(t *testing.T) {
 	require.True(t, planner.reqs[1].EnableRowGroupPlanning)
 	require.Equal(t, []int32{1, 4}, node.ExternScan.IcebergScan.ProjectedFieldIds)
 	require.Equal(t, int32(1), node.Stats.BlockNum)
+}
+
+func registerCompileTestObjectIO(t *testing.T) string {
+	t.Helper()
+	fs, err := fileservice.NewMemoryFS("iceberg-compile-object-io", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	ref, err := icebergio.RegisterEphemeralObjectIOProvider(
+		context.Background(),
+		icebergio.ScopedProvider{FileService: fs},
+		func(location string) icebergio.ObjectScope {
+			return icebergio.ObjectScope{
+				AccountID:       42,
+				CatalogID:       7,
+				StorageLocation: location,
+				Endpoint:        "s3.me-central-1.amazonaws.com",
+				Region:          "me-central-1",
+				Bucket:          "warehouse",
+				Principal:       "compile-test",
+			}
+		},
+		time.Hour,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		// Some fanout tests intentionally do not execute/free the compiled scopes.
+		// Drain any retains they added so the process-wide test registry stays clean.
+		for range 64 {
+			icebergio.ReleaseObjectIORef(ref)
+		}
+	})
+	return ref
 }
 
 func TestCompileIcebergScanSkipsPrunePredicatesWhenFieldIDMappingIsAmbiguous(t *testing.T) {

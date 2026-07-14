@@ -44,9 +44,13 @@ func (c *Compile) constructIcebergInsert(nodes []*plan.Node, node *plan.Node) (v
 		metadata.OverwriteScope = planned.OverwriteScope
 		metadata.OverwritePartition = planned.OverwritePartition
 		writer.Request.DMLScan = metadata
+		if err := writer.RetainObjectIORef(c.proc.Ctx); err != nil {
+			return nil, err
+		}
 		if writer.Factory != nil {
 			coordinator, err := writer.Factory.NewCoordinator(c.proc.Ctx, writer.Request)
 			if err != nil {
+				writer.ReleaseObjectIORef()
 				return nil, err
 			}
 			writer.Coordinator = coordinator

@@ -88,7 +88,7 @@ func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifes
 		if dataPath == "" {
 			return
 		}
-		key := entry.manifestPath + "\x00" + file.FilePath + "\x00" + dataPath
+		key := deleteTaskIdentity(entry.manifestPath, file.FilePath, dataPath)
 		if _, ok := seen[key]; ok {
 			return
 		}
@@ -144,6 +144,16 @@ func pairDeleteTasks(dataTasks []api.DataFileTask, deleteEntries []deleteManifes
 		}
 	}
 	return out, nil
+}
+
+func deleteTaskIdentity(parts ...string) string {
+	var out strings.Builder
+	for _, part := range parts {
+		out.WriteString(strconv.Itoa(len(part)))
+		out.WriteByte(':')
+		out.WriteString(part)
+	}
+	return out.String()
 }
 
 func addHiddenDeleteColumnMappings(mappings []api.IcebergColumnMapping, schema api.Schema, deleteTasks []api.DeleteFileTask) ([]api.IcebergColumnMapping, error) {

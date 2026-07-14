@@ -16,9 +16,11 @@ package icebergwrite
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
@@ -101,6 +103,8 @@ type IcebergWrite struct {
 	Coordinator Coordinator
 	Factory     CoordinatorFactory
 
+	objectIORefRetained bool
+
 	vm.OperatorBase
 }
 
@@ -118,6 +122,31 @@ func (w *IcebergWrite) WithCoordinator(coordinator Coordinator) *IcebergWrite {
 func (w *IcebergWrite) WithCoordinatorFactory(factory CoordinatorFactory) *IcebergWrite {
 	w.Factory = factory
 	return w
+}
+
+func (w *IcebergWrite) RetainObjectIORef(ctx context.Context) error {
+	if w == nil || w.objectIORefRetained {
+		return nil
+	}
+	ref := strings.TrimSpace(w.Request.DMLScan.ObjectIORef)
+	if ref == "" {
+		return nil
+	}
+	if !icebergio.RetainObjectIORef(ref) {
+		return api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg write object IO ref is not registered or expired", map[string]string{
+			"object_io_ref": api.PathHash(ref),
+		}))
+	}
+	w.objectIORefRetained = true
+	return nil
+}
+
+func (w *IcebergWrite) ReleaseObjectIORef() {
+	if w == nil || !w.objectIORefRetained {
+		return
+	}
+	icebergio.ReleaseObjectIORef(w.Request.DMLScan.ObjectIORef)
+	w.objectIORefRetained = false
 }
 
 func (w *IcebergWrite) GetOperatorBase() *vm.OperatorBase {

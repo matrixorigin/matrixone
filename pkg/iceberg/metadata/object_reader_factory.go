@@ -17,6 +17,7 @@ package metadata
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -229,19 +230,20 @@ func storageCredentialsIdentity(credentials []api.StorageCredential) string {
 		}
 		sort.Strings(keys)
 		var part strings.Builder
-		part.WriteString(credential.Prefix)
-		part.WriteByte('|')
-		part.WriteString(credential.ExpiresAt.UTC().Format(time.RFC3339Nano))
+		writeObjectReaderIdentityPart(&part, credential.Prefix)
+		writeObjectReaderIdentityPart(&part, credential.ExpiresAt.UTC().Format(time.RFC3339Nano))
 		for _, key := range keys {
-			part.WriteByte('|')
-			part.WriteString(strings.ToLower(strings.TrimSpace(key)))
-			part.WriteByte('=')
-			part.WriteString(strings.TrimSpace(credential.Config[key]))
+			writeObjectReaderIdentityPart(&part, strings.ToLower(strings.TrimSpace(key)))
+			writeObjectReaderIdentityPart(&part, strings.TrimSpace(credential.Config[key]))
 		}
 		parts = append(parts, part.String())
 	}
 	sort.Strings(parts)
-	return strings.Join(parts, "\n")
+	var out strings.Builder
+	for _, part := range parts {
+		writeObjectReaderIdentityPart(&out, part)
+	}
+	return out.String()
 }
 
 func remoteSigningIdentity(config map[string]string) string {
@@ -259,12 +261,16 @@ func remoteSigningIdentity(config map[string]string) string {
 		if !strings.HasPrefix(k, "s3.") && !strings.HasPrefix(k, "client.region") {
 			continue
 		}
-		out.WriteString(k)
-		out.WriteByte('=')
-		out.WriteString(strings.TrimSpace(config[key]))
-		out.WriteByte('|')
+		writeObjectReaderIdentityPart(&out, k)
+		writeObjectReaderIdentityPart(&out, strings.TrimSpace(config[key]))
 	}
 	return out.String()
+}
+
+func writeObjectReaderIdentityPart(out *strings.Builder, value string) {
+	out.WriteString(strconv.Itoa(len(value)))
+	out.WriteByte(':')
+	out.WriteString(value)
 }
 
 func cloneStringSlice(in []string) []string {

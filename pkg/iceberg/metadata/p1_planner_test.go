@@ -160,6 +160,12 @@ func TestValidateP1DeleteFileRejectsInvalidDeleteMetadata(t *testing.T) {
 	}
 }
 
+func TestDeleteTaskIdentityDoesNotCollideOnDelimiters(t *testing.T) {
+	if deleteTaskIdentity("a\x00b", "c", "d") == deleteTaskIdentity("a", "b\x00c", "d") {
+		t.Fatal("delete task identities collided on path delimiters")
+	}
+}
+
 func TestDeletePlannerHiddenMappingsAndPartitionTokens(t *testing.T) {
 	mappings := []api.IcebergColumnMapping{
 		{FieldID: 1, ColumnName: "id", Projected: true},

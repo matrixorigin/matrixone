@@ -40,6 +40,7 @@ import (
 )
 
 const icebergDeleteReadBatchRows = 1024
+const icebergDeleteApplyStateBytes = int64(128)
 
 func (external *External) prepareIcebergDeleteApply(proc *process.Process) error {
 	param := external.Es
@@ -48,6 +49,7 @@ func (external *External) prepareIcebergDeleteApply(proc *process.Process) error
 	}
 	opts := icebergDeleteApplyOptions(param)
 	states := make(map[string]*icebergdelete.ApplyState)
+	var totalMemoryBytes int64
 	for _, task := range param.IcebergDeleteTasks {
 		if task == nil {
 			continue
@@ -57,7 +59,13 @@ func (external *External) prepareIcebergDeleteApply(proc *process.Process) error
 		if state == nil {
 			state = icebergdelete.NewApplyState(opts)
 			states[dataFile] = state
+			totalMemoryBytes += icebergDeleteApplyStateBytes + int64(len(dataFile))
+			if err := icebergdelete.CheckMemoryLimit(proc.Ctx, opts, totalMemoryBytes); err != nil {
+				return err
+			}
 		}
+		beforeMemoryBytes := state.MemoryBytes()
+		state.Options.BaseMemoryBytes = totalMemoryBytes - beforeMemoryBytes
 		switch strings.ToLower(strings.TrimSpace(task.DeleteType)) {
 		case "position":
 			if err := loadIcebergPositionDeleteFile(proc.Ctx, param, state, task); err != nil {
@@ -75,11 +83,20 @@ func (external *External) prepareIcebergDeleteApply(proc *process.Process) error
 		if err := state.CheckMemory(proc.Ctx); err != nil {
 			return err
 		}
+		totalMemoryBytes += state.Profile.MemoryBytes - beforeMemoryBytes
+		if err := icebergdelete.CheckMemoryLimit(proc.Ctx, opts, totalMemoryBytes); err != nil {
+			return err
+		}
 		state.Profile.DeleteFilesRead++
+	}
+	for _, state := range states {
+		if state != nil {
+			state.Options.BaseMemoryBytes = totalMemoryBytes - state.MemoryBytes()
+		}
 	}
 	param.icebergDeleteStates = states
 	param.icebergDeleteLoaded = true
-	param.addIcebergDeleteLoadProfile(states)
+	param.addIcebergDeleteLoadProfile(states, totalMemoryBytes)
 	return nil
 }
 
@@ -725,22 +742,20 @@ func (param *ExternalParam) addIcebergDeleteProfile(state *icebergdelete.ApplySt
 	param.addParquetProfile(delta)
 }
 
-func (param *ExternalParam) addIcebergDeleteLoadProfile(states map[string]*icebergdelete.ApplyState) {
+func (param *ExternalParam) addIcebergDeleteLoadProfile(states map[string]*icebergdelete.ApplyState, totalMemoryBytes int64) {
 	if param == nil || len(states) == 0 {
 		return
 	}
 	var filesRead int64
-	var memoryBytes int64
 	for _, state := range states {
 		if state == nil {
 			continue
 		}
 		filesRead += state.Profile.DeleteFilesRead
-		memoryBytes += state.Profile.MemoryBytes
 	}
 	param.addParquetProfile(process.ParquetProfileStats{
 		IcebergDeleteFilesRead:            filesRead,
-		IcebergDeleteApplyPeakMemoryBytes: memoryBytes,
+		IcebergDeleteApplyPeakMemoryBytes: totalMemoryBytes,
 	})
 }
 

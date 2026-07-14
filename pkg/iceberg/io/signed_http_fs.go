@@ -19,6 +19,7 @@ import (
 	"context"
 	"io"
 	"iter"
+	"math"
 	"net/http"
 	pathpkg "path"
 	"strconv"
@@ -74,7 +75,15 @@ func (s *signedHTTPFileService) Write(ctx context.Context, vector fileservice.IO
 	}
 	body := append([]byte(nil), entry.Data...)
 	if entry.ReaderForWrite != nil {
-		data, err := io.ReadAll(entry.ReaderForWrite)
+		reader := io.Reader(entry.ReaderForWrite)
+		if entry.Size >= 0 {
+			limit := entry.Size
+			if limit < math.MaxInt64 {
+				limit++
+			}
+			reader = io.LimitReader(reader, limit)
+		}
+		data, err := io.ReadAll(reader)
 		if err != nil {
 			return api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg signed HTTP write payload read failed", map[string]string{
 				"signed_url": RedactObjectPath(target),
@@ -181,7 +190,7 @@ func (s *signedHTTPFileService) StatFile(ctx context.Context, filePath string) (
 		"status":        strconv.Itoa(resp.StatusCode),
 		"content_range": resp.Header.Get("Content-Range"),
 		"content_len":   strconv.FormatInt(resp.ContentLength, 10),
-		"body":          string(body),
+		"body_hash":     api.PathHash(string(body)),
 	}))
 }
 
@@ -202,6 +211,11 @@ func (s *signedHTTPFileService) ETLCompatible() {
 func (s *signedHTTPFileService) readEntry(ctx context.Context, target string, entry *fileservice.IOEntry) ([]byte, error) {
 	if target == "" {
 		return nil, api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg signed HTTP read requires URL", nil))
+	}
+	if entry.Offset < 0 || entry.Size < -1 || (entry.Size > 0 && entry.Offset > math.MaxInt64-entry.Size) {
+		return nil, api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg signed HTTP read range is invalid", map[string]string{
+			"signed_url": RedactObjectPath(target),
+		}))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -225,26 +239,28 @@ func (s *signedHTTPFileService) readEntry(ctx context.Context, target string, en
 		return nil, api.ToMOErr(ctx, api.NewError(api.ErrObjectIO, "Iceberg signed HTTP read returned non-success status", map[string]string{
 			"signed_url": RedactObjectPath(target),
 			"status":     strconv.Itoa(resp.StatusCode),
-			"body":       string(body),
+			"body_hash":  api.PathHash(string(body)),
 		}))
 	}
-	data, err := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusOK && entry.Offset > 0 {
+		if _, err := io.CopyN(io.Discard, resp.Body, entry.Offset); err != nil {
+			return nil, io.ErrUnexpectedEOF
+		}
+	}
+	reader := io.Reader(resp.Body)
+	if entry.Size >= 0 {
+		reader = io.LimitReader(reader, entry.Size)
+	}
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, api.ToMOErr(ctx, api.WrapError(api.ErrObjectIO, "Iceberg signed HTTP response read failed", map[string]string{
 			"signed_url": RedactObjectPath(target),
 		}, err))
 	}
-	if resp.StatusCode == http.StatusOK && entry.Offset > 0 {
-		if entry.Offset > int64(len(data)) {
-			return nil, io.ErrUnexpectedEOF
-		}
-		data = data[entry.Offset:]
-	}
 	if entry.Size >= 0 {
 		if int64(len(data)) < entry.Size {
 			return nil, io.ErrUnexpectedEOF
 		}
-		data = data[:entry.Size]
 	}
 	return data, nil
 }

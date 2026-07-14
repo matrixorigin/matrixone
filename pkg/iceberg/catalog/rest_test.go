@@ -78,6 +78,101 @@ func TestRESTClientGetConfigNegotiatesCapabilitiesAndCaches(t *testing.T) {
 	}
 }
 
+func TestRESTClientConfigCacheIsBoundedAndSweepsExpiredKeys(t *testing.T) {
+	client := NewRESTClient(WithConfigCacheTTL(time.Hour), WithConfigCacheLimit(2))
+	expiresAt := time.Now().Add(time.Hour)
+	client.configCache["b"] = configCacheEntry{expiresAt: expiresAt, response: api.ConfigResponse{Prefix: "b"}}
+	client.configCache["a"] = configCacheEntry{expiresAt: expiresAt, response: api.ConfigResponse{Prefix: "a"}}
+
+	client.putConfigCache("c", api.ConfigResponse{Prefix: "c"})
+	if len(client.configCache) != 2 {
+		t.Fatalf("config cache exceeded its hard bound: %d", len(client.configCache))
+	}
+	if _, ok := client.configCache["a"]; ok {
+		t.Fatal("equal-expiry eviction must deterministically remove the lexical-first key")
+	}
+
+	client.configCache["expired"] = configCacheEntry{expiresAt: time.Now().Add(-time.Second)}
+	client.putConfigCache("d", api.ConfigResponse{Prefix: "d"})
+	if _, ok := client.configCache["expired"]; ok {
+		t.Fatal("key churn must sweep expired config cache entries")
+	}
+	if len(client.configCache) > 2 {
+		t.Fatalf("config cache exceeded its hard bound after expiry sweep: %d", len(client.configCache))
+	}
+}
+
+func TestRESTClientConfigCacheEnforcesWeightedBoundAndReplacementAccounting(t *testing.T) {
+	client := NewRESTClient(WithConfigCacheTTL(time.Hour), WithConfigCacheLimit(10), WithConfigCacheMaxBytes(700))
+	client.putConfigCache("a", api.ConfigResponse{Prefix: strings.Repeat("a", 100)})
+	client.putConfigCache("b", api.ConfigResponse{Prefix: strings.Repeat("b", 100)})
+	if client.configCacheBytes > client.configCacheMaxBytes {
+		t.Fatalf("weighted config cache exceeded its bound: %d", client.configCacheBytes)
+	}
+	before := client.configCacheBytes
+	client.putConfigCache("b", api.ConfigResponse{Prefix: "small"})
+	if client.configCacheBytes >= before {
+		t.Fatalf("replacement did not reduce weighted accounting: before=%d after=%d", before, client.configCacheBytes)
+	}
+	client.putConfigCache("oversized", api.ConfigResponse{Prefix: strings.Repeat("x", 1_000)})
+	if _, ok := client.configCache["oversized"]; ok {
+		t.Fatal("oversized config cache entry must be rejected")
+	}
+}
+
+func TestRESTClientConfigCacheKeyDoesNotCollideOnDelimiters(t *testing.T) {
+	client := NewRESTClient()
+	left := api.GetConfigRequest{CatalogRequest: api.CatalogRequest{Catalog: model.Catalog{AccountID: 1, CatalogID: 2, URI: "https://catalog.example/a\x00b"}}, Warehouse: "c"}
+	right := api.GetConfigRequest{CatalogRequest: api.CatalogRequest{Catalog: model.Catalog{AccountID: 1, CatalogID: 2, URI: "https://catalog.example/a"}}, Warehouse: "b\x00c"}
+	if client.configCacheKey(left) == client.configCacheKey(right) {
+		t.Fatal("config cache keys collided on request delimiters")
+	}
+}
+
+func TestRESTClientConfigCacheConcurrentAccess(t *testing.T) {
+	client := NewRESTClient(WithConfigCacheTTL(time.Minute), WithConfigCacheLimit(8))
+	var done atomic.Int32
+	for worker := range 8 {
+		go func() {
+			for iteration := range 100 {
+				key := strconv.Itoa((worker + iteration) % 16)
+				client.putConfigCache(key, api.ConfigResponse{Prefix: key})
+				_, _ = client.getConfigCache(key)
+			}
+			done.Add(1)
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for done.Load() != 8 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if done.Load() != 8 {
+		t.Fatal("concurrent config cache access did not complete")
+	}
+	client.configCacheMu.Lock()
+	defer client.configCacheMu.Unlock()
+	if len(client.configCache) > client.configCacheLimit {
+		t.Fatalf("concurrent config cache access exceeded the hard bound: %d", len(client.configCache))
+	}
+	if client.configCacheBytes > client.configCacheMaxBytes {
+		t.Fatalf("concurrent config cache access exceeded the weighted bound: %d", client.configCacheBytes)
+	}
+}
+
+func TestRESTClientDoesNotExposeRemoteErrorMessage(t *testing.T) {
+	secret := "Bearer catalog-secret-token"
+	err := mapHTTPError("load_table", http.StatusForbidden, []byte(`{"error":{"message":"`+secret+`","type":"secret-type","code":403}}`))
+	if err == nil {
+		t.Fatal("expected mapped catalog error")
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "secret-type") {
+		t.Fatalf("remote error details leaked through the catalog boundary: %v", err)
+	}
+	if !strings.Contains(err.Error(), "catalog_error_message_hash") || !strings.Contains(err.Error(), "catalog_error_type_hash") {
+		t.Fatalf("redacted catalog error should retain diagnostic hashes: %v", err)
+	}
+}
+
 func TestRESTClientDecodesConfigPrefixBeforeFollowupRequests(t *testing.T) {
 	var credentialsPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

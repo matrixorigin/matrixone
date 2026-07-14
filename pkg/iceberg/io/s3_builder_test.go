@@ -275,3 +275,20 @@ func TestRemoteSigningPathStyleDetection(t *testing.T) {
 		}
 	}
 }
+
+func TestCredentialIdentitiesDoNotCollideOnDelimiters(t *testing.T) {
+	expires := time.Unix(1_700_000_000, 0).UTC()
+	left := api.StorageCredential{Prefix: "s3://warehouse/", ExpiresAt: expires, Config: map[string]string{
+		"a": "x|b=y",
+	}}
+	right := api.StorageCredential{Prefix: "s3://warehouse/", ExpiresAt: expires, Config: map[string]string{
+		"a": "x",
+		"b": "y",
+	}}
+	if storageCredentialIdentity(left) == storageCredentialIdentity(right) {
+		t.Fatal("storage credential identities collided on config delimiters")
+	}
+	if remoteSigningConfigIdentity(left.Config) == remoteSigningConfigIdentity(right.Config) {
+		t.Fatal("remote signing config identities collided on config delimiters")
+	}
+}

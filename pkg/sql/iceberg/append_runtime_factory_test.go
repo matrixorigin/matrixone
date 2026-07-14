@@ -392,6 +392,17 @@ func TestAppendRuntimeCoordinatorCacheBuildsDifferentStatementsConcurrently(t *t
 	}
 }
 
+func TestAppendRuntimeCoordinatorCacheKeyDoesNotCollideOnDelimiters(t *testing.T) {
+	base := icebergwrite.AppendRequest{AccountID: 1, CatalogName: "catalog", Namespace: "sales", Table: "orders", StatementID: "stmt"}
+	left := base
+	left.CatalogName = "catalog\x1fsales"
+	left.Namespace = "orders"
+	right := base
+	right.CatalogName = "catalog"
+	right.Namespace = "sales\x1forders"
+	require.NotEqual(t, appendRuntimeCoordinatorCacheKey(left), appendRuntimeCoordinatorCacheKey(right))
+}
+
 func TestAppendRuntimeCoordinatorCacheSingleflightsSameStatement(t *testing.T) {
 	ctx := context.Background()
 	cache := &appendRuntimeCoordinatorCache{entries: make(map[string]*appendRuntimeCoordinatorCacheEntry)}

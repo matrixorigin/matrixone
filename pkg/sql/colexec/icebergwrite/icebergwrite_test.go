@@ -23,6 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -46,6 +49,51 @@ func TestIcebergWriteLifecycleAbortsOpenCoordinator(t *testing.T) {
 	require.Equal(t, 1, coord.beginCalls)
 	op.Reset(proc, true, context.Canceled)
 	require.Equal(t, 1, coord.abortCalls)
+}
+
+func TestIcebergWriteAbortsCoordinatorWhenBeginFails(t *testing.T) {
+	beginErr := errors.New("begin failed")
+	coord := &testCoordinator{beginErr: beginErr}
+	op := NewArgument(AppendRequest{Operation: OperationAppend}).WithCoordinator(coord)
+	proc := testutil.NewProc(t)
+
+	err := op.Prepare(proc)
+	require.ErrorIs(t, err, beginErr)
+	require.Equal(t, 1, coord.beginCalls)
+	require.Equal(t, 1, coord.abortCalls)
+	require.ErrorIs(t, coord.abortCause, beginErr)
+
+	op.Free(proc, true, err)
+	require.Equal(t, 1, coord.abortCalls, "Free must not repeat rollback after a failed Begin")
+}
+
+func TestIcebergWriteReleasesRetainedObjectIORef(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("iceberg-write-object-io", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	ref, err := icebergio.RegisterEphemeralObjectIOProvider(ctx, icebergio.ScopedProvider{FileService: fs}, func(location string) icebergio.ObjectScope {
+		return icebergio.ObjectScope{
+			AccountID:       42,
+			CatalogID:       7,
+			StorageLocation: location,
+			Endpoint:        "s3.me-central-1.amazonaws.com",
+			Region:          "me-central-1",
+			Bucket:          "warehouse",
+			Principal:       "writer-test",
+		}
+	}, 0)
+	require.NoError(t, err)
+	op := NewArgument(AppendRequest{DMLScan: DMLScanMetadata{ObjectIORef: ref}})
+	require.NoError(t, op.RetainObjectIORef(ctx))
+	require.NoError(t, op.RetainObjectIORef(ctx), "retaining the same operator ref must be idempotent")
+	_, _, err = icebergio.ResolveObjectIORef(ctx, ref, "s3://warehouse/orders/data/a.parquet")
+	require.NoError(t, err)
+
+	op.Free(testutil.NewProc(t), false, nil)
+	_, _, err = icebergio.ResolveObjectIORef(ctx, ref, "s3://warehouse/orders/data/a.parquet")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrObjectIO))
+	op.Free(testutil.NewProc(t), false, nil)
 }
 
 func TestUnsupportedCoordinatorFailsOnDataAndCommit(t *testing.T) {
@@ -293,11 +341,12 @@ type testCoordinator struct {
 	commitErr   error
 	abortErr    error
 	abortCause  error
+	beginErr    error
 }
 
 func (c *testCoordinator) Begin(ctx context.Context, req AppendRequest) error {
 	c.beginCalls++
-	return nil
+	return c.beginErr
 }
 
 func (c *testCoordinator) Append(ctx context.Context, bat *batch.Batch) error {

@@ -25,8 +25,10 @@ import (
 )
 
 const (
-	defaultPositionEntryBytes = int64(24)
-	defaultEqualityEntryBytes = int64(64)
+	defaultPositionEntryBytes  = int64(24)
+	defaultPositionFileBytes   = int64(64)
+	defaultEqualityEntryBytes  = int64(64)
+	defaultEqualityLayoutBytes = int64(64)
 )
 
 type Profile struct {
@@ -40,6 +42,9 @@ type Profile struct {
 type Options struct {
 	MaxMemoryBytes int64
 	SpillEnabled   bool
+	// BaseMemoryBytes is memory already consumed by sibling delete states in
+	// the same operator. It lets per-row loading enforce one aggregate budget.
+	BaseMemoryBytes int64
 }
 
 type PositionIndex struct {
@@ -63,6 +68,7 @@ func (idx *PositionIndex) Add(dataFile string, rowOrdinal int64) {
 	if rows == nil {
 		rows = make(map[int64]struct{})
 		idx.rows[dataFile] = rows
+		idx.memoryBytes += defaultPositionFileBytes + int64(len(dataFile))
 	}
 	if _, exists := rows[rowOrdinal]; exists {
 		return
@@ -128,6 +134,7 @@ type ApplyState struct {
 	EqualityLayouts map[string]*EqualityIndex
 	Options         Options
 	Profile         Profile
+	layoutBytes     int64
 }
 
 func NewApplyState(opts Options) *ApplyState {
@@ -143,23 +150,35 @@ func (s *ApplyState) CheckMemory(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	memoryBytes := s.Position.MemoryBytes() + s.Equality.MemoryBytes()
+	memoryBytes := s.MemoryBytes()
+	s.Profile.MemoryBytes = memoryBytes
+	return CheckMemoryLimit(ctx, s.Options, s.Options.BaseMemoryBytes+memoryBytes)
+}
+
+func (s *ApplyState) MemoryBytes() int64 {
+	if s == nil {
+		return 0
+	}
+	memoryBytes := s.Position.MemoryBytes() + s.Equality.MemoryBytes() + s.layoutBytes
 	for _, idx := range s.EqualityLayouts {
 		memoryBytes += idx.MemoryBytes()
 	}
-	s.Profile.MemoryBytes = memoryBytes
-	if s.Options.MaxMemoryBytes <= 0 || s.Profile.MemoryBytes <= s.Options.MaxMemoryBytes {
+	return memoryBytes
+}
+
+func CheckMemoryLimit(ctx context.Context, opts Options, memoryBytes int64) error {
+	if opts.MaxMemoryBytes <= 0 || memoryBytes <= opts.MaxMemoryBytes {
 		return nil
 	}
-	if s.Options.SpillEnabled {
+	if opts.SpillEnabled {
 		return api.ToMOErr(ctx, api.NewError(api.ErrUnsupportedFeature, "Iceberg delete apply spill is not implemented", map[string]string{
-			"memory_bytes": fmt.Sprintf("%d", s.Profile.MemoryBytes),
-			"limit_bytes":  fmt.Sprintf("%d", s.Options.MaxMemoryBytes),
+			"memory_bytes": fmt.Sprintf("%d", memoryBytes),
+			"limit_bytes":  fmt.Sprintf("%d", opts.MaxMemoryBytes),
 		}))
 	}
 	return api.ToMOErr(ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg delete apply exceeded memory limit", map[string]string{
-		"memory_bytes": fmt.Sprintf("%d", s.Profile.MemoryBytes),
-		"limit_bytes":  fmt.Sprintf("%d", s.Options.MaxMemoryBytes),
+		"memory_bytes": fmt.Sprintf("%d", memoryBytes),
+		"limit_bytes":  fmt.Sprintf("%d", opts.MaxMemoryBytes),
 	}))
 }
 
@@ -179,6 +198,7 @@ func (s *ApplyState) AddEqualityKey(layout string, values ...any) {
 	if idx == nil {
 		idx = NewEqualityIndex()
 		s.EqualityLayouts[layout] = idx
+		s.layoutBytes += defaultEqualityLayoutBytes + int64(len(layout))
 	}
 	idx.AddKey(values...)
 }
@@ -263,11 +283,11 @@ func RowOrdinals(startRowOrdinal int64, rowCount int) []int64 {
 
 func equalityKey(values []any) string {
 	var b strings.Builder
-	for i, value := range values {
-		if i > 0 {
-			b.WriteByte(0)
-		}
-		b.WriteString(equalityValueToken(value))
+	for _, value := range values {
+		token := equalityValueToken(value)
+		b.WriteString(strconv.Itoa(len(token)))
+		b.WriteByte(':')
+		b.WriteString(token)
 	}
 	return b.String()
 }

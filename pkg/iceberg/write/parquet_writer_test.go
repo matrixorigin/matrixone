@@ -456,11 +456,20 @@ func TestParquetWriterPartitionTransformsAndFormatting(t *testing.T) {
 	require.Equal(t, "true", partitionValueString(true))
 	require.Equal(t, "ksa", partitionValueString("ksa"))
 	require.Equal(t, "{7}", partitionValueString(struct{ N int }{N: 7}))
-	require.Equal(t, "region=ksa/bucket=7", partitionKey(map[string]any{"region": "ksa", "bucket": int32(7)}, api.PartitionSpec{Fields: []api.PartitionField{
+	spec := api.PartitionSpec{Fields: []api.PartitionField{
 		{Name: "region"},
 		{Name: "bucket"},
-	}}))
+	}}
+	require.NotEmpty(t, partitionKey(map[string]any{"region": "ksa", "bucket": int32(7)}, spec))
 	require.Equal(t, "", partitionKey(nil, api.PartitionSpec{}))
+	require.NotEqual(t,
+		partitionKey(map[string]any{"region": nil, "bucket": int32(7)}, spec),
+		partitionKey(map[string]any{"region": "null", "bucket": int32(7)}, spec),
+	)
+	require.NotEqual(t,
+		partitionKey(map[string]any{"region": "x/bucket=y", "bucket": "z"}, spec),
+		partitionKey(map[string]any{"region": "x", "bucket": "y/bucket=z"}, spec),
+	)
 }
 
 func TestFanoutParquetDataWriterSplitsByPartitionAndTargetSize(t *testing.T) {

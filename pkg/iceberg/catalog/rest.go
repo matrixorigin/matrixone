@@ -41,6 +41,8 @@ const (
 	defaultNamespaceSep     = "\x1f"
 	defaultRESTTimeout      = 30 * time.Second
 	defaultMaxBodyBytes     = 32 << 20
+	defaultConfigCacheLimit = 1024
+	defaultConfigCacheBytes = 16 << 20
 )
 
 type TokenProvider interface {
@@ -75,36 +77,42 @@ type RESTClientOption func(*RESTClient)
 type CatalogResidencyValidator func(ctx context.Context, req api.CatalogRequest) error
 
 type RESTClient struct {
-	httpClient         *http.Client
-	tokenProvider      TokenProvider
-	residencyValidator CatalogResidencyValidator
-	cacheTTL           time.Duration
-	sleep              func(context.Context, time.Duration) error
-	configCacheMu      sync.Mutex
-	configCache        map[string]configCacheEntry
-	defaultRetry       api.RetryPolicy
-	defaultTimeout     time.Duration
-	allowPlainHTTP     bool
-	userAgent          string
-	namespaceSep       string
-	maxBodyBytes       int64
+	httpClient          *http.Client
+	tokenProvider       TokenProvider
+	residencyValidator  CatalogResidencyValidator
+	cacheTTL            time.Duration
+	configCacheLimit    int
+	configCacheMaxBytes int64
+	configCacheBytes    int64
+	sleep               func(context.Context, time.Duration) error
+	configCacheMu       sync.Mutex
+	configCache         map[string]configCacheEntry
+	defaultRetry        api.RetryPolicy
+	defaultTimeout      time.Duration
+	allowPlainHTTP      bool
+	userAgent           string
+	namespaceSep        string
+	maxBodyBytes        int64
 }
 
 type configCacheEntry struct {
 	expiresAt time.Time
 	response  api.ConfigResponse
+	weight    int64
 }
 
 func NewRESTClient(opts ...RESTClientOption) *RESTClient {
 	c := &RESTClient{
-		httpClient:     http.DefaultClient,
-		cacheTTL:       5 * time.Minute,
-		configCache:    make(map[string]configCacheEntry),
-		defaultRetry:   api.RetryPolicy{MaxAttempts: 3, BaseBackoff: 10 * time.Millisecond, MaxBackoff: 200 * time.Millisecond},
-		defaultTimeout: defaultRESTTimeout,
-		userAgent:      "matrixone-iceberg-connector",
-		namespaceSep:   defaultNamespaceSep,
-		maxBodyBytes:   defaultMaxBodyBytes,
+		httpClient:          http.DefaultClient,
+		cacheTTL:            5 * time.Minute,
+		configCacheLimit:    defaultConfigCacheLimit,
+		configCacheMaxBytes: defaultConfigCacheBytes,
+		configCache:         make(map[string]configCacheEntry),
+		defaultRetry:        api.RetryPolicy{MaxAttempts: 3, BaseBackoff: 10 * time.Millisecond, MaxBackoff: 200 * time.Millisecond},
+		defaultTimeout:      defaultRESTTimeout,
+		userAgent:           "matrixone-iceberg-connector",
+		namespaceSep:        defaultNamespaceSep,
+		maxBodyBytes:        defaultMaxBodyBytes,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -151,6 +159,18 @@ func WithResidencyValidator(validator CatalogResidencyValidator) RESTClientOptio
 func WithConfigCacheTTL(ttl time.Duration) RESTClientOption {
 	return func(c *RESTClient) {
 		c.cacheTTL = ttl
+	}
+}
+
+func WithConfigCacheLimit(limit int) RESTClientOption {
+	return func(c *RESTClient) {
+		c.configCacheLimit = limit
+	}
+}
+
+func WithConfigCacheMaxBytes(maxBytes int64) RESTClientOption {
+	return func(c *RESTClient) {
+		c.configCacheMaxBytes = maxBytes
 	}
 }
 
@@ -785,38 +805,105 @@ func (c *RESTClient) pathPrefix(req api.CatalogRequest) []string {
 }
 
 func (c *RESTClient) configCacheKey(req api.GetConfigRequest) string {
-	return strings.Join([]string{
+	return lengthPrefixedRESTCacheKey(
 		strconv.FormatUint(uint64(req.Catalog.AccountID), 10),
 		strconv.FormatUint(req.Catalog.CatalogID, 10),
 		req.Catalog.URI,
 		firstNonEmpty(req.Warehouse, req.Catalog.Warehouse),
 		req.ExternalPrincipal,
-	}, "\x00")
+	)
+}
+
+func lengthPrefixedRESTCacheKey(parts ...string) string {
+	var out strings.Builder
+	for _, part := range parts {
+		out.WriteString(strconv.Itoa(len(part)))
+		out.WriteByte(':')
+		out.WriteString(part)
+	}
+	return out.String()
 }
 
 func (c *RESTClient) getConfigCache(key string) (api.ConfigResponse, bool) {
-	if c.cacheTTL <= 0 {
+	if c.cacheTTL <= 0 || c.configCacheLimit <= 0 || c.configCacheMaxBytes <= 0 {
 		return api.ConfigResponse{}, false
 	}
 	c.configCacheMu.Lock()
 	defer c.configCacheMu.Unlock()
+	c.sweepExpiredConfigCacheLocked(time.Now())
 	entry, ok := c.configCache[key]
-	if !ok || time.Now().After(entry.expiresAt) {
-		if ok {
-			delete(c.configCache, key)
-		}
+	if !ok {
 		return api.ConfigResponse{}, false
 	}
 	return cloneConfigResponse(entry.response), true
 }
 
 func (c *RESTClient) putConfigCache(key string, resp api.ConfigResponse) {
-	if c.cacheTTL <= 0 {
+	if c.cacheTTL <= 0 || c.configCacheLimit <= 0 || c.configCacheMaxBytes <= 0 {
 		return
 	}
 	c.configCacheMu.Lock()
 	defer c.configCacheMu.Unlock()
-	c.configCache[key] = configCacheEntry{expiresAt: time.Now().Add(c.cacheTTL), response: cloneConfigResponse(resp)}
+	now := time.Now()
+	c.sweepExpiredConfigCacheLocked(now)
+	cloned := cloneConfigResponse(resp)
+	weight := configCacheResponseWeight(key, cloned)
+	if weight > c.configCacheMaxBytes {
+		return
+	}
+	if existing, exists := c.configCache[key]; exists {
+		c.removeConfigCacheEntryLocked(key, existing)
+	}
+	for len(c.configCache) >= c.configCacheLimit || c.configCacheBytes > c.configCacheMaxBytes-weight {
+		c.evictConfigCacheEntryLocked()
+	}
+	c.configCache[key] = configCacheEntry{expiresAt: now.Add(c.cacheTTL), response: cloned, weight: weight}
+	c.configCacheBytes += weight
+}
+
+func (c *RESTClient) sweepExpiredConfigCacheLocked(now time.Time) {
+	for key, entry := range c.configCache {
+		if !now.Before(entry.expiresAt) {
+			c.removeConfigCacheEntryLocked(key, entry)
+		}
+	}
+}
+
+func (c *RESTClient) evictConfigCacheEntryLocked() {
+	var candidate string
+	var candidateExpiry time.Time
+	for key, entry := range c.configCache {
+		if candidate == "" || entry.expiresAt.Before(candidateExpiry) ||
+			(entry.expiresAt.Equal(candidateExpiry) && key < candidate) {
+			candidate = key
+			candidateExpiry = entry.expiresAt
+		}
+	}
+	if candidate != "" {
+		c.removeConfigCacheEntryLocked(candidate, c.configCache[candidate])
+	}
+}
+
+func (c *RESTClient) removeConfigCacheEntryLocked(key string, entry configCacheEntry) {
+	delete(c.configCache, key)
+	c.configCacheBytes -= entry.weight
+	if c.configCacheBytes < 0 {
+		c.configCacheBytes = 0
+	}
+}
+
+func configCacheResponseWeight(key string, resp api.ConfigResponse) int64 {
+	weight := int64(len(key) + len(resp.IdempotencyKeyLifetime) + len(resp.Prefix) + 128)
+	for k, v := range resp.Defaults {
+		weight += int64(len(k) + len(v) + 64)
+	}
+	for k, v := range resp.Overrides {
+		weight += int64(len(k) + len(v) + 64)
+	}
+	for _, endpoint := range resp.Endpoints {
+		weight += int64(len(endpoint) + 16)
+	}
+	return weight
 }
 
 func restURL(rawBase string, segments []string, allowPlainHTTP bool) (string, error) {
@@ -908,9 +995,10 @@ func mapHTTPError(operation string, status int, body []byte) error {
 		"status":    strconv.Itoa(status),
 	}
 	if model := parseErrorModel(body); model.Message != "" {
-		fields["catalog_error_type"] = model.Type
+		fields["catalog_error_type_hash"] = api.PathHash(model.Type)
 		fields["catalog_error_code"] = strconv.Itoa(model.Code)
-		return api.NewError(errorCodeForStatus(status, model.Type), model.Message, fields)
+		fields["catalog_error_message_hash"] = api.PathHash(model.Message)
+		return api.NewError(errorCodeForStatus(status, model.Type), "Iceberg REST catalog request failed", fields)
 	}
 	return api.NewError(errorCodeForStatus(status, ""), http.StatusText(status), fields)
 }

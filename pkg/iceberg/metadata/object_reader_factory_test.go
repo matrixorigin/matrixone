@@ -250,6 +250,23 @@ func TestVendedObjectReaderFactoryRequiresCredentials(t *testing.T) {
 	}
 }
 
+func TestObjectReaderCredentialIdentitiesDoNotCollideOnDelimiters(t *testing.T) {
+	expires := time.Unix(1_700_000_000, 0).UTC()
+	left := []api.StorageCredential{{Prefix: "s3://warehouse/", ExpiresAt: expires, Config: map[string]string{
+		"s3.a": "x|s3.b=y",
+	}}}
+	right := []api.StorageCredential{{Prefix: "s3://warehouse/", ExpiresAt: expires, Config: map[string]string{
+		"s3.a": "x",
+		"s3.b": "y",
+	}}}
+	if storageCredentialsIdentity(left) == storageCredentialsIdentity(right) {
+		t.Fatal("object reader credential identities collided on config delimiters")
+	}
+	if remoteSigningIdentity(left[0].Config) == remoteSigningIdentity(right[0].Config) {
+		t.Fatal("object reader remote signing identities collided on config delimiters")
+	}
+}
+
 type remoteSigningCatalogClient struct {
 	*catalog.MockClient
 	signer icebergio.RemoteSigner

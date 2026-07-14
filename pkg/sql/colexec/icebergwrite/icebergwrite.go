@@ -54,6 +54,7 @@ func (w *IcebergWrite) Prepare(proc *process.Process) error {
 	}
 	if !w.ctr.opened {
 		if err := w.Coordinator.Begin(proc.Ctx, w.Request); err != nil {
+			_ = w.Coordinator.Abort(proc.Ctx, err)
 			return err
 		}
 		w.ctr.opened = true
@@ -113,6 +114,7 @@ func (w *IcebergWrite) Reset(proc *process.Process, pipelineFailed bool, err err
 
 func (w *IcebergWrite) Free(proc *process.Process, pipelineFailed bool, err error) {
 	w.abortOpen(proc, err)
+	w.ReleaseObjectIORef()
 	w.input = vm.CallResult{}
 	w.Coordinator = nil
 }

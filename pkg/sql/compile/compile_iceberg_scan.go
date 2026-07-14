@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
@@ -79,6 +80,15 @@ func (c *Compile) compileIcebergScanWithAccessForPlanNode(planNodeID int32, node
 	if err != nil {
 		return nil, icebergapi.ToMOErr(ctx, err)
 	}
+	if scanPlan == nil {
+		return nil, moerr.NewInternalError(ctx, "Iceberg scan planner returned an empty plan")
+	}
+	objectIOHandedOff := false
+	defer func() {
+		if !objectIOHandedOff && scanPlan != nil {
+			icebergio.ReleaseObjectIORef(scanPlan.ObjectIORef)
+		}
+	}()
 	applyIcebergExecutionOptionsToPlan(scanPlan, req)
 	if fieldIDs := icebergFieldIDsByColumnMapping(node, scanPlan.ColumnMapping); len(fieldIDs) > 0 {
 		icebergScan.ProjectedFieldIds = intSliceToInt32(fieldIDs)
@@ -87,9 +97,17 @@ func (c *Compile) compileIcebergScanWithAccessForPlanNode(planNodeID int32, node
 			req.PrunePredicates = icebergPrunePredicatesFromNodeWithFieldIDs(node, fieldIDs)
 			req.EnableRowGroupPlanning = len(req.PrunePredicates) > 0
 			if len(req.PrunePredicates) > 0 {
-				scanPlan, err = planner.PlanScan(ctx, req)
+				replanned, replanErr := planner.PlanScan(ctx, req)
+				if replanned == nil || strings.TrimSpace(replanned.ObjectIORef) != strings.TrimSpace(scanPlan.ObjectIORef) {
+					icebergio.ReleaseObjectIORef(scanPlan.ObjectIORef)
+				}
+				scanPlan = replanned
+				err = replanErr
 				if err != nil {
 					return nil, icebergapi.ToMOErr(ctx, err)
+				}
+				if scanPlan == nil {
+					return nil, moerr.NewInternalError(ctx, "Iceberg scan planner returned an empty plan")
 				}
 				applyIcebergExecutionOptionsToPlan(scanPlan, req)
 			}
@@ -115,7 +133,12 @@ func (c *Compile) compileIcebergScanWithAccessForPlanNode(planNodeID int32, node
 			Parallel:   true,
 		},
 	}
-	return c.compileExternScanIcebergFileFanout(node, param, runtime, strictSqlMode)
+	scopes, err := c.compileExternScanIcebergFileFanout(node, param, runtime, strictSqlMode)
+	if err != nil {
+		return nil, err
+	}
+	objectIOHandedOff = true
+	return scopes, nil
 }
 
 func applyIcebergScanAccessContext(req *icebergapi.ScanPlanRequest, access icebergScanAccessContext) {

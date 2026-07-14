@@ -494,11 +494,12 @@ func ensureIcebergFeatureEnabledForSession(ctx context.Context, ses interface {
 	return sqliceberg.EnsureFeatureEnabled(ctx, cfg, ses.GetAccountId(), surface)
 }
 
-func icebergParameterUnitForService(service string) (pu *moconfig.ParameterUnit) {
-	defer func() {
-		if recover() != nil {
-			pu = nil
-		}
-	}()
-	return getPu(service)
+func icebergParameterUnitForService(service string) *moconfig.ParameterUnit {
+	vars := getServerLevelVars(service)
+	if vars == nil {
+		return nil
+	}
+	value := vars.Pu.Load()
+	pu, _ := value.(*moconfig.ParameterUnit)
+	return pu
 }

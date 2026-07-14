@@ -612,11 +612,18 @@ func rewriteDataFilesPartitionKey(partition map[string]any) string {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
+	var out strings.Builder
 	for _, key := range keys {
-		parts = append(parts, key+"="+rewriteDataFilesPartitionValue(partition[key]))
+		writeRewriteDataFilesKeyPart(&out, key)
+		writeRewriteDataFilesKeyPart(&out, rewriteDataFilesPartitionValue(partition[key]))
 	}
-	return strings.Join(parts, ";")
+	return out.String()
+}
+
+func writeRewriteDataFilesKeyPart(out *strings.Builder, value string) {
+	out.WriteString(strconv.Itoa(len(value)))
+	out.WriteByte(':')
+	out.WriteString(value)
 }
 
 func rewriteDataFilesPartitionValue(value any) string {

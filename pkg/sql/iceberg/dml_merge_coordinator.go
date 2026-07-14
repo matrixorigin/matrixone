@@ -209,7 +209,7 @@ func (c *DMLMergeCoordinator) rejectDuplicateMatchedTargets(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		key := path + "\x00" + strconv.FormatInt(ordinal, 10)
+		key := lengthPrefixedKey(path, strconv.FormatInt(ordinal, 10))
 		if _, exists := c.matchedRows[key]; exists {
 			return api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg MERGE matched multiple source rows for the same target row", map[string]string{
 				"path":        api.RedactPath(path),

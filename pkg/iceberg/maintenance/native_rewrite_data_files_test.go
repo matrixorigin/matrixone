@@ -91,7 +91,7 @@ func TestRewriteDataFilesSelectorGroupsSmallCurrentDataFiles(t *testing.T) {
 	require.Equal(t, int64(120), selection.CandidateSizeBytes)
 	require.Len(t, selection.Groups, 1)
 	group := selection.Groups[0]
-	require.Equal(t, "0|region=s:ksa", group.PartitionKey)
+	require.Equal(t, rewriteDataFilesGroupKey(group.Candidates[0].File), group.PartitionKey)
 	require.Equal(t, int64(90), group.TotalSizeBytes)
 	require.Equal(t, int64(90), group.TotalRecords)
 	require.Len(t, group.Candidates, 2)
@@ -128,7 +128,7 @@ func TestRewriteDataFilesSelectorChunksByMaxGroupSize(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, selection.Groups, 2)
-	require.Equal(t, "0|day=i:1", selection.Groups[0].PartitionKey)
+	require.Equal(t, rewriteDataFilesGroupKey(selection.Groups[0].Candidates[0].File), selection.Groups[0].PartitionKey)
 	require.Equal(t, int64(150), selection.Groups[0].TotalSizeBytes)
 	require.Len(t, selection.Groups[0].Candidates, 2)
 	require.Equal(t, int64(60), selection.Groups[1].TotalSizeBytes)
@@ -139,6 +139,10 @@ func TestRewriteDataFilesPartitionKeyNormalizesIntegerWidths(t *testing.T) {
 	left := rewriteDataFilesPartitionKey(map[string]any{"day": int32(1), "region": "ksa"})
 	right := rewriteDataFilesPartitionKey(map[string]any{"day": int64(1), "region": "ksa"})
 	require.Equal(t, left, right)
+	require.NotEqual(t,
+		rewriteDataFilesPartitionKey(map[string]any{"a": "x;b=s:y", "b": "z"}),
+		rewriteDataFilesPartitionKey(map[string]any{"a": "x", "b": "y;b=s:z"}),
+	)
 }
 
 func TestBuildRewriteDataFilesManifestCommitMaterializesSnapshotUpdate(t *testing.T) {

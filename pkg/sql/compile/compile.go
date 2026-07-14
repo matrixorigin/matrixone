@@ -2131,7 +2131,9 @@ func (c *Compile) compileExternScanIcebergShard(
 		makeWholeFileOffsets(len(shard.fileList)),
 		strictSqlMode,
 	)
-	attachIcebergRuntimeToExternal(op, runtime, shard.dataTasks)
+	if err := attachIcebergRuntimeToExternal(c.proc.Ctx, op, runtime, shard.dataTasks); err != nil {
+		return nil, err
+	}
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	ss[0].setRootOperator(op)
 	c.anal.isFirst = false
@@ -2548,10 +2550,14 @@ func icebergDataTaskFiles(tasks []*pipeline.IcebergDataFileTask) ([]string, []in
 }
 
 func attachIcebergRuntimeToExternal(
+	ctx context.Context,
 	op *external.External,
 	runtime icebergExternalScanRuntime,
 	dataTasks []*pipeline.IcebergDataFileTask,
-) {
+) error {
+	if ref := strings.TrimSpace(runtime.objectIORef); ref != "" && !icebergio.RetainObjectIORef(ref) {
+		return moerr.NewInternalError(ctx, "Iceberg object IO ref is not registered or expired")
+	}
 	ensureIcebergHiddenReadColumns(op.Es, runtime.columns)
 	op.Es.Attrs = icebergProjectedAttrs(op.Es.Attrs, runtime.columns, runtime.hiddenReadCols)
 	op.Es.IcebergDataTasks = dataTasks
@@ -2559,13 +2565,13 @@ func attachIcebergRuntimeToExternal(
 	op.Es.IcebergColumns = runtime.columns
 	op.Es.IcebergSnapshot = runtime.snapshot
 	op.Es.IcebergObjectIORef = runtime.objectIORef
-	icebergio.RetainObjectIORef(runtime.objectIORef)
 	op.Es.IcebergHiddenReadCols = runtime.hiddenReadCols
 	op.Es.IcebergPlanningStats = runtime.planningStats
 	op.Es.NeedRowOrdinal = runtime.needRowOrdinal
 	op.Es.IcebergDeleteMaxMemoryBytes = runtime.deleteMaxMemoryBytes
 	op.Es.IcebergDeleteSpillEnabled = runtime.deleteSpillEnabled
 	op.Es.ParquetRowGroupShards = icebergDataTaskRowGroupShards(dataTasks)
+	return nil
 }
 
 func ensureIcebergHiddenReadColumns(

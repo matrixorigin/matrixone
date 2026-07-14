@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -72,6 +73,12 @@ func (p RuntimeScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanReques
 	if err != nil {
 		return nil, err
 	}
+	objectIOHandedOff := false
+	defer func() {
+		if !objectIOHandedOff {
+			icebergio.ReleaseObjectIORef(readerCtx.ObjectIORef)
+		}
+	}()
 	metadataFacade := p.Metadata
 	if metadataFacade == nil {
 		metadataFacade = NativeFacade{}
@@ -104,6 +111,9 @@ func (p RuntimeScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanReques
 	if err != nil {
 		return nil, err
 	}
+	if scanPlan == nil {
+		return nil, api.NewError(api.ErrInternal, "Iceberg scan planner returned an empty plan", nil)
+	}
 	if refDisplay != "" {
 		scanPlan.Snapshot.RefName = refDisplay
 	}
@@ -111,6 +121,7 @@ func (p RuntimeScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanReques
 	scanPlan.DeleteMaxMemoryBytes = req.DeleteMaxMemoryBytes
 	scanPlan.EnableDeleteSpill = req.EnableDeleteSpill
 	p.reportScanMetrics(ctx, catalogClient, req, scanPlan)
+	objectIOHandedOff = true
 	return scanPlan, nil
 }
 

@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -242,18 +241,7 @@ func partitionFieldIDs(spec api.PartitionSpec) map[string]int {
 }
 
 func (w *ParquetDataWriter) PartitionPath() string {
-	if len(w.partition) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(w.cfg.PartitionSpec.Fields))
-	for _, field := range w.cfg.PartitionSpec.Fields {
-		value, ok := w.partition[field.Name]
-		if !ok {
-			continue
-		}
-		parts = append(parts, field.Name+"="+partitionValueString(value))
-	}
-	return path.Join(parts...)
+	return partitionPathForSpec(w.partition, w.cfg.PartitionSpec)
 }
 
 func (w *ParquetDataWriter) ApproxSize() int64 {
@@ -735,11 +723,24 @@ func partitionKey(values map[string]any, spec api.PartitionSpec) string {
 	if len(values) == 0 {
 		return ""
 	}
-	parts := make([]string, 0, len(spec.Fields))
+	var key strings.Builder
 	for _, field := range spec.Fields {
-		parts = append(parts, field.Name+"="+partitionValueString(values[field.Name]))
+		writePartitionKeyPart(&key, field.Name)
+		value, ok := values[field.Name]
+		if !ok || value == nil {
+			key.WriteByte('N')
+			continue
+		}
+		key.WriteByte('V')
+		writePartitionKeyPart(&key, partitionValueString(value))
 	}
-	return strings.Join(parts, "/")
+	return key.String()
+}
+
+func writePartitionKeyPart(key *strings.Builder, value string) {
+	key.WriteString(strconv.Itoa(len(value)))
+	key.WriteByte(':')
+	key.WriteString(value)
 }
 
 func partitionValueString(value any) string {

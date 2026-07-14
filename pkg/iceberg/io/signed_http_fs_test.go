@@ -70,6 +70,61 @@ func TestSignedHTTPFileServiceReadsRangeWithSignedHeaders(t *testing.T) {
 	}
 }
 
+func TestSignedHTTPFileServiceDoesNotExposeErrorBody(t *testing.T) {
+	secret := "AWSSecretAccessKey=super-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(secret))
+	}))
+	defer server.Close()
+
+	fs, readPath, err := SignedHTTPFileServiceBuilder{HTTPClient: server.Client()}.Build(context.Background(), ObjectScope{StorageLocation: "s3://warehouse/data.bin"}, SignedRequest{
+		URL: server.URL + "/data.bin",
+	})
+	if err != nil {
+		t.Fatalf("build signed http fs: %v", err)
+	}
+	vec := fileservice.IOVector{FilePath: readPath, Entries: []fileservice.IOEntry{{Offset: 0, Size: 1}}}
+	err = fs.Read(context.Background(), &vec)
+	if err == nil {
+		t.Fatal("expected signed HTTP read error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("signed HTTP response body leaked through the object IO boundary: %v", err)
+	}
+	if !strings.Contains(err.Error(), "body_hash") {
+		t.Fatalf("redacted signed HTTP error should retain a diagnostic hash: %v", err)
+	}
+}
+
+func TestSignedHTTPFileServiceBoundsRangeReadWhenServerIgnoresRange(t *testing.T) {
+	payload := []byte("0123456789abcdef")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") != "bytes=9-11" {
+			t.Fatalf("unexpected range header: %q", r.Header.Get("Range"))
+		}
+		// A signed endpoint is allowed to ignore Range and return 200. The client
+		// must skip and bound the stream instead of buffering the whole object.
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	fs, readPath, err := SignedHTTPFileServiceBuilder{HTTPClient: server.Client()}.Build(context.Background(), ObjectScope{StorageLocation: "s3://warehouse/data.bin"}, SignedRequest{
+		URL: server.URL + "/data.bin",
+	})
+	if err != nil {
+		t.Fatalf("build signed http fs: %v", err)
+	}
+	vec := fileservice.IOVector{FilePath: readPath, Entries: []fileservice.IOEntry{{Offset: 9, Size: 3}}}
+	if err := fs.Read(context.Background(), &vec); err != nil {
+		t.Fatalf("read ignored range response: %v", err)
+	}
+	if string(vec.Entries[0].Data) != "9ab" {
+		t.Fatalf("unexpected ignored-range data: %q", vec.Entries[0].Data)
+	}
+}
+
 func TestSignedHTTPFileServiceStatsWithSignedRangeGET(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

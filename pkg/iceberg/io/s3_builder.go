@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -351,14 +352,11 @@ func storageCredentialIdentity(credential api.StorageCredential) string {
 	}
 	sort.Strings(keys)
 	var out strings.Builder
-	out.WriteString(credential.Prefix)
-	out.WriteByte('|')
-	out.WriteString(credential.ExpiresAt.UTC().Format("2006-01-02T15:04:05.000000000Z07:00"))
+	writeCredentialIdentityPart(&out, credential.Prefix)
+	writeCredentialIdentityPart(&out, credential.ExpiresAt.UTC().Format("2006-01-02T15:04:05.000000000Z07:00"))
 	for _, key := range keys {
-		out.WriteByte('|')
-		out.WriteString(strings.ToLower(strings.TrimSpace(key)))
-		out.WriteByte('=')
-		out.WriteString(strings.TrimSpace(credential.Config[key]))
+		writeCredentialIdentityPart(&out, strings.ToLower(strings.TrimSpace(key)))
+		writeCredentialIdentityPart(&out, strings.TrimSpace(credential.Config[key]))
 	}
 	return out.String()
 }
@@ -374,12 +372,16 @@ func remoteSigningConfigIdentity(config map[string]string) string {
 	sort.Strings(keys)
 	var out strings.Builder
 	for _, key := range keys {
-		out.WriteString(strings.ToLower(strings.TrimSpace(key)))
-		out.WriteByte('=')
-		out.WriteString(strings.TrimSpace(config[key]))
-		out.WriteByte('|')
+		writeCredentialIdentityPart(&out, strings.ToLower(strings.TrimSpace(key)))
+		writeCredentialIdentityPart(&out, strings.TrimSpace(config[key]))
 	}
 	return out.String()
+}
+
+func writeCredentialIdentityPart(out *strings.Builder, value string) {
+	out.WriteString(strconv.Itoa(len(value)))
+	out.WriteByte(':')
+	out.WriteString(value)
 }
 
 func firstNonEmpty(values ...string) string {

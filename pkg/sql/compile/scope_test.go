@@ -1051,7 +1051,7 @@ func TestCompileExternScanIcebergFileFanout(t *testing.T) {
 		deleteTasks:    deleteTasks,
 		columns:        columns,
 		snapshot:       snapshot,
-		objectIORef:    "object-scope-ref",
+		objectIORef:    registerCompileTestObjectIO(t),
 		hiddenReadCols: []int32{3},
 		needRowOrdinal: true,
 	}
@@ -1076,7 +1076,7 @@ func TestCompileExternScanIcebergFileFanout(t *testing.T) {
 		require.Len(t, ext.Es.FileOffsetTotal, len(ext.Es.IcebergDataTasks))
 		require.Equal(t, columns, ext.Es.IcebergColumns)
 		require.Equal(t, snapshot, ext.Es.IcebergSnapshot)
-		require.Equal(t, "object-scope-ref", ext.Es.IcebergObjectIORef)
+		require.Equal(t, runtime.objectIORef, ext.Es.IcebergObjectIORef)
 		require.Equal(t, []int32{3}, ext.Es.IcebergHiddenReadCols)
 		require.True(t, ext.Es.NeedRowOrdinal)
 		for i, task := range ext.Es.IcebergDataTasks {

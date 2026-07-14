@@ -15,9 +15,20 @@
 package iceberg
 
 import (
+	"strconv"
 	"strings"
 	"time"
 )
+
+func lengthPrefixedKey(parts ...string) string {
+	var out strings.Builder
+	for _, part := range parts {
+		out.WriteString(strconv.Itoa(len(part)))
+		out.WriteByte(':')
+		out.WriteString(part)
+	}
+	return out.String()
+}
 
 func quoteSQLString(value string) string {
 	value = strings.ReplaceAll(value, `\`, `\\`)

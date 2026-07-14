@@ -33,6 +33,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestDMLRuntimeCoordinatorCacheKeyDoesNotCollideOnDelimiters(t *testing.T) {
+	base := icebergwrite.AppendRequest{AccountID: 1, Operation: icebergwrite.OperationDelete, CatalogName: "catalog", Namespace: "sales", Table: "orders", StatementID: "stmt"}
+	left := base
+	left.CatalogName = "catalog\x1fsales"
+	left.Namespace = "orders"
+	right := base
+	right.CatalogName = "catalog"
+	right.Namespace = "sales\x1forders"
+	require.NotEqual(t, dmlRuntimeCoordinatorCacheKey(left), dmlRuntimeCoordinatorCacheKey(right))
+}
+
 func TestDMLDeleteRuntimeFactoryLoadsTableAndBuildsCoordinator(t *testing.T) {
 	ctx := context.Background()
 	rawMeta := []byte(`{

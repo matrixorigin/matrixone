@@ -17,10 +17,13 @@ package metadata
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/stretchr/testify/require"
 )
@@ -73,6 +76,45 @@ func TestRuntimeScanPlannerBuildsRequestScopedLocalPlanner(t *testing.T) {
 	require.Len(t, plan.DataTasks, 1)
 	require.Equal(t, "runtime-cred-scope", plan.DataTasks[0].CredentialScope)
 	require.Equal(t, 1, fixture.catalogLoads)
+}
+
+func TestRuntimeScanPlannerReleasesObjectIORefOnPlanningFailure(t *testing.T) {
+	fixture := newPlannerFixture(t, 1)
+	fixture.client.LoadTableFunc = func(context.Context, api.LoadTableRequest) (*api.LoadTableResponse, error) {
+		return nil, moerr.NewInternalErrorNoCtx("catalog failed")
+	}
+	fs, err := fileservice.NewMemoryFS("iceberg-planner-object-io", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	var ref string
+	planner := RuntimeScanPlanner{
+		CatalogFactory: &recordingCatalogFactory{client: fixture.client},
+		Metadata:       fixture.facade,
+		ObjectReader: func(context.Context, api.CatalogClient, api.ScanPlanRequest) (api.ObjectReader, ObjectReaderContext, error) {
+			var registerErr error
+			ref, registerErr = icebergio.RegisterEphemeralObjectIOProvider(
+				context.Background(),
+				icebergio.ScopedProvider{FileService: fs},
+				nil,
+				time.Hour,
+			)
+			return fixture.reader, ObjectReaderContext{ObjectIORef: ref}, registerErr
+		},
+		Config: api.Config{Scan: api.ScanPlanningConfig{
+			ManifestReadParallelism: 1,
+			MaxManifestFiles:        100,
+			MaxDataFiles:            100,
+		}},
+	}
+
+	_, err = planner.PlanScan(context.Background(), api.ScanPlanRequest{
+		CatalogRequest: api.CatalogRequest{Catalog: model.Catalog{AccountID: 42, CatalogID: 7}},
+		Namespace:      api.Namespace{"sales"},
+		Table:          "orders",
+	})
+	require.Error(t, err)
+	require.NotEmpty(t, ref)
+	_, _, err = icebergio.ResolveObjectIORef(context.Background(), ref, "s3://warehouse/orders/data/a.parquet")
+	require.Error(t, err, "failed planning must not leave the credential provider registered")
 }
 
 func TestRuntimeScanPlannerResolvesRESTPrefixBeforeObjectReader(t *testing.T) {
