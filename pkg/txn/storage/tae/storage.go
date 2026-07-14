@@ -37,7 +37,10 @@ import (
 type taeStorage struct {
 	shard         metadata.TNShard
 	taeHandler    rpchandle.Handler
-	logtailServer *service.LogtailServer
+	logtailServer interface {
+		Start() error
+		Close() error
+	}
 }
 
 var _ storage.TxnStorage = (*taeStorage)(nil)
@@ -56,13 +59,16 @@ func NewTAEStorage(
 	if rt.ServiceUUID() != opt.SID {
 		panic(fmt.Sprintf("service uuid mismatch, %s != %s", rt.ServiceUUID(), opt.SID))
 	}
-	taeHandler := rpc.NewTAEHandle(ctx, dataDir, client, opt)
+	taeHandler, err := rpc.NewTAEHandleWithError(ctx, dataDir, client, opt)
+	if err != nil {
+		return nil, err
+	}
 	tae := taeHandler.GetDB()
 	tae.TxnServer = txnServer
 	logtailer := logtail.NewLogtailer(ctx, tae, tae.LogtailMgr, tae.Catalog)
 	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt, nil)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, taeHandler.HandleClose(ctx))
 	}
 
 	ss, ok := rt.GetGlobalVariables(runtime.StatusServer)
@@ -104,7 +110,7 @@ func (s *taeStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error 
 
 // Destroy implements storage.TxnTAEStorage
 func (s *taeStorage) Destroy(ctx context.Context) error {
-	return s.taeHandler.HandleDestroy(ctx)
+	return errors.Join(s.Close(ctx), s.taeHandler.HandleDestroy(ctx))
 }
 
 // Prepare implements storage.TxnTAEStorage
