@@ -80,3 +80,27 @@ drop publication sys_pub_1;
 drop database sys_db_1;
 
 
+-- A COPY ALTER internally drops and renames the source table. It must not
+-- remove that table from a table-level publication.
+drop account if exists pub_copy_acc;
+create account pub_copy_acc admin_name 'root' identified by '111';
+drop database if exists pub_copy_src;
+create database pub_copy_src;
+use pub_copy_src;
+create table pub_copy_t(id int primary key, value varchar(20));
+insert into pub_copy_t values (1, 'before');
+create publication pub_copy_pub database pub_copy_src table pub_copy_t account pub_copy_acc;
+alter table pub_copy_t add column extra int default 9;
+show create publication pub_copy_pub;
+
+-- @session:id=3&user=pub_copy_acc:root&password=111
+create database pub_copy_sub from sys publication pub_copy_pub;
+use pub_copy_sub;
+select * from pub_copy_t;
+drop database pub_copy_sub;
+-- @session
+
+drop publication pub_copy_pub;
+drop database pub_copy_src;
+drop account pub_copy_acc;
+

@@ -760,16 +760,17 @@ const (
 	ST_POINT32 = 540
 
 	// function `cast_strict`
-	CAST_STRICT   = 541
-	DATE_TRUNC    = 542
-	JSON_CONTAINS = 543
-	JSON_REMOVE   = 544
+	CAST_STRICT        = 541
+	DATE_TRUNC         = 542
+	JSON_CONTAINS      = 543
+	JSON_REMOVE        = 544
+	JSON_CONTAINS_PATH = 545
 	// function `cast_explicit`
-	CAST_EXPLICIT = 545
+	CAST_EXPLICIT = 546
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 546
+	FUNCTION_END_NUMBER = 547
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1054,6 +1055,7 @@ var functionIdRegister = map[string]int32{
 	"json_valid":                     JSON_VALID,
 	"json_length":                    JSON_LENGTH,
 	"json_contains":                  JSON_CONTAINS,
+	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
 	"json_schema_valid":              JSON_SCHEMA_VALID,

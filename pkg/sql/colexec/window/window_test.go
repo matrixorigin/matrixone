@@ -48,8 +48,24 @@ func makeTestCases(t *testing.T) []winTestCase {
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Window{
 				WinSpecList: []*plan.Expr{makeWindowSpec()},
-				Types:       []types.Type{types.T_int32.ToType()},
 				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				},
+			},
+		},
+		{
+			// Multi-argument window aggregate (json_objectagg): the operator must
+			// derive one argument type per argument. Guards against regressing the
+			// fix for issue #25483 where only a single type was passed to MakeAgg.
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			arg: &Window{
+				WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
+				Aggs:        []aggexec.AggFuncExecExpression{newJsonObjectAggExpr(t)},
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -81,14 +97,16 @@ func TestWin(t *testing.T) {
 		resetChildren(tc.arg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
+		_, err = vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
 
 		tc.arg.Reset(tc.proc, false, nil)
 
 		resetChildren(tc.arg, tc.proc.Mp())
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
+		_, err = vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -102,8 +120,8 @@ func resetChildren(arg *Window, m *mpool.MPool) {
 	arg.AppendChild(op)
 }
 
-func makeWindowSpec() *plan.Expr {
-	f := &plan.FrameClause{
+func makeFullFrame() *plan.FrameClause {
+	return &plan.FrameClause{
 		Type: plan.FrameClause_ROWS,
 		Start: &plan.FrameBound{
 			Type:      plan.FrameBound_PRECEDING,
@@ -114,21 +132,45 @@ func makeWindowSpec() *plan.Expr {
 			UnBounded: true,
 		},
 	}
+}
+
+func makeWindowSpec() *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{},
 		Expr: &plan.Expr_W{
 			W: &plan.WindowSpec{
 				//OrderBy:    []*plan.OrderBySpec{&plan.OrderBySpec{Expr: newColExpr(0)}},
-				WindowFunc: newFunExpr(),
-				Frame:      f,
+				WindowFunc: newFunExpr("sum"),
+				Frame:      makeFullFrame(),
+			},
+		},
+	}
+}
+
+// makeAggWindowSpec builds a window spec for a generic (non win-value) aggregate
+// window function such as json_objectagg.
+func makeAggWindowSpec(name string) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{},
+		Expr: &plan.Expr_W{
+			W: &plan.WindowSpec{
+				Name:       name,
+				WindowFunc: newFunExpr(name),
+				Frame:      makeFullFrame(),
 			},
 		},
 	}
 }
 
 func newColExpr(pos int32) *plan.Expr {
+	// col 0 of the mock batch is int32; keep the arg type in sync so the window
+	// operator can build the aggregate executor from the argument expression.
+	return newColExprWithType(pos, types.T_int32.ToType())
+}
+
+func newColExprWithType(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
-		Typ: plan.Type{},
+		Typ: plan.Type{Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				ColPos: pos,
@@ -143,12 +185,108 @@ func newAggExpr() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(id, false, []*plan.Expr{newColExpr(0)}, nil)
 }
 
-func newFunExpr() *plan.Expr {
+// newJsonObjectAggExpr builds a two-argument aggregate expression:
+// json_objectagg(varchar_key, int32_value), using mock batch col 2 (varchar) and col 0 (int32).
+func newJsonObjectAggExpr(t *testing.T) aggexec.AggFuncExecExpression {
+	return jsonObjectAggColExpr(t, 2, 0)
+}
+
+// jsonObjectAggColExpr builds json_objectagg(varchar@keyPos, int32@valPos).
+func jsonObjectAggColExpr(t *testing.T, keyPos, valPos int32) aggexec.AggFuncExecExpression {
+	keyType := types.T_varchar.ToType()
+	valType := types.T_int32.ToType()
+	e, err := function.GetFunctionByName(context.Background(), "json_objectagg", []types.Type{keyType, valType})
+	require.NoError(t, err)
+	id := e.GetEncodedOverloadID()
+	return aggexec.MakeAggFunctionExpression(id, false,
+		[]*plan.Expr{newColExprWithType(keyPos, keyType), newColExprWithType(valPos, valType)}, nil)
+}
+
+// makeKeyValBatch builds a batch of (varchar key, int32 value) columns for
+// json_objectagg tests. keyNullPos lists the NULL key row positions (may be nil).
+func makeKeyValBatch(mp *mpool.MPool, keys []string, keyNullPos []uint64, vals []int32) *batch.Batch {
+	bat := batch.New([]string{"k", "v"})
+	bat.Vecs[0] = testutil.MakeVarcharVector(keys, keyNullPos, mp)
+	bat.Vecs[1] = testutil.MakeInt32Vector(vals, nil, mp)
+	bat.SetRowCount(len(keys))
+	return bat
+}
+
+// TestWindowJsonObjectAggOutput drives the window operator end-to-end for a
+// two-argument aggregate and asserts the actual JSON output, so a regression in
+// multi-argument passing (issue #25483) cannot pass silently.
+func TestWindowJsonObjectAggOutput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeKeyValBatch(proc.Mp(), []string{"k1", "k2", "k3"}, nil, []int32{10, 20, 30})
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
+		Aggs:        []aggexec.AggFuncExecExpression{jsonObjectAggColExpr(t, 0, 1)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+
+	resVec := result.Batch.Vecs[len(result.Batch.Vecs)-1]
+	require.Equal(t, 3, resVec.Length())
+	// Full frame over a single partition: every row aggregates the whole partition.
+	want := `{"k1": 10, "k2": 20, "k3": 30}`
+	for i := 0; i < resVec.Length(); i++ {
+		require.Equal(t, want, types.DecodeJson(resVec.GetBytesAt(i)).String(), "row %d", i)
+	}
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+}
+
+// TestWindowJsonObjectAggNullKeyNoLeak reproduces the NULL-key error exit
+// (json_objectagg key cannot be NULL) mid-aggregation and asserts that Reset/Free
+// release the aggregators, guarding the error-path mpool leak fix.
+func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	// Row 1 has a NULL key: json_objectagg errors while filling the frame.
+	bat := makeKeyValBatch(proc.Mp(), []string{"k1", ""}, []uint64{1}, []int32{10, 20})
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
+		Aggs:        []aggexec.AggFuncExecExpression{jsonObjectAggColExpr(t, 0, 1)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	_, err := vm.Exec(arg, proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key cannot be NULL")
+	// Aggregators were allocated during the failed eval and would leak without the fix.
+	require.NotNil(t, arg.ctr.batAggs)
+
+	arg.Reset(proc, true, err)
+	require.Nil(t, arg.ctr.batAggs, "Reset must release window aggregators after an error")
+
+	arg.Free(proc, true, err)
+	op.Free(proc, true, err)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB(), "no mpool leak on the json_objectagg error path")
+}
+
+func newFunExpr(name string) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					ObjName: "sum",
+					ObjName: name,
 				},
 			},
 		},

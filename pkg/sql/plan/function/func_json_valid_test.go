@@ -1251,6 +1251,38 @@ func TestJsonContainsCheckFn(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestJsonContainsPathCheckFn(t *testing.T) {
+	ctx := context.Background()
+
+	_, err := GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Error(t, err)
+}
+
 func TestJsonContains(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -1534,6 +1566,169 @@ func TestJsonContainsErrors(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})
+}
+
+func TestJsonContainsPath(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "json_contains_path matches json null and short circuits later null paths",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"a":null}`, `{}`, `{"a":1}`, `{"a":1}`, `{"a":1}`, `{"a":1}`},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`all`, `all`, `one`, `all`, `one`, `all`},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$.a`, `$.a`, `$.a`, `$.missing`, `$.missing`, `$.a`},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$`, `$.missing`, ``, ``, ``, ``},
+				[]bool{false, false, true, true, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{1, 0, 1, 0, 0, 0},
+			[]bool{false, false, false, false, true, true}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+}
+
+func TestJsonContainsPathMySQLRegressionSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	complexDoc := `{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}`
+	tc := tcTemp{
+		info: "json_contains_path supports MySQL all one wildcard and recursive path cases",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{complexDoc, complexDoc, `{"a":true,"b":[1,2]}`, `{"a":1,"b":2}`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`all`, `one`, `ALL`, `oNe`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$**[1]`, `$.c`, `$.b[0]`, `$.*`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$.b[0]`, `$**[1]`, `$.b[1]`, `$.missing`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$.c`, `$.b[0]`, `$`, `$.b`},
+				[]bool{false, false, false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{0, 1, 1, 1},
+			[]bool{false, false, false, false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+
+	typedJSON := tcTemp{
+		info: "json_contains_path accepts typed json documents",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{mustJsonBinaryString(t, `{"a":null,"b":[1,2]}`)}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`all`}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.b[1]`}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, typedJSON.inputs, typedJSON.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+	s, info = fcTC.Run()
+	require.True(t, s, info)
+}
+
+func TestJsonContainsPathEvaluationOrder(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "one skips a later invalid path after a hit",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`one`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$[`}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+		},
+		{
+			name: "all skips a later invalid path after a miss",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`all`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.missing`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$[`}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+		},
+		{
+			name: "invalid document is evaluated before a later null path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`one`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
+		},
+		{
+			name: "invalid mode is evaluated before a later null path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`invalid`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tt.inputs, tt.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+			s, info := fcTC.Run()
+			require.True(t, s, info)
+		})
+	}
+}
+
+func TestJsonContainsPathConstantCacheInvalidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	op := newOpBuiltInJsonContainsPath()
+
+	modeOne, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("one"), 1, proc.Mp())
+	require.NoError(t, err)
+	mode, isNull, err := op.getMode(modeOne, vector.GenerateFunctionStrParameter(modeOne), 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.Equal(t, jsonContainsPathOne, mode)
+
+	modeAll, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("all"), 1, proc.Mp())
+	require.NoError(t, err)
+	mode, isNull, err = op.getMode(modeAll, vector.GenerateFunctionStrParameter(modeAll), 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.Equal(t, jsonContainsPathAll, mode)
+
+	op.pathCache = make([]jsonContainsPathPathCache, 1)
+	pathA, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("$.a"), 1, proc.Mp())
+	require.NoError(t, err)
+	parsedA, isNull, err := op.getPath(pathA, vector.GenerateFunctionStrParameter(pathA), 0, 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+
+	pathB, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("$.b"), 1, proc.Mp())
+	require.NoError(t, err)
+	parsedB, isNull, err := op.getPath(pathB, vector.GenerateFunctionStrParameter(pathB), 0, 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.NotSame(t, parsedA, parsedB)
+	require.Equal(t, `$.b`, op.pathCache[0].text)
 }
 
 func TestJsonContainsSelectList(t *testing.T) {

@@ -1689,6 +1689,7 @@ func TestScopeGetRelDataError(t *testing.T) {
 	}
 
 	// Create a mock compile with engine
+	catalog.SetupDefines("")
 	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	c := NewMockCompile(t)
 	c.proc = s.Proc
