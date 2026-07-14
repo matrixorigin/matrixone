@@ -512,10 +512,33 @@ func (client *txnClient) RestartTxn(
 	if err != nil {
 		return nil, err
 	}
-	if err := op.openRunSQLAfterRestart(); err != nil {
+	if err := client.completeRestartTxn(ctx, op); err != nil {
 		return nil, err
 	}
 	return restarted, nil
+}
+
+// completeRestartTxn linearizes publishing the restarted generation against
+// client Close. If Close already won, the admitted generation is removed via
+// the same private cleanup path as any other post-open creation failure. If
+// restart wins, Close cannot publish the closed client state until both SQL and
+// terminal admission gates are open.
+func (client *txnClient) completeRestartTxn(
+	ctx context.Context,
+	op *txnOperator,
+) error {
+	err := func() error {
+		client.mu.RLock()
+		defer client.mu.RUnlock()
+		if client.mu.closed {
+			return moerr.NewClientClosedNoCtx()
+		}
+		return op.openRunSQLAfterRestart()
+	}()
+	if err != nil {
+		return client.abortCreatedTxn(ctx, op, err)
+	}
+	return nil
 }
 
 func (client *txnClient) doCreateTxn(

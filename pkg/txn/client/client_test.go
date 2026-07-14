@@ -1014,6 +1014,50 @@ func TestRestartTxnCannotReopenRunSQLAfterConcurrentClose(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 }
 
+func TestRestartTxnFinalizationRejectsClosedClient(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	client := NewTxnClient("", newTestTxnSender()).(*txnClient)
+	client.Resume()
+
+	op, err := client.New(
+		context.Background(),
+		timestamp.Timestamp{},
+		WithUserTxn())
+	require.NoError(t, err)
+	operator := op.(*txnOperator)
+	require.NoError(t, operator.Rollback(context.Background()))
+	require.NoError(t, operator.claimRestart())
+	operator.initForRestart(
+		client.newTxnMeta(),
+		client.getTxnOptions([]TxnOption{WithUserTxn()})...)
+	admitted, err := client.doCreateTxn(
+		context.Background(),
+		operator,
+		timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.Same(t, operator, admitted)
+	require.Equal(t, int64(1), client.atomic.activeTxnCount.Load())
+	client.mu.RLock()
+	users := client.mu.users
+	client.mu.RUnlock()
+	require.Equal(t, 1, users)
+
+	require.NoError(t, client.Close())
+	err = client.completeRestartTxn(context.Background(), operator)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+	require.Zero(t, client.atomic.activeTxnCount.Load())
+	client.mu.RLock()
+	users = client.mu.users
+	client.mu.RUnlock()
+	require.Zero(t, users)
+	operator.mu.RLock()
+	closed := operator.mu.closed
+	operator.mu.RUnlock()
+	require.True(t, closed)
+	_, err = operator.TryEnterRunSqlWithTokenAndSQL(nil, "select 1")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+}
+
 func TestRestartTxnClaimsClosedOperatorOnce(t *testing.T) {
 	op := &txnOperator{}
 	op.reset.runSQLTracker.seal()
