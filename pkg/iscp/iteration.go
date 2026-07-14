@@ -429,28 +429,16 @@ func ExecuteIteration(
 			if status.ErrorCode == 0 {
 				watermark = status.To
 			}
-			err = retry(
+			err = flushFinalJobStatusOnIterationState(
 				ctx,
-				func() error {
-					return FlushJobStatusOnIterationState(
-						ctx,
-						cnUUID,
-						cnEngine,
-						cnTxnClient,
-						iterCtx.accountID,
-						iterCtx.tableID,
-						[]string{iterCtx.jobNames[i]},
-						[]uint64{iterCtx.jobIDs[i]},
-						[]uint64{iterCtx.lsn[i]},
-						[]*JobStatus{status},
-						watermark,
-						state,
-						iterCtx.lsn,
-					)
-				},
-				SubmitRetryTimes,
-				DefaultRetryInterval,
-				SubmitRetryDuration,
+				cnUUID,
+				cnEngine,
+				cnTxnClient,
+				iterCtx,
+				i,
+				status,
+				watermark,
+				state,
 			)
 			if err != nil {
 				logutil.Error(
@@ -462,6 +450,42 @@ func ExecuteIteration(
 	}
 
 	return nil
+}
+
+func flushFinalJobStatusOnIterationState(
+	ctx context.Context,
+	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	iterCtx *IterationContext,
+	jobIdx int,
+	status *JobStatus,
+	watermark types.TS,
+	state int8,
+) error {
+	return retry(
+		ctx,
+		func() error {
+			return FlushJobStatusOnIterationState(
+				ctx,
+				cnUUID,
+				cnEngine,
+				cnTxnClient,
+				iterCtx.accountID,
+				iterCtx.tableID,
+				[]string{iterCtx.jobNames[jobIdx]},
+				[]uint64{iterCtx.jobIDs[jobIdx]},
+				[]uint64{iterCtx.lsn[jobIdx]},
+				[]*JobStatus{status},
+				watermark,
+				state,
+				[]uint64{iterCtx.lsn[jobIdx]},
+			)
+		},
+		SubmitRetryTimes,
+		DefaultRetryInterval,
+		SubmitRetryDuration,
+	)
 }
 
 var FlushJobStatusOnIterationState = func(

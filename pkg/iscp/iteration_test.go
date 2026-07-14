@@ -287,6 +287,72 @@ func TestNormalizeJobStatusesResizesAndFillsNilEntries(t *testing.T) {
 	require.Equal(t, uint64(20), statuses[1].LSN)
 }
 
+func TestFlushFinalJobStatusUsesCurrentJobLSNAsPrevLSN(t *testing.T) {
+	oldFlushJobStatusOnIterationState := FlushJobStatusOnIterationState
+	defer func() {
+		FlushJobStatusOnIterationState = oldFlushJobStatusOnIterationState
+	}()
+
+	iterCtx := &IterationContext{
+		accountID: 7,
+		tableID:   42,
+		jobNames:  []string{"job_first", "job_second"},
+		jobIDs:    []uint64{101, 202},
+		lsn:       []uint64{11, 22},
+	}
+	status := &JobStatus{From: types.BuildTS(100, 0), To: types.BuildTS(200, 0)}
+	status.SetError(moerr.NewInternalErrorNoCtx("sink failed"))
+
+	var capturedJobNames []string
+	var capturedJobIDs []uint64
+	var capturedLSNs []uint64
+	var capturedPrevLSN []uint64
+	var capturedStatuses []*JobStatus
+	var capturedState int8
+	FlushJobStatusOnIterationState = func(
+		_ context.Context,
+		_ string,
+		_ engine.Engine,
+		_ client.TxnClient,
+		_ uint32,
+		_ uint64,
+		jobNames []string,
+		jobIDs []uint64,
+		lsns []uint64,
+		jobStatuses []*JobStatus,
+		_ types.TS,
+		state int8,
+		prevLSN []uint64,
+	) error {
+		capturedJobNames = append([]string(nil), jobNames...)
+		capturedJobIDs = append([]uint64(nil), jobIDs...)
+		capturedLSNs = append([]uint64(nil), lsns...)
+		capturedPrevLSN = append([]uint64(nil), prevLSN...)
+		capturedStatuses = append([]*JobStatus(nil), jobStatuses...)
+		capturedState = state
+		return nil
+	}
+
+	err := flushFinalJobStatusOnIterationState(
+		context.Background(),
+		"",
+		nil,
+		nil,
+		iterCtx,
+		1,
+		status,
+		status.From,
+		ISCPJobState_Error,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"job_second"}, capturedJobNames)
+	require.Equal(t, []uint64{202}, capturedJobIDs)
+	require.Equal(t, []uint64{22}, capturedLSNs)
+	require.Equal(t, []uint64{22}, capturedPrevLSN)
+	require.Same(t, status, capturedStatuses[0])
+	require.Equal(t, ISCPJobState_Error, capturedState)
+}
+
 func newISCPLogResult(t *testing.T, batches []iscpLogBatch) (executor.Result, *mpool.MPool) {
 	t.Helper()
 
