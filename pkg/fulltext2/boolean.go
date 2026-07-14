@@ -79,10 +79,36 @@ type BoolQuery struct {
 // no MUST-NOT clause is present, and — with no MUST — at least one SHOULD clause
 // is present. Score sums the MUST + SHOULD contributions, then applies ~ ADJUST
 // penalties to the matched docs.
+//
+// A pure disjunction of single terms (bare/>/< SHOULD terms, no MUST/MUST-NOT/~,
+// no phrase/prefix/group) is routed to the WAND top-k (searchWAND), which
+// early-terminates via term max-impact bounds and returns the identical ranking
+// as the full scan. Everything else uses the full evaluator.
 func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int) ([]Result, error) {
 	if k <= 0 || s.N == 0 || (len(q.must) == 0 && len(q.should) == 0) {
 		return nil, nil
 	}
+	if terms, ok := disjunctiveTerms(q); ok {
+		return s.searchWAND(terms, algo, k), nil
+	}
+	return s.searchBooleanFull(q, algo, k)
+}
+
+// disjunctiveTerms reports whether q is a pure OR of single-term SHOULD clauses
+// (the WAND-eligible shape) and returns those clauses.
+func disjunctiveTerms(q BoolQuery) ([]clause, bool) {
+	if len(q.must) != 0 || len(q.mustNot) != 0 || len(q.adjust) != 0 || len(q.should) == 0 {
+		return nil, false
+	}
+	for _, c := range q.should {
+		if c.kind != clauseTerm {
+			return nil, false
+		}
+	}
+	return q.should, true
+}
+
+func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int) ([]Result, error) {
 	avgDocLen := s.avgDocLenOrMean()
 
 	mustMaps, err := s.evalClauses(q.must, algo, avgDocLen)

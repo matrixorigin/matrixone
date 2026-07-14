@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"io"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -253,9 +254,29 @@ func (s *Segment) decodePostings(data []byte) error {
 			}
 			tp.positions[d] = pos
 		}
+		// Derive the raw score-UB fields (maxTf / minDocLen) from the loaded
+		// postings + docLen — used by WAND max-impact bounds. docLen is decoded
+		// from the docmap member, which precedes postings in the archive.
+		deriveTermStats(tp, s.docLen)
 		s.loaded[t] = tp
 	}
 	return nil
+}
+
+// deriveTermStats fills tp.maxTf and tp.minDocLen from its postings (df >= 1).
+func deriveTermStats(tp *termPostings, docLen []int32) {
+	var maxTf uint8
+	minDL := int32(math.MaxInt32)
+	for i, ord := range tp.docIDs {
+		if tp.tfs[i] > maxTf {
+			maxTf = tp.tfs[i]
+		}
+		if dl := docLen[ord]; dl < minDL {
+			minDL = dl
+		}
+	}
+	tp.maxTf = maxTf
+	tp.minDocLen = minDL
 }
 
 // LookupLoaded resolves a term to its posting list on a LOADED segment (via the
