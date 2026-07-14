@@ -104,11 +104,12 @@ select greatest(cast('2020-01-01' as date), json_extract('"2020-01-02"', '$')) a
 select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast(2021 as year)) as greatest_json_date_year;
 
 -- Date-bearing temporal values compare as packed datetime values. Invalid
--- temporal text returns MatrixOne's invalid-input error.
+-- temporal text returns MatrixOne's invalid-input error. TIME uses the
+-- statement date, so assert that it wins instead of snapshotting that date.
 select greatest(cast('2020-01-01' as date), '2020-01-02') as greatest_date_varchar;
 select greatest(cast('2020-01-01' as date), 'not-a-date');
 select least(cast('2020-01-01' as date), 'not-a-date');
-select greatest(cast('2020-01-01' as date), cast('12:00:00' as time)) as greatest_date_time;
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00' as time)) as datetime) > cast('2020-01-01' as datetime) as greatest_date_time_uses_time;
 select greatest(cast(2020 as year), cast('2020-01-01' as date), 1) as greatest_year_date_num;
 select hex(greatest(cast('2020-01-01' as date), cast('2020-01-02' as blob))) as greatest_date_blob;
 select hex(greatest(cast('2020-01-01' as date), cast('2020-01-02' as varbinary))) as greatest_date_varbinary;
@@ -156,23 +157,23 @@ select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), c
 select greatest(json_extract('"2020-01-02 12:00:00"', '$'), cast('2020-01-01 00:00:00' as datetime)) as greatest_json_datetime;
 select greatest(json_extract('"2020-01-02 12:00:00"', '$'), cast('2020-01-01 00:00:00' as timestamp)) as greatest_json_timestamp;
 select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), 20200103) as greatest_json_date_bigint;
-select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('12:00:00' as time)) as greatest_json_date_time;
+select cast(greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('12:00:00' as time)) as date) > cast('2020-01-02' as date) as greatest_json_date_time_uses_time;
 select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), interval 1 day);
 
 -- The date-bearing temporal matrix uses packed datetime comparison and chooses
 -- the documented result family from the non-temporal peer.
 select greatest(cast('2020-01-01' as datetime), '2020-01-02') as greatest_datetime_varchar;
 select greatest(cast('2020-01-01' as date), cast('2020-01-01 12:00:00' as datetime)) as greatest_date_datetime;
-select greatest(cast('2020-01-01' as date), cast('12:00:00' as time)) as greatest_date_time_format;
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00' as time)) as datetime) > cast('2020-01-01' as datetime) as greatest_date_time_format_uses_time;
 select greatest(cast('2020-01-01' as date), cast('2020-01-02' as text)) as greatest_date_text;
 select least(cast('10:00:00' as time), cast('09:00:00' as text)) as least_time_text;
 select greatest(cast('10:00:00' as time), cast('09:00:00' as blob)) as greatest_time_blob;
 select greatest(cast('2020-01-01' as date), 20200102) as greatest_date_numeric;
 select greatest(cast('2020-01-01' as date), cast(20200102 as bit(25))) as greatest_date_bit;
 select greatest(cast(2020 as year), cast('10:00:00' as time)) as greatest_year_time;
-select greatest(cast('2020-01-01' as date), cast('12:00:00' as time), '2020-01-02') as greatest_date_time_varchar;
-select greatest(cast('2020-01-01' as date), cast('12:00:00' as time), 20200102) as greatest_date_time_bigint;
-select hex(greatest(cast('2020-01-01' as date), cast('12:00:00' as time), cast('2020-01-02' as blob))) as greatest_date_time_blob;
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00' as time), '2020-01-02') as date) > cast('2020-01-02' as date) as greatest_date_time_varchar_uses_time;
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00' as time), 20200102) as date) > cast('2020-01-02' as date) as greatest_date_time_bigint_uses_time;
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00' as time), cast('2020-01-02' as blob)) as date) > cast('2020-01-02' as date) as greatest_date_time_blob_uses_time;
 
 -- String-family precedence is TEXT > CHAR/VARCHAR > BLOB > BINARY/VARBINARY.
 select greatest(cast('b' as text), cast('a' as blob)) as greatest_text_blob;

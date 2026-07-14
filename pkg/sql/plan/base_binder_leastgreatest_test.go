@@ -22,6 +22,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,4 +62,45 @@ func TestBuildLeastGreatestTemporalScale(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, int32(types.T_time), result.Typ.Id)
 	require.Equal(t, int32(2), result.Typ.Scale)
+}
+
+func TestConstantFoldLeastGreatestTemporalScale(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select greatest(cast('10:00:00.1' as time(1)), cast('10:00:00.99' as time(2)))", 1)
+	require.NoError(t, err)
+
+	pl, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	var result *planpb.Expr
+	for _, node := range pl.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == "greatest" {
+				result = expr
+			}
+		}
+	}
+	require.NotNil(t, result)
+	require.Len(t, result.GetF().Args, 2)
+	require.Equal(t, int32(2), result.GetF().Args[0].Typ.Scale)
+	require.Equal(t, int32(2), result.GetF().Args[1].Typ.Scale)
+	require.Equal(t, int32(2), result.Typ.Scale)
+
+	fold := rule.NewConstantFold(false)
+	foldOne := func(expr *planpb.Expr) *planpb.Expr {
+		node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(expr)}}
+		fold.Apply(node, nil, ctx.GetProcess())
+		return node.ProjectList[0]
+	}
+
+	firstCast := foldOne(result.GetF().Args[0])
+	secondCast := foldOne(result.GetF().Args[1])
+	foldedGreatest := foldOne(result)
+
+	// The resolver adds an implicit TIME(2) cast around TIME(1), so both
+	// arguments must be TIME(2) before the outer function is folded.
+	require.Equal(t, int32(2), firstCast.Typ.Scale, "first argument")
+	require.Equal(t, int32(2), secondCast.Typ.Scale, "TIME(2) cast")
+	require.Equal(t, int32(2), foldedGreatest.Typ.Scale, "GREATEST result")
 }

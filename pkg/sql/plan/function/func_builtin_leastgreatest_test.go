@@ -1019,6 +1019,16 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 	ok, info = tcLeast.Run()
 	require.True(t, ok, info)
 
+	tcInvalidDatePeer := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(dateTyp, []types.Date{d1}, nil),
+			NewFunctionTestInput(varcharTyp, []string{"1"}, nil),
+		},
+		NewFunctionTestResult(varcharTyp, true, []string{""}, nil),
+		greatestTemporalFn)
+	ok, info = tcInvalidDatePeer.Run()
+	require.True(t, ok, info)
+
 	// JSON-temporal parameters reach this executor after JSON is cast to
 	// VARCHAR. The specialized overload keeps the VARCHAR return contract.
 	tcJSONGreatest := NewFunctionTestCase(proc,
@@ -1030,6 +1040,11 @@ func TestLeastGreatestTemporalExecutor(t *testing.T) {
 		greatestJSONTemporalFn)
 	ok, info = tcJSONGreatest.Run()
 	require.True(t, ok, info)
+}
+
+func TestLeastGreatestPackedDateRejectsTimeFallback(t *testing.T) {
+	_, err := leastGreatestParsePackedDateBytes([]byte("1"), types.T_date.ToType(), nil, time.Local)
+	require.Error(t, err)
 }
 
 func TestLeastGreatestPackedDateUsesStatementStartForTime(t *testing.T) {

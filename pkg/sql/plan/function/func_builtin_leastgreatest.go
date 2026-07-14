@@ -992,7 +992,7 @@ func leastGreatestFnPackedDateResolved(
 				}
 				goto nextRow
 			}
-			v, err := leastGreatestDatetimeValue(pv, i, proc, loc)
+			v, err := leastGreatestDatetimeValue(pv, i, resolution.temporalItemType, proc, loc)
 			if err != nil {
 				return err
 			}
@@ -1026,7 +1026,7 @@ func leastGreatestSetNullResult(result vector.FunctionResultWrapper, length int)
 	return nil
 }
 
-func leastGreatestDatetimeValue(v *vector.Vector, row uint64, proc *process.Process, loc *time.Location) (types.Datetime, error) {
+func leastGreatestDatetimeValue(v *vector.Vector, row uint64, temporalItemType types.Type, proc *process.Process, loc *time.Location) (types.Datetime, error) {
 	switch v.GetType().Oid {
 	case types.T_date:
 		p := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
@@ -1049,7 +1049,7 @@ func leastGreatestDatetimeValue(v *vector.Vector, row uint64, proc *process.Proc
 		val, _ := p.GetValue(row)
 		return types.DatetimeFromClock(int32(val.ToInt64()), 1, 1, 0, 0, 0, 0), nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
-		return leastGreatestParseDatetimeBytes(v.GetBytesAt(int(row)))
+		return leastGreatestParsePackedDateBytes(v.GetBytesAt(int(row)), temporalItemType, proc, loc)
 	default:
 		return types.Datetime(0), moerr.NewInternalErrorNoCtxf("unsupported temporal comparison type %s", v.GetType().Oid.String())
 	}
@@ -1086,19 +1086,32 @@ func leastGreatestTimeToDatetime(value types.Time, scale int32, proc *process.Pr
 	return base + types.Datetime(value.TruncateToScale(scale))
 }
 
-func leastGreatestParseDatetimeBytes(v []byte) (types.Datetime, error) {
+func leastGreatestParsePackedDateBytes(v []byte, temporalItemType types.Type, proc *process.Process, loc *time.Location) (types.Datetime, error) {
 	s := string(v)
-	if dt, err := types.ParseDatetime(s, 6); err == nil {
-		return dt, nil
-	}
-	if d, err := types.ParseDateCast(s); err == nil {
+	switch temporalItemType.Oid {
+	case types.T_date:
+		d, err := types.ParseDateCast(s)
+		if err != nil {
+			return types.Datetime(0), err
+		}
 		return d.ToDatetime(), nil
+	case types.T_datetime:
+		return types.ParseDatetime(s, temporalItemType.Scale)
+	case types.T_timestamp:
+		ts, err := types.ParseTimestamp(loc, s, temporalItemType.Scale)
+		if err != nil {
+			return types.Datetime(0), err
+		}
+		return ts.ToDatetime(loc), nil
+	case types.T_time:
+		t, err := types.ParseTime(s, temporalItemType.Scale)
+		if err != nil {
+			return types.Datetime(0), err
+		}
+		return leastGreatestTimeToDatetime(t, temporalItemType.Scale, proc, loc), nil
+	default:
+		return types.Datetime(0), moerr.NewInternalErrorNoCtxf("unsupported temporal comparison target %s", temporalItemType.Oid.String())
 	}
-	if t, err := types.ParseTime(s, 6); err == nil {
-		return t.ToDatetime(6), nil
-	}
-	_, err := types.ParseDatetime(s, 6)
-	return types.Datetime(0), err
 }
 
 func leastGreatestAppendPackedDateResult(
