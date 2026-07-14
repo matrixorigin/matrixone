@@ -34,6 +34,58 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 )
 
+const JsonOrderingParamFunctionName = "__mo_json_ordering_param"
+
+func normalizeJsonOrderingParam(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	_ *FunctionSelectList,
+) error {
+	from := vector.GenerateFunctionStrParameter(parameters[0])
+	to := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := from.GetStrValue(i)
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		encoded, err := encodeJsonOrderingParam(value)
+		if err != nil {
+			return err
+		}
+		if err := to.AppendBytes(encoded, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func encodeJsonOrderingParam(value []byte) ([]byte, error) {
+	trimmed := bytes.TrimSpace(value)
+	if !json.Valid(trimmed) {
+		_, err := types.ParseStringToByteJson(string(trimmed))
+		return nil, err
+	}
+
+	if len(trimmed) > 0 && (trimmed[0] == '-' || trimmed[0] >= '0' && trimmed[0] <= '9') &&
+		bytes.ContainsAny(trimmed, ".eE") {
+		data := make([]byte, binary.MaxVarintLen64+len(trimmed))
+		n := binary.PutUvarint(data, uint64(len(trimmed)))
+		copy(data[n:], trimmed)
+		return types.EncodeJson(bytejson.ByteJson{Type: bytejson.TpCodeDecimal, Data: data[:n+len(trimmed)]})
+	}
+
+	parsed, err := types.ParseStringToByteJson(string(trimmed))
+	if err != nil {
+		return nil, err
+	}
+	return types.EncodeJson(parsed)
+}
+
 type opBuiltInJsonExtract struct {
 	allConst bool
 	npath    int
@@ -44,12 +96,42 @@ type opBuiltInJsonExtract struct {
 
 type opBuiltInJsonContains struct{}
 
+type jsonContainsPathMode uint8
+
+const (
+	jsonContainsPathOne jsonContainsPathMode = iota
+	jsonContainsPathAll
+)
+
+type jsonContainsPathModeCache struct {
+	valid  bool
+	isNull bool
+	text   string
+	mode   jsonContainsPathMode
+}
+
+type jsonContainsPathPathCache struct {
+	valid  bool
+	isNull bool
+	text   string
+	path   *bytejson.Path
+}
+
+type opBuiltInJsonContainsPath struct {
+	modeCache jsonContainsPathModeCache
+	pathCache []jsonContainsPathPathCache
+}
+
 func newOpBuiltInJsonExtract() *opBuiltInJsonExtract {
 	return &opBuiltInJsonExtract{}
 }
 
 func newOpBuiltInJsonContains() *opBuiltInJsonContains {
 	return &opBuiltInJsonContains{}
+}
+
+func newOpBuiltInJsonContainsPath() *opBuiltInJsonContainsPath {
+	return &opBuiltInJsonContainsPath{}
 }
 
 // JSON_EXTRACT
@@ -86,6 +168,35 @@ func jsonContainsCheckFn(overloads []overload, inputs []types.Type) checkResult 
 	allMatch := true
 	for i, input := range inputs {
 		if i < 2 && input.Oid == types.T_json {
+			ts = append(ts, input)
+			continue
+		}
+		if input.Oid.IsMySQLString() {
+			ts = append(ts, input)
+			continue
+		}
+		if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
+			ts = append(ts, types.T_varchar.ToType())
+			allMatch = false
+			continue
+		}
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if allMatch {
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithCast(0, ts)
+}
+
+func jsonContainsPathCheckFn(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) < 3 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	ts := make([]types.Type, 0, len(inputs))
+	allMatch := true
+	for i, input := range inputs {
+		if i == 0 && input.Oid == types.T_json {
 			ts = append(ts, input)
 			continue
 		}
@@ -260,6 +371,172 @@ func (op *opBuiltInJsonContains) jsonContains(parameters []*vector.Vector, resul
 	return nil
 }
 
+func (op *opBuiltInJsonContainsPath) jsonContainsPath(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	docVec := parameters[0]
+	docWrapper := vector.GenerateFunctionStrParameter(docVec)
+	modeVec := parameters[1]
+	modeWrapper := vector.GenerateFunctionStrParameter(modeVec)
+	pathWrappers := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters)-2)
+	for i := range pathWrappers {
+		pathWrappers[i] = vector.GenerateFunctionStrParameter(parameters[i+2])
+	}
+	rs := vector.MustFunctionResult[int64](result)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if len(op.pathCache) != len(pathWrappers) {
+		op.pathCache = make([]jsonContainsPathPathCache, len(pathWrappers))
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		docBytes, docNull := docWrapper.GetStrValue(i)
+		if docNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		doc, err := parseJsonContainsPathDocument(proc, docVec, docBytes)
+		if err != nil {
+			return err
+		}
+
+		mode, modeNull, err := op.getMode(modeVec, modeWrapper, i, proc)
+		if err != nil {
+			return err
+		}
+		if modeNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		settled := false
+		for j := range pathWrappers {
+			path, pathNull, err := op.getPath(parameters[j+2], pathWrappers[j], i, j, proc)
+			if err != nil {
+				return err
+			}
+			if pathNull {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				settled = true
+				break
+			}
+
+			exists := doc.PathExists(path)
+			if exists && mode == jsonContainsPathOne {
+				if err := rs.Append(1, false); err != nil {
+					return err
+				}
+				settled = true
+				break
+			}
+			if !exists && mode == jsonContainsPathAll {
+				if err := rs.Append(0, false); err != nil {
+					return err
+				}
+				settled = true
+				break
+			}
+		}
+		if settled {
+			continue
+		}
+
+		if mode == jsonContainsPathOne {
+			if err := rs.Append(0, false); err != nil {
+				return err
+			}
+		} else if err := rs.Append(1, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (op *opBuiltInJsonContainsPath) getMode(modeVec *vector.Vector, wrapper vector.FunctionParameterWrapper[types.Varlena], row uint64, proc *process.Process) (jsonContainsPathMode, bool, error) {
+	if modeVec.IsConst() && op.modeCache.valid {
+		modeBytes, modeNull := wrapper.GetStrValue(0)
+		if modeNull && op.modeCache.isNull {
+			return op.modeCache.mode, true, nil
+		}
+		if !modeNull && !op.modeCache.isNull && op.modeCache.text == string(modeBytes) {
+			return op.modeCache.mode, false, nil
+		}
+	}
+
+	modeBytes, modeNull := wrapper.GetStrValue(row)
+	if modeNull {
+		if modeVec.IsConst() {
+			op.modeCache = jsonContainsPathModeCache{valid: true, isNull: true}
+		}
+		return jsonContainsPathOne, true, nil
+	}
+
+	modeText := string(modeBytes)
+	var mode jsonContainsPathMode
+	switch {
+	case strings.EqualFold(modeText, "one"):
+		mode = jsonContainsPathOne
+	case strings.EqualFold(modeText, "all"):
+		mode = jsonContainsPathAll
+	default:
+		return jsonContainsPathOne, false, moerr.NewInvalidArg(proc.Ctx, "json_contains_path", "one_or_all must be one or all")
+	}
+	if modeVec.IsConst() {
+		op.modeCache = jsonContainsPathModeCache{valid: true, text: modeText, mode: mode}
+	}
+	return mode, false, nil
+}
+
+func (op *opBuiltInJsonContainsPath) getPath(pathVec *vector.Vector, wrapper vector.FunctionParameterWrapper[types.Varlena], row uint64, index int, proc *process.Process) (*bytejson.Path, bool, error) {
+	cache := &op.pathCache[index]
+	if pathVec.IsConst() && cache.valid {
+		pathBytes, pathNull := wrapper.GetStrValue(0)
+		if pathNull && cache.isNull {
+			return nil, true, nil
+		}
+		if !pathNull && !cache.isNull && cache.text == string(pathBytes) {
+			return cache.path, false, nil
+		}
+	}
+
+	pathBytes, pathNull := wrapper.GetStrValue(row)
+	if pathNull {
+		if pathVec.IsConst() {
+			*cache = jsonContainsPathPathCache{valid: true, isNull: true}
+		}
+		return nil, true, nil
+	}
+
+	pathText := string(pathBytes)
+	path, err := types.ParseStringToPath(pathText)
+	if err != nil {
+		return nil, false, moerr.NewInvalidArg(proc.Ctx, "json_contains_path", "invalid path expression")
+	}
+	if pathVec.IsConst() {
+		*cache = jsonContainsPathPathCache{valid: true, text: pathText, path: &path}
+	}
+	return &path, false, nil
+}
+
 func parseJsonContainsDocument(proc *process.Process, v *vector.Vector, data []byte) (bytejson.ByteJson, error) {
 	if v.GetType().Oid == types.T_json {
 		return types.DecodeJson(data), nil
@@ -268,6 +545,18 @@ func parseJsonContainsDocument(proc *process.Process, v *vector.Vector, data []b
 	bj, err := types.ParseSliceToByteJson(data)
 	if err != nil {
 		return bytejson.Null, moerr.NewInvalidArg(proc.Ctx, "json_contains", "invalid JSON document")
+	}
+	return bj, nil
+}
+
+func parseJsonContainsPathDocument(proc *process.Process, v *vector.Vector, data []byte) (bytejson.ByteJson, error) {
+	if v.GetType().Oid == types.T_json {
+		return types.DecodeJson(data), nil
+	}
+
+	bj, err := types.ParseSliceToByteJson(data)
+	if err != nil {
+		return bytejson.Null, moerr.NewInvalidArg(proc.Ctx, "json_contains_path", "invalid JSON document")
 	}
 	return bj, nil
 }

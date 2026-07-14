@@ -374,6 +374,10 @@ func (exec *txnExecutor) Exec(
 	// Attach original frontend session to support session-scoped metadata
 	// (e.g. temporary-table alias mapping) in internal SQL compilation.
 	proc.Session = getInternalExecutorSession(exec.ctx)
+	// A DisableIncrStatement execution runs on the caller's transaction
+	// without opening a statement, so its compile must not advance the
+	// workspace snapshot write offset (the statement boundary).
+	proc.SetIncrStatementDisabled(exec.opts.DisableIncrStatement())
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
 	if exec.opts.ResolveVariableFunc() != nil {

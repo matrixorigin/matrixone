@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -357,7 +358,7 @@ func TestCleanerPreservesCannotCommitOnActiveTxnQueryError(t *testing.T) {
 		},
 		func(lta *lockTableAllocator) {
 			lta.keepBindTimeout = time.Millisecond * 20
-			lta.options.getActiveTxnFunc = func(string) (bool, [][]byte, error) {
+			lta.options.getActiveTxnFunc = func(context.Context, string) (bool, [][]byte, error) {
 				<-ready
 				return false, nil, moerr.NewBackendClosedNoCtx()
 			}
@@ -478,7 +479,7 @@ func TestCtlCanRemovedByInvalidService(t *testing.T) {
 		},
 		func(lta *lockTableAllocator) {
 			lta.keepBindTimeout = time.Millisecond * 100
-			lta.options.getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
+			lta.options.getActiveTxnFunc = func(context.Context, string) (bool, [][]byte, error) {
 				<-ch
 				return false, nil, nil
 			}
@@ -503,7 +504,7 @@ func TestCtlCanRemovedByNotActiveTxn(t *testing.T) {
 		},
 		func(lta *lockTableAllocator) {
 			lta.keepBindTimeout = time.Millisecond * 100
-			lta.options.getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
+			lta.options.getActiveTxnFunc = func(context.Context, string) (bool, [][]byte, error) {
 				<-ch
 				return true, [][]byte{[]byte("t2")}, nil
 			}

@@ -35,6 +35,8 @@ import (
 )
 
 var (
+	pipelineLifecycleMu sync.Mutex
+
 	_jobPool = sync.Pool{
 		New: func() any {
 			return new(tasks.Job)
@@ -117,9 +119,12 @@ func putReader(reader *objectio.ObjectReader) {
 type IOJobFactory func(context.Context, fetchParams) *tasks.Job
 
 func Start(sid string) {
+	pipelineLifecycleMu.Lock()
+	defer pipelineLifecycleMu.Unlock()
+
 	r := rt.ServiceRuntime(sid)
-	_, ok := r.GetGlobalVariables("blockio")
-	if ok {
+	value, ok := r.GetGlobalVariables("blockio")
+	if ok && value.(*IoPipeline).active.Load() {
 		return
 	}
 
@@ -131,6 +136,9 @@ func Start(sid string) {
 }
 
 func Stop(sid string) {
+	pipelineLifecycleMu.Lock()
+	defer pipelineLifecycleMu.Unlock()
+
 	val, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
 	if !ok {
 		return

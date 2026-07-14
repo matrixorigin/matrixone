@@ -1686,6 +1686,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
 		}
+		if err := adjustJsonOrderingDynamicParamType(ctx, name, args); err != nil {
+			return nil, err
+		}
 
 		// Early detection for decimal comparisons
 		if len(args) == 2 {
@@ -1923,11 +1926,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
 			var tp = types.T_date
+			var fsp int
 			if exprC := args[1].GetLit(); exprC != nil {
 				sval := exprC.Value.(*plan.Literal_Sval)
-				tp, _ = ExtractToDateReturnType(sval.Sval)
+				tp, fsp = ExtractToDateReturnType(sval.Sval)
 			}
-			args = append(args, makePlan2DateConstNullExpr(tp))
+			args = append(args, makePlan2DateConstNullExprWithScale(tp, int32(fsp)))
 
 		} else if args[1].Typ.Id == int32(types.T_any) {
 			args = append(args, makePlan2DateConstNullExpr(types.T_datetime))
@@ -2396,6 +2400,34 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "<", "<=", ">", ">=":
+	default:
+		return nil
+	}
+	if len(args) != 2 {
+		return nil
+	}
+
+	if args[0].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[1]) {
+		var err error
+		args[1], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[1]})
+		return err
+	}
+	if args[1].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[0]) {
+		var err error
+		args[0], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[0]})
+		return err
+	}
+	return nil
+}
+
+func isDirectDynamicParam(expr *Expr) bool {
+	_, ok := expr.Expr.(*plan.Expr_P)
+	return ok
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {

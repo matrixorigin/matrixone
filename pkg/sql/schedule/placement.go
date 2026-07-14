@@ -41,6 +41,19 @@ const (
 	QueryExecAPMultiCN
 )
 
+func (k QueryExecKind) String() string {
+	switch k {
+	case QueryExecTP:
+		return "tp"
+	case QueryExecAPOneCN:
+		return "ap-one-cn"
+	case QueryExecAPMultiCN:
+		return "ap-multi-cn"
+	default:
+		return "unknown"
+	}
+}
+
 type CurrentCNPolicy uint8
 
 const (
@@ -66,19 +79,53 @@ func (p CurrentCNPolicy) String() string {
 }
 
 type QueryRequest struct {
-	ExecKind        QueryExecKind
-	CurrentCN       Worker
-	Candidates      Workers
-	CurrentCNPolicy CurrentCNPolicy
+	ExecKind  QueryExecKind
+	CurrentCN Worker
+	// Candidates contains workers after candidate discovery and pool/label
+	// resolution. Query placement only selects from this resolved set.
+	Candidates          Workers
+	CandidateResolution CandidateResolution
+	CurrentCNPolicy     CurrentCNPolicy
 }
 
 type QueryDecision struct {
-	ExecKind        QueryExecKind
-	Workers         Workers
-	Dropped         DroppedWorkers
-	Reason          string
-	CurrentCNPolicy CurrentCNPolicy
-	Satisfied       bool
+	ExecKind               QueryExecKind
+	CurrentCN              Worker
+	Workers                Workers
+	Dropped                DroppedWorkers
+	Reason                 string
+	CandidateResolution    CandidateResolution
+	ResolvedCandidateCount int
+	CurrentCNPolicy        CurrentCNPolicy
+	Satisfied              bool
+}
+
+type CandidateSource string
+
+const (
+	CandidateSourceUnspecified      CandidateSource = "unspecified"
+	CandidateSourceNotRequired      CandidateSource = "not-required"
+	CandidateSourceEngineNodes      CandidateSource = "engine-nodes"
+	CandidateSourceClusterInventory CandidateSource = "cluster-inventory"
+)
+
+type PoolResolution string
+
+const (
+	PoolResolutionUnspecified       PoolResolution = "unspecified"
+	PoolResolutionNotRequired       PoolResolution = "not-required"
+	PoolResolutionLegacyEngineNodes PoolResolution = "legacy-engine-nodes"
+	PoolResolutionTenantLabels      PoolResolution = "tenant-labels"
+)
+
+// CandidateResolution describes the boundary before worker selection. The
+// legacy engine adapter currently performs discovery and pool/label filtering
+// together; making that explicit prevents selection from depending directly on
+// Engine.Nodes and allows the two stages to be separated later.
+type CandidateResolution struct {
+	DiscoverySource CandidateSource
+	PoolResolution  PoolResolution
+	DiscoveredCount int
 }
 
 func DecideQueryPlacement(req QueryRequest) QueryDecision {
@@ -160,13 +207,24 @@ func (p CurrentCNPolicy) Valid() bool {
 
 func queryDecision(req QueryRequest, workers Workers, dropped DroppedWorkers, reason string, satisfied bool) QueryDecision {
 	workers = orderDecisionWorkers(req, workers, reason)
+	resolution := req.CandidateResolution
+	if resolution.DiscoverySource == "" {
+		resolution.DiscoverySource = CandidateSourceUnspecified
+	}
+	if resolution.PoolResolution == "" {
+		resolution.PoolResolution = PoolResolutionUnspecified
+	}
+	resolution.DiscoveredCount = max(resolution.DiscoveredCount, 0)
 	return QueryDecision{
-		ExecKind:        req.ExecKind,
-		Workers:         workers,
-		Dropped:         cloneDroppedWorkers(dropped),
-		Reason:          reason,
-		CurrentCNPolicy: req.CurrentCNPolicy,
-		Satisfied:       satisfied,
+		ExecKind:               req.ExecKind,
+		CurrentCN:              req.CurrentCN,
+		Workers:                workers,
+		Dropped:                cloneDroppedWorkers(dropped),
+		Reason:                 reason,
+		CandidateResolution:    resolution,
+		ResolvedCandidateCount: len(req.Candidates),
+		CurrentCNPolicy:        req.CurrentCNPolicy,
+		Satisfied:              satisfied,
 	}
 }
 
