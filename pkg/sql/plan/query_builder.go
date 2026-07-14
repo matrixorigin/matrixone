@@ -309,6 +309,8 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 type ColRefRemapping struct {
 	globalToLocal map[[2]int32][2]int32
 	localToGlobal [][2]int32
+	// A reachable node must preserve rows even when none of its values are consumed.
+	preserveRowCount bool
 }
 
 func (m *ColRefRemapping) addColRef(colRef [2]int32) {
@@ -359,6 +361,105 @@ func aggregateDependsOnInputOrder(expr *plan.Expr) bool {
 	}
 }
 
+type rowCarrierCost struct {
+	aggregateCost int
+	varlen        bool
+	width         int64
+}
+
+func getRowCarrierCost(expr *plan.Expr, aggregate bool) rowCarrierCost {
+	cost := rowCarrierCost{width: 1}
+	if expr != nil {
+		fixedLength := types.T(expr.Typ.Id).FixedLength()
+		if fixedLength > 0 {
+			cost.width = int64(fixedLength)
+		} else if fixedLength < 0 {
+			cost.varlen = true
+			cost.width = int64(expr.Typ.Width)
+			if cost.width <= 0 {
+				cost.width = int64(^uint32(0) >> 1)
+			}
+		}
+	}
+	if !aggregate || expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return cost
+	}
+	for _, arg := range expr.GetF().Args {
+		cost = addRowCarrierCost(cost, getRowCarrierCost(arg, false))
+	}
+
+	switch expr.GetF().Func.ObjName {
+	case "starcount":
+		cost.aggregateCost = 0
+	case "count", "min", "max", "any_value", "bit_and", "bit_or", "bit_xor", "sum":
+		cost.aggregateCost = 1
+	case "avg":
+		cost.aggregateCost = 2
+	case "group_concat", "json_arrayagg", "json_objectagg":
+		cost.aggregateCost = 100
+	default:
+		cost.aggregateCost = 10
+	}
+	return cost
+}
+
+func addRowCarrierCost(left, right rowCarrierCost) rowCarrierCost {
+	return rowCarrierCost{
+		aggregateCost: left.aggregateCost + right.aggregateCost,
+		varlen:        left.varlen || right.varlen,
+		width:         left.width + right.width,
+	}
+}
+
+func rowCarrierCostLess(left, right rowCarrierCost) bool {
+	if left.aggregateCost != right.aggregateCost {
+		return left.aggregateCost < right.aggregateCost
+	}
+	if left.varlen != right.varlen {
+		return !left.varlen
+	}
+	return left.width < right.width
+}
+
+func chooseRowCarrier(exprs []*plan.Expr, aggregate bool) int {
+	best := -1
+	var bestCost rowCarrierCost
+	for i, expr := range exprs {
+		cost := getRowCarrierCost(expr, aggregate)
+		if best < 0 || rowCarrierCostLess(cost, bestCost) {
+			best = i
+			bestCost = cost
+		}
+	}
+	return best
+}
+
+func chooseTableRowCarrier(cols []*plan.ColDef) int {
+	best := -1
+	var bestCost rowCarrierCost
+	for i, col := range cols {
+		cost := getRowCarrierCost(&plan.Expr{Typ: col.Typ}, false)
+		if best < 0 || rowCarrierCostLess(cost, bestCost) {
+			best = i
+			bestCost = cost
+		}
+	}
+	return best
+}
+
+func chooseUnionRowCarrier(left, right []*plan.Expr, size int) int {
+	best := -1
+	var bestCost rowCarrierCost
+	for i := 0; i < size && i < len(left) && i < len(right); i++ {
+		cost := addRowCarrierCost(getRowCarrierCost(left[i], false), getRowCarrierCost(right[i], false))
+		if best < 0 || rowCarrierCostLess(cost, bestCost) {
+			best = i
+			bestCost = cost
+		}
+	}
+	return best
+}
+
 // retainInputOrder keeps windows on each order-transparent input path.
 // Order-sensitive aggregates expose the input sequence in their result, even
 // when a window's own output column is not referenced. Stacked windows must all
@@ -406,7 +507,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	node := builder.qry.Nodes[nodeID]
 
 	remapping := &ColRefRemapping{
-		globalToLocal: make(map[[2]int32][2]int32),
+		globalToLocal:    make(map[[2]int32][2]int32),
+		preserveRowCount: true,
 	}
 	remapInfo := RemapInfo{
 		step:       step,
@@ -441,9 +543,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
 		}
 
-		if len(newTableDef.Cols) == 0 {
-			internalRemapping.addColRef([2]int32{tag, 0})
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[0]))
+		if remapping.preserveRowCount && len(newTableDef.Cols) == 0 {
+			carrier := chooseTableRowCarrier(node.TableDef.Cols)
+			if carrier >= 0 {
+				internalRemapping.addColRef([2]int32{tag, int32(carrier)})
+				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[carrier]))
+			}
 		}
 
 		node.TableDef = newTableDef
@@ -478,34 +583,18 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-		if len(node.ProjectList) == 0 {
-			if len(node.TableDef.Cols) == 0 {
-				globalRef := [2]int32{tag, 0}
-				remapping.addColRef(globalRef)
-
-				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.TableDef.Cols[0].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: 0,
-							ColPos: 0,
-							Name:   node.TableDef.Cols[0].Name,
-						},
+		if remapping.preserveRowCount && len(node.ProjectList) == 0 && len(node.TableDef.Cols) > 0 {
+			remapping.addColRef(internalRemapping.localToGlobal[0])
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: node.TableDef.Cols[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+						Name:   node.TableDef.Cols[0].Name,
 					},
-				})
-			} else {
-				remapping.addColRef(internalRemapping.localToGlobal[0])
-				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.TableDef.Cols[0].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: 0,
-							ColPos: 0,
-							Name:   node.TableDef.Cols[0].Name,
-						},
-					},
-				})
-			}
+				},
+			})
 		}
 
 		if len(node.Children) == 0 {
@@ -583,9 +672,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		}
 
-		if len(newTableDef.Cols) == 0 {
-			internalRemapping.addColRef([2]int32{colTag, 0})
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[0]))
+		if remapping.preserveRowCount && len(newTableDef.Cols) == 0 {
+			carrier := chooseTableRowCarrier(node.TableDef.Cols)
+			if carrier >= 0 {
+				internalRemapping.addColRef([2]int32{colTag, int32(carrier)})
+				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[carrier]))
+			}
 		}
 
 		node.TableDef = newTableDef
@@ -692,7 +784,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		if len(node.ProjectList) == 0 && len(node.TableDef.Cols) > 0 {
+		if remapping.preserveRowCount && len(node.ProjectList) == 0 && len(node.TableDef.Cols) > 0 {
 			remapping.addColRef(internalRemapping.localToGlobal[0])
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: node.TableDef.Cols[0].Typ,
@@ -738,10 +830,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				increaseRefCnt(expr, 1, colRefCnt)
 				remapping.addColRef(globalRef)
 			}
-			if len(neededProj) == 0 && len(node.ProjectList) > 0 {
-				neededProj = append(neededProj, 0)
-				increaseRefCnt(node.ProjectList[0], 1, colRefCnt)
-				remapping.addColRef([2]int32{thisTag, 0})
+			if remapping.preserveRowCount && len(neededProj) == 0 && len(node.ProjectList) > 0 {
+				carrier := chooseUnionRowCarrier(leftNode.ProjectList, rightNode.ProjectList, len(node.ProjectList))
+				if carrier < 0 {
+					carrier = chooseRowCarrier(node.ProjectList, false)
+				}
+				if carrier >= 0 {
+					neededProj = append(neededProj, carrier)
+					increaseRefCnt(node.ProjectList[carrier], 1, colRefCnt)
+					remapping.addColRef([2]int32{thisTag, int32(carrier)})
+				}
 			}
 		} else {
 			// The other set operators use every input column to determine
@@ -1007,9 +1105,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		// empty input. Keep one aggregate as the row-producing carrier when its
 		// value is discarded by an outer constant projection.
 		keepCarrier := false
-		if groupSize == 0 && len(node.AggList) > 0 && neededAggCount == 0 {
+		if remapping.preserveRowCount && groupSize == 0 && len(node.AggList) > 0 && neededAggCount == 0 {
 			neededAggCount = 1
-			firstNeededAgg = 0
+			firstNeededAgg = int32(chooseRowCarrier(node.AggList, true))
 			keepCarrier = true
 		}
 
@@ -1026,7 +1124,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			newPos := int32(0)
 			for i := range node.AggList {
 				globalRef := [2]int32{aggregateTag, int32(i)}
-				if colRefCnt[globalRef] == 0 && exprCanRemoveProject(node.AggList[i]) && !(keepCarrier && i == 0) {
+				if colRefCnt[globalRef] == 0 && exprCanRemoveProject(node.AggList[i]) &&
+					!(keepCarrier && int32(i) == firstNeededAgg) {
 					continue
 				}
 				aggPos[i] = newPos

@@ -707,6 +707,21 @@ func TestColumnPruneSemanticBoundaries(t *testing.T) {
 }
 
 func TestColumnPruneOperatorShape(t *testing.T) {
+	t.Run("scan chooses deterministic row carrier", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select 1 from nation",
+		)
+		require.NoError(t, err)
+
+		columns, err := getPrunedTableColumns(logicPlan)
+		require.NoError(t, err)
+		require.Equal(t, []Entry[string, []string]{
+			{tableName: "nation", colNames: []string{"n_nationkey"}},
+		}, columns)
+	})
+
 	t.Run("union all compacts output positions", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
@@ -724,6 +739,51 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		}
 		require.NotNil(t, unionAll)
 		require.Len(t, unionAll.ProjectList, 1)
+	})
+
+	t.Run("union all chooses low-cost discarded position", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select 1 from (select n_name, n_regionkey from nation union all select r_name, r_regionkey from region) u",
+		)
+		require.NoError(t, err)
+
+		var unionAll *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_UNION_ALL {
+				unionAll = node
+				break
+			}
+		}
+		require.NotNil(t, unionAll)
+		require.Len(t, unionAll.ProjectList, 1)
+		columns, err := getPrunedTableColumns(logicPlan)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []Entry[string, []string]{
+			{tableName: "nation", colNames: []string{"n_regionkey"}},
+			{tableName: "region", colNames: []string{"r_regionkey"}},
+		}, columns)
+	})
+
+	t.Run("scalar aggregate chooses low-cost row carrier", func(t *testing.T) {
+		logicPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select 1 from (select group_concat(n_name), count(*) from nation) g",
+		)
+		require.NoError(t, err)
+
+		var agg *plan.Node
+		for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+			if node.NodeType == plan.Node_AGG {
+				agg = node
+				break
+			}
+		}
+		require.NotNil(t, agg)
+		require.Len(t, agg.AggList, 1)
+		require.Equal(t, "starcount", agg.AggList[0].GetF().Func.ObjName)
 	})
 
 	t.Run("union all retains side-effecting positions", func(t *testing.T) {
