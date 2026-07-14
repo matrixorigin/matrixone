@@ -136,6 +136,8 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 	}
 
 	sr.reset(requests)
+	commitResponsesPending := 0
+	var commitTxnID []byte
 	for idx := range requests {
 		tn := requests[idx].GetTargetTN()
 		st := sr.getStream(tn.ShardID)
@@ -154,6 +156,10 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 			sr.Release()
 			return nil, err
 		}
+		if requests[idx].Method == txn.TxnMethod_Commit {
+			commitResponsesPending++
+			commitTxnID = requests[idx].Txn.ID
+		}
 	}
 
 	for idx := range requests {
@@ -161,15 +167,29 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		c, err := st.Receive()
 		if err != nil {
 			sr.Release()
+			if commitResponsesPending > 0 {
+				// Commit was accepted by the stream, so a response-path error
+				// cannot prove whether TN applied it.
+				return nil, newTxnUnknownError(ctx, commitTxnID)
+			}
 			return nil, err
 		}
 		v, ok := <-c
-		if !ok {
+		if !ok || v == nil {
+			sr.Release()
+			if commitResponsesPending > 0 {
+				// A closed stream after Commit was sent has the same unknown
+				// outcome as a Receive error.
+				return nil, newTxnUnknownError(ctx, commitTxnID)
+			}
 			return nil, moerr.NewStreamClosedNoCtx()
 		}
 		resp := v.(*txn.TxnResponse)
 		sr.setResponse(resp, idx)
 		s.releaseResponse(resp)
+		if requests[idx].Method == txn.TxnMethod_Commit {
+			commitResponsesPending--
+		}
 	}
 	return sr, nil
 }

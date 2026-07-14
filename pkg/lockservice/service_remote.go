@@ -87,21 +87,9 @@ func (s *service) initRemote() {
 			return false, err
 		},
 		func(txn []pb.OrphanTxn) (pb.CannotCommitResponse, error) {
-			req := acquireRequest()
-			defer releaseRequest(req)
-
-			req.Method = pb.Method_CannotCommit
-			req.CannotCommit.OrphanTxnList = txn
-
 			ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseInitRemote1)
 			defer cancel()
-
-			resp, err := s.remote.client.Send(ctx, req)
-			if err != nil {
-				return pb.CannotCommitResponse{}, moerr.AttachCause(ctx, err)
-			}
-			defer releaseResponse(resp)
-			return resp.CannotCommit, nil
+			return s.notifyCannotCommit(ctx, txn)
 		},
 		func(txn pb.WaitTxn) (bool, error) {
 			return checkRemoteActiveTxn(s.remote.client, txn)
@@ -134,6 +122,24 @@ func (s *service) initRemote() {
 	if err := s.stopper.RunTask(s.unlockTimeoutRemoteTxn); err != nil {
 		panic(err)
 	}
+}
+
+func (s *service) notifyCannotCommit(
+	ctx context.Context,
+	txns []pb.OrphanTxn,
+) (pb.CannotCommitResponse, error) {
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_CannotCommit
+	req.CannotCommit.OrphanTxnList = txns
+
+	resp, err := s.remote.client.Send(ctx, req)
+	if err != nil {
+		return pb.CannotCommitResponse{}, moerr.AttachCause(ctx, err)
+	}
+	defer releaseResponse(resp)
+	return resp.CannotCommit, nil
 }
 
 // checkRemoteActiveTxn treats a service-identity mismatch as a routing signal,

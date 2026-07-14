@@ -47,19 +47,20 @@ func WithWait(wait func()) Option {
 }
 
 type service struct {
-	cfg                  Config
-	serviceID            string
-	tableGroups          *lockTableHolders
-	activeTxnHolder      activeTxnHolder
-	fsp                  *fixedSlicePool
-	deadlockDetector     *detector
-	events               *waiterEvents
-	clock                clock.Clock
-	stopper              *stopper.Stopper
-	stopOnce             sync.Once
-	bindChangeMu         sync.RWMutex
-	fetchWhoWaitingListC chan who
-	logger               *log.MOLogger
+	cfg                   Config
+	serviceID             string
+	tableGroups           *lockTableHolders
+	activeTxnHolder       activeTxnHolder
+	fsp                   *fixedSlicePool
+	deadlockDetector      *detector
+	events                *waiterEvents
+	unknownCommitResolver *unknownCommitResolver
+	clock                 clock.Clock
+	stopper               *stopper.Stopper
+	stopOnce              sync.Once
+	bindChangeMu          sync.RWMutex
+	fetchWhoWaitingListC  chan who
+	logger                *log.MOLogger
 
 	allocatorVersionMu         sync.Mutex
 	lastAllocatorVersion       uint64
@@ -126,6 +127,7 @@ func NewLockService(
 	s.clock = runtime.ServiceRuntime(cfg.ServiceID).Clock()
 
 	s.initRemote()
+	s.unknownCommitResolver = newUnknownCommitResolver(s)
 	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector, s.activeTxnHolder, s.cfg.RemoteLockTimeout.Duration, s.Unlock, s.logger)
 	s.events.start()
 	for i := 0; i < fetchWhoWaitingListTaskCount; i++ {

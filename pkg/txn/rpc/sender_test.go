@@ -701,6 +701,57 @@ func TestSendCommitDeadlineReturnsTxnUnknown(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
 }
 
+func TestSendMultiRequestCommitResponseLossReturnsTxnUnknown(t *testing.T) {
+	s := newTestTxnServer(t, testTN2Addr, nil)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+	s.RegisterRequestHandler(func(
+		ctx context.Context,
+		message morpc.RPCMessage,
+		_ uint64,
+		_ morpc.ClientSession,
+	) error {
+		request := message.Message.(*txn.TxnRequest)
+		if request.Method == txn.TxnMethod_Commit {
+			// The server has accepted Commit, then the response path is lost.
+			return moerr.NewInternalError(ctx, "connection reset by peer")
+		}
+		return nil
+	})
+
+	sd, err := NewSender(Config{}, newTestRuntime(newTestClock(), nil))
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, sd.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	txnMeta := txn.TxnMeta{
+		ID: []byte("multi-commit-deadline"),
+		TNShards: []metadata.TNShard{{
+			Address: testTN2Addr,
+		}},
+	}
+	result, err := sd.Send(ctx, []txn.TxnRequest{
+		{
+			Method: txn.TxnMethod_Write,
+			Txn:    txnMeta,
+			CNRequest: &txn.CNOpRequest{
+				Target: metadata.TNShard{Address: testTN2Addr},
+			},
+		},
+		{
+			Method:        txn.TxnMethod_Commit,
+			Txn:           txnMeta,
+			CommitRequest: &txn.TxnCommitRequest{},
+		},
+	})
+	assert.Nil(t, result)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+}
+
 func newTestTxnServer(
 	t assert.TestingT,
 	addr string,

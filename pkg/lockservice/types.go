@@ -135,6 +135,16 @@ type LockService interface {
 	CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error)
 }
 
+// UnknownCommitResolver resolves a Commit whose request may have reached TN but
+// whose final response was not received by CN. It must not release the txn's
+// locks until the allocator proves that the txn cannot still be committing.
+//
+// This is deliberately separate from LockService: callers that only perform
+// regular lock operations do not need to implement the exceptional protocol.
+type UnknownCommitResolver interface {
+	ResolveCommitUnknown(txnID []byte) error
+}
+
 type ResumeLockService interface {
 	LockService
 

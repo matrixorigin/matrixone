@@ -44,6 +44,31 @@ type checkLockTableBindLockService struct {
 	cancel context.CancelFunc
 }
 
+type unknownCommitResolverLockService struct {
+	lockservice.LockService
+	resolvedTxnID []byte
+	unlockedTxnID []byte
+}
+
+func (s *unknownCommitResolverLockService) GetServiceID() string {
+	return "unknown-commit-resolver"
+}
+
+func (s *unknownCommitResolverLockService) ResolveCommitUnknown(txnID []byte) error {
+	s.resolvedTxnID = append(s.resolvedTxnID[:0], txnID...)
+	return nil
+}
+
+func (s *unknownCommitResolverLockService) Unlock(
+	_ context.Context,
+	txnID []byte,
+	_ timestamp.Timestamp,
+	_ ...lock.ExtraMutation,
+) error {
+	s.unlockedTxnID = append(s.unlockedTxnID[:0], txnID...)
+	return nil
+}
+
 func (s *checkLockTableBindLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
 	s.calls++
 	if s.cancel != nil {
@@ -1086,18 +1111,42 @@ func newTNRequest(op uint32, tn uint64) txn.TxnRequest {
 	})
 }
 
-func TestCommitSendErrorSetsCommitTSWorkaround(t *testing.T) {
-	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+func TestCommitUnknownSchedulesUnknownCommitResolution(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{}
+	runOperatorTestsWithOptions(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		ws := &trackingWorkspace{
+			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+		}
+		tc.AddWorkspace(ws)
+		ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			return nil, moerr.NewTxnUnknown(ctx, "test")
+		})
+		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
+		err := tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		require.Equal(t, tc.mu.txn.ID, resolver.resolvedTxnID)
+		require.True(t, tc.mu.txn.CommitTS.IsEmpty())
+		require.Equal(t, 1, ws.unknownCount)
+		require.Zero(t, ws.rollbackCount)
+		require.True(t, tc.reset.cannotCleanWorkspace.Load())
+		require.Equal(t, txn.TxnStatus_Active, tc.mu.txn.Status)
+	}, timestamp.Timestamp{}, []TxnOption{WithTxnMode(txn.TxnMode_Pessimistic)}, WithLockService(resolver))
+}
+
+func TestRollbackSendErrorDoesNotScheduleUnknownCommitResolution(t *testing.T) {
+	resolver := &unknownCommitResolverLockService{}
+	runOperatorTestsWithOptions(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
 			return nil, assert.AnError
 		})
 		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
-		start := time.Now().UnixNano()
-		err := tc.Commit(ctx)
-		assert.Error(t, err)
-		commitTS := tc.mu.txn.CommitTS.PhysicalTime
-		assert.InDelta(t, start+10000000000, commitTS, 1e9, "CommitTS should be set to now+10s on send error")
-	})
+
+		err := tc.Rollback(ctx)
+		require.Error(t, err)
+		require.Empty(t, resolver.resolvedTxnID)
+		require.Equal(t, tc.mu.txn.ID, resolver.unlockedTxnID)
+		require.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
+	}, timestamp.Timestamp{}, []TxnOption{WithTxnMode(txn.TxnMode_Pessimistic)}, WithLockService(resolver))
 }
 
 func TestCancelAndWaitRunningSQL(t *testing.T) {

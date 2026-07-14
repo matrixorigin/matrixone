@@ -291,27 +291,28 @@ type txnOperator struct {
 	}
 
 	reset struct {
-		txnID                []byte
-		parent               atomic.Pointer[txnOperator]
-		waiter               *waiter
-		waitActiveCost       time.Duration
-		sequence             atomic.Uint64
-		commitSeq            uint64
-		createAt             time.Time
-		commitAt             time.Time
-		createTs             timestamp.Timestamp
-		cannotCleanWorkspace atomic.Bool
-		workspace            Workspace
-		commitCounter        counter
-		rollbackCounter      counter
-		runSqlCounter        counter
-		runSQLTracker        runSQLTracker
-		incrStmtCounter      counter
-		rollbackStmtCounter  counter
-		fprints              *footPrints
-		runningSQL           atomic.Bool
-		commitErr            error
-		cache                sync.Map
+		txnID                 []byte
+		parent                atomic.Pointer[txnOperator]
+		waiter                *waiter
+		waitActiveCost        time.Duration
+		sequence              atomic.Uint64
+		commitSeq             uint64
+		createAt              time.Time
+		commitAt              time.Time
+		createTs              timestamp.Timestamp
+		cannotCleanWorkspace  atomic.Bool
+		workspace             Workspace
+		commitCounter         counter
+		rollbackCounter       counter
+		runSqlCounter         counter
+		runSQLTracker         runSQLTracker
+		incrStmtCounter       counter
+		rollbackStmtCounter   counter
+		fprints               *footPrints
+		runningSQL            atomic.Bool
+		commitErr             error
+		commitNeedsResolution bool
+		cache                 sync.Map
 	}
 
 	opts struct {
@@ -549,6 +550,7 @@ func (tc *txnOperator) initReset() {
 	// fprints is external pointer, don't reset here
 	tc.reset.runningSQL.Store(false)
 	tc.reset.commitErr = nil
+	tc.reset.commitNeedsResolution = false
 	tc.reset.cache = sync.Map{}
 }
 
@@ -1144,7 +1146,7 @@ func (tc *txnOperator) doWrite(
 					return
 				}
 				if err != nil {
-					if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+					if tc.reset.commitNeedsResolution {
 						tc.reset.cannotCleanWorkspace.Store(true)
 						tc.reset.workspace.FinalizeCommitWithUnknownResult(ctx)
 						return
@@ -1164,7 +1166,7 @@ func (tc *txnOperator) doWrite(
 			// Set the guard before releasing the operator lock. A later Rollback
 			// must not delete objects when the Commit result is unknown and TN
 			// may already have committed them.
-			if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+			if tc.reset.commitNeedsResolution {
 				tc.reset.cannotCleanWorkspace.Store(true)
 			}
 			if err != nil && tc.reset.commitErr == nil {
@@ -1230,6 +1232,9 @@ func (tc *txnOperator) doWrite(
 	resp, err = tc.trimResponses(tc.handleError(ctx, result, err))
 	if err != nil && commit {
 		tc.reset.commitErr = err
+		if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+			tc.reset.commitNeedsResolution = true
+		}
 	}
 	return resp, err
 }
@@ -1372,13 +1377,6 @@ func (tc *txnOperator) doSend(
 	util.LogTxnSendRequests(tc.logger, requests)
 	result, err := tc.sender.Send(ctx, requests)
 	if err != nil {
-		if commit {
-			// TODO: remove this workaround
-			// set tc.mu.txn.CommitTS = now+10s
-			now, _ := tc.clock.Now()
-			now.PhysicalTime += 10000000000
-			tc.mu.txn.CommitTS = now
-		}
 		util.LogTxnSendRequestsFailed(tc.logger, requests, err)
 		return nil, err
 	}
@@ -1401,7 +1399,6 @@ func (tc *txnOperator) doSend(
 	tc.mu.txn.Status = resp.Txn.Status
 	return result, nil
 }
-
 func (tc *txnOperator) handleError(ctx context.Context, result *rpc.SendResult, err error) (*rpc.SendResult, error) {
 	if err != nil {
 		return nil, err
@@ -1586,6 +1583,21 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 		return
 	}
 
+	if tc.reset.commitNeedsResolution {
+		resolver, ok := tc.lockService.(lockservice.UnknownCommitResolver)
+		if !ok {
+			tc.logger.Error("lockservice does not support unknown commit resolution",
+				util.TxnField(tc.mu.txn))
+			return
+		}
+		if err := resolver.ResolveCommitUnknown(tc.mu.txn.ID); err != nil {
+			tc.logger.Error("failed to schedule unknown commit resolution",
+				util.TxnField(tc.mu.txn),
+				zap.Error(err))
+		}
+		return
+	}
+
 	if !tc.reset.commitAt.IsZero() {
 		v2.TxnCNCommitResponseDurationHistogram.Observe(float64(time.Since(tc.reset.commitAt).Seconds()))
 	}
@@ -1640,10 +1652,10 @@ func (tc *txnOperator) needUnlockLocked() bool {
 func (tc *txnOperator) closeLocked(ctx context.Context) {
 	if !tc.mu.closed {
 		tc.mu.closed = true
-		// ErrTxnUnknown only describes the CN's observation of Commit. TN may
+		// A missing Commit response only describes the CN's observation. TN may
 		// already have committed, so do not rewrite the status to Aborted.
 		if tc.reset.commitErr != nil &&
-			!moerr.IsMoErrCode(tc.reset.commitErr, moerr.ErrTxnUnknown) {
+			!tc.reset.commitNeedsResolution {
 			tc.mu.txn.Status = txn.TxnStatus_Aborted
 		}
 		tc.triggerEventLocked(
