@@ -354,7 +354,7 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 			getLogger(""),
 			newFixedSlicePool(16),
 			func(sid string) (bool, error) { return true, nil },
-			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+			func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 			func(txn pb.WaitTxn) (bool, error) { return true, nil },
 		).(*mapBasedTxnHolder)
 		defer hold.close()
@@ -372,6 +372,219 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 	})
 }
 
+func TestHandleCheckActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			visited := 0
+			s.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				for _, txnID := range [][]byte{
+					[]byte("txn1"),
+					[]byte("txn2"),
+					[]byte("txn3"),
+				} {
+					visited++
+					if !fn(txnID) {
+						return
+					}
+				}
+			}
+
+			req := &pb.Request{
+				Method: pb.Method_CheckActiveTxn,
+				CheckActiveTxn: pb.CheckActiveTxnRequest{
+					ServiceID: s.serviceID,
+					Txn:       []byte("txn2"),
+				},
+			}
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+
+			require.True(t, cs.writeCalled)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.True(t, resp.CheckActiveTxn.Active)
+			require.Equal(t, 2, visited)
+		},
+	)
+}
+
+func TestValidRemoteTxnUsesCheckActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.False(t, fn([]byte("txn1")))
+			}
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.True(t, valid)
+		},
+	)
+}
+
+type scriptedActiveTxnClient struct {
+	Client
+	calls      atomic.Int32
+	resets     atomic.Int32
+	resetErr   error
+	afterReset pb.CheckActiveTxnResponse
+}
+
+func (c *scriptedActiveTxnClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	if req.Method != pb.Method_CheckActiveTxn {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected active-txn method")
+	}
+	resp := acquireResponse()
+	if c.calls.Add(1) == 1 {
+		// The stale endpoint belongs to a different CN incarnation.
+		resp.CheckActiveTxn.Valid = false
+		return resp, nil
+	}
+	resp.CheckActiveTxn = c.afterReset
+	return resp, nil
+}
+
+func (c *scriptedActiveTxnClient) ResetBackend(context.Context, string) error {
+	c.resets.Add(1)
+	return c.resetErr
+}
+
+func (c *scriptedActiveTxnClient) Close() error { return nil }
+
+func TestValidRemoteTxnRecoversStaleCheckActiveTxnEndpoint(t *testing.T) {
+	client := &scriptedActiveTxnClient{
+		afterReset: pb.CheckActiveTxnResponse{Valid: true, Active: true},
+	}
+	var notified atomic.Int32
+	holder := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) {
+			return checkRemoteActiveTxn(client, txn)
+		},
+	).(*mapBasedTxnHolder)
+	defer holder.close()
+
+	require.True(t, holder.isValidRemoteTxn(pb.WaitTxn{
+		TxnID:     []byte("live"),
+		CreatedOn: "target",
+	}))
+	require.Equal(t, int32(2), client.calls.Load())
+	require.Equal(t, int32(1), client.resets.Load())
+	require.Zero(t, notified.Load(), "recovered live txn reached unlock fencing")
+}
+
+func TestValidRemoteTxnStaysLiveWhenEndpointResetFails(t *testing.T) {
+	client := &scriptedActiveTxnClient{resetErr: moerr.NewBackendClosedNoCtx()}
+	var notified atomic.Int32
+	holder := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) {
+			return checkRemoteActiveTxn(client, txn)
+		},
+	).(*mapBasedTxnHolder)
+	defer holder.close()
+
+	require.True(t, holder.isValidRemoteTxn(pb.WaitTxn{
+		TxnID:     []byte("live"),
+		CreatedOn: "target",
+	}))
+	require.Equal(t, int32(1), client.calls.Load())
+	require.Equal(t, int32(1), client.resets.Load())
+	require.Zero(t, notified.Load(), "unknown routing must not reach unlock fencing")
+}
+
+func TestValidRemoteTxnFallsBackToGetActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.True(t, fn([]byte("txn1")))
+			}
+			target.remote.server.RegisterMethodHandler(
+				pb.Method_CheckActiveTxn,
+				func(_ context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+					writeResponse(
+						target.logger,
+						cancel,
+						resp,
+						moerr.NewNotSupportedNoCtx("check active txn"),
+						cs,
+					)
+				},
+			)
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.True(t, valid)
+		},
+	)
+}
+
+func TestValidRemoteTxnFallsBackToGetActiveTxnMiss(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.True(t, fn([]byte("txn2")))
+			}
+			target.remote.server.RegisterMethodHandler(
+				pb.Method_CheckActiveTxn,
+				func(_ context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+					writeResponse(
+						target.logger,
+						cancel,
+						resp,
+						moerr.NewNotSupportedNoCtx("check active txn"),
+						cs,
+					)
+				},
+			)
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.False(t, valid)
+		},
+	)
+}
+
 func TestKeepRemoteActiveTxn(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
@@ -379,7 +592,7 @@ func TestKeepRemoteActiveTxn(t *testing.T) {
 			getLogger(""),
 			newFixedSlicePool(16),
 			func(sid string) (bool, error) { return false, nil },
-			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+			func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 			func(txn pb.WaitTxn) (bool, error) { return true, nil },
 		).(*mapBasedTxnHolder)
 		defer hold.close()

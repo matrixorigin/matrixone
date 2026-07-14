@@ -34,13 +34,14 @@ __pycache__/
 # Ignore build artifacts
 cgo/*.o
 cgo/*.a
+vendor/
+.proto-vendor/
 
 # Keep what we need
 !etc/
 !proto/
 !pkg/
 !cmd/
-!vendor/
 !go.mod
 !go.sum
 !Makefile

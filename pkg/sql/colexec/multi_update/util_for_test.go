@@ -115,6 +115,11 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 			continue
 		}
 		require.NoError(t, err)
+		if tc.op.Action != UpdateWriteS3 {
+			for _, info := range tc.op.ctr.updateCtxInfos {
+				require.NotNil(t, info.Source)
+			}
+		}
 
 		for {
 			res, err = vm.Exec(tc.op, proc)
@@ -182,6 +187,8 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
+
+	_ = colexec.NewServer(proc.GetService())
 
 	throttler := rscthrottler.NewMemThrottler(t.Name(), 1.0)
 

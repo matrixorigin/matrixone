@@ -94,6 +94,29 @@ func TestPositionFunctionSyntax(t *testing.T) {
 	}
 }
 
+func TestBinaryIntroducedHexLiteralHasDistinctType(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "select X'3132', _binary X'3132', _binary '1'", 1)
+	require.NoError(t, err)
+
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, clause.Exprs, 3)
+
+	plainHex, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, tree.P_hexnum, plainHex.ValType)
+
+	binaryHex, ok := clause.Exprs[1].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, tree.P_ScoreBinaryHexnum, binaryHex.ValType)
+
+	binaryString, ok := clause.Exprs[2].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, tree.P_ScoreBinary, binaryString.ValType)
+}
+
 func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	stmt, err := ParseOne(
 		context.TODO(),
@@ -414,6 +437,21 @@ var (
 	}, {
 		input:  "select rank() over(partition by a order by b desc) from t1",
 		output: "select rank() over (partition by a order by b desc) from t1",
+	}, {
+		input:  "select json_arrayagg(status) over (partition by customer_id order by id) from orders",
+		output: "select json_arrayagg(status) over (partition by customer_id order by id) from orders",
+	}, {
+		input:  "select json_arrayagg(status) from orders",
+		output: "select json_arrayagg(status) from orders",
+	}, {
+		input:  "select json_objectagg(k, v) over (partition by c order by id) from t1",
+		output: "select json_objectagg(k, v) over (partition by c order by id) from t1",
+	}, {
+		input:  "select json_objectagg(k, v) from t1",
+		output: "select json_objectagg(k, v) from t1",
+	}, {
+		input:  "select json_arrayagg, json_objectagg from t1",
+		output: "select json_arrayagg, json_objectagg from t1",
 	}, {
 		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
 		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
@@ -861,6 +899,9 @@ var (
 		}, {
 			input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
 			output: "select ADDDATE(DATE(2021-01-01), INTERVAL 1 day)",
+		}, {
+			input:  "SELECT DATE_ADD('2025-12-01', INTERVAL ((5*11)%180) DAY);",
+			output: "select DATE_ADD(2025-12-01, INTERVAL ((5 * 11) % 180) day)",
 		}, {
 			input:  "select '2007-01-01' + interval a day from t1;",
 			output: "select 2007-01-01 + INTERVAL a day from t1",
@@ -3247,16 +3288,16 @@ var (
 			output: "create database if not exists ucl360_demo_v3 default character set utf8mb4 collate utf8mb4_0900_ai_ci encryption N",
 		}, {
 			input:  "alter table t1 algorithm = DEFAULT",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = DEFAULT",
 		}, {
 			input:  "alter table t1 algorithm = INSTANT",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = INSTANT",
 		}, {
 			input:  "alter table t1 algorithm = INPLACE",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = INPLACE",
 		}, {
 			input:  "alter table t1 algorithm = COPY",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = COPY",
 		}, {
 			input:  "alter table t1 default CHARACTER SET = a COLLATE = b",
 			output: "alter table t1 charset = a",
@@ -3280,16 +3321,16 @@ var (
 			output: "alter table t1 charset = FORCE",
 		}, {
 			input:  "alter table t1 LOCK = DEFAULT",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = DEFAULT",
 		}, {
 			input:  "alter table t1 LOCK = NONE",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = NONE",
 		}, {
 			input:  "alter table t1 LOCK = SHARED",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = SHARED",
 		}, {
 			input:  "alter table t1 LOCK = EXCLUSIVE",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = EXCLUSIVE",
 		}, {
 			input:  "alter table t1 WITHOUT VALIDATION",
 			output: "alter table t1 charset = WITHOUT",

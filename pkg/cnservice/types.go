@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -593,9 +594,7 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 			return
 		}
 
-		tc.IterTxns(func(to client.TxnOverview) bool {
-			return f(to.Meta.ID)
-		})
+		tc.IterTxnIDs(f)
 	}
 	return s.cfg.LockService
 }
@@ -642,6 +641,7 @@ type service struct {
 	_txnClient             client.TxnClient
 	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
+	colexecServer          *colexec.Server
 	distributeTaeMp        *mpool.MPool
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService

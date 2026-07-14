@@ -93,11 +93,13 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 		if terminalSignal.EventType == process.EventEnd && terminalDelivered {
 			connector.cleanupSpool = sp
 		} else {
+			abortErr := terminalErr
 			if terminalSignal.EventType == process.EventEnd && !terminalDelivered {
 				fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
 				connector.sendTerminalWithLog(signalCtx, proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
+				abortErr = fallbackErr
 			}
-			sp.Abort()
+			sp.Abort(abortErr)
 			connector.cleanupSpool = nil
 		}
 		connector.ctr.sp = nil

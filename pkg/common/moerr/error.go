@@ -58,12 +58,13 @@ const (
 	ErrWarnDataTruncated uint16 = 201
 
 	// Group 1: Internal errors
-	ErrStart            uint16 = 20100
-	ErrInternal         uint16 = 20101
-	ErrNYI              uint16 = 20102
-	ErrOOM              uint16 = 20103
-	ErrQueryInterrupted uint16 = 20104
-	ErrNotSupported     uint16 = 20105
+	ErrStart                       uint16 = 20100
+	ErrInternal                    uint16 = 20101
+	ErrNYI                         uint16 = 20102
+	ErrOOM                         uint16 = 20103
+	ErrQueryInterrupted            uint16 = 20104
+	ErrNotSupported                uint16 = 20105
+	ErrRemoteDispatchNotRegistered uint16 = 20106
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -167,6 +168,7 @@ const (
 	ErrBlobCantHaveDefault                      uint16 = 20472
 	ErrCantCompileForPrepare                    uint16 = 20473
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
+	ErrKeyDoesNotExist                          uint16 = 20475
 
 	// Group 5: rpc errors
 	//
@@ -362,12 +364,13 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWarnDataTruncated: {WARN_DATA_TRUNCATED, []string{MySQLDefaultSqlState}, "warning: data truncated"},
 
 	// Group 1: Internal errors
-	ErrStart:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: error code start"},
-	ErrInternal:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: %s"},
-	ErrNYI:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s is not yet implemented"},
-	ErrOOM:              {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "error: out of memory"},
-	ErrQueryInterrupted: {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
-	ErrNotSupported:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
+	ErrStart:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: error code start"},
+	ErrInternal:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: %s"},
+	ErrNYI:                         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s is not yet implemented"},
+	ErrOOM:                         {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "error: out of memory"},
+	ErrQueryInterrupted:            {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
+	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
+	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
@@ -455,6 +458,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrForeignKeyColumnCannotChange:             {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
 	ErrForeignKeyOnPartitioned:                  {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
 	ErrKeyColumnDoesNotExist:                    {ER_KEY_COLUMN_DOES_NOT_EXIST, []string{MySQLDefaultSqlState}, "Key column '%-.192s' doesn't exist in table"},
+	ErrKeyDoesNotExist:                          {ER_KEY_DOES_NOT_EXIST, []string{"42000"}, "Key '%-.192s' doesn't exist in table '%-.192s'"},
 	ErrCantDropFieldOrKey:                       {ER_CANT_DROP_FIELD_OR_KEY, []string{MySQLDefaultSqlState}, "Can't DROP '%-.192s'; check that column/key exists"},
 	ErrTableMustHaveColumns:                     {ER_TABLE_MUST_HAVE_COLUMNS, []string{MySQLDefaultSqlState}, "A table must have at least 1 column"},
 	ErrCantRemoveAllFields:                      {ER_CANT_REMOVE_ALL_FIELDS, []string{MySQLDefaultSqlState}, "You can't delete all columns with ALTER TABLE; use DROP TABLE instead"},
@@ -903,6 +907,10 @@ func NewNotSupportedf(ctx context.Context, format string, args ...any) *Error {
 
 func NewNotSupported(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrNotSupported, msg)
+}
+
+func NewRemoteDispatchNotRegistered(ctx context.Context, uuid string) *Error {
+	return newError(ctx, ErrRemoteDispatchNotRegistered, uuid)
 }
 
 func NewOOM(ctx context.Context) *Error {
@@ -1601,6 +1609,10 @@ func NewErrDupFieldName(ctx context.Context, k any) *Error {
 
 func NewErrKeyColumnDoesNotExist(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrKeyColumnDoesNotExist, k)
+}
+
+func NewErrKeyDoesNotExist(ctx context.Context, key any, table any) *Error {
+	return newError(ctx, ErrKeyDoesNotExist, key, table)
 }
 
 func NewErrCantDropFieldOrKey(ctx context.Context, k any) *Error {

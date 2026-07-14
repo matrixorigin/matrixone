@@ -28,7 +28,7 @@ type bytejsonModifier struct {
 }
 
 func (bm *bytejsonModifier) insert(path *Path, newBj ByteJson) (ByteJson, error) {
-	_, exists := bm.bj.querySimpleExist(path)
+	_, exists := bm.bj.querySimpleExist(path, false)
 	if exists {
 		// if path exists, return
 		return bm.bj, nil
@@ -42,7 +42,7 @@ func (bm *bytejsonModifier) insert(path *Path, newBj ByteJson) (ByteJson, error)
 }
 
 func (bm *bytejsonModifier) replace(path *Path, newBj ByteJson) (ByteJson, error) {
-	result, exists := bm.bj.querySimpleExist(path)
+	result, exists := bm.bj.querySimpleExist(path, false)
 	if !exists {
 		// if path not exists, return
 		return bm.bj, nil
@@ -54,7 +54,7 @@ func (bm *bytejsonModifier) replace(path *Path, newBj ByteJson) (ByteJson, error
 }
 
 func (bm *bytejsonModifier) set(path *Path, newBj ByteJson) (ByteJson, error) {
-	result, exists := bm.bj.querySimpleExist(path)
+	result, exists := bm.bj.querySimpleExist(path, false)
 	if exists {
 		// set
 		bm.modifyPtr = &result.Data[0]
@@ -67,6 +67,101 @@ func (bm *bytejsonModifier) set(path *Path, newBj ByteJson) (ByteJson, error) {
 	}
 	// return bm.rebuild()
 	return Null, moerr.NewInvalidArgNoCtx("invalid path", path.String())
+}
+
+func (bm *bytejsonModifier) remove(path *Path) (ByteJson, error) {
+	if path == nil || path.empty() {
+		return Null, moerr.NewInvalidArgNoCtx("invalid json remove", "$")
+	}
+
+	path = bm.removePathWithoutAutowrapping(path)
+	if path.empty() {
+		return bm.bj, nil
+	}
+
+	parentPath, lastSub := path.popOneSubPath()
+	parent, exists := bm.bj.querySimpleExist(&parentPath, false)
+	if !exists {
+		return bm.bj, nil
+	}
+
+	switch parent.Type {
+	case TpCodeArray:
+		if lastSub.tp != subPathIdx {
+			return bm.bj, nil
+		}
+		elemCnt := parent.GetElemCnt()
+		idx, _, _ := lastSub.idx.genIndex(elemCnt)
+		if idx < 0 || idx >= elemCnt {
+			return bm.bj, nil
+		}
+		elems := make([]ByteJson, 0, elemCnt-1)
+		for i := 0; i < elemCnt; i++ {
+			if i != idx {
+				elems = append(elems, parent.getArrayElem(i))
+			}
+		}
+		bm.modifyPtr = &parent.Data[0]
+		bm.modifyVal = buildBinaryJSONArray(elems)
+		return bm.rebuild(), nil
+	case TpCodeObject:
+		if lastSub.tp != subPathKey {
+			return bm.bj, nil
+		}
+		elementCount := parent.GetElemCnt()
+		removeKey := []byte(lastSub.key)
+		removeIdx := sort.Search(elementCount, func(i int) bool {
+			k := parent.getObjectKey(i)
+			return bytes.Compare(k, removeKey) >= 0
+		})
+		if removeIdx >= elementCount || !bytes.Equal(parent.getObjectKey(removeIdx), removeKey) {
+			return bm.bj, nil
+		}
+		keys := make([][]byte, 0, elementCount-1)
+		elems := make([]ByteJson, 0, elementCount-1)
+		for i := 0; i < elementCount; i++ {
+			if i == removeIdx {
+				continue
+			}
+			keys = append(keys, parent.getObjectKey(i))
+			elems = append(elems, parent.getObjectVal(i))
+		}
+		var err error
+		bm.modifyPtr = &parent.Data[0]
+		bm.modifyVal, err = buildJsonObject(keys, elems)
+		if err != nil {
+			return Null, err
+		}
+		return bm.rebuild(), nil
+	default:
+		return bm.bj, nil
+	}
+}
+
+func (bm *bytejsonModifier) removePathWithoutAutowrapping(path *Path) *Path {
+	clonedSubs := make([]subPath, 0, len(path.paths))
+	for _, sub := range path.paths {
+		if isAutowrapArrayCell(sub) {
+			clonedPath := Path{paths: clonedSubs}
+			hit, exists := bm.bj.querySimpleExist(&clonedPath, false)
+			if exists && hit.Type != TpCodeArray {
+				continue
+			}
+		}
+		clonedSubs = append(clonedSubs, sub)
+	}
+
+	var cloned Path
+	cloned.init(clonedSubs)
+	return &cloned
+}
+
+func isAutowrapArrayCell(sub subPath) bool {
+	if sub.tp != subPathIdx || sub.idx == nil {
+		return false
+	}
+	idx, _, _ := sub.idx.genIndex(1)
+	return idx == 0
 }
 
 func (bm *bytejsonModifier) rebuild() ByteJson {
