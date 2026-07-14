@@ -3639,6 +3639,7 @@ type rollupWindowRewriteState struct {
 	innerExprs           tree.SelectExprs
 	exprAliases          map[string]string
 	sourceNameAliases    map[string]string
+	ambiguousSourceNames map[string]struct{}
 	havingAliases        map[string]string
 	outputAliases        map[string]string
 	activeNameAliases    map[string]string
@@ -3649,12 +3650,13 @@ type rollupWindowRewriteState struct {
 
 func newRollupWindowRewriteState(selectExprs tree.SelectExprs) *rollupWindowRewriteState {
 	state := &rollupWindowRewriteState{
-		innerExprs:        make(tree.SelectExprs, 0, len(selectExprs)),
-		exprAliases:       make(map[string]string),
-		sourceNameAliases: make(map[string]string),
-		havingAliases:     make(map[string]string),
-		outputAliases:     make(map[string]string),
-		usedAliases:       make(map[string]struct{}),
+		innerExprs:           make(tree.SelectExprs, 0, len(selectExprs)),
+		exprAliases:          make(map[string]string),
+		sourceNameAliases:    make(map[string]string),
+		ambiguousSourceNames: make(map[string]struct{}),
+		havingAliases:        make(map[string]string),
+		outputAliases:        make(map[string]string),
+		usedAliases:          make(map[string]struct{}),
 	}
 	for _, selectExpr := range selectExprs {
 		if selectExpr.As != nil && !selectExpr.As.Empty() {
@@ -3673,11 +3675,12 @@ func newRollupWindowRewriteState(selectExprs tree.SelectExprs) *rollupWindowRewr
 }
 
 func (state *rollupWindowRewriteState) addGroupedSourceExprs(groupBy *tree.GroupByClause) bool {
-	// A grouped column may only be referenced by HAVING. Materialize bare group
-	// names so AliasAfterColumn can still choose them ahead of SELECT aliases.
+	// A grouped column may only be referenced by HAVING. Materialize grouped
+	// names so AliasAfterColumn can still choose their terminal column name
+	// ahead of SELECT aliases.
 	for _, groupByExprs := range groupBy.GroupByExprsList {
 		for _, expr := range groupByExprs {
-			if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star && unresolvedName.NumParts == 1 {
+			if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star {
 				if _, ok := state.ensureInnerExpr(expr); !ok {
 					return false
 				}
@@ -3722,9 +3725,25 @@ func (state *rollupWindowRewriteState) addExprAlias(expr tree.Expr, alias string
 	if _, exists := state.exprAliases[key]; !exists {
 		state.exprAliases[key] = alias
 	}
-	if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star && unresolvedName.NumParts == 1 {
-		addRollupWindowNameAlias(state.sourceNameAliases, unresolvedName.ColNameOrigin(), alias)
+	if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star {
+		state.addSourceNameAlias(unresolvedName.ColNameOrigin(), alias)
 	}
+}
+
+func (state *rollupWindowRewriteState) addSourceNameAlias(name, alias string) {
+	key := strings.ToLower(name)
+	if key == "" {
+		return
+	}
+	if _, ambiguous := state.ambiguousSourceNames[key]; ambiguous {
+		return
+	}
+	if existing, exists := state.sourceNameAliases[key]; exists && existing != alias {
+		delete(state.sourceNameAliases, key)
+		state.ambiguousSourceNames[key] = struct{}{}
+		return
+	}
+	state.sourceNameAliases[key] = alias
 }
 
 func addRollupWindowNameAlias(aliases map[string]string, name, alias string) {
@@ -3741,7 +3760,11 @@ func (state *rollupWindowRewriteState) lookupExprAlias(expr tree.Expr) (string, 
 	exprKey := rollupWindowExprKey(expr)
 	if state.nameAliasesAfterExpr {
 		if unresolvedName, ok := expr.(*tree.UnresolvedName); ok && !unresolvedName.Star && unresolvedName.NumParts == 1 {
-			if alias, exists := state.sourceNameAliases[strings.ToLower(unresolvedName.ColNameOrigin())]; exists {
+			name := strings.ToLower(unresolvedName.ColNameOrigin())
+			if _, ambiguous := state.ambiguousSourceNames[name]; ambiguous {
+				return "", false
+			}
+			if alias, exists := state.sourceNameAliases[name]; exists {
 				return alias, true
 			}
 		}

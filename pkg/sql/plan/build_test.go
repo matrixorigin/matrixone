@@ -967,6 +967,18 @@ func TestRollupWindowAliasCollisionsPreserveSourceScope(t *testing.T) {
 			expectedProjectLen: 3,
 			expectedHavingType: int32(types.T_int32),
 		},
+		{
+			name: "qualified grouped source keeps bare having source scope",
+			sql: `
+				select sum(t.n_nationkey) as n_regionkey, t.n_regionkey,
+				       row_number() over (order by t.n_regionkey) as rn
+				from nation t
+				group by t.n_regionkey with rollup
+				having n_regionkey > 0`,
+			expectedHeadings:   []string{"n_regionkey", "n_regionkey", "rn"},
+			expectedProjectLen: 3,
+			expectedHavingType: int32(types.T_int32),
+		},
 	}
 
 	for _, test := range tests {
@@ -1047,6 +1059,25 @@ func TestRollupWindowHavingAliasCollisionWithHiddenGroup(t *testing.T) {
 		}
 	}
 	require.True(t, foundHaving)
+}
+
+func TestRollupWindowSourceNameAliasAmbiguity(t *testing.T) {
+	state := newRollupWindowRewriteState(nil)
+	state.addSourceNameAlias("n_regionkey", "left_alias")
+	state.addSourceNameAlias("N_REGIONKEY", "right_alias")
+
+	_, exists := state.sourceNameAliases["n_regionkey"]
+	require.False(t, exists)
+	_, ambiguous := state.ambiguousSourceNames["n_regionkey"]
+	require.True(t, ambiguous)
+
+	state.havingAliases["n_regionkey"] = "aggregate_alias"
+	rewritten, ok := rewriteRollupWindowExprWithFallbackNameAliases(
+		tree.NewUnresolvedColName("n_regionkey"), state, state.havingAliases)
+	require.True(t, ok)
+	require.NotEqual(t, "aggregate_alias", tree.String(rewritten, dialect.MYSQL))
+	require.Len(t, state.innerExprs, 1)
+	require.Equal(t, "n_regionkey", tree.String(state.innerExprs[0].Expr, dialect.MYSQL))
 }
 
 func TestRewriteRollupWindowSelectHelpers(t *testing.T) {

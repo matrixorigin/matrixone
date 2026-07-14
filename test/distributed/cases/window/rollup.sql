@@ -646,12 +646,12 @@ order by row_num;
 -- HAVING keeps AliasAfterColumn precedence when an aggregate alias collides
 -- with the grouped source column name
 select
-    sum(qty) as qty,
-    row_number() over (order by sum(qty), count(*)) as row_num
+    sum(r.qty) as qty,
+    row_number() over (order by sum(r.qty), count(*)) as row_num
 from
-    rollup_window_sales
+    rollup_window_sales r
 group by
-    qty with rollup
+    r.qty with rollup
 having qty > 0
 order by row_num;
 drop table rollup_window_sales;
