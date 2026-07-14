@@ -689,6 +689,13 @@ func TestLeastGreatestFunctionResolution(t *testing.T) {
 			wantTargets: []types.T{types.T_varbinary, types.T_varbinary},
 		},
 		{
+			name:        "text blob returns text",
+			args:        []types.Type{types.T_text.ToType(), types.T_blob.ToType()},
+			wantReturn:  types.T_text,
+			wantCast:    true,
+			wantTargets: []types.T{types.T_text, types.T_text},
+		},
+		{
 			name:        "enum varchar returns varchar",
 			args:        []types.Type{types.T_enum.ToType(), types.T_varchar.ToType()},
 			wantReturn:  types.T_varchar,
@@ -766,6 +773,24 @@ func TestLeastGreatestTemporalResolution(t *testing.T) {
 			wantOverload: 2,
 			wantMode:     leastGreatestComparePackedDate,
 			wantTargets:  []types.T{types.T_varchar, types.T_date, types.T_time},
+		},
+		{
+			name:         "json datetime keeps temporal input for json temporal overload",
+			inputs:       []types.Type{types.T_json.ToType(), types.T_datetime.ToType()},
+			wantOK:       true,
+			wantReturn:   types.T_varchar,
+			wantOverload: leastGreatestJSONTemporalOverload,
+			wantMode:     leastGreatestComparePackedDate,
+			wantTargets:  []types.T{types.T_varchar, types.T_datetime},
+		},
+		{
+			name:         "json timestamp keeps temporal input for json temporal overload",
+			inputs:       []types.Type{types.T_json.ToType(), types.T_timestamp.ToType()},
+			wantOK:       true,
+			wantReturn:   types.T_varchar,
+			wantOverload: leastGreatestJSONTemporalOverload,
+			wantMode:     leastGreatestComparePackedDate,
+			wantTargets:  []types.T{types.T_varchar, types.T_timestamp},
 		},
 		{
 			name:         "year date bigint keeps temporal peers",
@@ -874,6 +899,48 @@ func TestLeastGreatestHighPriorityResolution(t *testing.T) {
 		_, ok := resolveLeastGreatestType([]types.Type{intervalType, intervalType})
 		require.False(t, ok)
 	})
+}
+
+func TestLeastGreatestSupportedOidResolution(t *testing.T) {
+	sameOidCases := []struct {
+		name string
+		typ  types.Type
+	}{
+		{"uuid", types.T_uuid.ToType()},
+		{"rowid", types.T_Rowid.ToType()},
+		{"float32 array", types.T_array_float32.ToType()},
+		{"float64 array", types.T_array_float64.ToType()},
+		{"datalink", types.T_datalink.ToType()},
+	}
+	for _, tc := range sameOidCases {
+		t.Run(tc.name+" same oid", func(t *testing.T) {
+			resolution, ok := resolveLeastGreatestType([]types.Type{tc.typ, tc.typ})
+			require.True(t, ok)
+			require.Equal(t, tc.typ.Oid, resolution.resultType.Oid)
+			require.Equal(t, leastGreatestNormalOverload, resolution.overloadID)
+			require.Empty(t, resolution.castTypes)
+		})
+		t.Run(tc.name+" mixed oid", func(t *testing.T) {
+			_, ok := resolveLeastGreatestType([]types.Type{tc.typ, types.T_varchar.ToType()})
+			require.False(t, ok)
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		input []types.Type
+	}{
+		{"interval same oid", []types.Type{{Oid: types.T_interval}, {Oid: types.T_interval}}},
+		{"interval mixed oid", []types.Type{{Oid: types.T_interval}, types.T_varchar.ToType()}},
+		{"geometry same oid", []types.Type{{Oid: types.T_geometry}, {Oid: types.T_geometry}}},
+		{"geometry mixed oid", []types.Type{{Oid: types.T_geometry}, types.T_varchar.ToType()}},
+		{"float arrays mixed oid", []types.Type{types.T_array_float32.ToType(), types.T_array_float64.ToType()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok := resolveLeastGreatestType(tc.input)
+			require.False(t, ok)
+		})
+	}
 }
 
 func TestLeastGreatestPackedDateMaterializesNullRows(t *testing.T) {
@@ -992,21 +1059,68 @@ func TestLeastGreatestYearNumericExecutor(t *testing.T) {
 		leastYearNumericFn)
 	ok, info = tcLeast.Run()
 	require.True(t, ok, info)
+
+	t.Run("double target", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2020, 2022}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2019.5, 2022.5}, nil),
+		}
+		greatest := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{2020, 2022.5}, nil),
+			greatestYearNumericFn)
+		ok, info := greatest.Run()
+		require.True(t, ok, info)
+
+		least := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{2019.5, 2022}, nil),
+			leastYearNumericFn)
+		ok, info = least.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("bit target", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2020, 2022}, nil),
+			NewFunctionTestInput(types.T_bit.ToType(), []uint64{2019, 2023}, nil),
+		}
+		greatest := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{2020, 2023}, nil),
+			greatestYearNumericFn)
+		ok, info := greatest.Run()
+		require.True(t, ok, info)
+
+		least := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{2019, 2022}, nil),
+			leastYearNumericFn)
+		ok, info = least.Run()
+		require.True(t, ok, info)
+	})
 }
 
 func TestLeastGreatestYearNumericFunctionResolution(t *testing.T) {
-	for _, name := range []string{"greatest", "least"} {
-		fn, err := GetFunctionByName(context.Background(), name, []types.Type{
-			types.T_year.ToType(),
-			types.New(types.T_decimal128, 10, 1),
-		})
-		require.NoError(t, err)
-		require.Equal(t, int32(leastGreatestYearNumericOverload), fn.overloadId)
-		require.Equal(t, types.T_decimal128, fn.GetReturnType().Oid)
+	cases := []struct {
+		name       string
+		numericTyp types.Type
+		wantTarget types.T
+	}{
+		{"bigint", types.T_int64.ToType(), types.T_decimal128},
+		{"decimal", types.New(types.T_decimal128, 10, 1), types.T_decimal128},
+		{"double", types.T_float64.ToType(), types.T_float64},
+		{"bit", types.T_bit.ToType(), types.T_uint64},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, name := range []string{"greatest", "least"} {
+				fn, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_year.ToType(), tc.numericTyp})
+				require.NoError(t, err)
+				require.Equal(t, int32(leastGreatestYearNumericOverload), fn.overloadId)
+				require.Equal(t, tc.wantTarget, fn.GetReturnType().Oid)
 
-		targets, shouldCast := fn.ShouldDoImplicitTypeCast()
-		require.True(t, shouldCast)
-		require.Equal(t, []types.T{types.T_year, types.T_decimal128}, []types.T{targets[0].Oid, targets[1].Oid})
+				targets, shouldCast := fn.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Equal(t, []types.T{types.T_year, tc.wantTarget}, []types.T{targets[0].Oid, targets[1].Oid})
+			}
+		})
 	}
 }
 

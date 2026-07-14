@@ -348,6 +348,9 @@ invalid argument function greatest, bad value [ROWID BIGINT]
 select greatest(v32, v32) as greatest_vecf32_same_oid from greatest_least_supported_oid;
 ➤ greatest_vecf32_same_oid[12,3,0]  𝄀
 [1, 2, 3]
+select greatest(v64, v64) as greatest_vecf64_same_oid from greatest_least_supported_oid;
+➤ greatest_vecf64_same_oid[12,3,0]  𝄀
+[1, 2, 3]
 select greatest(v32, v64) from greatest_least_supported_oid;
 invalid argument function greatest, bad value [VECF32 VECF64]
 select greatest(cast('file://greatest-least-a' as datalink), cast('file://greatest-least-b' as datalink)) as greatest_datalink_same_oid;

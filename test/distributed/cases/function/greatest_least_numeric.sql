@@ -193,6 +193,7 @@ select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), 'x');
 select greatest(__mo_rowid, __mo_rowid) = __mo_rowid as greatest_rowid_same_oid from greatest_least_supported_oid;
 select greatest(__mo_rowid, 1) from greatest_least_supported_oid;
 select greatest(v32, v32) as greatest_vecf32_same_oid from greatest_least_supported_oid;
+select greatest(v64, v64) as greatest_vecf64_same_oid from greatest_least_supported_oid;
 select greatest(v32, v64) from greatest_least_supported_oid;
 select greatest(cast('file://greatest-least-a' as datalink), cast('file://greatest-least-b' as datalink)) as greatest_datalink_same_oid;
 select greatest(cast('file://greatest-least-a' as datalink), 'x');
