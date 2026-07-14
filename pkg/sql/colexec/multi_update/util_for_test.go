@@ -188,6 +188,8 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 
+	_ = colexec.NewServer(proc.GetService())
+
 	throttler := rscthrottler.NewMemThrottler(t.Name(), 1.0)
 
 	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.CNMemoryThrottler, throttler)

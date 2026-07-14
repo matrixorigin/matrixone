@@ -236,11 +236,10 @@ func TestRemoteRun(t *testing.T) {
 }
 
 func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
-	_ = colexec.NewServer(nil)
-
 	oldRuntime := runtime.ServiceRuntime("")
 	testRuntime := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", testRuntime)
+	_ = colexec.NewServer("")
 	t.Cleanup(func() {
 		runtime.SetupServiceBasedRuntime("", oldRuntime)
 	})
@@ -288,6 +287,7 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 	require.NoError(t, err)
 	defer registrations.cleanup()
 	registeredProc, notifyCh, err := (&messageReceiverOnServer{
+		colexecServer: colexec.GetServer(""),
 		connectionCtx: context.Background(),
 		messageCtx:    context.Background(),
 	}).TryGetProcByUuid(uid)
@@ -325,7 +325,7 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 		t.Fatal("RemoteRun failure did not release the pending retained-root attach")
 	}
 	registrations.cleanup()
-	registeredProc, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+	registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
 	require.False(t, ok)
 	require.Nil(t, registeredProc)
 	require.Nil(t, notifyCh)

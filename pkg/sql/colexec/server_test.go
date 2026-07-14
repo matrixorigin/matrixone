@@ -18,13 +18,44 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestServerIsIsolatedByCNService(t *testing.T) {
+	const (
+		cn0 = "colexec-isolation-cn0"
+		cn1 = "colexec-isolation-cn1"
+	)
+	runtime.SetupServiceBasedRuntime(cn0, runtime.NewRuntime(metadata.ServiceType_CN, cn0, nil))
+	runtime.SetupServiceBasedRuntime(cn1, runtime.NewRuntime(metadata.ServiceType_CN, cn1, nil))
+
+	server0 := NewServer(cn0)
+	server1 := NewServer(cn1)
+	require.NotSame(t, server0, server1)
+	require.Same(t, server0, GetServer(cn0))
+	require.Same(t, server1, GetServer(cn1))
+
+	uid := uuid.Must(uuid.NewV7())
+	proc0 := &process.Process{}
+	proc1 := &process.Process{}
+	ch0 := make(process.RemotePipelineInformationChannel)
+	ch1 := make(process.RemotePipelineInformationChannel)
+	require.NoError(t, server0.PutProcIntoUuidMap(uid, proc0, ch0))
+	require.NoError(t, server1.PutProcIntoUuidMap(uid, proc1, ch1))
+
+	server1.RemoveUuidsOwned([]uuid.UUID{uid}, ch1)
+	gotProc, gotCh, ok := server0.GetProcByUuid(uid, false)
+	require.True(t, ok)
+	require.Same(t, proc0, gotProc)
+	require.Equal(t, ch0, gotCh)
+}
+
 func TestPutProcIntoUuidMapConflictIncludesUuidAndState(t *testing.T) {
-	srv := NewServer(nil)
+	srv := NewServer("")
 
 	t.Run("live", func(t *testing.T) {
 		uid := uuid.Must(uuid.NewV7())

@@ -133,16 +133,32 @@ func NewCompile(
 	c.disableRetry = false
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
-	if c.proc.GetTxnOperator() != nil {
-		// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
-		// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
-		// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
-		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
-		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
-	} else {
-		c.TxnOffset = 0
-	}
+	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
+	// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
+	// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
+	c.TxnOffset = txnOffsetOfCompile(c.proc)
 	return c
+}
+
+// txnOffsetOfCompile returns the workspace write offset a new compile reads
+// with. Compiling a user statement advances the statement boundary of the
+// workspace and reads with it. An internal sub-sql of the current statement
+// (DisableIncrStatement, marked on the process) instead captures the current
+// end of the workspace — it reads everything its caller has written so far,
+// but it opens no statement, so it must not advance the shared boundary:
+// moving the boundary mid-statement breaks the positional visibility of the
+// caller's workspace entries (issue #25557).
+func txnOffsetOfCompile(proc *process.Process) int {
+	op := proc.GetTxnOperator()
+	if op == nil {
+		return 0
+	}
+	ws := op.GetWorkspace()
+	if proc.IncrStatementDisabled() {
+		return int(ws.WriteOffset())
+	}
+	ws.UpdateSnapshotWriteOffset()
+	return ws.GetSnapshotWriteOffset()
 }
 
 func (c *Compile) Release() {
@@ -214,9 +230,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		f.reset()
 	}
 	c.startAt = startAt
+	c.TxnOffset = txnOffsetOfCompile(c.proc)
 	if c.proc.GetTxnOperator() != nil {
-		c.proc.GetTxnOperator().GetWorkspace().UpdateSnapshotWriteOffset()
-		c.TxnOffset = c.proc.GetTxnOperator().GetWorkspace().GetSnapshotWriteOffset()
 		// all scopes should update the txn offset, or the reader will receive a 0 txnOffset,
 		// that cause a dml statement can not see the previous statements' operations.
 		if len(c.scopes) > 0 {
@@ -224,8 +239,6 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 				UpdateScopeTxnOffset(c.scopes[i], c.TxnOffset)
 			}
 		}
-	} else {
-		c.TxnOffset = 0
 	}
 
 	// A reused prepared pipeline runs directly after Reset. Only retries compile
@@ -4620,7 +4633,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, node 
 		// use distributed delete
 		arg.RemoteDelete = true
 		// maybe just copy only once?
-		arg.SegmentMap = colexec.Get().GetCnSegmentMap()
+		arg.SegmentMap = colexec.MustGetServer(c.proc.GetService()).GetCnSegmentMap()
 		arg.IBucket = uint32(i)
 		arg.Nbucket = uint32(len(rs))
 		rs[i].setRootOperator(dupOperator(arg, 0, len(rs)))
