@@ -99,6 +99,22 @@ var (
 			Name:      "storage_usage_cache_size",
 			Help:      "Size of the storage usage cache used",
 		})
+
+	TaskMergeOOMPauseCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "merge_oom_pause_total",
+			Help:      "Total number of DN merge scheduler pauses caused by low available memory.",
+		})
+
+	TaskMergeAvailableMemoryGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "merge_available_memory_bytes",
+			Help:      "Available memory observed by the DN merge scheduler.",
+		})
 )
 
 // transfer page metrics
