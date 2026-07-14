@@ -34,9 +34,13 @@ func TestCastTemporalNumericUsesMysqlPackedValue(t *testing.T) {
 	timestampValue := datetimeValue.ToTimestamp(time.UTC)
 	dateDecimal, err := types.ParseDecimal128("20240102", 20, 0)
 	require.NoError(t, err)
+	dateDecimal64, err := types.ParseDecimal64("20240102.000000", 14, 6)
+	require.NoError(t, err)
 	datetimeDecimal, err := types.ParseDecimal128("20240102030405.123456", 20, 6)
 	require.NoError(t, err)
 	yearDecimal, err := types.ParseDecimal128("2024", 20, 0)
+	require.NoError(t, err)
+	yearDecimal64, err := types.ParseDecimal64("2024", 4, 0)
 	require.NoError(t, err)
 
 	testCases := []tcTemp{
@@ -55,6 +59,14 @@ func TestCastTemporalNumericUsesMysqlPackedValue(t *testing.T) {
 				NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{}, nil),
 			},
 			expect: NewFunctionTestResult(types.New(types.T_decimal128, 20, 0), false, []types.Decimal128{dateDecimal}, nil),
+		},
+		{
+			info: "date to decimal64 preserves target scale",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{dateValue}, nil),
+				NewFunctionTestInput(types.New(types.T_decimal64, 14, 6), []types.Decimal64{}, nil),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_decimal64, 14, 6), false, []types.Decimal64{dateDecimal64}, nil),
 		},
 		{
 			info: "datetime to signed uses YYYYMMDDHHMMSS",
@@ -95,6 +107,14 @@ func TestCastTemporalNumericUsesMysqlPackedValue(t *testing.T) {
 				NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{}, nil),
 			},
 			expect: NewFunctionTestResult(types.New(types.T_decimal128, 20, 0), false, []types.Decimal128{yearDecimal}, nil),
+		},
+		{
+			info: "year to decimal64 uses year value",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024}, nil),
+				NewFunctionTestInput(types.New(types.T_decimal64, 4, 0), []types.Decimal64{}, nil),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_decimal64, 4, 0), false, []types.Decimal64{yearDecimal64}, nil),
 		},
 	}
 
@@ -164,4 +184,26 @@ func TestTemporalNumericCastOverloadSupportsDateAndYearDecimal(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestTimestampNumericCastUsesSessionTimeZone(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("+08:00", 8*60*60)
+
+	datetimeValue, err := types.ParseDatetime("2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+	timestampValue := datetimeValue.ToTimestamp(time.UTC)
+	expected, err := types.ParseDecimal128("20240102110405.123456", 20, 6)
+	require.NoError(t, err)
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{timestampValue}, nil),
+			NewFunctionTestInput(types.New(types.T_decimal128, 20, 6), []types.Decimal128{}, nil),
+		},
+		NewFunctionTestResult(types.New(types.T_decimal128, 20, 6), false, []types.Decimal128{expected}, nil),
+		NewCast,
+	)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
 }
