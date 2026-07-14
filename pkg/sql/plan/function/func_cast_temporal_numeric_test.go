@@ -207,3 +207,39 @@ func TestTimestampNumericCastUsesSessionTimeZone(t *testing.T) {
 	succeed, info := tc.Run()
 	require.True(t, succeed, info)
 }
+
+func TestTemporalNumericCastRejectsPackedValueOutsideInt32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	datetimeValue, err := types.ParseDatetime("2024-01-02 03:04:05", 0)
+	require.NoError(t, err)
+	timestampValue := datetimeValue.ToTimestamp(time.UTC)
+
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{
+			name:  "datetime",
+			input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetimeValue}, nil),
+		},
+		{
+			name:  "timestamp",
+			input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestampValue}, nil),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					tc.input,
+					NewFunctionTestInput(types.T_int32.ToType(), []int32{}, nil),
+				},
+				NewFunctionTestResult(types.T_int32.ToType(), true, nil, nil),
+				NewCast,
+			)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
