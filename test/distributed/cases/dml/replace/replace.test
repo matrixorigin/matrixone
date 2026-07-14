@@ -327,6 +327,39 @@ drop table fk_review_src;
 drop table fk_review_c;
 drop table fk_review_p;
 
+create table fk_auto_p(id int auto_increment primary key, u int unique, v int);
+create table fk_auto_c(id int primary key, pid int,
+  foreign key(pid) references fk_auto_p(id) on delete cascade);
+insert into fk_auto_p(u, v) values (10, 100);
+insert into fk_auto_c values (1, 1);
+replace into fk_auto_p(u, v) values (10, 200);
+select u, v from fk_auto_p;
+select * from fk_auto_c;
+drop table fk_auto_c;
+drop table fk_auto_p;
+
+create table fk_nonpk_p(id int primary key, u int unique);
+create table fk_nonpk_c(id int primary key, parent_u int,
+  foreign key(parent_u) references fk_nonpk_p(u) on delete cascade);
+insert into fk_nonpk_p values (1, 10);
+insert into fk_nonpk_c values (1, 10);
+replace into fk_nonpk_p values (2, 10);
+select * from fk_nonpk_p;
+select * from fk_nonpk_c;
+drop table fk_nonpk_c;
+drop table fk_nonpk_p;
+
+create table fk_fanout_p(id int primary key, u int unique, v int unique);
+create table fk_fanout_c(id int primary key, pid int,
+  foreign key(pid) references fk_fanout_p(id) on delete cascade);
+insert into fk_fanout_p values (1, 10, 100), (2, 20, 200);
+insert into fk_fanout_c values (1, 1), (2, 2);
+replace into fk_fanout_p values (3, 10, 200);
+select * from fk_fanout_p;
+select * from fk_fanout_c;
+drop table fk_fanout_c;
+drop table fk_fanout_p;
+
 create table fk_param_p(id int primary key, v int);
 create table fk_param_c(id int primary key, pid int,
   foreign key(pid) references fk_param_p(id) on delete restrict);

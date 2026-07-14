@@ -2900,7 +2900,8 @@ func TestReplaceParentSideFKRestrict(t *testing.T) {
 		"RESTRICT parent-side FK REPLACE should generate a REPLACE_PARENT_CHK: pre-check SQL")
 	assert.Contains(t, preCheck, "replace_fk_c", "pre-check SQL should target the child table")
 	assert.Contains(t, preCheck, "`pid`", "pre-check SQL should reference the child FK column")
-	assert.Contains(t, preCheck, "(1)", "pre-check SQL should embed the supplied PK value")
+	assert.Contains(t, preCheck, "`id` = 1", "pre-check SQL should match the supplied PK value")
+	assert.Contains(t, preCheck, "exists (select 1", "pre-check should resolve the actual conflicting parent row")
 
 	// No CASCADE/SET NULL action SQL should be produced for RESTRICT.
 	for _, sql := range query.DetectSqls {
@@ -2935,7 +2936,8 @@ func TestReplaceParentSideFKCascade(t *testing.T) {
 	assert.Contains(t, action, "delete from", "CASCADE action should be a DELETE on the child")
 	assert.Contains(t, action, "replace_fk_cc", "CASCADE action should target the child table")
 	assert.Contains(t, action, "`pid`", "CASCADE action should filter on the child FK column")
-	assert.Contains(t, action, "(1)", "CASCADE action should embed the supplied PK value")
+	assert.Contains(t, action, "`id` = 1", "CASCADE action should match the supplied PK value")
+	assert.Contains(t, action, "exists (select 1", "CASCADE should resolve the actual conflicting parent row")
 
 	// CASCADE must NOT generate a parent-child RESTRICT pre-check.
 	for _, sql := range query.DetectSqls {
@@ -2969,7 +2971,7 @@ func TestReplaceParentSideFKExplicitColumns(t *testing.T) {
 		"parent-side pre-check should be generated with an explicit, mixed-case column list")
 	assert.Contains(t, preCheck, "replace_fk_c", "pre-check SQL should target the child table")
 	assert.Contains(t, preCheck, "`pid`", "pre-check SQL should reference the child FK column")
-	assert.Contains(t, preCheck, "(1)", "pre-check SQL should embed the supplied PK value")
+	assert.Contains(t, preCheck, "`id` = 1", "pre-check SQL should match the supplied PK value")
 }
 
 func TestReplaceParentSideFKNoAction(t *testing.T) {
@@ -3092,7 +3094,7 @@ func TestReplaceParentSideFKSetNull(t *testing.T) {
 	assert.Contains(t, action, "update", "SET NULL action should be an UPDATE on the child")
 	assert.Contains(t, action, "replace_fk_sc", "SET NULL action should target the child table")
 	assert.Contains(t, action, "null", "SET NULL action should set the child FK column to null")
-	assert.Contains(t, action, "(1)", "SET NULL action should embed the supplied PK value")
+	assert.Contains(t, action, "`id` = 1", "SET NULL action should match the supplied PK value")
 
 	// SET NULL must NOT generate a parent-child RESTRICT pre-check.
 	for _, sql := range query.DetectSqls {

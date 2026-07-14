@@ -380,31 +380,67 @@ foreign key(pid) references fk_review_p(id) on delete cascade);
 insert into fk_review_p values (1, 10, 100);
 insert into fk_review_c values (1, 1);
 replace into fk_review_p values (2, 10, 200);
-not supported: REPLACE on a referenced table with secondary unique keys
 select * from fk_review_p order by id;
 id    u    v
-1    10    100
+2    10    200
 select * from fk_review_c order by id;
 id    pid
-1    1
 create table fk_review_src(id int, u int, v int);
 insert into fk_review_src values (1, 10, 400);
 replace into fk_review_p select * from fk_review_src;
 not supported: REPLACE SELECT/TABLE on a referenced parent table
 select * from fk_review_p order by id;
 id    u    v
-1    10    100
+2    10    200
 select * from fk_review_c order by id;
 id    pid
-1    1
 drop table fk_review_src;
 drop table fk_review_c;
 drop table fk_review_p;
+create table fk_auto_p(id int auto_increment primary key, u int unique, v int);
+create table fk_auto_c(id int primary key, pid int,
+foreign key(pid) references fk_auto_p(id) on delete cascade);
+insert into fk_auto_p(u, v) values (10, 100);
+insert into fk_auto_c values (1, 1);
+replace into fk_auto_p(u, v) values (10, 200);
+select u, v from fk_auto_p;
+u    v
+10    200
+select * from fk_auto_c;
+id    pid
+drop table fk_auto_c;
+drop table fk_auto_p;
+create table fk_nonpk_p(id int primary key, u int unique);
+create table fk_nonpk_c(id int primary key, parent_u int,
+foreign key(parent_u) references fk_nonpk_p(u) on delete cascade);
+insert into fk_nonpk_p values (1, 10);
+insert into fk_nonpk_c values (1, 10);
+replace into fk_nonpk_p values (2, 10);
+select * from fk_nonpk_p;
+id    u
+2    10
+select * from fk_nonpk_c;
+id    parent_u
+drop table fk_nonpk_c;
+drop table fk_nonpk_p;
+create table fk_fanout_p(id int primary key, u int unique, v int unique);
+create table fk_fanout_c(id int primary key, pid int,
+foreign key(pid) references fk_fanout_p(id) on delete cascade);
+insert into fk_fanout_p values (1, 10, 100), (2, 20, 200);
+insert into fk_fanout_c values (1, 1), (2, 2);
+replace into fk_fanout_p values (3, 10, 200);
+select * from fk_fanout_p;
+id    u    v
+3    10    200
+select * from fk_fanout_c;
+id    pid
+drop table fk_fanout_c;
+drop table fk_fanout_p;
 create table fk_param_p(id int primary key, v int);
 create table fk_param_c(id int primary key, pid int,
 foreign key(pid) references fk_param_p(id) on delete restrict);
 prepare fk_review_stmt from 'replace into fk_param_p values (?, ?)';
-not supported: REPLACE with a non-literal parent key
+not supported: REPLACE with a non-literal conflict key
 set @fk_id = 1, @fk_v = 300;
 execute fk_review_stmt using @fk_id, @fk_v;
 invalid state prepared statement 'fk_review_stmt' does not exist
@@ -419,13 +455,11 @@ foreign key(a, b) references fk_comp_p(a, b) on delete cascade);
 insert into fk_comp_p values (1, 1);
 insert into fk_comp_c values (1, 1, 1);
 replace into fk_comp_p values (1, 1);
-not supported: REPLACE on a referenced composite primary key
 select * from fk_comp_p;
 a    b
 1    1
 select * from fk_comp_c;
 id    a    b
-1    1    1
 drop table fk_comp_c;
 drop table fk_comp_p;
 drop table if exists `fk``tick_c`;

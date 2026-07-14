@@ -1188,7 +1188,12 @@ func genPreCheckSqlsForReplaceFKSelfRefer(
 	return ret, nil
 }
 
-func genParentSideReplaceFKSqls(ctx CompilerContext, parent *plan.TableDef, stmt *tree.Replace) ([]string, []string, error) {
+func genParentSideReplaceFKSqls(
+	ctx CompilerContext,
+	parentRef *plan.ObjectRef,
+	parent *plan.TableDef,
+	stmt *tree.Replace,
+) ([]string, []string, error) {
 	if stmt.Rows == nil || len(parent.RefChildTbls) == 0 {
 		return nil, nil, nil
 	}
@@ -1206,15 +1211,6 @@ func genParentSideReplaceFKSqls(ctx CompilerContext, parent *plan.TableDef, stmt
 	if !ok {
 		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE SELECT/TABLE on a referenced parent table")
 	}
-	if parent.Pkey == nil || len(parent.Pkey.Names) != 1 {
-		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE on a referenced composite primary key")
-	}
-	for _, idx := range parent.Indexes {
-		if idx.Unique {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE on a referenced table with secondary unique keys")
-		}
-	}
-	pkName := parent.Pkey.Names[0]
 	positions := make(map[string]int)
 	if len(stmt.Columns) > 0 {
 		for i, col := range stmt.Columns {
@@ -1229,26 +1225,68 @@ func genParentSideReplaceFKSqls(ctx CompilerContext, parent *plan.TableDef, stmt
 			}
 		}
 	}
-	pkPos, ok := positions[pkName]
-	if !ok {
-		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE without a parent primary key")
-	}
-	pkVals := make([]string, 0, len(values.Rows))
-	for _, row := range values.Rows {
-		if pkPos >= len(row) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE without a parent primary key")
-		}
-		switch row[pkPos].(type) {
-		case *tree.NumVal, *tree.StrVal:
-			pkVals = append(pkVals, tree.String(row[pkPos], dialect.MYSQL))
-		default:
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE with a non-literal parent key")
-		}
-	}
-	inList := strings.Join(pkVals, ",")
 	quoteIdentifier := func(name string) string {
 		return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 	}
+	qualifiedCol := func(alias, name string) string {
+		return quoteIdentifier(alias) + "." + quoteIdentifier(name)
+	}
+
+	uniqueKeys := make([][]string, 0, 1+len(parent.Indexes))
+	if parent.Pkey != nil && len(parent.Pkey.Names) > 0 {
+		uniqueKeys = append(uniqueKeys, parent.Pkey.Names)
+	}
+	for _, idx := range parent.Indexes {
+		if !idx.Unique {
+			continue
+		}
+		parts := make([]string, len(idx.Parts))
+		for i, part := range idx.Parts {
+			parts[i] = catalog.ResolveAlias(part)
+		}
+		uniqueKeys = append(uniqueKeys, parts)
+	}
+
+	const parentAlias = "__mo_replace_parent"
+	conflictPredicates := make([]string, 0, len(values.Rows)*len(uniqueKeys))
+	for _, row := range values.Rows {
+		for _, key := range uniqueKeys {
+			parts := make([]string, 0, len(key))
+			missing := 0
+			allMissingAutoIncrement := true
+			for _, colName := range key {
+				pos, supplied := positions[colName]
+				if !supplied || pos >= len(row) {
+					missing++
+					colPos, found := parent.Name2ColIndex[colName]
+					if !found || !parent.Cols[colPos].Typ.AutoIncr {
+						allMissingAutoIncrement = false
+					}
+					continue
+				}
+				switch row[pos].(type) {
+				case *tree.NumVal, *tree.StrVal:
+					parts = append(parts, fmt.Sprintf("%s = %s",
+						qualifiedCol(parentAlias, colName), tree.String(row[pos], dialect.MYSQL)))
+				default:
+					return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE with a non-literal conflict key")
+				}
+			}
+			if missing == len(key) && allMissingAutoIncrement {
+				continue
+			}
+			if missing != 0 {
+				return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE with an omitted conflict key")
+			}
+			conflictPredicates = append(conflictPredicates, "("+strings.Join(parts, " and ")+")")
+		}
+	}
+	if len(conflictPredicates) == 0 {
+		return nil, nil, nil
+	}
+	conflictPredicate := "(" + strings.Join(conflictPredicates, " or ") + ")"
+	parentTable := quoteIdentifier(parentRef.SchemaName) + "." + quoteIdentifier(parent.Name)
+
 	var checks, actions []string
 	seen := make(map[uint64]bool)
 	for _, childID := range parent.RefChildTbls {
@@ -1267,29 +1305,37 @@ func genParentSideReplaceFKSqls(ctx CompilerContext, parent *plan.TableDef, stmt
 			if fk.ForeignTbl != parent.TblId {
 				continue
 			}
-			if len(fk.Cols) != 1 || len(fk.ForeignCols) != 1 {
-				return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE with a composite parent foreign key")
+			if len(fk.Cols) == 0 || len(fk.Cols) != len(fk.ForeignCols) {
+				return nil, nil, moerr.NewInternalError(ctx.GetContext(), "invalid parent foreign key definition")
 			}
 			parentCols, err := colIdsToNames(ctx.GetContext(), fk.ForeignCols, parent.Cols)
 			if err != nil {
 				return nil, nil, err
 			}
-			if len(parentCols) != 1 || parentCols[0] != pkName {
-				return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "REPLACE with a non-primary parent foreign key")
-			}
 			childCols, err := colIdsToNames(ctx.GetContext(), fk.Cols, child.Cols)
 			if err != nil {
 				return nil, nil, err
 			}
-			table := quoteIdentifier(childRef.SchemaName) + "." + quoteIdentifier(child.Name)
-			col := quoteIdentifier(childCols[0])
+			childTable := quoteIdentifier(childRef.SchemaName) + "." + quoteIdentifier(child.Name)
+			joinParts := make([]string, len(childCols))
+			for i := range childCols {
+				joinParts[i] = fmt.Sprintf("%s.%s = %s",
+					childTable, quoteIdentifier(childCols[i]), qualifiedCol(parentAlias, parentCols[i]))
+			}
+			exists := fmt.Sprintf("exists (select 1 from %s as %s where %s and %s)",
+				parentTable, quoteIdentifier(parentAlias), conflictPredicate, strings.Join(joinParts, " and "))
 			switch fk.OnDelete {
 			case plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_NO_ACTION, plan.ForeignKeyDef_SET_DEFAULT:
-				checks = append(checks, fmt.Sprintf("select count(*) = 0 from %s where %s in (%s)", table, col, inList))
+				checks = append(checks, fmt.Sprintf("select count(*) = 0 from %s where %s", childTable, exists))
 			case plan.ForeignKeyDef_CASCADE:
-				actions = append(actions, fmt.Sprintf("delete from %s where %s in (%s)", table, col, inList))
+				actions = append(actions, fmt.Sprintf("delete from %s where %s", childTable, exists))
 			case plan.ForeignKeyDef_SET_NULL:
-				actions = append(actions, fmt.Sprintf("update %s set %s = null where %s in (%s)", table, col, col, inList))
+				setParts := make([]string, len(childCols))
+				for i, col := range childCols {
+					setParts[i] = quoteIdentifier(col) + " = null"
+				}
+				actions = append(actions, fmt.Sprintf("update %s set %s where %s",
+					childTable, strings.Join(setParts, ", "), exists))
 			}
 		}
 	}
