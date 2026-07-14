@@ -108,13 +108,13 @@ func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *
 	return
 }
 
-func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, opt *options.Options) *Handle {
+func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, opt *options.Options) (*Handle, error) {
 	if path == "" {
 		path = "./store"
 	}
 	tae, err := openTAE(ctx, path, opt)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	h := &Handle{
@@ -124,7 +124,7 @@ func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, o
 
 	RegisterManifestHTTP(tae)
 
-	return h
+	return h, nil
 }
 
 //#endregion Open

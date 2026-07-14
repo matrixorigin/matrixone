@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -42,6 +44,13 @@ type taeStorage struct {
 
 var _ storage.TxnStorage = (*taeStorage)(nil)
 
+type logtailServerFactory func(
+	string,
+	string,
+	*service.LogtailServer,
+	...morpc.ServerOption,
+) (morpc.RPCServer, error)
+
 func NewTAEStorage(
 	ctx context.Context,
 	dataDir string,
@@ -53,14 +62,49 @@ func NewTAEStorage(
 	txnServer rpc2.TxnServer,
 	client client.QueryClient,
 ) (storage.TxnStorage, error) {
+	return newTAEStorage(
+		ctx,
+		dataDir,
+		opt,
+		shard,
+		rt,
+		logtailServerAddr,
+		logtailServerCfg,
+		txnServer,
+		client,
+		nil,
+	)
+}
+
+func newTAEStorage(
+	ctx context.Context,
+	dataDir string,
+	opt *options.Options,
+	shard metadata.TNShard,
+	rt runtime.Runtime,
+	logtailServerAddr string,
+	logtailServerCfg *options.LogtailServerCfg,
+	txnServer rpc2.TxnServer,
+	client client.QueryClient,
+	rpcServerFactory logtailServerFactory,
+) (txnStorage storage.TxnStorage, err error) {
 	if rt.ServiceUUID() != opt.SID {
 		panic(fmt.Sprintf("service uuid mismatch, %s != %s", rt.ServiceUUID(), opt.SID))
 	}
-	taeHandler := rpc.NewTAEHandle(ctx, dataDir, client, opt)
+	taeHandler, err := rpc.NewTAEHandle(ctx, dataDir, client, opt)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, taeHandler.HandleClose(ctx))
+		}
+	}()
+
 	tae := taeHandler.GetDB()
 	tae.TxnServer = txnServer
 	logtailer := logtail.NewLogtailer(ctx, tae, tae.LogtailMgr, tae.Catalog)
-	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt, nil)
+	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt, rpcServerFactory)
 	if err != nil {
 		return nil, err
 	}
