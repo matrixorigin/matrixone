@@ -197,16 +197,26 @@ func (idx *HnswModel[T]) SaveToFile() error {
 	if err != nil {
 		return err
 	}
+	// os.CreateTemp opens the file; we only need its (now reserved) name — usearch's
+	// Index.Save and CheckSum reopen the path themselves. Close our handle immediately,
+	// otherwise every save leaks a file descriptor (#25630). Every error path below also
+	// removes the temp file so it is not orphaned on disk (idx.Path is not set until success).
+	fpath := f.Name()
+	if err = f.Close(); err != nil {
+		os.Remove(fpath)
+		return err
+	}
 
-	err = idx.Index.Save(f.Name())
+	err = idx.Index.Save(fpath)
 	if err != nil {
-		os.Remove(f.Name())
+		os.Remove(fpath)
 		return err
 	}
 
 	// get new checksum
-	chksum, err := vectorindex.CheckSum(f.Name())
+	chksum, err := vectorindex.CheckSum(fpath)
 	if err != nil {
+		os.Remove(fpath)
 		return err
 	}
 	idx.Checksum = chksum
@@ -214,10 +224,11 @@ func (idx *HnswModel[T]) SaveToFile() error {
 	// free memory
 	err = idx.Index.Destroy()
 	if err != nil {
+		os.Remove(fpath)
 		return err
 	}
 	idx.Index = nil
-	idx.Path = f.Name()
+	idx.Path = fpath
 
 	// Do NOT set filesize here. filesize == 0 means file didn't save to database yet
 	/*
