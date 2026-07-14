@@ -83,6 +83,15 @@ type Segment struct {
 	// every key in `terms` appears once in `sortedTerms`.
 	terms       map[string]*termPostings
 	sortedTerms []string
+
+	// term dict, LOADED-side representation — set by Deserialize, nil on a
+	// build-side segment. `dict` is the vellum FST mapping term → ordinal (its
+	// position in sorted order); `loaded` holds the posting lists indexed by that
+	// ordinal. Query on a loaded segment resolves term → ordinal → posting list;
+	// the build-side `terms` map is left nil. (Mirrors bm25's build-side per-term
+	// slices vs loaded buffers split.)
+	dict   *termDict
+	loaded []*termPostings
 }
 
 // NewSegment returns an empty segment with the given id and pk type. Postings
