@@ -1667,7 +1667,7 @@ func TestGetColDataUnsupportedTypeReportsColumnIndex(t *testing.T) {
 		proc,
 	)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "the value type 100 is not support now")
+	require.Contains(t, err.Error(), "the value type TRANSACTION TIMESTAMP is not support now")
 }
 
 // Test_getColData_VecDimensionCheck tests that getColData correctly validates

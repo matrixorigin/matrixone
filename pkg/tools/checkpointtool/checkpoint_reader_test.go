@@ -248,7 +248,7 @@ func TestCheckpointReaderEmptyLocationBranches(t *testing.T) {
 	require.Nil(t, data)
 	require.Nil(t, tomb)
 
-	dataByTable, tombByTable, err := reader.GetObjectEntriesForTables(entry, map[uint64]struct{}{42: struct{}{}})
+	dataByTable, tombByTable, err := reader.GetObjectEntriesForTables(entry, map[uint64]struct{}{42: {}})
 	require.NoError(t, err)
 	require.Nil(t, dataByTable)
 	require.Nil(t, tombByTable)

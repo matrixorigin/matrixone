@@ -154,7 +154,7 @@ func TestLazyCacheFSDelegatesMetadataAndInvalidatesCachedWrites(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(3), stat.Size)
 
-	var listed []string
+	listed := make([]string, 0, 1)
 	for entry, err := range fs.List(ctx, "dir") {
 		require.NoError(t, err)
 		listed = append(listed, entry.Name)
