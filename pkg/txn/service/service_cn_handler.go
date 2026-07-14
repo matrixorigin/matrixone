@@ -208,8 +208,9 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	// server queue would otherwise receive a fresh relative timeout when it is
 	// decoded. The absolute deadline is checked before lockservice admission so
 	// an expired Commit cannot be admitted after its unknown-result fence has
-	// been collected.
-	if commitRequestExpired(request, time.Now()) {
+	// been collected. The sender and TN have different wall clocks, so account
+	// for the configured HLC offset before declaring a request expired.
+	if commitRequestExpired(request, time.Now(), s.commitDeadlineClockOffset()) {
 		response.TxnError = txn.WrapError(
 			moerr.NewTxnNotActive(ctx, "commit request expired"),
 			0,
@@ -370,10 +371,22 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	return s.startAsyncCommitTask(txnCtx)
 }
 
-func commitRequestExpired(request *txn.TxnRequest, now time.Time) bool {
+func (s *service) commitDeadlineClockOffset() time.Duration {
+	rt := runtime.ServiceRuntime(s.sid)
+	if rt == nil || rt.Clock() == nil {
+		return 0
+	}
+	return rt.Clock().MaxOffset()
+}
+
+func commitRequestExpired(
+	request *txn.TxnRequest,
+	now time.Time,
+	clockOffset time.Duration,
+) bool {
 	return request.CommitRequest != nil &&
 		request.CommitRequest.DeadlineUnixNano > 0 &&
-		now.UnixNano() >= request.CommitRequest.DeadlineUnixNano
+		!now.Before(time.Unix(0, request.CommitRequest.DeadlineUnixNano).Add(clockOffset))
 }
 
 func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {

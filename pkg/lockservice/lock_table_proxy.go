@@ -32,8 +32,9 @@ type localLockTableProxy struct {
 
 	mu struct {
 		sync.RWMutex
-		holders       map[string]*sharedOps // key: row
-		currentHolder map[string][]byte
+		holders              map[string]*sharedOps // key: row
+		currentHolder        map[string][]byte
+		pendingRemoteHolders map[string][]byte
 	}
 }
 
@@ -49,6 +50,7 @@ func newLockTableProxy(
 	}
 	lp.mu.holders = make(map[string]*sharedOps)
 	lp.mu.currentHolder = make(map[string][]byte)
+	lp.mu.pendingRemoteHolders = make(map[string][]byte)
 	return lp
 }
 
@@ -140,9 +142,11 @@ func (lp *localLockTableProxy) unlockWithContext(
 	defer rows.unref()
 
 	type holderUpdate struct {
-		row              string
-		replaceWith      []byte
-		keepRemoteHolder bool
+		row                      string
+		replaceWith              []byte
+		keepRemoteHolder         bool
+		clearPendingRemoteHolder bool
+		nextPendingRemoteHolder  []byte
 	}
 
 	skipped := 0
@@ -162,6 +166,30 @@ func (lp *localLockTableProxy) unlockWithContext(
 
 			// not the holder, no need to unlock
 			if !isHolder {
+				// A previous holder may have been replaced at the owner before its
+				// response was lost. Only the replacement selected by that
+				// unacknowledged handoff can be a remote holder too. Its ordinary
+				// unlock must conditionally transfer that remote holder instead of
+				// being skipped, otherwise the owner retains a finished txn until
+				// orphan cleanup.
+				if lp.isPendingRemoteHolderLocked(row, txn.txnID) {
+					remoteMutations = append(remoteMutations, pb.ExtraMutation{
+						Key:       key,
+						ReplaceTo: replacement,
+					})
+					nextPending := replacement
+					if bytes.Equal(nextPending, lp.mu.currentHolder[row]) {
+						nextPending = nil
+					}
+					updates = append(updates, holderUpdate{
+						row:                      row,
+						replaceWith:              lp.mu.currentHolder[row],
+						keepRemoteHolder:         true,
+						clearPendingRemoteHolder: len(nextPending) == 0,
+						nextPendingRemoteHolder:  nextPending,
+					})
+					return true
+				}
 				skipped++
 				if n > 1 {
 					remoteMutations = append(remoteMutations,
@@ -186,13 +214,20 @@ func (lp *localLockTableProxy) unlockWithContext(
 			// marker: if the response is lost after the owner released this last
 			// holder, a retry must not fail when another transaction already owns
 			// the row.
+			if len(replacement) > 0 {
+				lp.mu.pendingRemoteHolders[row] = replacement
+			}
 			remoteMutations = append(remoteMutations,
 				pb.ExtraMutation{
 					Key:       key,
 					Skip:      false,
 					ReplaceTo: replacement,
 				})
-			updates = append(updates, holderUpdate{row: row, replaceWith: replacement})
+			updates = append(updates, holderUpdate{
+				row:                      row,
+				replaceWith:              replacement,
+				clearPendingRemoteHolder: true,
+			})
 		}
 		return true
 	})
@@ -220,6 +255,11 @@ func (lp *localLockTableProxy) unlockWithContext(
 		} else {
 			delete(lp.mu.currentHolder, update.row)
 		}
+		if update.clearPendingRemoteHolder {
+			delete(lp.mu.pendingRemoteHolders, update.row)
+		} else if len(update.nextPendingRemoteHolder) > 0 {
+			lp.mu.pendingRemoteHolders[update.row] = update.nextPendingRemoteHolder
+		}
 	}
 	return nil
 }
@@ -237,6 +277,14 @@ func (lp *localLockTableProxy) isRemoteHolderLocked(
 func (lp *localLockTableProxy) hasRemoteHolderLocked(row string) bool {
 	_, ok := lp.mu.currentHolder[row]
 	return ok
+}
+
+func (lp *localLockTableProxy) isPendingRemoteHolderLocked(
+	row string,
+	txnID []byte,
+) bool {
+	pending, ok := lp.mu.pendingRemoteHolders[row]
+	return ok && bytes.Equal(pending, txnID)
 }
 
 func (lp *localLockTableProxy) getLock(

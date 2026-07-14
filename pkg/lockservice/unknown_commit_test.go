@@ -242,6 +242,59 @@ func TestUnknownCommitFenceRejectsOnlyOlderCommitSequences(t *testing.T) {
 	})
 }
 
+func TestUnknownCommitFenceKeepsSequenceExpiryPairs(t *testing.T) {
+	ctl := &commitCtl{}
+	now := time.Now().UnixNano()
+	longExpiry := now + int64(time.Hour)
+	shortExpiry := now + int64(time.Second)
+
+	ctl.mu.Lock()
+	ctl.addPersistentFenceLocked(now, commitFence{
+		persist:        true,
+		expiresAt:      longExpiry,
+		commitSequence: 1,
+	})
+	ctl.addPersistentFenceLocked(now, commitFence{
+		persist:        true,
+		expiresAt:      shortExpiry,
+		commitSequence: 100,
+	})
+	require.True(t, ctl.hasPersistentFenceLocked(now, 2))
+	// Once the short fence expires, the long-running sequence-1 fence must
+	// remain, but it must not continue rejecting still-valid sequences 2..99.
+	require.False(t, ctl.hasPersistentFenceLocked(shortExpiry+1, 2))
+	require.True(t, ctl.hasPersistentFenceLocked(shortExpiry+1, 1))
+	ctl.mu.Unlock()
+}
+
+func TestUnknownCommitFenceFrontierIsBounded(t *testing.T) {
+	ctl := &commitCtl{}
+	now := time.Now()
+	for i := 0; i < maxPersistentFenceFrontierEntries; i++ {
+		state := ctl.tryCannotCommit(
+			fmt.Sprintf("unknown-%d", i),
+			commitFence{
+				persist:        true,
+				expiresAt:      now.Add(time.Duration(maxPersistentFenceFrontierEntries-i+2) * time.Second).UnixNano(),
+				commitSequence: uint64(i + 1),
+			},
+		)
+		require.Equal(t, cannotCommitState, state)
+	}
+	require.Equal(t, maxPersistentFenceFrontierEntries, ctl.persistentFenceCount())
+
+	state := ctl.tryCannotCommit(
+		"overflow",
+		commitFence{
+			persist:        true,
+			expiresAt:      now.Add(time.Second).UnixNano(),
+			commitSequence: maxPersistentFenceFrontierEntries + 1,
+		},
+	)
+	require.Equal(t, fencePendingState, state)
+	require.Equal(t, maxPersistentFenceFrontierEntries, ctl.persistentFenceCount())
+}
+
 func TestUnknownCommitFencesStayBoundedForSequentialTxns(t *testing.T) {
 	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
 		service := services[0]
@@ -261,6 +314,7 @@ func TestUnknownCommitFencesStayBoundedForSequentialTxns(t *testing.T) {
 
 		ctl := allocator.getCtl(service.serviceID)
 		require.NotZero(t, ctl.persistentFenceExpiry())
+		require.Equal(t, 1, ctl.persistentFenceCount())
 		require.Zero(t, ctl.size(), "unknown Commit fences must not retain each txn")
 
 		// A normal live-service cleanup must preserve the compact source fence.

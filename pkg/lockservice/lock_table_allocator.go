@@ -171,7 +171,7 @@ func (l *lockTableAllocator) addCannotCommitLocked(values []pb.OrphanTxn) [][]by
 					commitSequence: v.CommitSequence,
 				},
 			)
-			if state == committingState {
+			if state != cannotCommitState {
 				committing = append(committing, txn)
 			}
 		}
@@ -1245,15 +1245,21 @@ type ctlState int
 var (
 	committingState   = ctlState(0)
 	cannotCommitState = ctlState(1)
+	fencePendingState = ctlState(2)
 )
 
+// A frontier entry is retained only until its Commit admission deadline. Keep
+// an explicit bound nevertheless: a response-loss storm with deliberately
+// different deadlines must not turn that temporary state into allocator OOM.
+// When full, unknown-commit cleanup retries without releasing its locks.
+const maxPersistentFenceFrontierEntries = 1024
+
 type commitCtl struct {
-	mu                       sync.Mutex
-	generation               uint64
-	recoveryEpoch            uint64
-	persistentFenceExpiresAt int64
-	persistentFenceSequence  uint64
-	states                   map[string]commitState
+	mu               sync.Mutex
+	generation       uint64
+	recoveryEpoch    uint64
+	persistentFences []persistentCommitFence
+	states           map[string]commitState
 }
 
 type commitState struct {
@@ -1264,6 +1270,16 @@ type commitState struct {
 
 type commitFence struct {
 	persist        bool
+	expiresAt      int64
+	commitSequence uint64
+}
+
+// persistentCommitFence is a source-CN admission fence installed after an
+// unknown Commit. A fence rejects the Commit request carrying this sequence or
+// an older one until its own expiry. Keeping the sequence paired with its
+// expiry prevents a short-lived newer fence from extending the rejection
+// window of unrelated older requests.
+type persistentCommitFence struct {
 	expiresAt      int64
 	commitSequence uint64
 }
@@ -1331,19 +1347,8 @@ func (c *commitCtl) tryCannotCommit(txnID string, fences ...commitFence) ctlStat
 		return committingState
 	}
 	if fence.persist {
-		// Keep one bounded source-CN fence instead of one permanent state per
-		// unknown transaction. CommitSequence is allocated by the source
-		// lockservice, so a larger sequence is a new Commit even when it has a
-		// shorter context deadline than the unknown request.
-		if fence.expiresAt > c.persistentFenceExpiresAt {
-			c.persistentFenceExpiresAt = fence.expiresAt
-		}
-		if fence.commitSequence == 0 {
-			// Missing sequence is a legacy or malformed request. Keep the fence
-			// fail-closed until its TN admission deadline elapses.
-			c.persistentFenceSequence = math.MaxUint64
-		} else if fence.commitSequence > c.persistentFenceSequence {
-			c.persistentFenceSequence = fence.commitSequence
+		if !c.addPersistentFenceLocked(time.Now().UnixNano(), fence) {
+			return fencePendingState
 		}
 		return cannotCommitState
 	}
@@ -1387,7 +1392,7 @@ func (c *commitCtl) clean(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now().UnixNano()
-	_ = c.hasPersistentFenceLocked(now, 0)
+	c.removeExpiredPersistentFencesLocked(now)
 	for txnID, state := range c.states {
 		// A newer state was created or refreshed while GetActiveTxn was in
 		// flight, so the response cannot be used to remove it.
@@ -1409,8 +1414,8 @@ func (c *commitCtl) clean(
 func (c *commitCtl) empty() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_ = c.hasPersistentFenceLocked(time.Now().UnixNano(), 0)
-	return len(c.states) == 0 && c.persistentFenceExpiresAt == 0
+	c.removeExpiredPersistentFencesLocked(time.Now().UnixNano())
+	return len(c.states) == 0 && len(c.persistentFences) == 0
 }
 
 func (c *commitCtl) size() int {
@@ -1420,25 +1425,85 @@ func (c *commitCtl) size() int {
 }
 
 func (c *commitCtl) hasPersistentFenceLocked(now int64, commitSequence uint64) bool {
-	if c.persistentFenceExpiresAt == 0 {
-		return false
-	}
-	if now >= c.persistentFenceExpiresAt {
-		c.persistentFenceExpiresAt = 0
-		c.persistentFenceSequence = 0
-		return false
-	}
+	c.removeExpiredPersistentFencesLocked(now)
 	// A legacy caller has no source sequence, so it cannot prove that it was
 	// created after the unknown Commit. Fail closed until the admission
 	// deadline, while allowing all newer source-CN Commit requests.
-	return commitSequence == 0 || commitSequence <= c.persistentFenceSequence
+	for _, fence := range c.persistentFences {
+		if commitSequence == 0 || commitSequence <= fence.commitSequence {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *commitCtl) persistentFenceExpiry() int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_ = c.hasPersistentFenceLocked(time.Now().UnixNano(), 0)
-	return c.persistentFenceExpiresAt
+	c.removeExpiredPersistentFencesLocked(time.Now().UnixNano())
+	var latest int64
+	for _, fence := range c.persistentFences {
+		if fence.expiresAt > latest {
+			latest = fence.expiresAt
+		}
+	}
+	return latest
+}
+
+func (c *commitCtl) persistentFenceCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.removeExpiredPersistentFencesLocked(time.Now().UnixNano())
+	return len(c.persistentFences)
+}
+
+func (c *commitCtl) addPersistentFenceLocked(now int64, fence commitFence) bool {
+	c.removeExpiredPersistentFencesLocked(now)
+	if fence.expiresAt <= now {
+		return true
+	}
+
+	sequence := fence.commitSequence
+	if sequence == 0 {
+		// Missing sequence is a legacy or malformed request. It cannot prove
+		// it was created after any unknown Commit, so fail closed until expiry.
+		sequence = math.MaxUint64
+	}
+
+	// A fence dominates another only when it blocks at least the same request
+	// sequences for at least the same duration. Retain the non-dominated
+	// frontier so expiry and sequence remain coupled.
+	for _, current := range c.persistentFences {
+		if current.commitSequence >= sequence && current.expiresAt >= fence.expiresAt {
+			return true
+		}
+	}
+
+	values := c.persistentFences[:0]
+	for _, current := range c.persistentFences {
+		if sequence >= current.commitSequence && fence.expiresAt >= current.expiresAt {
+			continue
+		}
+		values = append(values, current)
+	}
+	if len(values) >= maxPersistentFenceFrontierEntries {
+		return false
+	}
+	c.persistentFences = append(values, persistentCommitFence{
+		expiresAt:      fence.expiresAt,
+		commitSequence: sequence,
+	})
+	return true
+}
+
+func (c *commitCtl) removeExpiredPersistentFencesLocked(now int64) {
+	values := c.persistentFences[:0]
+	for _, fence := range c.persistentFences {
+		if fence.expiresAt > now {
+			values = append(values, fence)
+		}
+	}
+	c.persistentFences = values
 }
 
 func (c *commitCtl) ensureStatesLocked() {

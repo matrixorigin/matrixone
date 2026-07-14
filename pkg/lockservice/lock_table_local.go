@@ -325,13 +325,12 @@ func (l *localLockTable) unlock(
 			if !lock.holders.contains(txn.txnID) {
 				// A remote proxy retries ReplaceTo after an RPC response is lost.
 				// The first request may already have replaced the holder, so make
-				// that exact handoff idempotent instead of treating it as a stale
-				// ordinary unlock.
+				// a stale handoff idempotent instead of treating it as a stale
+				// ordinary unlock. A replacement can itself finish before the
+				// original proxy holder retries, in which case the conditional
+				// handoff is also a safe no-op.
 				if idx != -1 {
-					if len(mutations[idx].ReplaceTo) == 0 ||
-						lock.holders.contains(mutations[idx].ReplaceTo) {
-						return true
-					}
+					return true
 				}
 				// 1. txn1 hold key1 on bind version 0
 				// 2. txn1 commit success
