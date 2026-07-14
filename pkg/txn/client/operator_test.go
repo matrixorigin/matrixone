@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -106,6 +107,12 @@ type blockingRollbackWorkspace struct {
 	release chan struct{}
 }
 
+type blockingFinalizeWorkspace struct {
+	trackingWorkspace
+	started chan struct{}
+	release chan struct{}
+}
+
 func (w *blockingRollbackWorkspace) Rollback(ctx context.Context) error {
 	w.rollbackCount++
 	select {
@@ -117,6 +124,18 @@ func (w *blockingRollbackWorkspace) Rollback(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (w *blockingFinalizeWorkspace) FinalizeCommit(ctx context.Context) {
+	w.finalizeCount++
+	select {
+	case w.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-w.release:
+	case <-ctx.Done():
 	}
 }
 
@@ -375,9 +394,10 @@ func TestCommitFinalizesPreparedWorkspaceWithoutRollbackAfterTxnUnknown(t *testi
 		require.Equal(t, txn.TxnStatus_Active, tc.mu.txn.Status)
 		require.True(t, tc.reset.cannotCleanWorkspace.Load())
 
-		// A retained direct handle must still be unable to run workspace
+		// A retained direct handle must be rejected before it can run workspace
 		// rollback after an unknown finalization.
-		require.NoError(t, tc.Rollback(ctx))
+		err = tc.Rollback(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
 		require.Zero(t, ws.rollbackCount)
 		require.Equal(t, txn.TxnStatus_Active, tc.mu.txn.Status)
 	})
@@ -919,7 +939,8 @@ func TestUpdateSnapshotTSWithWaiter(t *testing.T) {
 func TestRollbackMultiTimes(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		require.NoError(t, tc.Rollback(ctx))
-		require.NoError(t, tc.Rollback(ctx))
+		err := tc.Rollback(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
 	})
 }
 
@@ -1762,6 +1783,127 @@ func TestTerminalCallOwnerRejectsConcurrentPublicTerminalCalls(t *testing.T) {
 
 		close(releaseSend)
 		require.NoError(t, <-commitErr)
+	})
+}
+
+func TestClosedOperatorRejectsSequentialPublicTerminalCalls(t *testing.T) {
+	actions := []struct {
+		name string
+		run  func(*txnOperator, context.Context) error
+	}{
+		{name: "commit", run: (*txnOperator).Commit},
+		{name: "rollback", run: (*txnOperator).Rollback},
+		{name: "write-and-commit", run: func(tc *txnOperator, ctx context.Context) error {
+			result, err := tc.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(2, 2)})
+			if result != nil {
+				result.Release()
+			}
+			return err
+		}},
+	}
+
+	for _, owner := range actions {
+		t.Run(owner.name, func(t *testing.T) {
+			runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+				workspace := &trackingWorkspace{
+					commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+				}
+				tc.AddWorkspace(workspace)
+				tc.mu.Lock()
+				tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+				tc.mu.Unlock()
+
+				require.NoError(t, owner.run(tc, ctx))
+				require.Equal(t, txnTerminalCallSealed, txnTerminalCallState(tc.terminalCall.Load()))
+				beforeTxn := tc.Txn()
+				beforeRequests := append([]txn.TxnRequest(nil), ts.getLastRequests()...)
+				beforeCommit := workspace.commitCount
+				beforeRollback := workspace.rollbackCount
+				beforeFinalize := workspace.finalizeCount
+
+				for _, later := range actions {
+					t.Run("then-"+later.name, func(t *testing.T) {
+						callCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+						defer cancel()
+						err := later.run(tc, callCtx)
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+						require.NoError(t, callCtx.Err(), "sequential terminal call did not fail fast")
+						require.Equal(t, beforeTxn, tc.Txn())
+						require.Equal(t, beforeRequests, ts.getLastRequests())
+						require.Equal(t, beforeCommit, workspace.commitCount)
+						require.Equal(t, beforeRollback, workspace.rollbackCount)
+						require.Equal(t, beforeFinalize, workspace.finalizeCount)
+					})
+				}
+			})
+		})
+	}
+}
+
+func TestTerminalCallFailureBeforeCloseReopensGate(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		tc.AppendEventCallback(CommitEvent, TxnEventCallback{Func: func(
+			context.Context,
+			TxnOperator,
+			TxnEvent,
+			any,
+		) error {
+			return assert.AnError
+		}})
+
+		err := tc.Commit(ctx)
+		require.ErrorIs(t, err, assert.AnError)
+		require.Equal(t, txnTerminalCallIdle, txnTerminalCallState(tc.terminalCall.Load()))
+		tc.mu.RLock()
+		require.False(t, tc.mu.closed)
+		tc.mu.RUnlock()
+
+		require.NoError(t, tc.Rollback(ctx))
+		require.Equal(t, txnTerminalCallSealed, txnTerminalCallState(tc.terminalCall.Load()))
+	})
+}
+
+func TestRestartRejectedUntilTerminalOwnerFinishesFinalization(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		client := c.(*txnClient)
+		op, err := c.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		workspace := &blockingFinalizeWorkspace{
+			trackingWorkspace: trackingWorkspace{
+				commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+			},
+			started: make(chan struct{}, 1),
+			release: make(chan struct{}),
+		}
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(workspace.release) }) }
+		defer release()
+		tc.AddWorkspace(workspace)
+
+		commitC := make(chan error, 1)
+		go func() { commitC <- tc.Commit(ctx) }()
+		select {
+		case <-workspace.started:
+		case <-ctx.Done():
+			t.Fatal("commit did not reach workspace finalization")
+		}
+		require.Equal(t, txnTerminalCallActive, txnTerminalCallState(tc.terminalCall.Load()))
+
+		restartCtx, cancelRestart := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		_, err = client.RestartTxn(restartCtx, tc, timestamp.Timestamp{})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+		require.NoError(t, restartCtx.Err(), "restart did not fail fast while terminal owner was finalizing")
+		cancelRestart()
+
+		release()
+		require.NoError(t, <-commitC)
+		restarted, err := client.RestartTxn(ctx, tc, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, restarted.Rollback(ctx))
 	})
 }
 

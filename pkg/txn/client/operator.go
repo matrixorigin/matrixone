@@ -1880,6 +1880,14 @@ func (tc *txnOperator) needUnlockLocked() bool {
 }
 
 func (tc *txnOperator) closeLocked(ctx context.Context) {
+	// A close that is not owned by a public terminal call still has to seal the
+	// public gate. If a public owner is active, leave it active until its final
+	// defer publishes sealed: workspace finalization and event callbacks can run
+	// after closeLocked, and RestartTxn must not enter that new generation early.
+	tc.terminalCall.CompareAndSwap(
+		uint32(txnTerminalCallIdle),
+		uint32(txnTerminalCallSealed),
+	)
 	if !tc.mu.closed {
 		tc.reset.runSQLTracker.seal()
 		tc.mu.closed = true
@@ -1918,6 +1926,7 @@ func (tc *txnOperator) closeUnadmitted(err error) {
 	tc.reset.runSQLTracker.seal()
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
+	tc.terminalCall.Store(uint32(txnTerminalCallSealed))
 	if tc.mu.closed {
 		return
 	}
@@ -2217,11 +2226,22 @@ func (tc *txnOperator) claimTerminalCall() error {
 }
 
 func (tc *txnOperator) releaseTerminalCall() {
-	// A timeout owner changes active to sealed before scheduling deferred
-	// rollback. Do not reopen that terminal boundary when the public call exits.
+	// This is the public terminal owner's final defer, after workspace
+	// finalization and terminal event callbacks. Keep the gate sealed once that
+	// owner closed the operator; only a call that returned without a terminal
+	// transition may reopen the same generation. Holding tc.mu across the state
+	// read and CAS also closes the race with an independent internal close.
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	next := txnTerminalCallIdle
+	if tc.mu.closed {
+		next = txnTerminalCallSealed
+	}
+	// A running-SQL timeout changes active to sealed before scheduling its
+	// deferred rollback owner. In that case this CAS deliberately does nothing.
 	tc.terminalCall.CompareAndSwap(
 		uint32(txnTerminalCallActive),
-		uint32(txnTerminalCallIdle),
+		uint32(next),
 	)
 }
 
