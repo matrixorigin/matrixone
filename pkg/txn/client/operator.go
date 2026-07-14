@@ -306,12 +306,10 @@ type txnOperator struct {
 		workspace            Workspace
 		commitCounter        counter
 		rollbackCounter      counter
-		runSqlCounter        counter
 		runSQLTracker        runSQLTracker
 		incrStmtCounter      counter
 		rollbackStmtCounter  counter
 		fprints              *footPrints
-		runningSQL           atomic.Bool
 		commitErr            error
 		cache                sync.Map
 	}
@@ -331,6 +329,8 @@ type runSQLTracker struct {
 	mu           sync.Mutex
 	activeTokens map[uint64]runSQLInfo
 	nextID       uint64
+	enterCount   uint64
+	exitCount    uint64
 	cond         *sync.Cond
 	sealed       atomic.Bool
 	onDrained    func()
@@ -380,7 +380,10 @@ func (t *runSQLTracker) reset(sealed bool) {
 			delete(t.activeTokens, k)
 		}
 	}
-	t.nextID = 0
+	// Token IDs span the operator lifetime. Reusing them across RestartTxn
+	// would let a stale old-generation Exit alias a current token.
+	t.enterCount = 0
+	t.exitCount = 0
 	t.sealed.Store(sealed)
 	t.onDrained = nil
 	// Keep cond, no need to recreate
@@ -412,6 +415,16 @@ func (t *runSQLTracker) enterTokenWithSQL(cancel context.CancelFunc, sql string)
 		}
 		return 0
 	}
+	if t.nextID == ^uint64(0) {
+		// Never wrap and reuse an operator-lifetime identity. Exhaustion is
+		// practically unreachable, but failing closed preserves generation
+		// isolation for stale tokens.
+		t.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return 0
+	}
 	t.nextID++
 	token := t.nextID
 	t.activeTokens[token] = runSQLInfo{
@@ -419,6 +432,7 @@ func (t *runSQLTracker) enterTokenWithSQL(cancel context.CancelFunc, sql string)
 		sql:    trimSQLForTracker(sql),
 		start:  time.Now(),
 	}
+	t.enterCount++
 	t.notifyLocked()
 	t.mu.Unlock()
 	return token
@@ -430,6 +444,11 @@ func (t *runSQLTracker) exitToken(token uint64) {
 	}
 	t.mu.Lock()
 	t.ensureInitLocked()
+	if _, ok := t.activeTokens[token]; !ok {
+		t.mu.Unlock()
+		return
+	}
+	t.exitCount++
 	delete(t.activeTokens, token)
 	var callback func()
 	if t.sealed.Load() && len(t.activeTokens) == 0 {
@@ -442,6 +461,18 @@ func (t *runSQLTracker) exitToken(token uint64) {
 	if callback != nil {
 		go callback()
 	}
+}
+
+func (t *runSQLTracker) active() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.activeTokens) != 0
+}
+
+func (t *runSQLTracker) counterString() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return fmt.Sprintf("enter:%d, exit:%d", t.enterCount, t.exitCount)
 }
 
 // sealAndRunWhenDrained permanently rejects new SQL tokens and runs fn once
@@ -689,12 +720,10 @@ func (tc *txnOperator) initReset(sealRunSQL bool) {
 	tc.reset.workspace = nil
 	tc.reset.commitCounter = counter{}
 	tc.reset.rollbackCounter = counter{}
-	tc.reset.runSqlCounter = counter{}
 	tc.reset.runSQLTracker.reset(sealRunSQL)
 	tc.reset.incrStmtCounter = counter{}
 	tc.reset.rollbackStmtCounter = counter{}
 	// fprints is external pointer, don't reset here
-	tc.reset.runningSQL.Store(false)
 	tc.reset.commitErr = nil
 	tc.reset.cache = sync.Map{}
 }
@@ -2029,8 +2058,6 @@ func (tc *txnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql
 	if token == 0 {
 		return 0, moerr.NewTxnClosedNoCtx(nil)
 	}
-	tc.reset.runningSQL.Store(true)
-	tc.reset.runSqlCounter.addEnter()
 	return token, nil
 }
 
@@ -2038,11 +2065,9 @@ func (tc *txnOperator) ExitRunSqlWithToken(token uint64) {
 	if token == 0 {
 		return
 	}
-	tc.reset.runSqlCounter.addExit()
+	// Removing the token can release a terminal waiter and allow RestartTxn.
+	// It must therefore be the final old-generation operation.
 	tc.reset.runSQLTracker.exitToken(token)
-	if !tc.reset.runSqlCounter.more() {
-		tc.reset.runningSQL.Store(false)
-	}
 }
 
 func (tc *txnOperator) CancelAndWaitRunningSQL(ctx context.Context, keepToken uint64) error {
@@ -2114,7 +2139,7 @@ func (tc *txnOperator) waitRunningSQL(
 }
 
 func (tc *txnOperator) inRunSql() bool {
-	return tc.reset.runSqlCounter.more()
+	return tc.reset.runSQLTracker.active()
 }
 
 func (tc *txnOperator) claimRestart() error {
@@ -2233,7 +2258,7 @@ func (tc *txnOperator) counter() string {
 	return fmt.Sprintf("commit: %s rollback: %s runSql: %s incrStmt: %s rollbackStmt: %s txnMeta: %s footPrints: %s",
 		tc.reset.commitCounter.String(),
 		tc.reset.rollbackCounter.String(),
-		tc.reset.runSqlCounter.String(),
+		tc.reset.runSQLTracker.counterString(),
 		tc.reset.incrStmtCounter.String(),
 		tc.reset.rollbackStmtCounter.String(),
 		tc.Txn().DebugString(),

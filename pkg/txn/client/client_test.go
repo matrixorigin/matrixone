@@ -291,6 +291,55 @@ func TestRestartTxnRejectsActiveOperator(t *testing.T) {
 	})
 }
 
+func TestRestartTxnImmediatelyAfterLastRunSQLExit(t *testing.T) {
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		client := c.(*txnClient)
+
+		for range 128 {
+			op, err := client.New(ctx, timestamp.Timestamp{})
+			require.NoError(t, err)
+			tc := op.(*txnOperator)
+
+			runningCtx, runningCancel := context.WithCancel(context.Background())
+			token := mustEnterRunSQL(t, tc, runningCancel, "last old-generation sql")
+			commitC := make(chan error, 1)
+			go func() {
+				commitC <- tc.Commit(ctx)
+			}()
+
+			// Cancellation proves Commit sealed the tracker and is waiting for
+			// this token, without relying on scheduler timing.
+			select {
+			case <-runningCtx.Done():
+			case <-ctx.Done():
+				t.Fatal("commit did not wait for running SQL")
+			}
+
+			exitDone := make(chan struct{})
+			go func() {
+				tc.ExitRunSqlWithToken(token)
+				close(exitDone)
+			}()
+			require.NoError(t, <-commitC)
+
+			// Restart as soon as the drain notification releases Commit. Do not
+			// wait for the Exit caller to return: it must have no old-generation
+			// state access remaining after publishing the drain.
+			restarted, err := client.RestartTxn(ctx, tc, timestamp.Timestamp{})
+			require.NoError(t, err)
+			<-exitDone
+
+			newTC := restarted.(*txnOperator)
+			newToken := mustEnterRunSQL(t, newTC, nil, "new-generation sql")
+			require.NotEqual(t, token, newToken)
+			newTC.ExitRunSqlWithToken(newToken)
+			require.NoError(t, restarted.Rollback(ctx))
+		}
+	})
+}
+
 func TestRestartTxnKeepsRunSQLSealedUntilAdmissionCompletes(t *testing.T) {
 	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

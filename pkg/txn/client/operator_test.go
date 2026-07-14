@@ -1810,6 +1810,37 @@ func TestRunSQLExitDoesNotBlockDeferredRollback(t *testing.T) {
 	})
 }
 
+func TestRunSQLTrackerDoesNotReuseTokensAcrossRestart(t *testing.T) {
+	var tracker runSQLTracker
+	oldToken := tracker.enterTokenWithSQL(nil, "old generation")
+	require.NotZero(t, oldToken)
+	require.Equal(t, "enter:1, exit:0", tracker.counterString())
+	tracker.exitToken(oldToken)
+	require.Equal(t, "enter:1, exit:1", tracker.counterString())
+
+	tracker.reset(true)
+	require.Equal(t, "enter:0, exit:0", tracker.counterString())
+	tracker.open()
+	newToken := tracker.enterTokenWithSQL(nil, "new generation")
+	require.NotZero(t, newToken)
+	require.NotEqual(t, oldToken, newToken)
+
+	// A delayed or duplicated old-generation Exit must not remove current work.
+	tracker.exitToken(oldToken)
+	require.True(t, tracker.active())
+	tracker.exitToken(newToken)
+	require.False(t, tracker.active())
+
+	exhausted := runSQLTracker{nextID: ^uint64(0)}
+	exhaustedCtx, exhaustedCancel := context.WithCancel(context.Background())
+	require.Zero(t, exhausted.enterTokenWithSQL(exhaustedCancel, "exhausted token space"))
+	select {
+	case <-exhaustedCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("rejected exhausted registration was not canceled")
+	}
+}
+
 func BenchmarkRunSQLTrackerEnterExit(b *testing.B) {
 	tc := &txnOperator{}
 	b.ReportAllocs()
