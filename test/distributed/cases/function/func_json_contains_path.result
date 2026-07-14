@@ -1,0 +1,116 @@
+select json_contains_path();
+invalid argument function json_contains_path, bad value []
+select json_contains_path('{"a":true}');
+invalid argument function json_contains_path, bad value [VARCHAR]
+select json_contains_path('{"a":true}', 'all');
+invalid argument function json_contains_path, bad value [VARCHAR VARCHAR]
+select json_contains_path('{"a":tru}', 'all', '$');
+invalid argument json_contains_path, bad value invalid JSON document
+select json_contains_path('{"a":true}', 'all', '$[');
+invalid argument json_contains_path, bad value invalid path expression
+select json_contains_path('{"a":true}', 'all', '$a.***[3]');
+invalid argument json_contains_path, bad value invalid path expression
+select json_contains_path('{"a":true}', 'invalid', '$.a');
+invalid argument json_contains_path, bad value one_or_all must be one or all
+select json_contains_path(null, 'all', '$.a');
+➤ json_contains_path(null, all, $.a)[-5,64,0]  𝄀
+null
+select json_contains_path('{"a":true}', null, '$.a');
+➤ json_contains_path({"a":true}, null, $.a)[-5,64,0]  𝄀
+null
+select json_contains_path('{"a":true}', 'all', null);
+➤ json_contains_path({"a":true}, all, null)[-5,64,0]  𝄀
+null
+select json_contains_path('{"a":null}', 'all', '$.a');
+➤ json_contains_path({"a":null}, all, $.a)[-5,64,0]  𝄀
+1
+select json_contains_path('{"a":true}', 'all', '$');
+➤ json_contains_path({"a":true}, all, $)[-5,64,0]  𝄀
+1
+select json_contains_path('1', 'all', '$[0]');
+➤ json_contains_path(1, all, $[0])[-5,64,0]  𝄀
+1
+select json_contains_path('1', 'all', '$[1]');
+➤ json_contains_path(1, all, $[1])[-5,64,0]  𝄀
+0
+select json_contains_path('[1]', 'all', '$[1 to 2]');
+➤ json_contains_path([1], all, $[1 to 2])[-5,64,0]  𝄀
+0
+select json_contains_path('{"a":true}', 'all', '$.a', '$.b');
+➤ json_contains_path({"a":true}, all, $.a, $.b)[-5,64,0]  𝄀
+0
+select json_contains_path('{"a":true}', 'all', '$.b', '$.a');
+➤ json_contains_path({"a":true}, all, $.b, $.a)[-5,64,0]  𝄀
+0
+select json_contains_path('{"a":true}', 'ALL', '$.a', '$.b');
+➤ json_contains_path({"a":true}, ALL, $.a, $.b)[-5,64,0]  𝄀
+0
+select json_contains_path('{"a":true}', 'one', '$.a', '$.b');
+➤ json_contains_path({"a":true}, one, $.a, $.b)[-5,64,0]  𝄀
+1
+select json_contains_path('{"a":true}', 'oNe', '$.b', '$.a');
+➤ json_contains_path({"a":true}, oNe, $.b, $.a)[-5,64,0]  𝄀
+1
+select json_contains_path('{"a":true,"b":[1,2]}', 'all', '$**[1]', '$.b[0]', '$.c');
+➤ json_contains_path({"a":true,"b":[1,2]}, all, $**[1], $.b[0], $.c)[-5,64,0]  𝄀
+0
+select json_contains_path('{"a":true,"b":[1,2]}', 'one', '$.c', '$**[1]', '$.b[0]');
+➤ json_contains_path({"a":true,"b":[1,2]}, one, $.c, $**[1], $.b[0])[-5,64,0]  𝄀
+1
+select json_contains_path('{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}', 'all', '$**[4]');
+➤ json_contains_path({"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}, all, $**[4])[-5,64,0]  𝄀
+1
+select json_contains_path('{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}', 'all', '$**[4]', '$**[5]');
+➤ json_contains_path({"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}, all, $**[4], $**[5])[-5,64,0]  𝄀
+0
+select json_contains_path('{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}', 'all', '$**.c[2]');
+➤ json_contains_path({"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}, all, $**.c[2])[-5,64,0]  𝄀
+1
+select json_contains_path('{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}', 'all', '$**.c[3]');
+➤ json_contains_path({"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}, all, $**.c[3])[-5,64,0]  𝄀
+0
+select json_contains_path('{"a":1,"b":2}', 'one', '$.*');
+➤ json_contains_path({"a":1,"b":2}, one, $.*)[-5,64,0]  𝄀
+1
+select json_contains_path('[1,2,3]', 'one', '$.*');
+➤ json_contains_path([1,2,3], one, $.*)[-5,64,0]  𝄀
+0
+select json_contains_path('{}', 'one', '$[*]');
+➤ json_contains_path({}, one, $[*])[-5,64,0]  𝄀
+0
+select json_contains_path('[1,[[{"x":[{"a":{"b":{"c":42}}}]}]]]', 'one', '$**.a.*');
+➤ json_contains_path([1,[[{"x":[{"a":{"b":{"c":42}}}]}]]], one, $**.a.*)[-5,64,0]  𝄀
+1
+select json_contains_path('[1,[[{"x":[{"a":{"b":{"c":42}}}]}]]]', 'all', '$**.a.*');
+➤ json_contains_path([1,[[{"x":[{"a":{"b":{"c":42}}}]}]]], all, $**.a.*)[-5,64,0]  𝄀
+1
+select json_contains_path('[1,2,3]', 'one', '$**[*]');
+➤ json_contains_path([1,2,3], one, $**[*])[-5,64,0]  𝄀
+1
+select json_contains_path('[1,2,3]', 'all', '$**[*]');
+➤ json_contains_path([1,2,3], all, $**[*])[-5,64,0]  𝄀
+1
+select json_contains_path('{"a":1}', 'one', '$.a', null);
+➤ json_contains_path({"a":1}, one, $.a, null)[-5,64,0]  𝄀
+1
+select json_contains_path('{"a":1}', 'all', '$.missing', null);
+➤ json_contains_path({"a":1}, all, $.missing, null)[-5,64,0]  𝄀
+0
+select json_contains_path('{"a":1}', 'one', '$.a', '$[');
+➤ json_contains_path({"a":1}, one, $.a, $[)[-5,64,0]  𝄀
+1
+select json_contains_path('{"a":1}', 'all', '$.missing', '$[');
+➤ json_contains_path({"a":1}, all, $.missing, $[)[-5,64,0]  𝄀
+0
+drop table if exists t_json_contains_path;
+create table t_json_contains_path (id int, doc json, mode varchar(8), p1 varchar(64), p2 varchar(64));
+insert into t_json_contains_path values
+(1, '{"a":1,"b":[1,2]}', 'all', '$.a', '$.b[1]'),
+(2, '{"a":1,"b":[1,2]}', 'one', '$.missing', '$.b[0]'),
+(3, '{"a":null}', 'all', '$.a', '$');
+select id, json_contains_path(doc, mode, p1, p2) from t_json_contains_path order by id;
+➤ id[4,32,0]  ¦  json_contains_path(doc, mode, p1, p2)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+drop table t_json_contains_path;

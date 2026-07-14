@@ -336,6 +336,13 @@ type BaseProcess struct {
 	logger              *log.MOLogger
 	TxnOperator         client.TxnOperator
 	CloneTxnOperator    client.TxnOperator
+	// incrStatementDisabled marks a process that executes internal SQL on a
+	// caller-owned transaction without opening a statement of its own
+	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
+	// must not advance the workspace snapshot write offset: that is a
+	// statement-boundary action, and moving the boundary mid-statement breaks
+	// the positional visibility of the caller's workspace entries.
+	incrStatementDisabled bool
 
 	// post dml sqls run right after all pipelines finished.
 	PostDmlSqlList *threadsafe.Slice[string]
@@ -453,6 +460,19 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 		val := proc.Base.prepareParams.GetRawBytesAt(i)
 		return val, nil
 	}
+}
+
+// SetIncrStatementDisabled marks this process (and every child process
+// sharing its BaseProcess) as running internal SQL that must not advance the
+// workspace snapshot write offset. See BaseProcess.incrStatementDisabled.
+func (proc *Process) SetIncrStatementDisabled(disabled bool) {
+	proc.Base.incrStatementDisabled = disabled
+}
+
+// IncrStatementDisabled reports whether compiles on this process must skip
+// advancing the workspace snapshot write offset.
+func (proc *Process) IncrStatementDisabled() bool {
+	return proc.Base.incrStatementDisabled
 }
 
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
