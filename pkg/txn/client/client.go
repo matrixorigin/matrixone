@@ -36,9 +36,58 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/ratelimit"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 )
+
+type txnRateLimiter interface {
+	Wait(context.Context, context.Context) error
+}
+
+type unlimitedTxnRateLimiter struct{}
+
+func (unlimitedTxnRateLimiter) Wait(ctx, closeCtx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if closeCtx != nil {
+		return closeCtx.Err()
+	}
+	return nil
+}
+
+type contextTxnRateLimiter struct {
+	limiter *rate.Limiter
+}
+
+func (l *contextTxnRateLimiter) Wait(ctx, closeCtx context.Context) error {
+	if closeCtx == nil {
+		return waitTxnRateLimit(l.limiter, ctx)
+	}
+	waitCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(closeCtx, cancel)
+	defer func() {
+		stop()
+		cancel()
+	}()
+	return waitTxnRateLimit(l.limiter, waitCtx)
+}
+
+func waitTxnRateLimit(limiter *rate.Limiter, ctx context.Context) error {
+	err := limiter.Wait(ctx)
+	if err == nil {
+		return nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	// rate.Limiter rejects a reservation immediately when its delay would
+	// exceed the context deadline. Preserve the caller-facing context contract.
+	if _, ok := ctx.Deadline(); ok {
+		return context.DeadlineExceeded
+	}
+	return err
+}
 
 // WithTxnIDGenerator setup txn id generator
 func WithTxnIDGenerator(generator TxnIDGenerator) TxnClientCreateOption {
@@ -117,7 +166,11 @@ func WithEnableLeakCheck(
 // WithTxnLimit flow control of transaction creation, maximum number of transactions per second
 func WithTxnLimit(n int) TxnClientCreateOption {
 	return func(tc *txnClient) {
-		tc.limiter = ratelimit.New(n, ratelimit.Per(time.Second))
+		// Match the previous limiter's ten-request accumulated slack without
+		// allowing an initial startup burst.
+		limiter := rate.NewLimiter(rate.Limit(n), 11)
+		limiter.AllowN(time.Now(), 10)
+		tc.limiter = &contextTxnRateLimiter{limiter: limiter}
 	}
 }
 
@@ -179,7 +232,7 @@ type txnClient struct {
 	lockService                lockservice.LockService
 	timestampWaiter            TimestampWaiter
 	leakChecker                *leakChecker
-	limiter                    ratelimit.Limiter
+	limiter                    txnRateLimiter
 	maxActiveTxn               int
 	enableCheckDup             bool
 	enableCNBasedConsistency   bool
@@ -263,6 +316,16 @@ func (client *txnClient) addActiveTxn(op *txnOperator) {
 	shard.Unlock()
 	client.atomic.activeTxnCount.Add(1)
 	client.addToLeakCheck(op)
+}
+
+// markTxnAbortedIfObserved is the creator-side half of the abort handshake. If
+// active-map publication wins, the worker scan sees op. If the scan wins,
+// latestAbortAt is already visible here and the creator marks op itself.
+func (client *txnClient) markTxnAbortedIfObserved(op *txnOperator) {
+	if latest := client.atomic.latestAbortAt.Load(); latest != nil &&
+		op.reset.createAt.Before(*latest) {
+		op.addFlag(AbortedFlag)
+	}
 }
 
 // removeActiveTxn removes a transaction from the sharded map.
@@ -395,7 +458,7 @@ func (client *txnClient) adjust() {
 		panic("txn clock not set")
 	}
 	if client.limiter == nil {
-		client.limiter = ratelimit.NewUnlimited()
+		client.limiter = unlimitedTxnRateLimiter{}
 	}
 	if client.maxActiveTxn == 0 {
 		client.maxActiveTxn = math.MaxInt
@@ -465,8 +528,16 @@ func (client *txnClient) doCreateTxn(
 		v2.TxnCreateTotalDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	// we take a token from the limiter to control the number of transactions created per second.
-	client.limiter.Take()
+	// Admission throttling obeys both the caller's cancellation and client
+	// shutdown. No client ownership exists yet, so failure closes only this
+	// unadmitted operator generation.
+	if err = client.limiter.Wait(ctx, client.closeCtx); err != nil {
+		if client.isClosed() {
+			err = moerr.NewClientClosedNoCtx()
+		}
+		op.closeUnadmitted(err)
+		return nil, err
+	}
 
 	op.timestampWaiter = client.timestampWaiter
 	op.AppendEventCallback(
@@ -483,6 +554,10 @@ func (client *txnClient) doCreateTxn(
 		op.closeUnadmitted(err)
 		return nil, err
 	}
+	// Direct admission is already published. Queued admission may still be
+	// unpublished, but recording an older abort observation is safe and avoids
+	// exposing stale state to creation callbacks.
+	client.markTxnAbortedIfObserved(op)
 	// From this point until the successful return, openTxn has transferred the
 	// operator into the client's admission ownership graph. One deferred owner
 	// closes every failure/panic path and first crosses the admission barrier;
@@ -556,6 +631,13 @@ func (client *txnClient) doCreateTxn(
 			return nil, err
 		}
 		return nil, errors.Join(err, moerr.NewTxnError(ctx, "wait active"))
+	}
+	if op.reset.waiter != nil {
+		// A queued operator can be published after the worker completed its scan.
+		// Recheck on the creator side before New is allowed to return. Direct
+		// admission was already published before the first check above, so the
+		// worker observes every later abort without another hot-path load here.
+		client.markTxnAbortedIfObserved(op)
 	}
 	client.mu.RLock()
 	closed = client.mu.closed
@@ -840,14 +922,14 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 			client.logger.Warn("txn client is in ready state",
 				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
 		}
-		if client.mu.closed {
-			client.mu.Unlock()
-			return moerr.NewClientClosedNoCtx()
-		}
-		if err := ctx.Err(); err != nil {
-			client.mu.Unlock()
-			return err
-		}
+	}
+	if client.mu.closed {
+		client.mu.Unlock()
+		return moerr.NewClientClosedNoCtx()
+	}
+	if err := ctx.Err(); err != nil {
+		client.mu.Unlock()
+		return err
 	}
 
 	if !op.opts.options.UserTxn() ||
@@ -857,7 +939,7 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 		}
 		waitQueueSize := len(client.mu.waitActiveTxns)
 		client.mu.Unlock()
-		// Add to sharded map outside mu lock
+		// Add to sharded map outside mu lock.
 		client.addActiveTxn(op)
 		// Update metrics after actual operation
 		v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
@@ -931,7 +1013,7 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
 		client.mu.Unlock()
 
-		// Add to sharded map and notify outside mu lock
+		// Add to the sharded map and notify outside mu lock.
 		for _, waitOp := range toActivate {
 			client.addActiveTxn(waitOp)
 			waitOp.notifyActive()

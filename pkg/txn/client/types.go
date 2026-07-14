@@ -225,7 +225,10 @@ type RunSQLAdmissionOperator interface {
 }
 
 // TryEnterRunSqlWithTokenAndSQL admits one SQL execution using the richer
-// capability when available and safely falls back to the legacy contract.
+// capability when available and preserves the legacy contract otherwise.
+// A legacy TxnOperator has no error channel and therefore cannot reject SQL
+// admission after close; implementations that require the sealed lifecycle
+// guarantee must implement RunSQLAdmissionOperator.
 func TryEnterRunSqlWithTokenAndSQL(
 	op TxnOperator,
 	cancel context.CancelFunc,

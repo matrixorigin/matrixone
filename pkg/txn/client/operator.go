@@ -754,6 +754,7 @@ func (tc *txnOperator) initProtectedFields(sealTerminalCall bool) {
 	tc.mu.terminalOutcome = txnTerminalOutcomeNone
 	tc.mu.retry = false
 	tc.mu.lockSeq = 0
+	tc.mu.flag = 0
 	tc.mu.txn = txn.TxnMeta{}
 	tc.mu.lastLockTableBindCheck = time.Time{}
 	tc.mu.lockTableBindChanged = false

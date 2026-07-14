@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 )
 
 type blockingTimestampWaiter struct {
@@ -47,6 +48,67 @@ type observedWaitContext struct {
 	context.Context
 	waiting chan struct{}
 	once    sync.Once
+}
+
+type blockingTxnRateLimiter struct {
+	entered chan struct{}
+}
+
+type txnCreateResult struct {
+	op  TxnOperator
+	err error
+}
+
+func (l *blockingTxnRateLimiter) Wait(ctx, closeCtx context.Context) error {
+	select {
+	case l.entered <- struct{}{}:
+	default:
+	}
+	if closeCtx == nil {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-closeCtx.Done():
+		return closeCtx.Err()
+	}
+}
+
+func finishAbortScanWhileShardLocked(
+	t *testing.T,
+	client *txnClient,
+	shard *activeTxnShard,
+) {
+	t.Helper()
+	shard.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			shard.Unlock()
+		}
+	}()
+
+	client.markAllActiveTxnAborted()
+	require.Eventually(t, func() bool {
+		client.mu.RLock()
+		defer client.mu.RUnlock()
+		return client.mu.waitMarkAllActiveAbortedC != nil
+	}, 5*time.Second, 10*time.Millisecond)
+	shard.Unlock()
+	locked = false
+	require.Eventually(t, func() bool {
+		client.mu.RLock()
+		defer client.mu.RUnlock()
+		return client.mu.waitMarkAllActiveAbortedC == nil
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+func txnMarkedAborted(op *txnOperator) bool {
+	op.mu.RLock()
+	defer op.mu.RUnlock()
+	return op.markAbortedLocked()
 }
 
 func (c *observedWaitContext) Done() <-chan struct{} {
@@ -798,6 +860,26 @@ func TestRestartTxnKeepsRunSQLSealedUntilAdmissionCompletes(t *testing.T) {
 	})
 }
 
+func TestRestartTxnDoesNotRetainAbortFlag(t *testing.T) {
+	RunTxnTests(func(tc TxnClient, _ rpc.TxnSender) {
+		client := tc.(*txnClient)
+		op, err := client.New(context.Background(), timestamp.Timestamp{})
+		require.NoError(t, err)
+		old := op.(*txnOperator)
+		old.addFlag(AbortedFlag)
+		require.NoError(t, old.Rollback(context.Background()))
+
+		restarted, err := client.RestartTxn(
+			context.Background(),
+			old,
+			timestamp.Timestamp{})
+		require.NoError(t, err)
+		current := restarted.(*txnOperator)
+		require.False(t, txnMarkedAborted(current))
+		require.NoError(t, current.Rollback(context.Background()))
+	})
+}
+
 func TestRestartTxnAdmissionFailureLeavesOperatorClosed(t *testing.T) {
 	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1109,6 +1191,93 @@ func TestLimit(t *testing.T) {
 			require.True(t, n < 5)
 		},
 		WithTxnLimit(1))
+}
+
+func TestTxnLimitWaitCancellationClosesUnadmittedRestart(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	tc := NewTxnClient("", newTestTxnSender())
+	defer func() { require.NoError(t, tc.Close()) }()
+	tc.Resume()
+	client := tc.(*txnClient)
+
+	op, err := tc.New(context.Background(), timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.NoError(t, op.Rollback(context.Background()))
+
+	limiter := &blockingTxnRateLimiter{entered: make(chan struct{}, 1)}
+	client.limiter = limiter
+	ctx, cancel := context.WithCancel(context.Background())
+	resultC := make(chan txnCreateResult, 1)
+	go func() {
+		restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{})
+		resultC <- txnCreateResult{op: restarted, err: err}
+	}()
+
+	select {
+	case <-limiter.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RestartTxn did not enter the rate-limit wait")
+	}
+	cancel()
+	var result txnCreateResult
+	select {
+	case result = <-resultC:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RestartTxn did not return after rate-limit cancellation")
+	}
+	require.Nil(t, result.op)
+	require.ErrorIs(t, result.err, context.Canceled)
+	require.Zero(t, client.atomic.activeTxnCount.Load())
+	client.mu.RLock()
+	require.Zero(t, client.mu.users)
+	require.Empty(t, client.mu.waitActiveTxns)
+	client.mu.RUnlock()
+
+	// The canceled, unadmitted generation is terminally closed and can be
+	// reused by a later explicit restart.
+	client.limiter = unlimitedTxnRateLimiter{}
+	restarted, err := client.RestartTxn(context.Background(), op, timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.NoError(t, restarted.Rollback(context.Background()))
+}
+
+func TestTxnLimitWaitUnblockedByClientClose(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	tc := NewTxnClient("", newTestTxnSender())
+	defer func() { require.NoError(t, tc.Close()) }()
+	tc.Resume()
+	client := tc.(*txnClient)
+	limiter := &blockingTxnRateLimiter{entered: make(chan struct{}, 1)}
+	client.limiter = limiter
+
+	errC := make(chan error, 1)
+	go func() {
+		_, err := tc.New(context.Background(), timestamp.Timestamp{})
+		errC <- err
+	}()
+	select {
+	case <-limiter.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("New did not enter the rate-limit wait")
+	}
+
+	require.NoError(t, tc.Close())
+	select {
+	case err := <-errC:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+	case <-time.After(5 * time.Second):
+		t.Fatal("client Close did not unblock the rate-limit wait")
+	}
+	require.Zero(t, client.atomic.activeTxnCount.Load())
+}
+
+func TestWaitTxnRateLimitHonorsContextDeadline(t *testing.T) {
+	limiter := rate.NewLimiter(0, 1)
+	require.True(t, limiter.Allow())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := waitTxnRateLimit(limiter, ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestMaxActiveTxnWithWaitPrevClosed(t *testing.T) {
@@ -1728,6 +1897,26 @@ func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
 	require.Error(t, c.openTxn(context.Background(), op))
 }
 
+func TestOpenTxnSkipReadyStillRejectsCanceledContext(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := &txnClient{}
+	c.adjust()
+	c.mu.state = normal
+
+	op := &txnOperator{}
+	op.reset.txnID = []byte("canceled-skip-ready")
+	WithSkipPushClientReady()(op)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(t, c.openTxn(ctx, op), context.Canceled)
+	require.Zero(t, c.atomic.activeTxnCount.Load())
+	c.mu.RLock()
+	require.Zero(t, c.mu.users)
+	require.Empty(t, c.mu.waitActiveTxns)
+	c.mu.RUnlock()
+}
+
 func TestCloseTxnWithAbortAllCheck(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := &txnClient{}
@@ -1797,6 +1986,103 @@ func TestWaitAbortMarked(t *testing.T) {
 	}()
 	op := &txnOperator{}
 	require.NoError(t, tc.openTxn(context.Background(), op))
+}
+
+func TestDirectAdmissionPublishedAfterAbortScanIsMarked(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	tc := NewTxnClient("", newTestTxnSender())
+	defer func() { require.NoError(t, tc.Close()) }()
+	tc.Resume()
+	client := tc.(*txnClient)
+
+	active, err := tc.New(context.Background(), timestamp.Timestamp{})
+	require.NoError(t, err)
+	client.Pause()
+
+	waitCtx := &observedWaitContext{
+		Context: context.Background(),
+		waiting: make(chan struct{}),
+	}
+	resultC := make(chan txnCreateResult, 1)
+	go func() {
+		created, err := tc.New(waitCtx, timestamp.Timestamp{})
+		resultC <- txnCreateResult{op: created, err: err}
+	}()
+
+	select {
+	case <-waitCtx.waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("direct admission did not pause before publication")
+	}
+
+	// Keep the abort worker inside its scan until its barrier is observable.
+	// The paused transaction is older than the abort observation but is not in
+	// the active map, so only the creator-side handshake can mark it.
+	activeShard := client.getActiveTxnShard(string(active.Txn().ID))
+	finishAbortScanWhileShardLocked(t, client, activeShard)
+
+	client.Resume()
+	var result txnCreateResult
+	select {
+	case result = <-resultC:
+	case <-time.After(5 * time.Second):
+		t.Fatal("direct admission did not finish after resume")
+	}
+	require.NoError(t, result.err)
+	created := result.op
+	op := created.(*txnOperator)
+	require.True(t, txnMarkedAborted(op))
+
+	require.NoError(t, active.Rollback(context.Background()))
+	require.NoError(t, created.Rollback(context.Background()))
+}
+
+func TestQueuedAdmissionPublishedAfterAbortScanIsMarked(t *testing.T) {
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			client := tc.(*txnClient)
+			active, err := tc.New(
+				context.Background(),
+				timestamp.Timestamp{},
+				WithUserTxn())
+			require.NoError(t, err)
+
+			waitEntered := make(chan struct{})
+			resultC := make(chan txnCreateResult, 1)
+			go func() {
+				created, err := tc.New(
+					context.Background(),
+					timestamp.Timestamp{},
+					WithUserTxn(),
+					WithWaitActiveHandle(func() { close(waitEntered) }))
+				resultC <- txnCreateResult{op: created, err: err}
+			}()
+
+			select {
+			case <-waitEntered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("queued admission did not reach the active wait")
+			}
+
+			// Finish an abort scan while the queued transaction is unpublished.
+			// Promotion after this point must retain the abort observation.
+			activeShard := client.getActiveTxnShard(string(active.Txn().ID))
+			finishAbortScanWhileShardLocked(t, client, activeShard)
+
+			require.NoError(t, active.Rollback(context.Background()))
+			var result txnCreateResult
+			select {
+			case result = <-resultC:
+			case <-time.After(5 * time.Second):
+				t.Fatal("queued admission did not finish after promotion")
+			}
+			require.NoError(t, result.err)
+			created := result.op
+			op := created.(*txnOperator)
+			require.True(t, txnMarkedAborted(op))
+			require.NoError(t, created.Rollback(context.Background()))
+		},
+		WithMaxActiveTxn(1))
 }
 
 func TestOpenTxnReturnsWhenPausedContextCanceled(t *testing.T) {
