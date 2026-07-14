@@ -1162,6 +1162,22 @@ func TestUpdate(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestUpdateIgnoreUsesIgnoreDedupAction(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE NATION SET N_NATIONKEY = N_NATIONKEY + 1")
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.JoinType == plan.Node_DEDUP {
+			found = true
+			require.Equal(t, plan.Node_IGNORE, node.OnDuplicateAction)
+		}
+	}
+	require.True(t, found, "UPDATE IGNORE of a primary key should include a DEDUP join")
+}
+
 func TestUpdateRecomputesCompositeClusterByKey(t *testing.T) {
 	testCases := []struct {
 		name             string
