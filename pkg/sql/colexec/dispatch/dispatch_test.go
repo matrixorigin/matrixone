@@ -30,9 +30,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type emptyDispatchChild struct {
+	*value_scan.ValueScan
+	called chan struct{}
+}
+
+func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
+	close(child.called)
+	return vm.NewCallResult(), nil
+}
 
 func TestPrepareRemote(t *testing.T) {
 	_ = colexec.NewServer(nil)
@@ -264,6 +276,106 @@ func TestWaitRemoteRegsReadyPropagatesCancelCause(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("waitRemoteRegsReady did not return after proc cancellation")
 	}
+}
+
+func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	proc := testutil.NewProcess(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	proc.Ctx = ctx
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	child := &emptyDispatchChild{
+		ValueScan: value_scan.NewArgument(),
+		called:    make(chan struct{}),
+	}
+	defer child.Release()
+	require.NoError(t, child.Prepare(proc))
+
+	d := NewArgument()
+	defer d.Release()
+	d.FuncId = SendToAllFunc
+	d.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+	d.AppendChild(child)
+
+	registration, err := d.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, registration)
+	defer registration.Cleanup()
+	require.NoError(t, d.Prepare(proc))
+
+	attached := make(chan struct{})
+	go func() {
+		select {
+		case <-child.called:
+		case <-ctx.Done():
+			return
+		}
+		registeredProc, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+		if !ok || registeredProc != proc {
+			return
+		}
+		select {
+		case notifyCh <- &process.WrapCs{Uid: uid, Err: make(chan error, 1)}:
+			close(attached)
+		case <-ctx.Done():
+		}
+	}()
+
+	result, err := d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.True(t, d.ctr.prepared)
+	require.Len(t, d.ctr.remoteReceivers, 1)
+	select {
+	case <-attached:
+	default:
+		t.Fatal("empty dispatch returned before its remote receiver attached")
+	}
+}
+
+func TestDispatchEmptyInputRemoteWaitPropagatesCancellation(t *testing.T) {
+	_ = colexec.NewServer(nil)
+
+	proc := testutil.NewProcess(t)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	proc.Ctx = ctx
+	proc.Cancel = cancel
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	child := &emptyDispatchChild{
+		ValueScan: value_scan.NewArgument(),
+		called:    make(chan struct{}),
+	}
+	defer child.Release()
+	require.NoError(t, child.Prepare(proc))
+
+	d := NewArgument()
+	defer d.Release()
+	d.FuncId = SendToAllFunc
+	d.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+	d.AppendChild(child)
+
+	registration, err := d.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	require.NotNil(t, registration)
+	defer registration.Cleanup()
+	require.NoError(t, d.Prepare(proc))
+
+	want := moerr.NewInternalErrorNoCtx("query canceled while waiting for remote receiver")
+	go func() {
+		<-child.called
+		cancel(want)
+	}()
+
+	result, err := d.Call(proc)
+	require.ErrorIs(t, err, want)
+	require.Nil(t, result.Batch)
+	require.True(t, d.ctr.prepared)
 }
 
 func TestDispatchAdoptCleanupState_TransfersOwnership(t *testing.T) {

@@ -277,6 +277,8 @@ var (
 		"error_message=?," +
 		"gate_result=?," +
 		"runner_cn=? where run_id=?"
+	completeSQLTaskRun = updateSQLTaskRun +
+		" and status=? and runner_cn=? and attempt_number=?"
 
 	selectSQLTaskRun = "select " + sqlTaskRunSelectColumns + " from sql_task_run where 1=1"
 
@@ -1136,7 +1138,7 @@ func (m *mysqlTaskStorage) CompleteSQLTaskRun(ctx context.Context, run SQLTaskRu
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-	exec, err := execUpdateSQLTaskRun(ctx, m.db, run)
+	exec, err := execCompleteSQLTaskRun(ctx, m.db, run)
 	if err != nil {
 		return 0, err
 	}
@@ -1145,6 +1147,32 @@ func (m *mysqlTaskStorage) CompleteSQLTaskRun(ctx context.Context, run SQLTaskRu
 		return 0, err
 	}
 	return int(affected), nil
+}
+
+func execCompleteSQLTaskRun(ctx context.Context, exec sqlTaskRunExecer, run SQLTaskRun) (sql.Result, error) {
+	return exec.ExecContext(
+		ctx,
+		completeSQLTaskRun,
+		run.TaskID,
+		run.TaskName,
+		run.AccountID,
+		nullTime(run.ScheduledAt),
+		nullTime(run.StartedAt),
+		nullTime(run.FinishedAt),
+		run.DurationSeconds,
+		run.Status,
+		run.TriggerType,
+		run.AttemptNumber,
+		run.RowsAffected,
+		run.ErrorCode,
+		nullString(run.ErrorMessage),
+		sqlTaskEnabledValue(run.GateResult),
+		run.RunnerCN,
+		run.RunID,
+		SQLTaskStatusRunning,
+		run.RunnerCN,
+		run.AttemptNumber,
+	)
 }
 
 type sqlTaskRunExecer interface {
