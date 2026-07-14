@@ -208,7 +208,13 @@ func (part *Partition) GetItem(offset uint64) ([]byte, error) {
 	return util.UnsafeToBytesWithLength(&part.data[offset], int(part.dsize)), nil
 }
 
-// FreeItem simply reduce reference count by one and free the data when refcnt == 0
+// FreeItem simply reduce reference count by one and free the data when refcnt == 0.
+// The returned value is the number of RESIDENT bytes released, which the pool subtracts from
+// mem_in_use. A partition can be spilled when its last item is freed (the top-K scoring pass
+// re-spills partitions under memory pressure), in which case its resident bytes were already
+// released at Spill() and are no longer counted in mem_in_use — so we drop the on-disk copy
+// and report 0, avoiding a double subtraction (which would underflow mem_in_use) and a temp
+// file lingering until Close.
 func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 	if part.refcnt == 0 {
 		return 0, moerr.NewInternalError(part.proc.Ctx, "FreeItem: refcnt = 0, double free")
@@ -218,10 +224,17 @@ func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 	ret := uint64(0)
 	if part.refcnt == 0 {
 		// no more reference delete the data
-		ret = part.capacity
-		if part.data != nil {
-			part.proc.Mp().Free(part.data)
-			part.data = nil
+		if part.spilled {
+			// resident bytes already freed at Spill(); just remove the temp file.
+			os.Remove(part.spill_fpath)
+			part.spilled = false
+			part.spill_fpath = ""
+		} else {
+			ret = part.capacity
+			if part.data != nil {
+				part.proc.Mp().Free(part.data)
+				part.data = nil
+			}
 		}
 		part.capacity = 0
 		part.cpos = 0
@@ -345,22 +358,31 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 		}
 	}
 
-	// Before growing PAST the first partition, make sure the next block fits the Go-heap
-	// budget. The common case (a single partition's worth of matched docs) is never gated.
-	// Estimate what the new partition adds to the heap: the docvec block + the NON-spillable
-	// per-doc side maps (agghtab/docLenMap/docIDMap in the fulltext TVF) for the docs it will
-	// hold. Those maps grow one entry per matched doc and cannot spill, so a query matching
-	// far more docs than its LIMIT would otherwise exhaust the CN heap. We compare projected
-	// live heap (memGolang, which already includes those maps) against a fraction of total
-	// memory; if it would exceed the budget, fail cleanly instead (#25638).
-	if len(pool.partitions) > 0 && pool.dsize > 0 {
-		est := pool.partition_cap + (pool.partition_cap/pool.dsize)*MapMemPerItem
+	// Guard the Go-heap budget before allocating a partition. We compare live heap (memGolang,
+	// which already includes the NON-spillable per-doc side maps agghtab/docLenMap/docIDMap in
+	// the fulltext TVF) against a fraction of total node memory.
+	//   - FIRST partition: est=0, so we only refuse when the CN is ALREADY over budget (from
+	//     this or other work). We do NOT over-reserve a full worst-case block for a query that
+	//     may match only a handful of docs, which would false-fail small queries on a loaded CN.
+	//   - PAST the first partition: also reserve the next partition's estimated footprint
+	//     (docvec block + its per-doc map entries). Those maps grow one entry per matched doc
+	//     and cannot spill, so a query matching far more docs than its LIMIT would otherwise
+	//     exhaust the CN heap; refuse cleanly before that happens (#25638).
+	if pool.dsize > 0 {
 		if total := memTotal(); total > 0 {
 			used := uint64(memGolang())
 			budget := total / 100 * HeapBudgetPct
+			var est uint64
+			if len(pool.partitions) > 0 {
+				est = pool.partition_cap + (pool.partition_cap/pool.dsize)*MapMemPerItem
+			}
 			if used+est > budget {
+				detail := ""
+				if est > 0 {
+					detail = fmt.Sprintf(" the next batch of matched documents needs ~%d bytes and", est)
+				}
 				return 0, nil, moerr.NewInternalError(pool.proc.Ctx,
-					fmt.Sprintf("fulltext search aborted: the next batch of matched documents needs ~%d bytes but the Go heap is already at %d bytes of a %d-byte budget; the query matched too many documents, add a more selective filter or predicate", est, used, budget))
+					fmt.Sprintf("fulltext search aborted:%s the Go heap is at %d bytes, over the %d-byte budget; the query matched too many documents, add a more selective filter or predicate", detail, used, budget))
 			}
 		}
 	}
@@ -391,6 +413,19 @@ func (pool *FixedBytePool) GetItem(addr uint64) ([]byte, error) {
 	p := pool.partitions[id]
 
 	if p.Spilled() {
+		// Bringing a spilled partition back into memory grows resident heap. The top-K
+		// scoring pass (fulltext TVF evaluate/sort_topk) GetItems every matched doc, so
+		// without a bound it would re-materialize ALL spilled partitions at once and blow
+		// past mem_limit — the same OOM this fix targets, just moved to the scoring phase
+		// (#25638). Evict LRU resident partitions first to stay within the spill budget.
+		// Spill() skips already-spilled partitions, so the target p (still spilled here) is
+		// never the eviction victim; the []byte returned below therefore stays resident until
+		// the caller is done with it (the next GetItem is what may evict it).
+		if pool.mem_in_use+pool.partition_cap > pool.mem_limit {
+			if err := pool.Spill(); err != nil {
+				return nil, err
+			}
+		}
 		err := p.Unspill()
 		if err != nil {
 			return nil, err
@@ -436,11 +471,18 @@ func (pool *FixedBytePool) Close() {
 // spill will find LRU partitions to spill and will double the number of partitions to spill for the next time
 func (pool *FixedBytePool) Spill() error {
 
-	// find unspilled partitions
+	// find spillable partitions. Skip:
+	//   - already-spilled partitions (nothing to do);
+	//   - the active append target (!full): the build phase's next NewItem appends to it via
+	//     the fast path, and Partition.NewItem rejects a spilled partition — spilling it here
+	//     (GetItem eviction fires during build too, to bump existing docs' word counts) would
+	//     abort the query with "NewItem: partition is spillled";
+	//   - already-freed partitions (data == nil, not spilled): they hold no resident bytes, so
+	//     counting them in nspill would under-subtract mem_in_use (underflow).
 	lru := make([]Lru, 0, len(pool.partitions))
 
 	for _, p := range pool.partitions {
-		if p.Spilled() {
+		if p.Spilled() || !p.full || p.data == nil {
 			continue
 		}
 		lru = append(lru, Lru{id: p.Id(), last_update: p.LastUpdate()})
