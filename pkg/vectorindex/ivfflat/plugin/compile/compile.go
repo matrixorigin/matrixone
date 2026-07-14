@@ -198,7 +198,7 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 		return nil
 	}
 
-	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -394,7 +394,7 @@ func ivfIndexCentroidsTable(
 			indexDef.IndexAlgoParams, string(cfgbytes))
 	}
 
-	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(indexDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}

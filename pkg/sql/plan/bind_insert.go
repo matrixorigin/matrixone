@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -576,7 +577,7 @@ func (builder *QueryBuilder) deletePkColExpr(relPos int32) *plan.Expr {
 // (the join key is the integer PK, never the vector), so it is robust to the
 // materialized layout and never copies the base vector through the hash join.
 func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, multiTableIndex *MultiTableIndex) error {
-	async, err := catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(multiTableIndex.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -664,7 +665,7 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 // the IVF delete: join the index table on doc_id == old/final PK and project only
 // the index row_id + fake pk into the output.
 func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindContext, indexdef *plan.IndexDef) error {
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	async, err := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}

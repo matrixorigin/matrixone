@@ -95,7 +95,7 @@ type Hooks struct{}
 //     ivfpq_create table-function builder in pkg/sql/plan/ivfpq.go.
 //
 // The sync-vs-async branch is driven by the index's `async`
-// IndexAlgoParam (catalog.IsIndexAsync). Default (key missing or
+// IndexAlgoParam (catalog.IndexParamAsync). Default (key missing or
 // "false"): forceSync=true — ivfpq_create runs inline before the CDC
 // task is registered. Explicit async="true": forceSync=false — the
 // build SQL is stashed as ConsumerInfo.InitSQL and runs at the first
@@ -108,7 +108,7 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 	if !ok || metaDef == nil {
 		return h.handleCreate(ctx, indexDefs, true)
 	}
-	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}

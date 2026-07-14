@@ -200,8 +200,23 @@ tokenization by the index's parser). Only *execution* moves to WAND.
     + Format/merge; `catalog.IndexAlgoParamVersion` + SHOW CREATE rendering; `buildFullTextParams`
     records `version` only when `>=2`. Parser round-trip + plumbing unit tests green. Classic
     fulltext (unset/1) byte-for-byte unchanged.
-  - ☐ **thin version-router** at each fulltext-plugin hook (schema/build/search/maintenance) —
+  - ◑ **thin version-router** at each fulltext-plugin hook (schema/build/search/maintenance) —
     `if version>=2 { fulltext2.X() } else { <v1 verbatim> }`.
+    - ✅ **maintenance-model fork (v2 ⇒ always-async)** — v2 is CDC-only; classic v1 is
+      synchronous (opt-in async). NOT expressed by faking the `async` param and NOT by a
+      param-aware SyncDescriptor (the static descriptor is a per-algo constant — making it take
+      params forces `""` at every param-less caller). Instead: a canonical async resolver in the
+      plugin layer — `indexplugin.IsAsync(algo, params)` = `AlwaysAsync` (algo identity via the
+      static `SyncDescriptor().AlwaysAsync` — hnsw/bm25/cagra/ivfpq — **OR** engine version≥2 —
+      fulltext v2) **OR** the user `async` param (`catalog.IndexParamAsync`). `catalog` keeps only
+      the pure-param primitives (`IndexAlgoParamVersionOf`, `IndexParamAsync`, née `IsIndexAsync`),
+      since a complete `AlwaysAsync` needs the plugin registry. Every fulltext async-decision site
+      (compile CREATE, the fulltext DML maintenance builders, CDC-validity, clone-skip) now routes
+      through `IsAsync`, collapsing the old hand-written `d.AlwaysAsync || IsIndexAsync` combines;
+      vector/bm25 build-timing sites keep the raw-param call. Unit-tested; v1 byte-for-byte
+      unchanged (`IsAsync` ≡ the param there). *(only fulltext behavior changes, and only for v2)*
+    - ☐ engine-swap hooks (schema → WAND segment store, build → positional builder, search →
+      `fulltext2_index_scan`) — per-hook `version>=2` branches, once `pkg/fulltext2/` exists.
   - ☐ **`pkg/fulltext2/` package** — segment format (FST term dict + positional postings + per-doc
     length + docmap + serialize/load on the shared CDC framing).
 - **P1 — NL exact-phrase.** Positional two-phase conjunctive + **TF-IDF and BM25** top-k, cached,

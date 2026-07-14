@@ -65,14 +65,10 @@ func checkValidIndexCdcByIndexdef(idx *plan.IndexDef) (bool, error) {
 	// Plugin-registered algorithms (vector + fulltext) describe their
 	// CDC participation via SyncDescriptor().
 	if p, ok := indexplugin.Get(idx.IndexAlgo); ok {
-		d := p.Catalog().SyncDescriptor()
-		if !d.UsesCDC {
+		if !p.Catalog().SyncDescriptor().UsesCDC {
 			return false, nil
 		}
-		if d.AlwaysAsync {
-			return true, nil
-		}
-		return catalog.IsIndexAsync(idx.IndexAlgoParams)
+		return indexplugin.IsAsync(idx.IndexAlgo, idx.IndexAlgoParams)
 	}
 
 	return false, nil

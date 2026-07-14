@@ -58,7 +58,7 @@ func newPrefixKeyPart(colName string, length int) *tree.KeyPart {
 	}
 }
 
-func TestIsIndexAsync(t *testing.T) {
+func TestIndexParamAsync(t *testing.T) {
 
 	var (
 		json string
@@ -67,22 +67,22 @@ func TestIsIndexAsync(t *testing.T) {
 	)
 
 	json = ""
-	ok, err = IsIndexAsync(json)
+	ok, err = IndexParamAsync(json)
 	require.Nil(t, err)
 	require.Equal(t, ok, false)
 
 	json = "{}"
-	ok, err = IsIndexAsync(json)
+	ok, err = IndexParamAsync(json)
 	require.Nil(t, err)
 	require.Equal(t, ok, false)
 
 	json = `{"async": "true"}`
-	ok, err = IsIndexAsync(json)
+	ok, err = IndexParamAsync(json)
 	require.Nil(t, err)
 	require.Equal(t, ok, true)
 
 	json = `{"async": 1}`
-	_, err = IsIndexAsync(json)
+	_, err = IndexParamAsync(json)
 	require.NotNil(t, err)
 }
 

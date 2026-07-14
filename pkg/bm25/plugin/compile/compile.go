@@ -122,7 +122,7 @@ func handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.I
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexBm25Algo.ToString())
 
 	// The `async` param gates the BUILD only (never DML — bm25 is AlwaysAsync).
-	async, err := catalog.IsIndexAsync(storeDef.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(storeDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}

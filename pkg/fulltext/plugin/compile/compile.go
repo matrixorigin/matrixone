@@ -27,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -80,7 +81,7 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		return nil
 	}
 
-	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
+	async, err := indexplugin.IsAsync(indexDef.IndexAlgo, indexDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}

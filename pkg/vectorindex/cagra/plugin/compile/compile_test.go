@@ -384,7 +384,7 @@ func TestCagraHandleCreateIndex_BackgroundReentry(t *testing.T) {
 func TestCagraHandleReindex_DelegatesToCreate(t *testing.T) {
 	// HandleReindex is a thin pass-through to handleCreate; honors
 	// the forceSync arg directly (unlike HandleCreateIndex, which
-	// now reads catalog.IsIndexAsync).
+	// now reads catalog.IndexParamAsync).
 	err := Hooks{}.HandleReindex(newHandleCtx(true), cagraIndexDefs(), false, false)
 	require.NoError(t, err)
 }

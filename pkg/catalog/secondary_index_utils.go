@@ -451,7 +451,41 @@ func DefaultIvfIndexAlgoOptions() map[string]string {
 	return res
 }
 
-func IsIndexAsync(indexAlgoParams string) (bool, error) {
+// IndexAlgoParamVersionOf returns the engine version recorded in an index's
+// algo_params (currently only fulltext uses it: v2 = WAND engine). Absent or
+// unparseable ⇒ 1 (the classic engine), so pre-version indexes read as v1.
+func IndexAlgoParamVersionOf(indexAlgoParams string) int64 {
+	if len(indexAlgoParams) == 0 {
+		return 1
+	}
+	val, err := sonic.Get([]byte(indexAlgoParams), IndexAlgoParamVersion)
+	if err != nil {
+		// key not present ⇒ classic engine
+		return 1
+	}
+	s, err := val.StrictString()
+	if err != nil {
+		return 1
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 1
+	}
+	return n
+}
+
+// IndexParamAsync reports whether the user opted into async maintenance via the
+// index's `async` algo_param. (Formerly IsIndexAsync.)
+//
+// This is a pure-param PRIMITIVE — one of the two independent sources of an
+// index's async-ness (the other being the algorithm's intrinsic always-async).
+// It is NOT the full "is this index async" answer: that also depends on the
+// algorithm identity (hnsw/bm25/cagra/ivfpq are always async) and the engine
+// version (fulltext VERSION=2), neither of which is visible from catalog, which
+// sits below the plugin registry. Use indexplugin.IsAsync(algo, params) for the
+// complete resolution; reach for this primitive only when you specifically mean
+// "did the user set the async param".
+func IndexParamAsync(indexAlgoParams string) (bool, error) {
 	if len(indexAlgoParams) > 0 {
 		val, err := sonic.Get([]byte(indexAlgoParams), Async)
 		if err != nil {
