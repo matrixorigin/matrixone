@@ -228,7 +228,11 @@ tokenization by the index's parser). Only *execution* moves to WAND.
     lands with P4 maintenance.)
 - **P1 — NL exact-phrase.** Positional two-phase conjunctive + **TF-IDF and BM25** top-k, cached,
   early-terminating. gojieba + ngram. **A/B parity** vs `VERSION=1` on the same data (below).
-- **P2 — Boolean operators.** OR-WAND + `+ - > < ~ ( )` + `"…"` phrase.
+- **P2 — Boolean operators.** ◑ *core done* — `+` MUST / `-` MUST-NOT / bare OR, `"…"` phrase,
+  and `word*` prefix (FST-expanded, max-impact), over the positional segment; TF-IDF/BM25 scoring;
+  self-contained parser + evaluator, runnable on fulltext text cases. ☐ remaining: `> < ~` weight
+  operators, nested `( )` groups, OR-WAND block-max early termination, and translating the reused
+  `fulltext.ParsePattern` front-end into these clauses at plugin integration.
 - **P3 — Prefix `*`.** FST prefix-enumeration → disjunctive slot + min-prefix guard.
 - **P4 — Maintenance + migration + BVT.** CDC sink, sync build, idxcron MERGE/REBUILD; multi-term
   pushdown; `ALTER … REINDEX … VERSION=2/1` migration; BVT parity. (v1 stays the default baseline;
