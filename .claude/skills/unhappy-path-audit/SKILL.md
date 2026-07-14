@@ -233,7 +233,7 @@ Common false positive: variable is reset in a function you haven't read yet (e.g
 
 | Resource Creation | Destruction Path | Wait Point | Release Event | Accumulation | Bounded By |
 |-------------------|-----------------|------------|---------------|--------------|------------|
-| `txnClient` | `Close()` | `doCreateTxn` in paused state | `cond.Broadcast()` on Resume | active txn count | `MaxActiveTxn` |
+| `txnClient` | `Close()` | `doCreateTxn` in paused state | `pausedC` close on Resume/client Close, or caller context | waiting user txns | request concurrency; entries removed on cancel/close |
 | txn operator | `closeTxn()` commit/rollback path | `doSend()` 2PC commit | caller ctx (SQL executor timeout) | — | — |
 | lock (unlock error path) | `lockService.Unlock()` infinite retry (max backoff 5s) | — | — | — | — |
 

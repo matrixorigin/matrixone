@@ -1352,10 +1352,10 @@ func TestOpenTxnReturnsWhenAbortMarkingContextCanceled(t *testing.T) {
 func TestMarkAllActiveTxnAbortedRetainsLatestObservation(t *testing.T) {
 	c := &txnClient{abortC: make(chan struct{}, 1)}
 	c.markAllActiveTxnAborted()
-	latest := time.Now().Add(time.Hour).UnixNano()
-	c.atomic.latestAbortAt.Store(latest)
+	latest := time.Now().Add(time.Hour)
+	c.atomic.latestAbortAt.Store(&latest)
 	c.markAllActiveTxnAborted()
 
 	require.Len(t, c.abortC, 1)
-	require.Equal(t, latest, c.atomic.latestAbortAt.Load())
+	require.Equal(t, latest, *c.atomic.latestAbortAt.Load())
 }

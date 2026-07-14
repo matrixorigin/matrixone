@@ -205,7 +205,9 @@ type txnClient struct {
 		// activeTxnCount is the total count of active transactions across all shards.
 		activeTxnCount atomic.Int64
 		// latestAbortAt is the newest invalid-CN observation awaiting handling.
-		latestAbortAt atomic.Int64
+		// Keep the full time.Time so cutoff comparisons retain Go's monotonic
+		// clock component across wall-clock adjustments.
+		latestAbortAt atomic.Pointer[time.Time]
 	}
 
 	// activeTxns is sharded to reduce lock contention.
@@ -1061,10 +1063,13 @@ func (client *txnClient) getTxnOptions(
 }
 
 func (client *txnClient) markAllActiveTxnAborted() {
-	now := time.Now().UnixNano()
+	now := time.Now()
 	for {
 		latest := client.atomic.latestAbortAt.Load()
-		if latest >= now || client.atomic.latestAbortAt.CompareAndSwap(latest, now) {
+		if latest != nil && !latest.Before(now) {
+			break
+		}
+		if client.atomic.latestAbortAt.CompareAndSwap(latest, &now) {
 			break
 		}
 	}
@@ -1085,7 +1090,11 @@ func (client *txnClient) handleMarkActiveTxnAborted(
 			return
 		case <-client.abortC:
 			fn := func() {
-				from := time.Unix(0, client.atomic.latestAbortAt.Load())
+				latest := client.atomic.latestAbortAt.Load()
+				if latest == nil {
+					return
+				}
+				from := *latest
 				client.mu.Lock()
 				client.mu.waitMarkAllActiveAbortedC = make(chan struct{})
 				client.mu.Unlock()
