@@ -259,11 +259,24 @@ type Workspace interface {
 	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
 	// workspace will update snapshot data for later read request.
 	IncrStatementID(ctx context.Context, commit bool) error
+	// AdvanceSnapshot advances an RC transaction's snapshot and transfers its
+	// tombstones to the newly visible objects before returning.
+	AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
 
+	// UpdateSnapshotWriteOffset advances the statement boundary of the
+	// workspace to its current end. Only statement-boundary callers may use
+	// it (compiling a new user statement); internal sub-sql executions must
+	// not move the caller's boundary.
 	UpdateSnapshotWriteOffset()
+	// GetSnapshotWriteOffset returns the current statement boundary.
 	GetSnapshotWriteOffset() int
+	// WriteOffset returns the current end of the workspace write list. An
+	// internal sub-sql (DisableIncrStatement) compiles against this value to
+	// see everything its caller has written so far without touching the
+	// shared statement boundary.
+	WriteOffset() uint64
 
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
 	Adjust(writeOffset uint64) error
