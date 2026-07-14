@@ -668,8 +668,8 @@ func TestPrepareArithCastContextBackfill(t *testing.T) {
 		{"prepare s from select cast(? div ? as decimal(30,0))", int32(types.T_decimal128)},
 		{"prepare s from select cast(? mod ? as decimal(30,0))", int32(types.T_decimal128)},
 		{"prepare s from select cast(? + ? as signed)", int32(types.T_int64)},
-		// nested: outer exact context propagates to the inner promoted params.
-		{"prepare s from select cast((? + ?) + 1 as decimal(20,2))", int32(types.T_decimal128)},
+		// nested unary is type-transparent, so params still retype.
+		{"prepare s from select cast(-(? + ?) as decimal(30,0))", int32(types.T_decimal128)},
 	}
 	for _, tc := range tests {
 		logicPlan, err := runOneStmt(mock, t, tc.sql)
@@ -879,12 +879,10 @@ func TestPrepareArithOnDupKeyUpdateBackfill(t *testing.T) {
 	}
 }
 
-// TestPrepareArithUnaryAndColRefContext verifies that the exact-context backfill
-// propagates through unary +/- and exact-type column-ref peers — neither is an
-// explicit cast, so they must not block context propagation. The column peer is
-// coerced to float64 by the outer operator during promotion; the backfill undoes
-// that coercion cast and retypes the params.
-func TestPrepareArithUnaryAndColRefContext(t *testing.T) {
+// TestPrepareArithUnaryContext verifies the exact-context backfill propagates
+// through type-transparent unary +/-, since neither is an explicit cast nor a
+// non-param peer: "CAST(-(? + ?) AS DECIMAL)" still retypes the params.
+func TestPrepareArithUnaryContext(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addArithCtxTableForTest(mock)
 
@@ -894,8 +892,7 @@ func TestPrepareArithUnaryAndColRefContext(t *testing.T) {
 	}{
 		{"prepare s from select cast(-(? + ?) as decimal(30,0))", int32(types.T_decimal128)},
 		{"prepare s from select cast(-(? + ?) as signed)", int32(types.T_int64)},
-		{"prepare s from update arith_ctx_t set dec = (? + ?) + dec where id = 1", int32(types.T_decimal128)},
-		{"prepare s from update arith_ctx_t set dec = dec + (? + ?) where id = 1", int32(types.T_decimal128)},
+		{"prepare s from select cast(-(? * ?) as decimal(30,0))", int32(types.T_decimal128)},
 	}
 	for _, tc := range tests {
 		logicPlan, err := runOneStmt(mock, t, tc.sql)
@@ -909,6 +906,41 @@ func TestPrepareArithUnaryAndColRefContext(t *testing.T) {
 		for _, id := range ids {
 			assert.Equalf(t, tc.wantParam, id,
 				"%s: param must be retyped to exact context type %d, got %d", tc.sql, tc.wantParam, id)
+		}
+	}
+}
+
+// TestPrepareArithNonParamPeerKeepsDouble verifies that a literal or column
+// peer participating in the arithmetic disables the rebind, keeping params on
+// the safe DOUBLE promotion. Pushing the outer target onto such a peer would
+// change the result (a fractional literal like 0.6 rounding to an integer) or
+// introduce overflow that float64 avoids (±1e100 cancelling in DOUBLE but
+// overflowing DECIMAL). This guards the round-5 correctness findings.
+func TestPrepareArithNonParamPeerKeepsDouble(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addArithCtxTableForTest(mock)
+
+	tests := []string{
+		// literal peers in intermediate arithmetic
+		"prepare s from select cast((? + ?) * 0.6 as signed)",
+		"prepare s from select cast((? + ?) + 1 as decimal(20,2))",
+		"prepare s from insert into arith_ctx_t(id, i64) values(1, (? + ?) * 2)",
+		// column peers in intermediate arithmetic
+		"prepare s from update arith_ctx_t set dec = (? + ?) + dec where id = 1",
+		"prepare s from update arith_ctx_t set dec = dec + (? + ?) where id = 1",
+	}
+	for _, sql := range tests {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		assert.NoErrorf(t, err, "%s should succeed", sql)
+		q := resolveQueryPlan(logicPlan)
+		if q == nil || q.GetQuery() == nil {
+			continue
+		}
+		ids := allParamCastTargetIds(q)
+		assert.NotEmptyf(t, ids, "%s should cast prepared params", sql)
+		for _, id := range ids {
+			assert.Equalf(t, int32(types.T_float64), id,
+				"%s: a non-param peer must keep params on DOUBLE, got %d", sql, id)
 		}
 	}
 }
