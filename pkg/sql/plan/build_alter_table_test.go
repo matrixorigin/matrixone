@@ -68,6 +68,14 @@ func TestAlterTableAddColumnWithColumnCheck(t *testing.T) {
 	}
 }
 
+func TestAlterTableAddColumnRejectsNotEnforcedCheck(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	// NOT ENFORCED is unsupported and must be rejected here just as CREATE TABLE
+	// rejects it, not silently accepted (and inverted into an enforced check).
+	_, err := buildSingleStmt(mock, t, "ALTER TABLE t1 ADD COLUMN d INT CHECK (d > 0) NOT ENFORCED;")
+	assert.ErrorContains(t, err, "NOT ENFORCED")
+}
+
 func TestAlterTableRenameRejectsCheckDependentColumn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// Give single_idx_t a CHECK (val > 0) whose column ref points at val by

@@ -585,6 +585,13 @@ select * from t_chk_ignore order by a;
 1  𝄀
 2
 drop table t_chk_ignore;
+drop table if exists t_chk_ignore_dedup;
+create table t_chk_ignore_dedup(id int primary key, v int check (v > 0));
+insert ignore into t_chk_ignore_dedup values (1, -1), (1, 1);
+select * from t_chk_ignore_dedup order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1
+drop table t_chk_ignore_dedup;
 drop table if exists t_chk_addcol;
 create table t_chk_addcol(id int primary key);
 alter table t_chk_addcol add column b int check (b > 0);
@@ -595,6 +602,11 @@ select * from t_chk_addcol order by id;
 ➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  5
 drop table t_chk_addcol;
+drop table if exists t_chk_addcol_notenforced;
+create table t_chk_addcol_notenforced(id int primary key);
+alter table t_chk_addcol_notenforced add column b int check (b > 0) not enforced;
+not supported: CHECK constraint NOT ENFORCED
+drop table t_chk_addcol_notenforced;
 drop table if exists t_chk_rename;
 create table t_chk_rename(a int, b int, check (a > 0));
 alter table t_chk_rename rename column a to a2;

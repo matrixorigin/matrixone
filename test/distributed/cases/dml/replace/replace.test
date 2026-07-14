@@ -459,6 +459,14 @@ insert ignore into t_chk_ignore values (-1), (1), (-2), (2);
 select * from t_chk_ignore order by a;
 drop table t_chk_ignore;
 
+-- INSERT IGNORE evaluates CHECK per row before the unique-key dedup: an invalid
+-- row sharing a primary key with a later valid row must not mask it. Expect (1,1).
+drop table if exists t_chk_ignore_dedup;
+create table t_chk_ignore_dedup(id int primary key, v int check (v > 0));
+insert ignore into t_chk_ignore_dedup values (1, -1), (1, 1);
+select * from t_chk_ignore_dedup order by id;
+drop table t_chk_ignore_dedup;
+
 -- ALTER TABLE ADD COLUMN with a column-level CHECK that references the new column.
 drop table if exists t_chk_addcol;
 create table t_chk_addcol(id int primary key);
@@ -467,6 +475,13 @@ insert into t_chk_addcol values (1, 5);
 insert into t_chk_addcol values (2, -5);
 select * from t_chk_addcol order by id;
 drop table t_chk_addcol;
+
+-- ALTER ADD COLUMN with NOT ENFORCED is unsupported and must be rejected, like
+-- CREATE TABLE, rather than silently accepted as an enforced check.
+drop table if exists t_chk_addcol_notenforced;
+create table t_chk_addcol_notenforced(id int primary key);
+alter table t_chk_addcol_notenforced add column b int check (b > 0) not enforced;
+drop table t_chk_addcol_notenforced;
 
 -- Renaming a column that a CHECK depends on must be rejected; renaming an
 -- unrelated column is still allowed.

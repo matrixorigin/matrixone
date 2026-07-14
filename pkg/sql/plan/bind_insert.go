@@ -1420,6 +1420,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	} else if onDupAction == plan.Node_IGNORE {
+		// INSERT IGNORE: drop CHECK-violating rows here, before the unique-key
+		// dedup, so that a later valid row sharing a key with a dropped invalid
+		// row still survives. MySQL evaluates CHECK per row before conflict
+		// handling; asserting after dedup would let the surviving (invalid) first
+		// row mask a valid later duplicate and end up inserting nothing.
+		if lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, selectTag, colName2Idx, true); err != nil {
+			return 0, err
+		}
+		selectNode = builder.qry.Nodes[lastNodeID]
+
 		fkEnabled, err := builder.modernInsertFkCheckEnabled(tableDef)
 		if err != nil {
 			return 0, err
@@ -2514,11 +2524,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 	}
 
-	// INSERT IGNORE drops rows that violate a CHECK (and warns) instead of
-	// aborting the whole statement; other modes assert and fail on violation.
-	lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, selectTag, colName2Idx, onDupAction == plan.Node_IGNORE)
-	if err != nil {
-		return 0, err
+	// CHECK enforcement. INSERT IGNORE is handled earlier (before the unique-key
+	// dedup) so that a later valid row sharing a key with a dropped invalid row
+	// still survives; here we only assert-and-fail for the non-IGNORE modes.
+	if onDupAction != plan.Node_IGNORE {
+		lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, selectTag, colName2Idx, false)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)

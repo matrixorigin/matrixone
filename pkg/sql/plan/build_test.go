@@ -2378,6 +2378,57 @@ func TestInsertIgnoreFiltersCheckViolatingRows(t *testing.T) {
 	assert.True(t, hasCheckFilter, "INSERT IGNORE should filter check-violating rows out")
 }
 
+func TestInsertIgnoreFiltersChecksBeforeDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	// Two rows share PK id=1: (1,-1) violates the check, (1,1) is valid. The
+	// CHECK filter must run BEFORE the unique-key dedup, otherwise dedup keeps
+	// the invalid (1,-1), discards the valid (1,1) as a duplicate, and the check
+	// filter then drops (1,-1) too — inserting nothing instead of (1,1).
+	logicPlan, err := runOneStmt(mock, t, "INSERT IGNORE INTO single_idx_t VALUES (1, -1), (1, 1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+
+	// Node ids do not reflect execution order, so walk the plan tree: the CHECK
+	// filter must sit in the subtree feeding the DEDUP join (i.e. run before it).
+	dedupID := int32(-1)
+	for i, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
+			dedupID = int32(i)
+		}
+	}
+	require.NotEqual(t, int32(-1), dedupID, "INSERT IGNORE with duplicate keys should build a DEDUP join")
+	require.True(t, subtreeHasCoalesceCheckFilter(query, dedupID, map[int32]bool{}),
+		"CHECK filter must run before (feed into) the unique-key dedup for INSERT IGNORE")
+}
+
+// subtreeHasCoalesceCheckFilter reports whether the subtree rooted at nodeID
+// (following Children) contains a FILTER whose predicate calls coalesce, i.e. an
+// INSERT IGNORE check filter.
+func subtreeHasCoalesceCheckFilter(query *Query, nodeID int32, seen map[int32]bool) bool {
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) || seen[nodeID] {
+		return false
+	}
+	seen[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node.NodeType == plan.Node_FILTER {
+		for _, e := range node.FilterList {
+			if exprContainsFuncName(e, "coalesce") {
+				return true
+			}
+		}
+	}
+	for _, c := range node.Children {
+		if subtreeHasCoalesceCheckFilter(query, c, seen) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestLegacyInsertFallbackChecksTableCheckConstraints(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addFakePkTPositiveCheckWithoutUniqueKey(t, mock)
