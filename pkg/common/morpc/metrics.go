@@ -15,11 +15,19 @@
 package morpc
 
 import (
+	"errors"
+	"io"
+	"net"
+	"os"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 type metrics struct {
+	name                          string
 	sendCounter                   prometheus.Counter
 	receiveCounter                prometheus.Counter
 	createCounter                 prometheus.Counter
@@ -44,6 +52,7 @@ type metrics struct {
 
 func newMetrics(name string) *metrics {
 	return &metrics{
+		name:                          name,
 		sendCounter:                   v2.NewRPCMessageSendCounterByName(name),
 		receiveCounter:                v2.NewRPCMessageReceiveCounterByName(name),
 		createCounter:                 v2.NewRPCBackendCreateCounterByName(name),
@@ -65,6 +74,53 @@ func newMetrics(name string) *metrics {
 		autoCreateTimeoutCounter:      v2.NewRPCBackendAutoCreateTimeoutCounterByName(name),
 		backendUnavailableCounter:     v2.NewRPCBackendUnavailableCounterByName(name),
 	}
+}
+
+func (m *metrics) observeBackendError(backend, phase string, err error) {
+	if m == nil || err == nil {
+		return
+	}
+	v2.NewRPCBackendErrorCounter(m.name, backend, phase, rpcMetricErrorType(err)).Inc()
+}
+
+func rpcMetricErrorType(err error) string {
+	if err == nil {
+		return "none"
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) {
+		return "rpc_timeout"
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+		return "backend_cannot_connect"
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) || errors.Is(err, backendClosed) {
+		return "backend_closed"
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return "unexpected_eof"
+	}
+	if errors.Is(err, io.EOF) {
+		return "eof"
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	errText := err.Error()
+	switch {
+	case strings.Contains(errText, "i/o timeout"),
+		strings.Contains(errText, "deadline exceeded"),
+		strings.Contains(errText, "timeout"):
+		return "timeout"
+	case strings.Contains(errText, "unexpected EOF"):
+		return "unexpected_eof"
+	case strings.Contains(errText, "EOF"):
+		return "eof"
+	}
+	return "other"
 }
 
 type serverMetrics struct {

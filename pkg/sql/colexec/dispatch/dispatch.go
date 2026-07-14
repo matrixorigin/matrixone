@@ -136,6 +136,15 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 
 	whichToSend := result.Batch
 	if result.Batch == nil {
+		// A remote dispatch must attach every receiver even when its child
+		// produces no batches. Otherwise an early NotRegistered response can
+		// outlive this pipeline: cleanup removes the registration before the
+		// client's next retry, which then retries until the query timeout.
+		if dispatch.ctr.isRemote && !dispatch.ctr.prepared {
+			if _, err = dispatch.waitRemoteRegsReady(proc); err != nil {
+				return result, err
+			}
+		}
 		result.Status = vm.ExecStop
 		printShuffleResult(dispatch)
 		return result, nil
