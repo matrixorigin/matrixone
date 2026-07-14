@@ -10485,11 +10485,18 @@ func parameterIntervalsCoverSegment(intervals []geometryParamInterval) bool {
 		return false
 	}
 
+	// Sort by an exact total order on (start, end). Do NOT fold starts within an
+	// epsilon into an "equal" bucket here: an epsilon band is non-transitive
+	// (start A~B and B~C does not imply A~C), which violates slices.SortFunc's
+	// strict-weak-ordering contract and can leave a non-minimum-start interval at
+	// position 0 -- making the coverage check below wrongly bail on
+	// intervals[0].start > 1e-9. The epsilon tolerance stays in the gap/coverage
+	// loop, where it is applied pairwise and transitivity is not required.
 	slices.SortFunc(intervals, func(a, b geometryParamInterval) int {
-		if sameGeometryCoordinate(a.start, b.start) {
-			return cmp.Compare(a.end, b.end)
+		if c := cmp.Compare(a.start, b.start); c != 0 {
+			return c
 		}
-		return cmp.Compare(a.start, b.start)
+		return cmp.Compare(a.end, b.end)
 	})
 
 	coveredEnd := intervals[0].end
