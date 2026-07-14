@@ -89,6 +89,7 @@ type trackingWorkspace struct {
 	commitRequests  []txn.TxnRequest
 	commitErr       error
 	rollbackErr     error
+	finalizeAction  func()
 	commitCount     int
 	rollbackCount   int
 	finalizeCount   int
@@ -186,6 +187,9 @@ func (w *trackingWorkspace) Commit(context.Context) ([]txn.TxnRequest, error) {
 
 func (w *trackingWorkspace) FinalizeCommit(context.Context) {
 	w.finalizeCount++
+	if w.finalizeAction != nil {
+		w.finalizeAction()
+	}
 }
 
 func (w *trackingWorkspace) FinalizeCommitWithUnknownResult(context.Context) {

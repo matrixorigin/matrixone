@@ -1062,10 +1062,20 @@ func (tc *txnOperator) WriteAndCommit(
 		return nil, err
 	}
 	defer tc.releaseTerminalCall()
+	completedNormally := false
 	defer func() {
-		tc.publishTerminalOutcome(err)
+		tc.publishTerminalOutcome(err, completedNormally)
 	}()
 
+	resp, err = tc.writeAndCommitOwned(ctx, requests)
+	completedNormally = true
+	return
+}
+
+func (tc *txnOperator) writeAndCommitOwned(
+	ctx context.Context,
+	requests []txn.TxnRequest,
+) (*rpc.SendResult, error) {
 	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<write-and-commit>"); err != nil {
 		tc.scheduleRollbackAfterRunningSQL(err)
 		return nil, err
@@ -1080,10 +1090,17 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 		return err
 	}
 	defer tc.releaseTerminalCall()
+	completedNormally := false
 	defer func() {
-		tc.publishTerminalOutcome(err)
+		tc.publishTerminalOutcome(err, completedNormally)
 	}()
 
+	err = tc.commitOwned(ctx)
+	completedNormally = true
+	return
+}
+
+func (tc *txnOperator) commitOwned(ctx context.Context) (err error) {
 	if err := tc.sealAndWaitRunningSQLWithSQL(ctx, "<commit>"); err != nil {
 		tc.scheduleRollbackAfterRunningSQL(err)
 		return err
@@ -1447,8 +1464,12 @@ func (tc *txnOperator) doWrite(
 			}()
 		}
 		tc.mu.Lock()
+		// Keep unlock in its own defer. closeLocked invokes callbacks while the
+		// mutex is held; if one panics or calls runtime.Goexit, later statements
+		// in that callback-owning defer would not run.
+		defer tc.mu.Unlock()
 		defer func() {
-			// Set the guard before releasing the operator lock. A later Rollback
+			// Set the guard before closeLocked. A later Rollback
 			// must not delete objects when the Commit result is unknown and TN
 			// may already have committed them.
 			if moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
@@ -1458,7 +1479,6 @@ func (tc *txnOperator) doWrite(
 				tc.reset.commitErr = err
 			}
 			tc.closeLocked(ctx)
-			tc.mu.Unlock()
 		}()
 		if tc.mu.closed {
 			tc.reset.commitErr = moerr.NewTxnClosedNoCtx(tc.reset.txnID)
@@ -1984,10 +2004,19 @@ func (tc *txnOperator) closeAsAborted(ctx context.Context, err error) {
 	defer tc.mu.Unlock()
 
 	if !tc.mu.closed {
-		tc.mu.terminalOutcome = txnTerminalOutcomeSucceeded
+		// Success is published only after closeLocked and every ClosedEvent
+		// callback return normally. A panic or runtime.Goexit still runs this
+		// defer and leaves the closed generation permanently non-restartable.
+		tc.mu.terminalOutcome = txnTerminalOutcomePending
+		defer func() {
+			if tc.mu.terminalOutcome == txnTerminalOutcomePending {
+				tc.mu.terminalOutcome = txnTerminalOutcomeFailed
+			}
+		}()
 		tc.reset.commitErr = err
 		tc.mu.txn.Status = txn.TxnStatus_Aborted
 		tc.closeLocked(ctx)
+		tc.mu.terminalOutcome = txnTerminalOutcomeSucceeded
 	}
 }
 
@@ -2041,12 +2070,22 @@ func (tc *txnOperator) scheduleRollbackAfterRunningSQL(waitErr error) {
 
 // publishTerminalOutcome is the final epilogue for commit owners. It runs after
 // all downstream finalization and before releaseTerminalCall makes the closed
-// operator restartable. A rollback owner publishes its own more precise result
-// and is never overwritten here.
-func (tc *txnOperator) publishTerminalOutcome(err error) {
+// operator restartable. A nil named error is not proof of normal completion:
+// panic and runtime.Goexit both run defers while leaving it nil.
+func (tc *txnOperator) publishTerminalOutcome(err error, completedNormally bool) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
-	if !tc.mu.closed || tc.mu.terminalOutcome != txnTerminalOutcomeNone {
+	if !tc.mu.closed {
+		return
+	}
+	if !completedNormally {
+		// The outer terminal owner did not finish its lifecycle. Even if nested
+		// cleanup had published success, a later finalizer or callback may have
+		// stopped midway, so this generation must never be reused.
+		tc.mu.terminalOutcome = txnTerminalOutcomeFailed
+		return
+	}
+	if tc.mu.terminalOutcome != txnTerminalOutcomeNone {
 		return
 	}
 	if err == nil {

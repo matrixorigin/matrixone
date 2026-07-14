@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"errors"
+	goruntime "runtime"
 	"sync"
 	"testing"
 	"time"
@@ -419,6 +420,229 @@ func TestRestartTxnRejectsFailedSynchronousTerminalCall(t *testing.T) {
 				}
 				require.Equal(t, oldTxnID, tc.reset.txnID)
 				_, err = tc.TryEnterRunSqlWithTokenAndSQL(nil, "after failed terminal call")
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+			})
+		})
+	}
+}
+
+func TestRestartTxnRejectsAbnormalTerminalFinalization(t *testing.T) {
+	panicValue := "injected terminal panic"
+	exits := []struct {
+		name          string
+		action        func()
+		expectedPanic any
+	}{
+		{
+			name: "panic",
+			action: func() {
+				panic(panicValue)
+			},
+			expectedPanic: panicValue,
+		},
+		{
+			name:   "goexit",
+			action: goruntime.Goexit,
+		},
+	}
+	terminalCalls := []struct {
+		name string
+		run  func(context.Context, *txnOperator) error
+	}{
+		{
+			name: "commit",
+			run:  func(ctx context.Context, tc *txnOperator) error { return tc.Commit(ctx) },
+		},
+		{
+			name: "write-and-commit",
+			run: func(ctx context.Context, tc *txnOperator) error {
+				result, err := tc.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+				if result != nil {
+					result.Release()
+				}
+				return err
+			},
+		},
+	}
+	phases := []struct {
+		name   string
+		inject func(*txnOperator, *trackingWorkspace, func())
+	}{
+		{
+			name: "workspace-finalize",
+			inject: func(_ *txnOperator, workspace *trackingWorkspace, action func()) {
+				workspace.finalizeAction = action
+			},
+		},
+		{
+			name: "closed-callback",
+			inject: func(tc *txnOperator, _ *trackingWorkspace, action func()) {
+				tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error {
+					action()
+					return nil
+				}})
+			},
+		},
+	}
+
+	for _, terminalCall := range terminalCalls {
+		for _, phase := range phases {
+			for _, exit := range exits {
+				t.Run(terminalCall.name+"/"+phase.name+"/"+exit.name, func(t *testing.T) {
+					RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						client := c.(*txnClient)
+						op, err := client.New(ctx, timestamp.Timestamp{})
+						require.NoError(t, err)
+						tc := op.(*txnOperator)
+						workspace := &trackingWorkspace{
+							commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
+						}
+						phase.inject(tc, workspace, exit.action)
+						tc.AddWorkspace(workspace)
+						oldTxnID := append([]byte(nil), tc.reset.txnID...)
+
+						returned := make(chan error, 1)
+						recovered := make(chan any, 1)
+						done := make(chan struct{})
+						go func() {
+							defer close(done)
+							defer func() { recovered <- recover() }()
+							returned <- terminalCall.run(ctx, tc)
+						}()
+						select {
+						case <-done:
+						case <-ctx.Done():
+							t.Fatal("terminal call did not finish its abnormal exit")
+						}
+						require.Equal(t, exit.expectedPanic, <-recovered)
+						select {
+						case err := <-returned:
+							t.Fatalf("terminal call returned normally: %v", err)
+						default:
+						}
+
+						tc.mu.RLock()
+						require.True(t, tc.mu.closed)
+						require.Equal(t, txnTerminalOutcomeFailed, tc.mu.terminalOutcome)
+						tc.mu.RUnlock()
+						require.Equal(t, 1, workspace.finalizeCount)
+						require.Equal(t, oldTxnID, tc.reset.txnID)
+						require.Same(t, workspace, tc.reset.workspace)
+
+						for range 2 {
+							_, err = client.RestartTxn(ctx, op, timestamp.Timestamp{})
+							require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+						}
+						_, err = tc.TryEnterRunSqlWithTokenAndSQL(nil, "after abnormal terminal exit")
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+					})
+				})
+			}
+		}
+	}
+}
+
+func TestRestartTxnRejectsPanicAfterWorkspaceFinalization(t *testing.T) {
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client := c.(*txnClient)
+		op, err := client.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		workspace := &trackingWorkspace{commitRequests: []txn.TxnRequest{newTNRequest(1, 1)}}
+		tc.AddWorkspace(workspace)
+		panicValue := "injected commit cost callback panic"
+		costEventCalled := false
+		tc.AppendEventCallback(CommitEvent, TxnEventCallback{Func: func(_ context.Context, _ TxnOperator, event TxnEvent, _ any) error {
+			if event.CostEvent {
+				costEventCalled = true
+				panic(panicValue)
+			}
+			return nil
+		}})
+
+		var recovered any
+		func() {
+			defer func() { recovered = recover() }()
+			err = tc.Commit(ctx)
+		}()
+		require.Equal(t, panicValue, recovered)
+		require.NoError(t, err)
+		require.True(t, costEventCalled)
+		require.Equal(t, 1, workspace.finalizeCount)
+
+		tc.mu.RLock()
+		require.True(t, tc.mu.closed)
+		require.Equal(t, txnTerminalOutcomeFailed, tc.mu.terminalOutcome)
+		tc.mu.RUnlock()
+		_, err = client.RestartTxn(ctx, op, timestamp.Timestamp{})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
+	})
+}
+
+func TestCloseAsAbortedDoesNotPublishSuccessAfterAbnormalCallback(t *testing.T) {
+	panicValue := "injected closed callback panic"
+	exits := []struct {
+		name          string
+		callback      func()
+		expectedPanic any
+	}{
+		{
+			name: "panic",
+			callback: func() {
+				panic(panicValue)
+			},
+			expectedPanic: panicValue,
+		},
+		{
+			name:     "goexit",
+			callback: goruntime.Goexit,
+		},
+	}
+
+	for _, exit := range exits {
+		t.Run(exit.name, func(t *testing.T) {
+			RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				client := c.(*txnClient)
+				op, err := client.New(ctx, timestamp.Timestamp{})
+				require.NoError(t, err)
+				tc := op.(*txnOperator)
+				tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error {
+					exit.callback()
+					return nil
+				}})
+
+				returned := make(chan struct{}, 1)
+				recovered := make(chan any, 1)
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					defer func() { recovered <- recover() }()
+					tc.closeAsAborted(ctx, assert.AnError)
+					returned <- struct{}{}
+				}()
+				select {
+				case <-done:
+				case <-ctx.Done():
+					t.Fatal("closeAsAborted did not finish its abnormal exit")
+				}
+				require.Equal(t, exit.expectedPanic, <-recovered)
+				select {
+				case <-returned:
+					t.Fatal("closeAsAborted returned normally")
+				default:
+				}
+
+				tc.mu.RLock()
+				require.True(t, tc.mu.closed)
+				require.Equal(t, txnTerminalOutcomeFailed, tc.mu.terminalOutcome)
+				tc.mu.RUnlock()
+				_, err = client.RestartTxn(ctx, op, timestamp.Timestamp{})
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
 			})
 		})
