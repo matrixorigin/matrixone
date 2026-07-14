@@ -50,6 +50,65 @@ func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestHAKeeperClientConstructorsRejectContextWithoutDeadline(t *testing.T) {
+	original := newHAKeeperClientFunc
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		t.Fatal("constructor must not dial without a context deadline")
+		return nil, nil
+	}
+	defer func() {
+		newHAKeeperClientFunc = original
+	}()
+
+	cfg := HAKeeperClientConfig{}
+	tests := []struct {
+		name string
+		fn   func(context.Context, string, HAKeeperClientConfig) (any, error)
+	}{
+		{
+			name: "cluster",
+			fn: func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+				return NewClusterHAKeeperClient(ctx, sid, cfg)
+			},
+		},
+		{
+			name: "cn",
+			fn: func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+				return NewCNHAKeeperClient(ctx, sid, cfg)
+			},
+		},
+		{
+			name: "tn",
+			fn: func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+				return NewTNHAKeeperClient(ctx, sid, cfg)
+			},
+		},
+		{
+			name: "log",
+			fn: func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+				return NewLogHAKeeperClient(ctx, sid, cfg)
+			},
+		},
+		{
+			name: "proxy",
+			fn: func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+				return NewProxyHAKeeperClient(ctx, sid, cfg)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := tt.fn(context.TODO(), "", cfg)
+			require.Nil(t, c)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		})
+	}
+}
+
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
@@ -66,6 +125,169 @@ func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 		c3, err := NewLogHAKeeperClient(ctx, "", cfg)
 		assert.NoError(t, err)
 		assert.NoError(t, c3.Close())
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestHAKeeperClientMethodsRejectContextWithoutDeadline(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		cnClient, err := NewCNHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, cnClient.Close())
+		}()
+		tnClient, err := NewTNHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, tnClient.Close())
+		}()
+		logClient, err := NewLogHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, logClient.Close())
+		}()
+		proxyClient, err := NewProxyHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, proxyClient.Close())
+		}()
+
+		tests := []struct {
+			name string
+			fn   func(context.Context) error
+		}{
+			{
+				name: "CheckLogServiceHealth",
+				fn:   cnClient.CheckLogServiceHealth,
+			},
+			{
+				name: "GetClusterDetails",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.GetClusterDetails(ctx)
+					return err
+				},
+			},
+			{
+				name: "GetClusterState",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.GetClusterState(ctx)
+					return err
+				},
+			},
+			{
+				name: "AllocateID",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.AllocateID(ctx)
+					return err
+				},
+			},
+			{
+				name: "AllocateIDByKey",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.AllocateIDByKey(ctx, "test-key")
+					return err
+				},
+			},
+			{
+				name: "AllocateIDByKeyWithBatch",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.AllocateIDByKeyWithBatch(ctx, "test-key-batch", 2)
+					return err
+				},
+			},
+			{
+				name: "SendCNHeartbeat",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.SendCNHeartbeat(ctx, pb.CNStoreHeartbeat{})
+					return err
+				},
+			},
+			{
+				name: "UpdateNonVotingReplicaNum",
+				fn: func(ctx context.Context) error {
+					return cnClient.UpdateNonVotingReplicaNum(ctx, 1)
+				},
+			},
+			{
+				name: "UpdateNonVotingLocality",
+				fn: func(ctx context.Context) error {
+					return cnClient.UpdateNonVotingLocality(ctx, pb.Locality{})
+				},
+			},
+			{
+				name: "GetBackupData",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.GetBackupData(ctx)
+					return err
+				},
+			},
+			{
+				name: "SendTNHeartbeat",
+				fn: func(ctx context.Context) error {
+					_, err := tnClient.SendTNHeartbeat(ctx, pb.TNStoreHeartbeat{})
+					return err
+				},
+			},
+			{
+				name: "SendLogHeartbeat",
+				fn: func(ctx context.Context) error {
+					_, err := logClient.SendLogHeartbeat(ctx, pb.LogStoreHeartbeat{})
+					return err
+				},
+			},
+			{
+				name: "GetCNState",
+				fn: func(ctx context.Context) error {
+					_, err := proxyClient.GetCNState(ctx)
+					return err
+				},
+			},
+			{
+				name: "UpdateCNLabel",
+				fn: func(ctx context.Context) error {
+					return proxyClient.UpdateCNLabel(ctx, pb.CNStoreLabel{})
+				},
+			},
+			{
+				name: "UpdateCNWorkState",
+				fn: func(ctx context.Context) error {
+					return proxyClient.UpdateCNWorkState(ctx, pb.CNWorkState{})
+				},
+			},
+			{
+				name: "PatchCNStore",
+				fn: func(ctx context.Context) error {
+					return proxyClient.PatchCNStore(ctx, pb.CNStateLabel{})
+				},
+			},
+			{
+				name: "DeleteCNStore",
+				fn: func(ctx context.Context) error {
+					return proxyClient.DeleteCNStore(ctx, pb.DeleteCNStore{})
+				},
+			},
+			{
+				name: "SendProxyHeartbeat",
+				fn: func(ctx context.Context) error {
+					_, err := proxyClient.SendProxyHeartbeat(ctx, pb.ProxyHeartbeat{})
+					return err
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				require.NotPanics(t, func() {
+					err := tt.fn(context.Background())
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+				})
+			})
+		}
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -656,7 +878,9 @@ func TestAllocateIDRetriesPrepareClientError(t *testing.T) {
 	c := &managedHAKeeperClient{
 		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
 	}
-	firstID, err := c.AllocateID(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	firstID, err := c.AllocateID(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(42), firstID)
 	require.Equal(t, 2, attempts)
@@ -737,7 +961,9 @@ func TestAllocateIDRetriesEOFSendError(t *testing.T) {
 	c := &managedHAKeeperClient{
 		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
 	}
-	firstID, err := c.AllocateID(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	firstID, err := c.AllocateID(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(42), firstID)
 	require.Equal(t, 2, attempts)
@@ -782,7 +1008,9 @@ func TestAllocateBatchIDRetriesPrepareClientError(t *testing.T) {
 		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
 	}
 	c.mu.allocIDByKey = make(map[string]*allocID)
-	firstID, err := c.AllocateIDByKeyWithBatch(context.Background(), "x", 2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	firstID, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), firstID)
 	require.Equal(t, 2, attempts)
@@ -865,7 +1093,9 @@ func TestAllocateBatchIDRetriesEOFSendError(t *testing.T) {
 		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
 	}
 	c.mu.allocIDByKey = make(map[string]*allocID)
-	firstID, err := c.AllocateIDByKeyWithBatch(context.Background(), "x", 2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	firstID, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), firstID)
 	require.Equal(t, 2, attempts)
