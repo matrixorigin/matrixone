@@ -1470,6 +1470,12 @@ func dateToOthers(proc *process.Process,
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
 		return dateToSigned(source, rs, length, selectList)
+	case types.T_decimal64:
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return dateToDecimal64(source, rs, length, selectList)
+	case types.T_decimal128:
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return dateToDecimal128(source, rs, length, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
 		return rs.DupFromParameter(source, length)
@@ -1551,10 +1557,10 @@ func timestampToOthers(proc *process.Process,
 	switch toType.Oid {
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return timestampToInt32(proc.Ctx, source, rs, length, selectList)
+		return timestampToInt32(proc.Ctx, source, rs, length, zone, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return timestampToInt64(source, rs, length, selectList)
+		return timestampToInt64(source, rs, length, zone, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
 		return timestampToDate(proc.Ctx, source, rs, length, zone)
@@ -1573,10 +1579,10 @@ func timestampToOthers(proc *process.Process,
 		return timestampToStr(proc.Ctx, source, rs, length, zone, toType, strictStringWidth...)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return timestampToDecimal64(proc.Ctx, source, rs, length, selectList)
+		return timestampToDecimal64(source, rs, length, zone, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return timestampToDecimal128(proc.Ctx, source, rs, length, selectList)
+		return timestampToDecimal128(source, rs, length, zone, selectList)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from timestamp to %s", toType))
 }
@@ -3126,13 +3132,90 @@ func dateToSigned[T int32 | int64](
 				return err
 			}
 		} else {
-			val := v.DaysSinceUnixEpoch()
+			val := packedDateInt64(v)
 			if err := to.Append(T(val), false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func dateToDecimal64(
+	from vector.FunctionParameterWrapper[types.Date],
+	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal64
+	totype := to.GetType()
+	for ; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			result, err := types.ParseDecimal64(strconv.FormatInt(packedDateInt64(v), 10), totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func dateToDecimal128(
+	from vector.FunctionParameterWrapper[types.Date],
+	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	var dft types.Decimal128
+	totype := to.GetType()
+	for ; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			result, err := types.ParseDecimal128(strconv.FormatInt(packedDateInt64(v), 10), totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func packedDateInt64(v types.Date) int64 {
+	return int64(v.Year())*10000 + int64(v.Month())*100 + int64(v.Day())
+}
+
+func packedDatetimeInt64(v types.Datetime) int64 {
+	return int64(v.Year())*10000000000 +
+		int64(v.Month())*100000000 +
+		int64(v.Day())*1000000 +
+		int64(v.Hour())*10000 +
+		int64(v.Minute())*100 +
+		int64(v.Sec())
+}
+
+func packedDatetimeDecimalString(v types.Datetime) string {
+	return fmt.Sprintf("%d.%06d", packedDatetimeInt64(v), v.MicroSec())
+}
+
+func packedDatetimeDecimal64(v types.Datetime, toType types.Type) (types.Decimal64, error) {
+	return types.ParseDecimal64(packedDatetimeDecimalString(v), toType.Width, toType.Scale)
+}
+
+func packedDatetimeDecimal128(v types.Datetime, toType types.Type) (types.Decimal128, error) {
+	return types.ParseDecimal128(packedDatetimeDecimalString(v), toType.Width, toType.Scale)
 }
 
 func dateToTime(
@@ -3210,7 +3293,7 @@ func datetimeToInt32(
 				return err
 			}
 		} else {
-			val := v.SecsSinceUnixEpoch()
+			val := packedDatetimeInt64(v)
 			if val < math.MinInt32 || val > math.MaxInt32 {
 				return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", val)
 			}
@@ -3234,7 +3317,7 @@ func datetimeToInt64(
 				return err
 			}
 		} else {
-			val := v.SecsSinceUnixEpoch()
+			val := packedDatetimeInt64(v)
 			if err := to.Append(val, false); err != nil {
 				return err
 			}
@@ -3257,7 +3340,7 @@ func datetimeToDecimal64(
 				return err
 			}
 		} else {
-			result, err := v.ToDecimal64().Scale(to.GetType().Scale - 6)
+			result, err := packedDatetimeDecimal64(v, to.GetType())
 			if err != nil {
 				return err
 			}
@@ -3283,7 +3366,7 @@ func datetimeToDecimal128(
 				return err
 			}
 		} else {
-			result, err := v.ToDecimal128().Scale(to.GetType().Scale - 6)
+			result, err := packedDatetimeDecimal128(v, to.GetType())
 			if err != nil {
 				return err
 			}
@@ -3495,7 +3578,7 @@ func datetimeToDate(
 func timestampToInt32(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Timestamp],
-	to *vector.FunctionResult[int32], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[int32], length int, zone *time.Location, selectList *FunctionSelectList) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {
 		v, null := from.GetValue(i)
@@ -3504,7 +3587,7 @@ func timestampToInt32(
 				return err
 			}
 		} else {
-			val := v.Unix()
+			val := packedDatetimeInt64(v.ToDatetime(zone))
 			if val < math.MinInt32 || val > math.MaxInt32 {
 				return moerr.NewOutOfRangef(ctx, "int32", "value '%v'", val)
 			}
@@ -3518,7 +3601,7 @@ func timestampToInt32(
 
 func timestampToInt64(
 	from vector.FunctionParameterWrapper[types.Timestamp],
-	to *vector.FunctionResult[int64], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[int64], length int, zone *time.Location, selectList *FunctionSelectList) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {
 		v, null := from.GetValue(i)
@@ -3527,7 +3610,7 @@ func timestampToInt64(
 				return err
 			}
 		} else {
-			val := v.Unix()
+			val := packedDatetimeInt64(v.ToDatetime(zone))
 			if err := to.Append(val, false); err != nil {
 				return err
 			}
@@ -3562,9 +3645,8 @@ func timestampToDate(
 }
 
 func timestampToDecimal64(
-	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Timestamp],
-	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Decimal64], length int, zone *time.Location, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
@@ -3575,11 +3657,7 @@ func timestampToDecimal64(
 				return err
 			}
 		} else {
-			result, err := v.UnixToDecimal64()
-			if err != nil {
-				return err
-			}
-			result, err = result.Scale(to.GetType().Scale - 6)
+			result, err := packedDatetimeDecimal64(v.ToDatetime(zone), to.GetType())
 			if err != nil {
 				return err
 			}
@@ -3592,9 +3670,8 @@ func timestampToDecimal64(
 }
 
 func timestampToDecimal128(
-	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Timestamp],
-	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Decimal128], length int, zone *time.Location, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
@@ -3605,11 +3682,7 @@ func timestampToDecimal128(
 				return err
 			}
 		} else {
-			result, err := v.UnixToDecimal128()
-			if err != nil {
-				return err
-			}
-			result, err = result.Scale(to.GetType().Scale - 6)
+			result, err := packedDatetimeDecimal128(v.ToDatetime(zone), to.GetType())
 			if err != nil {
 				return err
 			}
@@ -6652,6 +6725,12 @@ func yearToOthers(ctx context.Context,
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
 		return yearToFloat(ctx, source, rs, length, selectList)
+	case types.T_decimal64:
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return yearToDecimal64(source, rs, length, selectList)
+	case types.T_decimal128:
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return yearToDecimal128(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return yearToStr(ctx, source, rs, length, toType)
@@ -6725,6 +6804,54 @@ func yearToFloat[T constraints.Float](ctx context.Context,
 			}
 		} else {
 			if err := rs.Append(T(v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func yearToDecimal64(
+	source vector.FunctionParameterWrapper[types.MoYear],
+	rs *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
+	toType := rs.GetType()
+	var dft types.Decimal64
+	for i := 0; i < length; i++ {
+		v, isnull := source.GetValue(uint64(i))
+		if isnull {
+			if err := rs.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			result, err := types.ParseDecimal64(strconv.FormatUint(uint64(v), 10), toType.Width, toType.Scale)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func yearToDecimal128(
+	source vector.FunctionParameterWrapper[types.MoYear],
+	rs *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
+	toType := rs.GetType()
+	var dft types.Decimal128
+	for i := 0; i < length; i++ {
+		v, isnull := source.GetValue(uint64(i))
+		if isnull {
+			if err := rs.Append(dft, true); err != nil {
+				return err
+			}
+		} else {
+			result, err := types.ParseDecimal128(strconv.FormatUint(uint64(v), 10), toType.Width, toType.Scale)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(result, false); err != nil {
 				return err
 			}
 		}
